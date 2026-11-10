@@ -304,8 +304,27 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
   }
 }
 
-/** The status lines waiting for a session's next message (session-message-queue.ts
- *  sendMessageToSession), or null. `markTold` once the message holding them is queued. */
+/** Read today's state at delivery, not the status frozen when an idle node's notice was stored. */
+export async function pendingLiveStatusNote(sessionId: string, now = Date.now()): Promise<{ text: string; markTold: () => void } | null> {
+  const { ridingKeys } = await import('./status-riding.js');
+  const keys = ridingKeys(sessionId);
+  if (!keys.length) return null;
+  const { listTasksByIds } = await import('../task-manager.js');
+  const tasks = await listTasksByIds(keys).catch((err) => {
+    log.session.warn('status riding: live status unavailable, notice kept for next message', { sessionId, error: err instanceof Error ? err.message : String(err) });
+    return null;
+  });
+  if (!tasks) return null;
+  const current = new Map(tasks.map((t) => {
+    const live = seenOf(t);
+    const words = live.words ? ` ${live.state === 'needs' ? 'It asks the user' : live.state === 'read' ? 'For the user to read' : 'Waiting on'}: ${live.words}.` : '';
+    return [t.id, { line: `- "${clip(t.title).replace(/"/g, "'")}" (${t.id}): ${live.label}.${words}`,
+      state: live.state, error: live.state === 'needs' && t.user_status?.source === 'error' && !t.user_status?.transient }] as const;
+  }));
+  return pendingRiding(sessionId, now, current);
+}
+
+/** The stored status lines, for synchronous readers. Delivery uses pendingLiveStatusNote. */
 export function pendingStatusNote(sessionId: string, now = Date.now()): { text: string; markTold: () => void } | null {
   return pendingRiding(sessionId, now);
 }

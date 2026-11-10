@@ -276,8 +276,8 @@ export async function sendMessageToSession(
   const { pendingOrgDigest } = await import('./org/org-store.js');
   const digest = scopedArea ? null : await pendingOrgDigest(sessionId);
   // A status change of a task it asked something rides the same way (sessions/status-push.ts).
-  const { pendingStatusNote } = await import('./sessions/status-push.js');
-  const statusNote = scopedArea ? null : pendingStatusNote(sessionId);
+  const { pendingLiveStatusNote } = await import('./sessions/status-push.js');
+  const statusNote = scopedArea ? null : await pendingLiveStatusNote(sessionId);
   // Every message is escaped, and a turn nobody typed still carries the message
   // hints a human send would (hints/hint-send.ts), unless its sender composed them.
   const { prepareQueuedHintedSend } = await import('./hints/hint-send.js');

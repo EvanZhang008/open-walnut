@@ -379,11 +379,34 @@ describe('/api/v1/org', () => {
       // As the session runtime does when a session fails: the phase (session:error), the record,
       // then the status event.
       await updateTask(broken.id, { phase: 'NEED_ACTION' }, { source: 'api' })
+      await updateTaskRaw(broken.id, { user_status: { state: 'needs', source: 'error' } })
       bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: brokenSid, process_status: 'error' }, ['web-ui'], { source: 'session-tracker' })
       const failed = await pendingOrgDigest(sid, told + 300)
       expect(failed!.text).toContain(`- Walnut: "fails" (${broken.id}) stopped on an error`)
       expect(failed!.text).not.toContain('asks a question')
       await failed!.markTold()
+
+      // A session's old error never overrides its task's current permission decision or recovery.
+      const deciding = (await addTask({ title: 'asks for install permission', project: 'Walnut' })).task
+      const decidingSid = '44444444-5555-4666-8777-888888888889'
+      await createSessionRecord(decidingSid, deciding.id, 'Walnut', WALNUT_HOME)
+      await updateSessionRecord(decidingSid, { process_status: 'error' })
+      for (const live of [
+        { state: 'needs' as const, source: 'session' as const, ask: 'Approve installation permission?' },
+        { state: 'working' as const },
+        { state: 'waiting' as const },
+        { state: 'needs' as const, source: 'error' as const, transient: true },
+      ]) {
+        await updateTaskRaw(deciding.id, { session_id: decidingSid, phase: 'NEED_ACTION', user_status: live })
+        const note = await pendingOrgDigest(sid, told + 310)
+        expect(note?.text ?? '').not.toContain(`"asks for install permission" (${deciding.id}) stopped on an error`)
+        if (note) await note.markTold()
+      }
+      // Suppressing the old error did not consume its key: a real failure is still told once.
+      await updateTaskRaw(deciding.id, { user_status: { state: 'needs', source: 'error' } })
+      const liveFailure = await pendingOrgDigest(sid, told + 320)
+      expect(liveFailure!.text).toContain(`"asks for install permission" (${deciding.id}) stopped on an error`)
+      await liveFailure!.markTold()
 
       // A lost host is Walnut's to recover (auto-resume), not news for the user.
       const flaky = (await addTask({ title: 'loses its host', project: 'Walnut' })).task

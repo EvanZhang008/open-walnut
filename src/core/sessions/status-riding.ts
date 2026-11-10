@@ -230,14 +230,23 @@ export function renderItems(items: Iterable<Item>): string {
 }
 
 /** What waits for a session's next message, or null. `markTold` once the message holding it is queued. */
-export function pendingRiding(sessionId: string, now = Date.now()): { text: string; markTold: () => void } | null {
+export function pendingRiding(sessionId: string, now = Date.now(), current?: ReadonlyMap<string, { line: string; state: string; error: boolean }>): { text: string; markTold: () => void } | null {
   const held = riding.get(sessionId);
   if (!held) return null;
   for (const [id, v] of held) if (now - v.at > RIDE_MAX_MS) held.delete(id);
   if (held.size === 0) { riding.delete(sessionId); return null; }
   const snapshot = new Map([...held].map(([id, v]) => [id, { item: v, at: v.at }] as const));
+  const items = [...snapshot].map(([id, s]) => {
+    const live = current?.get(id);
+    if (!live) return s.item;
+    const item = { ...s.item, line: { text: live.line, at: s.at } };
+    // An edge kept while a node was idle is history, never today's failure or completion.
+    if ((item.end?.kind === 'error' && !live.error) || (item.end?.kind === 'completed' && live.state !== 'done')) delete item.end;
+    if (item.turn && live.state === 'working') delete item.turn;
+    return item;
+  });
   return {
-    text: renderItems([...snapshot.values()].map((s) => s.item)),
+    text: renderItems(items),
     markTold: () => {
       const cur = riding.get(sessionId);
       if (!cur) return;

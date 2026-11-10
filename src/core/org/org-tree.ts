@@ -54,7 +54,7 @@ export interface OrgTaskLike {
   session_id?: string;
   exec_session_id?: string;
   /** The one status the user sees (src/core/user-status.ts); the counts read it. */
-  user_status?: Pick<UserStatus, 'state' | 'snoozed'>;
+  user_status?: Pick<UserStatus, 'state' | 'snoozed' | 'source' | 'transient'>;
 }
 
 /** By the user's status (src/core/user-status.ts), the same numbers every surface shows. */

@@ -29,7 +29,7 @@ describe('router isolation guard', () => {
     expect(hints).toContain('record?.profile?.areaId');
     expect(hints).toContain('data.profile?.areaId');
     const queue = read('src/core/session-message-queue.ts');
-    for (const producer of ['pendingPlaceNotice', 'pendingSwitchContext', 'pendingOrgDigest', 'pendingStatusNote', 'pendingAppState', 'pendingRetiredLeadNote', 'pendingHeldNotices']) {
+    for (const producer of ['pendingPlaceNotice', 'pendingSwitchContext', 'pendingOrgDigest', 'pendingLiveStatusNote', 'pendingAppState', 'pendingRetiredLeadNote', 'pendingHeldNotices']) {
       expect(queue).toMatch(new RegExp(`scopedArea \\? null : (?:await )?${producer}\\(`));
     }
   });

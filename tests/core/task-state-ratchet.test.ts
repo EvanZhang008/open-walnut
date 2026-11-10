@@ -69,7 +69,7 @@ describe('every reminder path asks the snooze', () => {
   it('the paths that do not hold the state still ask: the status push, the letter gate, the org digest, the Brief', () => {
     expect(fs.readFileSync(path.join(ROOT, 'src/core/sessions/status-push.ts'), 'utf8')).toMatch(/if \(c\.to\.snoozed && f\.org_role\) break;/)
     expect(fs.readFileSync(path.join(ROOT, 'src/core/human-inbox/letter-ops.ts'), 'utf8')).toMatch(/admitSnoozedLetter\(/)
-    // Main's org digest raises a failed session from its record, not from the status: it skips a snoozed one.
+    // Main's org digest skips a snoozed error and reads the same live status as every surface.
     expect(fs.readFileSync(path.join(ROOT, 'src/core/org/org-store.ts'), 'utf8')).toMatch(/task\.user_status\?\.snoozed/)
     // The Brief lists a snoozed task under Waiting / snoozed with its date, never as an ask.
     expect(fs.readFileSync(path.join(ROOT, 'src/core/sessions/brief.ts'), 'utf8')).toMatch(/snoozed\?\.until\) words = `snoozed until/)

@@ -45,6 +45,35 @@ describe('one item per task', () => {
     expect(both.indexOf('DONE')).toBeLessThan(both.indexOf('REOPENED-STOP'))
   })
 
+  it('a delayed notice reads live status, never a recovered error or reopened completion', () => {
+    rideNotice('s', 't1', 'error', notice('OLD-ERROR'), 1_000)
+    rideLine('s', 't1', '- stale failure', 1_001)
+    rideNotice('s', 't2', 'completed', notice('OLD-DONE'), 1_002)
+    const live = new Map([
+      ['t1', { line: '- Permission approval needed.', state: 'needs', error: false }],
+      ['t2', { line: '- Work resumed.', state: 'working', error: false }],
+    ])
+    const pending = pendingRiding('s', 2_000, live)!
+    expect(pending.text).toContain('Permission approval needed')
+    expect(pending.text).toContain('Work resumed')
+    expect(pending.text).not.toMatch(/OLD-ERROR|OLD-DONE|stale failure/)
+    // A new status written while this read was on its way still rides the next message.
+    rideLine('s', 't1', '- A newer change.', 2_001)
+    pending.markTold()
+    expect(pendingRiding('s', 3_000)!.text).toContain('A newer change')
+  })
+
+  it('a current failure keeps its notice and carries the live line inside it', () => {
+    rideNotice('s', 't1', 'error', notice('REAL-ERROR'), 1_000)
+    const live = new Map([['t1', { line: '- Live failure.', state: 'needs', error: true }]])
+    const pending = pendingRiding('s', 2_000, live)!
+    expect(pending.text).toContain('REAL-ERROR')
+    expect(pending.text).toContain('Its status now')
+    expect(pending.text).toContain('Live failure')
+    pending.markTold()
+    expect(pendingRiding('s', 3_000)).toBeNull()
+  })
+
   it('a message takes off only what it carried', () => {
     rideNotice('s', 't1', 'stopped', notice('OLD'), 1_000)
     const pending = pendingRiding('s', 1_500)!
@@ -128,5 +157,8 @@ describe('guard: one store, no queue writes of its own', () => {
     expect(push).not.toMatch(/const riding = new Map/)
     expect(push).toMatch(/rideLine\(/)
     expect(push).toMatch(/return pendingRiding\(sessionId, now\)/)
+    expect(push).toMatch(/listTasksByIds\(keys\)/)
+    const send = await fs.readFile(path.join(process.cwd(), 'src/core/session-message-queue.ts'), 'utf8')
+    expect(send).toMatch(/await pendingLiveStatusNote\(sessionId\)/)
   })
 })

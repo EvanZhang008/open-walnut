@@ -734,6 +734,10 @@ async function orgAlerts(tasks: readonly OrgTaskLike[], nowMs: number): Promise<
         seen.add(task.id);
         continue;
       }
+      // The task's own live status wins over an older session error. A permission
+      // decision, an answered ask or resumed work must never be announced as failure.
+      const live = task.user_status;
+      if (live && (live.transient || live.state !== 'needs' || live.source !== 'error')) { seen.add(task.id); continue; }
       alerts.push({ ...base, key: `error:${task.id}:${r.claudeSessionId}:${entry?.timestamp ?? ''}`, kind: 'error' });
       seen.add(task.id);
     }
