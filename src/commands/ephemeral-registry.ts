@@ -408,24 +408,33 @@ function noteReapedServer(dir: string, data: ControlData & { port?: number, star
   })
 }
 
+/** A live ephemeral server as its control file describes it. */
+export type LiveEphemeralServer = { pid: number, port?: number, dir: string, startedAt?: string, owner?: { pid?: number, command?: string } }
+
 /**
- * Count currently live ephemeral servers.
- * Only counts dirs with an ephemeral.json whose PID is still alive.
+ * Currently live ephemeral servers: dirs with an ephemeral.json whose PID is still alive.
  * Call AFTER reapStaleEphemeralDirs() so stale dirs are already cleaned.
  */
-export function countLiveEphemeralServers(walnutHome: string, opts: ReapOptions = {}): number {
+export function liveEphemeralServers(walnutHome: string, opts: ReapOptions = {}): LiveEphemeralServer[] {
   // Same candidate union as the reaper: a server started under a different TMPDIR
   // is still a live server competing for this machine, so counting only
   // os.tmpdir() would under-report and let the concurrency limit be exceeded.
-  const livePids = new Set<number>()
+  const live = new Map<number, LiveEphemeralServer>()
   for (const dir of candidateDirs(walnutHome, opts.tmpBase ?? os.tmpdir())) {
     try {
       const data = JSON.parse(fs.readFileSync(path.join(dir, 'ephemeral.json'), 'utf-8'))
       // Dedupe by pid: the registry and the tmpdir scan can name the same server.
-      if (data.pid && isProcessAlive(data.pid) && !heartbeatLost(dir, data)) livePids.add(data.pid)
+      if (data.pid && isProcessAlive(data.pid) && !heartbeatLost(dir, data)) {
+        live.set(data.pid, { pid: data.pid, port: data.port, dir, startedAt: data.startedAt, owner: data.owner })
+      }
     } catch {
-      // No control file or can't parse — not a live server
+      // No control file or can't parse: not a live server
     }
   }
-  return livePids.size
+  return [...live.values()]
+}
+
+/** How many ephemeral servers are live (see liveEphemeralServers). */
+export function countLiveEphemeralServers(walnutHome: string, opts: ReapOptions = {}): number {
+  return liveEphemeralServers(walnutHome, opts).length
 }

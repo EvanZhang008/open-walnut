@@ -6,6 +6,8 @@
  *   2. Child (--_ephemeral-child): runs the real server on a random port,
  *      writes ephemeral.json, self-destructs after 10 min of idle (WALNUT_EPHEMERAL_IDLE_MINUTES)
  *      or once the process it works for is gone (ephemeral-owner.ts).
+ * At most WALNUT_EPHEMERAL_MAX run at once (2 on a Mac): the launcher takes a slot before
+ * anything else and waits for one when all are held (ephemeral-slots.ts).
  */
 
 /** Written by the launcher into the snapshot: the process the server works for. */
@@ -20,19 +22,22 @@ import {
   registerEphemeralDir,
   unregisterEphemeralDir,
   reapStaleEphemeralDirs,
-  countLiveEphemeralServers,
+  liveEphemeralServers,
   ephemeralRuntimeDir,
   removeEphemeralRuntimeDirs,
   removeEphemeralRuntimeDirsNow,
   EPHEMERAL_SERVER_PID_FILE,
 } from './ephemeral-registry.js'
-import { ephemeralIdleTtlMs } from './ephemeral-idle.js'
+import { ephemeralContendedIdleTtlMs, ephemeralIdleTtlMs, idleExitRule } from './ephemeral-idle.js'
 import { ephemeralExitLogFile, recordEphemeralExit, type EphemeralExitRule } from './ephemeral-exit-record.js'
-import { resolveEphemeralOwner, startOwnerWatch, type EphemeralOwner } from './ephemeral-owner.js'
+import { ownerGone, processStartOf, resolveEphemeralOwner, startOwnerWatch, type EphemeralOwner } from './ephemeral-owner.js'
+import { EPHEMERAL_SLOT_FILE, acquireEphemeralSlot, ephemeralMaxServers, ephemeralSlotDir, ephemeralWaitMs, giveUpLines, releaseSlot, slotWanted, updateSlot, type HeldSlot } from './ephemeral-slots.js'
 import { copyDataSnapshot, dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTriage, stopSnapshotTunnels, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
 
 /** Auto-shutdown after this long with no HTTP request (WALNUT_EPHEMERAL_IDLE_MINUTES, default 10). */
 const EPHEMERAL_IDLE_TTL_MS = ephemeralIdleTtlMs()
+/** The idle limit while a launcher waits for a slot (WALNUT_EPHEMERAL_CONTENDED_IDLE_MINUTES, default 15). */
+const CONTENDED_IDLE_TTL_MS = ephemeralContendedIdleTtlMs()
 /** How often to check for idle timeout (milliseconds). */
 const IDLE_CHECK_INTERVAL_MS = 60 * 1000
 
@@ -46,15 +51,12 @@ const POLL_TIMEOUT_MS = 90_000
 /** Poll interval when waiting for ephemeral.json. */
 const POLL_INTERVAL_MS = 200
 
-/** Maximum concurrent ephemeral servers (each is a full Express + WS server). */
-const DEFAULT_EPHEMERAL_LIMIT = 3
-
 // ── Ephemeral Launcher (parent — exits quickly) ──────────────────────────
 
 /**
  * Parent process that:
  * 1. Reaps stale /tmp/open-walnut-* dirs (dead PIDs)
- * 2. Checks ephemeral concurrency limit (max 3 live servers)
+ * 2. Takes a slot (at most WALNUT_EPHEMERAL_MAX at once), waiting for one when all are held
  * 3. Copies WALNUT_HOME to a unique tmpdir
  * 4. Spawns a detached child: open-walnut web --_ephemeral-child
  * 5. Polls for ephemeral.json until port appears
@@ -66,19 +68,14 @@ export async function runEphemeralLauncher(): Promise<void> {
   // 1. Reap stale dirs from previous runs
   reapStaleEphemeralDirs(WALNUT_HOME)
 
-  // 2. Enforce ephemeral server concurrency limit
-  const liveCount = countLiveEphemeralServers(WALNUT_HOME)
-  if (liveCount >= DEFAULT_EPHEMERAL_LIMIT) {
-    // Output JSON error to stdout so the calling session can parse it
-    console.log(JSON.stringify({
-      error: true,
-      reason: `Ephemeral server limit reached: ${liveCount}/${DEFAULT_EPHEMERAL_LIMIT} running. Wait for an existing server to idle-timeout or kill one manually.`,
-      running: liveCount,
-      limit: DEFAULT_EPHEMERAL_LIMIT,
-    }))
-    process.exit(1)
-    return
-  }
+  // Who the server works for: it ends when that process does (ephemeral-owner.ts). Read
+  // before the copy and any wait, while this launcher's parent is surely still the one that asked.
+  const owner = await resolveEphemeralOwner()
+
+  // 2. A slot before the copy, so a launcher still copying counts too. Every exit of this
+  // launcher gives it back unless the server took it over; a killed one leaves a dead pid.
+  const slot = await takeLauncherSlot(WALNUT_HOME, owner)
+  if (slot) process.on('exit', () => releaseSlot(slot.file, process.pid))
 
   // 3. Create unique tmpdir: /tmp/open-walnut-{PPID}-{random}
   const prefix = `open-walnut-${process.ppid}-`
@@ -108,10 +105,6 @@ export async function runEphemeralLauncher(): Promise<void> {
     return
   }
 
-  // Who the server works for: it ends when that process does (ephemeral-owner.ts). Read
-  // before the copy, while this launcher's parent is surely still the one that asked.
-  const owner = await resolveEphemeralOwner()
-
   // 4. Ensure WALNUT_HOME exists (first run on a fresh machine)
   fs.mkdirSync(WALNUT_HOME, { recursive: true })
 
@@ -136,6 +129,9 @@ export async function runEphemeralLauncher(): Promise<void> {
   }
   if (owner) {
     try { fs.writeFileSync(path.join(tmpDir, EPHEMERAL_OWNER_FILE), JSON.stringify(owner)) } catch { /* the idle timer still ends it */ }
+  }
+  if (slot) {
+    try { fs.writeFileSync(path.join(tmpDir, EPHEMERAL_SLOT_FILE), JSON.stringify({ file: slot.file })) } catch { /* it still holds the slot by pid */ }
   }
 
   // The copied automations and phone registrations belong to the real Walnut.
@@ -179,6 +175,11 @@ export async function runEphemeralLauncher(): Promise<void> {
   child.unref()
 
   const childPid = child.pid
+  // The slot is the server's from here: it ends when the server does, not this launcher.
+  // With its start time, so a pid reused after a crash during boot never holds the slot.
+  if (slot && childPid != null && !updateSlot(slot.file, process.pid, { pid: childPid, start: await processStartOf(childPid), role: 'server' })) {
+    process.stderr.write(`ephemeral: could not hand slot ${slot.file} to the server (pid ${childPid}); it is not counted until it rewrites the slot\n`)
+  }
   if (childPid == null) {
     process.stderr.write('ephemeral: child.pid is undefined — spawn may have failed\n')
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
@@ -222,6 +223,32 @@ export async function runEphemeralLauncher(): Promise<void> {
     unregisterEphemeralDir(registryFile, tmpDir)
     process.exit(1)
   }
+}
+
+/**
+ * The launcher's slot, null when there is no cap (WALNUT_EPHEMERAL_MAX=0). Waits when all are
+ * held; one that waited too long, or whose owner went, exits 1 with what to do.
+ */
+async function takeLauncherSlot(walnutHome: string, owner: EphemeralOwner | null): Promise<HeldSlot | null> {
+  const max = ephemeralMaxServers()
+  if (max <= 0) return null
+  const waitMs = ephemeralWaitMs()
+  const got = await acquireEphemeralSlot({
+    dir: ephemeralSlotDir(walnutHome), max, waitMs,
+    holder: { pid: process.pid, start: await processStartOf(process.pid), role: 'launcher', takenAt: Date.now(), ownerPid: owner?.pid ?? null, ownerCommand: owner?.command.slice(0, 80) },
+    contendedMinutes: CONTENDED_IDLE_TTL_MS / 60_000,
+    liveServers: () => liveEphemeralServers(walnutHome),
+    say: (line) => process.stderr.write(`${line}\n`),
+    ...(owner ? { ownerGone: () => ownerGone(owner) } : {}),
+  })
+  if (got.slot) return got.slot
+  const lines = got.reason === 'timeout'
+    ? giveUpLines(got.running, max, waitMs)
+    : [`ephemeral: stopped waiting for a slot: the process that asked for this server (pid ${owner?.pid}) is gone.`]
+  for (const line of lines) process.stderr.write(`${line}\n`)
+  // JSON to stdout too, so the calling session can parse it.
+  console.log(JSON.stringify({ error: true, reason: lines[0], running: got.running.length, limit: max }))
+  process.exit(1)
 }
 
 /**
@@ -284,6 +311,10 @@ export async function runEphemeralChild(): Promise<void> {
       uptimeSec: process.uptime(), code,
     })
   })
+  // The slot its launcher handed it (ephemeral-slots.ts), given back on every exit.
+  let slotFile: string | null = null
+  try { slotFile = (JSON.parse(fs.readFileSync(path.join(process.env.OPEN_WALNUT_HOME ?? '', EPHEMERAL_SLOT_FILE), 'utf-8')) as { file?: string }).file ?? null } catch { /* no cap */ }
+  if (slotFile) process.on('exit', () => releaseSlot(slotFile!, process.pid))
   const exitChild = (rule: EphemeralExitRule, detail: string, code: number): never => {
     exitWhy = { rule, detail }
     process.stderr.write(`ephemeral child: ${detail}\n`)
@@ -332,10 +363,22 @@ export async function runEphemeralChild(): Promise<void> {
     lastActivity = Date.now()
   })
   facts.idleMinutes = () => (Date.now() - lastActivity) / 60_000
+  // What a waiting launcher prints about this server; its start time keeps a reused pid from holding the slot.
+  const noteSlot = (extra: { start?: string } = {}) => {
+    if (slotFile) updateSlot(slotFile, process.pid, { role: 'server', port, lastRequestAt: lastActivity, idleLimitMinutes, ...extra })
+  }
+  noteSlot()
+  if (slotFile) void processStartOf(process.pid).then((start) => { if (start) noteSlot({ start }) })
 
   const idleChecker = setInterval(() => {
-    if (Date.now() - lastActivity > EPHEMERAL_IDLE_TTL_MS) {
+    noteSlot()
+    // A raised limit holds only while no launcher waits for a slot.
+    const contended = slotFile ? slotWanted(path.dirname(slotFile)) : false
+    const rule = idleExitRule(Date.now() - lastActivity, EPHEMERAL_IDLE_TTL_MS, contended, CONTENDED_IDLE_TTL_MS)
+    if (rule === 'idle') {
       void cleanup('idle', `no HTTP request for ${facts.idleMinutes!().toFixed(1)} min (its limit is ${idleLimitMinutes} min, WALNUT_EPHEMERAL_IDLE_MINUTES)`)
+    } else if (rule === 'idle-contended') {
+      void cleanup('idle-contended', `no HTTP request for ${facts.idleMinutes!().toFixed(1)} min while another test server waits for a slot (limit ${CONTENDED_IDLE_TTL_MS / 60_000} min then, WALNUT_EPHEMERAL_CONTENDED_IDLE_MINUTES; its own is ${idleLimitMinutes} min)`)
     }
   }, IDLE_CHECK_INTERVAL_MS)
   idleChecker.unref()

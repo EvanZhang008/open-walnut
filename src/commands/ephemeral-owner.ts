@@ -134,6 +134,21 @@ export async function ownerGone(owner: { pid: number; start: string }): Promise<
   return start !== '' && !sameStart(start, owner.start)
 }
 
+/** A process's start time in ps's lstart form, or '' when it cannot be read (gone, ps failed). */
+export async function processStartOf(pid: number): Promise<string> {
+  const out = await ps(['-o', 'lstart=', '-p', String(pid)])
+  return out == null ? '' : out.trim().replace(/\s+/g, ' ')
+}
+
+/**
+ * Like ownerGone, for a record that may lack its start time (one written before ps answered):
+ * then the pid alone decides, so a reused pid only keeps the record a while longer.
+ */
+export async function recordedProcessGone(rec: { pid: number; start?: string }): Promise<boolean> {
+  if (rec.start) return ownerGone({ pid: rec.pid, start: rec.start })
+  try { process.kill(rec.pid, 0); return false } catch (err) { return (err as NodeJS.ErrnoException).code === 'ESRCH' }
+}
+
 /** Linux derives lstart from the boot time, which a clock step moves by a little. */
 function sameStart(a: string, b: string): boolean {
   if (a === b) return true

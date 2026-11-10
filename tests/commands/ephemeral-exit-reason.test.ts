@@ -111,6 +111,6 @@ describe('guard: every exit of the ephemeral child names its reason', () => {
     const other = body.split('\n').filter((l) => /cleanup\(/.test(l) && !/^\s*(\/\/|\*)/.test(l)
       && !/async function cleanup\(/.test(l) && !/(?:void |=> )cleanup\(/.test(l))
     expect(other).toEqual([])
-    for (const args of calls) expect(args, args).toMatch(/^'(idle|owner-gone|signal)',/)
+    for (const args of calls) expect(args, args).toMatch(/^'(idle|idle-contended|owner-gone|signal)',/)
   })
 })

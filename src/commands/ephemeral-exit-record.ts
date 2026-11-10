@@ -19,6 +19,7 @@ import { exitTraceFileFor, localProductionDaemonDir } from '../lib/daemon-dir.js
 /** The rules that end an ephemeral server. */
 export type EphemeralExitRule =
   | 'idle'            // no HTTP request for its idle time
+  | 'idle-contended'  // idle past the shorter limit while another launcher waited for a slot
   | 'owner-gone'      // the process it worked for ended
   | 'signal'          // SIGTERM / SIGINT from another process
   | 'forced'          // its shutdown did not finish in time
