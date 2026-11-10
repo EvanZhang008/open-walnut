@@ -80,11 +80,23 @@ function holdNextTurn(): void {
   held = new Promise<void>((resolve) => { releaseTurn = resolve })
 }
 
+/** Messages the fake CLI took, in order. */
+let taken: string[] = []
+
 function drainQueue(sessionId: string): void {
   const p = (async () => {
     try {
       const batch = await markProcessing(sessionId)
-      if (batch.length > 0) await removeProcessed(sessionId, batch.map((m) => m.id))
+      if (batch.length === 0) return
+      await removeProcessed(sessionId, batch.map((m) => m.id))
+      taken.push(...batch.map((m) => m.message))
+      // Written to the CLI, and the CLI took the line (its `command_lifecycle started`).
+      bus.emit(EventNames.SESSION_MESSAGES_DELIVERED,
+        { sessionId, count: batch.length, messageIds: batch.map((m) => m.id) },
+        ['main-ai', 'session-runner'], { source: 'session-runner' })
+      bus.emit(EventNames.SESSION_USER_LINE,
+        { sessionId, uuid: `line-${batch[0].id}`, rowIds: batch.map((m) => m.id) },
+        ['main-ai'], { source: 'session-runner' })
     } catch { /* the store may be torn down between tests */ }
   })()
   inFlightDrains.add(p)
@@ -318,6 +330,87 @@ describe('inFlight marks the running turn, and only it', () => {
       // frame, the rows it refetches must already be clean.
       releaseTurn?.()
       await sse.waitFor((e) => e.event === 'message-end', 30_000)
+      const after = await getMessages(convId)
+      expect(after.every((m) => !('inFlight' in m))).toBe(true)
+    } finally {
+      releaseTurn?.()
+      sse.close()
+    }
+  }, 60_000)
+
+  it('a message sent with join mid-turn goes into the running turn, which answers it, and its row carries its id', async () => {
+    started = []
+    taken = []
+    holdNextTurn()
+    const convId = await createConv()
+    const sse = await connectSse(apiUrl(`/api/v1/conversations/${convId}/stream`))
+    try {
+      const own = 'qm-mobile-0000000001'
+      const res = await fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'start the long job', messageId: own }),
+      })
+      expect(res.status).toBe(202)
+      await sse.waitFor((e) => e.event === 'message-start')
+      const lane = await waitForLane(convId)
+      await updateSessionRecord(lane.sessionId, { pid: 4242, startedAt: '2025-01-01T00:00:00.000Z' })
+      const turnId = (sse.events.find((e) => e.event === 'message-start')?.data as { turnId?: string }).turnId
+      // An older phone (no `join`) is refused mid-turn, as it always was.
+      expect((await postMessage(convId, 'from an older phone')).status).toBe(409)
+      // The phone's second message goes into the running turn.
+      const joined = 'qm-mobile-0000000002'
+      const join = (): Promise<Response> => fetch(apiUrl(`/api/v1/conversations/${convId}/messages`), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'and also check the logs', messageId: joined, join: true }),
+      })
+      const sent = await join()
+      expect(sent.status).toBe(202)
+      expect(await sent.json()).toEqual({ turnId, joined: true, sessionId: lane.sessionId })
+      // A repeat of the POST (a lost answer) is answered by the same turn and sends nothing again.
+      const again = await join()
+      expect(again.status).toBe(202)
+      expect(await again.json()).toEqual({ turnId, duplicate: true, joined: true, sessionId: lane.sessionId })
+      for (let i = 0; i < 50 && taken.length === 0; i++) await new Promise((r) => setTimeout(r, 50))
+      expect(taken).toEqual(['and also check the logs'])
+      // Close to now, so the turn's chat-history copy finds its own row by time.
+      const at = (s: number): string => new Date(Date.now() + s * 1000).toISOString()
+      await writeJsonl(lane.cwd, lane.sessionId, [
+        { ...(userLine('earlier question') as object), timestamp: at(-600) },
+        { ...(asstLine('earlier answer') as object), timestamp: at(-590) },
+        { ...(userLine('start the long job') as object), timestamp: at(1) },
+        { ...(asstLine('Starting it now.') as object), timestamp: at(2) },
+        { ...(toolLine('tu-first') as object), timestamp: at(3) },
+        // The CLI's own line of the message sent into the turn.
+        { ...(userLine('and also check the logs') as object), timestamp: at(4) },
+        { ...(toolLine('tu-second') as object), timestamp: at(5) },
+      ])
+
+      const mid = await getMessages(convId) as Array<V1Message & { messageId?: string }>
+      expect(mid.map((m) => `${m.role}:${m.kind ?? 'text'}:${m.text}`)).toEqual([
+        'user:text:earlier question',
+        'assistant:text:earlier answer',
+        'user:text:start the long job',
+        'assistant:text:Starting it now.',
+        'assistant:tool:Bash',
+        'user:text:and also check the logs',
+        'assistant:tool:Bash',
+      ])
+      // Everything after the turn's OWN message is the running turn, the message sent
+      // into it included: the last user row is not the boundary any more.
+      expect(mid.map((m) => m.inFlight)).toEqual([undefined, undefined, undefined, true, true, true, true])
+      // Each user row carries the id its client sent it under.
+      expect(mid[2].messageId).toBe(own)
+      expect(mid[5].messageId).toBe(joined)
+
+      releaseTurn?.()
+      const end = await sse.waitFor((e) => e.event === 'message-end', 30_000)
+      // One turn, one end: the answer that covers both messages.
+      expect(end.data).toEqual({ turnId, fullText: 'the lane answered' })
+      // The conversation is free again: a plain send starts the next turn.
+      holdNextTurn()
+      expect((await postMessage(convId, 'next question')).status).toBe(202)
+      releaseTurn?.()
+      await sse.waitFor((e) => e.event === 'message-end' && e !== end, 30_000)
       const after = await getMessages(convId)
       expect(after.every((m) => !('inFlight' in m))).toBe(true)
     } finally {

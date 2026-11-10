@@ -36,14 +36,35 @@ protocol ChatSendTransport {
     /// Behind the seam for the queue's sake: a STOP is one of the moments that has to
     /// drain (see `stopTurn`), and a stop that cannot succeed cannot be shown to.
     func stopConversation(id: String, agentID: String) async throws -> ConversationStopped
+    /// The same POST with `join: true`: a message for the conversation's running turn
+    /// (ChatLaneJoin.swift). Throws `turn_active` when that turn cannot take it now.
+    func joinMessage(
+        conversationID: String, agentID: String, text: String, messageId: String
+    ) async throws -> ChatJoinReceipt
+    /// Whether a send during a turn is offered to that turn (`joinMessage`) at all.
+    /// The real API always offers it (an older server answers 409, and the words wait
+    /// here as before); a transport that cannot keeps the old line.
+    var sendsIntoRunningTurn: Bool { get }
 }
 
-extension WalnutAPI: ChatSendTransport {}
+extension WalnutAPI: ChatSendTransport {
+    var sendsIntoRunningTurn: Bool { true }
+}
 
 /// A chat POST's 202. `duplicate`: the server had already taken this message (same
 /// `messageId`) and started no turn for this request.
 struct ChatSendReceipt: Equatable, Sendable {
     let turnId: String
+    var duplicate = false
+}
+
+/// A `join` POST's 202. `joined`: the message went into the running turn `turnId`,
+/// on the lane session `sessionId`. Without it the turn had just ended and the
+/// message started a turn of its own (or the server had it already: `duplicate`).
+struct ChatJoinReceipt: Equatable, Sendable {
+    let turnId: String
+    var joined = false
+    var sessionId: String?
     var duplicate = false
 }
 
@@ -97,6 +118,25 @@ final class ChatStore {
     /// "not over" forever and the composer would stay frozen after a genuinely
     /// lost message-end, which is the freeze this watchdog exists to break.
     private var lastFetchSettledTurn: Bool?
+
+    // MARK: Sends into the running turn (ChatLaneJoin.swift)
+
+    @ObservationIgnored private let laneQueueMaker: (String) -> SessionQueueModel
+    /// The line of the lane session a message went into, read while one is followed:
+    /// its bubble's Queued and Delivered come from it.
+    private(set) var laneQueue: SessionQueueModel?
+    @ObservationIgnored private var laneFollow: Task<Void, Never>?
+    /// Each bubble sent into a turn, by bubble id: the message id it went in under.
+    private(set) var joinedBubbles: [String: String] = [:]
+    /// The last send into a turn: the next one goes out after it, so two sends made
+    /// in a row reach the server, and so the lane, in the order they were made.
+    @ObservationIgnored private var joinChain: Task<Void, Never>?
+    /// Sends into a turn still on their way, by conversation: anything sent there
+    /// meanwhile that does not go into the turn too waits behind them.
+    private(set) var joinsOut: [String: Int] = [:]
+    /// How often a followed send's line is read, and for how long at most.
+    nonisolated(unsafe) static var laneFollowPoll: Duration = .milliseconds(1500)
+    nonisolated(unsafe) static var laneFollowLimit: TimeInterval = 10 * 60
 
     var conversations: [ConversationSummary] = []
     /// The agent's asks exactly as the Mac's Ask drawer lists them
@@ -361,10 +401,12 @@ final class ChatStore {
     /// conversation-switch ordering and the real queue drain without a network.
     init(transport: ChatMessagesTransport? = nil, sendTransport: ChatSendTransport? = nil,
          uploads: SessionUploadTransport? = nil,
+         laneQueueMaker: ((String) -> SessionQueueModel)? = nil,
          cloudMarksDefaults: UserDefaults = .standard) {
         self.transport = transport ?? api
         self.sendTransport = sendTransport ?? api
         self.uploads = uploads ?? api
+        self.laneQueueMaker = laneQueueMaker ?? { SessionQueueModel(sessionId: $0) }
         self.cloudMarks = CloudAnswerMarks(defaults: cloudMarksDefaults)
         LifecycleHub.shared.register(self)
     }
@@ -682,6 +724,7 @@ final class ChatStore {
         localRowConversation.removeAll()
         inconclusiveSends.removeAll()
         sendsShownByServer.removeAll()
+        forgetLane()
         // Banked sends outlive a conversation switch (they are the user's words,
         // not a view state), so the rows that picture them are rebuilt here — the
         // wipe above removed the bubbles, never the queue.
@@ -1180,7 +1223,18 @@ final class ChatStore {
         // Not in a new chat: there is no conversation to bank against, so the words
         // go now and make it, and the file send moves to it (`moveNewChatFileSends`).
         let fileSendAhead = activeID != nil && hasFileSendAheadHere
-        if isActive, sending || streaming || hasQueuedSendsHere || fileSendAhead {
+        // A turn is running here: the words go straight into it, as on the web. The
+        // server decides whether it can take them; when it cannot, they wait here.
+        if isActive, sendTransport.sendsIntoRunningTurn, ChatLaneJoinRules.mayJoin(
+            streaming: streaming, joining: joinsOutHere > 0, sending: sending,
+            waitingHere: hasQueuedSendsHere || fileSendAhead, pendingQuestion: pendingQuestion,
+            online: connection?.online != false, hasConversation: activeID != nil, hasImages: !images.isEmpty
+        ) {
+            return joinRunningTurn(text, images: images, messageId: messageId)
+        }
+        // Also behind a send into the turn still on its way: a new turn must not
+        // overtake it.
+        if isActive, sending || streaming || hasQueuedSendsHere || fileSendAhead || joinsOutHere > 0 {
             return enqueue(text, images: images, messageId: messageId) ? .queued : .refusedKeepingNothing
         }
         guard acceptsNewTurn else { return .refusedKeepingNothing }
@@ -2223,6 +2277,10 @@ final class ChatStore {
     /// removed from the row at the same moment (`queuedRowStates` drives the badge),
     /// because a Withdraw button that silently does nothing is worse than no button.
     func withdrawQueued(_ rowID: String) {
+        if queuedRowStates[rowID] == nil, let messageID = joinedBubbles[rowID] {
+            withdrawJoined(messageID)
+            return
+        }
         guard queuedRowStates[rowID] == .pending else { return }
         setQueue(queuedSends.filter { $0.id != rowID })
         messages.removeAll { $0.id == rowID }
@@ -2310,6 +2368,7 @@ final class ChatStore {
     /// exists to protect.
     private func scheduleQueueDrain() {
         guard isActive, !sending, !streaming, !queuedSends.isEmpty else { return }
+        guard joinsOutHere == 0 else { return }
         guard connection?.online != false else { return }
         guard let next = ChatSendQueueRules.nextDeliverable(
             queuedSends, conversationID: activeID, agentID: activeAgentID
@@ -2330,6 +2389,7 @@ final class ChatStore {
     private func drainQueue() async {
         while true {
             guard isActive, !sending, !streaming, !Task.isCancelled else { return }
+            guard joinsOutHere == 0 else { return }
             guard connection?.online != false else { return }
             guard let index = ChatSendQueueRules.nextDeliverable(
                 queuedSends, conversationID: activeID, agentID: activeAgentID
@@ -2428,6 +2488,206 @@ final class ChatStore {
         await queueDrainTask?.value
     }
 
+    // MARK: - Sends into the running turn (ChatLaneJoin.swift)
+
+    /// Each bubble's state for the timeline: a banked row's own, else the lane's for a
+    /// message sent into the turn.
+    var bubbleSendStates: [String: QueuedSend.Status] {
+        ChatLaneJoinRules.bubbleStates(
+            banked: queuedRowStates, lane: laneQueue?.sendStates ?? [:], joined: joinedBubbles
+        )
+    }
+
+    /// Sends into a turn still on their way in the conversation on screen.
+    private var joinsOutHere: Int { activeID.map { joinsOut[$0] ?? 0 } ?? 0 }
+
+    /// The conversation on screen changed: the lane line followed is not this one's.
+    private func forgetLane() {
+        laneFollow?.cancel()
+        laneFollow = nil
+        laneQueue?.stop()
+        laneQueue = nil
+        joinedBubbles.removeAll()
+    }
+
+    /// Send these words into the running turn: their bubble at once, then the send,
+    /// after any earlier one into it.
+    private func joinRunningTurn(_ text: String, images: [SelectedImage], messageId: String?) -> SendOutcome {
+        guard let conversationID = activeID else { return .refusedKeepingNothing }
+        guard ChatSendQueueRules.hasContent(text: text, images: []) else { return .refusedKeepingNothing }
+        let messageId = messageId ?? SendRetryPolicy.newMessageId()
+        var bubble = ChatMessage(
+            id: "local-\(UUID().uuidString)", role: "user", text: text,
+            createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil
+        )
+        bubble.pending = true
+        bubble.clientMessageId = messageId
+        messages.append(bubble)
+        localRowConversation[bubble.id] = conversationID
+        joinsOut[conversationID, default: 0] += 1
+        bottomPinned = true
+        if isActive { scrollToBottomSignal += 1 }
+        let send = JoinedSend(
+            bubbleID: bubble.id, text: text, messageId: messageId,
+            conversationID: conversationID, agentID: activeAgentID, createdAt: bubble.createdAt
+        )
+        let previous = joinChain
+        joinChain = Task { @MainActor [weak self] in
+            await previous?.value
+            await self?.deliverJoin(send)
+        }
+        return .queued
+    }
+
+    private struct JoinedSend {
+        let bubbleID: String
+        let text: String
+        let messageId: String
+        let conversationID: String
+        let agentID: String
+        let createdAt: String
+    }
+
+    /// Deliver one send into the turn. Whatever happens, the words stay somewhere: in
+    /// the turn, in a turn of their own, back in the line here (the turn could not
+    /// take them, or nothing reached the server), or a failed bubble to retry (the
+    /// server may have them; a retry under the same id is answered once).
+    private func deliverJoin(_ send: JoinedSend) async {
+        defer {
+            let left = max(0, (joinsOut[send.conversationID] ?? 0) - 1)
+            joinsOut[send.conversationID] = left == 0 ? nil : left
+            if left == 0 { scheduleQueueDrain() }
+        }
+        // An earlier one went back in the line here: this one waits behind it.
+        if queuedSends.contains(where: {
+            $0.conversationID == send.conversationID && $0.agentID == send.agentID && $0.status != .undecided
+        }) {
+            bankJoin(send)
+            return
+        }
+        do {
+            let receipt = try await sendTransport.joinMessage(
+                conversationID: send.conversationID, agentID: send.agentID, text: send.text,
+                messageId: send.messageId
+            )
+            if let idx = messages.firstIndex(where: { $0.id == send.bubbleID }) { messages[idx].pending = false }
+            connection?.reportReachability(true, source: "chat-rest")
+            if receipt.joined {
+                AppLog.info("chat", "a message went into the running turn", [
+                    "conversationID": send.conversationID, "messageId": send.messageId,
+                ])
+                if let laneID = receipt.sessionId, !laneID.isEmpty, stillViewing(send.conversationID) {
+                    joinedBubbles[send.bubbleID] = send.messageId
+                    followLane(laneID).watch(send.messageId)
+                }
+            } else {
+                // The turn had just ended: the message started the next one.
+                adoptJoinAsTurn(send, receipt: receipt)
+            }
+        } catch {
+            if ChatLaneJoinRules.keepsForAfterTheTurn(error) || ChatSendQueueRules.earnsAutomaticRetry(error) {
+                bankJoin(send)
+                return
+            }
+            if Self.sendMayHaveArrived(error) { inconclusiveSends.insert(send.bubbleID) }
+            markSendFailed(send.bubbleID)
+            reportIfNetwork(error)
+            if stillViewing(send.conversationID) { errorMessage = error.localizedDescription }
+        }
+    }
+
+    /// A send into the turn that the server ran as a turn of its own (the turn it was
+    /// meant for had ended): the screen follows that turn as it does any send's.
+    private func adoptJoinAsTurn(_ send: JoinedSend, receipt: ChatJoinReceipt) {
+        guard isActive, stillViewing(send.conversationID), !streaming else { return }
+        streaming = true
+        streamText = ""
+        streamTextTruncated = false
+        activity = nil
+        watchedUserText = send.text
+        startTurnWatchdog(conversationID: send.conversationID)
+        if receipt.duplicate { settleRepeatedSend(conversationID: send.conversationID) }
+    }
+
+    /// The words go back in the line here, in their bubble's place and ahead of every
+    /// send made after them, and go out as a turn of their own once the running one
+    /// is over.
+    private func bankJoin(_ send: JoinedSend) {
+        joinedBubbles[send.bubbleID] = nil
+        let entry = QueuedSend(
+            id: "queued-\(UUID().uuidString)", conversationID: send.conversationID, agentID: send.agentID,
+            text: send.text, images: [], createdAt: send.createdAt, messageId: send.messageId
+        )
+        // Where its bubble stands: entries whose bubbles stand below it were sent after it.
+        let position = messages.firstIndex(where: { $0.id == send.bubbleID }) ?? Int.max
+        let shown = Dictionary(messages.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let queue = ChatLaneJoinRules.inserting(entry, into: queuedSends) { (shown[$0.id] ?? Int.max) > position }
+        guard setQueue(queue) else {
+            markSendFailed(send.bubbleID)
+            return
+        }
+        AppLog.info("chat", "a send into the running turn waits for the turn to end", [
+            "conversationID": send.conversationID,
+        ])
+        guard let idx = messages.firstIndex(where: { $0.id == send.bubbleID }) else { return }
+        messages[idx] = bubble(for: entry)
+        localRowConversation[send.bubbleID] = nil
+        localRowConversation[entry.id] = send.conversationID
+    }
+
+    /// Read the lane's line while a send into it is followed, until each has shown
+    /// Delivered (and never longer than `laneFollowLimit`).
+    private func followLane(_ laneID: String) -> SessionQueueModel {
+        let queue: SessionQueueModel
+        if let current = laneQueue, current.sessionId == laneID {
+            queue = current
+        } else {
+            laneFollow?.cancel()
+            laneFollow = nil
+            laneQueue?.stop()
+            queue = laneQueueMaker(laneID)
+            queue.onWithdrawn = { [weak self] messageID in self?.joinedWithdrawn(messageID) }
+            laneQueue = queue
+        }
+        if laneFollow == nil {
+            laneFollow = Task { @MainActor [weak self] in
+                let deadline = Date().addingTimeInterval(Self.laneFollowLimit)
+                while !Task.isCancelled, Date() < deadline {
+                    try? await Task.sleep(for: Self.laneFollowPoll)
+                    guard let self, let queue = self.laneQueue, !Task.isCancelled else { return }
+                    if queue.sendStates.isEmpty { break }
+                    await queue.refresh()
+                }
+                guard !Task.isCancelled else { return }
+                self?.laneFollow = nil
+            }
+        }
+        return queue
+    }
+
+    /// Take back a message sent into the turn that is still waiting to go in.
+    private func withdrawJoined(_ messageID: String) {
+        guard let queue = laneQueue, queue.sendStates[messageID] == .pending else { return }
+        Task { @MainActor in
+            if !queue.rows.contains(where: { $0.id == messageID }) { await queue.refresh() }
+            if let row = queue.rows.first(where: { $0.id == messageID }) { await queue.withdraw(row) }
+        }
+    }
+
+    private func joinedWithdrawn(_ messageID: String) {
+        let gone = joinedBubbles.filter { $0.value == messageID }.map(\.key)
+        for id in gone {
+            joinedBubbles[id] = nil
+            messages.removeAll { $0.id == id }
+            localRowConversation[id] = nil
+        }
+    }
+
+    /// Test seam: await the last send into a turn.
+    func awaitLaneJoinsForTesting() async {
+        await joinChain?.value
+    }
+
     // MARK: - SSE
 
     func connectStream() {
@@ -2481,6 +2741,10 @@ final class ChatStore {
         clearLiveThinking()
         activity = nil
         forgetLiveTurn()
+        // The lane line is read only while the screen shows it; a send into the turn
+        // still on its way finishes on its own (its bubble is settled by the reload).
+        laneFollow?.cancel()
+        laneFollow = nil
     }
 
     private func resumeStream() {
@@ -2989,8 +3253,14 @@ final class ChatStore {
         // The server says which rows are in flight. They are a contiguous tail by
         // contract, so cutting at the FIRST of them also keeps a row the server
         // forgot to flag from slipping in behind one it did.
+        // The watched row bounds it too: a server that takes the LAST user row as the
+        // turn's start leaves a message sent into the turn unflagged and the turn's
+        // rows above it with it (servers before the boundary fix).
+        let watchedEnd = watched.flatMap { watched in
+            fetched.lastIndex(where: { $0.role == "user" && $0.kind == nil && $0.text == watched }).map { $0 + 1 }
+        }
         if let first = fetched.firstIndex(where: { $0.inFlight == true }) {
-            return Array(fetched[..<first])
+            return Array(fetched[..<min(first, watchedEnd ?? first)])
         }
         // Older server: the watched user row is the only boundary there is. With
         // no watched text, or none matching, NOTHING is dropped: guessing a
@@ -3015,7 +3285,10 @@ final class ChatStore {
         guard let userIdx = history.lastIndex(where: { $0.role == "user" && $0.text == watched }) else {
             return false
         }
-        return history[(userIdx + 1)...].contains { $0.role == "assistant" && $0.kind == nil }
+        // A turn is over once it answered every message in it: one sent into it while
+        // it ran (a user row after the watched one) needs a reply after it too.
+        let lastAsked = history[(userIdx + 1)...].lastIndex { $0.role == "user" && $0.kind == nil } ?? userIdx
+        return history[(lastAsked + 1)...].contains { $0.role == "assistant" && $0.kind == nil }
     }
 
     private func finalizeTurn(conversationID: String, fullText: String, answeredOnCloud: Bool = false) {

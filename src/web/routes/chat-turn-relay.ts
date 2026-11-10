@@ -623,6 +623,11 @@ export function activeRelayedTurnCount(): number {
   return primaryTurns.size
 }
 
+/** Replica: the relayed turn this box follows on the conversation, if any (chat-join-relay.ts). */
+export function followedRelayTurnId(conversationId: string): string | undefined {
+  return inFlight.get(conversationId)?.turnId
+}
+
 /** conversationId → turnId for turns whose SSE frames must be mirrored down. */
 const mirroring = new Map<string, string>()
 
@@ -728,6 +733,10 @@ export interface PrimaryChatTurnOutcome {
   /** On a duplicate: the turn is still running here, so its frames are still
    *  being mirrored down. Absent on an older primary. */
   running?: boolean
+  /** A `join` relay: the message went into the running turn `turnId`, on the lane
+   *  session `sessionId` (chat-join-relay.ts). Absent from an older primary. */
+  joined?: boolean
+  sessionId?: string
 }
 
 /**
@@ -764,6 +773,11 @@ export async function handlePrimaryChatTurnRelay(
   // ("what is this?" is the picture itself). Text-only still requires text.
   if (text.trim().length === 0 && imagePaths.length === 0) {
     return { accepted: false, turnId, reason: 'bad_request', message: 'text (non-empty string) is required' }
+  }
+  // A message for the running turn: it goes into that turn or is refused, never a turn of its own.
+  if (params.join === true) {
+    const { handlePrimaryChatJoin } = await import('./chat-join-relay.js')
+    return handlePrimaryChatJoin(agentId, conversationId, text, turnId, messageId, imagePaths.length > 0)
   }
   const replay = replayOf(agentId, conversationId, turnId, messageId)
   if (replay) return replay

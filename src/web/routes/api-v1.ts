@@ -35,6 +35,7 @@ import { parseSearchPromptMessage } from '../../core/task-search-transcript.js'
 import { VALID_PHASES } from '../../core/phase.js'
 import { CLOUD_MODE, LOG_DIR, NOTES_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
+import { answerJoin, closeJoin, joinedReceiptOf, offerJoin, openJoin, type JoinOffer } from './api-v1-join.js'
 import { listConversations, createConversation } from '../../core/conversations.js'
 import { followerKind, isCompanion } from '../../core/server-role.js'
 import { enqueueAgentTurn, getQueueStatus } from '../agent-turn-queue.js'
@@ -626,13 +627,35 @@ function cloudAnsweredBy(entry: ChatEntry): { answeredBy?: 'cloud' } {
 function stampInFlight(rows: ApiV1Message[], conversationId: string): ApiV1Message[] {
   // `activeTurns` covers a turn that is running OR still queued behind another
   // one, which is exactly the window in which "is it over?" must answer no.
-  if (!activeTurns.has(conversationId)) return rows
-  let lastUser = -1
-  for (let i = rows.length - 1; i >= 0; i--) {
-    if (rows[i].role === 'user') { lastUser = i; break }
+  const turnId = activeTurns.get(conversationId)
+  if (turnId === undefined) return rows
+  const boundary = inFlightBoundary(rows, activeTurnMessageIds.get(conversationId), turnId)
+  if (boundary === -1 || boundary === rows.length - 1) return rows
+  return rows.map((row, i) => (i > boundary ? { ...row, inFlight: true as const } : row))
+}
+
+/**
+ * The row the running turn answers: its own user row, found by the client's id for
+ * it, else the last user row. A message sent into the lane while the turn runs (the
+ * phone's mid-turn send, the web's) is a user row INSIDE the turn: taken as the
+ * boundary, it left the turn's tool and text rows above it unmarked, and with
+ * nothing after it yet it marked nothing, so the phone's watchdog read a running
+ * turn as over. Exported for tests.
+ */
+export function inFlightBoundary(
+  rows: ReadonlyArray<Pick<ApiV1Message, 'role' | 'messageId'>>,
+  own: { turnId: string; messageId: string } | undefined,
+  turnId: string,
+): number {
+  if (own && own.turnId === turnId) {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (rows[i].role === 'user' && rows[i].messageId === own.messageId) return i
+    }
   }
-  if (lastUser === -1 || lastUser === rows.length - 1) return rows
-  return rows.map((row, i) => (i > lastUser ? { ...row, inFlight: true as const } : row))
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].role === 'user') return i
+  }
+  return -1
 }
 
 /**
@@ -1687,6 +1710,17 @@ apiV1Router.get('/conversations/:id/stream', async (req: Request, res: Response,
 
 /** REST-initiated turns currently running or queued, keyed by conversation. */
 const activeTurns = new Map<string, string>()
+/** The client's id for the message each of those turns answers (stampInFlight's
+ *  boundary). Read only while its turnId is the conversation's active one, so an
+ *  entry a finished turn left behind means nothing; one per conversation. */
+const activeTurnMessageIds = new Map<string, { turnId: string; messageId: string }>()
+
+/** Register a REST-initiated turn, with the client's id for its message when it has one. */
+function noteActiveTurn(conversationId: string, turnId: string, messageId: string | undefined): void {
+  activeTurns.set(conversationId, turnId)
+  if (messageId) activeTurnMessageIds.set(conversationId, { turnId, messageId })
+  else activeTurnMessageIds.delete(conversationId)
+}
 
 // ── Image attachments (additive) ──
 // Frozen-contract note: `images` is optional. Absent → identical to today.
@@ -1800,6 +1834,11 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
       unsureTurnId = step.unsureTurnId
     }
     if (activeTurns.has(conversationId)) {
+      // A client that asks to send into the running turn (api-v1-join.ts). Every
+      // other request, and one the turn cannot take now, gets the 409 it always got.
+      const running = activeTurns.get(conversationId)
+      if (req.body?.join === true && images.length === 0 && messageId && running
+        && await answerJoin(res, agentId, conversationId, running, text, messageId)) return
       sendError(res, 409, 'turn_active', 'A turn is already active on this conversation')
       return
     }
@@ -1849,7 +1888,7 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
     // or is refused gives it back, or keeps it unsure (runApiV1TurnRouted).
     const claim = messageId ? claimChatSend(agentId, conversationId, messageId, turnId) : undefined
     if (!CLOUD_MODE) claim?.started()
-    activeTurns.set(conversationId, turnId)
+    noteActiveTurn(conversationId, turnId, messageId)
     log.web.info('api-v1 message accepted', {
       conversationId, turnId, agentId, messageLength: text.length, imageCount: images.length,
       ...(messageId ? { messageId } : {}),
@@ -1925,6 +1964,15 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
     next(err)
   }
 })
+
+/** Primary: a replica relays a message for the conversation's running turn, which
+ *  may be a relayed turn or one a client started here (chat-join-relay.ts). */
+export function offerJoinToRunningTurn(
+  agentId: string, conversationId: string, text: string, messageId: string,
+): JoinOffer | null {
+  const turnId = activeTurns.get(conversationId)
+  return turnId ? offerJoin(agentId, conversationId, turnId, text, messageId) : null
+}
 
 /** What became of a turn's start, for a POST that waits for it (a retry of an
  *  unsure relay). */
@@ -2126,7 +2174,8 @@ function repeatStep(res: Response, agentId: string, conversationId: string, mess
     conversationId, turnId: prior.turnId, agentId, messageId,
     active: activeTurns.get(conversationId) === prior.turnId,
   })
-  res.status(202).json({ turnId: prior.turnId, duplicate: true })
+  // A message that went into a running turn says so again (api-v1-join.ts).
+  res.status(202).json({ turnId: prior.turnId, duplicate: true, ...joinedReceiptOf(agentId, conversationId, messageId) })
   return { kind: 'answered' }
 }
 
@@ -2173,7 +2222,7 @@ export async function runRelayedApiV1Turn(
   // turn ran on this box with nothing marking its rows in flight, which is the one
   // topology where the phone reads its rows THROUGH this box. Released in the
   // `finally` below, plus early by the terminal frame (see emitSse).
-  activeTurns.set(conversationId, turnId)
+  noteActiveTurn(conversationId, turnId, messageId)
   try {
     await runApiV1Turn(agentId, conversationId, text, turnId, imageData, messageId)
   } finally {
@@ -2324,6 +2373,8 @@ async function runApiV1LaneTurn(
     `api-v1-lane-relay-${turnId}`,
     (event, data) => emitSse(conversationId, event, data),
   )
+  /** The chat-history copies of the messages sent into this turn (api-v1-join.ts). */
+  const joinedRows: Promise<unknown>[] = []
 
   try {
     const turn = await runLaneTurn(agentId, conversationId, message, {
@@ -2332,8 +2383,14 @@ async function runApiV1LaneTurn(
       // The lane is still busy with an earlier turn that stalled: this one waits
       // for it (lane-turn-gate.ts). Say so, or the wait reads as a hang.
       onQueued: () => emitSse(conversationId, 'queued', { turnId, position: 1 }),
+      onJoinable: (joiner) => {
+        if (laneSessionId) openJoin({ agentId, conversationId, turnId, laneSessionId, joiner, rows: joinedRows })
+      },
     })
+    closeJoin(conversationId, turnId)
     const { sessionId, resultText } = turn
+    // A message sent into the turn has its row before the answer that covers it.
+    await Promise.allSettled(joinedRows)
 
     // The turn is over: hand the client the reasoning tail BEFORE any terminal
     // frame, then stop relaying.
@@ -2415,6 +2472,7 @@ async function runApiV1LaneTurn(
       conversationId, turnId, agentId, sessionId, resultLength: resultText.length,
     })
   } catch (err) {
+    closeJoin(conversationId, turnId)
     // getOrCreateLaneSession can still throw (no config, record write failure) —
     // without this the client would only learn of it from its own watchdog.
     relay.settle()
@@ -2422,6 +2480,7 @@ async function runApiV1LaneTurn(
     log.web.error('api-v1 lane turn error', { conversationId, turnId, agentId, error: errMsg })
     await persistAndEmitTurnError(agentId, conversationId, errMsg)
   } finally {
+    closeJoin(conversationId, turnId)
     relay.dispose()
   }
 }

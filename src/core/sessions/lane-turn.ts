@@ -47,6 +47,9 @@ import {
   closeLaneGate, openLaneGate, drainLaneGate, laneGate, readLaneProcess, laneProcessDead, _closedLaneGatesForTesting,
 } from './lane-turn-gate.js';
 import { releaseTurnSlotWhile } from '../turn-slot.js';
+import { LaneTurnJoins, MAX_JOINS_PER_TURN, type LaneTurnJoiner } from './lane-turn-joins.js';
+
+export type { LaneTurnJoiner } from './lane-turn-joins.js';
 
 /**
  * A lane turn whose CLI stream produced NOTHING for this long has stalled.
@@ -166,6 +169,10 @@ export function _outstandingLateLanesForTesting(): string[] {
  * @param opts.onQueued     called once when this turn has to wait for an earlier,
  *                          stalled turn on the same lane (the gate below), so the
  *                          caller can show a wait instead of a hang.
+ * @param opts.onJoinable   called once the turn's message is on its way, with the handle
+ *                          that sends a later message into this turn (lane-turn-joins.ts).
+ *                          The turn then ends only when every message it took has its
+ *                          answer, and its result is those answers in order.
  */
 export async function runLaneTurn(
   agentId: string,
@@ -180,6 +187,7 @@ export async function runLaneTurn(
     onQueued?: () => void;
     /** Run on this lane instead of the conversation's Personal AI lane. */
     target?: LaneTurnTarget;
+    onJoinable?: (joiner: LaneTurnJoiner) => void;
   },
 ): Promise<LaneTurnResult> {
   const stallMs = opts.stallMs ?? LANE_TURN_STALL_MS;
@@ -213,6 +221,12 @@ export async function runLaneTurn(
   let redeliverTimer: ReturnType<typeof setTimeout> | undefined;
   let redeliverKicks = 0;
   let redelivering = false;
+  /** Messages sent into this turn after its own (opts.onJoinable). */
+  const joins = new LaneTurnJoins();
+  /** Those whose send has not answered yet: their row may not be in the queue yet. */
+  const inFlightJoins = new Set<ReturnType<LaneTurnJoins['add']>>();
+  /** The last join's send: each waits for the one before, so they reach the queue in order. */
+  let joinSends: Promise<unknown> = Promise.resolve();
 
   let resolveTurn!: (r: LaneTurnResult) => void;
   const turn = new Promise<LaneTurnResult>((resolve) => { resolveTurn = resolve; });
@@ -234,6 +248,14 @@ export async function runLaneTurn(
    */
   const settleLate = (text: string | null, why: string, lane: 'open' | 'drain' = 'open'): void => {
     if (mode !== 'late' || !resolveLate) return;
+    if (joins.count > 0) {
+      // The late answer is every answer the lane gave this turn, its messages' included.
+      if (joins.answeredOwn) text = joins.text() ?? text;
+      // A message sent into the turn still unanswered: the CLI may yet run it, so the
+      // next turn waits for the lane (a dead CLI runs nothing more).
+      const dead = why === 'died' || why.startsWith('process-');
+      if (lane === 'open' && joins.pending > 0 && !dead) lane = 'drain';
+    }
     const resolve = resolveLate;
     resolveLate = null;
     log.session.info('lane turn late watch finished', {
@@ -249,6 +271,22 @@ export async function runLaneTurn(
 
   const finish = (resultText: string | null, why: string, failure?: LaneTurnFailure, stillRunning = false, undelivered = false): void => {
     if (mode !== 'turn') return;
+    if (resultText === null && joins.answeredOwn) {
+      // The turn's own message has its answer and a message sent into it has none,
+      // and now never gets one here (the CLI died or went silent). The turn ends with
+      // what was answered; a lane still running is drained, so the next turn cannot
+      // join the one the CLI may still be in (lane-turn-gate.ts).
+      log.session.warn('lane turn: ending before a message sent into it was answered', {
+        sessionId: sessionId ?? '', agentId, conversationId, source: opts.source, why, ...joins.waiting(),
+      });
+      if (stillRunning && sessionId) {
+        drainLaneGate({ sessionId, agentId, conversationId, source: opts.source, why, tickMs, windowMs: stallMs });
+      }
+      resultText = joins.text() ?? '';
+      failure = undefined;
+      stillRunning = false;
+      undelivered = false;
+    }
     let lateResult: Promise<string | null> | undefined;
     if (stillRunning && sessionId) {
       // Keep watching THIS turn: its answer may still come. The lane stays gated
@@ -286,9 +324,22 @@ export async function runLaneTurn(
     return turnGen >= delivered.turnGen;
   };
 
-  const takeResult = (text: string): void => {
-    if (mode === 'turn') finish(text, 'result');
-    else if (mode === 'late') settleLate(text, 'late-result');
+  const takeResult = (text: string, turnGen?: number): void => {
+    if (mode === 'done') return;
+    if (joins.count === 0) {
+      if (mode === 'late') settleLate(text, 'late-result');
+      else finish(text, 'result');
+      return;
+    }
+    joins.noteResult(text, turnGen);
+    if (joins.settled) {
+      if (mode === 'late') settleLate(joins.text() ?? text, 'late-result');
+      else finish(joins.text() ?? '', 'result');
+      return;
+    }
+    log.session.info('lane turn: answered, waiting for the messages sent into it', {
+      sessionId: sessionId ?? '', agentId, conversationId, source: opts.source, turnGen, ...joins.waiting(),
+    });
   };
 
   const confirmDelivery = (turnGen: number | undefined): void => {
@@ -298,7 +349,7 @@ export async function runLaneTurn(
     // result only if it closed the turn our message landed in (or a later one).
     const match = heldResults.find((r) => turnGen === undefined || r.turnGen >= turnGen);
     heldResults.length = 0;
-    if (match) takeResult(match.text);
+    if (match) takeResult(match.text, match.turnGen);
   };
 
   const consider = (event: BusEvent): void => {
@@ -306,9 +357,28 @@ export async function runLaneTurn(
     const d = event.data as { sessionId?: string };
     if (d?.sessionId !== sessionId) return;
     clock?.progress(Date.now());
+    if (event.name === EventNames.SESSION_USER_LINE) {
+      joins.noteTaken(eventData<'session:user-line'>(event).rowIds ?? []);
+      return;
+    }
+    if (event.name === EventNames.SESSION_QUEUED_CANCELLED) {
+      const ids = (event.data as { messageIds?: string[] }).messageIds ?? [];
+      if (joins.noteDropped(ids).length > 0) settleJoinsIfDone('dropped');
+      return;
+    }
+    if (event.name === EventNames.SESSION_BATCH_FAILED) {
+      // The failed rows are back in the line (or parked) now: not written any more,
+      // so a write reported after this event is the retry's. Only a row that is
+      // gone from the line, or parked, is not waited for.
+      const ids = (event.data as { messageIds?: string[] }).messageIds ?? [];
+      joins.noteUndelivered(ids);
+      void recheckFailed(ids);
+      return;
+    }
     if (event.name === EventNames.SESSION_MESSAGES_DELIVERED) {
-      if (!sendStarted) return;
       const dd = eventData<'session:messages-delivered'>(event);
+      joins.noteDelivered(dd.messageIds ?? [], dd.turnGen);
+      if (!sendStarted) return;
       for (const id of dd.messageIds ?? []) {
         if (ourMessageId === null) {
           if (deliveredBeforeId.size < EARLY_BUFFER_MAX) deliveredBeforeId.set(id, dd.turnGen);
@@ -332,7 +402,7 @@ export async function runLaneTurn(
         if (heldResults.length < HELD_RESULTS_MAX) heldResults.push({ turnGen: r.turnGen!, text: r.result ?? '' });
         return;
       }
-      if (verdict) takeResult(r.result ?? '');
+      if (verdict) takeResult(r.result ?? '', r.turnGen);
       return;
     }
     if (event.name === EventNames.SESSION_ERROR) {
@@ -349,6 +419,70 @@ export async function runLaneTurn(
       // Producers degrade rather than crash — resolve null, never reject.
       if (mode === 'turn') finish(null, `error:${e.errorKind ?? 'unknown'}`, 'died');
       else settleLate(null, 'died');
+    }
+  };
+
+  /** Every message the turn took has its answer now (one it waited for went away). */
+  const settleJoinsIfDone = (why: string): void => {
+    if (!joins.settled) return;
+    if (mode === 'turn') finish(joins.text() ?? '', why);
+    else if (mode === 'late') settleLate(joins.text(), why);
+  };
+
+  /** The line's rows that still wait to run (a parked row runs only by hand). */
+  const waitingRows = async (sid: string): Promise<Set<string>> => {
+    const { getQueue } = await import('../session-message-queue.js');
+    return new Set((await getQueue(sid)).filter((r) => r.status !== 'parked').map((r) => r.id));
+  };
+
+  /** A failed batch carrying messages sent into the turn: those back in the line are
+   *  waited for again (not written any more), the others are not waited for. */
+  const recheckFailed = async (ids: string[]): Promise<void> => {
+    const sid = sessionId;
+    if (!sid || mode === 'done' || ids.length === 0) return;
+    try {
+      const rows = await waitingRows(sid);
+      // Only what is still unwritten after the read: a retry may have been written meanwhile.
+      const gone = joins.unwritten().filter((j) => ids.includes(j.id) && !rows.has(j.id)).map((j) => j.id);
+      if (gone.length > 0 && joins.noteDropped(gone).length > 0) {
+        log.session.info('lane turn: a message sent into the turn left the line after a failed write', {
+          sessionId: sid, agentId, conversationId, messageIds: gone,
+        });
+        settleJoinsIfDone('dropped');
+      }
+    } catch { /* the tick's row check still applies */ }
+  };
+
+  /** A message sent into the turn whose row left the line, or was parked, before the
+   *  CLI was written it (withdrawn from a queue view, a stop): not waited for. Missing
+   *  at two reads in a row, since a row is taken off the line just before its write
+   *  is reported. */
+  let checkingRows = false;
+  const missingOnce = new Set<string>();
+  const dropWithdrawn = async (): Promise<void> => {
+    const sid = sessionId;
+    if (!sid || checkingRows || mode === 'done' || joins.unwritten().length === 0) return;
+    checkingRows = true;
+    try {
+      const { getQueue } = await import('../session-message-queue.js');
+      const status = new Map((await getQueue(sid)).map((r) => [r.id, r.status] as const));
+      const gone = joins.unwritten().filter((j) => {
+        if (inFlightJoins.has(j)) return false;
+        const st = status.get(j.id);
+        if (st === 'parked') return true;
+        if (st !== undefined) { missingOnce.delete(j.id); return false; }
+        if (missingOnce.has(j.id)) return true;
+        missingOnce.add(j.id);
+        return false;
+      });
+      if (gone.length === 0) return;
+      for (const j of gone) joins.remove(j);
+      log.session.info('lane turn: a message sent into the turn left the line unsent', {
+        sessionId: sid, agentId, conversationId, messageIds: gone.map((j) => j.id),
+      });
+      settleJoinsIfDone('withdrawn');
+    } catch { /* the next tick asks again */ } finally {
+      checkingRows = false;
     }
   };
 
@@ -391,6 +525,7 @@ export async function runLaneTurn(
   const onTick = async (): Promise<void> => {
     if (mode === 'done' || !sessionId || !clock || probing) return;
     void redeliverIfStranded();
+    void dropWithdrawn();
     const sid = sessionId;
     const stamp = lastSessionProgressAt(sid);
     if (stamp !== undefined) clock.progress(stamp);
@@ -446,6 +581,8 @@ export async function runLaneTurn(
       interest: [
         EventNames.SESSION_RESULT, EventNames.SESSION_ERROR, EventNames.SESSION_MESSAGES_DELIVERED,
         EventNames.SESSION_TOOL_USE, EventNames.SESSION_TOOL_RESULT,
+        // Messages sent into the turn (lane-turn-joins.ts): taken by the CLI, or gone unrun.
+        EventNames.SESSION_USER_LINE, EventNames.SESSION_BATCH_FAILED, EventNames.SESSION_QUEUED_CANCELLED,
       ],
     });
 
@@ -557,9 +694,87 @@ export async function runLaneTurn(
       }
     }
 
+    if (opts.onJoinable && mode === 'turn') {
+      try { opts.onJoinable(joinerFor(sessionId)); } catch (err) {
+        log.session.warn('lane turn onJoinable hook threw', {
+          sessionId, agentId, conversationId, source: opts.source,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     return await turn;
   } catch (err) {
     cleanup();
     throw err;
+  }
+
+  function joinerFor(sid: string): LaneTurnJoiner {
+    return {
+      offer: (text, messageId, onWritten) => {
+        if (mode !== 'turn' || sessionId !== sid) return null;
+        // Only once the CLI has the turn's own message: one sent around it could
+        // reach the CLI first. A just-created lane took it with its spawn.
+        if (!laneCreated && delivered === null) return null;
+        if (joins.count >= MAX_JOINS_PER_TURN) return null;
+        const joined = joins.add(messageId, onWritten);
+        inFlightJoins.add(joined);
+        log.session.info('lane turn: a message is sent into the running turn', {
+          sessionId: sid, agentId, conversationId, source: opts.source, messageId,
+        });
+        const previous = joinSends;
+        const sent = (async () => {
+          await previous.catch(() => {});
+          try {
+            // Whether this lane's CLI reports its queue (lane-turn-joins.ts): read
+            // before the send, so it is known by the time the CLI can answer.
+            const rec = await getLaneRecord(sid);
+            joined.reportsQueue = typeof rec?.lineLifecyclePid === 'number' && rec.lineLifecyclePid === rec.pid;
+            // The lane is being switched to another engine or moved with its task: a
+            // message sent now is held for the new session, which this turn never
+            // reads. Refused, so it waits for the next turn instead.
+            const { movingFrom, switchingFrom } = await import('./engine-switch.js');
+            if (movingFrom({ sessionId: sid }) || switchingFrom(sid)) throw new Error('the lane is moving to another session');
+            const { sendMessageToSession } = await import('../session-message-queue.js');
+            const queued = await sendMessageToSession(sid, text, { source: opts.source, messageId });
+            // The send went to another session (the lane moved to another engine):
+            // the message is in the conversation's lane now, so it is never sent
+            // again, but this turn never reads that lane's answer and does not wait.
+            if (typeof queued?.sessionId === 'string' && queued.sessionId !== sid) {
+              inFlightJoins.delete(joined);
+              joins.remove(joined);
+              log.session.info('lane turn: a message sent into the turn went to the lane\'s new session', {
+                sessionId: sid, movedTo: queued.sessionId, agentId, conversationId, messageId,
+              });
+              settleJoinsIfDone('moved');
+              return;
+            }
+            if (typeof queued?.id === 'string') joins.rename(joined, queued.id);
+            inFlightJoins.delete(joined);
+          } catch (err) {
+            inFlightJoins.delete(joined);
+            joins.remove(joined);
+            log.session.warn('lane turn: a message sent into the turn failed to queue', {
+              sessionId: sid, agentId, conversationId, messageId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            settleJoinsIfDone('result');
+            throw err;
+          }
+        })();
+        joinSends = sent;
+        return sent;
+      },
+    };
+  }
+}
+
+/** The lane's session record, for whether its CLI reports its queue. Null when unreadable. */
+async function getLaneRecord(sessionId: string): Promise<{ pid?: number | null; lineLifecyclePid?: number } | null> {
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    return (await getSessionByClaudeId(sessionId)) as { pid?: number | null; lineLifecyclePid?: number } | null;
+  } catch {
+    return null;
   }
 }

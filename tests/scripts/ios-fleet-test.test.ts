@@ -856,6 +856,17 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
     const q = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: 'Board layout (\u8bed\u97f3\u8f93\u5165, voice input)' }))
     expect(q.status, q.stderr).toBe(0)
     expect((q.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).not.toContain('--audio')
+    // Nor is a note that the recognizer misheard a word of that quote (2026-11-09: a chat task
+    // whose description says so was refused by every Mac where a person sits).
+    fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
+    const misheard = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: 'Chat send order. (\u300c\u83dc\u4e0a\u300d\u662f\u8bed\u97f3\u8bc6\u522b\u9519\u8bef, a speech recognition error)' }))
+    expect(misheard.status, misheard.stderr).toBe(0)
+    expect((misheard.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).not.toContain('--audio')
+    // A speech recognition feature still is one.
+    fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
+    const stt = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: '\u8bed\u97f3\u8bc6\u522b\u8d28\u91cf\u4e0b\u964d' }))
+    expect(stt.status, stt.stderr).toBe(0)
+    expect((stt.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).toMatch(/unit --audio .*its task says/)
     // A rule against sound ("the run starts only while its sound is muted") is no audio test.
     fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
     const rule = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: 'Board layout. lane B \u53ea\u5728\u90a3\u53f0\u7684\u58f0\u97f3\u662f\u9759\u97f3\u65f6\u624d\u5f00\u59cb\u8dd1' }))

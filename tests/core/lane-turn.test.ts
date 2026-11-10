@@ -249,12 +249,14 @@ describe('subscription hygiene', () => {
     await settleSend()
     const opts = subscribeSpy.mock.calls.at(-1)?.[2] as { global?: boolean; interest?: string[] }
     expect(opts?.global).toBe(true)
-    // Low-frequency events only: turn-over, death, delivery (result correlation)
-    // and tool starts/results (progress). Stream liveness is polled from
+    // Low-frequency events only: turn-over, death, delivery (result correlation),
+    // tool starts/results (progress), and the fate of a message sent into the turn
+    // (taken by the CLI, dropped unrun). Stream liveness is polled from
     // session-progress.ts instead of subscribing to deltas.
     expect(opts?.interest).toEqual([
       EventNames.SESSION_RESULT, EventNames.SESSION_ERROR, EventNames.SESSION_MESSAGES_DELIVERED,
       EventNames.SESSION_TOOL_USE, EventNames.SESSION_TOOL_RESULT,
+      EventNames.SESSION_USER_LINE, EventNames.SESSION_BATCH_FAILED, EventNames.SESSION_QUEUED_CANCELLED,
     ])
     for (const streaming of [EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_THINKING_DELTA]) {
       expect(opts?.interest?.some((p) => streaming.startsWith(p))).toBe(false)

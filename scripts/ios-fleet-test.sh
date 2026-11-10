@@ -140,7 +140,8 @@ try: d=json.load(sys.stdin)
 except Exception: sys.exit()
 t=d.get("task") or d
 s=((t.get("title") or "")+"\n"+(t.get("description") or ""))[:6000]
-s=re.sub(r"语音输入|语音转写|voice[- ]?(input|typed|typing|dictated)|by voice|dictated by", " ", s, flags=re.I)
+# How the quoted words were made (typed by voice, a word the recognizer got wrong) is no audio test.
+s=re.sub(r"语音输入|语音转写|语音识别错误|语音识别的错|voice[- ]?(input|typed|typing|dictated)|by voice|dictated by|(speech|voice)[- ]recognition (error|mistake)", " ", s, flags=re.I)
 # A rule against sound is no audio test (the rule of sim-queue.sh audio_why): sound words alone count
 # only in a sentence with no quiet, mute or "no" in it; the words of a voice feature always count.
 strong=re.compile(r"voice|microphone|\bmic\b|dictat|speech|transcrib|\bstt\b|\basr\b|\btts\b|read aloud|siri|语音|麦克风|录音|听写|朗读|说一段话", re.I)

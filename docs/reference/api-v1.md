@@ -563,8 +563,10 @@ Returns the most recent `limit` messages, **oldest-first**, normalized for mobil
   engine) carry no ref, so a drawer must always be able to render the excerpt
   alone.
 - `inFlight` (additive, 2026-09): `true` on every row of the turn that is
-  **still running right now**, i.e. the rows after the last `role: "user"` row
-  (the user row itself never carries it). Absent otherwise, which is also what an
+  **still running right now**, i.e. the rows after the turn's own `role: "user"`
+  row (that row itself never carries it). That is the last user row, except when a
+  message was sent into the running turn (`join`, below): its row, and everything
+  after the turn's own message, is part of the turn. Absent otherwise, which is also what an
   older server sends, so treat "absent" as "not in flight" and never as unknown.
   Read it before concluding a turn has ended: a lane transcript includes the
   model's INTERMEDIATE text, so "an assistant row exists after my message" is not
@@ -666,6 +668,29 @@ first turn is still running (where it would otherwise be a `409 turn_active`).
 - Every user row of the conversation names the `messageId` it was sent under (see
   `GET /conversations/:id/messages`), which is how a client can tell that its own
   copy of the message has arrived without comparing words.
+
+`join` (additive, 2026-11): `true` asks to send the message INTO the turn already
+running on the conversation, the way a session's message goes into its running
+turn on the web, instead of being refused. Only a text message with a `messageId`
+can join; without `join`, or on a server that predates it, a send during a turn is
+the `409 turn_active` below, as it always was.
+
+- `202 { "turnId", "joined": true, "sessionId" }`: the running turn `turnId` took
+  it. It went to that turn's lane session `sessionId`, whose queue
+  (`GET /sessions/:id/queue`) shows the message waiting until the CLI has it, and
+  the turn does not end until the message has its own answer. Its `message-end`
+  carries the answers in order, joined by a blank line. The message's row in
+  `GET /conversations/:id/messages` carries its `messageId` and is part of the
+  running turn (`inFlight`) until the turn ends.
+- `409 turn_active`: the running turn cannot take it now (its own message is not
+  with the CLI yet, or the turn is ending, or the send into it failed). Keep the
+  message and send it once the turn has ended.
+- `202 { "turnId" }` with no `joined`: no turn was running any more, so the message
+  started a turn of its own, as a plain send does.
+- A repeat of a joined message (same `messageId`) is answered `202` under the same
+  turn and is never sent into it twice.
+- On the cloud companion the primary decides (`server.chat.turn` with `join: true`);
+  an older primary refuses, which reads as `409 turn_active`.
 
 `images` (additive) attaches image content blocks to the turn:
 

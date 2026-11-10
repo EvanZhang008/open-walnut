@@ -50,7 +50,7 @@ struct ChatTimelineBody: View {
                 // Which bubbles are still waiting behind the running turn, and
                 // which are already being delivered. Store state, not a message
                 // field: it changes without the message changing.
-                queuedMessageStates: chat.queuedRowStates,
+                queuedMessageStates: chat.bubbleSendStates,
                 scrollToBottomSignal: chat.scrollToBottomSignal + repinSignal,
                 isPinned: { chat.bottomPinned },
                 setPinned: { chat.bottomPinned = $0 },

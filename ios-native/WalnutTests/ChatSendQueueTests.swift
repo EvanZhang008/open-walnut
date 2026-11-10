@@ -53,6 +53,36 @@ final class MockChatSendTransport: ChatSendTransport, @unchecked Sendable {
         return ConversationStopped(stopped: 1, questionCancelled: false)
     }
 
+    // MARK: Sends into the running turn (`join: true`)
+
+    /// Off by default: the queue's own tests pin the line a turn holds sends in.
+    var sendsIntoRunningTurn = false
+
+    /// Answers for the join POSTs, in order; past the end each is taken into the turn.
+    var joinAnswers: [Result<ChatJoinReceipt, Error>] = []
+    /// How long each join POST takes on the wire, in order; past the end none.
+    var joinDelays: [Duration] = []
+    private var joinPosts: [(text: String, messageId: String)] = []
+    /// Every join POST, in the order it reached the "server".
+    var joinedTexts: [String] { lock.lock(); defer { lock.unlock() }; return joinPosts.map(\.text) }
+    var joinedIDs: [String] { lock.lock(); defer { lock.unlock() }; return joinPosts.map(\.messageId) }
+
+    func joinMessage(
+        conversationID: String, agentID: String, text: String, messageId: String
+    ) async throws -> ChatJoinReceipt {
+        lock.lock()
+        let index = joinPosts.count + joinsInFlight
+        joinsInFlight += 1
+        let delay = index < joinDelays.count ? joinDelays[index] : nil
+        let answer = index < joinAnswers.count ? joinAnswers[index]
+            : .success(ChatJoinReceipt(turnId: "turn-running", joined: true, sessionId: "lane-1"))
+        lock.unlock()
+        if let delay { try? await Task.sleep(for: delay) }
+        lock.lock(); joinsInFlight -= 1; joinPosts.append((text, messageId)); lock.unlock()
+        return try answer.get()
+    }
+    private var joinsInFlight = 0
+
     /// Holds `createConversation` open the way `sendGate` holds a POST. This is the
     /// only suspension inside one send that happens BEFORE the POST, so it is the
     /// only place a test can act in the window the send reads its scope from.

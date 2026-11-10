@@ -94,6 +94,24 @@ struct WalnutAPI {
         return ChatSendReceipt(turnId: accepted.turnId, duplicate: accepted.duplicate == true)
     }
 
+    /// POST a message for the conversation's running turn (`join: true`, additive;
+    /// ChatLaneJoin.swift). Throws APIError.server(code: "turn_active") when that turn
+    /// cannot take it now, and an older server answers the same while a turn runs.
+    func joinMessage(
+        conversationID: String, agentID: String, text: String, messageId: String
+    ) async throws -> ChatJoinReceipt {
+        struct Body: Encodable { let text: String; let agentId: String; let messageId: String; let join: Bool }
+        struct Accepted: Codable { let turnId: String; let joined: Bool?; let sessionId: String?; let duplicate: Bool? }
+        let accepted: Accepted = try await send(
+            "POST", "/conversations/\(escape(conversationID))/messages",
+            body: Body(text: text, agentId: agentID, messageId: messageId, join: true)
+        )
+        return ChatJoinReceipt(
+            turnId: accepted.turnId, joined: accepted.joined == true, sessionId: accepted.sessionId,
+            duplicate: accepted.duplicate == true
+        )
+    }
+
     /// Read-only task projection. Fetches ALL tasks (no status query) so the
     /// smart-list filters can slice client-side. Throws APIError.server with
     /// code "unavailable" (503) when the companion hasn't synced yet.
