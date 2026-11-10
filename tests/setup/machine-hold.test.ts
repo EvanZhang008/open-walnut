@@ -112,7 +112,15 @@ describe('every test entry point reaches it (enumerated from the source)', () =>
     const configs = tracked(['*.config.ts', '**/*.config.ts', '*.config.mts', '**/*.config.mts'])
       .filter((f) => !f.includes('node_modules/') && /@playwright\/test/.test(read(f)))
     expect(configs).toContain('playwright.config.ts')
-    expect(configs.filter((f) => !/\bengageGate\(/.test(code(f)))).toEqual([])
+    // Itself, or by extending a config that does (an import of it engages the gate when it loads).
+    const reaches = (f: string, seen = new Set<string>()): boolean => {
+      if (seen.has(f)) return false
+      seen.add(f)
+      const src = code(f)
+      if (/\bengageGate\(/.test(src)) return true
+      return [...src.matchAll(/from '(\.{1,2}\/[^']*playwright\.config)(\.js|\.ts)?'/g)].some((m) => reaches(path.join(path.dirname(f), m[1] + '.ts'), seen))
+    }
+    expect(configs.filter((f) => !reaches(f))).toEqual([])
   })
 
   it('every Playwright browser a session launches passes the preload\'s check, whatever engine', () => {
