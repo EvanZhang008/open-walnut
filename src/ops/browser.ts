@@ -163,7 +163,7 @@ defineOp({
     + 'screenshot (full: the whole page, cut at 12000 px; annotate: numbers on the elements on screen, labels map number to ref); click_label {label}; '
     + 'zoom {x, y, width, height} (that region of the screen at full pixel resolution); text {all_frames: each frame\'s text on its own}; upload {ref, files: [{name, type, base64}]} (10 MB in all; `walnut browser upload e5 ./a.pdf` in a shell); '
     + 'downloads {wait?, ms?}; fill_login {item?} (signs in with the user\'s saved login for the page: you never see the password; needs_ok waits for their approval: call again with request); fill_code {item?} (on the page that asks for a sign-in\'s one-time code: fills the code of the saved login\'s two-step setup, you never see it; the same approvals). '
-    + 'Real input (off unless the user turned it on in the extension: trusted_off): trusted: true on click, hover, type, press, scroll (the wheel), upload {paths on the browser\'s machine}; '
+    + 'Real input (Chrome only; on unless the user turned it off in the extension: trusted_off): click, hover, type and press in your own tab in the agent window use it by default (trusted: false for the page\'s events; a frame, a link to a new tab, a picker, a shortcut with Control, Meta or Alt, or long text stay the page\'s); trusted: true asks for it by name on click, hover, type, press, scroll (the wheel), upload {paths on the browser\'s machine}; '
     + 'drag {ref or x, y; to_ref or to_x, to_y; steps?} (always real input, top frame); a trusted step that opens an alert, confirm or prompt answers with it (dialog), and the page waits: '
     + 'dialog {read: true} reads it (type, message, default_prompt), dialog {accept, text?} answers it (text: a prompt\'s answer); evaluate {expression} runs page JavaScript in a tab you opened (result JSON, 50 KB). '
     + 'Recording, in a tab you opened, also with that switch (Chrome shows its debugging bar there): network {url?, method?, status?: 404 or "4xx", type?, limit?, include_static?, stop?} lists the requests the page made '
@@ -225,7 +225,7 @@ defineOp({
     request: z.string().max(100).optional().describe('fill_login, fill_code, request_sign_in, or a click / press / type that waits for the user: the request id from needs_ok, to wait for their answer'),
     site: z.string().max(200).optional().describe('request_sign_in: the site to sign in to (default the tab\'s)'),
     fresh_sign_in: z.boolean().optional().describe('fill_login, fill_code: ask the person to approve a new sign-in here, although they have this site open in a tab of their own (only their yes fills)'),
-    trusted: z.boolean().optional().describe('click / hover / type / press / scroll / upload: real mouse and keys through the browser\'s debugger (the user turns it on)'),
+    trusted: z.boolean().optional().describe('click / hover / type / press / scroll / upload: true asks for real mouse and keys through the browser\'s debugger by name; false for the page\'s events; unset: real input by default for click, hover, type and press in your own tab'),
     accept: z.boolean().optional().describe('dialog: OK (true, default) or Cancel (false); text is a prompt\'s answer'),
     item: z.string().max(200).optional().describe('fill_login, fill_code: the login (its id, name or username) when the site has several'),
     purpose: z.string().max(200).optional().describe('fill_login, fill_code: why, in a few words the user reads on the approval'),

@@ -1,9 +1,24 @@
 /**
- * Real input for an agent (`trusted: true`, and `dialog`, `evaluate`, `drag`): the browser's own
- * mouse, wheel and keys through its debugger (cdp.ts), for pages that ignore the page events agents
- * send otherwise. A step that may open a page dialog runs with the debugger watching for one
- * (agent-dialog.ts), and answers with it. Off until the person turns it on (trusted-switch.ts, an optional permission); the
- * debugger is attached for that one action and detached right after. Only in the top frame.
+ * Real input for an agent: the browser's own mouse, wheel and keys through its debugger (cdp.ts),
+ * which pages take as a person's (isTrusted). A step that may open a page dialog runs with the
+ * debugger watching for one (agent-dialog.ts), and answers with it. Only in the top frame. On with
+ * the debugger permission (required in the manifest) unless the person turned "Let agents use real
+ * mouse and keys" off (trusted-switch.ts).
+ *
+ *   - By default (2026-11-09, the user: "fully capable using debug"): an agent's click, type, press
+ *     and hover in its own tab in Walnut's agent window go through the debugger without `trusted`
+ *     (trustedByDefault). They fall back to the page's events, as before, in a frame, in a tab of
+ *     the person's (handed over or taken: real input there only when the agent asks for it by name,
+ *     as before), on a link to a new tab (the background opens that one, in the background), on a
+ *     control that opens a picker of the browser's (a select, a file chooser), on a shortcut with
+ *     Control, Meta or Alt or a key the debugger does not know, with
+ *     DevTools open on the tab, for a while after the person cancelled Chrome's debugging bar, or
+ *     with `trusted: false`. A scroll stays the page's (its answer says where the page is, which
+ *     the wheel cannot).
+ *   - `trusted: true` (and `dialog`, `evaluate`, `drag`, always): real input wherever the agent may
+ *     act, or a refusal that says why.
+ * Either way a step that buys, sends or deletes is judged the same (page-ops.ts held, right after
+ * the cursor and again with the debugger attached): it waits for the person's yes.
  * `evaluate` runs the page's own JavaScript, so only in a tab an agent opened, never the person's
  * (nor one their tab opened), and never on a site where fill_login put a password in. A trusted
  * upload sends only files this task's own downloads wrote.
@@ -13,9 +28,11 @@ import { realInputOn } from './trusted-switch'
 import { isFirefox, type Tab } from './ext'
 import { cdpClick, cdpEvaluate, cdpHover, cdpPress, cdpType, cdpUpload, cdpWheel } from './cdp'
 import { run, watched } from './agent-debugger'
-import { AgentError, checkPage, filledHere, frameOp, nearPerson, reached, settled, where, WALNUT_PAGE, type AgentTab, type WireCommand } from './agent-shared'
+import { ACTING_MS, AgentError, acting, agentWindowId, checkPage, filledHere, frameOp, nearPerson, personsTab, reached, settled, where, WALNUT_PAGE, type AgentTab, type WireCommand } from './agent-shared'
 import { downloadedFiles } from './agent-downloads'
-import { outwardHeld, refByText } from './agent-page'
+import { openedSince, outwardHeld, refByText } from './agent-page'
+import { barCancelled, comboModifiers } from './cdp'
+import { cancelKnown } from './agent-live'
 import { trustedOutward } from './page-agent-outward'
 import type { DialogInfo } from './agent-dialog'
 import { dialogAct } from './agent-dialog-act'
@@ -32,20 +49,76 @@ export const DEBUGGER_OPS = new Set(['dialog', 'evaluate', 'drag'])
  * Where the person turns real input on, step by step (an agent passes it on as it is). Real input,
  * evaluate, dialog and recording a tab (agent-net.ts) all wait for this one switch.
  */
-export const REAL_INPUT_SWITCH = 'Only the person can turn it on: in Chrome, click the Walnut extension\'s icon in the toolbar (in the puzzle-piece Extensions menu when it is not pinned), '
-  + 'click the gear (Settings) at the top of the popup, and turn on "Let agents use real mouse and keys"; Chrome then asks to allow the debugger: Allow. '
+export const REAL_INPUT_SWITCH = 'It is on unless the person turned it off, and only the person can turn it back on: in Chrome, click the Walnut extension\'s icon in the toolbar (in the puzzle-piece Extensions menu when it is not pinned), '
+  + 'click the gear (Settings) at the top of the popup, and turn on "Let agents use real mouse and keys"; if Chrome asks to allow the debugger: Allow. '
   + 'While an agent uses it, Chrome shows its "started debugging" bar at the top of every tab.'
 const OFF = `Real input is off in this browser. ${REAL_INPUT_SWITCH} Without it, use the action without trusted.`
 
-/** The debugger permission and the person's real-input switch (trusted-switch.ts: the permission alone may be held for live pictures only). */
+/** The debugger permission and the person's real-input switch (trusted-switch.ts). */
 export async function trustedReady(): Promise<boolean> {
   return !isFirefox && !!more.debugger && await realInputOn()
 }
 
-export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<Record<string, unknown>> {
+/** Steps that go through the debugger by default (trustedByDefault), with no `trusted` asked. */
+export const DEFAULT_TRUSTED_OPS = new Set(['click', 'type', 'press', 'hover'])
+/** Typed text longer than this stays the page's by default: real typing sends two commands a character. */
+export const DEFAULT_TYPE_MAX = 200
+
+const inFrame = (r: unknown) => typeof r === 'string' && /^f\d+:/.test(r)
+/**
+ * The page's key events take this press by default: Alt (1), Control (2) or Meta (4) in the combo,
+ * or a key the debugger does not know (the page's own press takes any key name, review 2026-11-09).
+ */
+function pageTakesKey(combo: string): boolean {
+  const m = comboModifiers(combo)
+  return m === null || (m & 7) !== 0
+}
+
+/**
+ * Whether this step goes through the debugger though the agent did not ask (`trusted` not given):
+ * real input is on, the tab is the agent's own in Walnut's agent window (never one of the
+ * person's), the step names no frame, and the person did not cancel the debugging bar lately.
+ */
+export async function trustedByDefault(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<boolean> {
+  const a = c.args
+  if (!DEFAULT_TRUSTED_OPS.has(c.action) || a.trusted !== undefined) return false
+  if (inFrame(a.ref) || personsTab(rec)) return false
+  if (c.action === 'type' && [...String(a.text ?? '')].length > DEFAULT_TYPE_MAX) return false
+  // A shortcut with Control, Meta or Alt is the browser's too (a new tab, a new window, history,
+  // closing the tab): the page's own key events reach only the page (review 2026-11-09).
+  if (c.action === 'press' && pageTakesKey(String(a.key ?? ''))) return false
+  if (tab.windowId === undefined || tab.windowId !== await agentWindowId()) return false
+  await cancelKnown()
+  if (barCancelled(tabId)) return false
+  return trustedReady()
+}
+
+/** Real input could not take this default step before it acted: the page's events take it instead. */
+class Fallback extends Error {
+  constructor(readonly found?: Awaited<ReturnType<typeof refByText>>) { super('real input falls back to the page') }
+}
+/** Refusals that come before anything is pressed: a default step falls back on them. */
+const FALLBACK_CODES = new Set(['trusted_frame', 'debugger_busy'])
+
+/**
+ * A step trustedByDefault chose: real input, or `fallback` (with the words' match, when a click
+ * by its words found it in a frame) for the page's events. Every other answer, an outward step's
+ * hold included, is the step's own.
+ */
+export async function defaultTrustedAct(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<{ done: Record<string, unknown> } | { fallback: true; found?: Awaited<ReturnType<typeof refByText>> }> {
+  try {
+    return { done: await trustedAct(c, tabId, tab, rec, true) }
+  } catch (err) {
+    if (err instanceof Fallback) return { fallback: true, ...(err.found ? { found: err.found } : {}) }
+    if (err instanceof AgentError && FALLBACK_CODES.has(err.code)) return { fallback: true }
+    throw err
+  }
+}
+
+/** `soft`: a step trustedByDefault chose (it falls back where the page's events would do). */
+export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab, soft = false): Promise<Record<string, unknown>> {
   if (!(await trustedReady())) throw new AgentError(isFirefox ? 'Real input needs Chrome: Firefox does not let extensions use its debugger.' : OFF, 'trusted_off')
   let a = c.args
-  const inFrame = (r: unknown) => typeof r === 'string' && /^f\d+:/.test(r)
   if (inFrame(a.ref) || inFrame(a.to_ref)) throw new AgentError('Real input works in the top frame of the page only: use the action without trusted in a frame.', 'trusted_frame')
   await checkPage(c.allow, tab.url ?? '')
   // A dialog blocks the page's script, so the page is not asked first.
@@ -67,9 +140,10 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
    */
   const again = (extra: Record<string, unknown>) => locate({ ...extra, recheck: true })
   // A click by its words: the match, top frame only (real input).
-  let matched: Record<string, unknown> | undefined
+  let matched: Awaited<ReturnType<typeof refByText>> | undefined
   if ((c.action === 'click' || c.action === 'hover') && typeof a.text === 'string' && a.text && a.ref === undefined && typeof a.x !== 'number' && typeof a.label !== 'number') {
     const m = await refByText(c, tabId, Date.now() + SEARCH_MS)
+    if (inFrame(m.ref) && soft) throw new Fallback(m)
     if (inFrame(m.ref)) throw new AgentError(`"${String(a.text).slice(0, 60)}" is inside a frame (${m.ref}): real input works in the top frame only, so click it without trusted.`, 'trusted_frame')
     a = { ...a, ref: m.ref, text: undefined }
     matched = m
@@ -77,80 +151,101 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
   if (c.action === 'drag') return dragAct({ ...c, args: a }, tabId, rec)
   let out: Record<string, unknown>
   let dialog: DialogInfo | undefined
-  switch (c.action) {
-    case 'evaluate': {
-      if (nearPerson(rec)) throw new AgentError('evaluate runs only in a tab an agent opened, never in the person\'s own tab or one it opened: open the page in a tab of your own (open {url}), which has their sign-ins too.', 'not_agent_opened')
-      if (await filledHere(rec.owner, page.href)) throw new AgentError('evaluate does not run on a site where Walnut filled a login for you: it could read the password. Read the page with snapshot, text or find, or record its requests (network).', 'filled_here')
-      const expression = typeof a.expression === 'string' ? a.expression : ''
-      if (!expression) throw new AgentError('Give the expression to run.', 'bad_request')
-      out = { ...(await run(tabId, rec.owner, (send) => cdpEvaluate(send, expression))) }
-      break
+  // A default step sends only mouse and key events: the page stays fillable (agent-debugger.ts run).
+  const taint = { taint: !soft }
+  // A window or tab the page opens from this step is the agent's (agent-page.ts watchOpened).
+  const started = Date.now()
+  acting.set(tabId, started + 30_000 + ACTING_MS)
+  try {
+    switch (c.action) {
+      case 'evaluate': {
+        if (nearPerson(rec)) throw new AgentError('evaluate runs only in a tab an agent opened, never in the person\'s own tab or one it opened: open the page in a tab of your own (open {url}), which has their sign-ins too.', 'not_agent_opened')
+        if (await filledHere(rec.owner, page.href)) throw new AgentError('evaluate does not run on a site where Walnut filled a login for you: it could read the password. Read the page with snapshot, text or find, or record its requests (network).', 'filled_here')
+        const expression = typeof a.expression === 'string' ? a.expression : ''
+        if (!expression) throw new AgentError('Give the expression to run.', 'bad_request')
+        out = { ...(await run(tabId, rec.owner, (send) => cdpEvaluate(send, expression))) }
+        break
+      }
+      case 'click': {
+        const judge = trustedOutward('click', a)
+        // A default click asks whether it is a link to a new tab (the page's own click opens that one
+        // in the background) or a control that opens a picker of the browser's (a select, a file
+        // chooser): those stay the page's.
+        const pageTakes = (r: unknown) => soft && (typeof (r as { newTab?: unknown }).newTab === 'string' || (r as { native?: unknown }).native === true)
+        const blank = soft ? { blank: true } : {}
+        let l = await locate({ ...judge, cursor: 'click', ...blank })
+        if (pageTakes(l)) throw new Fallback(matched)
+        dialog = await watched(tabId, rec.owner, async (send) => {
+          l = await again({ ...judge, ...blank })
+          // What is under the point changed once the debugger attached: still nothing pressed.
+          if (pageTakes(l)) throw new Fallback(matched)
+          await cdpClick(send, l.x, l.y)
+        }, undefined, taint)
+        out = { clicked: l.what, trusted: true }
+        break
+      }
+      case 'hover': { const l = await locate({ cursor: 'move' }); await run(tabId, rec.owner, (send) => cdpHover(send, l.x, l.y), taint); out = { hovered: l.what, trusted: true }; break }
+      case 'press': {
+        const k = String(a.key ?? '')
+        // Every combo that ends in Enter, and Space or Enter on a focused button or link, is judged.
+        await locate({ active: true, ...trustedOutward('press', a) })
+        dialog = await watched(tabId, rec.owner, async (send) => { await again({ active: true, ...trustedOutward('press', a) }); await cdpPress(send, k) }, undefined, taint)
+        out = { pressed: k, trusted: true }
+        break
+      }
+      case 'type': {
+        const text = String(a.text ?? '')
+        const slowly = a.slowly === true
+        if (slowly && [...text].length > SLOW_MAX) throw new AgentError(`slowly types at most ${SLOW_MAX} characters (a key every ${SLOW_KEY_MS} ms); type the rest without it.`, 'too_long')
+        // Real typing presses Enter for each newline: a newline counts as submit.
+        const enter = trustedOutward('type', a)
+        // At a point: a click there first, as a person puts the caret in a field.
+        const at = a.ref === undefined && typeof a.x === 'number' && typeof a.y === 'number'
+        // The click at the point is judged as any click is (a Pay button there waits for the person),
+        // and with the Enter the text presses, as one step: one ask, one yes for both.
+        const atJudge = { outward: 'click', ...(enter.outward ? { then_enter: true, typing: enter.typing } : {}) }
+        let l = at ? await locate({ focus: true, clear: a.clear === true, cursor: 'click', ...atJudge })
+          : a.ref !== undefined ? await locate({ focus: true, clear: a.clear === true, cursor: 'move', ...enter }) : (await locate({ active: true, ...enter }), undefined)
+        dialog = await watched(tabId, rec.owner, async (send) => {
+          // Judged again on what is there now: at the point, or the focused field the text goes to.
+          if (at) l = await again(atJudge)
+          else await again({ active: true, ...enter })
+          if (at && l) await cdpClick(send, l.x, l.y)
+          await cdpType(send, text, slowly ? SLOW_KEY_MS : 0)
+          if (a.submit === true) await cdpPress(send, 'Enter')
+        }, undefined, taint)
+        out = { typed: `${text.length} characters${l ? ` into ${l.what}` : ''}${slowly ? ', one key at a time' : ''}`, trusted: true }
+        break
+      }
+      case 'scroll': {
+        // The wheel over the element (or point, or the middle of the page): what is under it scrolls.
+        const l = await locate(a.ref === undefined && typeof a.x !== 'number' ? { middle: true, cursor: 'move' } : { cursor: 'move' })
+        const d = wheelDelta(a)
+        await run(tabId, rec.owner, (send) => cdpWheel(send, l.x, l.y, d.x, d.y))
+        out = { scrolled: `${d.said} over ${l.what}`, trusted: true }
+        break
+      }
+      case 'upload': {
+        const paths = Array.isArray(a.paths) ? (a.paths as unknown[]).filter((p): p is string => typeof p === 'string' && p.length > 0) : []
+        if (!paths.length) throw new AgentError('A trusted upload takes paths of files on the browser\'s own machine (paths); to send the bytes, upload without trusted.', 'bad_request')
+        // Only what this task downloaded: any other file on the person's machine is theirs.
+        const mine = await downloadedFiles(rec.owner)
+        const other = paths.filter((p) => !mine.includes(p))
+        if (other.length) throw new AgentError(`A trusted upload sends only files this task downloaded (downloads lists them); not ${other.slice(0, 3).join(', ')}. Send other files as bytes, without trusted.`, 'path_not_allowed')
+        const markId = crypto.randomUUID().replace(/-/g, '')
+        const l = await locate({ mark: markId, cursor: 'move', ...(typeof a.selector === 'string' && a.ref === undefined ? { selector: a.selector } : {}) })
+        await run(tabId, rec.owner, (send) => cdpUpload(send, markId, paths))
+        out = { uploaded: paths, into: l.what, trusted: true }
+        break
+      }
+      default: throw new AgentError(`${c.action} has no real-input form.`, 'bad_action')
     }
-    case 'click': {
-      const judge = trustedOutward('click', a)
-      let l = await locate({ ...judge, cursor: 'click' })
-      dialog = await watched(tabId, rec.owner, async (send) => { l = await again(judge); await cdpClick(send, l.x, l.y) })
-      out = { clicked: l.what, trusted: true }
-      break
-    }
-    case 'hover': { const l = await locate({ cursor: 'move' }); await run(tabId, rec.owner, (send) => cdpHover(send, l.x, l.y)); out = { hovered: l.what, trusted: true }; break }
-    case 'press': {
-      const k = String(a.key ?? '')
-      // Every combo that ends in Enter, and Space or Enter on a focused button or link, is judged.
-      await locate({ active: true, ...trustedOutward('press', a) })
-      dialog = await watched(tabId, rec.owner, async (send) => { await again({ active: true, ...trustedOutward('press', a) }); await cdpPress(send, k) })
-      out = { pressed: k, trusted: true }
-      break
-    }
-    case 'type': {
-      const text = String(a.text ?? '')
-      const slowly = a.slowly === true
-      if (slowly && [...text].length > SLOW_MAX) throw new AgentError(`slowly types at most ${SLOW_MAX} characters (a key every ${SLOW_KEY_MS} ms); type the rest without it.`, 'too_long')
-      // Real typing presses Enter for each newline: a newline counts as submit.
-      const enter = trustedOutward('type', a)
-      // At a point: a click there first, as a person puts the caret in a field.
-      const at = a.ref === undefined && typeof a.x === 'number' && typeof a.y === 'number'
-      // The click at the point is judged as any click is (a Pay button there waits for the person),
-      // and with the Enter the text presses, as one step: one ask, one yes for both.
-      const atJudge = { outward: 'click', ...(enter.outward ? { then_enter: true, typing: enter.typing } : {}) }
-      let l = at ? await locate({ focus: true, clear: a.clear === true, cursor: 'click', ...atJudge })
-        : a.ref !== undefined ? await locate({ focus: true, clear: a.clear === true, cursor: 'move', ...enter }) : (await locate({ active: true, ...enter }), undefined)
-      dialog = await watched(tabId, rec.owner, async (send) => {
-        // Judged again on what is there now: at the point, or the focused field the text goes to.
-        if (at) l = await again(atJudge)
-        else await again({ active: true, ...enter })
-        if (at && l) await cdpClick(send, l.x, l.y)
-        await cdpType(send, text, slowly ? SLOW_KEY_MS : 0)
-        if (a.submit === true) await cdpPress(send, 'Enter')
-      })
-      out = { typed: `${text.length} characters${l ? ` into ${l.what}` : ''}${slowly ? ', one key at a time' : ''}`, trusted: true }
-      break
-    }
-    case 'scroll': {
-      // The wheel over the element (or point, or the middle of the page): what is under it scrolls.
-      const l = await locate(a.ref === undefined && typeof a.x !== 'number' ? { middle: true, cursor: 'move' } : { cursor: 'move' })
-      const d = wheelDelta(a)
-      await run(tabId, rec.owner, (send) => cdpWheel(send, l.x, l.y, d.x, d.y))
-      out = { scrolled: `${d.said} over ${l.what}`, trusted: true }
-      break
-    }
-    case 'upload': {
-      const paths = Array.isArray(a.paths) ? (a.paths as unknown[]).filter((p): p is string => typeof p === 'string' && p.length > 0) : []
-      if (!paths.length) throw new AgentError('A trusted upload takes paths of files on the browser\'s own machine (paths); to send the bytes, upload without trusted.', 'bad_request')
-      // Only what this task downloaded: any other file on the person's machine is theirs.
-      const mine = await downloadedFiles(rec.owner)
-      const other = paths.filter((p) => !mine.includes(p))
-      if (other.length) throw new AgentError(`A trusted upload sends only files this task downloaded (downloads lists them); not ${other.slice(0, 3).join(', ')}. Send other files as bytes, without trusted.`, 'path_not_allowed')
-      const markId = crypto.randomUUID().replace(/-/g, '')
-      const l = await locate({ mark: markId, cursor: 'move', ...(typeof a.selector === 'string' && a.ref === undefined ? { selector: a.selector } : {}) })
-      await run(tabId, rec.owner, (send) => cdpUpload(send, markId, paths))
-      out = { uploaded: paths, into: l.what, trusted: true }
-      break
-    }
-    default: throw new AgentError(`${c.action} has no real-input form.`, 'bad_action')
+    // A dialog the step opened holds the page: nothing loads until it is answered.
+    if (dialog) return { ...out, ...(matched ? { matched } : {}), dialog, note: 'The step opened a dialog: dialog accept (with text for a prompt) or dialog dismiss answers it.', ...(await where(tabId)) }
+    if (c.action !== 'hover' && c.action !== 'evaluate') await settled(tabId)
+    const popup = c.action === 'click' || c.action === 'press' || c.action === 'type' ? await openedSince(tabId, started) : undefined
+    return { ...out, ...(matched ? { matched } : {}), ...(await where(tabId)), ...(popup ? { opened: popup } : {}) }
+  } finally {
+    acting.set(tabId, Date.now() + ACTING_MS)
   }
-  // A dialog the step opened holds the page: nothing loads until it is answered.
-  if (dialog) return { ...out, ...(matched ? { matched } : {}), dialog, note: 'The step opened a dialog: dialog accept (with text for a prompt) or dialog dismiss answers it.', ...(await where(tabId)) }
-  if (c.action !== 'hover' && c.action !== 'evaluate') await settled(tabId)
-  return { ...out, ...(matched ? { matched } : {}), ...(await where(tabId)) }
 }

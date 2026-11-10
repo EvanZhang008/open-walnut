@@ -17,7 +17,7 @@ import { ext, type Sender } from './ext'
 import { ApiError, DEFAULT_SERVER, api, call, cleanServerUrl, connection, disconnect, pair, vaultSession } from './walnut-api'
 import { displayHost, matchItem } from '../../../src/core/vault/url-match'
 import { generate, DEFAULT_PASSWORD, type GeneratorOptions } from '../../../src/core/vault/generator'
-import { cursorUp } from './agent-cursor'
+import { cursorUp, frameHelloBox } from './agent-cursor'
 import { adoptTab, agentMessage, agentOn, initAgent, isAgentTab, releaseAllTabs, releaseTab, relayState, tabOwnerOf } from './agent'
 import { initSelfUpdate } from './self-update'
 import { injectOpenTabs, reachPage, toPage } from './page-reach'
@@ -130,6 +130,7 @@ const ALLOWED: Record<string, SenderKind | SenderKind[]> = {
   'agent-get': ['popup', 'sidepanel'], 'agent-on': ['popup', 'sidepanel'], 'agent-off': ['popup', 'sidepanel'], 'agent-stop': 'content', 'agent-handback': 'content',
   // A frame's step: its point for the agent's cursor in the top document (agent-cursor.ts).
   'agent-cursor-up': 'content',
+  'agent-frame-hello-box': 'content',
   'relay-state': 'sidepanel', 'relay-stop-all': 'sidepanel',
   'page-selection': 'content',
   'panel-state': 'sidepanel', 'panel-page': 'sidepanel', 'panel-adopt': 'sidepanel', 'panel-release': 'sidepanel', 'panel-pending': 'sidepanel', 'panel-hand': 'sidepanel',
@@ -177,6 +178,8 @@ async function handle(msg: { type: string; [k: string]: unknown }, sender: Sende
     case 'agent-get': case 'agent-on': case 'agent-off': case 'agent-stop': case 'agent-handback': return agentMessage(msg.type, sender)
     // A step in a frame: the agent's cursor is drawn in the top document at the frame's place (agent-cursor.ts).
     case 'agent-cursor-up': return cursorUp(msg, sender)
+    // The document holding a frame says where that frame starts (agent-cursor.ts helloOrigin).
+    case 'agent-frame-hello-box': return frameHelloBox(msg, sender)
     // the side panel
     case 'page-selection': {
       // Told to an open panel (an extension page); none open, nobody hears it.

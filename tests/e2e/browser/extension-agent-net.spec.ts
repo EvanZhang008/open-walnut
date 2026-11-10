@@ -105,12 +105,9 @@ test.beforeAll(async ({ browser }, info) => {
   base = String(info.project.use.baseURL ?? 'http://localhost:3457')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ext-net-'))
   execFileSync(bunRuntime(), ['scripts/build-extension.mjs', '--out', dir, '--no-zip'], { stdio: 'pipe' })
-  // The person's Allow on "Let agents use real mouse and keys": the debugger permission, granted.
-  const mf = path.join(dir, 'chrome', 'manifest.json')
-  const m = JSON.parse(fs.readFileSync(mf, 'utf8')) as { permissions: string[]; optional_permissions?: string[] }
-  m.permissions.push('debugger')
-  m.optional_permissions = (m.optional_permissions ?? []).filter((x) => x !== 'debugger')
-  fs.writeFileSync(mf, JSON.stringify(m))
+  // The debugger is a required permission of the Chrome build (2026-11-09): the browser holds it.
+  const m = JSON.parse(fs.readFileSync(path.join(dir, 'chrome', 'manifest.json'), 'utf8')) as { permissions: string[] }
+  expect(m.permissions).toContain('debugger')
   await startSites()
   ctx = await chromium.launchPersistentContext(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-ext-net-profile-')), {
     channel: 'chromium',
@@ -127,7 +124,8 @@ test.beforeAll(async ({ browser }, info) => {
   const p = await ctx.newPage()
   await p.goto(`chrome-extension://${extId}/popup.html`)
   await press(p, p.locator('#server'))
-  await p.keyboard.press('Control+a')
+  // Select all on every platform (on macOS Control+a only moves to the start, so the address was typed in front of the one the popup found).
+  await p.keyboard.press('ControlOrMeta+a')
   await p.keyboard.type(base)
   const opened = ctx.waitForEvent('page')
   await press(p, p.getByTestId('popup-connect'))
@@ -200,7 +198,9 @@ test('open with record: the page\'s requests and console from its load; a respon
   const attached = () => sw.evaluate(async (id: number) => chrome.debugger.sendCommand({ tabId: id }, 'Page.getFrameTree').then(() => true, () => false), tab)
   expect(await attached()).toBe(true)
   expect((await act(page, { action: 'network', tab, stop: true })).body).toMatchObject({ recording: false, stopped: true })
-  await expect.poll(attached).toBe(false)
+  // The recording's hold goes now; the hover's session lingers up to 30 s after it (cdp.ts
+  // LINGER_MS, so Chrome's bar does not flash on every step), then the debugger lets go.
+  await expect.poll(attached, { timeout: 45_000, intervals: [1000] }).toBe(false)
   // A new recording starts afresh.
   expect((await act(page, { action: 'network', tab })).body.started_now).toBe(true)
   await act(page, { action: 'close', tab })

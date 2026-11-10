@@ -8,7 +8,8 @@
  * Stop button, and Stop gives the tab back; the person's own tabs are never listed or touched;
  * Settings, Browser extension shows the browser and the allowed site, and Remove takes it off.
  * The agent's cursor is drawn where it acts (in the top document for a step in a frame) and never
- * takes a click; a tab of the person's the agent holds sits in its task's tab group of that window
+ * takes a click; a tab of the person's the agent took stays where it is in their window (only an
+ * Act-in-tab hand-over joins its task's tab group there, extension-agent-release.test.ts)
  * and goes back where it was when let go (2026-11-09).
  *
  * Agents act through the API here (`walnut browser` and the `browser` op call the same route).
@@ -224,6 +225,11 @@ test('with Ask me first, a new site waits for the person; approved, the agent op
   await mine.goto(site('shop.other.test', '/mine'))
   // Any site is the default; the person may ask to approve each new one in Settings.
   expect((await (await mine.request.put(`${base}/api/v1/browser/settings`, { data: { mode: 'ask' } })).json()).mode).toBe('ask')
+  // The fixture server is shared by every spec of a run: a site another spec approved is in the
+  // list already, and would open with no ask (the land gate's 200 for 202). This spec starts from none.
+  const listed = (await (await mine.request.get(`${base}/api/v1/browser/status`)).json()).sites as Array<{ site: string }>
+  for (const { site: name } of listed) await mine.request.put(`${base}/api/v1/browser/settings`, { data: { removeSite: name } })
+  expect((await (await mine.request.get(`${base}/api/v1/browser/status`)).json()).sites).toEqual([])
   const first = await act(mine, { action: 'open', url: site('shop.example.test', '/order') })
   expect(first.status).toBe(202)
   expect(first.body).toMatchObject({ status: 'needs_ok', site: 'example.test' })
@@ -543,9 +549,9 @@ test('the person\'s tabs: listed by title and address; one they are not on can b
   expect(took.status, JSON.stringify(took.body)).toBe(200)
   expect(took.body).toMatchObject({ tab: ids.a, taken: true })
   await expect.poll(() => p1.locator('walnut-ext').count(), { timeout: 10_000 }).toBeGreaterThan(0)
-  // Held by the agent: in its task's group of the person's own window, never folded, and the person stays on their tab.
-  await expect.poll(async () => (await placeOf(ids.a)).group?.title ?? '', { timeout: 10_000 }).toMatch(/^walnut-/)
-  expect((await placeOf(ids.a)).group).toMatchObject({ windowId: was.windowId, collapsed: false })
+  // Taken (not handed over with Act in tab): it stays where it is in the person's window, in no
+  // group of the task (6d7e912a1: only an Act-in-tab hand-over joins it), and the person stays on their tab.
+  expect(await placeOf(ids.a)).toEqual(was)
   expect(await sw.evaluate(async (id: number) => (await chrome.tabs.get(id)).active, ids.b)).toBe(true)
   const snap = await act(page, { action: 'snapshot', tab: ids.a })
   expect(snap.status).toBe(200)
@@ -565,7 +571,7 @@ test('the person\'s tabs: listed by title and address; one they are not on can b
   expect(back.body).toMatchObject({ closed: false, released: true })
   // The frame, its pill and the agent's cursor (drawn by the click above) are all gone.
   await expect.poll(() => p1.locator('walnut-ext').count(), { timeout: 10_000 }).toBe(0)
-  // Let go: out of the task's group, back where it was.
+  // Let go: still where it was.
   await expect.poll(async () => JSON.stringify(await placeOf(ids.a)), { timeout: 10_000 }).toBe(JSON.stringify(was))
   expect(p1.isClosed()).toBe(false)
   expect((await act(page, { action: 'snapshot', tab: ids.a })).body.code).toBe('not_your_tab')
@@ -576,7 +582,15 @@ test('the person\'s tabs: listed by title and address; one they are not on can b
   await Promise.all([p1.close(), p2.close(), blank.close()])
 })
 
-test('real input is off until the person turns it on: trusted, dialog and evaluate say where', async () => {
+test('real input is on by default; once the person turns it off, trusted, dialog and evaluate say where to turn it back on', async () => {
+  // The debugger is a required permission of the Chrome build (2026-11-09): real input is on until
+  // the person turns it off in Settings. Every step before this one took it by default.
+  const p = await popup()
+  await p.getByRole('button', { name: 'Settings' }).click()
+  await expect(p.getByTestId('popup-trusted')).toBeChecked()
+  await p.getByText('Let agents use real mouse and keys', { exact: true }).click()
+  await expect(p.getByTestId('popup-trusted')).not.toBeChecked()
+  await p.close()
   const page = ctx.pages()[0]
   const nav = await act(page, { action: 'navigate', url: site('shop.example.test', '/order') })
   expect(nav.status, JSON.stringify(nav.body)).toBe(200)
@@ -636,8 +650,8 @@ test('fill_login refuses a page an agent\'s script or real input touched since i
   const page = ctx.pages()[0]
   expect((await act(page, { action: 'navigate', url: site('shop.example.test', '/login') })).status).toBe(200)
   const sw = ctx.serviceWorkers()[0]
-  // What the debugger's run marks (agent-trusted.ts noteTampered): this document's id. Real input
-  // is off in this browser, so the mark is set the way that run sets it.
+  // What the debugger's run marks (agent-trusted.ts noteTampered): this document's id. The person
+  // turned real input off above, so the mark is set the way that run sets it.
   await sw.evaluate(async (tab: number) => {
     const r = await chrome.tabs.sendMessage(tab, { type: 'agent-check' }, { frameId: 0 }) as { doc?: string }
     if (!r?.doc) throw new Error('the page gave no document id')

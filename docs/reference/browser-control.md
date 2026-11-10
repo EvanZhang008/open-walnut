@@ -61,9 +61,9 @@ extension's Settings, reached from the key's popover in the side panel or the to
   **What this does not cover:** the ask judges only an agent's own click, key or typed text. It
   does not see `evaluate` (a page script an agent runs), the page's own scripts, a request the
   page sends by itself (`fetch`), or a link that acts on a plain visit (a GET that deletes or
-  buys). `evaluate` works only after you turn on "Let agents use real mouse and keys" in the
-  extension's Settings, which also lets agents run page scripts in tabs they opened; leave it off
-  unless an agent needs it.
+  buys). `evaluate` works only while "Let agents use real mouse and keys" is on in the
+  extension's Settings (on by default in Chrome), which also lets agents run page scripts in tabs
+  they opened; turn it off if you do not want that.
 - **Never Walnut's own pages, nor the browser's** (settings, extension pages, `file:`). Walnut at
   any address (its tunnel, the cloud companion, another machine) is known by the mark its page
   carries; such a tab is closed at once.
@@ -80,17 +80,36 @@ extension's Settings, reached from the key's popover in the side panel or the to
   fill the item's own sites must still match the page. A page an agent ran `evaluate` or any real
   input (the debugger) in since it loaded is refused (`page_tampered`: reload it first), since a
   script it left could read the password; a navigation or reload is a new page.
-- **Real mouse and keys only when you turn them on.** Agents' input is page events by default.
-  "Let agents use real mouse and keys" in the extension's Settings (Chrome only) grants the
-  browser's optional `debugger` permission; then an agent may ask for `trusted` input on a
-  click, hover, type, press, scroll (the wheel) or upload, drag (`drag` is always real input),
-  read and answer a page's alert, confirm or prompt (`dialog`), and
-  run JavaScript in a tab it opened (`evaluate`, never in your own tab). The debugger is
-  attached for that one action and detached right after; Chrome shows its "started debugging"
-  bar while it is. Off, these answer `trusted_off` and say where to turn it on. The switch is
-  its own (`realInput` in the extension's storage), apart from the permission, which live
-  pictures (below) may hold alone; an extension that had the permission before keeps real input
-  on (`packages/browser-extension/src/trusted-switch.ts`).
+- **Real mouse and keys by default, in the agent's own tabs.** The Chrome extension holds the
+  browser's `debugger` permission (required in its manifest: the copy Walnut sets up is unpacked,
+  and Chrome grants an unpacked extension's new permissions on its next reload with no prompt). An
+  agent's `click`, `type`, `press` and `hover` in its own tab in Walnut's agent window go through
+  the debugger (`Input.dispatch*`, input pages take as a person's) without the agent asking; the
+  answer says `trusted: true`. They take the page's own events instead, as before, in a frame, in
+  a tab of yours (handed over or taken: there real input only when the agent asks for `trusted` by
+  name, as before), on a link to a new tab (the extension opens that one in the background), on a
+  control whose own click opens a picker Chrome draws outside the page (a select, a file field, a
+  date, time or colour field, or a label of one: the file chooser is a window of the system's and
+  would take your focus), on a shortcut with Control, Meta or Alt (the browser's own), with
+  DevTools open on the tab, for 10 minutes on every tab after you cancel Chrome's debugging bar
+  (kept across a restart of the extension's background), for typing over 200 characters, or with
+  `trusted: false`. A `scroll` stays the page's (its answer says where the
+  page is). An agent may still ask for `trusted` on a click, hover, type, press, scroll (the wheel)
+  or upload anywhere it may act; `drag` is always real input; it may read and answer a page's
+  alert, confirm or prompt (`dialog`), and run JavaScript in a tab it opened (`evaluate`, never in
+  your own tab). A step that buys, sends or deletes is judged the same on every path and waits for
+  your yes. The debugger session stays attached while an agent works in the tab and goes 30
+  seconds after its last step that went through (or at once when it lets the tab go, you take it
+  over or you turn real input off; never in a tab of yours), so Chrome's "started debugging" bar
+  does not flash on every step. "Let agents use real mouse and
+  keys" in the extension's Settings turns it off (`realInput` in the extension's storage): it is
+  on while the permission is held until you set it yourself, and your choice is kept (a `false`
+  that the extension's own migration stored, in a build of the same day no release carried, is not
+  taken for yours)
+  (`packages/browser-extension/src/trusted-switch.ts`); off, the default steps take page events and
+  the named ones answer `trusted_off`. A page an agent ran `evaluate` or real input it asked for
+  by name in is refused by `fill_login` until it loads again; a default step sends only mouse and
+  key events, as page events do, and leaves the page fillable.
 - **No test runs.** A request from a test run (`x-walnut-test-run`) is refused before it
   reaches the browser.
 
@@ -104,21 +123,32 @@ extension's Settings, reached from the key's popover in the side panel or the to
   allows one (two a second), at your screen's own pixels, and posts it to Walnut itself
   (`POST /api/v1/browser/view/push`); the view holds one request open for the next picture, so a
   picture shows as soon as it is taken, and a picture the same as the last goes without its bytes.
-  Nobody looking, no pictures: a watch nobody renews ends within seconds. On macOS, Chrome draws
-  nothing in a window other windows cover entirely, so `captureVisibleTab` has no picture then
-  (`covered`). With **live pictures** on (the extension's Settings, "Live pictures while Walnut's
-  agent window is covered", on by default once the debugger permission is held), the stream takes
-  those pictures with the debugger's `Page.captureScreenshot`, which draws the page off screen and
-  never shows, raises or focuses the window: attached only while you watch a covered window, let
-  go when you stop watching, the tab goes, or the window shows again (Chrome shows its debugging
-  bar meanwhile; `agent-live.ts`, sharing one attach per tab with real input, dialogs and
-  recording, `cdp.ts`). Without the permission, the view offers **Show it live**: the extension
-  opens its own small page in your window (`POST /api/v1/browser/view/grant`, `grant-open.ts`),
-  where Allow, then Allow in Chrome's box, turns live pictures on (an agent may ask for that page
-  too: it opens in the background, and the grant is still your clicks; after you close it without
-  allowing, an agent's ask opens it again only 10 minutes later). An agent's screenshot of a
-  covered window uses the same session only while you watch that tab's Browser view; nobody
-  watching, it answers `window_covered` (snapshot and text still read the page). The picture is the
+  Nobody looking, no pictures: a watch nobody renews ends within seconds. `captureVisibleTab`
+  copies only what a window draws, and only its front tab: on macOS Chrome draws nothing in a
+  window other windows cover entirely (or while Chrome itself is hidden), nor in a minimized one.
+  Whenever it cannot give the watched tab's picture (covered, minimized, Chrome hidden, the tab
+  behind another tab of the agent window), the stream takes it with the debugger's
+  `Page.captureScreenshot`, which has the page draw itself in place: nothing is switched, raised
+  or focused, and no tab of the agent window is brought up for it. From that frame on the session
+  stays attached while you watch (about four pictures a second while the page changes), and goes
+  when you stop watching, the tab goes, or you turn **live pictures** off (the extension's
+  Settings, "Live pictures through Chrome's debugger", on by default; `agent-live.ts`, sharing one
+  attach per tab with real input, dialogs and recording, `cdp.ts`). Only an agent's own tab in
+  Walnut's agent window; a tab of yours is pictured only while it is on screen. What it still
+  cannot picture, each with its own line on the card: a page with an alert, confirm or prompt open
+  (`dialog`: it draws nothing new until answered), a tab DevTools holds (`devtools`), a tab Chrome
+  discarded to save memory (`discarded`: attaching would load it again), pages that are not web
+  pages (`not_web`), and the 10 minutes after you cancel Chrome's debugging bar (`cancelled`).
+  Without the debugger (Firefox, live pictures off) a tab behind another in the agent window is
+  brought up there for its picture only while nobody is in that window and its front tab has no
+  command running. A copy of the extension that lacks the permission gets **Show it live**: the
+  extension opens its own small page in your window (`POST /api/v1/browser/view/grant`,
+  `grant-open.ts`), where Allow, then Allow in Chrome's box, grants it (an agent may ask for that
+  page too: it opens in the background, and the grant is still your clicks; after you close it
+  without allowing, an agent's ask opens it again only 10 minutes later). An agent's screenshot
+  uses the debugger in the same cases whether or not anyone watches (a tab behind another is
+  pictured in place, not brought up); a tab of yours, or live pictures off, answers as before
+  (`window_covered`, `tab_hidden`). Otherwise the picture is the
   screenshot path (`captureVisibleTab`), so it works on a window behind yours and takes no focus;
   a tab of yours is pictured only while it is on screen (Walnut never switches your tabs), and a
   picture waits for nothing an agent is doing (`agent-view.ts`, `capture-gate.ts`,
@@ -324,7 +354,7 @@ walnut browser close                          # closes a tab it opened, gives ba
 | `take` | `tab` | one of the person's tabs becomes this task's (`person_is_here` when they are on it) |
 | `dialog` | `read?`, `accept`, `text?` | real input: `read` gives the open dialog (`type`: alert, confirm, prompt or beforeunload, `message`, `default_prompt`); `accept` OK or Cancel, `text` a prompt's answer; the answer names the dialog it `answered`. Only a dialog the debugger saw open: see "Page dialogs" below |
 | `evaluate` | `expression` | real input, a tab the agent opened only: the value as JSON, cut at 50 KB |
-| any of click, hover, type, press, scroll | `trusted: true` | real input through the debugger (top frame only); `scroll` is the wheel at the element, point or the middle of the page; `type {x, y}` clicks the point first; `slowly` puts 50 ms between keys |
+| any of click, hover, type, press, scroll | `trusted: true` | real input through the debugger (top frame only); `scroll` is the wheel at the element, point or the middle of the page; `type {x, y}` clicks the point first; `slowly` puts 50 ms between keys. A click, hover, type or press in the agent's own tab takes real input without it (see above); `trusted: false` asks for the page's events |
 | `upload` | `trusted: true, paths` | real input: files already on the browser's machine (a download, say) |
 
 `tab` may be left out once a task has used one. A snapshot lists headings, then each element a
@@ -359,9 +389,10 @@ answer in time (`browser_timeout`, `outward_expired`, or no approval in 10 minut
 error. `walnut browser screenshot x.png` asks for a PNG; a JPEG an older extension sends is saved
 under `.jpg`, and it says so.
 
-Input is the page's own DOM events (`isTrusted` false). Nearly every site takes them; a page
-that insists on trusted input (bank-style keystroke checks, some games, some anti-bot checks)
-needs `trusted: true`, which works once you turned real input on. A link that opens a new tab
+In the agent's own tabs a click, hover, type or press is real input by default (see above);
+elsewhere, and for the rest, input is the page's own DOM events (`isTrusted` false). Nearly every
+site takes them; a page that insists on trusted input (bank-style keystroke checks, some games,
+some anti-bot checks) needs `trusted: true` there. A link that opens a new tab
 is opened by the extension as the agent's own tab (the browser blocks a page's new tab from an
 input that is not trusted); a page's own `window.open` from a click opens only with trusted
 input. A download is the agent's when it starts from its tab's site while it acts there (or
@@ -448,7 +479,8 @@ command-line unpacked extension after a reload when Developer mode is off.
 Screenshots need the extension's site access (`<all_urls>`, asked at install in Chrome; in
 Firefox the person grants it from the extension's page). The extension also asks for
 `downloads` at install, `tabGroups` (Chrome: "View and manage your tab groups", for the task's
-group), and `debugger` only as an optional permission when you turn real input on. Tests: `tests/core/browser-control/`, `tests/e2e/browser-control.test.ts`,
+group), and `debugger` (Chrome; required since 2026-11-09, so the copy Walnut set up gets it with
+no prompt at its next reload). Tests: `tests/core/browser-control/`, `tests/e2e/browser-control.test.ts`,
 `tests/e2e/browser/extension-agent.spec.ts`, `tests/e2e/browser/extension-sidepanel.spec.ts`,
 `tests/core/browser-control/cdp.test.ts`, `tests/core/browser-control/extension-outward.test.ts`,
 `tests/e2e/browser/extension-agent-outward.spec.ts`,

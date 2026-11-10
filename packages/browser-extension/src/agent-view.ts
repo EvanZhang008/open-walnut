@@ -15,15 +15,18 @@
  *   - the picture is captureVisibleTab of the tab's window, the screenshot path, which works on a
  *     window behind others and takes no focus; one capture at a time (capture-gate.ts), and a
  *     frame is skipped, not waited for, while an agent's screenshot holds the gate;
+ *   - where captureVisibleTab cannot give the tab's real picture (the window covered or minimized,
+ *     Chrome hidden, the tab behind another tab of the agent window), the picture comes through
+ *     Chrome's debugger instead (agent-live.ts): drawn in place, with nothing switched, raised or
+ *     focused, and the session stays attached while the tab is watched. Only an agent's own tab in
+ *     Walnut's agent window, never a tab of the person's;
  *   - a tab of the person's (handed over or taken) is pictured only while it is on screen in their
  *     window: it is never brought up there, since that would change what they see;
- *   - an agent tab behind another tab in the agent window is brought up there only while the tab
- *     on screen has no command running (an agent's real input or page step goes on undisturbed)
- *     and is not watched itself, and the picture counts only if that tab is still the one on
- *     screen after the capture;
- *   - no page script, no mask: nothing in the page changes for a frame. The debugger only while
- *     the window is covered and the person turned live pictures on (agent-live.ts): its
- *     Page.captureScreenshot draws the page off screen and shows no window.
+ *   - without the debugger (Firefox, live pictures turned off, the bar cancelled), an agent tab
+ *     behind another tab in the agent window is brought up there only while the tab on screen has
+ *     no command running (an agent's real input or page step goes on undisturbed) and is not
+ *     watched itself, and the picture counts only if that tab is still the one on screen after;
+ *   - no page script, no mask: nothing in the page changes for a frame.
  * The frame goes to the person's Walnut alone (the route refuses agents): an agent takes a
  * screenshot, which draws a shown password as dots.
  */
@@ -31,7 +34,7 @@ import { ext } from './ext'
 import { AgentError, agentTabs, agentWindowId, personsTab, walnutCheck, where, type AgentTab, type WireCommand } from './agent-shared'
 import { walnutAddress } from './walnut-address'
 import { WindowCovered, capture, tryCapture } from './capture-gate'
-import { endLive, liveHeld, liveNow, livePicture, liveState, type LiveState } from './agent-live'
+import { endLive, liveHeld, livePicture, liveState, type LiveState } from './agent-live'
 import { frontDriven } from './agent-takeover'
 import { noteGroupUse, type GroupApi } from './agent-groups'
 
@@ -87,7 +90,7 @@ export async function bringUpForCommand(tabId: number): Promise<void> {
 }
 
 /** Why a frame has no picture this time. */
-export type NoFrame = 'behind' | 'busy' | 'minimized' | 'covered' | 'no_permission' | 'not_web' | 'walnut_page' | 'changed' | 'failed'
+export type NoFrame = 'behind' | 'busy' | 'minimized' | 'covered' | 'no_permission' | 'not_web' | 'walnut_page' | 'changed' | 'failed' | 'discarded'
 
 async function shrink(dataUrl: string): Promise<string> {
   try {
@@ -109,41 +112,36 @@ async function shrink(dataUrl: string): Promise<string> {
   }
 }
 
-/** Why the tab's last covered frame had no live picture (agent-live.ts), for its frame's `live`. */
+/** Why the tab's last covered frame had no picture through the debugger (agent-live.ts), for its frame's `live`. */
 const coveredLive = new Map<number, LiveState>()
 
+/** What a frame with no picture says of the debugger's pictures: why they could not serve ('on' after a try: it failed). */
+async function liveWord(tabId: number, tried: boolean): Promise<LiveState | undefined> {
+  const st = await liveState(tabId)
+  return st === 'on' ? (tried ? 'failed' : undefined) : st
+}
+
 /**
- * The picture of what the window shows. A stream (`full`) of a covered window takes it through the
- * debugger instead, while live pictures are on (agent-live.ts), and goes back to captureVisibleTab
- * (letting the debugger go) as soon as the window shows again. A single frame (`view_frame`, an
- * older Walnut) never attaches the debugger.
+ * The picture of what the window shows (captureVisibleTab). A stream (`full`) of a covered window
+ * takes it through the debugger instead, while live pictures may be taken (`live`, agent-live.ts).
+ * A single frame (`view_frame`, an older Walnut) never attaches the debugger.
  */
-async function pictureOf(tabId: number, win: number, full: boolean, liveOk: boolean): Promise<string | 'failed' | 'covered'> {
+async function pictureOf(tabId: number, win: number, full: boolean, live: LiveState): Promise<string | 'failed' | 'covered'> {
   const quality = full ? STREAM_QUALITY : 60
-  // Only an agent's own tab in Walnut's agent window: never the debugger on a tab of the person's.
-  if (!liveOk && liveHeld(tabId)) await endLive(tabId)
-  if (full && liveOk && liveNow(tabId)) {
-    // The person may have turned live pictures off meanwhile (or the permission went): let go at once.
-    if (await liveState(tabId) !== 'on') await endLive(tabId)
-    else try { return await livePicture(tabId, quality) } catch { /* tried the window next */ }
-  }
   try {
     const image = await capture(win, { format: 'jpeg', quality })
-    // The window shows again: no debugger (and no bar) for this tab now.
-    if (liveHeld(tabId)) await endLive(tabId)
     coveredLive.delete(tabId)
     return image
   } catch (err) {
     if (!(err instanceof WindowCovered)) return 'failed'
   }
-  const state: LiveState = liveOk ? await liveState(tabId) : 'unavailable'
-  if (!full || state !== 'on') { coveredLive.set(tabId, state); return 'covered' }
+  if (!full || live !== 'on') { coveredLive.set(tabId, live); return 'covered' }
   try {
     const image = await livePicture(tabId, quality)
     coveredLive.delete(tabId)
     return image
   } catch {
-    coveredLive.set(tabId, 'failed')
+    coveredLive.set(tabId, (await liveWord(tabId, true)) ?? 'failed')
     return 'covered'
   }
 }
@@ -161,6 +159,7 @@ async function frameOf(c: WireCommand, busy: (tabId: number) => boolean, full: b
   const tabId = typeof c.args.tab === 'number' ? c.args.tab : NaN
   const rec = await agentTabs.get(tabId)
   if (!rec) throw new AgentError('That tab is no agent\'s now (closed, or given back with Stop).', 'not_your_tab')
+  const holder: AgentTab = rec
   const tab = await ext.tabs.get(tabId).catch(() => null)
   if (!tab || tab.windowId === undefined) { await agentTabs.delete(tabId); throw new AgentError('That tab was closed.', 'not_your_tab') }
   const win: number = tab.windowId
@@ -173,17 +172,42 @@ async function frameOf(c: WireCommand, busy: (tabId: number) => boolean, full: b
   if (!/^https?:\/\//i.test(url)) return none('not_web')
   if (await walnutCheck.isWalnutPage(url) || walnutAddress(c.allow.walnut, url)) return none('walnut_page')
   if (!(await ext.permissions.contains({ origins: ['<all_urls>'] }).catch(() => false))) return none('no_permission')
-  if (at.windowState === 'minimized') return none('minimized')
+  // Chrome put the tab to sleep to save memory: attaching the debugger would load it again.
+  if (tab.discarded === true) return none('discarded')
   const inAgentWindow = tab.windowId === await agentWindowId()
+  // Pictures through the debugger: only an agent's own tab in Walnut's agent window.
+  const liveOk = inAgentWindow && !personsTab(rec)
+  const live: LiveState = liveOk ? await liveState(tabId) : 'unavailable'
+  // The person turned live pictures off, cancelled the bar, a dialog opened: the stream lets go now.
+  if (live !== 'on' && liveHeld(tabId)) await endLive(tabId)
+  const minimized = at.windowState === 'minimized'
+  // captureVisibleTab cannot picture it (minimized, behind another tab), or the stream holds the
+  // debugger already: the picture through it, in place. Nothing is switched for it.
+  let triedLive = false
+  if (full && live === 'on' && (minimized || !tab.active || liveHeld(tabId))) {
+    triedLive = true
+    const got = await liveFrame()
+    if (got === null) throw new AgentError('That tab was closed or given back.', 'not_your_tab')
+    if (typeof got === 'object') return finish(got.image)
+    if (got === 'changed') return none('changed')
+  }
+  // After a failed try, why the debugger gave none (it is not tried again in this frame).
+  const capLive: LiveState = triedLive ? (await liveWord(tabId, true)) ?? 'failed' : live
+  // What a frame with no picture says of the debugger's pictures (absent for a tab they never serve).
+  const why = async () => (liveOk ? { live: triedLive ? capLive : await liveWord(tabId, false) } : {})
+  if (minimized) return { ...none('minimized'), ...(await why()) }
   if (!tab.active) {
     if (personsTab(rec) || !inAgentWindow) return none('behind')
+    // No picture through the debugger now (none here, turned off, DevTools on the tab, a dialog,
+    // the bar cancelled): the window's own picture, bringing the tab up as before, only while
+    // nobody is in that window and its front tab has no command running.
     // The person is in the agent window: their view of it is never switched for a picture.
-    if (await windowFocused(tab.windowId)) return none('behind')
+    if (await windowFocused(tab.windowId)) return { ...none('behind'), ...(await why()) }
     const [front] = await ext.tabs.query({ active: true, windowId: tab.windowId })
     if (front?.id !== undefined && busy(front.id)) return none('busy')
     // The person took the front tab over: never pull it away for a picture.
-    if (await frontDriven(tab.windowId)) return none('behind')
-    if (front?.id !== undefined && Date.now() - (framedAt.get(front.id) ?? 0) < WATCHED_MS) return none('behind')
+    if (await frontDriven(tab.windowId)) return { ...none('behind'), ...(await why()) }
+    if (front?.id !== undefined && Date.now() - (framedAt.get(front.id) ?? 0) < WATCHED_MS) return { ...none('behind'), ...(await why()) }
     // The agent works in the front tab: a picture of this one now and then, the last one kept meanwhile.
     if (worked(front?.id) && Date.now() - (switchedAt.get(tabId) ?? 0) < BEHIND_EVERY_MS) return none('busy')
   }
@@ -226,12 +250,13 @@ async function frameOf(c: WireCommand, busy: (tabId: number) => boolean, full: b
   if (shot === null) throw new AgentError('That tab was closed or given back.', 'not_your_tab')
   // A covered window says whether live pictures could show it (the card offers to turn them on).
   if (shot === 'covered') return { ...none('covered'), live: coveredLive.get(tabId) ?? 'unavailable' }
-  if (shot === 'behind' || shot === 'failed' || shot === 'changed') return none(shot)
+  if (shot === 'behind') return { ...none('behind'), ...(await why()) }
+  if (shot === 'failed' || shot === 'changed') return none(shot)
   return finish(shot)
 
   async function pictureNow(): Promise<string | 'failed' | 'changed' | 'covered' | null> {
     let image: string
-    const got = await pictureOf(tabId, win, full, inAgentWindow && !personsTab(rec))
+    const got = await pictureOf(tabId, win, full, capLive)
     if (typeof got !== 'string') return got
     image = got
     // What was on screen must be this tab still (a page's popup, another agent's tab brought up meanwhile).
@@ -248,6 +273,20 @@ async function frameOf(c: WireCommand, busy: (tabId: number) => boolean, full: b
     framedAt.set(tabId, Date.now())
     if (framedAt.size > 50) for (const [id, at] of framedAt) if (Date.now() - at > WATCHED_MS) framedAt.delete(id)
     return image
+  }
+
+  /** The picture through the debugger (agent-live.ts), in place; then the same checks as a capture's. */
+  async function liveFrame(): Promise<{ image: string } | 'failed' | 'changed' | null> {
+    ownerFramedAt.set(holder.owner, Date.now())
+    let image: string
+    try { image = await livePicture(tabId, STREAM_QUALITY) } catch { return 'failed' }
+    if (!sameHolding(await agentTabs.get(tabId))) return null
+    const after = await ext.tabs.get(tabId).catch(() => null)
+    if (!after) return null
+    if ((after.url ?? '') !== url || after.windowId !== win) return 'changed'
+    framedAt.set(tabId, Date.now())
+    coveredLive.delete(tabId)
+    return { image }
   }
 
   async function finish(shot: string): Promise<Record<string, unknown>> {
@@ -278,7 +317,7 @@ export type Push = (body: Record<string, unknown>) => Promise<PushAnswer>
 
 const streams = new Map<number, { until: number; grant?: string }>()
 /** Frames without a picture after which the stream holds no debugger for the tab (agent-live.ts). */
-const LETS_GO = new Set<string>(['minimized', 'behind', 'not_web', 'walnut_page', 'no_permission'])
+const LETS_GO = new Set<string>(['minimized', 'behind', 'not_web', 'walnut_page', 'no_permission', 'discarded'])
 const watchMs = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(1000, Math.min(WATCH_MAX_MS, v)) : WATCH_MS)
 
 /**
@@ -315,8 +354,8 @@ async function stream(tabId: number, c: WireCommand, busy: (tabId: number) => bo
         await push({ tab: tabId, seq: ++seq, gone: true, code: err instanceof AgentError ? err.code : 'browser_error' }).catch(() => null)
         return
       }
-      // No picture of this tab can come now for a reason no capture changes (minimized, behind
-      // another tab, not a web page): live pictures let the debugger go meanwhile.
+      // No picture of this tab can come now for a reason no capture changes (minimized or behind
+      // with no picture through the debugger either, not a web page): the debugger goes meanwhile.
       if (frame.shown !== true && typeof frame.why === 'string' && LETS_GO.has(frame.why)) await endLive(tabId)
       const image = frame.shown === true && typeof frame.image === 'string' ? frame.image : ''
       const body = image && image === last ? { ...frame, image: undefined, same: true } : frame

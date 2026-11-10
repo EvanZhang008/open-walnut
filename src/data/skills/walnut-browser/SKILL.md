@@ -91,13 +91,14 @@ More actions, when the loop above is not enough:
   lets you act in one of theirs, never the one they are on (`person_is_here`); `close` gives it
   back. Take one only when the work is in that tab (a page they left open for you, a sign-in
   they did), and say which tab you took.
-- Real mouse and keys (`--trusted` on click, hover, type, press, scroll (the wheel); `drag e3 e9`
-  or `drag 100,200 300,240`, always real input; `dialog`; `evaluate <js>` in a tab you opened)
-  work only after the user turns on "Let agents use real mouse and keys" in the extension's
-  Settings; otherwise `trusted_off`. Use them only when page
-  events did not work (a keystroke-checking bank form, an alert blocking the page), and tell the
-  user in one line how to turn it on if you need it: the `trusted_off` message says exactly
-  where (the extension's icon, the gear, the switch, Allow); pass it on as it is.
+- Real mouse and keys (Chrome): click, hover, type and press in your own tab in Walnut's agent
+  window use them by default; a frame, a link to a new tab, a select or file field, a shortcut
+  with Control, Meta or Alt, and long text stay the page's events, and `--no-trusted` asks for
+  page events. `--trusted` asks for real input by name (also on scroll, the wheel, and in a tab of
+  the user's you took); `drag e3 e9` or `drag 100,200 300,240`, `dialog` and `evaluate <js>` (in
+  a tab you opened) are always real input. All of it is on unless the user turned off "Let agents
+  use real mouse and keys" in the extension's Settings; then `trusted_off`, whose message says
+  where to turn it back on (the extension's icon, the gear, the switch): pass it on as it is.
 - **Page dialogs** (an alert, confirm or prompt): do a step that may open one with `--trusted`.
   Its answer then says a dialog opened and what it says, and the page waits for you: `dialog`
   reads it again, `dialog accept --text "Ana"` answers a prompt, `dialog accept` is OK, `dialog

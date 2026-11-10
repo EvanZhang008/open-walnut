@@ -4,13 +4,22 @@
  * as dots while it is taken, in every frame; the page's scroll is put back after. `annotate`
  * numbers the elements on screen (page-annotate.ts; `click {label}` clicks one), and `zoom`
  * crops a region at the picture's full resolution (agent-picture.ts).
+ *
+ * Where captureVisibleTab cannot picture the tab (other windows cover the agent window, it is
+ * minimized, Chrome is hidden, or the tab is behind another tab), the picture comes through Chrome's
+ * debugger (agent-live.ts), whether or not anyone watches the Browser view (2026-11-09, the user
+ * wants the agent fully capable): drawn in place, so a tab behind another is never brought up for
+ * it. Only an agent's own tab in Walnut's agent window; a tab of the person's is pictured only while
+ * it is on screen in their window, as before.
  */
 import { ext, type Tab } from './ext'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { toPage } from './page-reach'
 import { framesOf } from './agent-page'
 import { WindowCovered, capture, withCapture } from './capture-gate'
-import { endShot, liveHeld, liveShot, liveState } from './agent-live'
+import { endShot, liveShot, liveState } from './agent-live'
+import { lingersIn } from './agent-debugger'
+import { endMark } from './cdp'
 import { frontDriven } from './agent-takeover'
 import { base64, cropPicture, drawLabels } from './agent-picture'
 import type { LabelBox } from './input-math'
@@ -25,21 +34,30 @@ const FULL_BUDGET_MS = 25_000
 type Shoot = (o: { format: 'jpeg' | 'png'; quality?: number }) => Promise<string>
 
 /**
- * The window's picture; a covered window's through the debugger only while the Browser view's
- * stream holds it for this tab (agent-live.ts liveHeld: someone watches the card, and live pictures
- * are on; it draws the page off screen, no window moves). Nobody watching: the covered error as it
- * was, with no attach and no debugging bar for a picture nobody asked to see live (review 2026-11-09).
+ * The tab's picture: the window's (captureVisibleTab), or through the debugger when the window
+ * draws nothing (covered, Chrome hidden) and live pictures may be taken (agent-live.ts liveState:
+ * the permission, the person's switch, no Cancel on the bar lately). `inPlace`: the tab is behind
+ * another or its window minimized, so only the debugger can picture it. `liveOk` only for an
+ * agent's own tab in Walnut's agent window: never the debugger on a tab of the person's.
  */
-export function shooter(tabId: number, windowId: number, liveOk: boolean): Shoot {
+export function shooter(tabId: number, windowId: number, liveOk: boolean, inPlace = false): Shoot {
   return async (o) => {
+    if (inPlace) return liveShot(tabId, o).catch((err: unknown) => { throw shotFailed(err) })
     try {
       return await capture(windowId, o)
     } catch (err) {
-      // Only an agent's own tab in Walnut's agent window: never the debugger on a tab of the person's.
-      if (!(err instanceof WindowCovered) || !liveOk || !liveHeld(tabId) || await liveState(tabId) !== 'on') throw err
-      return liveShot(tabId, o)
+      if (!(err instanceof WindowCovered) || !liveOk || await liveState(tabId) !== 'on') throw err
+      return liveShot(tabId, o).catch((e: unknown) => { throw shotFailed(e, err) })
     }
   }
+}
+
+/** The debugger gave no picture: why, for the agent (a covered window keeps its own code). */
+function shotFailed(err: unknown, covered?: WindowCovered): AgentError {
+  if (err instanceof AgentError) return err
+  const m = err instanceof Error ? err.message : String(err)
+  if (covered) return new AgentError(`${covered.message} Chrome's debugger gave no picture either (${m}).`, 'window_covered')
+  return new AgentError(`Chrome's debugger gave no picture of that tab (${m}): use snapshot or text, or try again in a moment.`, 'shot_failed')
 }
 
 async function maskAll(tabId: number, on: boolean): Promise<boolean> {
@@ -120,13 +138,63 @@ async function onScreen(c: WireCommand, tabId: number, shoot: Shoot): Promise<Re
 
 export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<Record<string, unknown>> {
   if (c.args.full === true && (c.action === 'zoom' || c.args.annotate === true)) throw new AgentError('annotate and zoom work on what is on screen, not with full: scroll to the part first.', 'bad_request')
-  // Only the agent window is brought forward for a capture: the person's window stays as they left it.
+  const inAgentWindow = tab.windowId === await agentWindowId()
+  const liveOk = !personsTab(rec) && inAgentWindow
+  // Behind another tab, or the window minimized: only the debugger pictures it, in place.
+  const minimized = (await ext.windows.get(tab.windowId!).catch(() => null) as { state?: string } | null)?.state === 'minimized'
+  const inPlace = liveOk && (!tab.active || minimized) && await liveState(tabId) === 'on'
   // A tab outside the agent window (the person's, or one it opened there) is captured only while on screen.
-  if (!tab.active && (personsTab(rec) || tab.windowId !== await agentWindowId())) throw new AgentError('That tab is not on screen in the person\'s window: use snapshot, or ask them to show it.', 'tab_hidden')
+  if (!tab.active && !inPlace && (personsTab(rec) || !inAgentWindow)) throw new AgentError('That tab is not on screen in the person\'s window: use snapshot, or ask them to show it.', 'tab_hidden')
   await checkPage(c.allow, tab.url ?? '')
   const before = await reached(tabId)
   if (before.walnut) throw new AgentError(WALNUT_PAGE, 'walnut_page')
   await checkPage(c.allow, before.href)
+  const take = async (shoot: Shoot): Promise<Record<string, unknown>> => {
+    // A let-go or take-over from here on leaves no debugger session lingering after the shot.
+    const lingerMark = endMark(tabId)
+    let ok = false
+    // A password the page shows as text (its "show" button) is drawn as dots for the capture.
+    try {
+      if (!(await maskAll(tabId, true))) throw new AgentError('The page is not ready: wait and try again.', 'page_not_ready')
+      await sleep(250)
+      if (c.args.full === true) {
+        // The frame and its Stop pill would be drawn once per screen: off while the agent's own tab
+        // is scrolled through (a tab of the person's keeps them, they may be looking).
+        const unmark = !personsTab(rec)
+        if (unmark) await mark(tabId, false)
+        const f = await full(c, tabId, shoot).finally(() => unmark ? mark(tabId, true, rec.who) : undefined)
+        ok = true
+        return { image: f.image, full: true, height: f.height, pageHeight: f.pageHeight, ...(f.cut ? { cut: true, note: `Cut at ${f.height} of ${f.pageHeight} px of the page.` } : {}) }
+      }
+      const r = await onScreen(c, tabId, shoot)
+      ok = true
+      return r
+    } finally {
+      // Lingers only after a shot that went through, in a tab still the agent's own (agent-debugger.ts lingersIn).
+      await endShot(tabId, ok ? lingersIn(tabId) : false, lingerMark)
+      await maskAll(tabId, false)
+    }
+  }
+  if (inPlace) {
+    // Drawn by the page itself through the debugger: no window capture, nothing brought up, so the
+    // capture gate (one window capture at a time) is not needed.
+    let out: Record<string, unknown> | undefined
+    try {
+      out = await take(shooter(tabId, tab.windowId!, true, true))
+    } catch (err) {
+      // The debugger could not draw it (DevTools holds the tab, the page did not answer): the old
+      // way below, which brings the tab up in the agent window (review 2026-11-09). Anything else
+      // (the page not ready, a page that is Walnut's) is the step's own answer.
+      if (!(err instanceof AgentError) || !['shot_failed', 'window_covered'].includes(err.code) || await liveState(tabId) === 'on') throw err
+    }
+    if (out) {
+      const after = await ext.tabs.get(tabId).catch(() => null)
+      if (!after || after.windowId !== tab.windowId || siteKey(after.url ?? '')?.domain !== siteKey(before.href)?.domain) {
+        throw new AgentError('The page changed while the screenshot was taken: try again.', 'page_changed')
+      }
+      return { ...(await where(tabId)), ...out, ...(minimized ? { minimized: true } : { behind: true }) }
+    }
+  }
   // One capture at a time (capture-gate.ts): the live Browser view's frames wait while this tab is brought up and taken.
   const out = await withCapture(async () => {
     // Only a tab on screen in its window can be captured: bring it up there, in the agent window,
@@ -139,26 +207,7 @@ export async function screenshot(c: WireCommand, tabId: number, tab: Tab, rec: A
       throw new AgentError('The person is looking at another tab in the agent window: use snapshot for this tab, or try again in a moment.', 'person_looking')
     }
     await ext.tabs.update(tabId, { active: true })
-    // A password the page shows as text (its "show" button) is drawn as dots for the capture.
-    let out: Record<string, unknown>
-    const shoot = shooter(tabId, tab.windowId!, !personsTab(rec) && tab.windowId === await agentWindowId())
-    try {
-      if (!(await maskAll(tabId, true))) throw new AgentError('The page is not ready: wait and try again.', 'page_not_ready')
-      await sleep(250)
-      if (c.args.full === true) {
-        // The frame and its Stop pill would be drawn once per screen: off while the agent's own tab
-        // is scrolled through (a tab of the person's keeps them, they may be looking).
-        const unmark = !personsTab(rec)
-        if (unmark) await mark(tabId, false)
-        const f = await full(c, tabId, shoot).finally(() => unmark ? mark(tabId, true, rec.who) : undefined)
-        out = { image: f.image, full: true, height: f.height, pageHeight: f.pageHeight, ...(f.cut ? { cut: true, note: `Cut at ${f.height} of ${f.pageHeight} px of the page.` } : {}) }
-      } else {
-        out = await onScreen(c, tabId, shoot)
-      }
-    } finally {
-      await endShot(tabId)
-      await maskAll(tabId, false)
-    }
+    const out = await take(shooter(tabId, tab.windowId!, liveOk))
     // What was on screen must still be that tab on that page (not a window the page opened).
     const [shown] = await ext.tabs.query({ active: true, windowId: tab.windowId })
     if (shown?.id !== tabId || siteKey(shown.url ?? '')?.domain !== siteKey(before.href)?.domain) {

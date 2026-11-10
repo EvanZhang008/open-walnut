@@ -53,10 +53,12 @@ export interface BrowserFrame {
   /** The browser streams its pictures (asked again at once, never on a timer). */
   stream?: boolean;
   /**
-   * A covered window (`why: 'covered'`): whether the extension's live pictures could show it
-   * (packages/browser-extension/src/agent-live.ts LiveState); absent from an older extension.
+   * A frame with no picture of an agent's tab (`covered`, `minimized`, `behind`): why the
+   * extension's pictures through Chrome's debugger could not show it either
+   * (packages/browser-extension/src/agent-live.ts LiveState); absent from an older extension, and
+   * for a tab they never serve (one of the person's).
    */
-  live?: 'off' | 'no_permission' | 'cancelled' | 'unavailable' | 'failed' | string;
+  live?: 'off' | 'no_permission' | 'cancelled' | 'unavailable' | 'failed' | 'dialog' | 'devtools' | string;
 }
 
 /** Which window the tab is in, as the person reads it. */
@@ -78,34 +80,62 @@ const COVERED_LINE = "Chrome stops drawing Walnut's agent window while other win
 /** What "Show it live" does, said beside the button. */
 export const LIVE_GRANT_LINE = "Chrome opens a small Walnut page: click Allow there, then Allow in Chrome's box.";
 
+/** The extension's switch for pictures through Chrome's debugger (packages/browser-extension/src/popup-settings.ts LIVE_PICTURES_TITLE). */
+export const LIVE_PICTURES_SWITCH = "Live pictures through Chrome's debugger";
+
+/** The frames whose picture Chrome's debugger can take when captureVisibleTab cannot. */
+const LIVE_WHYS = new Set(['covered', 'minimized', 'behind']);
+
 /**
- * The card offers "Show it live": the window is covered, the extension may not use its debugger
- * yet, and it can open the page that asks (an older one cannot: its covered line stays).
+ * The card offers "Show it live": the extension lacks the debugger permission (a copy that
+ * somehow has not got it: the manifest requires it), and it can open the page that asks (an older
+ * one cannot: its line stays).
  */
 export function liveGrantOffer(f: Pick<BrowserFrame, 'why' | 'live'> | null, t: Pick<BrowserViewTab, 'liveGrant'> | undefined): boolean {
-  return f?.why === 'covered' && f.live === 'no_permission' && t?.liveGrant === true;
+  return !!f?.why && LIVE_WHYS.has(f.why) && f.live === 'no_permission' && t?.liveGrant === true;
 }
 
-/** A covered window's line, by what the extension says of live pictures (`grant`: the card offers Show it live). */
+/**
+ * Why Chrome's debugger gave no picture either, as one sentence, or null when the extension did
+ * not say (an older one, or a tab it never pictures that way).
+ */
+function liveLine(live: string | undefined, grant: boolean): string | null {
+  switch (live) {
+    case 'no_permission': return grant
+      ? `To see it live anyway, press Show it live. ${LIVE_GRANT_LINE}`
+      : "This copy of the Walnut extension may not use Chrome's debugger, which would show it anyway: set the extension up again from Walnut (Settings, Browser extension).";
+    case 'off': return `To see it anyway, turn on "${LIVE_PICTURES_SWITCH}" in the Walnut extension's Settings.`;
+    case 'cancelled': return "You cancelled Chrome's debugging bar, so Walnut takes no pictures through it for 10 minutes.";
+    case 'dialog': return 'A dialog (alert, confirm or prompt) is open on the page, and Chrome draws nothing new until it is answered: the agent answers it with dialog, or you can in that tab.';
+    case 'devtools': return "DevTools is open on this tab, so Walnut cannot use Chrome's debugger there: close DevTools and the picture comes back.";
+    case 'failed': return "Chrome's debugger gave no picture of the tab just now: Walnut tries again in half a minute.";
+    default: return null;
+  }
+}
+
+/** A covered window's line, by what the extension says of pictures through the debugger (`grant`: the card offers Show it live). */
 function coveredLine(live: string | undefined, grant: boolean): string {
-  if (live === 'no_permission' && grant) return `Chrome stops drawing Walnut's agent window while other windows cover all of it. To see it live anyway, press Show it live. ${LIVE_GRANT_LINE}`;
-  if (live === 'off') return `${COVERED_LINE} To see it live anyway, turn on "Live pictures while Walnut's agent window is covered" in the Walnut extension's Settings.`;
-  if (live === 'cancelled') return "You cancelled Chrome's debugging bar, so Walnut takes no live pictures for a while. The picture comes as soon as any part of Walnut's agent window is on screen.";
-  if (live === 'failed') return "Chrome gave Walnut no live picture of the covered window just now (a dialog on the page, or DevTools open on it). It comes as soon as any part of that window is on screen; Walnut tries again in a moment.";
-  return COVERED_LINE;
+  const why = liveLine(live, grant);
+  if (!why) return COVERED_LINE;
+  return `Chrome stops drawing Walnut's agent window while other windows cover all of it. ${why}`;
 }
 
 export function noPictureLine(f: Pick<BrowserFrame, 'why' | 'window' | 'live'> | null, hasPicture: boolean, grant = false): string | null {
   switch (f?.why) {
-    case 'behind':
-      return f.window === 'person'
-        ? 'This tab is behind another tab in your window. Walnut never switches your tabs to take a picture: it shows when the tab is in front.'
-        : 'This tab is behind another tab in the agent window: the picture shows when it is in front.';
-    case 'minimized': return "Walnut's agent window is minimized: the picture shows again when you restore it.";
+    case 'behind': {
+      if (f.window === 'person') return 'This tab is behind another tab in your window. Walnut never switches your tabs to take a picture: it shows when the tab is in front.';
+      const why = liveLine(f.live, grant);
+      return why ? `This tab is behind another tab in the agent window. ${why}` : 'This tab is behind another tab in the agent window: the picture shows when it is in front.';
+    }
+    case 'minimized': {
+      const why = liveLine(f.live, grant);
+      return why ? `Walnut's agent window is minimized. ${why}` : "Walnut's agent window is minimized: the picture shows again when you restore it.";
+    }
     // Chrome draws nothing in a window other windows cover entirely, so the last picture is old.
     case 'covered': return coveredLine(f.live, grant);
+    case 'discarded': return "Chrome put this tab to sleep to save memory, so it has nothing to show. It wakes when the agent acts in it again (Walnut does not wake it just to take a picture: that would load the page again).";
     case 'no_permission': return 'The Walnut extension may not take pictures of pages in this browser (it asks for that permission in its Settings).';
-    case 'not_web': return 'The tab is not on a web page now.';
+    case 'not_web': return 'The tab is not on a web page now (a browser page such as chrome://, or a file), which Chrome does not let extensions picture.';
     case 'walnut_page': return "The tab shows Walnut's own page: no picture of it.";
     case 'old_extension': return "This browser's Walnut extension is older than the Browser view: update it (Settings, Browser extension).";
     case 'busy': return hasPicture ? null : 'The agent is clicking or typing in another of its tabs, which needs the screen: the picture comes right after.';

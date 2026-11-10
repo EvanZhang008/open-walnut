@@ -136,12 +136,23 @@ test('Settings shows the live pictures switch apart from real input, and grant.h
   const real = p.getByTestId('popup-trusted')
   const live = p.getByTestId('popup-live-pictures')
   await expect(live).toBeAttached()
-  // A fresh browser holds no debugger permission: both off, each its own switch.
-  await expect(real).not.toBeChecked()
-  await expect(live).not.toBeChecked()
-  await expect(p.getByText("Live pictures while Walnut's agent window is covered", { exact: true })).toBeVisible()
+  // The manifest lists the debugger as required (2026-11-09): a fresh browser holds it, and both
+  // uses are on until the person turns one off, each its own switch.
+  await expect(real).toBeChecked()
+  await expect(live).toBeChecked()
+  await expect(p.getByText("Live pictures through Chrome's debugger", { exact: true })).toBeVisible()
   await expect(p.getByTestId('popup-live-pictures-note')).toContainText("Chrome shows its debugging bar while it does")
   await shot(p, 'settings-live-pictures', true)
+  // Turned off by the person, each stays off on its own, and on again with one click.
+  await p.getByText('Let agents use real mouse and keys', { exact: true }).click()
+  await expect(real).not.toBeChecked()
+  await expect(live).toBeChecked()
+  await p.reload()
+  await expect(p.getByLabel('Search Walnut')).toBeVisible({ timeout: 20_000 })
+  await p.getByTestId('popup-settings').click()
+  await expect(p.getByTestId('popup-trusted')).not.toBeChecked()
+  await p.getByText('Let agents use real mouse and keys', { exact: true }).click()
+  await expect(p.getByTestId('popup-trusted')).toBeChecked()
   await p.close()
 
   // The grant page: what happens, then one Allow (Chrome's own box follows its click).

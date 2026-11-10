@@ -25,7 +25,7 @@ import {
 import { PAGE_OPS, pageOp, watchOpened } from './agent-page'
 import { screenshot } from './agent-shot'
 import { downloadsAction, watchDownloads } from './agent-downloads'
-import { DEBUGGER_OPS, TRUSTED_OPS, trustedAct, trustedReady } from './agent-trusted'
+import { DEBUGGER_OPS, TRUSTED_OPS, defaultTrustedAct, trustedAct, trustedByDefault, trustedReady } from './agent-trusted'
 import { fillFrames } from './bg-fill'
 import { inHandedReach } from './agent-tab-kind'
 import { openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
@@ -313,9 +313,17 @@ async function act(cmd: WireCommand): Promise<unknown> {
   }
   if (PAGE_OPS.has(c.action)) {
     const { tabId, tab, rec } = await ownTab(a)
+    // An agent's click, type, press or hover in its own tab goes through the debugger by default
+    // (agent-trusted.ts trustedByDefault); where real input cannot take it, the page's events do.
+    let found: Parameters<typeof pageOp>[4]
+    if (await trustedByDefault(c, tabId, tab, rec)) {
+      const r = await defaultTrustedAct(c, tabId, tab, rec)
+      if ('done' in r) return r.done
+      found = r.found
+    }
     await checkPage(c.allow, tab.url ?? '')
     await reached(tabId)
-    return pageOp(c, tabId, tab, rec)
+    return pageOp(c, tabId, tab, rec, found)
   }
   throw new AgentError(`Unknown action ${c.action}.`, 'bad_action')
 }

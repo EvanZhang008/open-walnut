@@ -1,8 +1,8 @@
 /**
- * Real input through the browser's debugger (Chrome DevTools Protocol), for the one action that
- * asked for it: attach, send the commands, detach. Chrome shows its "started debugging" bar only
- * while attached. These are the command sequences alone, so a test can drive them with a fake
- * debugger (tests/core/browser-control/cdp.test.ts); agent-trusted.ts wires them in.
+ * Real input through the browser's debugger (Chrome DevTools Protocol): attach, send the commands,
+ * let go. Chrome shows its "started debugging" bar only while attached. These are the command
+ * sequences alone, so a test can drive them with a fake debugger
+ * (tests/core/browser-control/cdp.test.ts); agent-trusted.ts wires them in.
  */
 import type { DebuggerApi } from './agent-api'
 
@@ -15,15 +15,44 @@ export class CdpError extends Error {
 /**
  * One debugger session per tab, shared by everything that needs it (the browser refuses a second
  * attach): a recording (agent-net.ts, `record`), a dialog waiting for its answer (agent-dialog.ts,
- * `dialog`), the live pictures of a covered agent window (agent-live.ts, `picture` and `shot`), and
- * each real-input step while it runs (`step:<n>`). Each holder names itself; the session is
- * detached only when the last one lets go, so a picture never cuts a click short and a click never
- * ends a recording.
+ * `dialog`), the live pictures of a watched tab (agent-live.ts, `picture` and `shot`), each
+ * real-input step while it runs (`step:<n>`), and the short hold an agent's steps leave behind
+ * (`linger`, below). Each holder names itself; the session is detached only when the last one lets
+ * go, so a picture never cuts a click short and a click never ends a recording.
  */
 const held = new Map<number, { send: Send; by: Set<string> }>()
 /** Attaches under way: a second user waits for it instead of attaching again. */
 const attaching = new Map<number, Promise<void>>()
 const watchedApis = new WeakSet<object>()
+/** The timer of each tab's lingering hold (LINGER_MS). */
+const lingering = new Map<number, ReturnType<typeof setTimeout>>()
+
+/**
+ * After the person cancelled Chrome's debugging bar (it is browser-wide: one Cancel detaches every
+ * tab), nothing Walnut does by itself attaches the debugger for this long, on any tab (live
+ * pictures, an agent's screenshot through it, real input an agent did not ask for by name): the
+ * bar would come straight back. agent-live.ts keeps it in storage.session, so a restart of the
+ * background keeps it too.
+ */
+export const CANCEL_COOL_MS = 10 * 60_000
+let cancelledAt = 0
+let onCancel: ((at: number) => void) | undefined
+
+/** The person cancelled the debugging bar within CANCEL_COOL_MS. (`tabId`: kept for the callers' words.) */
+export const barCancelled = (_tabId?: number, now = Date.now()): boolean => now - cancelledAt < CANCEL_COOL_MS
+/** The browser let go of a tab's session: the person's Cancel on the bar is remembered. */
+export function noteDetached(tabId: number, reason?: string): void {
+  dropDebugger(tabId)
+  if (reason === 'canceled_by_user') { cancelledAt = Date.now(); onCancel?.(cancelledAt) }
+}
+/** Who keeps the Cancel across a restart (agent-live.ts), and the time it kept. */
+export function keepCancel(save: (at: number) => void, at?: unknown): void {
+  onCancel = save
+  const stored = typeof at === 'number' && Number.isFinite(at) && at <= Date.now() ? at : 0
+  if (stored > cancelledAt) cancelledAt = stored
+  // A Cancel that came before the stored one was read: kept now.
+  else if (cancelledAt > stored) save(cancelledAt)
+}
 
 /** `by` holds the tab's session `send` (joined when one is held already). */
 export function holdDebugger(tabId: number, send: Send, by = 'record'): void {
@@ -41,6 +70,8 @@ export function dropDebugger(tabId: number, by?: string): boolean {
   if (by !== undefined) e.by.delete(by)
   if (by !== undefined && e.by.size) return false
   held.delete(tabId)
+  clearTimeout(lingering.get(tabId))
+  lingering.delete(tabId)
   return true
 }
 export const debuggerHeld = (tabId: number): boolean => held.has(tabId)
@@ -48,6 +79,66 @@ export const debuggerHeld = (tabId: number): boolean => held.has(tabId)
 export const heldSend = (tabId: number): Send | undefined => held.get(tabId)?.send
 /** Who holds the tab's session now (tests, and whether a recording holds it). */
 export const holdersOf = (tabId: number): string[] => [...(held.get(tabId)?.by ?? [])]
+
+/**
+ * How long a tab's session stays attached after an agent's last step there (a click, a key, a
+ * screenshot through the debugger), so Chrome's "started debugging" bar does not come and go on
+ * every step while the agent works (2026-11-09, the user: the bar flashed on each click). Each new
+ * step starts it again; the agent letting the tab go, the person taking it over, or their Cancel on
+ * the bar ends it at once.
+ */
+export const LINGER_MS = 30_000
+let lingerMs = LINGER_MS
+
+/** The session stays a while after this step (joined as `linger`), unless the person cancelled the bar. */
+export function linger(dbg: DebuggerApi | undefined, tabId: number): void {
+  const e = held.get(tabId)
+  if (!e || !dbg || lingerMs <= 0 || barCancelled(tabId)) return
+  e.by.add('linger')
+  clearTimeout(lingering.get(tabId))
+  lingering.set(tabId, setTimeout(() => { lingering.delete(tabId); void releaseDebugger(dbg, tabId, 'linger') }, lingerMs))
+}
+
+/**
+ * Whether a step's session lingers: `true`, or a check run once the step went through (the agent
+ * code's: the tab is still an agent's own, not the person's, not taken over; agent-debugger.ts).
+ */
+export type LingerIf = boolean | (() => Promise<boolean>)
+/** How many times each tab's lingering was ended, and every tab's at once: a step that began before an end never lingers after it. */
+const endsOf = new Map<number, number>()
+let allEnds = 0
+export const endMark = (tabId: number) => `${allEnds}:${endsOf.get(tabId) ?? 0}`
+
+/**
+ * After a step that went through, while its own hold is still on: the session lingers when `when`
+ * says so and nobody ended the tab's lingering since the step began (`mark`, from endMark). So a
+ * Stop, a let-go or a take-over that comes while the step runs, or while its check is on its way,
+ * leaves nothing attached behind it (review 2026-11-09).
+ */
+export async function lingerAfter(dbg: DebuggerApi, tabId: number, when: LingerIf | undefined, mark: string): Promise<void> {
+  if (!when) return
+  if (when !== true && !(await when().catch(() => false))) return
+  if (endMark(tabId) !== mark) return
+  linger(dbg, tabId)
+}
+
+/** Every lingering hold goes now, and no step running lingers after it (the person turned real input off). */
+export async function endAllLingers(dbg: DebuggerApi | undefined): Promise<void> {
+  allEnds++
+  for (const tabId of [...lingering.keys()]) await endLinger(dbg, tabId)
+}
+
+/** The agent's work in the tab is over (let go, taken over): the lingering hold goes now, and a step still running keeps none. */
+export async function endLinger(dbg: DebuggerApi | undefined, tabId: number): Promise<void> {
+  endsOf.set(tabId, (endsOf.get(tabId) ?? 0) + 1)
+  if (!lingering.has(tabId)) return
+  clearTimeout(lingering.get(tabId))
+  lingering.delete(tabId)
+  await releaseDebugger(dbg, tabId, 'linger')
+}
+
+/** For tests: how long a session lingers after a step (0: detached at once, as before). */
+export function _setLingerMsForTesting(ms: number = LINGER_MS): void { lingerMs = ms }
 
 let steps = 0
 /** A holder name for one step (each real-input step its own). */
@@ -63,7 +154,7 @@ export async function acquireDebugger(dbg: DebuggerApi, tabId: number, by: strin
   // The browser let go by itself (the tab closed, the person cancelled its bar): nobody holds it.
   if (!watchedApis.has(dbg) && dbg.onDetach) {
     watchedApis.add(dbg)
-    dbg.onDetach.addListener((source) => { if (typeof source?.tabId === 'number') dropDebugger(source.tabId) })
+    dbg.onDetach.addListener((source, reason) => { if (typeof source?.tabId === 'number') noteDetached(source.tabId, reason) })
   }
   for (let p = attaching.get(tabId); p; p = attaching.get(tabId)) await p
   const e = held.get(tabId)
@@ -89,16 +180,32 @@ export async function releaseDebugger(dbg: DebuggerApi | undefined, tabId: numbe
   if (dropDebugger(tabId, by)) await dbg?.detach({ tabId }).catch(() => undefined)
 }
 
-/** For tests: no session held, none attaching. */
-export function _resetDebuggerForTesting(): void { held.clear(); attaching.clear() }
+/** For tests: no session held, none attaching, no Cancel remembered. */
+export function _resetDebuggerForTesting(): void {
+  held.clear()
+  attaching.clear()
+  for (const t of lingering.values()) clearTimeout(t)
+  lingering.clear()
+  endsOf.clear()
+  cancelledAt = 0
+}
 
-/** Attach to the tab (or join the session held), do the work, let go (detached unless another holder needs it). */
-export async function withDebugger<T>(dbg: DebuggerApi, tabId: number, work: (send: Send) => Promise<T>): Promise<T> {
+/**
+ * Attach to the tab (or join the session held), do the work, let go (detached unless another
+ * holder needs it). `linger`: an agent's step, whose session stays a while after (LINGER_MS) when
+ * it went through (a step that failed or fell back keeps nothing attached for itself).
+ */
+export async function withDebugger<T>(dbg: DebuggerApi, tabId: number, work: (send: Send) => Promise<T>, o: { linger?: LingerIf } = {}): Promise<T> {
   const by = stepHolder()
+  const mark = endMark(tabId)
   const send = await acquireDebugger(dbg, tabId, by)
+  let done = false
   try {
-    return await work(send)
+    const r = await work(send)
+    done = true
+    return r
   } finally {
+    if (done) await lingerAfter(dbg, tabId, o.linger, mark)
     await releaseDebugger(dbg, tabId, by)
   }
 }
@@ -135,6 +242,17 @@ export function parseCombo(combo: string): { key: string; modifiers: number } {
   const last = parts[parts.length - 1] ?? ''
   if (!last) throw new CdpError('Say which key.', 'no_key')
   return { key: last === 'Space' ? ' ' : last, modifiers }
+}
+
+/** The combo's modifiers when the debugger can press it (a key it knows), else null. */
+export function comboModifiers(combo: string): number | null {
+  try {
+    const { key, modifiers } = parseCombo(combo)
+    keyParams(key, modifiers)
+    return modifiers
+  } catch {
+    return null
+  }
 }
 
 function keyParams(key: string, modifiers: number): Record<string, unknown> {

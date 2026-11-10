@@ -9,7 +9,7 @@
  */
 import { more } from './agent-api'
 import { ext } from './ext'
-import { CdpError, acquireDebugger, dropDebugger, holdDebugger, holdersOf, releaseDebugger, stepHolder, type Send } from './cdp'
+import { CdpError, acquireDebugger, dropDebugger, endMark, holdDebugger, holdersOf, lingerAfter, releaseDebugger, stepHolder, type LingerIf, type Send } from './cdp'
 import { AgentError } from './agent-shared'
 import { pageCheck } from './page-reach'
 
@@ -175,18 +175,22 @@ export type OnInterrupt = (send: Send) => void
  * Real input with Page on: the work, or the dialog it opened (whichever comes first). The debugger
  * is the tab's held one when there is one (a recording), else attached for this step and let go
  * after, unless a dialog opened: then it stays until the dialog is answered (releaseDialogHold).
+ * `linger`: an agent's step, whose session stays a while after it (cdp.ts LINGER_MS).
  */
-export async function runWatching<T>(tabId: number, work: (send: Send) => Promise<T>, onInterrupt?: OnInterrupt): Promise<{ done: T } | { dialog: DialogInfo }> {
+export async function runWatching<T>(tabId: number, work: (send: Send) => Promise<T>, onInterrupt?: OnInterrupt, o: { linger?: LingerIf } = {}): Promise<{ done: T } | { dialog: DialogInfo }> {
   listen()
   const dbg = more.debugger!
   // The tab's session (cdp.ts): a recording's or live pictures' when one is held, else attached
   // for this step; this step holds it until it ends.
   const by = stepHolder()
+  const mark = endMark(tabId)
   const raw = await acquireDebugger(dbg, tabId, by)
   const opened = whenDialog(tabId)
   // A step a dialog cut short stops there: whatever it would send after (the next key, the rest of
   // a drag) is refused, so nothing more happens once the dialog is answered.
   let interrupted = false
+  // The step went through (or a dialog cut it short): only then may its session linger after it.
+  let went = false
   const guarded: Send = (method, params) => (interrupted
     ? Promise.reject(new CdpError('A dialog opened: the step stopped there.', 'dialog_interrupted'))
     : raw(method, params))
@@ -196,6 +200,7 @@ export async function runWatching<T>(tabId: number, work: (send: Send) => Promis
     // A step a dialog interrupted ends when the dialog is answered: its result is not waited for.
     step.catch(() => undefined)
     const r = await Promise.race([step, opened.promise.then((dialog) => ({ dialog }))])
+    went = true
     if ('dialog' in r) {
       interrupted = true
       try { onInterrupt?.(raw) } catch { /* best effort */ }
@@ -209,6 +214,7 @@ export async function runWatching<T>(tabId: number, work: (send: Send) => Promis
     return r
   } finally {
     opened.cancel()
+    if (went) await lingerAfter(dbg, tabId, o.linger, mark)
     await releaseDebugger(dbg, tabId, by)
   }
 }

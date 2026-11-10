@@ -28,6 +28,8 @@ const fake = {
   shown: [] as string[],
   frameBoxes: {} as Record<number, Record<number, { x: number; y: number }>>,
   frames: [] as number[],
+  /** Chrome's way (no runtime.getFrameId in a content script): the frame element's place, told by the document holding it (`parent`) when the frame says hello. */
+  parents: {} as Record<number, { parent: number; box: { x: number; y: number }; tab?: number }>,
   /** A page message held back until this resolves (`agent-mark` on, `agent-frame-box`). */
   hold: null as null | { type: string; wait: Promise<void> },
   /** tabs.ungroup refuses this many more times ("Tabs cannot be edited right now"). */
@@ -89,6 +91,13 @@ const copy = (t: FTab) => ({ ...t })
       if (h && h.type === msg.type && (msg.type !== 'agent-mark' || msg.on === true)) { fake.hold = null; await h.wait }
       if (msg.type === 'agent-check') return { ok: true, walnut: false, href: fake.tabs.get(tab)?.url }
       if (msg.type === 'agent-frame-box') return { ok: true, box: fake.frameBoxes[opts?.frameId ?? 0]?.[Number(msg.frameId)] ?? null }
+      if (msg.type === 'agent-frame-hello') {
+        const p = fake.parents[opts?.frameId ?? 0]
+        if (!p) return { ok: false }
+        // The parent's script answers as a page message would: after this send has answered.
+        setTimeout(() => frameHelloBox({ type: 'agent-frame-hello-box', token: msg.token, box: p.box }, { tab: { id: p.tab ?? tab }, frameId: p.parent } as never), 0)
+        return { ok: true }
+      }
       if (msg.type === 'agent-cursor') return { ok: true, placed: true }
       return { ok: true }
     },
@@ -115,7 +124,7 @@ const copy = (t: FTab) => ({ ...t })
 const agent = await import('../../../packages/browser-extension/src/agent')
 const { agentTabs, mark, walnutCheck } = await import('../../../packages/browser-extension/src/agent-shared')
 const { foldIdleGroup, noteGroupUse, _resetGroupsForTesting } = await import('../../../packages/browser-extension/src/agent-groups')
-const { cursorUp, _resetCursorRelayForTesting } = await import('../../../packages/browser-extension/src/agent-cursor')
+const { cursorUp, frameHelloBox, _resetCursorRelayForTesting } = await import('../../../packages/browser-extension/src/agent-cursor')
 const { RESTORE_RETRY_MS, restoreLeftPersonTabs, restorePersonTab } = await import('../../../packages/browser-extension/src/agent-groups-person')
 walnutCheck.isWalnutPage = async () => false
 
@@ -133,7 +142,7 @@ function browser(): void {
   fake.session = { agentWindow: 3 }
   fake.local = {}
   fake.tabs.clear(); fake.groups.clear(); fake.nextGroup = 100
-  fake.sent = []; fake.shown = []; fake.frameBoxes = {}; fake.frames = []
+  fake.sent = []; fake.shown = []; fake.frameBoxes = {}; fake.frames = []; fake.parents = {}
   fake.hold = null; fake.ungroupRefusals = 0; fake.joinOnMove = -1
   _resetCursorRelayForTesting()
   const t = (id: number, windowId: number, index: number, groupId = -1, active = false): FTab => ({ id, windowId, index, groupId, url: `https://shop.example.test/${id}`, active, status: 'complete' })
@@ -392,6 +401,54 @@ describe('a step in a frame: the cursor in the top document', () => {
     expect(await placing).toEqual({ ok: true, placed: true })
     expect(drawn()).toEqual([])
     expect(cursorOffSent(3)).toBe(true)
+  })
+
+  it('a top document too slow to answer (a loaded machine) is no "not here": the next step looks again', async () => {
+    await hand(3)
+    fake.frameBoxes = { 0: { 4: { x: 100, y: 200 } } }
+    // The top document's first answer never comes in time (2026-11-09, the land gate's runner).
+    fake.hold = { type: 'agent-frame-box', wait: new Promise<void>(() => undefined) }
+    vi.useFakeTimers()
+    try {
+      const first = up(4)
+      await vi.advanceTimersByTimeAsync(4000)
+      expect(await first).toEqual({ ok: true, placed: false })
+    } finally {
+      vi.useRealTimers()
+    }
+    fake.sent = []
+    expect(await up(4)).toEqual({ ok: true, placed: true })
+    expect(drawn()[0].msg).toMatchObject({ x: 110, y: 220 })
+  })
+
+  it('Chrome (no runtime.getFrameId): the frame says hello to its parent, which says where it starts; nested frames add up', async () => {
+    await hand(3)
+    fake.sent = []
+    fake.frames = [2, 4]
+    fake.parents = { 4: { parent: 2, box: { x: 5, y: 7 } }, 2: { parent: 0, box: { x: 100, y: 200 } } }
+    expect(await up(4)).toEqual({ ok: true, placed: true })
+    expect(drawn()[0].msg).toMatchObject({ x: 115, y: 227 })
+    expect(fake.sent.filter((s) => s.msg.type === 'agent-frame-hello').map((s) => s.frameId)).toEqual([4, 2])
+  })
+
+  it('an answer from another tab is not taken, nor one with no place; a token nobody waits for is ignored', async () => {
+    await hand(3)
+    fake.parents = { 4: { parent: 0, box: { x: 1, y: 1 }, tab: 99 } }
+    fake.sent = []
+    expect(await up(4)).toEqual({ ok: true, placed: false })
+    expect(drawn()).toEqual([])
+    _resetCursorRelayForTesting()
+    fake.parents = { 4: { parent: 0, box: { x: Number.NaN, y: 1 } } }
+    vi.useFakeTimers()
+    try {
+      const r = up(4)
+      await vi.advanceTimersByTimeAsync(4000)
+      expect(await r).toEqual({ ok: true, placed: false })
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(drawn()).toEqual([])
+    expect(frameHelloBox({ token: 'not-a-token-of-ours-0000', box: { x: 1, y: 1 } }, { tab: { id: 3 }, frameId: 0 } as never)).toEqual({ ok: true })
   })
 
   it('a place nobody can say, or a tab no agent holds: not drawn there (the frame draws it itself), and not looked for again for a while', async () => {

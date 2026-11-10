@@ -13,6 +13,8 @@
  *     the person (request_sign_in) carries on.
  */
 import { ext } from './ext'
+import { more } from './agent-api'
+import { endLinger } from './cdp'
 import { AgentError, agentTabs, agentWindowId, mark, personsTab, where, type AgentTab, type WireCommand } from './agent-shared'
 
 /** The person has the tab: since when (ms). */
@@ -54,6 +56,8 @@ export async function takeOver(c: WireCommand): Promise<Record<string, unknown>>
     return { ...rec, driving: drivingSince(rec) ?? since }
   })
   if (!held) throw new AgentError('That tab is no agent\'s now (closed, or given back with Stop).', 'not_your_tab')
+  // The person has the tab now: the agent's lingering debugger hold goes (cdp.ts linger).
+  await endLinger(more.debugger, tabId).catch(() => undefined)
   const tab = await ext.tabs.get(tabId).catch(() => null)
   if (!tab || tab.windowId === undefined) throw new AgentError('That tab was closed.', 'not_your_tab')
   const rec = await agentTabs.get(tabId)

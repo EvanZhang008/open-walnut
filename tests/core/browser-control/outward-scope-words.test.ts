@@ -27,6 +27,6 @@ describe('what the outward ask covers is said plainly', () => {
   })
 
   it('the person reads which switch evaluate needs', () => {
-    expect(read('docs/reference/browser-control.md')).toMatch(/`evaluate` works only after you turn on "Let agents use real mouse and keys"/)
+    expect(read('docs/reference/browser-control.md')).toMatch(/`evaluate` works only while "Let agents use real mouse and keys" is on/)
   })
 })

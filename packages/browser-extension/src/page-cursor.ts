@@ -29,8 +29,8 @@ export const MOVE_MAX_MS = 300
 /** A first appearance is shown this long before the step acts, so the person sees where. */
 export const FIRST_MS = 120
 export const RIPPLE_MS = 450
-/** How long a frame waits for the background to draw its point in the top document. */
-const UP_MS = 3000
+/** How long a frame waits for the background to draw its point in the top document (agent-cursor.ts SEARCH_MS and DRAW_MS fit inside). */
+const UP_MS = 6000
 
 const ARROW_PATH = 'M3 2 L3 18 L7.2 14.2 L10.2 20.6 L12.9 19.4 L9.9 13 L15.6 13 Z'
 const SVG_NS = 'http://www.w3.org/2000/svg'
@@ -163,12 +163,7 @@ export function frameBox(frameId: number): { x: number; y: number } | null {
   if (typeof rt?.getFrameId !== 'function' || !Number.isInteger(frameId) || frameId <= 0) return null
   const walk = (doc: Document, ox: number, oy: number, depth: number): { x: number; y: number } | null => {
     for (const el of Array.from(doc.querySelectorAll('iframe, frame'))) {
-      const r = el.getBoundingClientRect()
-      let cs: CSSStyleDeclaration | undefined
-      try { cs = doc.defaultView?.getComputedStyle(el) } catch { /* no style to read */ }
-      // The frame's page starts inside its border and padding.
-      const x = ox + r.left + ((el as HTMLElement).clientLeft || 0) + (parseFloat(cs?.paddingLeft ?? '') || 0)
-      const y = oy + r.top + ((el as HTMLElement).clientTop || 0) + (parseFloat(cs?.paddingTop ?? '') || 0)
+      const { x, y } = innerStart(el, doc, ox, oy)
       let id = -1
       try { id = rt!.getFrameId!(el) } catch { /* not a frame the browser names */ }
       if (id === frameId) return { x, y }
@@ -183,8 +178,41 @@ export function frameBox(frameId: number): { x: number; y: number } | null {
   return walk(document, 0, 0, 0)
 }
 
+/** Where a frame element's page starts in its document's viewport: inside its border and padding. */
+function innerStart(el: Element, doc: Document = document, ox = 0, oy = 0): { x: number; y: number } {
+  const r = el.getBoundingClientRect()
+  let cs: CSSStyleDeclaration | undefined
+  try { cs = doc.defaultView?.getComputedStyle(el) } catch { /* no style to read */ }
+  return {
+    x: ox + r.left + ((el as HTMLElement).clientLeft || 0) + (parseFloat(cs?.paddingLeft ?? '') || 0),
+    y: oy + r.top + ((el as HTMLElement).clientTop || 0) + (parseFloat(cs?.paddingTop ?? '') || 0),
+  }
+}
+
+/**
+ * The frame's hello to the document that holds it (agent-cursor.ts helloOrigin): Chrome gives a
+ * content script no runtime.getFrameId (2026-11-09: undefined in Chrome 145, so the cursor of every
+ * step in a frame was drawn inside the frame), so the frame posts a token to its parent window, and
+ * the parent's script finds which of its frame elements that window is (`source`) and tells the
+ * background where it starts. Only the place goes back; a page that copies the token can at worst
+ * move Walnut's cursor picture.
+ */
+export const FRAME_HELLO = 'walnutFrameHello'
+const TOKEN = /^[0-9a-f-]{16,64}$/
+
+function listenHello(): void {
+  addEventListener('message', (e) => {
+    const token = (e.data as Record<string, unknown> | null)?.[FRAME_HELLO]
+    if (typeof token !== 'string' || !TOKEN.test(token) || !e.source) return
+    const el = Array.from(document.querySelectorAll('iframe, frame')).find((f) => (f as HTMLIFrameElement).contentWindow === e.source)
+    if (!el) return
+    void ask({ type: 'agent-frame-hello-box', token, box: innerStart(el) }).catch(() => undefined)
+  })
+}
+
 /** The background's messages about the cursor (content.ts calls this once per frame). */
 export function listenCursor(): void {
+  listenHello()
   ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type === 'agent-cursor') {
       if (msg.off === true) { cursorOff(); sendResponse({ ok: true }); return }
@@ -193,6 +221,12 @@ export function listenCursor(): void {
       return true
     }
     if (msg?.type === 'agent-frame-box') { sendResponse({ ok: true, box: frameBox(Number(msg.frameId)) }); return }
+    if (msg?.type === 'agent-frame-hello') {
+      const token = String(msg.token ?? '')
+      if (isTop() || !TOKEN.test(token)) { sendResponse({ ok: false }); return }
+      try { window.parent.postMessage({ [FRAME_HELLO]: token }, '*') } catch { sendResponse({ ok: false }); return }
+      sendResponse({ ok: true }); return
+    }
   })
 }
 

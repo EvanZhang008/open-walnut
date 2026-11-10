@@ -38,8 +38,13 @@ const fake = {
   changed: [] as Array<(c: Record<string, { newValue?: unknown }>, area: string) => void>,
   /** Every tabs.onRemoved listener (a tab closing is told to each). */
   removed: [] as Array<(tabId: number) => void>,
+  /** Tab 7 is the front tab of the agent window (else another tab is in front: 8). */
+  active: true,
+  discarded: false,
+  /** The browser refuses the attach (DevTools holds the tab). */
+  attachError: '',
 }
-const tab = (id = 7) => ({ id, windowId: 3, active: true, url: 'https://shop.example.test/', title: 'Shop' })
+const tab = (id = 7) => ({ id, windowId: 3, active: id === 7 ? fake.active : !fake.active, url: 'https://shop.example.test/', title: 'Shop', ...(id === 7 && fake.discarded ? { discarded: true } : {}) })
 ;(globalThis as any).chrome = {
   runtime: { id: 'test', getURL: (p: string) => `chrome-extension://walnut/${p}`, onMessage: ev() },
   storage: {
@@ -60,7 +65,7 @@ const tab = (id = 7) => ({ id, windowId: 3, active: true, url: 'https://shop.exa
     query: async (q: Record<string, unknown>) => {
       if (q.url) return fake.others.filter((t) => t.url === q.url)
       if (q.lastFocusedWindow) return fake.others.filter((t) => t.windowId === fake.lastFocused && t.active)
-      if (q.windowId === 3) return [tab(7)]
+      if (q.windowId === 3) return q.active ? [fake.active ? tab(7) : tab(8)] : [tab(7), tab(8)]
       return [tab(7), ...fake.others.filter((t) => t.active)]
     },
     create: async (o: Record<string, unknown>) => { fake.created.push(o); return { id: 90, windowId: o.windowId as number, url: o.url as string } },
@@ -82,6 +87,7 @@ const tab = (id = 7) => ({ id, windowId: 3, active: true, url: 'https://shop.exa
     attach: async (t: { tabId: number }) => {
       fake.attaches.push(t.tabId)
       await new Promise((r) => setTimeout(r, 5))
+      if (fake.attachError) throw new Error(fake.attachError)
       if (fake.attached.has(t.tabId)) throw new Error('Another debugger is already attached to the tab')
       fake.attached.add(t.tabId)
     },
@@ -98,8 +104,8 @@ const tab = (id = 7) => ({ id, windowId: 3, active: true, url: 'https://shop.exa
 }
 
 const { viewWatch, viewFrame, streaming, STREAM_QUALITY, _resetViewForTesting } = await import('../../../packages/browser-extension/src/agent-view')
-const { liveHeld, liveState, LIVE_GAP_MS, PROBE_MS, _resetLiveForTesting } = await import('../../../packages/browser-extension/src/agent-live')
-const { acquireDebugger, releaseDebugger, holdDebugger, holdersOf, withDebugger, debuggerHeld, _resetDebuggerForTesting } = await import('../../../packages/browser-extension/src/cdp')
+const { liveHeld, liveState, LIVE_GAP_MS, _resetLiveForTesting } = await import('../../../packages/browser-extension/src/agent-live')
+const { acquireDebugger, releaseDebugger, holdDebugger, holdersOf, withDebugger, debuggerHeld, _resetDebuggerForTesting, _setLingerMsForTesting } = await import('../../../packages/browser-extension/src/cdp')
 const { migrateRealInput, realInputOn, livePicturesOn, setTrustedInput, setLivePictures, trustedInputState } = await import('../../../packages/browser-extension/src/trusted-switch')
 const { trustedReady } = await import('../../../packages/browser-extension/src/agent-trusted')
 const { openGrant } = await import('../../../packages/browser-extension/src/grant-open')
@@ -146,6 +152,10 @@ beforeEach(() => {
   fake.hang = false
   fake.windowState = 'normal'
   fake.incognito = new Set()
+  fake.active = true
+  fake.discarded = false
+  fake.attachError = ''
+  _setLingerMsForTesting(0)
   _resetViewForTesting()
   _resetLiveForTesting()
   _resetDebuggerForTesting()
@@ -178,16 +188,16 @@ describe('a covered agent window, watched', () => {
     expect(fake.tabUpdates).toEqual([])
   })
 
-  it('goes back to captureVisibleTab and lets the debugger go as soon as the window shows again', async () => {
-    _resetLiveForTesting(0)
+  it('once it needed the debugger, the watch keeps its one session to the end, also after the window shows again (no attach and detach per frame)', async () => {
     fake.captureError = COVERED
-    const posts = await watch(4, (_b, i) => { if (i === 2) fake.captureError = '' })
+    let attachedWhileShown = false
+    const posts = await watch(4, (_b, i) => { if (i === 2) fake.captureError = ''; if (i === 3) attachedWhileShown = fake.attached.has(7) })
     expect(posts.every((p) => p.shown === true)).toBe(true)
-    expect(posts.at(-1)).toMatchObject({ shown: true })
-    // Detached once the window drew again, while the stream still ran (no bar for a visible window).
+    expect(attachedWhileShown).toBe(true)
+    // One attach, one detach (when nobody watches), every picture through the same session.
     expect(fake.attaches).toEqual([7])
     expect(fake.detaches).toEqual([7])
-    expect(fake.sent.filter((s) => s.m === 'Page.captureScreenshot')).toHaveLength(2)
+    expect(fake.sent.filter((s) => s.m === 'Page.captureScreenshot')).toHaveLength(4)
   })
 
   it('a visible window never attaches the debugger', async () => {
@@ -235,7 +245,7 @@ describe('a covered agent window, watched', () => {
   })
 
   it('a picture that never comes is given up after a moment: the gate is free again, the debugger let go, no new try for a while', async () => {
-    _resetLiveForTesting(3000, 200)
+    _resetLiveForTesting(200)
     fake.captureError = COVERED
     fake.hang = true
     const posts = await watch(3)
@@ -245,11 +255,11 @@ describe('a covered agent window, watched', () => {
     expect(fake.detaches).toEqual([7])
   })
 
-  it('a dialog open on the page: no live picture is tried (it may never come)', async () => {
+  it('a dialog open on the page: no live picture is tried (it may never come), and the frame says so', async () => {
     fake.captureError = COVERED
     foldDialogEvent(7, 'Page.javascriptDialogOpening', { type: 'alert', message: 'Hi' })
     const posts = await watch(2)
-    expect(posts[0]).toMatchObject({ shown: false, why: 'covered', live: 'failed' })
+    expect(posts[0]).toMatchObject({ shown: false, why: 'covered', live: 'dialog' })
     expect(fake.attaches).toEqual([])
   })
 
@@ -279,12 +289,29 @@ describe('a covered agent window, watched', () => {
     expect(fake.detaches).toEqual([7])
   })
 
-  it('minimized meanwhile: the stream lets the debugger go', async () => {
+  it('minimized meanwhile: pictures go on through the debugger, and nothing restores the window', async () => {
     fake.captureError = COVERED
-    let gone = -1
-    const posts = await watch(3, (_b, i) => { if (i === 1) fake.windowState = 'minimized'; if (i === 2) gone = fake.detaches.length })
-    expect(posts[1]).toMatchObject({ why: 'minimized' })
-    expect(gone).toBe(1)
+    const posts = await watch(3, (_b, i) => { if (i === 1) fake.windowState = 'minimized' })
+    expect(posts.map((p) => p.shown)).toEqual([true, true, true])
+    expect(fake.attaches).toEqual([7])
+    expect(fake.windowUpdates).toEqual([])
+    expect(fake.tabUpdates).toEqual([])
+  })
+
+  it('minimized with live pictures off: says minimized and why, and holds no debugger', async () => {
+    fake.windowState = 'minimized'
+    fake.local.livePictures = false
+    const posts = await watch(2)
+    expect(posts[0]).toMatchObject({ shown: false, why: 'minimized', live: 'off' })
+    expect(fake.attaches).toEqual([])
+  })
+
+  it('minimized from the start: the first picture already comes through the debugger', async () => {
+    fake.windowState = 'minimized'
+    const posts = await watch(2)
+    expect(posts[0]).toMatchObject({ shown: true, image: 'data:image/jpeg;base64,LIVE' })
+    // captureVisibleTab of a minimized window is never tried.
+    expect(fake.captures).toBe(0)
   })
 
   it('a single frame (an older Walnut, view_frame) never attaches', async () => {
@@ -295,11 +322,35 @@ describe('a covered agent window, watched', () => {
 })
 
 describe('an agent\'s screenshot of a covered window', () => {
-  it('nobody watches the card: covered, as before, with no attach and no debugging bar (review 2026-11-09)', async () => {
+  it('nobody watches the card: the picture comes through the debugger anyway (2026-11-09: the agent fully capable), then the hold goes', async () => {
     fake.captureError = COVERED
+    expect(await shooter(7, 3, true)({ format: 'png' })).toBe('data:image/png;base64,LIVE')
+    expect(fake.attaches).toEqual([7])
+    await endShot(7)
+    expect(fake.detaches).toEqual([7])
+    expect(debuggerHeld(7)).toBe(false)
+    expect(fake.windowUpdates).toEqual([])
+    expect(fake.tabUpdates).toEqual([])
+  })
+
+  it('live pictures off, or the bar cancelled lately: covered, as before, with no attach', async () => {
+    fake.captureError = COVERED
+    fake.local.livePictures = false
+    await expect(shooter(7, 3, true)({ format: 'png' })).rejects.toMatchObject({ code: 'window_covered' })
+    fake.local.livePictures = true
+    await acquireDebugger(dbg, 7, 'record')
+    fake.attached.delete(7)
+    for (const f of fake.onDetach) f({ tabId: 7 }, 'canceled_by_user')
+    fake.attaches = []
     await expect(shooter(7, 3, true)({ format: 'png' })).rejects.toMatchObject({ code: 'window_covered' })
     expect(fake.attaches).toEqual([])
-    expect(debuggerHeld(7)).toBe(false)
+  })
+
+  it('a picture through the debugger that fails keeps the covered code and says why', async () => {
+    fake.captureError = COVERED
+    fake.attachError = 'Another debugger is already attached to the tab with id: 7.'
+    await expect(shooter(7, 3, true)({ format: 'png' })).rejects.toMatchObject({ code: 'window_covered', message: expect.stringMatching(/debugger gave no picture either/) })
+    expect(await liveState(7)).toBe('devtools')
   })
 
   it('while the Browser view\'s stream holds the tab: through that session, held for the screenshot, and the stream\'s attach stays', async () => {
@@ -322,12 +373,21 @@ describe('an agent\'s screenshot of a covered window', () => {
     expect(fake.detaches).toEqual([7])
   })
 
-  it('a session held by someone else (a recording, a dialog) is not a watched card: still covered', async () => {
+  it('a session a recording holds: the screenshot joins it, and the recording keeps it after', async () => {
     fake.captureError = COVERED
     await acquireDebugger(dbg, 7, 'record')
-    await expect(shooter(7, 3, true)({ format: 'png' })).rejects.toMatchObject({ code: 'window_covered' })
-    expect(fake.sent.filter((x) => x.m === 'Page.captureScreenshot')).toEqual([])
+    expect(await shooter(7, 3, true)({ format: 'png' })).toBe('data:image/png;base64,LIVE')
+    await endShot(7)
+    expect(fake.attaches).toEqual([7])
+    expect(fake.detaches).toEqual([])
+    expect(holdersOf(7)).toEqual(['record'])
     await releaseDebugger(dbg, 7, 'record')
+  })
+
+  it('a tab behind another (inPlace): only the debugger, never captureVisibleTab of the window', async () => {
+    expect(await shooter(7, 3, true, true)({ format: 'jpeg', quality: 70 })).toBe('data:image/jpeg;base64,LIVE')
+    expect(fake.captures).toBe(0)
+    expect(fake.tabUpdates).toEqual([])
   })
 
   it('without the permission says covered as before, even while a stream ran', async () => {
@@ -426,7 +486,7 @@ describe('live pictures ended while their attach was on its way (review 2026-11-
   })
 
   it('the stream let go while its picture was being drawn: no failure of the page, live pictures stay on', async () => {
-    _resetLiveForTesting(PROBE_MS, 200)
+    _resetLiveForTesting(200)
     fake.hang = true
     const pic = livePicture(7, STREAM_QUALITY)
     await vi.waitFor(() => expect(fake.sent.some((x) => x.m === 'Page.captureScreenshot')).toBe(true))
@@ -478,46 +538,187 @@ describe('a recording that stops while another holder keeps the session (review 
   })
 })
 
-describe('real input apart from the debugger permission', () => {
-  it('migrates once: a never-stored switch becomes whether the permission is held now', async () => {
+// 2026-11-09, the user: "why still no picture", "we need make it fully capable using debug". With
+// the debugger held, every case captureVisibleTab cannot serve gets its picture in place.
+describe('pictures always while watched: every case captureVisibleTab cannot serve', () => {
+  it('a tab behind another tab of the agent window: pictured in place, the front tab never switched', async () => {
+    fake.active = false
+    const posts = await watch(3)
+    expect(posts.map((p) => p.shown)).toEqual([true, true, true])
+    expect(posts[0]).toMatchObject({ image: 'data:image/jpeg;base64,LIVE' })
+    expect(fake.tabUpdates).toEqual([])
+    expect(fake.windowUpdates).toEqual([])
+    expect(fake.captures).toBe(0)
+    // One session for the whole watch.
+    expect(fake.attaches).toEqual([7])
+    expect(fake.detaches).toEqual([7])
+  })
+
+  it('the same tab without the debugger (live pictures off): the old way, no debugger, and never a switch while the person is in the window', async () => {
+    fake.active = false
+    fake.local.livePictures = false
+    await watch(1)
+    expect(fake.attaches).toEqual([])
+  })
+
+  it('about four pictures a second while the page changes', async () => {
+    fake.captureError = COVERED
+    let n = 0
+    const sendCommand = dbg.sendCommand
+    dbg.sendCommand = async (t: { tabId: number }, m: string, p?: Record<string, unknown>) => (m === 'Page.captureScreenshot' ? (await sendCommand(t, m, p), { data: `LIVE${++n}` }) : sendCommand(t, m, p))
+    try {
+      const t0 = Date.now()
+      const posts = await watch(6)
+      const took = Date.now() - t0
+      expect(posts.every((p) => p.shown === true && typeof p.image === 'string')).toBe(true)
+      // Six different pictures in about 6 x LIVE_GAP_MS, well above captureVisibleTab's two a second.
+      expect(LIVE_GAP_MS).toBeLessThanOrEqual(334)
+      expect(took).toBeLessThan(6 * 550)
+    } finally {
+      dbg.sendCommand = sendCommand
+    }
+  })
+
+  it('a tab Chrome discarded: its own reason, and no attach (that would load it again)', async () => {
+    fake.discarded = true
+    const posts = await watch(1)
+    expect(posts[0]).toMatchObject({ shown: false, why: 'discarded' })
+    expect(fake.attaches).toEqual([])
+  })
+
+  it('DevTools holds the tab: the frame says devtools, and the next try waits (no bar flashing)', async () => {
+    fake.captureError = COVERED
+    fake.attachError = 'Another debugger is already attached to the tab with id: 7.'
+    const posts = await watch(3)
+    expect(posts.map((p) => p.live)).toEqual(['devtools', 'devtools', 'devtools'])
+    expect(fake.attaches).toEqual([7])
+  })
+
+  it('a tab behind another with DevTools on it: one try (the next waits), then the window\'s own picture as before', async () => {
+    fake.active = false
+    fake.attachError = 'Another debugger is already attached to the tab with id: 7.'
+    await watch(2)
+    expect(fake.attaches).toEqual([7])
+    expect(await liveState(7)).toBe('devtools')
+    // The old way: the agent window's own tab brought up (never a window focused), as before the debugger.
+    expect(fake.tabUpdates.every((u) => u.id === 7 || u.id === 8)).toBe(true)
+    expect(fake.windowUpdates).toEqual([])
+  })
+
+  it('a tab behind another while the person is in the agent window, with DevTools on it: behind, and why', async () => {
+    fake.active = false
+    fake.attachError = 'Another debugger is already attached to the tab with id: 7.'
+    const get = (globalThis as any).chrome.windows.get
+    ;(globalThis as any).chrome.windows.get = async (id: number) => ({ ...(await get(id)), focused: id === 3 })
+    try {
+      const posts = await watch(1)
+      expect(posts[0]).toMatchObject({ shown: false, why: 'behind', live: 'devtools' })
+      expect(fake.tabUpdates).toEqual([])
+    } finally {
+      ;(globalThis as any).chrome.windows.get = get
+    }
+  })
+
+  it('the person cancelling the bar: no picture through it for the cool-down, on any tab', async () => {
+    fake.captureError = COVERED
+    await watch(1)
+    for (const f of fake.onDetach) f({ tabId: 7 }, 'canceled_by_user')
+    fake.attaches = []
+    expect(await liveState(7)).toBe('cancelled')
+    expect(await liveState(9)).toBe('cancelled')
+    const posts = await watch(1)
+    expect(posts[0]).toMatchObject({ shown: false, why: 'covered', live: 'cancelled' })
+    expect(fake.attaches).toEqual([])
+  })
+})
+
+describe('the debugger session stays while the agent works (cdp.ts linger)', () => {
+  it('a step\'s session lingers: the next step joins it, no second attach; it goes LINGER_MS after the last step', async () => {
+    _setLingerMsForTesting(80)
+    await withDebugger(dbg, 7, async (send) => { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 }) }, { linger: true })
+    expect(fake.detaches).toEqual([])
+    expect(holdersOf(7)).toEqual(['linger'])
+    await withDebugger(dbg, 7, async (send) => { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2 }) }, { linger: true })
+    expect(fake.attaches).toEqual([7])
+    await vi.waitFor(() => expect(fake.detaches).toEqual([7]), { timeout: 2000 })
+    expect(debuggerHeld(7)).toBe(false)
+  })
+
+  it('the agent letting the tab go ends it at once', async () => {
+    _setLingerMsForTesting(60_000)
+    await withDebugger(dbg, 7, async () => undefined, { linger: true })
+    const { endLinger } = await import('../../../packages/browser-extension/src/cdp')
+    await endLinger(dbg, 7)
+    expect(fake.detaches).toEqual([7])
+  })
+
+  it('after the person cancelled the bar, a step does not linger', async () => {
+    _setLingerMsForTesting(60_000)
+    await acquireDebugger(dbg, 7, 'record')
+    fake.attached.delete(7)
+    for (const f of fake.onDetach) f({ tabId: 7 }, 'canceled_by_user')
+    await withDebugger(dbg, 7, async () => undefined, { linger: true })
+    expect(holdersOf(7)).toEqual([])
+    expect(fake.detaches).toEqual([7])
+  })
+
+  it('a step without linger (a recording\'s own) detaches at once, as before', async () => {
+    _setLingerMsForTesting(60_000)
+    await withDebugger(dbg, 7, async () => undefined)
+    expect(fake.detaches).toEqual([7])
+  })
+})
+
+describe('real input: on while the permission is held, until the person chooses (2026-11-09)', () => {
+  it('never set by the person: it follows the permission, whatever an older build stored by itself', async () => {
     fake.local = {}
     fake.perm = true
     expect(await migrateRealInput()).toBe(true)
     expect(fake.local.realInput).toBe(true)
+    expect(await trustedReady()).toBe(true)
+    // An older build's own migration (or a grant for live pictures) stored it off: not the person's choice.
+    fake.local = { realInput: false }
+    expect(await realInputOn()).toBe(true)
+    expect(fake.local.realInput).toBe(true)
+    // No permission (a copy that lacks it): off, and on again once it is held.
     fake.local = {}
     fake.perm = false
     expect(await migrateRealInput()).toBe(false)
-    expect(fake.local.realInput).toBe(false)
-    // Stored: a grant later (for live pictures) does not turn real input on.
-    fake.perm = true
-    expect(await migrateRealInput()).toBe(false)
-    expect(await realInputOn()).toBe(false)
     expect(await trustedReady()).toBe(false)
-    expect(await livePicturesOn()).toBe(true)
+    fake.perm = true
+    expect(await trustedReady()).toBe(true)
   })
 
-  it('real input needs both the permission and the switch', async () => {
-    fake.local = { realInput: true }
+  it('the person\'s own off stays off; their on stays on', async () => {
+    fake.local = {}
+    expect(await setTrustedInput(false)).toBe(false)
+    expect(fake.local).toMatchObject({ realInput: false, realInputBy: 'person' })
+    expect(await migrateRealInput()).toBe(false)
+    expect(await trustedReady()).toBe(false)
+    expect(await trustedInputState()).toMatchObject({ on: false, livePictures: true, permission: true })
+    expect(await setTrustedInput(true)).toBe(true)
+    expect(await trustedReady()).toBe(true)
+  })
+
+  it('real input needs the permission too', async () => {
+    fake.local = { realInput: true, realInputBy: 'person' }
     fake.perm = false
     expect(await trustedReady()).toBe(false)
     fake.perm = true
     expect(await trustedReady()).toBe(true)
   })
 
-  it('turning real input off keeps the permission while live pictures are on, and removes it when they are off too', async () => {
-    fake.local = { realInput: true }
+  it('turning either switch off never removes the permission (it is required now)', async () => {
     expect(await setTrustedInput(false)).toBe(false)
-    expect(fake.local.realInput).toBe(false)
+    expect(await setLivePictures(false)).toBe(false)
     expect(fake.removes).toBe(0)
-    expect(fake.perm).toBe(true)
-    expect(await trustedInputState()).toMatchObject({ on: false, livePictures: true, permission: true })
-    expect(await setLivePictures(false, true)).toBe(false)
-    expect(fake.removes).toBe(1)
-    expect(await trustedInputState()).toMatchObject({ on: false, livePictures: false, permission: false })
+    expect(await trustedInputState()).toMatchObject({ on: false, livePictures: false, permission: true })
+    const src = readFileSync('packages/browser-extension/src/trusted-switch.ts', 'utf8')
+    expect(src).not.toMatch(/permissions\.remove/)
   })
 
-  it('turning real input on asks Chrome in the click and stores the switch; a no puts it back', async () => {
-    fake.local = { realInput: false }
+  it('a copy without the permission: turning real input on asks Chrome in the click; a no puts it back', async () => {
+    fake.local = {}
     fake.perm = false
     fake.grantAnswer = false
     expect(await setTrustedInput(true)).toBe(false)
@@ -528,27 +729,17 @@ describe('real input apart from the debugger permission', () => {
     expect(fake.requests).toBe(2)
   })
 
-  it('the grant page reads real input in the click, never from when it opened (review 2026-11-09)', async () => {
-    // The page waited hours; meanwhile the person turned real input on (the permission and the switch).
-    fake.local = { realInput: true }
-    fake.perm = true
+  it('the grant page stores live pictures on and leaves real input as it was', async () => {
+    fake.local = { realInput: false, realInputBy: 'person' }
+    fake.perm = false
     expect(await grantLivePictures()).toBe(true)
-    expect(fake.local).toMatchObject({ livePictures: true, realInput: true })
-    // A switch the person stored off stays off.
-    fake.local = { realInput: false }
-    expect(await grantLivePictures()).toBe(true)
-    expect(fake.local.realInput).toBe(false)
-    // Never stored: off (this grant is for pictures alone).
+    expect(fake.local).toMatchObject({ livePictures: true, realInput: false, realInputBy: 'person' })
+    expect(await trustedReady()).toBe(false)
+    // Never set by the person: it follows the permission the grant brought.
     fake.local = {}
     fake.perm = false
     expect(await grantLivePictures()).toBe(true)
-    expect(fake.local).toMatchObject({ livePictures: true, realInput: false })
-    // Stored on while the permission was missing at the click: it meant nothing, and this grant does not bring it to life.
-    fake.local = { realInput: true }
-    fake.perm = false
-    expect(await grantLivePictures()).toBe(true)
-    expect(fake.local.realInput).toBe(false)
-    expect(await trustedReady()).toBe(false)
+    expect(await trustedReady()).toBe(true)
   })
 
   it('grant.ts keeps no permission state from its opening: Allow calls grantLivePictures and nothing before it', () => {
@@ -559,12 +750,9 @@ describe('real input apart from the debugger permission', () => {
     expect(click.slice(0, click.indexOf('grantLivePictures'))).not.toMatch(/\bawait\b/)
   })
 
-  it('a grant made for live pictures alone stores real input off', async () => {
-    fake.local = { realInput: true }
-    fake.perm = false
-    expect(await setLivePictures(true, false)).toBe(true)
-    expect(fake.local).toMatchObject({ livePictures: true, realInput: false })
-    expect(await trustedReady()).toBe(false)
+  it('the background settles the switch at its start', () => {
+    const src = readFileSync('packages/browser-extension/src/background.ts', 'utf8')
+    expect(src).toMatch(/void migrateRealInput\(\)/)
   })
 })
 
@@ -603,6 +791,11 @@ describe('view_grant: the page that turns live pictures on', () => {
   it('opens nothing when live pictures are on already, and reuses a page already open', async () => {
     expect(await openGrant({ args: { person: true } })).toMatchObject({ opened: false, already: true })
     expect(fake.created).toEqual([])
+    // The permission held and the person turned live pictures off: their choice, never undone by this page.
+    fake.local.livePictures = false
+    expect(await openGrant({ args: { tab: 7 } })).toMatchObject({ opened: false, already: true, off: true })
+    expect(fake.created).toEqual([])
+    fake.local.livePictures = true
     fake.perm = false
     fake.others.push({ id: 31, windowId: 1, url: 'chrome-extension://walnut/grant.html' })
     expect(await openGrant({ args: { person: true } })).toMatchObject({ opened: true, reused: true })

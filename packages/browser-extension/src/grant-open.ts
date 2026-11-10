@@ -1,15 +1,18 @@
 /**
- * `view_grant {tab, person}`: "Show it live" on a covered Browser view in Walnut. Chrome asks for
- * an optional permission only inside a click on one of the extension's own pages, so this opens
- * that page (grant.html, grant.ts), whose one button asks for the debugger and turns live pictures
- * on (agent-live.ts). Nothing is granted here: the grant takes the person's two clicks there.
+ * `view_grant {tab, person}`: "Show it live" in a task's Browser view, for a copy of the extension
+ * that lacks the debugger permission (it is required in the manifest, so this is rare:
+ * trusted-switch.ts). Chrome asks for a permission only inside a click on one of the extension's
+ * own pages, so this opens that page (grant.html, grant.ts), whose one button asks for the debugger
+ * and turns live pictures on (agent-live.ts). Nothing is granted here: the grant takes the person's
+ * two clicks there.
  *
  *   - From the person's own click in Walnut (`person`): the page opens in their last-focused
  *     window, in front, and that window comes forward, as Take over does: they asked for it now.
  *   - From an agent (the route lets one ask, as every person's action): the page opens in their
  *     window in the background, never in front and never focusing anything; it waits there.
  *   - Never in Walnut's agent window. A page already open is reused (brought up for the person).
- *   - The permission held already and live pictures on: nothing opens.
+ *   - The permission held already: nothing opens (live pictures turned off is the person's own
+ *     choice in Settings, which this page never undoes).
  *   - The person closed the page without allowing: an agent's ask opens it again only
  *     GRANT_COOL_MS after that (review 2026-11-09: an agent could put it back in their window each
  *     time they closed it). The person's own click is never held back.
@@ -17,7 +20,7 @@
 import { ext, type Tab } from './ext'
 import { more } from './agent-api'
 import { agentWindowId } from './agent-shared'
-import { livePicturesOn } from './trusted-switch'
+import { debuggerGranted, livePicturesOn } from './trusted-switch'
 
 export const GRANT_PAGE = 'grant.html'
 /** After the person closed the page without allowing, an agent's ask opens no new one for this long. */
@@ -40,7 +43,7 @@ export function watchGrantClose(): void {
 async function noteClosed(tabId: number): Promise<void> {
   const g = await readState()
   if (g.tab !== tabId) return
-  await writeState(await livePicturesOn() ? {} : { ...g, tab: undefined, closedAt: Date.now() })
+  await writeState(await debuggerGranted() ? {} : { ...g, tab: undefined, closedAt: Date.now() })
 }
 
 /** When the person last closed the page without allowing; no page is open now, so one still noted open was closed unseen (counted from now). */
@@ -72,7 +75,10 @@ async function personsWindow(): Promise<number | undefined> {
 
 export async function openGrant(c: { args: Record<string, unknown> }): Promise<Record<string, unknown>> {
   const person = c.args.person === true
-  if (await livePicturesOn()) return { opened: false, already: true }
+  if (await debuggerGranted()) {
+    return await livePicturesOn() ? { opened: false, already: true }
+      : { opened: false, already: true, off: true, note: 'The person turned live pictures off in the Walnut extension\'s Settings: only they can turn them on again there.' }
+  }
   const url = ext.runtime.getURL(GRANT_PAGE)
   const agent = await agentWindowId()
   const open = (await ext.tabs.query({ url }).catch(() => [] as Tab[])).find((t) => t.windowId !== agent)

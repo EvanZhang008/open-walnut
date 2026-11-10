@@ -26,13 +26,14 @@ describe('extension manifests', () => {
     expect(c.version).toMatch(/^\d+(\.\d+){0,3}$/)
   })
 
-  it('asks for storage, alarms, the context menu, downloads, the clipboard, idle and web pages, the debugger only as optional, and exposes only the two framed pages', () => {
+  it('asks for storage, alarms, the context menu, downloads, the clipboard, idle and web pages, the debugger as required in Chrome, and exposes only the two framed pages', () => {
     for (const b of ['chrome', 'firefox']) {
       const m = manifestFor(b)
-      expect(m.permissions).toEqual(['storage', 'alarms', 'contextMenus', 'scripting', 'downloads', 'clipboardRead', 'clipboardWrite', 'idle', ...(b === 'chrome' ? ['sidePanel', 'offscreen', 'tabGroups'] : [])])
-      // The debugger is never asked at install: only when the person turns real input on (Chrome only).
-      expect(m.permissions).not.toContain('debugger')
-      expect(m.optional_permissions).toEqual(b === 'chrome' ? ['debugger'] : undefined)
+      expect(m.permissions).toEqual(['storage', 'alarms', 'contextMenus', 'scripting', 'downloads', 'clipboardRead', 'clipboardWrite', 'idle', ...(b === 'chrome' ? ['sidePanel', 'offscreen', 'tabGroups', 'debugger'] : [])])
+      // 2026-11-09: required in Chrome, so a copy Walnut set up (unpacked) holds it after its next
+      // reload with no prompt; Firefox gives extensions no debugger. Nothing is optional any more.
+      expect(m.permissions.includes('debugger')).toBe(b === 'chrome')
+      expect(m.optional_permissions).toBeUndefined()
       expect(m.host_permissions).toEqual(['<all_urls>'])
       expect(m.web_accessible_resources).toEqual([{ resources: ['menu.html', 'savebar.html'], matches: ['http://*/*', 'https://*/*'] }])
       expect(m.content_scripts[0].all_frames).toBe(true)

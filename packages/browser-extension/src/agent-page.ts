@@ -337,7 +337,22 @@ async function openLink(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab, 
   return (await agentTabs.get(t.id)) ? { tab: t.id, url: href } : undefined
 }
 
-export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<Record<string, unknown>> {
+/**
+ * A tab or window the step opened from this tab since `started` (a window the page opened with no
+ * opener named: waited for briefly, to learn whether it was this tab's). Real input uses it too
+ * (agent-trusted.ts), as the browser opens a page's own new tab or window from a trusted click.
+ */
+export async function openedSince(tabId: number, started: number): Promise<{ tab: number; url?: string } | undefined> {
+  if (!opened.some((o) => o.opener === tabId && o.at >= started)) {
+    const checks = unnamed.filter((u) => u.at >= started).map((u) => u.check)
+    if (checks.length) await Promise.race([Promise.all(checks), sleep(8000)])
+  }
+  const o = opened.find((x) => x.opener === tabId && x.at >= started)
+  return o ? { tab: o.tab, url: (await ext.tabs.get(o.tab).catch(() => ({} as Tab))).url } : undefined
+}
+
+/** `found`: the match a click by its words already found (real input handed it over: agent-trusted.ts). */
+export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab, found?: Awaited<ReturnType<typeof refByText>>): Promise<Record<string, unknown>> {
   let a = c.args
   // Within the server's own limit for the command (hub.ts, 30 s; `wait` 40 s), reaching the page
   // and a search for the words included: an answer after it would be an action the agent was
@@ -347,7 +362,7 @@ export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: Agent
   // A click by its words, in the page or a frame: the search has part of the time, the click the rest.
   let matched: Record<string, unknown> | undefined
   if ((c.action === 'click' || c.action === 'hover') && typeof a.text === 'string' && a.text && a.ref === undefined && typeof a.x !== 'number' && typeof a.label !== 'number') {
-    matched = await refByText(c, tabId, began + budget / 2)
+    matched = found ?? await refByText(c, tabId, began + budget / 2)
     a = { ...a, ref: matched.ref, text: undefined }
     c = { ...c, args: a }
   }
@@ -388,13 +403,8 @@ export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: Agent
     let link: { tab: number; url: string } | undefined
     if (typeof r.newTab === 'string') { link = await openLink(c, tabId, tab, rec, r.newTab); delete r.newTab }
     if (MAY_NAVIGATE.has(c.action)) await settled(tabId)
-    // A window the page opened with no opener named: wait (briefly) to learn whether it was this tab's.
-    if (!link && !opened.some((o) => o.opener === tabId && o.at >= started)) {
-      const checks = unnamed.filter((u) => u.at >= started).map((u) => u.check)
-      if (checks.length) await Promise.race([Promise.all(checks), sleep(8000)])
-    }
-    const popup = link ?? opened.find((o) => o.opener === tabId && o.at >= started)
-    return { ...r, ...(matched ? { matched } : {}), ...(await where(tabId)), ...(popup ? { opened: { tab: popup.tab, url: 'url' in popup ? popup.url : (await ext.tabs.get(popup.tab).catch(() => ({} as Tab))).url } } : {}) }
+    const popup = link ?? await openedSince(tabId, started)
+    return { ...r, ...(matched ? { matched } : {}), ...(await where(tabId)), ...(popup ? { opened: popup } : {}) }
   } finally {
     acting.set(tabId, Date.now() + ACTING_MS)
   }

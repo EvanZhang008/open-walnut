@@ -1,10 +1,10 @@
 /**
- * grant.html: the one page where the person lets Walnut show a covered agent window live
- * (grant-open.ts opens it from "Show it live" in a task's Browser view). Chrome asks for the
- * debugger permission only inside a click on an extension page, so the request is the first thing
- * the Allow button does, with nothing awaited before it. Allow stores live pictures on
- * (trusted-switch.ts grantLivePictures, which reads real input in the click; it is not turned on
- * by it), says it is done and closes the page.
+ * grant.html: the fallback page where the person lets Walnut use Chrome's debugger, for a copy of
+ * the extension that lacks the permission (the manifest lists it as required, so a copy Walnut set
+ * up holds it after its next reload: trusted-switch.ts). grant-open.ts opens it from "Show it live"
+ * in a task's Browser view. Chrome asks for a permission only inside a click on an extension page,
+ * so the request is the first thing the Allow button does, with nothing awaited before it. Allow
+ * stores live pictures on (trusted-switch.ts grantLivePictures), says it is done and closes the page.
  */
 import { ext } from './ext'
 import { h } from './dom'
@@ -15,7 +15,7 @@ export const GRANT_WORDS = {
   title: "Show Walnut's agent window live",
   body: "When other windows cover Walnut's agent window, Chrome stops drawing it, so a task's Browser view in Walnut gets no new picture. "
     + "Allow lets Walnut take those pictures through Chrome's debugger. It never brings the window forward and never clicks or types for this.",
-  bar: "While it takes them (only while you watch a covered agent window), Chrome shows its \"started debugging this browser\" bar. You can turn this off in the extension's Settings.",
+  bar: "While Walnut uses it, Chrome shows its \"started debugging this browser\" bar. You can turn live pictures off in the extension's Settings.",
   done: 'Done. The Browser view in Walnut shows the agent\'s tab live now. This page closes itself.',
   no: 'Chrome did not allow it. Click Allow to try again.',
 }
@@ -30,7 +30,7 @@ function closeSelf(): void {
 
 export async function startGrantPage(root: HTMLElement): Promise<void> {
   followTheme()
-  // Before any click: a never-stored real-input switch is settled first (it must not follow this grant).
+  // Before any click: the real-input switch is settled as stored now (the person's choice stays theirs).
   await migrateRealInput().catch(() => false)
   const line = h('p', { class: 'grant-line', role: 'status', 'data-testid': 'grant-line' })
   const allow = h('button', { class: 'btn btn-primary btn-block', type: 'button', 'data-testid': 'grant-allow' }, 'Allow') as HTMLButtonElement

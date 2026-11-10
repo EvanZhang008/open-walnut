@@ -82,7 +82,7 @@ const tab = () => ({ id: 7, windowId: 3, active: true, url: PAGE_URL, title: 'Ch
 
 const agent = await import('../../../packages/browser-extension/src/agent')
 const { walnutCheck } = await import('../../../packages/browser-extension/src/agent-shared')
-const { debuggerHeld, dropDebugger, holdDebugger } = await import('../../../packages/browser-extension/src/cdp')
+const { debuggerHeld, dropDebugger, holdDebugger, _setLingerMsForTesting } = await import('../../../packages/browser-extension/src/cdp')
 const dialogs = await import('../../../packages/browser-extension/src/agent-dialog')
 walnutCheck.isWalnutPage = async () => false
 
@@ -105,6 +105,8 @@ beforeEach(() => {
   fake.order = []
   dialogs._resetDialogsForTesting()
   dropDebugger(7)
+  // Each step's own attach and detach (the 30 s linger after a step: extension-default-trusted.test.ts).
+  _setLingerMsForTesting(0)
 })
 
 describe('drag', () => {
@@ -340,7 +342,8 @@ describe('page dialogs', () => {
       if (op === 'click') { setTimeout(() => emit('Page.javascriptDialogOpening', { type: 'alert', message: 'Saved' }), 20); return new Promise(() => {}) }
       return {}
     }
-    const r = await act('click', { ref: 'e2' })
+    // The page's own click (a click in the agent's tab is real input by default: trusted false asks for the page's).
+    const r = await act('click', { ref: 'e2', trusted: false })
     expect(r.dialog).toMatchObject({ type: 'alert', message: 'Saved' })
     // The page side stops what it was doing (slow typing types no more keys) once the dialog is answered.
     expect(pageOps('cancel_input')).toHaveLength(1)

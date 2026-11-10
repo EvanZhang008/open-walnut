@@ -100,7 +100,25 @@ async function locate(args: Record<string, unknown>): Promise<Record<string, unk
     if (!input) throw new pa.PageError(`${String(args.ref)} is not a file field (input type=file).`, 'not_a_file_field')
     input.setAttribute('data-walnut-upload', args.mark)
   }
-  return { x, y, what: `${pa.roleOf(el)} "${pa.clip(pa.nameOf(el), 60)}"` }
+  // A link to a new tab (`blank`, asked by real input an agent did not ask for by name): the
+  // background opens it as the agent's own tab in the background instead (agent-page.ts openLink),
+  // where Chrome would open the browser's own click in front.
+  const link = args.blank === true ? el.closest('a[href]') : null
+  const newTab = link instanceof HTMLAnchorElement && /^_blank$/i.test(link.target) && /^https?:/i.test(link.href) && !link.hasAttribute('download') ? link.href : undefined
+  // A control whose browser's own click opens a picker Chrome draws outside the page (`blank` too):
+  // a select's list, the file chooser (a window of the system's, which takes the person's focus),
+  // a date, time or colour picker. The page's own events set those without opening anything.
+  const native = args.blank === true && opensPicker(el)
+  return { x, y, what: `${pa.roleOf(el)} "${pa.clip(pa.nameOf(el), 60)}"`, ...(newTab ? { newTab } : {}), ...(native ? { native: true } : {}) }
+}
+
+const PICKER_TYPES = new Set(['file', 'date', 'time', 'datetime-local', 'month', 'week', 'color'])
+/** The element, the control its label names, or the select it is in, opens a picker of the browser's. */
+function opensPicker(el: Element): boolean {
+  const label = el.closest('label')
+  const named = label?.getAttribute('for')
+  const control = label ? (label as HTMLLabelElement).control ?? (named ? document.getElementById(named) : label.querySelector('input, select, textarea')) : null
+  return [el, control, el.closest('select')].some((x) => x instanceof HTMLSelectElement || (x instanceof HTMLInputElement && PICKER_TYPES.has(x.type)))
 }
 
 /**

@@ -45,7 +45,8 @@ const PAGES = {
   savebar: { body: 'bar', html: 'frame' },
   sidepanel: { body: 'sidepanel', html: 'panel' },
   'popup-ask': { body: 'sidepanel askpop', html: 'panel askpop', script: 'sidepanel' },
-  // "Show it live" from a task's Browser view (grant-open.ts, grant.ts): the debugger asked for in its one click.
+  // "Show it live" from a task's Browser view (grant-open.ts, grant.ts): the debugger asked for in
+  // its one click, for a copy that lacks the permission.
   grant: { body: 'grant' },
 }
 const SITES = ['http://*/*', 'https://*/*']
@@ -94,12 +95,12 @@ export function manifestFor(browser, build) {
     // there (bg-clipboard.ts); offscreen: Chrome writes the clipboard from an offscreen page.
     // idle: Passwords lock when the computer locks or goes idle (bg-autolock.ts).
     // tabGroups: each task's agent tabs sit in one group named walnut-<task name> (agent-groups.ts).
+    // debugger (Chrome; Firefox gives extensions none): agents' real mouse and keys (agent-trusted.ts)
+    // and pictures of an agent's tab Chrome does not draw (agent-live.ts), each with its switch in
+    // Settings. Required, so a copy Walnut set up holds it after its next reload: Chrome grants an
+    // unpacked extension's new permissions on reload with no prompt (trusted-switch.ts).
     permissions: ['storage', 'alarms', 'contextMenus', 'scripting', 'downloads', 'clipboardRead', 'clipboardWrite', 'idle',
-      ...(browser === 'chrome' ? ['sidePanel', 'offscreen', 'tabGroups'] : [])],
-    // Chrome's debugger, only once the person turns it on (the browser asks them then): real mouse
-    // and keys for agents (agent-trusted.ts, a switch in Settings), and live pictures of a covered
-    // agent window (agent-live.ts; Settings, or grant.html from a task's Browser view). Firefox gives extensions none.
-    ...(browser === 'chrome' ? { optional_permissions: ['debugger'] } : {}),
+      ...(browser === 'chrome' ? ['sidePanel', 'offscreen', 'tabGroups', 'debugger'] : [])],
     // Every web page (the same warning as http and https alone): a screenshot of an agent's
     // tab (captureVisibleTab) needs all URLs, so it is asked once, at install.
     host_permissions: ['<all_urls>'],

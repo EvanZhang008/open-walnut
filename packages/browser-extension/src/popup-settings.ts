@@ -11,6 +11,9 @@ import { errLine, iconButton, popupIcon, switchRow, topBar } from './popup-ui'
 import { disconnectControl } from './popup-disconnect'
 import { setLivePictures, setTrustedInput, trustedInputState } from './trusted-switch'
 
+/** The live pictures switch's name (the Browser view's lines name it: web/src/components/sessions/browser-view-model.ts). */
+export const LIVE_PICTURES_TITLE = "Live pictures through Chrome's debugger"
+
 /** Agents in this browser: off until the person turns it on here. */
 async function agentSection(): Promise<HTMLElement> {
   const st = await ask<{ on: boolean; tabs: number; screenshots: boolean }>({ type: 'agent-get' })
@@ -46,20 +49,19 @@ async function agentSection(): Promise<HTMLElement> {
 }
 
 /**
- * Real mouse and keys for agents, and live pictures of a covered agent window: both use the
- * optional debugger permission (trusted-switch.ts), each with its own switch; Chrome only, so
+ * Real mouse and keys for agents, and live pictures of agents' tabs: both use the debugger
+ * permission (trusted-switch.ts), each with its own switch, both on by default; Chrome only, so
  * hidden elsewhere.
  */
 async function trustedRow(): Promise<{ rows: HTMLElement[]; notes: HTMLElement[] } | null> {
   const st = await trustedInputState()
   if (!st.available) return null
-  let held = st.permission
   const box = h('input', { type: 'checkbox', id: 'trusted', role: 'switch', 'data-testid': 'popup-trusted' }) as HTMLInputElement
   box.checked = st.on
   const live = h('input', { type: 'checkbox', id: 'live-pictures', role: 'switch', 'data-testid': 'popup-live-pictures' }) as HTMLInputElement
   live.checked = st.livePictures
   // Each switch's answer; the permission may have come or gone with it, which the other one reads.
-  const reread = () => void trustedInputState().then((now) => { held = now.permission; box.checked = now.on; live.checked = now.livePictures })
+  const reread = () => void trustedInputState().then((now) => { box.checked = now.on; live.checked = now.livePictures })
   box.onclick = () => {
     // Asked inside the click: nothing is awaited before the browser's permission request.
     const want = box.checked
@@ -67,17 +69,17 @@ async function trustedRow(): Promise<{ rows: HTMLElement[]; notes: HTMLElement[]
   }
   live.onclick = () => {
     const want = live.checked
-    void setLivePictures(want, held).then(reread)
+    void setLivePictures(want).then(reread)
   }
   return {
     rows: [
       h('label', { class: 'row switch-row', for: 'trusted' },
         h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, 'Let agents use real mouse and keys')), box),
       h('label', { class: 'row switch-row', for: 'live-pictures' },
-        h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, "Live pictures while Walnut's agent window is covered")), live)],
+        h('span', { class: 'row-text' }, h('span', { class: 'row-title' }, LIVE_PICTURES_TITLE)), live)],
     notes: [
-      h('p', { class: 'group-note' }, 'Real mouse and keys are for sites that ignore simulated input. This also lets agents run scripts in a page, which Walnut cannot check before a purchase or a send. Chrome shows a debugging bar while an agent uses them.'),
-      h('p', { class: 'group-note', 'data-testid': 'popup-live-pictures-note' }, "Chrome stops drawing Walnut's agent window while other windows cover it. With live pictures on, a task's Browser view in Walnut still shows the agent's tab, through Chrome's debugger; Chrome shows its debugging bar while it does, only while you watch a covered agent window.")],
+      h('p', { class: 'group-note' }, "Agents click and type in their own tabs with the browser's mouse and keys, as you would, so sites that ignore simulated input work too. A purchase, a send or a delete still waits for your yes. This also lets agents run scripts in a page, which Walnut cannot check before a purchase or a send. Chrome shows its debugging bar while an agent works."),
+      h('p', { class: 'group-note', 'data-testid': 'popup-live-pictures-note' }, "Chrome stops drawing Walnut's agent window while other windows cover it or it is minimized, and draws only the front tab. With live pictures on, a task's Browser view in Walnut still shows the agent's tab, through Chrome's debugger, without bringing anything forward; Chrome shows its debugging bar while it does.")],
   }
 }
 

@@ -41,7 +41,7 @@ export const BROWSER_USAGE = [
   '       walnut browser console [--level error|warn|info|log|debug] [--limit N] [--tab N]   (recording: real input; a tab you opened)',
   '       walnut browser resize <width> <height> [--viewport] [--tab N]   (Walnut\'s agent window; --viewport: the page\'s size)',
   '  Refs: e12 in the page, f3:e12 inside a frame. --json prints the whole result. A site agents have not used yet waits for the',
-  '  person only when they chose "Ask me first" in Settings. Real input (--trusted, dialog, evaluate) needs the person to turn it on in the extension.',
+  '  person only when they chose "Ask me first" in Settings. Real input (by default for click, hover, type and press in your own tab, --no-trusted for page events; --trusted, dialog, evaluate) is on unless the person turned it off in the extension.',
   'Exit: 0 done; 1 refused or a choice to make (the person said no, not your tab, which tab or login: the message lists them); 2 no answer in time; 3 an error.',
 ].join('\n')
 
@@ -90,6 +90,7 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       else if (w === '--full') args.full = true
       else if (w === '--exact') args.exact = true
       else if (w === '--trusted') args.trusted = true
+      else if (w === '--no-trusted' || w === '--trusted=false') args.trusted = false
       else if (w === '--wait') args.wait = true
       else if (w === '--role') args.role = val()
       else if (w === '--limit') args.limit = Number(val())

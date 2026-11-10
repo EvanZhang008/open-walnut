@@ -11,6 +11,8 @@ import { tabStore } from './tab-store'
 import { walnutAddress } from './walnut-address'
 import { injectContent, pageCheck, reachPage, toPage, type ReachError } from './page-reach'
 import { windowOf } from './agent-window'
+import { more } from './agent-api'
+import { endLinger } from './cdp'
 
 export interface WireCommand { id: string; action: string; args: Record<string, unknown>; allow: { any: boolean; sites: string[]; walnut?: string[] } }
 
@@ -61,6 +63,8 @@ export const agentTabs = {
  */
 async function letGo(tabId: number): Promise<void> {
   void Promise.resolve().then(() => ext.tabs.sendMessage(tabId, { type: 'agent-cursor', off: true })).catch(() => undefined)
+  // The agent is done with the tab: its steps' lingering debugger hold goes now (cdp.ts linger).
+  void endLinger(more.debugger, tabId).catch(() => undefined)
   await restorePersonTab(ext as unknown as GroupApi, tabId).catch(() => undefined)
 }
 
