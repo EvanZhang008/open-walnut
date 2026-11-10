@@ -99,6 +99,12 @@ const PAGES: Record<string, () => string> = {
   '/issues/42': () => `<header>Site menu Pull requests</header><main><h1>Login fails on Safari</h1>
     <div class="body"><p>First paragraph: the sign-in button does nothing on Safari 18.</p><p>Second paragraph.</p></div>
     <aside>Assignees Labels bug</aside></main><footer>Terms Privacy Footer</footer>`,
+  // A search box with no form whose script tests the legacy keyCode (as a code host's does), and a
+  // release date drawn in a shadow root.
+  '/find': () => `<main><input id="q" aria-label="Search the shop" placeholder="Search the shop"><div id="hits"></div>
+    <p>Released <relative-time id="d" datetime="2026-11-10T12:11:37Z" title="Nov 10, 2026, 4:11 AM PST"></relative-time></p></main>
+    <script>document.getElementById('d').attachShadow({ mode: 'open' }).innerHTML = '<span>2 hours ago</span>';
+    document.addEventListener('keydown', (e) => { const q = document.getElementById('q'); if (e.keyCode === 13 && q.value) history.pushState(null, '', '/find?q=' + encodeURIComponent(q.value)) })</script>`,
   '/verify': () => `<h1>Two-step verification</h1><form id="vf" onsubmit="return false"><label>Code from your app <input id="otp" name="otp" inputmode="numeric" autocomplete="one-time-code"></label><button>Verify</button></form>`,
 }
 /** The fixture vault's fake master password (shared with the other extension specs). */
@@ -441,6 +447,38 @@ test('every step says what it changed; a read is small; a minimized agent window
     expect(named.status).toBe(409)
     expect(named.body.code).toBe('window_hidden')
     expect(named.body.error).toMatch(/Drop --trusted/)
+  } finally {
+    await sw.evaluate(async (w: number) => { await chrome.windows.update(w, { state: 'normal' }) }, win).catch(() => undefined)
+  }
+})
+
+test('page events submit a search box with no form (its script tests keyCode 13), the answer says what the Enter did, and a shadow-root date reads', async () => {
+  const page = ctx.pages()[0]
+  expect((await act(page, { action: 'navigate', url: site('shop.example.test', '/find') })).status).toBe(200)
+  // The date in its shadow root is in the page's text, with the full date beside it.
+  expect(String((await act(page, { action: 'text' })).body.text)).toContain('2 hours ago (Nov 10, 2026, 4:11 AM PST)')
+  // Page events by name (what a covered window falls back to): the Enter carries keyCode 13.
+  const field = (await act(page, { action: 'find', text: 'Search the shop' })).body.matches[0].ref
+  const typed = await act(page, { action: 'type', ref: field, text: 'oat roll', submit: true, trusted: false })
+  expect(typed.status, JSON.stringify(typed.body)).toBe(200)
+  expect(typed.body, JSON.stringify(typed.body)).toMatchObject({ changed: expect.stringMatching(/^Enter: went to http:\/\/shop\.example\.test:\d+\/find\?q=oat%20roll/) })
+})
+
+test('a covered agent window takes that path by default: the typed search goes through', async () => {
+  const page = ctx.pages()[0]
+  expect((await act(page, { action: 'navigate', url: site('shop.example.test', '/find') })).status).toBe(200)
+  const sw = ctx.serviceWorkers()[0]
+  const win = await sw.evaluate(async (id: number) => (await chrome.tabs.get(id)).windowId, agentTab)
+  await sw.evaluate(async (w: number) => { await chrome.windows.update(w, { state: 'minimized' }) }, win).catch(() => undefined)
+  try {
+    const hidden = await expect.poll(() => agentPage()!.evaluate(() => document.visibilityState), { timeout: 5000 }).toBe('hidden').then(() => true, () => false)
+    test.skip(!hidden, 'this Chromium does not report a minimized window as hidden')
+    const snap = await act(page, { action: 'find', text: 'Search the shop' })
+    const ref = snap.body.matches[0].ref
+    const r = await act(page, { action: 'type', ref, text: 'rye bread', submit: true })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body, JSON.stringify(r.body)).toMatchObject({ trusted: false, changed: expect.stringMatching(/^Enter: went to http:\/\/shop\.example\.test:\d+\/find\?q=rye%20bread/) })
+    await expect.poll(() => agentPage()!.url(), { timeout: 5000 }).toBe(site('shop.example.test', '/find?q=rye%20bread'))
   } finally {
     await sw.evaluate(async (w: number) => { await chrome.windows.update(w, { state: 'normal' }) }, win).catch(() => undefined)
   }
