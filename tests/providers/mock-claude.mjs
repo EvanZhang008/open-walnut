@@ -2175,10 +2175,19 @@ if (outputFormat === 'stream-json') {
       // line of narration and a Bash call that runs, then a long rich Markdown
       // answer (headings, lists, a fenced code block, a table, a quote, an HTML
       // card) in 40-character deltas. Honours chunk-delay: between deltas.
-      if (mode === 'markdown-reply') {
+      // `stream-partial-markdown-reply gate:<file>` stops the answer after its
+      // first delta until <file> exists (60 s at most), so a spec can open its
+      // column while the reply still streams however slowly the machine draws.
+      if (mode === 'markdown-reply' || mode.startsWith('markdown-reply ')) {
         (async () => {
           const gap = chunkDelayMs > 0 ? chunkDelayMs : 20;
           const pause = (ms = gap) => new Promise((r) => setTimeout(r, ms));
+          const gate = (mode.match(/\sgate:(\S+)/) || [])[1];
+          const gateOpen = async () => {
+            if (!gate) return;
+            const capAt = Date.now() + 60_000;
+            while (!fs.existsSync(gate) && Date.now() < capAt) await pause(100);
+          };
           const model = modelFlag || 'mock-model';
           const lead = `${msgId}_m1`;
           const reply = `${msgId}_m2`;
@@ -2213,9 +2222,10 @@ if (outputFormat === 'stream-json') {
           ].join('\n');
           emitStream(wrap({ type: 'message_start', message: { id: reply, role: 'assistant', content: [], model, usage: { input_tokens: 10, output_tokens: 1 } } }));
           emitStream(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
-          for (const piece of answer.match(/[\s\S]{1,40}/g)) {
+          for (const [i, piece] of answer.match(/[\s\S]{1,40}/g).entries()) {
             emitStream(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } }));
             await pause();
+            if (i === 0) await gateOpen();
           }
           emitStream(wrap({ type: 'content_block_stop', index: 0 }));
           emitStream({ type: 'assistant', message: { id: reply, role: 'assistant', model, content: [{ type: 'text', text: answer }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 400 } }, session_id: outputSessionId });

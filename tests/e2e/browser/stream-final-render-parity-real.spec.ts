@@ -10,6 +10,9 @@
  * history read that brings the persisted rows is held until the streamed reply
  * has been measured, then released while every frame and DOM commit is sampled.
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test, expect, type Page, type APIRequestContext, type Locator } from '@playwright/test';
 import {
   countIslandLoads, diffSnaps, disableTransitions, dumpRows, islandLoads, replyNodesReplaced, snapReply,
@@ -94,15 +97,22 @@ test('a real streamed reply looks exactly like its persisted row, in every frame
   });
 
   // The column must open while the reply still streams: one that opens after the turn ended reads
-  // the persisted row from its first history read, before the hold below. 120ms between the ~55
-  // deltas gives the open about 7s (at 40ms a loaded CI runner opened it after the turn, both tries).
-  await startRealSession(page, 'chunk-delay:120 stream-partial-markdown-reply', taskId);
+  // the persisted row from its first history read, before the hold below. A time window alone did
+  // not hold on a loaded CI runner (40ms deltas, then 120ms: the column still opened after the
+  // turn, both tries, 2026-11-10), so the mock stops the answer after its first delta until the
+  // gate file exists, and the gate opens once the streaming reply is on screen. A column that
+  // opens after that first delta must keep the text streamed before it (useSessionStream
+  // seedOnAdopt: the next delta used to write over it).
+  const gate = path.join(os.tmpdir(), `pw-parity-real-gate-${process.pid}-${Date.now()}`);
+  await startRealSession(page, `chunk-delay:120 stream-partial-markdown-reply gate:${gate}`, taskId);
   const sid = await waitForSessionId(request, taskId);
   const history = await openFromTaskRow(page, taskId, sid);
   await expect(history.locator('[data-stream-reply]', { hasText: 'Findings PARITYREAL' }), 'the column opened while the reply streamed')
     .toBeVisible({ timeout: 20_000 });
   holding = true;
+  fs.writeFileSync(gate, '');
   await expect(history).toContainText('Closing sentence PARITYREAL.', { timeout: 30_000 });
+  fs.rmSync(gate, { force: true });
   // The turn is over (no working indicator) and still on screen as stream blocks.
   await expect(page.locator(`.session-panel[data-session-id="${sid}"] .session-working-indicator`)).toHaveCount(0, { timeout: 15_000 });
   // The turn's last text and its end often land in one commit: the column must
