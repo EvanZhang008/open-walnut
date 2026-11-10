@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { openKebabGroup } from './kebab-group-helpers'
+import { specLock } from './spec-lock'
 
 const SESSION_ID = 'pw-servers-session'
 const TASK_ID = 'pw-task-servers'
@@ -29,6 +30,11 @@ test.afterEach(() => {
     try { if (s.pgid > 1) process.kill(-s.pgid, 'SIGKILL') } catch { /* gone */ }
   }
 })
+
+// Both session-servers.spec.ts and session-live-pills.spec.ts start real servers for the one
+// fixture session, and each counts that session's servers: one test of either at a time.
+// Declared after the kill above, so a test's servers are gone before the next one starts.
+specLock('servers-session').hold('test')
 
 /**
  * A free port below the OS-assigned range, the way a dev server picks one: a young

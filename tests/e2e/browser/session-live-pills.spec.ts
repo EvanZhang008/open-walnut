@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 import { test, expect, type Browser, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
+import { specLock } from './spec-lock'
 
 const SESSION_ID = 'pw-servers-session'
 const TASK_ID = 'pw-task-servers'
@@ -29,6 +30,11 @@ test.afterEach(() => {
     try { if (s.pgid > 1) process.kill(-s.pgid, 'SIGKILL') } catch { /* gone */ }
   }
 })
+
+// Both session-servers.spec.ts and session-live-pills.spec.ts start real servers for the one
+// fixture session, and each counts that session's servers: one test of either at a time.
+// Declared after the kill above, so a test's servers are gone before the next one starts.
+specLock('servers-session').hold('test')
 
 async function freePort(): Promise<number> {
   for (;;) {
