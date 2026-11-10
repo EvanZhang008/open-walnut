@@ -79,11 +79,19 @@ async function mockSession(page: Page) {
 
 test.describe('First open — render window', () => {
   test('a shorter Phase 1 window does not explode the DOM when Phase 2 lands', async ({ page, baseURL }) => {
+    test.setTimeout(150_000);
     await mockSession(page);
 
+    // Phase 2's answer: the app boots before it reads either phase, which on a loaded runner
+    // outlasts the content wait below (see the next test).
+    const phase2 = page.waitForResponse((r) => {
+      const url = r.url();
+      return url.includes(`/api/sessions/${SESSION_ID}/history`) && !url.includes('source=streams');
+    }, { timeout: 90_000 });
     await page.setContent(`<a href="${baseURL}/sessions?id=${SESSION_ID}">Open conversation</a>`);
     await page.getByRole('link', { name: 'Open conversation' }).click();
     await page.waitForLoadState('networkidle');
+    await phase2;
 
     const history = page.locator('.session-history');
     await expect(history).toContainText(`History message ${TOTAL - 1}`, { timeout: 15000 });
@@ -109,6 +117,9 @@ test.describe('First open — render window', () => {
   });
 
   test('scrolling up while the second phase lands does not move the reader', async ({ page, baseURL }) => {
+    // The app boots before it reads Phase 1, and with Phase 2 held there is no network idle to
+    // wait for: the wait below is on Phase 1's answer itself, long enough for a loaded runner.
+    test.setTimeout(150_000);
     // Hold Phase 2 back until the user has scrolled up, so the array is
     // re-windowed underneath a reader who is NOT at the bottom.
     let releasePhase2: (() => void) | null = null;
@@ -142,9 +153,16 @@ test.describe('First open — render window', () => {
       });
     });
 
+    // Phase 1's answer (served by the route above). On a loaded runner the boot alone took over
+    // 15s (2026-11-09: three CI runs in a row painted only the spinner by then).
+    const phase1 = page.waitForResponse((r) => {
+      const url = r.url();
+      return url.includes(`/api/sessions/${SESSION_ID}/history`) && url.includes('source=streams');
+    }, { timeout: 90_000 });
     await page.setContent(`<a href="${baseURL}/sessions?id=${SESSION_ID}">Open conversation</a>`);
     await page.getByRole('link', { name: 'Open conversation' }).click();
     await page.waitForLoadState('domcontentloaded');
+    await phase1;
 
     const history = page.locator('.session-history');
     await expect(history).toContainText(`History message ${TOTAL - 1}`, { timeout: 15000 });
