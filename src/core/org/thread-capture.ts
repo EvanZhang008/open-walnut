@@ -15,7 +15,7 @@ import type { Task } from '../types.js';
 import { walnutLetterLanguage } from '../human-inbox/walnut-letters/languages.js';
 import { stripReferenceCards } from '../sessions/reference-cards.js';
 import {
-  fileMessage, isOpen, lastUserAt, movedAway, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
+  fileMessage, FOLLOW_UP_REOPENS_MS, isOpen, lastUserAt, movedAway, SAME_CONVERSATION_MS, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
   type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
 } from './threads-model.js';
 import { exchangesOf, pinnedNow, snoozedNow, summaryBehindHim, summaryOwed } from './thread-view.js';
@@ -93,6 +93,8 @@ export interface ThreadHintState {
   closed: Array<{ id: string; title: string; how: ThreadCloseHow; by: ThreadWriter }>;
   /** The Follow up named a thread that moved to another node with its work: filed there (thread-follow.ts). */
   movedTo?: { task: string; title: string };
+  /** It went to a thread it did not name (threads-model.ts FileMessageResult.joined). */
+  joined?: 'reopened' | 'recent';
 }
 
 export interface ThreadCapture {
@@ -133,7 +135,7 @@ export async function prepareThreadCapture(input: {
     text: words.text, images: words.images, via: input.threadId ? 'follow-up' : words.via,
     ...(words.about ? { about: words.about } : {}),
     ...(words.letter ? { letter: words.letter } : {}),
-    ...(input.threadId ? { threadId: input.threadId } : {}),
+    ...(input.threadId ? { threadId: input.threadId, reopenWithin: windowMs('WALNUT_THREAD_REOPEN_SECS', FOLLOW_UP_REOPENS_MS) } : { joinRecent: windowMs('WALNUT_THREAD_JOIN_SECS', SAME_CONVERSATION_MS) }),
     // A Follow up carries a key of its own, so a send of it on to the node holding the thread now
     // (it moved between this plan and the write) finds it filed (thread-follow.ts deliverMovedFollowUp).
     ...(input.key || input.threadId ? { key: input.key ?? `fu-${messageId}` } : {}),
@@ -161,12 +163,14 @@ export async function prepareThreadCapture(input: {
   // The same pure step the store runs, on the copy read now: the node is told what will be.
   const planned = fileMessage(cur, draft);
   const nowMs = Date.parse(at);
-  const closed = cur.threads.filter((t) => t.closed && !t.closed.told && nowMs - Date.parse(t.closed.at) < CLOSE_NEWS_MS);
+  // A thread this message opened again is no close to tell.
+  const closed = cur.threads.filter((t) => t.closed && !t.closed.told && t.id !== planned.thread.id && nowMs - Date.parse(t.closed.at) < CLOSE_NEWS_MS);
   const open = sortedThreads(planned.file.threads).filter((t) => isOpen(t) && t.id !== planned.thread.id).slice(0, HINT_OPEN_MAX);
   const follows = planned.thread.follows ? cur.threads.find((t) => t.id === planned.thread.follows) : undefined;
   const hint: ThreadHintState = {
     threadId: planned.thread.id, title: planned.thread.title, created: planned.created, duplicate: planned.duplicate,
     followUp: !!input.threadId && !planned.created,
+    ...(planned.joined ? { joined: planned.joined } : {}),
     ...(follows ? { follows: { id: follows.id, title: follows.title } } : {}),
     open: open.map((t) => ({ id: t.id, title: t.title, state: t.state, ...(snoozedNow(t, nowMs) ? { snoozedUntil: t.snoozed!.until } : {}), ...(pinnedNow(t) ? { pinnedBy: t.pinned!.by } : {}) })),
     closed: closed.map((t) => ({ id: t.id, title: t.title, how: t.closed!.how, by: t.closed!.by })),
@@ -198,6 +202,14 @@ export async function prepareThreadCapture(input: {
 
 function q(s: string): string { return JSON.stringify(s); }
 
+/** A window from the environment in seconds (0 turns it off), else its default. */
+function windowMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n * 1000 : fallback;
+}
+
 /**
  * What the `threads` hint tells the node about this message: where it was filed, and for a new
  * thread the open ones it might belong to. Only the facts of this message; the rules for keeping
@@ -208,7 +220,13 @@ export function threadHintText(s: ThreadHintState): string {
   let text: string;
   if (s.movedTo) return `a follow-up in thread ${s.threadId} ${q(s.title)}, which moved to ${s.movedTo.title} (${s.movedTo.task}) with its work: filed there, and ${s.movedTo.title} reads it. Not yours to act on; at most tell him it is with ${s.movedTo.title} now.`;
   if (s.duplicate) text = `already filed under thread ${s.threadId} ${q(s.title)}.`;
-  else if (s.followUp) text = `a follow-up in thread ${s.threadId} ${q(s.title)}, filed there.`;
+  else if (s.followUp) {
+    text = s.joined === 'reopened'
+      ? `a follow-up in thread ${s.threadId} ${q(s.title)}, which he had closed a moment ago: filed there, and the thread is open again.`
+      : `a follow-up in thread ${s.threadId} ${q(s.title)}, filed there.`;
+  } else if (s.joined === 'recent') {
+    text = `filed under thread ${s.threadId} ${q(s.title)}: it came right after his last message there. Another subject: thread_split it out.`;
+  }
   else if (s.created) {
     text = `filed as new thread ${s.threadId}${s.follows ? ` (asks again about closed ${s.follows.id} ${q(s.follows.title)})` : ''}.`;
     text += s.open.length

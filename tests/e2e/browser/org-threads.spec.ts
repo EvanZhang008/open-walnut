@@ -160,15 +160,12 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"]`)).toContainText(`Build Threads ${STAMP}`)
   await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"] i`)).toHaveCount(1)
 
-  // A second ask about the same thing: its own card first, then the lead puts it under the first.
+  // A second ask right after the first is the same conversation: it joins the first thread at once
+  // (core/org/threads-model.ts SAME_CONVERSATION_MS), never a card of its own.
   const second = `and group my asks about one subject ${STAMP}`
   await sendToLead(page, second)
-  await expect.poll(async () => (await threads(request)).length, { timeout: 30_000 }).toBe(before + 2)
-  const t2 = (await threads(request)).find((t) => t.messages[0]?.text === second)!
-  await expect(card(page, t2.id)).toBeVisible()
-  await leadUpdates(request, t2.id, { merge_into: t1.id })
-  await expect(card(page, t2.id)).toHaveCount(0)
-  await expect(c1.getByTestId('org-thread-count')).toHaveText(/^2 messages/)
+  await expect(c1.getByTestId('org-thread-count')).toHaveText(/^2 messages/, { timeout: 30_000 })
+  expect((await threads(request)).length).toBe(before + 1)
   // The whole conversation opens from the toggle in the card body.
   await c1.getByTestId('org-thread-history').click()
   await expect(c1.getByTestId('org-thread-history')).toHaveAttribute('aria-expanded', 'true')
@@ -195,6 +192,8 @@ test('Follow up files under the thread; Acknowledge closes it, Reopen brings it 
   const c1 = card(page, t1.id)
   await expect(c1).toBeVisible()
   await c1.getByTestId('org-thread-follow-open').click()
+  // The box names the thread it goes to.
+  await expect(c1.getByTestId('org-thread-follow-to')).toHaveText(`Follow up on \u201cOrg: Threads view ${STAMP}\u201d`)
   const follow = `also show pictures in the thread ${STAMP}`
   await c1.getByTestId('org-thread-follow-input').fill(follow)
   await shot(page, 'follow-up')

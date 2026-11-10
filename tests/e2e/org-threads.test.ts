@@ -94,6 +94,10 @@ async function writeLeadChat(rows: Array<{ type: 'user' | 'assistant'; uuid: str
 const hintOf = (text: string) => /Walnut \(threads\):([\s\S]*?)<\/system-reminder>/.exec(text)?.[1] ?? ''
 
 beforeAll(async () => {
+  // These cases send his messages seconds apart to open separate threads: the windows that join a
+  // message to the conversation he is on are off here, and on in their own case at the end.
+  process.env.WALNUT_THREAD_JOIN_SECS = '0'
+  process.env.WALNUT_THREAD_REOPEN_SECS = '0'
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   const server = await startServer({ port: 0, dev: true })
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -106,6 +110,8 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  delete process.env.WALNUT_THREAD_JOIN_SECS
+  delete process.env.WALNUT_THREAD_REOPEN_SECS
   await stopServer()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
@@ -434,5 +440,36 @@ describe('a phone Follow up sent through the companion: the thread is announced 
     expect((await announce(mine.id, 'not-a-message-id')).status).toBe(400)
     // A worker keeps no Threads.
     expect((await announce(mine.id, 'qm-mobile-y', workerId)).status).toBe(409)
+  })
+})
+
+describe('his message goes to the thread he is on (2026-11-10: "I send but u don\'t know which thread")', () => {
+  it('a chat message right after his last one joins that thread; a Follow up a moment after his acknowledge opens it again', async () => {
+    delete process.env.WALNUT_THREAD_JOIN_SECS
+    delete process.env.WALNUT_THREAD_REOPEN_SECS
+    try {
+      await typeIntoChat(LEAD_SID, 'remove the dictation button on the Mac')
+      const subject = (await threads()).find((t) => t.messages.some((m) => m.text === 'remove the dictation button on the Mac'))!
+      const before = (await threads()).length
+      const look = await typeIntoChat(LEAD_SID, 'look')
+      expect(hintOf(look)).toContain(`filed under thread ${subject.id}`)
+      expect(hintOf(look)).toContain('right after his last message there')
+      expect((await threads()).length).toBe(before)
+      expect((await threads()).find((t) => t.id === subject.id)!.messages.at(-1)!.text).toBe('look')
+
+      expect((await patch(subject.id, { close: 'acked' })).status).toBe(200)
+      const fu = await typeIntoChat(LEAD_SID, 'that was fast, why not before?', subject.id)
+      expect(hintOf(fu)).toContain(`follow-up in thread ${subject.id}`)
+      expect(hintOf(fu)).toContain('open again')
+      expect(hintOf(fu)).not.toContain('Closed since')
+      const after = (await threads()).find((t) => t.id === subject.id)!
+      expect(after.closed).toBeUndefined()
+      expect(after.state).toBe('working')
+      expect(after.messages.at(-1)).toMatchObject({ text: 'that was fast, why not before?', via: 'follow-up' })
+      expect((await threads()).length).toBe(before)
+    } finally {
+      process.env.WALNUT_THREAD_JOIN_SECS = '0'
+      process.env.WALNUT_THREAD_REOPEN_SECS = '0'
+    }
   })
 })

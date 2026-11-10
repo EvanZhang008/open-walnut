@@ -481,8 +481,18 @@ export interface FileMessageInput {
   via: ThreadVia;
   about?: string;
   letter?: string;
-  /** Put it under this thread (the Follow up button). A closed one opens a new thread that follows it. */
+  /**
+   * Put it under this thread (the Follow up button). A thread he closed himself minutes ago opens
+   * again with it (`FOLLOW_UP_REOPENS_MS`); one closed longer ago opens a new thread that follows it.
+   */
   threadId?: string;
+  /**
+   * A chat message with no thread named joins the open thread his last message went to when that
+   * came at most this many ms before (the send path sets `SAME_CONVERSATION_MS`; thread-capture.ts).
+   */
+  joinRecent?: number;
+  /** A Follow up reopens a thread he closed at most this many ms before (default `FOLLOW_UP_REOPENS_MS`). */
+  reopenWithin?: number;
   /** Ids chosen ahead (the send path tells the node the id before the message is stored). */
   newThreadId?: string;
   messageId?: string;
@@ -503,6 +513,45 @@ export interface FileMessageResult {
   created: boolean;
   /** This send was already filed (its key, or its message id): nothing changed. */
   duplicate: boolean;
+  /**
+   * Why it went to a thread it did not name: `reopened`, a Follow up on a thread he had closed
+   * minutes ago; `recent`, a chat message right after his last one, which went to that thread.
+   */
+  joined?: 'reopened' | 'recent';
+}
+
+/**
+ * A Follow up this soon after he closed the thread himself is a word on it, not a new ask: the
+ * thread opens again (2026-11-10, the user, after acknowledging a thread and following up on it:
+ * "I send but u don't know which thread").
+ */
+export const FOLLOW_UP_REOPENS_MS = 10 * 60_000;
+/**
+ * A chat message this soon after his last one stays in that conversation: it joins the thread the
+ * last one went to, never one thread per sentence (2026-11-10: "look", "this is crazy", "OMG" each
+ * opened a thread of its own). The node splits it out when it is another subject.
+ */
+export const SAME_CONVERSATION_MS = 3 * 60_000;
+
+/** The open thread his latest message went to, when it came at most `SAME_CONVERSATION_MS` before `at`. */
+export function recentConversation(file: ThreadsFile, at: string, within = SAME_CONVERSATION_MS): OrgThread | undefined {
+  const now = Date.parse(at);
+  let best: { t: OrgThread; ms: number } | undefined;
+  for (const t of file.threads) {
+    for (const m of t.messages) {
+      const ms = Date.parse(m.at);
+      if (Number.isFinite(ms) && (!best || ms > best.ms)) best = { t, ms };
+    }
+  }
+  if (!best || !Number.isFinite(now) || now - best.ms > within || now < best.ms - 60_000) return undefined;
+  return isOpen(best.t) ? best.t : undefined;
+}
+
+/** He closed it himself (not moved, not the node's close) at most `FOLLOW_UP_REOPENS_MS` before `at`. */
+function closedByHimJustNow(t: OrgThread, at: string, within: number): boolean {
+  if (!t.closed || t.movedTo || t.closed.by !== 'human') return false;
+  const gap = Date.parse(at) - Date.parse(t.closed.at);
+  return Number.isFinite(gap) && gap <= within;
 }
 
 /** File one message of the user's. Never throws on a missing thread: the message is never lost. */
@@ -524,22 +573,26 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
     ...(input.key ? { key: input.key.slice(0, 80) } : {}),
     ...(input.sid ? { sid: input.sid.slice(0, 80) } : {}),
   };
-  const target = input.threadId ? file.threads.find((t) => t.id === input.threadId) : undefined;
-  if (target && isOpen(target)) {
-    // His own message in a snoozed thread brings it back.
-    const { snoozed: _s, ...rest } = target;
+  const named = input.threadId ? file.threads.find((t) => t.id === input.threadId) : undefined;
+  const reopened = !!named && closedByHimJustNow(named, input.at, input.reopenWithin ?? FOLLOW_UP_REOPENS_MS);
+  const recent = !input.threadId && input.joinRecent && input.via === 'chat' ? recentConversation(file, input.at, input.joinRecent) : undefined;
+  const target = named ?? recent;
+  if (target && (isOpen(target) || reopened)) {
+    // His own message in a snoozed thread brings it back; one he closed minutes ago opens again.
+    const { snoozed: _s, closed: _c, ...rest } = target;
     const next: OrgThread = {
       ...rest, messages: [...target.messages, message], updatedAt: input.at, by: 'human',
       // He spoke again: a thread answered, waiting on him or pending is the node's turn again.
-      ...(target.state === 'answered' || target.state === 'needs' || target.state === 'pending' ? { state: 'working' as ThreadState } : {}),
+      ...(reopened || target.state === 'answered' || target.state === 'needs' || target.state === 'pending' ? { state: 'working' as ThreadState } : {}),
     };
-    return { file: replace(file, next, input.at), thread: next, message, created: false, duplicate: false };
+    const joined = reopened ? 'reopened' as const : recent ? 'recent' as const : undefined;
+    return { file: replace(file, next, input.at), thread: next, message, created: false, duplicate: false, ...(joined ? { joined } : {}) };
   }
   const thread: OrgThread = {
     id: input.newThreadId && THREAD_ID_RE.test(input.newThreadId) ? input.newThreadId : newThreadId(),
     title: fallbackTitle(text, input.lang),
     state: 'new', messages: [message], createdAt: input.at, updatedAt: input.at, by: 'human',
-    ...(target ? { follows: target.id } : {}),
+    ...(named ? { follows: named.id } : {}),
   };
   return { file: { ...file, threads: prune([...file.threads, thread], input.at) }, thread, message, created: true, duplicate: false };
 }

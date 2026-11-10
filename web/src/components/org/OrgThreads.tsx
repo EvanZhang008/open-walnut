@@ -166,7 +166,7 @@ function TaskChips({ ids, tasks, onOpenTask }: { ids: readonly string[]; tasks: 
   );
 }
 
-function FollowUp({ onSend, onDone }: { onSend: (text: string, images?: ImageAttachment[]) => Promise<boolean>; onDone: () => void }) {
+function FollowUp({ title, onSend, onDone }: { title: string; onSend: (text: string, images?: ImageAttachment[]) => Promise<boolean>; onDone: () => void }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -187,6 +187,9 @@ function FollowUp({ onSend, onDone }: { onSend: (text: string, images?: ImageAtt
   const empty = !text.trim() && pictures.images.length === 0;
   return (
     <div className="org-thread-follow" data-testid="org-thread-follow">
+      {/* The box names its thread, so a Follow up opened on the wrong card shows before Send
+          (2026-11-10, the user: "I ask follow up of another thread ... not this blue title"). */}
+      <span className="org-thread-follow-to" data-testid="org-thread-follow-to">Follow up on {'\u201c'}{title}{'\u201d'}</span>
       {/* Walnut's answer box (common/AnswerBox.tsx): grows with the words, no grip, the mic inside, pictures as in the chat. */}
       <AnswerBox
         autoFocus
@@ -420,7 +423,7 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
         </ol>
       )}
       {following && onFollowUp ? (
-        <FollowUp onSend={(text, images) => onFollowUp(t.id, text, images)} onDone={() => setFollowing(false)} />
+        <FollowUp title={t.title} onSend={(text, images) => onFollowUp(t.id, text, images)} onDone={() => setFollowing(false)} />
       ) : (
         <div className="org-thread-actions">
           {closed ? (<>

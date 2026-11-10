@@ -113,6 +113,7 @@
 .org-thread-pin-btn[aria-pressed="true"] { color: var(--accent, #0a84ff); }
 .org-thread-closed { font-size: 12px; color: var(--fg-muted, #86868b); margin-right: auto; }
 .org-thread-follow { display: flex; flex-direction: column; gap: 4px; }
+.org-thread-follow-to { font-size: 12px; color: var(--fg-muted, #86868b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-thread-follow-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .org-thread-error { margin: 0 auto 0 0; font-size: 12px; color: var(--error, #ff3b30); }
 .org-threads-closed-toggle {
