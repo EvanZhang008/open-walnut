@@ -116,13 +116,36 @@ export type BridgeReadResult =
   | { status: 'failed'; failure: BridgeReadFailure }
   | { status: 'offline'; message: string }
 
-/** One fs.readBounded round trip with the relay deadline. Never throws. */
+export async function readBridgeFile(
+  host: string, params: Record<string, unknown>, signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const { bridgeRequest, bridgeForHost, BridgeOfflineError, BridgeLostError, lastBridgeLossAt, waitForBridge } = await import('../ws/bridge-registry.js')
+  const deadline = Date.now() + FILE_RELAY_TIMEOUT_MS
+  for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted()
+    try {
+      return await bridgeRequest(host, 'fs.readBounded', params, attempt === 0 ? FILE_RELAY_TIMEOUT_MS : Math.max(1, deadline - Date.now()))
+    } catch (err) {
+      if (!(err instanceof BridgeOfflineError || err instanceof BridgeLostError)) throw err
+      const lostAt = lastBridgeLossAt(host)
+      const left = deadline - Date.now()
+      const connected = bridgeForHost(host).connected
+      if (attempt >= 2 || left <= 0 || signal?.aborted
+        || (!connected && (lostAt === null || Date.now() - lostAt > FILE_RELAY_TIMEOUT_MS))) throw err
+      // A read may be repeated; range reads keep expectedVersion so a redial cannot mix files.
+      if (!connected && !(await waitForBridge(host, left))) throw err
+      if (Date.now() >= deadline) throw err
+    }
+  }
+}
+
+/** One fs.readBounded read with the relay deadline. Never throws. */
 async function bridgeReadFile(hostAlias: string, filePath: string): Promise<BridgeReadResult> {
-  const { bridgeRequest, BridgeOfflineError } = await import('../ws/bridge-registry.js')
+  const { BridgeOfflineError } = await import('../ws/bridge-registry.js')
   let reply: Record<string, unknown>
   const startedAt = Date.now()
   try {
-    reply = await bridgeRequest(hostAlias, 'fs.readBounded', { path: filePath }, FILE_RELAY_TIMEOUT_MS)
+    reply = await readBridgeFile(hostAlias, { path: filePath })
   } catch (err) {
     // Bridge down AND request timeout both degrade to "host unreachable" —
     // the phone's remedy is identical (wait for the host to reconnect).

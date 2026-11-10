@@ -22,6 +22,9 @@ class BridgeOfflineError extends Error {
 vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeRequest: bridgeRequestMock,
   BridgeOfflineError,
+  BridgeLostError: class extends Error {},
+  lastBridgeLossAt: () => null,
+  waitForBridge: async () => false,
   bridgeForHost: () => ({ connected: bridgeState.connected }),
   bridgeHosts: () => [],
   bridgeAttachSession: async () => {},

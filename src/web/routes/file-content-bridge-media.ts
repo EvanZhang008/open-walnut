@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { attachmentDisposition, parseRangeHeader } from './file-content.js'
 import { parseIfNoneMatch } from './file-content-validator.js'
 import {
-  classifyBridgeReadFailure, FILE_RELAY_TIMEOUT_MS, MAX_BRIDGE_FILE_BYTES, type BridgeReadResult,
+  classifyBridgeReadFailure, FILE_RELAY_TIMEOUT_MS, MAX_BRIDGE_FILE_BYTES, readBridgeFile, type BridgeReadResult,
 } from './file-content-bridge.js'
 
 /** Only raw audio/video uses the chunk lane; documents retain their whole-read cap. */
@@ -22,17 +22,16 @@ async function readPart(
   let timer: ReturnType<typeof setTimeout> | undefined
   let onAbort: (() => void) | undefined
   try {
-    const { bridgeRequest } = await import('../ws/bridge-registry.js')
     if (signal.aborted) return { status: 'closed' }
     const cancelled = new Promise<null>((resolve) => {
       onAbort = () => resolve(null)
       signal.addEventListener('abort', onAbort, { once: true })
     })
     const reply = await Promise.race([
-      bridgeRequest(host, 'fs.readBounded', {
+      readBridgeFile(host, {
         path: filePath, range: true, offset, length,
         ...(expected ? { expectedVersion: expected.version } : {}),
-      }, FILE_RELAY_TIMEOUT_MS),
+      }, signal),
       cancelled,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error('Media bridge read timed out')), FILE_RELAY_TIMEOUT_MS)

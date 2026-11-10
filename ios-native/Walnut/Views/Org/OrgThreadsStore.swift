@@ -40,14 +40,17 @@ final class OrgThreadsStore {
     @ObservationIgnored private var probing: Set<String> = []
     @ObservationIgnored private var generation = 0
 
-    init(taskId: String, threads: [OrgThread]? = nil, cache: OrgThreadsCache? = .shared) {
+    init(taskId: String, threads: [OrgThread]? = nil, cache: OrgThreadsCache? = .shared,
+         read: (() async throws -> OrgThreadsRead)? = nil) {
         self.taskId = taskId
         self.threads = threads
         self.cache = cache
+        self.read = read ?? { try await WalnutAPI().orgThreads(taskId: taskId) }
         if threads == nil, let entry = cache?.cached(taskId) { take(entry) }
     }
 
     private let cache: OrgThreadsCache?
+    private let read: () async throws -> OrgThreadsRead
 
     /// How often a page whose read failed asks again while it is on screen (`OrgNodePage`).
     nonisolated static let retrySeconds: Double = 5
@@ -70,6 +73,12 @@ final class OrgThreadsStore {
         take(entry)
     }
 
+    /// The native refresh task can be cancelled once the pull ends. Keep its bounded read and
+    /// reconnect attempts alive; a newer load still supersedes them through the generation fence.
+    func refresh() async {
+        await Task { await self.load() }.value
+    }
+
     func load() async {
         generation += 1
         let gen = generation
@@ -79,12 +88,9 @@ final class OrgThreadsStore {
         do {
             let read: OrgThreadsRead
             do {
-                read = try await WalnutAPI().orgThreads(taskId: taskId)
-            } catch let first as APIError where first.isPrimaryOnly && (threads == nil || fromCache) {
-                // Threads live on the Mac only: through the companion one read may land in a
-                // moment it cannot reach the Mac (2026-11-08). The companion asks the Mac again
-                // once it is heard (its beat is 15 s), so twice more within that before the page says so.
-                // A page showing only the phone's copy has no fresh read yet either.
+                read = try await self.read()
+            } catch let first as APIError where first.isPrimaryOnly {
+                // A refresh needs the same reconnect window as a first read, even with threads on screen.
                 read = try await retryUnavailable(gen: gen)
             }
             guard gen == generation else { return }
@@ -110,17 +116,17 @@ final class OrgThreadsStore {
             if threads == nil { await hydrate() }
             guard gen == generation else { return }
             lastRead = .init(startedAt: started, failed: true)
-            self.error = Self.readError(hasThreads: threads != nil, fromCache: fromCache)
+            self.error = Self.readError(hasThreads: threads != nil, fromCache: fromCache, cause: error as? APIError)
             AppLog.warn("org", "threads load failed", ["taskId": taskId, "error": error.localizedDescription])
         }
     }
 
     private func retryUnavailable(gen: Int) async throws -> OrgThreadsRead {
         var lastError: Error = APIError.cancelled
-        for wait in [2_000, 8_000] {
+        for wait in [2_000, 8_000, 8_000] {
             try await Task.sleep(for: .milliseconds(wait))
             guard gen == generation else { throw CancellationError() }
-            do { return try await WalnutAPI().orgThreads(taskId: taskId) } catch let e as APIError where e.isPrimaryOnly {
+            do { return try await read() } catch let e as APIError where e.isPrimaryOnly {
                 lastError = e
             }
         }
@@ -161,7 +167,11 @@ final class OrgThreadsStore {
     }
 
     /// What a failed list read says, by what the page still shows.
-    nonisolated static func readError(hasThreads: Bool, fromCache: Bool) -> String {
+    nonisolated static func readError(hasThreads: Bool, fromCache: Bool, cause: APIError? = nil) -> String {
+        if cause?.isPrimaryOnly == true {
+            let kept = hasThreads ? " The threads shown here have not been refreshed." : ""
+            return "The cloud companion couldn't get the threads from your Mac.\(kept) It will try again automatically."
+        }
         if !hasThreads { return "Couldn't load the threads. Pull to try again." }
         if fromCache { return "These are the threads as the phone last saw them. Pull to try again." }
         return "Couldn't refresh the threads."

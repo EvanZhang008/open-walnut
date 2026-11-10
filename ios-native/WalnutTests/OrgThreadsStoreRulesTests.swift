@@ -151,6 +151,88 @@ final class OrgThreadsStoreRulesTests: XCTestCase {
         XCTAssertEqual(OrgThreadsStore.readError(hasThreads: true, fromCache: false), "Couldn't refresh the threads.")
     }
 
+    func testARefreshWithThreadsOnScreenWaitsForThePrimaryToReturn() async throws {
+        let old = try thread("th-000001", title: "Old title")
+        let fresh = try thread("th-000001", title: "Refreshed title")
+        var reads = 0
+        let store = OrgThreadsStore(taskId: "node-reconnect", threads: [old], cache: nil, read: {
+            reads += 1
+            if reads == 1 {
+                throw APIError.server(status: 503, code: "primary_only", message: "Primary unavailable", serverHash: nil, serverContent: nil)
+            }
+            return OrgThreadsRead(threads: [fresh], shownCount: 1, closedCount: 0)
+        })
+        let loading = Task { await store.load() }
+        await Task.yield()
+        XCTAssertEqual(store.threads?.first?.title, "Old title")
+        await loading.value
+        XCTAssertEqual(reads, 2)
+        XCTAssertEqual(store.threads?.first?.title, "Refreshed title")
+        XCTAssertNil(store.error)
+        XCTAssertEqual(store.lastRead?.failed, false)
+    }
+
+    func testANewerRefreshWinsWhileAnOlderReadWaitsForReconnect() async throws {
+        let old = try thread("th-000001", title: "Old title")
+        let fresh = try thread("th-000001", title: "Newest title")
+        var reads = 0
+        let store = OrgThreadsStore(taskId: "node-reconnect", threads: [old], cache: nil, read: {
+            reads += 1
+            if reads == 1 {
+                throw APIError.server(status: 503, code: "primary_only", message: "Primary unavailable", serverHash: nil, serverContent: nil)
+            }
+            return OrgThreadsRead(threads: [fresh], shownCount: 1, closedCount: 0)
+        })
+        let older = Task { await store.load() }
+        while reads == 0 { await Task.yield() }
+        await store.load()
+        await older.value
+        XCTAssertEqual(reads, 2)
+        XCTAssertEqual(store.threads?.first?.title, "Newest title")
+        XCTAssertNil(store.error)
+        XCTAssertFalse(store.loading)
+    }
+
+    func testEndingTheNativePullDoesNotCancelItsReconnectRead() async throws {
+        let old = try thread("th-000001", title: "Old title")
+        let fresh = try thread("th-000001", title: "Refreshed title")
+        var reads = 0
+        let store = OrgThreadsStore(taskId: "node-pull", threads: [old], cache: nil, read: {
+            reads += 1
+            if reads == 1 {
+                throw APIError.server(status: 503, code: "primary_only", message: "Primary unavailable", serverHash: nil, serverContent: nil)
+            }
+            try Task.checkCancellation()
+            return OrgThreadsRead(threads: [fresh], shownCount: 1, closedCount: 0)
+        })
+        let pull = Task { await store.refresh() }
+        while reads == 0 { await Task.yield() }
+        pull.cancel()
+        await pull.value
+        XCTAssertEqual(reads, 2)
+        XCTAssertEqual(store.threads?.first?.title, "Refreshed title")
+        XCTAssertNil(store.error)
+        XCTAssertEqual(store.lastRead?.failed, false)
+        XCTAssertFalse(store.loading)
+
+        let code = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Walnut/Views/Org/OrgThreadsView.swift"), encoding: .utf8)
+        XCTAssertTrue(code.contains(".refreshable { await store.refresh() }"), "the native pull uses the cancellation-independent read")
+    }
+
+    func testAnUnavailablePrimaryNamesTheCloudToMacReadAndKeepsTheCopy() {
+        let cause = APIError.server(status: 503, code: "primary_only", message: "Primary not answering", serverHash: nil, serverContent: nil)
+        for fromCache in [false, true] {
+            let message = OrgThreadsStore.readError(hasThreads: true, fromCache: fromCache, cause: cause)
+            XCTAssertTrue(message.contains("cloud companion"))
+            XCTAssertTrue(message.contains("your Mac"))
+            XCTAssertTrue(message.contains("not been refreshed"))
+            XCTAssertTrue(message.contains("automatically"))
+        }
+        XCTAssertFalse(OrgThreadsStore.readError(hasThreads: false, fromCache: false, cause: cause).contains("shown here"))
+        XCTAssertEqual(OrgThreadsStore.readError(hasThreads: true, fromCache: false, cause: .unauthorized), "Couldn't refresh the threads.")
+    }
+
     // MARK: - 3. The Closed fold
 
     func testTheClosedFoldSaysThisWeekOnlyOfThisWeek() throws {

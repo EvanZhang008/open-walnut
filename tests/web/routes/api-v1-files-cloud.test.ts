@@ -22,13 +22,20 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-files-cloud', { CLOUD_MODE: true }))
 
 const bridgeRequestMock = vi.fn()
+const waitForBridgeMock = vi.fn()
+const lastBridgeLossAtMock = vi.fn()
+const bridgeForHostMock = vi.fn()
+class BridgeLostError extends Error {}
 class BridgeOfflineError extends Error {
   constructor(hostAlias: string) { super(`No live bridge for host: ${hostAlias}`) }
 }
 vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeRequest: bridgeRequestMock,
   BridgeOfflineError,
-  bridgeForHost: () => ({ connected: true }),
+  BridgeLostError,
+  waitForBridge: waitForBridgeMock,
+  lastBridgeLossAt: lastBridgeLossAtMock,
+  bridgeForHost: bridgeForHostMock,
   bridgeHosts: () => [],
   bridgeAttachSession: async () => {},
   bridgeDetachSession: () => {},
@@ -43,7 +50,8 @@ import { filesV1Router } from '../../../src/web/routes/files-v1.js'
 import { fileRawRouter } from '../../../src/web/routes/file-raw.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { serveBridgeMedia } from '../../../src/web/routes/file-content-bridge-media.js'
+import { BRIDGE_MEDIA_EXTENSIONS, serveBridgeMedia } from '../../../src/web/routes/file-content-bridge-media.js'
+import { readBridgeFile } from '../../../src/web/routes/file-content-bridge.js'
 
 function createApp() {
   const app = express()
@@ -64,6 +72,9 @@ beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   bridgeRequestMock.mockReset()
+  waitForBridgeMock.mockReset().mockResolvedValue(false)
+  lastBridgeLossAtMock.mockReset().mockReturnValue(null)
+  bridgeForHostMock.mockReset().mockReturnValue({ connected: false })
 })
 
 afterEach(async () => {
@@ -463,7 +474,7 @@ describe('raw media uses guarded bridge chunks', () => {
   })
 
   it('uses the range lane for each media extension but leaves JSON and document caps unchanged', async () => {
-    for (const ext of ['mp4', 'm4v', 'mov', 'webm', 'mp3', 'wav', 'm4a', 'ogg']) {
+    for (const ext of BRIDGE_MEDIA_EXTENSIONS) {
       mediaDaemon(Buffer.from([1, 2, 3]))
       expect((await rawMedia(ext)).status).toBe(200)
     }
@@ -530,6 +541,111 @@ describe('raw media uses guarded bridge chunks', () => {
     }
     mediaDaemon()
     expectBytes((await rawMedia().set('Range', 'bytes=0-9')).body, MEDIA_BYTES.subarray(0, 10))
+  })
+
+  it('a replacement bridge recovers the lost range after the outage timestamp was cleared', async () => {
+    lastBridgeLossAtMock.mockReturnValue(null)
+    bridgeForHostMock.mockReturnValue({ connected: true })
+    let dropped = false
+    bridgeRequestMock.mockImplementation(async (_host, _cmd, p) => {
+      if (p.offset === 1024 * 1024 && !dropped) { dropped = true; throw new BridgeLostError('bridge replaced') }
+      return rangeReply(MEDIA_BYTES, p)
+    })
+    const res = await rawMedia()
+    expect(res.status).toBe(200)
+    expectBytes(res.body, MEDIA_BYTES)
+    expect(waitForBridgeMock).not.toHaveBeenCalled()
+  })
+
+  it('whole file reads recover from a recent bridge loss, with no retries for daemon refusals', async () => {
+    bridgeRequestMock.mockRejectedValueOnce(new BridgeLostError('bridge disconnected')).mockResolvedValue(daemonOk('recovered'))
+    lastBridgeLossAtMock.mockReturnValue(Date.now())
+    waitForBridgeMock.mockResolvedValue(true)
+    const res = await request(createApp()).get('/api/v1/file-content?path=/w/index.html&host=devbox')
+    expect(res.body.content).toBe('recovered')
+    expect(bridgeRequestMock).toHaveBeenCalledTimes(2)
+    waitForBridgeMock.mockClear()
+    bridgeRequestMock.mockResolvedValue({ ok: false, error: 'path not permitted (EDENIED)' })
+    expect((await rawMedia()).status).toBe(403)
+    expect(waitForBridgeMock).not.toHaveBeenCalled()
+  })
+
+  it('a short bridge drop repeats only the interrupted range without mixing versions', async () => {
+    lastBridgeLossAtMock.mockImplementation(() => Date.now())
+    waitForBridgeMock.mockResolvedValue(true)
+    let dropped = false
+    bridgeRequestMock.mockImplementation(async (_host, _cmd, p) => {
+      if (p.offset === 1024 * 1024 && !dropped) { dropped = true; throw new BridgeLostError('bridge disconnected') }
+      return rangeReply(MEDIA_BYTES, p)
+    })
+    const res = await rawMedia()
+    expect(res.status).toBe(200)
+    expectBytes(res.body, MEDIA_BYTES)
+    expect(waitForBridgeMock).toHaveBeenCalledTimes(1)
+    const repeated = bridgeRequestMock.mock.calls.filter((c) => c[2].offset === 1024 * 1024)
+    expect(repeated).toHaveLength(2)
+    expect(repeated[1][2]).toEqual(repeated[0][2])
+    expect(repeated[1][2].expectedVersion).toBeDefined()
+  })
+
+  it('each raw media extension survives a recent bridge gap at its probe', async () => {
+    for (const ext of BRIDGE_MEDIA_EXTENSIONS) {
+      bridgeRequestMock.mockReset().mockRejectedValueOnce(new BridgeOfflineError('devbox'))
+        .mockImplementation(async (_host, _cmd, p) => rangeReply(MEDIA_BYTES, p))
+      lastBridgeLossAtMock.mockReturnValue(Date.now())
+      waitForBridgeMock.mockResolvedValue(true)
+      const res = await rawMedia(ext)
+      expect(res.status, ext).toBe(200)
+      expectBytes(res.body, MEDIA_BYTES)
+    }
+  })
+
+  it('a file that changed during reconnect is never appended to an older stream', async () => {
+    lastBridgeLossAtMock.mockReturnValue(Date.now())
+    waitForBridgeMock.mockResolvedValue(true)
+    let dropped = false
+    bridgeRequestMock.mockImplementation(async (_host, _cmd, p) => {
+      if (p.offset >= 1024 * 1024) {
+        if (!dropped) { dropped = true; throw new BridgeLostError('bridge disconnected') }
+        return { ok: false, error: 'file changed (ESTALE)' }
+      }
+      return rangeReply(MEDIA_BYTES, p)
+    })
+    await listenMedia(async (port) => {
+      expect(await interruptedBody(port)).toEqual({ aborted: true, bytes: 1024 * 1024 })
+    })
+    expect(waitForBridgeMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not wait for an unknown host or an old outage; a recent gap has a bounded wait', async () => {
+    for (const lostAt of [null, Date.now() - 60_000]) {
+      bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('devbox'))
+      lastBridgeLossAtMock.mockReturnValue(lostAt)
+      expect((await rawMedia()).status).toBe(503)
+    }
+    expect(waitForBridgeMock).not.toHaveBeenCalled()
+    lastBridgeLossAtMock.mockReturnValue(Date.now())
+    expect((await rawMedia()).status).toBe(503)
+    expect(waitForBridgeMock).toHaveBeenCalledTimes(1)
+    expect(waitForBridgeMock.mock.calls[0][1]).toBeLessThanOrEqual(15_000)
+  })
+
+  it('a reconnect never starts a new read after its total deadline or the caller cancels', async () => {
+    vi.useFakeTimers()
+    try {
+      for (const cancel of [false, true]) {
+        bridgeRequestMock.mockReset().mockRejectedValue(new BridgeLostError('bridge disconnected'))
+        lastBridgeLossAtMock.mockReturnValue(Date.now())
+        const controller = new AbortController()
+        waitForBridgeMock.mockImplementation(async () => {
+          if (cancel) controller.abort()
+          else vi.setSystemTime(Date.now() + 15_000)
+          return true
+        })
+        await expect(readBridgeFile('devbox', { path: '/w/a.html' }, controller.signal)).rejects.toThrow()
+        expect(bridgeRequestMock).toHaveBeenCalledTimes(1)
+      }
+    } finally { vi.useRealTimers() }
   })
 
   it('client abort during a pending read ends the route and starts no subsequent chunks', async () => {

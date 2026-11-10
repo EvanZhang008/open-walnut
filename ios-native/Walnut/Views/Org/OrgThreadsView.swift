@@ -192,7 +192,7 @@ struct OrgThreadsView: View {
             }
             // At the bottom, above the tab bar: where the eye is after the card's buttons, and off the cards' text.
             .overlay(alignment: .bottom) { noticeView }
-            .refreshable { await store.load() }
+            .refreshable { await store.refresh() }
             .onScrollPhaseChange { _, phase in
                 guard phase == .interacting else { return }
                 // He scrolls: a reveal still checking its jump stops putting the thread back.

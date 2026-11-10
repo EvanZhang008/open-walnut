@@ -25,7 +25,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import type { Server as HttpServer } from 'node:http'
-import { WebSocket } from 'ws'
+import { WebSocket, WebSocketServer } from 'ws'
 import { createMockConstants } from '../helpers/mock-constants.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
@@ -38,6 +38,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { withPreviewBridge } from '../../src/web/preview-bridge.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { bridgeHosts } from '../../src/web/ws/bridge-registry.js'
 
 const HOST_ALIAS = 'relaybox'
 const HTML = '<!doctype html>\n<html><body><h1>works from anywhere</h1></body></html>\n'
@@ -205,6 +206,61 @@ describe('phone → cloud server → /bridge → real daemon → file bytes', ()
     expect(secret.status).toBe(403)
     await secret.text()
   })
+
+  it('keeps a phone download byte-exact when the real bridge redials halfway through', async () => {
+    const proxy = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>((resolve) => proxy.once('listening', resolve))
+    const proxyPort = (proxy.address() as { port: number }).port
+    const upstreams = new Set<WebSocket>()
+    let dropped = false
+    let dials = 0
+    proxy.on('connection', (client, req) => {
+      dials++
+      const upstream = new WebSocket(`ws://127.0.0.1:${port}${req.url}`)
+      upstreams.add(upstream)
+      const queued: string[] = []
+      client.on('error', () => {})
+      upstream.on('error', () => {})
+      upstream.on('open', () => { for (const frame of queued) upstream.send(frame) })
+      client.on('message', (frame) => {
+        if (upstream.readyState === WebSocket.OPEN) upstream.send(frame.toString())
+        else queued.push(frame.toString())
+      })
+      upstream.on('message', (frame) => {
+        const msg = JSON.parse(frame.toString())
+        if (!dropped && msg.cmd === 'fs.readBounded' && msg.offset === 1024 * 1024) {
+          dropped = true
+          upstream.terminate()
+          client.terminate()
+          return
+        }
+        if (client.readyState === WebSocket.OPEN) client.send(frame.toString())
+      })
+      client.on('close', () => upstream.terminate())
+      upstream.on('close', () => { upstreams.delete(upstream); client.terminate() })
+    })
+    try {
+      const previousSince = bridgeHosts().find((b) => b.hostAlias === HOST_ALIAS)?.since
+      expect((await rpc(ctl!, 10, 'bridge.configure', {
+        enabled: true, url: `ws://127.0.0.1:${proxyPort}/bridge`, token: machineToken, hostAlias: HOST_ALIAS,
+      })).ok).toBe(true)
+      await waitFor(() => dials > 0 && bridgeHosts().some((b) => b.hostAlias === HOST_ALIAS && b.since !== previousSince))
+      const p = encodeURIComponent(path.join(filesDir, 'bytes.mp4'))
+      const res = await authedFetch(`/api/v1/file-content?path=${p}&host=${HOST_ALIAS}&raw=1`)
+      expect(res.status).toBe(200)
+      expect(Buffer.from(await res.arrayBuffer()).equals(MEDIA_BYTES)).toBe(true)
+      expect(dropped).toBe(true)
+      expect(dials).toBeGreaterThanOrEqual(2)
+    } finally {
+      await rpc(ctl!, 11, 'bridge.configure', {
+        enabled: true, url: `ws://127.0.0.1:${port}/bridge`, token: machineToken, hostAlias: HOST_ALIAS,
+      })
+      for (const socket of proxy.clients) socket.terminate()
+      for (const socket of upstreams) socket.terminate()
+      await new Promise<void>((resolve) => proxy.close(() => resolve()))
+      await waitFor(bridgeConnected)
+    }
+  }, 30_000)
 
   it('raw=1 serves the HTML bytes with text/html (the WKWebView preview URL)', async () => {
     const p = encodeURIComponent(path.join(filesDir, 'index.html'))
