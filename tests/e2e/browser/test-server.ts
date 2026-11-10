@@ -3502,6 +3502,18 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
     thinkCall('mcp__walnut__human_inbox_reply', { letter_id: 'letter-sample', text: 'Answered.' }, '{"outcome":"Replied."}')
     thinkCall('mcp__walnut__task_send', { in_reply_to: 'rq-sample0001', title: 'FOLD_REPLY_NINE answer', text: 'Here is the answer.' }, '{"outcome":"Delivered."}')
     say('FOLD_FINAL_I passed it on.')
+    // ⑩ words and a send in ONE message, more words after it (2026-11-09): the
+    // words show, the send between them is one closed "Sent 1" line
+    ask('FOLD_ASK_TEN decide it.')
+    {
+      const id = `toolu_fold_${seq + 1}`
+      push('assistant', [
+        { type: 'text', text: 'FOLD_WORDS_TEN my pick is C.' },
+        { type: 'tool_use', id, name: 'mcp__walnut__task_send', input: { to: 'pw-task-001', title: 'FOLD_SENT_TEN pick C', text: 'Pick C.' } },
+      ], `msg_fold_${seq + 1}`)
+      push('user', [{ type: 'tool_result', tool_use_id: id, content: '{"outcome":"Delivered."}' }])
+    }
+    say('FOLD_FINAL_TEN the decision is yours.')
     lines.push('')
     await fs.writeFile(path.join(jsonlDir, `${sid}.jsonl`), lines.join('\n'))
   }

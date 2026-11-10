@@ -261,6 +261,9 @@ interface SessionMessageProps {
   ridersFolded?: boolean;
   /** Only the last assistant output renders copy actions, keeping middle rows compact. */
   showCopyActions?: boolean;
+  /** The calls of a row whose words drew it already (SessionChatHistory's
+   *  `toolsAfter`): no second copy, pin or time strip for the same message. */
+  noActions?: boolean;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
@@ -646,6 +649,18 @@ export function isTextPlusMergeableTools(m: SessionHistoryMessage): boolean {
     && !!(m.text ?? '').trim()
     && !!m.tools && m.tools.length > 0
     && m.tools.every(isMergeableHistoryTool);
+}
+
+/** Words with calls that are all steps, one of them a message sent to another
+ *  session (the rest generic tools): the words stay on screen and the calls fold
+ *  after them as one closed line ("Sent 1 message"), never the send's whole card
+ *  between two paragraphs of the answer (2026-11-09, the user: "the message
+ *  should also be auto collapsed ... like send message 1"). */
+export function isTextPlusStepTools(m: SessionHistoryMessage): boolean {
+  return m.role === 'assistant'
+    && !!(m.text ?? '').trim()
+    && !!m.tools && m.tools.length > 0
+    && m.tools.every((t) => isMergeableHistoryTool(t) || !!detectOutboundSend(t));
 }
 
 /** A streaming run member: a generic tool (running or done), or the reasoning
@@ -1236,7 +1251,7 @@ export const SessionMessage = memo(function SessionMessage(props: SessionMessage
   return <SessionMessageBubble {...props} />;
 });
 
-function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, ridersFolded, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
+function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, ridersFolded, showCopyActions = false, noActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
   const { role, text: arrivingText, timestamp, tools: rawTools, thinking } = message;
   // A reply still arriving is this same row (SessionChatHistory draws a stream
   // block as the row its persisted twin will be): its words hold while the
@@ -1504,7 +1519,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
             CSS keeps it invisible until the row is hovered); the live tail's last
             reply keeps its actions on screen, which is what showCopyActions has
             always meant. */}
-        {phone ? ((!!bodyText?.trim() || !!msgId) && (
+        {noActions ? null : phone ? ((!!bodyText?.trim() || !!msgId) && (
           <button
             type="button"
             className="msg-more-btn"

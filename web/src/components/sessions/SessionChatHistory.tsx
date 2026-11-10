@@ -26,7 +26,7 @@ import { downInputResumesAtEnd, followResumes, READER_DOWN_MS, type FollowLeave 
 import { liveOutputSize, phoneTurnStartStep, PHONE_TURN_START_WINDOW_MS, type TimelineContent } from './phone-turn-start';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { TimelineBottomPills, useFlagStore } from './PhoneTimelinePills';
-import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, runRowKey, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
+import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, runRowKey, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, isTextPlusStepTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars, streamReplyText, useStreamReplyRows } from './StreamingBlockView';
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
@@ -441,6 +441,9 @@ type TimelineItem =
   | { kind: 'indicator'; type: 'resuming' | 'working' };
 
 type HistoryPart = { kind: 'msg'; m: SessionHistoryMessage; globalIndex: number; suppressTools?: boolean;
+      /** The calls of the row before it (isTextPlusStepTools), split off its words
+       *  so they fold as a step where they happened. Same message id as its words. */
+      toolsAfter?: boolean;
       /** A reply still arriving, drawn as the row its persisted twin will be
        *  (streamReplyMessage): `showCopy` stands in for lastAssistantTextIndex. */
       stream?: { showCopy: boolean } }
@@ -3269,6 +3272,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         historyRunSeeded = true;
         continue;
       }
+      if (isTextPlusStepTools(msg)) {
+        // A send among the calls: no run takes it, so the calls are a part of
+        // their own right after the words, a step the turn's fold takes.
+        parts.push({ kind: 'msg', m: msg, globalIndex, suppressTools: true });
+        const prose = msg;
+        parts.push({ kind: 'msg', m: ids.derive(prose, 'tools-after', [], () => ({ ...prose, text: '', thinking: undefined })), globalIndex, toolsAfter: true });
+        continue;
+      }
       parts.push({ kind: 'msg', m: msg, globalIndex });
     }
     flushHistoryRun(false);
@@ -4098,16 +4109,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const askedAfter = new Map<number, AskedFromRow[]>();
   if (askedGroups && askedGroups.size > 0) {
     let rows: AskedFromRow[] = [];
+    // The list hangs under the words, never under the calls split off them (a step, folded).
+    let host = -1;
     visibleHistoryParts.forEach((part, i) => {
       const first = part.kind === 'msg' ? part.m : part.members[0].m;
-      if (part.kind === 'msg' && first.role === 'user' && rows.length > 0 && i > 0) {
-        askedAfter.set(i - 1, rows);
+      if (part.kind === 'msg' && first.role === 'user' && rows.length > 0 && host >= 0) {
+        askedAfter.set(host, rows);
         rows = [];
       }
+      if (part.kind === 'msg' && part.toolsAfter) return;
+      host = i;
       const ids = part.kind === 'msg' ? [first.msgId ?? first.walnutMessageId] : part.members.map((x) => x.m.msgId ?? x.m.walnutMessageId);
       for (const id of ids) { const g = id ? askedGroups.get(id) : undefined; if (g) rows = [...rows, ...g]; }
     });
-    if (rows.length > 0) askedAfter.set(visibleHistoryParts.length - 1, rows);
+    if (rows.length > 0 && host >= 0) askedAfter.set(host, rows);
   }
   const openFromRow = useCallback((key: string) => stack.pushTo(key, 'asked-from'), [stack]);
 
@@ -4550,7 +4565,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       );
     }
     const { globalIndex, stream } = part;
-    const overlay = !stream && part.m.msgId ? replyTextOverlay.get(part.m.msgId) : undefined;
+    const overlay = !stream && !part.toolsAfter && part.m.msgId ? replyTextOverlay.get(part.m.msgId) : undefined;
     if (overlay !== undefined) overlaidReplies.add(part.m.msgId!);
     const m = overlay !== undefined ? { ...part.m, text: overlay } : part.m;
     // Question rows wear their decoration through the wrapper (the gutter bar in
@@ -4558,10 +4573,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const rowId = m.msgId ?? m.walnutMessageId;
     return (
       <div
-        key={m.msgId ?? m.walnutMessageId ?? `${m.role}:${m.timestamp}:${globalIndex}`}
+        // The calls split off a row's words share its message id: the words keep the row's key and id.
+        key={part.toolsAfter ? `tools-after:${m.msgId ?? m.walnutMessageId ?? `${m.timestamp}:${globalIndex}`}` : m.msgId ?? m.walnutMessageId ?? `${m.role}:${m.timestamp}:${globalIndex}`}
         data-msg-index={stream ? undefined : globalIndex}
         {...(stream ? { 'data-stream-reply': '' } : {})}
-        data-message-id={m.msgId ?? m.walnutMessageId}
+        data-message-id={part.toolsAfter ? undefined : m.msgId ?? m.walnutMessageId}
         data-row-keys={rowKeysAttr((m.tools ?? []).map((t) => t.toolUseId))}
         // Read by the quote-pin selection pill, which only has the DOM row it
         // found the selection in — cheaper than threading the messages array
@@ -4570,12 +4586,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         data-msg-ts={m.timestamp}
         {...threadWrapperProps(rowId)}
       >
-        {forkBoundaryIndex != null && globalIndex === forkBoundaryIndex && (
+        {!part.toolsAfter && forkBoundaryIndex != null && globalIndex === forkBoundaryIndex && (
           <div className="session-fork-divider">
             <span className="session-fork-divider-label">Forked session starts here</span>
           </div>
         )}
-        {gapDivider(globalIndex)}
+        {!part.toolsAfter && gapDivider(globalIndex)}
         {turnLabelFor(rowId, m.role)}
         {isMarkerOnly(m) ? (
           // The line alone has nothing to show; it reads "Acknowledged" only where
@@ -4589,7 +4605,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             {noActionSet.has(globalIndex) ? <NoActionMark /> : null}
           </>
         ) : (
-          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} {...(ridersFolded.has(globalIndex) ? { ridersFolded: true } : {})} showCopyActions={stream ? stream.showCopy : globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} {...(ridersFolded.has(globalIndex) ? { ridersFolded: true } : {})} showCopyActions={stream ? stream.showCopy : globalIndex === lastAssistantTextIndex && !part.toolsAfter} {...(part.toolsAfter ? { noActions: true } : {})} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         )}
       </div>
     );
@@ -4613,7 +4629,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const readProcessTools = (part: HistoryPart): SessionHistoryTool[] | null => {
     if (part.kind === 'system-run') return null;
     const first = part.kind === 'msg' ? part.globalIndex : part.members[0].globalIndex;
-    if ((forkBoundaryIndex != null && first === forkBoundaryIndex) || gapAt.has(first)) return null;
+    // The divider at a row's index is drawn by its words, not by the calls split off them.
+    const divides = !(part.kind === 'msg' && part.toolsAfter);
+    if (divides && ((forkBoundaryIndex != null && first === forkBoundaryIndex) || gapAt.has(first))) return null;
     const msgs = part.kind === 'run' ? part.memberMsgs : part.suppressTools ? null : [part.m];
     if (!msgs) return null;
     const tools: SessionHistoryTool[] = [];
@@ -4632,7 +4650,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   /** What a row is for the fold rule (fold-rows.ts); its role is MSG_KIND_ROLE's. */
   const msgKindOf = (part: HistoryPart): MsgKind => {
     const first = part.kind === 'msg' ? part.globalIndex : part.members[0].globalIndex;
-    if ((forkBoundaryIndex != null && first === forkBoundaryIndex) || gapAt.has(first)) return 'boundary';
+    const divides = !(part.kind === 'msg' && part.toolsAfter);
+    if (divides && ((forkBoundaryIndex != null && first === forkBoundaryIndex) || gapAt.has(first))) return 'boundary';
     switch (part.kind) {
       case 'system-run': return 'system';
       case 'run': return processToolsOf(part) !== null ? 'calls' : 'other';
@@ -4767,6 +4786,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const rowsOf = (part: HistoryPart) => (part.kind === 'msg' ? [part.m] : part.members.map((x) => x.m));
   const markAll = (items: readonly Item[], key: string) => {
     for (const { part } of items) {
+      // A jump to the words of a row lands on them, never opens the fold its calls are in.
+      if (part.kind === 'msg' && part.toolsAfter) continue;
       for (const m of rowsOf(part)) { const id = m.msgId ?? m.walnutMessageId; if (id) markFolded(id, key); }
     }
   };
@@ -4882,7 +4903,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const meetReader = (key: string, items: readonly Item[]) => {
     const rows = new Set<SessionHistoryMessage>();
     for (const { part } of items) {
-      if (part.kind === 'msg') ownRows.add(part.m);
+      if (part.kind === 'msg' && !part.toolsAfter) ownRows.add(part.m);
       for (const m of rowsOf(part)) rows.add(m);
     }
     foldRowsNow.set(key, rows);

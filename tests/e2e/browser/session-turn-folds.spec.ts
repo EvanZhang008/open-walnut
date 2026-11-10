@@ -124,6 +124,30 @@ test('sends, replies and messaging ops fold with the steps, reasoning included; 
   await shot(page, fold, 'sends-open')
 })
 
+test('a send in the same message as the words folds to one closed line between them', async ({ page }) => {
+  // 2026-11-09, the user: "the message should also be auto collapsed ... like send message 1".
+  test.setTimeout(90_000)
+  const panel = await openFoldSession(page)
+  const history = panel.locator('.session-history')
+  await expect(history).toContainText('FOLD_FINAL_TEN the decision is yours.')
+  await expect(history).toContainText('FOLD_WORDS_TEN my pick is C.')
+  const fold = history.locator('[data-testid="turn-fold"]').filter({ hasText: /^Sent 1/ }).last()
+  await expect(fold).toHaveAttribute('data-open', 'false')
+  expect(await history.innerText()).not.toContain('FOLD_SENT_TEN')
+  // In place: after the words, before the words that follow.
+  const words = history.locator('.session-msg-assistant', { hasText: 'FOLD_WORDS_TEN' })
+  const after = history.locator('.session-msg-assistant', { hasText: 'FOLD_FINAL_TEN' })
+  const [w, f, a] = await Promise.all([words.boundingBox(), fold.boundingBox(), after.boundingBox()])
+  expect(w!.y).toBeLessThan(f!.y)
+  expect(f!.y).toBeLessThan(a!.y)
+  await reveal(page, panel, fold)
+  await shot(page, fold, 'words-send-folded')
+  await fold.locator('.tool-run-toggle').first().click()
+  await expect(fold).toHaveAttribute('data-open', 'true')
+  await expect(fold).toContainText('FOLD_SENT_TEN')
+  await expect(history.getByText('FOLD_WORDS_TEN my pick is C.')).toHaveCount(1)
+})
+
 test('a failure folded before an answer says so in the header', async ({ page }) => {
   test.setTimeout(90_000)
   const panel = await openFoldSession(page)
