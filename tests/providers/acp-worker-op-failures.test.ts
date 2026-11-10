@@ -69,7 +69,7 @@ describe('which op failures are turn errors', () => {
     const added = patch.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'))
     expect(added.filter((l) => /tmpdir\(|\/tmp\//.test(l) && /model_catalog|walnut-codex-models|const file/.test(l))).toEqual([])
     const dist = fs.readFileSync(createRequire(import.meta.url).resolve('@agentclientprotocol/codex-acp/dist/index.js'), 'utf8')
-    expect(dist).toContain('path.join(walnutCatalogDir(os2), `walnut-codex-models-')
+    expect(dist).toContain('const dir = walnutCodexCatalogDir(os2);')
     // Only a catalog that loaded (checked, then renamed into place) is the one put back later.
     const kept = dist.indexOf('walnutCatalog = { file, body }')
     expect(kept).toBeGreaterThan(dist.indexOf('fs.renameSync(tmp, file);'))
