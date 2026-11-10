@@ -98,9 +98,14 @@ test('a refusal that lasts shows its reason and Retry, and Retry loads it', asyn
   const line = page.locator(`[data-testid="mail-group"][data-group-id="${first.id}"]`)
   await expect(line.locator('.mail-inline-error')).toContainText('The mail account needs signing in again', { timeout: 20_000 })
   await expect(line.getByTestId('mail-load-retrying')).toHaveCount(0)
-  const tries = broken.failed()
+  // Count from when the first reads are all in: they go out group by group, and the list reads its
+  // groups a second time as it settles, so a count taken at the first error grew by the reads still
+  // on their way (2026-11-10: 15, then 18, with no retry among them).
+  let tries = -1
+  await expect.poll(() => { const now = broken.failed(); const settled = now === tries; tries = now; return settled },
+    { intervals: [1_500], timeout: 30_000 }).toBe(true)
   await page.waitForTimeout(3_000)
-  expect(broken.failed()).toBe(tries)
+  expect(broken.failed(), 'a refusal is not read again by itself').toBe(tries)
   await shoot(page, SHOTS, 'refused')
   await broken.heal()
   await line.getByTestId('mail-group-retry').click()
