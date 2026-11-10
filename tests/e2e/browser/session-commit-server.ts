@@ -54,7 +54,15 @@ const nodeBin = path.join(root, 'node-bin')
 const shellBin = path.join(root, 'shell-bin')
 for (const d of [toolbox, nodeBin, shellBin]) fs.mkdirSync(d, { recursive: true })
 fs.symlinkSync(process.execPath, path.join(nodeBin, 'node'))
-const PATH = [toolbox, nodeBin, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':')
+// The system dirs hold gh on some machines (GitHub's runners ship it in /usr/bin, 2026-11-10:
+// the nightly run then offered a PR), so the PATH reads mirrors of them that leave gh out.
+const systemBins = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].filter((d) => fs.existsSync(d)).map((dir, i) => {
+  const mirror = path.join(root, `system-bin-${i}`)
+  fs.mkdirSync(mirror, { recursive: true })
+  for (const name of fs.readdirSync(dir)) if (name !== 'gh') fs.symlinkSync(path.join(dir, name), path.join(mirror, name))
+  return mirror
+})
+const PATH = [toolbox, nodeBin, ...systemBins].join(':')
 // The daemon asks `$SHELL -lc` for the user's PATH; a login /bin/sh would add
 // /etc/paths.d (Homebrew, where gh lives). This wrapper answers with PATH above.
 fs.writeFileSync(path.join(shellBin, 'sh'), [
