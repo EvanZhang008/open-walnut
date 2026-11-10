@@ -230,7 +230,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -4129,6 +4129,9 @@ function dispatchCommand(ws, id, cmd) {
     case 'taskdir.prune': return cmdTaskDirPrune(ws, id, cmd);
     case 'taskdir.pruneBuilds': return cmdTaskDirPrune(ws, id, cmd, true);
     case 'taskdir.sizes': return cmdTaskDirSizes(ws, id, cmd);
+    case 'transcript.archive': return cmdTranscriptArchive(ws, id, cmd);
+    case 'taskdir.pruneCaches': return cmdTaskDirPruneCaches(ws, id, cmd);
+    case 'transcript.restore': return cmdTranscriptRestore(ws, id, cmd);
     // A command for a task on another host (host-exec-v1); not bridge- or
     // follower-reachable: only the trusted walnut socket asks. Mirrors daemon-standalone.ts.
     case 'exec.run': case 'exec.read': case 'exec.kill': case 'exec.list': {
@@ -7332,6 +7335,10 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   const resumesTranscript = !!resume || (args.includes('--resume') && !args.includes('--fork-session'));
   const notOurs = ownedSid ? strictStartRefusal(ownedSid, cmd, ownerHome, resumesTranscript) : null;
   if (notOurs) throw notOurs;
+  // An archived transcript comes back plain before the CLI resumes it (transcript-archive.ts).
+  if (ownedSid && resumesTranscript && taskDirCore && typeof taskDirCore.restoreSessionAnywhere === 'function') {
+    await taskDirCore.restoreSessionAnywhere(CLAUDE_PROJECTS_DIRS, ownedSid).catch(() => null);
+  }
   // A start that a stop or a newer supervision request overtook ends here.
   const superseded = () => (!!canStart && !canStart()) || (!!isCurrent && !isCurrent());
   const stopIfSuperseded = () => {
@@ -11955,6 +11962,8 @@ async function cmdFsRead(ws, id, cmd) {
   if (filePath === '~' || filePath.startsWith('~/')) {
     filePath = HOME_DIR + filePath.slice(1);
   }
+  // An archived session's transcript comes back plain first (transcript-archive.ts).
+  await transcriptRestoreForRead(filePath);
 
   try {
     // Regular files ONLY, checked BEFORE open: open() on a FIFO with no writer
@@ -12075,6 +12084,8 @@ async function cmdFsReadBounded(ws, id, cmd) {
   if (filePath === '~' || filePath.startsWith('~/')) {
     filePath = HOME_DIR + filePath.slice(1);
   }
+  // An archived session's transcript comes back plain first (transcript-archive.ts).
+  await transcriptRestoreForRead(filePath);
   if (filePath.includes('..')) return sendError(ws, id, 'fs.readBounded: invalid path (EDENIED)');
   if (!path.isAbsolute(filePath)) return sendError(ws, id, 'fs.readBounded: path must be absolute (EDENIED)');
   try {
@@ -12581,6 +12592,8 @@ async function cmdFsLs(ws, id, cmd) {
   if (dirPath === '~' || dirPath.startsWith('~/')) {
     dirPath = HOME_DIR + dirPath.slice(1);
   }
+  // An archived session's transcript comes back plain first (transcript-archive.ts).
+  await transcriptRestoreForRead(dirPath);
 
   try {
     // detail:true adds per-file size/mtimeMs for the session-changes subagent cache.
@@ -12638,7 +12651,8 @@ async function cmdFsFind(ws, id, cmd) {
       }
     }
     for (const root of roots) await walk(root, 0);
-    sendOk(ws, id, { files: found });
+    // A <sid>.jsonl find also matches an archived <sid>.jsonl.gz: answer it restored, as its plain path.
+    sendOk(ws, id, { files: await transcriptPlainFind(found, name) });
   } catch (err) {
     sendError(ws, id, 'fs.find failed: ' + err.message);
   }
@@ -12651,6 +12665,8 @@ async function cmdFsStat(ws, id, cmd) {
   if (filePath === '~' || filePath.startsWith('~/')) {
     filePath = HOME_DIR + filePath.slice(1);
   }
+  // An archived session's transcript comes back plain first (transcript-archive.ts).
+  await transcriptRestoreForRead(filePath);
 
   try {
     const st = await fs.promises.stat(filePath);
@@ -12685,6 +12701,8 @@ async function cmdFsReadRange(ws, id, cmd) {
   if (filePath === '~' || filePath.startsWith('~/')) {
     filePath = HOME_DIR + filePath.slice(1);
   }
+  // An archived session's transcript comes back plain first (transcript-archive.ts).
+  await transcriptRestoreForRead(filePath);
 
   let fh = null;
   try {
@@ -13362,6 +13380,66 @@ try { pathResolveCore = require(path.join(__dirname, 'path-resolve-core.cjs')); 
 let taskDirCore = null;
 try { taskDirCore = require(path.join(__dirname, 'task-dir-core.cjs')); } catch (err) { taskDirCore = null; }
 const TASK_DIR_ROOT = taskDirCore ? taskDirCore.taskDirRoot(process.env, HOME_DIR) : null;
+// Session history archive (transcript-archive.ts, bundled into the task-dir-core.cjs
+// sidecar): the file commands restore an archived transcript before they read it; an
+// older sidecar without it leaves every path as it is. Keep in sync with daemon-standalone.ts.
+const transcriptArchiveLoaded = () => !!taskDirCore && typeof taskDirCore.archiveTranscripts === 'function';
+function transcriptRestoreForRead(p) {
+  return transcriptArchiveLoaded() ? taskDirCore.restoreForRead(p, CLAUDE_PROJECTS_DIRS).catch(() => {}) : Promise.resolve();
+}
+function transcriptPlainFind(found, name) {
+  return transcriptArchiveLoaded() ? taskDirCore.plainFindResults(found, name).catch(() => found) : Promise.resolve(found);
+}
+let transcriptArchiveBusy = false;
+async function cmdTranscriptArchive(ws, id, cmd) {
+  if (!transcriptArchiveLoaded()) return sendError(ws, id, 'transcript.archive unsupported: task-dir-core sidecar too old');
+  const days = Number(cmd.olderThanDays);
+  if (!Number.isFinite(days) || days < 1) return sendError(ws, id, 'transcript.archive: olderThanDays must be 1 or more');
+  if (transcriptArchiveBusy) return sendOk(ws, id, { busy: true });
+  transcriptArchiveBusy = true;
+  try {
+    const live = new Set();
+    for (const [sid, s] of sessions) if (!s.exitedAt) live.add(sid);
+    const out = await new Promise((resolve) => {
+      execFile('ps', ['-A', '-o', 'args='], { encoding: 'utf-8', timeout: 15000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout || '')));
+    });
+    if (out === null) return sendError(ws, id, 'transcript.archive: the process table could not be read');
+    for (const sid of taskDirCore.liveTranscriptIdsFromPs(out)) live.add(sid);
+    const budgetMs = Number(cmd.budgetMs);
+    const report = await taskDirCore.archiveTranscripts(CLAUDE_PROJECTS_DIRS, {
+      olderThanMs: days * 86400000,
+      isLive: (sid) => live.has(sid),
+      dryRun: cmd.dryRun === true,
+      ...(Number.isFinite(budgetMs) && budgetMs > 0 ? { budgetMs } : {}),
+    });
+    if (report.sessions > 0 || report.failed > 0) logMsg('info', 'transcript archive pass', Object.assign({}, report));
+    sendOk(ws, id, report);
+  } catch (err) {
+    sendError(ws, id, 'transcript.archive failed: ' + err.message);
+  } finally { transcriptArchiveBusy = false; }
+}
+async function cmdTaskDirPruneCaches(ws, id, cmd) {
+  if (!taskDirCore || typeof taskDirCore.pruneHostCaches !== 'function') return sendError(ws, id, 'taskdir.pruneCaches unsupported: task-dir-core sidecar too old');
+  const olderThanMs = Number(cmd.olderThanMs);
+  if (!Number.isFinite(olderThanMs) || olderThanMs < 3600000) return sendError(ws, id, 'taskdir.pruneCaches: olderThanMs must be an hour or more');
+  try {
+    const result = await taskDirCore.pruneHostCaches(taskDirCore.bunTranspilerCacheDirs(process.env, HOME_DIR), olderThanMs);
+    if (result.removedFiles > 0) logMsg('info', 'host caches pruned', Object.assign({}, result));
+    sendOk(ws, id, result);
+  } catch (err) {
+    sendError(ws, id, 'taskdir.pruneCaches failed: ' + err.message);
+  }
+}
+async function cmdTranscriptRestore(ws, id, cmd) {
+  if (!transcriptArchiveLoaded()) return sendError(ws, id, 'transcript.restore unsupported: task-dir-core sidecar too old');
+  const sid = typeof cmd.sessionId === 'string' ? cmd.sessionId : '';
+  if (!sid) return sendError(ws, id, 'transcript.restore: missing sessionId');
+  try {
+    sendOk(ws, id, { path: await taskDirCore.restoreSessionAnywhere(CLAUDE_PROJECTS_DIRS, sid) });
+  } catch (err) {
+    sendError(ws, id, 'transcript.restore failed: ' + err.message);
+  }
+}
 // Fleet secrets sidecar (secrets-core.cjs): the secrets the user shared with this
 // host. 'secrets-v1' is advertised only when it loads. Mirrors daemon-standalone.ts.
 let secretStore = null;
@@ -13589,6 +13667,8 @@ function daemonCapabilities() {
   if (taskDirCore && typeof taskDirCore.pruneTaskDirs === 'function') caps.push('task-dir-prune-v1');
   if (taskDirCore && typeof taskDirCore.pruneTaskBuilds === 'function') caps.push('task-dir-prune-builds-v1');
   if (taskDirCore && typeof taskDirCore.taskDirSizes === 'function') caps.push('task-dir-sizes-v1');
+  if (taskDirCore && typeof taskDirCore.archiveTranscripts === 'function') caps.push('transcript-archive-v1');
+  if (taskDirCore && typeof taskDirCore.pruneHostCaches === 'function') caps.push('host-cache-prune-v1');
   if (hostExec) caps.push('host-exec-v1');
   if (hostExec && hostExec.version >= 2) caps.push('host-exec-v2');
   if (netSupervisor) caps.push('net-v1');

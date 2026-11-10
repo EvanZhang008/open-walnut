@@ -51,6 +51,32 @@ describe('claude transcript', () => {
     expect(scan.buckets.find(b => b.model === 'claude-haiku-5-5')).toMatchObject({ responses: 1, input: 10 });
   });
 
+  it('an archived session (.jsonl.gz, subagents too) costs the same as the plain one and is never restored for it', async () => {
+    const projects = path.join(root, 'projects');
+    const dir = path.join(projects, '-work-acme');
+    await lines(path.join(dir, `${SID}.jsonl`), [
+      assistant('m1', '2026-10-18T10:00:00.000Z', { stop_reason: null, usage: usage({ output_tokens: 5 }) }),
+      assistant('m1', '2026-10-18T10:00:01.000Z'),
+      assistant('m2', '2026-10-18T12:00:00.000Z', { usage: usage({ cache_read_input_tokens: 150_000 }) }),
+      ...Array.from({ length: 80 }, (_, i) => assistant(`f${i}`, '2026-10-18T13:00:00.000Z')),
+    ]);
+    await lines(path.join(dir, SID, 'subagents', 'agent-a.jsonl'), Array.from({ length: 80 }, (_, i) => assistant(`s${i}`, '2026-10-18T11:00:00.000Z', { model: 'claude-haiku-5-5' })));
+    const req = { engine: 'claude', sessionId: SID, cwd: '/work/acme', thresholds: T, projectsDir: projects };
+    const plain = await scanSessionCost(req);
+    const { archiveTranscripts } = await import('../../src/providers/transcript-archive.js');
+    expect((await archiveTranscripts([projects], { olderThanMs: 86_400_000, now: Date.now() + 2 * 86_400_000 })).sessions).toBe(1);
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(path.join(dir, `${SID}.jsonl`))).toBe(false);
+    for (const fresh of [true, false]) {
+      if (fresh) resetSessionCostCachesForTests();
+      const archived = await scanSessionCost(req);
+      expect(archived).toMatchObject({ found: true, files: 2 });
+      const shape = (scan: typeof plain) => scan.buckets.map(b => [b.model, b.band, b.responses, b.output, b.cacheRead]).sort();
+      expect(shape(archived)).toEqual(shape(plain));
+    }
+    expect(existsSync(path.join(dir, `${SID}.jsonl`))).toBe(false);
+  });
+
   it('serves an unchanged transcript from its cache and rescans when it grows', async () => {
     const projects = path.join(root, 'projects');
     const main = path.join(projects, 'p', `${SID}.jsonl`);

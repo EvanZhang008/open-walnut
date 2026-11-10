@@ -32,6 +32,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { log } from '../logging/index.js'
 import { parseSpawnJournal } from '../providers/external-session-scan-core.js'
+import { transcriptSessionId } from '../providers/transcript-archive.js'
 
 /**
  * How long a finished session's capture stays. 2026-11-09: the Mac's streams dir
@@ -59,7 +60,7 @@ export interface StreamRetentionOptions {
   now?: number
 }
 
-/** Collect the basenames of every canonical transcript: projects/<slug>/<id>.jsonl. */
+/** Collect the basenames of every canonical transcript: projects/<slug>/<id>.jsonl (or its archive, named as the plain file). */
 async function canonicalTranscriptNames(claudeProjectsDir: string): Promise<Set<string>> {
   const names = new Set<string>()
   let slugs: string[]
@@ -76,7 +77,9 @@ async function canonicalTranscriptNames(claudeProjectsDir: string): Promise<Set<
       continue // a plain file, or unreadable — not a project dir
     }
     for (const e of entries) {
-      if (e.endsWith('.jsonl')) names.add(e)
+      // An archived transcript (<id>.jsonl.gz, verified when it was made) is a whole copy too.
+      const id = transcriptSessionId(e)
+      if (id) names.add(id + '.jsonl')
     }
   }
   return names

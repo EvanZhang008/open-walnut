@@ -183,14 +183,21 @@ async function claudeFiles(projectsDir: string, sessionId: string, cwd?: string)
     const index = projects.findIndex(p => p === name || (name.length > 200 && p.startsWith(`${name.slice(0, 200)}-`)));
     if (index > 0) projects.unshift(...projects.splice(index, 1));
   }
+  const isFile = (p: string) => lstat(p).then((s) => s.isFile(), () => false);
   for (const project of projects) {
-    const main = path.join(projectsDir, project, `${sessionId}.jsonl`);
-    try { if (!(await lstat(main)).isFile()) continue; } catch { continue; }
+    let main = path.join(projectsDir, project, `${sessionId}.jsonl`);
+    // An archived session (transcript-archive.ts) is read as its archive, never restored for a cost read.
+    if (!(await isFile(main))) {
+      if (!(await isFile(main + '.gz'))) continue;
+      main += '.gz';
+    }
     const files: { path: string; agentId?: string }[] = [{ path: main }];
     const agents = path.join(projectsDir, project, sessionId, 'subagents');
     try {
       for (const entry of await readdir(agents, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push({ path: path.join(agents, entry.name), agentId: entry.name.slice(0, -6) });
+        if (!entry.isFile()) continue;
+        if (entry.name.endsWith('.jsonl')) files.push({ path: path.join(agents, entry.name), agentId: entry.name.slice(0, -6) });
+        else if (entry.name.endsWith('.jsonl.gz')) files.push({ path: path.join(agents, entry.name), agentId: entry.name.slice(0, -9) });
       }
     } catch { /* no subagents */ }
     return files;

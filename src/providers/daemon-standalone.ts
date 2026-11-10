@@ -189,7 +189,7 @@ import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { createDaemonPorts } from './port-scan-core.js'
-import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
+import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, restoreSessionAnywhere, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
 import { createHostMcp } from './host-mcp-core.js'
@@ -2632,6 +2632,9 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'taskdir.prune': return cmdTaskDirPrune(ws, id as number, cmd)
     case 'taskdir.pruneBuilds': return cmdTaskDirPrune(ws, id as number, cmd, true)
     case 'taskdir.sizes': return cmdTaskDirSizes(ws, id as number, cmd)
+    case 'transcript.archive': return cmdTranscriptArchive(ws, id as number, cmd)
+    case 'taskdir.pruneCaches': return cmdTaskDirPruneCaches(ws, id as number, cmd)
+    case 'transcript.restore': return cmdTranscriptRestore(ws, id as number, cmd)
     // A command for a task on another host (host-exec-v1, host-exec-core.ts). NOT in
     // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: it runs anything the user
     // can, so only the trusted walnut socket asks, after the server checked the
@@ -6111,6 +6114,66 @@ function hostWorkNow(): HostWork[] {
 }
 const taskDirBusy = (dir: string, taskId: string) => taskDirInUse(dir, taskId, hostWorkNow())
 
+/**
+ * Session history archive (transcript-archive.ts, capability transcript-archive-v1).
+ * `transcript.archive {olderThanDays, dryRun?, budgetMs?}` compresses this host's
+ * Claude Code sessions untouched for that long, never one a live CLI holds (this
+ * daemon's sessions, and any `claude` process naming it, read from ps once a pass);
+ * one pass at a time. `transcript.restore {sessionId}` brings one back plain.
+ * Keep in sync with daemon-source.ts.
+ */
+let transcriptArchiveBusy = false
+async function cmdTranscriptArchive(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const days = Number(cmd.olderThanDays)
+  if (!Number.isFinite(days) || days < 1) return sendError(ws, id, 'transcript.archive: olderThanDays must be 1 or more')
+  if (transcriptArchiveBusy) return sendOk(ws, id, { busy: true })
+  transcriptArchiveBusy = true
+  try {
+    const live = new Set<string>()
+    for (const [sid, s] of sessions) if (!s.exitedAt) live.add(sid)
+    const ps = await boundedExecFile(
+      (f, a, options, callback) => execFile(f, a, options, (error, stdout) => callback(error, String(stdout ?? ''))),
+      'ps', ['-A', '-o', 'args='], { encoding: 'utf-8' as const, timeout: 15_000, maxBuffer: 64 * 1024 * 1024 },
+    )
+    if (ps.error) return sendError(ws, id, 'transcript.archive: the process table could not be read')
+    for (const sid of liveTranscriptIdsFromPs(ps.stdout)) live.add(sid)
+    const budgetMs = Number(cmd.budgetMs)
+    const report = await archiveTranscripts(CLAUDE_PROJECTS_DIRS, {
+      olderThanMs: days * 86_400_000,
+      isLive: (sid) => live.has(sid),
+      dryRun: cmd.dryRun === true,
+      ...(Number.isFinite(budgetMs) && budgetMs > 0 ? { budgetMs } : {}),
+    })
+    if (report.sessions > 0 || report.failed > 0) logMsg('info', 'transcript archive pass', { ...report })
+    sendOk(ws, id, report)
+  } catch (err) {
+    sendError(ws, id, 'transcript.archive failed: ' + (err as Error).message)
+  } finally { transcriptArchiveBusy = false }
+}
+
+/** Rebuildable tool caches older than `olderThanMs` (host-cache-prune.ts, host-cache-prune-v1). Keep in sync with daemon-source.ts. */
+async function cmdTaskDirPruneCaches(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const olderThanMs = Number(cmd.olderThanMs)
+  if (!Number.isFinite(olderThanMs) || olderThanMs < 3_600_000) return sendError(ws, id, 'taskdir.pruneCaches: olderThanMs must be an hour or more')
+  try {
+    const result = await pruneHostCaches(bunTranspilerCacheDirs(process.env, HOME_DIR), olderThanMs)
+    if (result.removedFiles > 0) logMsg('info', 'host caches pruned', { ...result })
+    sendOk(ws, id, result)
+  } catch (err) {
+    sendError(ws, id, 'taskdir.pruneCaches failed: ' + (err as Error).message)
+  }
+}
+
+async function cmdTranscriptRestore(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const sid = typeof cmd.sessionId === 'string' ? cmd.sessionId : ''
+  if (!sid) return sendError(ws, id, 'transcript.restore: missing sessionId')
+  try {
+    sendOk(ws, id, { path: await restoreSessionAnywhere(CLAUDE_PROJECTS_DIRS, sid) })
+  } catch (err) {
+    sendError(ws, id, 'transcript.restore failed: ' + (err as Error).message)
+  }
+}
+
 async function cmdTaskDirRemove(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : []
   const busy = taskDirBusy
@@ -6428,6 +6491,8 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   const resumesTranscript = !!resume || (args.includes('--resume') && !args.includes('--fork-session'))
   const notOurs = ownedSid ? strictStartRefusal(ownedSid, cmd, ownerHome, resumesTranscript) : null
   if (notOurs) throw notOurs
+  // An archived transcript comes back plain before the CLI resumes it (transcript-archive.ts).
+  if (ownedSid && resumesTranscript) await restoreSessionAnywhere(CLAUDE_PROJECTS_DIRS, ownedSid)
   // A start that a stop or a newer supervision request overtook ends here.
   const superseded = () => (!!canStart && !canStart()) || (!!isCurrent && !isCurrent())
   const stopIfSuperseded = () => {
@@ -10290,6 +10355,8 @@ async function cmdFsRead(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   if (filePath === '~' || filePath.startsWith('~/')) {
     filePath = HOME_DIR + filePath.slice(1)
   }
+  // An archived session's transcript comes back plain first (transcript-archive.ts).
+  await restoreForRead(filePath, CLAUDE_PROJECTS_DIRS)
 
   try {
     // Regular files ONLY, checked BEFORE open: open() on a FIFO with no writer
@@ -10412,6 +10479,7 @@ async function cmdFsReadBounded(ws: ServerWebSocket<WsData>, id: number, cmd: Re
   if (filePath === '~' || filePath.startsWith('~/')) {
     filePath = HOME_DIR + filePath.slice(1)
   }
+  await restoreForRead(filePath, CLAUDE_PROJECTS_DIRS)
   if (filePath.includes('..')) return sendError(ws, id, 'fs.readBounded: invalid path (EDENIED)')
   if (!path.isAbsolute(filePath)) return sendError(ws, id, 'fs.readBounded: path must be absolute (EDENIED)')
   try {
@@ -10925,6 +10993,8 @@ async function cmdFsLs(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   if (dirPath === '~' || dirPath.startsWith('~/')) {
     dirPath = HOME_DIR + dirPath.slice(1)
   }
+  // An archived session's transcript comes back plain first (transcript-archive.ts).
+  await restoreForRead(dirPath, CLAUDE_PROJECTS_DIRS)
 
   try {
     // detail:true adds per-file size/mtimeMs (one stat per entry) — used by the
@@ -10982,7 +11052,8 @@ async function cmdFsFind(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       }
     }
     for (const root of roots) await walk(root, 0)
-    sendOk(ws, id, { files: found })
+    // A `<sid>.jsonl` find also matches an archived `<sid>.jsonl.gz`: answer it restored, as its plain path.
+    sendOk(ws, id, { files: await plainFindResults(found, name) })
   } catch (err: unknown) {
     sendError(ws, id, 'fs.find failed: ' + (err as Error).message)
   }
@@ -10995,6 +11066,8 @@ async function cmdFsStat(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   if (filePath === '~' || filePath.startsWith('~/')) {
     filePath = HOME_DIR + filePath.slice(1)
   }
+  // An archived session's transcript comes back plain first (transcript-archive.ts).
+  await restoreForRead(filePath, CLAUDE_PROJECTS_DIRS)
 
   try {
     const st = await fs.promises.stat(filePath)
@@ -11108,6 +11181,8 @@ async function cmdFsReadRange(ws: ServerWebSocket<WsData>, id: number, cmd: Reco
   if (filePath === '~' || filePath.startsWith('~/')) {
     filePath = HOME_DIR + filePath.slice(1)
   }
+  // An archived session's transcript comes back plain first (transcript-archive.ts).
+  await restoreForRead(filePath, CLAUDE_PROJECTS_DIRS)
 
   let fh: fs.promises.FileHandle | null = null
   try {

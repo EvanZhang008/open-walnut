@@ -25,6 +25,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { parseBashFileOps } from '../core/bash-file-ops.js';
+import { restoreArchivedAt } from './transcript-archive.js';
 
 // ── Public result types (the wire + frontend shape) ──
 
@@ -625,6 +626,10 @@ export async function resolveJsonlPathHostLocal(
   for (const d of dirs) {
     const candidate = path.join(projectsDir, d, `${sessionId}.jsonl`);
     try { await fsp.access(candidate); return candidate; } catch { /* keep scanning */ }
+  }
+  // An archived session (transcript-archive.ts) comes back plain.
+  for (const d of dirs) {
+    if (await restoreArchivedAt(path.join(projectsDir, d), sessionId)) return path.join(projectsDir, d, `${sessionId}.jsonl`);
   }
   return null;
 }

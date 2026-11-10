@@ -129,7 +129,7 @@ export function pickBuildPrunable(
 
 type SweepConn = { host: string; hasCapability?: (c: string) => boolean; send: (cmd: string, p?: Record<string, unknown>, t?: number) => Promise<unknown> }
 
-type SweepRow = { host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned']; buildsPruned?: PruneResult['pruned']; toldSize?: string[] }
+type SweepRow = { host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned']; buildsPruned?: PruneResult['pruned']; toldSize?: string[]; cachesPruned?: { files: number; bytes: number } }
 
 /** True while the disk Walnut's data lives on is low (disk-watermark.ts warn or critical). */
 /** This machine's disk is low: free space under the floor new work already moves away at, or the watermark says so. */
@@ -226,6 +226,13 @@ export async function sweepTaskDirsOnce(deps?: {
         row.buildsPruned = (res?.pruned ?? []).filter((p) => p.builds.length > 0)
         log.session.info('task dir builds pruned', { host: conn.host, pruned: row.buildsPruned, kept: res?.kept ?? [] })
       })
+      // Rebuildable tool caches that never evict (bun's transcompiled files), while this machine's disk is low.
+      if (lowDisk && local && conn.hasCapability?.('host-cache-prune-v1')) await step('pruneCaches', async () => {
+        const res = await conn.send('taskdir.pruneCaches', { olderThanMs: DAY_MS }, 120_000) as { ok?: boolean; error?: string; removedFiles?: number; removedBytes?: number }
+        if (res?.ok === false) throw new Error(res.error || 'taskdir.pruneCaches refused')
+        row.cachesPruned = { files: res?.removedFiles ?? 0, bytes: res?.removedBytes ?? 0 }
+        if ((res?.removedFiles ?? 0) > 0) log.session.info('host caches pruned', { host: conn.host, ...row.cachesPruned })
+      })
       if (lowDisk && conn.host === '__local__' && conn.hasCapability?.('task-dir-sizes-v1')) {
         const { tellOversizeTasks } = await import('./task-dir-size-notice.js')
         const free = deps?.freeBytes !== undefined ? deps.freeBytes : await fsp.statfs(WALNUT_HOME).then((f) => Number(f.bavail) * Number(f.bsize)).catch(() => null)
@@ -236,7 +243,7 @@ export async function sweepTaskDirsOnce(deps?: {
           ...(deps?.orgOn !== undefined ? { orgOn: deps.orgOn } : {}),
         }).catch((err) => { log.session.warn('task dir size check failed', { host: conn.host, error: (err as Error).message }); return [] })
       }
-      if (removable.length > 0 || prunable.length > 0 || buildPrunable.length > 0 || (row.toldSize?.length ?? 0) > 0) results.push(row)
+      if (removable.length > 0 || prunable.length > 0 || buildPrunable.length > 0 || (row.toldSize?.length ?? 0) > 0 || (row.cachesPruned?.files ?? 0) > 0) results.push(row)
     } catch (err) {
       log.session.warn('task dir sweep failed', { host: conn.host, error: (err as Error).message })
     }

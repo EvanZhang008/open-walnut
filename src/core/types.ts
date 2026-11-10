@@ -1728,6 +1728,11 @@ export interface Config {
      *  the user's other ones. Default off (src/core/sessions/request-tag.ts). */
     tag_requests?: boolean;
 
+    /** Days a Claude Code session's history stays as it is: a session nobody touched
+     *  for longer is compressed in place on its host and comes back the moment it is
+     *  opened (src/core/transcript-archive-sweep.ts). Default 60; 0 turns it off. */
+    history_compress_days?: number;
+
     /** Reply STYLE every session starts on: 'rich' lets the model answer in HTML
      *  the console renders natively, 'markdown' keeps replies plain. A session's
      *  own `output_mode` (the composer pill) overrides this; a session that never

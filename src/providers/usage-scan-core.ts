@@ -1,8 +1,9 @@
-import { constants } from 'node:fs';
+import { constants, createReadStream } from 'node:fs';
 import { lstat, open, readdir, realpath, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { setImmediate } from 'node:timers/promises';
+import { createGunzip } from 'node:zlib';
 
 export interface CanonicalUsageRecord {
   responseId: string;
@@ -481,8 +482,49 @@ function parseLine(buf: Buffer, start: number, end: number, diag: UsageScanDiagn
 }
 
 /** Folds the bytes a file gained since the last read (all of it after a rewrite). */
+/**
+ * An archived transcript (`.jsonl.gz`, transcript-archive.ts) read as it is,
+ * through gunzip, never restored for a cost read. An archive never changes, so
+ * one fold of it is the whole file and a later read reuses it.
+ */
+async function foldArchived(state: SessionFoldState, file: LogFile, sessionId: string, diag: UsageScanDiagnostics,
+  pause: () => Promise<void> | undefined, progress: { read: number }): Promise<void> {
+  try {
+    const st = await lstat(file.path);
+    if (!st.isFile()) { diag.skipped_non_regular_files++; return; }
+    diag.files_scanned++;
+    const known = state.files.get(file.path);
+    if (known && known.ino === st.ino && known.offset > 0) { progress.read += known.offset; return; }
+    const entry = { file, ino: st.ino, offset: 0, line: 0, head: '', snapshots: new Map<string, ResponseSnapshot>() };
+    state.files.set(file.path, entry);
+    const gunzip = createGunzip();
+    const source = createReadStream(file.path);
+    source.on('error', (err) => gunzip.destroy(err));
+    source.pipe(gunzip);
+    let rest = Buffer.alloc(0);
+    for await (const chunk of gunzip as AsyncIterable<Buffer>) {
+      progress.read += chunk.length;
+      const buf = rest.length ? Buffer.concat([rest, chunk]) : chunk;
+      const complete = buf.lastIndexOf(NEWLINE) + 1;
+      for (const start of candidateLines(buf, complete)) {
+        const wait = pause();
+        if (wait) await wait;
+        const row = parseLine(buf, start, buf.indexOf(NEWLINE, start), diag);
+        if (row) foldRow(entry, row, sessionId, diag);
+      }
+      entry.offset += complete;
+      rest = Buffer.from(buf.subarray(complete));
+    }
+    if (rest.length && CANDIDATES.some(p => rest.includes(p))) {
+      try { const row: unknown = JSON.parse(rest.toString('utf8')); if (object(row)) foldRow(entry, row, sessionId, diag); } catch { /* a torn last line */ }
+    }
+    entry.offset += rest.length;
+  } catch { diag.unreadable_files++; }
+}
+
 async function foldTail(state: SessionFoldState, file: LogFile, sessionId: string, diag: UsageScanDiagnostics,
   pause: () => Promise<void> | undefined, progress: { read: number }): Promise<void> {
+  if (file.path.endsWith('.jsonl.gz')) return foldArchived(state, file, sessionId, diag, pause, progress);
   let handle: FileHandle | undefined;
   try {
     if (!(await lstat(file.path)).isFile()) { diag.skipped_non_regular_files++; return; }

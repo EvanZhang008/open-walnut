@@ -78,6 +78,9 @@ export async function migrateSessionJsonlForCwd(
   const newSubagentDir = subagentDirPath(sessionId, newCwd);
 
   try {
+    // An archived session (transcript-archive.ts) comes back plain first, so it moves whole.
+    const { restoreArchivedAt } = await import('../providers/transcript-archive.js');
+    await restoreArchivedAt(path.dirname(oldJsonl), sessionId);
     const jsonlResult = await moveIfPresent(oldJsonl, newJsonl);
     let subagentResult: string = 'skipped';
     try {

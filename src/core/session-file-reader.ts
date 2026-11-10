@@ -150,9 +150,12 @@ export async function createFileReader(host?: string): Promise<SessionFileReader
 export async function findLocalJsonlPath(sessionId: string, cwd?: string): Promise<string | null> {
   const projectsDir = localClaudeProjectsDir();
 
+  // A session archived on this machine (transcript-archive.ts) comes back plain here.
+  const { restoreArchivedAt } = await import('../providers/transcript-archive.js');
   if (cwd) {
     const filePath = canonicalJsonlPath(sessionId, cwd);
     if (await fileExists(filePath)) return filePath;
+    if (await restoreArchivedAt(path.dirname(filePath), sessionId)) return filePath;
   }
 
   // Fallback: search all project directories
@@ -161,6 +164,9 @@ export async function findLocalJsonlPath(sessionId: string, cwd?: string): Promi
     for (const dir of dirs) {
       const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`);
       if (await fileExists(filePath)) return filePath;
+    }
+    for (const dir of dirs) {
+      if (await restoreArchivedAt(path.join(projectsDir, dir), sessionId)) return path.join(projectsDir, dir, `${sessionId}.jsonl`);
     }
   } catch (err) {
     log.session.debug('failed to scan projects dir for session', {

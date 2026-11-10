@@ -158,6 +158,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     // session the line is gone (sessions/instruction-notice.ts).
     reply_language: 'the reply language every session\'s prompt carries, built on the Mac',
     idle_compaction: 'the idle compaction runs on the Mac only (sessions/idle-compaction.ts)',
+    history_compress_days: 'the history archive runs on the primary only (transcript-archive-sweep.ts)',
     hints: 'the message hints the Mac composes into each message it delivers (core/hints/)',
   },
   'hosts.*': {

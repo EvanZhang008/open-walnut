@@ -31,6 +31,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { log } from '../../logging/index.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
@@ -39,6 +40,13 @@ import { resolveAgentSearchRun } from '../task-search-agent.js';
 import { ASK_WALNUT_PROJECT, GENERAL_AGENT_ID } from './ask-agent.js';
 import type { SessionProfile, SessionEffort, SessionRecord } from '../types.js';
 import { SEARCH_ASK_TAG } from '../task-junk.js';
+import { isArchivedAt } from '../../providers/transcript-archive.js';
+
+/** The session's transcript is in that cwd's project dir, plain or archived (a resume restores it). */
+function transcriptThere(sessionId: string, cwd: string): boolean {
+  const p = canonicalJsonlPath(sessionId, cwd);
+  return existsSync(p) || isArchivedAt(path.dirname(p), sessionId);
+}
 
 export class AdoptSearchSessionError extends Error {
   statusCode: number;
@@ -139,7 +147,7 @@ async function findExistingSearchAsk(query: string): Promise<AdoptedSearchSessio
       // An archived record is a retired conversation (a failed resume archives
       // one) — reopening it would hand the user a dead session.
       if (!record || record.archived) continue;
-      if (!existsSync(canonicalJsonlPath(sessionId, record.cwd ?? WALNUT_HOME))) continue;
+      if (!transcriptThere(sessionId, record.cwd ?? WALNUT_HOME)) continue;
       return { sessionId, taskId: task.id, reused: true };
     }
   } catch (err) {
@@ -211,7 +219,7 @@ export async function adoptAgentSearchSession(
   // panel now and a first follow-up that dies on "No conversation found".
   const transcriptCwd = [already?.cwd, resolved.cwd, WALNUT_HOME]
     .filter((c): c is string => !!c)
-    .find((c) => existsSync(canonicalJsonlPath(resolved.sessionId, c)));
+    .find((c) => transcriptThere(resolved.sessionId, c));
   if (!transcriptCwd) {
     throw new AdoptSearchSessionError('the AI search session left no transcript', 404, 'no_transcript');
   }

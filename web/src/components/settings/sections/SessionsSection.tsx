@@ -81,6 +81,12 @@ export function SessionsSection({ config, onSave }: Props) {
     (v) => saveSession({ max_idle: v }, 'sessions.max-idle'),
     { rowKey: 'sessions.max-idle', kind: 'number' },
   );
+  // Empty = the server's 60 days; 0 turns the archive off.
+  const historyDays = useCommitField<number | undefined>(
+    config.session?.history_compress_days,
+    (v) => saveSession({ history_compress_days: v }, 'sessions.history-compress'),
+    { rowKey: 'sessions.history-compress', kind: 'number', clamp: (v) => (v == null ? v : Math.max(0, Math.round(v))) },
+  );
   const idleCompact = useOptimisticSetting<boolean>(
     config.session?.idle_compaction?.enabled !== false,
     (v) => saveIdleCompaction({ enabled: v }, 'sessions.idle-compaction'),
@@ -155,6 +161,17 @@ export function SessionsSection({ config, onSave }: Props) {
           htmlFor="max-idle"
           error={maxIdle.error}
           control={<NumberInput id="max-idle" field={maxIdle.inputProps} placeholder="30" min={0} unit="sessions" />}
+        />
+      </SettingsGroup>
+
+      <SettingsGroup heading="History">
+        <SettingsRow
+          anchor="history-compress-row"
+          label="Compress session history after"
+          help="A Claude Code session nobody opened for this many days is compressed in place on its machine, to about a third of its size. Opening it in Walnut brings it back in a moment, nothing is lost. Empty uses 60 days, 0 never compresses. Claude Code's own session list in a terminal shows a compressed session again once Walnut opened it."
+          htmlFor="history-compress"
+          error={historyDays.error}
+          control={<NumberInput id="history-compress" field={historyDays.inputProps} unit="days" placeholder="60" min={0} />}
         />
       </SettingsGroup>
 

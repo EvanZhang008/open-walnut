@@ -95,6 +95,8 @@ SOURCES=(
   src/providers/port-scan-core.ts
   src/providers/task-dir-core.ts
   src/providers/task-dir-sizes.ts
+  src/providers/transcript-archive.ts
+  src/providers/host-cache-prune.ts
   src/lib/task-dir.ts
   src/providers/host-exec-core.ts
   src/providers/host-exec-line.ts

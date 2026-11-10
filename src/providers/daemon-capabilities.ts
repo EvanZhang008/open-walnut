@@ -516,6 +516,20 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // while this machine's disk is low and tells an open task whose own folder is
   // over the limit (src/core/task-dir-size-notice.ts). Sidecar-gated in the source twin.
   'task-dir-sizes-v1',
+  // 'transcript-archive-v1' — the session history archive (transcript-archive.ts):
+  // `transcript.archive {olderThanDays, dryRun?, budgetMs?}` compresses this host's
+  // Claude Code sessions untouched that long (never one a live CLI holds) and
+  // `transcript.restore {sessionId}` brings one back; every file command (fs.read,
+  // fs.readRange, fs.readBounded, fs.stat, fs.ls, fs.find) and a resume restore an
+  // archived session first, so a reader never sees the difference. The server's
+  // sweep asks only a daemon with it (src/core/transcript-archive-sweep.ts).
+  // Sidecar-gated in the source twin.
+  'transcript-archive-v1',
+  // 'host-cache-prune-v1' — `taskdir.pruneCaches {olderThanMs}`: files of bun's
+  // runtime transpiler cache older than that (host-cache-prune.ts), a cache that
+  // never evicts. The server asks only its own machine, while its disk is below
+  // the floor (src/core/task-dir-sweep.ts). Sidecar-gated in the source twin.
+  'host-cache-prune-v1',
   // 'host-exec-v1' — a command for a task on another host (host-exec-core.ts):
   // `exec.run {jobId, taskId, command | argv, cwd, timeoutMs, background}` runs it
   // under the user's login shell (its process group killed at the deadline: 10 min,

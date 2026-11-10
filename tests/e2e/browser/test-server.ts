@@ -22,6 +22,7 @@ import { REVIEW_MIXED_SESSION } from './threads-review-fixture'
 // Kanban specs: old completions and a 3 day stall no route can backdate (board-kanban-fixture.ts).
 import { kanbanSeedTasks } from './board-kanban-seed'
 import { chatEarlierSessionRecords, writeChatEarlierFiles } from './chat-earlier-fixture'
+import { archivedHistoryRecord, archivedHistoryTask, writeArchivedHistory } from './archived-history-fixture'
 import { GIT_GLANCE_SESSION, gitGlanceDemoIdPair, gitGlanceJsonl, gitGlanceRecord, gitGlanceTask, writeGitGlanceDemo, writeGitGlanceRepo } from './git-glance-fixture'
 // Transcript past the full read's byte ceiling (whale-history.spec.ts).
 import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
@@ -1278,6 +1279,7 @@ await fs.writeFile(
         subtasks: [],
       },
       gitGlanceTask(new Date().toISOString()),
+      archivedHistoryTask(new Date().toISOString()),
       ...gitGlanceDemo.map((d) => d.task),
       ...gitGlanceDemoIdPair(new Date().toISOString()),
       {
@@ -2974,6 +2976,8 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
       await fs.writeFile(path.join(dir, `${d.sessionId}.jsonl`), d.jsonl)
     }
   }
+  // A session whose history the archive already compressed (archived-history-fixture.ts).
+  await writeArchivedHistory(tmpBase)
   const controllerPath = path.join(vscodeFixtureRoot, 'sync-controller.go')
   const controllerContent = await fs.readFile(controllerPath, 'utf8')
   await fs.writeFile(
@@ -4085,6 +4089,7 @@ await fs.writeFile(
         title: 'Send waits for dictation fixture session 2',
       },
       gitGlanceRecord(sessionFixtureNow, gitGlanceRoot),
+      archivedHistoryRecord(tmpBase),
       ...gitGlanceDemo.map((d) => d.record),
       {
         claudeSessionId: 'pw-changed-session',
