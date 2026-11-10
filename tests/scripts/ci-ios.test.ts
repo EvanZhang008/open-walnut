@@ -45,8 +45,9 @@ function testClasses(target: string): { name: string; file: string; body: string
 }
 
 const SHARD_SCRIPT = path.join(ROOT, 'ios-native/tests/ui/ci-shard.py')
-// Minutes a UI shard's step spends building and installing before its first test (run 42735468568).
-const UI_BUILD_MINUTES = 8
+// Minutes a UI shard's step spends building and installing before its first test: 8 on run
+// 42735468568, 9 to 15 on run 42831643140, whose third shard then ran out of its step.
+const UI_BUILD_MINUTES = 15
 type ShardPlan = { shards: number; skipped: string[]; legs: { shard: number; seconds: number; classes: string[] }[] }
 
 /** The number of UI shards the ios matrix runs. */
@@ -153,7 +154,7 @@ describe('the iOS job in ci.yml', () => {
     // A job past its timeout-minutes is cancelled, and a cancelled job runs no failure() step.
     const ui = job.steps.find((s) => s.if === "matrix.layer == 'ui'" && s.run?.includes('run-ui-tests.sh'))!
     const stepLimit = ui['timeout-minutes']!
-    // The step builds first (about 8 minutes on run 42735468568), then runs its shard's tests,
+    // The step builds first (up to 15 minutes on run 42831643140), then runs its shard's tests,
     // which a slow runner may stretch by half. When a shard outgrows that, add a shard.
     const longest = Math.max(...shardPlan(uiShards()).legs.map((l) => l.seconds)) / 60
     expect(UI_BUILD_MINUTES + 1.5 * longest, `the longest UI shard (${longest.toFixed(1)} min of tests) no longer fits its step: add a UI shard to the ios matrix`).toBeLessThanOrEqual(stepLimit)
@@ -418,8 +419,8 @@ describe('the UI shards of the iOS job', () => {
   })
 
   it('holds two macOS runners on a push, as one UI leg did, and every leg on a pull request', () => {
-    expect(job.strategy?.['max-parallel']).toBe("${{ github.event_name == 'push' && 2 || 4 }}")
-    expect(job.strategy!.matrix.include).toHaveLength(4)
+    expect(job.strategy?.['max-parallel']).toBe("${{ github.event_name == 'push' && 2 || 5 }}")
+    expect(job.strategy!.matrix.include).toHaveLength(5)
   })
 })
 
