@@ -184,7 +184,7 @@ import { IslandHostContext, type IslandHost } from '@/components/chat/island-hos
 import { MessageAboutContext } from './message-about';
 import { dropSavedColumn } from '@/utils/layout-record';
 import { useTreeSplit } from '@/hooks/useTreeSplit';
-import { answeringPages, type NavRetarget } from '@/utils/tree-split-state';
+import { answeringPages, paneColumns, type NavRetarget } from '@/utils/tree-split-state';
 import { siblingRows } from '@/utils/tree-sibling';
 import { TreeSiblingDivider } from './TreeSiblingDivider';
 import { ThreadPathBar } from './ThreadPathBar';
@@ -2394,7 +2394,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     if (chatColWidth === undefined && !treePanes) return undefined;
     return {
       ...(chatColWidth !== undefined ? { width: chatColWidth, flex: `0 0 ${chatColWidth}` } : {}),
-      ...(treePanes ? { ['--tree-panes' as string]: String(treePanes) } : {}),
+      ...(treePanes ? { ['--tree-panes' as string]: String(treePanes), ['--tree-cols' as string]: paneColumns(treePanes) } : {}),
       ...(siblingTop ? { ['--tree-sibling-top' as string]: siblingTop } : {}),
     } as CSSProperties;
   }, [chatColWidth, treePanes, siblingTop]);

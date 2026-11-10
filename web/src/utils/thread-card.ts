@@ -248,6 +248,18 @@ export interface PassageMarkSpec {
   draft?: true;
 }
 
+/**
+ * Each mark wearing its question's state, the one rule of both views (Tree Mode
+ * and Conversation Mode paint the same few state colours, never a hue per
+ * branch: 2026-11-10). An Ask not sent yet is waiting; a question with no state
+ * keeps the plain paint.
+ */
+export function withMarkStates<M extends { key: string; draft?: boolean; state?: ThreadMarkState }>(
+  marks: readonly M[], states: ReadonlyMap<string, ThreadMarkState>,
+): M[] {
+  return marks.map((m) => (m.draft ? { ...m, state: 'waiting' as const } : states.has(m.key) ? { ...m, state: states.get(m.key) } : m));
+}
+
 /** An Ask not sent yet (ThreadPendingPage's fields the mark needs). */
 export interface UnsentAsk { pageKey: string; parentMsgId: string; quote?: SessionPinnedQuote; title: string }
 

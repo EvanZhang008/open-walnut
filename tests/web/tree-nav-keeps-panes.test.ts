@@ -89,7 +89,7 @@ describe('every via the stack is navigated with is placed', () => {
     for (const via of SLIDE_VIAS) {
       const r = retargetNav({ path: trail, trail, panes: 3, room: 3, toPath: trail.slice(0, 3), via })
       expect(r, via).toBeNull()
-      expect(paneCount({ cap: 3, width: 1400, pathLength: 3 })).toBe(3)
+      expect(paneCount({ cap: 2, width: 1400, pathLength: 3 })).toBe(2)
     }
   })
 

@@ -8,8 +8,7 @@
  * focus rings and reduced motion. Tokens only from globals.css variables.
  */
 
-/* ── Per-depth hue lightness (spec 5.1). One branch = one hue, so depth is told
-   apart by lightness: light 45/55/65/75, dark reversed 75/65/55/45. ── */
+/* ── Depth tokens (spec 5.1; the lightness steps are kept for older rules). ── */
 :root {
   --thread-l-1: 45%;
   --thread-l-2: 55%;
@@ -42,16 +41,22 @@
   }
 }
 
-/* Any element carrying a depth level resolves --thread-l; set --thread-hue on
-   it (or an ancestor) and read --thread-color / --thread-color-solid. */
+/* Any element carrying a depth level reads --thread-color / --thread-color-solid:
+   one neutral, the theme's muted text, deeper levels a little lighter. No hue per
+   branch (2026-11-10, the user: "every line color is different not necessary,
+   keep it simple, few standard colors like conversation mode"); the page being
+   worked on wears the accent (its quote head, the path bar's R badge). A
+   question's state colours its passage mark, as in Conversation Mode.
+   tests/web/tree-mode-colors-guard.test.ts fails on a stylesheet that reads a
+   branch hue again. */
 [data-thread-level], .thread-status-dot {
-  --thread-l: var(--thread-l-1);
-  --thread-color: hsl(var(--thread-hue, 280) var(--thread-sat) var(--thread-l) / var(--thread-alpha));
-  --thread-color-solid: hsl(var(--thread-hue, 280) var(--thread-sat) var(--thread-l));
+  --thread-mix: 72%;
+  --thread-color: color-mix(in srgb, var(--fg-muted) var(--thread-mix), transparent);
+  --thread-color-solid: var(--fg-muted);
 }
-[data-thread-level="2"], .thread-status-dot[data-depth="2"] { --thread-l: var(--thread-l-2); }
-[data-thread-level="3"], .thread-status-dot[data-depth="3"] { --thread-l: var(--thread-l-3); }
-[data-thread-level="4"], .thread-status-dot[data-depth="4"] { --thread-l: var(--thread-l-4); }
+[data-thread-level="2"], .thread-status-dot[data-depth="2"] { --thread-mix: 60%; }
+[data-thread-level="3"], .thread-status-dot[data-depth="3"] { --thread-mix: 50%; }
+[data-thread-level="4"], .thread-status-dot[data-depth="4"] { --thread-mix: 42%; }
 
 /* ── Icons: inline SVG, baseline-aligned in both engines ── */
 .thread-icon {

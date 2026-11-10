@@ -70,9 +70,9 @@
   width: 100%;
   padding: 7px 12px;
   border: 0;
-  border-left: 3px solid var(--thread-color-solid);
+  border-left: 3px solid var(--accent);
   border-radius: 0 8px 8px 0;
-  background: hsl(var(--thread-hue, 214) 70% 50% / 0.06);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
   color: var(--fg);
   font: inherit;
   font-size: 13.5px;
@@ -80,7 +80,7 @@
   text-align: left;
   cursor: pointer;
 }
-.thread-quote-head:hover { background: hsl(var(--thread-hue, 214) 70% 50% / 0.11); }
+.thread-quote-head:hover { background: color-mix(in srgb, var(--accent) 11%, transparent); }
 .thread-quote-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .thread-quote-head:focus:not(:focus-visible) { outline: none; }
 .thread-quote-context { color: var(--fg-muted); }
@@ -205,13 +205,10 @@
   background-size: 40% 100%, 100% 100%;
   animation: thread-live-scan 1.6s ease-in-out infinite;
 }
-.thread-live-line[data-hue] {
-  --live-base: hsl(var(--live-hue) 60% 60% / 0.45);
-  --live-band: hsl(var(--live-hue) 80% 42%);
-}
-[data-theme="dark"] .thread-live-line:not([data-hue]) { --live-base: hsl(140 35% 50% / 0.5); --live-band: hsl(140 70% 72%); }
+/* Every answering scan is the state's green, in Tree Mode too (no branch hue). */
+[data-theme="dark"] .thread-live-line { --live-base: hsl(140 35% 50% / 0.5); --live-band: hsl(140 70% 72%); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .thread-live-line:not([data-hue]) { --live-base: hsl(140 35% 50% / 0.5); --live-band: hsl(140 70% 72%); }
+  :root:not([data-theme]) .thread-live-line { --live-base: hsl(140 35% 50% / 0.5); --live-band: hsl(140 70% 72%); }
 }
 @keyframes thread-live-scan {
   0% { background-position: -40% 0, 0 0; }

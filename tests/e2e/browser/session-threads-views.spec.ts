@@ -218,8 +218,12 @@ test.describe('Question stack views', () => {
       if (r.top > hb.y && r.top + r.height < hb.y + hb.height) break
     }
     // C36 (c, d): painted, and a resolved question's mark has the fainter name.
-    expect((await highlightsOver(page, q6)).some((n) => /^thread-mark-\d+$/.test(n))).toBe(true)
-    expect((await highlightsOver(page, densePassage('Q10'))).some((n) => /^thread-mark-done-\d+$/.test(n))).toBe(true)
+    // Tree Mode paints the same few state marks as Conversation Mode, never a
+    // hue per branch (2026-11-10, the user: "keep it simple few standard color").
+    const q6Names = await highlightsOver(page, q6)
+    expect(q6Names.some((n) => /^thread-mark-(?:(?:waiting|live|unread|failed)-)?neutral$/.test(n)), q6Names.join(',')).toBe(true)
+    expect(q6Names.some((n) => /^thread-mark-(?:done-|live-)?\d+$/.test(n)), `no hue mark: ${q6Names.join(',')}`).toBe(false)
+    expect((await highlightsOver(page, densePassage('Q10'))).includes('thread-mark-done-neutral')).toBe(true)
     const alphas = await page.evaluate(() => {
       const out: Record<string, string> = {}
       for (const sheet of Array.from(document.styleSheets)) {
@@ -229,20 +233,18 @@ test.describe('Question stack views', () => {
           // The base (light) rule only: the dark overrides live under
           // [data-theme="dark"] and inside a prefers-color-scheme media block.
           if (!(r instanceof CSSStyleRule) || !r.selectorText.startsWith('::highlight(')) continue
-          const m = r.selectorText.match(/^::highlight\((thread-mark(?:-done)?-214)\)$/)
+          const m = r.selectorText.match(/^::highlight\((thread-mark(?:-done)?-neutral)\)$/)
           if (m) out[m[1]] = r.cssText
         }
       }
       return out
     })
-    // N18: a fill plus a hue underline; N48: the resolved mark is quieter AND a
-    // different kind of mark (a grey fill, a thinner dotted underline).
-    expect(alphas['thread-mark-214']).toMatch(/0\.22/)
-    expect(alphas['thread-mark-214']).toMatch(/underline/)
-    expect(alphas['thread-mark-214']).toMatch(/\b2px\b/)
-    expect(alphas['thread-mark-done-214']).toMatch(/0\.14/)
-    expect(alphas['thread-mark-done-214']).toMatch(/\b1\.5px\b/)
-    expect(alphas['thread-mark-done-214']).toMatch(/dotted/)
+    // N18: a fill plus an underline; N48: the resolved mark is quieter (a grey
+    // fill, its own underline). The state marks of Conversation Mode.
+    expect(alphas['thread-mark-neutral']).toMatch(/0\.15/)
+    expect(alphas['thread-mark-neutral']).toMatch(/underline/)
+    expect(alphas['thread-mark-done-neutral']).toMatch(/0\.12/)
+    expect(alphas['thread-mark-done-neutral']).toMatch(/\b1\.5px\b/)
     const rect = (await passageRects(panel, q6))[0]
     const clip = { x: rect.left, y: rect.top, width: Math.min(120, rect.right - rect.left), height: rect.height }
     const painted = await page.screenshot({ clip })
@@ -285,7 +287,7 @@ test.describe('Question stack views', () => {
     await expectDepth(panel, 1)
     const q11 = densePassage('Q11')
     await centre(page, panel, panel.locator('.session-msg-content', { hasText: q11 }).first())
-    await expect.poll(async () => (await highlightsOver(page, q11)).join(',')).toMatch(/thread-mark-\d+/)
+    await expect.poll(async () => (await highlightsOver(page, q11)).join(',')).toMatch(/thread-mark-(?:[a-z]+-)?neutral/)
     const names = await highlightsOver(page, q11)
     expect(names.some((n) => !n.startsWith('thread-mark')), `pin paint too: ${names.join(',')}`).toBe(true)
     const r11 = (await passageRects(panel, q11))[0]

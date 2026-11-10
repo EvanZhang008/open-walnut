@@ -6,12 +6,13 @@
  * clears it the way the panel's first flow child does), so nothing below it
  * scrolls under the header: the bodies below take no header room
  * (--sp-header-h: 0 for them). Split, the chat column is a grid of
- * --tree-panes columns (2 or 3, set by the panel):
+ * --tree-panes columns (2, or 1 with the sibling page alone; set by the panel,
+ * with --tree-cols: the previous page a third, the current two thirds):
  *
- *   [ chat bar (a view open beside the chat)                ]
- *   [ path bar                                              ]
- *   [ left page | middle page (of three) | body (own page)  ]
- *   [ (timeline + composer each)         | composer         ]
+ *   [ chat bar (a view open beside the chat)       ]
+ *   [ path bar                                     ]
+ *   [ previous page (1/3) | body (own page, 2/3)   ]
+ *   [ (timeline + composer) | composer             ]
  *
  * Single, the chat column stays `display: contents` and the bar is one more
  * flex row of the panel.
@@ -184,7 +185,7 @@
 /* The split */
 .session-panel-chat-col.is-tree-split {
   display: grid !important;
-  grid-template-columns: repeat(var(--tree-panes, 2), minmax(0, 1fr));
+  grid-template-columns: var(--tree-cols, minmax(0, 1fr) minmax(0, 2fr));
   /* chat bar, path bar, the sibling page (none: 0), the page, its composer */
   grid-template-rows: auto auto minmax(0, var(--tree-sibling-top, 0fr)) minmax(0, 1fr) auto;
   flex: 1 1 auto;

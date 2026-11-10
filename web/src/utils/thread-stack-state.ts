@@ -365,6 +365,10 @@ export interface MarkSpec {
   hue: number;
   resolved: boolean;
   title: string;
+  /** Painted like Conversation Mode: by the question's state, never a branch
+   *  hue (2026-11-10, the user: "every line color is different not necessary,
+   *  keep it simple, few standard colors like conversation mode"). */
+  neutral: true;
 }
 
 /** A mark per visible child question with a passage, on the page on screen. */
@@ -383,6 +387,7 @@ export function markSpecsFor(input: Pick<PageModelInput, 'tree' | 'currentKey' |
       hue: child.hue,
       resolved: metaOf(child, input.index)?.status === 'resolved',
       title: displayTitleOf(child, input.index).title,
+      neutral: true,
     });
   }
   return out;

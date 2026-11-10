@@ -102,7 +102,7 @@ import { ThreadCardConversation } from './ThreadCardConversation';
 import { useThreadReviewPane } from './useThreadReviewPane';
 import { ThreadStackMenu } from './ThreadStackMenu';
 import { useThreadCardPlace } from '@/hooks/useThreadCardPlace';
-import { allPassageMarks, cardTurnsOf, hasWords } from '@/utils/thread-card';
+import { allPassageMarks, cardTurnsOf, hasWords, withMarkStates } from '@/utils/thread-card';
 import { blockTagKeys, headsBySeq, isQuestionRow, keysBySeq, parseQuestionTag, questionLabels, questionNumbers, questionSeqOfRow, tagKeyAtBlock, tagKeysOfBlocks, withTagAnchors } from '@/utils/question-tag';
 import { liveAskKeyOf, strictAsksOf } from '@/utils/ask-answer';
 import { splitIndexOf, splitTaggedReplies } from '@/utils/tagged-reply-split';
@@ -4451,16 +4451,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     (p: { msgId: string; quote?: SessionPinnedQuote }) => quotePaint.locatePin(p),
     [quotePaint],
   );
-  // Tree Mode paints the page's child questions in their hue (unchanged by the
-  // mark states); Conversation Mode paints every asked passage by its question's
-  // state (waiting, answering, unread, ...), and a click opens its card.
+  // Both views paint an asked passage by its question's state (waiting,
+  // answering, unread, ...), in the same few colours: Tree Mode the page's child
+  // questions (a click opens the page), Conversation Mode every asked passage (a
+  // click opens its card). No branch hue (2026-11-10).
   const markStates = threadsApi.markStates;
   const unsentAsks = useMemo(() => (stack.pending ? [stack.pending, ...stack.draftPages] : stack.draftPages), [stack.pending, stack.draftPages]);
-  const markSpecs = useMemo(() => (stackMode
+  const markSpecs = useMemo(() => withMarkStates(stackMode
     ? markSpecsFor({ tree: threadTree, currentKey, hiddenKeys: threadsApi.hiddenKeys, index: threadsApi.metaIndex })
     : convMode ? allPassageMarks(threadTree, threadsApi.hiddenKeys, threadsApi.metaIndex, unsentAsks)
-      .map((m) => (m.draft ? { ...m, state: 'waiting' as const } : markStates.has(m.key) ? { ...m, state: markStates.get(m.key) } : m))
-      : NO_MARKS), [stackMode, convMode, threadTree, currentKey, threadsApi.hiddenKeys, threadsApi.metaIndex, markStates, unsentAsks]);
+      : NO_MARKS, markStates), [stackMode, convMode, threadTree, currentKey, threadsApi.hiddenKeys, threadsApi.metaIndex, markStates, unsentAsks]);
   // A question being answered: its mark's line scans until the answer ends.
   const liveMarkKeys = useAnsweringKeys(threadDerived.live);
   const liveLayerRef = useRef<HTMLDivElement | null>(null);

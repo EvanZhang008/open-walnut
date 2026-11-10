@@ -7,8 +7,11 @@
  * (the one its composer and Esc work on). The path bar shows the TRAIL: that
  * path, plus the deeper levels the reader went down to before moving left
  * (Cmd+[ or a segment click), so moving back right (Cmd+]) needs no search.
- * Split, the pages left of it are the levels above it on the path (`Main`
- * included), up to three pages in all; single, the page alone.
+ * Split, the page left of it is the level right above it on the path (its
+ * parent, `Main` for a question on the main conversation): always two pages,
+ * the previous at a third of the width and the current at two thirds
+ * (2026-11-10, the user: "we always show current one and previous one (1/3
+ * size)"); single, the page alone.
  *
  *   Main conversation  >  6 title  >  [L] 6.1 title  >  [R] 6.1.2 title
  *
@@ -19,18 +22,27 @@
 import { ROOT_THREAD_KEY, type ThreadTree } from '@/utils/thread-tree';
 import type { PageLandings } from '@/utils/thread-stack-state';
 
-/** Narrower than this (the chat area, not the window), Tree Mode shows one page: two pages of about 450px read well, two of 340px do not. */
-export const SPLIT_MIN_WIDTH = 900;
-/** From this width (the chat area), three pages fit side by side (about 345px each: the full-screen sheet of a 1440px window is about 1100px). */
-export const THREE_PANES_MIN_WIDTH = 1040;
+/** Narrower than this (the chat area, not the window), Tree Mode shows one page:
+ *  from here the previous page gets at least 200px (a third) and the current 400px.
+ *  A Home column (about 700 to 900px) shows both pages (2026-11-10: under the old
+ *  900px it showed the current page alone). */
+export const SPLIT_MIN_WIDTH = 600;
 /** Narrower than this, the path bar shows titles only on the pages on screen. */
 export const PATH_BAR_NARROW = 720;
-/** The most pages Tree Mode shows side by side. */
-export const MAX_PANES = 3;
+/** The most pages Tree Mode shows side by side: the current one and the one before it. */
+export const MAX_PANES = 2;
+/** The most a stored record may name: builds from 2026-11-05 to 2026-11-10 kept up to three. */
+const STORED_PANES_MAX = 3;
+
+/** The split's grid columns: the previous page a third, the current page two thirds. */
+export function paneColumns(panes: number): string {
+  return panes >= 2 ? 'minmax(0, 1fr) minmax(0, 2fr)' : 'minmax(0, 1fr)';
+}
 
 /**
  * What a panel place keeps (panel-view.ts): how many pages the reader lets the
- * split show (`panes`, 1 to 3: 1 is the one-page view he turned on himself),
+ * split show (`panes`, 1 or 2: 1 is the one-page view he turned on himself by
+ * closing the previous page; an older build's 3 reads as 2),
  * and the trail. `split` is `panes > 1`, written for older builds that read it.
  * A record from before `panes` existed reads as 3: its `split: false` was the
  * old default, not the reader's choice (2026-11-04, the user: a single page "is
@@ -53,14 +65,14 @@ export function isTreeSplitRecord(v: unknown): v is TreeSplitRecord {
   if (!v || typeof v !== 'object') return false;
   const r = v as Record<string, unknown>;
   return typeof r.split === 'boolean' && Array.isArray(r.trail) && r.trail.every((x) => typeof x === 'string')
-    && (r.panes === undefined || (typeof r.panes === 'number' && Number.isInteger(r.panes) && r.panes >= 1 && r.panes <= MAX_PANES))
+    && (r.panes === undefined || (typeof r.panes === 'number' && Number.isInteger(r.panes) && r.panes >= 1 && r.panes <= STORED_PANES_MAX))
     && (r.sibling === undefined || typeof r.sibling === 'boolean')
     && (r.siblingShare === undefined || (typeof r.siblingShare === 'number' && r.siblingShare > 0 && r.siblingShare < 1));
 }
 
 /** How many pages the reader lets the split show (a record without `panes` is an old default). */
 export function paneCap(r: TreeSplitRecord): number {
-  return r.panes ?? MAX_PANES;
+  return Math.min(r.panes ?? MAX_PANES, MAX_PANES);
 }
 
 /** The record with a new cap (`split` follows it for older builds). */
@@ -115,9 +127,7 @@ export function trailHeadsOf(tree: ThreadTree, keys: readonly string[]): string[
 
 /** How many pages fit side by side in a chat area this wide (0 = not measured yet: one). */
 export function roomFor(width: number): number {
-  if (width >= THREE_PANES_MIN_WIDTH) return 3;
-  if (width >= SPLIT_MIN_WIDTH) return 2;
-  return 1;
+  return width >= SPLIT_MIN_WIDTH ? MAX_PANES : 1;
 }
 
 /**

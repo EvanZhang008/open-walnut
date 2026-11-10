@@ -4,17 +4,19 @@
  * Main > 1 > 1.1 > 1.1.1, siblings 2 and 1.2), in the full-screen sheet at
  * 1440x900, with real clicks and keys:
  *
- *  The split shows the last levels of the path side by side, up to three pages
- *  (2026-11-04, the user: "three panels"), the question on screen on the right.
- *  A. Asking a new question: the levels it was asked from beside it, the new
+ *  The split shows two pages side by side: the question on screen on the right
+ *  (two thirds) and the level before it on the path on the left (a third;
+ *  2026-11-10, the user: "we always show current one and previous one (1/3
+ *  size)").
+ *  A. Asking a new question: the level it was asked from beside it, the new
  *     question on the right with its own composer; each page's composer sends
  *     into its own question (the record's anchor and the send's `question` hint).
  *  B. Cmd+[ / Cmd+] (Ctrl elsewhere) slide the pages along the path; the path bar
  *     keeps the deeper levels; a segment's list shows the questions at its level
  *     with their status words, and a pick switches it and cuts the levels after it.
- *  C. Closing the left page shows one page fewer (one page is the view the reader
- *     turned on; Split brings the pages back); closing the right page closes its
- *     level. A chat area narrower than three pages shows two, then one.
+ *  C. Closing the left page shows the page alone (Split, or the next move to
+ *     another page, brings the page before it back); closing the right page
+ *     closes its level. A chat area narrower than 600px shows one page.
  *  The split survives a reload. An Ask from a passage in the LEFT page (an answer
  *  still streaming there) hangs the new question on that page.
  *  What keeps the pages through comments, list picks and turns:
@@ -24,12 +26,10 @@ import { expect, type Locator, type Page } from '@playwright/test'
 import { mainComposer, openThreadsSession, switchView, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { SPLIT_PASSAGES, SPLIT_READY, SPLIT_SESSION, SPLIT_TASK, SPLIT_TITLES, buildSplitSession } from './threads-fixture'
 import {
-  bar, captureSends, hintOf, leftHalf, leftHeader, middlePage, openQuestion, openSheet, pagesOnScreen, rightBody,
+  bar, captureSends, hintOf, leftHalf, leftHeader, openQuestion, openSheet, pagesOnScreen, rightBody,
   rightComposer, rightHeader, segments, selectIn, send, shot, sidePages,
 } from './tree-split-helpers'
 
-const middleComposer = (panel: Locator) => middlePage(panel).locator('textarea.chat-input-textarea')
-const middleHeader = (panel: Locator) => middlePage(panel).locator('.thread-stack-header[data-half="M"]')
 const leftComposer = (panel: Locator) => leftHalf(panel).locator('textarea.chat-input-textarea')
 async function expectPages(panel: Locator, pages: string[]): Promise<void> {
   await expect.poll(() => pagesOnScreen(panel), { timeout: 10_000 }).toEqual(pages)
@@ -83,21 +83,21 @@ test.describe('Tree Mode split screen', () => {
     const sent = captureSends(page)
     const panel = await openSheet(page)
     await openQuestion(panel, SPLIT_TITLES.Q11)
-    // Three levels, three pages: the path bar names each with its place.
+    // Three levels, two pages: the path bar names each with its place.
     await expect(bar(panel)).toBeVisible()
-    expect(await segments(panel)).toEqual(['Main conversation [L]', `1 ${SPLIT_TITLES.Q1} [M]`, `1.1 ${SPLIT_TITLES.Q11} [R]`])
-    await expectPages(panel, ['L Main conversation', 'M 1', 'R 1.1'])
+    expect(await segments(panel)).toEqual(['Main conversation', `1 ${SPLIT_TITLES.Q1} [L]`, `1.1 ${SPLIT_TITLES.Q11} [R]`])
+    await expectPages(panel, ['L 1', 'R 1.1'])
 
     await askHere(page, panel, rightBody(panel), SPLIT_PASSAGES.ASK_Q11)
     // State A: the level it was asked in beside it, its passage on screen there.
-    await expect(middleHeader(panel).locator('.thread-half-name')).toHaveText('1.1')
-    await expect(middleHeader(panel).locator('.thread-half-badge')).toHaveText('M')
-    await expect(middlePage(panel).locator('.session-history')).toContainText(SPLIT_PASSAGES.ASK_Q11)
-    await expect(leftHeader(panel).locator('.thread-half-name')).toHaveText('1')
-    expect(await segments(panel)).toEqual(['Main conversation', `1 ${SPLIT_TITLES.Q1} [L]`, `1.1 ${SPLIT_TITLES.Q11} [M]`, 'New question [R]'])
+    await expect(leftHeader(panel).locator('.thread-half-name')).toHaveText('1.1')
+    await expect(leftHeader(panel).locator('.thread-half-badge')).toHaveText('L')
+    await expect(leftHalf(panel).locator('.session-history')).toContainText(SPLIT_PASSAGES.ASK_Q11)
+    expect(await segments(panel)).toEqual(['Main conversation', `1 ${SPLIT_TITLES.Q1}`, `1.1 ${SPLIT_TITLES.Q11} [L]`, 'New question [R]'])
+    await expectPages(panel, ['L 1.1', 'R New question'])
     await expect(rightComposer(panel)).toBeFocused()
     // Each badge is in its segment's name; only the right page is the current one.
-    await expect(bar(panel).getByRole('button', { name: new RegExp(`${SPLIT_TITLES.Q11} \\(middle page\\)$`) })).toBeVisible()
+    await expect(bar(panel).getByRole('button', { name: new RegExp(`${SPLIT_TITLES.Q11} \\(left page\\)$`) })).toBeVisible()
     await expect(bar(panel).getByRole('button', { name: /New question \(right page\)$/ })).toBeVisible()
     await expect(bar(panel).locator('[aria-current="page"]')).toHaveCount(1)
     await expect(bar(panel).locator('.tree-path-seg[data-role="R"] [aria-current="page"]')).toHaveCount(1)
@@ -110,12 +110,12 @@ test.describe('Tree Mode split screen', () => {
     await expect(rightHeader(panel).locator('.thread-half-name')).toHaveText(/^1\.1\.\d+$/, { timeout: 20_000 })
     const newNum = (await rightHeader(panel).locator('.thread-half-name').textContent())!.trim()
     expect(Number(newNum.split('.')[2])).toBeGreaterThanOrEqual(2)
-    await expect(middlePage(panel).locator('.session-history')).not.toContainText(rightWords)
+    await expect(leftHalf(panel).locator('.session-history')).not.toContainText(rightWords)
     await expect(rightHeader(panel).locator('.thread-status-word')).toHaveText(/Answer/, { timeout: 30_000 })
     await expect(rightComposer(panel)).toHaveAttribute('placeholder', /^Reply in /)
     // A long title's placeholder stays on one line in the light composer.
     expect(await rightComposer(panel).evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true)
-    await expect(middleComposer(panel)).toHaveAttribute('placeholder', `Reply in \u201c${SPLIT_TITLES.Q11}\u201d\u2026`)
+    await expect(leftComposer(panel)).toHaveAttribute('placeholder', `Reply in \u201c${SPLIT_TITLES.Q11}\u201d\u2026`)
     // The new question is filed under the passage of 1.1's answer.
     await expect.poll(async () => (await anchorFor(panel, rightWords))?.parent, { timeout: 20_000 }).toBe(answerOf(headOf(SPLIT_TITLES.Q11)))
     expect((await anchorFor(panel, rightWords))?.quote?.exact).toBe(SPLIT_PASSAGES.ASK_Q11)
@@ -124,33 +124,31 @@ test.describe('Tree Mode split screen', () => {
     await expect(rightHeader(panel).locator('.thread-status-word')).toHaveText('Answered', { timeout: 30_000 })
     await shot(page, 'A', panel)
 
-    // The middle page's composer posts into 1.1, not into the new question.
-    const midWords = `And who reads the binding, split middle ${Date.now()}?`
-    await send(middleComposer(panel), midWords)
-    await expect(middlePage(panel).locator('.session-history')).toContainText(midWords, { timeout: 20_000 })
+    // The left page's composer posts into 1.1, not into the new question.
+    const midWords = `And who reads the binding, split left ${Date.now()}?`
+    await send(leftComposer(panel), midWords)
+    await expect(leftHalf(panel).locator('.session-history')).toContainText(midWords, { timeout: 20_000 })
     await expect(rightBody(panel).locator('.session-history')).not.toContainText(midWords)
     await expect.poll(async () => (await anchorFor(panel, midWords))?.parent, { timeout: 20_000 }).toBe(answerOf(headOf(SPLIT_TITLES.Q1)))
     expect((await anchorFor(panel, midWords))?.quote?.exact).toBe(SPLIT_PASSAGES.Q11)
     expect(hintOf(sent, midWords)).toBe('1.1')
     // A draft typed in one page stays with its question.
     await leftComposer(panel).fill('left page draft')
-    await middleComposer(panel).fill('middle page draft')
     await rightComposer(panel).fill('right page draft')
 
     // A reload keeps the full screen, Tree Mode, the pages and every draft.
     // Each page's draft is saved under its own question (after the composer's debounce).
-    const keys = await Promise.all([leftComposer(panel), middleComposer(panel), rightComposer(panel)].map((b) => b.getAttribute('data-draft-key')))
-    expect(new Set(keys).size).toBe(3)
+    const keys = await Promise.all([leftComposer(panel), rightComposer(panel)].map((b) => b.getAttribute('data-draft-key')))
+    expect(new Set(keys).size).toBe(2)
     await expect.poll(() => page.evaluate((ks) => ks.map((k) => localStorage.getItem(k!)), keys))
-      .toEqual(['left page draft', 'middle page draft', 'right page draft'])
+      .toEqual(['left page draft', 'right page draft'])
     await page.reload()
     // 'load', not 'networkidle': the reloaded page polls, and at a high load it never goes quiet for 500ms.
     await page.waitForLoadState('load')
     const again = page.locator(`.main-page-session-column .session-panel[data-session-id="${SPLIT_SESSION}"]`)
-    await expect(middlePage(again)).toBeVisible({ timeout: 60_000 })
-    await expectPages(again, ['L 1', 'M 1.1', `R ${newNum}`])
+    await expect(leftHalf(again)).toBeVisible({ timeout: 60_000 })
+    await expectPages(again, ['L 1.1', `R ${newNum}`])
     await expect(leftComposer(again)).toHaveValue('left page draft')
-    await expect(middleComposer(again)).toHaveValue('middle page draft')
     await expect(rightComposer(again)).toHaveValue('right page draft')
   })
 
@@ -184,22 +182,24 @@ test.describe('Tree Mode split screen', () => {
   test('B: Cmd+[ / Cmd+] slide the pages, a level list switches a segment and cuts the path', async ({ page }) => {
     const panel = await openSheet(page)
     await openQuestion(panel, SPLIT_TITLES.Q111)
-    await expectPages(panel, ['L 1', 'M 1.1', 'R 1.1.1'])
+    await expectPages(panel, ['L 1.1', 'R 1.1.1'])
     expect(await segments(panel)).toEqual([
-      'Main conversation', `1 ${SPLIT_TITLES.Q1} [L]`, `1.1 ${SPLIT_TITLES.Q11} [M]`, `1.1.1 ${SPLIT_TITLES.Q111} [R]`,
+      'Main conversation', `1 ${SPLIT_TITLES.Q1}`, `1.1 ${SPLIT_TITLES.Q11} [L]`, `1.1.1 ${SPLIT_TITLES.Q111} [R]`,
     ])
     await rightComposer(panel).focus()
     await page.keyboard.press('ControlOrMeta+BracketLeft')
-    await expectPages(panel, ['L Main conversation', 'M 1', 'R 1.1'])
-    // The deeper level stays on the path, unmarked, also after a reload.
+    await expectPages(panel, ['L 1', 'R 1.1'])
+    await page.keyboard.press('ControlOrMeta+BracketLeft')
+    await expectPages(panel, ['L Main conversation', 'R 1'])
+    // The deeper levels stay on the path, unmarked, also after a reload.
     const atEnd = [
-      'Main conversation [L]', `1 ${SPLIT_TITLES.Q1} [M]`, `1.1 ${SPLIT_TITLES.Q11} [R]`, `1.1.1 ${SPLIT_TITLES.Q111}`,
+      'Main conversation [L]', `1 ${SPLIT_TITLES.Q1} [R]`, `1.1 ${SPLIT_TITLES.Q11}`, `1.1.1 ${SPLIT_TITLES.Q111}`,
     ]
     expect(await segments(panel)).toEqual(atEnd)
     await page.reload()
     await page.waitForLoadState('networkidle')
-    await expect(middlePage(panel)).toBeVisible({ timeout: 30_000 })
-    await expect(rightHeader(panel).locator('.thread-half-name')).toHaveText('1.1')
+    await expect(leftHalf(panel)).toBeVisible({ timeout: 30_000 })
+    await expect(rightHeader(panel).locator('.thread-half-name')).toHaveText('1')
     expect(await segments(panel)).toEqual(atEnd)
     // Main is at most the left page: one more Cmd+[ is taken (never the
     // browser's back) and moves nothing: the pages, the path, the page.
@@ -209,9 +209,12 @@ test.describe('Tree Mode split screen', () => {
     expect(await pairTaken(page)).toBe(true)
     await page.waitForTimeout(300)
     expect(await segments(panel)).toEqual(atEnd)
-    await expectPages(panel, ['L Main conversation', 'M 1', 'R 1.1'])
+    await expectPages(panel, ['L Main conversation', 'R 1'])
+    await page.keyboard.press('ControlOrMeta+BracketRight')
+    await expect(rightHeader(panel).locator('.thread-half-name')).toHaveText('1.1')
     await page.keyboard.press('ControlOrMeta+BracketRight')
     await expect(rightHeader(panel).locator('.thread-half-name')).toHaveText('1.1.1')
+    await expectPages(panel, ['L 1.1', 'R 1.1.1'])
 
     // State B: the list of a segment's level, with status words.
     const seg1 = bar(panel).locator('.tree-path-seg').nth(1)
@@ -227,11 +230,14 @@ test.describe('Tree Mode split screen', () => {
     expect(m!.x).toBeGreaterThanOrEqual(0)
     expect(m!.y + m!.height).toBeLessThanOrEqual(900)
     await shot(page, 'B', panel)
-    // Picking the question the segment already shows moves nothing.
+    // Picking the question the segment already shows keeps the path; that level
+    // is off the two pages, so they slide to show it as the left page.
     await menu.locator('.tree-path-menu-item', { hasText: SPLIT_TITLES.Q1 }).click()
     await expect(menu).toHaveCount(0)
-    await page.waitForTimeout(300)
-    await expectPages(panel, ['L 1', 'M 1.1', 'R 1.1.1'])
+    await expectPages(panel, ['L 1', 'R 1.1'])
+    expect(await segments(panel)).toEqual([
+      'Main conversation', `1 ${SPLIT_TITLES.Q1} [L]`, `1.1 ${SPLIT_TITLES.Q11} [R]`, `1.1.1 ${SPLIT_TITLES.Q111}`,
+    ])
     // Tab leaves the list on its caret.
     await seg1.locator('.tree-path-caret').click()
     await expect(menu).toBeVisible()
@@ -248,13 +254,15 @@ test.describe('Tree Mode split screen', () => {
     // A segment on screen only takes the focus; a deeper list switches only its level.
     await openQuestion(panel, SPLIT_TITLES.Q111)
     await bar(panel).locator('.tree-path-seg').nth(2).locator('.tree-path-seg-main').click()
-    await expectPages(panel, ['L 1', 'M 1.1', 'R 1.1.1'])
-    await expect(middleComposer(panel)).toBeFocused()
+    await expectPages(panel, ['L 1.1', 'R 1.1.1'])
+    await expect(leftComposer(panel)).toBeFocused()
     await bar(panel).locator('.tree-path-seg').nth(2).locator('.tree-path-caret').click()
     await expect(menu.locator('.tree-path-menu-heading')).toHaveText('Level 2 \u00b7 questions on 1')
     await menu.locator('.tree-path-menu-item', { hasText: SPLIT_TITLES.Q12 }).click()
     await expect(rightHeader(panel).locator('.thread-half-name')).toHaveText('1.2')
-    expect(await segments(panel)).toEqual(['Main conversation [L]', `1 ${SPLIT_TITLES.Q1} [M]`, `1.2 ${SPLIT_TITLES.Q12} [R]`])
+    // A sibling of the same level: still two pages, its parent on the left.
+    expect(await segments(panel)).toEqual(['Main conversation', `1 ${SPLIT_TITLES.Q1} [L]`, `1.2 ${SPLIT_TITLES.Q12} [R]`])
+    await expectPages(panel, ['L 1', 'R 1.2'])
     // Esc still goes up one level, as before.
     await rightComposer(panel).focus()
     await page.keyboard.press('Escape')
@@ -262,22 +270,16 @@ test.describe('Tree Mode split screen', () => {
     await expectPages(panel, ['L Main conversation', 'R 1'])
   })
 
-  test('C: closing a page; one page only when the reader asks; a narrow chat shows fewer', async ({ page }) => {
+  test('C: closing a page; one page only when the reader asks; a narrow chat shows one', async ({ page }) => {
     const panel = await openSheet(page)
     await openQuestion(panel, SPLIT_TITLES.Q111)
-    await expectPages(panel, ['L 1', 'M 1.1', 'R 1.1.1'])
-    // Close the left page: one page fewer; its level stays on the path; the
-    // focus in its composer moves to the composer that stays.
+    await expectPages(panel, ['L 1.1', 'R 1.1.1'])
+    // Close the left page: one page, the view the reader turned on, every level
+    // on the path; the focus in its composer moves to the composer that stays.
     await leftComposer(panel).focus()
     await leftHeader(panel).getByRole('button', { name: 'Close the left page' }).click()
-    await expectPages(panel, ['L 1.1', 'R 1.1.1'])
-    await expect(rightComposer(panel)).toBeFocused()
-    expect(await segments(panel)).toEqual([
-      'Main conversation', `1 ${SPLIT_TITLES.Q1}`, `1.1 ${SPLIT_TITLES.Q11} [L]`, `1.1.1 ${SPLIT_TITLES.Q111} [R]`,
-    ])
-    // Once more: one page, the view the reader turned on, every level on the path.
-    await leftHeader(panel).getByRole('button', { name: 'Close the left page' }).click()
     await expect(sidePages(panel)).toHaveCount(0)
+    await expect(rightComposer(panel)).toBeFocused()
     expect(await segments(panel)).toEqual([
       'Main conversation', `1 ${SPLIT_TITLES.Q1}`, `1.1 ${SPLIT_TITLES.Q11}`, `1.1.1 ${SPLIT_TITLES.Q111} [only]`,
     ])
@@ -287,21 +289,25 @@ test.describe('Tree Mode split screen', () => {
     await rightComposer(panel).focus()
     await page.keyboard.press('ControlOrMeta+BracketLeft')
     await expect(panel.locator('.thread-stack-header .thread-stack-title')).toHaveText(SPLIT_TITLES.Q11)
+    await expect(sidePages(panel)).toHaveCount(0)
     await shot(page, 'C', panel)
-    // Split again: three pages; close the RIGHT page: its level closes.
+    // Split again: the two pages.
     await page.getByRole('button', { name: 'Split', exact: true }).click()
-    await expectPages(panel, ['L Main conversation', 'M 1', 'R 1.1'])
+    await expectPages(panel, ['L 1', 'R 1.1'])
+    // Close the RIGHT page: its level closes.
     await rightHeader(panel).getByRole('button', { name: 'Close the right page' }).click()
     await expectPages(panel, ['L Main conversation', 'R 1'])
     expect(await segments(panel)).toEqual(['Main conversation [L]', `1 ${SPLIT_TITLES.Q1} [R]`])
 
-    // Narrower: as many pages as fit; too narrow for two: one, with the path
-    // bar and no Split offer; wide again, the pages are back.
+    // Narrower: two pages down to a 600px chat; under it one, with the path bar
+    // and no Split offer; wide again, the pages are back.
     await openQuestion(panel, SPLIT_TITLES.Q111)
-    await expectPages(panel, ['L 1', 'M 1.1', 'R 1.1.1'])
+    await expectPages(panel, ['L 1.1', 'R 1.1.1'])
     await page.setViewportSize({ width: 1280, height: 900 })
     await expectPages(panel, ['L 1.1', 'R 1.1.1'])
-    await page.setViewportSize({ width: 640, height: 900 })
+    await page.setViewportSize({ width: 800, height: 900 })
+    await expectPages(panel, ['L 1.1', 'R 1.1.1'])
+    await page.setViewportSize({ width: 600, height: 900 })
     await expect(sidePages(panel)).toHaveCount(0)
     // One page is the plain page: no sibling above it either.
     await expect(panel.locator('.tree-split-sibling')).toHaveCount(0)
@@ -310,13 +316,14 @@ test.describe('Tree Mode split screen', () => {
     await expect(page.getByRole('button', { name: 'Split', exact: true })).toHaveCount(0)
     await expect(panel.locator('.thread-stack-header .thread-stack-title')).toHaveText(SPLIT_TITLES.Q111)
     await page.setViewportSize({ width: 1440, height: 900 })
-    await expectPages(panel, ['L 1', 'M 1.1', 'R 1.1.1'])
+    await expectPages(panel, ['L 1.1', 'R 1.1.1'])
   })
 
   test('a notice in the corner as the sheet opens takes no page away', async ({ page }) => {
     // 2026-11-09, CI: a notice held the corner (another spec's) when the column went full screen,
     // the sheet moved its left edge past it, and Tree Mode kept the 1037px column's two pages in
     // the 1107px sheet. A pending approval card, for this page only, holds the corner here.
+    // (The width tiers then were two pages and three; the rule keeps holding for two.)
     const now = Date.now()
     await page.route(/\/api\/v1\/approvals(\?|$)/, async (route) => {
       if (route.request().method() !== 'GET') return route.fallback()
@@ -330,7 +337,7 @@ test.describe('Tree Mode split screen', () => {
     await expect(page.getByTestId('approval-card')).toHaveCount(1, { timeout: 15_000 })
     await expect.poll(() => panel.evaluate((el) => parseFloat((el as HTMLElement).style.getPropertyValue('--corner-sheet-inset')) || 0), { timeout: 10_000 }).toBeGreaterThan(0)
     await openQuestion(panel, SPLIT_TITLES.Q111)
-    await expectPages(panel, ['L 1', 'M 1.1', 'R 1.1.1'])
+    await expectPages(panel, ['L 1.1', 'R 1.1.1'])
   })
 
   test('under the task tabs: the path bar sits right below them and a task tab covers both halves', async ({ page, request }) => {
@@ -384,8 +391,7 @@ test.describe('Tree Mode split screen', () => {
     await page.waitForLoadState('networkidle')
     const panel = await openThreadsSession(page, SPLIT_SESSION, SPLIT_TASK, SPLIT_READY, { view: 'stack', pages: 'room' })
     await openQuestion(panel, SPLIT_TITLES.Q11)
-    // A normal session column: as many pages as its width holds (900px a page
-    // pair, 1040px three), with the path bar.
+    // A normal session column: two pages from a 600px chat, else one, with the path bar.
     await expect(bar(panel)).toBeVisible()
     // Measured the way the split measures it (useTreeSplit): the chat column, or the panel while
     // the column shows one page, since then the chat column is `display: contents` (tree-split.css)
@@ -394,7 +400,7 @@ test.describe('Tree Mode split screen', () => {
     // opens beside this one while the split settles is counted.
     const fitNow = () => panel.evaluate((p) => {
       const w = p.querySelector('.session-panel-chat-col')?.getBoundingClientRect().width || p.getBoundingClientRect().width
-      return w >= 1040 ? 3 : w >= 900 ? 2 : 1
+      return w >= 600 ? 2 : 1
     })
     let fit = 0
     await expect.poll(async () => {
@@ -413,8 +419,8 @@ test.describe('Tree Mode split screen', () => {
     await mainComposer(panel).focus()
     expect(await chord()).toBe(true)
     if (fit === 1) await expect(panel.locator('.thread-stack-header .thread-stack-title')).toHaveText(SPLIT_TITLES.Q1)
-    // Two pages slide one level (Main stays at most the left page); three already show Main.
-    else await expect.poll(() => pagesOnScreen(panel)).toEqual(fit === 2 ? ['L Main conversation', 'R 1'] : ['L Main conversation', 'M 1', 'R 1.1'])
+    // Two pages slide one level: Main is the left page now.
+    else await expect.poll(() => pagesOnScreen(panel)).toEqual(['L Main conversation', 'R 1'])
     // Conversation Mode has no path bar, and the same chord stays the browser's.
     await switchView(panel, 'linear')
     await expect(bar(panel)).toHaveCount(0)

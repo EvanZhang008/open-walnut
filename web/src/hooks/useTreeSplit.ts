@@ -1,6 +1,6 @@
 /**
  * Tree Mode's split screen for one session panel (design 4, the path bar): the
- * trail the path bar shows, how many pages sit side by side (one to three), and
+ * trail the path bar shows, how many pages sit side by side (one or two), and
  * the moves (Cmd+[ / Cmd+], a segment click, a pick from a level's list,
  * closing a page). The rules are tree-split-state.ts; the cap and the trail are
  * kept with the panel's view (panel-view.ts), so a reload shows the same pages.
@@ -21,7 +21,7 @@ import { questionLabels } from '@/utils/question-tag';
 import { widthTier } from '@/utils/thread-stack-state';
 import { modeBesideCorner, movedSheet } from '@/components/common/corner-sheet-inset';
 import {
-  MAX_PANES, PATH_BAR_NARROW, SPLIT_MIN_WIDTH, THREE_PANES_MIN_WIDTH, barShown as barShownOf, closePaneMove, isPrefix, levelPickMoves,
+  MAX_PANES, PATH_BAR_NARROW, SPLIT_MIN_WIDTH, barShown as barShownOf, closePaneMove, isPrefix, levelPickMoves,
   paneCap, paneCount, pairMoveTarget, retargetNav, roomFor, segmentRoles, segmentTarget, trailFor, trailHeadsOf, trailKeysOf,
   withPaneCap, type NavRetarget, type SegmentRole, type TreeSplitRecord,
 } from '@/utils/tree-split-state';
@@ -31,7 +31,7 @@ import { SIBLING_MIN_PANEL_HEIGHT, SIBLING_SHARE_DEFAULT, clampSiblingShare, sib
 /** The panel's own composer (the one that stays when the split closes). */
 const MAIN_COMPOSER = '.session-panel-input:not(.tree-split-input) .chat-input-textarea';
 
-const WIDTH_TIERS = [SPLIT_MIN_WIDTH, PATH_BAR_NARROW, THREE_PANES_MIN_WIDTH] as const;
+const WIDTH_TIERS = [SPLIT_MIN_WIDTH, PATH_BAR_NARROW] as const;
 
 export interface UseTreeSplitArgs {
   sessionId: string;

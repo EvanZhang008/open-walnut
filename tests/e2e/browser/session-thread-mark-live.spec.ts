@@ -12,8 +12,8 @@
  * and when the card closes, holds still under reduced motion, and goes away with
  * the live mark paint once the answer lands; a reload mid-answer comes back
  * with the same passage scanning. In Tree Mode: a question answered while its parent page is on screen
- * scans in its own hue, and follows the text when the window narrows and it
- * rewraps. In the Files tab: the same line in
+ * scans in the same green as Conversation Mode (no hue per branch, 2026-11-10),
+ * and follows the text when the window narrows and it rewraps. In the Files tab: the same line in
  * the markdown editor (an overlay re-placed on scroll, hidden under the toolbar
  * or out of sight) and inside the HTML preview's own document (a table cell on
  * a long page that scrolls).
@@ -206,18 +206,19 @@ test.describe('The scanning line under a passage being answered', () => {
     await expect(panel.locator('.thread-card .thread-card-body')).toContainText('processed your message: What drains first?', { timeout: 30_000 })
   })
 
-  test('Tree Mode: a question answered while its parent page is on screen scans in its own hue', async ({ page }) => {
+  test('Tree Mode: a question answered while its parent page is on screen scans in the state colour', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     await page.setViewportSize({ width: 1400, height: 820 })
     const panel = await openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'stack' })
-    const history = panel.locator('.session-history')
+    // The panel's own page (the right one while two pages sit side by side).
+    const history = panel.locator('.session-panel-body .session-history')
     const depth = (n: number) => expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(n), { timeout: 15_000 })
     await centreInHistory(page, panel, TAGGED_PASSAGE)
     const q1 = await passageRects(panel, TAGGED_PASSAGE)
     await page.mouse.click(q1[0].left + 8, q1[0].top + q1[0].height / 2)
     await depth(1)
-    const box = panel.locator('.chat-input-textarea').first()
+    const box = panel.locator('.session-panel-input:not(.tree-split-input) .chat-input-textarea')
     await box.click()
     await box.fill(`${SLOW} And on a cold start?`)
     await box.press('Enter')
@@ -229,12 +230,11 @@ test.describe('The scanning line under a passage being answered', () => {
     await centreInHistory(page, panel, TAGGED_PASSAGE)
     const lines = history.locator('.thread-live-layer .thread-live-line')
     await expect(lines.first()).toBeVisible({ timeout: 15_000 })
-    const hue = await lines.first().getAttribute('data-hue')
-    expect(hue, 'the line takes the question\'s hue').toMatch(/^\d+$/)
-    expect(await hasHighlight(page, `thread-mark-live-${hue}`)).toBe(true)
+    expect(await lines.first().getAttribute('data-hue'), 'no hue per branch').toBeNull()
+    expect(await hasHighlight(page, 'thread-mark-live-neutral')).toBe(true)
     expectUnder(await boxes(lines), await passageRects(panel, TAGGED_PASSAGE))
     await expectScanning(lines.first(), /^thread-live-scan$/)
-    await shot(page, 'tree-hue', (await passageRects(panel, TAGGED_PASSAGE))[0])
+    await shot(page, 'tree-live', (await passageRects(panel, TAGGED_PASSAGE))[0])
     // The window narrows: the text rewraps and the line follows it (no DOM change).
     const wide = await passageRects(panel, TAGGED_PASSAGE)
     await page.setViewportSize({ width: 1100, height: 820 })
@@ -243,7 +243,8 @@ test.describe('The scanning line under a passage being answered', () => {
       expectUnder(await boxes(lines), await passageRects(panel, TAGGED_PASSAGE))
     }).toPass({ timeout: 5_000 })
     await expect(lines).toHaveCount(0, { timeout: 60_000 })
-    expect(await hasHighlight(page, `thread-mark-${hue}`)).toBe(true)
+    // Answered: the mark keeps the state paint (unread until opened, or read).
+    await expect.poll(async () => await hasHighlight(page, 'thread-mark-unread-neutral') || await hasHighlight(page, 'thread-mark-neutral')).toBe(true)
   })
 
   test('Files tab: the markdown editor and the HTML preview scan the asked passage', async ({ page }) => {

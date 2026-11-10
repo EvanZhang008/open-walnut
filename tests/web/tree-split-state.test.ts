@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   answeringPages,
-  CUTTING_VIAS, MAX_PANES, NO_TREE_SPLIT, SPLIT_MIN_WIDTH, THREE_PANES_MIN_WIDTH, askPlacement, barShown, closePaneMove, isPrefix,
+  CUTTING_VIAS, MAX_PANES, NO_TREE_SPLIT, SPLIT_MIN_WIDTH, askPlacement, paneColumns, barShown, closePaneMove, isPrefix,
   isTreeSplitRecord, levelHeading, levelKeys, levelPickMoves, pairChordDir, pairMoveTarget, paneCap, paneCount, readOnlyLandings, retargetNav,
   roomFor, sameTreeSplit, segmentRoles, segmentTarget, splitShown, trailFor, trailHeadsOf, trailKeysOf, withPaneCap,
 } from '@/utils/tree-split-state';
@@ -78,28 +78,38 @@ describe('the trail the path bar shows', () => {
 });
 
 describe('how many pages sit side by side', () => {
-  it('as many as fit, up to the reader\'s cap and the path', () => {
+  it('two pages, the current and the one before it, wherever they fit (2026-11-10)', () => {
+    expect(MAX_PANES).toBe(2);
     expect(roomFor(0)).toBe(1);
     expect(roomFor(SPLIT_MIN_WIDTH - 1)).toBe(1);
     expect(roomFor(SPLIT_MIN_WIDTH)).toBe(2);
-    expect(roomFor(THREE_PANES_MIN_WIDTH - 1)).toBe(2);
-    expect(roomFor(THREE_PANES_MIN_WIDTH)).toBe(3);
-    expect(paneCount({ cap: 3, width: 1400, pathLength: 4 })).toBe(3);
-    expect(paneCount({ cap: 3, width: 1400, pathLength: 2 })).toBe(2);
-    expect(paneCount({ cap: 3, width: 900, pathLength: 4 })).toBe(2);
+    // A Home column (700 to 900px) and the full-screen sheet show both pages, never three.
+    for (const width of [700, 800, 899, 1100, 1460, 2400]) {
+      expect(roomFor(width), String(width)).toBe(2);
+      for (const pathLength of [2, 3, 4, 6]) expect(paneCount({ cap: 2, width, pathLength }), `${width} ${pathLength}`).toBe(2);
+    }
     expect(paneCount({ cap: 1, width: 1400, pathLength: 4 })).toBe(1);
-    expect(paneCount({ cap: 3, width: 1400, pathLength: 1 })).toBe(1);
-    expect(splitShown({ cap: 3, width: SPLIT_MIN_WIDTH, depth: 1 })).toBe(true);
-    expect(splitShown({ cap: 3, width: SPLIT_MIN_WIDTH - 1, depth: 3 })).toBe(false);
-    expect(splitShown({ cap: 3, width: 1400, depth: 0 })).toBe(false);
+    expect(paneCount({ cap: 2, width: 1400, pathLength: 1 })).toBe(1);
+    expect(splitShown({ cap: 2, width: SPLIT_MIN_WIDTH, depth: 1 })).toBe(true);
+    expect(splitShown({ cap: 2, width: SPLIT_MIN_WIDTH - 1, depth: 3 })).toBe(false);
+    expect(splitShown({ cap: 2, width: 1400, depth: 0 })).toBe(false);
     expect(splitShown({ cap: 1, width: 1400, depth: 2 })).toBe(false);
+  });
+  it('the previous page takes a third of the width, the current page two thirds', () => {
+    expect(paneColumns(2)).toBe('minmax(0, 1fr) minmax(0, 2fr)');
+    expect(paneColumns(1)).toBe('minmax(0, 1fr)');
   });
   it('a record from before the cap reads as the most pages (its split:false was the old default, not a choice)', () => {
     expect(paneCap({ split: false, trail: [] })).toBe(MAX_PANES);
     expect(paneCap(NO_TREE_SPLIT)).toBe(MAX_PANES);
     expect(withPaneCap(NO_TREE_SPLIT, 1)).toEqual({ split: false, trail: [], panes: 1 });
-    expect(withPaneCap({ split: false, trail: ['a'] }, 3)).toEqual({ split: true, trail: ['a'], panes: 3 });
+    expect(withPaneCap({ split: false, trail: ['a'] }, 2)).toEqual({ split: true, trail: ['a'], panes: 2 });
     expect(withPaneCap(NO_TREE_SPLIT, 9).panes).toBe(MAX_PANES);
+  });
+  it('a record an older build kept with three pages is still read, as two', () => {
+    const old = { split: true, trail: ['h1'], panes: 3 };
+    expect(isTreeSplitRecord(old)).toBe(true);
+    expect(paneCap(old)).toBe(2);
   });
   it('shows the bar in Tree Mode once there is a level besides Main', () => {
     expect(barShown({ stackMode: true, trailLength: 2 })).toBe(true);
