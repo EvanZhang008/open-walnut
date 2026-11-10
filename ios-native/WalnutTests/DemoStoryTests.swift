@@ -653,4 +653,30 @@ final class DemoStoryTests: XCTestCase {
             XCTAssertGreaterThan(next, c.now, label(c))
         }
     }
+
+    // MARK: - The board
+
+    /// The demo's board as the app first draws it (the default Now filter, the status
+    /// sections on) has a chip for every tier the sample data fills, on every hour of the
+    /// week: Focus, Satellite, Backlog and Parked. Parked's only task is snoozed to its ship
+    /// day, at least a day out, and a tier of snoozed rows keeps its chip (2026-11-10: the
+    /// chip was missing on every day, so the drawer's chip rail test could not find it).
+    func testTheDemoBoardHasAChipForEveryTierOnEveryHour() {
+        for c in everyHourOfTheWeek {
+            let tasks = seed(c).tasks
+            var tierOf: [String: String] = [:]
+            var order: [String: [String]] = [:]
+            for task in tasks.filter(\.pinned).sorted(by: { ($0.pinOrder ?? 0) < ($1.pinOrder ?? 0) }) {
+                let tier = task.focusTier ?? "satellite"
+                tierOf[task.id] = tier
+                order[tier, default: []].append(task.id)
+            }
+            let board = BoardModel.assemble(
+                tasks: tasks.map(\.wire), sessions: [], tierOf: tierOf, tierOrder: order,
+                customTiers: [], dateFilter: BoardFilterPrefs.defaultDateFilter,
+                statusSections: true, now: c.now
+            )
+            XCTAssertEqual(board.rail.compactMap(\.bandId), ["focus", "satellite", "backlog", "wait"], label(c))
+        }
+    }
 }

@@ -1112,13 +1112,30 @@ enum BoardModel {
         // rendered bands, which is what makes "the rail is the tier rail" true by
         // construction — feeding it the rendered bands is what turned it into a list of
         // projects and folders under `By project`.
-        // The WAITING rows set aside above that this query and date filter would show, per
-        // tier. A tier whose every row is waiting keeps its band and chip (the Parked shelf
-        // most of all), exactly like a tier of folded completions, so a reader scoped to it
-        // keeps the scope.
+        // The rows the Waiting / snoozed section holds instead of a band, per tier. A tier
+        // whose every row is there keeps its band and chip (the Parked shelf most of all),
+        // exactly like a tier of folded completions, so a reader scoped to it keeps the scope.
+        //
+        // Without the sections (a live query) that is the WAITING rows set aside above that
+        // the query and date filter would show. With them it is every row the section draws:
+        // the WAITING rows whatever their start date, and the rows "Now" defers because their
+        // start date is still to come. Counting only the admitted WAITING rows dropped the
+        // Parked chip whenever its tasks were snoozed to a later day, which is what a parked
+        // task usually is (2026-11-10: the demo's only Parked task starts on its ship day,
+        // always at least a day out, so its chip was missing on every day).
+        let sectionsHoldRows = statusSections && query.isEmpty
         var waitingByTier: [String: Int] = [:]
-        for held in heldWaiting where admits(held.row, query: query, dateFilter: dateFilter, now: now) {
+        for held in heldWaiting
+        where sectionsHoldRows || admits(held.row, query: query, dateFilter: dateFilter, now: now) {
             waitingByTier[held.tier, default: 0] += 1
+        }
+        if sectionsHoldRows && dateFilter == .now {
+            for id in order {
+                guard let tier = tierById[id], let row = rowById[id],
+                      isDeferred(row, filter: dateFilter, now: now)
+                else { continue }
+                waitingByTier[tier, default: 0] += 1
+            }
         }
         let railBands = tierBands(
             rowById: rowById, pinOrder: pinOrder, tiers: tiers, folders: folders,
@@ -1166,7 +1183,7 @@ enum BoardModel {
 
         // The status sections take their rows out of the bands. Off while a query is live:
         // search shows its own results.
-        let sectioned = statusSections && query.isEmpty
+        let sectioned = sectionsHoldRows
 
         // Nothing to narrow, nothing to re-head and nothing taken out: the rail bands ARE
         // the board.

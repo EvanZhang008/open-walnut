@@ -4,29 +4,25 @@ import XCTest
 /// its left, a task tap lands in its conversation, and "Recently opened" is a page of the
 /// drawer.
 ///
-/// Paired tests: they need a server with a board (`WALNUT_UITEST_SERVER`, through
-/// `ios-native/tests/ui/run-ui-tests.sh`), and they SKIP without one. Point it at an
-/// isolated server, never production: opening a task marks it read, which is a write.
-/// Nothing here completes, creates or deletes a task.
+/// Every launch is in the in-app demo (`DemoMode`): its board, its sample history and its
+/// sessions are what these tests read, and a launch in the demo starts them again from the
+/// sample data. They used to pair with `WALNUT_UITEST_SERVER`, which the runner defaults to a
+/// dead port, so the app showed whatever board an earlier run had left in its cache ("Offline:
+/// tasks are read-only from cache") and a relaunch kept that run's history (2026-11-10). The
+/// demo server lives in the app's memory: nothing here writes to any server.
 final class TasksDrawerUITests: XCTestCase {
+
+    private static let demoURL = "https://demo.walnut.invalid"
+    private static let demoToken = "walnut-demo-token"
 
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
     }
 
-    private func launchPaired() throws -> XCUIApplication {
-        guard
-            let server = ProcessInfo.processInfo.environment["WALNUT_UITEST_SERVER"],
-            let token = ProcessInfo.processInfo.environment["WALNUT_UITEST_TOKEN"],
-            !server.isEmpty, !token.isEmpty, !server.contains(":9/"), !server.hasSuffix(":9")
-        else {
-            throw XCTSkip("no paired server reached the runner (use tests/ui/run-ui-tests.sh)")
-        }
-        print("[uitest] runner server value: \(server)")
-        return UITestLaunch.launch([
-            "-walnut.serverUrl", UITestLaunch.pairedServer(server),
-            "-walnut.deviceToken", token,
+    private func launchDemo() -> XCUIApplication {
+        UITestLaunch.launch([
+            UITestLaunch.serverURLArgument, Self.demoURL, "-walnut.deviceToken", Self.demoToken,
         ])
     }
 
@@ -170,7 +166,7 @@ final class TasksDrawerUITests: XCTestCase {
     /// The whole point of the shape: a board row lands in its conversation, on the tab's
     /// page, with the drawer out of the way; the task's details are the session's title.
     func testABoardRowOpensItsSessionAndTheTitleOpensTheTask() throws {
-        let app = try launchPaired()
+        let app = launchDemo()
         let rows = try openBoard(app)
         guard openSomeSession(app, rows: rows, skipping: []) != nil else {
             throw XCTSkip("no board row near the top has a session to open")
@@ -189,7 +185,7 @@ final class TasksDrawerUITests: XCTestCase {
     // MARK: - Recently opened
 
     func testWhatWasOpenedIsListedNewestFirstAndReopens() throws {
-        let app = try launchPaired()
+        let app = launchDemo()
         let rows = try openBoard(app)
         // The demo's sample history, as every launch of the demo starts it.
         openRecents(app)
@@ -255,7 +251,7 @@ final class TasksDrawerUITests: XCTestCase {
         // the demo reopens nothing: the tab opens on the board. (Outside the demo a launch
         // reopens the newest session and the history survives: `RecentOpensTests`.)
         app.terminate()
-        let again = try launchPaired()
+        let again = launchDemo()
         let tasks = again.buttons["Tasks"]
         XCTAssertTrue(tasks.waitForExistence(timeout: 30))
         tasks.tap()
@@ -272,7 +268,7 @@ final class TasksDrawerUITests: XCTestCase {
     /// A sideways drag on the chip rail scrolls the rail; only a drag elsewhere closes
     /// the drawer.
     func testADragOnTheChipRailDoesNotCloseTheDrawer() throws {
-        let app = try launchPaired()
+        let app = launchDemo()
         _ = try openBoard(app)
         let bar = app.descendants(matching: .any)["board.bandBar"]
         XCTAssertTrue(bar.waitForExistence(timeout: 10), "no chip rail on the board")
@@ -287,7 +283,7 @@ final class TasksDrawerUITests: XCTestCase {
     }
 
     func testTheInlineChipRailStaysVisibleAcrossThePinHandoff() throws {
-        let app = try launchPaired()
+        let app = launchDemo()
         _ = try openBoard(app)
         let window = app.windows.firstMatch
         let filters = app.buttons["board.filters"]
@@ -316,7 +312,7 @@ final class TasksDrawerUITests: XCTestCase {
     }
 
     func testThePinnedChipRailStaysVisibleAfterVerticalAndDiagonalDrags() throws {
-        let app = try launchPaired()
+        let app = launchDemo()
         _ = try openBoard(app)
         let window = app.windows.firstMatch
         let filters = app.buttons["board.filters"]
@@ -380,7 +376,7 @@ final class TasksDrawerUITests: XCTestCase {
     /// the row: a row's leading swipe COMPLETES its task, so a close drag that also
     /// swiped it would complete a task nobody meant to touch.
     func testDraggingTheDrawerShutFromARowLeavesTheRowAlone() throws {
-        let app = try launchPaired()
+        let app = launchDemo()
         let rows = try openBoard(app)
         let row = rows.element(boundBy: 1)
         let ring = app.descendants(matching: .any)["board.ring.\(taskId(of: row))"]
@@ -413,7 +409,7 @@ final class TasksDrawerUITests: XCTestCase {
     /// Over the calendar (a page pushed over the session) the left edge is the page's back
     /// swipe, never the drawer.
     func testTheEdgeSwipeOnTheCalendarGoesBack() throws {
-        let app = try launchPaired()
+        let app = launchDemo()
         _ = try openBoard(app)
         let calendar = app.buttons["tasks.calendar"]
         XCTAssertTrue(calendar.waitForExistence(timeout: 5), "no calendar button on the board")

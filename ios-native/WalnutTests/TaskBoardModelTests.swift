@@ -1557,6 +1557,52 @@ final class TaskBoardModelTests: XCTestCase {
         }
     }
 
+    /// The same holds for a tier whose every row is SNOOZED: under Now a start date still to
+    /// come puts a row under Waiting / snoozed, and its tier keeps its chip and scope whether
+    /// the row is WAITING or not, and however far out the date is (2026-11-10: the demo's
+    /// Parked chip was missing on every day, because its only task starts on a later day).
+    func testATierOfOnlySnoozedRowsKeepsItsChipAndScope() {
+        let day: TimeInterval = 24 * 3600
+        let aheads: [TimeInterval] = [60, 3 * 3600, day, 3 * day, 9 * day]
+        for ahead in aheads {
+            let start = ISO8601DateFormatter().string(from: Self.now.addingTimeInterval(ahead))
+            let tasks = [
+                task("o", title: "open", project: "acme"),
+                task("s", title: "ship", project: "marina", start: start),
+                task("ws", title: "ship later", project: "marina", phase: "WAITING", start: start),
+            ]
+            let tierOf = ["o": "focus", "s": "wait", "ws": "wait"]
+            let order = ["focus": ["o"], "wait": ["s", "ws"]]
+            func board(_ grouping: BoardGrouping, scope: String?, query: String = "") -> BoardAssembly {
+                BoardModel.assemble(
+                    tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order,
+                    customTiers: [], query: query, grouping: grouping, dateFilter: .now,
+                    scope: scope, statusSections: true, now: Self.now
+                )
+            }
+            for grouping in [BoardGrouping.tier, .project] {
+                let label = "\(grouping), \(Int(ahead))s ahead"
+                let whole = board(grouping, scope: nil)
+                XCTAssertEqual(whole.rail.map(\.id), ["__all__", "focus", "wait"], label)
+                XCTAssertEqual(whole.rail.map(\.count), [1, 1, 0], "a snoozed row is no open work (\(label))")
+                XCTAssertEqual(Set(whole.sections.waiting.map(\.id)), ["s", "ws"], label)
+                let scoped = board(grouping, scope: "wait")
+                XCTAssertEqual(scoped.scope, "wait", "the stored scope survives (\(label))")
+                XCTAssertEqual(Set(scoped.sections.waiting.map(\.id)), ["s", "ws"], label)
+                XCTAssertTrue(scoped.bands.isEmpty, "Working holds nothing here (\(label))")
+                // A live query turns the sections off and shows its own results: nothing is
+                // drawn for the snoozed rows then, so they hold no band, as before.
+                XCTAssertFalse(board(grouping, scope: nil, query: "ship").rail.contains { $0.bandId == "wait" }, label)
+            }
+            // Under All a later start is ordinary open work: the row is in its band.
+            let all = BoardModel.assemble(
+                tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order,
+                customTiers: [], dateFilter: .all, statusSections: true, now: Self.now
+            )
+            XCTAssertTrue(all.rail.contains { $0.bandId == "wait" && $0.count == 1 })
+        }
+    }
+
     /// Every row the old footer counted as hidden is now in a section: done in Completed,
     /// WAITING and (under Now) a start date still to come in Waiting / snoozed. Under All a
     /// later start is ordinary open work, as on the web, where only the default Date rule
