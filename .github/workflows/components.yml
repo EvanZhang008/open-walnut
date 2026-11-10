@@ -10,6 +10,9 @@ name: Components
 # bumping its revision, `bun scripts/components/build.ts --write`, committing
 # the new pins, then this. A published asset is never replaced: one already on
 # its release must hold the pinned tar, or the publish fails.
+# A push to main that changes the pins publishes on its own when an archive they
+# name is not out yet (scripts/components-release-ready.mjs), so a commit never
+# pins a download nobody published; release.yml waits for the same check.
 
 on:
   workflow_dispatch:
@@ -19,6 +22,10 @@ on:
         required: false
         type: boolean
         default: false
+  push:
+    branches: [main]
+    paths:
+      - 'src/core/components/manifest-data.ts'
   pull_request:
     paths:
       - 'scripts/components/**'
@@ -30,13 +37,39 @@ permissions:
   contents: read
 
 # A newer check replaces an older one; a publish runs in its own group and is never cancelled.
+# A pending publish is still dropped when a newer one queues behind it; the release gates
+# hold any commit whose archives are not out, and the newer run publishes the newer pins.
 concurrency:
-  group: components-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' && inputs.publish) && 'publish' || 'check' }}
-  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish) }}
+  group: components-${{ github.ref }}-${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && 'publish' || 'check' }}
+  cancel-in-progress: ${{ !(github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
 
 jobs:
+  # A push builds only when a pinned archive is not out yet.
+  plan:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    outputs:
+      publish: ${{ steps.p.outputs.publish }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      # Exit 2 (a manifest it cannot read) fails this job instead of starting a build.
+      - id: p
+        run: |
+          rc=0
+          bun scripts/components-release-ready.mjs || rc=$?
+          case $rc in
+            0) echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
+
   verify:
     name: ${{ matrix.platform }}
+    needs: plan
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.plan.outputs.publish == 'true') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
@@ -74,8 +107,8 @@ jobs:
 
   release:
     name: Attach to the component prereleases
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
-    needs: verify
+    if: ${{ !cancelled() && needs.verify.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.publish) || (github.event_name == 'push' && needs.plan.outputs.publish == 'true')) }}
+    needs: [plan, verify]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
