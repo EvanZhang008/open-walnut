@@ -101,6 +101,9 @@ describe('pricing', () => {
     });
 
     it('keeps Fable 5 at its own $1 cache read and prices Mythos 5.1 like Fable 5.1', () => {
+      const f52 = findPricing('global.anthropic.claude-fable-5-2[1m]')!;
+      expect(f52.pattern).toBe('claude-fable-5-2');
+      expect([f52.input, f52.output, f52.cacheWrite, f52.cacheWrite1h, f52.cacheRead]).toEqual([8.00, 40.00, 10.00, 16.00, 0.20]);
       expect(findPricing('claude-fable-5')!.cacheRead).toBe(1.00);
       expect(findPricing('global.anthropic.claude-fable-5-1')!.cacheRead).toBe(0.25);
       expect(findPricing('claude-mythos-5-1')!.pattern).toBe('claude-mythos-5-1');
@@ -225,6 +228,7 @@ describe('pricing', () => {
 
     it.each([
       ['claude-opus-5-5', 0.212376],
+      ['claude-fable-5-2', 0.406472],
       ['claude-fable-5-1', 0.50809],
       ['gpt-6.1-sol', 0.106188],
       ['gpt-6-astra', 0.57664],
@@ -240,6 +244,7 @@ describe('pricing', () => {
 
     it.each([
       ['claude-opus-5-5', 0.290376],
+      ['claude-fable-5-2', 0.562472],
       ['claude-fable-5-1', 0.70309],
     ])('prices %s one-hour writes from response details', (model, expected) => {
       expect(priceUsage({
@@ -304,6 +309,7 @@ describe('pricing', () => {
 
     it.each([
       ['claude-opus-5-5', ['claude-opus-5.5', 'global.anthropic.claude-opus-5-5-v1:0', 'bedrock/global.anthropic.claude-opus-5.5-v1:0[1m]']],
+      ['claude-fable-5-2', ['claude-fable-5.2', 'global.anthropic.claude-fable-5-2[1m]']],
       ['claude-fable-5-1', ['claude-fable-5.1', 'anthropic/claude-fable-5-1[1m]']],
       ['gpt-6.1-sol', ['gpt-6-1-sol', 'openai.gpt-6.1-sol', 'bedrock/global.openai.gpt-6-1-sol[1m]']],
       ['claude-haiku-5-5', ['claude-haiku-5.5', 'anthropic.claude-haiku-5-5[1m]']],

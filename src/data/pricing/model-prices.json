@@ -1,5 +1,6 @@
 {"source":"litellm","url":"https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json","fetchedAt":"2026-10-23T04:29:37.980Z","models":{"chat-latest":{"provider":"openai","input":5,"output":30,"cacheRead":0.5},
 "claude-fable-5":{"provider":"anthropic","input":10,"output":50,"cacheRead":1,"cacheWrite":12.5,"cacheWrite1h":20},
+"claude-fable-5-2":{"provider":"anthropic","input":8,"output":40,"cacheRead":0.2,"cacheWrite":10,"cacheWrite1h":16},
 "claude-fable-5-1":{"provider":"anthropic","input":10,"output":50,"cacheRead":0.25,"cacheWrite":12.5,"cacheWrite1h":20},
 "claude-haiku-4-5":{"provider":"anthropic","input":1,"output":5,"cacheRead":0.1,"cacheWrite":1.25,"cacheWrite1h":2},
 "claude-haiku-4-5-20251001":{"provider":"anthropic","input":1,"output":5,"cacheRead":0.1,"cacheWrite":1.25,"cacheWrite1h":2},

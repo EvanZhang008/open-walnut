@@ -54,6 +54,7 @@ export interface UsagePrice {
 export const DEFAULT_PRICING: PricingEntry[] = [
   // Public standard/global token rates: https://platform.claude.com/docs/en/about-claude/pricing
   { pattern: 'claude-mythos-5-1',   input: 10.00, output: 50.00, cacheWrite: 12.50, cacheWrite1h: 20.00, cacheRead: 0.25 },
+  { pattern: 'claude-fable-5-2',    input: 8.00,  output: 40.00, cacheWrite: 10.00, cacheWrite1h: 16.00, cacheRead: 0.20 },
   { pattern: 'claude-fable-5-1',    input: 10.00, output: 50.00, cacheWrite: 12.50, cacheWrite1h: 20.00, cacheRead: 0.25 },
   // Fable 5 kept a higher cache-read rate than 5.1.
   { pattern: 'claude-fable-5',      input: 10.00, output: 50.00, cacheWrite: 12.50, cacheWrite1h: 20.00, cacheRead: 1.00 },
@@ -241,7 +242,7 @@ export function priceWithEntry(entry: PricingEntry, params: PriceUsageParams, op
 }
 
 export function priceReconciledUsage(params: PriceUsageParams & { forwardedModel: string | null }): UsagePrice {
-  const published = ['claude-opus-5-5', 'claude-fable-5-1', 'claude-haiku-5-5'];
+  const published = ['claude-opus-5-5', 'claude-fable-5-2', 'claude-fable-5-1', 'claude-haiku-5-5'];
   if (!published.includes(findPricing(params.model)?.pattern ?? '')
     || !params.forwardedModel?.startsWith('global.anthropic.claude-') || !params.model.startsWith('claude-')
     || findPricing(params.forwardedModel)?.pattern !== findPricing(params.model)?.pattern
