@@ -146,6 +146,13 @@ test('one quiet line, no Save, and typing reaches disk on its own', async ({ pag
   // At a 1280 window with the chat open the name is whole, not cut.
   const nameCut = await bar(page).locator('.sfe-crumb.is-last .sfe-crumb-text').evaluate((el) => el.scrollWidth > el.clientWidth + 1)
   expect(nameCut, 'the file name is shown whole').toBe(false)
+  // That pane draws the bar compact: the Terminal dock toggle is its icon, as Preview and Source
+  // are (its word took the name's room on Linux fonts).
+  await expect(bar(page)).toHaveAttribute('data-fit', 'compact')
+  const dock = bar(page).getByTestId('terminal-dock-toggle')
+  await expect(dock).toBeVisible()
+  await expect(dock).toHaveAccessibleName('Terminal')
+  await expect(dock.locator('.sfe-btn-label')).toBeHidden()
   await expect(state(page)).toHaveText('Saved')
   await page.screenshot({ path: `${SHOTS}/2-file-open.png` })
 

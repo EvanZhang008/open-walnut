@@ -526,6 +526,9 @@ html body .sfe-path-suggest.sfe-path-suggest-floating {
 
 /* compact: the arrows and gaps tighten so a usual file name stays whole. */
 .fv-doc-bar[data-fit='compact'] { gap: 4px; padding-right: 6px; }
+/* The Terminal dock toggle is its icon, as Preview and Source are: its word took the room the
+   file's name needs (2026-11-09: a 1280 window with the chat open cut the name on Linux fonts). */
+.fv-doc-bar:not([data-fit='full']) .session-terminal-dock-toggle .sfe-btn-label { display: none; }
 .fv-doc-bar[data-fit='compact'] .sfe-nav-group .sfe-nav-btn { min-width: 22px; padding: 0 2px; }
 .fv-doc-bar[data-fit='compact'] .sfe-crumbs { margin-left: 2px; }
 .fv-doc-bar[data-fit='compact'] .fv-mode-toggle { margin: 0 2px; }

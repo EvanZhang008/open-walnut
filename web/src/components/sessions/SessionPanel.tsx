@@ -3570,6 +3570,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 className={`sfe-btn session-terminal-dock-toggle${terminalDocked ? ' is-on' : ''}`}
                 onClick={terminalDocked ? undockTerminal : () => setTerminalDock((d) => ({ ...d, on: true }))}
                 aria-pressed={terminalDocked}
+                // Its name stays when a narrow file bar draws it as the icon alone (file-doc-bar.css).
+                aria-label="Terminal"
                 title={terminalDocked ? 'Hide the terminal (it keeps running)' : `Show the terminal under ${DOCK_VIEW_LABEL[activeView] ?? 'this view'}`}
                 data-testid="terminal-dock-toggle"
               >{ICON_TERMINAL}<span className="sfe-btn-label">Terminal</span></button>
