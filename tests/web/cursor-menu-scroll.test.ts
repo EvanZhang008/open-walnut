@@ -20,8 +20,10 @@ import path from 'node:path';
 import { rowAnchorOf, scrollMovedRow } from '../../web/src/utils/cursor-menu-scroll';
 
 const ROOT = path.resolve(import.meta.dirname, '../../web/src');
-/** `if (… !scrolled.contains(anchor)) return; close();`: a scroll of the row's pane closes, moved or not. */
-const PANE_ONLY = /!\s*\w+\.contains\(\w+\)\)\s*return;?\s*close\w*\(\)/;
+/** `if (… !scrolled.contains(anchor)) return; close();`: a scroll of the row's pane closes, moved or not.
+ *  Either side may be a property path (`anchor.el`): ContextMenu's sticky-anchor branch had exactly
+ *  that shape, and a `\w+`-only pattern let it through (1a91f2a69, found 2026-11-10). */
+const PANE_ONLY = /!\s*[\w.?]+\.contains\([\w.?]+\)\)\s*return;?\s*close\w*\(\)/;
 
 function fakeRow(rect: { top: number; left: number }) {
   return {
@@ -85,6 +87,15 @@ describe('every cursor-anchored menu judges a scroll by its row', () => {
       'components/tasks/ProjectHeaderMenus.tsx', 'components/tasks/TaskKebabMenu.tsx', 'components/sessions/TaskQuickActions.tsx',
       'components/common/ContextMenu.tsx', 'components/tasks/CursorFlyout.tsx',
     ]));
+  });
+
+  it('the pane-only pattern catches the shapes it guards, property paths included', () => {
+    // The sticky-anchor branch as 1a91f2a69 shipped it: must be caught.
+    expect(PANE_ONLY.test('if (anchor?.el.isConnected && scrolled instanceof Node && !scrolled.contains(anchor.el)) return;\n        close();')).toBe(true);
+    expect(PANE_ONLY.test('if (!pane.contains(row)) return; close();')).toBe(true);
+    expect(PANE_ONLY.test('if (!e.target.contains(this.row)) return;\n closeMenu();')).toBe(true);
+    // A pane check followed by a "did it move" check is the rule, not a breach.
+    expect(PANE_ONLY.test('if (!scrolled.contains(anchor.el)) return;\n if (under && !scrollMovedRow(under, scrolled)) return;\n close();')).toBe(false);
   });
 
   it('no scroll closer decides by "the scrolled pane holds the row" alone', () => {
