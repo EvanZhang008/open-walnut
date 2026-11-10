@@ -148,7 +148,7 @@ describe('every way a Playwright run starts goes through it', () => {
   })
   it('the preload patches it for every Playwright library and every load of the file, beside the silencer', () => {
     const src = pwSilencePreloadSource()
-    expect(src).toMatch(/if \(isPlaywrightCore\(filename\)\) \{ install\(module\.exports\); quietWebkit\(/)
+    expect(src).toMatch(/if \(isPlaywrightCore\(filename\)\) \{ const root = [^;]+; install\(module\.exports\); holdBrowsers\(root\); quietWebkit\(root\)/)
     expect(src).toContain('else if (isWebkitServer(filename)) quietWebkitServer(module.exports);')
   })
   it('the repo silencer every Playwright config imports calls it, even when a runner\'s older preload silenced the pages first', () => {

@@ -30,6 +30,7 @@ import {
 } from './ephemeral-registry.js'
 import { ephemeralContendedIdleTtlMs, ephemeralIdleTtlMs, idleExitRule } from './ephemeral-idle.js'
 import { ephemeralExitLogFile, recordEphemeralExit, type EphemeralExitRule } from './ephemeral-exit-record.js'
+import { machineHold } from '../lib/machine-hold.js'
 import { ownerGone, processStartOf, resolveEphemeralOwner, startOwnerWatch, type EphemeralOwner } from './ephemeral-owner.js'
 import { EPHEMERAL_SLOT_FILE, acquireEphemeralSlot, ephemeralMaxServers, ephemeralSlotDir, ephemeralWaitMs, giveUpLines, releaseSlot, slotWanted, updateSlot, type HeldSlot } from './ephemeral-slots.js'
 import { copyDataSnapshot, dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTriage, stopSnapshotTunnels, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
@@ -64,6 +65,15 @@ const POLL_INTERVAL_MS = 200
  */
 export async function runEphemeralLauncher(): Promise<void> {
   const { WALNUT_HOME } = await import('../constants.js')
+
+  // 0. A machine on hold, or in its quiet night, starts no test server (src/lib/machine-hold.ts;
+  //    2026-11-09: review fixture servers started on a held Mac at night).
+  const held = machineHold()
+  if (held) {
+    console.log(JSON.stringify({ error: true, reason: `The test server did not start: ${held}` }))
+    process.exit(1)
+    return
+  }
 
   // 1. Reap stale dirs from previous runs
   reapStaleEphemeralDirs(WALNUT_HOME)

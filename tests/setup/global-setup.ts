@@ -27,6 +27,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { acquireTestSlot, releaseTestSlot } from './test-gate';
 import { assertTestRuntime } from './runtime-deps';
+import { assertNoMachineHold } from '../../src/lib/machine-hold';
 import { sweepStaleTmpDirs } from './stale-tmp';
 // Shared with runtime-dir-isolation.ts (workers): one name, one sweep rule.
 import { PROD_RUNTIME_DIR, RUNTIME_DIR_PREFIX, isCallerChosenRuntime } from './runtime-dir-choice';
@@ -37,6 +38,10 @@ import { EXEC_GUARD_HOME_PREFIX, formatHit, unattributedHitsSince, unreadHitsOfR
 const RUN_STARTED_MS = Date.now();
 
 export async function setup(): Promise<void> {
+  // A machine on hold, or in its quiet night, starts no test run (src/lib/machine-hold.ts):
+  // every config with this setup, the ones that set no worker budget too (fleet, live).
+  assertNoMachineHold();
+
   // Before anything spawns git: an inherited GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE
   // outranks the `cwd` every git test passes, so the runner and its children would
   // address the launcher's repo (2026-09-20: a stray commit landed on main that way).

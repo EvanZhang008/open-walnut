@@ -30,6 +30,7 @@
  */
 
 import { assertMacBrakes } from './mac-brakes.js'
+import { assertNoMachineHold } from '../../src/lib/machine-hold.js'
 
 /** Hard ceiling — no override may exceed this. */
 const ABSOLUTE_MAX = 2
@@ -38,6 +39,8 @@ const ABSOLUTE_MAX = 2
 export function maxWorkers(): number {
   // A Mac run with a brake off (CI, WALNUT_TEST_WORKERS > 1, --maxWorkers > 1) stops here.
   assertMacBrakes()
+  // A machine on hold, or in its quiet night, starts no vitest run (src/lib/machine-hold.ts).
+  assertNoMachineHold()
   // CI runners are isolated single-purpose machines — no shared-box risk.
   if (process.env.CI) return 4
   const n = Number(process.env.WALNUT_TEST_WORKERS)

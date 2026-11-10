@@ -5,7 +5,8 @@
  * Node process loads (the runner, its workers, a script) adds the page silencer to every browser context, at document start in
  * every frame. Gated on navigator.webdriver, so a person's browser is untouched; a process
  * that never loads playwright-core is not touched. On a Mac, every WebKit browser it starts
- * can never become the frontmost app (src/providers/pw-noactivate-core.ts).
+ * can never become the frontmost app (src/providers/pw-noactivate-core.ts), and a machine on hold
+ * or in its quiet night launches no browser at all (src/lib/machine-hold.ts).
  */
 'use strict';
 const SILENCE_JS = '(function(){if(!(globalThis.navigator&&globalThis.navigator.webdriver))return;' + "(function(){try{var w=globalThis;if(w.__walnutSilent)return;w.__walnutSilent=true;var T={contexts:0,blocked:0,plays:0,speech:0};w.__walnutAudio=T;var R=function(n){var E=w.DOMException;return E?new E('No audio in a test run',n):new Error('No audio in a test run')};var M=w.HTMLMediaElement&&w.HTMLMediaElement.prototype;if(M){var d=Object.getOwnPropertyDescriptor(M,'muted'),ms=d&&d.set;if(d&&d.get&&d.set){Object.defineProperty(M,'muted',{configurable:true,enumerable:d.enumerable,get:d.get,set:function(){ms.call(this,true)}})}var ad=Object.getOwnPropertyDescriptor(M,'autoplay'),as=ad&&ad.set;if(ad&&ad.get&&ad.set){Object.defineProperty(M,'autoplay',{configurable:true,enumerable:ad.enumerable,get:ad.get,set:function(){as.call(this,false)}})}var hold=function(t,e){try{if(ms)ms.call(t,true);else t.muted=true;if(as)as.call(t,false);if(e&&e.type==='play'&&t.pause){T.plays++;t.pause()}}catch(x){}};var q=function(e){var t=e.target;if(t&&M.isPrototypeOf(t))hold(t,e)};var listen=function(n){if(n&&n.addEventListener){n.addEventListener('loadstart',q,true);n.addEventListener('play',q,true);n.addEventListener('volumechange',q,true)}};var seen=w.WeakSet?new w.WeakSet():null;var guard=function(t){if(!t||!M.isPrototypeOf(t)||(seen&&seen.has(t)))return t;if(seen)seen.add(t);hold(t);listen(t);return t};listen(w.document);if(typeof M.play==='function'){M.play=function(){guard(this);T.plays++;try{if(this.pause)this.pause()}catch(e){}return w.Promise.reject(R('NotAllowedError'))}}var lo=M.load;if(typeof lo==='function'){M.load=function(){guard(this);return lo.apply(this,arguments)}}var ks=['src','srcObject'];for(var j=0;j<ks.length;j++){(function(k){var sd=Object.getOwnPropertyDescriptor(M,k);if(!sd||!sd.set)return;var ss=sd.set;Object.defineProperty(M,k,{configurable:true,enumerable:sd.enumerable,get:sd.get,set:function(v){guard(this);ss.call(this,v)}})})(ks[j])}var EP=w.Element&&w.Element.prototype;if(EP){var sa=EP.setAttribute;if(typeof sa==='function'){EP.setAttribute=function(n){if(M.isPrototypeOf(this)){guard(this);if(String(n).toLowerCase()==='autoplay')return}return sa.apply(this,arguments)}}var at=EP.attachShadow;if(typeof at==='function'){EP.attachShadow=function(){var r=at.apply(this,arguments);listen(r);return r}}}var DP=w.Document&&w.Document.prototype;if(DP){var cs=['createElement','createElementNS'];for(var c2=0;c2<cs.length;c2++){(function(k){var f=DP[k];if(typeof f==='function'){DP[k]=function(){return guard(f.apply(this,arguments))}}})(cs[c2])}}var A=w.Audio;if(typeof A==='function'){var SA=function(s){return guard(arguments.length?new A(s):new A())};SA.prototype=A.prototype;w.Audio=SA}}var names=['AudioContext','webkitAudioContext'];for(var i=0;i<names.length;i++){(function(name){var N=w[name];if(typeof N!=='function'||N.__walnutSilent)return;var dl=!!N.prototype&&typeof N.prototype.setSinkId==='function';var S=function(o){T.contexts++;if(!dl){if(/ WalnutVoiceTest$/.test((w.navigator&&w.navigator.userAgent)||''))return new N(o);T.blocked++;throw R('NotSupportedError')}var p={};if(o)for(var k in o)p[k]=o[k];p.sinkId={type:'none'};return new N(p)};S.prototype=N.prototype;S.__walnutSilent=true;if(dl)N.prototype.setSinkId=function(){return w.Promise.resolve()};w[name]=S})(names[i])}var P=w.AudioNode&&w.AudioNode.prototype,D=w.AudioDestinationNode;if(P&&D&&typeof P.connect==='function'){var c=P.connect,z=new WeakMap();P.connect=function(t){var r=Array.prototype.slice.call(arguments,1),x=t instanceof D?t.context:null;if(!x||(w.OfflineAudioContext&&x instanceof w.OfflineAudioContext))return c.apply(this,[t].concat(r));var g=z.get(x);if(!g){g=x.createGain();g.gain.value=0;c.call(g,t);z.set(x,g)}c.apply(this,[g].concat(r));return t}}var S2=w.SpeechSynthesis&&w.SpeechSynthesis.prototype;if(S2&&typeof S2.speak==='function'){S2.speak=function(){T.speech++}}}catch(e){}})();" + '})();';
@@ -43,7 +44,7 @@ if (!globalThis[HOOKED]) {
     if (typeof loadJs === 'function') {
       exts['.js'] = function (module, filename) {
         const result = loadJs.apply(this, arguments);
-        try { if (isPlaywrightCore(filename)) { install(module.exports); quietWebkit(filename.replace(/[\\/](index|lib[\\/]inprocess)\.js$/, '')); } else if (isWebkitServer(filename)) quietWebkitServer(module.exports); } catch (e) {
+        try { if (isPlaywrightCore(filename)) { const root = filename.replace(/[\\/](index|lib[\\/]inprocess)\.js$/, ''); install(module.exports); holdBrowsers(root); quietWebkit(root); } else if (isBrowserTypeServer(filename)) holdBrowserTypes(module.exports); else if (isWebkitServer(filename)) quietWebkitServer(module.exports); } catch (e) {
           console.warn('[pw-silence-preload] could not silence test browsers: ' + (e && e.message));
         }
         return result;
@@ -52,6 +53,53 @@ if (!globalThis[HOOKED]) {
   } catch (e) {
     console.warn('[pw-silence-preload] could not silence test browsers: ' + (e && e.message));
   }
+}
+
+// A held machine, or one in its quiet night, launches no test browser (src/lib/machine-hold.ts).
+function machineHold(home, now) {
+  const fs = require('node:fs'), path = require('node:path');
+  const dir = path.join(home || require('node:os').homedir(), '.config', 'walnut');
+  const hold = path.join(dir, 'hold');
+  if (fs.existsSync(hold)) {
+    let why = '';
+    try { why = fs.readFileSync(hold, 'utf8').split('\n')[0].trim(); } catch (e) {}
+    return 'this machine holds every new test run for now (~/.config/walnut/hold' + (why ? ': ' + why : '') + '). ' +
+      'Run it elsewhere (a remote dev host, a container, CI) or once the hold is lifted.';
+  }
+  const h = (now || new Date()).getHours();
+  if (fs.existsSync(path.join(dir, 'night-quiet')) && (h >= 22 || h < 8)) {
+    return 'this machine runs no test from 22:00 to 08:00 (~/.config/walnut/night-quiet). ' +
+      'Run it elsewhere (a remote dev host, a container, CI) or after 08:00.';
+  }
+  return null;
+}
+/** The deploy's first-paint check (scripts/devprod-render-check.mjs) is no test run: a deploy on a held machine still checks its bundle. */
+function deployCheck() {
+  return /[\\/]scripts[\\/]devprod-render-check\.mjs$/.test(String(process.argv[1] || ''));
+}
+const HELD = Symbol.for('walnut.pwSilence.machineHold');
+/** Every launch of one Playwright library's browser types refuses on a held machine; once per library. */
+function holdBrowserTypes(mod) {
+  const proto = mod && mod.BrowserType && mod.BrowserType.prototype;
+  if (!proto || Object.prototype.hasOwnProperty.call(proto, HELD)) return false;
+  const prepare = proto._prepareToLaunch;
+  if (typeof prepare !== 'function') return false;
+  proto[HELD] = true;
+  proto._prepareToLaunch = function () {
+    const why = deployCheck() ? null : machineHold();
+    if (why) throw new Error('[machine-hold] This browser did not start: ' + why);
+    return prepare.apply(this, arguments);
+  };
+  return true;
+}
+/** Playwright's server-side BrowserType file, in node_modules or Bun's cache. */
+function isBrowserTypeServer(file) {
+  return typeof file === 'string' && /[\\/]playwright-core(@[^\\/]*)?[\\/]lib[\\/]server[\\/]browserType\.js$/.test(file);
+}
+/** The same, from a Playwright library's folder. */
+function holdBrowsers(root) {
+  try { return holdBrowserTypes(require(require('node:path').join(root, 'lib', 'server', 'browserType.js'))); }
+  catch (e) { return false; }
 }
 
 // A Mac WebKit test browser never becomes the frontmost app (src/providers/pw-noactivate-core.ts).
@@ -177,4 +225,4 @@ if (process.versions && process.versions.bun && !globalThis[WORKERS]) {
   }
 }
 
-module.exports = { SILENCE_JS, install, isPlaywrightCore, quietWebkit, quietWebkitServer, isWebkitServer };
+module.exports = { SILENCE_JS, install, isPlaywrightCore, quietWebkit, quietWebkitServer, isWebkitServer, machineHold, holdBrowserTypes, holdBrowsers, isBrowserTypeServer };

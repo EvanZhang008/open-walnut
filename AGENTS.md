@@ -815,6 +815,13 @@ starts it; CI installs Node for it). The fixture servers it tests run on bun lik
 - **Overload wait** — if something else already saturates the box (concurrent vitest,
   Xcode, simulators), it waits rather than piling on, up to 10 minutes, then stops with an
   error and nothing runs. `PW_IGNORE_LOAD=1` skips it.
+- **Machine hold** — a machine with `~/.config/walnut/hold` starts no test run, and one with
+  `~/.config/walnut/night-quiet` none from 22:00 to 08:00 by its own clock (`src/lib/machine-hold.ts`;
+  2026-11-09: review scripts took the lease and started fixture servers on a held Mac at night).
+  Every entry point reads it: every vitest config (`maxWorkers()`, the global setup), every
+  Playwright config and hand-written script (`engageGate`, `perRunWorkers()`, `acquireSync`), the
+  ephemeral test server, and every Playwright browser a Walnut session launches (the silencer
+  preload). The file is the only switch. Ratchet: `tests/setup/machine-hold.test.ts`.
 
 ```bash
 scripts/pw-cleanup.sh status   # browsers / fixture server / isolated daemons / leases

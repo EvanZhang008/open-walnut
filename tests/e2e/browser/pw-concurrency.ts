@@ -34,6 +34,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { assertMacBrakes, realCi } from '../../setup/mac-brakes.js'
+import { assertNoMachineHold } from '../../../src/lib/machine-hold.js'
 import {
   type Capacity,
   capacityVerdict,
@@ -60,6 +61,8 @@ export function perRunWorkers(): number {
   // A Mac run with a brake off (PW_IGNORE_LOAD, PW_NO_GATE, PW_TEST_PORT, CI, more than one
   // worker) stops here, before the gate; and a Mac runs one browser at a time.
   assertMacBrakes()
+  // A machine on hold, or in its quiet night, starts no Playwright run (src/lib/machine-hold.ts).
+  assertNoMachineHold()
   const explicit = Number(process.env.PW_WORKERS)
   if (Number.isFinite(explicit) && explicit > 0) return Math.floor(explicit)
   if (process.env.CI) return 4
@@ -246,6 +249,9 @@ export function leaseWaitMs(env: NodeJS.ProcessEnv = process.env): number {
  * (2026-11-07); two runs on one port stop each other's server.
  */
 export function acquireSync(port: number, timeoutMs = leaseWaitMs()): string {
+  // Hand-written review scripts take the lease without a config (2026-11-09: they drove WebKit
+  // on a held Mac at night): a held machine gives no lease.
+  assertNoMachineHold()
   const deadline = Date.now() + timeoutMs
   let announced = false
   for (;;) {

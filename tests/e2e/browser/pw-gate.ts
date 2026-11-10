@@ -12,6 +12,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { assertNoMachineHold } from '../../../src/lib/machine-hold.js'
 import {
   acquireSync,
   reapOrphanFixtureServer,
@@ -63,6 +64,8 @@ function markRun(): void {
 export function engageGate(port: number): void {
   if (engaged || isWorkerProcess() || !isRealRun()) return
   engaged = true
+  // A machine on hold, or in its quiet night, starts no Playwright run (src/lib/machine-hold.ts).
+  assertNoMachineHold()
   markRun()
   if (process.env.PW_NO_GATE === '1') return
 
