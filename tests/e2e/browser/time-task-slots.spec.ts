@@ -40,6 +40,9 @@ const TASK = 't-time-slots'
 const SID_A = 'sess-time-slots-a'
 const PINS_KEY = 'open-walnut-session-header-pins'
 const SLOT_KEY = 'walnut-time:session-time'
+/** A plugin's fact row in the session menu. The host's own Web servers row (SessionMetaFacts.tsx)
+ *  leads every menu and is no plugin's, so the plugin's rows are the others. */
+const PLUGIN_FACT = '.task-kebab-fact:not([data-testid="session-fact-web-servers"])'
 
 let fixture: TimeFixture | null = null
 let stopFixture: (() => Promise<void>) | null = null
@@ -220,9 +223,10 @@ test('a session\'s time is a fact in its menu, and no chip on the header row by 
   const fact = menu.getByTestId('time-session-fact')
   await expect(cell(fact, 'you-total')).toHaveText('50m', { timeout: 30_000 })
   await expect(cell(fact, 'agent-total')).toHaveText('3h 02m')
-  // A labelled row at the top of Session info (2026-11-02 menu redesign: the Time row moved
-  // there from the menu's head), above Created; its "Header" toggle at the end, off.
-  const row = menu.locator('.task-kebab-fact')
+  // A labelled row in Session info (2026-11-02 menu redesign: the Time row moved there from the
+  // menu's head), under the host's own Web servers row and above Created; its "Header" toggle at
+  // the end, off.
+  const row = menu.locator(PLUGIN_FACT)
   await expect(row.locator('.task-kebab-fact-label')).toHaveText('Time')
   await expect(row.locator('.task-kebab-fact-value')).toHaveText('You 50m \u00b7 Agent 3h 02m')
   await expect(row.getByTestId('session-fact-pin')).toHaveText('Header')
@@ -265,7 +269,7 @@ test('the menu row pins the time to every session header, kept across a reload',
   await expect(menu).toBeVisible()
   // The Time row lives in Session info, inside the Session group (64a253e18), as openMenu reads it.
   await openKebabGroup(menu, 'session-kebab-details')
-  const pin = menu.getByTestId('session-fact-pin')
+  const pin = menu.locator(PLUGIN_FACT).getByTestId('session-fact-pin')
   await expect(pin).toHaveAttribute('aria-pressed', 'false', { timeout: 30_000 })
   await pin.click()
   await expect(pin).toHaveAttribute('aria-pressed', 'true')
@@ -320,8 +324,8 @@ test('the menu row pins the time to every session header, kept across a reload',
 
   // Off again from the same row: the chip leaves every header.
   const again = await openMenu(page, column(page, SID_A))
-  await again.getByTestId('session-fact-pin').click()
-  await expect(again.getByTestId('session-fact-pin')).toHaveAttribute('aria-pressed', 'false')
+  await again.locator(PLUGIN_FACT).getByTestId('session-fact-pin').click()
+  await expect(again.locator(PLUGIN_FACT).getByTestId('session-fact-pin')).toHaveAttribute('aria-pressed', 'false')
   await expect(column(page, SID_A).locator(`[data-header-id="slot:${SLOT_KEY}"]`)).toHaveCount(0)
   expect(await page.evaluate((key) => localStorage.getItem(key), PINS_KEY)).toBe('[]')
   expect(errors).toEqual([])
@@ -351,9 +355,9 @@ test('nothing recorded means no Time fact and no stray label', async ({ page }) 
   await expect(col.getByTestId('time-session-chip')).toHaveCount(0)
   await expect(col.locator('.session-panel-header').getByRole('button', { name: /^More \(/ })).toHaveCount(0)
   await expect(menu.getByTestId('time-session-fact')).toHaveCount(0)
-  await expect(menu.locator('.task-kebab-fact')).toBeHidden()
+  await expect(menu.locator(PLUGIN_FACT)).toBeHidden()
   expect(await menu.locator('.task-kebab-tier-label').allTextContents()).not.toContain('Time')
-  await expect(menu.getByTestId('session-fact-pin')).toHaveCount(0)
+  await expect(menu.locator(PLUGIN_FACT).getByTestId('session-fact-pin')).toHaveCount(0)
   expect(errors).toEqual([])
 })
 
@@ -493,7 +497,7 @@ test('disabling the plugin takes both facts away without a reload', async ({ pag
   const open = await openKebabGroup(menu, 'session-kebab-open')
   await expect(open.locator('.task-kebab-item').filter({ hasText: /^Inbox/ })).toBeVisible()
   await expect(menu.getByTestId('time-session-fact')).toHaveCount(0)
-  await expect(menu.locator('.task-kebab-fact')).toHaveCount(0)
+  await expect(menu.locator(PLUGIN_FACT)).toHaveCount(0)
   // The pin outlives the plugin (it is the user's choice), but there is nothing to draw.
   await expect(col.locator('[data-header-id^="slot:"]')).toHaveCount(0)
   expect(errors).toEqual([])
