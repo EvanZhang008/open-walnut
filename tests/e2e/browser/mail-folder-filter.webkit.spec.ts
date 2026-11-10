@@ -113,4 +113,24 @@ test('a group\'s "Filter mails like these…" starts from the group\'s mail, and
   await page.keyboard.press('Escape')
   await expect(card).toHaveCount(0)
   expect((await fileRules(fixture)).length).toBe(before)
+
+  // A closed group starts from the same fields: its first page is read for the card (2026-11-09, the
+  // real CI group opened closed and left Subject empty, which would take the sender's other mail).
+  const reopen = async () => {
+    const again = await openGroupMenu(page, groupId)
+    await again.getByRole('menuitem', { name: 'Filter mails like these…' }).click()
+    await expect(card).toBeVisible()
+  }
+  await reopen()
+  await card.getByTestId('mail-filter-cancel').click()
+  await expect(card).toHaveCount(0)
+  await reopen()
+  const open = { from: await card.getByTestId('mail-filter-from').inputValue(), subject: await card.getByTestId('mail-filter-subject').inputValue() }
+  await card.getByTestId('mail-filter-cancel').click()
+  await first.getByTestId('mail-group-name').click()
+  await expect(first).toHaveAttribute('aria-expanded', 'false')
+  await reopen()
+  await expect(card.getByTestId('mail-filter-from')).toHaveValue(open.from)
+  await expect(card.getByTestId('mail-filter-subject')).toHaveValue(open.subject)
+  await card.getByTestId('mail-filter-cancel').click()
 })

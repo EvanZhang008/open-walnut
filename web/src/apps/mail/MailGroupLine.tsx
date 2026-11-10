@@ -33,7 +33,7 @@ import {
   CANT_MARK_HERE, FILTER_MENU, FOLDER_FILTER_GROUP_MENU, GROUPS_UPDATING_TITLE, GROUP_ACTIONS_ARIA, IMPORTANT_MENU, RENAME_MENU,
   UNSUBSCRIBE_ELLIPSIS, groupRowAria, markLabel, progressLabel, readOnlyTitle,
 } from './mail-groups-copy';
-import { loadGroupPage, setGroupOpen, useGroupPage } from './mail-groups-store';
+import { groupSampleRows, loadGroupPage, setGroupOpen, useGroupPage } from './mail-groups-store';
 import { RETRYING_LINE } from './mail-load-retry';
 import { CheckIcon, MoreIcon, TwistIcon } from './mail-icons';
 import { isOpenRow } from './MailMessageRow';
@@ -174,13 +174,16 @@ export function MailGroupLine({
       ...(kind === 'group-filter' ? { watermark: group.watermark, cannotArchive: group.cannotArchive ?? [] } : {}),
     });
   };
-  // "Filter mails like these…": the fields start from the group's own mail (its loaded rows, else its
-  // top sender), and the folder from its name.
-  const openFilter = () => {
+  // "Filter mails like these…": the fields start from the group's own mail (its loaded rows; a closed
+  // group's first page is read for it, else its top sender), and the folder from its name. Without
+  // the rows the Subject stays empty, and a filter on the sender alone takes its other mail too.
+  const openFilter = async () => {
+    if (!lineRef.current) return;
+    const rows = page.rows.length > 0 ? page.rows : await groupSampleRows(scope, group.id).catch(() => [] as MailMessageDto[]);
     const anchor = lineRef.current;
-    if (!anchor) return;
+    if (!anchor?.isConnected) return;
     const top = group.topSenders.find((one) => one.key.includes('@'))?.key;
-    const defaults = filterDefaultsFor(page.rows, { label: group.label, ...(page.rows.length === 0 && top ? { sender: top } : {}) });
+    const defaults = filterDefaultsFor(rows, { label: group.label, ...(rows.length === 0 && top ? { sender: top } : {}) });
     requestMailFilter({ scope, viewKey, anchor, origin: 'group', draftId: group.id, ...defaults, ...('accountId' in scope ? { accountId: scope.accountId } : {}) });
   };
   const items: ContextMenuItem[] = [
@@ -191,7 +194,7 @@ export function MailGroupLine({
     },
     { divider: true },
     { key: 'important', label: IMPORTANT_MENU, onSelect: () => card('group-important') },
-    { key: 'filter-folder', label: FOLDER_FILTER_GROUP_MENU, onSelect: openFilter },
+    { key: 'filter-folder', label: FOLDER_FILTER_GROUP_MENU, onSelect: () => { void openFilter(); } },
     { key: 'filter', label: FILTER_MENU, when: filterRuleFor(group.id, group.label) !== null, onSelect: () => card('group-filter') },
     { key: 'rename', label: RENAME_MENU, onSelect: () => card('rename') },
   ];

@@ -509,6 +509,14 @@ function pageQuery(scope: MailGroupsScope, group: string, sender: string, unread
   };
 }
 
+/**
+ * One page of a group's mail, read on its own and kept nowhere: what "Filter mails like these…"
+ * starts its fields from when the group is closed and nothing of it is loaded.
+ */
+export async function groupSampleRows(scope: MailGroupsScope, group: string): Promise<MailMessageDto[]> {
+  return (await listMailMessages(pageQuery(scope, group, '', false))).messages;
+}
+
 export function pageState(key: string): GroupPageState {
   return pages.get(key) ?? EMPTY_PAGE;
 }
