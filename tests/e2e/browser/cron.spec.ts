@@ -68,6 +68,11 @@ test('cron page shows empty state when no jobs exist', async ({ page }) => {
     route.request().method() === 'GET' ? route.fulfill({ json: { jobs: [] } }) : route.fallback())
   await page.route('**/api/routines', (route) =>
     route.request().method() === 'GET' ? route.fulfill({ json: { jobs: [] } }) : route.fallback())
+  // A cron push now reads the one routine it names (GET /api/routines/:id, 867216a2e), and the
+  // other specs' jobs push all the time: that read added their routine to the empty list (CI
+  // 2026-11-10, both tries). Gone here, as it is from the list.
+  await page.route(/\/api\/routines\/(?!executors(?:[?#]|$))[^/?#]+(?:\?[^#]*)?$/, (route) =>
+    route.request().method() === 'GET' ? route.fulfill({ status: 404, json: { error: 'not found' } }) : route.fallback())
 
   await page.goto('/cron')
   await page.waitForLoadState('networkidle')
