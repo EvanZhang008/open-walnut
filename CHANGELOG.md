@@ -6,6 +6,220 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.30] - 2026-11-10
+
+### Added
+
+- Remote Hosts keeps what you typed, and a host's own settings live with it
+- Remote Hosts is one list of machines
+- Remote Hosts reads at a glance, and a draft row never replaces a saved host
+- The rail's Agenda and Scratchpad open beside any page
+- A low disk tells each open task whose own directory is over 5 GB to clear it
+- Code blocks get a language label, syntax colors, Copy and Wrap on web and iOS
+- What was open last opens next: the tab, the page over an Org chat, the shelves and filters
+- The Action Button listens without opening Walnut, and only the person sends
+- Permission prompts remember for the session or the project, deny with a note, answer by number keys
+- Open owner-scoped dialogs without replacing active work
+- Design C with a side bar for Chat, Passwords, Browser control and Settings
+- The first page is New task over the task list, with the relay in its header
+- The task panel and the draft composer can be hosted in a narrow desktop frame
+- A new task with no folder can start in its own task directory
+- Network capture, upload by selector, resize, console and muted agent tabs, so the old relay can retire
+- Live Browser view in the task, window and tab in every answer, no second sign-in on a site the person has open
+- One conversation per agent, the extension hands its Walnut page a browser key, and the third review round's fixes
+- A lock reaches every open Walnut page at once, approvals show in Ask, and the second review round's fixes
+- One unlock reaches Walnut's web pages too, the panel opens real in about 0.6 s, and the first review round's fixes
+- The side panel and popup open as Walnut's regular Ask, with the vault behind a key
+- One unlock on this computer reaches its browser extension, and a lock reaches an open popup at once
+- Settings offers a generic Add a source before naming Bitwarden
+- One switch turns filling and saving on web pages off, for a browser where another password manager fills
+- An unlock that holds 48 hours everywhere, a master password hint, Bitwarden as its own source, and the second review round's fixes
+- Org chart cards show names only and open for detail
+- Walnut as the iPhone's password app
+- A plugin's settings and sign-in live on its page in Apps, never in Settings
+- Per-host start slots, file-aware placement, and starts that either start or fail with the reason
+- A host daemon tells the server whether the process on its gateway socket is in the session
+- Show why, the task's goal and last steps, check the asking process, and ask-and-end mode
+- Consume signed steps once within their bound context
+- A click on a zoomed tall picture fills the width, and the zoom scrolls
+- Trigger_list takes name, state, task and limit, and answers one short row per trigger
+- Ask here in the Changed tab opens the question card beside the diff passage
+- The file page reads like a document: one quiet line, saving always live
+- Tree Mode keeps up to three pages side by side, with a sibling page and light composers
+- An App brief for the AI only, told once per session and after each compaction
+- Talk to Walnut, press the Action Button and speak to the CEO chat
+- The Side threads pop-up goes full screen like the session panel
+- An outside reminder that owns sign-in holds Walnut's sign-in letters while it runs
+- Config ssh_cert_letter false hands the certificate warning to another reminder
+- Hide status sentences unless enabled in Display
+- Draw Claude Code's error reply as its error row, as the web does
+- Organize Home work by pin tier and project
+- Home's taskbar keeps minimized sessions one click away
+
+### Fixed
+
+- A signal to the push gate ends its poll sleep too, so its output closes at once
+- The notice corner drops a page's room when the page changes, and judges a left column without the room it took itself
+- The scrollbar's room is measured once the global stylesheets are in, so code blocks no longer keep 6px of dead space under their track
+- A spec that switches to WebKit in a Chromium project starts it without Chromium's --mute-audio
+- Launch parity names the extension's own-task-dir start and the permission decisions read, so the ratchet passes
+- On a phone, Show more and the Changed tab's compare and review controls are 44px targets with 12px text
+- A death found by a send waits for that send's answer
+- A store whose data home is gone opens afresh too
+- A wiped store opens its fresh handle before it closes the old one
+- A wiped data home no longer serves the previous test's SQLite rows
+- A stop's ride-along save can be awaited, and status-push tests wait for it
+- A turn generation is never reused, so a lane never takes the previous answer
+- The leak audit scans the push gate sweep's logs too
+- The push gate runs on a hidden ref and sweeps what a killed hook left
+- A notice beside a full-screen sheet never folds the kanban to its narrow sections
+- The board's sorts and the launch log fields type in steps, and slow expressions are flagged
+- The phone's Board button is a 44px target; C68 reads "1 Needs you"
+- The Org Threads transcript is stamped before its turn ends, and the reader double has every real method
+- The own-share load reads give each blank-headed ps column its own -o
+- The iOS job skips TalkRealServerUITests, which drives the home screen and needs a paired server
+- Closing Changed raises no ResizeObserver loop error, and its scroll spec follows the chat rule
+- A clone of another checkout never takes that checkout's branch as the default
+- The comparison button and Hide whitespace are finger-sized on a phone
+- A secret's Save that runs keeps its form, and a field put right drops its refusal
+- Remote Hosts says each thing once, and a secret's form lands where Add's does
+- Remote Hosts answers every press, in WebKit too
+- Add host offers both ways in and lands on what it made
+- Go there on a Scratchpad still saving opens it in a sheet at phone width
+- The Org page settles its default node once the tasks are in, and keeps it
+- The scratchpad keeps the first edit after a focus reload, and a stale first read never wins
+- The moved scratchpad fills and scrolls, waits in the document, opens only once read
+- One scratchpad editor per window; full screen starts beside the side bar
+- A plugin's job bundle finds the packages Walnut carries
+- The phone's direct send reads a daemon's error answer as no answer, never a death
+- A move or switch leaves exactly one live session per task
+- The darwin-arm64 daemon tests and the real-ps sweep test run only on a Mac
+- Count the size walk in the daemon version hash and list the size notice's send
+- Size notices skip org nodes while the org is off, never starve a directory, never block the daemon
+- A low disk prunes old build output of tasks still running
+- The kept Org page comes back only with a launch's restore; Threads retry waits out the companion's beat
+- A phone that leaves while the stream to the Mac still opens is no mark against it either
+- A Threads read the companion could not pass on is tried once more before the page says so
+- A call the phone cancels is no mark against the Mac
+- The Org node page's id no longer hides its view picker's own
+- An Org node's chat keeps the screen at the accessibility text sizes
+- The queue card shows what the person typed, where each line stands, and pictures as pictures
+- The update test makes its DMG with the release build's sized, retried create, so one failed hdiutil create no longer fails a signed app
+- Excuse only the lines Walnut recorded writing, not lines in its shape
+- Hold only the writer's own lines to the Brief limit
+- Idle open tasks lose their build output too; a full disk lets host commands through
+- A received message's fold stays shut under a reader near the bottom
+- A task settling another's ask reads the user's words there first
+- His message outdates a thread's summary until the node rewrites it
+- The session header's fit never changes boxes above it inside a ResizeObserver callback
+- A stopped question's "Turn interrupted" stays on the question's page
+- A task whose session host is gone is never stuck
+- A trigger's name is a short label, never its prompt's opening
+- Work a target runs after its turn (background jobs, a team, a wakeup) is a sign it took up the work
+- A target that took up the work since the ask is never told silent
+- A worker handed back while its own subtask or asked reply is at work waits on that task, not its lead
+- Time Walnut was not running never counts against a reply deadline
+- The Chinese certificate letter sets the user's renew step apart after a colon
+- Memory saves take the shared file lock and refuse a stale hash before sending
+- Memory_write takes exact-string edits and says whether the file changed
+- One -o per blank-headed column, so Linux procps 3.3.10 reads every column
+- The CLI's own window reading is lifted to what the session holds
+- Judge an answer for the user where it really goes, up to the write
+- An answer for the user never wakes a stopped or finished task
+- The first page reads its tasks through a committed ref, and the relay panel's placing visibility is listed with main's highlight guard
+- The key popover keeps a typed master password across a redraw too, and a guard lists every password field
+- The agents switch's line in Browser control says what it does in the state it is in
+- The first page hands over only the tab Send was pressed in, keeps a failed handoff's words, keeps task links inside the panel, and saves a todo once
+- One holding per tab, a sign-in yes fills once on its site, and network answers judge the request they read
+- Network reads keep site rules and masking, the live view and Stop answer only the owner, a fresh sign-in needs the person
+- A popup redraw keeps the master password, Secret Key and server address the person typed
+- A shrunk list keeps its room in the taker shape the column-aware stack reads
+- Ask rows read their latest words from chat history too, an answer counts as read only on interaction, and the fourth review round's fixes
+- Side panel hides a parked task by Home's own rule instead of reading the phase
+- Side panel Tasks counts Focus as Home does, and a Needs you row says what the task asked
+- Unlock to approve follows main's one-line approval rows
+- A card folds its new answers behind one line under the summary
+- Every card leads with a summary line, and the node is asked for a missing one
+- Show a thread only once it has a real reply, one summary per card, and wake a node that left a thread too long
+- Every GitHub read of the leak audit is tried again after a failure, so one HTTP 500 on a release asset no longer ends the audit
+- The idle notice's new words move the history cache, and the recovery's compaction shares the quiet store
+- The inline share clamps as Settings does; the opened row reads calmer
+- The context share drops as soon as a compaction lands; a closed idle run stays closed
+- Idle compaction never reads as Working, opens to its reason, and Compact context goes out once
+- An opened project counts its tasks' asks, not its VP's threads
+- Org chart detail ids are one to one with their row keys
+- An opened org chart card lists its tasks' asks; narrow layout and empty VP stay names only
+- The Minimize dash draws on the header row's middle, with a guard on every window button's icon
+- A move for its files sets the repository up in its own window
+- Review fixes for the window source
+- A [1m] request caches its window apart from the plain model
+- The window comes from what Claude Code reported, kept on disk; a name rule is only an estimate
+- No text sends anyone to Settings for a plugin any more
+- A part's own panels show on its parent's page, and a host row with a port stays remembered
+- The turn readout names every model a switched turn ran on
+- Typing after a space keeps a note's own bytes too
+- Hash the caller-proof modules into the daemon version, run its twin test on Node, and keep the hello capability order the parity test pins
+- Judge each asking process by its start time, from the daemon's own record
+- A picture pasted from the clipboard is read from the paste's files
+- Reads under a task that its record cannot answer go to the Mac
+- The Action Button opens Walnut already listening, with no Live Activity
+- Keep dense tasks reachable and body drags aligned
+- A message an installed App sends through its own op call is named as that App
+- An app update or a restart no longer turns the work card off for the stretch
+- Ask here never covers its passage, quotes the file's line breaks, and never does nothing
+- The selection bar opens its menus away from the words, and fits a narrow column
+- Ask here in the Files tab opens its card on every view, at once
+- The selection menu's Ask choice and Comment box are normal menus over the conversation
+- Typing keeps a note's own bytes even where the editor cannot spell them back; phone tree-head name is a 44 px target
+- An overloaded run lets the fixture port go before it stops
+- A Playwright run never starts on a machine still overloaded after the wait
+- A Playwright run never starts beside a live holder of the fixture port
+- Every artifact download has its own step limit, and the binary matrix downloads a release's assets again when the first download hangs or ends without them
+- Keep thread asks readable without faded clipping
+- The iOS job restarts the simulator service once when xcodebuild still cannot see its booted iPhone, and a leg with no result bundle says so in one line
+- A list that fills its column ends above the corner, so no row sits under a notice
+- A brief handed to an earlier queued row keeps the order its notes were made in
+- The App brief leads a batched line, reaches ACP starts, and moves with its row
+- Keep the App brief out of tool results and parses, and tell it on every path
+- The Threads jump bar stays when the last card for him is gone
+- The session that asked hears the answer
+- The chip flow's width types in steps, and the session-state tests know the boot window
+- A cold resume past its cache runs on the current prompt; a person is answered first
+- The reply language leaves the hints for the prompt; the org notes say one line
+- A hint goes out only by its own triggers; the reply language never rides every message
+- The Threads jump chip counts every closed thread, and the closed fold says it lists the newest
+- Keep the drag preview under the grabbed point
+- A full-screen sheet moves its whole left edge past the corner, and a task link keeps its arrow
+- The corner stays bottom left in full screen, and an approval opens the task that asked
+- A picture's HTML form sets loading before src
+- Exact image names keep a pipe; failed pictures recover everywhere
+- A pasted or cut image names the exact file it drew
+- Images in a note show inline, with click to zoom
+- A Talk card leaves the Lock Screen once its take is sent or deleted
+- The phone's Threads list and its count come from one rule, and a failed read is never an empty list
+- Every GitHub read of the test gate has a time limit, and the log says when it last heard
+- The taskbar's card takes pictures, its scrollbar keeps the WebKit look, and Minimize joins the "..." menu
+- Pin the folded file so compaction cannot reuse its identity
+- The Changed button shows no count badge
+- Focus Bar writes hold their rows until answered, and overlapping writes end in one pull
+- Pinned thread jumps, a letter's task link on its own line
+- A request keeps the fingerprint of the first answer that reached its asker
+- A start killed while its CLI boots waits for it, and a machine-killed start recovers by itself
+- A write still waiting for a connection when the page goes is sent at once
+- Tappable Try Again, chip lines that never cover the rows below
+- A sign-in ask is this machine's, a part of an answer keeps its order and direction
+- One sign-in is one ask, checked against the live sign-in; an answered ask stays answered
+- One notice per answer, cause and expiry; open error cards survive a full feed
+- The iOS job waits until xcodebuild lists its booted simulator, and says so when it never does
+- A rename or delete holds its moved task rows until the write answers
+- Readable letter task row, retry feedback, kept task section folds
+- Claude Code's own error reply is its error line, not an answer, and notice lines read at 13px in a darker grey
+- A turn that ended on "Prompt is too long" never closes the work, and a restart mid-compaction resends what was owed
+- Review round 7 fixes for the Org pages and task details
+- The phone's page read of a session its host cannot read answers 503, not 404
+- A model with a 1M window reads 1M, and the model list shows each model once
+- An import an older build kept as Walnut's is put right, and an import that appears during a long read counts as outside
+
 ## [0.6.29] - 2026-11-08
 
 ### Fixed
