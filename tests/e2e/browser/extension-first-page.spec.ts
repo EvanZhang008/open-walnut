@@ -296,7 +296,10 @@ test('the tabs and a list of more than 100 tasks are Home\'s own', async () => {
   const waiting = v.getByTestId('status-section-notstarted').locator('.navigation-heading-open')
   if ((await waiting.getAttribute('aria-expanded')) !== 'true') await waiting.click()
   await expect(waiting).toHaveAttribute('aria-expanded', 'true')
-  await expect(v.getByTestId('status-section-notstarted-count')).toHaveText(/^1\d\d\+?$/)
+  // At least the 104 seeded here: the run shares its server with other specs, whose own tasks
+  // nobody started count too (2026-11-10, CI read 201, then 203).
+  await expect.poll(async () => Number((await v.getByTestId('status-section-notstarted-count').textContent())?.replace(/\+$/, '')))
+    .toBeGreaterThanOrEqual(104)
   // The list scrolls with the wheel; the composer stays where it is.
   const tasks = v.getByTestId('ext-home-tasks')
   const tb = (await tasks.boundingBox())!
