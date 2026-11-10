@@ -73,6 +73,8 @@ import { isolateUiPrefs, openListProject, presetPanelView, showMoreUntil } from 
 import { presetTierViewModes } from './draft-surface-helpers'
 import { chooseViewOption } from './home-navigation-helpers'
 
+type Box = { x: number; y: number; width: number; height: number }
+
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
 // Round-trips queue behind the fixture's session health monitor on its seeded
@@ -396,6 +398,28 @@ async function scrollOnScreen(page: Page, target: Locator, what: string): Promis
     expect(box.y + box.height, `${what} must be ON SCREEN for a coordinate gesture`).toBeLessThan(view.height)
   }
   return box
+}
+
+/**
+ * Put two rows of the task list in the middle of its scroller and read both boxes after that
+ * scroll. dnd-kit scrolls a list while the pointer rests in its outer fifth (its autoScroll
+ * threshold), and the drop's `event.delta` counts that scroll: a pointer that came back to the
+ * press point after resting there is over other rows, so the drop really moved the card.
+ */
+async function midListBoxes(first: Locator, last: Locator, what: string): Promise<{ first: Box; last: Box }> {
+  const band = await first.evaluate((a, b) => {
+    const scroller = a.closest('.home-navigation-scroll') as HTMLElement
+    const r = scroller.getBoundingClientRect()
+    const mid = (a.getBoundingClientRect().top + (b as Element).getBoundingClientRect().bottom) / 2
+    scroller.scrollTop += mid - (r.top + r.height / 2)
+    return { top: r.top + r.height * 0.2, bottom: r.bottom - r.height * 0.2 }
+  }, await last.elementHandle())
+  const one = await first.boundingBox()
+  const two = await last.boundingBox()
+  if (!one || !two) throw new Error(`${what} has no box`)
+  expect(one.y, `${what} must sit below the list's top autoscroll band`).toBeGreaterThan(band.top)
+  expect(two.y + two.height, `${what} must sit above the list's bottom autoscroll band`).toBeLessThan(band.bottom)
+  return { first: one, last: two }
 }
 
 /**
@@ -1887,8 +1911,14 @@ test('a drag that visits another run and returns to the press point changes noth
   const projectPatches = watchProjectPatches(page, targetCard)
 
   const card = tierCard(page, targetCard, tierId)
-  const box = await scrollOnScreen(page, card, 'the middle run\'s card')
-  const away = await scrollOnScreen(page, tierCard(page, visited.cards[0], tierId), 'the visited run\'s card')
+  const visitedCard = tierCard(page, visited.cards[0], tierId)
+  await scrollOnScreen(page, card, 'the middle run\'s card')
+  await scrollOnScreen(page, visitedCard, 'the visited run\'s card')
+  // Both boxes are read after the last scroll, with neither row in an autoscroll band: on a CI
+  // runner the seeded tier sat low in a fuller list, the visited row rested in the bottom band,
+  // the list scrolled under the pointer, and the drop moved the card to the visited run (both
+  // tries, 2026-11-10).
+  const { first: box, last: away } = await midListBoxes(card, visitedCard, 'the pressed and the visited card')
   const x = box.x + box.width / 2
   const y = box.y + box.height / 2
   await page.mouse.move(x, y)
