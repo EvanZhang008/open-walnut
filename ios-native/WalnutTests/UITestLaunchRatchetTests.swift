@@ -150,7 +150,7 @@ final class UITestLaunchRatchetTests: XCTestCase {
     /// for it. Anywhere else, or without both, it is an ordinary attach.
     static let shortcutsID = "com.apple.shortcuts"
     /// The recorded-file run and the run against a real paired server (TalkRealServerUITests).
-    static let shortcutsRunFiles: Set<String> = ["TalkToWalnutUITests.swift", "TalkRealServerUITests.swift"]
+    static let shortcutsRunFiles: Set<String> = ["TalkShortcutUITests.swift", "TalkRealServerUITests.swift"]
 
     private static func isPinnedShortcutsRun(_ use: AttachSite, file: String) -> Bool {
         use.bundleID == shortcutsID && shortcutsRunFiles.contains(file) && use.enclosing.hasPrefix("test")
