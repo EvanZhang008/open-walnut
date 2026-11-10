@@ -21,18 +21,18 @@
  * The dictation itself, and the stray-word report end to end, are in
  * session-voice-selection.spec.ts (Chromium).
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 import {
   PHRASE, PHRASE2, SESSION_ID, heldPainted, highlightsSupported, openSession, questionPage,
   requestHoldFromPage, selectPassage, selectedText, shot, stubSttStatus, wheel,
 } from './voice-selection-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
-import { VOICE_TEST_USER_AGENT, hasMediaRecorder } from './webkit-recorder'
+import { VOICE_TEST_UA_MARK, hasMediaRecorder } from './webkit-recorder'
 
 // The panel count is one value the whole fixture shares: hold it while this test runs.
 holdPanelCountLock('test')
 
-test.use({ browserName: 'webkit', userAgent: VOICE_TEST_USER_AGENT })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent + VOICE_TEST_UA_MARK })
 
 /** These sessions have no question yet, so they read as Conversation Mode and
  *  Ask here asks there (the view on screen, 2026-11-03): the question's card

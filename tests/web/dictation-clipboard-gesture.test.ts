@@ -77,4 +77,17 @@ describe('dictated words reach the clipboard through a write asked for in the cl
     expect(src).not.toMatch(/'btn mic-btn\b/)
     expect(src).not.toMatch(/mic-error-bubble/)
   })
+
+  it('the composer\'s dictation children need no router: the composer renders outside one too', () => {
+    // 2026-11-10: the clipboard mic's useNavigate threw in every composer rendered
+    // without a <Router>, the composer's own tests among them.
+    const chat = fs.readFileSync(path.join(WEB, 'components/chat/ChatInput.tsx'), 'utf8')
+    const children = [...chat.matchAll(/import \{[^}]*\} from '@\/components\/common\/(\w+)'/g)].map((m) => m[1]!)
+      .filter((name) => dictationFiles.some((f) => path.basename(f, '.tsx') === name) && name !== 'MicButton')
+    expect(children).toContain('ClipboardMicButton')
+    for (const name of children) {
+      const src = fs.readFileSync(path.join(WEB, `components/common/${name}.tsx`), 'utf8')
+      expect(src, name).not.toMatch(/from 'react-router-dom'/)
+    }
+  })
 })

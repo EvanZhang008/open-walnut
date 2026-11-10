@@ -498,6 +498,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const micControlRef = useRef<MicControl | null>(null);
   // The clipboard mic beside it is recording: one recording at a time.
   const [clipboardDictating, setClipboardDictating] = useState(false);
+  const [clipboardDictationReady, setClipboardDictationReady] = useState(false);
   const clipboardMicRef = useRef<ClipboardMicHandle | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1980,22 +1981,24 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                 <span>{atAttachLimit ? 'Attachment limit reached' : acceptsFiles ? 'Attach files or images' : 'Attach image'}</span>
               </button>
               {/* The clipboard mic's way in where the row has no room for its button. */}
-              <button
-                className="chat-plus-menu-item"
-                onClick={() => { setPlusOpen(false); clipboardMicRef.current?.start(); }}
-                type="button"
-                role="menuitem"
-                data-testid="plus-dictate-clipboard"
-                title="Speak; the words go to the clipboard, nothing is sent"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-                  <rect x="8" y="2" width="8" height="4" rx="1" />
-                  <rect x="10.5" y="9" width="3" height="6" rx="1.5" />
-                  <path d="M8.5 13.5a3.5 3.5 0 0 0 7 0" />
-                </svg>
-                <span>Dictate to clipboard</span>
-              </button>
+              {clipboardDictationReady && (
+                <button
+                  className="chat-plus-menu-item"
+                  onClick={() => { setPlusOpen(false); clipboardMicRef.current?.start(); }}
+                  type="button"
+                  role="menuitem"
+                  data-testid="plus-dictate-clipboard"
+                  title="Speak; the words go to the clipboard, nothing is sent"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                    <rect x="8" y="2" width="8" height="4" rx="1" />
+                    <rect x="10.5" y="9" width="3" height="6" rx="1.5" />
+                    <path d="M8.5 13.5a3.5 3.5 0 0 0 7 0" />
+                  </svg>
+                  <span>Dictate to clipboard</span>
+                </button>
+              )}
               {/* Shortcuts — the discoverable index of the composer's special
                   commands (each row inserts its trigger and opens its picker). */}
               {(enableEntityMention || mentionCwd || showCommands || isSessionMode) && (
@@ -2141,6 +2144,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           handleRef={clipboardMicRef}
           otherBusy={() => !!(micControlRef.current?.busy() || micControlRef.current?.opening?.())}
           onBusyChange={setClipboardDictating}
+          onReadyChange={setClipboardDictationReady}
         />
         <MicButton
           onTranscribe={(text) => writeDictation(text, false)}

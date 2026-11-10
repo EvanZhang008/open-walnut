@@ -15,7 +15,6 @@
  */
 
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type RefObject } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useSpeechToText } from '@/hooks/useSpeechToText';
 import { useSttStatus, sttBlocksMic } from '@/hooks/useSttStatus';
 import { copyTextDeferred } from '@/utils/clipboard';
@@ -38,6 +37,8 @@ export interface ClipboardMicButtonProps {
   otherBusy?: () => boolean;
   /** This button's recording (or its transcription) started or ended. */
   onBusyChange?: (busy: boolean) => void;
+  /** Dictation became usable here, or stopped being (the "+" menu row follows it). */
+  onReadyChange?: (ready: boolean) => void;
   disabled?: boolean;
   language?: string;
 }
@@ -50,7 +51,7 @@ export function partialNote(err: string): string {
 
 type Note = { kind: 'copied'; text: string } | { kind: 'error'; text: string } | null;
 
-export function ClipboardMicButton({ handleRef, otherBusy, onBusyChange, disabled, language }: ClipboardMicButtonProps) {
+export function ClipboardMicButton({ handleRef, otherBusy, onBusyChange, onReadyChange, disabled, language }: ClipboardMicButtonProps) {
   // The words the user will get: the last final text the hook delivered
   // (a stop mid-sentence delivers the draft first, then its refinement).
   const finalRef = useRef('');
@@ -80,7 +81,13 @@ export function ClipboardMicButton({ handleRef, otherBusy, onBusyChange, disable
   const stoppingRef = useRef(false);
 
   const sttStatus = useSttStatus();
-  const navigate = useNavigate();
+  // Not set up: no button at all. The composer's own mic leads to the setup, and
+  // this one needs no router of its own (the composer renders outside one too).
+  const sttUnavailable = isSupported && sttBlocksMic(sttStatus, busy);
+  const ready = isSupported && !sttUnavailable;
+  const onReadyRef = useRef(onReadyChange);
+  onReadyRef.current = onReadyChange;
+  useEffect(() => { onReadyRef.current?.(ready); }, [ready]);
 
   const showNote = useCallback((n: Note, ms?: number) => {
     clearTimeout(noteTimer.current);
@@ -98,8 +105,7 @@ export function ClipboardMicButton({ handleRef, otherBusy, onBusyChange, disable
     if (error && !busy) setNote((n) => n ?? { kind: 'error', text: error });
   }, [error]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!isSupported) return null;
-  const sttUnavailable = sttBlocksMic(sttStatus, busy);
+  if (!ready && !engaged && !note) return null;
 
   const stop = () => {
     if (stoppingRef.current) return;
@@ -134,7 +140,7 @@ export function ClipboardMicButton({ handleRef, otherBusy, onBusyChange, disable
   };
 
   const start = () => {
-    if (sttUnavailable) { navigate('/settings#stt'); return; }
+    if (sttUnavailable) return;
     // Still opening the microphone from the last press, or the other mic records.
     if (isRecording || isTranscribing || opening || otherBusy?.()) return;
     finalRef.current = '';
@@ -153,9 +159,7 @@ export function ClipboardMicButton({ handleRef, otherBusy, onBusyChange, disable
     start();
   };
 
-  const title = sttUnavailable
-    ? 'Set up dictation'
-    : isTranscribing
+  const title = isTranscribing
       ? 'Transcribing, then copying...'
       : isRecording
         ? 'Stop and copy the words'
@@ -163,7 +167,6 @@ export function ClipboardMicButton({ handleRef, otherBusy, onBusyChange, disable
 
   const btnClass = [
     'btn clipboard-mic-btn',
-    sttUnavailable && 'mic-unconfigured',
     isRecording && 'mic-recording',
     isTranscribing && 'mic-transcribing',
   ].filter(Boolean).join(' ');

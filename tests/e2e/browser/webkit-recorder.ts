@@ -23,4 +23,6 @@ export const ENGINE_CHECK = 'really runs in WebKit'
  * of zero. The synthetic microphone is an AudioContext, so every spec that records
  * uses this agent.
  */
-export const VOICE_TEST_USER_AGENT = `${devices['Desktop Safari'].userAgent} WalnutVoiceTest`
+/** Added after Safari's agent; a spec pins `devices['Desktop Safari'].userAgent + VOICE_TEST_UA_MARK`. */
+export const VOICE_TEST_UA_MARK = ' WalnutVoiceTest'
+export const VOICE_TEST_USER_AGENT = `${devices['Desktop Safari'].userAgent}${VOICE_TEST_UA_MARK}`

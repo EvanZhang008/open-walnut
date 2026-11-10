@@ -2,11 +2,11 @@
  * Dictate to the clipboard in WebKit, the Mac app's engine. Scenarios:
  * stt-clipboard-helpers.ts.
  */
-import { expect, test } from '@playwright/test'
-import { ENGINE_CHECK, NO_RECORDER, VOICE_TEST_USER_AGENT, hasMediaRecorder } from './webkit-recorder'
+import { devices, expect, test } from '@playwright/test'
+import { ENGINE_CHECK, NO_RECORDER, VOICE_TEST_UA_MARK, hasMediaRecorder } from './webkit-recorder'
 import { registerClipboardDictationScenarios } from './stt-clipboard-helpers'
 
-test.use({ browserName: 'webkit', userAgent: VOICE_TEST_USER_AGENT })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent + VOICE_TEST_UA_MARK })
 
 test(ENGINE_CHECK, async ({ browserName }) => {
   expect(browserName).toBe('webkit')
