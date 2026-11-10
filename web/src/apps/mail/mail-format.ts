@@ -12,6 +12,45 @@ import { timeAgo } from '@/utils/time';
 /** Past this, an age stops answering "when" and the date is what the reader wants. */
 const AGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** The date a stamp older than a week prints: `5 Sep 2026` (the locale's own order). */
+const MAIL_DATE_OPTIONS: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' };
+
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * One `Intl.DateTimeFormat` per locale and options, made once and reused.
+ *
+ * `toLocaleDateString(locale, options)` builds a new formatter on every call, and a formatter is
+ * the expensive part: the dense grouped inbox's redraw spent 360 to 460 ms of main-thread CPU in
+ * `formatMailTime` alone (2026-11-10, a CPU profile of the 3,000 mail draw). With date fields in
+ * `options` both produce the same text (`tests/web/mail-format-cached-date.test.ts` compares them).
+ *
+ * A formatter keeps the locale and time zone the page had when it was made, so the cache is
+ * dropped when the browser's language changes and whenever the page comes back into view (the
+ * moment a time zone change, such as a laptop waking up after a flight, can first be seen).
+ */
+export function cachedDateFormat(locale: string | undefined, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${locale ?? ''}\u0000${JSON.stringify(options)}`;
+  let format = dateFormats.get(key);
+  if (!format) {
+    format = new Intl.DateTimeFormat(locale, options);
+    dateFormats.set(key, format);
+  }
+  return format;
+}
+
+/** Forget every cached formatter (the next stamp makes a fresh one for the page's locale and zone). */
+export function resetCachedDateFormats(): void {
+  dateFormats.clear();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('languagechange', resetCachedDateFormats);
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resetCachedDateFormats(); });
+  }
+}
+
 /**
  * A message's stamp: an age inside the last week, a date beyond it.
  *
@@ -21,9 +60,7 @@ const AGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export function formatMailTime(sentAt: number): string {
   if (!Number.isFinite(sentAt) || sentAt <= 0) return '';
   const age = Date.now() - sentAt;
-  if (age >= AGE_WINDOW_MS) {
-    return new Date(sentAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-  }
+  if (age >= AGE_WINDOW_MS) return cachedDateFormat(undefined, MAIL_DATE_OPTIONS).format(sentAt);
   return timeAgo(new Date(sentAt).toISOString());
 }
 
