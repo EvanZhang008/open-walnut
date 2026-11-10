@@ -72,15 +72,24 @@ final class FileSourceLinesViewTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
 
-    /// The window once the anchor highlight has drawn, or as it is after `seconds`.
+    /// The window once the anchor highlight has drawn, or as it is after `seconds`
+    /// of run loop time.
     /// The flash lights about 0.41 s after the view appears (60 + 250 + 100 ms of
     /// task sleeps) and holds 2.2 s; one fixed wait read it before it lit on a slow
     /// runner (run 41250878827: 0 warm pixels at 0.8 s), so this looks every 0.1 s.
+    /// The budget counts only the time the run loop ran: the view's task moves on
+    /// only then, and on a slow runner one snapshot and count took about a second
+    /// of the main thread, so a wall clock deadline of 2.5 s ran out after two
+    /// looks, before the task's three sleeps had had their turns (run 42763058265:
+    /// 0 warm pixels after 3.5 s). The wall clock cap only keeps a real failure
+    /// from hanging the suite.
     private func snapshotOnceDrawn(_ window: UIWindow, within seconds: TimeInterval = 2.5) -> CGImage {
-        let deadline = Date().addingTimeInterval(seconds)
+        let wallCap = Date().addingTimeInterval(max(30, seconds * 12))
+        var ran: TimeInterval = 0
         var image = snapshot(window)
-        while warmPixelCount(image) <= 200, Date() < deadline {
+        while warmPixelCount(image) <= 200, ran < seconds, Date() < wallCap {
             pump(0.1)
+            ran += 0.1
             image = snapshot(window)
         }
         return image
