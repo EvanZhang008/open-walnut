@@ -364,7 +364,9 @@ final class TalkSessionTests: XCTestCase {
         var detector = TalkPauseDetector()
         detector.pauseToSend = 0.05
         detector.minSpeech = 0.01
-        detector.noSpeechTimeout = 0.05
+        // The silence timeout stays at its default: readings are timed by the wall clock,
+        // and on a loaded CI runner the three quiet readings before the speech outlasted a
+        // 0.05 s timeout, so the take was dropped as silent before it heard a word.
         recorder.levels = Array(repeating: -60, count: 3) + Array(repeating: -15, count: 20) + Array(repeating: -60, count: 400)
         let talk = session()
         talk.detectorTemplate = detector
