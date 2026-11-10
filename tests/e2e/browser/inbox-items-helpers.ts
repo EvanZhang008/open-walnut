@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { withFileLock } from '../../../src/utils/file-lock';
 import { draftComposer } from './draft-helpers';
+import { isolateUiPrefs } from './todo-panel-helpers';
 export const EVIDENCE = process.env.PW_EVIDENCE_DIR ?? '/tmp/inbox-item-actions';
 // Specs write their debug JSON straight into it (fixer-r3 failed with ENOENT on a fresh machine).
 mkdirSync(EVIDENCE, { recursive: true });
@@ -27,6 +28,9 @@ export async function sendItems(request: APIRequestContext, items: InboxLetterIt
   return { subject, id: (await res.json()).id as string };
 }
 export async function home(page: Page) {
+  // The layout is the spec's own: another spec's synced prefs on the shared fixture opened a 390px
+  // page on the chat slot, which has no Notifications button (2026-11-10).
+  await isolateUiPrefs(page);
   // Initial document loading is not SPA navigation; all subsequent navigation uses clicks.
   await page.setContent('<a id="fixture-entry" href="/">Open fixture console</a>');
   await page.locator('#fixture-entry').evaluate((a, url) => { (a as HTMLAnchorElement).href = url; }, test.info().project.use.baseURL as string);
