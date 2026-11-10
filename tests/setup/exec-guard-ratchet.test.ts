@@ -43,7 +43,15 @@ const GUARD_FILES = new Set([
 const FLEET_DIR = 'tests/fleet/'
 
 /** Unit tests of the daemon's PATH rule: the variable appears in a fake env only. */
-const GUARD_VAR_UNIT_TESTS = new Set(['tests/providers/host-runtime-core.test.ts'])
+const GUARD_VAR_UNIT_TESTS = new Set(['tests/providers/host-runtime-core.test.ts', 'tests/scripts/test-path-without-gh.test.ts'])
+
+/**
+ * Playwright fixture servers that start a real daemon with a PATH of their own. No vitest
+ * harness (and so no guard) runs there; naming the guard while the PATH does not hold it pins
+ * the daemon to that PATH (host-runtime-core.ts testGuardedPath), so the daemon adds no system
+ * dir and nothing of the machine's runs. That pins more, never less.
+ */
+const PINNED_PATH_FIXTURES = new Set(['tests/e2e/browser/session-commit-server.ts'])
 
 /** Literal PATH values handed to code, per file, as of the guard's arrival. */
 const LITERAL_PATH_BUDGET: Record<string, number> = {
@@ -179,7 +187,7 @@ describe('every vitest config loads the exec guard first', () => {
 
 describe('no test opts out', () => {
   it('only the guard\'s own files name its variables or consume its hits', () => {
-    const offenders = testFiles.filter((rel) => !GUARD_FILES.has(rel) && !GUARD_VAR_UNIT_TESTS.has(rel)
+    const offenders = testFiles.filter((rel) => !GUARD_FILES.has(rel) && !GUARD_VAR_UNIT_TESTS.has(rel) && !PINNED_PATH_FIXTURES.has(rel)
       && /WALNUT_TEST_EXEC_GUARD|takeExecGuardHits|failOnExecGuardHits/.test(read(rel)))
     expect(offenders, 'a test may not disable, re-point or drain the exec guard').toEqual([])
   })

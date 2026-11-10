@@ -25,6 +25,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fixtureHome, fixtureRealHome } from './fixture-home'
+import { systemBinWithout } from '../../helpers/system-bin.js'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3514)
 if (port === 3456) throw new Error('Production port is forbidden')
@@ -48,21 +49,16 @@ process.on('exit', () => {
 })
 const inRoot = (p: string) => { if (!path.resolve(p).startsWith(root + path.sep)) throw new Error('outside the fixture root: ' + p) }
 
-// A PATH this fixture controls: the mock CLI, node, system git. No gh anywhere.
+// A PATH this fixture controls: the mock CLI, node, the system tools. No gh anywhere: the
+// system dirs are linked in without it, because CI's Ubuntu image ships gh in /usr/bin, and
+// the daemon keeps this PATH as it is (WALNUT_TEST_EXEC_GUARD below).
 const toolbox = path.join(root, '.toolbox/bin')
 const nodeBin = path.join(root, 'node-bin')
 const shellBin = path.join(root, 'shell-bin')
 for (const d of [toolbox, nodeBin, shellBin]) fs.mkdirSync(d, { recursive: true })
 fs.symlinkSync(process.execPath, path.join(nodeBin, 'node'))
-// The system dirs hold gh on some machines (GitHub's runners ship it in /usr/bin, 2026-11-10:
-// the nightly run then offered a PR), so the PATH reads mirrors of them that leave gh out.
-const systemBins = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].filter((d) => fs.existsSync(d)).map((dir, i) => {
-  const mirror = path.join(root, `system-bin-${i}`)
-  fs.mkdirSync(mirror, { recursive: true })
-  for (const name of fs.readdirSync(dir)) if (name !== 'gh') fs.symlinkSync(path.join(dir, name), path.join(mirror, name))
-  return mirror
-})
-const PATH = [toolbox, nodeBin, ...systemBins].join(':')
+const sysBin = systemBinWithout(path.join(root, 'sys-bin'), ['gh'])
+const PATH = [toolbox, nodeBin, sysBin].join(':')
 // The daemon asks `$SHELL -lc` for the user's PATH; a login /bin/sh would add
 // /etc/paths.d (Homebrew, where gh lives). This wrapper answers with PATH above.
 fs.writeFileSync(path.join(shellBin, 'sh'), [
@@ -93,6 +89,11 @@ Object.assign(process.env, {
   WALNUT_BUNDLED_STORE_DIR: path.join(root, 'bundled-store'),
   GIT_CONFIG_GLOBAL: gitconfig,
   GIT_CONFIG_NOSYSTEM: '1',
+  // The daemon adds the system dirs after the login PATH (host-runtime-core.ts
+  // defaultExtraPaths), which brings /usr/bin/gh back on CI. A daemon that names the
+  // test guard while its PATH does not hold it keeps exactly this PATH (`pinned`).
+  WALNUT_TEST_EXEC_GUARD: path.join(repoRoot, 'tests/setup/exec-guard-bin'),
+  WALNUT_TEST_EXEC_GUARD_LOG: path.join(root, 'exec-guard.log'),
   MOCK_CLAUDE_TRANSCRIPT_DIR: path.join(root, '.claude/projects'),
   MOCK_CLAUDE_PLAIN_ECHO: '1',
   MOCK_SNAPSHOT_TURN_DELAY_MS: '300',

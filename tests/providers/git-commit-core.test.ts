@@ -16,6 +16,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { createGitAttribution, type AttrOp } from '../../src/providers/git-attribution-core.js'
 import { createGitCommitCore, type CommitPlanRepo, type GitCommitDeps, type PlanChanges } from '../../src/providers/git-commit-core.js'
+import { systemBinWithout } from '../helpers/system-bin.js'
 
 let ROOT = ''
 let ENV: Record<string, string> = {}
@@ -124,19 +125,7 @@ beforeAll(() => {
   const gitconfig = path.join(ROOT, 'gitconfig')
   fs.writeFileSync(gitconfig, '[user]\n\tname = Test User\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[commit]\n\tgpgSign = false\n')
   // The system dirs' tools, and never a real gh (the PR cases bring their own).
-  // The dirs themselves are not enough: CI's Ubuntu image ships gh in /usr/bin,
-  // so the "no gh" case saw one there. Every system tool but gh is linked into
-  // one directory of this root, the first dir in PATH order winning a name.
-  const sysbin = path.join(ROOT, 'sysbin')
-  fs.mkdirSync(sysbin)
-  for (const dir of ['/usr/bin', '/bin', '/usr/sbin', '/sbin']) {
-    let names: string[] = []
-    try { names = fs.readdirSync(dir) } catch { continue }
-    for (const name of names) {
-      if (name === 'gh' || fs.existsSync(path.join(sysbin, name))) continue
-      try { fs.symlinkSync(path.join(dir, name), path.join(sysbin, name)) } catch { /* a racing duplicate */ }
-    }
-  }
+  const sysbin = systemBinWithout(path.join(ROOT, 'sysbin'), ['gh'])
   ENV = {
     PATH: sysbin,
     HOME: home,

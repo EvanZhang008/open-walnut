@@ -163,7 +163,11 @@ test('web reload: an image still in a session box is listed, and Go there from a
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('main:open-session', { detail: { sessionId: 'pw-vscode-session' } })))
   const box = sessionColumn(page).locator('.session-panel-input')
   await expect(box.locator('textarea')).toBeVisible()
+  // An uploaded image stays with the draft over a reload (99843af1e), so only one still
+  // uploading is lost: its upload is held open for the rest of the test.
+  await page.route('**/api/images/upload', () => { /* never answered: the image stays uploading */ })
   await attach(page, ['not-sent.png'])
+  await expect(box.locator('.chat-image-preview.is-uploading')).toHaveCount(1)
   // Home records its open column in the URL; leave only after it did, or that write lands on the next page.
   await expect(page).toHaveURL(/s1=pw-vscode-session/, { timeout: 15_000 })
   // Another page: Home stays mounted behind it, hidden.
