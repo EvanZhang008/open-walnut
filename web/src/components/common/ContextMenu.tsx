@@ -223,11 +223,14 @@ export function contextMenuReasonRows(rows: ContextMenuItem[]): Map<number, stri
  * moves the content under it, never the anchor, so where the anchor sits says nothing about that
  * scroll. What it rides over does: a person's scroll moves that content, while the browser's scroll
  * anchoring (a live update above, which shifts scrollTop to keep the view where it was) does not.
- * So the menu reads the content under the pinned part (`under`): the block a sticky part sticks in,
- * or, when that block is the pane itself, the pane's first other child with a box. Every Home
- * navigation project header is sticky (home-navigation.css), and "any scroll of the pane closes"
- * took its menu down under the hand whenever a task was added or removed above it (2026-11-10, a
- * shared CI fixture). A fixed part has no such block: any scroll of its pane closes (`under` null).
+ * So the menu reads the content under the pinned part (`under`): the row on screen right below it,
+ * found at a point just under its bottom edge. Not the block it sticks in: a task added to the same
+ * project above the visible rows moves that block's top while anchoring keeps the rows in place.
+ * With nothing on screen there, the block or the pane's first other child that moves with the
+ * content (in flow, with a box). Every Home navigation project header is sticky
+ * (home-navigation.css), and "any scroll of the pane closes" (1a91f2a69) took its menu down under
+ * the hand whenever a task was added or removed above it (2026-11-10, a shared CI fixture). A fixed
+ * part has no such content: any scroll of its pane closes (`under` null).
  */
 function pinnedInPane(el: HTMLElement): { under: HTMLElement | null } | null {
   let holder: HTMLElement | null = null;
@@ -239,13 +242,34 @@ function pinnedInPane(el: HTMLElement): { under: HTMLElement | null } | null {
       if (cs.position === 'sticky') { holder = p; continue; }
       if (scrolls) return null;
     } else if (scrolls || !p.parentElement) {
-      const block = holder.parentElement;
-      if (block && block !== p) return { under: block };
-      const other = [...p.children].find((c): c is HTMLElement => c !== holder && c instanceof HTMLElement && c.getBoundingClientRect().height > 0);
-      return { under: other ?? null };
+      return { under: contentUnder(holder, p) };
     }
   }
   return null;
+}
+
+/** Moves with its pane's content: no sticky, fixed or absolute box between it and the pane, and a
+ *  box of its own. */
+function movesWithContent(el: HTMLElement, pane: HTMLElement): boolean {
+  if (el.getBoundingClientRect().height <= 0) return false;
+  for (let p: HTMLElement | null = el; p && p !== pane; p = p.parentElement) {
+    if (/^(sticky|fixed|absolute)$/.test(getComputedStyle(p).position)) return false;
+  }
+  return true;
+}
+
+function contentUnder(holder: HTMLElement, pane: HTMLElement): HTMLElement | null {
+  const r = holder.getBoundingClientRect();
+  // Every element at that point, the menu's backdrop and the menu first: they are not in the pane.
+  const hits = typeof document.elementsFromPoint === 'function'
+    ? document.elementsFromPoint(r.left + Math.min(16, r.width / 2), r.bottom + 2) : [];
+  for (const hit of hits) {
+    if (!(hit instanceof HTMLElement) || hit === pane || !pane.contains(hit) || holder.contains(hit)) continue;
+    if (movesWithContent(hit, pane)) return hit;
+  }
+  const block = holder.parentElement;
+  const candidates = block && block !== pane ? [block] : [...pane.children];
+  return candidates.find((c): c is HTMLElement => c !== holder && c instanceof HTMLElement && movesWithContent(c, pane)) ?? null;
 }
 
 export function ContextMenu({

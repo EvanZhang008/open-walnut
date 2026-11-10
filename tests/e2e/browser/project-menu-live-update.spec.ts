@@ -1,83 +1,149 @@
 /**
- * A project's right-click menu stays open while live updates change the list above it.
+ * A project's right-click menu stays open while live updates change the list above what it shows.
  *
  * Every Home navigation project header is sticky (home-navigation.css). Since 1a91f2a69 a menu on a
  * sticky control closed on any scroll of the pane holding it, and a task added or removed above the
- * header makes the browser's scroll anchoring shift the pane's scrollTop to keep the view where it
- * was: a scroll event that moved nothing under the menu, which then vanished under the hand
+ * visible rows makes the browser's scroll anchoring shift the pane's scrollTop to keep the view where
+ * it was: a scroll event that moved nothing on screen, which then took the menu down under the hand
  * (2026-11-10: home-navigation.spec.ts's Sort row and group-menu-settings.spec.ts's Project row on a
  * shared CI fixture, where other specs add and remove tasks all the time). The churn below is what
- * those specs did to it; the menu must ride it out, and the header must not have moved.
+ * those specs did to it: in other projects above the header, and in the header's own project above
+ * its visible rows (which moves the project's block but not the rows on screen). The menu must ride
+ * both out, and a person's own wheel over the list must still close it.
+ *
+ * WebKit has no CSS scroll anchoring: a live update never scrolls the pane there, so the failure
+ * cannot happen and the churn would prove nothing (each case checks the pane did scroll).
  */
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs, listProjectHeader, openListProject } from './todo-panel-helpers'
 import { presetPanelDesign } from './status-section-helpers'
 import { openHome } from './home-navigation-helpers'
 
-test('the project menu stays open while tasks come and go above its header', async ({ page, baseURL, browserName }) => {
-  // WebKit has no CSS scroll anchoring: a live update above never scrolls the pane there, so the
-  // failure this pins cannot happen and the churn proves nothing (the pane-scroll check below).
-  test.skip(browserName === 'webkit', 'no scroll anchoring in WebKit')
-  const tag = `${test.info().project.name}-${test.info().repeatEachIndex}-${Date.now()}`
-  const project = `Live menu ${tag}`
-  const made: string[] = []
-  const make = async (title: string, inProject: string) => {
-    const res = await page.request.post('/api/tasks', { data: { title: `${title} ${tag}`, project: inProject, source: 'local' } })
-    expect(res.ok()).toBe(true)
-    const id = (await res.json()).task.id as string
-    made.push(id)
-    return id
-  }
-  try {
-    // Enough rows that the list scrolls, so the header can sit near its top with projects above it
-    // (projects are listed by name: the churn's "0 …" project lands above this one).
-    await page.setViewportSize({ width: 1280, height: 640 })
-    const ids = await Promise.all(Array.from({ length: 24 }, (_, i) => make(`row ${i}`, project)))
-    for (const id of ids) await page.request.delete(`/api/focus/tasks/${id}`)
-    await isolateUiPrefs(page)
-    await presetPanelDesign(page, 'project')
-    await openHome(page, baseURL!)
-    await openListProject(page, project)
-    const header = listProjectHeader(page, project)
+test.skip(({ browserName }) => browserName === 'webkit', 'no scroll anchoring in WebKit')
 
-    // The list scrolled so the header sits near its top with rows above it, the way a person
-    // reaches a project down the list: only a scrolled pane is shifted by scroll anchoring.
-    const scrolled = await header.evaluate((el) => {
-      const pane = el.closest('.home-navigation-scroll') as HTMLElement
-      pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top - 120
-      return pane.scrollTop
-    })
-    expect(scrolled).toBeGreaterThan(0)
-    await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
-    // Count the scrolls of the list pane the churn causes: without one, this proves nothing.
-    await page.evaluate(() => {
-      const w = window as unknown as { __paneScrolls: number }
-      w.__paneScrolls = 0
-      document.querySelector('.home-navigation-scroll')?.addEventListener('scroll', () => { w.__paneScrolls++ })
-    })
-    await header.click({ button: 'right' })
-    const menu = page.getByTestId('project-ctx-menu')
-    await expect(menu).toBeVisible()
-    await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
-    const before = await header.boundingBox()
+const made: string[] = []
+let tag = ''
 
-    // Tasks added and removed above the header: in the Inbox and in a project of their own.
-    const other = `0 Live churn ${tag}`
-    for (let round = 0; round < 8; round++) {
-      for (const where of ['', other]) {
-        const id = await make(`churn ${round}`, where)
-        if (round % 2 === 1) await page.request.delete(`/api/tasks/${id}?force=true`)
-      }
-      await page.waitForTimeout(250)
+async function make(page: Page, title: string, project: string): Promise<string> {
+  // Unpinned from the start, so it lands in its project's list at once.
+  const res = await page.request.post('/api/tasks', { data: { title: `${title} ${tag}`, project, source: 'local', pinned: false } })
+  expect(res.ok()).toBe(true)
+  const id = (await res.json()).task.id as string
+  made.push(id)
+  return id
+}
+
+test.beforeEach(async ({ page }) => {
+  tag = `${test.info().project.name}-${test.info().repeatEachIndex}-${Date.now()}`
+  made.length = 0
+})
+
+test.afterEach(async ({ request }) => {
+  for (const id of made) await request.delete(`/api/tasks/${id}?force=true`).catch(() => undefined)
+})
+
+/**
+ * A project of 24 rows on a short window, opened, its list scrolled by `past` px relative to the
+ * header (negative: the header sits that far below the pane's top; positive: scrolled past it, so it
+ * sticks with its rows going under it), and its right-click menu open and settled.
+ */
+async function openMenuOnScrolledProject(page: Page, baseURL: string, project: string, past: number) {
+  await page.setViewportSize({ width: 1280, height: 640 })
+  await Promise.all(Array.from({ length: 24 }, (_, i) => make(page, `row ${i}`, project)))
+  await isolateUiPrefs(page)
+  await presetPanelDesign(page, 'project')
+  await openHome(page, baseURL)
+  await openListProject(page, project)
+  const header = listProjectHeader(page, project)
+  const scrolled = await header.evaluate((el, by) => {
+    const pane = el.closest('.home-navigation-scroll') as HTMLElement
+    pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top + by
+    return pane.scrollTop
+  }, past)
+  expect(scrolled).toBeGreaterThan(0)
+  await frames(page)
+  // Count the scrolls of the list pane the churn causes: without one, a case proves nothing.
+  await page.evaluate(() => {
+    const w = window as unknown as { __paneScrolls: number }
+    w.__paneScrolls = 0
+    document.querySelector('.home-navigation-scroll')?.addEventListener('scroll', () => { w.__paneScrolls++ })
+  })
+  await header.click({ button: 'right' })
+  const menu = page.getByTestId('project-ctx-menu')
+  await expect(menu).toBeVisible()
+  await frames(page)
+  return { header, menu }
+}
+
+const frames = (page: Page) => page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+const paneScrolls = (page: Page) => page.evaluate(() => (window as unknown as { __paneScrolls: number }).__paneScrolls)
+
+/** Tasks added to each project, every other round removed. */
+async function churn(page: Page, projects: string[]) {
+  for (let round = 0; round < 8; round++) {
+    for (const where of projects) {
+      const id = await make(page, `churn ${round}`, where)
+      if (round % 2 === 1) await page.request.delete(`/api/tasks/${id}?force=true`)
     }
-    await expect.poll(() => page.evaluate(() => (window as unknown as { __paneScrolls: number }).__paneScrolls)).toBeGreaterThan(0)
-    await expect(menu).toBeVisible()
-    await expect(menu.getByRole('menuitem', { name: /^Sort/ })).toBeVisible()
-    const after = await header.boundingBox()
-    expect(Math.abs(after!.y - before!.y)).toBeLessThanOrEqual(1)
-    await page.keyboard.press('Escape')
-    await expect(menu).toHaveCount(0)
-  } finally {
-    for (const id of made) await page.request.delete(`/api/tasks/${id}?force=true`).catch(() => undefined)
+    await page.waitForTimeout(250)
   }
+}
+
+test('the project menu stays open while tasks come and go in the projects above its header', async ({ page, baseURL }) => {
+  // Projects are listed by name: "0 …" lands above this one.
+  const { header, menu } = await openMenuOnScrolledProject(page, baseURL!, `Live menu ${tag}`, -120)
+  const before = await header.boundingBox()
+  await churn(page, ['', `0 Live churn ${tag}`])
+  await expect.poll(() => paneScrolls(page)).toBeGreaterThan(0)
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: /^Sort/ })).toBeVisible()
+  const after = await header.boundingBox()
+  expect(Math.abs(after!.y - before!.y)).toBeLessThanOrEqual(1)
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+})
+
+test('the project menu stays open while its own project grows above the rows on screen; a wheel still closes it', async ({ page, baseURL }) => {
+  const project = `Live menu own ${tag}`
+  // Scrolled well past the header: it sticks at the top, its first rows under it and out of sight.
+  const { header, menu } = await openMenuOnScrolledProject(page, baseURL!, project, 300)
+  const rowsOnScreen = () => page.locator('.home-navigation-scroll .todo-panel-item[data-task-id]').evaluateAll((rows) => {
+    const r = (document.querySelector('.home-navigation-scroll') as HTMLElement).getBoundingClientRect()
+    return rows.filter((row) => { const b = row.getBoundingClientRect(); return b.top >= r.top && b.bottom <= r.bottom })
+      .map((row) => `${row.getAttribute('data-task-id')}@${Math.round(row.getBoundingClientRect().top)}`).slice(0, 6)
+  })
+  const shown = await rowsOnScreen()
+  // Rows appear in the project above the ones on screen, out of sight under the stuck header, and
+  // go again. Drawn by hand into the project's block: a task added there through the API makes the
+  // list redraw its rows and jump (a separate behaviour), so the block's own growth, which scroll
+  // anchoring answers by shifting scrollTop and the project's block top with it while the rows on
+  // screen stay put, is staged directly.
+  for (let round = 0; round < 4; round++) {
+    await header.evaluate((el, n) => {
+      const row = document.createElement('div')
+      row.className = 'pw-staged-row'
+      row.style.height = '56px'
+      row.dataset.round = String(n)
+      el.parentElement!.insertBefore(row, el.nextSibling)
+    }, round)
+    await page.waitForTimeout(250)
+  }
+  await header.evaluate((el) => { el.parentElement!.querySelectorAll('.pw-staged-row')[0]?.remove() })
+  await page.waitForTimeout(250)
+  await expect.poll(() => paneScrolls(page)).toBeGreaterThan(0)
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: /^Sort/ })).toBeVisible()
+  // What the person looks at did not move: scroll anchoring kept it in place.
+  expect(await rowsOnScreen()).toEqual(shown)
+  await header.evaluate((el) => { el.parentElement!.querySelectorAll('.pw-staged-row').forEach((r) => r.remove()) })
+
+  // A person's own scroll over the list still closes it: a wheel low on the list's left edge, clear
+  // of the menu (it opens rightward from the click; a wheel over the menu scrolls the menu).
+  const pane = (await page.locator('.home-navigation-scroll').boundingBox())!
+  const box = (await menu.boundingBox())!
+  const at = { x: pane.x + 24, y: pane.y + pane.height - 24 }
+  expect(at.x < box.x || at.y > box.y + box.height).toBe(true)
+  await page.mouse.move(at.x, at.y)
+  await page.mouse.wheel(0, 240)
+  await expect(menu).toHaveCount(0)
 })
