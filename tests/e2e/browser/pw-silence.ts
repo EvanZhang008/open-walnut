@@ -13,6 +13,7 @@
  */
 import { createRequire } from 'node:module'
 import { AUTOMATION_SILENCE_JS } from '../../../src/lib/automation-silence.js'
+import { guardWebkitPasteboard } from './pw-pasteboard.js'
 
 interface ContextLike { addInitScript(script: { content: string }): Promise<void> }
 interface Instrumentation { addListener(listener: { runAfterCreateBrowserContext?: (c: ContextLike) => Promise<void> }): void }
@@ -53,4 +54,8 @@ if (!g[FLAG]) {
   } catch (e) {
     console.warn(`[pw-silence] could not silence test browsers: ${(e as Error).message}`)
   }
+  // Nor does a WebKit test browser on a Mac ever write the person's clipboard (pw-pasteboard.ts).
+  // Outside the try above: when it cannot be put in place, the run stops instead of going on.
+  const core = createRequire(import.meta.url)('playwright-core') as Record<string, unknown> & { _defaultLaunchOptions?: { env?: Record<string, string>; executablePath?: string } }
+  guardWebkitPasteboard(core.webkit as Parameters<typeof guardWebkitPasteboard>[0], process.platform, undefined, () => core._defaultLaunchOptions)
 }
