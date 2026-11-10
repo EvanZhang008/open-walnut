@@ -68,8 +68,15 @@ function useOnScreen(el: HTMLElement | null): boolean {
   return intersecting && visible;
 }
 
-export function SessionBrowserCard({ taskId }: { taskId: string }) {
-  const { state, reread } = useBrowserView(taskId);
+export function SessionBrowserCard({ taskId, view, onClose }: {
+  taskId: string;
+  /** The tabs, read by the host (the header pill, SessionBrowserChip.tsx): no second read here. */
+  view?: ReturnType<typeof useBrowserView>;
+  /** Shown in the pill's popover: × closes the popover (no fold), and so does Dismiss. */
+  onClose?: () => void;
+}) {
+  const own = useBrowserView(view ? undefined : taskId);
+  const { state, reread } = view ?? own;
   const [prefs, setPrefs] = usePageViewOf<CardPrefs>('panel', 'browser-card', taskId, PREFS, isPrefs);
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
   const [picture, setPicture] = useState<{ image: string; at: string } | null>(null);
@@ -92,7 +99,9 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   const followedDevice = followed?.device;
   // The picture belongs to this task, browser and tab: any of them changing starts it afresh.
   const shownKey = followed ? `${taskId}|${tabKey(followed)}` : undefined;
-  const watching = !!followed && !prefs.folded && onScreen;
+  // In the pill's popover the view is open or not there: never folded.
+  const folded = !onClose && prefs.folded;
+  const watching = !!followed && !folded && onScreen;
 
   // A new tab followed (another browser's, another task's): no picture of the old one under its title.
   const shownTab = useRef<string | undefined>(undefined);
@@ -212,6 +221,9 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   // Once live pictures flow (or the window shows), the offer and its words go.
   const offerNow = liveGrantOffer(frame, followed);
   useEffect(() => { if (!offerNow) setGranting(null); }, [offerNow]);
+  // In the pill's popover, nothing to show closes it (no empty popover left open).
+  const nothing = !!state && !followed && (!state.ended || prefs.dismissed === state.ended.at);
+  useEffect(() => { if (nothing) onClose?.(); }, [nothing, onClose]);
 
   if (!state) return null;
 
@@ -223,7 +235,7 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
         <span className="session-browser-dot session-browser-dot--off" aria-hidden />
         <span className="session-browser-ended-text">Browser: {endedLine(ended.why)} <span className="session-browser-muted">{agoLine(ended.at, Date.now())}</span></span>
         <button type="button" className="session-browser-btn" aria-label="Dismiss" title="Dismiss"
-          onClick={() => setPrefs((p) => ({ ...p, dismissed: ended.at }))}>&times;</button>
+          onClick={() => { setPrefs((p) => ({ ...p, dismissed: ended.at })); onClose?.(); }}>&times;</button>
       </div>
     );
   }
@@ -247,7 +259,7 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
   const driving = !!followed.driving;
   const asks = handLine({ driving, signIn: followed.signIn });
 
-  if (prefs.folded) {
+  if (folded) {
     return (
       <div className="session-browser-card session-browser-card--folded" data-testid="session-browser-folded">
         <span className="session-browser-dot" aria-hidden />
@@ -276,8 +288,8 @@ export function SessionBrowserCard({ taskId }: { taskId: string }) {
                 title="Bring this tab up in your browser and use it yourself; the agent waits until you hand it back" data-testid="session-browser-takeover">{handing === 'take' ? 'Taking over…' : 'Take over'}</button>}
           <button type="button" className="session-browser-btn session-browser-btn--stop" onClick={() => { void stop(); }} disabled={stopping}
             title="The agent stops using this tab. The tab stays open, yours." data-testid="session-browser-stop">{stopping ? 'Stopping…' : 'Stop'}</button>
-          <button type="button" className="session-browser-btn" aria-label="Hide the Browser view" title="Hide (one line stays)"
-            onClick={() => setPrefs((p) => ({ ...p, folded: true }))} data-testid="session-browser-hide">&times;</button>
+          <button type="button" className="session-browser-btn" aria-label={onClose ? 'Close the Browser view' : 'Hide the Browser view'} title={onClose ? 'Close' : 'Hide (one line stays)'}
+            onClick={() => { if (onClose) onClose(); else setPrefs((p) => ({ ...p, folded: true })); }} data-testid="session-browser-hide">&times;</button>
         </div>
       </header>
       {tabs.length > 1 && (

@@ -41,8 +41,6 @@ import { sessionScope } from '@/utils/file-view-state';
 import { SessionCodeView } from './SessionCodeView';
 import { SessionWebView, activeLocalPort, type WebViewRequest } from './SessionWebView';
 import { SessionServersChip } from './SessionServersChip';
-import { SessionServersTurnContext, type SessionServersTurnContextValue } from './SessionServersTurnCard';
-import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { useSessionServers } from '@/hooks/useSessionServers';
 import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } from '@/utils/service-link';
 import { sessionGitStore, useSessionGitGlance } from '@/stores/session-git-store';
@@ -92,7 +90,8 @@ import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, peekSessionRecord, keepSessionRecord, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession, type ContinueInNewFolderResult } from '@/api/sessions';
 import { FolderGoneBanner } from './FolderGoneBanner';
-import { SessionBrowserCard } from './SessionBrowserCard';
+import { SessionBrowserChip } from './SessionBrowserChip';
+import { useBrowserView } from './useBrowserView';
 import { UsageLimitBanner, UsageLimitContinuedNote, useContinuingAfterLimit } from './UsageLimitBanner';
 import { EngineFallbackBanner, showsEngineFallback } from './EngineFallbackBanner';
 import { isFolderGoneReason } from '@/utils/folder-gone';
@@ -1748,17 +1747,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // The servers this session started, listed in the Web view: asked only while it is open.
   // Slowly while the panel shows (the menu's count starts from it), every few seconds in the Web view.
   const webServers = useSessionServers(sessionId, { enabled: !inset, fast: activeView === 'web' });
+  // The task's tabs in the person's browser, read once for the header pill and the phone's.
+  const browserView = useBrowserView(!inset && !plainChat ? session?.taskId : undefined);
   // The page the Web view shows, by its port: the title row's server card marks it.
   const webShownPort = activeView === 'web' && webRequest?.url ? activeLocalPort(webRequest.url) : null;
-  const hostDisplayName = useHostDisplayLabels();
-  // The chat's turn cards read the servers from here (SessionServersTurnCard.tsx), so a scan
-  // re-renders those cards and not the whole history.
-  const serversTurnCtx = useMemo<SessionServersTurnContextValue | null>(() => (inset ? null : {
-    servers: webServers,
-    activePort: webShownPort,
-    hostLabel: webServers.host && webServers.host !== '__local__' ? hostDisplayName(webServers.host) : '',
-    onOpen: (s) => openWebView(s.url),
-  }), [inset, webServers, webShownPort, hostDisplayName, openWebView]);
   // Click delegation for the whole chat column: any rendered anchor (markdown
   // autolink, model-written HTML, tool output) whose href is a service. A plain
   // web link, a modified click (⌘/Ctrl/Shift/middle = "give me a real tab"), or a
@@ -2544,7 +2536,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const headerPills = (
     <>
       <WaitingChip task={sessionTask} />
+      {/* What the session holds live (its servers, its browser tabs) is a pill here and only here,
+          its details in the pill's popover; never a card in the chat
+          (tests/web/live-resources-header-only-guard.test.ts). */}
       {!inset && <SessionServersChip servers={webServers} activePort={webShownPort} onOpen={(s) => openWebView(s.url)} />}
+      {!inset && !plainChat && session?.taskId && <SessionBrowserChip taskId={session.taskId} view={browserView} />}
       {session?.provider === 'embedded' && (
         <span className="session-panel-badge session-panel-embedded-badge" data-header-pill="embedded" data-short="E">
           {ICON_ROBOT}<span className="task-pill-long"> Embedded</span>
@@ -3365,6 +3361,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               {!loading && kebabSlot && !inset && createPortal(
                 <SessionServersChip servers={webServers} activePort={webShownPort} onOpen={(s) => openWebView(s.url)} compact />,
                 kebabSlot, 'web-chip')}
+              {!loading && kebabSlot && !inset && !plainChat && session?.taskId && createPortal(
+                <SessionBrowserChip taskId={session.taskId} view={browserView} compact />,
+                kebabSlot, 'browser-chip')}
               {!loading && sessionId && kebabSlot && createPortal(renderSessionKebab((close) => (
                 <PhoneSessionHeaderRows
                   sessionId={sessionId}
@@ -3395,8 +3394,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             />
           </div>
         )}
-        {/* The task's Browser view: shows itself while the session drives the person's browser. */}
-        {!inset && !plainChat && session?.taskId && <SessionBrowserCard taskId={session.taskId} />}
         {session?.cwdGone && !session.archived && (
           <FolderGoneBanner sessionId={sessionId} cwdGone={session.cwdGone} onDone={handleFolderMoved} />
         )}
@@ -3852,7 +3849,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           <IslandHostContext.Provider value={islandHost}>
           <MessageAboutContext.Provider value={sessionTask?.org_role === 'main' || sessionTask?.org_role === 'lead'}>
           <TreeHalfContext.Provider value={rightHalf}>
-          <SessionServersTurnContext.Provider value={serversTurnCtx}>
           <SessionChatHistory
             key={`${sessionId}:${rewindEpoch}`}
             sessionId={sessionId}
@@ -3894,7 +3890,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onQuoteInChat={quoteInChat}
             {...(plainChat ? { workingText: 'Walnut is thinking…' } : {})}
           />
-          </SessionServersTurnContext.Provider>
           </TreeHalfContext.Provider>
           </MessageAboutContext.Provider>
           </IslandHostContext.Provider>

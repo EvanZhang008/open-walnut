@@ -165,11 +165,9 @@ test('a session\'s servers are listed, open in the Web view, and stop without to
   await expect(chipCard).toHaveCount(0)
   await expect(panel).toBeVisible()
 
-  // ── The servers started after the last message are this turn's: one card at the chat's end ──
-  const turnCard = panel.getByTestId('session-servers-turn-card')
-  await expect(turnCard).toHaveCount(1)
-  await expect(turnCard.getByTestId('session-server-row')).toHaveCount(3)
-  await expect(turnCard).toContainText('Servers this turn started')
+  // ── The servers are the header pill's alone: no card in the chat (2026-11-09, the user:
+  //    "not show bottom,only show the top one there") ──
+  await expect(panel.locator('.session-panel-body').getByTestId('session-server-row')).toHaveCount(0)
 
   // ── The menu's Web preview row counts the web pages it can open (two; the raw service is not one) ──
   const row = await webPreviewRow(page, panel)

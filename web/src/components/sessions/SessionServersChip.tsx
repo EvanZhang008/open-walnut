@@ -4,7 +4,10 @@
  * tags, on the left ... hover shows the details", 2026-10-31). Not in the tools row
  * (SessionPanel.tsx: "Do not add more here").
  *
- *   chip   ":5173" for one web page, "Web 3" for more; nothing while no web page runs
+ *   chip   ":5173" for one web page, "Web 3" for more; a server that is not a web page counts
+ *          only when there is no web page (":2014", "2 servers"); nothing while none runs. The
+ *          servers are a pill here only, never a card in the chat (2026-11-09, the user: "not
+ *          show bottom,only show the top one there"; tests/web/live-resources-header-only-guard.test.ts)
  *   card   on hover, focus or a tap: the session's server list (SessionServerList), each
  *          row with Open (into the Web view) and Stop (asked first, as everywhere)
  *
@@ -37,9 +40,11 @@ export const WEB_GLOBE_ICON = (
   </svg>
 );
 
-/** The chip's words: the one page's port, else "Web" and how many. */
-export function serversChipLabel(pages: readonly Pick<SessionServer, 'port'>[]): string {
-  return pages.length === 1 ? `:${pages[0]!.port}` : `Web ${pages.length}`;
+/** The chip's words: the one page's port, else "Web" and how many; with no web page, the servers. */
+export function serversChipLabel(pages: readonly Pick<SessionServer, 'port'>[], all: readonly Pick<SessionServer, 'port'>[] = pages): string {
+  if (pages.length === 1) return `:${pages[0]!.port}`;
+  if (pages.length > 1) return `Web ${pages.length}`;
+  return all.length === 1 ? `:${all[0]!.port}` : `${all.length} servers`;
 }
 
 export function SessionServersChip({ servers, activePort, onOpen, compact = false }: {
@@ -73,15 +78,17 @@ export function SessionServersChip({ servers, activePort, onOpen, compact = fals
 
   useOverlayLayer({ open, onClose: () => setOpen(false), refs: [cardRef, chipRef], trapFocus: false });
 
-  const pages = servers.servers.filter(openable);
-  // Nothing to open: no chip (and no card left over from one).
-  useEffect(() => { if (pages.length === 0) setOpen(false); }, [pages.length]);
-  if (pages.length === 0) return null;
+  const all = servers.servers;
+  const pages = all.filter(openable);
+  // No server: no chip (and no card left over from one).
+  useEffect(() => { if (all.length === 0) setOpen(false); }, [all.length]);
+  if (all.length === 0) return null;
 
-  const label = serversChipLabel(pages);
+  const label = serversChipLabel(pages, all);
   const title = pages.length === 1
     ? `:${pages[0]!.port} ${pages[0]!.title || serverLabel(pages[0]!)}, a web server this session started`
-    : `${pages.length} web servers this session started`;
+    : pages.length > 1 ? `${pages.length} web servers this session started`
+      : all.length === 1 ? `:${all[0]!.port} ${serverLabel(all[0]!)}, a server this session started` : `${all.length} servers this session started`;
   const hostLabel = servers.host && servers.host !== '__local__' ? hostName(servers.host) : '';
   return (
     <>
@@ -111,7 +118,7 @@ export function SessionServersChip({ servers, activePort, onOpen, compact = fals
       >
         <span className="session-web-chip-dot" aria-hidden="true" />
         {compact
-          ? <><span className="session-web-chip-icon" aria-hidden="true">{WEB_GLOBE_ICON}</span><span className="session-web-chip-count">{pages.length}</span></>
+          ? <><span className="session-web-chip-icon" aria-hidden="true">{WEB_GLOBE_ICON}</span><span className="session-web-chip-count">{pages.length || all.length}</span></>
           : <span className="session-web-chip-label">{label}</span>}
       </button>
       {open && typeof document !== 'undefined'

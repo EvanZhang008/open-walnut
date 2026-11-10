@@ -1,0 +1,94 @@
+/* The task's browser use as one pill in the session header (components/sessions/SessionBrowserChip.tsx),
+   the same shape as the servers' pill (.session-web-chip), and its popover holding the Browser view. */
+.session-browser-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.session-browser-chip:hover,
+.session-browser-chip[aria-expanded="true"] { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--fg); }
+.session-browser-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.session-browser-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex: none; }
+/* The agent asks the person to sign in: the one state that needs them, in the attention colour. */
+.session-browser-chip.is-ask {
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--fg);
+}
+.session-browser-chip.is-ask:hover,
+.session-browser-chip.is-ask[aria-expanded="true"] { background: color-mix(in srgb, var(--warning) 22%, transparent); }
+.session-browser-chip.is-ask .session-browser-chip-dot { background: var(--warning); }
+/* The person has the tab (Take over): the agent waits. */
+.session-browser-chip.is-yours {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.session-browser-chip.is-yours .session-browser-chip-dot { background: var(--accent); }
+/* The last tab gone while the view is open: no longer in use. */
+.session-browser-chip.is-ended {
+  border-color: var(--border);
+  background: var(--bg-secondary);
+}
+.session-browser-chip.is-ended .session-browser-chip-dot { background: var(--fg-muted); }
+
+.session-browser-popover {
+  position: fixed;
+  z-index: 10050;
+  width: min(560px, calc(100vw - 24px));
+  max-height: min(80vh, 720px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated, var(--card-bg));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+}
+.session-browser-popover:empty { display: none; }
+/* The view fills the popover: no margin or border of its own there. */
+.session-browser-popover > .session-browser-card { margin: 0; border: 0; border-radius: 0; background: transparent; }
+
+/* The phone's top bar, beside the kebab: a dot and "B" in a 44 px target. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact {
+    justify-content: center;
+    gap: 3px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0 6px;
+    border-color: transparent;
+    background: transparent;
+    color: var(--success);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-ask { color: var(--warning); }
+  /* The title's gutters grow by every pill in the slot beside the kebab (the slot's children:
+     the kebab and each pill), whichever pills they are: wait, pull request, web, browser. */
+  .app-shell-navigation .phone-topbar:has(.phone-bar-slot .session-browser-chip) .phone-topbar-title {
+    left: calc(96px + var(--wn-safe-left));
+    right: calc(96px + var(--wn-safe-right));
+  }
+  .app-shell-navigation .phone-topbar:has(.phone-bar-slot .session-browser-chip):has(.phone-bar-slot > :nth-child(3)) .phone-topbar-title {
+    left: calc(140px + var(--wn-safe-left));
+    right: calc(140px + var(--wn-safe-right));
+  }
+  .app-shell-navigation .phone-topbar:has(.phone-bar-slot .session-browser-chip):has(.phone-bar-slot > :nth-child(4)) .phone-topbar-title {
+    left: calc(184px + var(--wn-safe-left));
+    right: calc(184px + var(--wn-safe-right));
+  }
+  .app-shell-navigation .phone-topbar:has(.phone-bar-slot .session-browser-chip):has(.phone-bar-slot > :nth-child(5)) .phone-topbar-title {
+    left: calc(228px + var(--wn-safe-left));
+    right: calc(228px + var(--wn-safe-right));
+  }
+}

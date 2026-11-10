@@ -67,7 +67,9 @@ describe('session header title row', () => {
       // to the kebab on phone"), nothing else.
       .replace('createPortal(<WaitingChip task={sessionTask} compact />, kebabSlot', 'createPortal(PHONE_WAIT, kebabSlot')
       .replace('createPortal(<PrPill task={sessionTask} compact />, kebabSlot', 'createPortal(PHONE_PR, kebabSlot')
-      .replace(/createPortal\(\s*<SessionServersChip\b(?:(?!\/>)[\s\S])*\bcompact \/>,\s*kebabSlot/, 'createPortal(PHONE_WEB, kebabSlot');
+      .replace(/createPortal\(\s*<SessionServersChip\b(?:(?!\/>)[\s\S])*\bcompact \/>,\s*kebabSlot/, 'createPortal(PHONE_WEB, kebabSlot')
+      // And the task's browser use as one more (2026-11-09: live resources are header pills only).
+      .replace(/createPortal\(\s*<SessionBrowserChip\b(?:(?!\/>)[\s\S])*\bcompact \/>,\s*kebabSlot/, 'createPortal(PHONE_BROWSER, kebabSlot');
     const found = [...row.matchAll(PILL_LIKE)].map((m) => m[1]).filter((name) => !(name in ALLOWED_ON_ROW));
     expect(found, 'a label beside the title: put it in headerPills, or a tag in headerTags').toEqual([]);
     // A label drawn as a plain element (a badge span, a tag chip) counts too. The one badge the

@@ -6,9 +6,10 @@
  * also show a browser screen in the task, it can be a bit slow it is fine, but at least we know".
  *
  * A real task session (the mock CLI) opens a page in the person's browser through the `browser`
- * act route, as its agent would. Its session panel on Home then shows the Browser view by itself:
- * the tab's title, address and window (Walnut's agent window, not minimized), and a live picture
- * that follows the page. Hide folds it to one line and no picture is asked for meanwhile; Stop
+ * act route, as its agent would. Its session panel's header on Home then shows a Browser pill by
+ * itself (never a card in the chat); a click opens the Browser view in its popover: the tab's title,
+ * address and window (Walnut's agent window, not minimized), and a live picture that follows the
+ * page. Closing the popover asks for no picture meanwhile; Stop
  * ends the agent's use (the tab stays open) and the view says so. The open names the window and
  * tab, and lists the person's own tab on the same site. Every click is real mouse input.
  *
@@ -84,7 +85,11 @@ async function startSession(page: Page, message: string, task: string): Promise<
   }, { message, task })
 }
 
-const card = (page: Page) => page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"] [data-testid="session-browser-card"]`)
+// The view lives in the header pill's popover (2026-11-09, the user: "we only show as a small pill
+// tehere people can click and see detail"); nothing of it is in the chat.
+const chip = (page: Page) => page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"] [data-testid="session-browser-chip"]`)
+const popover = (page: Page) => page.getByTestId('session-browser-popover')
+const card = (page: Page) => popover(page).getByTestId('session-browser-card')
 const column = (page: Page) => page.locator('.main-page-session-column').filter({ has: page.locator(`.session-panel[data-session-id="${sid}"]`) })
 
 test.beforeAll(async ({ browser }, info) => {
@@ -165,8 +170,8 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
   await seedColumns(page, [sid])
   await loadHome(page)
   await expect(column(page)).toBeVisible({ timeout: 30_000 })
-  // No browser use yet: no view.
-  await expect(card(page)).toHaveCount(0)
+  // No browser use yet: no pill.
+  await expect(chip(page)).toHaveCount(0)
 
   // The person is signed in to the bank in a tab of their own.
   const mine = await ctx.newPage()
@@ -190,7 +195,12 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
   expect(win.agent).toBe(true)
   expect(win.state).not.toBe('minimized')
 
-  // The view shows itself: title, address, window, and a live picture.
+  // The pill shows itself in the header; nothing in the chat. A click opens the view: title, address,
+  // window, and a live picture.
+  await expect(chip(page)).toBeVisible({ timeout: 20_000 })
+  await expect(chip(page)).toHaveText('Browser')
+  await expect(column(page).locator('.session-panel-body [data-testid^="session-browser-"]')).toHaveCount(0)
+  await press(page, chip(page))
   await expect(card(page)).toBeVisible({ timeout: 20_000 })
   await expect(card(page).getByTestId('session-browser-title')).toHaveText('Sign in to Test Bank')
   await expect(card(page).getByTestId('session-browser-url')).toHaveText(site('login.bank.test', '/signin'))
@@ -201,7 +211,7 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
   await expect(card(page).getByTestId('session-browser-foot')).toContainText('Live')
   const first = await picture.getAttribute('src')
   expect(first).toMatch(/^data:image\/jpeg;base64,/)
-  await column(page).screenshot({ path: path.join(SHOTS, 'light.png') })
+  await page.screenshot({ path: path.join(SHOTS, 'light.png') })
 
   // The agent moves on: the view follows (title and a new picture).
   expect((await act(page, { action: 'navigate', tab: agentTab, url: site('login.bank.test', '/statement') })).status).toBe(200)
@@ -214,23 +224,22 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
   await expect(card(page).getByTestId('session-browser-foot')).toContainText('Live', { timeout: 20_000 })
-  await column(page).screenshot({ path: path.join(SHOTS, 'dark-large.png') })
+  await page.screenshot({ path: path.join(SHOTS, 'dark-large.png') })
   await press(page, card(page).getByTestId('session-browser-size'))
-  await column(page).screenshot({ path: path.join(SHOTS, 'dark.png') })
+  await page.screenshot({ path: path.join(SHOTS, 'dark.png') })
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'))
   await page.emulateMedia({ colorScheme: 'light' })
 
-  // Hide folds it to one line that still says the browser is in use; no picture is asked for meanwhile.
+  // × closes the popover; the pill stays and no picture is asked for meanwhile.
   await press(page, card(page).getByTestId('session-browser-hide'))
-  const folded = column(page).getByTestId('session-browser-folded')
-  await expect(folded).toContainText('Browser in use: Statement for October')
+  await expect(popover(page)).toHaveCount(0)
+  await expect(chip(page)).toBeVisible()
   await page.waitForTimeout(1500)
   const asked = frames.length
   await page.waitForTimeout(4000)
   expect(frames.length).toBe(asked)
-  await column(page).screenshot({ path: path.join(SHOTS, 'folded.png') })
-  // Show brings it back, live again.
-  await press(page, folded.getByTestId('session-browser-show'))
+  // The pill opens it again, live again.
+  await press(page, chip(page))
   await expect(card(page).getByTestId('session-browser-foot')).toContainText('Live', { timeout: 20_000 })
   await expect.poll(() => frames.length, { timeout: 20_000, message: `frame answers: ${answers.join(', ')}` }).toBeGreaterThan(asked)
 
@@ -253,8 +262,9 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
   // Take over: the tab is the person's, the agent waits; Hand back gives it to the agent again.
   await press(page, card(page).getByTestId('session-browser-takeover'))
   await expect(card(page).getByTestId('session-browser-hand')).toContainText('You have this tab in your browser', { timeout: 20_000 })
+  await expect(chip(page)).toHaveText('Yours', { timeout: 20_000 })
   expect((await act(page, { action: 'snapshot', tab: agentTab })).body.code).toBe('person_driving')
-  await column(page).screenshot({ path: path.join(SHOTS, 'taken-over.png') })
+  await page.screenshot({ path: path.join(SHOTS, 'taken-over.png') })
   await press(page, card(page).getByTestId('session-browser-handback'))
   await expect(card(page).getByTestId('session-browser-hand')).toHaveCount(0, { timeout: 20_000 })
   expect((await act(page, { action: 'snapshot', tab: agentTab })).status).toBe(200)
@@ -264,7 +274,8 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
   expect(ask.status, JSON.stringify(ask.body)).toBe(202)
   const hand = card(page).getByTestId('session-browser-hand')
   await expect(hand).toContainText('The agent asks you to sign in to bank.test yourself', { timeout: 20_000 })
-  await column(page).screenshot({ path: path.join(SHOTS, 'sign-in-ask.png') })
+  await expect(chip(page)).toHaveText('Sign in', { timeout: 20_000 })
+  await page.screenshot({ path: path.join(SHOTS, 'sign-in-ask.png') })
   await press(page, hand.getByRole('button', { name: 'Take over to sign in' }))
   await expect(hand).toContainText('Sign in to bank.test there, then press Done', { timeout: 20_000 })
   const waiting = act(page, { action: 'request_sign_in', tab: agentTab, request: ask.body.request, wait_ms: 20_000 })
@@ -274,13 +285,15 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
 
   // Stop: the agent's use ends, the tab stays open, the view says so, the agent's next command is refused.
   await press(page, card(page).getByTestId('session-browser-stop'))
-  const ended = column(page).getByTestId('session-browser-ended')
+  // The last tab gone: the open popover says why, and the pill stays until it closes.
+  const ended = popover(page).getByTestId('session-browser-ended')
   await expect(ended).toContainText("You stopped the agent's use of the tab. It stays open.", { timeout: 20_000 })
-  await column(page).screenshot({ path: path.join(SHOTS, 'stopped.png') })
+  await page.screenshot({ path: path.join(SHOTS, 'stopped.png') })
   expect(await sw.evaluate(async (tab: number) => !!(await chrome.tabs.get(tab).catch(() => null)), agentTab)).toBe(true)
   expect((await act(page, { action: 'snapshot', tab: agentTab })).body.code).toBe('not_your_tab')
-  // Dismissed, it is gone.
+  // Dismissed, the popover and the pill are gone.
   await press(page, ended.getByRole('button', { name: 'Dismiss' }))
-  await expect(ended).toHaveCount(0)
+  await expect(popover(page)).toHaveCount(0)
+  await expect(chip(page)).toHaveCount(0)
   await mine.close()
 })

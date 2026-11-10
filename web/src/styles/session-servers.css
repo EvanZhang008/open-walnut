@@ -487,20 +487,6 @@
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
 }
 .session-web-card .session-servers-list { max-width: none; }
-/* The servers a turn started, at its end in the chat (SessionServersTurnCard.tsx). */
-.session-servers-turn-card {
-  container-type: inline-size;
-  box-sizing: border-box;
-  width: 100%;
-  max-width: 640px;
-  margin: 6px 0 14px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-secondary);
-}
-.session-servers-turn-card .session-servers-list { max-width: none; }
-.session-servers-turn-card .session-servers-list-title { font-size: 12px; color: var(--fg-secondary); }
 /* A card's list (SessionServerList dense): one line a server, port, name, Open, Stop. The
    command, uptime and pid are the Web view's list (and the row's tooltip). */
 .session-servers-list-dense .session-server-row-meta,
