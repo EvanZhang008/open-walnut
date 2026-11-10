@@ -516,11 +516,23 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await expect.poll(onScreen, { timeout: 5_000 }).toBe(true)
     // Shown only once it is beside the passage: never at the place from before
     // the page's scroll (2026-11-09: shown there, then moved 80px up).
-    await expect.poll(() => card.evaluate((el) => el.parentElement!.hasAttribute('data-card-measure'))).toBe(false)
-    const p = (await frameTextRects(view, LONG_PASSAGE)).at(-1)!
+    await expect.poll(() => card.evaluate((el) => el.parentElement!.hasAttribute('data-card-measure')), { timeout: 400 }).toBe(false)
+    // Beside it: under its last line, or over its first when the view leaves
+    // too little room under it (placeFileCard). The passage sits near the end
+    // of the page, which the page cannot scroll past to center it; how near the
+    // view's foot depends on the view's width (fullscreen widens the sheet while
+    // the chat's review column is open), so either side happens.
+    const rects = await frameTextRects(view, LONG_PASSAGE)
+    const p = rects.at(-1)!
+    const pTop = rects[0].top
     const cb = (await card.boundingBox())!
-    expect(cb.y).toBeGreaterThanOrEqual(p.top + p.height - 1)
-    expect(cb.y - (p.top + p.height)).toBeLessThan(40)
+    const cardAbove = cb.y + cb.height <= pTop + 1
+    if (cardAbove) {
+      expect(pTop - (cb.y + cb.height), `card over the passage, foot ${Math.round(cb.y + cb.height)}, passage top ${Math.round(pTop)}`).toBeLessThan(40)
+    } else {
+      expect(cb.y, `card under the passage's bottom ${Math.round(p.top + p.height)}`).toBeGreaterThanOrEqual(p.top + p.height - 1)
+      expect(cb.y - (p.top + p.height)).toBeLessThan(40)
+    }
     await shot(page, 'file-q-long-reopen')
     // Twice in a row: the same question, after scrolling away again.
     await card.locator('.thread-card-input').press('Escape')
@@ -529,24 +541,31 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await rail.locator('.thread-map-rail').click()
     await rail.locator('.thread-map-overlay .thread-map-row').click()
     await expect.poll(onScreen, { timeout: 5_000 }).toBe(true)
+    // Shown beside the passage soon after the page's report, not left waiting
+    // unseen at the top until its wait runs out (2026-11-10: up to 600ms more,
+    // read here as a card at the top of the view).
+    await expect.poll(() => card.evaluate((el) => el.parentElement!.hasAttribute('data-card-measure')), { timeout: 400 }).toBe(false)
 
-    // ⤢ grows the card where it is: the same top under the passage, as wide as
-    // the view allows (placeFileCard: up to 960px, a gap of 8px each side),
-    // inside the view; Esc brings it back to its size. The view's width is the
-    // layout's: fullscreen keeps side margins and the chat pane sits beside the
-    // files, so the grown width is read from the layer, never a fixed gain.
+    // ⤢ grows the card where it is: the same edge at the passage (its top under
+    // it, or its foot over it), as wide as the view allows (placeFileCard: up to
+    // 960px, a gap of 8px each side), inside the view; Esc brings it back to its
+    // size. The view's width is the layout's: fullscreen keeps side margins and
+    // the chat pane sits beside the files, so the grown width is read from the
+    // layer, never a fixed gain (a narrow view leaves the card its own width).
     await expect(card).toBeVisible()
     await page.waitForTimeout(300)
     const small = (await card.boundingBox())!
+    const passageTop = (await frameTextRects(view, LONG_PASSAGE))[0].top
+    const overIt = small.y + small.height <= passageTop + 1
     const layer = (await view.locator('.fv-thread-layer').boundingBox())!
-    const wide = Math.round(Math.min(960, layer.width - 16))
-    expect(wide, 'the view leaves room to grow').toBeGreaterThan(small.width + 24)
+    const wide = Math.round(Math.max(small.width, Math.min(960, layer.width - 16)))
     await card.locator('.thread-card-expand').click()
     await expect(card).toHaveAttribute('data-expanded', 'true')
     await expect.poll(async () => Math.abs((await card.boundingBox())!.width - wide)).toBeLessThanOrEqual(1)
     await page.waitForTimeout(300)
     const big = (await card.boundingBox())!
-    expect(Math.abs(big.y - small.y)).toBeLessThan(2)
+    if (overIt) expect(Math.abs((big.y + big.height) - (small.y + small.height)), 'its foot stays over the passage').toBeLessThan(2)
+    else expect(Math.abs(big.y - small.y), 'its top stays under the passage').toBeLessThan(2)
     const vb2 = (await view.boundingBox())!
     expect(big.x).toBeGreaterThanOrEqual(vb2.x)
     expect(big.x + big.width).toBeLessThanOrEqual(vb2.x + vb2.width + 1)

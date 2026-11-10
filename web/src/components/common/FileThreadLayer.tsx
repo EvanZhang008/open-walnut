@@ -525,7 +525,16 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     window.addEventListener('resize', later);
     // The page reports its passage's rects (on paint, its scroll and its resize),
     // and its text (a passage it does not hold ends the card's wait at once).
-    const off = inFrame ? channel?.on((m) => { if (m.type === 'rects' || m.type === 'text') later(); }) : undefined;
+    // Measured right after the report, not on this window's next frame: WebKit
+    // held that frame back by up to 600ms after the page scrolled to the
+    // passage, and the card waited unseen at the top all that time (2026-11-10).
+    let soon = false;
+    const now = () => {
+      if (soon) return;
+      soon = true;
+      queueMicrotask(() => { soon = false; if (live) measure(true); });
+    };
+    const off = inFrame ? channel?.on((m) => { if (m.type === 'rects' || m.type === 'text') now(); }) : undefined;
     return () => {
       mo.disconnect();
       ro?.disconnect();
