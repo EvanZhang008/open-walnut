@@ -123,6 +123,31 @@ describe('text keeps the words innerText misses: a shadow root\'s and a date\'s'
   })
 })
 
+describe('deep shadow trees (an app shell that slots the page into nested components)', () => {
+  it('words slotted through six nested hosts, and a date twelve elements deep in light content, are kept; past the depth cap a host reads its own text, never nothing', async () => {
+    const g = globalThis as any
+    // linkedom has no slot assignment: a slot shows its host's children.
+    const was = g.HTMLElement.prototype.assignedNodes
+    g.HTMLElement.prototype.assignedNodes = function (this: Element) { const host = (this.getRootNode?.() as ShadowRoot | undefined)?.host; return host ? Array.from(host.childNodes) : [] }
+    try {
+      let inner = '<p>Slotted page words</p><div><div><div><div><div><div><div><div><div><div><div><div><span>Updated <time datetime="2026-11-09T08:00:00Z" title="Nov 9, 2026"></time></span></div></div></div></div></div></div></div></div></div></div></div></div>'
+      for (let i = 0; i < 6; i++) inner = `<app-${i}>${inner}</app-${i}>`
+      page.load(`<main id="m">${inner}</main>`)
+      page.place('#m', { x: 0, y: 0, w: 800, h: 400 })
+      for (let i = 0; i < 6; i++) page.$(`app-${i}`).attachShadow({ mode: 'open' }).innerHTML = `<div class="frame-${i}"><slot></slot></div>`
+      const r = await op('text')
+      expect(r.text).toContain('Slotted page words')
+      expect(r.text).toContain('Nov 9, 2026')
+      // A host whose shadow root draws nothing past the cap still reads its light words.
+      page.load('<main id="m"><x-deep id="d">Light words of the host</x-deep></main>')
+      page.place('#m', { x: 0, y: 0, w: 800, h: 400 })
+      let host: Element = page.$('#d')
+      for (let i = 0; i < 12; i++) { const root = host.attachShadow({ mode: 'open' }); root.innerHTML = `<x-deep-${i}></x-deep-${i}>`; host = root.firstElementChild! }
+      expect((await op('text')).text).toContain('Light words of the host')
+    } finally { g.HTMLElement.prototype.assignedNodes = was }
+  })
+})
+
 describe('snapshot', () => {
   it('lists what is on screen, says how many more elsewhere, and shows a same-site link by its path', async () => {
     page.load('<h1 id="h">Issues</h1><a id="a1" href="https://shop.example.test/issues/12">Login fails</a><a id="a2" href="https://other.test/x">Elsewhere</a>'

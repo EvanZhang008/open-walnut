@@ -45,32 +45,46 @@ function dateWords(el: Element): string {
   return Number.isNaN(d.getTime()) ? dt : d.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-/** The words of a shadow root as it draws them: its slots show the host's own children. */
-function shadowText(root: ShadowRoot | Element, depth = 0): string {
-  if (depth > 8) return ''
-  const parts: string[] = []
-  for (const n of Array.from(root.childNodes)) {
-    if (n.nodeType === 3) { const t = (n.textContent ?? '').trim(); if (t) parts.push(t); continue }
-    if (n.nodeType !== 1) continue
-    const c = n as Element
-    if (/^(STYLE|SCRIPT|TEMPLATE)$/.test(c.tagName) || !shown(c)) continue
-    if (c.tagName === 'SLOT') {
-      const got = (c as HTMLSlotElement).assignedNodes?.({ flatten: true }) ?? []
-      for (const a of got.length ? got : Array.from(c.childNodes)) {
-        const t = a.nodeType === 1 ? deepOf(a as Element, depth + 1) : (a.textContent ?? '').trim()
-        if (t) parts.push(t)
-      }
-      continue
-    }
-    const t = deepOf(c, depth + 1)
-    if (t) parts.push(t)
+/** How many shadow roots deep a read goes; past it an element reads as its own innerText (never nothing). */
+const SHADOW_DEPTH = 8
+
+/**
+ * The words of `root` (an element or a shadow root) in order, a line per block: an element is read
+ * whole (innerText) unless something in it needs a closer look (a shadow root, a date, a slot, an
+ * element in `skip`), and then its children one by one. A slot reads the host's children it shows.
+ */
+function wordsOf(root: Element | ShadowRoot, depth: number, skip: Set<Element> = new Set()): string[] {
+  const deep = new Set<Element>()
+  const holds = new Set<Node>()
+  const hold = (f: Element) => { for (let p: Node | null = f.parentNode; p && p !== root && !holds.has(p); p = p.parentNode) holds.add(p) }
+  for (const f of skip) hold(f)
+  for (const el of Array.from(root.querySelectorAll('*'))) {
+    if (el.shadowRoot || el.matches(DATES) || el.tagName === 'SLOT') { deep.add(el); hold(el) }
   }
-  return parts.join(' ')
+  const parts: string[] = []
+  const push = (t: string) => { const x = t.trim(); if (x) parts.push(x) }
+  const walk = (node: Node) => {
+    for (const n of Array.from(node.childNodes)) {
+      if (n.nodeType === 3) { push(n.textContent ?? ''); continue }
+      if (n.nodeType !== 1) continue
+      const c = n as Element
+      if (skip.has(c) || /^(STYLE|SCRIPT|TEMPLATE|NOSCRIPT)$/.test(c.tagName) || !shown(c)) continue
+      if (c.tagName === 'SLOT') {
+        const got = (c as HTMLSlotElement).assignedNodes?.({ flatten: true }) ?? []
+        for (const x of got.length ? got : Array.from(c.childNodes)) push(x.nodeType === 1 ? deepOf(x as Element, depth) : x.nodeType === 3 ? x.textContent ?? '' : '')
+      } else if (deep.has(c)) push(deepOf(c, depth))
+      else if (holds.has(c)) walk(c)
+      else push(innerOf(c))
+    }
+  }
+  walk(root)
+  return parts
 }
 
 /** An element's words, its shadow root's and its dates' included. */
 function deepOf(el: Element, depth = 0): string {
-  const drawn = el.shadowRoot ? shadowText(el.shadowRoot, depth).trim() : ''
+  // Past the depth cap the element reads as innerText reads it, never as nothing.
+  const drawn = el.shadowRoot && depth < SHADOW_DEPTH ? wordsOf(el.shadowRoot, depth + 1).join('\n').trim() : ''
   if (el.matches(DATES)) {
     // "37 minutes ago" says little a day later: the full date with it, when the element has one.
     const words = drawn || innerOf(el).trim()
@@ -78,14 +92,7 @@ function deepOf(el: Element, depth = 0): string {
     return words && full && !words.includes(full) ? `${words} (${full})` : words || full
   }
   if (el.shadowRoot) return drawn || innerOf(el).trim() || el.getAttribute('title')?.trim() || ''
-  return special(el) ? shadowText(el, depth) : innerOf(el).trim()
-}
-
-/** Whether an element holds words innerText misses: an open shadow root or a date element, in it or below it. */
-function special(el: Element): boolean {
-  if (el.shadowRoot || el.matches(DATES)) return true
-  for (const x of Array.from(el.querySelectorAll('*'))) if (x.shadowRoot || x.matches(DATES)) return true
-  return false
+  return wordsOf(el, depth).join('\n')
 }
 
 /** A box laid over the page (a banner or a dialog), as a cookie notice is. */
@@ -140,27 +147,8 @@ function readable(root: Element, inContent: boolean, keepFurniture = false): str
   for (const el of Array.from(root.querySelectorAll(keepFurniture ? 'walnut-ext' : CANDIDATES))) {
     if (el.tagName === 'WALNUT-EXT' || furniture(el, inContent)) skip.add(el)
   }
-  const holds = new Set<Element>()
-  const hold = (f: Element) => { for (let p = f.parentElement; p && p !== root && !holds.has(p); p = p.parentElement) holds.add(p) }
-  for (const f of skip) hold(f)
-  // An element whose words innerText misses (a shadow root's, a date's): the walk goes down to it.
-  const deep = new Set<Element>()
-  for (const el of Array.from(root.querySelectorAll('*'))) if (el.shadowRoot || el.matches(DATES)) { deep.add(el); hold(el) }
-  if (root.shadowRoot) return deepOf(root)
-  const parts: string[] = []
-  const walk = (el: Element) => {
-    for (const n of Array.from(el.childNodes)) {
-      if (n.nodeType === 3) { const t = (n.textContent ?? '').trim(); if (t) parts.push(t); continue }
-      if (n.nodeType !== 1) continue
-      const c = n as Element
-      if (skip.has(c) || !shown(c)) continue
-      if (deep.has(c)) { const t = deepOf(c); if (t) parts.push(t) }
-      else if (holds.has(c)) walk(c)
-      else { const t = innerOf(c).trim(); if (t) parts.push(t) }
-    }
-  }
-  walk(root)
-  return parts.join('\n')
+  if (root.shadowRoot || root.matches(DATES)) return deepOf(root)
+  return wordsOf(root, 0, skip).join('\n')
 }
 
 const tidy = (s: string) => s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()

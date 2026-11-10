@@ -174,3 +174,140 @@ describe('the watch: the field\'s own change is not the page\'s', () => {
     expect(enterLine(before, { ...before, values: 2, watching: true, mutations: 0, scrolls: 0 }, {})).toBe(ENTER_NOTHING)
   })
 })
+
+/** linkedom's form is a plain element: the parts of a form Enter needs, and a count of sends. */
+function stubForm(sel: string): { sent: () => number } {
+  const form = page.$(sel) as any
+  let sent = 0
+  Object.defineProperty(form, 'elements', { configurable: true, get: () => [...form.querySelectorAll('input, button, select, textarea')] })
+  form.requestSubmit = () => { sent++ }
+  // A submit button's click sends its form (the browser's activation behavior).
+  for (const b of form.querySelectorAll('button, input[type=submit]')) b.addEventListener('click', () => { if (!b.disabled) sent++ })
+  return { sent: () => sent }
+}
+const clicks = (sel: string) => { let n = 0; page.$(sel).addEventListener('click', () => { n++ }); return () => n }
+
+describe('Enter never sends what a person\'s Enter would not (review 2026-11-10)', () => {
+  it('focus on the page itself (after a click on plain text): press Enter clicks nothing and sends no form', async () => {
+    page.load('<main><p id="plain">Search settings and preferences</p><form id="f"><input id="name" aria-label="Display name"><button id="submit">Submit</button></form><button id="go">Go</button></main>')
+    page.place('#plain', { x: 10, y: 10, w: 300, h: 20 })
+    page.place('#submit', { x: 10, y: 60, w: 80, h: 30 })
+    page.place('#go', { x: 10, y: 100, w: 80, h: 30 })
+    const f = stubForm('#f')
+    const go = clicks('#go')
+    await op('click', { ref: await refOf('Search settings and preferences') })
+    const r = await op('press', { key: 'Enter' })
+    expect(r).toEqual({ pressed: 'Enter' })
+    expect(f.sent()).toBe(0)
+    expect(go()).toBe(0)
+  })
+
+  it('a search box beside a button that is no search ("Submit request", "Go Premium"): nothing is clicked', async () => {
+    for (const label of ['Submit request', 'Go Premium', 'Submit']) {
+      page.load(`<div id="box"><input id="q" aria-label="Search the help center"><button id="b">${label}</button></div>`)
+      page.place('#q', { x: 10, y: 10, w: 300, h: 30 })
+      page.place('#b', { x: 320, y: 10, w: 120, h: 30 })
+      const n = clicks('#b')
+      expect(searchButton(page.$('#q')), label).toBeNull()
+      const r = await op('type', { ref: await refOf('Search the help center'), text: 'refund', submit: true })
+      expect(n(), label).toBe(0)
+      expect(r.enter_quiet, label).toBe(true)
+    }
+  })
+
+  it('a type=submit "Go" counts only inside a search area', async () => {
+    page.load('<div role="search" id="s"><input id="q" aria-label="Query"><button id="b" type="submit">Go</button></div>')
+    page.place('#q', { x: 10, y: 10, w: 300, h: 30 })
+    page.place('#b', { x: 320, y: 10, w: 60, h: 30 })
+    expect(searchButton(page.$('#q'))).toBe(page.$('#b'))
+  })
+
+  it('the fallback button the outward check holds ("Search and pay") is not clicked', async () => {
+    page.load('<div id="box"><input id="q" aria-label="Search flights"><button id="b">Search and pay</button></div>')
+    page.place('#q', { x: 10, y: 10, w: 300, h: 30 })
+    page.place('#b', { x: 320, y: 10, w: 120, h: 30 })
+    expect(searchButton(page.$('#q'))).toBe(page.$('#b'))
+    const n = clicks('#b')
+    const r = await op('type', { ref: await refOf('Search flights'), text: 'oslo', submit: true })
+    expect(n()).toBe(0)
+    expect(r.enter_quiet).toBe(true)
+  })
+
+  it('a page that goes to another address during the wait: the button is never clicked', async () => {
+    const q = searchPage((e) => { if (e.keyCode === 13) (location as unknown as URL).href = 'https://search.example.test/results?q=1' }, '<button id="go" aria-label="Search">Go</button>')
+    const n = clicks('#go')
+    const r = await op('type', { ref: await refOf('Search the site'), text: 'x', submit: true })
+    expect(n()).toBe(0)
+    expect(r.submit).toBeUndefined()
+    expect(r.enter_quiet).toBeUndefined()
+    expect(q.value).toBe('x')
+    ;(location as unknown as URL).href = 'https://search.example.test/search'
+  })
+
+  it('implicit submission: the default button is clicked; a disabled one, or two fields and no button, send nothing', async () => {
+    page.load('<form id="f"><input id="a" aria-label="City"><button id="ok">Save</button></form>')
+    page.place('#a', { x: 10, y: 10, w: 300, h: 30 })
+    let f = stubForm('#f')
+    expect((await op('type', { ref: await refOf('City'), text: 'Oslo', submit: true })).submit).toBe('form')
+    expect(f.sent()).toBe(1)
+    page.load('<form id="f"><input id="a" aria-label="City"><button id="ok" disabled>Save</button></form>')
+    page.place('#a', { x: 10, y: 10, w: 300, h: 30 })
+    f = stubForm('#f')
+    expect((await op('type', { ref: await refOf('City'), text: 'Oslo', submit: true })).submit).toBeUndefined()
+    expect(f.sent()).toBe(0)
+    page.load('<form id="f"><input id="a" aria-label="City"><input id="b" aria-label="Country"></form>')
+    page.place('#a', { x: 10, y: 10, w: 300, h: 30 })
+    f = stubForm('#f')
+    expect((await op('type', { ref: await refOf('City'), text: 'Oslo', submit: true })).submit).toBeUndefined()
+    expect(f.sent()).toBe(0)
+  })
+})
+
+describe('Enter goes to the field typed into, judged again', () => {
+  it('an input inside an open shadow root gets the Enter itself (not its host), by type --submit and press Enter', async () => {
+    page.load('<search-box id="host"></search-box>')
+    const host = page.$('#host')
+    const root = host.attachShadow({ mode: 'open' })
+    root.innerHTML = '<input id="inner" aria-label="Search the docs">'
+    const inner = root.querySelector('#inner') as HTMLInputElement
+    page.place(inner, { x: 10, y: 10, w: 300, h: 30 })
+    const got: string[] = []
+    inner.addEventListener('keydown', (e: any) => { got.push(`${e.key}:${e.keyCode}`) })
+    // A browser's document.activeElement is the shadow host; the input is the root's.
+    const doc = Object.getOwnPropertyDescriptor(document, 'activeElement')!
+    Object.defineProperty(root, 'activeElement', { configurable: true, get: () => inner })
+    Object.defineProperty(document, 'activeElement', { configurable: true, get: () => host })
+    try {
+      await op('type', { ref: await refOf('Search the docs'), text: 'api', submit: true })
+      expect(got).toEqual(['Enter:13'])
+      await op('press', { key: 'Enter' })
+      expect(got).toEqual(['Enter:13', 'Enter:13'])
+    } finally { Object.defineProperty(document, 'activeElement', doc) }
+  })
+
+  it('the page moves the focus to another form after the typing: Enter goes to the typed field\'s form, never the other', async () => {
+    page.load('<form id="a"><input id="q" aria-label="Find a store"><button>Find</button></form><form id="b"><input id="card" aria-label="Card number" autocomplete="cc-number"><button>Place order</button></form>')
+    page.place('#q', { x: 10, y: 10, w: 300, h: 30 })
+    page.place('#card', { x: 10, y: 60, w: 300, h: 30 })
+    const a = stubForm('#a')
+    const b = stubForm('#b')
+    page.$('#q').addEventListener('input', () => (page.$('#card') as HTMLElement).focus())
+    await op('type', { ref: await refOf('Find a store'), text: 'oslo', submit: true })
+    expect(b.sent()).toBe(0)
+    expect(a.sent()).toBe(1)
+  })
+
+  it('the page turns the typed field\'s Enter into a payment after the typing: refused, nothing sent', async () => {
+    page.load('<form id="a"><input id="q" aria-label="Find a store"><button>Find</button></form>')
+    page.place('#q', { x: 10, y: 10, w: 300, h: 30 })
+    const a = stubForm('#a')
+    page.$('#q').addEventListener('input', () => {
+      page.$('#a').insertAdjacentHTML('beforeend', '<input id="card" autocomplete="cc-number" aria-label="Card number">')
+      page.$('#a button').textContent = 'Pay now'
+    })
+    const err = await op('type', { ref: await refOf('Find a store'), text: 'oslo', submit: true }).then(() => null, (e: { code?: string; message?: string }) => e)
+    expect(err?.code).toBe('enter_not_sent')
+    expect(err?.message).toMatch(/text is typed.*did not press it/)
+    expect(a.sent()).toBe(0)
+  })
+})

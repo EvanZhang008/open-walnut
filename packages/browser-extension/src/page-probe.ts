@@ -105,7 +105,7 @@ function walnutOwn(n: Node | null): boolean {
 }
 
 /** The element that has the focus, inside open shadow roots too. */
-function deepActive(): Element | null {
+export function deepActive(): Element | null {
   let a: Element | null = document.activeElement
   while (a?.shadowRoot?.activeElement) a = a.shadowRoot.activeElement
   return a

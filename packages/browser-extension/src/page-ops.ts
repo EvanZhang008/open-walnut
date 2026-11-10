@@ -11,7 +11,7 @@ import { clickFacts, clickTarget, enterFacts, judgeOutward, messageOf, orderTota
 import { cancelTyping, dragPoints, scrollIn, typeField, typeSlowly } from './page-input'
 import { annotate, refOfLabel } from './page-annotate'
 import { onScreenMiddle, pointAt, type CursorKind } from './page-cursor'
-import { armProbe, markWatches, readProbe } from './page-probe'
+import { armProbe, deepActive, markWatches, readProbe } from './page-probe'
 import { submitFrom } from './page-enter'
 
 /** position:fixed and sticky elements hidden after the first slice of a full screenshot, so they are drawn once. */
@@ -228,7 +228,7 @@ async function toElement(get: () => Element | null, kind: CursorKind = 'move'): 
 }
 
 /** The element a typed text goes to (as pa.type picks it; at a point, the element there). */
-const typeTarget = (args: Record<string, unknown>): Element | null => (args.ref !== undefined ? pa.byRef(args.ref) : atPoint(args) ? pa.target(args).el : document.activeElement)
+const typeTarget = (args: Record<string, unknown>): Element | null => (args.ref !== undefined ? pa.byRef(args.ref) : atPoint(args) ? pa.target(args).el : deepActive())
 
 /** `scroll` that names an element or a point and how far: that box scrolls (page-input.ts); a ref alone brings the element into view. */
 const scrollsInside = (args: Record<string, unknown>) => (args.ref !== undefined || atPoint(args))
@@ -252,36 +252,62 @@ async function typeOp(args: Record<string, unknown>): Promise<unknown> {
   // Judged on what is there now, and acted on at once.
   const h = held(args, parts(typeTarget(args)))
   if (h) return h
+  // What the Enter alone was judged as now (none, or the hold the person said yes to).
+  const judged = enterSig(args, typeTarget(args))
   if (atPoint(args)) {
     const el = typeField(args)
     if (!el) throw new pa.PageError(`Nothing to type in at ${String(args.x)},${String(args.y)}.`, 'no_field')
-    return withEnter(args, args.slowly === true ? typeSlowly(el, args) : pa.type({ ...args, ref: pa.refFor(el) }))
+    return withEnter(args, judged, el, args.slowly === true ? typeSlowly(el, args) : pa.type({ ...args, ref: pa.refFor(el) }))
   }
   if (args.slowly === true) {
     const el = typeField(args)
     if (!el || el === document.body) throw new pa.PageError('No field is focused: give the ref of the field to type in.', 'no_field')
-    return withEnter(args, typeSlowly(el, args))
+    // A key at a time follows the focus (a code split over boxes): Enter goes where the last key went.
+    return withEnter(args, judged, null, typeSlowly(el, args))
   }
-  return withEnter(args, pa.type(args))
+  // The field judged above (a field inside an open shadow root by itself, not its host).
+  const field = typeTarget(args)
+  return withEnter(args, judged, field, pa.type(args.ref === undefined && field && field !== document.body ? { ...args, ref: pa.refFor(field) } : args))
 }
 
 /**
- * The typing's answer, then with `submit` its Enter (page-enter.ts) in the field the typing left the
- * focus in. The typing starts at once on the judged field; the Enter was judged with it (one ask).
+ * The typing's answer, then with `submit` its Enter (page-enter.ts) in the field typed into
+ * (`field`; null: where the focus is after a key-at-a-time typing). The typing starts at once on
+ * the judged field; the Enter, judged with it before the typing, is judged again on the field it
+ * goes to right before the key (the page may have moved the focus or changed the form meanwhile).
  */
-async function withEnter(args: Record<string, unknown>, typed: Promise<{ typed: string }> | { typed: string }): Promise<Record<string, unknown>> {
+async function withEnter(args: Record<string, unknown>, judged: string | null, field: Element | null, typed: Promise<{ typed: string }> | { typed: string }): Promise<Record<string, unknown>> {
   const r = await typed
-  return args.submit === true ? { ...r, ...(await enterIn(document.activeElement, args, true)) } : r
+  if (args.submit !== true) return r
+  const to = field?.isConnected ? field : deepActive()
+  return { ...r, ...(await enterIn(to, args, true, judged)) }
 }
 
-/** Enter in a field (page-enter.ts); the search button it may fall back to is judged like any click. */
-function enterIn(el: Element | null, args: Record<string, unknown>, settle: boolean) {
-  return submitFrom(el && el !== document.body ? el : document.body, { settle, mayClick: (b) => held(args, [[{ click: true }, b]]) === null })
+/** The hold the typed text's Enter in `el` would get (its signature), or null. */
+function enterSig(args: Record<string, unknown>, el: Element | null): string | null {
+  const how = typedEnter(args)
+  return how && el ? holdOf(how, el)?.sig ?? null : null
 }
 
-/** `press Enter`: the keys go at once (nothing awaited before them, page-enter.ts). */
+/**
+ * Enter in a field (page-enter.ts). `judged`: for a typed text, what its Enter was judged as before
+ * the typing; judged again on the field right before the key, and a hold it did not have then
+ * refuses the Enter (the text stays typed). The search button Enter may fall back to is judged like
+ * any click.
+ */
+function enterIn(el: Element | null, args: Record<string, unknown>, settle: boolean, judged?: string | null) {
+  const recheck = judged === undefined ? undefined : (f: Element) => {
+    const now = enterSig(args, f)
+    if (now !== null && now !== judged) {
+      throw new pa.PageError('The text is typed, but the page changed before its Enter, and Enter there now buys, sends or deletes: Walnut did not press it. snapshot, then press Enter (it is judged again).', 'enter_not_sent')
+    }
+  }
+  return submitFrom(el && el !== document.body ? el : document.body, { settle, recheck, mayClick: (b) => held(args, [[{ click: true }, b]]) === null })
+}
+
+/** `press Enter`: the keys go at once to the focused element (inside a shadow root too; nothing awaited before them, page-enter.ts). */
 async function pressEnter(args: Record<string, unknown>): Promise<Record<string, unknown>> {
-  return { pressed: 'Enter', ...(await enterIn(document.activeElement, args, false)) }
+  return { pressed: 'Enter', ...(await enterIn(deepActive(), args, false)) }
 }
 
 export async function runPageOp(op: string, args: Record<string, unknown>): Promise<unknown> {
@@ -304,7 +330,7 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
     case 'type': return typeOp(args)
     case 'select': await toElement(() => pa.byRef(args.ref)); return pa.select(args)
     case 'press': {
-      const h = held(args, [[{ key: String(args.key ?? '') }, document.activeElement]])
+      const h = held(args, [[{ key: String(args.key ?? '') }, args.key === 'Enter' ? deepActive() : document.activeElement]])
       if (h) return h
       return args.key === 'Enter' ? pressEnter(args) : pa.press(args)
     }
