@@ -111,25 +111,22 @@ test('× on a column never makes a chip: the session goes to Recent at the right
 
 test('a column pushed out by a full strip never makes a chip: it goes to Recent', async ({ page }) => {
   test.setTimeout(120_000)
+  // The lock (holdPanelCountLock) puts the count back as it found it after the test.
   await setPanelMode(page, '1')
-  try {
-    await openSessionPanel(page)
-    await beat(page)
-    // Opening another task's session on a one-panel strip pushes this column out.
-    await page.locator('.todo-search-input').fill('')
-    const other = page.locator('.todo-panel-item[data-task-id="pw-task-001"]')
-    await page.locator('.todo-search-input').fill('pw-task-001')
-    await expect(other).toBeVisible()
-    await other.locator('.todo-item-title').click()
-    await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)).toHaveCount(0)
-    await expect(page.locator('.main-page-session-column .session-panel')).toHaveCount(1)
-    await expect(chip(page)).toHaveCount(0)
-    await expect(page.locator(`.session-taskbar-recent-pill[data-session-id="${SESSION_ID}"]`)).toBeVisible()
-    await beat(page)
-    await page.locator(`.session-taskbar-recent-pill[data-session-id="${SESSION_ID}"]`).getByRole('button', { name: /Remove .* from Recent/ }).click()
-  } finally {
-    await setPanelMode(page, 'Auto')
-  }
+  await openSessionPanel(page)
+  await beat(page)
+  // Opening another task's session on a one-panel strip pushes this column out.
+  await page.locator('.todo-search-input').fill('')
+  const other = page.locator('.todo-panel-item[data-task-id="pw-task-001"]')
+  await page.locator('.todo-search-input').fill('pw-task-001')
+  await expect(other).toBeVisible()
+  await other.locator('.todo-item-title').click()
+  await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${SESSION_ID}"]`)).toHaveCount(0)
+  await expect(page.locator('.main-page-session-column .session-panel')).toHaveCount(1)
+  await expect(chip(page)).toHaveCount(0)
+  await expect(page.locator(`.session-taskbar-recent-pill[data-session-id="${SESSION_ID}"]`)).toBeVisible()
+  await beat(page)
+  await page.locator(`.session-taskbar-recent-pill[data-session-id="${SESSION_ID}"]`).getByRole('button', { name: /Remove .* from Recent/ }).click()
 })
 
 test('the bar is the same on every page: Minimize on the Org side panel shows there and on Home, and a chip opens it where you are', async ({ page }) => {

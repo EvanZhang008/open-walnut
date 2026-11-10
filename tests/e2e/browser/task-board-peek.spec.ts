@@ -37,9 +37,13 @@ import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { showCustomBoard } from './board-view-helpers'
 import { closeSessionKebab, kebabRow, sessionKebabButton } from './session-kebab-helpers'
+import { holdPanelCountLock } from './panel-count-lock'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
+// Its tests keep two columns open at once (a worker's and its leader's), so they hold the shared
+// panel count: no file may set 1 meanwhile (2026-11-10: the worker's column was pushed out on CI).
+holdPanelCountLock('test')
 const SHOT_DIR = '/tmp/board-b'
 // The Board's own chip words (board-elements.frame.js PHASES), which the peek header repeats.
 /** The header reads the one user status (src/core/user-status.ts), the phase for a task not derived yet. */
