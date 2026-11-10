@@ -32,6 +32,8 @@ const REFUSAL_WATCH_MS = 8000;
 interface Entry {
   taskId: string;
   from: string;
+  /** The title the column knew, for a toast the list cannot name yet. */
+  title?: string;
   /** Where the column sat and whether it was pinned, read when it closed (a pin or an unpin
    *  during the tick moves it). */
   slot: SessionSlot;
@@ -104,7 +106,7 @@ interface Deps {
 
 export interface ColumnCompleteClose {
   /** A task was completed from the header of the column showing `sessionId`. */
-  onTaskCompleted: (sessionId: string, info: { taskId: string; from: string }) => void;
+  onTaskCompleted: (sessionId: string, info: { taskId: string; from: string; title?: string }) => void;
   /** The person closed the column themselves (×) before the tick ended: nothing left to do. */
   release: (sessionId: string) => void;
 }
@@ -169,7 +171,7 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
     });
   }, [restoreColumn]);
 
-  const onTaskCompleted = useCallback((sessionId: string, info: { taskId: string; from: string }) => {
+  const onTaskCompleted = useCallback((sessionId: string, info: { taskId: string; from: string; title?: string }) => {
     const d = latest.current;
     // A pinned column closes too: completing the task from its own header is the person
     // saying they are done with it, and the Undo brings it back pinned.
@@ -180,6 +182,7 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
     const entry: Entry = {
       taskId: info.taskId,
       from: info.from,
+      ...(info.title ? { title: info.title } : {}),
       slot,
       index,
       undoKey: `column-done:${info.taskId}`,
@@ -229,7 +232,8 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
       if (at < 0) { endCarry(false); return; }
       entry.slot = cols[at];
       entry.index = at;
-      const title = latest.current.tasks.find((t) => t.id === entry.taskId)?.title;
+      // The list's title, else the column's (a click before the board's first list came).
+      const title = latest.current.tasks.find((t) => t.id === entry.taskId)?.title ?? entry.title;
       watchAfterClose();
       // The caret goes on with the person, never back to the struck-through row that opened
       // the column: to the next task, else to the column that takes this one's place; and

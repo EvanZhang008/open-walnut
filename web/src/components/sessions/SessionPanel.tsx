@@ -379,7 +379,7 @@ interface SessionPanelProps {
   onMinimize?: (sessionId: string) => void;
   /** The person completed this panel's task from its header (the ring or the status menu). The
    *  home page's column answers by closing itself. Not called while the panel is fullscreen. */
-  onTaskCompleted?: (sessionId: string, info: { taskId: string; from: TaskPhase }) => void;
+  onTaskCompleted?: (sessionId: string, info: { taskId: string; from: TaskPhase; title?: string }) => void;
   onTaskClick?: (taskId: string) => void;
   /** The header's Locate button: find this panel's task in the task panel. Its session is
    *  already on screen, so unlike onTaskClick it must not open (and so reorder) any column. */
@@ -552,7 +552,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // show the person nothing, so the host hears about completions only from the normal view.
   const completedInColumn = useMemo(
     () => (onTaskCompleted && !isFullscreen
-      ? (info: { taskId: string; from: TaskPhase }) => onTaskCompleted(sessionId, info)
+      ? (info: { taskId: string; from: TaskPhase; title?: string }) => onTaskCompleted(sessionId, info)
       : undefined),
     [onTaskCompleted, isFullscreen, sessionId],
   );

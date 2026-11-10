@@ -97,7 +97,8 @@ interface TaskQuickActionsProps {
    * refusal), or, with no store row, once the server accepted the write; `from` is the phase
    * it left. A session column uses it to close itself.
    */
-  onCompleted?: (info: { taskId: string; from: TaskPhase }) => void;
+  /** `title`: the task's title, for a toast the board's list cannot name yet (a slow first load). */
+  onCompleted?: (info: { taskId: string; from: TaskPhase; title?: string }) => void;
 }
 
 export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', phoneMenu = false, extraSection, leadingSection, onOpenTaskDetail, contextMenuScope, onCompleted }: TaskQuickActionsProps) {
@@ -278,7 +279,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       // anywhere else a complete or reopen takes the plain one.
       if (completing && onCompleted) {
         shared.setPhase(id, phase, { row: task });
-        onCompleted({ taskId: id, from: task.phase });
+        onCompleted({ taskId: id, from: task.phase, title: task.title });
       } else if (taskUndo) taskUndo.setPhase(id, phase, ring ? { ring } : undefined);
       else shared.setPhase(id, phase);
       return;
@@ -289,8 +290,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     // or an answer that may be journaled, is never sent again and is shown; a newer pick drops
     // this one's retries.
     const from = task.phase;
+    const title = task.title;
     void writePhase(id, phase, {
-      done: () => { if (completing) onCompleted?.({ taskId: id, from }); },
+      done: () => { if (completing) onCompleted?.({ taskId: id, from, title }); },
       resync: () => { fetchTask(id).then(setTask).catch(() => {}); },
       showError: (message) => store?.showOperationError(message),
     });

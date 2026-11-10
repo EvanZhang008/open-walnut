@@ -341,6 +341,8 @@ test('a Complete clicked before the board has its list closes the column at once
   releaseList()
   await expect(col(page, 'b')).toHaveCount(0, { timeout: 20_000 })
   await expect(undoToast(page)).toBeVisible()
+  // Named by its task even when the list had no row for it at the click.
+  await expect(undoToast(page)).toContainText('Close fixture B')
 
   await expect(col(page, 'b')).toHaveCount(1, { timeout: 30_000 })
   await expect.poll(async () => (await order(page)).join(), { timeout: 10_000 }).toBe(KEYS.map(SID).join())
