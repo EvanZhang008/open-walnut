@@ -175,10 +175,18 @@ export function missedRuns(job: CronJob, nowMs: number): MissedRun[] {
     const slot = slots[i];
     if (dismissed.has(slot)) continue;
     const end = slots[i + 1] ?? scheduleNextRunAtMs(job, slot + 1) ?? Number.MAX_SAFE_INTEGER;
-    const forSlot = (e: RoutineRunEntry) => e.slotMs === slot || e.catchUpMs === slot || !!e.alsoSlotsMs?.includes(slot)
-      // Skips in a row are one row, standing for every slot from its first to its last.
-      || (e.firstSlotMs !== undefined && e.slotMs !== undefined && e.firstSlotMs <= slot && slot <= e.slotMs)
-      || (e.slotMs === undefined && e.catchUpMs === undefined && e.atMs >= slot && e.atMs < end);
+    // A recorded slot covers the slot whose window [slot, end) it falls in, on the grid or not: a
+    // next run an older build drifted off the grid, or an error backoff's run, is still that
+    // slot's run (2026-11-10: Inbox Triage's first run after a deploy, 6.7 min off its hourly
+    // grid, read as a missed run).
+    const inWindow = (t: number) => t >= slot && t < end;
+    const forSlot = (e: RoutineRunEntry) => e.catchUpMs === slot
+      || (e.slotMs !== undefined && (e.firstSlotMs !== undefined
+        // Skips in a row are one row, standing for every slot from its first to its last.
+        ? e.firstSlotMs < end && e.slotMs >= slot
+        : inWindow(e.slotMs)))
+      || !!e.alsoSlotsMs?.some(inWindow)
+      || (e.slotMs === undefined && e.catchUpMs === undefined && inWindow(e.atMs));
     const rows = log.filter(forSlot);
     if (rows.some((e) => !runFailed(e))) continue;
     // A retry still to come inside the slot: not missed yet.

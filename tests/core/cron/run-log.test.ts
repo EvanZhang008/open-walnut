@@ -370,3 +370,39 @@ describe('review findings', () => {
     expect(catchUpTitle('Org reflection', undefined)).toBe('Org reflection')
   })
 })
+
+// 2026-11-10, live after the deploy: Inbox Triage (every hour on an anchor) recorded its first run
+// for a next run an older build had drifted 6.7 min off the grid, and the grid slot read as missed.
+describe('a run recorded off the slot grid', () => {
+  const every = (state: Partial<CronJob['state']>): CronJob => ({
+    ...hourly(state), schedule: { kind: 'every', everyMs: HOUR, anchorMs: SLOT1 - 10 * DAY },
+  } as CronJob)
+
+  it('covers the grid slot it falls in, as a single row or a run of skips', () => {
+    const drift = 400_292
+    const merged = every({
+      runLogSinceMs: SLOT1 - 1, expectFromMs: SLOT1 - 1,
+      runLog: [{ atMs: SLOT1 + HOUR + 12, slotMs: SLOT1 + HOUR, status: 'skipped', durationMs: 3, summary: 'outside hours', repeats: 2, firstAtMs: SLOT1 + drift + 19, firstSlotMs: SLOT1 + drift }],
+    })
+    expect(missedRuns(merged, SLOT1 + 2 * HOUR - MIN)).toEqual([])
+    const single = every({ runLogSinceMs: SLOT1 - 1, expectFromMs: SLOT1 - 1, runLog: [{ atMs: SLOT1 + drift + 5, slotMs: SLOT1 + drift, status: 'ok', durationMs: 1 }] })
+    expect(missedRuns(single, SLOT1 + HOUR - MIN)).toEqual([])
+  })
+
+  it('every offset inside a window covers that window and no other', () => {
+    for (const off of [0, 1, 7 * MIN, 30 * MIN, HOUR - 1]) {
+      const job = every({ runLogSinceMs: SLOT1 - 1, expectFromMs: SLOT1 - 1, runLog: [{ atMs: SLOT1 + HOUR + off + 5, slotMs: SLOT1 + HOUR + off, status: 'ok', durationMs: 1 }] })
+      expect(missedRuns(job, SLOT1 + 2 * HOUR + MISSED_GRACE_MS).map((m) => m.slotMs), String(off)).toEqual([SLOT1 + 2 * HOUR, SLOT1])
+    }
+  })
+
+  it('an error backoff’s late run for a daily slot still counts for that day', async () => {
+    const state = makeState()
+    const job = await ops.add(state, daily)
+    answers = [{ status: 'error', error: "unknown host 'gone'" }]
+    await tickAt(state, SLOT1 + 5)
+    const j = await stored(state, job.id)
+    j.state.runLog = [runEntry({ atMs: SLOT1 + DAY + 3 * HOUR, slotMs: SLOT1 + DAY + 3 * HOUR, durationMs: 1, status: 'ok' }), ...(j.state.runLog ?? [])]
+    expect(missedRuns(j, SLOT1 + DAY + 4 * HOUR).map((m) => m.slotMs)).toEqual([SLOT1])
+  })
+})
