@@ -484,6 +484,11 @@
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-checkbox-input {
     border-radius: 6px;
   }
+  /* A select is a finger target too (Default engine, When it is out of usage): 28 px on a
+     computer, the iOS row height here. */
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-select {
+    height: 44px;
+  }
 }
 
 /* N30: the jump pill steps aside while it would cover an unanswered prompt
