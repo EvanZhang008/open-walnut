@@ -113,7 +113,7 @@ function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads 
   const shown = threads?.shown ?? 0;
   const pill = (tab: OrgTaskTab, n: number) => (
     <button type="button" className="org-pill is-button" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
-      <i style={{ background: TAB_DOT[tab] }} />{stateCountLabel(tab, n)}
+      <i style={{ background: TAB_DOT[tab] }} />{tab === 'notstarted' ? `${n} ${ORG_TASK_TAB_LABELS.notstarted}` : stateCountLabel(tab, n)}
     </button>
   );
   return (
@@ -133,6 +133,7 @@ function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads 
       {!keepsThreads && tabs.needs.length + approvals > 0 && pill('needs', tabs.needs.length + approvals)}
       {tabs.working.length > 0 && pill('working', tabs.working.length)}
       {tabs.waiting.length > 0 && pill('waiting', tabs.waiting.length)}
+      {tabs.notstarted.length > 0 && pill('notstarted', tabs.notstarted.length)}
     </span>
   );
 }
@@ -374,7 +375,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const approvals = useMemo(() => {
     const ids = new Set<string>();
     // Its own work: the open tasks under it, the ones it just finished, and the node's own task.
-    for (const t of [...tabs.watching, ...tabs.working, ...tabs.waiting, ...tabs.done]) ids.add(t.id);
+    for (const t of [...tabs.watching, ...tabs.working, ...tabs.waiting, ...tabs.notstarted, ...tabs.done]) ids.add(t.id);
     for (const a of tabs.needs) ids.add(a.taskId);
     if (row.contactId) ids.add(row.contactId);
     return approvalsForNode(pendingApprovals, row.kind, ids);

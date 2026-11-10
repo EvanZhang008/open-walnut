@@ -75,8 +75,8 @@ test.describe('Flat layout', () => {
     await openHome(page, baseURL!)
     const project = `Status lines ${Date.now()}`
     const needs = await seed(page, project, 'Choose the rollout date', { phase: 'NEED_ACTION' })
-    const waiting = await seed(page, project, 'Prepare the rollout', {})
-    await seed(page, project, 'Wait for rollout approval', { phase: 'WAITING' })
+    await seed(page, project, 'Prepare the rollout', {})
+    const waiting = await seed(page, project, 'Wait for rollout approval', { phase: 'WAITING' })
     const report = await page.request.put(`/api/v1/tasks/${needs}/report`, { data: { state: 'needs', ask: 'Which date should the rollout use?' } })
     expect(report.ok(), await report.text()).toBe(true)
     await page.reload()
@@ -106,7 +106,7 @@ test.describe('Flat layout', () => {
       await toggle.click()
       await expect(toggle).toHaveAttribute('aria-checked', 'true')
       await expect(needsRow.getByTestId('status-card-needs-line')).toContainText('Which date should the rollout use?')
-      await expect(waitingRow.getByTestId('status-card-reason')).toHaveText('Not started yet')
+      await expect(waitingRow.getByTestId('status-card-reason')).toHaveText(/\S/)
       await closeDisplayMenu(page)
       await page.reload()
       await expect(needsRow.getByTestId('status-card-needs-line')).toBeVisible()
@@ -164,16 +164,21 @@ test.describe('Flat layout', () => {
     await expect(await showSectionCard(panel, 'waiting', parked)).toBeVisible()
     await expect(await showSectionCard(panel, 'waiting', snoozed)).toBeVisible()
     await expect(statusSectionRows(panel, 'waiting').locator(`[data-task-id="${needs}"]`)).toHaveCount(0)
-    // Each Waiting row says why: not started, snoozed.
-    const todoRow = await showSectionCard(panel, 'waiting', todo)
-    await expect(todoRow.getByTestId('status-card-reason')).toHaveText('Not started yet')
+    // A task nobody started is not a wait: it folds under Not started (2026-11-09), whose
+    // heading says it, so its row has no line repeating it.
+    await expect(statusSectionRows(panel, 'waiting').locator(`[data-task-id="${todo}"]`)).toHaveCount(0)
+    await setStatusSectionOpen(panel, 'notstarted', true)
+    const todoRow = await showSectionCard(panel, 'notstarted', todo)
+    await expect(todoRow.getByTestId('status-card-reason')).toHaveCount(0)
+    // Each Waiting row says why: what it waits on, snoozed.
+    const parkedRow = await showSectionCard(panel, 'waiting', parked)
     await expect((await showSectionCard(panel, 'waiting', snoozed)).getByTestId('status-card-reason')).toHaveText('Snoozed')
     // What it waits on is a third line under the title (2026-11-02, the user: on the top line
     // the sentence was cut); "Snoozed" is a label and stays on the top line, with no third line.
-    await expect(todoRow.locator('.status-card-body > .status-card-wait-line')).toHaveText('Not started yet')
-    await expect(todoRow.locator('.status-card-meta [data-testid="status-card-reason"]')).toHaveCount(0)
-    const titleBox = (await todoRow.locator('.status-card-body > .todo-pinned-title').boundingBox())!
-    const waitBox = (await todoRow.locator('.status-card-wait-line').boundingBox())!
+    await expect(parkedRow.locator('.status-card-body > .status-card-wait-line')).toHaveText(/\S/)
+    await expect(parkedRow.locator('.status-card-meta [data-testid="status-card-reason"]')).toHaveCount(0)
+    const titleBox = (await parkedRow.locator('.status-card-body > .todo-pinned-title').boundingBox())!
+    const waitBox = (await parkedRow.locator('.status-card-wait-line').boundingBox())!
     expect(waitBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height - 1)
     const snoozedRow = await showSectionCard(panel, 'waiting', snoozed)
     await expect(snoozedRow.locator('.status-card-meta [data-testid="status-card-reason"]')).toHaveText('Snoozed')

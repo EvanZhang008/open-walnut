@@ -121,7 +121,7 @@ describe('Home sections equal the user status', () => {
   // serpeate to read", "thridline cna show what need u", with a category ("read, makde decison,
   // review, see if can closed").
   it('To read sits under Needs you, its line saying what to do with it; no section of its own', () => {
-    expect(STATUS_SECTION_ORDER).toEqual(['watching', 'needs', 'working', 'waiting', 'done'])
+    expect(STATUS_SECTION_ORDER).toEqual(['watching', 'needs', 'working', 'waiting', 'notstarted', 'done'])
     const older = task({ phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'other', toRead: 'result', waitingOn: 'The result is ready' } as Task['user_status'] })
     expect(stateSectionOf(older)).toBe('needs')
     expect(needsLine(older)).toMatchObject({ category: 'close', label: 'Can close', text: 'The result is ready' })

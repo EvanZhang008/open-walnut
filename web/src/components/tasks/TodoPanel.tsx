@@ -134,7 +134,7 @@ import { bottomStatusSections, foldTasksByProject, leftoverFoldProjects, project
 import { FOLD_PANEL_ATTR, statusSectionFoldKind, statusSectionsOpen } from './section-fold-rule';
 import { useFoldStore } from './useFoldStore';
 import {
-  LS_JUMP_SECTIONS_KEY, LS_STATUS_SECTIONS_KEY, STATUS_SECTION_ORDER, buildStatusSections, isWatched, stateSectionNoNeeds, stateSectionOf, type StateSectionKey, type StatusSectionKey,
+  LS_JUMP_SECTIONS_KEY, LS_STATUS_SECTIONS_KEY, STATUS_SECTION_ORDER, buildStatusSections, drawnSectionOf, isWatched, stateSectionNoNeeds, stateSectionOf, type DrawnSectionKey, type StatusSectionKey,
 } from './status-sections';
 import { isProjectJump, projectJumpHolds, projectJumpSection, startProjectJump, type ProjectJump } from './project-jump';
 import { usePageView } from '@/utils/view-memory';
@@ -4820,7 +4820,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   });
   /** The section each task was drawn in last render: one completed or parked from a
    *  section stays there through its exit grace instead of popping into the list. */
-  const lastPlaceRef = useRef<Map<string, StateSectionKey>>(new Map());
+  const lastPlaceRef = useRef<Map<string, DrawnSectionKey>>(new Map());
   /** The completed archive, fetched once a Completed section's "Show more" runs past the loaded rows. */
   const [archiveAsked, setArchiveAsked] = useState(false);
   const askArchive = useCallback(() => setArchiveAsked(true), []);
@@ -7590,6 +7590,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // Flat; elsewhere those rows stay in the list unless parked or snoozed.
       placeOf: (t) => (heldInGrace(t) ? (lastPlace.get(t.id) ?? 'working')
         : !needsSection ? stateSectionNoNeeds(t, snoozed) : undefined),
+      // Flat folds the tasks nobody started on their own, out of Waiting / snoozed.
+      splitNotStarted: needsSection,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recentTick re-runs the grace check
   }, [sectionsActive, needsSection, sectionScope, isSearchMode, tasks, filterEvalCtx, tasksStore?.completedHidden, footerTasks, heldInGrace, recentTick]);
@@ -7601,12 +7603,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // A task shown past the chips (5.12: a locate, a task just made) leads the section of
   // its state in Flat, the way the list draws it in place; its reasons show above the
   // sections, and that section opens for it.
-  const overrideSection = useMemo((): StateSectionKey | null => {
+  const overrideSection = useMemo((): DrawnSectionKey | null => {
     const t = filterOverrideReasons?.task;
     if (!flatSections || !t) return null;
     const m = baseSectionModel;
-    if ([m.watching, m.needs, m.working, m.waiting, m.done].some((rows) => rows.some((x) => x.id === t.id))) return null;
-    return stateSectionOf(t, regionRules.snoozed);
+    if ([m.watching, m.needs, m.working, m.waiting, m.notstarted, m.done].some((rows) => rows.some((x) => x.id === t.id))) return null;
+    return drawnSectionOf(t, regionRules.snoozed);
   }, [baseSectionModel, flatSections, filterOverrideReasons, regionRules]);
   const sectionModel = useMemo(() => {
     const t = filterOverrideReasons?.task;
@@ -7635,8 +7637,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   useLayoutEffect(() => {
     const drawn = new Set<StatusSectionKey>([...sectionsTop, ...sectionsBottom]);
     const place = new Map<string, StatusSectionKey>();
-    const graceAt = new Map<string, StateSectionKey>();
-    for (const key of ['watching', 'needs', 'working', 'waiting', 'done'] as const) {
+    const graceAt = new Map<string, DrawnSectionKey>();
+    for (const key of ['watching', 'needs', 'working', 'waiting', 'notstarted', 'done'] as const) {
       if (!drawn.has(key)) continue;
       for (const t of sectionRowsOf(sectionModel, key).tasks) {
         place.set(t.id, key);
@@ -7687,7 +7689,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   });
   /** Some section draws rows of this view, so an empty list under Working is no "No tasks found". */
   const sectionRowsDrawn = sectionModel.watching.length + sectionModel.needs.length + sectionModel.waiting.length
-    + sectionModel.done.length + sectionModel.doneUnloaded > 0;
+    + sectionModel.notstarted.length + sectionModel.done.length + sectionModel.doneUnloaded > 0;
   // A stable ref callback: an inline one is detached (set to null) on every commit,
   // which left FilterBar's scroll keeper reading a null list scroller.
   const listScrollRef = homeFilters.listScrollRef;

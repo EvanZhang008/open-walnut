@@ -86,6 +86,9 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 }
 .org-task-row:hover { background: var(--bg-secondary); }
 .org-task-row > i { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+/* Not started: the dashed ring of Home's section, never a filled dot. */
+.org-task-row > .org-task-ring { flex: none; display: inline-flex; color: var(--fg-muted, #86868b); }
+.org-task-row > .org-task-ring svg { width: 10px; height: 10px; }
 .org-task-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .org-task-title, .org-task-note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .org-task-note { font-size: 11.5px; color: var(--fg-secondary, var(--fg-muted)); }

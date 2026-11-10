@@ -10,9 +10,15 @@
  *                      "this is not waiting"; 2026-11-03, "I dont wnat serpeate to read"); each
  *                      row's line says what to do with it: Take a look, Decide, Review, Can close
  *   Working    open    its user status is Working: a turn runs, or its own work goes on
- *   Waiting    folded  its user status is Waiting: not started, stopped, on a watch,
- *                      a time, another task or something outside, or snoozed; each row
- *                      says which (waitingReason) and wears the wait or snooze mark
+ *   Waiting    folded  its user status is Waiting: stopped, on a watch, a time, another
+ *                      task or something outside, or snoozed; each row says which
+ *                      (waitingReason) and wears the wait or snooze mark
+ *   Not started folded Flat only: its user status is Waiting because nobody started it
+ *                      (kind `not-started`: never run, marked in progress with no session,
+ *                      or a start that failed), and it is not snoozed (2026-11-09, the user:
+ *                      "a new category not started, to put the not stared one not mix in to
+ *                      wait and snooze they are completeli differnet"); its rows wear the
+ *                      dashed ring, never the hourglass
  *   Completed  folded  done
  *
  * The state sections are the one user status (src/core/user-status.ts) as is, the same as
@@ -30,11 +36,14 @@ import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, USER_STATE_MEANINGS, limitedL
 import { sameAskLine, waitingLine, waitingSentence } from '../board/board-status-model';
 import { recentActivityTime } from './recent-activity-time';
 
-export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'done';
-/** The sections a task falls into by its state (Watching is the user's own pick). */
-export type StateSectionKey = Exclude<StatusSectionKey, 'watching'>;
+export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'notstarted' | 'done';
+/** The sections a task falls into by its one user status (Watching is the user's own pick,
+ *  Not started is a part of Waiting that Flat draws on its own). */
+export type StateSectionKey = 'needs' | 'working' | 'waiting' | 'done';
+/** A section a task is drawn in by its state: a user status section, or Not started. */
+export type DrawnSectionKey = Exclude<StatusSectionKey, 'watching'>;
 
-export const STATUS_SECTION_ORDER: readonly StatusSectionKey[] = ['watching', 'needs', 'working', 'waiting', 'done'];
+export const STATUS_SECTION_ORDER: readonly StatusSectionKey[] = ['watching', 'needs', 'working', 'waiting', 'notstarted', 'done'];
 
 const { read: _readLabel, ...SHOWN_LABELS } = USER_STATE_LABELS;
 const { read: _readMeaning, ...SHOWN_MEANINGS } = USER_STATE_MEANINGS;
@@ -42,13 +51,15 @@ const { read: _readMeaning, ...SHOWN_MEANINGS } = USER_STATE_MEANINGS;
 export const STATUS_SECTION_LABELS: Record<StatusSectionKey, string> = {
   watching: 'Watching',
   ...SHOWN_LABELS,
+  notstarted: 'Not started',
 };
 
 export const STATUS_SECTION_TITLES: Record<StatusSectionKey, string> = {
   watching: 'Tasks you watch: kept here whatever their state',
   ...SHOWN_MEANINGS,
   needs: 'It asks you something, or has a result or an answer for you to look at',
-  waiting: 'It waits on something: not started, stopped, a watch, a time, another task, or you snoozed it',
+  waiting: 'It waits on something: stopped, a watch, a time, another task, or you snoozed it',
+  notstarted: 'Nobody started it yet: no session has run it, or its start failed',
 };
 
 /** A fold's tooltip: what the section holds, then what a click does (one period, whichever
@@ -77,6 +88,29 @@ export function isWatched(task: Watchable): boolean {
  *  derived yet. Nothing else moves a task between sections (tests/web/home-sections-user-status.test.ts). */
 export function stateSectionOf(task: Task, snoozed?: (task: Task) => boolean): StateSectionKey {
   return shownState(taskUserState(task, !task.user_status && !!snoozed?.(task)));
+}
+
+/** Not started: a waiting status whose kind says nobody started it, not snoozed (a snoozed
+ *  task sleeps under Waiting / snoozed, whatever it would do after). A task the server has
+ *  not derived yet: a TODO with no session and no start date to come. */
+export function isNotStarted(task: Task, snoozed?: (task: Task) => boolean): boolean {
+  const us = task.user_status;
+  if (us) return us.state === 'waiting' && us.kind === 'not-started' && !us.snoozed;
+  return task.phase === 'TODO' && !task.session_id && !snoozed?.(task);
+}
+
+/** The section Flat draws a task in by its state: its user status section, with Not started
+ *  taken out of Waiting. */
+export function drawnSectionOf(task: Task, snoozed?: (task: Task) => boolean): DrawnSectionKey {
+  const s = stateSectionOf(task, snoozed);
+  return s === 'waiting' && isNotStarted(task, snoozed) ? 'notstarted' : s;
+}
+
+/** A Not started row's line: only what the heading does not say already (a start that
+ *  failed, a task marked in progress that nothing runs). */
+export function notStartedReason(task: Task): string {
+  const on = (task.user_status?.waitingOn ?? '').trim();
+  return /^not started( yet)?\.?$/i.test(on) ? '' : on;
 }
 
 /** Why a row under Waiting waits, in the Board's words (not started, stopped, a watch...).
@@ -200,6 +234,8 @@ export interface StatusSectionsModel {
   watching: Task[];
   needs: Task[];
   waiting: Task[];
+  /** Flat's Not started: drawn by Flat only; elsewhere these rows stay in the list or under Waiting. */
+  notstarted: Task[];
   done: Task[];
   /** Open tasks under Working: Flat draws them as rows, By project's list draws them itself. */
   working: Task[];
@@ -230,7 +266,9 @@ export interface StatusSectionsInput {
   archiveOffered?: boolean;
   /** A place that wins over the task's state: a row in its exit grace stays where it
    *  was drawn (completed from Needs you, it fades out there, not in the list). */
-  placeOf?: (task: Task) => StateSectionKey | undefined;
+  placeOf?: (task: Task) => DrawnSectionKey | undefined;
+  /** Flat: Not started is a section of its own; elsewhere those rows stay where their state puts them. */
+  splitNotStarted?: boolean;
 }
 
 /** Split the view into its sections. Pure; TodoPanel memoizes it. */
@@ -238,6 +276,7 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
   const watching: Task[] = [];
   const needs: Task[] = [];
   const waiting: Task[] = [];
+  const notstarted: Task[] = [];
   const done: Task[] = [];
   const working: Task[] = [];
   const seen = new Set<string>();
@@ -245,9 +284,11 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
     if (seen.has(t.id)) continue;
     seen.add(t.id);
     if (isWatched(t) || !input.passes(t)) continue;
-    switch (input.placeOf?.(t) ?? stateSectionOf(t, input.snoozed)) {
+    const place = input.placeOf?.(t) ?? (input.splitNotStarted ? drawnSectionOf(t, input.snoozed) : stateSectionOf(t, input.snoozed));
+    switch (place) {
       case 'needs': needs.push(t); break;
       case 'waiting': waiting.push(t); break;
+      case 'notstarted': notstarted.push(t); break;
       case 'done': done.push(t); break;
       default: working.push(t);
     }
@@ -257,6 +298,7 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
     watching: sortSectionTasks('watching', watching),
     needs: sortSectionTasks('needs', needs),
     waiting: sortSectionTasks('waiting', waiting),
+    notstarted: sortSectionTasks('notstarted', notstarted),
     done: sortSectionTasks('done', done),
     working: sortSectionTasks('working', working),
     workingCount: working.length,

@@ -1,5 +1,5 @@
 /* Status sections of the home task panel (StatusSections.tsx): Watching, Needs you,
-   Working, Waiting, Completed. A heading is a thin divider row, "Waiting (13) ---- >",
+   Working, Waiting, Not started (Flat), Completed. A heading is a thin divider row, "Waiting (13) ---- >",
    grey, the open one tinted (2026-10-30, the user picked this look from ten: "so clean
    so simple"). Every section has one, Needs you included, with the section's own mark
    before its name (2026-10-31: headless Needs you rows read as Watching's).
@@ -149,7 +149,8 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 /* Waiting / snoozed: the row's wait or snooze mark, muted, and an unread dot that does not
    read as an ask (2026-11-02, the user: "looks kike they are waiting for my input"). */
 .status-section-card .pinned-phase-picker[data-row-mark="waiting"],
-.status-section-card .pinned-phase-picker[data-row-mark="snoozed"] { color: var(--fg-muted); }
+.status-section-card .pinned-phase-picker[data-row-mark="snoozed"],
+.status-section-card .pinned-phase-picker[data-row-mark="not-started"] { color: var(--fg-muted); }
 .status-section-card > .task-unread-dot.task-unread-dot-quiet { background: var(--fg-muted); opacity: 0.55; }
 /* A usage limit stopped it (Walnut continues it at the reset): the session banner's tag
    (usage-limit.css), on the row and as a count on the Waiting heading. */

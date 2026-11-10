@@ -39,6 +39,7 @@ import {
   type StatusSectionKey,
   type StatusSectionsModel,
   needsLine,
+  notStartedReason,
   waitingReason,
   waitingHover,
 } from './status-sections';
@@ -57,6 +58,7 @@ export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
   needs: ICONS.ICON_ATTENTION,
   working: ICONS.ICON_PHASE_IN_PROGRESS,
   waiting: ICONS.ICON_PHASE_WAITING,
+  notstarted: ICONS.ICON_NOT_STARTED,
   done: ICONS.ICON_PHASE_COMPLETE,
 };
 
@@ -173,6 +175,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
   const limitOwn: LimitRowLine | null = need ? (continuingNow ? { tag: 'Continuing', text: 'now' } : limitOwnWords(task, need.text ?? '', limitNow, liveState)) : null;
   const reasonText = isDone ? '' : limitWaitOwn ? `${limitWaitOwn.tag} ${limitWaitOwn.text}`
     : sectionKey === 'waiting' ? limitWaitLine ?? waitingReason(task, formatWaitUntil)
+    : sectionKey === 'notstarted' ? notStartedReason(task)
     : limitOwn ? `${limitOwn.tag ? `${limitOwn.tag} ` : ''}${limitOwn.text}`
     : need ? [need.label, need.text].filter(Boolean).join(': ') : '';
   // Flat: the sentence of what it waits on is a third line under the title, so the top line
@@ -280,8 +283,8 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
         </span>
       )}
       {unread ? (
-        // Under Waiting / snoozed the unread dot is quiet: nothing there asks the user to act.
-        <span className={`task-unread-dot${sectionKey === 'waiting' ? ' task-unread-dot-quiet' : ''}`} role="img" aria-label="Unread: agent output you haven't seen" title="Unread: click to open and mark read" />
+        // Under Waiting / snoozed and Not started the unread dot is quiet: nothing there asks the user to act.
+        <span className={`task-unread-dot${sectionKey === 'waiting' || sectionKey === 'notstarted' ? ' task-unread-dot-quiet' : ''}`} role="img" aria-label="Unread: agent output you haven't seen" title="Unread: click to open and mark read" />
       ) : needsAction && !isDone && (
         <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
@@ -295,8 +298,9 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
         }}
         aria-label={isDone ? 'Reopen' : 'Mark complete'}
         title={isDone ? 'Done: click to reopen' : snoozeDate ? 'Snoozed: click to complete'
-          : sectionKey === 'waiting' ? 'Waiting: click to complete' : 'Click to complete'}
-        data-row-mark={isDone ? 'done' : sectionKey === 'waiting' ? (snoozeDate ? 'snoozed' : 'waiting') : need ? (taskUserState(task) === 'read' ? 'needs-read' : `needs-${need.category}`) : 'open'}
+          : sectionKey === 'waiting' ? 'Waiting: click to complete'
+          : sectionKey === 'notstarted' ? 'Not started: click to complete' : 'Click to complete'}
+        data-row-mark={isDone ? 'done' : sectionKey === 'waiting' ? (snoozeDate ? 'snoozed' : 'waiting') : sectionKey === 'notstarted' ? 'not-started' : need ? (taskUserState(task) === 'read' ? 'needs-read' : `needs-${need.category}`) : 'open'}
       >
         {ICONS.sectionRowIcon(sectionKey, isDone, task.phase, !!snoozeDate, taskUserState(task))}
       </button>
@@ -453,6 +457,7 @@ export function sectionRowsOf(model: StatusSectionsModel, key: StatusSectionKey)
     case 'watching': return { tasks: model.watching, count: model.watching.length };
     case 'needs': return { tasks: model.needs, count: model.needs.length };
     case 'waiting': return { tasks: model.waiting, count: model.waiting.length };
+    case 'notstarted': return { tasks: model.notstarted, count: model.notstarted.length };
     case 'done': return { tasks: model.done, count: model.done.length + model.doneUnloaded };
     default: return { tasks: model.working, count: model.workingCount };
   }

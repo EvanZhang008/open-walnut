@@ -50,7 +50,8 @@ export interface PlaceFacts {
 export function locatePlaceSig(task: Task, facts: PlaceFacts): string {
   const us = task.user_status;
   return JSON.stringify([
-    task.phase, task.status, us?.state ?? null, us?.snoozed ? 1 : 0, task.start_date ?? null,
+    // The kind too: Flat draws a task nobody started under Not started, out of Waiting.
+    task.phase, task.status, us?.state ?? null, us?.kind ?? null, us?.snoozed ? 1 : 0, task.start_date ?? null,
     (task as { watched_at?: string | null }).watched_at ? 1 : 0,
     task.project || '', task.group_id ?? null, task.parent_task_id ?? null,
     facts.tier, facts.passes ? 1 : 0, facts.held ? 1 : 0,

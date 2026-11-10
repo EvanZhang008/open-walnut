@@ -59,7 +59,7 @@ test('the project name on a row filters its own tab to that project, opens every
     await expect(filterChip(page, 'project')).toHaveCount(1)
     await expect(filterChip(page, 'project')).toContainText(garden)
     await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true')
-    for (const key of ['needs', 'waiting', 'done'] as const) {
+    for (const key of ['needs', 'waiting', 'notstarted', 'done'] as const) {
       const toggle = statusSectionToggle(panel, key)
       if (await toggle.count()) await expect(toggle).toHaveAttribute('aria-expanded', 'true')
     }
@@ -74,7 +74,7 @@ test('the project name on a row filters its own tab to that project, opens every
     // All, picked by the user inside the jump, shows every task of the project.
     await selectTab(page, 'All')
     await expect(statusSectionCard(panel, 'needs', gNeeds)).toBeVisible()
-    await expect(await showSectionCard(panel, 'waiting', gTodo)).toBeVisible()
+    await expect(await showSectionCard(panel, 'notstarted', gTodo)).toBeVisible()
     await expect(await showSectionCard(panel, 'waiting', gParked)).toBeVisible()
     await expect(await showSectionCard(panel, 'done', gDone)).toBeVisible()
 
@@ -94,7 +94,7 @@ test('the project name on a row filters its own tab to that project, opens every
     await removeFilterChip(page, 'project')
     await expect(tab(page, 'All')).toHaveAttribute('aria-selected', 'true')
     await expect(statusSectionCard(panel, 'needs', kFocus)).toBeVisible()
-    for (const key of ['waiting', 'done'] as const) {
+    for (const key of ['waiting', 'notstarted', 'done'] as const) {
       const toggle = statusSectionToggle(panel, key)
       if (await toggle.count()) await expect(toggle).toHaveAttribute('aria-expanded', 'false')
     }

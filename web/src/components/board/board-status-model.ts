@@ -14,7 +14,7 @@
 import type { Task } from '@open-walnut/core';
 import {
   limitedLine,
-  NEEDS_CATEGORY_LABELS, USER_STATES, dueAtMs, fallbackUserState, needsLineOf, shownState, stateCountLabel,
+  NEEDS_CATEGORY_LABELS, USER_STATES, USER_STATE_LABELS, dueAtMs, fallbackUserState, needsLineOf, shownState, stateCountLabel,
   storedUserState, type NeedsCategory, type UserState, type UserStatus, type WaitKind,
 } from '@open-walnut/user-status';
 import { teamChildren, walkTeam } from './board-overview-model';
@@ -23,6 +23,26 @@ import { teamChildren, walkTeam } from './board-overview-model';
 export type ShownState = Exclude<UserState, 'read'>;
 export const SHOWN_STATES: readonly ShownState[] = USER_STATES.filter((s): s is ShownState => s !== 'read');
 export type ShownCounts = Record<ShownState, number>;
+
+/** Not started: a part of Waiting with a chip and a pill of its own (2026-11-09, the user: not
+ *  started is "completeli differnet" from wait and snooze), the same rule as Home's Flat section
+ *  (status-sections.ts isNotStarted). A snoozed task sleeps under Waiting / snoozed. */
+export const NOT_STARTED_LABEL = 'Not started';
+export function isNotStartedStatus(status: UserStatus): boolean {
+  return status.state === 'waiting' && status.kind === 'not-started' && !status.snoozed;
+}
+/** The chips over the table, in order: the shown states with Not started after Waiting. */
+export type StatusChip = ShownState | 'notstarted';
+export const STATUS_CHIPS: readonly StatusChip[] = SHOWN_STATES.flatMap((s): StatusChip[] => (s === 'waiting' ? ['waiting', 'notstarted'] : [s]));
+export function chipLabel(chip: StatusChip): string {
+  return chip === 'notstarted' ? NOT_STARTED_LABEL : USER_STATE_LABELS[chip];
+}
+/** A chip's count: Waiting less the not started ones, which Not started counts. */
+export function chipCount(board: StatusBoard, chip: StatusChip): number {
+  const ns = board.groups.waiting.filter((r) => isNotStartedStatus(r.status)).length;
+  if (chip === 'notstarted') return ns;
+  return chip === 'waiting' ? board.counts.waiting - ns : board.counts[chip];
+}
 
 export interface StatusRow {
   task: Task;
@@ -191,27 +211,31 @@ export function statusBrief(board: StatusBoard): StatusBrief {
     }),
     counts: board.counts,
     stuck: board.groups.waiting.filter((r) => r.status.kind === 'stuck').length,
-    notStarted: board.groups.waiting.filter((r) => r.status.kind === 'not-started').length,
+    notStarted: board.groups.waiting.filter((r) => isNotStartedStatus(r.status)).length,
     doneWindowDays: board.doneWindowDays,
   };
 }
 
-/** "10 Working, 16 Waiting / snoozed (1 with nothing to wake it, 5 not started), 12 Completed in the last 7 days." */
+/** "10 Working, 11 Waiting / snoozed (1 with nothing to wake it), 5 Not started, 12 Completed in the last 7 days." */
 export function briefCountsLine(b: StatusBrief): string {
-  const extra = [b.stuck ? `${b.stuck} with nothing to wake it` : '', b.notStarted ? `${b.notStarted} not started` : ''].filter(Boolean).join(', ');
-  const waiting = `${stateCountLabel('waiting', b.counts.waiting)}${extra ? ` (${extra})` : ''}`;
-  return `${stateCountLabel('working', b.counts.working)}, ${waiting}, ${stateCountLabel('done', b.counts.done)} in the last ${b.doneWindowDays} days.`;
+  const extra = b.stuck ? ` (${b.stuck} with nothing to wake it)` : '';
+  const waiting = `${stateCountLabel('waiting', b.counts.waiting - b.notStarted)}${extra}`;
+  const notStarted = b.notStarted ? `, ${b.notStarted} ${NOT_STARTED_LABEL}` : '';
+  return `${stateCountLabel('working', b.counts.working)}, ${waiting}${notStarted}, ${stateCountLabel('done', b.counts.done)} in the last ${b.doneWindowDays} days.`;
 }
 
-export type StatusFilter = 'open' | ShownState;
+export type StatusFilter = 'open' | StatusChip;
 /** A kept filter (usePageViewOf): one of the filters, or the To read chip an older build kept,
  *  which is Needs you now (statusFilterShown). */
 export type KeptStatusFilter = StatusFilter | 'read';
-export const isStatusFilter = (v: unknown): v is KeptStatusFilter => v === 'open' || v === 'read' || (SHOWN_STATES as readonly unknown[]).includes(v);
+export const isStatusFilter = (v: unknown): v is KeptStatusFilter => v === 'open' || v === 'read' || (STATUS_CHIPS as readonly unknown[]).includes(v);
 export const statusFilterShown = (v: KeptStatusFilter): StatusFilter => (v === 'read' ? 'needs' : v);
 
-/** The rows a filter shows, in the table's order: Needs you, Working, Waiting (open), or one group. */
+/** The rows a filter shows, in the table's order: Needs you, Working, Waiting and Not started
+ *  (open; not started sort last among the waits), or one group. */
 export function filteredRows(board: StatusBoard, filter: StatusFilter): StatusRow[] {
   if (filter === 'open') return [...board.groups.needs, ...board.groups.working, ...board.groups.waiting];
+  if (filter === 'waiting') return board.groups.waiting.filter((r) => !isNotStartedStatus(r.status));
+  if (filter === 'notstarted') return board.groups.waiting.filter((r) => isNotStartedStatus(r.status));
   return board.groups[filter];
 }

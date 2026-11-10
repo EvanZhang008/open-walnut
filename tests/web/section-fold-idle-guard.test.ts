@@ -32,7 +32,7 @@ const autoKeys = Object.entries(STATUS_SECTION_FOLD).filter(([, k]) => k === 'au
 describe('a status fold folds 60 s after the last action in its panel', () => {
   it('the time is 60 s', () => {
     expect(FOLD_AUTO_CLOSE_MS).toBe(60_000);
-    expect(autoKeys.sort()).toEqual(['done', 'waiting', 'working']);
+    expect(autoKeys.sort()).toEqual(['done', 'notstarted', 'waiting', 'working']);
   });
 
   for (const key of [...autoKeys, 'list\u0000Garden\u0000done']) {

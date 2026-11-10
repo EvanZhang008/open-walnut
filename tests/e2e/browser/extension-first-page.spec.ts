@@ -259,17 +259,17 @@ test('the tabs and a list of more than 100 tasks are Home\'s own', async () => {
   await expect(pinnedTab).toHaveClass(/is-active/)
   // Pinned holds the tasks pinned to a tier, never an ask that is in no tier.
   await expect(needsCard(v)).toBeVisible({ timeout: 20_000 })
-  await expect(v.getByTestId('status-section-waiting')).toBeVisible()
+  await expect(v.getByTestId('status-section-notstarted')).toBeVisible()
   await expect(v.locator('.ext-home-tasks').getByText('Which plants like shade?')).toHaveCount(0)
   await shots(panel, 'panel-tab-pinned')
   const allTab = v.locator('.todo-section-tab').filter({ hasText: 'All' })
   await allTab.click()
   await expect(allTab).toHaveClass(/is-active/)
-  // The board's more than 100 open tasks, unfolded under Waiting / snoozed.
-  const waiting = v.getByTestId('status-section-waiting').locator('.navigation-heading-open')
+  // The board's more than 100 open tasks nobody started, unfolded under Not started.
+  const waiting = v.getByTestId('status-section-notstarted').locator('.navigation-heading-open')
   if ((await waiting.getAttribute('aria-expanded')) !== 'true') await waiting.click()
   await expect(waiting).toHaveAttribute('aria-expanded', 'true')
-  await expect(v.getByTestId('status-section-waiting-count')).toHaveText(/^1\d\d\+?$/)
+  await expect(v.getByTestId('status-section-notstarted-count')).toHaveText(/^1\d\d\+?$/)
   // The list scrolls with the wheel; the composer stays where it is.
   const tasks = v.getByTestId('ext-home-tasks')
   const tb = (await tasks.boundingBox())!

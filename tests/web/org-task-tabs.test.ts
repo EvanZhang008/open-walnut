@@ -40,7 +40,7 @@ describe('the Task view tabs', () => {
   const walnut = rows.find((r) => r.project === 'Walnut')!
 
   it('carry the home panel\'s names, in its order', () => {
-    expect(ORG_TASK_TABS.map((k) => ORG_TASK_TAB_LABELS[k])).toEqual(['Needs you', 'Working', 'Waiting / snoozed', 'Completed'])
+    expect(ORG_TASK_TABS.map((k) => ORG_TASK_TAB_LABELS[k])).toEqual(['Needs you', 'Working', 'Waiting / snoozed', 'Not started', 'Completed'])
     for (const k of ORG_TASK_TABS) expect(ORG_TASK_TAB_LABELS[k]).toBe(STATUS_SECTION_LABELS[k])
     expect(ORG_RAIL_TABS).not.toContain('read')
     expect(Object.keys(TAB_DOT)).not.toContain('read')

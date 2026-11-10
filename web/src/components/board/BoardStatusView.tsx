@@ -17,14 +17,15 @@ import { CEO_LABEL, VP_LABEL, orgDisplayTitle } from '@open-walnut/org-tree';
 import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { formatWaitUntil } from '@/components/tasks/TaskStatusControl';
 import { timeAgo } from '@/utils/time';
+import * as ICONS from '@/components/common/Icons';
 import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { apiPost } from '@/api/client';
 import { LiveActivityLine } from './LiveActivityLine';
 import { useLiveActivity } from '@/stores/live-activity-store';
 import {
-  SHOWN_STATES, briefCountsLine, buildStatusBoard, filteredRows, isStatusFilter, needsRowLine, rowTime, statusBrief,
-  statusFilterShown, waitingLine, sameAskLine, waitingSentence, type KeptStatusFilter, type ShownState, type StatusFilter, type StatusRow,
+  NOT_STARTED_LABEL, STATUS_CHIPS, briefCountsLine, buildStatusBoard, chipCount, chipLabel, filteredRows, isNotStartedStatus, isStatusFilter, needsRowLine,
+  rowTime, statusBrief, statusFilterShown, waitingLine, sameAskLine, waitingSentence, type KeptStatusFilter, type StatusChip, type StatusFilter, type StatusRow,
 } from './board-status-model';
 import '@/styles/board-overview.css';
 import '@/styles/board-status.css';
@@ -49,6 +50,7 @@ const EMPTY_TEXT: Record<StatusFilter, string> = {
   needs: 'Nothing needs you right now.',
   working: 'Nothing is working right now.',
   waiting: 'Nothing is waiting right now.',
+  notstarted: 'Every task here has started.',
   done: `Nothing was done in the last ${RECENT_COMPLETED_DAYS} days.`,
 };
 
@@ -59,6 +61,10 @@ function StatusPill({ row }: { row: StatusRow }) {
   // Stuck is a wait nothing will wake: the state's own name, in the stuck colour (its words say why).
   if (state === 'waiting' && kind === 'stuck') {
     return <span className="bs-pill bs-pill-stuck" data-state="stuck">{USER_STATE_LABELS.waiting}</span>;
+  }
+  // Nobody started it: its own pill (a dashed ring), never Waiting's (2026-11-09).
+  if (isNotStartedStatus(row.status)) {
+    return <span className="bs-pill bs-pill-notstarted" data-state="notstarted"><span className="bs-ring">{ICONS.ICON_NOT_STARTED}</span>{NOT_STARTED_LABEL}</span>;
   }
   const main = <span className={`bs-pill bs-pill-${state}`} data-state={state}><span className="bs-dot" />{USER_STATE_LABELS[state]}</span>;
   // Its latest result left things not done (structured-reply.ts): "Done" alone would overstate it.
@@ -152,7 +158,7 @@ const Row = memo(function Row({ row, onOpenTask, onOpenPage }: { row: StatusRow;
       data-state={shown}
       tabIndex={0}
       role="button"
-      aria-label={`${title}: ${USER_STATE_LABELS[shown]}. Open the task`}
+      aria-label={`${title}: ${isNotStartedStatus(row.status) ? NOT_STARTED_LABEL : USER_STATE_LABELS[shown]}. Open the task`}
       onClick={() => onOpenTask(t.id)}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenTask(t.id); } }}
     >
@@ -278,7 +284,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
           <button type="button" className={`bs-chip${filter === 'open' ? ' is-on' : ''}`} aria-pressed={filter === 'open'} onClick={() => pick('open')} data-testid="board-status-filter-open">
             All open <b>{open}</b>
           </button>
-          {SHOWN_STATES.map((s: ShownState) => (
+          {STATUS_CHIPS.map((s: StatusChip) => (
             <button
               key={s}
               type="button"
@@ -287,7 +293,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
               onClick={() => pick(s)}
               data-testid={`board-status-filter-${s}`}
             >
-              <span className="bs-dot" /><b>{board.counts[s]}</b> {USER_STATE_LABELS[s]}
+              {s === 'notstarted' ? <span className="bs-ring">{ICONS.ICON_NOT_STARTED}</span> : <span className="bs-dot" />}<b>{chipCount(board, s)}</b> {chipLabel(s)}
             </button>
           ))}
         </div>

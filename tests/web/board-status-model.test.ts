@@ -57,7 +57,7 @@ describe('buildStatusBoard', () => {
     expect(brief.needs.map((n) => n.ask)).toEqual(['Revoke the old token?', 'Approve a real iPhone test?']);
     // Each one's line says what to do with it, then its ask.
     expect(brief.needs.map((n) => n.line)).toEqual(['Decide: Revoke the old token?', 'Decide: Approve a real iPhone test?']);
-    expect(briefCountsLine(brief)).toBe('3 Working, 3 Waiting / snoozed (1 with nothing to wake it, 1 not started), 1 Completed in the last 7 days.');
+    expect(briefCountsLine(brief)).toBe('3 Working, 2 Waiting / snoozed (1 with nothing to wake it), 1 Not started, 1 Completed in the last 7 days.');
   });
 
   it('filters: all open in the table order, or one state', () => {
@@ -104,7 +104,7 @@ describe('buildStatusBoard', () => {
       'Take a look: It answered your question', 'Can close: The result is ready',
       'Decide: Revoke the old token?', 'Decide: Approve a real iPhone test?',
     ]);
-    expect(briefCountsLine(brief)).toBe('3 Working, 4 Waiting / snoozed (1 with nothing to wake it, 1 not started), 1 Completed in the last 7 days.');
+    expect(briefCountsLine(brief)).toBe('3 Working, 3 Waiting / snoozed (1 with nothing to wake it), 1 Not started, 1 Completed in the last 7 days.');
     expect(briefCountsLine(brief)).not.toContain('To read');
   });
 

@@ -15,7 +15,7 @@ import {
   endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, type StatusSectionKey,
 } from './status-section-helpers'
 
-const KEYS: StatusSectionKey[] = ['watching', 'needs', 'working', 'waiting', 'done']
+const KEYS: StatusSectionKey[] = ['watching', 'needs', 'working', 'waiting', 'notstarted', 'done']
 const TABS = ['All', 'Focus', 'Satellite'] as const
 
 const made: string[] = []
@@ -74,6 +74,7 @@ test('every section draws one heading with its count on every tab, Needs you inc
       waiting: await seed(page, project, `heading parked ${tier} ${stamp}`, tier, { phase: 'WAITING', wait_until: new Date(Date.now() + 6 * 3600e3).toISOString() }),
       watching: await seed(page, project, `heading watched ${tier} ${stamp}`, tier, { phase: 'NEED_ACTION', watched_at: new Date().toISOString() }),
       done: await seed(page, project, `heading done ${tier} ${stamp}`, tier, { phase: 'COMPLETE' }),
+      notstarted: await seed(page, project, `heading not started ${tier} ${stamp}`, tier, {}),
     }
   }
   ids.focus.working = await seed(page, project, `heading working focus ${stamp}`, 'focus', { phase: 'IN_PROGRESS' })

@@ -80,6 +80,9 @@
 .board-status .bs-chip-needs .bs-dot, .board-status .bs-pill-needs .bs-dot { background: var(--bs-needs); }
 .board-status .bs-chip-working .bs-dot, .board-status .bs-pill-working .bs-dot { background: var(--bs-working); }
 .board-status .bs-chip-done .bs-dot, .board-status .bs-pill-done .bs-dot { background: var(--bs-done); }
+/* Not started: the dashed ring of Home's section (ICON_NOT_STARTED), never Waiting's filled dot. */
+.board-status .bs-ring { flex: none; display: inline-flex; color: var(--bs-waiting); }
+.board-status .bs-ring svg { width: 10px; height: 10px; }
 
 .board-status .bs-table { width: 100%; border-collapse: collapse; }
 

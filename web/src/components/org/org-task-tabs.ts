@@ -8,19 +8,23 @@
 import type { Task } from '@open-walnut/core';
 import { projectKey, userStateOf } from '@open-walnut/org-tree';
 import { shownState } from '@open-walnut/user-status';
-import { STATUS_SECTION_LABELS, isWatched, sortSectionTasks } from '@/components/tasks/status-sections';
+import { STATUS_SECTION_LABELS, isNotStarted, isWatched, notStartedReason, sortSectionTasks } from '@/components/tasks/status-sections';
 import { readStatusLine } from './org-ask-form';
 import { flattenNodes, needsRowText, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
 import type { LayoutSlot } from '@/utils/layout-record';
 
 // A task with only a result or an answer to look at (To read) is under Needs you, a card with
-// its line (2026-11-03, the user: "I dont wnat serpeate to read"): no tab of its own.
-export type OrgTaskTab = 'needs' | 'working' | 'waiting' | 'done';
-export const ORG_TASK_TABS: readonly OrgTaskTab[] = ['needs', 'working', 'waiting', 'done'];
+// its line (2026-11-03, the user: "I dont wnat serpeate to read"): no tab of its own. A task nobody
+// started has its own tab after Waiting, as on Home (2026-11-09, the user: not started is
+// "completeli differnet" from wait and snooze; status-sections.ts isNotStarted).
+export type OrgTaskTab = 'needs' | 'working' | 'waiting' | 'notstarted' | 'done';
+/** A tab one user status fills (Not started is a part of Waiting). */
+export type OrgStateTab = Exclude<OrgTaskTab, 'notstarted'>;
+export const ORG_TASK_TABS: readonly OrgTaskTab[] = ['needs', 'working', 'waiting', 'notstarted', 'done'];
 export const ORG_TASK_TAB_LABELS: Record<OrgTaskTab, string> = {
   needs: STATUS_SECTION_LABELS.needs, working: STATUS_SECTION_LABELS.working,
-  waiting: STATUS_SECTION_LABELS.waiting, done: STATUS_SECTION_LABELS.done,
+  waiting: STATUS_SECTION_LABELS.waiting, notstarted: STATUS_SECTION_LABELS.notstarted, done: STATUS_SECTION_LABELS.done,
 };
 
 /** The rail's tabs: the tasks the user watches first, then the four status tabs, as on the home
@@ -39,7 +43,8 @@ export const railTabShown = (v: KeptRailTab): OrgRailTab => (v === 'pinned' ? 'w
 
 /** Each status tab's dot. */
 export const TAB_DOT: Record<OrgTaskTab, string> = {
-  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
+  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)',
+  notstarted: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
 };
 
 /** Completed work stays listed this long (the Board's Status view and the phone use the same). */
@@ -52,6 +57,8 @@ export interface OrgTaskTabs {
   needs: OrgAlertView[];
   working: Task[];
   waiting: Task[];
+  /** Waiting because nobody started it, not snoozed: its own tab. */
+  notstarted: Task[];
   done: Task[];
 }
 
@@ -65,7 +72,7 @@ const doneAt = (t: Task) => Date.parse(t.completed_at ?? t.updated_at ?? '') || 
  */
 export function orgTaskTabs(row: ChannelRow, rows: readonly ChannelRow[], tasks: readonly Task[], now: number): OrgTaskTabs {
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
-  if (row.kind === 'router') return { watching: [], needs: row.alerts, working: [], waiting: [], done: [] };
+  if (row.kind === 'router') return { watching: [], needs: row.alerts, working: [], waiting: [], notstarted: [], done: [] };
   const nodes = row.kind === 'main' ? rows : [row];
   const open = new Map<string, Task>();
   const projects = new Set<string>();
@@ -89,7 +96,8 @@ export function orgTaskTabs(row: ChannelRow, rows: readonly ChannelRow[], tasks:
   // Watched, done or not: on the CEO every one Home's Watching lists, on a VP those of its projects.
   const watching = sortSectionTasks('watching', tasks.filter((t) => isWatched(t) && !t.plugin_only
     && (row.kind === 'main' || projects.has(projectKey(t.project)))));
-  return { watching, needs, working: of('working'), waiting: of('waiting'), done };
+  const waits = of('waiting');
+  return { watching, needs, working: of('working'), waiting: waits.filter((t) => !isNotStarted(t)), notstarted: waits.filter((t) => isNotStarted(t)), done };
 }
 
 function dedupe(alerts: readonly OrgAlertView[]): OrgAlertView[] {
@@ -158,7 +166,7 @@ export function keptByRow(main: ChannelRow | null, rows: readonly ChannelRow[], 
 
 /** The status tab a task's own state belongs to (a watched row wears its dot and its line): To
  *  read is under Needs you (shownState). */
-export const stateTab = (task: Task): OrgTaskTab => shownState(userStateOf(task));
+export const stateTab = (task: Task): OrgStateTab => shownState(userStateOf(task));
 
 /** The line under a task in its tab: what it does, or what it waits on, in its status's words. */
 export function taskTabNote(task: Task, tab: OrgTaskTab): string {
@@ -170,6 +178,8 @@ export function taskTabNote(task: Task, tab: OrgTaskTab): string {
   if (tab === 'needs') return task.user_status ? needsRowText(task) : '';
   if (tab === 'working') return s?.now?.trim() ?? '';
   if (tab === 'waiting') return (s?.waitingOn ?? s?.now ?? '').trim();
+  // The tab says it was never started; a failed start says why.
+  if (tab === 'notstarted') return notStartedReason(task);
   return '';
 }
 

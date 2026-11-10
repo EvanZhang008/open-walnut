@@ -9,6 +9,8 @@ import type { ReactNode } from 'react';
 export const ICON_PHASE_TODO = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6"/></svg>;
 /** Hourglass: Waiting (set aside until something happens, or until its wait_until). */
 export const ICON_PHASE_WAITING = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 2h8M4 14h8"/><path d="M5 2c0 3 3 4 3 6s-3 3-3 6M11 2c0 3-3 4-3 6s3 3 3 6"/></svg>;
+/** Not started: the open ring drawn dashed, a task nobody has begun (never the wait hourglass). */
+export const ICON_NOT_STARTED = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="2.4 2.3"><circle cx="8" cy="8" r="6"/></svg>;
 /** half-filled: In Progress */
 export const ICON_PHASE_IN_PROGRESS = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 010 12z" fill="currentColor"/></svg>;
 /** single check: Need Action */
@@ -151,6 +153,7 @@ export const ICON_TO_READ = <svg width="14" height="14" viewBox="0 0 16 16" fill
 export function sectionRowIcon(section: string, isDone: boolean, phase: string | undefined, snoozed: boolean, state: string | undefined): ReactNode {
   if (isDone) return binaryPhaseIcon(true, phase, state);
   if (section === 'waiting') return snoozed ? ICON_SNOOZE : ICON_PHASE_WAITING;
+  if (section === 'notstarted') return ICON_NOT_STARTED;
   // Under Needs you a row with only something to read wears the page; an ask, the open ring.
   if (section === 'needs' && state === 'read') return ICON_TO_READ;
   // Working (its own build may run while it is parked) and Needs you wear the open ring.

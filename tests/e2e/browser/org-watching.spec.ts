@@ -104,8 +104,8 @@ test('a row\'s eye watches it; the Watching tab lists them first, in order; the 
   await railTab(page, 'watching').click()
   await expect(page.getByTestId('org-rail').getByTestId('org-task-empty')).toContainText('Nothing watched here')
 
-  // The tasks wait (no session yet): watch two from the Waiting tab.
-  await railTab(page, 'waiting').click()
+  // Nobody started the tasks (no session yet): watch two from the Not started tab.
+  await railTab(page, 'notstarted').click()
   for (const id of [ids.b, ids.a]) {
     const item = railItem(page, id)
     await item.hover()
@@ -177,7 +177,7 @@ test('× in the list stops watching; a watch made elsewhere shows without a relo
   await page.route(`**/api/tasks/${ids.b}`, (route) => (route.request().method() === 'PATCH'
     ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"refused"}' })
     : route.fallback()))
-  await railTab(page, 'waiting').click()
+  await railTab(page, 'notstarted').click()
   const item = railItem(page, ids.b)
   await item.hover()
   await item.getByTestId('org-watch-toggle').click()

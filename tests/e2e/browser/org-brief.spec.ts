@@ -161,10 +161,11 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.parser}"]`)).toBeVisible()
   // Watching first (Home's watched tasks of this node's work, org-pins.ts), then the home panel's four
   // names, To read folded into Needs you (5ef179d98: no tab of its own); the node opens on Needs you.
-  // Waiting / snoozed lists the review. (The lead's own turn ended too, so it may need the user as well:
+  // Not started lists the review, nobody started it (2026-11-09: its own tab, out of Waiting / snoozed;
+  // the Brief keeps its three sections). (The lead's own turn ended too, so it may need the user as well:
   // counted, not pinned.)
   const tabs = detail.getByTestId('org-task-tab')
-  await expect(tabs).toHaveText([/^Watching\s*\d+$/, /^Needs you\s*\d+$/, /^Working\s*\d+$/, /^Waiting \/ snoozed\s*\d+$/, /^Completed\s*\d+$/])
+  await expect(tabs).toHaveText([/^Watching\s*\d+$/, /^Needs you\s*\d+$/, /^Working\s*\d+$/, /^Waiting \/ snoozed\s*\d+$/, /^Not started\s*\d+$/, /^Completed\s*\d+$/])
   await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true')
   const needsCount = Number((await tabs.nth(1).locator('.org-task-tab-count').textContent()) ?? '-1')
   // Every one is a card, the lead's own ask included (the first, named for the node).
@@ -178,8 +179,8 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   await expect(detail.getByTestId('org-pill-needs')).toHaveCount(0)
   await expect(detail.getByTestId('org-pill-threads')).toHaveText(/^\d+ threads?$/)
   await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-tab', 'needs')
-  await detail.getByTestId('org-pill-waiting').click()
-  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-tab', 'waiting')
+  await detail.getByTestId('org-pill-notstarted').click()
+  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-tab', 'notstarted')
   await expect(detail.locator(`[data-testid="org-task-row"][data-task-id="${ids.review}"]`)).toBeVisible()
   await expect(detail.getByTestId('org-alerts')).toHaveCount(0)
   await detail.screenshot({ path: `test-results/org-task-waiting-${test.info().project.name}.png` })

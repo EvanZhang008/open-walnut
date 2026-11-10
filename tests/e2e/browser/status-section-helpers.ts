@@ -10,7 +10,7 @@
  */
 import { expect, type APIRequestContext, type BrowserContext, type Locator, type Page } from '@playwright/test'
 
-export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'done'
+export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'notstarted' | 'done'
 /** 'status' is Flat (the product default), 'project' By project (what every page's storage starts with). */
 export type PanelDesign = 'status' | 'project'
 

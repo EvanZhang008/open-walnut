@@ -107,7 +107,9 @@ function TaskTabBar({ tabs, tab, onPick, approvals }: { tabs: OrgTaskTabs; tab: 
           data-tab={t}
           onClick={() => onPick(t)}
         >
-          {t === 'watching' ? <span className="org-task-tab-watch" aria-hidden="true">{ICONS.ICON_EYE}</span> : <i style={{ background: TAB_DOT[t] }} />}
+          {t === 'watching' ? <span className="org-task-tab-watch" aria-hidden="true">{ICONS.ICON_EYE}</span>
+            : t === 'notstarted' ? <span className="org-task-tab-watch" aria-hidden="true">{ICONS.ICON_NOT_STARTED}</span>
+            : <i style={{ background: TAB_DOT[t] }} />}
           {ORG_RAIL_TAB_LABELS[t]}<span className="org-task-tab-count">{tabs[t].length + (t === 'needs' ? approvals : 0)}</span>
         </button>
       ))}
@@ -137,6 +139,7 @@ const EMPTY: Record<OrgRailTab, string> = {
   needs: 'Nothing needs you here.',
   working: 'Nothing is working here.',
   waiting: 'Nothing is waiting or snoozed here.',
+  notstarted: 'Every task here has started.',
   done: 'Nothing completed in the last week.',
 };
 
@@ -154,7 +157,9 @@ function TaskTabList({ tasks, tab, onOpen, now }: { tasks: readonly Task[]; tab:
         return (
           <li key={t.id} className="org-task-item">
             <button type="button" className="org-task-row" data-testid="org-task-row" data-task-id={t.id} data-state={own} onClick={() => onOpen(t.id)} title={note ? `${t.title}\n${note}` : t.title}>
-              <i style={{ background: TAB_DOT[own] }} aria-hidden="true" />
+              {own === 'notstarted'
+                ? <span className="org-task-ring" aria-hidden="true">{ICONS.ICON_NOT_STARTED}</span>
+                : <i style={{ background: TAB_DOT[own] }} aria-hidden="true" />}
               <span className="org-task-text">
                 <span className="org-task-title">{orgDisplayTitle(t)}</span>
                 {note && <span className="org-task-note" data-testid="org-task-note">{note}</span>}

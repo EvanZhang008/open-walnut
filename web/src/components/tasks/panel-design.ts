@@ -65,9 +65,12 @@ export function projectFoldKey(region: string, project: string, kind: 'waiting')
  * both layouts and on every tab: By project folds Waiting inside each project but never
  * Completed (2026-11-05, the user: "show a drop down below to open all completed ... not
  * each project"), so a project with only completed tasks draws no group. Recent has no
- * projects to fold into, so it keeps Waiting here too.
+ * projects to fold into, so it keeps Waiting here too. Flat folds Not started on its own,
+ * between Waiting and Completed (2026-11-09, the user: not started is "completeli differnet"
+ * from wait and snooze); By project keeps those tasks in its list, its to-do list.
  */
 export function bottomStatusSections(design: PanelDesign, view: string): readonly StatusSectionKey[] {
+  if (design === 'status' && view !== 'recent') return ['waiting', 'notstarted', 'done'];
   return design !== 'project' || view === 'recent' ? ['waiting', 'done'] : ['done'];
 }
 
