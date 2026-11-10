@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  HAND_OVER_STEP, personTabsNote, sameSiteTabs, signInRefusal, tabWords, whereLine, windowWords,
+  HAND_OVER_STEP, TOLD_MS, forgetPersonTabsNote, personTabsNote, personTabsNoteFor, sameSiteTabs, signInRefusal, tabWords, whereLine, windowWords,
 } from '../../../src/core/browser-control/where-words'
 
 describe('which window and tab', () => {
@@ -59,5 +59,30 @@ describe('the person\'s own tabs on the site', () => {
     expect(r).toMatch(/already has example\.com open in tab 9 \("Online Banking", the tab they are on\)/)
     expect(r).toContain(HAND_OVER_STEP)
     expect(r).toMatch(/fresh_sign_in: true/)
+  })
+})
+
+describe('the note on the person\'s tabs: in full once per task and site, then one line', () => {
+  const who = { owner: 'task:once', device: 'd1' }
+  const tabs = [{ id: 41, title: 'Issues', active: true }]
+  it('full the first time; short on the next opens; full again when the tabs change, after a sign-in step, or hours later', () => {
+    const now = 1_000_000
+    const full = personTabsNoteFor(who, 'example.com', tabs, now)
+    expect(full).toBe(personTabsNote('example.com', tabs))
+    expect(full).toContain(HAND_OVER_STEP)
+    const short = personTabsNoteFor(who, 'example.com', tabs, now + 1000)
+    expect(short).toBe('The person already has example.com open in tab 41: do not sign in here (ask for their tab if you need their sign-in).')
+    expect(short.length).toBeLessThan(full.length / 2)
+    // Another task, or another site, gets its own full note.
+    expect(personTabsNoteFor({ ...who, owner: 'task:other' }, 'example.com', tabs, now)).toBe(full)
+    // The person's tabs changed: in full again.
+    const two = [...tabs, { id: 42, title: 'Pulls' }]
+    expect(personTabsNoteFor(who, 'example.com', two, now + 2000)).toBe(personTabsNote('example.com', two))
+    expect(personTabsNoteFor(who, 'example.com', two, now + 3000)).toMatch(/open in tabs 41 and 42: do not sign in here/)
+    // A sign-in step on the site.
+    forgetPersonTabsNote(who, 'example.com')
+    expect(personTabsNoteFor(who, 'example.com', two, now + 4000)).toContain(HAND_OVER_STEP)
+    // Hours later.
+    expect(personTabsNoteFor(who, 'example.com', two, now + 4000 + TOLD_MS)).toContain(HAND_OVER_STEP)
   })
 })

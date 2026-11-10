@@ -8,7 +8,10 @@
  *   - which window and tab: Walnut's agent window (behind theirs, not minimized) or the person's
  *     own window, and the tab's id, title and address;
  *   - the person's own tabs on the same site (the vault's site key: the registrable domain), so an
- *     agent asks for that tab instead of opening the site again and signing in a second time.
+ *     agent asks for that tab instead of opening the site again and signing in a second time. Said
+ *     in full once per task and site, then in one line (2026-11-10: about 300 characters on every
+ *     open of a public site an agent only read); in full again when those tabs change, after a
+ *     sign-in step, or hours later.
  */
 import { siteKey } from '../vault/url-match.js'
 
@@ -77,6 +80,42 @@ export const HAND_OVER_STEP = 'If they are signed in there, ask them to hand tha
 /** An open or navigate to a site the person already has open in their own tabs. */
 export function personTabsNote(site: string, tabs: PersonTab[]): string {
   return `They already have ${site} open in ${listTabs(tabs)}. ${HAND_OVER_STEP}`
+}
+
+/** The short line of a later open on the same site, once the full note was given. */
+export function shortPersonTabsNote(site: string, tabs: PersonTab[]): string {
+  const ids = tabs.slice(0, 3).map((t) => t.id)
+  const more = tabs.length > 3 ? ` and ${tabs.length - 3} more` : ''
+  const which = ids.length > 1 ? `tabs ${ids.slice(0, -1).join(', ')} and ${ids[ids.length - 1]}${more}` : `tab ${ids[0]}${more}`
+  return `The person already has ${site} open in ${which}: do not sign in here (ask for their tab if you need their sign-in).`
+}
+
+/** Who was told the full note, for which site and tabs (in memory: a restart tells once more). */
+const told = new Map<string, { tabs: string; at: number }>()
+/** The full note again after this long, and at most this many remembered. */
+export const TOLD_MS = 6 * 3600_000
+const TOLD_MAX = 500
+
+const toldKey = (owner: string, device: string, site: string) => `${owner}\n${device}\n${site}`
+
+/**
+ * The note for an open or navigate: in full the first time this task meets the person's tabs on
+ * this site (or when those tabs changed, or after TOLD_MS), else one short line.
+ */
+export function personTabsNoteFor(who: { owner: string; device: string }, site: string, tabs: PersonTab[], now = Date.now()): string {
+  const k = toldKey(who.owner, who.device, site)
+  const ids = tabs.map((t) => t.id).sort((a, b) => a - b).join(',')
+  const prev = told.get(k)
+  if (prev && prev.tabs === ids && now - prev.at < TOLD_MS) return shortPersonTabsNote(site, tabs)
+  told.delete(k)
+  told.set(k, { tabs: ids, at: now })
+  while (told.size > TOLD_MAX) told.delete(told.keys().next().value as string)
+  return personTabsNote(site, tabs)
+}
+
+/** A sign-in step on the site (fill_login, fill_code): the next open tells the whole note again. */
+export function forgetPersonTabsNote(who: { owner: string; device: string }, site: string): void {
+  told.delete(toldKey(who.owner, who.device, site))
 }
 
 /** fill_login refused: the person has the site open in a tab of their own. */

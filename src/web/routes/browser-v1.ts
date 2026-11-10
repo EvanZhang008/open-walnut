@@ -482,6 +482,8 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       if (!handedOnly && (!mine || typeof mine.url !== 'string')) throw retry('the browser did not list this tab')
       const theirs = mine && typeof mine.url === 'string' ? w.sameSiteTabs(all, mine.url) : []
       if (mine && typeof mine.url === 'string') checkedSite = w.siteOf(mine.url) || undefined
+      // A sign-in step: the next open of this site tells the person's tabs in full again.
+      if (checkedSite) w.forgetPersonTabsNote({ owner, device: c.device }, checkedSite)
       if (theirs.length && !personCaller(req)) {
         const site = w.siteOf(mine!.url!)
         const scope = { owner, device: c.device, tab: tab!, site }
@@ -600,7 +602,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     // A sign-in page that refuses this browser (Google's "may not be secure"): the person signs in, not a retry.
     const refusal = (await import('../../core/browser-control/sign-in-refusal.js')).signInRefusalOf(r as Record<string, unknown>)
     if (refusal) { extra.hand_off = refusal; log.web.info('browser act met a sign-in refusal', { action, device: c.device, owner, tab: used, why: refusal.why }) }
-    if (theirs?.length) { extra.person_tabs = theirs; extra.person_tabs_note = w.personTabsNote(w.siteOf(String(args.url)), theirs) }
+    if (theirs?.length) { extra.person_tabs = theirs; extra.person_tabs_note = w.personTabsNoteFor({ owner, device: c.device }, w.siteOf(String(args.url)), theirs) }
     // `read_text`: the page's main text in the same call (a read takes 3 to 5 calls: open --read,
     // click --read, close). A tab the step opened is the one read; a page holding a dialog open
     // answers nothing until it is handled, so it is not read.
