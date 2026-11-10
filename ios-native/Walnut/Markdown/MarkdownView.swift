@@ -8,11 +8,20 @@ struct MarkdownView: View {
     /// The paragraph, list and quote text style; `.markdownBodyFont(_:)` sets it for a compact
     /// place (a thread card), everything else keeps `.body`.
     @Environment(\.markdownBodyFont) private var bodyFont
+    /// Lazy only where this view is a scroll view's own content (a long plan). Inside a card, a
+    /// letter or a chat row a lazy stack answers its height from estimates it keeps, so a fold
+    /// that grew or shrank the text left the card at the old height for a while: blank bands
+    /// above and below, or the text and its buttons spilling past the card (2026-11-10, the
+    /// user: Expand pushed the page out and the buttons were gone for a while). Ratchet:
+    /// tests/web/ios-lazy-stack-nesting.test.ts.
+    var lazy = false
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 6) {
-            ForEach(blocks) { block in
-                blockView(block)
+        Group {
+            if lazy {
+                LazyVStack(alignment: .leading, spacing: 6) { rows }
+            } else {
+                VStack(alignment: .leading, spacing: 6) { rows }
             }
         }
         // Absolute paths inside a note / letter / plan are linkified by
@@ -20,6 +29,13 @@ struct MarkdownView: View {
         // handed the walnut-file:// scheme to the system opener, which dropped it
         // silently. Non-file URLs still open the usual way.
         .handlingFilePathLinks()
+    }
+
+    @ViewBuilder
+    private var rows: some View {
+        ForEach(blocks) { block in
+            blockView(block)
+        }
     }
 
     @ViewBuilder

@@ -168,7 +168,7 @@ struct SessionPlanSheet: View {
                     HStack { ProgressView(); Text("Loading plan…").foregroundStyle(.secondary) }
                         .padding(.top, 40)
                 } else if let plan {
-                    MarkdownView(blocks: MarkdownParser.parse(plan.content))
+                    MarkdownView(blocks: MarkdownParser.parse(plan.content), lazy: true)
                         .padding(16)
                 } else if let emptyText {
                     ContentUnavailableView {
