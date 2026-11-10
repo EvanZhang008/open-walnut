@@ -730,12 +730,6 @@ export class AcpSession {
   private _mode: SessionMode
   private _active = false
   private _turnActive = false
-  /**
-   * A steer into this turn did not apply: no other steer is tried until the turn ends, and what
-   * is queued goes into the next turn (2026-11-09: a Codex session's queue drain steered the same
-   * message 7,835 times in a few hours, each try a turn error, and the task read Needs you).
-   */
-  private _steerMissed = false
   /** Latest line consumed by this in-memory instance (survives reconnects). */
   private _seenV: number
   /** Last terminal offset durably committed to SessionRecord. */
@@ -976,7 +970,7 @@ export class AcpSession {
       if (t === 'prompt-accepted' || t === 'steer-accepted') this.noteTaken(record.event.walnutMessageId)
       if (t === 'prompt-accepted') {
         const terminalAlreadyObserved = this._terminalCommands.has(record.event.commandId)
-        if (!terminalAlreadyObserved) { this._turnActive = true; this._steerMissed = false }
+        if (!terminalAlreadyObserved) this._turnActive = true
         void this.commitPromptAcceptance(
           record.event.commandId,
           terminalAlreadyObserved,
@@ -984,7 +978,6 @@ export class AcpSession {
       }
       if (t === 'turn-started'
         && !this._terminalCommands.has(record.event.commandId)) {
-        if (!this._turnActive) this._steerMissed = false
         this._turnActive = true
         this._turnEpoch++
       }
@@ -994,7 +987,6 @@ export class AcpSession {
           this._terminalCommands.add(record.event.commandId)
         }
         this._turnActive = false
-        this._steerMissed = false
       }
       if (t === 'error' && !isOpRefusalRecord(record.event)) this._turnHadError = true
       if (t === 'permission-answered' || t === 'permission-auto-cancelled') {
@@ -2046,9 +2038,9 @@ export class AcpSession {
     )
   }
 
-  /** True when this worker's adapter advertised mid-turn steering support. */
-  // Only an adapter a worker of this version saw promise injection only (protocol.ts steeringInjectOnly).
-  get canSteer(): boolean { return this._capabilities?.steering === true && this._capabilities.steeringInjectOnly === true && !this._steerMissed }
+  /** True when this worker's adapter advertised mid-turn steering that never starts a turn of its
+   *  own (protocol.ts steeringInjectOnly; an older worker's snapshot has no such field: no steering). */
+  get canSteer(): boolean { return this._capabilities?.steering === true && this._capabilities.steeringInjectOnly === true }
 
   /** The live turn already refused a steer: the queue waits for its end instead of taking a row to steer. */
   get steerRefusedThisTurn(): boolean { return this._steerRefusedEpoch === this._turnEpoch }
@@ -2075,7 +2067,7 @@ export class AcpSession {
    * (daemon RPC transport) propagate.
    */
   async steer(message: string, walnutMessageId: string): Promise<boolean> {
-    if (!this._active || !this._turnActive || this._steerMissed) return false
+    if (!this._active || !this._turnActive) return false
     if (!this.canSteer) return false
     // This turn already refused a steer (Codex refuses for a whole review or compact
     // turn): the message waits for the turn end and goes as the next prompt, once.
@@ -2092,8 +2084,6 @@ export class AcpSession {
     if (resp.ok) return true
     this._steerRefusedEpoch = this._turnEpoch
     const kind = (resp as { errorKind?: string }).errorKind
-    // One try per turn: the turn's end drains what stays queued, once.
-    this._steerMissed = true
     // Anything steer-shaped (no live turn, unsupported, race, old daemon
     // without the acpSteer command) degrades to the queue path silently.
     log.session.info('acp: steer not applied — message stays queued', {

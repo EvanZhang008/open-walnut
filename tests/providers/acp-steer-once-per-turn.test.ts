@@ -28,7 +28,7 @@ function liveSession(steerReply: () => Record<string, unknown>) {
   Object.assign(session as object, {
     conn: { connected: true, send },
     _active: true,
-    _capabilities: { steering: true },
+    _capabilities: { steering: true, steeringInjectOnly: true },
   })
   return { session, steers: () => send.mock.calls.filter(([c]) => c === 'acpSteer').length }
 }

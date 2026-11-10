@@ -71,7 +71,7 @@ describe('a steer that meets the end of the live ACP turn', () => {
     await settled()
 
     expect(send.mock.calls.filter(([c]) => c === 'acpSteer')).toHaveLength(1)
-    expect(session.canSteer).toBe(false)
+    expect(session.steerRefusedThisTurn).toBe(true)
     expect(prompt).not.toHaveBeenCalled()
     expect(await getQueue(sessionId)).toEqual([expect.objectContaining({ id: queued.id, status: 'pending' })])
 
@@ -86,7 +86,7 @@ describe('a steer that meets the end of the live ACP turn', () => {
 
     // A new turn may be steered again.
     journal(session, { type: 'prompt-accepted', commandId: 'acp-prompt:qm-next', walnutMessageId: 'qm-next', text: 'x' }, 2)
-    expect(session.canSteer).toBe(true)
+    expect(session.steerRefusedThisTurn).toBe(false)
   })
 
   it('a session whose worker never said injection only (an older worker) is never steered', async () => {
