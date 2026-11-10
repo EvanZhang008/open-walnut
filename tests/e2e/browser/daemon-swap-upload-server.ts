@@ -42,15 +42,25 @@ process.on('exit', () => {
 
 const cliBin = path.join(root, 'cli-bin')
 const nodeBin = path.join(root, 'node-bin')
-for (const d of [cliBin, nodeBin]) fs.mkdirSync(d, { recursive: true })
+const shellBin = path.join(root, 'shell-bin')
+for (const d of [cliBin, nodeBin, shellBin]) fs.mkdirSync(d, { recursive: true })
 fs.symlinkSync(process.execPath, path.join(nodeBin, 'node'))
 const PATH = [cliBin, nodeBin, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':')
+// The daemon asks `$SHELL -lc` for the user's PATH; a login /bin/sh on macOS adds
+// /etc/paths.d (where a real `claude` may live). This wrapper answers with PATH above.
+fs.writeFileSync(path.join(shellBin, 'sh'), [
+  '#!/bin/sh',
+  `PATH=${JSON.stringify(PATH)}; export PATH`,
+  'if [ "$1" = "-lc" ]; then shift; exec /bin/sh -c "$@"; fi',
+  'exec /bin/sh "$@"',
+  '',
+].join('\n'), { mode: 0o755 })
 const mock = path.join(repoRoot, 'tests/providers/mock-claude.mjs')
 fs.writeFileSync(path.join(cliBin, 'claude'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(mock)} "$@"\n`, { mode: 0o755 })
 for (const k of Object.keys(process.env)) if (k.startsWith('GIT_')) delete process.env[k]
 Object.assign(process.env, {
   PATH,
-  SHELL: '/bin/sh',
+  SHELL: path.join(shellBin, 'sh'),
   HOME: root,
   USERPROFILE: root,
   OPEN_WALNUT_HOME: root,
