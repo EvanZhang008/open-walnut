@@ -352,7 +352,6 @@ test.describe('The scanning line under a passage being answered', () => {
     await frame.locator('body').evaluate((el, phrase) => {
       Array.from(el.querySelectorAll('td')).find((t) => t.textContent === phrase)!.scrollIntoView({ block: 'center' })
     }, LONG_PASSAGE)
-    await page.waitForTimeout(300)
     const frameOffset = async () => {
       const b = (await view.locator('.fv-html-preview').boundingBox())!
       return { x: b.x, y: b.y }
@@ -361,7 +360,30 @@ test.describe('The scanning line under a passage being answered', () => {
       const o = await frameOffset()
       return (await textRects(frame.locator('body'), LONG_PASSAGE)).map((r) => ({ ...r, left: r.left + o.x, right: r.right + o.x, top: r.top + o.y }))
     }
-    await drag(await frameRects())
+    // The cell where it rests, inside the frame's box on screen: the page and the frame may still
+    // be moving (its scroll, the file view's layout), and a drag measured mid-move started rows
+    // above the cell (CI 2026-11-10: the asked range was half the table, the lines drawn under
+    // every row but the passage's) or on nothing (its retry: no selection, no Ask here). So the
+    // drag waits for two reads that agree, and is made again until the frame holds the passage.
+    const restingRects = async () => {
+      let prev = ''
+      let rects: TextRect[] = []
+      await expect.poll(async () => {
+        rects = await frameRects()
+        const frameBox = (await view.locator('.fv-html-preview').boundingBox())!
+        const inside = rects.length > 0 && rects.every((r) => r.top >= Math.max(frameBox.y, 0) && r.top + r.height <= Math.min(frameBox.y + frameBox.height, page.viewportSize()!.height))
+        const key = JSON.stringify([rects, frameBox])
+        const resting = inside && key === prev
+        prev = key
+        return resting
+      }, { intervals: [150], timeout: 10_000 }).toBe(true)
+      return rects
+    }
+    await expect(async () => {
+      await drag(await restingRects())
+      expect(await frame.locator('body').evaluate(() => window.getSelection()?.toString().trim() ?? ''), 'the drag selected the passage').toBe(LONG_PASSAGE)
+      await expect(page.locator('[data-testid="file-ask-here"]')).toBeVisible({ timeout: 3_000 })
+    }).toPass({ timeout: 30_000 })
     await page.locator('[data-testid="file-ask-here"]').click()
     card = view.locator('.fv-thread-layer .thread-card')
     await card.locator('.thread-card-input').fill(`${SLOW} Which slot wins?`)
