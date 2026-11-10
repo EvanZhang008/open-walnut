@@ -141,7 +141,8 @@ export function SessionsSection({ config, onSave }: Props) {
         <DefaultEngineRow config={config} save={save} />
         <FallbackEngineRow config={config} save={save} />
       </SettingsGroup>
-      <SettingsGroup>
+      {/* A multi-select list of engines: a checklist, like Session modes (C14). */}
+      <SettingsGroup className="settings-checklist">
         <EngineSplitRow config={config} save={save} />
       </SettingsGroup>
       <ClaudeCodeImportGroups />
