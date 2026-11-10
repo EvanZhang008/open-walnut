@@ -6,6 +6,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { HEALTH_HOST, HEALTH_SPIKE_SIG } from './health-monitor-fixture'
+import { signatureId } from '../../../src/core/health-monitor/log-alarms'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
 async function openHealth(page: Page): Promise<void> {
@@ -34,7 +35,10 @@ test.describe('Walnut Health', () => {
     await expect(link).toContainText(HEALTH_HOST)
     await expect(link.locator('.health-did')).toContainText('filed a fix task')
     await expect(link.locator('svg.health-spark path')).toHaveCount(1)
-    const spike = section.locator('tr.health-row', { hasText: 'Log line far above its normal' })
+    // The seeded spike by its id: the shared fixture server's own log lines raise spike
+    // alarms of their own as other specs run, each with the same title.
+    const spike = section.locator(`tr[data-alarm="log.spike:${signatureId(HEALTH_SPIKE_SIG)}"]`)
+    await expect(spike).toContainText('Log line far above its normal')
     await expect(spike).toContainText(HEALTH_SPIKE_SIG)
     await expect(section.getByTestId('health-summary')).toContainText('in alarm')
     // every built-in alarm has a row, the ones without data too
