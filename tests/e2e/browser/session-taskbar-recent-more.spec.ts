@@ -132,3 +132,62 @@ test('in a short window the "N more" menu is cut to fit, and the row the keyboar
   await page.keyboard.press('Escape')
   await page.evaluate(({ r }) => localStorage.setItem(r, JSON.stringify({ v: 1, value: null })), { r: RECENT_KEY })
 })
+
+test('every dot on the bar wears its task status in the task pills\' colors: red, green, blue, grey only for a wait', async ({ page }) => {
+  await isolateUiPrefs(page)
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  const ids = await sessionIds(page)
+  // Five sessions, one per status: Needs you, To read, Working (its turn over), snoozed, Done.
+  const want: Array<{ sid: string; us: Record<string, unknown>; phase?: string; state: string; color: string }> = [
+    { sid: ids[0]!, us: { state: 'needs', since: new Date().toISOString() }, state: 'needs', color: 'rgb(255, 59, 48)' },
+    { sid: ids[1]!, us: { state: 'read', toRead: 'turn', since: new Date().toISOString() }, state: 'needs', color: 'rgb(255, 59, 48)' },
+    { sid: ids[2]!, us: { state: 'working', since: new Date().toISOString() }, state: 'working', color: 'rgb(52, 199, 89)' },
+    { sid: ids[3]!, us: { state: 'waiting', snoozed: { until: '2099-01-01' }, since: new Date().toISOString() }, state: 'waiting', color: '' },
+    { sid: ids[4]!, us: { state: 'done', since: new Date().toISOString() }, phase: 'COMPLETE', state: 'done', color: '' },
+  ]
+  const bySid = new Map(want.map((w) => [w.sid, w]))
+  await page.route((url) => url.pathname.endsWith('/api/tasks'), async (route) => {
+    const res = await route.fetch()
+    const body = await res.json() as { tasks: Array<Record<string, unknown>> }
+    for (const t of body.tasks) {
+      const w = bySid.get(t.session_id as string)
+      if (w) { t.user_status = w.us; if (w.phase) t.phase = w.phase }
+    }
+    await route.fulfill({ response: res, json: body })
+  })
+  await page.route((url) => url.pathname.endsWith('/api/sessions/status'), async (route) => {
+    const res = await route.fetch()
+    const body = await res.json() as Record<string, unknown>
+    const rows = (body.statuses ?? body) as Record<string, Record<string, unknown>>
+    for (const sid of bySid.keys()) if (rows[sid]) { rows[sid].process_status = 'idle'; rows[sid].pendingPermissionTool = null }
+    await route.fulfill({ response: res, json: body })
+  })
+  // Three chips, two Recent pills.
+  await page.evaluate(({ chips, recent, r, c }) => {
+    localStorage.setItem(c, JSON.stringify({ v: 1, value: chips }))
+    localStorage.setItem(r, JSON.stringify({ v: 1, value: recent }))
+  }, { chips: want.slice(0, 3).map((w) => w.sid), recent: want.slice(3).map((w) => w.sid), r: RECENT_KEY, c: CHIPS_KEY })
+  await page.reload()
+  await page.waitForLoadState('networkidle')
+  const css = await page.evaluate(() => {
+    const s = getComputedStyle(document.documentElement)
+    return { muted: s.getPropertyValue('--fg-muted').trim(), accent: s.getPropertyValue('--accent').trim() }
+  })
+  for (const w of want) {
+    const el = page.locator(`.session-taskbar [data-session-id="${w.sid}"]`).first()
+    await expect(el).toHaveAttribute('data-state', w.state)
+    await expect(el).not.toHaveAttribute('data-running', /.*/)
+    const bg = await el.locator('.session-taskbar-dot').evaluate((d) => getComputedStyle(d).backgroundColor)
+    if (w.color) expect(bg, `${w.state} dot`).toBe(w.color)
+    // Done is the accent blue, a wait the muted grey: compare through a probe in the same page.
+    else {
+      const ref = await page.evaluate((v) => { const p = document.createElement('i'); p.style.background = v; document.body.append(p); const c = getComputedStyle(p).backgroundColor; p.remove(); return c }, w.state === 'done' ? css.accent : css.muted)
+      expect(bg, `${w.state} dot`).toBe(ref)
+    }
+  }
+  await beat(page)
+  await beat(page)
+  await page.evaluate(({ r, c }) => { localStorage.setItem(r, JSON.stringify({ v: 1, value: null })); localStorage.setItem(c, JSON.stringify({ v: 1, value: [] })) }, { r: RECENT_KEY, c: CHIPS_KEY })
+})

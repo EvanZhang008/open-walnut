@@ -11,6 +11,9 @@
 
 import type { SessionSlot } from './sessionColumns';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
+import type { Task } from '@open-walnut/core';
+import { shownState } from '@open-walnut/user-status';
+import { taskUserState } from '@/utils/session-status';
 
 /** A column id that names a real session (not a draft, a launch or a workspace on its way). */
 export function isRealSessionColumn(id: string): boolean {
@@ -116,4 +119,25 @@ export function restoreTaskbar(minimized: unknown, recent: unknown, legacy: unkn
 /** Stored Recent from any shape, without the chips, at most RECENT_MAX. */
 export function parseRecent(value: unknown, chips: readonly string[]): string[] {
   return parseChips(value).filter(id => !chips.includes(id)).slice(0, RECENT_MAX);
+}
+
+/** A chip's dot, in the colors every task pill wears: red Needs you, green Working, blue Done, grey
+ *  only for a wait or a snooze (2026-11-09, the user: "we neve ruse the grey acutally if itis read
+ *  it is read, we use red means it is ready, green is working ... grey might means it is wait liek
+ *  wait staus, or snoozed"). */
+export type ChipState = 'needs' | 'working' | 'waiting' | 'done';
+
+/** The task's one user status (To read drawn as Needs you), a prompt waiting on the user as Needs
+ *  you, a running turn as Working (`running` pulses the dot). A session with no task reads its
+ *  process alone, an error as Needs you. Having seen a session never greys it. */
+export function chipStateOf(
+  task: Pick<Task, 'phase' | 'status' | 'user_status'> | undefined,
+  status: { process_status?: string | null; pendingPermissionTool?: string | null } | null | undefined,
+): { state: ChipState; running: boolean } {
+  const running = status?.process_status === 'running';
+  const user = task ? shownState(taskUserState(task)) : status?.process_status === 'error' ? 'needs' : null;
+  const state: ChipState = status?.pendingPermissionTool || user === 'needs' ? 'needs'
+    : running || user === 'working' ? 'working'
+      : user === 'done' ? 'done' : 'waiting';
+  return { state, running };
 }

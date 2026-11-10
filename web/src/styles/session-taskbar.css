@@ -110,27 +110,23 @@
 .session-taskbar-recent-pill .session-taskbar-close svg { width: 9px; height: 9px; }
 .session-taskbar-recent-pill .session-taskbar-dot { width: 6px; height: 6px; }
 
-/* The state dot: the same reading as a task row's (red needs you, pulse working). */
+/* The state dot: the colors every task pill wears (globals.css a.task-link[data-user-state]):
+   needs you red, working green (pulsing while a turn runs), done blue, waiting or snoozed grey. */
 .session-taskbar-dot {
   flex: 0 0 auto;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--fg-muted);
-  opacity: 0.6;
+  background: var(--fg-muted, #86868b);
 }
 [data-state='needs'] > * > .session-taskbar-dot,
-.session-taskbar-card[data-state='needs'] .session-taskbar-dot { background: var(--error, #ff3b30); opacity: 1; }
-[data-state='error'] > * > .session-taskbar-dot,
-.session-taskbar-card[data-state='error'] .session-taskbar-dot { background: var(--warning, #ff9500); opacity: 1; }
+.session-taskbar-card[data-state='needs'] .session-taskbar-dot { background: var(--error, #ff3b30); }
+[data-state='working'] > * > .session-taskbar-dot,
+.session-taskbar-card[data-state='working'] .session-taskbar-dot { background: var(--success, #34c759); }
 [data-state='done'] > * > .session-taskbar-dot,
-.session-taskbar-card[data-state='done'] .session-taskbar-dot { background: var(--success, #34c759); opacity: 1; }
-[data-state='running'] > * > .session-taskbar-dot,
-.session-taskbar-card[data-state='running'] .session-taskbar-dot {
-  background: var(--accent);
-  opacity: 1;
-  animation: session-taskbar-pulse 1.4s ease-in-out infinite;
-}
+.session-taskbar-card[data-state='done'] .session-taskbar-dot { background: var(--accent, #0a84ff); }
+[data-running] > * > .session-taskbar-dot,
+.session-taskbar-card[data-running] .session-taskbar-dot { animation: session-taskbar-pulse 1.4s ease-in-out infinite; }
 @keyframes session-taskbar-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) {
   .session-taskbar-dot { animation: none !important; }

@@ -3,8 +3,10 @@
  * the user: "like a taskbar in computer"; design A, a bar along the bottom of Home).
  *
  * A chip per session the user minimized, in the order it joined (drag to reorder). Its dot
- * says the session's state: red for Needs you or a prompt waiting on the user, a
- * pulse while a turn runs, a check when its task is done. A click opens it back
+ * wears its task's status in the colors every task pill wears (2026-11-09, the user: "red
+ * means it is ready, green is working ... grey might means it is wait"): red for Needs you
+ * (To read too) or a prompt waiting on the user, green while it works (pulsing while a turn
+ * runs), blue when done, grey only while it waits or is snoozed. A click opens it back
  * onto the strip; × closes it to the background (the session keeps running). Hover,
  * or the ^ button, opens the small card: its status line, its last reply and a
  * one-line composer, the way a watch shows a phone's conversation.
@@ -27,9 +29,9 @@ import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
-import { RECENT_SHOWN } from '@/pages/sessionTaskbar';
+import { RECENT_SHOWN, chipStateOf, type ChipState } from '@/pages/sessionTaskbar';
 import { fetchSessionHistory } from '@/api/sessions';
-import { taskNeedsAction, taskOfSession, taskStatusLabel } from '@/utils/session-status';
+import { taskOfSession, taskStatusLabel } from '@/utils/session-status';
 import { ICON_CLOSE } from '@/components/common/Icons';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { useImageAttachments } from '@/components/common/image-attachments';
@@ -46,7 +48,6 @@ export interface SessionTaskbarProps {
   onMove: (sessionId: string, toIndex: number) => void;
 }
 
-type ChipState = 'needs' | 'running' | 'error' | 'done' | 'idle';
 
 /** The hover delay before a card opens, and the grace before it closes when the pointer leaves. */
 const PEEK_OPEN_MS = 350;
@@ -102,22 +103,19 @@ interface ChipProps {
   onDrop: (e: DragEvent) => void;
 }
 
-/** The dot's state: red for Needs you or a prompt, a pulse while a turn runs, a check when done. */
+/** The dot's state: chipStateOf (pages/sessionTaskbar.ts), the task's one user status. */
 function useChipState(sessionId: string, task: Task | undefined) {
   const status = useSessionStatus(sessionId);
-  const state: ChipState = status?.pendingPermissionTool || (task && taskNeedsAction(task)) ? 'needs'
-    : status?.process_status === 'running' ? 'running'
-      : status?.process_status === 'error' ? 'error'
-        : task?.phase === 'COMPLETE' ? 'done' : 'idle';
-  return { status, state };
+  const { state, running } = chipStateOf(task, status);
+  return { status, state, running };
 }
 
 /** A Recent pill: the dot and title open it back onto the strip; × drops it from the list. */
 function RecentPill({ sessionId, task, onRestore, onClose }: { sessionId: string; task: Task | undefined; onRestore: (id: string) => void; onClose: (id: string) => void }) {
-  const { state } = useChipState(sessionId, task);
+  const { state, running } = useChipState(sessionId, task);
   const title = task?.title || 'Session';
   return (
-    <div className="session-taskbar-recent-pill" data-session-id={sessionId} data-state={state}>
+    <div className="session-taskbar-recent-pill" data-session-id={sessionId} data-state={state} data-running={running || undefined}>
       <button type="button" className="session-taskbar-open" title={title} onClick={() => onRestore(sessionId)} aria-label={`Open ${title} (recent)`}>
         <span className="session-taskbar-dot" aria-hidden="true" />
         <span className="session-taskbar-title">{title}</span>
@@ -217,10 +215,10 @@ function RecentMore({ ids, tasks, onRestore, onClose }: { ids: readonly string[]
 }
 
 function RecentMoreRow({ sessionId, task, onRestore, onClose }: { sessionId: string; task: Task | undefined; onRestore: (id: string) => void; onClose: (id: string) => void }) {
-  const { state } = useChipState(sessionId, task);
+  const { state, running } = useChipState(sessionId, task);
   const title = task?.title || 'Session';
   return (
-    <div className="session-taskbar-more-row" role="none" data-session-id={sessionId} data-state={state}>
+    <div className="session-taskbar-more-row" role="none" data-session-id={sessionId} data-state={state} data-running={running || undefined}>
       <button type="button" role="menuitem" className="session-taskbar-open" title={title} onClick={() => onRestore(sessionId)} aria-label={`Open ${title} (recent)`}>
         <span className="session-taskbar-dot" aria-hidden="true" />
         <span className="session-taskbar-title">{title}</span>
@@ -233,7 +231,7 @@ function RecentMoreRow({ sessionId, task, onRestore, onClose }: { sessionId: str
 }
 
 function TaskbarChip({ sessionId, task, dragging, onRestore, onClose, onDragStart, onDragEnd, onDrop }: ChipProps) {
-  const { status, state } = useChipState(sessionId, task);
+  const { status, state, running } = useChipState(sessionId, task);
   const title = task?.title || 'Session';
   const chipRef = useRef<HTMLDivElement>(null);
   // A card the pointer opened closes when the pointer leaves; one opened with ^ stays
@@ -251,6 +249,7 @@ function TaskbarChip({ sessionId, task, dragging, onRestore, onClose, onDragStar
       className={`session-taskbar-chip${dragging ? ' is-dragging' : ''}`}
       data-session-id={sessionId}
       data-state={state}
+      data-running={running || undefined}
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
@@ -291,6 +290,7 @@ function TaskbarChip({ sessionId, task, dragging, onRestore, onClose, onDragStar
           task={task}
           title={title}
           state={state}
+          running={running}
           anchorRef={chipRef}
           processStatus={status?.process_status ?? null}
           onOpen={() => { setPeek('none'); onRestore(sessionId); }}
@@ -308,6 +308,7 @@ interface PeekCardProps {
   task: Task | undefined;
   title: string;
   state: ChipState;
+  running: boolean;
   anchorRef: React.RefObject<HTMLDivElement | null>;
   processStatus: string | null;
   onOpen: () => void;
@@ -317,7 +318,7 @@ interface PeekCardProps {
 }
 
 /** The watch-size card: what the session needs or where it stands, its last reply, a composer. */
-function PeekCard({ sessionId, task, title, state, anchorRef, processStatus, onOpen, onDismiss, onPointerEnter, onPointerLeave }: PeekCardProps) {
+function PeekCard({ sessionId, task, title, state, running, anchorRef, processStatus, onOpen, onDismiss, onPointerEnter, onPointerLeave }: PeekCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(true, anchorRef, cardRef, { align: 'start', preferSide: 'up', minHeight: 160, onAnchorLost: onDismiss });
   const lastReply = useLastReply(sessionId, processStatus);
@@ -357,6 +358,7 @@ function PeekCard({ sessionId, task, title, state, anchorRef, processStatus, onO
       ref={cardRef}
       className="session-taskbar-card"
       data-state={state}
+      data-running={running || undefined}
       data-testid="session-taskbar-card"
       style={menuPlacementStyle(placement)}
       onPointerDown={(e) => e.stopPropagation()}
