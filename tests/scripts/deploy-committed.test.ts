@@ -178,6 +178,28 @@ describe('deploy-committed.sh', () => {
     expect(fs.existsSync(path.join(deps, 'not-a-mirror'))).toBe(true)
   })
 
+  it('a tool cache inside node_modules neither joins the mirror nor makes a new one when it changes', () => {
+    if (!clones) return
+    const f = fixture()
+    const deps = path.join(f.tmp, '..', 'deps')
+    const env = { WALNUT_DEVPROD_DRY_RUN: '1', WALNUT_DEPLOY_DEPS_MIRROR: '1' }
+    const mirrors = () => fs.readdirSync(deps).filter((n) => /^[0-9a-f]{16}$/.test(n))
+    fs.mkdirSync(path.join(f.repo, 'web', 'node_modules', '.vite-temp'))
+    fs.writeFileSync(path.join(f.repo, 'web', 'node_modules', '.vite-temp', 'a.mjs'), '1')
+    fs.mkdirSync(path.join(f.repo, 'node_modules', '.bin'))
+    fs.writeFileSync(path.join(f.repo, 'node_modules', '.bin', 'tool'), '#!/bin/sh\n')
+    expect(run(f, env).status).toBe(0)
+    const [key] = mirrors()
+    expect(fs.existsSync(path.join(deps, key, 'web', 'node_modules', '.vite-temp'))).toBe(false)
+    expect(fs.existsSync(path.join(deps, key, 'node_modules', '.bin', 'tool'))).toBe(true)
+    // vite writes there on every run: no new copy for it.
+    fs.writeFileSync(path.join(f.repo, 'web', 'node_modules', '.vite-temp', 'b.mjs'), '2')
+    const again = run(f, env)
+    expect(again.status).toBe(0)
+    expect(again.stdout).not.toContain('Copying this checkout')
+    expect(mirrors()).toEqual([key])
+  })
+
   it('loading a dependency fails on a checkout mid-merge with the links, and builds with the mirror', () => {
     if (!clones) return
     const stub = `#!/usr/bin/env bash

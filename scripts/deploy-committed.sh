@@ -152,7 +152,9 @@ const list = (d) => { try { return fs.readdirSync(d).sort() } catch { return [] 
 const at = (p) => { try { return String(fs.statSync(p).mtimeMs) } catch { return '' } }
 for (const nm of ['node_modules', 'web/node_modules']) {
   const dir = path.join(root, nm)
-  for (const n of list(dir)) {
+  // Dot entries are tool caches and temp files (vite writes .vite-temp on every run), not
+  // the install, except .bin.
+  for (const n of list(dir).filter((n) => !n.startsWith('.') || n === '.bin')) {
     for (const e of n.startsWith('@') ? list(path.join(dir, n)).map((c) => `${n}/${c}`) : [n]) {
       // The package's directory too: an install that replaces or adds files moves it.
       h.update(`${nm}/${e} ${at(path.join(dir, e))} ${at(path.join(dir, e, 'package.json'))}\n`)
@@ -167,8 +169,14 @@ JS
   )
 }
 dev_of() { if [[ "$(uname -s)" == Darwin ]]; then stat -f %d "$1"; else stat -c %d "$1"; fi; }
-clone_tree() { # copy-on-write copy of a directory tree, or fail
-  if [[ "$(uname -s)" == Darwin ]]; then cp -c -R "$1" "$2"; else cp -a --reflink=always "$1" "$2"; fi
+clone_one() { if [[ "$(uname -s)" == Darwin ]]; then cp -c -R "$1" "$2"; else cp -a --reflink=always "$1" "$2"; fi; }
+clone_tree() { # copy-on-write copy of a node_modules dir without its dot caches (.bin kept), or fail
+  local e
+  mkdir "$2" || return 1
+  for e in "$1"/* "$1"/.bin; do
+    [[ -e "$e" || -L "$e" ]] || continue
+    clone_one "$e" "$2/${e##*/}" || return 1
+  done
 }
 mirror_deps() {
   local key dir tmp old pid probe
