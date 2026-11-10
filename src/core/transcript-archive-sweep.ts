@@ -133,23 +133,92 @@ export function archiveHistoryNow(): Promise<ArchivePassRow[]> {
   return inFlight
 }
 
-export function startTranscriptArchiveSweep(): { stop: () => void } {
+/** A host still busy with a pass (one a restart cut this server off from) is asked again this soon. */
+const RETRY_AFTER_MS = 5 * 60_000
+/** The soonest a pass runs after a start, even when one was due while the server was down. */
+const BOOT_MIN_MS = 3 * 60_000
+
+/** How long after these rows the next pass is due. */
+export function nextPassMs(rows: ArchivePassRow[] | null): number {
+  if (rows?.some((r) => r.skipped === 'busy')) return RETRY_AFTER_MS
+  if (rows?.some((r) => r.partial || r.error)) return RESUME_AFTER_MS
+  if (rows?.some((r) => (r.aside ?? 0) > 0)) return FINALIZE_AFTER_MS
+  return SWEEP_EVERY_MS
+}
+
+/**
+ * The first pass after a start: when the due time a previous server kept says, no sooner than
+ * BOOT_MIN_MS, never later than a whole sweep. With none kept, FIRST_SWEEP_MS. 2026-11-10: production
+ * restarted about every 20 minutes for a day of deploys, the clock began again at each start, and the
+ * pass due 20 minutes in was cut off by the next restart every time, so no originals were removed.
+ */
+export function firstPassMs(dueAt: number | null, now: number): number {
+  if (dueAt === null || !Number.isFinite(dueAt)) return FIRST_SWEEP_MS
+  return Math.min(SWEEP_EVERY_MS, Math.max(BOOT_MIN_MS, dueAt - now))
+}
+
+async function dueFile(): Promise<string | null> {
+  try {
+    const [{ WALNUT_HOME }, path] = await Promise.all([import('../constants.js'), import('node:path')])
+    return path.join(WALNUT_HOME, 'cache', 'history-archive-due.json')
+  } catch { return null }
+}
+
+async function readDueAt(file: string | null): Promise<number | null> {
+  if (!file) return null
+  try {
+    const fs = await import('node:fs/promises')
+    const at = Number((JSON.parse(await fs.readFile(file, 'utf8')) as { dueAt?: unknown }).dueAt)
+    return Number.isFinite(at) ? at : null
+  } catch { return null }
+}
+
+async function writeDueAt(file: string | null, dueAt: number): Promise<void> {
+  if (!file) return
+  try {
+    const [fs, path] = await Promise.all([import('node:fs/promises'), import('node:path')])
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    const tmp = `${file}.${process.pid}.tmp`
+    await fs.writeFile(tmp, JSON.stringify({ dueAt }))
+    await fs.rename(tmp, file)
+  } catch { /* the clock only: a start without it waits FIRST_SWEEP_MS */ }
+}
+
+export function startTranscriptArchiveSweep(deps?: { dueFile?: string | null; now?: () => number }): { stop: () => void } {
   let stopped = false
   let again: ReturnType<typeof setTimeout> | null = null
+  let first: ReturnType<typeof setTimeout> | null = null
+  const now = deps?.now ?? Date.now
+  const file = deps && 'dueFile' in deps ? Promise.resolve(deps.dueFile ?? null) : dueFile()
   const run = (): void => {
     if (stopped) return
-    void historyArchiveAllowed().then((ok) => (ok ? archiveHistoryNow() : null)).then((rows) => {
+    void historyArchiveAllowed().then((ok) => (ok ? archiveHistoryNow() : null)).then(async (rows) => {
       if (stopped || again) return
-      const ms = rows?.some((r) => r.partial) ? RESUME_AFTER_MS : rows?.some((r) => (r.aside ?? 0) > 0) ? FINALIZE_AFTER_MS : 0
-      if (!ms) return
+      // An archive that is off or not allowed yet keeps no due time: the next start waits as before.
+      if (!rows) return
+      const ms = nextPassMs(rows)
+      await writeDueAt(await file, now() + ms)
+      if (stopped || again || ms >= SWEEP_EVERY_MS) return
       again = setTimeout(() => { again = null; run() }, ms)
       again.unref?.()
     }).catch(() => { /* next round */ })
   }
   const firstMs = Number(process.env.WALNUT_HISTORY_ARCHIVE_FIRST_MS)
-  const first = setTimeout(run, Number.isFinite(firstMs) && firstMs >= 0 ? firstMs : FIRST_SWEEP_MS)
-  first.unref?.()
+  if (Number.isFinite(firstMs) && firstMs >= 0 && process.env.WALNUT_HISTORY_ARCHIVE_FIRST_MS !== '') {
+    first = setTimeout(run, firstMs)
+    first.unref?.()
+  } else {
+    void file.then(async (f) => {
+      const dueAt = await readDueAt(f)
+      const ms = firstPassMs(dueAt, now())
+      // Kept at once: a server restarted before its first pass hands the due time on.
+      if (dueAt === null) await writeDueAt(f, now() + ms)
+      if (stopped) return
+      first = setTimeout(run, ms)
+      first.unref?.()
+    })
+  }
   const every = setInterval(run, SWEEP_EVERY_MS)
   every.unref?.()
-  return { stop: () => { stopped = true; clearTimeout(first); clearInterval(every); if (again) clearTimeout(again) } }
+  return { stop: () => { stopped = true; if (first) clearTimeout(first); clearInterval(every); if (again) clearTimeout(again) } }
 }
