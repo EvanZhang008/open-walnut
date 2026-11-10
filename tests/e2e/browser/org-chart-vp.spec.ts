@@ -68,12 +68,17 @@ async function expand(toggle: Locator): Promise<void> {
 }
 
 /** Drag with the mouse, so the card under the pointer can be read before the drop. */
-async function dragOver(page: Page, from: Locator, to: Locator): Promise<void> {
+async function dragOver(page: Page, from: Locator, to: Locator, { drags = true } = {}): Promise<void> {
   await from.scrollIntoViewIfNeeded()
   const a = (await from.boundingBox())!
   await page.mouse.move(a.x + 20, a.y + a.height / 2)
   await page.mouse.down()
   await page.mouse.move(a.x + 40, a.y + a.height / 2, { steps: 4 })
+  // The chart draws the drag a task after it starts (OrgChartSheet onDragStart), and that render
+  // moves the cards (the drop zone's words change): read the target's place once it is drawn as a
+  // drop target. Read before it, on a loaded runner the pointer went to where the card had been,
+  // and the drop asked nothing (2026-11-10, CI: no hint, then no question).
+  if (drags) await expect(to).toHaveClass(/\b(can-drop|is-active)\b/)
   const b = (await to.boundingBox())!
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 8 })
   await page.mouse.move(b.x + b.width / 2 + 4, b.y + b.height / 2, { steps: 2 })
@@ -219,7 +224,7 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   await expect(card.locator(`[data-testid="org-chart-project"][data-project="${A}"]`).getByTestId('org-chart-tasks')).toHaveCount(0)
 
   // A press on a task that moves a little drags no project: the press is the task's.
-  await dragOver(page, tasks.first(), page.getByTestId('org-chart-own'))
+  await dragOver(page, tasks.first(), page.getByTestId('org-chart-own'), { drags: false })
   await page.mouse.up()
   await expect(page.getByTestId('org-chart-confirm')).toHaveCount(0)
   await expect(page.getByTestId('org-chart')).toBeVisible()
