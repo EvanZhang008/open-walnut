@@ -57,7 +57,7 @@ targets:
       properties:
         CFBundleDisplayName: Walnut
         CFBundleShortVersionString: "1.0.2"
-        CFBundleVersion: "163"
+        CFBundleVersion: "164"
         UILaunchScreen: {}
         # The lock-screen work card (WorkCardController): one Live Activity with how many
         # tasks work, need you and were completed, kept current by silent server pushes.
