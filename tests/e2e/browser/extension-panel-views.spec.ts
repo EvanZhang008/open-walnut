@@ -70,8 +70,22 @@ async function unlockExtension(): Promise<void> {
   await expect(pw.or(list)).toBeVisible({ timeout: 30_000 })
   if (await pw.isVisible()) {
     await pw.fill(VAULT_MASTER)
-    await p.getByTestId('popup-unlock').click()
-    await expect(list).toBeVisible({ timeout: 30_000 })
+    // The fixture's one vault checks one master password at a time for every spec beside this
+    // one, and the popup waits out a busy answer only a few seconds: on a loaded runner the right
+    // password then reads "Another unlock is being checked. Try again in a moment." (or, after
+    // other specs' wrong passwords, "Too many tries. Wait N s."), and the list never comes (CI
+    // 2026-11-10). A person presses Unlock again, after the wait it names; so does this.
+    const refused = p.getByRole('alert').filter({ hasText: /\S/ })
+    const deadline = Date.now() + 120_000
+    for (;;) {
+      await p.getByTestId('popup-unlock').click()
+      await expect(list.or(refused)).toBeVisible({ timeout: 30_000 })
+      if (await list.isVisible()) break
+      const said = (await refused.textContent()) ?? ''
+      expect(said, 'the right password was refused').toMatch(/Another unlock is being checked|Too many/)
+      expect(Date.now() < deadline, `still refused after two minutes: ${said}`).toBe(true)
+      await p.waitForTimeout(Math.min(60, Number(said.match(/(\d+) s\b/)?.[1] ?? 1)) * 1000)
+    }
   }
   await p.close()
 }
