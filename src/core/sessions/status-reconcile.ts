@@ -24,7 +24,14 @@
  * so a status change within minutes of an answer about the turn that held the last request is that
  * answer's echo, and the per-turn cap counts asks by that request, not by a status change the asks
  * themselves make.
+ *
+ * The asks are counted on disk (cache/status-reconcile.json, never synced), because production
+ * restarts with every deploy, and on 2026-11-10 it restarted every 20 to 30 minutes: a count held
+ * in memory started at zero after each one, so the same session was asked about the same turn
+ * five minutes after every restart.
  */
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import { isAcpEngine } from '../agents/engine-registry.js';
@@ -40,7 +47,43 @@ const PER_PASS = 4;
 /** Asks for one turn end at most; then it waits for the session's next turn. */
 const MAX_PER_TURN_END = 2;
 
-const lastAsked = new Map<string, { at: number; ended: number; n: number }>();
+type Asked = { at: number; ended: number; n: number };
+const lastAsked = new Map<string, Asked>();
+/** An ask this old no longer holds anything back (RETRY_GAP_MS and a turn's cap are long past). */
+const KEEP_ASKED_MS = 3 * 24 * 3_600_000;
+let loaded = false;
+
+async function askedFile(): Promise<string> {
+  const { WALNUT_HOME } = await import('../../constants.js');
+  return path.join(WALNUT_HOME, 'cache', 'status-reconcile.json');
+}
+
+/** The asks counted before a restart. */
+async function loadAsked(nowMs: number): Promise<void> {
+  if (loaded) return;
+  loaded = true;
+  try {
+    const raw = JSON.parse(await fs.readFile(await askedFile(), 'utf8')) as { asked?: Record<string, Partial<Asked>> };
+    for (const [sid, a] of Object.entries(raw.asked ?? {})) {
+      if (lastAsked.has(sid) || typeof a?.at !== 'number' || typeof a.ended !== 'number' || typeof a.n !== 'number') continue;
+      if (nowMs - a.at > KEEP_ASKED_MS) continue;
+      lastAsked.set(sid, { at: a.at, ended: a.ended, n: a.n });
+    }
+  } catch { /* none yet, or unreadable: start counting afresh */ }
+}
+
+async function saveAsked(nowMs: number): Promise<void> {
+  try {
+    for (const [sid, a] of lastAsked) if (nowMs - a.at > KEEP_ASKED_MS) lastAsked.delete(sid);
+    const file = await askedFile();
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const { writeFileAtomic } = await import('../config-store.js');
+    await writeFileAtomic(file, JSON.stringify({ version: 1, asked: Object.fromEntries(lastAsked) }));
+  } catch (err) {
+    log.session.warn('status reconcile: asks not saved', { error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 let timer: ReturnType<typeof setInterval> | null = null;
 let passRunning = false;
 
@@ -133,6 +176,7 @@ export async function runStatusReconcile(nowMs = Date.now()): Promise<string[]> 
     // The org is off (org/org-enabled.ts): Main and the VPs are asked nothing.
     const { isOrgEnabled, isOrgNode } = await import('../org/org-enabled.js');
     const orgOff = !(await isOrgEnabled());
+    await loadAsked(nowMs);
     for (const s of await listSessionsForTasks(new Set(byId.keys()))) {
       if (asked.length >= PER_PASS) break;
       const task = s.taskId ? byId.get(s.taskId) : undefined;
@@ -147,7 +191,7 @@ export async function runStatusReconcile(nowMs = Date.now()): Promise<string[]> 
       // demand, as a normal send does. A process that is gone is never started for it.
       if (!(await sessionRunner.getOrAttachLiveSession(s.claudeSessionId).catch(() => undefined))) continue;
       lastAsked.set(s.claudeSessionId, { at: nowMs, ended: turn, n: last?.ended === turn ? last.n + 1 : 1 });
-      if (lastAsked.size > 2000) lastAsked.clear();
+      await saveAsked(nowMs);
       asked.push(task.id);
       log.session.info('status reconcile: its status misses its last turn, asked again', { taskId: task.id, sessionId: s.claudeSessionId });
       await askStatus(task.id, s.claudeSessionId, ended, 'reconcile');
@@ -190,6 +234,14 @@ export function startStatusReconcile(): void {
 export function stopStatusReconcile(): void {
   if (timer) clearInterval(timer);
   timer = null;
+  // As a restart does: the counted asks are read back from disk at the next pass.
   lastAsked.clear();
+  loaded = false;
   passRunning = false;
+}
+
+/** Tests: forget every counted ask, on disk too. */
+export async function __resetStatusReconcile(): Promise<void> {
+  stopStatusReconcile();
+  await fs.rm(await askedFile(), { force: true }).catch(() => {});
 }

@@ -270,7 +270,7 @@ describe('the reconcile loop', () => {
   })
 
   it('a pass asks a missed status, at most twice for one turn end, one pass at a time', async () => {
-    const { runStatusReconcile, stopStatusReconcile } = await import('../../../src/core/sessions/status-reconcile.js')
+    const { runStatusReconcile, stopStatusReconcile, __resetStatusReconcile } = await import('../../../src/core/sessions/status-reconcile.js')
     const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js')
     const own = (await addTask({ title: 'Tune the cache', project: 'Garden' })).task
     await updateTaskRaw(own.id, { phase: 'IN_PROGRESS' }, { source: 'test' })
@@ -282,7 +282,7 @@ describe('the reconcile loop', () => {
       await createSessionRecord(sid, own.id, 'Garden')
       const now = Date.now()
       await updateSessionRecord(sid, { process_status: 'idle', last_status_change: new Date(now - 10 * 60_000).toISOString() })
-      stopStatusReconcile()
+      await __resetStatusReconcile()
       const [a, b] = await Promise.all([runStatusReconcile(now), runStatusReconcile(now)])
       expect([...a, ...b]).toEqual([own.id])
       // Within the retry gap: not again.
@@ -293,12 +293,12 @@ describe('the reconcile loop', () => {
       expect(fake.askSideQuestion).toHaveBeenCalledTimes(2)
     } finally {
       sessions.delete(sid)
-      stopStatusReconcile()
+      await __resetStatusReconcile()
     }
   })
 
-  it('asks that never read are capped per request, though each ask moves the status change', async () => {
-    const { runStatusReconcile, stopStatusReconcile } = await import('../../../src/core/sessions/status-reconcile.js')
+  it('asks that never read are capped per request, though each ask moves the status change and the server restarts between them', async () => {
+    const { runStatusReconcile, stopStatusReconcile, __resetStatusReconcile } = await import('../../../src/core/sessions/status-reconcile.js')
     const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js')
     const own = (await addTask({ title: 'Prune the hedge', project: 'Garden' })).task
     await updateTaskRaw(own.id, { phase: 'IN_PROGRESS' }, { source: 'test' })
@@ -311,10 +311,13 @@ describe('the reconcile loop', () => {
       const now = Date.now()
       const requestAt = new Date(now - 15 * 60_000).toISOString()
       await updateSessionRecord(sid, { process_status: 'idle', last_status_change: new Date(now - 10 * 60_000).toISOString(), promptCache: { tokens: 250_000, requestAt } })
-      stopStatusReconcile()
+      await __resetStatusReconcile()
       const asked: string[][] = []
       for (let i = 0; i < 6; i++) {
         const at = now + i * 31 * 60_000
+        // Production restarted with every deploy (2026-11-10: every 20 to 30 minutes), and a
+        // count held in memory started again at zero each time.
+        stopStatusReconcile()
         asked.push(await runStatusReconcile(at))
         // The ask's own stream lines reach the record a few minutes later as a status change.
         await updateSessionRecord(sid, { last_status_change: new Date(at + 3 * 60_000).toISOString() })
@@ -323,7 +326,7 @@ describe('the reconcile loop', () => {
       expect(fake.askSideQuestion).toHaveBeenCalledTimes(2)
     } finally {
       sessions.delete(sid)
-      stopStatusReconcile()
+      await __resetStatusReconcile()
     }
   })
 })
