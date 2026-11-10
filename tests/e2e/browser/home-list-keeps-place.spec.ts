@@ -15,10 +15,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs, listProjectHeader, openListProject } from './todo-panel-helpers'
 import { presetPanelDesign } from './status-section-helpers'
-import { chooseViewOption, openHome } from './home-navigation-helpers'
-
-// WebKit moves the rows by each added row's height until the list anchors them by hand.
-test.skip(({ browserName }) => browserName === 'webkit', 'no scroll anchoring in WebKit yet')
+import { arrange, chooseViewOption, openHome } from './home-navigation-helpers'
 
 const made: string[] = []
 let tag = ''
@@ -91,7 +88,7 @@ const aboveView = (page: Page, id: string) => page.evaluate((rowId) => {
  * A project of 24 rows on a short window, opened, and the list scrolled 240px past its header,
  * so its first rows are above the view and the ones on screen are in the middle of it.
  */
-async function openScrolledProject(page: Page, baseURL: string, project: string, view?: string): Promise<string[]> {
+async function openScrolledProject(page: Page, baseURL: string, project: string, view?: string, manual = false, past = 240): Promise<string[]> {
   await page.setViewportSize({ width: 1280, height: 640 })
   const ids: string[] = []
   // One at a time, so their order (newest first) is fixed.
@@ -100,16 +97,17 @@ async function openScrolledProject(page: Page, baseURL: string, project: string,
   await presetPanelDesign(page, 'project')
   await openHome(page, baseURL)
   if (view) await chooseViewOption(page, view)
+  if (manual) await arrange(page, 'Manual')
   await openListProject(page, project)
   await expect(page.locator(`[data-task-id="${ids[ids.length - 1]}"]`)).toBeAttached()
-  const scrolled = await listProjectHeader(page, project).evaluate((header) => {
+  const scrolled = await listProjectHeader(page, project).evaluate((header, by) => {
     const outer = document.querySelector('.home-navigation-scroll') as HTMLElement
     const el = (outer.classList.contains('is-stacked') ? outer : outer.querySelector('.todo-panel-list')) as HTMLElement
-    el.scrollTop += header.getBoundingClientRect().top - el.getBoundingClientRect().top + 240
+    el.scrollTop += header.getBoundingClientRect().top - el.getBoundingClientRect().top + by
     return { top: el.scrollTop, max: el.scrollHeight - el.clientHeight }
-  })
+  }, past)
   // Scrolled into the project, with room left below: an end-of-list clamp is another case.
-  expect(scrolled.top).toBeGreaterThan(200)
+  expect(scrolled.top).toBeGreaterThan(past > 0 ? 200 : 0)
   expect(scrolled.max - scrolled.top).toBeGreaterThan(100)
   await frames(page)
   return ids
@@ -162,4 +160,90 @@ test('the Projects view keeps the rows on screen while tasks come and go above t
   const ids = await openScrolledProject(page, baseURL!, project, 'tasks')
   await expect(page.locator('.home-navigation-scroll')).not.toHaveClass(/is-stacked/)
   await addAndRemoveAbove(page, project, ids)
+})
+
+/** The list's scroll position, and each task row wholly on screen with its top, in list order. */
+const shownRows = (page: Page) => page.evaluate(() => {
+  const outer = document.querySelector('.home-navigation-scroll') as HTMLElement
+  const el = (outer.classList.contains('is-stacked') ? outer : outer.querySelector('.todo-panel-list')) as HTMLElement
+  const r = el.getBoundingClientRect()
+  const rows = Array.from(el.querySelectorAll('.todo-panel-item[data-task-id]'))
+    .map((row) => ({ id: row.getAttribute('data-task-id')!, top: row.getBoundingClientRect().top, bottom: row.getBoundingClientRect().bottom }))
+  return {
+    scrollTop: el.scrollTop,
+    paneTop: r.top,
+    // The row a person reads at: the first one that reaches below the box's top edge.
+    first: rows.find((row) => row.bottom > r.top)?.id ?? '',
+    whole: rows.filter((row) => row.top >= r.top && row.bottom <= r.bottom),
+  }
+})
+
+test('a drop in a manual project keeps the dropped row on screen and the list where it was', async ({ page, baseURL }) => {
+  // The Projects view, its header at the list's top edge: the project's first row, A, is the row
+  // the list holds. Other projects come before it. A is dragged down past B, four rows further:
+  // the drop moves the held row itself, and the pointer stays clear of the edges that scroll a drag.
+  const project = `Keeps place drag ${tag}`
+  await openScrolledProject(page, baseURL!, project, 'tasks', true, 0)
+  const before = await shownRows(page)
+  const a = before.whole.find((r) => r.id === before.first)
+  const b = before.whole[before.whole.indexOf(a!) + 4]
+  expect(a && b).toBeTruthy()
+  const row = (id: string) => page.locator(`.home-navigation-scroll .todo-panel-item[data-task-id="${id}"]`)
+  const from = (await row(a!.id).boundingBox())!
+  const to = (await row(b.id).boundingBox())!
+  const x = from.x + from.width * 0.4
+  await page.mouse.move(x, from.y + from.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(x, from.y + from.height / 2 + 12, { steps: 4 })
+  // A's middle onto B's middle (the pointer holds A by its middle): A takes B's place, after it.
+  await page.mouse.move(x, to.y + to.height / 2 - 1, { steps: 16 })
+  await frames(page)
+  await page.mouse.move(x, to.y + to.height / 2, { steps: 2 })
+  await frames(page)
+  const atDrop = await shownRows(page)
+  await page.mouse.up()
+  // The drop landed: A now comes after B.
+  await expect.poll(() => row(a!.id).evaluate((el, bId) => {
+    const other = document.querySelector(`.home-navigation-scroll .todo-panel-item[data-task-id="${bId}"]`)!
+    return !!(el.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_PRECEDING)
+  }, b.id)).toBe(true)
+  await page.waitForTimeout(600)
+  await frames(page)
+  const after = await shownRows(page)
+  // C, the row after B, is where it was when A was let go: the list did not scroll after the row
+  // the drop moved. Screen places, not scrollTop: on a shared fixture other specs add and remove
+  // rows above, and holding the rows on screen then changes scrollTop.
+  const c = atDrop.whole.find((r) => r.id === before.whole[before.whole.indexOf(a!) + 5]?.id)
+  expect(c, 'the row after B is on screen at the drop').toBeTruthy()
+  const cAfter = after.whole.find((r) => r.id === c!.id)
+  expect(cAfter, 'the row after B left the view').toBeTruthy()
+  expect(Math.abs(cAfter!.top - c!.top), 'the list scrolled after the drop').toBeLessThanOrEqual(30)
+  // A shows where it was dropped: right before C in the list, and on screen once the drop has
+  // settled (its drop animation rides a transform, slower in WebKit under load).
+  expect(await row(c!.id).evaluate((el) => {
+    const rows = Array.from(document.querySelectorAll('.home-navigation-scroll .todo-panel-item[data-task-id]'))
+    return rows[rows.indexOf(el) - 1]?.getAttribute('data-task-id') ?? ''
+  }), 'the dropped row is not right before the row after B').toBe(a!.id)
+  await expect.poll(async () => (await shownRows(page)).whole.some((r) => r.id === a!.id), { message: 'the dropped row left the view' }).toBe(true)
+})
+
+test('a re-sort that takes the row at the top of the view away does not scroll the list after it', async ({ page, baseURL }) => {
+  const project = `0 Keeps place resort ${tag}`
+  await openScrolledProject(page, baseURL!, project)
+  const before = await shownRows(page)
+  expect(before.first).not.toBe('')
+  // The row a person reads by once the top one is gone: the second one on screen.
+  const next = before.whole.find((r) => r.id !== before.first)!
+  expect(next).toBeTruthy()
+  // New activity on it: the list holds its place for 3 s, then sorts it to the top of its
+  // project, far above the view.
+  expect((await page.request.patch(`/api/tasks/${before.first}`, { data: { title: `resorted ${tag}` } })).ok()).toBe(true)
+  await expect.poll(() => aboveView(page, before.first), { timeout: 10_000 }).toBe(true)
+  await frames(page)
+  const after = await shownRows(page)
+  // Its row moved up by the re-sorted row's height (that row left the place above it), and no more:
+  // the list did not follow the re-sorted row up to its project's top.
+  const nextAfter = after.whole.find((r) => r.id === next.id)
+  expect(nextAfter, 'the list followed the row it re-sorted').toBeTruthy()
+  expect(Math.abs(nextAfter!.top - next.top), 'the list followed the row it re-sorted').toBeLessThanOrEqual(40)
 })

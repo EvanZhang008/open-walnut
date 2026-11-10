@@ -1,4 +1,5 @@
 import { useEffect, type RefObject } from 'react';
+import { SCROLL_HELD_ATTR, SCROLL_RELEASED_EVENT } from './scroll-anchor';
 
 /**
  * A fold toggle keeps the row that was clicked where it was on screen: only what is
@@ -135,7 +136,12 @@ export function useFoldAnchor(rootRef: RefObject<HTMLElement | null>): void {
 
     const release = () => {
       cancelAnimationFrame(raf);
-      if (hold) hold.scroller.style.overflowAnchor = hold.anchor;
+      if (hold) {
+        hold.scroller.style.overflowAnchor = hold.anchor;
+        // The live-update keeper (useScrollAnchor) takes the box back.
+        hold.scroller.removeAttribute(SCROLL_HELD_ATTR);
+        hold.scroller.dispatchEvent(new Event(SCROLL_RELEASED_EVENT));
+      }
       hold = null;
     };
     const step = () => {
@@ -179,6 +185,9 @@ export function useFoldAnchor(rootRef: RefObject<HTMLElement | null>): void {
       // Chromium's own anchoring would move the scroller by a rule of its own; off
       // for the hold, so both engines end up exactly here.
       scroller.style.overflowAnchor = 'none';
+      // …and so is the live-update keeper (useScrollAnchor): it would move the scroller by its own
+      // row in the fold's commit, which this hold reads as another scroll and lets go.
+      scroller.setAttribute(SCROLL_HELD_ATTR, '');
       raf = requestAnimationFrame(step);
     };
 

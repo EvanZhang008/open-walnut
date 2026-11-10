@@ -17,10 +17,33 @@
  * happens when something above really moved.
  */
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
-import { anchoredScrollTop, type AnchorMark } from './scroll-anchor';
+import { anchoredScrollTop, SCROLL_HELD_ATTR, SCROLL_RELEASED_EVENT, type AnchorMark } from './scroll-anchor';
 
 interface Anchor extends AnchorMark {
   el: Element;
+  /** The rows right before and after it when it was picked (see `stillInOrder`). */
+  prev: Element | null;
+  next: Element | null;
+}
+
+const hasBox = (el: Element) => el.getClientRects().length > 0;
+
+/**
+ * The index of the first row in `list` (document order) whose box reaches below the top edge, or -1.
+ * The search starts at `from`, the row held before: a scroll or a commit moves the view by a few
+ * rows, so a long list reads the boxes of a handful of rows instead of every row above the view.
+ */
+function firstReaching(list: Element[], edge: number, from: number): number {
+  const reaches = (el: Element) => hasBox(el) && el.getBoundingClientRect().bottom - edge > 0;
+  let i = Math.max(0, Math.min(from, list.length - 1));
+  while (i < list.length && !reaches(list[i])) i++;
+  if (i >= list.length) return -1;
+  for (let j = i - 1; j >= 0; j--) {
+    if (!hasBox(list[j])) continue;
+    if (!reaches(list[j])) break;
+    i = j;
+  }
+  return i;
 }
 
 /**
@@ -29,26 +52,34 @@ interface Anchor extends AnchorMark {
  * than the row below it: what opens inside it (a smart row's accounts, below its line) opens in view
  * and nothing scrolls, where anchoring on the next row down would scroll the opened rows out of view.
  */
-function pickAnchor(box: HTMLElement, rows: string): Anchor | null {
+function pickAnchor(box: HTMLElement, rows: string, hint: Element | null): Anchor | null {
   if (box.scrollTop <= 0) return null;
   const edge = box.getBoundingClientRect().top;
   const height = box.clientHeight;
-  let found: { el: Element; top: number } | null = null;
+  let found: { el: Element; top: number; prev: Element | null; next: Element | null } | null = null;
   let scope: Element = box;
   for (;;) {
-    let next: { el: Element; top: number } | null = null;
-    for (const el of Array.from(scope.querySelectorAll(rows))) {
-      if (el.getClientRects().length === 0) continue;
-      const rect = el.getBoundingClientRect();
-      const top = rect.top - edge;
-      if (top >= height) break;
-      if (rect.bottom - edge > 0) { next = { el, top }; break; }
-    }
-    if (!next) break;
-    found = next;
-    scope = next.el;
+    const list = Array.from(scope.querySelectorAll(rows));
+    const i = firstReaching(list, edge, scope === box && hint ? Math.max(0, list.indexOf(hint)) : 0);
+    if (i < 0) break;
+    const top = list[i].getBoundingClientRect().top - edge;
+    if (top >= height) break;
+    found = { el: list[i], top, prev: list[i - 1] ?? null, next: list[i + 1] ?? null };
+    scope = list[i];
   }
-  return found ? { el: found.el, top: found.top, scrollTop: box.scrollTop } : null;
+  return found ? { el: found.el, top: found.top, scrollTop: box.scrollTop, prev: found.prev, next: found.next } : null;
+}
+
+/**
+ * Whether the held row still sits between the rows it sat between. A row that moved in the list (a
+ * drop, a re-sort) is no longer where the person reads: holding it would scroll the whole list after
+ * it, so it is let go and a row is picked afresh with no correction, as the browser's own anchoring
+ * lets go of a node that moves. Rows added or removed around it keep the order of those that stay.
+ */
+function stillInOrder(held: Anchor): boolean {
+  if (held.prev?.isConnected && !(held.el.compareDocumentPosition(held.prev) & Node.DOCUMENT_POSITION_PRECEDING)) return false;
+  if (held.next?.isConnected && !(held.el.compareDocumentPosition(held.next) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
+  return true;
 }
 
 interface Attached {
@@ -57,22 +88,31 @@ interface Attached {
   observeChildren: () => void;
 }
 
-/** `rows` selects the lines a person reads by, inside the box that `ref` points at. */
-export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string): void {
+/**
+ * `rows` selects the lines a person reads by, inside the box that `ref` points at. While `paused`
+ * nothing is held or corrected, and the row held after it is picked afresh: a drag moves its rows
+ * by transforms, which a correction would read as rows that moved above the view. The same while
+ * another keeper holds the box (`SCROLL_HELD_ATTR`, a fold keeping its clicked row in place).
+ */
+export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string, paused = false): void {
   const anchor = useRef<Anchor | null>(null);
   const attached = useRef<Attached | null>(null);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+  const standsDown = (box: HTMLElement) => pausedRef.current || box.hasAttribute(SCROLL_HELD_ATTR);
+  const pick = (box: HTMLElement) => (standsDown(box) ? null : pickAnchor(box, rowsRef.current, anchor.current?.el ?? null));
 
   // A ref, not a dependency: it is called from the observers attached once per box.
   const keep = useRef((box: HTMLElement) => {
-    const held = anchor.current;
-    if (held && held.el.isConnected && held.el.getClientRects().length > 0) {
+    const held = standsDown(box) ? null : anchor.current;
+    if (held && held.el.isConnected && held.el.getClientRects().length > 0 && stillInOrder(held)) {
       const top = held.el.getBoundingClientRect().top - box.getBoundingClientRect().top;
       const target = anchoredScrollTop(held, top, box.scrollTop, box.scrollHeight - box.clientHeight);
       if (target !== box.scrollTop) box.scrollTop = target;
     }
-    anchor.current = pickAnchor(box, rowsRef.current);
+    anchor.current = pick(box);
   }).current;
 
   useLayoutEffect(() => {
@@ -94,8 +134,10 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
   }, []);
 
   function attach(box: HTMLElement): Attached {
-    const onScroll = () => { anchor.current = pickAnchor(box, rowsRef.current); };
+    const onScroll = () => { anchor.current = pick(box); };
     box.addEventListener('scroll', onScroll, { passive: true });
+    // The keeper that held the box let go: hold the row on screen from here.
+    box.addEventListener(SCROLL_RELEASED_EVENT, onScroll);
     // Fires after layout and before paint, so a correction from here is never drawn as a jump. A
     // scroll changes no size, so the correction cannot feed this observer back.
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => keep(box));
@@ -122,6 +164,7 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
       observeChildren,
       stop: () => {
         box.removeEventListener('scroll', onScroll);
+        box.removeEventListener(SCROLL_RELEASED_EVENT, onScroll);
         ro?.disconnect();
         watched.clear();
       },

@@ -43,3 +43,12 @@ export function anchoredScrollTop(mark: AnchorMark, top: number, scrollTop: numb
 
 /** Under half a pixel is subpixel layout, not a move: correcting it would fight rounding forever. */
 export const ANCHOR_SLOP_PX = 0.5;
+
+/**
+ * A scroll box another keeper holds for a moment carries this attribute (a fold toggle, which
+ * `useFoldAnchor` keeps in place by its clicked row), and `useScrollAnchor` leaves the box to it:
+ * two keepers correcting one move undo each other, and the fold's keeper lets go of any scroll it
+ * did not make. The keeper dispatches `SCROLL_RELEASED_EVENT` on the box when it lets go.
+ */
+export const SCROLL_HELD_ATTR = 'data-scroll-held';
+export const SCROLL_RELEASED_EVENT = 'walnut-scroll-released';

@@ -12131,10 +12131,11 @@ body.walnut-dragging {
 
      Known hazard class (inc-1786603990062, notes tree): content-visibility on
      rows once caused scroll teleports when the estimate diverged wildly from
-     real heights. This scroller differs — scroll anchoring stays live and the
-     `auto` keyword keeps each row's REMEMBERED size after first render — but
-     the min-height below still pins the floor so an unrendered row can never
-     collapse under its estimate. */
+     real heights. This scroller differs: its rows are held by hand
+     (useScrollAnchor in TodoPanel, which also corrects for a row above the view
+     taking its real size), and the `auto` keyword keeps each row's REMEMBERED
+     size after first render. The min-height below still pins the floor so an
+     unrendered row can never collapse under its estimate. */
   content-visibility: auto;
   contain-intrinsic-size: auto 32px;
   min-height: 26px;

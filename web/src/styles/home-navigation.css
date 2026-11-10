@@ -60,6 +60,13 @@
    circles sit at 22px whether or not a dot is showing, titles at 46px, folder members one
    16px step deeper. Hover backgrounds start at 8px. */
 .home-navigation-scroll { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: auto; padding: 0 8px 16px 8px; }
+/* Anchored by hand (useScrollAnchor in TodoPanel), every box that scrolls the list: WebKit, which
+   the Mac app runs, has no scroll anchoring, so both engines run the one mechanism and never two
+   corrections of one move. */
+.home-navigation-scroll,
+.home-navigation-scroll .todo-panel-list,
+.home-navigation-scroll .todo-pinned-wrapper,
+.home-navigation-scroll .todo-pinned-list-scroll { overflow-anchor: none; }
 @supports not selector(::-webkit-scrollbar) { .home-navigation-scroll { scrollbar-width: thin; } }
 .home-navigation-scroll.is-unpin-dragging { margin-bottom: 46px; }
 .todo-unpin-zone { pointer-events: auto; background: var(--bg); }

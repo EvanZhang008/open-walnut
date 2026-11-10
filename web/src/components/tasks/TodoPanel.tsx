@@ -1,6 +1,7 @@
 import { matchParentRef, refNamesId } from '../../../../src/lib/id-ref';
 import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
+import { useScrollAnchor } from '@/hooks/useScrollAnchor';
 import { manualMoved, orderToDraw } from './draw-order';
 import { useDraft } from '@/hooks/useDraft';
 import { useIntegrations } from '@/hooks/useIntegrations';
@@ -554,6 +555,8 @@ const LS_LEGACY_FOLDER_FOLDS_KEY = 'open-walnut-collapsed-folders';
 const LIST_PLACE = 'list';
 // LS_FILTERS_COLLAPSED_KEY removed — filters now inside ViewDropdown
 const LS_SORT_KEY = 'walnut-todo-sortBy';
+/** The rows the Home list's scroll anchoring holds: task rows and cards, never a sticky heading. */
+const HOME_LIST_ROWS = '.todo-panel-item[data-task-id], .todo-pinned-card[data-task-id], .status-section-card[data-task-id]';
 /** Per-project task order, `{ [project]: SortBy }`; a project absent here follows LS_SORT_KEY. */
 const LS_PROJECT_SORT_KEY = 'walnut-todo-project-sort';
 const LS_GROUP_KEY = 'walnut-todo-groupBy';
@@ -1815,7 +1818,7 @@ const NO_SEPARATORS: TierSeparator[] = [];
 // It reads as the status sections' divider row (name, count, a line). No grip and no
 // per-tier resize handle: the All view is one scroller now, so a per-tier maxHeight
 // would carve a second scrollbar out of it.
-function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle, visibleIds, taskCount, children, isEmpty, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed, viewMode, onChangeViewMode, sortBy, onChangeSort }: {
+function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle, visibleIds, taskCount, children, isEmpty, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed, viewMode, onChangeViewMode, sortBy, onChangeSort, anchorPaused }: {
   /** `id` + `label` of the tier — the four built-ins pass a synthetic def. */
   def: CustomTierDef;
   /** In a stacked view (All or Pinned): the tier draws its heading and takes header drops. */
@@ -1850,8 +1853,13 @@ function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle
   /** The tier's own sort, offered as pick-one rows like the Projects heading's. */
   sortBy?: SortBy;
   onChangeSort?: (tier: string, sort: SortBy) => void;
+  /** A drag is live: its rows ride transforms, so the list's scroll keeper waits. */
+  anchorPaused?: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `${def.id}-header-drop-zone`, disabled: !isAll });
+  // The tier's own list scrolls in a view of its own: it holds its rows like the main list.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  useScrollAnchor(listRef, HOME_LIST_ROWS, !!anchorPaused);
   const actions: ContextMenuItem[] = [
     {
       key: 'new-task',
@@ -1898,7 +1906,7 @@ function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle
         <SortableContext id={def.id} items={visibleIds} strategy={verticalListSortingStrategy}>
           {/* `todo-pinned-list` rides on TierDropZone, as it did for three of the
               four built-ins — Satellite's copy was the odd one out. */}
-          <div className="todo-pinned-list-scroll" {...dropProps}>
+          <div ref={listRef} className="todo-pinned-list-scroll" {...dropProps}>
             <TierDropZone id={`${def.id}-drop-zone`} isEmpty={isEmpty}>
               {children}
             </TierDropZone>
@@ -7819,6 +7827,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     stopRowFit.current?.();
     stopRowFit.current = el ? observeRowFit(el) : null;
   }, [listScrollRef]);
+  // The row a person reads stays in place when tasks arrive or leave above it, in WebKit (the Mac
+  // app) too, which has no CSS scroll anchoring. One box scrolls the stacked views; in the others
+  // the list itself, the pinned region or a tier's or Recent's own list does (each tier's is
+  // TierNavigationGroup's). home-navigation.css turns the native anchoring off on all of them.
+  // Not during a drag.
+  const panelListRef = useRef<HTMLDivElement | null>(null);
+  const recentListRef = useRef<HTMLDivElement | null>(null);
+  const dragging = activeDragId !== null || activeDragPinnedId !== null;
+  useScrollAnchor(listScrollRef, HOME_LIST_ROWS, dragging);
+  useScrollAnchor(panelListRef, HOME_LIST_ROWS, dragging);
+  useScrollAnchor(pinnedWrapperRef, HOME_LIST_ROWS, dragging);
+  useScrollAnchor(recentListRef, HOME_LIST_ROWS, dragging);
   // 6.8: the project heading's "Filter to this project" replaces the Project set.
   const filterToProject = useCallback(
     (project: string) => homeFilters.apply({ ...homeFilters.state, projects: [project] }, 'board'),
@@ -8163,6 +8183,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                           onChangeViewMode={setTierViewMode}
                           sortBy={tierSort(tier)}
                           onChangeSort={setTierSort}
+                          anchorPaused={dragging}
                         >
                           {renderTierItems(model.visibleIds, tier, model.groupMeta)}
                         </TierNavigationGroup>
@@ -8253,6 +8274,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       ignores the dragged cap — that height was picked for the cramped
                       stack and would strand empty space below. */}
                   <div
+                    ref={recentListRef}
                     className="todo-pinned-list todo-pinned-list-scroll todo-pinned-list-recent"
                     style={isAll && recentResize.height != null
                       ? { maxHeight: recentResize.height, flex: 'none' }
@@ -8399,7 +8421,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           view scrolls as ONE column, so the list is simply as tall as it is. The
           detail pane still splits, because that IS two panes side by side. */}
       {tasksVisible && !tasksCollapsed && (
-      <div className="todo-panel-list" style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : undefined}>
+      <div ref={panelListRef} className="todo-panel-list" style={detailTarget ? { flex: `${1 - detailRatio} 1 0%` } : undefined}>
         {loading && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
             <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />

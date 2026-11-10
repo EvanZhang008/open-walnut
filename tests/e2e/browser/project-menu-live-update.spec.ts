@@ -11,15 +11,13 @@
  * its visible rows (which moves the project's block but not the rows on screen). The menu must ride
  * both out, and a person's own wheel over the list must still close it.
  *
- * WebKit has no CSS scroll anchoring: a live update never scrolls the pane there, so the failure
- * cannot happen and the churn would prove nothing (each case checks the pane did scroll).
+ * WebKit has no CSS scroll anchoring, but the Home list holds its rows by hand in both engines
+ * (useScrollAnchor), so a live update scrolls the pane in WebKit too (each case checks it did).
  */
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs, listProjectHeader, openListProject } from './todo-panel-helpers'
 import { presetPanelDesign } from './status-section-helpers'
 import { openHome } from './home-navigation-helpers'
-
-test.skip(({ browserName }) => browserName === 'webkit', 'no scroll anchoring in WebKit')
 
 const made: string[] = []
 let tag = ''
@@ -114,10 +112,10 @@ test('the project menu stays open while its own project grows above the rows on 
   })
   const shown = await rowsOnScreen()
   // Rows appear in the project above the ones on screen, out of sight under the stuck header, and
-  // go again. Drawn by hand into the project's block: a task added there through the API makes the
-  // list redraw its rows and jump (a separate behaviour), so the block's own growth, which scroll
-  // anchoring answers by shifting scrollTop and the project's block top with it while the rows on
-  // screen stay put, is staged directly.
+  // go again. Drawn by hand into the project's block, right under its header, so they land above
+  // the rows on screen whatever the project's sort: scroll anchoring answers the block's growth by
+  // shifting scrollTop and the project's block top with it, while the rows on screen stay put
+  // (home-list-keeps-place.spec.ts adds real tasks there).
   for (let round = 0; round < 4; round++) {
     await header.evaluate((el, n) => {
       const row = document.createElement('div')
