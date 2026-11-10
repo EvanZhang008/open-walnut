@@ -19,7 +19,7 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from '@
 import { openKebabGroup, type KebabGroupId } from './kebab-group-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
 
-const SHOTS = `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots/session-kebab-groups`
+const SHOTS = '/tmp/task-pin-first-level/session-kebab-groups'
 // A local session that keeps its task in the fixture (one per engine, so two engines
 // never share a row); pw-normal-session boots with its task link cleared.
 const sidFor = (browserName: string) => `pw-background-bar-${browserName}`
@@ -36,7 +36,7 @@ async function openColumn(page: Page, SID: string): Promise<Locator> {
       sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id, locked: false }]))
     } catch { /* ignore */ }
   }, SID)
-  await page.goto('/')
+  await page.evaluate((url) => { location.assign(url) }, `http://localhost:${process.env.PW_TEST_PORT ?? 3457}/`)
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SID}"]`)
   // The first spec of a run meets a cold dev server that is still compiling the app.
   await expect(panel).toBeVisible({ timeout: 90_000 })
@@ -110,7 +110,9 @@ test('the first level holds the frequent rows and the groups; nothing else', asy
   }
   // The closed rows say what they hold.
   await expect(group(menu, 'kebab-group-dates').locator('.task-kebab-group-hint')).toHaveText(/start|due/)
-  await expect(group(menu, 'kebab-group-pin').locator('.task-kebab-group-hint')).toHaveText(/focus · satellite · parked|^pinned · /)
+  await expect(menu.getByTestId('kebab-pin-focus')).toBeVisible()
+  await expect(menu.getByTestId('kebab-pin-satellite')).toBeVisible()
+  await expect(group(menu, 'kebab-group-pin').locator('.task-kebab-group-toggle')).toHaveCount(0)
   await expect(group(menu, 'session-kebab-open').locator('.task-kebab-group-hint')).toHaveText(/^changed · files .*inbox · code/)
   await expect(group(menu, 'session-kebab-session').locator('.task-kebab-group-hint')).toHaveText('copy · debug · restart · info')
   // The strip's panel count stays on the first level as the Columns row (the Display menu
@@ -174,8 +176,14 @@ test('the first level holds the frequent rows and the groups; nothing else', asy
   // track with Tab (a click on an option closes the menu), and only a keyboard focus draws
   // the ring, so the walk starts with Shift+Tab, Tab, not a script focus.
   const target = pressedAt === 3 ? 2 : 3
-  await page.keyboard.press('Shift+Tab')
-  await page.keyboard.press('Tab')
+  if (browserName === 'webkit') {
+    // Safari's Tab skips buttons unless Full Keyboard Access is enabled; Option+Tab reaches them.
+    await page.keyboard.press('Alt+Shift+Tab')
+    await page.keyboard.press('Alt+Tab')
+  } else {
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.press('Tab')
+  }
   await expect(opts.nth(0)).toBeFocused()
   for (let i = 0; i < pressedAt; i++) await page.keyboard.press('ArrowRight')
   await expect(opts.nth(pressedAt)).toBeFocused()
@@ -225,7 +233,7 @@ test('each group opens its rows in place, and the menu reopens with every group 
   const win = await openGroup(menu, 'session-kebab-window')
   await expect(win.locator('.task-kebab-item')).toContainText(['Open in new tab', 'Full screen'])
   const pin = await openGroup(menu, 'kebab-group-pin')
-  await expect(pin.locator('.task-kebab-item')).toContainText(['Focus', 'Satellite', 'Parked'])
+  await expect(pin.locator('[data-testid^="kebab-pin-"]')).toContainText(['Focus', 'Satellite', 'Parked'])
   const copy = await openGroup(menu, 'session-kebab-copy-open')
   await expect(copy.locator('.task-kebab-item')).toContainText(['Open in VS Code', 'Copy folder path', 'Copy session ID', 'Copy resume command'])
   await expect(copy.getByTestId('session-kebab-meta')).toHaveCount(0)
@@ -243,7 +251,7 @@ test('each group opens its rows in place, and the menu reopens with every group 
   // Where the task comes from is back: a local task says Local, a synced one names its service.
   await expect(move.locator('[data-testid="kebab-source-row"], [data-testid="kebab-source-link"]')).toHaveCount(1)
   // A group's rows carry no section dividers of their own.
-  for (const body of [views, win, pin, copy, details, debug, dates, move]) {
+  for (const body of [views, win, copy, details, debug, dates, move]) {
     await expect(body.locator('.task-kebab-divider:visible')).toHaveCount(0)
   }
   // Every group open still fits the window: the menu scrolls instead of running off

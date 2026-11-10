@@ -48,6 +48,8 @@ async function createTask(title: string): Promise<{ id: string; title: string }>
   if (!res.ok) throw new Error(`task create failed: ${res.status} ${await res.text()}`)
   const body = (await res.json()) as { task: { id: string; title: string } }
   litter.push(body.task.id)
+  // A worker-created task inherits its caller's board tier; this fixture starts unpinned.
+  await fetch(`${API}/api/focus/tasks/${body.task.id}`, { method: 'DELETE' })
   return body.task
 }
 
@@ -97,7 +99,7 @@ async function openRowKebab(page: Page, task: { id: string; title: string }): Pr
 
 test('no unread row, no unpin row, no priority, dates collapsed until clicked', async ({ page }) => {
   const task = await createTask('Lean kebab')
-  await page.goto('/')
+  await page.evaluate((url) => { location.assign(url) }, API)
   await page.waitForLoadState('networkidle')
   const menu = await openRowKebab(page, task)
 
@@ -147,11 +149,12 @@ test('no unread row, no unpin row, no priority, dates collapsed until clicked', 
 test('the lit tier row is the pin: clicking it again unpins', async ({ page }) => {
   const task = await createTask('Pill unpin')
   await pinToFocus(task.id)
-  await page.goto('/')
+  await page.evaluate((url) => { location.assign(url) }, API)
   await page.waitForLoadState('networkidle')
   const menu = await openRowKebab(page, task)
 
-  await expect(menu.getByTestId('kebab-group-pin').locator('.task-kebab-group-hint')).toHaveText('pinned · Focus')
+  await expect(menu.getByTestId('kebab-group-pin').locator('.task-kebab-group-toggle')).toHaveCount(0)
+  await expect(menu.getByTestId('kebab-unpin')).toBeVisible()
   const lit = (await openKebabGroup(menu, 'kebab-group-pin')).locator('[data-testid^="kebab-pin-"][aria-pressed="true"]')
   await expect(lit).toHaveCount(1)
   await expect(lit).toHaveAttribute('title', /^Unpin from Focus/)
@@ -162,7 +165,7 @@ test('the lit tier row is the pin: clicking it again unpins', async ({ page }) =
 
   // Reopened: nothing lit, label back to "Pin to", still no separate Unpin row.
   const again = await openRowKebab(page, task)
-  await expect(again.getByTestId('kebab-group-pin').locator('.task-kebab-group-hint')).toHaveText('focus · satellite · parked')
+  await expect(again.getByTestId('kebab-group-pin').locator('.task-kebab-tier-label')).toHaveText('Pin to')
   await expect((await openKebabGroup(again, 'kebab-group-pin')).locator('[aria-pressed="true"]')).toHaveCount(0)
   await expect(again.getByText('Unpin', { exact: true })).toHaveCount(0)
 })
@@ -170,7 +173,7 @@ test('the lit tier row is the pin: clicking it again unpins', async ({ page }) =
 test('priority comes back when ui.show_priority is on', async ({ page }) => {
   const task = await createTask('Priority setting')
   await setShowPriority(true)
-  await page.goto('/')
+  await page.evaluate((url) => { location.assign(url) }, API)
   await page.waitForLoadState('networkidle')
   const menu = await openRowKebab(page, task)
   await expect(menu.locator('.task-kebab-priority')).toHaveCount(1)

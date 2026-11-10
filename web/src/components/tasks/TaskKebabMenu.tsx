@@ -11,6 +11,8 @@ import type { Task, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
+import { useTaskUndo } from '@/undo/TaskUndoContext';
+import { markTierUsed } from './filter-bar-persist';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common/DatePicker';
@@ -41,7 +43,7 @@ interface TaskKebabMenuProps {
   onExpandDetail?: (task: Task) => void;
   onClearFocus?: () => void;
   onSetPriority?: (id: string, priority: string) => void;
-  onPinTask?: (id: string) => void;
+  onPinTask?: (id: string) => void | Promise<boolean | void>;
   onUnpinTask?: (id: string) => void;
   onSetTier?: (id: string, tier: FocusTier) => void;
   /** Accepted for call-site compatibility; the menu no longer has an
@@ -203,8 +205,8 @@ function WalnutPickRow({ pick, afterAction }: {
  * current value to highlight, so every option renders un-selected and the
  * callback fans out across the caller's selection.
  *
- * Pinning has no separate "Unpin" row: the highlighted tier pill IS the pin, and
- * clicking it again unpins. Priority renders only when Settings says so
+ * The highlighted tier pill unpins on a second click. First-level task menus also
+ * offer Unpin beside the tier choices. Priority renders only when Settings says so
  * (`ui.show_priority`, off by default). Dates are collapsed rows (KebabDateRow).
  * The draft menu opts into a few differences through optional props (see the
  * prop docs); the board kebab passes none of them and keeps this behavior.
@@ -212,12 +214,12 @@ function WalnutPickRow({ pick, afterAction }: {
 export function TaskActionMenuItems({
   task, isPinned, pinnedTier, isDone, batchMode,
   onSetPriority, onPinTask, onPinWithTier, onUnpinTask, onSetTier, onSetDate, onSetStartDate, afterAction,
-  formatDate, showPriorityLabels, litClickAccepts, tierHeading, walnutPick, startLabel, part, pinRows,
+  formatDate, showPriorityLabels, litClickAccepts, tierHeading, walnutPick, startLabel, part, firstLevelPin,
 }: {
   /** Single task (kebab) — null in batch mode. Only the fields the rows READ are
    *  required, so a draft column can hand in its launch meta (the task that
    *  Start will create) shaped like a task — see DraftTaskMenu. */
-  task: Pick<Task, 'priority' | 'start_date' | 'due_date'> | null;
+  task: (Pick<Task, 'priority' | 'start_date' | 'due_date'> & Partial<Pick<Task, 'id'>>) | null;
   isPinned: boolean;
   /** null = explicitly not pinned (nothing lit, like undefined). */
   pinnedTier?: FocusTier | null;
@@ -225,11 +227,9 @@ export function TaskActionMenuItems({
   /** Batch mode: tier button calls onSetTier(tier) directly (caller fans out pin+tier per task). */
   batchMode?: boolean;
   onSetPriority?: (priority: string) => void;
-  onPinTask?: () => void;
-  /** Pin straight INTO a tier, in one step. When given, it replaces the
-   *  pin-then-setTier-100ms-later dance below for an unpinned task — for owners
-   *  whose pin is one atomic write (a draft's launch meta), where the delayed
-   *  half could land after the draft was already launched. */
+  onPinTask?: () => void | Promise<boolean | void>;
+  /** Pin directly into a tier for a draft's launch metadata. Real task menus
+   *  use the focus store's atomic write through the undoable action. */
   onPinWithTier?: (tier: FocusTier) => void;
   onUnpinTask?: () => void;
   onSetTier?: (tier: FocusTier) => void;
@@ -258,12 +258,14 @@ export function TaskActionMenuItems({
   /** One half only: the session ⋮ menu draws Pin (and Priority) on its first level
    *  and the dates inside its Dates group. Absent, both halves (the board kebab). */
   part?: 'pin' | 'dates' | 'priority';
-  /** The pin tiers as one row each (the session and board menus' Pin to group), not chips. */
-  pinRows?: boolean;
+  /** Compact first-level pin choices, including an explicit Unpin for a pinned task. */
+  firstLevelPin?: boolean;
 }) {
   // Custom tiers append after the built-ins. Safe hook: kebabs also render on
   // isolated surfaces (tests, popouts) that may sit outside the FocusBarProvider.
-  const customTiers = useFocusBarContextSafe()?.customTiers ?? [];
+  const focusBar = useFocusBarContextSafe();
+  const customTiers = focusBar?.customTiers ?? [];
+  const undo = useTaskUndo();
   const showPriority = useShowPriority();
   const tierOptions = [
     ...TIER_OPTIONS,
@@ -273,43 +275,18 @@ export function TaskActionMenuItems({
     <>
       {/* Pin / Tier */}
       {part !== 'dates' && part !== 'priority' && (batchMode ? !!onSetTier : !isDone && (onPinTask || onPinWithTier || isPinned)) && (
-        pinRows ? (
-          tierOptions.map((t) => {
-            const isCurrent = isPinned && pinnedTier === t.value;
-            return (
-              <button
-                key={t.value}
-                type="button"
-                className={`task-kebab-item${isCurrent ? ' task-kebab-item-active' : ''}`}
-                data-testid={`kebab-pin-${t.value}`}
-                aria-pressed={isCurrent || undefined}
-                title={isCurrent ? `Unpin from ${t.label}` : `Pin to ${t.label}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (isCurrent) onUnpinTask?.();
-                  else if (isPinned) onSetTier?.(t.value);
-                  else if (onPinWithTier) onPinWithTier(t.value);
-                  // Same race guard as the chips below.
-                  else { onPinTask?.(); setTimeout(() => onSetTier?.(t.value), 100); }
-                  afterAction();
-                }}
-              >
-                <span className="task-kebab-icon" style={{ color: TIER_COLORS[t.value] ?? 'var(--tier-custom)' }}>{t.icon}</span>
-                <span>{t.label}</span>
-                {isCurrent && <span className="task-kebab-check" aria-hidden="true">✓</span>}
-              </button>
-            );
-          })
-        ) : <>
+        <>
           <div className="task-kebab-divider" />
-          <div className="task-kebab-tier">
-            <span className="task-kebab-tier-label">{tierHeading ?? (!batchMode && isPinned ? 'Pinned' : 'Pin to')}</span>
+          <div className={`task-kebab-tier${firstLevelPin ? ' task-kebab-pin-choices' : ''}`} data-testid={firstLevelPin ? 'kebab-group-pin' : undefined}>
+            <span className="task-kebab-tier-label">{firstLevelPin ? 'Pin to' : tierHeading ?? (!batchMode && isPinned ? 'Pinned' : 'Pin to')}</span>
             <div className="task-kebab-tier-options">
               {tierOptions.map((t) => {
                 const isCurrent = !batchMode && isPinned && pinnedTier === t.value;
                 return (
                 <button
                   key={t.value}
+                  type="button"
+                  data-testid={firstLevelPin ? `kebab-pin-${t.value}` : undefined}
                   className={`task-kebab-tier-btn${isCurrent ? ' active' : ''}`}
                   style={{ color: TIER_COLORS[t.value] ?? 'var(--tier-custom)' }}
                   title={isCurrent ? `Unpin from ${t.label}` : t.label}
@@ -319,6 +296,12 @@ export function TaskActionMenuItems({
                     if (batchMode) {
                       // Caller fans out pin+tier across the whole selection.
                       onSetTier?.(t.value);
+                    } else if (firstLevelPin && task?.id && focusBar) {
+                      const id = task.id;
+                      markTierUsed();
+                      window.dispatchEvent(new Event('walnut:tier-used'));
+                      if (isCurrent) onUnpinTask?.();
+                      else void (undo ? undo.pinToTier(id, t.value) : focusBar.setTierBulk([id], t.value));
                     } else if (isPinned) {
                       // The lit pill is the pin itself: click it again to unpin.
                       if (isCurrent) onUnpinTask?.();
@@ -326,23 +309,23 @@ export function TaskActionMenuItems({
                     } else if (onPinWithTier) {
                       onPinWithTier(t.value);
                     } else {
-                      // Pin first, then set the tier. The 100ms gap is a race guard: the
-                      // pin must register (server write + local focus-store update) before
-                      // setTier targets it — fired synchronously, setTier hits a task the
-                      // focus store doesn't yet know is pinned and the tier is dropped.
-                      // (Not a hard guarantee; the proper fix is a pin-with-tier API. This
-                      // same pattern is mirrored in TodoPanel.batchPinToTier.)
-                      onPinTask?.();
-                      setTimeout(() => onSetTier?.(t.value), 100);
+                      // A slow pin must finish before its tier write, not after a guessed delay.
+                      void Promise.resolve(onPinTask?.()).then((accepted) => {
+                        if (accepted !== false) onSetTier?.(t.value);
+                      }).catch(() => {});
                     }
                     afterAction();
                   }}
                 >
                   <span className="task-kebab-tier-btn-icon">{t.icon}</span>
-                  {t.label}
+                  <span>{t.label}</span>
+                  {firstLevelPin && isCurrent && <span aria-hidden="true">✓</span>}
                 </button>
                 );
               })}
+              {firstLevelPin && isPinned && onUnpinTask && (
+                <button type="button" className="task-kebab-tier-btn" data-testid="kebab-unpin" onClick={(e) => { e.stopPropagation(); onUnpinTask(); afterAction(); }}>Unpin</button>
+              )}
             </div>
           </div>
           <WalnutPickRow pick={walnutPick?.pinTier} afterAction={afterAction} />
@@ -350,7 +333,7 @@ export function TaskActionMenuItems({
       )}
 
       {/* Priority (hidden unless Settings → Tasks → Show task priority) */}
-      {part !== 'dates' && !pinRows && onSetPriority && showPriority && (
+      {part !== 'dates' && !firstLevelPin && onSetPriority && showPriority && (
         <>
           <div className="task-kebab-divider" />
           <div className="task-kebab-priority">

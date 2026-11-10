@@ -32,8 +32,6 @@ import { QuoteInSessionItem } from './QuoteInSessionItem';
 import { TeamMenuItems } from './TeamMenuItems';
 import { TaskSyncMenuRows } from './TaskSyncMenuRows';
 import { PluginFieldsSection, usePluginTaskFields } from './PluginFieldPicker';
-import { TIER_OPTIONS } from './TaskKebabMenu';
-import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
 import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
@@ -63,7 +61,7 @@ export interface TaskMenuRowsProps {
   onSetPhase?: (id: string, phase: string) => void;
   onSetWaitUntil?: (id: string, waitUntil: string) => void;
   onSetPriority?: (priority: string) => void;
-  onPinTask?: () => void;
+  onPinTask?: () => void | Promise<boolean | void>;
   onUnpinTask?: () => void;
   onSetTier?: (tier: FocusTier) => void;
   onMoveToProject?: (project: string) => void;
@@ -75,7 +73,7 @@ export interface TaskMenuRowsProps {
   onStartSession?: () => void;
   list?: TaskMenuListActions;
   onDelete?: () => void;
-  /** The phone's short menu: snooze, watch, details and status only. */
+  /** The phone's short menu: snooze, watch, details, status and pin choices. */
   phoneMenu?: boolean;
 }
 
@@ -102,7 +100,6 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
   const isDone = p.isDone ?? (task.status === 'done' || task.phase === 'COMPLETE');
   const ownSession = resolveTaskSessionId(task);
   const fields = usePluginTaskFields();
-  const customTiers = useFocusBarContextSafe()?.customTiers ?? [];
   const act = (fn: () => void) => () => { fn(); close(); };
 
   return (
@@ -130,28 +127,22 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
 
       <TaskStatusMenuSection task={task} onSetPhase={p.onSetPhase} onSetWaitUntil={p.onSetWaitUntil} afterAction={close} />
 
-      {!p.phoneMenu && (<>
-        {/* Each kind of setting its own row (the user: "pin is pin, not mix with date, date is
-            date, and the sprint is other"): Pin to, Dates, then a plugin's own fields. */}
-        <div className="task-kebab-divider" />
-        {!isDone && (p.onPinTask || p.isPinned) && (
-          <KebabGroup label="Pin to" hint={pinHint(p.isPinned, p.pinnedTier, customTiers)} icon={ICONS.ICON_PIN} testId="kebab-group-pin">
-            <TaskActionMenuItems
-              task={task}
-              part="pin"
-              pinRows
-              isPinned={p.isPinned}
-              pinnedTier={p.pinnedTier}
-              isDone={isDone}
-              onSetPriority={p.onSetPriority}
-              onPinTask={p.onPinTask}
-              onUnpinTask={p.onUnpinTask}
-              onSetTier={p.onSetTier}
-              afterAction={close}
-            />
-          </KebabGroup>
-        )}
+      <TaskActionMenuItems
+        task={task}
+        part="pin"
+        firstLevelPin
+        isPinned={p.isPinned}
+        pinnedTier={p.pinnedTier}
+        isDone={isDone}
+        onPinTask={p.onPinTask}
+        onUnpinTask={p.onUnpinTask}
+        onSetTier={p.onSetTier}
+        afterAction={close}
+      />
 
+      {!p.phoneMenu && (<>
+        {/* Dates and plugin fields keep their own groups. Pin choices are directly above. */}
+        <div className="task-kebab-divider" />
         {(p.onSetStartDate || p.onSetDate) && (
           <KebabGroup label="Dates" hint={datesHint(task)} icon={ICONS.ICON_CALENDAR} testId="kebab-group-dates">
             <TaskActionMenuItems
@@ -207,13 +198,6 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
       </>)}
     </>
   );
-}
-
-/** The closed Pin to row: where it is pinned, else what the row holds. */
-function pinHint(isPinned: boolean, tier: FocusTier | null | undefined, custom: ReadonlyArray<{ id: string; label: string }>): string {
-  if (!isPinned) return 'focus · satellite · parked';
-  const label = TIER_OPTIONS.find((t) => t.value === tier)?.label ?? custom.find((t) => t.id === tier)?.label;
-  return `pinned · ${label ?? 'Focus'}`;
 }
 
 /** The list's own moves (only a list has an order and folders): left out of a parent, up, down, out of a folder. */

@@ -94,8 +94,10 @@ describe('task menus share one row definition', () => {
       expect(at, `${label} group`).toBeGreaterThan(0);
       return rows.slice(at, rows.indexOf('</KebabGroup>', at));
     };
-    expect(groupOf('Pin to')).toMatch(/part="pin"[\s\S]*pinRows/);
-    expect(groupOf('Pin to')).not.toContain('part="dates"');
+    expect(rows).not.toMatch(/<KebabGroup[^>]*label="Pin to"/);
+    expect(rows).toMatch(/part="pin"\s+firstLevelPin/);
+    // The shared pin block is outside the phone's reduced-menu gate too.
+    expect(rows.indexOf('firstLevelPin')).toBeLessThan(rows.indexOf('{!p.phoneMenu && (<>'));
     expect(groupOf('Dates')).toContain('part="dates"');
     expect(groupOf('More fields')).toContain('<PluginFieldsSection');
     // No plugin field row on the first level.

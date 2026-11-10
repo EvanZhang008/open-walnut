@@ -14,7 +14,10 @@ import { parseHTML } from 'linkedom';
 import { createElement, act } from '../../web/node_modules/react/index.js';
 import { createRoot } from '../../web/node_modules/react-dom/client.js';
 
-vi.mock('@/contexts/FocusBarContext', () => ({ useFocusBarContextSafe: () => null }));
+const pinContext = vi.hoisted(() => ({ bar: null as null | { customTiers: []; setTierBulk: ReturnType<typeof vi.fn> }, undo: null as null | { pinToTier: ReturnType<typeof vi.fn> } }));
+vi.mock('@/contexts/FocusBarContext', () => ({ useFocusBarContextSafe: () => pinContext.bar }));
+vi.mock('@/undo/TaskUndoContext', () => ({ useTaskUndo: () => pinContext.undo }));
+beforeEach(() => { pinContext.bar = null; pinContext.undo = null; });
 vi.mock('@/hooks/useProjectRegistry', () => ({ useProjectRegistry: () => ({ projects: [] }) }));
 vi.mock('@/hooks/useShowPriority', () => ({ useShowPriority: () => true, useShowPriorityState: () => true }));
 vi.mock('@/hooks/useIntegrations', () => ({ getIntegrationMeta: () => undefined, useIntegrations: () => [] }));
@@ -37,6 +40,7 @@ beforeAll(() => {
   const g = globalThis as unknown as Record<string, unknown>;
   g.window = dom.window;
   g.document = dom.document;
+  g.Event = dom.window.Event;
   g.IS_REACT_ACT_ENVIRONMENT = true;
   g.requestAnimationFrame ??= (cb: (t: number) => void) => setTimeout(() => cb(0), 0);
   g.cancelAnimationFrame ??= (id: number) => clearTimeout(id);
@@ -98,6 +102,71 @@ describe('TaskActionMenuItems without the draft props (board kebab)', () => {
     const host = await mount({ task: TASK, isPinned: true, pinnedTier: 'focus', isDone: false, ...spies() });
     const labels = [...host.querySelectorAll('.task-kebab-date-label')].map((e) => e.textContent);
     expect(labels).toEqual(['Start / Snooze until', `Due: ${formatDateDisplay('2026-09-26')}`]);
+  });
+});
+
+describe('first-level pin choices', () => {
+  it('a real task pins through the single undoable atomic action, not its legacy callbacks', async () => {
+    const s = spies();
+    pinContext.bar = { customTiers: [], setTierBulk: vi.fn() };
+    pinContext.undo = { pinToTier: vi.fn() };
+    const host = await mount({ task: { ...TASK, id: 'menu-task' }, isPinned: false, isDone: false, ...s, part: 'pin', firstLevelPin: true });
+    await click(host.querySelector('[data-testid="kebab-pin-focus"]'));
+    expect(pinContext.undo.pinToTier).toHaveBeenCalledWith('menu-task', 'focus');
+    expect(pinContext.bar.setTierBulk).not.toHaveBeenCalled();
+    expect(s.onPinWithTier).not.toHaveBeenCalled();
+    expect(s.onSetTier).not.toHaveBeenCalled();
+    expect(s.afterAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('an isolated real-task menu uses the same atomic store write without an undo provider', async () => {
+    pinContext.bar = { customTiers: [], setTierBulk: vi.fn() };
+    const host = await mount({ task: { ...TASK, id: 'isolated-task' }, isPinned: false, isDone: false, ...spies(), part: 'pin', firstLevelPin: true });
+    await click(host.querySelector('[data-testid="kebab-pin-wait"]'));
+    expect(pinContext.bar.setTierBulk).toHaveBeenCalledWith(['isolated-task'], 'wait');
+  });
+
+  it('shows every built-in choice immediately, marks the current tier and offers Unpin', async () => {
+    const s = spies();
+    const host = await mount({ task: TASK, isPinned: true, pinnedTier: 'satellite', isDone: false, ...s, part: 'pin', firstLevelPin: true });
+    expect(host.querySelector('.task-kebab-group-toggle')).toBeNull();
+    expect([...host.querySelectorAll('[data-testid^="kebab-pin-"]')].map((b) => b.textContent?.trim())).toEqual(['Focus', 'Satellite✓', 'Parked']);
+    expect(host.querySelector('[aria-pressed="true"]')?.getAttribute('data-testid')).toBe('kebab-pin-satellite');
+    expect(priorityBtns(host)).toHaveLength(0);
+    await click(host.querySelector('[data-testid="kebab-pin-focus"]'));
+    expect(s.onSetTier).toHaveBeenCalledWith('focus');
+    await click(host.querySelector('[data-testid="kebab-unpin"]'));
+    expect(s.onUnpinTask).toHaveBeenCalledTimes(1);
+    expect(s.afterAction).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for a slow pin before setting the tier and closes immediately', async () => {
+    const s = spies();
+    let finish!: (accepted: boolean) => void;
+    const onPinTask = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    const host = await mount({ task: TASK, isPinned: false, isDone: false, ...s, onPinWithTier: undefined, onPinTask, part: 'pin', firstLevelPin: true });
+    await click(host.querySelector('[data-testid="kebab-pin-focus"]'));
+    expect(onPinTask).toHaveBeenCalledTimes(1);
+    expect(s.afterAction).toHaveBeenCalledTimes(1);
+    expect(s.onSetTier).not.toHaveBeenCalled();
+    await act(async () => { finish(true); });
+    expect(s.onSetTier).toHaveBeenCalledWith('focus');
+  });
+
+  it('does not retier a refused pin', async () => {
+    const s = spies();
+    const host = await mount({ task: TASK, isPinned: false, isDone: false, ...s, onPinWithTier: undefined, onPinTask: () => Promise.resolve(false), part: 'pin', firstLevelPin: true });
+    await click(host.querySelector('[data-testid="kebab-pin-focus"]'));
+    expect(s.onSetTier).not.toHaveBeenCalled();
+  });
+
+  it('an unpinned task has no Unpin and a choice pins directly into its tier', async () => {
+    const s = spies();
+    const host = await mount({ task: TASK, isPinned: false, isDone: false, ...s, part: 'pin', firstLevelPin: true });
+    expect(host.querySelector('[data-testid="kebab-unpin"]')).toBeNull();
+    expect(host.querySelector('[aria-pressed="true"]')).toBeNull();
+    await click(host.querySelector('[data-testid="kebab-pin-satellite"]'));
+    expect(s.onPinWithTier).toHaveBeenCalledWith('satellite');
   });
 });
 

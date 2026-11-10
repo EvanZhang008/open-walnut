@@ -71,6 +71,8 @@ export interface TaskUndo {
   toggleComplete: (id: string) => void;
   setStartDate: (id: string, date: string | null) => void;
   pin: (id: string) => Promise<void>;
+  /** Pin and select a tier in one request, with one Undo. */
+  pinToTier: (id: string, tier: FocusTier) => Promise<void>;
   unpin: (id: string) => Promise<void>;
   setTier: (id: string, tier: FocusTier, newPinnedOrder?: string[]) => Promise<void>;
   deleteTask: (id: string, opts?: { force?: boolean }) => void;
@@ -284,6 +286,37 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     // The tier pick follows the pin's answer: its moment starts now, however slow that was.
     const fresh = freshPins.current.get(id);
     if (fresh) fresh.until = Date.now() + PIN_THEN_TIER_MS;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [push]);
+
+  const pinToTier = useCallback(async (id: string, tier: FocusTier) => {
+    const snap = pinSnapshot(id);
+    const t = row(id);
+    if (t && !snap.pinned && isDone(t)) return;
+    freshPins.current.delete(id);
+    let pending = true;
+    let undone = false;
+    const withdraw = push({
+      key: `pin:${id}`, title: `${snap.pinned ? 'Moved to' : 'Pinned to'} ${tierName(tier)}`,
+      ...(t ? { body: t.title } : {}), undo: () => {
+        if (pending) {
+          undone = true;
+          latest.current.store.patchTasksLocal({ [id]: { pinned: snap.pinned, focus_tier: snap.pinned ? snap.tier : undefined } });
+        } else restorePin(id, snap);
+      },
+      revive: { kind: 'pin', data: { id, snap } },
+    });
+    try {
+      await latest.current.focusBar.setTierBulk([id], tier, (message) => {
+        withdraw();
+        latest.current.notify({ title: 'Action failed', body: message, kind: 'operation-error', severity: 'error', persistent: false, dedupKey: `pin-failed:${id}` });
+      });
+    } catch { withdraw(); }
+    finally {
+      pending = false;
+      // Undo cannot reach the server ahead of the write it undoes.
+      if (undone) restorePin(id, snap);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [push]);
 
@@ -548,8 +581,8 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
   }, [stack, reviveWaiting]);
 
   const value = useMemo<TaskUndo>(
-    () => ({ push, drop, setPhase, restorePhase, registerReviver, noteCompleted, toggleComplete, setStartDate, pin, unpin, setTier, deleteTask, isDeleteHeld, onDelete }),
-    [push, drop, setPhase, restorePhase, registerReviver, noteCompleted, toggleComplete, setStartDate, pin, unpin, setTier, deleteTask, isDeleteHeld, onDelete],
+    () => ({ push, drop, setPhase, restorePhase, registerReviver, noteCompleted, toggleComplete, setStartDate, pin, pinToTier, unpin, setTier, deleteTask, isDeleteHeld, onDelete }),
+    [push, drop, setPhase, restorePhase, registerReviver, noteCompleted, toggleComplete, setStartDate, pin, pinToTier, unpin, setTier, deleteTask, isDeleteHeld, onDelete],
   );
   return <TaskUndoContext.Provider value={value}>{children}</TaskUndoContext.Provider>;
 }

@@ -32,6 +32,8 @@ async function expand(group: Locator): Promise<Locator> {
 /** Open one group of an open task or session menu (idempotent); returns the group's rows. */
 export async function openKebabGroup(menu: Locator, id: KebabGroupId): Promise<Locator> {
   if (IN_SESSION.has(id)) await expand(menu.getByTestId('session-kebab-session'))
+  // Pin choices are already on the first level, with no group toggle to press.
+  if (id === 'kebab-group-pin') return menu.getByTestId(id)
   return expand(menu.getByTestId(id))
 }
 

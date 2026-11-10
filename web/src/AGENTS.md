@@ -939,8 +939,9 @@ show inline after the open ones, other completed hits that show the query fold i
   selection hands the gesture to the native menu: the folder menu never opened on a right-click on its name
   (Chromium does not pre-select, so only the WebKit run of `folder-collapse-menu.spec.ts` caught it).
 - **The kebab is lean by default** (2026-09-10 user feedback: "too noisy"). No session-status row (clicking the task row opens its session), no unread row
-  (opening the task marks it read), no Unpin row (the lit tier pill IS the pin; clicking it
-  again unpins), Start/Due are collapsed `KebabDateRow`s whose calendar opens on click, the team actions sit behind one collapsed Team row (`TeamMenuItems`: Adopt / Release a worker / Leave leader), and
+  (opening the task marks it read). Pin choices are compact buttons on the first level, never
+  a submenu (2026-11-10): Focus, Satellite, Parked and custom tiers, the current one marked,
+  plus Unpin beside them when pinned. Clicking the lit tier also unpins. Start/Due are collapsed `KebabDateRow`s whose calendar opens on click, the team actions sit behind one collapsed Team row (`TeamMenuItems`: Adopt / Release a worker / Leave leader), and
   priority renders only when `ui.show_priority` is on (`useShowPriority`, Settings → Tasks;
   off by default and hidden on every surface, not just menus). Ratchets:
   `tests/web/task-kebab-lean.test.ts`, `tests/e2e/browser/kebab-menu-lean.spec.ts`.

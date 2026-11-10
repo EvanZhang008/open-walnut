@@ -28,8 +28,18 @@
 .task-kebab-group-sep { height: 1px; background: var(--border); margin: 4px 8px; }
 /* A disabled row's reason, after its label (Board "Not written yet"). */
 .task-kebab-row-why { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
-/* The current pin tier in the Pin to group. */
-.task-kebab-check { margin-left: auto; color: var(--accent); font-size: 12px; font-weight: 600; }
+/* First-level pin choices wrap within the menu, even with long custom tier names. */
+.task-kebab-pin-choices { align-items: flex-start; width: 340px; max-width: 100%; box-sizing: border-box; }
+.task-kebab-pin-choices .task-kebab-tier-label { padding-top: 6px; }
+.task-kebab-pin-choices .task-kebab-tier-options { flex: 1; min-width: 0; flex-wrap: wrap; max-height: 112px; overflow-y: auto; padding: 2px; }
+.task-kebab-pin-choices .task-kebab-tier-btn { min-height: 28px; max-width: 100%; }
+.task-kebab-pin-choices .task-kebab-tier-btn > span:not(.task-kebab-tier-btn-icon) { overflow-wrap: anywhere; }
+.task-kebab-pin-choices .task-kebab-tier-btn-icon { flex-shrink: 0; }
+.task-kebab-pin-choices .task-kebab-tier-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 700px) {
+  /* Finger-size choices need room for the built-ins, a custom tier and Unpin. */
+  .task-kebab-pin-choices .task-kebab-tier-options { max-height: 180px; }
+}
 
 /* Columns (the session panel count): a segmented track (2026-11-02, the user: "the panel
    switch should at least be in top level, in a really nice way"), each option labelled with

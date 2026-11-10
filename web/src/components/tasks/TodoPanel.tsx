@@ -12,6 +12,8 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { useConfirm, usePrompt } from '@/hooks/useConfirm';
 import { useNotifications } from '@/contexts/notifications';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
+import { useTaskUndo } from '@/undo/TaskUndoContext';
 import { useWatchReorder } from './WatchToggle';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
@@ -2226,6 +2228,18 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
 // ── TodoPanel ──
 
 export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionIds, openSessionTaskIds, openInWindowTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
+  const pinUndo = useTaskUndo();
+  const pinBar = useFocusBarContextSafe();
+  const pinIntoTier = useCallback((id: string, tier: FocusTier, order?: string[]) => {
+    if (!pinBar) return;
+    markTierUsed();
+    window.dispatchEvent(new Event('walnut:tier-used'));
+    void (async () => {
+      if (pinUndo) await pinUndo.pinToTier(id, tier);
+      else await pinBar.setTierBulk([id], tier);
+      if (order) await pinBar.reorder(order);
+    })();
+  }, [pinUndo, pinBar]);
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -2259,6 +2273,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // 5.10: tier headings stay off a one-tier board until the user picks a tier once.
   const [tierUsed, setTierUsed] = useState(readTierUsed);
   const noteTierUsed = useCallback(() => { markTierUsed(); setTierUsed(true); }, []);
+  useEffect(() => {
+    window.addEventListener('walnut:tier-used', noteTierUsed);
+    return () => window.removeEventListener('walnut:tier-used', noteTierUsed);
+  }, [noteTierUsed]);
   const onSetTier = useMemo(() => onSetTierProp && ((...args: Parameters<NonNullable<typeof onSetTierProp>>) => {
     noteTierUsed();
     return onSetTierProp(...args);
@@ -4189,8 +4207,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const fromTier = snapTierOf(id);
       if (fromTier) sepReanchor(fromTier, taskIdsOnly(snap.tiers.get(fromTier) ?? []), [id]);
       if (snap.recent?.includes(id)) {
-        onPinTask?.(id);
-        setTimeout(() => onSetTier?.(id, tier), 100);
+        pinIntoTier(id, tier);
       } else if (fromTier && fromTier !== tier) {
         onSetTier?.(id, tier);
       }
@@ -4580,8 +4597,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (isFromRecent) {
         if (currentTier) {
           const order = persisted(buildOrderFromRefs());
-          onPinTask?.(activeId);
-          setTimeout(() => onSetTier?.(activeId, currentTier, order), 100);
+          pinIntoTier(activeId, currentTier, order);
           maybeMoveProject(currentTier, finalArr(currentTier), /* evidence */ 'none');
         }
       } else {
@@ -4640,11 +4656,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // placed the dragged card (see the pinned-to-pinned note below).
       const targetTier = DROP_ZONE_TIERS[overId] ?? snapTierOf(overId) ?? finalTierOf(activeId);
       if (!targetTier) return;
-      // Pin first, then set tier. setFocusTier requires task.pinned===true in the
-      // store, so we delay to let the pin write complete before changing tier.
+      // Pin and select the target tier together, then persist its dropped order.
       const order = persisted(buildOrderFromRefs());
-      onPinTask?.(activeId);
-      setTimeout(() => onSetTier?.(activeId, targetTier, order), 100);
+      pinIntoTier(activeId, targetTier, order);
       maybeMoveProject(targetTier, finalArr(targetTier), /* evidence */ 'none');
       return;
     }
@@ -4716,7 +4730,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const order = taskIdsOnly(newOrder);
       return onReorderPinned?.(persisted(order, reorderIn(origTier, order)));
     });
-  }, [holdScrollAnchor, pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, folderMeta, onUngroupTask, onUnpinTask, overUnpinZone, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors, setTierSort, showSortToast, customTiers]);
+  }, [holdScrollAnchor, pinnedTaskIds_arr, onReorderPinned, onSetTier, pinIntoTier, clearDragState, folderMeta, onUngroupTask, onUnpinTask, overUnpinZone, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors, setTierSort, showSortToast, customTiers]);
 
   /** Every live project group key: real project names + '' when Inbox exists. */
   const liveGroupKeys = useMemo(() => {
@@ -6678,21 +6692,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [selectionInfo, confirm, onBatchDelete, onDelete, exitSelectMode, reportBatchFailures]);
 
   const batchPinToTier = useCallback((tier: FocusTier) => {
-    // Pin any unpinned task first, then set its tier. The 100ms gap is the same race
-    // guard documented in TaskKebabMenu's tier buttons: the pin must register before
-    // setTier targets it, or the tier is dropped. Already-pinned tasks need no pin and
-    // no delay, so set their tier synchronously.
+    // New pins and their tier share one write; existing pins only change tier.
     selectionInfo.tasks.forEach((t) => {
       const alreadyPinned = pinnedTaskIds?.has(t.id);
       if (alreadyPinned) {
         onSetTier?.(t.id, tier);
       } else {
-        onPinTask?.(t.id);
-        setTimeout(() => onSetTier?.(t.id, tier), 100);
+        pinIntoTier(t.id, tier);
       }
     });
     exitSelectMode();
-  }, [selectionInfo, pinnedTaskIds, onPinTask, onSetTier, exitSelectMode]);
+  }, [selectionInfo, pinnedTaskIds, pinIntoTier, onSetTier, exitSelectMode]);
 
   const batchMoveToProject = useCallback(async (project: string) => {
     if (!onMoveTask) return; // never confirm a destructive move we then can't perform

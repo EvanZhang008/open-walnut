@@ -7,7 +7,7 @@
  *    (TaskActionMenuItems) instead of its own copy of tier / priority / dates,
  *    which is how the two menus had already diverged once (an "Unpin" row and a
  *    "Mark unread" row that the board kebab never had);
- *  . neither kebab has a standalone Unpin row or an unread row;
+ *  . Unpin sits beside the pin choices, never in a separate action row; no unread row;
  *  . priority in the shared block is gated on the `ui.show_priority` hook;
  *  . dates render through the collapsed KebabDateRow, never a bare inline picker.
  */
@@ -32,9 +32,11 @@ describe('task kebab menus stay lean and shared', () => {
     expect(QUICK).not.toContain('<DatePicker');
   });
 
-  it('no standalone Unpin row anywhere: the lit tier pill unpins', () => {
+  it('Unpin is a compact pin choice and the lit tier still unpins', () => {
     expect(KEBAB).not.toMatch(/<span>Unpin<\/span>/);
     expect(QUICK).not.toMatch(/<span>Unpin<\/span>/);
+    expect(KEBAB).toContain('firstLevelPin && isPinned && onUnpinTask');
+    expect(KEBAB).toContain('data-testid="kebab-unpin"');
     // The pill click path routes the active tier to onUnpinTask.
     expect(KEBAB).toMatch(/if \(isCurrent\) onUnpinTask\?\.\(\)/);
   });
