@@ -24,11 +24,18 @@ test.setTimeout(120_000)
 
 interface Seen { path: string; search: string; at: number }
 
+/** The reloaded page's GETs: counted once its document has answered, so a read the page before
+ *  the reload still made is not one of them (2026-11-09: on a loaded runner the reload took 18s,
+ *  and the warm page's own list read 84ms after this started was counted as a third). */
 function watchRequests(page: Page): Seen[] {
   const seen: Seen[] = []
   const t0 = Date.now()
+  let reloaded = false
+  page.on('response', (res) => {
+    if (res.request().isNavigationRequest() && res.frame() === page.mainFrame()) reloaded = true
+  })
   page.on('request', (req) => {
-    if (req.method() !== 'GET') return
+    if (!reloaded || req.method() !== 'GET') return
     const url = new URL(req.url())
     if (url.pathname.startsWith('/api/')) seen.push({ path: url.pathname, search: url.search, at: Date.now() - t0 })
   })
