@@ -82,6 +82,43 @@ export function isWatched(task: Watchable): boolean {
   return !!task.watched_at;
 }
 
+/** A watched row's place in Watching: its `watched_at` (when watched, or where the user dragged it). */
+function watchTime(task: Watchable): number {
+  const t = Date.parse(task.watched_at ?? '');
+  return Number.isFinite(t) ? t : 0;
+}
+
+/**
+ * The writes that put a dragged Watching row at `toIndex` (2026-11-09, the user: "I want this watch
+ * to be able to reorder by drag"). Watching is ordered by `watched_at`, so the order is the tasks'
+ * own field and every surface that lists the watch (Home on every device, the Org page, the phone)
+ * reads it with no list of its own: the moved row takes a time between its new neighbours (one
+ * write); a new watch is stamped now, so it lands at the bottom. When its neighbours leave no room
+ * (the same millisecond), the rows after it that would tie move on by a millisecond each, so only
+ * that run is written. `rows` is the whole of Watching in the order it shows, the rows behind its
+ * "Show more" included, so a drop on the last row shown never jumps past them.
+ */
+export function watchReorder(rows: readonly Watchable[], fromId: string, toIndex: number, now: number): { id: string; watched_at: string }[] {
+  const from = rows.findIndex((r) => r.id === fromId);
+  if (from < 0 || toIndex < 0 || toIndex >= rows.length || from === toIndex) return [];
+  const next = rows.filter((r) => r.id !== fromId);
+  next.splice(toIndex, 0, rows[from]);
+  const t = next.map(watchTime);
+  const k = toIndex;
+  const tb = k > 0 ? t[k - 1] : NaN, ta = k < t.length - 1 ? t[k + 1] : NaN;
+  if (k > 0 && k < t.length - 1) t[k] = ta - tb >= 2 ? Math.floor((tb + ta) / 2) : tb + 1;
+  else if (k === 0) t[k] = ta > 1000 ? ta - 1000 : 1;
+  else t[k] = Math.max(tb + 1, now);
+  // No room: the rows after it that now tie or go backwards move on, a millisecond each.
+  for (let j = k + 1; j < t.length && t[j] <= t[j - 1]; j++) t[j] = t[j - 1] + 1;
+  const out: { id: string; watched_at: string }[] = [];
+  next.forEach((r, i) => {
+    const iso = new Date(t[i]).toISOString();
+    if (i === k || watchTime(r) !== t[i]) out.push({ id: r.id, watched_at: iso });
+  });
+  return out;
+}
+
 /** The state section a task belongs to: its one user status (taskUserState), where the
  *  server already weighed a snooze (the task's own start date or an ancestor's). `snoozed`
  *  is the panel's own read of the start date, used only for a task the server has not
@@ -188,7 +225,8 @@ export function sortSectionTasks(key: StatusSectionKey, tasks: readonly Task[]):
   const activity = (t: Task) => recentActivityTime(t, 'updated').at;
   switch (key) {
     case 'watching':
-      return rows.sort((a, b) => ((a as Watchable).watched_at ?? '').localeCompare((b as Watchable).watched_at ?? '') || a.id.localeCompare(b.id));
+      // By the time, not the text: an ISO time written without milliseconds sorts by its instant too.
+      return rows.sort((a, b) => (watchTime(a) - watchTime(b)) || a.id.localeCompare(b.id));
     case 'waiting':
       return rows.sort((a, b) => {
         const la = a.user_status?.limit, lb = b.user_status?.limit;

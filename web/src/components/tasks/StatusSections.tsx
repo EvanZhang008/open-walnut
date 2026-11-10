@@ -6,9 +6,14 @@
  * section opens and folds is section-fold-rule.ts, read through useFoldStore by the drawer.
  *
  * The rows are plain cards: no drag, since a section's order is the state's own
- * (latest activity, soonest wake, latest completion), not a place the user keeps.
+ * (latest activity, soonest wake, latest completion), not a place the user keeps. Watching is
+ * the one list the user orders: its rows drag (WatchingRows; 2026-11-09, the user: "I want this
+ * watch to be able to reorder by drag"), in a DndContext of their own, outside the tiers'.
  */
-import { memo, useState, type ReactNode } from 'react';
+import { memo, useCallback, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type DraggableAttributes, type DraggableSyntheticListeners } from '@dnd-kit/core';
+import { SortableContext, useSortable, verticalListSortingStrategy, type AnimateLayoutChanges, defaultAnimateLayoutChanges } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { isBuiltinTier } from '@/api/focus';
@@ -40,6 +45,7 @@ import {
   type StatusSectionsModel,
   needsLine,
   notStartedReason,
+  watchReorder,
   waitingReason,
   waitingHover,
 } from './status-sections';
@@ -139,9 +145,20 @@ export interface SectionRowHandlers {
   onFilterProject?: (project: string) => void;
   /** Fetch rows not loaded yet (the completed archive), asked by "Show more". */
   onLoadMore?: () => void;
+  /** Watching's drag: the `watched_at` writes that put a row where it was dropped (watchReorder). */
+  onReorderWatching?: (writes: { id: string; watched_at: string }[]) => void;
 }
 
-const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoLine }: { task: Task; sectionKey: StatusSectionKey; handlers: SectionRowHandlers; twoLine: boolean }) {
+/** A Watching row's drag: the sortable's node, its moving style and its pointer listeners. */
+interface RowDrag {
+  setNodeRef: (node: HTMLElement | null) => void;
+  style: CSSProperties;
+  attributes: DraggableAttributes;
+  listeners: DraggableSyntheticListeners;
+  isDragging: boolean;
+}
+
+const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoLine, drag }: { task: Task; sectionKey: StatusSectionKey; handlers: SectionRowHandlers; twoLine: boolean; drag?: RowDrag }) {
   const circleClass = useTaskCircle(task);
   const [showStatusLines] = useTaskStatusLines();
   // On a phone a title tap opens the row, as on a list row (phone-row-behavior.ts).
@@ -260,8 +277,14 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
   ) : null;
   return (
     <div
+      ref={drag?.setNodeRef}
+      style={drag?.style}
+      // Renaming: a press in the title edits text, it never drags the row.
+      {...(edit.isEditing ? undefined : drag?.listeners)}
+      aria-roledescription={drag ? drag.attributes['aria-roledescription'] : undefined}
       data-task-id={task.id}
-      className={`todo-pinned-card status-section-card${handlers.limitFlash?.has(task.id) ? ' is-limit-flash' : ''}${twoLine ? ' status-card-two-line' : inlineReason ? ' status-card-reason-inline' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}
+      data-dragging={drag?.isDragging ? '1' : undefined}
+      className={`todo-pinned-card status-section-card${drag ? ' status-card-draggable' : ''}${drag?.isDragging ? ' is-dragging' : ''}${handlers.limitFlash?.has(task.id) ? ' is-limit-flash' : ''}${twoLine ? ' status-card-two-line' : inlineReason ? ' status-card-reason-inline' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (edit.isEditing) return;
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
@@ -383,9 +406,13 @@ export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft, i
   const more = Math.max(0, total - head.length);
   // Every loaded row is out: the rest is the archive, fetched only now (not on open).
   const unloaded = head.length >= tasks.length;
+  const twoLine = !inProject && !!handlers.twoLine;
+  const reorder = sectionKey === 'watching' ? handlers.onReorderWatching : undefined;
   return (
     <div className="todo-pinned-list status-section-list" data-testid={`status-section-${sectionKey}-rows`}>
-      {head.map((task) => <SectionCard key={task.id} task={task} sectionKey={sectionKey} handlers={handlers} twoLine={!inProject && !!handlers.twoLine} />)}
+      {reorder
+        ? <WatchingRows rows={head} all={tasks} handlers={handlers} twoLine={twoLine} onReorder={reorder} />
+        : head.map((task) => <SectionCard key={task.id} task={task} sectionKey={sectionKey} handlers={handlers} twoLine={twoLine} />)}
       {more > 0 && (
         <button
           type="button"
@@ -448,6 +475,47 @@ export function LimitedSummary({ model, onShow }: { model: StatusSectionsModel; 
         {next ? <span className="status-limit-summary-when">Next reset {limitTimeWords(next, now)}</span> : null}
       </span>
     </div>
+  );
+}
+
+/** A pointer drag, never a touch: on a phone a finger on a row scrolls the list. */
+class WatchPointerSensor extends PointerSensor {
+  static activators: typeof PointerSensor.activators = PointerSensor.activators.map((activator) => ({
+    ...activator,
+    handler: (event, options) => event.nativeEvent.pointerType !== 'touch' && activator.handler(event, options),
+  }));
+}
+const WATCH_DRAG = { activationConstraint: { distance: 5 } };
+// A row that was just dropped takes its place at once, with no slide back from where it started.
+const noAnimateAfterDrag: AnimateLayoutChanges = (args) => (args.isSorting || args.wasDragging ? false : defaultAnimateLayoutChanges(args));
+
+const SortableWatchCard = memo(function SortableWatchCard({ task, handlers, twoLine }: { task: Task; handlers: SectionRowHandlers; twoLine: boolean }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id, animateLayoutChanges: noAnimateAfterDrag });
+  const drag = useMemo<RowDrag>(() => ({
+    setNodeRef, attributes, listeners, isDragging,
+    style: { transform: CSS.Transform.toString(transform), transition, ...(isDragging ? { zIndex: 2, position: 'relative' as const } : {}) },
+  }), [setNodeRef, attributes, listeners, isDragging, transform, transition]);
+  return <SectionCard task={task} sectionKey="watching" handlers={handlers} twoLine={twoLine} drag={drag} />;
+});
+
+/** Watching's rows, in the order the user drags them to (watchReorder writes it to the tasks).
+ *  `rows` are the ones shown, `all` the whole section (they start alike), so a drop is placed
+ *  among the rows behind "Show more" too. */
+function WatchingRows({ rows, all, handlers, twoLine, onReorder }: { rows: readonly Task[]; all: readonly Task[]; handlers: SectionRowHandlers; twoLine: boolean; onReorder: NonNullable<SectionRowHandlers['onReorderWatching']> }) {
+  const sensors = useSensors(useSensor(WatchPointerSensor, WATCH_DRAG));
+  const ids = useMemo(() => rows.map((t) => t.id), [rows]);
+  const onDragEnd = useCallback((e: DragEndEvent) => {
+    const to = e.over ? ids.indexOf(String(e.over.id)) : -1;
+    if (to < 0 || String(e.active.id) === String(e.over?.id)) return;
+    const writes = watchReorder(all, String(e.active.id), to, Date.now());
+    if (writes.length) onReorder(writes);
+  }, [ids, all, onReorder]);
+  return (
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+        {rows.map((task) => <SortableWatchCard key={task.id} task={task} handlers={handlers} twoLine={twoLine} />)}
+      </SortableContext>
+    </DndContext>
   );
 }
 

@@ -5,6 +5,7 @@
  * "pin": Focus and the pinned board already are pins. One field, `watched_at`, the
  * time the watch began; clearing it ends the watch. Nothing else about the task moves.
  */
+import { useCallback } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { updateTask } from '@/api/tasks';
@@ -29,6 +30,21 @@ export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | 
     });
   };
   return { watched, toggle };
+}
+
+/** Watching's drag (watchReorder): each write goes through the board's store, applied at once, the
+ *  same as a watch; a task the store does not hold is a plain PATCH. */
+export function useWatchReorder(): (writes: readonly { id: string; watched_at: string }[]) => void {
+  const store = useTasksContextSafe();
+  return useCallback((writes) => {
+    log.info('task-watch', 'watching reordered', { taskIds: writes.map((w) => w.id).join(','), writes: writes.length });
+    for (const w of writes) {
+      if (store && store.tasks.some((t) => t.id === w.id)) { store.update(w.id, { watched_at: w.watched_at }); continue; }
+      void updateTask(w.id, { watched_at: w.watched_at }).catch((err) => {
+        log.warn('task-watch', 'watch order write failed', { taskId: w.id, error: String(err) });
+      });
+    }
+  }, [store]);
 }
 
 /** The row menu's Watch / Stop watching item. */

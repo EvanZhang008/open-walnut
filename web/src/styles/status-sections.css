@@ -200,3 +200,10 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 }
 .todo-item-limit-pill .status-card-limit-tag { flex: none; }
 .todo-item-limit-pill-words { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* Watching's rows drag to the user's own order (StatusSections WatchingRows): the row being moved
+   lifts over its neighbours. */
+.status-section-card.status-card-draggable.is-dragging {
+  background: var(--bg);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+  cursor: grabbing;
+}

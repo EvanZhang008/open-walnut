@@ -12,6 +12,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { useConfirm, usePrompt } from '@/hooks/useConfirm';
 import { useNotifications } from '@/contexts/notifications';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useWatchReorder } from './WatchToggle';
 import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
 import { resolveTaskSessionId, phasePickerChoices, taskNeedsAction, taskUserState } from '@/utils/session-status';
@@ -6991,6 +6992,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  case, and a permanent ghost row per project would triple the list's chrome.
    *  Consuming the signal zeroes the nonce instead of unmounting: dropping the row
    *  the moment it opens would eat the click that asked for it. */
+  const reorderWatching = useWatchReorder();
   const sectionRowHandlers = useMemo<SectionRowHandlers>(() => ({
     focusedTaskId,
     limitFlash,
@@ -7021,7 +7023,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onMoveToProject: onMoveTask ? handleMoveToProject : undefined,
     onDelete,
     onFilterProject: jumpToProject,
-  }), [focusedTaskId, limitFlash, limitLive, suppressDetail, openSessionTaskIds, pinnedTaskIds, getTier, effectiveSection, needsSection, customTiers, graceExiting, heldInGrace, askArchive, handleTaskClick, setPhaseOrComplete, onUpdate, handleUpdateTitle, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete, jumpToProject]);
+    // Watching is the user's own order: its rows drag (watchReorder).
+    onReorderWatching: isSearchMode ? undefined : reorderWatching,
+  }), [isSearchMode, reorderWatching, focusedTaskId, limitFlash, limitLive, suppressDetail, openSessionTaskIds, pinnedTaskIds, getTier, effectiveSection, needsSection, customTiers, graceExiting, heldInGrace, askArchive, handleTaskClick, setPhaseOrComplete, onUpdate, handleUpdateTitle, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete, jumpToProject]);
   // The By project design (panel-design.ts): each region's waiting and completed tasks
   // by project, drawn as folds at the end of the project. A tier region holds its own
   // pins; the list holds the rest (the pins too, outside the stacked view).
