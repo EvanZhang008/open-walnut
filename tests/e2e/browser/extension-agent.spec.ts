@@ -690,9 +690,10 @@ test('Settings, Browser extension shows the browser and the allowed site; Remove
   await expect(row).toBeVisible()
   await row.getByRole('button', { name: 'Remove' }).click()
   await expect(row).toHaveCount(0)
-  await expect(page.locator('.settings-row', { hasText: 'Allowed sites' })).toContainText('None yet')
+  // Only this file's site: another spec on the shared fixture server may allow one of its own meanwhile.
+  await expect(page.locator('.settings-row', { hasText: 'Allowed sites' })).not.toContainText('example.test')
   const st = await (await page.request.get(`${base}/api/v1/browser/status`)).json()
-  expect(st.sites).toEqual([])
+  expect(JSON.stringify(st.sites)).not.toContain('example.test')
 })
 
 test('turning agents off in the popup disconnects the browser', async () => {
