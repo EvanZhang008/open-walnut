@@ -371,7 +371,9 @@ describe('buildSessionContext (identity note)', () => {
     // admin credential) never gets past an application's own access control.
     // 9850 → 10000 (2026-11-08) for the charter's done check: re-read the task's description and
     // every request held and check each item before done (a task did one of five and said done).
-    expect(systemPrompt.length).toBeLessThan(10000)
+    // 10000 → 10400 (2026-11-09) for two charter lines: review stops after 3 rounds and no brief raises
+    // the cap (two tasks reached rounds 9 and 12), and a wrong-chat message is forwarded, never sent back. 10,332.
+    expect(systemPrompt.length).toBeLessThan(10400)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {
