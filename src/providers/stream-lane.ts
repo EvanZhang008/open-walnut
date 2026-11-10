@@ -263,6 +263,17 @@ export function laneForwardForTesting(): ((hostKey: string) => Promise<LaneForwa
   return forwardForTesting
 }
 
+let bulkForwardForTesting: ((hostKey: string) => Promise<LaneForward>) | null = null
+
+/** Tests give a host's bulk channel a forward of its own without SSH; null restores the SSH forward. */
+export function _setBulkForwardForTesting(fn: ((hostKey: string) => Promise<LaneForward>) | null): void {
+  bulkForwardForTesting = fn
+}
+
+export function bulkForwardHook(): ((hostKey: string) => Promise<LaneForward>) | null {
+  return bulkForwardForTesting
+}
+
 /** A free local port (closed again: ssh binds it). */
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {

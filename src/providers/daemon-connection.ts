@@ -33,7 +33,7 @@ import type { Duplex } from 'node:stream'
 import { log } from '../logging/index.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../lib/link-stream.js'
 import { registerForwardSocket } from '../lib/forward-lane-ports.js'
-import { laneForwardForTesting, sshLaneForward, StreamLane } from './stream-lane.js'
+import { bulkForwardHook, laneForwardForTesting, sshLaneForward, StreamLane, type LaneForward } from './stream-lane.js'
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
@@ -493,6 +493,19 @@ export type DaemonConnectPhase =
 
 // ── DaemonConnection ──
 
+/**
+ * About how many bytes a request's params take, without serializing them (a picture
+ * pasted into a session is megabytes; JSON.stringify of it would run twice per send).
+ */
+function requestBytesEstimate(params: Record<string, unknown>): number {
+  let n = 0
+  for (const v of Object.values(params)) {
+    if (typeof v === 'string') n += v.length
+    else if (Array.isArray(v)) n += v.length * 64
+  }
+  return n
+}
+
 export class DaemonConnection {
   private ws: WebSocket | null = null
   /** Byte streams to the host's server (core/host-server/), through the daemon. */
@@ -696,9 +709,10 @@ export class DaemonConnection {
   private linkHadOurCopy = false
 
   /**
-   * Bulk data channel — a SECOND WebSocket to the same daemon (same tunnel
-   * localPort; each TCP connection becomes an independent SSH channel, and
-   * SSH interleaves channels in ~32KB packets). MB-scale response frames
+   * Bulk data channel — a SECOND WebSocket to the same daemon (over SSH, on a
+   * connection of its own: bulkForward; else the same tunnel localPort, where
+   * each TCP connection becomes an independent SSH channel and SSH interleaves
+   * channels in ~32KB packets). MB-scale response frames
    * (BULK_COMMANDS) ride here so they can't head-of-line-block interactive
    * commands on the strictly-ordered main socket. Purely an optional
    * accelerator: dialed in the background after connect, used only when
@@ -712,6 +726,29 @@ export class DaemonConnection {
    *  dial can't install a socket for a connection that has since moved on
    *  (reconnect allocates a NEW localPort). */
   private bulkDialSeq = 0
+  /**
+   * A host reached over SSH: the bulk channel's own SSH forward (stream-lane.ts
+   * sshLaneForward), so its bytes never share the session link's connection.
+   * The relay path to some hosts ends an SSH connection every few MB carried UP
+   * (2026-11-10: a plain upload test died after 3 to 24 MB, a 1.5 GB download
+   * passed), and a file copied onto a host (fs.writePart) or a note's picture
+   * (attachments.put) through the shared tunnel took every session's link down
+   * with it, again on each retry: host.link.lost 8 an hour. On its own
+   * connection only this channel drops, and it dials again.
+   */
+  private bulkForward: LaneForward | null = null
+  /** The bulk channel is meant to ride its own connection: uploads wait for it (BULK_UPLOADS). */
+  private bulkOwnLink = false
+  /** The open bulk socket rides its own connection: its bytes say nothing about the session link's. */
+  private bulkSocketOwn = false
+  /** Bytes heard on a bulk socket of its own connection (kept out of _heardBytes). */
+  private _ownBulkHeardBytes = 0
+  /** Own connections in a row that ended within BULK_OWN_MIN_LIFE_MS: the redial backs off. */
+  private bulkShortLives = 0
+  private bulkForwardOpenedAt = 0
+  private bulkLastDialAt = 0
+  /** Uploads waiting for the bulk channel to come (back) up. */
+  private bulkWaiters: Array<() => void> = []
 
   /**
    * Last upgrade attempt (expected version + timestamp). Circuit breaker for
@@ -746,8 +783,9 @@ export class DaemonConnection {
    * it's open. Everything else (fs.ls, status, sends, events) stays on the
    * main WS. Membership is by frame size, not command family: replica.put
    * is the one whose REQUEST is big (a batch of note bodies, host-replica.ts),
-   * and so are fs.writePart (a relayed file chunk, transfer-core.ts) and
-   * attachments.put (a 2 MB chunk of a note's picture, attachment-replica.ts). mcp.call and
+   * and so are fs.writePart (a relayed file chunk, transfer-core.ts),
+   * attachments.put (a 2 MB chunk of a note's picture, attachment-replica.ts); fs.write
+   * and the replicas' manifests ride here only when big (BULK_WHEN_BIG). mcp.call and
    * mcp.result answer with a tool's images, up to 3 MB of base64 (host-mcp-core.ts).
    */
   private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put', 'fs.writePart', 'attachments.put', 'upload.part', 'mcp.call', 'mcp.result'])
@@ -757,6 +795,27 @@ export class DaemonConnection {
    * their timeout never terminates it (that would fail every other bulk command on it).
    */
   private static readonly BULK_WAITS = new Set(['mcp.call', 'mcp.result'])
+  /**
+   * Bulk commands whose REQUEST is the big frame (a file part, a batch of rows, a
+   * picture part). While the bulk channel rides its own SSH connection (bulkForward)
+   * and is down, these wait for it, up to BULK_UPLOAD_WAIT_MS, instead of taking the
+   * session link, whose connection the same megabytes would end.
+   */
+  static readonly BULK_UPLOADS = new Set(['fs.writePart', 'replica.put', 'attachments.put', 'upload.part'])
+  /**
+   * Commands whose request is big only sometimes: a picture pasted into a session on the
+   * host or a large file saved (fs.write), a replica's manifest of thousands of rows. At
+   * BULK_WHEN_BIG_BYTES or more they ride the bulk channel as uploads; small, they stay on
+   * the session link, never queued behind a download's megabytes on the bulk socket.
+   */
+  static readonly BULK_WHEN_BIG = new Set(['fs.write', 'replica.sync', 'attachments.sync'])
+  static BULK_WHEN_BIG_BYTES = 256 * 1024
+  /** The longest an upload waits for the bulk channel before it rides the session link. */
+  private static BULK_UPLOAD_WAIT_MS = 20_000
+  /** An own connection that lived less than this counts as short: the next redial waits longer. */
+  private static BULK_OWN_MIN_LIFE_MS = 60_000
+  /** The longest redial wait after own connections that keep ending (a fresh SSH login each). */
+  private static BULK_REDIAL_MAX_MS = 5 * 60_000
   /** Delay before re-dialing the bulk channel after it drops (main stays up). */
   private static BULK_REDIAL_DELAY_MS = 10_000
   /** Within this window, refuse a second upgrade toward the same expected version. */
@@ -1182,6 +1241,8 @@ export class DaemonConnection {
     const changed = this._connected !== value
     this._connected = value
     if (changed) this._connectionEpoch++
+    // Uploads waiting for the bulk channel meet the lost link now, not at the end of their wait.
+    if (!value) { this.bulkOwnLink = false; this.releaseBulkWaiters() }
     if (changed && value) this._bootStart?.schedule()
     if (changed && value) this.netUpdater?.schedule()
     if (value) {
@@ -2143,6 +2204,15 @@ export class DaemonConnection {
   ): Promise<DaemonCommandResult> {
     // An overdue swap may end with the old daemon restarted unprepared, and an older daemon's
     // shutdown does not wait for a file write: a file change waits for the swap (bounded).
+    const upload = DaemonConnection.BULK_UPLOADS.has(cmd)
+      || (DaemonConnection.BULK_WHEN_BIG.has(cmd) && requestBytesEstimate(params) >= DaemonConnection.BULK_WHEN_BIG_BYTES)
+    // An upload waits for the bulk channel's own connection before the swap fence is read,
+    // so a fence raised meanwhile still holds it.
+    if (upload && this.bulkOwnLink && !this.bulkChannelActive && this._connected) {
+      this.dialBulkSoon()
+      const waited = await this.waitBulkChannel(Math.min(DaemonConnection.BULK_UPLOAD_WAIT_MS, Math.floor(timeoutMs / 2)))
+      timeoutMs = Math.max(1_000, timeoutMs - waited)
+    }
     if (((this._swapOverBusy && this._swapInFlight) || this._fileFence) && SWAP_HELD_FILE_COMMANDS.has(cmd)) await this.waitOverBusySwap()
     if (!this._connected || !this.ws) {
       throw markLinkFailure(new Error(`DaemonConnection not connected to ${this.hostKey}`), 'no-link')
@@ -2178,7 +2248,8 @@ export class DaemonConnection {
     // open, so their MB-scale frames can't head-of-line-block interactive
     // commands on the main WS. Shared pendingCommands map — the response is
     // matched by id regardless of which socket delivers it.
-    const bulkSocket = DaemonConnection.BULK_COMMANDS.has(cmd) && this.bulkWs?.readyState === WebSocket.OPEN
+    const routedBulk = upload || DaemonConnection.BULK_COMMANDS.has(cmd)
+    const bulkSocket = routedBulk && this.bulkWs?.readyState === WebSocket.OPEN
       ? this.bulkWs
       : null
 
@@ -2186,8 +2257,10 @@ export class DaemonConnection {
     const sentOn = bulkSocket ?? this.ws
     // A bulk command's own progress: bytes on the socket it rides. The main
     // socket also carries events and pongs, which say nothing about this reply.
-    const isBulk = DaemonConnection.BULK_COMMANDS.has(cmd)
-    const progressNow = () => (bulkSocket ? this._bulkHeardBytes : this._heardBytes - this._bulkHeardBytes)
+    const isBulk = routedBulk
+    const ownBulk = !!bulkSocket && this.bulkSocketOwn
+    const bulkHeard = () => (ownBulk ? this._ownBulkHeardBytes : this._bulkHeardBytes)
+    const progressNow = () => (bulkSocket ? bulkHeard() : this._heardBytes - this._bulkHeardBytes)
     let progressMark = progressNow()
     // A main-socket reply on a link it shares with a bulk reply waits behind
     // that reply's bytes (one ssh stream): what the link brings is its line moving.
@@ -2196,8 +2269,8 @@ export class DaemonConnection {
     // (core/hosts/read-progress.ts): its own socket's, and for a main-socket
     // command everything the link brings ahead of its reply. Frozen at settle.
     const sentHeard = this._heardBytes
-    const sentBulkHeard = this._bulkHeardBytes
-    const reachedNow = () => (bulkSocket ? this._bulkHeardBytes - sentBulkHeard : this._heardBytes - sentHeard)
+    const sentBulkHeard = bulkHeard()
+    const reachedNow = () => (bulkSocket ? bulkHeard() - sentBulkHeard : this._heardBytes - sentHeard)
     let reached: number | null = null
     creditCurrentRead(() => reached ?? reachedNow())
     return new Promise<DaemonCommandResult>((resolveCmd, rejectCmd) => {
@@ -2254,9 +2327,19 @@ export class DaemonConnection {
     })
   }
 
+  /** `socket` is a bulk socket on a connection of its own: nothing on it waits behind the session link. */
+  private ownBulkSocket(socket: WebSocket | undefined): boolean {
+    return this.bulkSocketOwn && !!socket && socket === this.bulkWs
+  }
+
+  /** The bulk socket when it shares the session link's connection (its bytes are that link's), else null. */
+  private get sharedBulkWs(): WebSocket | null {
+    return this.bulkSocketOwn ? null : this.bulkWs
+  }
+
   /** A command other than `except` waits on the bulk socket now (its reply can be MB-scale). */
   private bulkReplyInFlight(except: number): boolean {
-    for (const [id, pending] of this.pendingCommands) if (id !== except && pending.bulk) return true
+    for (const [id, pending] of this.pendingCommands) if (id !== except && pending.bulk && !this.ownBulkSocket(pending.socket)) return true
     return false
   }
 
@@ -2733,8 +2816,8 @@ export class DaemonConnection {
     const check = (async () => {
       for (let round = 1; round <= DaemonConnection.UPSTREAM_MAX_ROUNDS; round++) {
         const startedAt = Date.now()
-        const readAt = socketBytesRead(ws) + socketBytesRead(this.bulkWs)
-        const wroteAt = socketBytesWritten(ws) + socketBytesWritten(this.bulkWs)
+        const readAt = socketBytesRead(ws) + socketBytesRead(this.sharedBulkWs)
+        const wroteAt = socketBytesWritten(ws) + socketBytesWritten(this.sharedBulkWs)
         const deadlineMs = Math.min(15_000, Math.max(5_000, 2 * this.roundTripMs + 500))
         try {
           await this.send('ping', {}, deadlineMs)
@@ -2746,13 +2829,13 @@ export class DaemonConnection {
         if (roundMs < DaemonConnection.UPSTREAM_MIN_ROUND_MS) await new Promise((r) => setTimeout(r, DaemonConnection.UPSTREAM_MIN_ROUND_MS - roundMs))
         if (this.ws !== ws || !this._connected || this._lastReplyAt >= startedAt) return
         const spent = Date.now() - since >= DaemonConnection.UPSTREAM_DEAD_MS
-        const sending = [...this.pendingCommands.values()].some((p) => p.bulk)
-          || socketBytesWritten(ws) + socketBytesWritten(this.bulkWs) - wroteAt >= DaemonConnection.UPSTREAM_BUSY_BYTES
+        const sending = [...this.pendingCommands.values()].some((p) => p.bulk && !this.ownBulkSocket(p.socket))
+          || socketBytesWritten(ws) + socketBytesWritten(this.sharedBulkWs) - wroteAt >= DaemonConnection.UPSTREAM_BUSY_BYTES
         if (sending) {
           if (spent) return
           continue
         }
-        const heard = socketBytesRead(ws) + socketBytesRead(this.bulkWs) !== readAt
+        const heard = socketBytesRead(ws) + socketBytesRead(this.sharedBulkWs) !== readAt
         if (heard && !spent) continue
         if (Date.now() - this._upstreamDropAt < DaemonConnection.UPSTREAM_DROP_GAP_MS) {
           log.session.warn('DaemonConnection: answers to the daemon still go unacked; the link was dialed again lately, so it stays', {
@@ -6019,7 +6102,8 @@ export class DaemonConnection {
     if (pending) {
       clearTimeout(pending.timer)
       this.pendingCommands.delete(msg.id)
-      this._lastReplyAt = Date.now()
+      // A reply on a bulk socket of its own connection says nothing of the session link (checkUpstream).
+      if (!this.ownBulkSocket(pending.socket)) this._lastReplyAt = Date.now()
       // Per-command round-trip RTT — paired with the `DaemonConnection: send`
       // dispatch log by traceId. This is the SSH-tunnel/daemon hop that the
       // enqueue→delivered `deliveryMs` field omits; on a slow tunnel a `send`
@@ -6199,6 +6283,100 @@ export class DaemonConnection {
     const url = this._lastWsUrl
     if (!url || !this._connected || this._destroyed) return
     const seq = ++this.bulkDialSeq
+    const opener = this.bulkForwardOpener()
+    this.bulkOwnLink = opener !== null
+    this.bulkLastDialAt = Date.now()
+    if (!opener) { this.openBulkSocket(url, seq, false); return }
+    void opener().then((fwd) => {
+      if (seq !== this.bulkDialSeq || !this._connected || this._destroyed) { fwd.stop(); return }
+      this.bulkForward = fwd
+      this.bulkForwardOpenedAt = Date.now()
+      fwd.onExit((why) => {
+        if (this.bulkForward !== fwd) return
+        this.bulkForward = null
+        const livedMs = Date.now() - this.bulkForwardOpenedAt
+        this.bulkShortLives = livedMs < DaemonConnection.BULK_OWN_MIN_LIFE_MS ? this.bulkShortLives + 1 : 0
+        log.session.info('DaemonConnection: bulk channel connection ended', { host: this.hostKey, why, livedMs, shortInARow: this.bulkShortLives })
+        // The socket on it is dead: its close handler fails its commands and dials again.
+        const ws = this.bulkWs
+        if (ws) { try { ws.terminate() } catch { /* closing */ } } else if (seq === this.bulkDialSeq) this.scheduleBulkRedial()
+      })
+      this.openBulkSocket(`ws://127.0.0.1:${fwd.port}`, seq, true)
+    }, (err: unknown) => {
+      if (seq !== this.bulkDialSeq || !this._connected || this._destroyed) return
+      // No second connection (a login it refuses): the bulk channel rides the session link, as before.
+      log.session.info('DaemonConnection: bulk channel has no connection of its own; it rides the session link', {
+        host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+      })
+      this.bulkOwnLink = false
+      this.releaseBulkWaiters()
+      this.openBulkSocket(url, seq, false)
+    })
+  }
+
+  /** How this host's bulk channel opens a connection of its own, or null: it rides the session link. */
+  private bulkForwardOpener(): (() => Promise<LaneForward>) | null {
+    const hook = bulkForwardHook()
+    if (hook) return () => hook(this.hostKey)
+    const remotePort = this.remotePort
+    // The same hosts a stream lane serves: reached over SSH, not dialled directly.
+    if (this.noSsh || !this.sshTarget || this._dialledDirect || !remotePort) return null
+    const sshArgs = this.buildSshArgs({ useControlMaster: false })
+    const sshHost = this.sshHostString
+    return () => sshLaneForward(sshArgs, sshHost, remotePort)
+  }
+
+  /** Wait (at most `ms`) for the bulk channel to be up; resolves with the time waited. */
+  private waitBulkChannel(ms: number): Promise<number> {
+    const startedAt = Date.now()
+    if (ms <= 0 || this.bulkChannelActive) return Promise.resolve(0)
+    return new Promise((resolve) => {
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        this.bulkWaiters = this.bulkWaiters.filter((w) => w !== finish)
+        resolve(Date.now() - startedAt)
+      }
+      const timer = setTimeout(finish, ms)
+      timer.unref?.()
+      this.bulkWaiters.push(finish)
+    })
+  }
+
+  private releaseBulkWaiters(): void {
+    for (const w of this.bulkWaiters.splice(0)) w()
+  }
+
+  /**
+   * One redial of the bulk channel, while the session link is up. Own connections that
+   * keep ending soon after they open back off (each redial is a fresh SSH login, which
+   * some hosts rate-limit), doubling up to BULK_REDIAL_MAX_MS; an upload waiting for the
+   * channel dials sooner (dialBulkSoon).
+   */
+  private scheduleBulkRedial(): void {
+    if (!this._connected || this._destroyed || this.bulkRedialTimer) return
+    const base = DaemonConnection.BULK_REDIAL_DELAY_MS
+    const delay = Math.min(DaemonConnection.BULK_REDIAL_MAX_MS, base * 2 ** Math.max(0, this.bulkShortLives - 1))
+    this.bulkRedialTimer = setTimeout(() => {
+      this.bulkRedialTimer = null
+      if (this._connected && !this._destroyed) this.dialBulkChannel()
+    }, delay)
+    this.bulkRedialTimer.unref?.()
+  }
+
+  /** An upload waits for the bulk channel: dial now, unless a dial ran within the base redial delay. */
+  private dialBulkSoon(): void {
+    if (!this.bulkRedialTimer || this.bulkChannelActive) return
+    if (Date.now() - this.bulkLastDialAt < DaemonConnection.BULK_REDIAL_DELAY_MS) return
+    clearTimeout(this.bulkRedialTimer)
+    this.bulkRedialTimer = null
+    this.dialBulkChannel()
+  }
+
+  /** The bulk channel's socket, at `url` (the session tunnel's port, or its own forward's: `own`). */
+  private openBulkSocket(url: string, seq: number, own: boolean): void {
     const isCurrent = () => seq === this.bulkDialSeq && this._connected && !this._destroyed
     const headers = this._lastWsHeaders
 
@@ -6210,6 +6388,7 @@ export class DaemonConnection {
       log.session.debug('DaemonConnection: bulk channel dial failed', {
         host: this.hostKey, url, error: err instanceof Error ? err.message : String(err),
       })
+      this.scheduleBulkRedial()
       return
     }
     let established = false
@@ -6258,7 +6437,7 @@ export class DaemonConnection {
 
     ws.on('open', () => {
       if (!isCurrent()) { try { ws.terminate() } catch {}; return }
-      this.countHeardBytes(ws, true)
+      this.countHeardBytes(ws, true, own)
       // Verify daemon identity on THIS socket before routing to it. The reply
       // arrives on the bulk socket and resolves via resolveCommandFrame.
       const id = ++this.cmdCounter
@@ -6281,21 +6460,29 @@ export class DaemonConnection {
             host: this.hostKey, ok: res.ok, instanceId, mainInstanceId: this._daemonInstanceId,
           })
           this.bulkDialSeq++
+          this.bulkOwnLink = false
+          this.bulkForward?.stop()
+          this.bulkForward = null
+          this.releaseBulkWaiters()
           try { ws.terminate() } catch {}
           return
         }
         established = true
         this.bulkWs = ws
+        this.bulkSocketOwn = own
         this.announceProbeRole(ws)
         log.session.info('DaemonConnection: bulk channel connected', {
-          host: this.hostKey, url, instanceId,
+          host: this.hostKey, url, instanceId, ownConnection: this.bulkForward !== null,
         })
+        this.releaseBulkWaiters()
       }).catch((err) => {
         // Terminate UNCONDITIONALLY: disconnect() rejects the shared pending
         // map (including this hello) but closeBulkChannel only terminates an
         // INSTALLED bulkWs — a mid-hello socket would otherwise leak open.
         try { ws.terminate() } catch {}
         if (!isCurrent()) return
+        // An own connection whose hello fails backs off like one that ends soon.
+        if (own) this.bulkShortLives++
         log.session.debug('DaemonConnection: bulk channel hello failed', {
           host: this.hostKey, error: err instanceof Error ? err.message : String(err),
         })
@@ -6308,20 +6495,14 @@ export class DaemonConnection {
     ws.on('close', () => {
       this.failPendingOn(ws)
       if (seq !== this.bulkDialSeq) return // superseded or deliberately torn down
-      if (this.bulkWs === ws) this.bulkWs = null
+      if (this.bulkWs === ws) { this.bulkWs = null; this.bulkSocketOwn = false }
       if (established) {
         log.session.info('DaemonConnection: bulk channel down — falling back to main socket', {
           host: this.hostKey,
         })
       }
       // One pending redial at a time, only while the main connection is up.
-      if (this._connected && !this._destroyed && !this.bulkRedialTimer) {
-        this.bulkRedialTimer = setTimeout(() => {
-          this.bulkRedialTimer = null
-          if (this._connected && !this._destroyed) this.dialBulkChannel()
-        }, DaemonConnection.BULK_REDIAL_DELAY_MS)
-        this.bulkRedialTimer.unref?.()
-      }
+      this.scheduleBulkRedial()
     })
   }
 
@@ -6356,6 +6537,17 @@ export class DaemonConnection {
       this.failPendingOn(this.bulkWs)
       try { this.bulkWs.terminate() } catch {}
       this.bulkWs = null
+    }
+    this.bulkSocketOwn = false
+    const fwd = this.bulkForward
+    this.bulkForward = null
+    // A forward that served a while before it was closed here clears the backoff.
+    if (fwd && Date.now() - this.bulkForwardOpenedAt >= DaemonConnection.BULK_OWN_MIN_LIFE_MS) this.bulkShortLives = 0
+    fwd?.stop()
+    // A session link that went down takes the wait with it (the upload then meets no link).
+    if (!this._connected || this._destroyed) {
+      this.bulkOwnLink = false
+      this.releaseBulkWaiters()
     }
   }
 
@@ -6394,8 +6586,8 @@ export class DaemonConnection {
 
     this.setConnected(false)
 
-    // Close WebSockets. The bulk channel rides the same tunnel — when the
-    // main socket is gone the tunnel is suspect, so tear bulk down too; the
+    // Close WebSockets. The bulk channel goes with the session link (it rides the
+    // same tunnel, or a connection of its own that serves only this link); the
     // reconnect path re-dials it via setConnected(true).
     this.closeBulkChannel()
     if (this.ws) {
@@ -6680,7 +6872,7 @@ export class DaemonConnection {
     this._deployedViaSource = false
     this._bunPath = null
 
-    // Kill old tunnel if any (bulk channel rides it — tear that down first;
+    // Kill old tunnel if any (the bulk channel goes first, its own forward too;
     // usually already gone via handleConnectionLost, this is belt-and-braces)
     this.closeBulkChannel()
     if (this.tunnel) {
@@ -7299,7 +7491,7 @@ export class DaemonConnection {
     const probe = new Promise<boolean>((resolve) => {
       const heardAtStart = this._heardBytes
       const mainAtStart = socketBytesRead(ws)
-      const bulkAtStart = socketBytesRead(this.bulkWs)
+      const bulkAtStart = socketBytesRead(this.sharedBulkWs)
       let timer: ReturnType<typeof setTimeout> | undefined
       const finish = (alive: boolean) => {
         clearTimeout(timer)
@@ -7311,7 +7503,7 @@ export class DaemonConnection {
       ws.on('pong', onPong)
       timer = setTimeout(() => {
         if (this.ws !== ws || !this._connected) { finish(false); return }
-        if (this._heardBytes > heardAtStart || socketBytesRead(ws) > mainAtStart || socketBytesRead(this.bulkWs) > bulkAtStart) {
+        if (this._heardBytes > heardAtStart || socketBytesRead(ws) > mainAtStart || socketBytesRead(this.sharedBulkWs) > bulkAtStart) {
           finish(true)
           return
         }
@@ -7449,11 +7641,14 @@ export class DaemonConnection {
    * socket: no event fires for a frame until all of it is in). A socket the ws
    * library has not exposed (a test double) is simply not counted.
    */
-  private countHeardBytes(ws: WebSocket, bulk: boolean): void {
+  private countHeardBytes(ws: WebSocket, bulk: boolean, own = false): void {
     const raw = (ws as unknown as { _socket?: { on?: (event: string, fn: (chunk: Buffer) => void) => void } })._socket
     if (!raw || typeof raw.on !== 'function') return
     raw.on('data', (chunk: Buffer) => {
       const n = chunk?.length ?? 0
+      // A bulk socket on its own connection is heard apart: the session link's liveness
+      // (the ping loop, probeLiveness) must not read its pongs as the session link's.
+      if (own) { this._ownBulkHeardBytes += n; return }
       this._heardBytes += n
       if (bulk) this._bulkHeardBytes += n
     })
