@@ -306,9 +306,22 @@ value changed`, `the page scrolled`, or `nothing changed on the page`. The page 
 from right before the step to its answer (any change to its elements or attributes outside
 Walnut's own, a scroll of the page or of a box in it, a hash of its fields' values; never its
 words), and a click, key or form step looks twice more within 1.2 s before it says nothing
-changed. A step inside a frame says the frame's own change is not checked, and a page that could
-not be watched gives no `changed` at all, never a guess. A page that changes by itself (a clock,
-a live feed) reads as changed. Subagents of a session drive the browser as that session: the same task,
+changed. A change of the field being typed in (its value, its own box: a clear icon) is `a field's
+value changed`, never the page's. `type --submit` (and `press Enter`) says what the Enter did, apart
+from the typing (the page marks its watch right before the key): `Enter: went to <url>`, `Enter:
+the page content changed (no navigation)`, or `Enter changed nothing on the page (no navigation,
+nothing submitted ...)` with what to try. Enter as page events carries `keyCode`/`which` 13, sends
+a form the page did not take the key for, and, with no form and no answer within 700 ms, clicks
+the search button beside a search field (judged like any click). A step inside a frame says the
+frame's own change is not checked, and a page that could not be watched gives no `changed` at all,
+never a guess. A page that changes by itself (a clock, a live feed) reads as changed.
+
+`text` reads words innerText misses: an open shadow root's, and a date element's full date beside
+what it shows (`37 minutes ago (Nov 10, 2026, 4:11 AM PST)`, from its title or datetime). `find`
+ranks short text before long blocks and never answers with a page region that is only focusable.
+`snapshot` lists only what is on screen under "Elements on screen", and what is just past it under
+"Just off screen". The note on the person's own tabs of a site is said in full once per task and
+site, then in one line, and in full again when those tabs change or after a sign-in step. Subagents of a session drive the browser as that session: the same task,
 tabs, approvals and agent cursor (the CLI and the MCP server both send the session's id).
 
 ```bash
@@ -400,11 +413,13 @@ the same action with the same arguments and `request`; approved, it runs (once),
 says what it waits for. After you disconnect the extension (its popup, Settings, Disconnect this
 browser), `walnut browser status` says so at once and every command fails at once with
 `browser_disconnected` ("the person disconnected this browser from Walnut"); turning agents off
-answers `browser_off`. `walnut browser --help` prints the usage. Exit codes: 0 done, 1 refused or a
+answers `browser_off`. `walnut browser --help` prints the usage, `walnut browser guide` the
+`walnut-browser` skill as plain markdown. Exit codes: 0 done, 1 refused or a
 choice to make (`site_denied`, `not_your_tab`, `test_run`, `which_tab`, `person_is_here`, `person_driving`, `window_hidden`, `input_dropped`,
 `trusted_off`, `which_login`, `denied`, `agents_tab_only`; a choice lists its options), 2 no
-answer in time (`browser_timeout`, `outward_expired`, or no approval in 10 minutes), 3 any other
-error. `walnut browser screenshot x.png` asks for a PNG; a JPEG an older extension sends is saved
+answer in time (`browser_timeout`, `outward_expired`, or no approval in 10 minutes: run it again),
+3 any other error, a `wait` whose text or address did not come (`wait_timeout`: look at the page)
+included. `walnut browser screenshot x.png` asks for a PNG; a JPEG an older extension sends is saved
 under `.jpg`, and it says so.
 
 **A covered agent window.** Chrome does not draw a page whose window is covered by other windows

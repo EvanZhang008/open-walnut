@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import os from 'node:os'
-import { BROWSER_EXIT, BROWSER_USAGE, parseBrowserArgv, runBrowser } from '../../../src/core/browser-control/browser-cli'
+import { BROWSER_EXIT, BROWSER_USAGE, GUIDE_SKILL, parseBrowserArgv, runBrowser } from '../../../src/core/browser-control/browser-cli'
 
 async function out(argv: string[], result: Record<string, unknown>): Promise<string> {
   const p = parseBrowserArgv(argv)
@@ -29,6 +29,47 @@ describe('the usage', () => {
     expect(first.map((l) => l.trim().split(/\s/)[0])).toEqual(['open', 'snapshot', 'click', 'type', 'text', 'find', 'wait', 'close', 'e.g.'])
     expect(BROWSER_USAGE).toContain('open https://example.com/issues --read')
     expect(lines.every((l) => l.length <= 130)).toBe(true)
+  })
+})
+
+describe('the guide and the exit codes', () => {
+  it('the usage\'s first line names the guide; exit 2 is no answer in time, 3 an error, a wait that did not come included', () => {
+    expect(BROWSER_USAGE.split('\n')[0]).toMatch(/walnut browser guide/)
+    expect(BROWSER_USAGE).toMatch(/2 Walnut or the browser did not answer in time \(run it again\); 3 an error, a wait whose text or\n\s+address did not come included/)
+  })
+
+  it('walnut browser guide prints the skill as plain markdown, without its front matter or JSON', async () => {
+    const p = parseBrowserArgv(['guide'])
+    expect(p).toMatchObject({ ok: true, op: 'skill_read', args: { dirName: GUIDE_SKILL }, guide: true })
+    if (!p.ok) return
+    let text = ''
+    let asked: unknown
+    const content = '---\nname: walnut-browser\ndescription: >-\n  x\n---\n\n# The user\'s browser for agents\n\n## Quick start\n\nThree calls read a page "quoted".\n'
+    const code = await runBrowser(p, { call: async (name, args) => { asked = { name, args }; return { ok: true, result: { skill: { content } } } }, say: () => undefined, out: (t) => { text += t }, cwd: os.tmpdir() })
+    expect(code).toBe(BROWSER_EXIT.ok)
+    expect(asked).toEqual({ name: 'skill_read', args: { dirName: 'walnut-browser' } })
+    expect(text).toBe('# The user\'s browser for agents\n\n## Quick start\n\nThree calls read a page "quoted".\n')
+    let said = ''
+    expect(await runBrowser(p, { call: async () => ({ ok: true, result: {} }), say: (l) => { said += l }, out: () => undefined, cwd: os.tmpdir() })).toBe(BROWSER_EXIT.error)
+    expect(said).toMatch(/no walnut-browser skill/)
+  })
+
+  it('a wait whose text never came exits 3 (an error to look at), a call with no answer in time exits 2', async () => {
+    const run = async (code: string) => {
+      const p = parseBrowserArgv(['wait', 'Never there', '--ms', '500'])
+      if (!p.ok) throw new Error(p.error)
+      return runBrowser(p, { call: async () => ({ ok: false, code, message: 'x' }), say: () => undefined, out: () => undefined, cwd: os.tmpdir() })
+    }
+    expect(await run('wait_timeout')).toBe(3)
+    expect(await run('browser_timeout')).toBe(2)
+  })
+
+  it('the skill on disk leads with a quick start a model reads in 40 lines', async () => {
+    const fs = await import('node:fs')
+    const md = fs.readFileSync('src/data/skills/walnut-browser/SKILL.md', 'utf8')
+    const body = md.replace(/^---\n[\s\S]*?\n---\n+/, '').split('\n').slice(0, 40).join('\n')
+    expect(body).toMatch(/## Quick start/)
+    for (const step of ['open https://', '--read', 'click --text', 'close', 'walnut browser guide']) expect(body).toContain(step)
   })
 })
 

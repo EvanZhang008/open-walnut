@@ -8,7 +8,7 @@ import path from 'node:path'
 import { noBrowserLine, type GoneBrowser } from './gone-words.js'
 
 export const BROWSER_USAGE = [
-  'usage: walnut browser <command> [--tab N] [--json]',
+  'usage: walnut browser <command> [--tab N] [--json]      walnut browser guide: the whole guide, plain text',
   'Start here (a read takes 3 to 5 calls; every step says what it changed):',
   '  open <url> [--read]               a tab in Walnut\'s agent window; --read prints its main text too',
   '  snapshot [--all]                  the elements on screen, a ref each (e12); --all: the whole page',
@@ -35,10 +35,20 @@ export const BROWSER_USAGE = [
   '  press in your own tab; --no-trusted uses page events, --trusted asks for it by name. A covered agent window takes page',
   '  events (the answer says trusted false and why). --json prints the whole result.',
   'Exit: 0 done; 1 refused or a choice to make (the person said no, not your tab, which tab or login: the message',
-  '  lists them); 2 no answer in time; 3 an error.',
+  '  lists them); 2 Walnut or the browser did not answer in time (run it again); 3 an error, a wait whose text or',
+  '  address did not come included (look at the page: text or snapshot).',
 ].join('\n')
 
 export const BROWSER_EXIT = { ok: 0, refused: 1, timeout: 2, error: 3 } as const
+/** The skill `walnut browser guide` prints. */
+export const GUIDE_SKILL = 'walnut-browser'
+
+/** A skill's markdown without its front matter (the guide). */
+export function guideText(body: unknown): string | undefined {
+  const content = (body as { skill?: { content?: unknown } } | undefined)?.skill?.content
+  if (typeof content !== 'string' || !content.trim()) return undefined
+  return `${content.replace(/^---\n[\s\S]*?\n---\n+/, '').trim()}\n`
+}
 
 export interface OpResult { ok: boolean; result?: unknown; message?: string; status?: number; code?: string }
 export interface BrowserIo {
@@ -51,7 +61,7 @@ export interface BrowserIo {
 }
 
 export type ParsedBrowser =
-  | { ok: true; op: 'browser' | 'browser_status'; args: Record<string, unknown>; json: boolean; file?: string; upload?: string[] }
+  | { ok: true; op: 'browser' | 'browser_status' | 'skill_read'; args: Record<string, unknown>; json: boolean; file?: string; upload?: string[]; guide?: true }
   | { ok: false; error: string; help?: true }
 
 /** What a front end prints for a parse that did not give an action: help to stdout (exit 0), an error with the usage to stderr. */
@@ -129,6 +139,8 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   try {
     switch (verb) {
       case 'status': return { ok: true, op: 'browser_status', args: {}, json }
+      // The skill as plain text (a model reads 16 KB of escaped JSON from skill_read otherwise).
+      case 'guide': return { ok: true, op: 'skill_read', args: { dirName: GUIDE_SKILL }, json, guide: true }
       case 'drag': {
         const end = (w: string | undefined, name: string): Record<string, unknown> => {
           const m = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/.exec(w ?? '')
@@ -298,6 +310,13 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
       return r.code && REFUSED.has(r.code) ? BROWSER_EXIT.refused : r.code === 'browser_timeout' || r.code === 'outward_expired' ? BROWSER_EXIT.timeout : BROWSER_EXIT.error
     }
     const body = (r.result ?? {}) as Record<string, unknown>
+    if (p.guide) {
+      if (p.json) { io.out(JSON.stringify(body, null, 2) + '\n'); return BROWSER_EXIT.ok }
+      const text = guideText(body)
+      if (!text) { io.say(`walnut browser: Walnut has no ${GUIDE_SKILL} skill to print`); return BROWSER_EXIT.error }
+      io.out(text)
+      return BROWSER_EXIT.ok
+    }
     if (body.status === 'needs_ok') {
       // A sign-in waits on its own ask: the next calls name it.
       if (typeof body.request === 'string') request = body.request

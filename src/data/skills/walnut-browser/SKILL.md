@@ -10,6 +10,43 @@ description: >-
 
 # The user's browser for agents
 
+## Quick start
+
+Three calls read a page; every acting step prints what it changed.
+
+```bash
+walnut browser open https://example.com/issues --read   # a tab in Walnut's agent window, and its main text
+walnut browser click --text "Login fails" --read         # click by its words; says what changed, then the new page's text
+walnut browser close                                     # when you are done with the tab
+```
+
+What a step changed: `went to <url> "<title>"`, `opened a new tab N`, `the page content changed`,
+`a field's value changed` (only the field you typed in), or `nothing changed on the page`.
+Nothing changed means the step did nothing: snapshot and act again; never wait for an address it
+will not reach. `type <ref> <text> --submit` says what its Enter did after what it typed:
+`typed 18 characters ...; Enter: went to <url>`, or `Enter changed nothing on the page (no
+navigation, nothing submitted ...)` with what to try (the search button, or the results address).
+Dates in `text` read as the page shows them with the full date: `37 minutes ago (Nov 10, 2026, 4:11 AM PST)`.
+`walnut browser --help` lists every command; `walnut browser guide` prints this guide.
+
+The commands you need first:
+
+```bash
+walnut browser snapshot                  # the elements on screen, one line each with a ref (e12); --all: the whole page
+walnut browser click e12                 # or --text "Next"; prints what changed
+walnut browser type e7 "order 1234" --submit
+walnut browser text                      # the main content (no menus, header, footer), 4000 characters
+walnut browser text e31                  # one element's text (or --selector 'article .body'); --max 20000 for more
+walnut browser find "Place order"        # the best few matches, with refs (--role button to narrow)
+walnut browser wait "Order details"      # 10 s unless --ms (up to 30000); or --gone "Loading", --url /orders\/\d+/
+walnut browser fill-login                # a sign-in page: fills the saved login, you never see it
+walnut browser screenshot                # saves a JPEG and prints its path: Read it to look
+```
+
+Subagents can drive the browser too: the same task, the same tabs, the same approvals and rules.
+
+## Turning it on
+
 The user lets Walnut agents into their browser from the Walnut extension's popup (Settings,
 "Let Walnut agents use this browser"). Then you can open tabs there and work in them. Check
 first: `walnut browser status` (or `browser_status`). If no browser is connected, tell the user
@@ -28,41 +65,13 @@ Browser view) with a Stop button for the user.
 ## Never sign in again on a site they have open
 
 An `open` or `navigate` to a site the user already has open in a tab of their own lists those
-tabs (`person_tabs`: id, title, whether they are on it) and says so. If they are signed in
+tabs (`person_tabs`: id, title, whether they are on it) and says so (in full the first time,
+then in one line). If they are signed in
 there, ask them to hand that tab over ("Act in tab" in Walnut's side panel, on that tab), or
 `take` it when they are not on it. **Do not sign in again in a tab of your own.** `fill-login`
 there answers `site_open_in_person_tab`; only when the user asked you for a fresh sign-in, run
 it again with `--fresh-sign-in` (op: `fresh_sign_in: true`): that asks them to approve it on
 their Mac and phone, and only their yes fills (the shell command waits for it).
-
-## Quick start
-
-A read takes 3 to 5 calls. Every acting step (click, type, press, select, hover, scroll, navigate,
-back, fill-form) prints what it changed: `went to <url> "<title>"`, `opened a new tab N`, `the page
-content changed`, or `nothing changed on the page`. Nothing changed means the step did nothing:
-snapshot and act again; never wait for an address it will not reach.
-
-```bash
-walnut browser open https://example.com/issues --read   # a tab in Walnut's agent window, and its main text
-walnut browser click --text "Login fails" --read         # click by its words; says what changed, then the new page's text
-walnut browser close                                     # when you are done with the tab
-```
-
-The commands you need first:
-
-```bash
-walnut browser snapshot                  # the elements on screen, one line each with a ref (e12); --all: the whole page
-walnut browser click e12                 # or --text "Next"; prints what changed
-walnut browser type e7 "order 1234" --submit
-walnut browser text                      # the main content (no menus, header, footer), 4000 characters
-walnut browser text e31                  # one element's text (or --selector 'article .body'); --max 20000 for more
-walnut browser find "Place order"        # the best few matches, with refs (--role button to narrow)
-walnut browser wait "Order details"      # 10 s unless --ms (up to 30000); or --gone "Loading", --url /orders\/\d+/
-walnut browser fill-login                # a sign-in page: fills the saved login, you never see it
-walnut browser screenshot                # saves a JPEG and prints its path: Read it to look
-```
-
-Subagents can drive the browser too: the same task, the same tabs, the same approvals and rules.
 
 More actions, when the commands above are not enough:
 
@@ -206,6 +215,6 @@ login answers `no_code`: ask the user to enter it themselves. Then click the ver
 - `evaluate` reads anything on the page: use it only for what the other actions cannot read,
   never to get at a password field.
 
-Exit codes of `walnut browser`: 0 done, 1 refused or a choice to make (the message lists the choices), 2 no answer in time, 3 an error.
+Exit codes of `walnut browser`: 0 done, 1 refused or a choice to make (the message lists the choices), 2 Walnut or the browser did not answer in time (run it again), 3 an error, a `wait` whose text or address did not come included (look at the page: `text` or `snapshot`).
 `browser_disconnected` means the user disconnected the extension: ask them to connect it again, do not retry.
 Reference: `docs/reference/browser-control.md`.
