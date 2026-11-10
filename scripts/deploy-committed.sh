@@ -228,10 +228,10 @@ fi
 # It prints each dependency the commit declares that the checkout has not
 # installed (a commit that adds one lands before anyone runs bun install here;
 # 2026-11-03: the web type-check then failed on a missing module).
-missing="$(cd "$BUILD" && "${JS_RUN[@]}" "$deps_src/node_modules" "$BUILD/node_modules" "$BUILD" <<'JS'
+missing="$(cd "$BUILD" && "${JS_RUN[@]}" "$deps_src/node_modules" "$BUILD/node_modules" "$BUILD" "$SERVE_ROOT" <<'JS'
 const fs = require('fs')
 const path = require('path')
-const [src, dst, build] = process.argv.slice(2)
+const [src, dst, build, checkout] = process.argv.slice(2)
 const pkg = JSON.parse(fs.readFileSync(path.join(build, 'package.json'), 'utf8'))
 const workspaces = new Map()
 for (const dir of pkg.workspaces ?? []) {
@@ -262,14 +262,58 @@ const webDir = path.join(build, 'web')
 const webNm = path.join(path.dirname(src), 'web', 'node_modules')
 const out = [...lacks(build, src).map((n) => `root ${n}`)]
 if (fs.existsSync(path.join(webDir, 'package.json'))) out.push(...lacks(webDir, webNm).map((n) => `web ${n}`))
+// A dependency the commit patches, installed here with an older patch or none: the install
+// copies the patched files once, so a commit that only changes patches/ deployed the old
+// files (2026-11-10: the Codex catalog fix reached production unpatched). Each hunk of the
+// patch, as it reads once applied (its context and added lines in order), must appear whole
+// in the installed file, and a package the checkout patched must still be patched here.
+// No apostrophes in this block: bash 3.2 pairs quotes inside a heredoc within $(...).
+const hunksOf = (text) => {
+  const files = []
+  let file = null
+  let hunk = null
+  for (const line of text.split('\n')) {
+    const head = /^\+\+\+ b\/(.+)$/.exec(line)
+    if (head) { file = { name: head[1], hunks: [] }; files.push(file); hunk = null; continue }
+    if (!file) continue
+    if (line.startsWith('@@')) { hunk = []; file.hunks.push(hunk); continue }
+    if (!hunk) continue
+    if (line.startsWith('+') || line.startsWith(' ')) hunk.push(line.slice(1))
+    else if (line === '') hunk.push('')
+  }
+  return files
+}
+const stalePatch = (dir, text) => {
+  for (const file of hunksOf(text)) {
+    let have
+    try { have = fs.readFileSync(path.join(dir, file.name), 'utf8') } catch { return true }
+    for (const hunk of file.hunks) {
+      while (hunk.length && hunk[hunk.length - 1] === '') hunk.pop()
+      if (hunk.length && !have.includes(hunk.join('\n'))) return true
+    }
+  }
+  return false
+}
+const nameOf = (spec) => spec.replace(/@[^@/]+$/, '')
+const patched = pkg.patchedDependencies ?? {}
+for (const [spec, rel] of Object.entries(patched)) {
+  const dir = path.join(src, nameOf(spec))
+  let text
+  try { text = fs.readFileSync(path.join(build, rel), 'utf8') } catch { continue }
+  if (fs.existsSync(path.join(dir, 'package.json')) && stalePatch(dir, text)) out.push(`root patched ${nameOf(spec)}`)
+}
+let before = {}
+try { before = JSON.parse(fs.readFileSync(path.join(checkout, 'package.json'), 'utf8')).patchedDependencies ?? {} } catch {}
+for (const spec of Object.keys(before)) if (!(spec in patched)) out.push(`root unpatched ${nameOf(spec)}`)
 process.stdout.write(out.join('\n'))
 JS
 )"
 if [[ -d "$deps_src/web/node_modules" ]]; then
   ln -s "$deps_src/web/node_modules" "$BUILD/web/node_modules"
 fi
-# A dependency the commit needs and the checkout lacks: install the commit's own
-# lockfile into the clone instead of linking, never into the shared checkout.
+# A dependency the commit needs and the checkout lacks, or one it patches that the checkout
+# installed with an older patch: install the commit's own lockfile into the clone instead of
+# linking, never into the shared checkout.
 if [[ -n "$missing" ]]; then
   echo "The checkout's node_modules lacks what this commit declares ($(echo "$missing" | tr '\n' ' ')); installing the commit's lockfile in the clone."
   bun_bin="${JS_RUN[0]}"

@@ -298,7 +298,7 @@ out="$(cd "$here" && bun -e "console.log(require('leftpad'))" 2>&1)"; rc=$?
     expect(r.stderr).toBe('')
     expect(r.status).toBe(0)
     const args = fs.readFileSync(path.join(bin, 'bun.args'), 'utf-8').trim()
-    expect(args).toBe(`run - ${f.repo}/node_modules ${r.report!.here}/node_modules ${r.report!.here}`)
+    expect(args).toBe(`run - ${f.repo}/node_modules ${r.report!.here}/node_modules ${r.report!.here} ${fs.realpathSync(f.repo)}`)
     expect(r.report!.dep).toBe(path.join(f.repo, 'node_modules', 'leftpad'))
     expect(r.report!.ws_file).toBe('committed lib')
   })
@@ -329,6 +329,87 @@ out="$(cd "$here" && bun -e "console.log(require('leftpad'))" 2>&1)"; rc=$?
     // The clone has its own dependencies now; the checkout's are as they were.
     expect(r.report!.dep).toBe(path.join(r.report!.here, 'node_modules', 'leftpad'))
     expect(fs.existsSync(path.join(f.repo, 'node_modules', 'freshdep'))).toBe(false)
+  })
+
+  // 2026-11-10: a commit that changed only the codex-acp patch deployed the files the checkout
+  // had installed with the older patch, so the fix never reached production.
+  const patchedFixture = (installed: string, opts: { unpatchCommit?: boolean } = {}) => {
+    const f = fixture()
+    fs.writeFileSync(path.join(f.repo, 'node_modules', 'leftpad', 'package.json'), '{"name":"leftpad"}')
+    fs.writeFileSync(path.join(f.repo, 'node_modules', 'leftpad', 'index.js'), installed)
+    fs.mkdirSync(path.join(f.repo, 'patches'))
+    fs.writeFileSync(path.join(f.repo, 'patches', 'leftpad@1.0.0.patch'), [
+      'diff --git a/index.js b/index.js', '--- a/index.js', '+++ b/index.js', '@@ -1,2 +1,3 @@', ' base', '+patched line two', ' tail', '',
+    ].join('\n'))
+    const pkg = JSON.parse(fs.readFileSync(path.join(f.repo, 'package.json'), 'utf-8'))
+    fs.writeFileSync(path.join(f.repo, 'package.json'), JSON.stringify({ ...pkg, dependencies: { leftpad: '1.0.0' }, patchedDependencies: { 'leftpad@1.0.0': 'patches/leftpad@1.0.0.patch' } }))
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'add', 'package.json', 'patches')
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'patches leftpad')
+    if (opts.unpatchCommit) {
+      // The next commit drops the patch, while the checkout keeps the patched install and its package.json.
+      const withPatch = fs.readFileSync(path.join(f.repo, 'package.json'), 'utf-8')
+      const { patchedDependencies: _gone, ...rest } = JSON.parse(withPatch)
+      fs.writeFileSync(path.join(f.repo, 'package.json'), JSON.stringify(rest))
+      git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'unpatches leftpad', '--', 'package.json')
+      fs.writeFileSync(path.join(f.repo, 'package.json'), withPatch)
+    }
+    const bin = path.join(path.dirname(f.repo), 'bin')
+    fs.mkdirSync(bin)
+    const runStdin = process.versions.bun ? `"${process.execPath}" run -` : `"${process.execPath}" -`
+    const bun = path.join(bin, 'bun')
+    fs.writeFileSync(bun, [
+      '#!/bin/sh',
+      `printf '%s|%s\\n' "$(pwd -P)" "$*" >> "${bin}/bun.args"`,
+      'if [ "$1" = run ] && [ "$2" = - ]; then shift 2; exec ' + runStdin + ' "$@"; fi',
+      'if [ "$1" = install ]; then mkdir -p node_modules/leftpad node_modules/@acme/other web/node_modules; ln -s ../../packages/lib node_modules/@acme/lib; exit 0; fi',
+      'exit 9',
+    ].join('\n') + '\n', { mode: 0o755 })
+    return { f, bun, bin }
+  }
+
+  it('installs the commit\'s lockfile in the clone when the checkout installed a patched dependency with an older patch', () => {
+    const { f, bun, bin } = patchedFixture('base\ntail\n')
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', WALNUT_BUN: bun })
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('root patched leftpad')
+    const calls = fs.readFileSync(path.join(bin, 'bun.args'), 'utf-8').trim().split('\n')
+    expect(calls.filter((c) => c.endsWith('|install --frozen-lockfile'))).toEqual([`${r.report!.here}|install --frozen-lockfile`])
+    expect(r.report!.dep).toBe(path.join(r.report!.here, 'node_modules', 'leftpad'))
+    // The shared checkout's install is left as it was.
+    expect(fs.readFileSync(path.join(f.repo, 'node_modules', 'leftpad', 'index.js'), 'utf-8')).toBe('base\ntail\n')
+  })
+
+  it('links, and installs nothing, when the checkout installed the commit\'s patch', () => {
+    const { f, bun, bin } = patchedFixture('base\npatched line two\ntail\n')
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', WALNUT_BUN: bun })
+    expect(r.status).toBe(0)
+    expect(r.stdout).not.toContain('root patched')
+    expect(fs.readFileSync(path.join(bin, 'bun.args'), 'utf-8')).not.toContain('install')
+    expect(r.report!.dep).toBe(path.join(f.repo, 'node_modules', 'leftpad'))
+  })
+
+  it('installs in the clone when the checkout has an older patch whose added lines are all still there (a line the new patch drops)', () => {
+    const { f, bun } = patchedFixture('base\npatched line two\nline the older patch added\ntail\n')
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', WALNUT_BUN: bun })
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('root patched leftpad')
+  })
+
+  it('installs in the clone when the commit drops a patch the checkout installed', () => {
+    const { f, bun } = patchedFixture('base\npatched line two\ntail\n', { unpatchCommit: true })
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', WALNUT_BUN: bun })
+    expect(r.status).toBe(0)
+    expect(r.stdout).toContain('root unpatched leftpad')
+  })
+
+  // The Mac runs /bin/bash 3.2, which pairs single quotes inside a heredoc within $(...),
+  // even a quoted one: one apostrophe in a comment there failed every deploy, while Linux
+  // bash 5 (and these tests) parsed it.
+  it('every heredoc inside $(...) holds an even number of single quotes, for bash 3.2', () => {
+    const text = fs.readFileSync(WRAPPER, 'utf-8')
+    const blocks = [...text.matchAll(/\$\([^\n]*<<'(\w+)'\n([\s\S]*?)\n\1\n/g)].map((m) => m[2])
+    expect(blocks.length).toBeGreaterThan(0)
+    for (const b of blocks) expect((b.match(/'/g) ?? []).length % 2, b.slice(0, 120)).toBe(0)
   })
 
   it('links, and installs nothing, when the checkout has every dependency the commit declares', () => {
