@@ -325,6 +325,23 @@ describe('an answer for the user (answers_ask) is never this host\'s to deliver 
     expect(h.host.hasRecords(HOME)).toBe(false)
   })
 
+  it('a withdrawal stays on the server path, and a malformed one is refused offline before delivery', async () => {
+    const h = harness()
+    expect(await send(h, A, { to: TASK_B, text: 'Drop the ask.', withdraw_ask: true }).result).toBeNull()
+    expect(h.delivered).toEqual([])
+    h.serverUp.v = false
+    for (const args of [
+      { to: TASK_B, text: 'Drop the ask.', withdraw_ask: true },
+      { to: TASK_B, text: 'Drop the ask.', withdraw_ask: true, answers_ask: true, user_words: 'Do not ask me about this again.' },
+    ]) {
+      const r = await h.host.handle(HOME, A, 'tools.call', { name: 'task_send', args })
+      expect(r.ok).toBe(false)
+      expect(JSON.stringify(r)).toContain('answers_ask' in args ? 'hub_unreachable' : 'bad_request')
+      expect(h.delivered).toEqual([])
+      expect(h.host.hasRecords(HOME)).toBe(false)
+    }
+  })
+
   it('while the server is away: refused as needing the server, nothing delivered or queued', async () => {
     const h = harness()
     h.serverUp.v = false

@@ -87,6 +87,88 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
+describe('withdrawing an ask through the message route', () => {
+  it('requires answers_ask and the user\'s words before storing or sending anything', async () => {
+    const t = await asking('Quiet release', 'Choose the orchard release weekday?', 'stopped');
+    for (const body of [
+      { answers_ask: false, withdraw_ask: true, user_words: 'Stop asking about the release weekday.' },
+      { withdraw_ask: true },
+    ]) {
+      const r = await answer({ to: t.id, text: 'Do not ask again.', ...body });
+      expect(r.status).toBe(400 + (body.answers_ask === false ? 0 : 9));
+      expect(JSON.stringify(r.json)).toContain(body.answers_ask === false ? 'bad_request' : 'user_words');
+      expect((await getTask(t.id)).ask_answered).toBeUndefined();
+      expect(sentTo).not.toContain(t.sid);
+    }
+  });
+
+  it('rejects an omitted answers_ask flag before queueing the message', async () => {
+    const t = await asking('Quiet omitted flag', 'Choose the orchard importer schedule?', 'stopped');
+    const res = await fetch(`${base}/api/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': LEAD_SID },
+      body: JSON.stringify({ to: t.id, text: 'Do not ask again.', withdraw_ask: true }),
+    });
+    expect(res.status).toBe(400);
+    expect((await getTask(t.id)).ask_answered).toBeUndefined();
+    expect(sentTo).not.toContain(t.sid);
+  });
+
+  it('a finished target is not reopened, a person needs no quoted words, and a peer cannot withdraw', async () => {
+    const done = await asking('Quiet finished', 'Choose the orchard harvest label?', 'stopped');
+    await updateTaskRaw(done.id, { phase: 'COMPLETE' } as never, { source: 'test' });
+    const r = await answer({ to: done.id, text: 'Do not ask again.', withdraw_ask: true, user_words: 'Do not ask me about the harvest label again.' });
+    expect(r.status, JSON.stringify(r.json)).toBe(202);
+    expect(r.json).toMatchObject({ delivery: 'recorded', notWoken: 'complete', withdrawn: true });
+    expect((await getTask(done.id)).phase).toBe('COMPLETE');
+    expect(sentTo).not.toContain(done.sid);
+
+    const human = await asking('Quiet human', 'Choose the orchard crate color?', 'stopped');
+    const res = await fetch(`${base}/api/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ to: human.id, text: 'Do not ask again.', answers_ask: true, withdraw_ask: true }),
+    });
+    expect(res.status).toBe(202);
+    expect((await getTask(human.id)).ask_answered).toMatchObject({ withdrawn: true, by: 'human' });
+
+    const peer = await asking('Quiet peer', 'Choose the orchard cart size?', 'stopped');
+    const target = await asking('Quiet peer target', 'Choose the orchard fence height?', 'stopped');
+    const refused = await fetch(`${base}/api/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': peer.sid },
+      body: JSON.stringify({ to: target.id, text: 'Do not ask again.', answers_ask: true, withdraw_ask: true, user_words: 'Do not ask me about the fence height again.' }),
+    });
+    expect(refused.status).toBe(409);
+    expect(JSON.stringify(await refused.json())).toContain('not_above');
+    expect((await getTask(target.id)).ask_answered).toBeUndefined();
+    expect(sentTo).not.toContain(target.sid);
+  });
+
+  it('a live target gets one withdrawal line and confirms the permanent result', async () => {
+    const t = await asking('Quiet live', 'Choose the orchard truck capacity?', 'idle');
+    const r = await answer({ to: t.id, text: 'Do not ask again.', withdraw_ask: true, user_words: 'Do not ask me about truck capacity again.' });
+    expect(r.status, JSON.stringify(r.json)).toBe(202);
+    expect(r.json).toMatchObject({ delivery: 'queued', withdrawn: true });
+    expect(sentTo.filter((sid) => sid === t.sid)).toHaveLength(1);
+    expect(await queued(t.sid)).toContain('withdrew this ask for good');
+    expect((await getTask(t.id)).ask_answered?.withdrawn).toBe(true);
+  });
+
+  it('records a permanent withdrawal without waking a stopped task, and ordinary answers remain ordinary', async () => {
+    const t = await asking('Quiet exporter', 'Choose the orchard export format?', 'stopped');
+    const r = await answer({ to: t.id, text: 'Do not ask again.', withdraw_ask: true, user_words: 'Stop asking about the orchard export format.' });
+    expect(r.status, JSON.stringify(r.json)).toBe(202);
+    expect(r.json).toMatchObject({ delivery: 'recorded', notWoken: 'stopped' });
+    expect((await getTask(t.id)).ask_answered).toMatchObject({ withdrawn: true, by: lead });
+    expect(sentTo).not.toContain(t.sid);
+    expect((await getSessionByClaudeId(t.sid))?.process_status).toBe('stopped');
+    await settle();
+    expect((await getTask(t.id)).user_status).toMatchObject({ state: 'waiting', answeredFor: { by: lead } });
+
+    const ordinary = await asking('Ordinary exporter', 'Choose the orchard export compression?', 'stopped');
+    expect((await answer({ to: ordinary.id, text: 'Use gzip.' })).status).toBe(202);
+    expect((await getTask(ordinary.id)).ask_answered?.withdrawn).toBeUndefined();
+  });
+});
+
 describe('a task that is not running', () => {
   for (const status of ['stopped', 'error'] as const) {
     it(`(${status}): the answer is recorded, its ask leaves Needs you, and nothing is delivered`, async () => {

@@ -111,6 +111,8 @@ export interface SessionSendInput {
   /** This message answers the target's open question to the user, in the user's place
    *  (sessions/ask-answer.ts): only from a task above it, its lead or VP, Main, or the person. */
   answersAsk?: boolean;
+  /** With answersAsk: the user withdrew this ask for good, until they bring it up again. */
+  withdrawAsk?: boolean;
   /** With answersAsk on an ask only the user approves: their own words it acts on. */
   userWords?: string;
   /** Internal (answers_ask): deliver only into this session while it runs, bound to the stop fence
@@ -135,6 +137,8 @@ export interface SessionSendResult {
   delivery: 'queued' | 'deferred' | 'recorded';
   /** An answers_ask send to a COMPLETE task or one with no session running: recorded, no turn started. */
   notWoken?: 'complete' | 'stopped';
+  /** The user's ask was permanently withdrawn, not merely answered. */
+  withdrawn?: true;
   /** An answers_ask send, or a message to a task that still asks (openAsk): what the user wrote there (user-spoke.ts). */
   userSaid?: UserSaid;
   targetSessionId: string;
@@ -663,6 +667,9 @@ export type DeliveredSendResult = SessionSendResult & { delivery: 'queued' | 'de
 export async function performSessionSend(input: SessionSendInput & { answersAsk?: false }): Promise<DeliveredSendResult>;
 export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult>;
 export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult> {
+  if (input.withdrawAsk && !input.answersAsk) {
+    throw new SendError('bad_request', 'withdraw_ask requires answers_ask: true');
+  }
   if (!input.answersAsk) {
     const result = await performPlainSend(input);
     const open = input.inReplyTo ? null : await openAskBelow(input.callerSid, result.targetTaskId).catch(() => null);
@@ -701,6 +708,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     prepared = await prepareAskAnswer(
       caller.kind === 'session' ? caller.record.taskId! : null, targetTaskId, words, input.userWords,
       caller.kind === 'session' ? caller.record.claudeSessionId : undefined,
+      { withdraw: input.withdrawAsk === true },
     );
   } catch (err) {
     if (err instanceof AskAnswerError) throw new SendError(err.code, err.message, err.status, targetTaskId ? { taskId: targetTaskId } : undefined);
@@ -722,6 +730,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
       delivery: 'recorded', notWoken: why, targetSessionId: sid, targetTitle: prepared.target.title, targetTaskId: prepared.target.id,
       target: { handle: sessionHandle(prepared.target.title, sid), sessionId: sid, taskId: prepared.target.id },
       ...(asked ? { repliedTo: asked.id } : {}),
+      ...(input.withdrawAsk ? { withdrawn: true as const } : {}),
       ...(prepared.userSaid ? { userSaid: prepared.userSaid } : {}),
     };
   };
@@ -746,7 +755,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     throw err;
   }
   await prepared.commit();
-  return prepared.userSaid ? { ...result, userSaid: prepared.userSaid } : result;
+  return { ...result, ...(input.withdrawAsk ? { withdrawn: true as const } : {}), ...(prepared.userSaid ? { userSaid: prepared.userSaid } : {}) };
 }
 
 /** Where an answer to `request` from `replierSid` goes (performReply's own routing), or undefined. */

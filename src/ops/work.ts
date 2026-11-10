@@ -78,6 +78,10 @@ defineOp({
       + 'is not woken: the answer is recorded and nothing is delivered (delivery "recorded"); task_start it, or force with a reason, when it must act. 409 not_above when the task is not below you, '
       + '409 no_open_ask when it has no ask of its own to answer (none, a Board choice, or one shown on another task, named), 409 user_words for an ask only the user approves, '
       + `409 user_spoke_since when the user wrote in that task after it asked. ${USER_SPOKE_TEXT}`),
+    withdraw_ask: z.boolean().optional().describe(
+      'With answers_ask=true: the user withdrew this ask for good (do not remind them again, in other words either, unless they bring it up). '
+      + 'A task must quote their own words in user_words. This withdraws the question, not an answer: to take back an incorrect answer, use task_ask_answer_withdraw instead. '
+      + 'Without answers_ask, bad_request; without their words, user_words. Stopped or finished tasks are not woken.'),
     user_words: z.string().min(1).max(4000).optional().describe(
       'With answers_ask: the user\'s own words you act on, quoted exactly. Needed on an ask of a kind only the user approves (an outward send, spending, credentials, permissions, a cloud delete, an irreversible step), '
       + `and after 409 user_spoke_since: ${USER_WORDS_BACK} His messages in that task newer than the words you quote must be quoted too (409 user_spoke_since names them).`),
@@ -106,7 +110,7 @@ defineOp({
       const who = b.targetTaskId || target;
       return withOutcome(
         { ...b },
-        `Answer recorded on ${who}: Walnut took its ask off the user's Needs you. Not delivered: the task is ${b.notWoken === 'complete' ? 'COMPLETE' : 'not running'}, so no turn was started and it does not know yet.${said ? ` ${said}` : ''}`,
+        `${b.withdrawn === true ? 'Permanent withdrawal' : 'Answer'} recorded on ${who}: Walnut took its ask off the user's Needs you. Not delivered: the task is ${b.notWoken === 'complete' ? 'COMPLETE' : 'not running'}, so no turn was started and it does not know yet.${said ? ` ${said}` : ''}`,
         `Nothing to wait for. If it must act on this answer, task_start ${who} with the answer in the message${b.notWoken === 'complete' ? ' (it reopens)' : ''}. Do NOT resend.`,
       );
     }
@@ -129,7 +133,8 @@ defineOp({
         + (Array.isArray(b.answeredFor) && b.answeredFor.length
           ? ` It answered ${b.answeredFor.join(', ')} too, so it went straight to the original asker (${b.targetTaskId || target}); the task that handed it to you got one line saying so.`
           : '')
-        + (args.answers_ask === true ? ' It answers that task\'s ask of the user: Walnut took it off the user\'s Needs you and told the task.' : '')
+        + (b.withdrawn === true ? ' The user withdrew this ask for good; Walnut recorded the withdrawal and told the task.'
+          : args.answers_ask === true ? ' It answers that task\'s ask of the user: Walnut took it off the user\'s Needs you and told the task.' : '')
         + (typeof b.openAsk === 'string' && b.openAsk
           ? ` That task still asks the user: "${b.openAsk.replace(/\s+/g, ' ').slice(0, 160)}". If your message decides it, send one more short line with answers_ask: true naming the answer: only that takes it off the user's Needs you, and without it the user is asked again.`
           : '')

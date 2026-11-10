@@ -83,6 +83,20 @@ describe('every path that takes an answers_ask keeps the rule', () => {
 })
 
 describe('the sender reads what happened', () => {
+  it('withdraw_ask keeps its meaning through the op, route, core and offline host', async () => {
+    await import('../../../src/ops/index.js')
+    const { getOp } = await import('../../../src/ops/registry.js')
+    expect(getOp('task_send')!.input.withdraw_ask).toBeDefined()
+    expect(code('src/web/routes/messages-v1.ts')).toContain('withdrawAsk: b.withdraw_ask === true')
+    const core = code('src/core/sessions/session-send-core.ts')
+    expect(core).toMatch(/input\.withdrawAsk && !input\.answersAsk[\s\S]*?throw new SendError/)
+    expect(core).toMatch(/prepareAskAnswer\([\s\S]*?withdraw: input\.withdrawAsk === true/)
+    const offline = code('src/providers/offline-host-core.ts')
+    expect(offline).toContain('if (args.withdraw_ask !== undefined) return null')
+    expect(offline).toContain("if (args.withdraw_ask === true && args.answers_ask !== true) return fail('bad_request'")
+    expect(offline).toMatch(/args\.answers_ask === true\) return needsServer\(/)
+  })
+
   it('an answer only recorded says it was not delivered, and how to have the task act', async () => {
     await import('../../../src/ops/index.js')
     const { getOp } = await import('../../../src/ops/registry.js')

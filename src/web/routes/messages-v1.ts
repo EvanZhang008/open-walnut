@@ -1,7 +1,7 @@
 /**
  * /api/v1/messages + /api/v1/requests — the unified send surface.
  *
- *   POST /messages        { to?, text, title?, expect_reply?, reply_timeout?, in_reply_to?, hands_on?, answers_ask?, force?, reason?, messageId?, thread? }
+ *   POST /messages        { to?, text, title?, expect_reply?, reply_timeout?, in_reply_to?, hands_on?, answers_ask?, withdraw_ask?, force?, reason?, messageId?, thread? }
  *                         → 202 SessionSendResult (session-send-core.ts), with `thread_handoff` when a Thread
  *                         of the sender's went with it (core/org/thread-follow.ts)
  *   GET  /requests/:id    → { request, delivery? } — status read for `walnut wait rq-…`;
@@ -56,6 +56,7 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         handsOn: str(b.hands_on),
         // This answers the target's question to the user in his place (sessions/ask-answer.ts).
         answersAsk: b.answers_ask === true,
+        withdrawAsk: b.withdraw_ask === true,
         userWords: str(b.user_words),
         title: str(b.title),
         force: b.force === true,
