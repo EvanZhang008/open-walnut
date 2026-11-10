@@ -26,6 +26,42 @@ const MAX_TIMER_DELAY_MS = 60_000;
 const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
 
 /**
+ * The whole run's cap. An init processor's `timeoutSeconds` bounds that ACTION only
+ * (executeJobCore): it used to cap the whole run too, so the Inbox Triage routine
+ * (a 30 s batch action) cut its own executor's start, which may wait up to a minute
+ * for room on its host (routines/run-start-deps.ts ROUTINE_WAIT_MS). The run was
+ * failed with "timed out" while the start went on unowned, and Run now still read
+ * `ran: true` (2026-11-10 CI). Exported for the guard test.
+ */
+export function jobTimeoutMs(job: Pick<CronJob, 'payload' | 'initProcessor'>): number {
+  if (job.payload.kind === 'agentTurn' && typeof job.payload.timeoutSeconds === 'number') {
+    return job.payload.timeoutSeconds * 1_000;
+  }
+  const init = initTimeoutMs(job);
+  return Math.max(DEFAULT_JOB_TIMEOUT_MS, init ?? 0);
+}
+
+function initTimeoutMs(job: Pick<CronJob, 'initProcessor'>): number | undefined {
+  const s = job.initProcessor?.timeoutSeconds;
+  return typeof s === 'number' && Number.isFinite(s) && s > 0 ? s * 1_000 : undefined;
+}
+
+/** Race `work` against `ms`; the timer never outlives the race. */
+async function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
  * Exponential backoff delays (in ms) indexed by consecutive error count.
  * After the last entry the delay stays constant.
  */
@@ -332,19 +368,22 @@ function recordSessionRun(job: CronJob, result: JobRunOutcome): void {
  * - **isolated** session target: run an isolated agent job, then optionally
  *   announce the result back to the main session.
  */
-async function executeJobCore(
-  state: CronServiceState,
-  job: CronJob,
-  /** A human pressed Run now. The idle gate is a cadence rule, and they outrank it. */
-  forced = false,
-): Promise<{
+/** How one execution ended, as executeJobCore reports it. */
+export interface JobExecution {
   status: 'ok' | 'error' | 'skipped';
   error?: string;
   summary?: string;
   /** The text handed to the executor, for the wake fire's audit preview. */
   dispatched?: string;
   sessionId?: string;
-}> {
+}
+
+async function executeJobCore(
+  state: CronServiceState,
+  job: CronJob,
+  /** A human pressed Run now. The idle gate is a cadence rule, and they outrank it. */
+  forced = false,
+): Promise<JobExecution> {
   // ── Wake: nothing new, nothing to do ──
   // Here rather than in findDueJobs: a job filtered out THERE keeps a past-due
   // nextRunAtMs and is re-evaluated on every tick forever. Reaching this point
@@ -365,10 +404,20 @@ async function executeJobCore(
     if (!state.deps.runAction) {
       return { status: 'skipped', error: 'no action runner configured' };
     }
-    const actionResult = await state.deps.runAction(
+    const actionTimeout = initTimeoutMs(job);
+    const actionRun = state.deps.runAction(
       job.initProcessor.actionId,
       job.initProcessor.params ?? {},
     );
+    let actionResult: Awaited<typeof actionRun>;
+    try {
+      actionResult = actionTimeout === undefined
+        ? await actionRun
+        : await withTimeout(actionRun, actionTimeout,
+          `cron: init processor '${job.initProcessor.actionId}' timed out after ${actionTimeout / 1_000}s`);
+    } catch (err) {
+      return { status: 'error', error: err instanceof Error ? err.message : String(err) };
+    }
     if (actionResult.status === 'error') {
       return { status: 'error', error: actionResult.error };
     }
@@ -515,7 +564,7 @@ export async function executeJob(
   state: CronServiceState,
   job: CronJob,
   options: { forced?: boolean } = {},
-): Promise<void> {
+): Promise<JobExecution> {
   if (!job.state) {
     job.state = {};
   }
@@ -527,35 +576,16 @@ export async function executeJob(
   const wakeObserved = job.wake ? job.state.wakeCount ?? 0 : 0;
   emit(state, { jobId: job.id, action: 'started', runAtMs: startedAt });
 
-  // Outer timeout wraps the entire job (init processor + payload execution).
-  // Priority: payload.timeoutSeconds > initProcessor.timeoutSeconds > DEFAULT.
-  const payloadTimeout = job.payload.kind === 'agentTurn' && typeof job.payload.timeoutSeconds === 'number'
-    ? job.payload.timeoutSeconds * 1_000
-    : undefined;
-  const initTimeout = typeof job.initProcessor?.timeoutSeconds === 'number'
-    ? job.initProcessor.timeoutSeconds * 1_000
-    : undefined;
-  const jobTimeoutMs = payloadTimeout ?? initTimeout ?? DEFAULT_JOB_TIMEOUT_MS;
-
-  let coreResult: {
-    status: 'ok' | 'error' | 'skipped';
-    error?: string;
-    summary?: string;
-    dispatched?: string;
-    sessionId?: string;
-  };
+  // Outer timeout wraps the entire job (init processor + payload execution);
+  // the init processor's own timeout bounds only the action (jobTimeoutMs).
+  let coreResult: JobExecution;
 
   try {
-    let timeoutId: ReturnType<typeof setTimeout>;
-    coreResult = await Promise.race([
+    coreResult = await withTimeout(
       executeJobCore(state, job, options.forced === true),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(
-          () => reject(new Error('cron: job execution timed out')),
-          jobTimeoutMs,
-        );
-      }),
-    ]).finally(() => clearTimeout(timeoutId!));
+      jobTimeoutMs(job),
+      'cron: job execution timed out',
+    );
   } catch (err) {
     coreResult = { status: 'error', error: String(err) };
   }
@@ -598,6 +628,7 @@ export async function executeJob(
     }
     await persist(state);
   });
+  return coreResult;
 }
 
 // ── Timer tick ──
@@ -676,31 +707,16 @@ export async function onTimer(state: CronServiceState): Promise<void> {
       const wakeObserved = job.wake ? job.state.wakeCount ?? 0 : 0;
       emit(state, { jobId: job.id, action: 'started', runAtMs: startedAt });
 
-      const payloadTimeout2 = job.payload.kind === 'agentTurn' && typeof job.payload.timeoutSeconds === 'number'
-        ? job.payload.timeoutSeconds * 1_000
-        : undefined;
-      const initTimeout2 = typeof job.initProcessor?.timeoutSeconds === 'number'
-        ? job.initProcessor.timeoutSeconds * 1_000
-        : undefined;
-      const jobTimeoutMs = payloadTimeout2 ?? initTimeout2 ?? DEFAULT_JOB_TIMEOUT_MS;
+      const timeoutMs = jobTimeoutMs(job);
 
       try {
-        let timeoutId: ReturnType<typeof setTimeout>;
-        const result = await Promise.race([
-          executeJobCore(state, job),
-          new Promise<never>((_, reject) => {
-            timeoutId = setTimeout(
-              () => reject(new Error('cron: job execution timed out')),
-              jobTimeoutMs,
-            );
-          }),
-        ]).finally(() => clearTimeout(timeoutId!));
+        const result = await withTimeout(executeJobCore(state, job), timeoutMs, 'cron: job execution timed out');
         results.push({ jobId: id, ...result, startedAt, endedAt: state.deps.nowMs(), wakeObserved });
       } catch (err) {
         state.deps.log.warn(`job failed: ${String(err)}`, {
           jobId: id,
           jobName: job.name,
-          timeoutMs: jobTimeoutMs,
+          timeoutMs,
         });
         results.push({
           jobId: id,

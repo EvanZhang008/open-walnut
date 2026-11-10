@@ -318,8 +318,9 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
   const { job: jobToRun } = phase1;
 
   // Phase 2: execute OUTSIDE the lock (prevents deadlock when agent calls cron tools)
+  let outcome: Awaited<ReturnType<typeof executeJob>>;
   try {
-    await executeJob(state, jobToRun!, { forced: mode === 'force' });
+    outcome = await executeJob(state, jobToRun!, { forced: mode === 'force' });
   } finally {
     // Phase 3: Always finalize under lock, even if execution threw.
     await locked(state, async () => {
@@ -329,7 +330,14 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
     });
   }
 
-  return { ok: true, ran: true } as const;
+  // A run that failed or declined says so: `ran: true` alone read as "it worked" to Run now
+  // while the run had timed out and made nothing (2026-11-10 CI, the Inbox Triage e2e).
+  if (outcome.status === 'ok') return { ok: true, ran: true } as const;
+  return {
+    ok: true, ran: true, status: outcome.status,
+    ...(outcome.error ? { error: outcome.error } : {}),
+    ...(outcome.summary ? { summary: outcome.summary } : {}),
+  } as const;
 }
 
 /** What a bump did, so the caller can decide whether to run the routine. */

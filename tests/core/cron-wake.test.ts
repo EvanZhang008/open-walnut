@@ -183,7 +183,8 @@ describe('wake: the counter half of a routine trigger', () => {
 
     now.value = NOW + EVERY_MS + 1;
     const result = await service.run(job.id, 'due');
-    expect(result).toEqual({ ok: true, ran: true });
+    // It ran and was skipped, and says so (cron/ops.ts run).
+    expect(result).toEqual({ ok: true, ran: true, status: 'skipped', summary: 'no new items' });
     // Zero model spend is the point of the flag.
     expect(runExecutor).not.toHaveBeenCalled();
 

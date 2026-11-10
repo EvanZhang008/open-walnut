@@ -486,6 +486,8 @@ export type CronStatusSummary = {
 
 export type CronRunResult =
   | { ok: true; ran: true }
+  /** It ran and did not succeed: why, so Run now never reads a failed run as done. */
+  | { ok: true; ran: true; status: 'error' | 'skipped'; error?: string; summary?: string }
   | { ok: true; ran: false; reason: 'not-due' }
   | { ok: true; ran: false; reason: 'already-running' }
   | { ok: false };

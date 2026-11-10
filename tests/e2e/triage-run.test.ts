@@ -39,6 +39,7 @@ import { getTask } from '../../src/core/task-manager.js';
 import { getSessionsForTask } from '../../src/core/session-tracker.js';
 import { routerAreasPath } from '../../src/core/router/areas.js';
 import { mailRouterKey } from '../../src/integrations/mail/router-source.js';
+import { __resetHostAdmissionForTesting } from '../../src/core/sessions/host-admission.js';
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs');
 const TRIAGE_PROJECT = 'Ask Inbox Triage';
@@ -150,6 +151,10 @@ beforeAll(async () => {
       enabled: true, every: '30m', every_messages: 20,
       sources: ['mail', 'slack'], mode: 'ask', active_hours: '',
     },
+    // Two slots on this machine, as a small CI runner has (hosts/placement.ts hostSlots floors at
+    // 2): each run's start holds its slot for a minute (run-start-deps.ts SLOT_HOLD_MS), so the
+    // two wake runs below fill the host on every machine, not only on a small one.
+    session_limits: { local: 2 },
   });
   expect(saved.status, JSON.stringify(saved.json)).toBe(200);
   await vi.waitFor(async () => { expect(await triageRoutine()).toBeDefined(); }, { timeout: 20_000, interval: 100 });
@@ -366,6 +371,11 @@ describe('Inbox Triage runs, end to end', () => {
       await vi.waitFor(async () => {
         expect((await triageRoutine())?.state?.runningAtMs).toBeUndefined();
       }, { timeout: 30_000, interval: 200 });
+      // The two runs above may still hold this host's two slots (a minute from their starts), and
+      // a routine's start waits for room (sessions/host-admission.ts). That wait is the product
+      // working, not what this case measures, so the holds are let go (2026-11-10 CI: the forced
+      // run waited, was cut at 30 s, made no task and still answered ran:true).
+      __resetHostAdmissionForTesting();
       daemon.clearCommandHistory();
       const known = new Set((await triageTasks()).map((t: any) => t.id));
       // POST /api/routines/:id/run answers { result } with ops.run's CronRunResult; only
