@@ -38,6 +38,8 @@ export function installFakePage(url = 'https://shop.example.test/cart'): FakePag
 
   for (const k of ['HTMLElement', 'HTMLInputElement', 'HTMLTextAreaElement', 'HTMLButtonElement', 'HTMLAnchorElement', 'HTMLSelectElement',
     'HTMLFormElement', 'HTMLLabelElement', 'HTMLIFrameElement', 'Element', 'Node', 'Event', 'CustomEvent', 'InputEvent']) g[k] = w[k]
+  // The page's own observer (a page that answers a step is seen by it: page-probe.ts, page-enter.ts).
+  g.MutationObserver = w.MutationObserver
   const Base = w.Event
   class UIEvent extends Base { constructor(type: string, init: Record<string, unknown> = {}) { super(type, init); Object.assign(this, init) } }
   g.MouseEvent = UIEvent

@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 
-interface Fake { url: string; ok: boolean; doc: string; values: number; scroll: number; mutations: number; scrolls: number; watching: boolean; looks: Array<Record<string, unknown>>; later: null | (() => void) }
+interface Fake { url: string; ok: boolean; doc: string; values: number; scroll: number; mutations: number; scrolls: number; watching: boolean; looks: Array<Record<string, unknown>>; later: null | (() => void); enter?: Record<string, unknown> }
 const fake: Fake = { url: '', ok: true, doc: 'd1', values: 1, scroll: 0, mutations: 0, scrolls: 0, watching: true, looks: [], later: null }
 const ev = () => ({ addListener() {}, removeListener() {} })
 ;(globalThis as any).chrome = {
@@ -23,17 +23,17 @@ const ev = () => ({ addListener() {}, removeListener() {} })
       fake.looks.push(msg)
       if (fake.looks.length === 3 && fake.later) fake.later()
       if (!fake.ok) return undefined
-      return { ok: true, doc: fake.doc, values: fake.values, scroll: fake.scroll, ...(msg.read ? (fake.watching ? { watching: true, mutations: fake.mutations, scrolls: fake.scrolls } : { watching: false }) : {}) }
+      return { ok: true, doc: fake.doc, values: fake.values, scroll: fake.scroll, ...(msg.read ? (fake.watching ? { watching: true, mutations: fake.mutations, scrolls: fake.scrolls, ...(fake.enter ? { enter: fake.enter } : {}) } : { watching: false }) : {}) }
     },
   },
 }
-const { changedLine, withChange, NOTHING, IN_FRAME } = await import('../../../packages/browser-extension/src/agent-change')
+const { changedLine, withChange, NOTHING, IN_FRAME, ENTER_NOTHING } = await import('../../../packages/browser-extension/src/agent-change')
 
 const before = { url: 'https://x.test/a', doc: 'd1', values: 1, scroll: 0 }
 const after = { ...before, watching: true, mutations: 0, scrolls: 0 }
 
 beforeEach(() => {
-  Object.assign(fake, { url: 'https://x.test/a', ok: true, doc: 'd1', values: 1, scroll: 0, mutations: 0, scrolls: 0, watching: true, looks: [], later: null })
+  Object.assign(fake, { url: 'https://x.test/a', ok: true, doc: 'd1', values: 1, scroll: 0, mutations: 0, scrolls: 0, watching: true, looks: [], later: null, enter: undefined })
 })
 
 describe('changedLine', () => {
@@ -121,5 +121,22 @@ describe('withChange', () => {
     await expect(withChange(7, 'click', {}, async () => { throw Object.assign(new Error('covered'), { code: 'covered' }) })).rejects.toMatchObject({ code: 'covered' })
     await new Promise((res) => setTimeout(res, 0))
     expect(fake.looks.at(-1)).toMatchObject({ done: true })
+  })
+
+  it('a typed text that submits says what its Enter did, never the typing\'s change as the page\'s', async () => {
+    // Only the field moved before the Enter, and the Enter changed nothing: said so, after the late looks.
+    fake.enter = { mutations: 0, scrolls: 0, values: false, scroll: false }
+    const quiet = await withChange(7, 'type', { ref: 'e3', text: 'cats', submit: true }, async () => { fake.values = 2; return { tab: 7, typed: 'x', enter_quiet: true } })
+    expect(quiet.changed).toBe(ENTER_NOTHING)
+    expect(fake.looks).toHaveLength(5)
+    // The Enter went somewhere, late: the address is the line.
+    fake.looks = []; fake.values = 1
+    fake.enter = { mutations: 3, scrolls: 0, values: false, scroll: false }
+    fake.later = () => { fake.url = 'https://x.test/search?q=cats' }
+    const went = await withChange(7, 'type', { ref: 'e3', text: 'cats', submit: true }, async () => ({ tab: 7, typed: 'x', url: 'https://x.test/a' }))
+    expect(went.changed).toBe('Enter: went to https://x.test/search?q=cats')
+    // A plain type with no submit that only moved the field.
+    fake.later = null; fake.url = 'https://x.test/a'; fake.enter = undefined
+    expect((await withChange(7, 'type', { ref: 'e3', text: 'x' }, async () => { fake.values = 5; return { tab: 7 } })).changed).toBe('a field\'s value changed')
   })
 })

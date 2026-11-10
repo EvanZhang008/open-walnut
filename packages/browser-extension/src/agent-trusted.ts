@@ -268,7 +268,8 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
           else await again({ active: true, ...enter, ...typeProbe })
           if (at && l) await cdpClick(send, l.x, l.y)
           await cdpType(send, text, slowly ? SLOW_KEY_MS : 0)
-          if (a.submit === true) await cdpPress(send, 'Enter')
+          // The page's watch is marked before the Enter, so the answer tells what the Enter did (agent-change.ts).
+          if (a.submit === true) { await frameOp(tabId, 0, 'watch_mark', {}, c.allow, 2000).catch(() => undefined); await cdpPress(send, 'Enter') }
         }, undefined, taint)
         if (!dialog && sends) await check(kind)
         out = { typed: `${text.length} characters${l ? ` into ${l.what}` : ''}${slowly ? ', one key at a time' : ''}`, trusted: true }

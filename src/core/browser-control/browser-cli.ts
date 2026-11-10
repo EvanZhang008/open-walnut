@@ -440,7 +440,9 @@ const ACT_WORDS: Record<string, (b: Record<string, unknown>) => string> = {
  */
 function actLine(action: string, b: Record<string, unknown>): string {
   const did = ACT_WORDS[action](b).replace(/\s+$/, '')
-  const changed = typeof b.changed === 'string' ? `: ${b.changed}` : ''
+  // A typed text that submits says what its Enter did after what was typed; a pressed Enter says it once.
+  const said = typeof b.changed === 'string' ? (action === 'press' ? b.changed.replace(/^Enter:? /, '') : b.changed) : undefined
+  const changed = said === undefined ? '' : action === 'type' && /^Enter\b/.test(said) ? `; ${said}` : `: ${said}`
   // An older extension says nothing of what changed: the address it is at, as before.
   const tab = typeof b.tab === 'number' ? `  [tab ${b.tab}${!changed && typeof b.url === 'string' ? ` at ${b.url}` : ''}]` : ''
   const lines = [`ok  ${did}${changed}${tab}`]

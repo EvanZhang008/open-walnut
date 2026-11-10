@@ -11,7 +11,8 @@ import { clickFacts, clickTarget, enterFacts, judgeOutward, messageOf, orderTota
 import { cancelTyping, dragPoints, scrollIn, typeField, typeSlowly } from './page-input'
 import { annotate, refOfLabel } from './page-annotate'
 import { onScreenMiddle, pointAt, type CursorKind } from './page-cursor'
-import { armProbe, readProbe } from './page-probe'
+import { armProbe, markWatches, readProbe } from './page-probe'
+import { submitFrom } from './page-enter'
 
 /** position:fixed and sticky elements hidden after the first slice of a full screenshot, so they are drawn once. */
 let hiddenFixed: Array<{ el: HTMLElement; v: string }> = []
@@ -254,14 +255,33 @@ async function typeOp(args: Record<string, unknown>): Promise<unknown> {
   if (atPoint(args)) {
     const el = typeField(args)
     if (!el) throw new pa.PageError(`Nothing to type in at ${String(args.x)},${String(args.y)}.`, 'no_field')
-    return args.slowly === true ? typeSlowly(el, args) : pa.type({ ...args, ref: pa.refFor(el) })
+    return withEnter(args, args.slowly === true ? typeSlowly(el, args) : pa.type({ ...args, ref: pa.refFor(el) }))
   }
   if (args.slowly === true) {
     const el = typeField(args)
     if (!el || el === document.body) throw new pa.PageError('No field is focused: give the ref of the field to type in.', 'no_field')
-    return typeSlowly(el, args)
+    return withEnter(args, typeSlowly(el, args))
   }
-  return pa.type(args)
+  return withEnter(args, pa.type(args))
+}
+
+/**
+ * The typing's answer, then with `submit` its Enter (page-enter.ts) in the field the typing left the
+ * focus in. The typing starts at once on the judged field; the Enter was judged with it (one ask).
+ */
+async function withEnter(args: Record<string, unknown>, typed: Promise<{ typed: string }> | { typed: string }): Promise<Record<string, unknown>> {
+  const r = await typed
+  return args.submit === true ? { ...r, ...(await enterIn(document.activeElement, args, true)) } : r
+}
+
+/** Enter in a field (page-enter.ts); the search button it may fall back to is judged like any click. */
+function enterIn(el: Element | null, args: Record<string, unknown>, settle: boolean) {
+  return submitFrom(el && el !== document.body ? el : document.body, { settle, mayClick: (b) => held(args, [[{ click: true }, b]]) === null })
+}
+
+/** `press Enter`: the keys go at once (nothing awaited before them, page-enter.ts). */
+async function pressEnter(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return { pressed: 'Enter', ...(await enterIn(document.activeElement, args, false)) }
 }
 
 export async function runPageOp(op: string, args: Record<string, unknown>): Promise<unknown> {
@@ -283,7 +303,13 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
     case 'hover': { const t = pa.target(args); await pointAt(t.x, t.y); return pa.hover(args) }
     case 'type': return typeOp(args)
     case 'select': await toElement(() => pa.byRef(args.ref)); return pa.select(args)
-    case 'press': return held(args, [[{ key: String(args.key ?? '') }, document.activeElement]]) ?? pa.press(args)
+    case 'press': {
+      const h = held(args, [[{ key: String(args.key ?? '') }, document.activeElement]])
+      if (h) return h
+      return args.key === 'Enter' ? pressEnter(args) : pa.press(args)
+    }
+    // Right before the debugger's Enter of a typed text (agent-trusted.ts): the Enter's part of the watch starts.
+    case 'watch_mark': markWatches(); return { marked: true }
     case 'scroll': {
       // At a point or over an element: the cursor is there (a scroll of the whole page has no point).
       if (atPoint(args)) await pointAt(Number(args.x), Number(args.y))

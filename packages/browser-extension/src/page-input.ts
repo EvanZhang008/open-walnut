@@ -108,7 +108,7 @@ async function typeKeys(el: Element, args: Record<string, unknown>, run: number)
   const last = document.activeElement ?? el
   last.dispatchEvent(new Event('change', { bubbles: true }))
   if (run !== typingRun) throw new pa.PageError('Typing stopped before it submitted: a dialog opened.', 'dialog_interrupted')
-  if (args.submit === true) { pa.key(last, 'Enter', 'keydown'); pa.key(last, 'Enter', 'keyup'); if (last instanceof HTMLInputElement && last.form) last.form.requestSubmit() }
+  // The Enter of `submit` is page-enter.ts's (page-ops.ts sends it after this).
   return { typed: `${chars.length} characters, one key at a time, into ${pa.roleOf(el)} "${pa.clip(pa.nameOf(el), 60)}"` }
 }
 

@@ -8,7 +8,11 @@
  *     all), so a step is done only when its page saw it.
  *   - The change watch (agent-change.ts): from right before a step to its answer, whether the page
  *     changed (a mutation outside Walnut's own elements, a scroll anywhere in it) and a hash of its
- *     fields' values, so an acting step can say what it changed. Never the page's words.
+ *     fields' values, so an acting step can say what it changed. Never the page's words. A change of
+ *     the field being typed in (its value attribute, a clear button its box shows) is the field's
+ *     own, never "the page content changed" (2026-11-10: a typed search read so while nothing was
+ *     searched). A mark (page-enter.ts, right before Enter) splits what the typing changed from what
+ *     the Enter did.
  */
 
 /** The trusted events that show a step's input reached the page, by the step's kind. */
@@ -100,19 +104,64 @@ function walnutOwn(n: Node | null): boolean {
   return !!el?.closest('walnut-ext')
 }
 
-interface Watch { mutations: number; scrolls: number; stop: () => void; timer: ReturnType<typeof setTimeout> }
+/** The element that has the focus, inside open shadow roots too. */
+function deepActive(): Element | null {
+  let a: Element | null = document.activeElement
+  while (a?.shadowRoot?.activeElement) a = a.shadowRoot.activeElement
+  return a
+}
+
+const TEXT_FIELDS = 'input, textarea, [contenteditable=""], [contenteditable=true]'
+
+/** A field a person types in (not a checkbox or a button). */
+export function textField(el: Element | null): el is Element {
+  if (!el || el === document.body) return false
+  if (el instanceof HTMLTextAreaElement) return true
+  if (el instanceof HTMLInputElement) return !['checkbox', 'radio', 'submit', 'button', 'reset', 'image', 'file', 'range', 'color'].includes(el.type)
+  return (el as HTMLElement).isContentEditable === true || /^(textbox|searchbox|combobox)$/.test(el.getAttribute('role') ?? '')
+}
+
+/**
+ * The field's own box: the field, and the boxes around it (up to three) that hold no words and no
+ * other field (a styled wrapper with its icon and clear button). Not a form or a search area that
+ * has a label or a button with words.
+ */
+export function fieldBox(field: Element): Element {
+  let box = field
+  for (let i = 0; i < 3; i++) {
+    const p = box.parentElement
+    if (!p || p === document.body || p === document.documentElement) break
+    if ((p.textContent ?? '').replace(field.textContent ?? '', '').trim()) break
+    if (p.querySelectorAll(TEXT_FIELDS).length > 1) break
+    box = p
+  }
+  return box
+}
+
+/** A mutation of the focused text field or its own box: the field's change, not the page's. */
+function ownOfField(target: Node | null): boolean {
+  const f = deepActive()
+  if (!textField(f) || !target) return false
+  if (f === target || f.contains(target)) return true
+  const box = fieldBox(f)
+  return box !== f && box.contains(target)
+}
+
+interface Mark { mutations: number; scrolls: number; values: number; scroll: number }
+interface Watch { mutations: number; fields: number; scrolls: number; mark?: Mark; stop: () => void; timer: ReturnType<typeof setTimeout> }
 const watches = new Map<string, Watch>()
 
 /** Starts watching the page for a step's change. */
 export function watchChanges(id: string): void {
   if (!ID.test(id)) return
   stopWatch(id)
-  const w: Watch = { mutations: 0, scrolls: 0, stop: () => undefined, timer: setTimeout(() => stopWatch(id), LOOK_MS) }
+  const w: Watch = { mutations: 0, fields: 0, scrolls: 0, stop: () => undefined, timer: setTimeout(() => stopWatch(id), LOOK_MS) }
   const obs = typeof MutationObserver === 'function' ? new MutationObserver((recs) => {
     for (const r of recs) {
       if (walnutOwn(r.target)) continue
       // Walnut's cursor or frame put into (or taken out of) the document is not the page's change.
-      if (r.type === 'childList' && [...Array.from(r.addedNodes), ...Array.from(r.removedNodes)].every((x) => walnutOwn(x))) continue
+      if (r.type === 'childList' && [...Array.from(r.addedNodes ?? []), ...Array.from(r.removedNodes ?? [])].every((x) => walnutOwn(x))) continue
+      if (ownOfField(r.target)) { w.fields++; continue }
       w.mutations++
     }
   }) : null
@@ -132,6 +181,14 @@ function stopWatch(id: string): void {
   watches.delete(id)
 }
 
+/** Right before an Enter (page-enter.ts, agent-trusted.ts): what the watch sees from here on is the Enter's. */
+export function markWatches(): void {
+  if (!watches.size) return
+  const values = valuesHash()
+  const scroll = scrollOf()
+  for (const w of watches.values()) w.mark = { mutations: w.mutations, scrolls: w.scrolls, values, scroll }
+}
+
 /**
  * The page now (the 'agent-digest' message, content.ts): its fields' values and scroll, and with
  * `watch` it starts watching; with `read` what that watch saw (`watching: false` when this
@@ -142,7 +199,11 @@ export function pageDigest(args: { watch?: unknown; read?: unknown; done?: unkno
   const out: Record<string, unknown> = { values: valuesHash(), scroll: scrollOf() }
   if (typeof args.read === 'string') {
     const w = watches.get(args.read)
-    Object.assign(out, w ? { watching: true, mutations: w.mutations, scrolls: w.scrolls } : { watching: false })
+    Object.assign(out, w ? { watching: true, mutations: w.mutations, fields: w.fields, scrolls: w.scrolls } : { watching: false })
+    // What changed after the mark: the Enter's part of a typed text that submits.
+    if (w?.mark) {
+      out.enter = { mutations: w.mutations - w.mark.mutations, scrolls: w.scrolls - w.mark.scrolls, values: out.values !== w.mark.values, scroll: out.scroll !== w.mark.scroll }
+    }
     if (args.done === true) stopWatch(args.read)
   }
   return out

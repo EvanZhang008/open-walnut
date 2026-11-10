@@ -280,19 +280,31 @@ export function setNative(el: HTMLInputElement | HTMLTextAreaElement, value: str
   if (setter) setter.call(el, value); else el.value = value
 }
 
+/** The legacy key numbers pages still read (`keyCode === 13`); a KeyboardEvent built by script has 0 unless told. */
+const KEY_CODES: Record<string, number> = {
+  Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ' ': 32, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
+  Home: 36, End: 35, PageUp: 33, PageDown: 34, Insert: 45, Shift: 16, Control: 17, Alt: 18, Meta: 91,
+}
+const CODES: Record<string, string> = { ' ': 'Space' }
+
+/**
+ * One key event as a person's key makes it: `key`, `code`, and the legacy `keyCode`/`which` (and
+ * `charCode` on a keypress) that many pages still test; 2026-11-10: a site's search box ignored an
+ * Enter whose keyCode was 0. Chrome takes these from the init (an isolated world's event too).
+ */
 export function key(el: Element, k: string, type: 'keydown' | 'keyup' | 'keypress'): boolean {
-  const code = k.length === 1 ? `Key${k.toUpperCase()}` : k
-  return el.dispatchEvent(new KeyboardEvent(type, { key: k, code, bubbles: true, cancelable: true, composed: true }))
+  const one = [...k].length === 1
+  const code = CODES[k] ?? (one ? (/[a-z]/i.test(k) ? `Key${k.toUpperCase()}` : /\d/.test(k) ? `Digit${k}` : k) : k)
+  const keyCode = KEY_CODES[k] ?? (one ? k.toUpperCase().charCodeAt(0) : 0)
+  const charCode = type === 'keypress' ? (k === 'Enter' ? 13 : one ? k.charCodeAt(0) : 0) : 0
+  const legacy = type === 'keypress' ? charCode || keyCode : keyCode
+  return el.dispatchEvent(new KeyboardEvent(type, { key: k, code, keyCode: legacy, which: legacy, charCode, bubbles: true, cancelable: true, composed: true } as KeyboardEventInit))
 }
 
-function submitFrom(el: Element): void {
-  const go = key(el, 'Enter', 'keydown')
-  key(el, 'Enter', 'keypress')
-  key(el, 'Enter', 'keyup')
-  // A form sends on Enter by default; the page may have taken the key itself (then it did not).
-  if (go && (el instanceof HTMLInputElement) && el.form) el.form.requestSubmit()
-}
-
+/**
+ * The text typed as a person's typing sets it. `submit` (the Enter after it) is page-enter.ts's,
+ * run by page-ops.ts after this, so the page sees the typing settle before the key.
+ */
 export function type(args: { ref?: unknown; text?: unknown; clear?: unknown; submit?: unknown }): { typed: string } {
   const el = args.ref !== undefined ? byRef(args.ref) : document.activeElement
   if (!el || el === document.body) throw new PageError('No field is focused: give the ref of the field to type in.', 'no_field')
@@ -308,7 +320,6 @@ export function type(args: { ref?: unknown; text?: unknown; clear?: unknown; sub
     if (args.clear === true) { document.execCommand('selectAll'); document.execCommand('delete') }
     document.execCommand('insertText', false, value)
   } else throw new PageError(`${roleOf(el)} "${clip(nameOf(el), 40)}" is not a text field.`, 'not_a_field')
-  if (args.submit === true) submitFrom(el)
   return { typed: `${value.length} characters into ${roleOf(el)} "${clip(nameOf(el), 60)}"` }
 }
 
@@ -324,12 +335,14 @@ export function select(args: { ref?: unknown; value?: unknown }): { selected: st
   return { selected: clip(opt.textContent ?? opt.value, 60) }
 }
 
+/** A key other than Enter (Enter is page-enter.ts's: page-ops.ts sends it there). */
 export function press(args: { key?: unknown }): { pressed: string } {
   const k = String(args.key ?? '')
   if (!k) throw new PageError('Say which key.', 'no_key')
   const el = document.activeElement ?? document.body
-  if (k === 'Enter') { submitFrom(el); return { pressed: k } }
   const go = key(el, k, 'keydown')
+  // A key that types a character has its keypress, as a person's does.
+  if (go && [...k].length === 1) key(el, k, 'keypress')
   key(el, k, 'keyup')
   // Tab moves the focus as a browser would, when the page did not take the key.
   if (go && k === 'Tab') {

@@ -51,6 +51,17 @@ describe('what an acting step prints', () => {
       .toBe('ok  typed 2 characters into textbox "Search": a field\'s value changed  [tab 7]\n')
   })
 
+  it('a typed text that submits: what was typed, then what its Enter did; a pressed Enter says it once', async () => {
+    expect(await out(['type', 'e17', 'walnut personal ai', '--submit'], { tab: 7, typed: '18 characters into textbox "Search GitHub"', changed: 'Enter: went to https://x.test/search?q=walnut' }))
+      .toBe('ok  typed 18 characters into textbox "Search GitHub"; Enter: went to https://x.test/search?q=walnut  [tab 7]\n')
+    const quiet = await out(['type', 'e17', 'cats', '--submit'], { tab: 7, typed: '4 characters into textbox "Search"', changed: 'Enter changed nothing on the page (no navigation, nothing submitted; the text is in the field): click the search or submit button beside it (find search), or open the results address directly' })
+    expect(quiet).toMatch(/^ok {2}typed 4 characters into textbox "Search"; Enter changed nothing on the page \(no navigation/)
+    expect(quiet).not.toContain('page content changed')
+    expect(await out(['press', 'Enter'], { tab: 7, pressed: 'Enter', changed: 'Enter: went to https://x.test/s' })).toBe('ok  pressed Enter: went to https://x.test/s  [tab 7]\n')
+    expect(await out(['press', 'Enter'], { tab: 7, pressed: 'Enter', changed: 'Enter changed nothing on the page (no navigation, nothing submitted; the text is in the field): x' }))
+      .toBe('ok  pressed Enter: changed nothing on the page (no navigation, nothing submitted; the text is in the field): x  [tab 7]\n')
+  })
+
   it('nothing changed says not to wait; trusted false says why; a match it chose is named', async () => {
     const t = await out(['click', '--text', 'Next'], { tab: 7, clicked: 'button "Next"', changed: 'nothing changed on the page', trusted: false, why: 'the agent window is covered; Chrome drops real input there, so page events were used', matched: { ref: 'e9', of: 3 } })
     expect(t).toContain('ok  clicked button "Next": nothing changed on the page  [tab 7]')

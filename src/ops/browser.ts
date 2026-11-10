@@ -118,6 +118,7 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       return {
         outcome: `Done${tab}${where}.${changed?.startsWith('opened') ? '' : also}${matched}${why}`,
         next: changed === 'nothing changed on the page' ? 'Nothing to wait for (no change in its text, fields, scroll or address): snapshot to check before acting again.'
+          : changed?.startsWith('Enter changed nothing on the page') ? 'Nothing was submitted: click the search or submit button beside the field (find search), or open the results address.'
           : body.page_text ? 'Read page_text; act again by ref (snapshot lists them).' : 'snapshot to act on what is there now, or text to read it.',
       }
     }
@@ -168,7 +169,7 @@ defineOp({
     + 'Start here (a read takes 3 to 5 calls): open {url, read_text: true} (the tab and its main text); snapshot (the elements on screen, a ref each: e12); '
     + 'click {ref} or {text: its words} (read_text: true reads the page after); type {ref, text, submit?}; text (the main content without menus, header or footer, 4000 characters; ref or selector: one element; max; all: the whole page); '
     + 'find {text} (the best few matches); wait {text | url | textGone, ms?} (10 s unless ms); close. '
-    + 'Every acting step answers `changed`: went to <url>, opened tab N, the page content changed, or nothing changed on the page (then do not wait: snapshot and act again). '
+    + 'Every acting step answers `changed`: went to <url>, opened tab N, the page content changed, a field\'s value changed (only the field typed in), or nothing changed on the page (then do not wait: snapshot and act again); a type with submit says what its Enter did ("Enter: went to <url>", or "Enter changed nothing ..." with what to try). '
     + 'Subagents may use it too: the same task, tabs and approvals. '
     + 'You act only in tabs your task opened (and the tabs those open), or a tab of the user\'s you take. Actions: tabs (all: every tab of the browser, title and address only); '
     + 'take {tab} (one of the user\'s tabs, never the one they are on: person_is_here); open {url}; navigate {tab, url}; back; close (a taken tab is given back, not closed); '

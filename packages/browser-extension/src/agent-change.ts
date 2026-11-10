@@ -9,7 +9,11 @@
  * tab's address and document are compared. A step that may set work going (a click, a key, a form)
  * and changed nothing is looked at once or twice more, briefly, for a page that answers late. A
  * step in a frame, or a page that could not be watched, says so or says nothing: never a guessed
- * "nothing changed".
+ * "nothing changed". The field being typed in changing (its value, its own box) is "a field's value
+ * changed", never "the page content changed". A typed text that submits says what its Enter did,
+ * apart from the typing (the page marks its watch right before the Enter): `Enter: went to <url>`,
+ * or that Enter changed nothing, with what to do instead (2026-11-10: a search typed with --submit
+ * read "the page content changed" while nothing was searched).
  */
 import { ext } from './ext'
 import { sleep, toPage } from './page-reach'
@@ -24,7 +28,13 @@ export const NOTHING = 'nothing changed on the page'
 const LOOK_WAIT_MS = 3000
 export const IN_FRAME = 'it acted inside a frame; the page around it did not change (the frame\'s own change is not checked)'
 
-export interface PageMark { url?: string; doc?: string; values?: number; scroll?: number; watching?: boolean; mutations?: number; scrolls?: number }
+/** What the watch saw after its mark (the Enter of a typed text). */
+export interface EnterMark { mutations: number; scrolls: number; values: boolean; scroll: boolean }
+export interface PageMark { url?: string; doc?: string; values?: number; scroll?: number; watching?: boolean; mutations?: number; fields?: number; scrolls?: number; enter?: EnterMark }
+
+/** Enter changed nothing: the words, and what to try. */
+export const ENTER_NOTHING = 'Enter changed nothing on the page (no navigation, nothing submitted; the text is in the field): '
+  + 'click the search or submit button beside it (find search), or open the results address directly'
 
 /** The tab's address and what its page says (`watch` starts its watch, `read` reads it). */
 export async function markOf(tabId: number, look: { watch?: string; read?: string; done?: boolean } = {}): Promise<PageMark> {
@@ -37,7 +47,7 @@ export async function markOf(tabId: number, look: { watch?: string; read?: strin
   return {
     ...(t?.url ? { url: t.url } : {}),
     ...(page ? { doc: d!.doc, values: d!.values, scroll: d!.scroll } : {}),
-    ...(page && look.read ? { watching: d!.watching === true, mutations: d!.mutations ?? 0, scrolls: d!.scrolls ?? 0 } : {}),
+    ...(page && look.read ? { watching: d!.watching === true, mutations: d!.mutations ?? 0, fields: d!.fields ?? 0, scrolls: d!.scrolls ?? 0, ...(d!.enter ? { enter: d!.enter } : {}) } : {}),
   }
 }
 
@@ -56,9 +66,32 @@ export function changedLine(before: PageMark, after: PageMark, result: Record<st
   if (before.doc && after.doc && before.doc !== after.doc) return `the page loaded again${title}`
   if (before.values === undefined || after.values === undefined || after.watching !== true) return undefined
   if ((after.mutations ?? 0) > 0) return 'the page content changed'
-  if (before.values !== after.values) return 'a field\'s value changed'
+  if (before.values !== after.values || (after.fields ?? 0) > 0) return 'a field\'s value changed'
   if ((after.scrolls ?? 0) > 0 || before.scroll !== after.scroll) return 'the page scrolled'
   return inFrame ? IN_FRAME : NOTHING
+}
+
+/**
+ * The line of a typed text that submits: what its Enter did (and the search button page-enter.ts
+ * clicked when Enter alone did nothing). Undefined when the page could not be watched.
+ */
+export function enterLine(before: PageMark, after: PageMark, result: Record<string, unknown>, inFrame = false): string | undefined {
+  const button = typeof result.submit === 'string' && result.submit !== 'form' ? result.submit : undefined
+  const lead = button ? `Enter changed nothing, so it clicked ${button}: ` : 'Enter: '
+  const whole = changedLine(before, after, result, inFrame)
+  if (whole === undefined || inFrame) return whole
+  // An address, a reload, a new tab or a dialog: the Enter's (the typing makes none of them).
+  if (whole !== 'the page content changed' && whole !== 'a field\'s value changed' && whole !== 'the page scrolled' && whole !== NOTHING) return `${lead}${whole}`
+  const e = after.enter
+  if (!e) {
+    // The page never saw the mark (an older page script): the typing and the Enter are not told apart.
+    if (whole === 'the page content changed') return 'the page content changed (the typing or its Enter: text or snapshot shows which)'
+    return result.enter_quiet === true || whole === NOTHING || whole === 'a field\'s value changed' ? ENTER_NOTHING : whole
+  }
+  if (e.mutations > 0) return `${lead}the page content changed (no navigation)`
+  if (e.values) return `${lead}a field's value changed (no navigation)`
+  if (e.scrolls > 0 || e.scroll) return `${lead}the page scrolled (no navigation)`
+  return ENTER_NOTHING
 }
 
 const watchId = (): string => `w${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`
@@ -90,12 +123,17 @@ export async function withChange(tabId: number, action: string, args: Record<str
   const inFrame = framed(args.ref) || !!m?.frame || framed(m?.ref)
     || (Array.isArray(args.fields) && (args.fields as Array<{ ref?: unknown }>).some((f) => framed(f?.ref)))
   const late = LATE_ACTS.has(action)
-  let line = changedLine(before, await markOf(tab, { read: id, done: !late }), r, inFrame)
+  // A typed text that submits: what its Enter did, apart from the typing.
+  const submits = (action === 'type' && args.submit === true) || (action === 'press' && args.key === 'Enter')
+  const lineOf = (after: PageMark) => (submits ? enterLine : changedLine)(before, after, r, inFrame)
+  // An Enter that changed the page but not its address yet may still go somewhere: looked at again too.
+  const quiet = (l: string | undefined) => l === NOTHING || l === IN_FRAME || l === ENTER_NOTHING || (submits && !!l?.endsWith('(no navigation)'))
+  let line = lineOf(await markOf(tab, { read: id, done: !late }))
   if (late) {
     for (const ms of LATE_MS) {
-      if (line !== NOTHING && line !== IN_FRAME) break
+      if (!quiet(line)) break
       await sleep(ms)
-      line = changedLine(before, await markOf(tab, { read: id }), r, inFrame)
+      line = lineOf(await markOf(tab, { read: id }))
     }
     void markOf(tab, { read: id, done: true }).catch(() => undefined)
   }
