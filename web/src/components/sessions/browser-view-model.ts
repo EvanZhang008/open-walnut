@@ -187,7 +187,11 @@ export const tabKey = (t: { device: string; tab: number }): string => `${t.devic
 
 /** The tab the view follows: the one picked (browser and tab) while it is still there, else the newest. */
 export function followedTab(tabs: BrowserViewTab[], picked: string | null): BrowserViewTab | undefined {
-  return tabs.find((t) => tabKey(t) === picked) ?? tabs[tabs.length - 1];
+  const chosen = tabs.find((t) => tabKey(t) === picked) ?? tabs[tabs.length - 1];
+  // A tab where the agent asks the person to sign in comes first: the header pill says "Sign in",
+  // so opening the view must show that ask, not another tab (2026-11-09 review).
+  if (chosen && chosen.signIn && !chosen.driving) return chosen;
+  return [...tabs].reverse().find((t) => t.signIn && !t.driving) ?? chosen;
 }
 
 /** How long after a frame's answer the next one is asked for. */

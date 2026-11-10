@@ -36,6 +36,11 @@ const LIVE_SOURCES: Array<[string, RegExp]> = [
   ['browser hook', /\buseBrowserView\b/],
   ['browser view', /\bSessionBrowserCard\b/],
   ['browser route', /\/api\/v1\/browser\/view/],
+  // What draws one counts as reading it, so a wrapper of a pill or a view mounted in the chat
+  // (a "LiveResourceCard" rendering SessionBrowserChip) is a new reader too.
+  ['servers pill', /\bSessionServersChip\b/],
+  ['browser pill', /\bSessionBrowserChip\b/],
+  ['web view', /\bSessionWebView\b/],
 ];
 
 /** Every file allowed to read one, and why it is not a card in the chat. */
@@ -76,9 +81,22 @@ describe('live resources are header pills only', () => {
     expect(stale, 'listed but reads no live resource any more').toEqual([]);
   });
 
+  it('a wrapper that only draws a pill or the view counts as a reader', () => {
+    // 2026-11-09 review: a LiveResourceCard rendering SessionBrowserChip, mounted in the chat,
+    // passed the first version of this guard.
+    for (const src of ['<SessionBrowserChip taskId={id} view={v} />', '<SessionServersChip servers={s} />', '<SessionBrowserCard taskId={id} />', '<SessionServerList servers={s} />']) {
+      expect(LIVE_SOURCES.some(([, re]) => re.test(strip(src))), src).toBe(true);
+    }
+  });
+
   it('the chat timeline files read no live resource', () => {
-    const chat = files(path.join(WEB, 'components/sessions'))
-      .filter((f) => /SessionChat|ChatHistory|Composer|Timeline|TurnCard/.test(path.basename(f)));
+    // The chat's files by name, and every module the timeline imports (whatever it is called).
+    const dir = path.join(WEB, 'components/sessions');
+    const history = fs.readFileSync(path.join(dir, 'SessionChatHistory.tsx'), 'utf8');
+    const imported = [...history.matchAll(/from '\.\/([^']+)'/g)]
+      .map((m) => ['.tsx', '.ts'].map((x) => path.join(dir, m[1]! + x)).find((f) => fs.existsSync(f)))
+      .filter((f): f is string => !!f);
+    const chat = [...new Set([...files(dir).filter((f) => /SessionChat|ChatHistory|Composer|Timeline|TurnCard/.test(path.basename(f))), ...imported])];
     expect(chat.length).toBeGreaterThan(0);
     for (const f of chat) {
       const src = strip(fs.readFileSync(f, 'utf8'));

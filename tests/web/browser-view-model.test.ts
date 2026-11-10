@@ -43,6 +43,12 @@ describe('the Browser view\'s words', () => {
     expect(followedTab([tab(1), tab(2)], 'extension-aaaaaa:1')?.tab).toBe(1)
     expect(followedTab([tab(1), tab(2)], 'extension-aaaaaa:9')?.tab).toBe(2)
     expect(followedTab([], null)).toBeUndefined()
+    // A sign-in ask on another tab is shown first (the pill says Sign in), unless the picked tab asks too.
+    const ask = { ...tab(1), signIn: { id: 'si', at: '2026-11-09T00:00:00Z' } }
+    expect(followedTab([ask, tab(2)], null)?.tab).toBe(1)
+    expect(followedTab([ask, tab(2)], 'extension-aaaaaa:2')?.tab).toBe(1)
+    expect(followedTab([ask, { ...tab(2), signIn: ask.signIn }], 'extension-aaaaaa:2')?.tab).toBe(2)
+    expect(followedTab([{ ...ask, driving: true }, tab(2)], null)?.tab).toBe(2)
   })
 
   it('tells two browsers\' tab 42 apart (the browser and the tab, never the tab alone)', () => {
