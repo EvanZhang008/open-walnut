@@ -123,7 +123,7 @@ const CLIENTS: Record<string, Client> = {
   'src/host-server/daemon-link.ts': { frames: 1, resends: 'request() goes through the loop; the dial and status poll use the same call(), before any request' },
   'src/commands/net.ts': { frames: 1, resends: 'daemonRpc is the loop over daemonRpcOnce' },
   'src/providers/local-daemon.ts': { frames: 3, exempt: 'its probes of the daemon on one port (hello, exec.list, the login-session check): they ask that daemon itself, and the next probe or ensureRunning asks the next one' },
-  'src/providers/daemon-service-cli.ts': { frames: 1, exempt: 'the service check after a swap says hello to learn which daemon serves; a draining one is the answer it looks for' },
+  'src/providers/daemon-service-ready.ts': { frames: 1, exempt: 'the service check after a swap (daemonReady) says hello to learn which daemon serves; a draining one is the answer it looks for' },
   'src/providers/stream-lane.ts': { frames: 1, exempt: 'the lane dial (hello, stream.lane): a refusal drops the lane and its own redial reaches the next daemon' },
 }
 

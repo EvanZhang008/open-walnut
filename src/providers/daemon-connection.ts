@@ -39,7 +39,7 @@ import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
 import { assertDaemonDialsOpen, daemonDialsClosed } from './daemon-dial-gate.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
-import { BUILD_BACKOFF_MS, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
+import { BUILD_BACKOFF_MS, backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 import { BACK_TRIES_MAX, pendingReplaces } from './daemon-update-store.js'
 import { gateSessionCommand, settleSessionCommand } from './ephemeral-session-gate.js'
 import { buildRemotePreamble } from './session-io.js'
@@ -4222,9 +4222,9 @@ export class DaemonConnection {
       }
       const failedHere = await this.realDirFailure()
       if (failedHere && buildBackedOff(failedHere, expected)) {
-        log.session.warn('DaemonConnection: this build did not start on the host after its trial; the running daemon keeps serving until a newer build comes', {
-          host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)', reason: failedHere.reason,
-        })
+        // Asked again when its day off ends (a newer build is tried at once), never left until the link drops.
+        this.postponeUpgrade(`this build did not stay serving on the host, so the running daemon keeps serving; asked again when its day off ends (${failedHere.reason.slice(0, 200)})`, expected, remoteVersion,
+          { delayMs: backoffLeftMs(failedHere) })
         return false
       }
       if (await this.acpTurnsOpen(expected, remoteVersion)) return false
@@ -4493,9 +4493,20 @@ export class DaemonConnection {
   private _forcedTries: { expected: string; n: number } | null = null
   private _forcedSpentNoted: string | null = null
   static MAX_FORCED_TRIES = 3
-  private countForcedTry(expected: string): void {
-    if (!this._overdueMs) return
+  private countForcedTry(expected: string): boolean {
+    if (!this._overdueMs) return false
     this._forcedTries = { expected, n: this._forcedTries?.expected === expected ? this._forcedTries.n + 1 : 1 }
+    return true
+  }
+
+  /**
+   * A counted try whose swap never happened (held or deferred on the host after its upload): it went
+   * over nothing, so it does not use up the forced tries (2026-11-10 review: three dark-wake deferrals
+   * spent them, and the holds were back with no bound).
+   */
+  private uncountForcedTry(expected: string): void {
+    if (this._forcedTries?.expected !== expected) return
+    this._forcedTries = this._forcedTries.n > 1 ? { expected, n: this._forcedTries.n - 1 } : null
   }
 
   /** Overdue: the update goes over the daemon's own work (`--over-busy`). */
@@ -4811,7 +4822,12 @@ export class DaemonConnection {
     }
     // A build that answered ok and then did not stay serving there: a day, not the 10 min cooldown
     // (2026-11-04 review: each try stopped the daemon and put the previous one back).
-    if (buildBackedOff(await this.realDirFailure(), expected)) return false
+    const failedHere = await this.realDirFailure()
+    if (failedHere && buildBackedOff(failedHere, expected)) {
+      this.postponeUpgrade(`this build did not stay serving on the host, so the running daemon keeps serving; asked again when its day off ends (${failedHere.reason.slice(0, 200)})`, expected, remoteVersion,
+        { delayMs: backoffLeftMs(failedHere) })
+      return 'held'
+    }
     if (!(await this.hasDaemonBinary())) return false
     // The last update's probation still watches the new daemon there (daemon-update-probation.ts):
     // its copies are the way back from a build that fails late, and this update's snapshot would
@@ -4837,6 +4853,7 @@ export class DaemonConnection {
       return stageFailed(error)
     }
     let swapping = false
+    let counted = false
     // The update's record, on disk from its launch: a server restarted during the update (a deploy)
     // reads it back before any new attempt (2026-11-04 review 4: it was kept only once a 15 min wait
     // gave up, so the next server stopped the healthy daemon once more for a build that had failed).
@@ -4865,7 +4882,7 @@ export class DaemonConnection {
           this._stageFail = null
           this._lastUpgradeAttempt = { expected, at: Date.now() }
           swapping = true
-          this.countForcedTry(expected)
+          counted = this.countForcedTry(expected)
           this.beginHandover()
           return true
         },
@@ -4889,6 +4906,7 @@ export class DaemonConnection {
       // nothing was changed, asked again in a minute.
       if (error instanceof Error && error.name === 'NetUpdateHeldError') {
         this._lastUpgradeAttempt = null
+        if (counted) this.uncountForcedTry(expected)
         this.postponeUpgrade(said, expected, remoteVersion, { steady: true })
         return 'held'
       }
@@ -4897,6 +4915,7 @@ export class DaemonConnection {
       const deferredAt = said.indexOf('update deferred: ')
       if (deferredAt >= 0) {
         this._lastUpgradeAttempt = null
+        if (counted) this.uncountForcedTry(expected)
         this.postponeUpgrade(said.slice(deferredAt, deferredAt + 400), expected, remoteVersion, { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS })
         return 'held'
       }
@@ -4967,6 +4986,11 @@ export class DaemonConnection {
     const fields = { host: this.hostKey, expected: u.expected, startedAt: u.at }
     if (back.state === 'none') {
       log.session.warn('DaemonConnection: managed daemon update left no record on the host (it may have restarted)', { ...fields, scriptLeft: back.scriptLeft })
+      return read()
+    }
+    if (back.nothingDone) {
+      // Held or deferred on the host before it changed anything: asked again on the upgrade clock, no failure.
+      log.session.info('DaemonConnection: managed daemon update read back after the wait ended: the host changed nothing', { ...fields, said: back.message.slice(0, 300) })
       return read()
     }
     if (back.applied) {

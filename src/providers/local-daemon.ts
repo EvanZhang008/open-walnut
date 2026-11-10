@@ -60,7 +60,7 @@ import { clearDaemonSwap, expectDaemonSwap } from './daemon-drain-resend.js'
 import { daemonLaunch, discardPending, keepPendingBinary, keepPreviousSource, keepRunningBinary, keptPrevious, previousDaemon, promotePending, ReplacementGate, trialDaemon } from './local-daemon-replace.js'
 import { STAY_MS, StayWatch } from './local-daemon-stay.js'
 import { provenBuilds, stayWatches } from './daemon-update-store.js'
-import { buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
+import { backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 
 /** True only when the config says nothing runs on Claude Code (core/agents/claude-code-needed.ts); a read that fails says it may. */
 async function claudeCodeNotNeeded(): Promise<boolean> {
@@ -446,7 +446,7 @@ export class LocalDaemon {
    * restart. Re-running it is safe: a turn still open defers again, an idle
    * daemon is upgraded.
    */
-  private scheduleUpgradeRecheck(): void {
+  private scheduleUpgradeRecheck(delayMs = LOCAL_UPGRADE_RECHECK_MS): void {
     if (this._upgradeRecheck) return
     this._upgradeRecheck = setTimeout(() => {
       this._upgradeRecheck = null
@@ -455,7 +455,7 @@ export class LocalDaemon {
           error: err instanceof Error ? err.message : String(err),
         })
       })
-    }, LOCAL_UPGRADE_RECHECK_MS)
+    }, delayMs)
     this._upgradeRecheck.unref?.()
   }
 
@@ -1032,7 +1032,10 @@ export class LocalDaemon {
         this.scheduleUpgradeRecheck()
         return
       }
-      if (outcome === 'busy' || outcome === 'later') {
+      if (outcome === 'backoff') {
+        // Its day off: the old daemon keeps serving, and the update is asked again once the day is over.
+        this.scheduleUpgradeRecheck(this._managedFail ? backoffLeftMs(this._managedFail) : LOCAL_UPGRADE_RECHECK_MS)
+      } else if (outcome === 'busy' || outcome === 'later') {
         // Work of its own started after the hello (a host_exec run), or a try within 10 minutes:
         // the old daemon keeps serving. Overdue (this._overdueMs), the next try goes over that work.
         this.scheduleUpgradeRecheck()
@@ -1058,13 +1061,14 @@ export class LocalDaemon {
     })
   }
 
-  private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null | 'busy' | 'later'> {
+  private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null | 'busy' | 'later' | 'backoff'> {
     if (binaryPath.endsWith('.cjs')) return null
     const scope = this.managedScope()
     if (!scope) return null
     if (this._lastManagedUpdate?.expected === expected && Date.now() - this._lastManagedUpdate.at < LOCAL_MANAGED_UPDATE_COOLDOWN_MS) return 'later'
     if (this._managedFail === undefined) this._managedFail = await readBuildBackoff(`local:${this.daemonDir}`)
-    if (buildBackedOff(this._managedFail, expected)) return null
+    // A build that answered ok and did not stay serving: asked again when its day off ends (startManagedUpdate).
+    if (this._managedFail && buildBackedOff(this._managedFail, expected)) return 'backoff'
     this._lastManagedUpdate = { expected, at: Date.now() }
     // Detached, with the tail after it (local-daemon-service.ts): a server stopped mid-update no longer takes the update with it.
     const { updateLocalService } = await import('./local-daemon-service.js')
@@ -1098,7 +1102,10 @@ export class LocalDaemon {
       return 'busy'
     }
     const port = this.readPortFile()
-    if (!port) throw new Error('Managed daemon update returned without a runtime port')
+    if (!port) {
+      clearDaemonSwap('daemon:__local__')
+      throw new Error('Managed daemon update returned without a runtime port')
+    }
     return port
   }
 

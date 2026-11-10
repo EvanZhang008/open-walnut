@@ -616,8 +616,8 @@ describe.each([
     const exited = deferred<number>()
     const order: string[] = []
     const logMsg = vi.fn()
-    const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
-      daemonCommands, hostFix: { cancel: vi.fn(() => false) }, releaseGatewayWaiters: vi.fn(),
+    const stop = compile<() => void>(stopDaemonSource(source), {
+      daemonCommands, hostFix: { cancel: vi.fn(() => false) }, hostExec: { stuck: () => false }, releaseGatewayWaiters: vi.fn(),
       releaseGatewayRelays: () => { order.push('relays') }, noteRestarting: () => { order.push('mark') },
       cronRuntime: { close: vi.fn(async () => {}) }, netSupervisor: { stop: vi.fn(async () => {}) },
       persistRegistry: () => { order.push('persist') }, cleanup: () => { order.push('cleanup') },

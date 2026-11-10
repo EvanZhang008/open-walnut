@@ -79,17 +79,23 @@ export function afterUpdateFailure(error: unknown): string {
   return 'what serves on the host now is not known'
 }
 
-/** A record read back: did the new build come to serve, and is the build itself at fault (the day's hold)? */
-export interface RecordVerdict { applied: boolean; buildFailed: boolean; message: string }
+/**
+ * A record read back: did the new build come to serve, and is the build itself at fault (the day's
+ * hold)? `nothingDone`: the host held or deferred it before it changed anything (a probation or
+ * another runner at work, the install lock, launchd starting no jobs): no failure, asked again.
+ */
+export interface RecordVerdict { applied: boolean; buildFailed: boolean; nothingDone: boolean; message: string }
 
 export function judgeUpdateRecord(record: NetUpdateRecord): RecordVerdict {
   try {
     const { output, tail } = answerOfRecord(record)
     judgeServiceUpdate(output, tail)
-    return { applied: true, buildFailed: false, message: '' }
+    return { applied: true, buildFailed: false, nothingDone: false, message: '' }
   } catch (error) {
     const e = error as Error & { buildFailed?: unknown }
-    return { applied: false, buildFailed: e.buildFailed === true, message: e.message }
+    // By name: tests replace daemon-net-update-io.ts, where the class lives, with a double.
+    const nothingDone = e.buildFailed !== true && (e.name === 'NetUpdateHeldError' || String(e.message).includes('update deferred: '))
+    return { applied: false, buildFailed: e.buildFailed === true, nothingDone, message: e.message }
   }
 }
 

@@ -20,6 +20,7 @@ import { parseUpdateTail, updateSnapshotScript, updateTailScript, type UpdateTai
 import { answerOfRecord, LAUNCHED, launcherScript, PROBATION_BUSY, readNetUpdateRecord, RUNNER_BUSY, runnerScript } from '../../src/providers/daemon-net-update-io.js'
 import { parseProbing, PROBATION_GRACE_SECONDS, PROBATION_SECONDS, PROBATION_STARTING_NAME, PROBATION_STARTING_SECONDS, probationRecordLines, probingCheckScript } from '../../src/providers/daemon-update-probation.js'
 import { servicePreamble } from '../../src/providers/daemon-update-shell.js'
+import { judgeUpdateRecord } from '../../src/providers/daemon-update-readback.js'
 import { createServiceStubs, type ServiceStubs } from '../helpers/service-stubs.js'
 import { endRecordedProbations } from '../helpers/probation-cleanup.js'
 
@@ -228,6 +229,8 @@ describe('a later update while the probation runs', () => {
     expect(fs.existsSync(path.join(dir, 'before.cfg'))).toBe(false)
     const record = await readNetUpdateRecord((file) => fs.promises.readFile(file, 'utf8').catch(() => null), dir)
     expect(() => answerOfRecord(record!)).toThrow(PROBATION_BUSY)
+    // Read back later (the server's wait ended): nothing was done, so no failure (2026-11-10 review).
+    expect(judgeUpdateRecord(record!)).toMatchObject({ applied: false, buildFailed: false, nothingDone: true })
     expect(fs.readFileSync(unit(), 'utf8')).toBe(newUnit)
     await new Promise((r) => setTimeout(r, 2_000))
     expect(alive(watcher)).toBe(true)

@@ -356,13 +356,13 @@ describe('LocalDaemon managed service updates', () => {
   // tried again every 10 minutes, each try a stop and a put-back of this machine's daemon.
   it('a build that answered ok and did not stay serving is not tried again for a day; any other failure is, after 10 minutes', async () => {
     const daemon = new LocalDaemon({ daemonDir: PROD_DAEMON_DIR, binaryPath: '/fixture/daemon' })
-    const internals = daemon as unknown as { updateManagedDaemon(path: string, version: string): Promise<number | null | 'busy'> }
+    const internals = daemon as unknown as { updateManagedDaemon(path: string, version: string): Promise<number | null | 'busy' | 'backoff'> }
     vi.spyOn(priv(daemon), 'detectServiceTakeover').mockReturnValue({ managed: true, present: [daemonServiceConfigPaths()[0]], unknown: [] })
     const later = (ms: number) => { priv(daemon)._lastManagedUpdate.at -= ms; if (priv(daemon)._managedFail) priv(daemon)._managedFail.at -= ms }
     localUpdate.mockRejectedValue(Object.assign(new Error('the update answered ok, but afterwards on the host: the previous service config was put back'), { tailOutcome: 'restored', buildFailed: true }))
     await expect(internals.updateManagedDaemon('/fixture/daemon', 'new-version')).rejects.toThrow('Managed daemon update failed')
     later(11 * 60_000)
-    expect(await internals.updateManagedDaemon('/fixture/daemon', 'new-version')).toBeNull()
+    expect(await internals.updateManagedDaemon('/fixture/daemon', 'new-version')).toBe('backoff')
     expect(localUpdate).toHaveBeenCalledTimes(1)
     later(24 * 60 * 60_000)
     await expect(internals.updateManagedDaemon('/fixture/daemon', 'new-version')).rejects.toThrow('Managed daemon update failed')
@@ -383,17 +383,36 @@ describe('LocalDaemon managed service updates', () => {
       const make = () => {
         const daemon = new LocalDaemon({ daemonDir: PROD_DAEMON_DIR, binaryPath: '/fixture/daemon' })
         vi.spyOn(priv(daemon), 'detectServiceTakeover').mockReturnValue({ managed: true, present: [daemonServiceConfigPaths()[0]], unknown: [] })
-        return daemon as unknown as { updateManagedDaemon(path: string, version: string): Promise<number | null | 'busy'> }
+        return daemon as unknown as { updateManagedDaemon(path: string, version: string): Promise<number | null | 'busy' | 'backoff'> }
       }
       localUpdate.mockRejectedValue(Object.assign(new Error('Managed daemon update failed: the daemon never answered as ready'), { buildFailed: true }))
       await expect(make().updateManagedDaemon('/fixture/daemon', 'new-version')).rejects.toThrow('Managed daemon update failed')
       await buildBackoffSettled()
-      expect(await make().updateManagedDaemon('/fixture/daemon', 'new-version')).toBeNull()
+      expect(await make().updateManagedDaemon('/fixture/daemon', 'new-version')).toBe('backoff')
       expect(localUpdate).toHaveBeenCalledTimes(1)
     } finally {
       delete process.env.WALNUT_BUILD_BACKOFF_FILE
       fs.rmSync(file, { force: true })
     }
+  })
+
+  // 2026-11-10 review: a build on its day off was never asked again while this server ran, and the
+  // log told the user to install the daemon by hand.
+  it('a build on its day off is asked again when the day ends, with no advice to install by hand', async () => {
+    const daemon = new LocalDaemon({ daemonDir: PROD_DAEMON_DIR, binaryPath: '/fixture/daemon' })
+    vi.spyOn(priv(daemon), 'detectServiceTakeover').mockReturnValue({ managed: true, present: [daemonServiceConfigPaths()[0]], unknown: [] })
+    const internals = daemon as unknown as { _managedFail: unknown; startManagedUpdate(path: string, expected: string, running: string | null): void; scheduleUpgradeRecheck(ms?: number): void }
+    internals._managedFail = { expected: 'new-version', at: Date.now() - 60 * 60_000, reason: 'the daemon never answered as ready' }
+    const recheck = vi.spyOn(internals, 'scheduleUpgradeRecheck').mockImplementation(() => {})
+    const error = vi.spyOn(log.session, 'error').mockImplementation(() => {})
+    internals.startManagedUpdate('/fixture/daemon', 'new-version', 'old-version')
+    await daemon.managedUpdatePending
+    expect(localUpdate).not.toHaveBeenCalled()
+    expect(recheck).toHaveBeenCalledTimes(1)
+    const ms = recheck.mock.calls[0][0]!
+    expect(ms).toBeGreaterThan(22 * 60 * 60_000)
+    expect(ms).toBeLessThanOrEqual(23 * 60 * 60_000 + 5_000)
+    expect(error).not.toHaveBeenCalled()
   })
 
   // 2026-11-04 review 4: startServer awaits ensureRunning() before it listens, and that waited on

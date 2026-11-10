@@ -4,7 +4,7 @@
  * server's own writes in flight, a connect in progress and the daemon's own busy refusal took
  * turns, each with its own clock or none, so no clock ever ran out. This ratchet:
  *  - finds every place an update is put off (daemon-connection.ts `postponeUpgrade(`, local-daemon.ts
- *    `scheduleUpgradeRecheck()`, daemon-net-update.ts `this.postpone(`) and fails on one that
+ *    `scheduleUpgradeRecheck(`, daemon-net-update.ts `this.postpone(`) and fails on one that
  *    DAEMON_UPDATE_HOLDS does not list, and on a listed one that is gone;
  *  - fails on a `hold` whose method never reads the overdue verdict (it would hold for good) or that
  *    names no behaviour test (`proof`) showing it give way, and on a `bounded` one whose limit is not
@@ -24,7 +24,7 @@ const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8')
 /** The calls that put an update off, per file (the definition itself excluded). */
 const SITES: Record<string, RegExp> = {
   'src/providers/daemon-connection.ts': /this\.postponeUpgrade\(/,
-  'src/providers/local-daemon.ts': /this\.scheduleUpgradeRecheck\(\)/,
+  'src/providers/local-daemon.ts': /this\.scheduleUpgradeRecheck\(/,
   'src/providers/daemon-net-update.ts': /this\.postpone\(/,
 }
 

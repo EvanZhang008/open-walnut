@@ -443,7 +443,13 @@ export class NetDaemonUpdater {
       })
     } catch (err) {
       // The upload was paid for: the next try waits a cooldown, it is not a failure.
-      if (err instanceof NetUpdateHeldError) { this.lastAttempt = null; return this.postpone(err.message, this.d.cooldownMs) }
+      // Read from its record after the launch too (a probation, the install lock): answered, and no failure.
+      if (err instanceof NetUpdateHeldError) {
+        this.lastAttempt = null
+        this.launched.answered()
+        this.launched.outcome(expected, null)
+        return this.postpone(err.message, this.d.cooldownMs)
+      }
       const msg = err instanceof Error ? err.message : String(err), deferredAt = msg.indexOf('update deferred: ')
       // The build stopped the daemon and did not stay serving (daemon-service-update.ts): a day, kept
       // across restarts, written before the record goes (a server killed in between keeps one of

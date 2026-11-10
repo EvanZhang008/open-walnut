@@ -368,6 +368,24 @@ describe('DaemonConnection: a managed update over SSH that did not go through', 
     expect(destructive(seen)).toEqual([])
   })
 
+  // 2026-11-10 review: a swap held or deferred on the host after its upload changed nothing, but it
+  // counted as a forced try; three dark-wake deferrals spent them, and the holds were back with no bound.
+  it.each([
+    ['deferred', () => new Error('Managed daemon update failed: update deferred: launchd is starting no jobs in this login session now; nothing was changed, and the running daemon keeps serving')],
+    ['held', () => Object.assign(new Error("the last daemon update's probation still watches the new daemon on the host"), { name: 'NetUpdateHeldError' })],
+    ['failed', () => new Error('Managed daemon update failed: the readiness check timed out')],
+  ] as const)('overdue, a swap %s on the host after its upload counts as a forced try only when it ran', async (kind, error) => {
+    const { conn } = managedOnOld()
+    vi.spyOn(priv(conn), 'noteOverdue').mockImplementation(() => { state(conn)._overdueMs = 1 })
+    managedUpdate.mockReset().mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
+      expect(await opts?.onStaged?.()).toBe(true)
+      throw error()
+    })
+    await priv(conn).checkDaemonRunning().catch(() => null)
+    expect(managedUpdate).toHaveBeenCalledTimes(1)
+    expect(state(conn)._forcedTries).toEqual(kind === 'failed' ? { expected: EXPECTED_VERSION, n: 1 } : null)
+  })
+
   // 2026-11-05 review 6: an update inside the last one's probation took its copies, the only way back
   // from a build that fails late; and each try uploaded the build first.
   it("the last update's probation still at work on the host: nothing uploaded or run, asked again after its end", async () => {
@@ -426,14 +444,21 @@ describe('DaemonConnection: a managed update over SSH that did not go through', 
 
   // 2026-11-04 review: tried again after the 10 min cooldown, each try a stop and a put-back of the host's daemon.
   it('a build that answered ok and did not stay serving is not tried again for a day; any other failure is, after the cooldown', async () => {
-    const { conn } = managedOnOld()
+    const { conn, postpone } = managedOnOld()
     managedUpdate.mockRejectedValue(Object.assign(new Error('the update answered ok, but afterwards on the host: the previous service config was put back'), { tailOutcome: 'restored', buildFailed: true }))
     await expect(priv(conn).checkDaemonRunning()).rejects.toBeInstanceOf(DaemonServiceNotReadyError)
     expect(managedUpdate).toHaveBeenCalledTimes(1)
     const later = (ms: number) => { state(conn)._lastUpgradeAttempt.at -= ms; if (state(conn)._realDirFail) state(conn)._realDirFail.at -= ms }
     later(11 * 60_000)
+    postpone.mockClear()
     await priv(conn).checkDaemonRunning().catch(() => null)
     expect(managedUpdate).toHaveBeenCalledTimes(1)
+    // Asked again when its day off ends (2026-11-10 review: nothing asked again while the link stayed up).
+    expect(postpone).toHaveBeenCalledTimes(1)
+    expect(postpone.mock.calls[0][0]).toContain('asked again when its day off ends')
+    const { delayMs } = postpone.mock.calls[0][3] as { delayMs: number }
+    expect(delayMs).toBeGreaterThan(23 * 60 * 60_000)
+    expect(delayMs).toBeLessThanOrEqual(24 * 60 * 60_000)
     later(24 * 60 * 60_000)
     await priv(conn).checkDaemonRunning().catch(() => null)
     expect(managedUpdate).toHaveBeenCalledTimes(2)

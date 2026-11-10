@@ -150,9 +150,10 @@ export class LaunchedNetUpdate {
     const words = superseded ? 'a later update on the host took over before this one ran'
       : !ok ? `the update answered: ${record.out.trim().slice(-300) || record.done.trim()}` : ''
     const after = tailSteppedIn(tail) ? `afterwards on the host: ${tail!.words}` : ''
-    const failed = superseded || !ok || tail?.outcome === 'restored' || tail?.outcome === 'standin' || tail?.outcome === 'down'
     // The same rule as an answer that came in time (judgeServiceUpdate): stopped and not serving, or restored or down after.
     const verdict = superseded ? null : judgeUpdateRecord(record)
+    // Held or deferred on the host before it changed anything: nothing failed, the next check asks again.
+    const failed = !verdict?.nothingDone && (superseded || !ok || tail?.outcome === 'restored' || tail?.outcome === 'standin' || tail?.outcome === 'down')
     const fields = { host: this.host, expected: l.expected, from: l.from, running, startedAt: l.at, done: record.done.trim(), tail: tail?.outcome ?? null, tailWords: tail?.words ?? null }
     if (failed) log.session.error('DaemonConnection: host network daemon update did not go through (read back once the host returned)', { ...fields, answer: record.out.slice(-600) })
     else log.session.info('DaemonConnection: host network daemon update read back once the host returned', fields)

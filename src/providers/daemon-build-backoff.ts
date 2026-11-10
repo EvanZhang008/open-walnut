@@ -55,3 +55,11 @@ export function buildBackoffSettled(): Promise<void> {
 export function buildBackedOff(entry: BuildBackoffEntry | null | undefined, expected: string, now = Date.now()): boolean {
   return !!entry && entry.expected === expected && store.fresh(entry, now)
 }
+
+/**
+ * How long until a build `entry` holds back is tried again: just after its day off ends (the same
+ * distance rule as buildBackedOff), at least a minute. A caller that holds the update asks again then.
+ */
+export function backoffLeftMs(entry: BuildBackoffEntry, now = Date.now()): number {
+  return Math.max(60_000, BUILD_BACKOFF_MS - Math.abs(now - entry.at) + 5_000)
+}
