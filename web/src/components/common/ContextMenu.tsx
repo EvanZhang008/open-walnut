@@ -221,15 +221,31 @@ export function contextMenuReasonRows(rows: ContextMenuItem[]): Map<number, stri
 /**
  * The anchor rides a sticky or fixed part of its pane (a settings pane's compact header): a scroll
  * moves the content under it, never the anchor, so where the anchor sits says nothing about that
- * scroll, and the old rule (a scroll of its pane closes the menu) stands.
+ * scroll. What it rides over does: a person's scroll moves that content, while the browser's scroll
+ * anchoring (a live update above, which shifts scrollTop to keep the view where it was) does not.
+ * So the menu reads the content under the pinned part (`under`): the block a sticky part sticks in,
+ * or, when that block is the pane itself, the pane's first other child with a box. Every Home
+ * navigation project header is sticky (home-navigation.css), and "any scroll of the pane closes"
+ * took its menu down under the hand whenever a task was added or removed above it (2026-11-10, a
+ * shared CI fixture). A fixed part has no such block: any scroll of its pane closes (`under` null).
  */
-function pinnedInPane(el: HTMLElement): boolean {
+function pinnedInPane(el: HTMLElement): { under: HTMLElement | null } | null {
+  let holder: HTMLElement | null = null;
   for (let p: HTMLElement | null = el; p; p = p.parentElement) {
     const cs = getComputedStyle(p);
-    if (cs.position === 'sticky' || cs.position === 'fixed') return true;
-    if (/(auto|scroll|overlay)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight) return false;
+    const scrolls = /(auto|scroll|overlay)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight;
+    if (!holder) {
+      if (cs.position === 'fixed') return { under: null };
+      if (cs.position === 'sticky') { holder = p; continue; }
+      if (scrolls) return null;
+    } else if (scrolls || !p.parentElement) {
+      const block = holder.parentElement;
+      if (block && block !== p) return { under: block };
+      const other = [...p.children].find((c): c is HTMLElement => c !== holder && c instanceof HTMLElement && c.getBoundingClientRect().height > 0);
+      return { under: other ?? null };
+    }
   }
-  return false;
+  return null;
 }
 
 export function ContextMenu({
@@ -306,12 +322,15 @@ export function ContextMenu({
     let anchor: RowAnchor | null = null;
     let scrollArmed = false;
     // A menu on a sticky or fixed control (pinnedInPane): a scroll moves the content under it, never
-    // the control, so a scroll of the pane holding it closes the menu as before.
+    // the control, so a scroll of the pane holding it closes the menu once that content moved.
     let pinned = false;
+    let under: RowAnchor | null = null;
     const arm = requestAnimationFrame(() => {
       scrollArmed = true;
       anchor = rowAnchorOf(back.current);
-      pinned = !!back.current?.isConnected && pinnedInPane(back.current);
+      const pin = back.current?.isConnected ? pinnedInPane(back.current) : null;
+      pinned = !!pin;
+      under = rowAnchorOf(pin?.under);
     });
     const onScroll = (e: Event) => {
       if (!scrollArmed) return;
@@ -328,6 +347,8 @@ export function ContextMenu({
       if (pinned) {
         const scrolled = e.target;
         if (anchor?.el.isConnected && scrolled instanceof Node && !scrolled.contains(anchor.el)) return;
+        // The content under the pinned control stayed put: scroll anchoring, not a scroll.
+        if (under && !scrollMovedRow(under, scrolled)) return;
         close();
         return;
       }
