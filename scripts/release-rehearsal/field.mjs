@@ -40,8 +40,10 @@
  *               creates a paused router through POST /api/v1/org/routers, which
  *               stamps the task store ROUTER_STORE_VERSION. The start point
  *               reinstalled must refuse that store before serving (REFUSAL, never
- *               the served fallback); forward again, the router, its area, the
- *               stamp, the work and every SQLite file are whole.
+ *               the served fallback) when it predates ROUTER_FIRST_VERSION, and
+ *               serve the router and its area whole from it on; forward again,
+ *               the router, its area, the stamp, the work and every SQLite file
+ *               are whole.
  *   field-cli   an install in use runs its own `walnut update` while its server
  *               serves; the old server keeps answering; its restart is the
  *               release, with the task, the history and the session.
@@ -503,6 +505,24 @@ export function judgeRouterRefusal({ version, message, tail }) {
   return `${version} refuses the router's task store before serving: ${refused[0]}`
 }
 
+/**
+ * The first published build with router areas (task store version ROUTER_STORE_VERSION; the
+ * nightly 0.6.30-nightly.20261109.779 and the stable 0.6.30 have none): every build before it
+ * refuses that store, it and every later one serve it.
+ */
+export const ROUTER_FIRST_VERSION = '0.6.31-nightly.20261110.795'
+export const knowsRouterStore = (version) => compareVersions(version, ROUTER_FIRST_VERSION) >= 0
+
+/**
+ * A start point that knows router areas, gone back to: it serves as itself, and the router
+ * and its area read as the release made them.
+ */
+export function judgeRouterServedBack({ version, served, id, made, back }) {
+  if (served !== version) throw new Error(`gone back to ${version}, serving ${served ?? 'nothing'}`)
+  if (JSON.stringify(back) !== JSON.stringify(made)) throw new Error(`router ${id}'s areas under ${version} are ${JSON.stringify(back)}, the release made ${JSON.stringify(made)}`)
+  return `${version} serves router ${id} and its area on the task store at version ${ROUTER_STORE_VERSION}`
+}
+
 /** The router as the release serves it: its task's role marker and its area's registry, which is returned. */
 async function readRouter(w, id, version) {
   const got = await w.api('GET', `/api/v1/tasks/${encodeURIComponent(id)}`)
@@ -569,17 +589,34 @@ async function goneBack({ from, field, work, walnuts, opts, router = false }) {
     registry.setDistTags(tags(from.version))
     await installStart(w, from, opts.upstream)
     let outcome
+    let refusedRouter = false
     if (router) {
       const backMark = logOf(w).length
+      let served = false
       try {
         await w.start({ timeoutMs: 600_000 })
+        served = true
       } catch (err) {
-        outcome = judgeRouterRefusal({ version: from.version, message: err instanceof Error ? err.message : String(err), tail: logOf(w).slice(backMark).split('\n').slice(-60).join('\n') })
+        const message = err instanceof Error ? err.message : String(err)
+        const tail = logOf(w).slice(backMark).split('\n').slice(-60).join('\n')
+        if (knowsRouterStore(from.version)) throw new Error(`${from.version} has router areas (${ROUTER_FIRST_VERSION} on) and must serve router ${made.id}'s store, but did not start: ${message}\n${tail.slice(-3000)}`)
+        outcome = judgeRouterRefusal({ version: from.version, message, tail })
+        refusedRouter = true
       }
-      // Published start points predate router areas: serving here fails, never the field-back fallback.
-      if (!outcome) {
+      // A start point from before router areas must refuse the store; one that has them must
+      // serve the router whole. Which is which is the version's, never what the start point did.
+      if (served && !knowsRouterStore(from.version)) {
         await w.stop()
-        throw new Error(`${from.version} served on the task store router ${made.id} stamped ${ROUTER_STORE_VERSION}; it must refuse it before serving (log: ${w.logFile})`)
+        throw new Error(`${from.version} served on the task store router ${made.id} stamped ${ROUTER_STORE_VERSION}; it predates ${ROUTER_FIRST_VERSION} and must refuse it before serving (log: ${w.logFile})`)
+      }
+      if (served) {
+        try {
+          const status = await w.api('GET', '/api/v1/status')
+          outcome = judgeRouterServedBack({ version: from.version, served: status.json?.version, id: made.id, made: made.areas, back: await readRouter(w, made.id, from.version) })
+        } catch (err) {
+          await w.stop()
+          throw new Error(`${from.version} served on the task store router ${made.id} stamped ${ROUTER_STORE_VERSION} without serving that router: ${err instanceof Error ? err.message : String(err)} (log: ${w.logFile})`)
+        }
       }
     } else try {
       await w.start({ timeoutMs: 600_000 })
@@ -607,7 +644,7 @@ async function goneBack({ from, field, work, walnuts, opts, router = false }) {
     if (badBack.length) throw new Error(`after going back to ${from.version}, SQLite files fail the integrity check: ${JSON.stringify(badBack)}`)
     if (router) {
       expectStore(back, w, ROUTER_STORE_VERSION, `after ${from.version} refused it`)
-      if (!fs.readFileSync(path.join(w.walnutHome, ROUTER_AREAS)).equals(areasBytes)) throw new Error(`${from.version} changed ${ROUTER_AREAS} while refusing the store`)
+      if (refusedRouter && !fs.readFileSync(path.join(w.walnutHome, ROUTER_AREAS)).equals(areasBytes)) throw new Error(`${from.version} changed ${ROUTER_AREAS} while refusing the store`)
     }
     // Forward again: the old install's own startup update takes the release once more.
     registry.setDistTags(tags(field.release.version))
