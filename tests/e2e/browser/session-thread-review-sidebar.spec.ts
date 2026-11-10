@@ -15,6 +15,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
+import { leaveFullscreen } from './draft-helpers'
 import { centreInHistory, clickInPlace, openThreadsSession, settledScrollTop, passageRects, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { REVIEW_COUNT, REVIEW_MIXED_PASSAGES, REVIEW_MIXED_READY, REVIEW_MIXED_SESSION, REVIEW_MIXED_TASK, REVIEW_OLD_PASSAGES, REVIEW_OLD_READY, REVIEW_OLD_SESSION, REVIEW_OLD_TASK, REVIEW_READY, REVIEW_ROUNDS, REVIEW_ROUND_CODE, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
 
@@ -724,12 +725,13 @@ test.describe('asks on turns that are not loaded', () => {
     await page.keyboard.type('What is in this picture?')
     await page.keyboard.press('Enter')
     await expect(recent.locator('.thread-review-body')).toContainText('processed your message', { timeout: 30_000 })
+    // Out of full screen before the load (the kept full screen is not what this checks).
+    await leaveFullscreen(page)
     await page.reload()
     await page.waitForLoadState('networkidle')
     const again = await openThreadsSession(page, REVIEW_MIXED_SESSION, REVIEW_MIXED_TASK, undefined, { view: 'linear' })
-    if (!/open-walnut-fullscreen/.test((await again.getAttribute('class')) ?? '')) {
-      await again.getByRole('button', { name: 'Expand session to full screen' }).click()
-    }
+    await again.getByRole('button', { name: 'Expand session to full screen' }).click()
+    await expect(again).toHaveClass(/open-walnut-fullscreen/)
     const card3 = sidebarCards(again).filter({ hasText: 'Mixed point 3' })
     const asked = card3.locator('.thread-card-q').filter({ hasText: 'What is in this picture?' })
     await expect(asked).toHaveCount(1, { timeout: 30_000 })
