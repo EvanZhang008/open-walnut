@@ -78,9 +78,9 @@ export const BUILTIN_ALARMS: readonly AlarmDef[] = [
   },
   {
     id: 'server.restarts',
-    title: 'Server restarts often',
-    description: 'How many times this server started in the last 24 hours (deploys included).',
-    metric: 'server.restarts_24h', kind: 'gauge', stat: 'last', periodMin: 5, comparison: '>', threshold: 15,
+    title: 'Server restarts on its own',
+    description: 'Times this server started again on the build it already ran (a crash and its respawn, a relaunch, a reboot) in the last 24 hours. Deploys and updates start a new build and are not counted: the deploy queue paces those.',
+    metric: 'server.unplanned_restarts_24h', kind: 'gauge', stat: 'last', periodMin: 5, comparison: '>=', threshold: 2,
     evaluationPeriods: 1, datapointsToAlarm: 1, missing: 'missing',
     unit: 'per day', action: { then: 'fix-task' },
   },

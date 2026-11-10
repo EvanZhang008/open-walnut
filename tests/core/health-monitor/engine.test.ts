@@ -11,9 +11,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { MinuteCollector } from '../../../src/core/health-monitor/collect.js'
-import { FIX_TASKS_PER_DAY, HealthMonitor, type FixTaskInput } from '../../../src/core/health-monitor/engine.js'
+import { bootOnSameBuild, FIX_TASKS_PER_DAY, HealthMonitor, type FixTaskInput } from '../../../src/core/health-monitor/engine.js'
 import { DAY_MS, hourStart, signatureId } from '../../../src/core/health-monitor/log-alarms.js'
-import { HealthStore } from '../../../src/core/health-monitor/store.js'
+import { HealthStore, type ServerEvent } from '../../../src/core/health-monitor/store.js'
+import { BUILTIN_ALARMS } from '../../../src/core/health-monitor/alarms.js'
 import { signatureKey } from '../../../src/core/health-monitor/signature.js'
 import { count } from '../../../src/core/observability/metrics.js'
 import { createSubsystemLogger } from '../../../src/logging/subsystem.js'
@@ -46,7 +47,7 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
-async function harness(opts: { pid?: number; exitTrace?: string; now?: number } = {}): Promise<Harness> {
+async function harness(opts: { pid?: number; exitTrace?: string; now?: number; build?: string | null } = {}): Promise<Harness> {
   const clock = { now: opts.now ?? START }
   const disk = { free: 200, usedPct: 40 }
   const GiB = 1024 ** 3
@@ -73,6 +74,7 @@ async function harness(opts: { pid?: number; exitTrace?: string; now?: number } 
     store: new HealthStore(dir),
     collector,
     pid: opts.pid ?? 4242,
+    build: opts.build,
     now: () => clock.now,
     exitTraceFile: opts.exitTrace ?? null,
     fixMode: async () => h.mode.v,
@@ -268,6 +270,52 @@ describe('health monitor engine', () => {
     expect(last.v['server.shutdown_bails_24h']).toBe(1)
     expect(h.m.alarms['server.shutdown'].state).toBe('ALARM')
     expect(h.fixes.map((f) => f.alarmId)).toContain('server.shutdown')
+  })
+
+  it('only a start on the build that already ran is an unplanned restart; deploys are not', async () => {
+    // A deploy on every boot, the way the deploy queue paces them: 20 a day stays OK.
+    let pid = 100
+    let now = START
+    const reboot = async (build: string | null) => {
+      const h = await harness({ now, pid: ++pid, build })
+      await minutes(h, 6)
+      h.m.stop(); await h.m.flushed(); harnesses = harnesses.filter((x) => x !== h)
+      now = h.clock.now + 60 * 60_000
+      return h
+    }
+    let h = await reboot('c0@t0')
+    for (let i = 1; i < 20; i++) h = await reboot(`c${i}@t${i}`)
+    let row = h.m.minuteRows[h.m.minuteRows.length - 1]
+    expect(row.v['server.restarts_24h']).toBe(20)
+    expect(row.v['server.deploys_24h']).toBe(20)
+    expect(row.v['server.unplanned_restarts_24h']).toBe(0)
+    expect(h.m.alarms['server.restarts'].state).toBe('OK')
+    // The server crashes and launchd starts the same file again, twice: that is the alarm.
+    h = await reboot('c19@t19')
+    h = await reboot('c19@t19')
+    row = h.m.minuteRows[h.m.minuteRows.length - 1]
+    expect(row.v['server.unplanned_restarts_24h']).toBe(2)
+    expect(h.m.alarms['server.restarts'].state).toBe('ALARM')
+    expect(h.fixes.map((f) => f.alarmId)).toContain('server.restarts')
+  })
+
+  it('a boot is the same build only when the boot before it recorded that build', () => {
+    const boot = (build?: string | null): ServerEvent => (build === undefined ? { kind: 'boot', at: 1, pid: 1 } : { kind: 'boot', at: 1, pid: 1, build })
+    const bail: ServerEvent = { kind: 'shutdown-bail', at: 2, pid: 1 }
+    expect(bootOnSameBuild([], 'a@1')).toBe(false) // first boot ever
+    expect(bootOnSameBuild([boot()], 'a@1')).toBe(false) // an older Walnut's boot has no build
+    expect(bootOnSameBuild([boot('a@1')], 'b@2')).toBe(false) // a deploy
+    expect(bootOnSameBuild([boot('a@1')], 'a@2')).toBe(false) // a forced redeploy of one commit: new build time
+    expect(bootOnSameBuild([boot('a@1'), bail], 'a@1')).toBe(true) // a respawn after a cut-off shutdown
+    expect(bootOnSameBuild([boot('a@1'), boot('b@2')], 'a@1')).toBe(false) // a rollback from a new build that booted (one that died before booting reads as a restart: it was one)
+    expect(bootOnSameBuild([boot(null)], null)).toBe(true) // from source, started again
+  })
+
+  it('no built-in alarm counts every boot: a restart alarm reads the unplanned count', () => {
+    // Deploys restart the server by design (the deploy queue paces them); an alarm
+    // on all boots asks for a fix nobody can make (2026-11-10: 16 deploys in a day).
+    const restartAlarms = BUILTIN_ALARMS.filter((a) => /restart|boot|start/.test(a.metric) && a.metric.startsWith('server.'))
+    expect(restartAlarms.map((a) => a.metric)).toEqual(['server.unplanned_restarts_24h'])
   })
 
   it('a restart in the small hours reads back every UTC day of its 26-hour window', async () => {

@@ -19,7 +19,7 @@ import { evaluateAlarm, fillPattern, indexRows, matchSeries, MINUTE_MS, parseSer
 import {
   chronicDays, chronicVerdict, hourStart, signatureId, spikeBaseline, spikeThreshold, spikeVerdict, HOUR_MS,
 } from './log-alarms.js'
-import { HealthStore, MEMORY_MINUTES, pruneLogHours, type LogHoursFile, type StateFile } from './store.js'
+import { HealthStore, MEMORY_MINUTES, pruneLogHours, type LogHoursFile, type ServerEvent, type StateFile } from './store.js'
 import type { AlarmDef, AlarmInstanceState, AlarmOverride, AlarmState, MinuteRow } from './types.js'
 
 export const FIX_TASKS_PER_DAY = 5
@@ -34,6 +34,22 @@ const REOPEN_AFTER_MS = 6 * 3_600_000
 
 export type FixMode = 'record' | 'start' | 'off'
 
+/**
+ * A boot on the same build as the boot before it is a start nobody deployed: a
+ * crash and its respawn, a launchd relaunch, a reboot. A deploy, an update and a
+ * rollback all start a different build. (2026-11-10: every one of 16 boots in a
+ * day was a queued deploy, and the alarm counting all boots asked for a fix.)
+ * A boot an older Walnut recorded has no build, so it never matches.
+ */
+export function bootOnSameBuild(events: readonly ServerEvent[], build: string | null): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]
+    if (e.kind !== 'boot') continue
+    return 'build' in e && e.build === build
+  }
+  return false
+}
+
 export interface FixTaskInput {
   alarmId: string
   title: string
@@ -45,6 +61,8 @@ export interface EngineDeps {
   store: HealthStore
   collector: MinuteCollector
   pid: number
+  /** The build this server runs (commit and build time, null from source): see bootOnSameBuild. */
+  build?: string | null
   now?: () => number
   /** The server's exit trace (shutdown cut-offs are read from it at boot). */
   exitTraceFile?: string | null
@@ -132,7 +150,8 @@ export class HealthMonitor {
       this.recentSigs.push({ t: r.t, sigs })
     }
     delete this.logHours.recent
-    this.state.events.push({ kind: 'boot', at: now, pid: this.deps.pid })
+    const build = this.deps.build ?? null
+    this.state.events.push({ kind: 'boot', at: now, pid: this.deps.pid, build, sameBuild: bootOnSameBuild(this.state.events, build) })
     await this.readShutdownBails()
     this.state.events = this.state.events.filter((e) => e.at > now - EVENTS_KEEP_MS)
     this.deps.collector.start()
@@ -208,6 +227,8 @@ export class HealthMonitor {
     const day = now - 86_400_000
     return {
       'server.restarts_24h': this.state.events.filter((e) => e.kind === 'boot' && e.at > day).length,
+      'server.unplanned_restarts_24h': this.state.events.filter((e) => e.kind === 'boot' && e.at > day && e.sameBuild === true).length,
+      'server.deploys_24h': this.state.events.filter((e) => e.kind === 'boot' && e.at > day && e.sameBuild !== true).length,
       'server.shutdown_bails_24h': this.state.events.filter((e) => e.kind === 'shutdown-bail' && e.at > day).length,
     }
   }

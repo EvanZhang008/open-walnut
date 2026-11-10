@@ -26,7 +26,7 @@ export function writeHealthMonitorSeed(home: string, now: number): void {
     const t = end - i * MIN
     const v: Record<string, number> = {
       'disk.free_gb': 24 + (i % 7) / 10, 'disk.used_pct': 95, 'process.fd': 300 + (i % 40), 'memory.pressure': 0,
-      'process.rss_mb': 900, 'server.restarts_24h': 9, 'server.shutdown_bails_24h': 8, 'session.hung': i % 90 === 0 ? 1 : 0,
+      'process.rss_mb': 900, 'server.restarts_24h': 9, 'server.unplanned_restarts_24h': 0, 'server.deploys_24h': 9, 'server.shutdown_bails_24h': 8, 'session.hung': i % 90 === 0 ? 1 : 0,
       'eventloop.delay.max': 40 + ((i * 37) % 300), 'log.warn': 20, 'log.error': i % 30 === 0 ? 1 : 0,
     }
     if (i <= 180 && i % 5 === 0) v[`host.link.lost{host=${HEALTH_HOST}}`] = 1

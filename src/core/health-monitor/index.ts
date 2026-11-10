@@ -35,6 +35,13 @@ export async function healthActionsOn(env: NodeJS.ProcessEnv = process.env): Pro
   return semanticLaneDecision({ env: rest, isEphemeral: IS_EPHEMERAL, walnutHome: WALNUT_HOME }).reason === 'default'
 }
 
+/** This server's build as one key: a new build (a deploy, an update) gets a new build time. */
+async function runningBuildKey(): Promise<string | null> {
+  const { getBuildInfo } = await import('../../lib/build-info.js')
+  const b = getBuildInfo()
+  return b.builtAt ? `${b.commit ?? 'unknown'}@${b.builtAt}` : null
+}
+
 export interface StartOptions {
   exitTraceFile: string | null
   notify: (alarmId: string, title: string, body: string) => void
@@ -70,6 +77,7 @@ export async function startHealthMonitor(opts: StartOptions): Promise<HealthMoni
     store: new HealthStore(path.join(dataDir, 'local', 'health-monitor')),
     collector,
     pid: process.pid,
+    build: await runningBuildKey(),
     exitTraceFile: opts.exitTraceFile,
     fixMode,
     autoFix: async (id) => (actionsOn ? runAutoFix(id, dataDir) : { ok: false, detail: 'actions are off on an isolated server' }),

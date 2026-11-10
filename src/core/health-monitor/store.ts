@@ -32,7 +32,15 @@ export interface LogHoursFile {
   recent?: Array<{ t: number; c: Record<string, number> }>
 }
 
-export interface ServerEvent { kind: 'boot' | 'shutdown-bail'; at: number; pid: number }
+export interface ServerEvent {
+  kind: 'boot' | 'shutdown-bail'
+  at: number
+  pid: number
+  /** A boot's build (commit and build time); absent on boots an older Walnut recorded. */
+  build?: string | null
+  /** A boot on the build the boot before it ran: a crash, a respawn or a reboot, never a deploy. */
+  sameBuild?: boolean
+}
 
 export interface StateFile {
   version: 1
