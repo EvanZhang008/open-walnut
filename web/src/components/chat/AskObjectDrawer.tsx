@@ -370,8 +370,14 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
   // Zero-argument on purpose: the panels call `onClose(sessionId)` / `onClose(draftId)`, and an opener's
   // close must not receive an id it never asked for.
   const onClose = useCallback(() => { onCloseRef.current(); }, []);
+  // What had focus when the drawer FIRST opened. A ref, so a replay of the effect below (React's
+  // StrictMode in development, a subtree that reconnects) keeps the opener, not the composer.
+  const openerRef = useRef<HTMLElement | null | undefined>(undefined);
   useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (openerRef.current === undefined) {
+      openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    const own = drawerRef.current;
     const key = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
       if (escapeBelongsToAnOverlay(e, drawerRef.current)) return;
@@ -382,9 +388,14 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
     document.addEventListener('keydown', key);
     return () => {
       document.removeEventListener('keydown', key);
+      // Still on the page: the effect is being replayed (StrictMode, a reconnect), not closed. Moving
+      // focus here took the caret out of the composer the drawer had just focused (2026-11-10: S4-3
+      // read the row focused; the composer's focus request runs once per open since 031b89ebe).
+      if (own?.isConnected) return;
       // The opener's answer first, resolved NOW rather than at mount so a list that re-rendered in
       // between is followed. The element captured at mount is the fallback, and it is usually the
       // context-menu row that opened this and is gone by now.
+      const previous = openerRef.current;
       const selector = restoreFocusRef.current;
       const named = selector ? document.querySelector(selector) : null;
       const back = named instanceof HTMLElement && named.isConnected
