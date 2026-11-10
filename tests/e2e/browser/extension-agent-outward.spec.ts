@@ -465,7 +465,12 @@ test('a window the page opens from the agent tab is the agent\'s, named in the c
   expect(mine).toContain(child)
   const inChild = await act(page, { action: 'snapshot', tab: child })
   expect(inChild.status, JSON.stringify(inChild.body)).toBe(200)
-  expect(inChild.body.snapshot).toContain('Orders ship in 2 days.')
+  expect(inChild.body.snapshot).toContain('Help window')
+  // A snapshot lists what is on screen and leaves the words to `text` (9e10664b1): the child's
+  // words are read there.
+  const childText = await act(page, { action: 'text', tab: child })
+  expect(childText.status, JSON.stringify(childText.body)).toBe(200)
+  expect(childText.body.text).toContain('Orders ship in 2 days.')
   const all = (await act(page, { action: 'tabs', all: true })).body.tabs as Array<{ id: number; owner: string }>
   expect(all.find((t) => t.id === child)?.owner).toBe('mine')
   expect((await act(page, { action: 'close', tab: child })).body).toMatchObject({ closed: true })
