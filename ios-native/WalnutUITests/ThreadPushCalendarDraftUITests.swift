@@ -69,10 +69,12 @@ final class ThreadPushCalendarDraftUITests: ThreadPushUITestCase {
         }
         shot("C-held")
 
-        // He closes it: the push goes, and the thread is drawn.
+        // He closes it: the sheet goes, then the push, and the thread is drawn.
         XCTAssertTrue(cancel.waitForExistence(timeout: 5), "C: the create sheet has no Cancel")
+        let closedAt = Date()
         cancel.tap()
-        expectRevealed(ids[4], "C-after-close", outline: true)
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 20), "C: Cancel left the create sheet up")
+        expectRevealed(ids[4], "C-after-close", outline: true, since: closedAt)
         XCTAssertFalse(sheet.exists, "C: the create sheet is still up over the page")
     }
 }

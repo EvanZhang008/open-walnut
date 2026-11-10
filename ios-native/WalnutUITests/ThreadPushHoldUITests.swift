@@ -45,8 +45,9 @@ final class ThreadPushHoldUITests: ThreadPushUITestCase {
         XCTAssertTrue(el("task.open.done").exists, "T: the task session under the editor was torn down")
 
         // He closes the editor: the push goes, and he sees the thread drawn.
+        let closedAt = Date()
         app.navigationBars["Description"].buttons["Cancel"].tap()
-        expectRevealed(ids[9], "T-after-close", outline: true)
+        expectRevealed(ids[9], "T-after-close", outline: true, since: closedAt)
         XCTAssertTrue(el("task.open.done").waitForNonExistence(timeout: 10), "T: the task session stayed over the page")
     }
 
@@ -75,8 +76,9 @@ final class ThreadPushHoldUITests: ThreadPushUITestCase {
         el("agentMemory.cancel").tap()
         let discard = app.buttons["Discard Changes"]
         XCTAssertTrue(discard.waitForExistence(timeout: 5), "U: Cancel did not ask about his changes")
+        let closedAt = Date()
         discard.tap()
-        expectRevealed(ids2[2], "U-after-close", outline: true)
+        expectRevealed(ids2[2], "U-after-close", outline: true, since: closedAt)
         XCTAssertTrue(titled(OrgThreadsFixture.vp2Name).waitForExistence(timeout: 10), "U: not the other VP's page")
         back()
         XCTAssertTrue(el("org.bar.threads").waitForExistence(timeout: 15), "U: Back did not reach a VP chat")
@@ -102,8 +104,9 @@ final class ThreadPushHoldUITests: ThreadPushUITestCase {
         push(ids[3])
         expectHeld("V-same")
         XCTAssertEqual(field.value as? String, "Call the printer", "V: his note changed under the push")
+        var closedAt = Date()
         app.navigationBars["Note"].buttons["Cancel"].tap()
-        expectRevealed(ids[3], "V-same-after-close", outline: true)
+        expectRevealed(ids[3], "V-same-after-close", outline: true, since: closedAt)
 
         // From the VP's chat again, a note and a push for the other VP.
         back()
@@ -112,8 +115,9 @@ final class ThreadPushHoldUITests: ThreadPushUITestCase {
         push(ids2[1], task: vp2)
         expectHeld("V-other")
         XCTAssertEqual(field.value as? String, "Ask about the venue", "V: his note changed under the other VP's push")
+        closedAt = Date()
         app.navigationBars["Note"].buttons["Cancel"].tap()
-        expectRevealed(ids2[1], "V-other-after-close", outline: true)
+        expectRevealed(ids2[1], "V-other-after-close", outline: true, since: closedAt)
         XCTAssertTrue(titled(OrgThreadsFixture.vp2Name).waitForExistence(timeout: 10), "V: not the other VP's page")
     }
 

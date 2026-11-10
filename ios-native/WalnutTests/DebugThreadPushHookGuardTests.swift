@@ -37,7 +37,7 @@ final class DebugThreadPushHookGuardTests: XCTestCase {
         guard let walker = FileManager.default.enumerator(at: Self.appRoot, includingPropertiesForKeys: nil) else {
             throw XCTSkip("no source tree at \(Self.appRoot.path)")
         }
-        let names = ["DebugThreadPushLink", "DebugRevealMarker", "DebugSwapPhaseMarker", "debugThreadPushKey)"]
+        let names = ["DebugThreadPushLink", "DebugRevealMarker", "DebugRevealRecord", "DebugSwapPhaseMarker", "debugThreadPushKey)"]
         var uses = 0
         for case let url as URL in walker where url.pathExtension == "swift" {
             let text = try String(contentsOf: url, encoding: .utf8)

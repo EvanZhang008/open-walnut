@@ -197,29 +197,58 @@ class ThreadPushUITestCase: XCTestCase {
     // MARK: - Where it landed
 
     /// The push's result: the VP's page, Threads in front, the thread in view and marked. With
-    /// `outline`, the outline he sees (2.5 s) must be seen drawn on it too: only where the reveal
-    /// comes right after a tap of the test's own (a held push released by closing the sheet), since
-    /// opening a URL from the test takes longer than the outline lasts.
-    func expectRevealed(_ threadId: String, _ step: String, outline: Bool = false,
+    /// `outline`, the outline he sees (2.5 s) must be seen drawn on it too.
+    ///
+    /// `since`: the push was let go by a tap of the test's own made after this time (closing the
+    /// sheet that held it). The page's record of its last reveal (`org.thread.lastReveal`, DEBUG)
+    /// is read instead of the card's marks, which last 8 s and 2.5 s: one accessibility read on a
+    /// slow CI runner took 11 to 18 s, so a reveal came and went between two reads and a push that
+    /// landed read as lost (2026-11-10, `ThreadPushCalendarDraftUITests`). The record names the
+    /// thread, the request's time (after `since`, so only this push counts) and whether its
+    /// outline was drawn, and it stays until the next reveal: the wait ends on that fact.
+    /// Without `since`, the marks are sampled as before.
+    func expectRevealed(_ threadId: String, _ step: String, outline: Bool = false, since: Date? = nil,
                         file: StaticString = #filePath, line: UInt = #line) {
-        let drawn = el("org.thread.highlight.\(threadId)")
-        let marked = el("org.thread.revealed.\(threadId)")
-        var sawOutline = false, sawMark = false
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline, !(sawMark && (sawOutline || !outline)) {
-            if outline, !sawOutline, drawn.exists { sawOutline = true }
-            if !sawMark, marked.exists { sawMark = true }
-        }
-        shot("\(step)-\(sawMark ? "revealed" : "no-mark")")
-        XCTAssertTrue(sawMark, "\(step): no reveal mark for \(threadId)", file: file, line: line)
-        if outline {
-            XCTAssertTrue(sawOutline, "\(step): the outline he sees was never drawn on \(threadId)", file: file, line: line)
+        if let since {
+            let record = el("org.thread.lastReveal")
+            var seen = "nothing"
+            let revealed = poll(45) {
+                guard record.exists else { return false }
+                seen = record.label
+                return Self.revealRecord(seen, names: threadId, since: since, outlined: outline)
+            }
+            shot("\(step)-\(revealed ? "revealed" : "no-mark")")
+            XCTAssertTrue(revealed, "\(step): no reveal of \(threadId) after \(since) (last reveal: \(seen))",
+                          file: file, line: line)
+        } else {
+            let drawn = el("org.thread.highlight.\(threadId)")
+            let marked = el("org.thread.revealed.\(threadId)")
+            var sawOutline = false, sawMark = false
+            let deadline = Date().addingTimeInterval(15)
+            while Date() < deadline, !(sawMark && (sawOutline || !outline)) {
+                if outline, !sawOutline, drawn.exists { sawOutline = true }
+                if !sawMark, marked.exists { sawMark = true }
+            }
+            shot("\(step)-\(sawMark ? "revealed" : "no-mark")")
+            XCTAssertTrue(sawMark, "\(step): no reveal mark for \(threadId)", file: file, line: line)
+            if outline {
+                XCTAssertTrue(sawOutline, "\(step): the outline he sees was never drawn on \(threadId)", file: file, line: line)
+            }
         }
         XCTAssertTrue(el("org.node.page").exists, "\(step): no VP page", file: file, line: line)
         XCTAssertTrue(poll(5) { segment("Threads").isSelected }, "\(step): Threads not in front", file: file, line: line)
         XCTAssertTrue(poll(8) { inView(cardTitle(threadId)) },
                       "\(step): \(threadId) not in view: \(whereIs(cardTitle(threadId)))", file: file, line: line)
         shot("\(step)-settled")
+    }
+
+    /// `label` (`<threadId> <request time in ms since 1970>[ outlined]`, `DebugRevealRecord`)
+    /// names a reveal of `threadId` for a request made at or after `since`, outlined if asked.
+    static func revealRecord(_ label: String, names threadId: String, since: Date, outlined: Bool) -> Bool {
+        let parts = label.split(separator: " ").map(String.init)
+        guard parts.count >= 2, parts[0] == threadId, let ms = Int64(parts[1]) else { return false }
+        guard Double(ms) >= (since.timeIntervalSince1970 * 1000).rounded(.down) else { return false }
+        return !outlined || parts.dropFirst(2).contains("outlined")
     }
 
     /// While a sheet holds his work, a push waits: the sheet says so, and nothing moved under it.

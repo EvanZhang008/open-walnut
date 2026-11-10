@@ -80,6 +80,8 @@ struct DebugRevealMarker: View {
     let threadId: String
     /// The outline he sees (`org.thread.highlight.<id>`), not the tests' longer mark.
     var visible = false
+    /// The reveal whose outline this is: noted in `DebugRevealRecord` once it is drawn.
+    var outlineOf: OrgThreadFocus? = nil
 
     var body: some View {
         Text("Revealed")
@@ -88,6 +90,54 @@ struct DebugRevealMarker: View {
             .frame(width: 1, height: 1)
             .allowsHitTesting(false)
             .accessibilityIdentifier(visible ? "org.thread.highlight.\(threadId)" : "org.thread.revealed.\(threadId)")
+            .task(id: outlineOf) { if let outlineOf { DebugRevealRecord.shared.outlineDrawn(outlineOf) } }
+    }
+}
+
+/// DEBUG only: the last reveal a Threads page made, kept until the next one, for a UI test that
+/// reads the screen more slowly than the card's mark lasts. On a slow CI runner one accessibility
+/// read took 11 to 18 s, so the 8 s mark (`DebugRevealMarker`) came and went between two reads and
+/// a push that was released by closing a sheet read as lost (2026-11-10,
+/// `ThreadPushCalendarDraftUITests`). This says which thread was revealed, for a request made
+/// when (`OrgThreadFocus.at`, so a test that knows when it let the push go reads only that push's
+/// reveal), and whether its outline was drawn: `org.thread.lastReveal`, its label
+/// `<threadId> <request time in ms since 1970>[ outlined]`.
+@Observable
+@MainActor
+final class DebugRevealRecord {
+    static let shared = DebugRevealRecord()
+    private(set) var focus: OrgThreadFocus?
+    private(set) var outlined = false
+    private init() {}
+
+    func revealed(_ focus: OrgThreadFocus) {
+        self.focus = focus
+        outlined = false
+    }
+
+    /// The outline of `focus` is drawn; another reveal's outline counts for nothing here.
+    func outlineDrawn(_ focus: OrgThreadFocus) {
+        if focus == self.focus { outlined = true }
+    }
+
+    var label: String {
+        guard let focus else { return "none" }
+        let ms = Int64((focus.at.timeIntervalSince1970 * 1000).rounded())
+        return "\(focus.threadId) \(ms)\(outlined ? " outlined" : "")"
+    }
+
+    struct Marker: View {
+        @State private var record = DebugRevealRecord.shared
+
+        var body: some View {
+            Text("Last reveal")
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
+                .frame(width: 1, height: 1)
+                .allowsHitTesting(false)
+                .accessibilityLabel(record.label)
+                .accessibilityIdentifier("org.thread.lastReveal")
+        }
     }
 }
 #endif

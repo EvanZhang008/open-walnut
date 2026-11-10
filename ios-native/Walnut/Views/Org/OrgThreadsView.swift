@@ -213,6 +213,10 @@ struct OrgThreadsView: View {
                 holdExpired = true
             }
         }
+        #if DEBUG
+        // The last reveal, kept until the next one (`DebugRevealRecord`).
+        .overlay(alignment: .topLeading) { DebugRevealRecord.Marker() }
+        #endif
         // A container, so the list's identifier does not replace those inside it (the jump bar's).
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("org.threads")
@@ -248,6 +252,7 @@ struct OrgThreadsView: View {
             startsOpen: t.id == focusThreadId, compact: compact, followUpSentAt: store.followUpSentAt[t.id],
             followUpKept: OrgThreadFollowUpDraft.exists(OrgThreadFollowUpDraft.key(nodeId: store.taskId, threadId: t.id)),
             highlighted: highlight?.threadId == t.id,
+            highlightFocus: highlight?.threadId == t.id ? highlight : nil,
             testMarked: testMark?.threadId == t.id,
             onEdit: { edit in Task { await store.edit(t.id, edit) } },
             onOpenTask: { cover.wrappedValue = .task($0) },
@@ -402,6 +407,9 @@ struct OrgThreadsView: View {
             }
             withAnimation(reduceMotion ? nil : .easeIn(duration: 0.2)) { highlight = focus }
             testMark = focus
+            #if DEBUG
+            DebugRevealRecord.shared.revealed(focus)
+            #endif
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(OrgThreadRevealModel.testMarkSeconds))
                 if testMark == focus { testMark = nil }
@@ -574,6 +582,8 @@ struct OrgThreadCard: View {
     var followUpKept = false
     /// Just revealed for a push or a link: marked for a moment so the eye finds it.
     var highlighted = false
+    /// The reveal `highlighted` is for (DEBUG: noted once its outline is drawn).
+    var highlightFocus: OrgThreadFocus? = nil
     /// DEBUG: wears the UI tests' reveal mark.
     var testMarked = false
     let onEdit: (OrgThreadEdit) -> Void
@@ -713,7 +723,7 @@ struct OrgThreadCard: View {
         // The reveal mark, for the UI tests to read (draws nothing).
         .overlay(alignment: .topTrailing) { if testMarked { DebugRevealMarker(threadId: t.id) } }
         // The outline itself, while it is drawn (the tests check the eye's mark, not only theirs).
-        .overlay(alignment: .topLeading) { if highlighted { DebugRevealMarker(threadId: t.id, visible: true) } }
+        .overlay(alignment: .topLeading) { if highlighted { DebugRevealMarker(threadId: t.id, visible: true, outlineOf: highlightFocus) } }
         #endif
         .opacity(closed ? 0.75 : 1)
         .onAppear { if startsOpen, OrgThreadModel.unread(t, shared: shared).isEmpty { conversation = true } }
