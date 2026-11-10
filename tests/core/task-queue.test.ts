@@ -247,6 +247,13 @@ describe('dispatchTaskOp (cloud → primary RPC, with fallbacks)', () => {
     expect(await listJson(QUEUE_DIR)).toEqual([]);
   });
 
+  it('the queued create carries only an explicit human action time', async () => {
+    current = await load(true);
+    const task = snapshot() as never;
+    expect(current.queue.buildTaskOp({ type: 'create', task })).not.toHaveProperty('humanTouchAt');
+    expect(current.queue.buildTaskOp({ type: 'create', task, humanTouchAt: '2026-11-09T20:00:00Z' })).toHaveProperty('humanTouchAt', '2026-11-09T20:00:00Z');
+  });
+
   it('bridge offline → op queued under cache/task-queue, git outbox untouched', async () => {
     current = await load(true);
     const { queue } = current;

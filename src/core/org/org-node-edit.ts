@@ -238,6 +238,7 @@ export async function createOrgNode(input: NewOrgNodeInput, vpOnly: boolean, opt
     log.task.info('org: node made on the Org page', { taskId: id, project: made.name, vpOnly, named: !!vpName, reopened: !!own, instructions: instructions.length });
     const final = await tm.getTask(id);
     if (!own) announceCreated(final);
+    if ((opts.writer ?? USER).by === 'human') await (await import('../recent-task-touch.js')).recordRecentTaskTouch(final.id, 'ui', final.created_at);
     // The new VP starts by itself, in the background (org-autostart.ts): no click, no other window.
     void import('./org-autostart.js').then((m) => m.startOrgNodeSoon(id, 'created')).catch(() => {});
     return final;

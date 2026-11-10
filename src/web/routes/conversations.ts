@@ -161,6 +161,7 @@ export function createConversationsRouter(): Router {
           title: body.title as string | undefined,
           project: body.project as string | undefined,
         })
+        await (await import('../../core/recent-task-touch.js')).recordRecentTaskTouch(task.id, (await import('../../core/sessions/send-sent-by.js')).routeSource('ui', req.headers), task.created_at)
         log.web.info('conversation promoted to task', { agentId, conversationId: cid, taskId: task.id, sessionId })
         const { bus } = await import('../../core/event-bus.js')
         bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'api' })

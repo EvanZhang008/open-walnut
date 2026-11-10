@@ -19,6 +19,7 @@
  * (`board_task_id`), and the owner, never the session's own task, is where every
  * write goes, whose events reload, and whose seen record and drafts are kept.
  */
+import { withRecentHumanInput, recordTaskOpened } from '@/utils/recent-opened';
 import { matchIdRef } from '../../../../src/lib/id-ref';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -553,7 +554,10 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
         toFrame({ t: 'wn-board:view', view: boardView(ownerRef.current) });
         return;
       case 'wn-board:open-task':
-        if (str('id')) openTask(str('id'));
+        if (!str('id')) return;
+        const ref = refs[str('id')] ?? Object.values(refs).find((entry) => entry.id === str('id'));
+        if (d.human === true && document.activeElement === frameRef.current && ref) withRecentHumanInput(() => { recordTaskOpened(ref.id); openTask(str('id')); });
+        else openTask(str('id'));
         return;
       case 'wn-board:open-session':
         if (str('id')) navigate(`/sessions?id=${encodeURIComponent(str('id'))}`);

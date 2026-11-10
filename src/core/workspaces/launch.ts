@@ -66,7 +66,7 @@ export interface DeferredTaskStart { taskId: string; title: string; started: fal
 /** What a task-start hands a workspace to replay once it is ready. */
 interface TaskStartAsk {
   message?: string; model?: string; mode?: string; effort?: string; engine?: string; cwd?: string
-  callerSid?: string; userRequest?: string; expectReply?: boolean; replyTimeoutSecs?: number; source: string
+  requestedAt?: string; callerSid?: string; userRequest?: string; expectReply?: boolean; replyTimeoutSecs?: number; source: string
 }
 
 function taskStartPending(task: Task, params: TaskStartAsk): WorkspacePendingStart {
@@ -82,7 +82,7 @@ function taskStartPending(task: Task, params: TaskStartAsk): WorkspacePendingSta
     ...(params.expectReply !== undefined ? { expect_reply: params.expectReply } : {}),
     ...(params.replyTimeoutSecs !== undefined ? { reply_timeout_secs: params.replyTimeoutSecs } : {}),
     source: params.source,
-    at: new Date().toISOString(),
+    at: params.requestedAt ?? new Date().toISOString(),
   }
 }
 
@@ -157,7 +157,7 @@ export interface QuickStartWorkspacePlan {
   cwd?: string
   /** File the task without starting; `begin` makes the workspace and answers the route. */
   defer?: true
-  begin?: (task: Task, pending: Omit<WorkspacePendingStart, 'via' | 'at'>) => Promise<Record<string, unknown>>
+  begin?: (task: Task, pending: Omit<WorkspacePendingStart, 'via' | 'at'> & { at?: string }) => Promise<Record<string, unknown>>
 }
 
 /** The quick-start route's workspace step (body field `workspace: { provider, inputs? }`). */
@@ -173,7 +173,7 @@ export async function workspaceLaunchPlan(body: Record<string, unknown>, ctx: {
   const begin = (request: { provider: string; inputs?: unknown } | null): QuickStartWorkspacePlan => ({
     defer: true,
     begin: async (task, pending) => {
-      const full: WorkspacePendingStart = { ...pending, via: 'quick-start', at: new Date().toISOString() }
+      const full: WorkspacePendingStart = { ...pending, via: 'quick-start', at: pending.at ?? new Date().toISOString() }
       try {
         const cur = task.workspace
         // A ready one (its setup held the start at plan time) takes the start on the row too.

@@ -39,6 +39,8 @@ export function installDirect(): void {
         // a person typing `walnut add` gets the task on the board (Satellite).
         pinned: newTaskPinDefault(),
       });
+      const { cliOpCaller } = await import('../lib/cli-sender.js');
+      if ('callerMode' in cliOpCaller()) await (await import('../core/recent-task-touch.js')).recordRecentTaskTouch(task.id, 'cli', task.created_at);
       printCreated(task as unknown as Parameters<typeof printCreated>[0], globals);
     },
 

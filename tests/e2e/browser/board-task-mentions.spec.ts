@@ -122,11 +122,20 @@ test('task ids in the Board text and its messages become live chips', async ({ p
   await expect(msg.locator('a.task-link')).toHaveCount(4)
   await expect(msg).toContainText('hash 2ac8891 and')
   await expect(msg.locator('code')).toHaveText(`git log ${OPEN_ID}`)
-  await msg.scrollIntoViewIfNeeded()
+  // The thread may draw its messages again as the board settles (2026-11-10 gate: the element went away mid-scroll).
+  await expect(async () => { await msg.scrollIntoViewIfNeeded({ timeout: 2_000 }) }).toPass({ timeout: 20_000 })
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-board.png` })
+
+  // An author cannot fabricate an input by calling a public element method.
+  await msg.locator(`walnut-task[id="9c1d4e2a"]`).evaluate((el) => {
+    const possible = el as HTMLElement & { wnOpen?: (event: unknown) => void };
+    possible.wnOpen?.({ isTrusted: true });
+  })
+  expect(await page.evaluate((id) => JSON.parse(localStorage.getItem('walnut-todo-recent-opened') ?? '[]').some((e: { id: string }) => e.id === id), UUID_ID)).toBe(false)
 
   // A chip opens its task beside the board.
   await pointer(page, msg.locator(`a.task-link[data-task-id="${UUID_ID}"]`))
   await expect(page.getByTestId('board-task-peek').or(page.locator(`[data-task-id="${UUID_ID}"]`)).first()).toBeVisible({ timeout: 15_000 })
+  await expect.poll(() => page.evaluate((id) => JSON.parse(localStorage.getItem('walnut-todo-recent-opened') ?? '[]').some((e: { id: string; human?: boolean }) => e.id === id && e.human === true), UUID_ID)).toBe(true)
   expect(pageErrors).toEqual([])
 })

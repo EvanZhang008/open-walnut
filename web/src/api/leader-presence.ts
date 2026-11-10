@@ -298,6 +298,7 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   config_writes_need_mac: 'Changing settings needs your Mac.',
   routine_writes_need_mac: 'Changing a routine needs your Mac.',
   prefs_writes_need_mac: 'Changing favorites or the layout needs your Mac.',
+  recent_human_history_not_ready: 'Recent on your phone joins in once your Mac has set it up.',
   conversation_writes_need_mac: 'Changing the chat list needs your Mac.',
   conversation_bodies_need_mac: 'The messages of a chat are on your Mac; this host keeps only the list.',
   other_hosts_need_mac: 'Reaching another host goes through your Mac.',

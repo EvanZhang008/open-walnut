@@ -271,8 +271,9 @@ describe('the Mac drains the companion\'s journal', () => {
   it('a task born on the companion lands with its id, fields and project, once; an edit of it lands after it', async () => {
     const id = `mcj${Date.now().toString(36)}aa01`
     const op = opId()
+    const humanTouchAt = '2026-11-09T20:00:00Z'
     companion.journal.journalTaskCreate({
-      opId: op, taskId: id,
+      opId: op, taskId: id, humanTouchAt,
       fields: { title: 'Acme launch checklist', priority: 'important', description: 'From the phone', phase: 'IN_PROGRESS', note: 'Ask the vendor' },
       placement: { project: 'Acme' },
     })
@@ -288,6 +289,8 @@ describe('the Mac drains the companion\'s journal', () => {
     expect(Date.parse(t.created_at)).toBeLessThan(drainedAt - 200)
     expect(t).toMatchObject({ id, title: 'Acme launch checklist, v2', project: 'Acme', priority: 'important', description: 'From the phone', phase: 'IN_PROGRESS', created_by_op: op })
     expect(t.note).toContain('Ask the vendor')
+    const prefs = JSON.parse(await fsp.readFile(constantsBase.UI_PREFS_FILE as string, 'utf8'))
+    expect(JSON.parse(prefs['walnut-todo-recent-opened'].v)).toContainEqual({ id, at: humanTouchAt, human: true })
     expect(companion.journal.companionJournalRecords()).toEqual([])
     // Drained again (a Mac that crashed before its ack): still one task, unchanged.
     const before = JSON.stringify(await mac.tm.getTask(id))

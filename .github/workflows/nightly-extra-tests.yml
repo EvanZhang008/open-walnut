@@ -162,6 +162,12 @@ jobs:
         env:
           WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-popout
         run: bash scripts/test-desktop-popout.sh
+      # The root install already installed web/ (scripts/postinstall.mjs).
+      - name: Recent uses native human input
+        if: ${{ !cancelled() }}
+        run: |
+          bun x playwright install webkit
+          bash scripts/test-desktop-recent.sh
 
   # The Whisper one-button setup for real: Homebrew installs whisper-cpp and the model
   # downloads (1.6 GB), so it runs on Sundays only, or when started by hand (never on a push of this

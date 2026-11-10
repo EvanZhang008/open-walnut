@@ -37,6 +37,7 @@ import { FocusBarProvider } from '@/contexts/FocusBarContext';
 import { usePageView } from '@/utils/view-memory';
 import { taskPath } from '@/utils/task-path';
 import { log } from '@/utils/log';
+import { recordTaskOpened } from '@/utils/recent-opened';
 import {
   ACT_CONTEXT_NAME, CONTEXT_NAME, actLine, composerPlaceholderOf, currentConversation, handedOf, hostOf, otherOwnerOf, pageChipOn, pageContextBlock, panelOptions,
   firstQuestionOf, selectionLeftOutOnSwitch, selectionOfferedTo, pageKey as pageKeyOf, panelAskTitle, rememberFirstQuestion, rememberHanded, rememberSent, forgetSent, rememberSentPage, sentOf, sentPageOf, selectionQuote,
@@ -299,6 +300,8 @@ function ExtPanel() {
 
   /** Show an ask (picked in the drawer or Continue, or handed over by the popup) as the open conversation. */
   const pickAsk = useCallback((taskId: string, sessionId: string | undefined, forAgent?: string) => {
+    // His pick is an open for Recent (only inside his own click: recordTaskOpened checks), Main left out as on Home.
+    if (taskId !== MAIN_OPEN && taskId !== mainIdRef.current) recordTaskOpened(taskId);
     if (!sessionId) {
       if (taskId === MAIN_OPEN || taskId === mainIdRef.current) { startMain(); return; }
       toParent({ type: 'open-walnut', path: taskPath(taskId) });
@@ -321,6 +324,7 @@ function ExtPanel() {
    */
   const openTask = useCallback((taskId: string, sessionId: string | undefined, started?: HomeLaunched) => {
     if (!keyRef.current) return;
+    recordTaskOpened(taskId);
     const k = nextConversation(TASK_POINTER);
     writeAskSession({ agentId: GENERAL_AGENT_ID, key: k }, { taskId, ...(sessionId ? { sessionId } : {}), asked: [], at: Date.now() });
     // Only the tab Send was pressed in, and only while it is still on show: never the act switch's
@@ -342,6 +346,7 @@ function ExtPanel() {
   }, [nextConversation, setKeptMode, setDetailId]);
   /** A task with no conversation yet: its detail in this frame, never a Walnut tab. */
   const openDetail = useCallback((taskId: string) => {
+    recordTaskOpened(taskId);
     setDetailId(taskId);
     setKeptMode('task');
   }, [setDetailId, setKeptMode]);

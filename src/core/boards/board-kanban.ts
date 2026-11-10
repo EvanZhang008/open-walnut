@@ -463,6 +463,7 @@ export async function createBoardCardTask(
     ...(owner.group_id ? { group_id: owner.group_id } : {}),
     ...(tags.length ? { tags: tags.map((t) => t.trim()) } : {}),
   });
+  if (opts.by === 'human') await (await import('../recent-task-touch.js')).recordRecentTaskTouch(task.id, 'ui', task.created_at);
   // As POST /tasks does: every open window's task store (and the kanban watch) hears of it.
   const { bus, EventNames } = await import('../event-bus.js');
   bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'board-kanban' });

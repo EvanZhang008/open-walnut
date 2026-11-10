@@ -48,7 +48,7 @@ async function sideThreadInArea(parentAreaId: string | undefined, threadAreaId: 
 export async function promoteSideThread(
   parentSid: string,
   threadId: string,
-  opts?: { title?: string },
+  opts?: { title?: string; source?: string },
 ): Promise<PromoteSideThreadResult> {
   const { getSideQuestion, markThreadPromoted } = await import('../side-questions.js');
   const entry = await getSideQuestion(parentSid, threadId);
@@ -114,6 +114,8 @@ export async function promoteSideThread(
       pinned: true,
     }));
   }
+
+  await (await import('../recent-task-touch.js')).recordRecentTaskTouch(task.id, opts?.source ?? 'ui', task.created_at);
 
   // Stamp BEFORE the record update: the 409 guard above keys off this stamp, so
   // a partial failure below must leave the guard armed — a retry after a failed

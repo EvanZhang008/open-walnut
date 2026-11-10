@@ -19,6 +19,8 @@ import { isLaunchReady } from '../workspaces/decisions.js';
 
 export interface SessionStartParams {
   taskIdPrefix: string;
+  /** Original human action time, preserved across workspace replay. */
+  requestedAt?: string;
   message?: string;
   /** Start with no first message and run no turn (an engine switch with nothing to say): never the
    *  task's description or a "Working on task" line, which would start its work again. */
@@ -303,6 +305,8 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
   }
   let result: SessionStartResult;
   const picked: { split?: { key: string; engine: SessionEngine; model?: string } } = {};
+  // The person's action time, kept through a workspace's replay of this start.
+  params = { ...params, requestedAt: params.requestedAt ?? new Date().toISOString() };
   try {
     result = await startSessionForTaskNow(params, picked);
   } catch (err) {
@@ -322,6 +326,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
   }
   const { clearStartQueue } = await import('./start-queue.js');
   await clearStartQueue(result.taskId, 'started');
+  if (!params.callerSid?.trim()) await (await import('../recent-task-touch.js')).recordRecentTaskTouch(result.taskId, params.source, params.requestedAt);
   return result;
 }
 

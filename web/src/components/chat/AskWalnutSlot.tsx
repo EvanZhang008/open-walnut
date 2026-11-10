@@ -455,10 +455,10 @@ export function AskWalnutSlot({
     setNewMode(false);
     // Main is Walnut's: showing it from another agent's list moves the drawer back to Walnut.
     if (taskId === MAIN_PICK) setAgentId(GENERAL_AGENT_ID);
-    // An open for the Recent tab; Main is always one tap away in this slot, so it is left out.
-    else recordTaskOpened(taskId);
+    // A person's explicit pick, including Main.
+    recordTaskOpened(taskId === MAIN_PICK ? mainTask?.id : taskId);
     setSelectedTaskId(taskId);
-  }, [dropLaunchedUnless]);
+  }, [dropLaunchedUnless, mainTask?.id]);
 
   useEffect(() => {
     const show = (e: Event) => {

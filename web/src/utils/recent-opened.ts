@@ -17,6 +17,7 @@
  * each task wins).
  */
 import { useSyncExternalStore } from 'react';
+import { useEvent } from '@/hooks/useWebSocket';
 import { apiGet } from '@/api/client';
 
 export {
@@ -69,7 +70,7 @@ export function readRecentOpened(): RecentOpen[] {
   try { raw = storage()?.getItem(RECENT_OPENED_KEY) ?? null; } catch { /* storage off */ }
   if (raw !== cachedRaw) {
     cachedRaw = raw;
-    cachedList = parseRecentOpened(raw);
+    cachedList = parseRecentOpened(raw).filter((entry) => entry.human === true);
   }
   return cachedList;
 }
@@ -84,8 +85,43 @@ function writeRecentOpened(list: readonly RecentOpen[]): void {
   window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 
-/** The person opened this task. Never throws. */
+// A rendered panel or a custom event is not evidence of a person's action. Keep the
+// grant inside the trusted input's turn; async open paths capture it before awaiting.
+let personOpening = false;
+let openingTurn = 0;
+if (typeof document !== 'undefined') {
+  const grant = (event: Event) => {
+    if (!event.isTrusted) return;
+    personOpening = true;
+    const turn = ++openingTurn;
+    setTimeout(() => { if (turn === openingTurn) personOpening = false; }, 0);
+  };
+  document.addEventListener('click', grant, true);
+  document.addEventListener('keydown', grant, true);
+}
+
+/** Browser-owned transport of a click (a popout or the native app link), never a render. */
+export function withRecentHumanInput<T>(action: () => T): T {
+  const before = personOpening;
+  personOpening = true;
+  try { return action(); } finally { personOpening = before; }
+}
+export function hasRecentHumanInput(): boolean { return personOpening; }
+
+/** Carry this input's permission across an async lookup, never across a restore. */
+export function recentOpenRecorder(): (taskId: string | null | undefined) => void {
+  const permitted = personOpening;
+  const at = new Date();
+  return (taskId) => { if (permitted) saveTaskOpened(taskId, at); };
+}
+
+/** Record an open only during a trusted human input. Never throws. */
 export function recordTaskOpened(taskId: string | null | undefined, now: Date = new Date()): void {
+  if (!personOpening) return;
+  saveTaskOpened(taskId, now);
+}
+
+function saveTaskOpened(taskId: string | null | undefined, now: Date): void {
   // `tmp-` is an optimistic create's id until the server's arrives (useTasks): never a real task.
   if (!taskId || taskId.startsWith('tmp-')) return;
   writeRecentOpened(withOpened(readRecentOpened(), taskId, now.toISOString()));
@@ -102,6 +138,12 @@ export async function pullRecentOpened(): Promise<void> {
     if (theirs.length === 0) return;
     writeRecentOpened(mergeRecentOpened(readRecentOpened(), theirs));
   } catch { /* offline: this window's own list stands */ }
+}
+
+let eventPull: ReturnType<typeof setTimeout> | undefined;
+function pullAfterTouch(): void {
+  clearTimeout(eventPull);
+  eventPull = setTimeout(() => { void pullRecentOpened(); }, 100);
 }
 
 let pulling = false;
@@ -132,5 +174,6 @@ function subscribe(onChange: () => void): () => void {
 
 /** The opens, newest first, live: this window's own, another tab's, another device's on return. */
 export function useRecentOpened(): RecentOpen[] {
+  useEvent('recent:changed', pullAfterTouch);
   return useSyncExternalStore(subscribe, readRecentOpened, readRecentOpened);
 }

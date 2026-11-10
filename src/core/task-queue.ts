@@ -79,7 +79,7 @@ function mintOpId(): string {
  *  scope an update (see TaskOp in task-outbox.ts); the two reorder kinds carry
  *  whole-list ordering (no per-row LWW clock). */
 export type TaskOpInput =
-  | { type: 'create'; task: Task; callerSid?: string }
+  | { type: 'create'; task: Task; callerSid?: string; humanTouchAt?: string }
   | { type: 'update'; task: Task; touched?: string[]; append?: { note?: string }; fields?: TaskFieldWrites }
   | { type: 'delete'; id: string }
   | { type: 'reorder'; project: string; taskIds: string[] }
@@ -96,7 +96,7 @@ export function buildTaskOp(op: TaskOpInput): TaskOp {
     case 'reorder-pins':
       return { opId, type: 'reorder-pins', at, taskIds: op.taskIds };
     case 'create':
-      return { opId, type: 'create', at, task: op.task, ...(op.callerSid ? { callerSid: op.callerSid } : {}) };
+      return { opId, type: 'create', at, task: op.task, ...(op.callerSid ? { callerSid: op.callerSid } : {}), ...(op.humanTouchAt ? { humanTouchAt: op.humanTouchAt } : {}) };
     case 'update':
       return {
         opId, type: 'update', at, task: op.task,
@@ -436,6 +436,7 @@ async function journalCreate(op: Extract<TaskOp, { type: 'create' }>): Promise<b
     // older Mac would refuse it under its old rule, and the companion already applied the new one.
     return journalTaskCreate({
       opId: op.opId, taskId: op.task.id, ...createRecordOf(op.task),
+      ...(op.humanTouchAt ? { humanTouchAt: op.humanTouchAt } : {}),
       ...(op.callerSid ? { actor: { kind: 'session' as const, sid: op.callerSid } } : {}),
     })?.ok === true;
   } catch (err) {

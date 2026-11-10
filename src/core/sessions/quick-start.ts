@@ -627,6 +627,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     updatedTask = wantsUnread ? await getTask(task.id) : task;
   }
 
+  await (await import('../recent-task-touch.js')).recordRecentTaskTouch(updatedTask.id, source, new Date(requestTs).toISOString());
+
   if (!existingTaskId) {
     bus.emit(EventNames.TASK_CREATED, { task: updatedTask }, ['web-ui'], { source });
   }

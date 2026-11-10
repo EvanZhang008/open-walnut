@@ -119,7 +119,7 @@ describe('session control relay payloads on a REPLICA', () => {
     expect(res.body).toEqual(result)
     expect(bridgeRequestMock).toHaveBeenCalledWith(
       '__local__', 'session.control',
-      { action: 'fork', sessionId: SID, params: { create_child_task: true, message: 'try B' } },
+      { action: 'fork', sessionId: SID, params: { create_child_task: true, message: 'try B', recentSource: 'mobile' } },
       30_000,
     )
   })

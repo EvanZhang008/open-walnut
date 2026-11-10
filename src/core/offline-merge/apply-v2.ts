@@ -317,6 +317,9 @@ async function createTask(
     // addTask's own validation (unknown tier, a folder of another project): the Mac's answer.
     throw new RefusedWrite(err instanceof Error ? err.message : String(err));
   }
+  const humanTouchAt = record.actor?.kind === 'device' ? created.created_at
+    : record.actor?.kind !== 'session' && typeof record.humanTouchAt === 'string' ? record.humanTouchAt : undefined;
+  if (humanTouchAt) await (await import('../recent-task-touch.js')).recordRecentTaskTouch(created.id, 'mobile', humanTouchAt);
   // Best-effort, as online: a failure leaves the task standalone in its project.
   await placeBesideCaller(decision, caller, created, 'offline-handover');
   // A cut session title is refined in the background as the online create does (only

@@ -791,7 +791,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         res.json(await wsPlan.begin(updatedTask, {
           message: sessionMessage, ...(messagePrefix ? { messagePrefix } : {}), ...(model ? { model } : {}), ...(mode ? { mode } : {}),
           ...(effectiveEngine ? { engine: effectiveEngine } : {}), ...(preassignedSessionId ? { session_id: preassignedSessionId } : {}),
-          source: routeSource('quick-start', req.headers),
+          source: routeSource('quick-start', req.headers), at: new Date(requestTs).toISOString(),
         }))
         return
       }
@@ -2645,7 +2645,7 @@ sessionsRouter.post('/:sessionId/side-question', async (req: Request, res: Respo
 // POST /api/sessions/:sessionId/side-question/:id/promote — turn a Q&A into a task
 sessionsRouter.post('/:sessionId/side-question/:id/promote', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const result = await promoteSessionSideQuestion(String(req.params.sessionId), String(req.params.id))
+    const result = await promoteSessionSideQuestion(String(req.params.sessionId), String(req.params.id), routeSource('ui', req.headers))
     res.json({ taskId: result.taskId, parentTaskId: result.parentTaskId })
   } catch (err) {
     if (err instanceof SessionControlError) {
@@ -2816,7 +2816,7 @@ sessionsRouter.post('/:sessionId/side-threads/:threadId/promote', async (req: Re
     const result = await promoteSideThread(
       String(req.params.sessionId),
       String(req.params.threadId),
-      typeof title === 'string' && title.trim() ? { title } : undefined,
+      { source: routeSource('ui', req.headers), ...(typeof title === 'string' && title.trim() ? { title } : {}) },
     )
     res.json({
       taskId: result.taskId,
@@ -3383,7 +3383,7 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
       const result = await forkSessionToTask(sourceSessionId, {
         task_id, create_child_task, child_title, message, title, model,
         ...(imageContext ? { imageContext } : {}),
-      }, 'web-api')
+      }, routeSource('web-api', req.headers))
       // Web and mobile now share the SAME core result shape (including the
       // additive `title` field); clients ignore fields they don't know.
       res.json(result)
@@ -3432,7 +3432,7 @@ sessionsRouter.post('/:sessionId/rewind', async (req: Request, res: Response, ne
         ...(restore_files !== undefined ? { restoreFiles: !!restore_files } : {}),
         ...(keep_source !== undefined ? { keepSource: !!keep_source } : {}),
         ...(message !== undefined ? { message: String(message) } : {}),
-      }, 'web-api')
+      }, routeSource('web-api', req.headers))
       log.web.info('session rewound via REST', {
         sessionId, rewoundId: result.sessionId, mode: result.mode, restoreFiles: !!restore_files,
       })

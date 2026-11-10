@@ -158,12 +158,15 @@ export function journalTaskCreate(input: {
   taskId: string
   fields: Record<string, unknown>
   placement: { parentTaskId?: string; project?: string; groupId?: string; tier?: string }
+  /** Proven original human action, carried through the journal's replay. */
+  humanTouchAt?: string
   /** The session whose create this was (a worker's, in its own project): the Mac's drain files it beside it. */
   actor?: { kind: 'session'; sid: string }
 }): AppendResult | null {
   if (!macDrains('task-create')) return null
   const r = journalOf().append(COMPANION_JOURNAL_HOME, {
     kind: 'task-create', taskId: input.taskId, fields: input.fields, placement: input.placement,
+    ...(input.humanTouchAt ? { humanTouchAt: input.humanTouchAt } : {}),
   }, { opId: input.opId, limit: true, ...(input.actor ? { actor: input.actor } : {}) })
   if (r.ok) {
     log.task.info('companion journal: saved a new task for the Mac', { taskId: input.taskId, opId: r.opId, seq: r.seq, ...(r.duplicate ? { duplicate: true } : {}) })

@@ -31,21 +31,24 @@
   // A thread scrolled within this of its bottom stays pinned there as messages arrive.
   var PIN_SLACK_PX = 24;
 
+  // Only these closed-over native listeners can attribute an open to a person.
+  function openTaskFromInput(el, e) {
+    if (!trusted(e)) return;
+    var id = el.getAttribute('id') || '';
+    var ref = state.refs[id];
+    if (id) kit.send({ t: 'wn-board:open-task', id: ref ? ref.id : id, human: true });
+  }
+
   // ── <walnut-task id compact?>: a live chip; click or Enter goes to the task ──
   class WalnutTask extends kit.Base {
     static get observedAttributes() { return ['id', 'compact']; }
     attributeChangedCallback() { if (kit.live.has(this)) this.wnRender(); }
     wnSetup() {
       var self = this;
-      this.addEventListener('click', function (e) { e.preventDefault(); if (trusted(e)) self.wnOpen(); });
+      this.addEventListener('click', function (e) { e.preventDefault(); if (trusted(e)) openTaskFromInput(self, e); });
       this.addEventListener('keydown', function (e) {
-        if (trusted(e) && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); self.wnOpen(); }
+        if (trusted(e) && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openTaskFromInput(self, e); }
       });
-    }
-    wnOpen() {
-      var id = this.getAttribute('id') || '';
-      var ref = state.refs[id];
-      if (id) kit.send({ t: 'wn-board:open-task', id: ref ? ref.id : id });
     }
     wnRender() {
       var id = this.getAttribute('id') || '';

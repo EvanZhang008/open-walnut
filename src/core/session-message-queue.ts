@@ -26,6 +26,7 @@
  * (unparkMessage, from Retry) puts it back in line, or deleteMessage discards it.
  */
 
+import { noteRecentHumanMessage } from './recent-task-touch.js';
 import { log } from '../logging/index.js';
 import { lineUuidFor, noteLineCarries, splitBatchAtUuid } from '../providers/batch-uuid.js';
 import {
@@ -108,7 +109,7 @@ export async function loadQueue(): Promise<void> {
 export async function enqueueMessage(
   sessionId: string,
   message: string,
-  opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean; sentBy?: 'person' | 'agent'; heldReason?: string },
+  opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean; sentBy?: 'person' | 'agent'; recentText?: string; heldReason?: string },
 ): Promise<QueuedMessage> {
   if (opts?.id?.startsWith('qm-inbox-') && !opts.id.startsWith('qm-inbox-ai-')) {
     const { validateInboxMessageBoundary } = await import('./human-inbox/item-execution.js');
@@ -161,6 +162,7 @@ export async function enqueueMessage(
     });
     return outcome.existing;
   }
+  if (msg.sentBy === 'person' && !inherited) noteRecentHumanMessage(sessionId, opts?.recentText ?? message, msg.enqueuedAt);
   log.session.info('message enqueued', { sessionId, messageId: msg.id, queueDepth: outcome.queueDepth });
   return msg;
 }
@@ -314,6 +316,7 @@ export async function sendMessageToSession(
     if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
     msg = await enqueueMessage(sessionId, enqueueText, {
       id: opts?.messageId,
+      recentText: message,
       ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
       ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       ...(opts?.relayTaken ? { relayTaken: true } : {}),

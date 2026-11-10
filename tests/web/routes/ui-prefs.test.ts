@@ -14,6 +14,7 @@ import express from 'express';
 import request from 'supertest';
 import { WALNUT_HOME, UI_PREFS_FILE } from '../../../src/constants.js';
 import { uiPrefsRouter, _resetUiPrefsMigrationForTest } from '../../../src/web/routes/ui-prefs.js';
+import { resetRecentTouchHistoryForTest } from '../../../src/core/recent-touch-history.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 
 const LEGACY_PREFS_FILE = path.join(WALNUT_HOME, 'ui-prefs.json');
@@ -32,6 +33,7 @@ beforeEach(async () => {
   // The legacy→config/share move is memoized per process; each test starts from
   // a fresh WALNUT_HOME, so it has to be allowed to run again.
   _resetUiPrefsMigrationForTest();
+  resetRecentTouchHistoryForTest();
 });
 
 afterEach(async () => {
@@ -55,11 +57,11 @@ describe('GET /api/ui-prefs', () => {
   it('?key= answers that one entry, or none when it is not saved', async () => {
     await fs.mkdir(path.dirname(UI_PREFS_FILE), { recursive: true });
     await fs.writeFile(UI_PREFS_FILE, JSON.stringify({
-      'walnut-todo-recent-opened': { v: '[{"id":"t1","at":"2026-11-06T19:30:00.000Z"}]', ts: 5 },
+      'walnut-todo-recent-opened': { v: '[{"id":"t1","at":"2026-11-06T19:30:00.000Z","human":true}]', ts: 5 },
       'open-walnut-theme': { v: 'dark', ts: 6 },
     }));
     const one = await request(createApp()).get('/api/ui-prefs').query({ key: 'walnut-todo-recent-opened' });
-    expect(one.body.prefs).toEqual({ 'walnut-todo-recent-opened': { v: '[{"id":"t1","at":"2026-11-06T19:30:00.000Z"}]', ts: 5 } });
+    expect(one.body.prefs['walnut-todo-recent-opened'].v).toBe('[{"id":"t1","at":"2026-11-06T19:30:00.000Z","human":true}]');
     const none = await request(createApp()).get('/api/ui-prefs').query({ key: 'walnut-todo-missing' });
     expect(none.body.prefs).toEqual({});
     // An inherited name is not a key.
@@ -160,7 +162,7 @@ describe('PUT /api/ui-prefs', () => {
     // last-writer-wins kept only B. The key is a list every window adds to.
     const KEY = 'walnut-todo-recent-opened';
     const app = createApp();
-    const list = (...e: Array<[string, string]>) => JSON.stringify(e.map(([id, at]) => ({ id, at })));
+    const list = (...e: Array<[string, string]>) => JSON.stringify(e.map(([id, at]) => ({ id, at, human: true })));
     await request(app).put('/api/ui-prefs').send({ prefs: { [KEY]: { v: list(['old', '2026-11-07T08:00:00.000Z']), ts: 100 } } });
     await Promise.all([
       request(app).put('/api/ui-prefs').send({ prefs: { [KEY]: { v: list(['A', '2026-11-07T09:00:00.000Z'], ['old', '2026-11-07T08:00:00.000Z']), ts: 300 } } }),
@@ -181,6 +183,78 @@ describe('PUT /api/ui-prefs', () => {
     // Concurrent PUTs never drop each other's keys.
     expect(after['open-walnut-y'].v).toBe('y');
     expect(after['open-walnut-z'].v).toBe('z');
+  });
+
+  it('an agent prefs write cannot insert or move any Recent row', async () => {
+    const app = createApp();
+    const key = 'walnut-todo-recent-opened';
+    const human = JSON.stringify([{ id: 'human', at: '2026-11-07T09:00:00Z', human: true }]);
+    await request(app).put('/api/ui-prefs').send({ prefs: { [key]: { v: human, ts: 100 } } });
+    for (const headers of [{ 'x-walnut-caller-sid': 'agent-session' }, { 'x-walnut-caller-kind': 'automation' }]) {
+      await request(app).put('/api/ui-prefs').set(headers).send({ prefs: {
+        [key]: { v: JSON.stringify([{ id: 'agent-only', at: '2026-11-07T10:00:00Z' }, { id: 'human', at: '2026-11-07T11:00:00Z' }]), ts: 200 },
+      } });
+      expect((await request(app).get('/api/ui-prefs')).body.prefs[key].v).toBe(human);
+    }
+  });
+
+  it('discards old automatic opens and a stale old browser cannot reintroduce them', async () => {
+    await fs.mkdir(path.dirname(UI_PREFS_FILE), { recursive: true });
+    const old = JSON.stringify([{ id: 'auto-opened', at: '2026-11-07T09:00:00Z' }]);
+    await fs.writeFile(UI_PREFS_FILE, JSON.stringify({ 'walnut-todo-recent-opened': { v: old, ts: 1 } }));
+    const app = createApp();
+    expect(JSON.parse((await request(app).get('/api/ui-prefs')).body.prefs['walnut-todo-recent-opened'].v)).toEqual([]);
+    await request(app).put('/api/ui-prefs').send({ prefs: { 'walnut-todo-recent-opened': { v: old, ts: Date.now() + 1000 } } });
+    expect(JSON.parse((await request(app).get('/api/ui-prefs')).body.prefs['walnut-todo-recent-opened'].v)).toEqual([]);
+  });
+
+  it('an old paired phone can add a new human open but cannot hand back its stale list', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { (req as typeof req & { deviceName: string }).deviceName = 'test-phone'; next(); });
+    app.use('/api/ui-prefs', uiPrefsRouter);
+    await request(app).get('/api/ui-prefs');
+    const time = new Date(Date.now() + 100).toISOString();
+    await request(app).put('/api/ui-prefs').set('User-Agent', 'Walnut/1.0 CFNetwork/1 Darwin/1').send({ prefs: { 'walnut-todo-recent-opened': {
+      v: JSON.stringify([{ id: 'stale', at: '2026-11-07T09:00:00Z' }, { id: 'phone-open', at: time }]), ts: Date.now(),
+    } } });
+    const res = await request(app).get('/api/ui-prefs');
+    expect(JSON.parse(res.body.prefs['walnut-todo-recent-opened'].v)).toEqual([{ id: 'phone-open', at: time, human: true }]);
+  });
+
+  it('a paired web browser cannot relabel automatic opens as human', async () => {
+    const app = express(); app.use(express.json());
+    app.use((req, _res, next) => { (req as typeof req & { deviceName: string }).deviceName = 'paired-browser'; next(); });
+    app.use('/api/ui-prefs', uiPrefsRouter);
+    await request(app).get('/api/ui-prefs');
+    await request(app).put('/api/ui-prefs').set('User-Agent', 'Mozilla/5.0 Safari/605.1.15').send({ prefs: { 'walnut-todo-recent-opened': {
+      v: JSON.stringify([{ id: 'automatic', at: new Date(Date.now() + 1000).toISOString() }]), ts: Date.now(),
+    } } });
+    expect(JSON.parse((await request(app).get('/api/ui-prefs')).body.prefs['walnut-todo-recent-opened'].v)).toEqual([]);
+  });
+
+  it('old human messages join Recent without treating agent updates as visits', async () => {
+    const dir = path.join(WALNUT_HOME, 'user-asks');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'human-task.json'), JSON.stringify({ version: 1, taskId: 'human-task', asks: [{ id: 'ua-1', at: '2026-11-07T09:00:00Z', text: 'My question', via: 'chat', state: 'closed' }] }));
+    const res = await request(createApp()).get('/api/ui-prefs').query({ key: 'walnut-todo-recent-opened' });
+    expect(JSON.parse(res.body.prefs['walnut-todo-recent-opened'].v)).toEqual([{ id: 'human-task', at: '2026-11-07T09:00:00Z', human: true }]);
+  });
+
+  it('a failed history migration leaves reads usable and retries recovery', async () => {
+    const dir = path.join(WALNUT_HOME, 'user-asks');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'human.json'), JSON.stringify({ version: 1, taskId: 'human', asks: [{ id: 'ua-1', at: '2026-11-07T09:00:00Z', text: 'Hi', via: 'chat', state: 'open' }] }));
+    const utils = await import('../../../src/utils/fs.js');
+    const spy = vi.spyOn(utils, 'writeJsonFile').mockRejectedValueOnce(new Error('disk full'));
+    const app = createApp();
+    try {
+      const first = await request(app).get('/api/ui-prefs');
+      expect(first.status).toBe(200);
+      const second = await request(app).get('/api/ui-prefs');
+      expect(second.status).toBe(200);
+      expect(JSON.parse(second.body.prefs['walnut-todo-recent-opened'].v)).toEqual([{ id: 'human', at: '2026-11-07T09:00:00Z', human: true }]);
+    } finally { spy.mockRestore(); }
   });
 
   it('null value is a delete tombstone', async () => {

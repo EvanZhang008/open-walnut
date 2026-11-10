@@ -310,12 +310,10 @@ export function OrgPage() {
   // A phone pushes the pick (Back returns to the list); the desktop replaces it. A new pick
   // closes the side panel: what it showed belonged to the node the user left.
   const select = useCallback((key: string, tab?: OrgTab) => {
-    // An open for Home's Recent tab (utils/recent-opened.ts); Main is left out, it is always at hand.
+    // The person picked a node: record the task it represents.
     // rowOf answers a led project's VP row, so the project's own row is looked up in it.
-    if (key !== MAIN_KEY) {
-      const row = rowOf(channelsRef.current, key);
-      recordTaskOpened((row?.key === key ? row : row?.led?.find((l) => l.key === key))?.contactId);
-    }
+    const row = rowOf(channelsRef.current, key);
+    recordTaskOpened((row?.key === key ? row : row?.led?.find((l) => l.key === key))?.contactId);
     setParams(() => {
       const next = liveParams();
       next.set('node', key);

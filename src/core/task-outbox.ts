@@ -72,6 +72,8 @@ export type TaskOp =
        *  made in the worker's own project, which the Mac files beside its parent's folder (the
        *  companion holds no folders). */
       callerSid?: string;
+      /** A proven person create, at its original time (never the replay's time). */
+      humanTouchAt?: string;
     }
   | {
       opId: string; type: 'update'; at: string; task: Task;
@@ -444,6 +446,7 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
         created_by_op: op.opId, applied_ops: [`companion|${op.opId}|1`],
       },
     ]);
+    if (created && op.type === 'create' && op.humanTouchAt) await (await import('./recent-task-touch.js')).recordRecentTaskTouch(created.id, 'mobile', op.humanTouchAt);
     rememberOpId(op.opId);
     // Read back once filed, so the event carries the folder (placing may emit nothing itself).
     const placed = created && op.type === 'create' && op.callerSid && await placeBesideParentOnArrival(created, op.callerSid)

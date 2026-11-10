@@ -86,7 +86,7 @@ const realDeps: WorkspaceManagerDeps = {
     if (pending.via === 'task-start') {
       const { startSessionForTask } = await import('../sessions/task-start.js')
       await startSessionForTask({
-        taskIdPrefix: task.id, message: pending.message, model: pending.model, mode: pending.mode,
+        taskIdPrefix: task.id, requestedAt: pending.at, message: pending.message, model: pending.model, mode: pending.mode,
         ...(pending.effort ? { effort: pending.effort as SessionEffort } : {}),
         engine: pending.engine as never, callerSid: pending.caller_sid,
         ...(pending.user_request ? { userRequest: pending.user_request } : {}), expectReply: pending.expect_reply,
@@ -96,7 +96,7 @@ const realDeps: WorkspaceManagerDeps = {
     }
     const { quickStartSession } = await import('../sessions/quick-start.js')
     await quickStartSession({
-      message: pending.message, messagePrefix: pending.messagePrefix,
+      requestTs: Date.parse(pending.at), message: pending.message, messagePrefix: pending.messagePrefix,
       cwd: ws.cwd!, host: ws.host === '__local__' ? undefined : ws.host,
       model: pending.model, mode: pending.mode, existingTaskId: task.id,
       source: pending.source ?? 'workspace', engine: pending.engine as never,

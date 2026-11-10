@@ -3062,7 +3062,8 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         && task.parent_task_id === caller.task.id
         ? { callerSid: caller.session.id }
         : {}
-      bus.emit(EventNames.TASK_CREATED, { task, ...fromWorker }, ['web-ui'], { source: 'api-v1' })
+      await (await import('../../core/recent-task-touch.js')).recordRecentTaskTouch(task.id, (await import('../../core/sessions/send-sent-by.js')).routeSource('mobile', req.headers), task.created_at)
+      bus.emit(EventNames.TASK_CREATED, { task, ...fromWorker, ...((await import('../../core/sessions/send-sent-by.js')).routeSource('mobile', req.headers) === 'mobile' ? { humanTouchAt: task.created_at } : {}) }, ['web-ui'], { source: 'api-v1' })
       if (titleShortenedFrom) {
         void refineShortTitle(task.id, finalTitle, titleShortenedFrom,
           description !== undefined ? description as string : undefined)

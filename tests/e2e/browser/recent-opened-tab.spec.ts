@@ -44,7 +44,7 @@ test.afterAll(async () => {
 async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-walnut-caller-kind': 'automation' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   if (!res.ok) throw new Error(`${method} ${path}: ${res.status} ${await res.text()}`)
@@ -55,6 +55,17 @@ async function createTask(title: string): Promise<string> {
   const { task } = await api<{ task: { id: string } }>('POST', '/api/tasks', { title, project: PROJECT, source: 'local' })
   made.push(task.id)
   return task.id
+}
+
+async function clickTaskLink(page: Page, id: string): Promise<void> {
+  await page.evaluate((taskId) => {
+    const button = document.createElement('button'); button.id = 'recent-test-link';
+    button.textContent = 'Open task link'; button.style.cssText = 'position:fixed;top:0;left:0;z-index:99999';
+    button.onclick = () => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId } }));
+    document.body.append(button);
+  }, id);
+  await page.locator('#recent-test-link').click();
+  await page.locator('#recent-test-link').evaluate((el) => el.remove());
 }
 
 /** The Recent rows this test owns, top to bottom. */
@@ -120,14 +131,18 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   // Nothing opened yet in this browser: the list says what it is for. (An empty Recent stays on
   // the tab bar under "Hide empty tabs": tests/web/tab-bar-model.test.ts; this fixture shows no bar.)
   await chooseViewOption(page, 'recent')
-  await expect(page.getByTestId('todo-recent-empty')).toHaveText('Tasks you open show up here, newest first.')
+  await expect(page.getByTestId('todo-recent-empty')).toHaveText('Tasks you create, open or write in show up here, newest first.')
   await chooseViewOption(page, 'all')
+
+  // An automatic locate can show a task, but it is not the person's input.
+  await page.evaluate((id) => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: id } })), d)
+  expect(await page.evaluate((key) => localStorage.getItem(key), KEY)).toBeNull()
 
   // Open three, the way the person does: a row click in the tiers, a task link (the
   // locate every link and notification uses), and the task's details from its menu.
   await expect(tierCard(page, a)).toBeVisible({ timeout: 20_000 })
   await tierCard(page, a).click()
-  await page.evaluate((id) => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: id } })), c)
+  await clickTaskLink(page, c)
   await tierCard(page, b).getByRole('button', { name: 'More actions' }).click()
   await page.getByRole('button', { name: 'Details', exact: true }).click()
   await expect(page.locator('.task-detail-modal-overlay')).toBeVisible()
@@ -141,7 +156,7 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   await expect(page.locator('[data-testid^="status-section-"]')).toHaveCount(0)
   await expect(page.locator('.todo-pinned-list-recent .tier-project-label')).toHaveCount(0)
   // The row's time is the open time.
-  await expect(recentCard(page, b).locator('.todo-recent-ago')).toHaveAttribute('title', /^Opened /)
+  await expect(recentCard(page, b).locator('.todo-recent-ago')).toHaveAttribute('title', /^Last used /)
 
   // An agent's update does not move a row; completing one keeps it in the list.
   await api('PATCH', `/api/tasks/${a}`, { title: `Recent open alpha renamed ${STAMP}` })
@@ -151,8 +166,8 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
 
   // The Display menu says how the list is ordered instead of offering dead Sort/Group rows.
   await openDisplayMenu(page)
-  await expect(displayMenu(page).locator('[data-view-option="sort"]')).toContainText('Newest opened first')
-  await expect(displayMenu(page).locator('[data-view-option="group"]')).toContainText('Newest opened first')
+  await expect(displayMenu(page).locator('[data-view-option="sort"]')).toContainText('Last used by you first')
+  await expect(displayMenu(page).locator('[data-view-option="group"]')).toContainText('Last used by you first')
   await closeDisplayMenu(page)
 
   // Open in this window = greyed: a's details are open, the rest are not.
@@ -193,11 +208,11 @@ test('Recent lists what was opened, newest first, flat, and greys what is open n
   await expectReadable(page, b)
   await expect.poll(() => recentRows(page, mine)).toEqual([b, c, a])
   // An open made elsewhere while the list is on screen comes in on top.
-  await page.evaluate((id) => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: id } })), d)
+  await clickTaskLink(page, d)
   await expect.poll(() => recentRows(page, mine)).toEqual([d, b, c, a])
   // A row opened from the list earlier, opened again from elsewhere (a chat link), goes to the top.
   await page.waitForTimeout(2_500)
-  await page.evaluate((id) => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: id } })), a)
+  await clickTaskLink(page, a)
   await expect.poll(() => recentRows(page, mine)).toEqual([a, d, b, c])
   await chooseViewOption(page, 'all')
   await chooseViewOption(page, 'recent')
@@ -231,9 +246,40 @@ test('an open made on another device joins the list when this window comes back'
   await chooseViewOption(page, 'recent')
   await expect.poll(() => recentRows(page, mine), { timeout: 20_000 }).toEqual([here])
 
-  serverValue = JSON.stringify([{ id: phone, at: new Date(Date.now() + 60_000).toISOString() }])
+  serverValue = JSON.stringify([{ id: phone, at: new Date(Date.now() + 60_000).toISOString(), human: true }])
   // The window comes back to the front (the pull waits 15 s between two looks).
   await page.waitForTimeout(15_500)
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect.poll(() => recentRows(page, mine), { timeout: 20_000 }).toEqual([phone, here])
+})
+
+
+test('server human creation appears on web, and a read-only list plus agent create stays out', async ({ page, baseURL, request }) => {
+  const human = await request.post('/api/tasks', { data: { title: `Recent human create ${STAMP}`, project: PROJECT } })
+  expect(human.ok()).toBe(true)
+  const created = (await human.json()).task.id as string
+  made.push(created)
+  const agent = await createTask(`Recent automatic create ${STAMP}`)
+  await page.unroute(/\/api\/ui-prefs(\?|$)/)
+  await openHome(page, baseURL!, 90_000)
+  await chooseViewOption(page, 'recent')
+  await expect(recentCard(page, created)).toBeVisible({ timeout: 20_000 })
+  await expect(recentCard(page, agent)).toHaveCount(0)
+  const before = await request.get(`/api/ui-prefs?key=${KEY}`)
+  // Listing and detail GETs are read-only; an automatic update cannot make the row recent.
+  await request.get('/api/tasks')
+  await request.get(`/api/tasks/${agent}`)
+  await request.patch(`/api/tasks/${agent}`, { headers: { 'x-walnut-caller-kind': 'automation' }, data: { summary: 'Background update' } })
+  expect((await (await request.get(`/api/ui-prefs?key=${KEY}`)).json()).prefs[KEY].v).toBe((await before.json()).prefs[KEY].v)
+  await expect(recentCard(page, agent)).toHaveCount(0)
+  // A click in a second window carries its person origin through the window channel.
+  const popout = await page.context().newPage()
+  await popout.goto(`${baseURL}/popout?view=note&id=missing-recent-note`)
+  await popout.evaluate(async (id) => {
+    const button = document.createElement('button'); button.id = 'recent-window-link'; button.textContent = 'Open task'
+    button.onclick = (event) => { const channel = new BroadcastChannel('walnut-open-task'); channel.postMessage({ ask: 'recent-human-click', taskId: id, human: event.isTrusted }); setTimeout(() => channel.close(), 1000) }; document.body.append(button)
+  }, agent)
+  await popout.locator('#recent-window-link').click()
+  await expect.poll(() => recentRows(page, [created, agent]), { timeout: 20_000 }).toEqual([agent, created])
+  await popout.close()
 })

@@ -970,9 +970,11 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
       focus_tier: typeof focusTier === 'string' ? focusTier : undefined,
       asyncPush: true,
     })
+    await (await import('../../core/recent-task-touch.js')).recordRecentTaskTouch(result.task.id, (await import('../../core/sessions/send-sent-by.js')).routeSource('ui', req.headers), result.task.created_at)
     log.web.info('task created via REST', { taskId: result.task.id, project: result.task.project || '' })
     bus.emit(EventNames.TASK_CREATED, {
       task: result.task,
+      ...((await import('../../core/sessions/send-sent-by.js')).routeSource('ui', req.headers) === 'ui' ? { humanTouchAt: result.task.created_at } : {}),
       ...(typeof clientRequestId === 'string' ? { clientRequestId } : {}),
     }, ['web-ui'], { source: 'api' })
     res.status(201).json(result)

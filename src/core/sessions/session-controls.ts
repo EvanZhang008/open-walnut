@@ -870,6 +870,8 @@ export async function forkSessionToTask(
     await adoptForkTaskTitle(task.id, [forkTitle]);
   }
 
+  await (await import('../recent-task-touch.js')).recordRecentTaskTouch(task.id, source, childTaskCreated ? task.created_at : new Date().toISOString());
+
   // Emit SESSION_START with forkedFromSessionId — handleStart() uses Claude
   // Code's native --resume + --fork-session to transfer conversation context.
   bus.emit(EventNames.SESSION_START, {
@@ -1202,7 +1204,7 @@ export async function handleSessionControlRelay(
           message: typeof p.message === 'string' ? p.message : undefined,
           title: typeof p.title === 'string' ? p.title : undefined,
           model: typeof p.model === 'string' ? p.model : undefined,
-        }, 'mobile-control-bridge') as unknown as Record<string, unknown>;
+        }, p.recentSource === 'mobile' || (p.recentSource === undefined && origin === 'remote-http') ? 'mobile' : 'api-agent') as unknown as Record<string, unknown>;
         break;
       case 'model-options':
         result = await computeModelOptions(sessionId) as unknown as Record<string, unknown>;
@@ -1326,7 +1328,7 @@ export async function handleSessionControlRelay(
       }
       case 'side-question.promote': {
         const { promoteSessionSideQuestion } = await import('./session-extras.js');
-        result = await promoteSessionSideQuestion(sessionId, String(p.id ?? '')) as unknown as Record<string, unknown>;
+        result = await promoteSessionSideQuestion(sessionId, String(p.id ?? ''), p.recentSource === 'mobile' || (p.recentSource === undefined && origin === 'remote-http') ? 'mobile' : 'api-agent') as unknown as Record<string, unknown>;
         break;
       }
       case 'side-question.delete': {

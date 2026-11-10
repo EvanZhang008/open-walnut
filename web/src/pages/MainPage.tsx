@@ -111,7 +111,7 @@ import { needsYouQueue, nextNeedsYou } from '@/components/tasks/next-needs-you';
 import '@/styles/keyboard-shortcuts.css';
 import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
 import { createStripWriter, readColumns, readLayoutField, readString, writeLayoutField, type LayoutField } from '@/utils/layout-record';
-import { recordTaskOpened } from '@/utils/recent-opened';
+import { recordTaskOpened, recentOpenRecorder } from '@/utils/recent-opened';
 import { restoreDraftColumns, saveDraftColumns } from '@/components/sessions/draft-column-persist';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
@@ -1074,7 +1074,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const task = taskMapRef.current.get(taskId);
       // Nonce bump marks this as a user locate action — TodoPanel only
       // auto-expands collapsed sections for those (never on refresh restore).
-      if (task) { setFocusScope(scope ?? 'all'); setFocusedTask(task); setFocusNonce((n) => n + 1); }
+      if (task) { recordTaskOpened(task.id); setFocusScope(scope ?? 'all'); setFocusedTask(task); setFocusNonce((n) => n + 1); }
       if (sessionId) openSessionOrToast(sessionId);
     };
     const handleDockChat = () => {
@@ -2296,6 +2296,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Handle session click from chat: focus the associated task + open session column
   const handleSessionClick = useCallback(async (sessionId: string) => {
+    const recordOpen = recentOpenRecorder();
     openSessionOrToast(sessionId);
     // Fetch session to find its associated task
     try {
@@ -2303,7 +2304,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       if (session?.taskId) {
         const task = taskMapRef.current.get(session.taskId);
         // User locate action — bump nonce so TodoPanel auto-expands to it.
-        if (task) { setFocusScope('all'); setFocusedTask(task); setFocusNonce((n) => n + 1); }
+        if (task) { recordOpen(task.id); setFocusScope('all'); setFocusedTask(task); setFocusNonce((n) => n + 1); }
       }
     } catch { /* non-critical */ }
   }, [openSessionOrToast]);
@@ -2395,15 +2396,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // "focused task went away" effects below.
   const focusedTaskRef = useRef(focusedTask);
   focusedTaskRef.current = focusedTask;
-  // Every focus the person asks for bumps the nonce (a row click, a locate from anywhere, a
-  // dock or chat link, a task detail); a load restoring the focus never does (restoreFocus).
-  // So the nonce is the one place an open is recorded for the Recent tab (utils/recent-opened.ts).
-  useEffect(() => {
-    if (focusNonce > 0) recordTaskOpened(focusedTaskRef.current?.id);
-  }, [focusNonce]);
-
-
   const handleFocusTask = useCallback((task: Task, opts?: { openDetail?: boolean; fromOutside?: boolean }) => {
+    recordTaskOpened(task.id);
     // Always focus (never toggle off) — unfocusing is done via detail panel close / Esc.
     // Increment nonce so TodoPanel re-scrolls even when the same task is re-clicked.
     setFocusScope(opts?.fromOutside ? 'locate' : 'all'); // explicit user locate — full behavior incl. tab switch
@@ -2457,7 +2451,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // click on its row does. `openDetail` (a "Details" off Home, `openTaskOnHome(..., { detail: true })`)
   // opens the task's details popup over it too. `detailOnly` (a session menu's Details on Home,
   // handleOpenTaskDetailById): open the details popup and nothing else, no locate, no session.
-  type PendingLocate = { taskId: string; sessionId?: string; openSession?: boolean; openDetail?: boolean; detailOnly?: boolean; until: number; reading?: true };
+  type PendingLocate = { recordOpen?: (id: string) => void; taskId: string; sessionId?: string; openSession?: boolean; openDetail?: boolean; detailOnly?: boolean; until: number; reading?: true };
   const pendingLocateRef = useRef<PendingLocate | null>(null);
   // A task the list does not carry (finished over a week ago, a plugin's own, an id prefix) opens
   // in its details popup over Home (OutsideTaskDetail): there is no task page to send it to.
@@ -2499,12 +2493,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [handleLocateTaskById, openSessionOrToast]);
   // The full-screen task detail for a listed task, touching neither the session columns nor the locate.
   const openDetailOf = useCallback((task: Task) => {
+    recordTaskOpened(task.id);
     setFocusScope('all');
     setFocusedTask(task);
     setFocusNonce(n => n + 1);
     setSuppressDetail(false);
   }, []);
   const revealPending = useCallback((task: Task, pending: PendingLocate) => {
+    pending.recordOpen?.(task.id);
     if (pending.detailOnly) openDetailOf(task);
     else revealOnHome(task, sessionToOpen(task, pending.sessionId, pending.openSession), pending.openDetail);
   }, [openDetailOf, revealOnHome]);
@@ -2529,7 +2525,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       setTodoVisible(true);
       yieldFullscreen('locate-task');
       setOutsideTask(full as Task);
-      recordTaskOpened(full.id);
+      pending.recordOpen?.(full.id);
     };
     // Only a task made in the last minute may still be on its way to the list; any other opens now.
     const fresh = !!full.created_at && Date.now() - Date.parse(full.created_at) < 60_000 && full.status !== 'done';
@@ -2552,7 +2548,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       }
       // Held while the list loads (a cold deep link: the clock is generous, a phone over the tunnel
       // can take long), then read by id.
-      const pending: PendingLocate = { taskId, ...(sessionId ? { sessionId } : {}), ...(openSession ? { openSession } : {}), ...(openDetail ? { openDetail } : {}), until: Date.now() + 60_000 };
+      const pending: PendingLocate = { recordOpen: recentOpenRecorder(), taskId, ...(sessionId ? { sessionId } : {}), ...(openSession ? { openSession } : {}), ...(openDetail ? { openDetail } : {}), until: Date.now() + 60_000 };
       pendingLocateRef.current = pending;
       if (!loadingRef.current) void revealFetched(pending);
     };
@@ -2587,7 +2583,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const handleOpenTaskDetailById = useCallback((taskId: string) => {
     const task = taskMapRef.current.get(taskId);
     if (task) { openDetailOf(task); return; }
-    const pending: PendingLocate = { taskId, detailOnly: true, until: Date.now() + 60_000 };
+    const pending: PendingLocate = { recordOpen: recentOpenRecorder(), taskId, detailOnly: true, until: Date.now() + 60_000 };
     pendingLocateRef.current = pending;
     // Through a ref, so this stays stable for the memoized SessionPanel that takes it.
     if (!loadingRef.current) void revealFetchedRef.current(pending);

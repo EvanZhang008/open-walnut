@@ -89,7 +89,8 @@ describe('session-extras relay payloads on a REPLICA', () => {
     await request(app).post(`/api/v1/sessions/${SID}/side-question`).send({ question: 'why?' })
     expectRelay('side-question.ask', { question: 'why?' })
     await request(app).post(`/api/v1/sessions/${SID}/side-question/sq-1/promote`)
-    expectRelay('side-question.promote', { id: 'sq-1' })
+    // The phone's promote is a person's act: it carries its source to the Mac's Recent.
+    expectRelay('side-question.promote', { id: 'sq-1', recentSource: 'mobile' })
     await request(app).delete(`/api/v1/sessions/${SID}/side-question/sq-1`)
     expectRelay('side-question.delete', { id: 'sq-1' })
   })

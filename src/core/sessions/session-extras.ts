@@ -244,6 +244,7 @@ export async function askSessionSideQuestion(sessionId: string, question: unknow
 export async function promoteSessionSideQuestion(
   sessionId: string,
   id: string,
+  source = 'ui',
 ): Promise<{ taskId: string; parentTaskId?: string }> {
   const { getSideQuestion, markPromoted, isSideThreadEntry } = await import('../side-questions.js');
   const entry = await getSideQuestion(sessionId, id);
@@ -271,6 +272,7 @@ export async function promoteSessionSideQuestion(
     // hand-made task (Satellite = pinned, no stored tier).
     pinned: true,
   });
+  await (await import('../recent-task-touch.js')).recordRecentTaskTouch(task.id, source, task.created_at);
   // No session link: the session belongs to its own task (one-session-per-task.ts).
   // The Q&A rides the description, and the parent link leads back to it.
   await markPromoted(sessionId, id, task.id);

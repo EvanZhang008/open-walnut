@@ -149,6 +149,23 @@ async function holdPosts(url: string): Promise<{ count: () => number; release: (
   await lab.ctx.route(url, route)
   return { count: () => n, release: () => release(), done: async () => { release(); await lab.ctx.unroute(url, route) } }
 }
+/**
+ * A task he just made from the panel is first in Recent at once, in the panel and in the one synced
+ * list Home and the phone read (2026-11-10, the user: a task made from the side panel could not be
+ * found in Recent, which still ordered rows by agent updates). Back on All after.
+ */
+async function firstInRecent(id: string): Promise<void> {
+  const v = askView(panel)
+  const tab = v.locator('.todo-section-tab-recent')
+  await tab.click()
+  await expect(tab).toHaveClass(/is-active/)
+  await expect(v.locator('.todo-pinned-list-recent [data-task-id]').first()).toHaveAttribute('data-task-id', id, { timeout: 15_000 })
+  const key = 'walnut-todo-recent-opened'
+  const prefs = (await (await lab.doc.request.get(`${lab.base}/api/ui-prefs?key=${key}`)).json() as Record<string, any>).prefs?.[key]?.v
+  const list = (typeof prefs === 'string' ? JSON.parse(prefs) : prefs) as Array<{ id: string }>
+  expect(list[0]?.id).toBe(id)
+  await v.locator('.todo-section-tab').filter({ hasText: 'All' }).click()
+}
 async function getTask(id: string): Promise<Record<string, any>> {
   const j = await (await lab.doc.request.get(`${lab.base}/api/v1/tasks/${id}`)).json() as Record<string, any>
   return (j.task ?? j) as Record<string, any>
@@ -379,6 +396,7 @@ test('typing and Send start a task that knows the page; it opens here, and Back 
   expect(await listTop(panel)).toBe(before)
   await expect(box).toHaveValue('')
   await expect.poll(async () => (await kept())?.mode?.mode, { timeout: 15_000 }).toBe('home')
+  await firstInRecent(taskId)
   // Its row is titled with his words at once, never "Session: <id>" (review round 5, Sol #1),
   // and search finds it by them.
   expect(String((await getTask(taskId)).title)).toContain('Find the receipt for order 40917')
@@ -513,6 +531,7 @@ test('× leaves the page out; Save as todo files the words and starts nothing', 
   expect(lab.ctx.pages().length).toBe(pages)
   await v.getByTestId('ext-task-back').click()
   await expect(v.getByTestId('ext-home')).toBeVisible()
+  await firstInRecent(String(todo!.id))
 })
 
 test('Save as todo saves once: a double click makes one todo, and Send waits while it saves', async () => {
@@ -566,6 +585,10 @@ test('a task with no conversation opens its detail in the panel', async () => {
   await shots(panel, 'panel-task-detail')
   await v.getByTestId('ext-task-back').click()
   await expect(v.getByTestId('ext-home')).toBeVisible()
+  // His click in the panel's list is an open: the row is first in Recent.
+  const r = await (await lab.doc.request.get(`${lab.base}/api/v1/tasks`)).json() as Record<string, any>
+  const list = (Array.isArray(r) ? r : r.tasks ?? r.items ?? []) as Array<Record<string, any>>
+  await firstInRecent(String(list.find((t) => t.title === NEEDS[0].title)!.id))
 })
 
 test('a task\'s detail opens its subtask and its parent in the panel too, never Walnut\'s whole app', async () => {

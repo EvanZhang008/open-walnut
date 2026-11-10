@@ -419,7 +419,7 @@ export async function deliverToSession(
     const sentBy = queueSentBy(opts.source);
     const parked = await withTimeout(
       // Escaped like every queued send (hints/hint-format.ts); no hint rides a parked row.
-      enqueueMessage(sid, frameForSource(escapeHintTags(opts.enqueueText), opts.source), { ...(opts.messageId ? { id: opts.messageId } : {}), ...(sentBy ? { sentBy } : {}), ...(guard ? { stopFence: guard.stopFence } : {}) }),
+      enqueueMessage(sid, frameForSource(escapeHintTags(opts.enqueueText), opts.source), { recentText: opts.busText, ...(opts.messageId ? { id: opts.messageId } : {}), ...(sentBy ? { sentBy } : {}), ...(guard ? { stopFence: guard.stopFence } : {}) }),
       DELIVERY_TIMEOUT_MS,
     );
     if (!parked) throw new SendError('delivery_failed', 'enqueue timed out — retry', 503);

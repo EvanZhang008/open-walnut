@@ -30,11 +30,14 @@ import { WALNUT_HOME, UI_PREFS_FILE } from '../../constants.js'
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { log } from '../../logging/index.js'
 import { MAX_KEY_LEN, machineLocalKey, syncableKey } from '../../core/ui-prefs-keys.js'
-import { UNION_PREF_KEYS } from '../../core/recent-opened-list.js'
+import { RECENT_OPENED_KEY, UNION_PREF_KEYS, mergeRecentOpened, parseRecentOpened } from '../../core/recent-opened-list.js'
 import { isCompanion, isHostReplicaProgram } from '../../core/server-role.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { ambientTestRun } from '../../core/test-run.js'
 import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
 import { KIND_NOT_COPIED, COPY_AS_OF_HEADER, copyKindAsOf } from '../../core/replication/kinds/gate.js'
+
+import { routeSource } from '../../core/sessions/send-sent-by.js'
 
 export const uiPrefsRouter = Router()
 
@@ -67,6 +70,7 @@ interface PrefEntry { v: string | null; ts: number }
  * must not turn into a 500 on the boot GET.
  */
 let migration: Promise<void> | null = null
+let humanRecentReady = false
 
 async function migrateLegacyPrefs(): Promise<void> {
   const from = LEGACY_PREFS_FILE()
@@ -119,6 +123,7 @@ export function ensureUiPrefsMigrated(): Promise<void> {
 /** Test hook: forget the memoized migration so a fresh WALNUT_HOME re-runs it. */
 export function _resetUiPrefsMigrationForTest(): void {
   migration = null
+  humanRecentReady = false
 }
 
 const MAX_KEYS = 1000
@@ -143,13 +148,16 @@ async function loadPrefs(): Promise<Record<string, PrefEntry>> {
 /** A test run's own writes (test-run-prefs.ts), over the user's prefs it reads. */
 function withTestRunWrites(prefs: Record<string, PrefEntry>): Record<string, PrefEntry> {
   const own = testRunPrefsRead<Record<string, PrefEntry>>('ui-prefs')
-  return own ? { ...prefs, ...own } : prefs
+  const shown = own ? { ...prefs, ...own } : { ...prefs }
+  const recent = shown[RECENT_OPENED_KEY]
+  if (typeof recent?.v === 'string') shown[RECENT_OPENED_KEY] = { ...recent, v: JSON.stringify(parseRecentOpened(recent.v).filter((e) => e.human === true)) }
+  return shown
 }
 
 /** `?key=<name>` answers that one entry (a window merging one key mid-session); none, every key. */
 function onlyAskedKey(req: Request, prefs: Record<string, PrefEntry>): Record<string, PrefEntry> {
   const key = typeof req.query.key === 'string' ? req.query.key : ''
-  if (!key) return prefs
+  if (!key) return Object.fromEntries(Object.entries(prefs).filter(([name]) => name !== HUMAN_SINCE_KEY && name !== HUMAN_BACKUP_KEY))
   return Object.prototype.hasOwnProperty.call(prefs, key) ? { [key]: prefs[key] } : {}
 }
 
@@ -176,22 +184,79 @@ uiPrefsRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
       res.json({ prefs: onlyAskedKey(req, withTestRunWrites(prefs)) })
       return
     }
-    res.json({ prefs: onlyAskedKey(req, withTestRunWrites(await loadPrefs())) })
+    if (!req.query.key || req.query.key === RECENT_OPENED_KEY) await ensureHumanRecent()
+    const prefs = await loadPrefs()
+    // Test reads cannot migrate the person's file, but still show verified rows only.
+    const recent = prefs[RECENT_OPENED_KEY]
+    if (typeof recent?.v === 'string') recent.v = JSON.stringify(parseRecentOpened(recent.v).filter((e) => e.human === true))
+    res.json({ prefs: onlyAskedKey(req, withTestRunWrites(prefs)) })
   } catch (err) {
     next(err)
   }
 })
 
+// The old list recorded render effects and cannot prove a human opened a task. Keep
+// verified opens and recover the person's actual messages, once, under the write queue.
+const HUMAN_SINCE_KEY = 'walnut-todo-recent-human-since'
+const HUMAN_BACKUP_KEY = 'walnut-todo-recent-before-human'
+async function ensureHumanRecent(): Promise<void> {
+  if (ambientTestRun() !== undefined || humanRecentReady) return
+  const prefs = await loadPrefs()
+  if (isCompanion() || isHostReplicaProgram()) return
+  if (Number(prefs[HUMAN_SINCE_KEY]?.v) > 0) { humanRecentReady = true; return }
+  const { recentTouchHistory } = await import('../../core/recent-touch-history.js')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const history = await Promise.race([recentTouchHistory(), new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 1500) })])
+  clearTimeout(timer)
+  if (history === null) return // Try again when the optional history read finishes.
+  const run = mergeChain.then(async () => {
+    const current = await loadPrefs()
+    if (Number(current[HUMAN_SINCE_KEY]?.v) > 0) { humanRecentReady = true; return }
+    const verified = parseRecentOpened(current[RECENT_OPENED_KEY]?.v ?? null).filter((e) => e.human === true)
+    const now = Date.now()
+    if (current[RECENT_OPENED_KEY]) current[HUMAN_BACKUP_KEY] = current[RECENT_OPENED_KEY]
+    if (current[RECENT_OPENED_KEY] || history.length) current[RECENT_OPENED_KEY] = { v: JSON.stringify(mergeRecentOpened(verified, history)), ts: now }
+    current[HUMAN_SINCE_KEY] = { v: String(now), ts: now }
+    await writeJsonFile(PREFS_FILE(), current)
+    humanRecentReady = true
+    for (const cb of writeListeners) { try { cb() } catch { /* never fails a write */ } }
+  })
+  mergeChain = run.catch(() => undefined)
+  try { await run } catch (err) {
+    log.web.warn('Recent history recovery deferred', { error: String(err) })
+  }
+}
+
 // PUT /api/ui-prefs { prefs: { key: { v, ts } } } — LWW merge; v null = delete tombstone.
 uiPrefsRouter.put('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const patch = req.body?.prefs
+    let patch = req.body?.prefs
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
       res.status(400).json({ error: 'prefs object is required' })
       return
     }
-    // A test run writes its own copy, never the user's file (test-run-prefs.ts).
+    // An agent may mirror layout, but its activity never joins the person's Recent.
+    if (routeSource('ui', req.headers) !== 'ui') {
+      patch = { ...patch }
+      delete patch[RECENT_OPENED_KEY]
+    }
+    // A test run writes its own copy, never the user's file (test-run-prefs.ts), so it never
+    // runs the history recovery that writes that file either.
     const own = testRunPrefsWrite<Record<string, PrefEntry>>('ui-prefs', () => ({}))
+    if (patch[RECENT_OPENED_KEY] && !own) await ensureHumanRecent()
+    patch = { ...patch }
+    delete patch[HUMAN_SINCE_KEY]
+    delete patch[HUMAN_BACKUP_KEY]
+    const recent = patch[RECENT_OPENED_KEY]
+    if (typeof recent?.v === 'string') {
+      const sourcePrefs = isCompanion() || isHostReplicaProgram()
+        ? await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy() : await loadPrefs()
+      const since = Number(sourcePrefs?.[HUMAN_SINCE_KEY]?.v ?? Infinity)
+      const phone = !!(req as Request & { deviceName?: string }).deviceName && /^Walnut\/[^ ]+ .*CFNetwork\//.test(String(req.headers['user-agent'] ?? ''))
+      if (phone && !Number.isFinite(since)) throw new NeedsLeaderError('recent_human_history_not_ready')
+      recent.v = JSON.stringify(parseRecentOpened(recent.v).filter((e) => e.human === true || (phone && Date.parse(e.at) >= since))
+        .map((e) => ({ ...e, human: true })))
+    }
     if (own) {
       applyUiPrefsPatch(own, patch)
       res.json({ ok: true })
@@ -212,6 +277,15 @@ uiPrefsRouter.put('/', async (req: Request, res: Response, next: NextFunction) =
     next(err)
   }
 })
+
+/** Server-side human touches share the same union, test isolation and companion relay. */
+export async function recordRecentTouch(patch: Record<string, PrefEntry>): Promise<void> {
+  await ensureHumanRecent()
+  const own = testRunPrefsWrite<Record<string, PrefEntry>>('ui-prefs', () => ({}))
+  if (own) { applyUiPrefsPatch(own, patch); return }
+  if (isCompanion()) { await putOnMac(patch); return }
+  await mergeUiPrefs(patch)
+}
 
 /** A merge input this route refuses (the relay answers it as a 400). */
 export class UiPrefsInputError extends Error {}
@@ -239,9 +313,11 @@ let mergeChain: Promise<void> = Promise.resolve()
 /** The PUT's LWW merge of `patch` into `prefs`, in place (the file's, or a test run's copy). */
 function applyUiPrefsPatch(prefs: Record<string, PrefEntry>, patch: object): void {
   for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
-    if (!syncableKey(key) || key.length > MAX_KEY_LEN) continue
+    if (key === HUMAN_SINCE_KEY || key === HUMAN_BACKUP_KEY || !syncableKey(key) || key.length > MAX_KEY_LEN) continue
     if (!value || typeof value !== 'object') continue
-    const { v, ts } = value as PrefEntry
+    let { v } = value as PrefEntry
+    const { ts } = value as PrefEntry
+    if (key === RECENT_OPENED_KEY && typeof v === 'string') v = JSON.stringify(parseRecentOpened(v).filter((e) => e.human === true))
     if (typeof ts !== 'number' || !Number.isFinite(ts)) continue
     if (v !== null && (typeof v !== 'string' || v.length > MAX_VALUE_LEN)) continue
     const existing = prefs[key]
@@ -258,7 +334,7 @@ function applyUiPrefsPatch(prefs: Record<string, PrefEntry>, patch: object): voi
   // Size backstop: a runaway writer can't grow the file without bound.
   const keys = Object.keys(prefs)
   if (keys.length > MAX_KEYS) {
-    for (const k of keys.slice(0, keys.length - MAX_KEYS)) delete prefs[k]
+    for (const k of keys.filter((name) => name !== HUMAN_SINCE_KEY && name !== HUMAN_BACKUP_KEY).slice(0, keys.length - MAX_KEYS)) delete prefs[k]
   }
 }
 

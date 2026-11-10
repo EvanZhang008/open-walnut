@@ -2104,7 +2104,7 @@ interface RecentCardProps {
 /** A Recent row's time tooltip: "Opened" and the full local date. */
 function openedTitle(at: string | undefined): string {
   const t = at ? new Date(at) : null;
-  return t && !isNaN(t.getTime()) ? `Opened ${t.toLocaleString()}` : '';
+  return t && !isNaN(t.getTime()) ? `Last used ${t.toLocaleString()}` : '';
 }
 
 // ── SortableRecentCard — a draggable row of the Recent list, with its kebab menu ──
@@ -7932,7 +7932,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         for (const t of writes.tiers) setTierViewMode(t, tierModeOfGroup(v));
         if (writes.projects) { setGroupBy(v); persistGroupBy(v); }
       },
-      note: isSearchMode ? 'Search ranks by match' : reads.recent ? 'Newest opened first' : null,
+      note: isSearchMode ? 'Search ranks by match' : reads.recent ? 'Last used by you first' : null,
     };
   })();
   // The Pinned heading sets every tier's Group and Sort at once, as Pinned's Display rows
@@ -8244,7 +8244,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               dead gap above TASKS); the list scrolls once items exceed that space. */}
           {/* Nothing opened yet (a new install, a cleared browser): say what the list is for. */}
           {recentVisible && recentTasks.length === 0 && !loading && !isSearchMode && (
-            <p className="todo-pinned-empty" data-testid="todo-recent-empty">Tasks you open show up here, newest first.</p>
+            <p className="todo-pinned-empty" data-testid="todo-recent-empty">Tasks you create, open or write in show up here, newest first.</p>
           )}
           {/* A search on Recent that no opened task matches (a typo, a task never opened): say so,
               with the way to the same search over every task. */}

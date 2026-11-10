@@ -3759,7 +3759,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // append-style note entry the primary must CONCATENATE, not replace.
           fields?: string[]; appendNote?: string
           // task:created of a worker's subtask on this companion (api-v1.ts): the worker's session.
-          callerSid?: string
+          callerSid?: string; humanTouchAt?: string
           // task:reordered payload (whole-list order, no per-row snapshot).
           project?: string; taskIds?: string[]; pins?: boolean
         }
@@ -3773,6 +3773,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             // A worker's subtask (api-v1.ts) names its session, for the Mac to file it beside its leader.
             void dispatchTaskOp({
               type: 'create', task: data.task,
+              ...(typeof data.humanTouchAt === 'string' ? { humanTouchAt: data.humanTouchAt } : {}),
               ...(typeof data.callerSid === 'string' && data.callerSid ? { callerSid: data.callerSid } : {}),
             })
           }

@@ -356,6 +356,23 @@ describe('task-outbox: primary side', () => {
     await fsp.writeFile(path.join(dir, name), JSON.stringify(op));
   }
 
+  it('an offline human create keeps its original Recent time; an agent create never joins', async () => {
+    current = await loadWithCloudMode(false);
+    const { outbox, tm } = current;
+    const at = '2026-11-09T20:00:00Z';
+    const snapshot = { id: 'offline-person', title: 'Phone task', status: 'todo', phase: 'TODO', priority: 'none',
+      project: '', source: 'local', created_at: at, updated_at: at, description: '', note: '', summary: '' };
+    await outbox.applyTaskOp({ opId: 'human-create', type: 'create', at, task: snapshot as never, humanTouchAt: at });
+    const prefFile = constantsBase.UI_PREFS_FILE as string;
+    const before = await fsp.readFile(prefFile, 'utf8');
+    expect(JSON.parse(JSON.parse(before)['walnut-todo-recent-opened'].v)).toEqual([{ id: snapshot.id, at, human: true }]);
+    await outbox.applyTaskOp({ opId: 'automatic-create', type: 'create', at, task: { ...snapshot, id: 'offline-agent' } as never });
+    expect(await tm.getTask('offline-agent')).toBeDefined();
+    expect(await fsp.readFile(prefFile, 'utf8')).toBe(before);
+    await outbox.applyTaskOp({ opId: 'human-create', type: 'create', at, task: snapshot as never, humanTouchAt: at });
+    expect(await fsp.readFile(prefFile, 'utf8')).toBe(before);
+  });
+
   it('create op inserts with the SAME id, ensures the project registry row, deletes the op file', async () => {
     current = await loadWithCloudMode(false);
     const { outbox, tm } = current;

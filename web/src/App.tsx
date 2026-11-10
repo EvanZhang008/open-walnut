@@ -1,3 +1,4 @@
+import { withRecentHumanInput } from '@/utils/recent-opened';
 import { memo, useEffect, useRef } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -55,9 +56,9 @@ function SessionsRedirect() {
     // `&tab=inbox[&letter=…]` on a pasted/bookmarked link lands on the session's
     // Inbox tab, same as clicking "Open session" inside a letter.
     const inbox = parseSessionInboxTarget(searchParams);
-    openSessionOnHome(id, (to) => navigate(to, { replace: true }), inbox
+    withRecentHumanInput(() => openSessionOnHome(id, (to) => navigate(to, { replace: true }), inbox
       ? { inboxTab: true, ...(inbox.letterId ? { inboxLetterId: inbox.letterId } : {}) }
-      : undefined);
+      : undefined));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return null;
@@ -73,7 +74,7 @@ function TaskRedirect() {
   const navigate = useNavigate();
   useEffect(() => {
     const go = (to: string) => navigate(to, { replace: true });
-    if (id) openTaskOnHome(id, go);
+    if (id) withRecentHumanInput(() => openTaskOnHome(id, go));
     else go('/');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -91,9 +92,10 @@ function useOpenTaskRequests(navigate: (to: string) => void, inPopout: boolean):
     if (inPopout || typeof BroadcastChannel === 'undefined') return;
     const channel = new BroadcastChannel(OPEN_TASK_CHANNEL);
     channel.onmessage = (e: MessageEvent) => {
-      const { ask, taskId } = (e.data ?? {}) as { ask?: string; taskId?: string };
+      const { ask, taskId, human } = (e.data ?? {}) as { ask?: string; taskId?: string; human?: boolean };
       if (!ask || !taskId) return;
-      openTaskOnHome(taskId, navigateRef.current);
+      if (human === true) withRecentHumanInput(() => openTaskOnHome(taskId, navigateRef.current));
+      else openTaskOnHome(taskId, navigateRef.current);
       channel.postMessage({ answer: ask });
       try { window.focus(); } catch { /* the browser decides */ }
     };
@@ -129,7 +131,7 @@ export function App() {
   }, []);
   // An open link (a launcher's "open this task", utils/open-link.ts) goes there like a notification's link.
   useEffect(() => {
-    const go = (to: string) => navigateToTarget(to, navigate);
+    const go = (to: string) => withRecentHumanInput(() => navigateToTarget(to, navigate));
     const waiting = takePendingTarget();
     if (waiting) go(waiting);
     return subscribeOpenTargets(go);

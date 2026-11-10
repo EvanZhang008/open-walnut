@@ -137,10 +137,12 @@ searchAgentRouter.post('/session', async (req: Request, res: Response, next: Nex
       );
     });
     try {
-      res.json(await Promise.race([
+      const adopted = await Promise.race([
         adoptAgentSearchSession(q, { startIfMissing: maySearch, ...(progressId ? { progressId } : {}) }),
         timeout,
-      ]));
+      ]);
+      await (await import('../../core/recent-task-touch.js')).recordRecentTaskTouch(adopted.taskId, (await import('../../core/sessions/send-sent-by.js')).routeSource('ui', req.headers));
+      res.json(adopted);
     } catch (err) {
       if (err instanceof AdoptSearchSessionError) {
         res.status(err.statusCode).json({ error: err.message, code: err.code });

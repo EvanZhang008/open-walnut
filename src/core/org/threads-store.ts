@@ -37,6 +37,13 @@ function leaderOnly(): void {
   if (isFollower()) throw new ThreadError('bad_input', 501, 'Threads are kept on the primary; this server holds no copy.');
 }
 
+/** The tasks that have a threads file (a reader goes through readThreads for each). */
+export async function threadTaskIds(): Promise<string[]> {
+  if (isFollower()) return [];
+  const names = await fs.readdir(threadsDir()).catch(() => [] as string[]);
+  return names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5)).filter((id) => TASK_ID_RE.test(id));
+}
+
 export async function readThreads(taskId: string): Promise<ThreadsFile> {
   if (isFollower()) return emptyThreads(taskId);
   return normalizeThreads(await readJsonFile<unknown>(threadsFile(taskId), null), taskId);

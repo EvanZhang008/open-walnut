@@ -36,6 +36,7 @@
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
 
+import { routeSource } from '../../core/sessions/send-sent-by.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
@@ -296,11 +297,11 @@ sessionExtrasV1Router.post('/sessions/:id/side-question/:qid/promote', async (re
     if (!sessionId) return
     const qid = String(req.params.qid ?? '')
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'side-question.promote', sessionId, { id: qid }, 200)
+      await relayControlAction(res, 'side-question.promote', sessionId, { id: qid, recentSource: routeSource('mobile', req.headers) }, 200)
       return
     }
     const { promoteSessionSideQuestion } = await import('../../core/sessions/session-extras.js')
-    await runLocal(res, next, 200, () => promoteSessionSideQuestion(sessionId, qid))
+    await runLocal(res, next, 200, () => promoteSessionSideQuestion(sessionId, qid, routeSource('mobile', req.headers)))
   } catch (err) {
     next(err)
   }

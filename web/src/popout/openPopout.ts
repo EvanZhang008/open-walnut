@@ -13,6 +13,7 @@
  * existing tab instead of spawning duplicates.
  */
 
+import { hasRecentHumanInput } from '@/utils/recent-opened';
 import { taskPath } from '@/utils/task-path';
 import { CORNER_ORDER, appendToCornerStack } from '@/components/common/corner-stack';
 
@@ -87,7 +88,7 @@ export function openTaskInApp(taskId: string): void {
     channel.close();
     flashNotice('Opened on Home in the Walnut window');
   };
-  channel.postMessage({ ask, taskId });
+  channel.postMessage({ ask, taskId, human: hasRecentHumanInput() });
   setTimeout(() => { if (answered) return; channel.close(); fallback(); }, 600);
 }
 
