@@ -30,6 +30,10 @@ export interface FocusState {
   phase: FocusPhase
   taskId?: string
   title?: string
+  /** What the person means to get done in this block, in their words; kept for "Another block". */
+  goal?: string
+  /** The block's Spotify music is paused on the Mac (the block runs on). Only while the block runs. */
+  musicPaused?: boolean
   /** This block's focus length, kept for "Another block". */
   minutes: number
   /** The short break this block's person picked at Start, in minutes. 0 = the configured one. */
@@ -67,6 +71,7 @@ export interface CompletedBlock {
   spotifyUri?: string
   taskId?: string
   title?: string
+  goal?: string
 }
 
 export type FocusEvent =
@@ -83,6 +88,29 @@ export const CYCLE_RESET_MS = 2 * 60 * 60_000
 
 const MIN = 60_000
 
+/** The longest goal kept, in characters. */
+export const GOAL_MAX = 200
+
+/** A goal as typed → one trimmed line of at most GOAL_MAX characters, or undefined for none. PURE. */
+export function normalizeGoal(input: unknown): string | undefined {
+  if (typeof input !== 'string') return undefined
+  const line = input.replace(/\s+/g, ' ').trim()
+  return line ? [...line].slice(0, GOAL_MAX).join('') : undefined
+}
+
+/** Set or clear the goal of the block running now. PURE. */
+export function setGoal(state: FocusState, goal: string | undefined): FocusState {
+  if (state.phase !== 'focus') throw new Error('No focus block is running. Set the goal in the Start form instead.')
+  const { goal: _old, ...rest } = state
+  return goal ? { ...rest, goal } : rest
+}
+
+/** The state without the block-only music pause (a break or off has no music of the block). */
+function withoutPause(state: FocusState): FocusState {
+  const { musicPaused: _paused, ...rest } = state
+  return rest
+}
+
 export function isFocusRunning(state: FocusState): boolean {
   return state.phase === 'focus'
 }
@@ -97,6 +125,7 @@ function off(state: FocusState, endedAt: number): FocusState {
     breakMinutes: state.breakMinutes,
     ...(state.taskId ? { taskId: state.taskId } : {}),
     ...(state.title ? { title: state.title } : {}),
+    ...(state.goal ? { goal: state.goal } : {}),
     ...(state.spotifyUri ? { spotifyUri: state.spotifyUri } : {}),
     lastEndedAt: ran ? endedAt : state.lastEndedAt,
     lastRunStartedAt: ran ? state.runStartedAt || state.startedAt : state.lastRunStartedAt,
@@ -106,7 +135,7 @@ function off(state: FocusState, endedAt: number): FocusState {
 
 export function startFocus(
   state: FocusState,
-  input: { now: number; minutes: number; breakMinutes?: number; spotifyUri?: string; taskId?: string; title?: string },
+  input: { now: number; minutes: number; breakMinutes?: number; spotifyUri?: string; taskId?: string; title?: string; goal?: string },
 ): FocusState {
   if (state.phase === 'focus') throw new Error('A focus block is already running. Stop it first with focus_stop.')
   // "Another block" during a break: the run being cut off is the last run now.
@@ -116,6 +145,7 @@ export function startFocus(
     phase: 'focus',
     ...(input.taskId ? { taskId: input.taskId } : {}),
     ...(input.title ? { title: input.title } : {}),
+    ...(input.goal ? { goal: input.goal } : {}),
     minutes: input.minutes,
     breakMinutes: input.breakMinutes ?? 0,
     ...(input.spotifyUri ? { spotifyUri: input.spotifyUri } : {}),
@@ -146,7 +176,7 @@ export function startRest(state: FocusState, input: { now: number; minutes: numb
   const fromBlock = state.phase === 'focus'
   const freshCycle = !fromBlock && state.lastEndedAt > 0 && input.now - state.lastEndedAt > CYCLE_RESET_MS
   return {
-    ...state,
+    ...withoutPause(state),
     phase: 'break',
     breakKind: 'short',
     startedAt: input.now,
@@ -215,13 +245,14 @@ export function advanceFocus(state: FocusState, now: number, d: FocusDurations):
           ...(current.spotifyUri ? { spotifyUri: current.spotifyUri } : {}),
           ...(current.taskId ? { taskId: current.taskId } : {}),
           ...(current.title ? { title: current.title } : {}),
+          ...(current.goal ? { goal: current.goal } : {}),
         },
         breakKind,
         breakEndsAt,
         lateMs: now - endedAt,
       })
       current = {
-        ...current,
+        ...withoutPause(current),
         phase: 'break',
         breakKind,
         completedInCycle: long ? 0 : completed,
@@ -254,6 +285,8 @@ export function focusOnBoot(raw: unknown): FocusState {
     phase,
     ...(typeof value.taskId === 'string' && value.taskId ? { taskId: value.taskId } : {}),
     ...(typeof value.title === 'string' && value.title ? { title: value.title } : {}),
+    ...(normalizeGoal(value.goal) ? { goal: normalizeGoal(value.goal) } : {}),
+    ...(value.phase === 'focus' && value.musicPaused === true ? { musicPaused: true } : {}),
     ...(typeof value.spotifyUri === 'string' && /^spotify:[a-z]+:[A-Za-z0-9]+$/.test(value.spotifyUri) ? { spotifyUri: value.spotifyUri } : {}),
     minutes: num(value.minutes),
     breakMinutes: Math.floor(num(value.breakMinutes)),

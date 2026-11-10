@@ -14,6 +14,8 @@ export interface FocusBlockEntry {
   minutes: number
   taskId?: string
   title?: string
+  /** The goal the block was started (or edited) with. */
+  goal?: string
 }
 
 export interface DayLog {

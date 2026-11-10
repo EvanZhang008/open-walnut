@@ -237,6 +237,30 @@ export const RHYTHM_CSS = `
 }
 .rhythm-preview:hover { color: var(--fg); background: var(--bg-hover, var(--bg-secondary)); }
 .rhythm-preview-on { color: var(--accent); border-color: var(--accent); }
+.rhythm-star {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; margin-right: 4px; padding: 0;
+  border: 0; border-radius: 6px; background: none; color: var(--fg-muted); cursor: pointer;
+}
+.rhythm-star:hover { color: var(--fg); background: var(--bg-hover, var(--bg-secondary)); }
+.rhythm-star-on, .rhythm-star-on:hover { color: #e0a100; }
+.rhythm-star:focus-visible, .rhythm-preview:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rhythm-now-head { display: flex; align-items: center; gap: 8px; }
+.rhythm-now-head .rhythm-start-plays { flex: 1; min-width: 0; }
+.rhythm-button.rhythm-pause { flex: none; min-width: 72px; }
+.rhythm-goal { display: grid; gap: 6px; justify-items: start; font-size: 13px; color: var(--fg); }
+.rhythm-goal p { margin: 0; }
+.rhythm-goal-text { margin: 0; font-size: 13.5px; line-height: 19px; color: var(--fg); font-weight: 500; overflow-wrap: anywhere; }
+.rhythm-goal-label { margin-right: 4px; color: var(--fg-secondary); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.rhythm-goal-editing { justify-items: stretch; }
+.rhythm-goal-buttons { display: flex; gap: 8px; }
+.rhythm-goal-field { flex-wrap: nowrap; }
+.rhythm-goal-input {
+  flex: 1; min-width: 0; height: 28px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--fg); font: inherit; font-size: 13px;
+}
+.rhythm-goal-input:focus { outline: none; border-color: var(--accent); }
 .rhythm-now-playing { display: grid; gap: 6px; justify-self: stretch; width: 100%; font-size: 13px; color: var(--fg); }
 .rhythm-now-playing p { margin: 0; }
 .rhythm-now-playing .rhythm-start-label { width: auto; }

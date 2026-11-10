@@ -81,6 +81,8 @@ export class SpotifyControl {
   // Every play and pause lands in the order it was asked for: a preview's play still opening
   // Spotify never lands after the pick or the stop that came after it.
   private queue: Promise<unknown> = Promise.resolve()
+  /** What Rhythm last started playing (a block's playlist or a preview), so a resume knows what Spotify holds. */
+  private lastStarted: string | null = null
   private readonly appPaths: string[]
   private readonly exists: (file: string) => Promise<boolean>
   private readonly sleep: (ms: number) => Promise<void>
@@ -140,12 +142,39 @@ export class SpotifyControl {
     if (!view.available) return { ok: false, error: view.reason ?? 'Spotify is not available.' }
     const played = await this.osascript(`tell application "Spotify" to play track "${uri}"`)
     if (!played.ok) return { ok: false, error: scriptError(played.error) }
+    this.lastStarted = uri
     for (let check = 0; check < PLAY_CHECKS; check++) {
       const state = await this.osascript('tell application "Spotify" to player state as string')
       if (state.ok && state.stdout.trim() === 'playing') return { ok: true }
       await this.sleep(PLAY_CHECK_MS)
     }
     return { ok: false, error: 'Spotify did not start playing. Open Spotify, make sure you are signed in, then start again.' }
+  }
+
+  /**
+   * Go on with `uri` where it was paused. Already playing it (the person pressed play in
+   * Spotify): nothing to do. When Spotify holds something else (a preview played over it,
+   * it was quit), start `uri` again.
+   */
+  resume(uri: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    return this.inOrder(async () => {
+      if (!URI.test(uri)) return { ok: false, error: 'That is not a Spotify playlist link.' }
+      const view = await this.view()
+      if (!view.available) return { ok: false, error: view.reason ?? 'Spotify is not available.' }
+      const state = await this.osascript('if application "Spotify" is running then tell application "Spotify" to player state as string')
+      const now = state.ok ? state.stdout.trim() : ''
+      const holdsIt = this.lastStarted === uri
+      if (holdsIt && now === 'playing') return { ok: true }
+      if (!holdsIt || now !== 'paused') return this.playNow(uri)
+      const played = await this.osascript('tell application "Spotify" to play')
+      if (!played.ok) return { ok: false, error: scriptError(played.error) }
+      for (let check = 0; check < PLAY_CHECKS; check++) {
+        const now = await this.osascript('tell application "Spotify" to player state as string')
+        if (now.ok && now.stdout.trim() === 'playing') return { ok: true }
+        await this.sleep(PLAY_CHECK_MS)
+      }
+      return { ok: false, error: 'Spotify did not start playing again. Open Spotify and press play there.' }
+    })
   }
 
   /** Pause, but never open Spotify just to pause it. */

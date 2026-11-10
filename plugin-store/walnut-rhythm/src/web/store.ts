@@ -7,6 +7,7 @@
  * `endsAt` would then be off by that much. The store keeps the skew seen at the last
  * update and `serverNow()` corrects for it.
  */
+import { useState } from 'react'
 import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
 import type { RhythmPublicState } from '../server/public-state'
 
@@ -22,6 +23,17 @@ export interface RhythmStore {
   refresh(options?: { refreshShortcuts?: boolean }): Promise<void>
   call<T = unknown>(localOp: string, args?: Record<string, unknown>): Promise<OpOutcome<T>>
   opName(localOp: string): string
+  /**
+   * A box's typed words, kept by Walnut's draft store (`walnut.ui.useDraft`): there again after
+   * a reload or a visit elsewhere. On an older host without it, kept only while the box is shown.
+   */
+  useDraft(name: string): [string, (next: string) => void, () => void]
+}
+
+/** An older host's stand-in for `walnut.ui.useDraft`: the words live only while the box is shown. */
+function useDraftInMemory(): [string, (next: string) => void, () => void] {
+  const [value, setValue] = useState('')
+  return [value, setValue, () => setValue('')]
 }
 
 export function createRhythmStore(walnut: WalnutWebApi): RhythmStore {
@@ -56,6 +68,8 @@ export function createRhythmStore(walnut: WalnutWebApi): RhythmStore {
     },
     serverNow: () => Date.now() + skewMs,
     opName: (localOp) => `${prefix}${localOp}`,
+    // Picked once, so every render of a box calls the same hook.
+    useDraft: walnut.ui?.useDraft ? (name) => walnut.ui.useDraft!(name) : () => useDraftInMemory(),
     async call<T>(localOp: string, args: Record<string, unknown> = {}): Promise<OpOutcome<T>> {
       try {
         const outcome = await walnut.ops.call<T>(store.opName(localOp), args)

@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react'
 import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { countdownText, focusPhaseText, runText } from './format'
 import { DndBlockRow } from './dnd-row'
+import { GoalRow } from './goal'
 import { NowPlaying } from './now-playing'
 import { BreakActions, FocusActions } from './phase-controls'
 import type { MusicPlayer } from './music'
@@ -137,6 +138,8 @@ export function FocusCard({ walnut, store, state, music }: FocusCardProps) {
           <p className="rhythm-focus-title" data-testid="rhythm-focus-title">
             {focus.phase === 'focus' ? (focus.title ?? 'No task') : 'Stand up and move.'}
           </p>
+          {focus.phase === 'focus' && <GoalRow store={store} goal={focus.goal} />}
+          {focus.phase === 'break' && focus.goal && <p className="rhythm-goal-text" data-testid="rhythm-goal-text"><span className="rhythm-goal-label">Goal</span> {focus.goal}</p>}
           {focus.phase === 'focus' && spotifyError && <p className="rhythm-error" role="status" data-testid="rhythm-focus-spotify-error">{spotifyError}</p>}
           <p className="rhythm-muted" data-testid="rhythm-focus-run">{runText(focus)}.{focus.phase === 'break' ? ' Then Rhythm asks before the next block.' : ''}</p>
           {focus.phase === 'focus' && (

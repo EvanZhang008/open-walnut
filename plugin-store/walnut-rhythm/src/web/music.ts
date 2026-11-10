@@ -69,6 +69,8 @@ export interface MusicView {
   /** The track playing, or the one Play would start. */
   trackId: string | null
   playing: boolean
+  /** Paused by the person (Pause): `trackId` keeps its place, and Resume goes on from there. */
+  paused: boolean
   /** Asked to play, waiting for the first sound. */
   starting: boolean
   order: MusicOrder
@@ -96,6 +98,10 @@ export interface MusicPlayer {
   play(options?: { trackId?: string; withFocus?: boolean }): number
   /** With `onlyPlay`, stops only when that play is still the current one. */
   stop(onlyPlay?: number): void
+  /** Pause the track playing here; it keeps its place and stays the block's music. */
+  pause(): void
+  /** Go on with the paused track from where it paused. Call it from the click itself. */
+  resume(): void
   select(trackId: string): void
   setOrder(order: MusicOrder): void
   setVolume(volume: number): void
@@ -171,6 +177,7 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     loadError: null,
     trackId: prefs.trackId ?? null,
     playing: false,
+    paused: false,
     starting: false,
     order: prefs.order ?? 'one',
     volume: prefs.volume ?? DEFAULT_VOLUME,
@@ -235,10 +242,13 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     }
     applyLoop()
     audio.volume = effectiveVolume()
-    publish({ trackId: track.id, starting: true, error: null })
+    publish({ trackId: track.id, starting: true, paused: false, error: null })
     savePrefs()
+    const number = playNumber
     // Called inside the click: Safari and the Mac app only allow sound a person asked for.
     audio.play().then(() => {
+      // Paused or stopped while it was starting.
+      if (number !== playNumber) return
       publish({ playing: true, starting: false })
       setMediaSession(track)
     }, (failure: unknown) => {
@@ -261,8 +271,18 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     tie = 'none'
     if (!audio.paused) ownPause = true
     audio.pause()
-    publish({ playing: false, starting: false })
+    publish({ playing: false, starting: false, paused: false })
     setMediaSession(null)
+  }
+
+  const pause = () => {
+    if (!view.playing && !view.starting) return
+    // A play still starting would sound after this pause: its promise rejects as AbortError.
+    playNumber += 1
+    if (!audio.paused) ownPause = true
+    audio.pause()
+    publish({ playing: false, starting: false, paused: true })
+    try { if (navigator.mediaSession) navigator.mediaSession.playbackState = 'paused' } catch { /* a nicety */ }
   }
 
   const play = (options: { trackId?: string; withFocus?: boolean } = {}) => {
@@ -364,7 +384,7 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     if (ownPause) { ownPause = false; return }
     if (audio.ended || (!view.playing && !view.starting)) return
     tie = 'none'
-    publish({ playing: false, starting: false })
+    publish({ playing: false, starting: false, paused: false })
     setMediaSession(null)
   })
   audio.addEventListener('playing', () => { ownPause = false })
@@ -374,7 +394,7 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
   const mediaActions = (on: boolean) => {
     try {
       session?.setActionHandler('play', on ? () => { play() } : null)
-      session?.setActionHandler('pause', on ? () => stop() : null)
+      session?.setActionHandler('pause', on ? () => pause() : null)
       session?.setActionHandler('stop', on ? () => stop() : null)
     } catch {
       // An action this browser does not know.
@@ -417,6 +437,8 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     toggle() { if (view.playing || view.starting) stop(); else play() },
     play,
     stop,
+    pause,
+    resume() { if (view.paused) play({ trackId: view.trackId ?? undefined }) },
     select(trackId) {
       // Picking a track while Start plays a track makes it the one Start plays too.
       if (view.startChoice?.kind === 'track') { publish({ startChoice: { kind: 'track', id: trackId } }); savePrefs() }

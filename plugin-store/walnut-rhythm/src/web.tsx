@@ -18,6 +18,7 @@ import { STATUS_ITEM_ID } from './server/status-item'
 import { RhythmApp } from './web/app'
 import { createMusicPlayer } from './web/music'
 import { DndBlockRow } from './web/dnd-row'
+import { GoalRow } from './web/goal'
 import { BreakActions, FocusActions } from './web/phase-controls'
 import { NowPlaying } from './web/now-playing'
 import { StartForm } from './web/start-form'
@@ -75,6 +76,7 @@ export async function activate(walnut: WalnutWebApi) {
     if (state.focus.phase === 'focus') {
       return (
         <div className="rhythm-start" data-testid="rhythm-running-panel">
+          <GoalRow store={store} goal={state.focus.goal} compact />
           <NowPlaying store={store} music={music} state={state} compact />
           <DndBlockRow store={store} state={state} />
           <FocusActions store={store} onDone={(op) => { if (op !== 'extend') close() }} />

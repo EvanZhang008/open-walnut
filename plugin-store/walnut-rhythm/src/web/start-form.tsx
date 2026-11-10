@@ -16,6 +16,7 @@ import { useMusic } from './music-card'
 import { choiceKey, MusicPicker } from './music-picker'
 import { CYCLE_RESET_MS } from '../server/focus'
 import { DndStartToggle } from './dnd-row'
+import { GoalInput } from './goal'
 import type { OpOutcome, RhythmPublicState, RhythmStore } from './store'
 
 export { choiceKey }
@@ -72,6 +73,8 @@ export function startWithMusic(input: {
   minutes: number
   breakMinutes: number
   taskId?: string | null
+  /** What the block is for, in the person's words; empty = none. */
+  goal?: string
   /** Mac Do Not Disturb for this block; absent = the setting. */
   dnd?: boolean
 }): Promise<OpOutcome<{ message: string; spotifyError?: string }>> {
@@ -82,11 +85,14 @@ export function startWithMusic(input: {
   if (choice.kind === 'track') played = music.play({ trackId: choice.id, withFocus: true })
   // Spotify plays on the Mac: a track still playing here would play over it.
   else if (choice.kind === 'spotify') music.stop()
+  // A track left paused here is not this block's music.
+  else if (music.get().paused) music.stop()
   const args: Record<string, unknown> = {
     minutes: input.minutes,
     breakMinutes: input.breakMinutes,
     remember: true,
     ...(input.taskId ? { taskId: input.taskId } : {}),
+    ...(input.goal?.trim() ? { goal: input.goal.trim() } : {}),
     ...(choice.kind === 'spotify' ? { spotify: choice.uri } : {}),
     ...(typeof input.dnd === 'boolean' ? { dnd: input.dnd } : {}),
   }
@@ -156,6 +162,8 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
   const { config } = state
   const [focusText, setFocusText] = useState(() => String(config.focusMinutes))
   const [breakText, setBreakText] = useState(() => String(config.breakMinutes))
+  // The goal being typed is a draft: a reload or a look elsewhere keeps it until the block starts.
+  const [goal, setGoal, clearGoal] = store.useDraft('goal')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
@@ -176,9 +184,10 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
     setBusy(true)
     setMessage(null)
     setFailed(false)
-    void startWithMusic({ store, music, choice, minutes, breakMinutes, taskId, ...(state.dnd.available ? { dnd } : {}) }).then((outcome) => {
+    void startWithMusic({ store, music, choice, minutes, breakMinutes, taskId, goal, ...(state.dnd.available ? { dnd } : {}) }).then((outcome) => {
       setBusy(false)
       if (!outcome.ok) { setFailed(true); setMessage(outcome.message); return }
+      clearGoal()
       onStarted?.(outcome.result)
     })
   }
@@ -199,11 +208,12 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
 
   return (
     <div className={`rhythm-start${compact ? ' rhythm-start-compact' : ''}`} data-testid="rhythm-start-form">
+      <GoalInput value={goal} onChange={setGoal} testId="rhythm-start-goal" />
       <MinutesRow label="Focus" presets={FOCUS_PRESETS} limits={FOCUS_LIMITS} value={focusText} onChange={setFocusText} testId="rhythm-start-focus" />
       <MinutesRow label="Break" presets={BREAK_PRESETS} limits={BREAK_LIMITS} value={breakText} onChange={setBreakText} testId="rhythm-start-break" />
       <div className="rhythm-start-music">
         <span className="rhythm-start-label" id="rhythm-start-music-label">Music</span>
-        <MusicPicker music={music} value={choice} onPick={(next) => { music.stopPreview(); music.setStartChoice(next) }} testId="rhythm-start-music" />
+        <MusicPicker music={music} store={store} value={choice} onPick={(next) => { music.stopPreview(); music.setStartChoice(next) }} testId="rhythm-start-music" />
       </div>
       <p className="rhythm-start-plays" data-testid="rhythm-start-plays">{musicLine(choice, listing)}</p>
       <DndStartToggle state={state} value={dnd} onChange={setDnd} />

@@ -40,6 +40,7 @@ export const OP_SPECS: OpSpec[] = [
     properties: {
       mode: { type: 'string', enum: ['focus', 'rest'], description: 'focus (default): a focus block; rest: a rest of `minutes` (default the break length), with no quiet and no Do Not Disturb' },
       taskId: TASK_ID,
+      goal: { type: 'string', description: 'What the person means to get done in this block, in their words (optional, one line, up to 200 characters). Shown with the block everywhere it shows.' },
       minutes: { ...MINUTES, description: 'Block length in minutes (default from settings, 1 to 180)' },
       breakMinutes: { ...MINUTES, description: 'Length of the break after this block in minutes (default from settings, 1 to 60); the long break keeps its own length' },
       spotify: { type: 'string', description: 'A Spotify playlist link or URI to play in the Spotify app on this Mac while the block runs; it pauses when the block ends. Omit for no Spotify.' },
@@ -85,6 +86,21 @@ export const OP_SPECS: OpSpec[] = [
     properties: { spotify: { type: 'string', description: 'A Spotify playlist link or URI; empty for no Spotify' } },
   },
   {
+    name: 'focus_goal', title: 'Set the block\'s goal', readonly: false, remote: 'allow',
+    description: 'Set or change the goal of the focus block running now (what the person means to get done), or clear it with an empty goal. Refused when no block runs; it never starts one.',
+    properties: { goal: { type: 'string', description: 'The goal, one line up to 200 characters; empty clears it' } },
+  },
+  {
+    name: 'focus_music_pause', title: 'Pause the block\'s music', readonly: false, remote: 'allow',
+    description: 'Pause (paused: true) or go on with (paused: false) the Spotify music of the focus block running now, on this Mac, without stopping the block. A folder track plays in the browser that started it and pauses there. Refused when no block runs or it plays no Spotify.',
+    properties: { paused: { type: 'boolean', description: 'true: pause; false: play on' } },
+  },
+  {
+    name: 'music_star', title: 'Star a focus sound', readonly: false, remote: 'allow',
+    description: 'Star a sound so it sits at the top of the music list on every device, or unstar it. The key is the list\'s own: "track:<file name>" for a folder track (its id in music_tracks) or "spotify:<Spotify URI>" for a playlist. Changes only Rhythm\'s list order.',
+    properties: { key: { type: 'string', description: 'track:<file name> or spotify:<Spotify URI>' }, on: { type: 'boolean', description: 'true: star; false: unstar' } },
+  },
+  {
     name: 'spotify_preview', title: 'Preview a Spotify playlist', readonly: false, remote: 'allow',
     description: 'Play 15 seconds of a Spotify playlist in the Spotify app on this Mac, so the person hears it before picking it; then the block\'s own playlist comes back, or Spotify pauses. stop: true ends a preview early.',
     properties: { uri: { type: 'string', description: 'The playlist link or URI' }, stop: { type: 'boolean', description: 'End the preview playing now' } },
@@ -126,6 +142,9 @@ function handlers(runtime: RhythmRuntime): Record<string, Handler> {
     music_tracks: () => actions.musicTracks(runtime),
     music_folder_open: () => actions.musicFolderOpen(runtime),
     focus_music: (args) => actions.focusMusic(runtime, args),
+    focus_music_pause: (args) => actions.focusMusicPause(runtime, args),
+    focus_goal: (args) => actions.focusGoal(runtime, args),
+    music_star: (args) => actions.musicStar(runtime, args),
     spotify_preview: (args) => actions.spotifyPreview(runtime, args),
     spotify_playlist_add: (args) => actions.spotifyPlaylistAdd(runtime, args),
     spotify_playlist_remove: (args) => actions.spotifyPlaylistRemove(runtime, args),

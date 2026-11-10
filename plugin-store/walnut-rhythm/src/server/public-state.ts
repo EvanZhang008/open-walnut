@@ -23,6 +23,10 @@ export interface RhythmPublicState {
     phase: FocusPhase
     taskId?: string
     title?: string
+    /** What the person means to get done in this block (or the break after it). */
+    goal?: string
+    /** The block's Spotify music is paused on the Mac; the block runs on. */
+    musicPaused?: boolean
     minutes: number
     /** The break this run's block picked (0 = the setting), for Rest now and Focus now. */
     breakMinutes: number
@@ -56,6 +60,8 @@ export interface RhythmPublicState {
     record: DndRecord | null
   }
   today: DayLog
+  /** The music the person starred (the music list's keys), on top in every list. */
+  starred: string[]
 }
 
 export function buildPublicState(runtime: RhythmRuntime, now: number): RhythmPublicState {
@@ -70,6 +76,8 @@ export function buildPublicState(runtime: RhythmRuntime, now: number): RhythmPub
       phase: focus.phase,
       ...(focus.taskId ? { taskId: focus.taskId } : {}),
       ...(focus.title ? { title: focus.title } : {}),
+      ...(focus.goal && focus.phase !== 'idle' ? { goal: focus.goal } : {}),
+      ...(focus.phase === 'focus' && focus.musicPaused ? { musicPaused: true } : {}),
       minutes: focus.minutes,
       breakMinutes: focus.breakMinutes,
       startedAt: running ? focus.startedAt : null,
@@ -96,6 +104,7 @@ export function buildPublicState(runtime: RhythmRuntime, now: number): RhythmPub
     },
     dnd: { available: runtime.dnd.available, record: runtime.dnd.record },
     today: runtime.day,
+    starred: [...runtime.starred],
   }
 }
 

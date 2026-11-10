@@ -82,6 +82,7 @@ export function BreakActions({ store, music, state, onDone }: { store: RhythmSto
     minutes: focus.minutes || config.focusMinutes,
     breakMinutes: focus.breakMinutes || config.breakMinutes,
     taskId: focus.taskId ?? null,
+    ...(focus.goal ? { goal: focus.goal } : {}),
   }))
   return (
     <>

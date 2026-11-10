@@ -28,7 +28,7 @@ export function rhythmStatusItem(state: RhythmPublicState): StatusItemState | nu
 
   if (focus.phase === 'focus' && focus.startedAt !== null && focus.endsAt !== null && focus.endsAt > focus.startedAt) {
     const quiet = config.focusQuietsWalnut ? ' Walnut is quiet until it ends.' : ''
-    const what = focus.title ? `${focus.title}. ` : ''
+    const what = `${focus.goal ? `Goal: ${focus.goal}. ` : ''}${focus.title ? `${focus.title}. ` : ''}`
     return {
       title: 'Focus · {remaining} left',
       detail: `${what}Started ${started ?? clockTime(focus.startedAt)}, ends ${clockTime(focus.endsAt)}.${quiet}`,

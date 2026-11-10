@@ -11,7 +11,8 @@ import os from 'node:os'
 import { BREAK_RANGE, clampMinutes, FOCUS_RANGE } from './config'
 import { clockTime, MINUTE_MS as MIN } from './clock'
 import { runProcess } from './exec'
-import { startFocus, stopFocus, skipBreak, advanceFocus, startRest, extendPhase, EXTEND_DEFAULT_MINUTES, EXTEND_RANGE } from './focus'
+import { startFocus, stopFocus, skipBreak, advanceFocus, startRest, extendPhase, normalizeGoal, setGoal, EXTEND_DEFAULT_MINUTES, EXTEND_RANGE } from './focus'
+import { isStarKey, setStarred } from './starred'
 import { listMusic, resolveMusicFolder, type MusicFs, type MusicListing } from './music'
 import { spotifyUriOf, spotifyWebUrl, type SpotifyView } from './spotify'
 import { KEY_BREAK_OVER, KEY_FOCUS_DONE } from './notices'
@@ -101,19 +102,30 @@ export async function focusMusic(runtime: RhythmRuntime, args: Record<string, un
   const given = args.spotify !== undefined && args.spotify !== null && args.spotify !== ''
   const uri = given ? spotifyUriOf(args.spotify) : null
   if (given && !uri) throw new Error('That is not a Spotify link. Paste a playlist link from Spotify (Share, Copy link).')
-  const had = await runtime.serial(async () => {
+  const { had, wasPaused } = await runtime.serial(async () => {
     await settle(runtime)
     // Never a way to start a block: only Start does that.
     if (runtime.focus.phase !== 'focus') throw new Error('No focus block is running. Pick the music in the Start form instead.')
     const before = runtime.focus.spotifyUri
-    const { spotifyUri: _old, ...rest } = runtime.focus
+    // A pick plays: the pause ends with it.
+    const { spotifyUri: _old, musicPaused: _paused, ...rest } = runtime.focus
+    const wasPaused = runtime.focus.musicPaused === true
     runtime.focus = uri ? { ...rest, spotifyUri: uri } : rest
     runtime.markDirty()
     await runtime.step()
-    return before
+    return { had: before, wasPaused }
   })
   const previewed = cancelSpotifyPreview(runtime)
   // Picking the playlist that already plays keeps its place (a preview played over it, though, it comes back).
+  if (uri && uri === had && wasPaused && !previewed) {
+    const resumed = await runtime.spotify.resume(uri)
+    if (!resumed.ok) await markPausedAgain(runtime, uri)
+    return {
+      message: resumed.ok ? `Spotify is playing ${await playlistName(runtime, uri)} again on this Mac.` : resumed.error,
+      state: buildPublicState(runtime, runtime.now()),
+      ...(resumed.ok ? {} : { spotifyError: resumed.error }),
+    }
+  }
   if (uri && uri === had && !previewed) {
     return { message: `Spotify is playing ${await playlistName(runtime, uri)} on this Mac until the block ends.`, state: buildPublicState(runtime, runtime.now()) }
   }
@@ -127,6 +139,77 @@ export async function focusMusic(runtime: RhythmRuntime, args: Record<string, un
     state: buildPublicState(runtime, runtime.now()),
     ...(played.ok ? {} : { spotifyError: played.error }),
   }
+}
+
+/**
+ * Pause or go on with the block's Spotify music on the Mac, without stopping the block.
+ * A folder track plays in the browser that started it, which pauses it there itself.
+ */
+export async function focusMusicPause(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
+  if (typeof args.paused !== 'boolean') throw new Error('Say paused: true or paused: false.')
+  const paused = args.paused
+  const { uri, name, sent } = await runtime.serial(async () => {
+    await settle(runtime)
+    if (runtime.focus.phase !== 'focus') throw new Error('No focus block is running, so no block music plays.')
+    const playing = runtime.focus.spotifyUri
+    if (!playing) throw new Error('The block plays no Spotify music. A folder track pauses in the window that plays it.')
+    const { musicPaused: _was, ...rest } = runtime.focus
+    runtime.focus = paused ? { ...rest, musicPaused: true } : rest
+    runtime.markDirty()
+    await runtime.step()
+    cancelSpotifyPreview(runtime)
+    // Queued on Spotify inside the queue, so a switch, a Stop or the block's end asked
+    // after this lands after it too. Awaited outside: Spotify can take seconds.
+    const sent: Promise<{ ok: true } | { ok: false; error: string }> = paused
+      ? runtime.spotify.pause().then(() => ({ ok: true as const }))
+      : runtime.spotify.resume(playing)
+    return { uri: playing, name: await playlistName(runtime, playing), sent }
+  })
+  const played = await sent
+  if (paused) return { message: `Paused ${name}. The block runs on.`, state: buildPublicState(runtime, runtime.now()) }
+  // Still quiet on the Mac: say so rather than claim it plays.
+  if (!played.ok) await markPausedAgain(runtime, uri)
+  return {
+    message: played.ok ? `${name} is playing again in Spotify on this Mac.` : played.error,
+    state: buildPublicState(runtime, runtime.now()),
+    ...(played.ok ? {} : { spotifyError: played.error }),
+  }
+}
+
+/** A resume that did not play: the block's music reads paused again, if it is still the same. */
+async function markPausedAgain(runtime: RhythmRuntime, uri: string): Promise<void> {
+  await runtime.serial(async () => {
+    if (runtime.focus.phase === 'focus' && runtime.focus.spotifyUri === uri) {
+      runtime.focus = { ...runtime.focus, musicPaused: true }
+      runtime.markDirty()
+      await runtime.step()
+    }
+  })
+}
+
+/** Set (or, with an empty goal, clear) the goal of the block running now. */
+export async function focusGoal(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
+  if (args.goal !== undefined && args.goal !== null && typeof args.goal !== 'string') throw new Error('goal is text; empty clears it.')
+  const goal = normalizeGoal(args.goal)
+  return runtime.serial(async () => {
+    await settle(runtime)
+    runtime.focus = setGoal(runtime.focus, goal)
+    runtime.markDirty()
+    return finish(runtime, goal ? `Goal for this block: ${goal}` : 'The block has no goal now.')
+  })
+}
+
+/** Star a sound (it sits on top of every music list, on every device) or unstar it. */
+export async function musicStar(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
+  if (!isStarKey(args.key)) throw new Error('Name the music by its key: "track:<file name>" or "spotify:<Spotify URI>", as music_tracks lists them.')
+  if (typeof args.on !== 'boolean') throw new Error('Say on: true to star it or on: false to unstar it.')
+  const key = args.key
+  const on = args.on
+  return runtime.serial(async () => {
+    runtime.starred = setStarred(runtime.starred, key, on)
+    runtime.markDirty()
+    return finish(runtime, on ? 'Starred. It sits at the top of the music list.' : 'Unstarred.')
+  })
 }
 
 export const SPOTIFY_PREVIEW_MS = 15_000
@@ -144,7 +227,8 @@ function cancelSpotifyPreview(runtime: RhythmRuntime): boolean {
 
 /** After a preview: the block's own playlist comes back, else Spotify goes quiet again. */
 async function afterPreview(runtime: RhythmRuntime): Promise<void> {
-  if (runtime.focus.phase === 'focus' && runtime.focus.spotifyUri) await runtime.spotify.play(runtime.focus.spotifyUri)
+  // A block whose music the person paused stays quiet; Resume starts its playlist again.
+  if (runtime.focus.phase === 'focus' && runtime.focus.spotifyUri && !runtime.focus.musicPaused) await runtime.spotify.play(runtime.focus.spotifyUri)
   else await runtime.spotify.pause()
 }
 
@@ -183,6 +267,7 @@ function startBlock(runtime: RhythmRuntime, args: Record<string, unknown>, spoti
   return runtime.serial(async () => {
     await settle(runtime)
     const taskId = str(args.taskId)
+    const goal = normalizeGoal(args.goal)
     let title: string | undefined
     if (taskId) {
       const task = await runtime.walnut.tasks.get(taskId)
@@ -195,7 +280,7 @@ function startBlock(runtime: RhythmRuntime, args: Record<string, unknown>, spoti
       ? 0
       : clampMinutes(args.breakMinutes, runtime.config.breakMinutes, BREAK_RANGE.min, BREAK_RANGE.max)
     const now = runtime.now()
-    runtime.focus = startFocus(runtime.focus, { now, minutes, breakMinutes, ...(spotifyUri ? { spotifyUri } : {}), ...(taskId ? { taskId } : {}), ...(title ? { title } : {}) })
+    runtime.focus = startFocus(runtime.focus, { now, minutes, breakMinutes, ...(spotifyUri ? { spotifyUri } : {}), ...(taskId ? { taskId } : {}), ...(title ? { title } : {}), ...(goal ? { goal } : {}) })
     runtime.markDirty()
     // A Start form's pick is the next block's default: the settings themselves, so every
     // surface, the Settings form and an agent's plain "start a block" read the same numbers.
@@ -209,7 +294,7 @@ function startBlock(runtime: RhythmRuntime, args: Record<string, unknown>, spoti
     const d = runtime.durations()
     const long = d.longBreakEvery > 0 && (runtime.focus.completedInCycle + 1) % d.longBreakEvery === 0
     const then = long ? `then the ${d.longBreakMinutes} min long break` : `then a ${breakMinutes || d.breakMinutes} min break`
-    return finish(runtime, `Focus block started: ${minutes} min${title ? ` on ${title}` : ''}, ${then}.`)
+    return finish(runtime, `Focus block started: ${minutes} min${title ? ` on ${title}` : ''}${goal ? `, goal: ${goal}` : ''}, ${then}.`)
   })
 }
 
@@ -242,9 +327,9 @@ export function focusRest(runtime: RhythmRuntime, args: Record<string, unknown>)
     if (before.phase === 'focus') {
       const ran = Math.floor((now - before.startedAt) / MIN)
       if (ran >= 1) {
-        runtime.recordDay({ type: 'block', entry: { at: now, minutes: ran, ...(before.taskId ? { taskId: before.taskId } : {}), ...(before.title ? { title: before.title } : {}) } })
+        runtime.recordDay({ type: 'block', entry: { at: now, minutes: ran, ...(before.taskId ? { taskId: before.taskId } : {}), ...(before.title ? { title: before.title } : {}), ...(before.goal ? { goal: before.goal } : {}) } })
         if (before.taskId) {
-          await runtime.walnut.tasks.appendLog(before.taskId, `Focus block: ${ran} min (rested early)`).catch((error: unknown) => {
+          await runtime.walnut.tasks.appendLog(before.taskId, `Focus block: ${ran} min (rested early)${before.goal ? `. Goal: ${before.goal}` : ''}`).catch((error: unknown) => {
             runtime.walnut.log.warn('Could not log the focus block on its task', { taskId: before.taskId, error: String(error) })
           })
         }

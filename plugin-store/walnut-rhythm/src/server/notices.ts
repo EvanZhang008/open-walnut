@@ -20,8 +20,9 @@ export const KEY_FOCUS_DONE = 'focus-done'
 export const KEY_BREAK_OVER = 'break-over'
 
 /** The next block as this one was started: same task, same length, same break. */
-export function nextBlockArgs(focus: { taskId?: string; minutes: number; breakMinutes: number; spotifyUri?: string }): Record<string, unknown> {
+export function nextBlockArgs(focus: { taskId?: string; goal?: string; minutes: number; breakMinutes: number; spotifyUri?: string }): Record<string, unknown> {
   return {
+    ...(focus.goal ? { goal: focus.goal } : {}),
     ...(focus.spotifyUri ? { spotify: focus.spotifyUri } : {}),
     ...(focus.taskId ? { taskId: focus.taskId } : {}),
     ...(focus.minutes > 0 ? { minutes: focus.minutes } : {}),
@@ -39,7 +40,7 @@ export function focusDoneNotice(block: CompletedBlock, breakKind: BreakKind, bre
   return {
     kind: 'reminder',
     title: `Focus block done, ${breakMinutes} min ${breakText}`,
-    body: `${block.minutes} min${what}. Stand up and move; the break ends at ${clockTime(breakEndsAt)}.`,
+    body: `${block.minutes} min${what}.${block.goal ? ` Goal: ${block.goal}.` : ''} Stand up and move; the break ends at ${clockTime(breakEndsAt)}.`,
     dedupKey: KEY_FOCUS_DONE,
     severity: 'success',
     ...(block.taskId ? { taskId: block.taskId } : {}),
@@ -48,8 +49,8 @@ export function focusDoneNotice(block: CompletedBlock, breakKind: BreakKind, bre
 }
 
 /** The one question after a break: start the next block? Not answering leaves Rhythm off. */
-export function breakOverNotice(focus: Pick<FocusState, 'taskId' | 'title' | 'minutes' | 'breakMinutes' | 'spotifyUri'>): PluginNotifyInput {
-  const what = focus.title ? ` on ${focus.title}` : ''
+export function breakOverNotice(focus: Pick<FocusState, 'taskId' | 'title' | 'goal' | 'minutes' | 'breakMinutes' | 'spotifyUri'>): PluginNotifyInput {
+  const what = `${focus.title ? ` on ${focus.title}` : ''}${focus.goal ? `, goal: ${focus.goal}` : ''}`
   return {
     kind: 'reminder',
     title: 'Break over. Start the next block?',

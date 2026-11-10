@@ -25,6 +25,7 @@ function sizeText(bytes: number): string {
 
 function nowText(music: MusicView, title: string | undefined, state: RhythmPublicState): string {
   if (music.starting) return `Starting ${title ?? 'the music'}…`
+  if (music.paused) return `Paused ${title ?? 'the music'}`
   if (!music.playing) return 'Stopped'
   if (music.tiedToFocus) return state.focus.phase === 'focus' ? `Playing ${title}, stops when the block ends` : `Playing ${title}`
   return `Playing ${title}`

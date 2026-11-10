@@ -22,6 +22,7 @@ import {
 import type { MacosBridge } from './macos-bridge'
 import { DndController } from './macos-dnd'
 import { SpotifyControl } from './spotify'
+import { parseStarred } from './starred'
 import { breakOverNotice, focusDoneNotice, KEY_BREAK_OVER, KEY_FOCUS_DONE, KEY_STAND_UP } from './notices'
 
 const STATE_FILE = 'state.json'
@@ -31,6 +32,8 @@ export const LATE_NOTIFY_MS = 10 * MINUTE_MS
 interface StoredState {
   version: 1
   focus: FocusState
+  /** The music the person starred (list keys), so it sits on top on every device. */
+  starred?: string[]
   /** The Do Not Disturb a block turned on, so a restart still knows which one is Rhythm's. */
   dnd?: unknown
 }
@@ -53,6 +56,8 @@ export class RhythmRuntime {
   readonly now: () => number
   config: RhythmConfig = normalizeConfig({})
   focus: FocusState = { ...IDLE_FOCUS }
+  /** The starred music (list keys), oldest first. */
+  starred: string[] = []
   day: DayLog
   quietState: QuietState = { active: false, allowPermissions: true, holds: [] }
   /** A Spotify preview playing now (`active`), and the number that tells a stale timer from the current one. */
@@ -103,6 +108,7 @@ export class RhythmRuntime {
     const now = this.now()
     const stored = await this.walnut.storage.readJson<Partial<StoredState>>(STATE_FILE, {})
     this.focus = focusOnBoot(stored.focus)
+    this.starred = parseStarred(stored.starred)
     this.dnd.load(stored.dnd)
     this.day = parseDay(await this.walnut.storage.readJson(this.dayFile(localDayKey(now)), null), localDayKey(now))
     // An older version kept a sitting streak and a stand-up reminder; neither exists now.
@@ -186,9 +192,9 @@ export class RhythmRuntime {
       // The block owned the Spotify it started; its break is quiet. Caught up long after
       // (the Mac slept), the music playing now is the person's own, not the block's.
       if (block.spotifyUri && event.lateMs < LATE_NOTIFY_MS) void this.spotify.pause()
-      this.recordDay({ type: 'block', entry: { at: block.endedAt, minutes: block.minutes, ...(block.taskId ? { taskId: block.taskId } : {}), ...(block.title ? { title: block.title } : {}) } })
+      this.recordDay({ type: 'block', entry: { at: block.endedAt, minutes: block.minutes, ...(block.taskId ? { taskId: block.taskId } : {}), ...(block.title ? { title: block.title } : {}), ...(block.goal ? { goal: block.goal } : {}) } })
       if (block.taskId) {
-        await this.walnut.tasks.appendLog(block.taskId, `Focus block: ${block.minutes} min`).catch((error: unknown) => {
+        await this.walnut.tasks.appendLog(block.taskId, `Focus block: ${block.minutes} min${block.goal ? `. Goal: ${block.goal}` : ''}`).catch((error: unknown) => {
           this.walnut.log.warn('Could not log the focus block on its task', { taskId: block.taskId, error: String(error) })
         })
       }
@@ -259,7 +265,7 @@ export class RhythmRuntime {
     if (this.dirty) {
       this.dirty = false
       const dnd = this.dnd.toJSON()
-      const state: StoredState = { version: 1, focus: this.focus, ...(dnd ? { dnd } : {}) }
+      const state: StoredState = { version: 1, focus: this.focus, ...(this.starred.length > 0 ? { starred: this.starred } : {}), ...(dnd ? { dnd } : {}) }
       await this.walnut.storage.writeJson(STATE_FILE, state).catch((error: unknown) => {
         this.dirty = true
         this.warnOnce('persist:state', 'Rhythm could not save its state', { error: String(error) })
