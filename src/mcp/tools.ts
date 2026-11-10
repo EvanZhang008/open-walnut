@@ -19,6 +19,7 @@ import { getOp, listOps, opNames, executeOp, resolveApiBase } from '../ops/index
 import { opInputJsonSchema } from '../ops/registry.js'
 import { LOCAL_ORIGIN } from '../lib/caller-origin.js'
 import { callIdFor, lostCallLines } from '../lib/op-call-id.js'
+import { fitToolAnswer } from '../lib/tool-answer-fit.js'
 
 export { resolveApiBase }
 
@@ -32,8 +33,9 @@ export const READ_TOOL_NAMES: readonly string[] = opNames({ readonly: true })
 export const WRITE_TOOL_NAMES: readonly string[] = opNames({ readonly: false })
 
 /** JSON text content — the one result shape every tool returns on success. */
-function ok(payload: unknown): CallToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] }
+function ok(payload: unknown, op = 'tool'): CallToolResult {
+  // Never more than an agent's tool result takes, whatever the op (tool-answer-fit.ts).
+  return { content: [{ type: 'text', text: fitToolAnswer(payload, { op, pretty: true }) }] }
 }
 
 /** MCP tool error (isError) carrying a human-readable message. */
@@ -114,8 +116,8 @@ async function runWithCallId(name: string, given: Record<string, unknown>, base:
   const { callId, bad } = callIdFor(args)
   if (bad) return fail(bad)
   const r = await executeOp(name, args, { apiBase: base, origin: LOCAL_ORIGIN, callId, callerSid: process.env.WALNUT_SESSION_ID?.trim() })
-  if (r.ok) return ok(r.result)
-  if (r.result !== undefined) return { ...ok(r.result), isError: true }
+  if (r.ok) return ok(r.result, name)
+  if (r.result !== undefined) return { ...ok(r.result, name), isError: true }
   return fail(r.lost || r.unreachable ? [r.message, ...lostCallLines(name, args, callId)].join('\n') : r.message)
 }
 

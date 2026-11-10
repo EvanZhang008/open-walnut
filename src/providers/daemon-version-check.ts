@@ -71,6 +71,9 @@ const DAEMON_SOURCE_FILES = [
   // the instructions it hands its client; both bundled into the CLI above.
   'src/providers/walnut-mcp-stdio.ts',
   'src/mcp/instructions.ts',
+  // Its answer cap and its call ids, imported by the two above.
+  'src/lib/tool-answer-fit.ts',
+  'src/lib/op-call-id.ts',
   // ACP worker stack — compiled into the daemon deploy unit (worker artifact
   // ships with the daemon; version skew impossible by construction).
   'src/providers/acp-daemon.ts',

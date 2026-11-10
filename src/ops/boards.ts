@@ -23,6 +23,7 @@ import type { OpCall } from './core.js';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
+import { BOARD_GET_BUDGET, BOARD_PART_NAMES, defaultView, selectParts, type BoardPart } from './board-get-view.js';
 
 interface CallerMe {
   kind?: string
@@ -173,19 +174,32 @@ function itemsSummary(b: BoardBody, nowMs: number): string {
 const NO_BOARD_NEXT = 'Make one: read the skill (walnut tools call skill_read \'{"dirName":"walnut-board"}\'), then board_set.';
 const EDIT_NEXT = 'Keep it current with board_edit; answer the user\'s thread messages with board_post.';
 
+const PARTS_ARG = z.array(z.enum(BOARD_PART_NAMES)).min(1).optional().describe(
+  'Only these parts: html (the exact page and its version, read it before board_edit), threads, marks, projects, ' +
+  'checks, choices, reminders, section_seen, tasks (the live state of each task the board names), lanes, cards, ' +
+  'team, kanban_seen, kanban (the last four), all. Without it you get the whole board when it is small, else a summary');
+
+/** The call, as the tool takes it (`walnut tools call board_get` takes the same JSON). */
+const getCall = (args: Record<string, unknown>) => `board_get ${JSON.stringify(args)}`;
+
 defineOp({
   name: 'board_get',
   title: 'Read a task\'s board',
   description:
-    'Read your team\'s Board (or the one of the task you name): its html, every chat thread with the user\'s ' +
-    'messages and yours, the user\'s notes (under `marks`), the board\'s projects and their status (with who ' +
-    'set it: status_by "human" is the user\'s pick), which points ' +
-    'were ticked read (and which changed since), the answers to choices (an option, words under `text`, or ' +
-    'both), reminders, and the live state of each task the board names; a tick or an answer an agent made ' +
-    'carries `by` / `by_name` (`text_by` for the words), one with none is the user\'s. Read it before every edit. ' +
-    'No board yet means a leader has not made one: the walnut-board skill says how. Anything the user does on ' +
-    'the page you may do too, with the api op on its route (the skill lists them).',
-  input: { task: TASK_ARG },
+    'Read your team\'s Board (or the one of the task you name): its html, the chat threads, the user\'s notes ' +
+    '(`marks`), the board\'s projects and their status (status_by "human" is the user\'s pick), read ticks, ' +
+    'answers to choices, reminders, the live state of each task the board names, and the kanban. A tick or an ' +
+    'answer an agent made carries `by` / `by_name`; one with none is the user\'s. A big board answers a summary ' +
+    `(counts and short lists, over ${BOARD_GET_BUDGET.toLocaleString('en-US')} characters of JSON); name \`parts\` ` +
+    'for what you need, and read parts ["html"] before every board_edit. `thread` (and `since`) narrow the ' +
+    'threads to one thread (and newer messages). No board yet means a leader has not made one: the walnut-board ' +
+    'skill says how. Anything the user does on the page you may do too, with the api op on its route.',
+  input: {
+    task: TASK_ARG,
+    parts: PARTS_ARG,
+    thread: z.string().min(1).max(128).optional().describe('Only this thread\'s messages (a <walnut-thread id>)'),
+    since: z.string().optional().describe('Only thread messages after this ISO time'),
+  },
   handler: async (args, call) => {
     const target = await resolveBoardTask(args, call);
     const body = await call('GET', boardPath(target.taskId)) as BoardBody;
@@ -196,17 +210,42 @@ defineOp({
     const items = has ? itemsSummary(body, nowMs) : '';
     const due = has ? dueReminders(body, nowMs) : [];
     const cards = cardsLine(body);
-    return withOutcome(
-      { task_id: target.taskId, ...body },
-      has
-        ? `Board of ${boardOf(target)}: ${boardSummary(body)}, ${body.board!.html!.length} chars of html, last written ${body.board!.updated_at ?? 'unknown'} by ${body.board!.updated_by ?? 'unknown'}.${items ? ` ${items}` : ''}${cards ? ` ${cards}.` : ''}`
-        : hasFile
-          ? `The board of ${boardOf(target)} has no page yet, only its kanban cards.${cards ? ` ${cards}.` : ''}`
-          : `Task ${boardOf(target)} has no board yet.`,
-      has
-        ? `${due.length ? `A reminder the user set is due on ${due.join(', ')}: raise it with the user now. ` : ''}${EDIT_NEXT}`
-        : NO_BOARD_NEXT,
-    );
+    const full = { task_id: target.taskId, ...body } as Record<string, unknown>;
+    const thread = typeof args.thread === 'string' && args.thread.trim() ? args.thread.trim() : undefined;
+    const since = typeof args.since === 'string' && args.since.trim() ? args.since.trim() : undefined;
+    if (since && Number.isNaN(Date.parse(since))) throw new Error(`since must be an ISO time (e.g. 2026-11-10T07:00:00Z), not "${since}".`);
+    const picked = selectParts(full, args.parts as BoardPart[] | undefined, thread, since);
+    const view = picked ? null : defaultView(full, due);
+    const result = picked ?? view!.body;
+    const base = has
+      ? `Board of ${boardOf(target)}: ${boardSummary(body)}, ${body.board!.html!.length} chars of html, last written ${body.board!.updated_at ?? 'unknown'} by ${body.board!.updated_by ?? 'unknown'}.${items ? ` ${items}` : ''}${cards ? ` ${cards}.` : ''}`
+      : hasFile
+        ? `The board of ${boardOf(target)} has no page yet, only its kanban cards.${cards ? ` ${cards}.` : ''}`
+        : `Task ${boardOf(target)} has no board yet.`;
+    const dueLine = due.length ? `A reminder the user set is due on ${due.join(', ')}: raise it with the user now. ` : '';
+    const task = { task: target.taskId };
+    let outcome = base;
+    let next = has ? `${dueLine}${EDIT_NEXT}` : NO_BOARD_NEXT;
+    if (picked) {
+      const names = (args.parts as string[] | undefined) ?? ['threads'];
+      const shown = (picked.threads ?? {}) as Record<string, unknown[]>;
+      const narrowed = !Object.hasOwn(picked, 'threads') ? ''
+        : thread
+        ? ` Thread "${thread}": ${Object.hasOwn(shown, thread) ? plural(shown[thread].length, 'message') : 'no such thread'}${since ? ` after ${since}` : ''}.`
+        : since ? ` Thread messages after ${since}.` : '';
+      const size = JSON.stringify(result).length;
+      const big = size > BOARD_GET_BUDGET && !(names.length === 1 && names[0] === 'html')
+        ? ` This answer is ${size.toLocaleString('en-US')} characters: ask for fewer parts, one thread, or since.` : '';
+      outcome = `${base} Parts: ${names.join(', ')}.${narrowed}${big}`;
+    } else if (view!.summarized) {
+      outcome = `${base} The whole board is ${view!.fullChars.toLocaleString('en-US')} characters of JSON, over the ` +
+        `${BOARD_GET_BUDGET.toLocaleString('en-US')} one read returns, so this is a summary: counts and short lists ` +
+        'under `summary`, the size of each left-out part under `part_chars`.';
+      next = `${has ? `For an edit, read the exact html first: ${getCall({ ...task, parts: ['html'] })}. ` : ''}` +
+        `${body.threads && Object.keys(body.threads).length ? `One thread's messages: ${getCall({ ...task, parts: ['threads'], thread: '<id>' })}. ` : ''}` +
+        `Any other part the same way (parts: ${BOARD_PART_NAMES.filter((p) => p !== 'refs').join(', ')}). ${next}`;
+    }
+    return withOutcome(result, outcome, next);
   },
   tags: { readonly: true, remote: 'allow' },
 });

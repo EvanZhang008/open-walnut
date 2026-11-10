@@ -26,6 +26,7 @@ import path from 'node:path'
 import type { GatewayError, GatewayOp, GatewayResponse } from './gateway-core.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES } from './tool-args-source.js'
 import { walnutMcpInstructions } from '../mcp/instructions.js'
+import { fitToolAnswer } from '../lib/tool-answer-fit.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { callIdFor, lostCallLines, newCallId } from '../lib/op-call-id.js'
 
@@ -51,6 +52,8 @@ export interface WalnutMcpDeps {
   notify?: (method: string) => void
   /** Overrides MCP_LIST_RETRY_MS (tests). */
   listRetryMs?: number
+  /** Where an answer too big for one tool result is written (tests); default tool-answer-fit's. */
+  answerDir?: string
 }
 
 interface JsonRpcRequest { jsonrpc?: string; id?: string | number | null; method?: unknown; params?: unknown }
@@ -171,7 +174,8 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
         callId = newCallId()
         resp = await deps.request('tools.call', { name, args, callId })
       }
-      if (resp.ok) return { content: [{ type: 'text', text: text(resp.result) }] }
+      // Never more than an agent's tool result takes, whatever the op (tool-answer-fit.ts).
+      if (resp.ok) return { content: [{ type: 'text', text: fitToolAnswer(resp.result, { op: name, dir: deps.answerDir }) }] }
       const message = deps.formatError(resp.error).join('\n')
       if (resp.error.code === 'hub_timeout') return toolError(lost(message), resp.error.detail)
       const away = resp.error.code === 'hub_unreachable' ? awayLines(name, args) : []

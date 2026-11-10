@@ -62,6 +62,8 @@ SOURCES=(
   src/providers/mcp-cli-args.ts
   src/providers/walnut-mcp-stdio.ts
   src/mcp/instructions.ts
+  src/lib/tool-answer-fit.ts
+  src/lib/op-call-id.ts
   src/providers/acp-daemon.ts
   src/providers/acp-thread-restore.ts
   src/providers/acp-host-artifacts.ts
