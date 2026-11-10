@@ -911,19 +911,31 @@ jobs:
   # the next day: it failed twice in its first day, once on two test races (fixed),
   # once with failure text no one without a login could read. It goes back once each
   # failure names its test as an annotation (The failed tests) and it has five green
-  # runs in a row. The UI leg may fail without failing the run (continue-on-error).
+  # runs in a row. The UI legs may fail without failing the run (continue-on-error).
   # WalnutUITests runs through ios-native/tests/ui/run-ui-tests.sh, the only way its
   # pairing reaches the XCUITest runner (ios-native/README.md), at its offline
   # default: a dead loopback port, no server and nobody's data.
+  # The UI layer runs in shards, each its own runner with its own simulator and build: one
+  # leg reached 38 of its tests in its 50 minute step (run 42735468568; about 61 minutes of
+  # tests, after 12 minutes of boot and build). ios-native/tests/ui/ci-shard.py deals every
+  # UI class with tests that IOS_CI_SKIP_UI does not leave out to a shard, weighed by the
+  # time CI measured (ios-native/tests/ui/ci-shard-times.tsv), so a new class needs no list.
+  # Three shards of about 20 minutes of tests each: macOS runners are scarce (five at a time,
+  # shared with the rehearsals), so on a push the job holds two, as it did with one UI leg.
   ios:
-    name: iOS app (${{ matrix.layer }})
+    name: iOS app (${{ matrix.layer }}${{ matrix.shard && format(' {0}/{1}', matrix.shard, matrix.shards) || '' }})
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 55
     continue-on-error: ${{ matrix.layer == 'ui' }}
     strategy:
       fail-fast: false
+      max-parallel: ${{ github.event_name == 'push' && 2 || 4 }}
       matrix:
-        layer: [unit, ui]
+        include:
+          - layer: unit
+          - { layer: ui, shard: 1, shards: 3 }
+          - { layer: ui, shard: 2, shards: 3 }
+          - { layer: ui, shard: 3, shards: 3 }
     # What this job leaves to the Mac (tests/scripts/ci-ios.test.ts keeps both lists whole):
     # the wall-clock budgets of the perf gates (a whole class, or the timed methods of
     # one whose other tests count work), which a shared runner misses by up to
@@ -1001,18 +1013,23 @@ jobs:
             -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -derivedDataPath "$RUNNER_TEMP/dd" -resultBundlePath "$RUNNER_TEMP/ios-unit.xcresult" \
             -only-testing:WalnutTests $IOS_CI_SKIP_UNIT
-      # Its own limit, under the job's 60: a job that runs out of time is cancelled, and a
+      # Its own limit, under the job's 55: a job that runs out of time is cancelled, and a
       # cancelled job runs no failure() step, so a hang would keep no evidence. A step that
-      # runs out fails, and the steps below still run (the leg took about 36 minutes; this
-      # limit plus the evidence step's stays 5 minutes under the job's).
+      # runs out fails, and the steps below still run (a shard builds for about 8 minutes,
+      # then runs about 20 of tests; this limit plus the evidence step's stays 5 minutes
+      # under the job's). The shard's classes are named, never the whole target: a shard
+      # with none fails here rather than run every class.
       - name: UI tests (WalnutUITests, offline pairing)
         if: matrix.layer == 'ui'
-        timeout-minutes: 50
+        timeout-minutes: 45
         shell: bash
         run: |
+          only=$(python3 ios-native/tests/ui/ci-shard.py ${{ matrix.shard }} ${{ matrix.shards }} $IOS_CI_SKIP_UI) || exit 1
+          echo "UI shard ${{ matrix.shard }} of ${{ matrix.shards }} runs:"
+          echo "$only"
           WALNUT_UITEST_UDID="$SIM_UDID" WALNUT_UITEST_DD="$RUNNER_TEMP/dd" \
             WALNUT_UITEST_RESULT_BUNDLE="$RUNNER_TEMP/ios-ui.xcresult" \
-            bash ios-native/tests/ui/run-ui-tests.sh -only-testing:WalnutUITests $IOS_CI_SKIP_UI
+            bash ios-native/tests/ui/run-ui-tests.sh $only $IOS_CI_SKIP_UI
       # The result bundle stays on the runner, never an artifact: a public repo's artifacts
       # are anyone's to download, and the 130 MB bundle (build logs, the runner's
       # environment) failed the leak audit on 2026-10-31.
@@ -1042,7 +1059,7 @@ jobs:
         if: failure() && matrix.layer == 'ui' && fromJSON(steps.evidence.outputs.kept || '0') > 0
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ui-failure-evidence-attempt-${{ github.run_attempt }}
+          name: ios-ui-failure-evidence-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ios-ui-evidence
           if-no-files-found: ignore
           retention-days: 7

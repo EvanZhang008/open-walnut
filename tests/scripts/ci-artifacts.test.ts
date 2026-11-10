@@ -27,7 +27,7 @@ const VETTED: Record<string, string> = {
   'browser-report-${{ matrix.shard }}': 'the Playwright JSON report the browser baseline reads',
   // Never the result bundle: ios-native/tests/ui-failure-evidence.py copies out only PNG/JPEG
   // and screened plain text of the failed tests, 25 MB at most (tests/scripts/ci-ios.test.ts).
-  'ios-ui-failure-evidence-attempt-${{ github.run_attempt }}': 'a failed iOS UI test\'s screenshots, element tree and step log, screened',
+  'ios-ui-failure-evidence-${{ matrix.shard }}-attempt-${{ github.run_attempt }}': 'a failed iOS UI test\'s screenshots, element tree and step log, screened',
 }
 
 describe('the artifacts ci.yml uploads', () => {

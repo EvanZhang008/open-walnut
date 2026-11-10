@@ -1,0 +1,30 @@
+# Seconds the WalnutUITests classes took on CI, read by ci-shard.py to balance the UI shards.
+# class<TAB>seconds of its timed tests<TAB>tests timed. Refresh: ci-shard.py record <job log>.
+AskQuestionCardUITests	119.2	4
+BoardOrderParityUITests	0.7	3
+BoardRingTapUITests	191.5	4
+CalendarInteractionUITests	134.1	7
+ChatPlaceUITests	357.3	5
+ClickedPathUITests	1.1	1
+CodeBlockUITests	48.9	2
+ComposerAttachmentMenuUITests	206.1	3
+DemoModeUITests	1.3	9
+InboxSelectUITests	2.3	4
+IslandStateUITests	49.7	1
+IslandStreamUITests	82.8	3
+LetterReplyUITests	5.8	45
+MidTurnQueueUITests	0.4	3
+ModelPillHealUITests	2.3	17
+OrgLargeTypeUITests	70.0	2
+PermissionOptionsUITests	49.5	4
+PrivateTasksUITests	0.2	2
+ProvenanceAndInboxUITests	1.8	8
+QuickQuestionRenameUITests	177.9	4
+SendOnceUITests	0.4	3
+SessionMidTurnOrderUITests	0.1	1
+SessionStreamStormUITests	0.9	7
+TalkToWalnutUITests	121.1	2
+TasksDrawerUITests	426.9	7
+ThreadPushCalendarDraftUITests	205.7	1
+ThreadPushColdOfflineReviewUITests	76.9	1
+ThreadPushHoldUITests	173.6	2

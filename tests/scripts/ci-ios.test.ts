@@ -5,6 +5,7 @@
  * run-ui-tests.sh, the one way its pairing reaches the XCUITest runner.
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import { execFileSync, spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -14,7 +15,8 @@ import { wallClockGates } from '../helpers/swift-wall-clock-gates'
 const ROOT = path.resolve(__dirname, '../..')
 const raw = fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')
 type Step = { name?: string; id?: string; run?: string; if?: string; uses?: string; env?: Record<string, string>; with?: Record<string, string | number>; 'timeout-minutes'?: number }
-const doc = parseYaml(raw) as { jobs: Record<string, { 'runs-on': string; 'timeout-minutes'?: number; needs?: string[]; 'continue-on-error'?: string; env?: Record<string, string>; strategy?: { matrix: { layer: string[] } }; steps: Step[] }> }
+const doc = parseYaml(raw) as { jobs: Record<string, { 'runs-on': string; 'timeout-minutes'?: number; needs?: string[]; 'continue-on-error'?: string; env?: Record<string, string>; strategy?: { 'max-parallel'?: string; matrix: { include: Leg[] } }; steps: Step[] }> }
+type Leg = { layer: string; shard?: number; shards?: number }
 const job = doc.jobs.ios!
 
 /** What a skip list names, `-skip-testing:<Target>/<Class>[/<method>]` each. */
@@ -42,6 +44,48 @@ function testClasses(target: string): { name: string; file: string; body: string
   })
 }
 
+const SHARD_SCRIPT = path.join(ROOT, 'ios-native/tests/ui/ci-shard.py')
+// Minutes a UI shard's step spends building and installing before its first test (run 42735468568).
+const UI_BUILD_MINUTES = 8
+type ShardPlan = { shards: number; skipped: string[]; legs: { shard: number; seconds: number; classes: string[] }[] }
+
+/** The number of UI shards the ios matrix runs. */
+function uiShards(): number {
+  return job.strategy!.matrix.include.filter((l) => l.layer === 'ui').length
+}
+
+/** The split ci-shard.py makes for the workflow's skip list (or another dir and times file). */
+function shardPlan(shards: number, env: Record<string, string> = {}, skipArgs?: string[]): ShardPlan {
+  const args = skipArgs ?? (job.env?.IOS_CI_SKIP_UI ?? '').split(/\s+/).filter(Boolean)
+  return JSON.parse(execFileSync('python3', [SHARD_SCRIPT, 'plan', String(shards), ...args], { encoding: 'utf8', env: { ...process.env, ...env } })) as ShardPlan
+}
+
+/**
+ * Every WalnutUITests class XCTest runs tests of, read here on its own (not through ci-shard.py):
+ * a subclass of XCTestCase, directly or through a base class of the directory, with a test method
+ * of its own, of a base class, or of an extension of it.
+ */
+function uiClassesWithTests(): string[] {
+  const dir = path.join(ROOT, 'ios-native/WalnutUITests')
+  const parent = new Map<string, string>()
+  const tests = new Map<string, number>()
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.swift'))) {
+    const text = fs.readFileSync(path.join(dir, file), 'utf8')
+    const decls = [...text.matchAll(/^(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|internal|open|final|private|fileprivate)\s+)*(class|extension|struct|enum|actor|protocol) (\w+)(?:\s*:\s*(\w+))?/gm)]
+    decls.forEach((d, i) => {
+      const body = text.slice(d.index! + d[0].length, decls[i + 1]?.index ?? text.length)
+      const n = body.split('\n').filter((l) => /^\s+(?:@\w+\s+)*(?:override\s+)?func test\w*\(\)/.test(l)).length
+      if (d[1] === 'class' && d[3]) parent.set(d[2]!, d[3])
+      if (d[1] === 'class' || d[1] === 'extension') tests.set(d[2]!, (tests.get(d[2]!) ?? 0) + n)
+    })
+  }
+  const lineage = (c: string): string[] => (parent.has(c) ? [c, ...lineage(parent.get(c)!)] : [c])
+  return [...parent.keys()].filter((c) => {
+    const chain = lineage(c)
+    return chain.at(-1) === 'XCTestCase' && chain.some((x) => (tests.get(x) ?? 0) > 0)
+  }).sort()
+}
+
 // A UI class that talks to a fixture server: its routes, the Inbox fixture marker, or
 // a test that fails without an isolated server.
 const TALKS_TO_FIXTURE = /__stub\/|"\/__\w+\/|WALNUT_UITEST_INBOX_ITEMS|InboxItemActionsUITests\.launch|isolated server/
@@ -59,9 +103,15 @@ const PROBES_ITS_FIXTURE = [
 ]
 
 describe('the iOS job in ci.yml', () => {
-  it('runs on the pinned macOS image, a unit and a UI leg', () => {
+  it('runs on the pinned macOS image, a unit leg and the UI shards 1..N', () => {
     expect(job['runs-on']).toBe('macos-26')
-    expect(job.strategy?.matrix.layer).toEqual(['unit', 'ui'])
+    const legs = job.strategy!.matrix.include
+    expect(legs[0]).toEqual({ layer: 'unit' })
+    const n = uiShards()
+    expect(n).toBeGreaterThanOrEqual(2)
+    expect(legs.slice(1)).toEqual(Array.from({ length: n }, (_, i) => ({ layer: 'ui', shard: i + 1, shards: n })))
+    // Each leg's name says which it is: iOS app (unit), iOS app (ui 2/3).
+    expect(job.name).toBe("iOS app (${{ matrix.layer }}${{ matrix.shard && format(' {0}/{1}', matrix.shard, matrix.shards) || '' }})")
   })
 
   it('reads no secret and signs nothing', () => {
@@ -103,7 +153,10 @@ describe('the iOS job in ci.yml', () => {
     // A job past its timeout-minutes is cancelled, and a cancelled job runs no failure() step.
     const ui = job.steps.find((s) => s.if === "matrix.layer == 'ui'" && s.run?.includes('run-ui-tests.sh'))!
     const stepLimit = ui['timeout-minutes']!
-    expect(stepLimit).toBeGreaterThanOrEqual(45) // the leg has run about 36 minutes
+    // The step builds first (about 8 minutes on run 42735468568), then runs its shard's tests,
+    // which a slow runner may stretch by half. When a shard outgrows that, add a shard.
+    const longest = Math.max(...shardPlan(uiShards()).legs.map((l) => l.seconds)) / 60
+    expect(UI_BUILD_MINUTES + 1.5 * longest, `the longest UI shard (${longest.toFixed(1)} min of tests) no longer fits its step: add a UI shard to the ios matrix`).toBeLessThanOrEqual(stepLimit)
     // The evidence step has its own limit too (its screen is linear, seconds on a 2 MB text),
     // and both together stay 5 minutes under the job's, for the boot and the upload.
     const ev = job.steps.find((s) => s.id === 'evidence')!
@@ -161,8 +214,10 @@ describe('the iOS job in ci.yml', () => {
     }
     for (const name of PROBES_ITS_FIXTURE) expect(fixture, `${name} no longer talks to a fixture`).toContain(name)
     const ui = job.steps.find((s) => s.if === "matrix.layer == 'ui'")!
-    // Arguments replace the runner's default target, so the leg names it itself.
-    expect(ui.run).toMatch(/run-ui-tests\.sh -only-testing:WalnutUITests \$IOS_CI_SKIP_UI/)
+    // Arguments replace the runner's default target, so the leg names its shard's classes,
+    // and the skip list still applies to a method it names.
+    expect(ui.run).toContain('only=$(python3 ios-native/tests/ui/ci-shard.py ${{ matrix.shard }} ${{ matrix.shards }} $IOS_CI_SKIP_UI) || exit 1')
+    expect(ui.run).toMatch(/run-ui-tests\.sh \$only \$IOS_CI_SKIP_UI\n/)
   })
 
   it('never uploads a result bundle: only the screened evidence of a failed UI test', () => {
@@ -175,7 +230,8 @@ describe('the iOS job in ci.yml', () => {
     expect(up.with?.path).toBe('${{ runner.temp }}/ios-ui-evidence')
     expect(up.with?.['if-no-files-found']).toBe('ignore')
     expect(Number(up.with?.['retention-days'])).toBeLessThanOrEqual(7)
-    expect(String(up.with?.name)).toContain('${{ github.run_attempt }}')
+    // One artifact per shard and attempt: a second upload of a name fails.
+    expect(up.with?.name).toBe('ios-ui-failure-evidence-${{ matrix.shard }}-attempt-${{ github.run_attempt }}')
     expect(up.if).toBe("failure() && matrix.layer == 'ui' && fromJSON(steps.evidence.outputs.kept || '0') > 0")
     // The evidence comes out of the bundle through the screening script, into its own directory.
     const ev = job.steps.find((s) => s.id === 'evidence')!
@@ -273,6 +329,97 @@ describe('the iOS job in ci.yml', () => {
     expect([...new Set(found)]).toEqual(caught.map((m) => [...m.matchAll(/func (test\w+)/g)].pop()![1]))
     // Each one's line points at its assertion.
     for (const g of wallClockGates(body)) expect(body.split('\n')[g.line - 1]).toMatch(/XCTAssert|XCTFail|\bif\b|\bguard\b|assertFast\(/)
+  })
+})
+
+describe('the UI shards of the iOS job', () => {
+  const skips = () => skipped(job.env?.IOS_CI_SKIP_UI, 'WalnutUITests')
+
+  it('run every UI class with tests that IOS_CI_SKIP_UI does not leave out, each on one shard', () => {
+    const plan = shardPlan(uiShards())
+    expect(plan.shards).toBe(uiShards())
+    expect(plan.legs).toHaveLength(uiShards())
+    const placed = plan.legs.flatMap((l) => l.classes)
+    expect(new Set(placed).size, 'a class on two shards').toBe(placed.length)
+    const all = uiClassesWithTests()
+    expect(all.length).toBeGreaterThan(30)
+    const expected = all.filter((c) => !skips().includes(c))
+    expect([...placed].sort(), 'a UI class with tests is on no shard and not in IOS_CI_SKIP_UI').toEqual(expected)
+    for (const leg of plan.legs) expect(leg.classes.length, `shard ${leg.shard} runs no class`).toBeGreaterThan(0)
+    // Inherited tests count: these hold none of their own beyond what ThreadPushUITestCase shares.
+    expect(placed).toEqual(expect.arrayContaining(['ThreadPushHoldUITests', 'ThreadPushNavigationUITests']))
+  })
+
+  it('every class IOS_CI_SKIP_UI names exists', () => {
+    const dir = path.join(ROOT, 'ios-native/WalnutUITests')
+    const source = fs.readdirSync(dir).filter((f) => f.endsWith('.swift')).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n')
+    for (const c of skips()) expect(source, `IOS_CI_SKIP_UI names ${c}, which is no class`).toMatch(new RegExp(`\\bclass ${c}\\b`))
+  })
+
+  it('prints a shard as its -only-testing arguments, the same classes the plan gives it', () => {
+    const args = (job.env?.IOS_CI_SKIP_UI ?? '').split(/\s+/).filter(Boolean)
+    const plan = shardPlan(uiShards())
+    for (const leg of plan.legs) {
+      const out = execFileSync('python3', [SHARD_SCRIPT, String(leg.shard), String(uiShards()), ...args], { encoding: 'utf8' })
+      expect(out.trim().split('\n')).toEqual(leg.classes.map((c) => `-only-testing:WalnutUITests/${c}`))
+    }
+  })
+
+  it('weighs classes by the time CI measured, else by their tests, and deals them heaviest first', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-shard-'))
+    const ui = path.join(dir, 'ui')
+    fs.mkdirSync(ui)
+    const write = (f: string, text: string) => fs.writeFileSync(path.join(ui, f), text)
+    write('Base.swift', 'class SharedCase: XCTestCase {\n    func testShared() {}\n    func helper() {}\n}\n')
+    write('Kid.swift', 'final class KidTests: SharedCase {\n    override func setUp() {}\n}\n')
+    write('Big.swift', 'final class BigTests: XCTestCase {\n    func testA() throws {}\n    func testB() async throws {}\n    @MainActor func testC() {}\n    private func testHidden() {}\n    func testCase(_ x: Int) {}\n    // func testCommented() {}\n    /*\n    func testInABlockComment() {}\n    */\n    private final class Box: @unchecked Sendable {}\n}\n')
+    write('BigMore.swift', 'extension BigTests {\n    func testD() {}\n}\n')
+    write('Timed.swift', 'final class TimedTests: XCTestCase {\n    func testOne() {}\n    func testTwo() {}\n}\n')
+    write('Skipped.swift', 'final class SkippedTests: XCTestCase {\n    func testX() {}\n}\n')
+    write('Helpers.swift', 'enum Helpers {\n    static func testLike() {}\n}\nfinal class NotATest: NSObject {\n    func testY() {}\n}\n')
+    const times = path.join(dir, 'times.tsv')
+    // Measured: 10 s a test, and a test added since counts at that rate.
+    fs.writeFileSync(times, '# comment\nTimedTests\t10.0\t1\n')
+    const env = { CI_SHARD_UI_DIR: ui, CI_SHARD_TIMES: times }
+    const skip = ['-skip-testing:WalnutUITests/SkippedTests', '-skip-testing:WalnutUITests/KidTests/testShared']
+    const plan = shardPlan(2, env, skip)
+    expect(plan.skipped).toEqual(['SkippedTests'])
+    // BigTests: 4 tests x 60 s; SharedCase and KidTests 60 s each (the method skip keeps KidTests); TimedTests 2 x 10 s.
+    expect(plan.legs).toEqual([
+      { shard: 1, seconds: 240, classes: ['BigTests'] },
+      { shard: 2, seconds: 140, classes: ['KidTests', 'SharedCase', 'TimedTests'] },
+    ])
+    // A shard with no class prints nothing and fails: no -only-testing would run the whole target.
+    const empty = spawnSync('python3', [SHARD_SCRIPT, '5', '5', ...skip], { encoding: 'utf8', env: { ...process.env, ...env } })
+    expect(empty).toMatchObject({ status: 1, stdout: '' })
+    expect(empty.stderr).toContain('shard 5 of 5 has no class')
+    expect(spawnSync('python3', [SHARD_SCRIPT, '4', '3'], { encoding: 'utf8', env: { ...process.env, ...env } }).status).not.toBe(0)
+    expect(spawnSync('python3', [SHARD_SCRIPT, '1', '2', '-skip-testing:Other/X'], { encoding: 'utf8', env: { ...process.env, ...env } }).status).not.toBe(0)
+    // record reads a job log's case lines into the times file, keeping classes the log lacks.
+    const log = path.join(dir, 'job.log')
+    fs.writeFileSync(log, [
+      "2026-11-10T03:17:42Z Test Case '-[WalnutUITests.BigTests testA]' passed (30.500 seconds).",
+      "2026-11-10T03:17:43Z Test Case '-[WalnutUITests.BigTests testB]' failed (9.500 seconds).",
+      "2026-11-10T03:17:44Z Test Case '-[WalnutUITests.KidTests testShared]' skipped (0.200 seconds).",
+      "2026-11-10T03:17:45Z Test Case '-[WalnutUITests.BigTests testA]' started.",
+    ].join('\n'))
+    execFileSync('python3', [SHARD_SCRIPT, 'record', log], { encoding: 'utf8', env: { ...process.env, ...env } })
+    const rows = fs.readFileSync(times, 'utf8').split('\n').filter((l) => l && !l.startsWith('#'))
+    expect(rows).toEqual(['BigTests\t40.0\t2', 'KidTests\t0.2\t1', 'TimedTests\t10.0\t1'])
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('has a measured time for most of the classes it runs', () => {
+    const timed = new Set(fs.readFileSync(path.join(ROOT, 'ios-native/tests/ui/ci-shard-times.tsv'), 'utf8')
+      .split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.split('\t')[0]))
+    const placed = shardPlan(uiShards()).legs.flatMap((l) => l.classes)
+    // An untimed class counts 60 s a test; refresh with `ci-shard.py record <job log>`.
+    expect(placed.filter((c) => timed.has(c)).length / placed.length).toBeGreaterThan(0.6)
+  })
+
+  it('holds two macOS runners on a push, as one UI leg did, and every leg on a pull request', () => {
+    expect(job.strategy?.['max-parallel']).toBe("${{ github.event_name == 'push' && 2 || 4 }}")
+    expect(job.strategy!.matrix.include).toHaveLength(4)
   })
 })
 
