@@ -135,6 +135,17 @@ enum OrgThreadModel {
         return !unread(t, shared: shared).isEmpty
     }
 
+    /// The thread once his Follow up went in, before the next read: an answered, needs or pending
+    /// thread is the node's move again (threads-model.ts files his message so), out of his view
+    /// unless he pinned it.
+    static func afterHisFollowUp(_ t: OrgThread) -> OrgThread {
+        var t = t
+        if t.closed != nil { return t }
+        if ["answered", "needs", "pending"].contains(t.state) { t.state = "working" }
+        t.shown = pinnedNow(t)
+        return t
+    }
+
     /// In his view: the server's judgement when it sent one (`shown`, made over every thread of
     /// the node, the rule the header counts by), else this phone's port of that rule.
     static func inView(_ t: OrgThread, shared: Set<String>, now: Date) -> Bool {

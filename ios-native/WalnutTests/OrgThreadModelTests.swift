@@ -40,6 +40,28 @@ final class OrgThreadModelTests: XCTestCase {
         XCTAssertEqual(OrgThreadModel.namedTasks(in: th.reply), ["abcdefg-1234"])
     }
 
+    /// His Follow up went in: the card leaves his view at once, before the next read (2026-11-10,
+    /// the user: "ios 和web回复thread都要thread自动消失 至少ios没有这样"), as the server files it.
+    func testHisFollowUpTakesTheThreadOutOfHisViewAtOnce() throws {
+        for state in ["answered", "needs", "pending"] {
+            var th = try t("f", state: state, messages: answeredOnce)
+            th.shown = true
+            let after = OrgThreadModel.afterHisFollowUp(th)
+            XCTAssertEqual(after.state, "working", state)
+            XCTAssertFalse(OrgThreadModel.inView(after, shared: [], now: Self.now), state)
+            let s = OrgThreadModel.sections([after], now: Self.now)
+            XCTAssertTrue(s.open.isEmpty, state)
+            XCTAssertEqual(s.inProgress.map(\.id), ["f"], state)
+        }
+        // Pinned: he keeps it in sight whatever its state.
+        var pinned = try t("p", extra: #","pinned":{"at":"2026-11-04T08:00:00Z"}"#)
+        pinned.shown = true
+        XCTAssertTrue(OrgThreadModel.inView(OrgThreadModel.afterHisFollowUp(pinned), shared: [], now: Self.now))
+        // Closed: untouched (a Follow up there opens a new thread on the server).
+        let closed = try t("c", extra: #","closed":{"how":"acked","at":"2026-11-04T08:00:00Z","by":"human"}"#)
+        XCTAssertEqual(OrgThreadModel.afterHisFollowUp(closed), closed)
+    }
+
     func testAnAnswerIsNewsUntilHeReactsAfterIt() throws {
         let fresh = try t("a", messages: answeredOnce)
         XCTAssertEqual(OrgThreadModel.unread(fresh).map(\.n), [1])

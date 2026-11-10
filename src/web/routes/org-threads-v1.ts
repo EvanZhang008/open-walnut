@@ -15,6 +15,8 @@
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
  *   POST  /api/v1/tasks/:id/threads/:thread/move           { to, why? } -> it goes to another node's Threads with its work
  *                                                          (core/org/thread-follow.ts): `to` a node, a task in its team, a project or a VP's name
+ *   PUT   /api/v1/tasks/:id/threads/:thread/follow-ups/:messageId -> the message with that id, relayed
+ *                                                          by the companion, is his Follow up in this thread
  *
  * The caller comes from `x-walnut-caller-sid`: none = the user. Writes answer 501 on the companion.
  * The session that wrote a summary or a first post is the caller's own, read from its session
@@ -184,6 +186,24 @@ orgThreadsV1Router.post('/tasks/:id/threads', route(async (req, res) => {
   })
   log.task.info('org thread message filed', { taskId: task.id, threadId: out.thread.id, created: out.created, by: await writerOf(req) })
   res.status(out.created ? 201 : 200).json({ task_id: task.id, thread: out.thread, message: out.message, created: out.created, duplicate: out.duplicate })
+}))
+
+/**
+ * A Follow up on its way through the companion: the message with this id is his reply in this
+ * thread (core/org/thread-follow-up-intent.ts). The companion forwards this to the Mac; its own
+ * relay of the words cannot carry the thread.
+ */
+orgThreadsV1Router.put('/tasks/:id/threads/:thread/follow-ups/:messageId', route(async (req, res) => {
+  const task = await nodeTask(req)
+  if (isCompanion()) throw new RouteError(503, 'primary_only', "Threads are kept on the primary; this server could not reach it just now.")
+  const id = threadIdOf(req)
+  const messageId = param(req.params.messageId)
+  if (!/^qm-[A-Za-z0-9-]{1,64}$/.test(messageId)) throw new RouteError(400, 'bad_request', `Not a message id: ${messageId}`)
+  if (!(await readThreads(task.id)).threads.some((t) => t.id === id)) throw new RouteError(404, 'no_thread', `No thread ${id} on this node.`)
+  const { noteFollowUpIntent } = await import('../../core/org/thread-follow-up-intent.js')
+  noteFollowUpIntent(task.id, id, messageId)
+  log.task.info('org thread follow-up announced', { taskId: task.id, threadId: id, messageId })
+  res.json({ task_id: task.id, thread_id: id, message_id: messageId })
 }))
 
 orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {

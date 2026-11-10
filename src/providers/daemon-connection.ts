@@ -2502,7 +2502,13 @@ export class DaemonConnection {
         const { prepareHintedSend } = await import('../core/hints/hint-send.js')
         // The companion composes the voice hint into a voice send; it is kept.
         const { voiceReplyBlock } = await import('../core/sessions/voice-reply.js')
-        const outputMode = await prepareHintedSend(sessionId, record, message, { sentBy: 'person', upstreamBlocks: [voiceReplyBlock()] })
+        // A Follow up the phone announced for this id is filed under its thread, as the primary
+        // box's send route files one (org/thread-follow-up-intent.ts); the id dedupes a retry.
+        const { followUpIntentFor } = await import('../core/org/thread-follow-up-intent.js')
+        const threadId = followUpIntentFor(record.taskId, messageId)
+        const outputMode = await prepareHintedSend(sessionId, record, message, {
+          sentBy: 'person', upstreamBlocks: [voiceReplyBlock()], threadKey: messageId, ...(threadId ? { threadId } : {}),
+        })
         const { sendMessageToSession } = await import('../core/session-message-queue.js')
         // The row and the id's fate are one write (relay-fates.ts): no crash
         // point leaves a queued message the companion would be told is unseen.

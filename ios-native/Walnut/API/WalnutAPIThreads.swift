@@ -48,7 +48,7 @@ struct OrgThread: Codable, Equatable, Identifiable {
     let title: String
     var ask: String? = nil
     /// new | working | needs | answered | pending
-    let state: String
+    var state: String
     /// The node's summary, latest first (markdown, may hold `<task-ref>` tags).
     var reply: String? = nil
     var tasks: [String]? = nil
@@ -173,6 +173,16 @@ extension WalnutAPI {
     func editOrgThread(taskId: String, threadId: String, _ edit: OrgThreadEdit) async throws {
         struct Ack: Decodable {}
         let _: Ack = try await send("PATCH", "/tasks/\(escape(taskId))/threads/\(escape(threadId))", body: edit.body)
+    }
+
+    /// Before a Follow up goes out: the message with `messageId` is his reply in this thread. The
+    /// companion's relay of the words cannot carry the thread, so the Mac hears it here first
+    /// (`PUT /tasks/:id/threads/:thread/follow-ups/:messageId`, additive 2026-11-10).
+    func announceThreadFollowUp(taskId: String, threadId: String, messageId: String) async throws {
+        struct Ack: Decodable {}
+        let _: Ack = try await send(
+            "PUT", "/tasks/\(escape(taskId))/threads/\(escape(threadId))/follow-ups/\(escape(messageId))",
+            body: [String: AnyEncodable](), timeout: 10)
     }
 
     func orgBrief(taskId: String) async throws -> OrgBriefReply {

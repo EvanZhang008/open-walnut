@@ -246,16 +246,29 @@ final class OrgThreadsStore {
         guard !words.isEmpty || !images.isEmpty else { return false }
         busyThreadId = threadId
         defer { busyThreadId = nil }
+        let messageId = SendRetryPolicy.newMessageId()
         do {
+            // The thread first: through the companion the words reach the Mac without it, and the
+            // thread he answered stayed on his view (2026-11-10). An older Mac, or one out of
+            // reach, answers an error: the words still go, filed by Walnut's own pick.
+            do {
+                try await WalnutAPI().announceThreadFollowUp(taskId: taskId, threadId: threadId, messageId: messageId)
+            } catch {
+                AppLog.warn("org", "thread follow-up not announced", ["taskId": taskId, "threadId": threadId, "error": error.localizedDescription])
+            }
             let payloads = await SelectedImage.buildPayloads(images.map(\.jpegData))
             _ = try await WalnutAPI().sendThreadFollowUp(
                 sessionId: sessionId, threadId: threadId, text: words, images: payloads,
-                messageId: SendRetryPolicy.newMessageId())
+                messageId: messageId)
         } catch {
             AppLog.warn("org", "thread follow-up failed", ["taskId": taskId, "threadId": threadId, "error": error.localizedDescription])
             return false
         }
         followUpSentAt[threadId] = Date()
+        // His reply makes it the node's move: out of his view at once, as the server's next read says.
+        if let i = threads?.firstIndex(where: { $0.id == threadId }), let t = threads?[i] {
+            threads?[i] = OrgThreadModel.afterHisFollowUp(t)
+        }
         await load()
         tellWhereItWent(threadId)
         return true

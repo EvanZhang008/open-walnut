@@ -42,6 +42,7 @@ import { getQueue, sendMessageToSession } from '../../src/core/session-message-q
 import { prepareHintedSend } from '../../src/core/hints/hint-send.js'
 import { buildLetterDeliveryText } from '../../src/core/human-inbox/letter-ops.js'
 import type { OrgThread } from '../../src/core/org/threads-model.js'
+import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 
 const LEAD_SID = '55555555-6666-4777-8888-999999999999'
 const WORKER_SID = '55555555-6666-4777-8888-000000000001'
@@ -390,5 +391,48 @@ describe('a phone Follow up names its thread through POST /api/v1/sessions/:id/m
     // An older or broken client's id: the send still goes, filed the way a plain message is.
     expect((await send({ text: 'one more thing about exports', threadId: 'not-a-thread' })).status).toBe(202)
     expect((await threads()).find((t) => t.id === opened!.id)!.messages.some((m) => m.text === 'one more thing about exports' && m.via === 'follow-up')).toBe(false)
+  })
+})
+
+describe('a phone Follow up sent through the companion: the thread is announced first, the relay carries the words', () => {
+  /** The primary's half of the companion's relay (`session.message` through the host's daemon). */
+  async function relay(text: string, messageId: string): Promise<Record<string, unknown>> {
+    const conn = new DaemonConnection('__local__', null)
+    const sent: Array<Record<string, unknown>> = []
+    ;(conn as unknown as { send: (cmd: string, params: Record<string, unknown>) => Promise<unknown> }).send =
+      async (_cmd, params) => { sent.push(params); return { ok: true } }
+    await (conn as unknown as { handleMessageRequest: (e: Record<string, unknown>) => Promise<void> })
+      .handleMessageRequest({ ev: 'message-request', relayId: 1, sessionId: LEAD_SID, message: text, messageId })
+    return sent[0] ?? {}
+  }
+  const announce = (thread: string, messageId: string, task = leadId) => fetch(
+    `${base}/api/v1/tasks/${task}/threads/${thread}/follow-ups/${messageId}`, { method: 'PUT' })
+
+  it('files the relayed words under the announced thread, which leaves his view; a retry is one message', async () => {
+    await typeIntoChat(LEAD_SID, 'Move the sync button to the toolbar')
+    const opened = (await threads()).find((t) => t.title === 'Move the sync button to the toolbar')!
+    expect((await patch(opened.id, { state: 'answered', reply: 'Moved it; the toolbar holds sync now.' })).status).toBe(200)
+    const before = (await threads()).find((t) => t.id === opened.id) as OrgThread & { shown?: boolean }
+    expect(before.shown).toBe(true)
+
+    expect((await announce(opened.id, 'qm-mobile-relay-follow-1')).status).toBe(200)
+    expect((await relay('and keep it on the right', 'qm-mobile-relay-follow-1')).result).toBeTruthy()
+    const after = (await threads()).find((t) => t.id === opened.id) as OrgThread & { shown?: boolean }
+    expect(after.messages.map((m) => [m.via, m.text])).toEqual([['chat', 'Move the sync button to the toolbar'], ['follow-up', 'and keep it on the right']])
+    expect(after.state).toBe('working')
+    expect(after.shown).toBe(false)
+    // The companion relays the same id again (its retry after a lost answer): one message.
+    await relay('and keep it on the right', 'qm-mobile-relay-follow-1')
+    expect((await threads()).find((t) => t.id === opened.id)!.messages).toHaveLength(2)
+  })
+
+  it('a relay nobody announced is filed by Walnut\'s pick, as before; bad announcements are refused', async () => {
+    await relay('Add a dark icon for the widget', 'qm-mobile-relay-plain-1')
+    const mine = (await threads()).find((t) => t.messages.some((m) => m.text === 'Add a dark icon for the widget'))!
+    expect(mine.messages.find((m) => m.text === 'Add a dark icon for the widget')!.via).toBe('chat')
+    expect((await announce('th-000000000000', 'qm-mobile-x')).status).toBe(404)
+    expect((await announce(mine.id, 'not-a-message-id')).status).toBe(400)
+    // A worker keeps no Threads.
+    expect((await announce(mine.id, 'qm-mobile-y', workerId)).status).toBe(409)
   })
 })

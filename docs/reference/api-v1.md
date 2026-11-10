@@ -1645,6 +1645,13 @@ team is talked to through that task; the Inbox never gets a lead.
   past what the companion carries back from the Mac (256 KB).
 - `GET /api/v1/tasks/:id/threads/:thread` → `200 { task_id, thread }`: one thread whole (a
   Conversation opened after a cut read); `404 no_thread`.
+- `PUT /api/v1/tasks/:id/threads/:thread/follow-ups/:messageId` → `200 { task_id, thread_id,
+  message_id }` (additive, 2026-11-10): the message the client is about to send into the node's
+  chat with this `qm-…` id is the person's Follow up in this thread. The companion forwards it to
+  the Mac, and the Mac files the message its relay brings with that id under the thread (the
+  relay carries the words alone). Kept an hour; a send held while the Mac is away is filed by
+  Walnut's own pick. `404 no_thread`, `400 bad_request` for an id that is not `qm-…`. A client
+  that gets any error still sends; an older Mac answers `404`.
 - On the companion, which keeps no Threads, both answer `503 primary_only` (the Mac out of reach,
   or its answer too large to carry back), never an empty list. An older companion answered an
   empty list there: a client that sees none while the node's `user_status.threads.shown` counts
@@ -2650,7 +2657,9 @@ primary box the same endpoints serve directly — no bridge involved.
     /tasks/:id/threads`): the message is filed under that thread instead of the
     one Walnut would pick. Any other value, or a session that is no Org node's,
     is ignored, never refused. The primary box only; the companion relays the
-    words without it.
+    words without it, so a client announces the thread first with `PUT
+    /tasks/:id/threads/:thread/follow-ups/:messageId` (below) and sends with that
+    `messageId`.
   - `voice` (additive, 2026-10) — `true` when the person SPOKE this message and
     will hear the answer read aloud (the phone's voice mode). The CLI also
     receives the `voice-reply` message hint after the text (a
