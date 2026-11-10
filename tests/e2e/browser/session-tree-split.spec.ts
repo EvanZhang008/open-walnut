@@ -387,12 +387,20 @@ test.describe('Tree Mode split screen', () => {
     // A normal session column: as many pages as its width holds (900px a page
     // pair, 1040px three), with the path bar.
     await expect(bar(panel)).toBeVisible()
-    // The chat column is measured once it is on screen (CI: read while it was not, it had no box).
-    const chatCol = panel.locator('.session-panel-chat-col')
-    await expect(chatCol).toBeVisible()
-    const width = (await chatCol.boundingBox())!.width
-    const fit = width >= 1040 ? 3 : width >= 900 ? 2 : 1
-    await expect.poll(async () => (await pagesOnScreen(panel)).length || 1).toBe(fit)
+    // Measured the way the split measures it (useTreeSplit): the chat column, or the panel while
+    // the column shows one page, since then the chat column is `display: contents` (tree-split.css)
+    // and has no box (2026-11-10 CI: a column under 900px beside a parallel test's columns threw on
+    // a null box). The width and the pages are read together until they agree, so a column that
+    // opens beside this one while the split settles is counted.
+    const fitNow = () => panel.evaluate((p) => {
+      const w = p.querySelector('.session-panel-chat-col')?.getBoundingClientRect().width || p.getBoundingClientRect().width
+      return w >= 1040 ? 3 : w >= 900 ? 2 : 1
+    })
+    let fit = 0
+    await expect.poll(async () => {
+      fit = await fitNow()
+      return `${(await pagesOnScreen(panel)).length || 1} of ${fit}`
+    }).toMatch(/^(\d) of \1$/)
     // The platform's own chord only (Cmd on a Mac, Ctrl elsewhere): a press of
     // both is no pair chord on any platform.
     const chord = () => page.evaluate(() => {
