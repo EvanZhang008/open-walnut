@@ -26,6 +26,7 @@
  * Pure functions here; the tree reads are in same-ask-tree.ts.
  */
 import { normalizeText } from './human-inbox/duplicate-letter.js';
+import { closeRewording } from './ask-decision.js';
 import type { RolledAsk, StatusReport, UserStatus } from './user-status.js';
 
 /** A deliberate second ask says why in at least this many characters. */
@@ -146,9 +147,16 @@ function directionLinks(text: string | undefined | null, token: (w: string) => s
     for (let i = 0; i < words.length; i++) {
       if (!DIRECTIONS.has(words[i]!)) continue;
       const target: string[] = [];
+      let script: boolean | undefined;
       for (const w of words.slice(i + 1)) {
         if (DIRECTIONS.has(w) || target.length >= LINK_WORDS_MAX) break;
         if (FRAME_WORDS.has(w)) continue;
+        // One script run: in mixed text the CJK words after a Latin target are the next verb, not
+        // more of where it points ("to Z" then a CJK "press" or a CJK "check" both point to Z;
+        // 2026-11-10, one ask reworded read as pointing elsewhere and came back as news).
+        const cjk = CJK_PIECE.test(w);
+        if (script !== undefined && cjk !== script) break;
+        script = cjk;
         // A CJK run is one "word" here: its first two characters stand for it, as askWords' bigrams do.
         target.push(CJK_PIECE.test(w) ? token([...w].slice(0, 2).join('')) : /^\d+$/.test(w) ? numberMarked(w) : token(stem(w)));
       }
@@ -430,6 +438,9 @@ export interface AskAnswer {
   userWords?: string;
   /** Answering task's session, from the resolved caller; absent = a person or unknown. */
   sessionId?: string;
+  /** The decision the ask carried when it was answered (ask-decision.ts): the same decision asked
+   *  again in other words is still answered. Absent on an answer recorded before decisions had ids. */
+  askId?: string;
 }
 
 /** The writer of a status's now/next, kept when a fold or an answer rebuilds it (user-status.ts reportSourceOf). */
@@ -481,16 +492,26 @@ export const ASK_ANSWER_HOLD_MS = 7 * 24 * 60 * 60_000;
 export const ASKS_ANSWERED_MAX = 8;
 
 /**
- * Whether `answer` still answers `ask` now, inside the hold: the same words, the same ask reworded
- * (sameAskReworded), or one part of what it answered asked again on its own (2026-11-05: Main
- * answered six questions at once, and the task asked one of them again in a letter of its own).
- * Pure.
+ * Whether `answer` still answers `ask` now, inside the hold: the decision the session itself named
+ * (`said` with its id, ask-decision.ts), the same words, the same ask reworded (sameAskReworded, or a
+ * close rewording, closeRewording, when the session named no other decision), or one part of what it
+ * answered asked again on its own (2026-11-05: Main answered six questions at once, and the task asked
+ * one of them again in a letter of its own). An id Walnut kept from the words alone never holds it by
+ * itself: hiding an ask needs more than keeping it quiet (2026-11-10: a VP answered "don't remind me
+ * again" for the user, and the task's own trigger put the same ask back in other words). Pure.
  */
-export function answerHolds(answer: AskAnswer | null | undefined, ask: string | null | undefined, nowMs = Date.now()): boolean {
+export function answerHolds(
+  answer: AskAnswer | null | undefined, ask: string | null | undefined, nowMs = Date.now(),
+  decision?: { id: string; said?: boolean } | null,
+): boolean {
   if (!answer || !ask) return false;
   const at = Date.parse(answer.at);
   if (!Number.isFinite(at) || nowMs - at > ASK_ANSWER_HOLD_MS) return false;
+  const sameId = !!decision?.id && !!answer.askId && decision.id.toLowerCase() === answer.askId.toLowerCase();
+  if (sameId && decision!.said) return true;
   if (askKey(ask) === answer.key || sameAskReworded(answer.ask, ask)) return true;
+  // Two ids that differ: the session asks another decision, so only the strict rules above hold.
+  if ((sameId || !decision?.id || !answer.askId) && closeRewording(answer.ask, ask)) return true;
   return askIsPartOf(ask, answer.ask);
 }
 
@@ -518,8 +539,11 @@ export function askIsPartOf(part: string, whole: string): boolean {
 }
 
 /** The answer of `answers` that still answers `ask` now, or null. Pure. */
-export function answerFor(answers: readonly (AskAnswer | null | undefined)[], ask: string | null | undefined, nowMs = Date.now()): AskAnswer | null {
-  for (const a of answers) if (answerHolds(a, ask, nowMs)) return a!;
+export function answerFor(
+  answers: readonly (AskAnswer | null | undefined)[], ask: string | null | undefined, nowMs = Date.now(),
+  decision?: { id: string; said?: boolean } | null,
+): AskAnswer | null {
+  for (const a of answers) if (answerHolds(a, ask, nowMs, decision)) return a!;
   return null;
 }
 
@@ -552,7 +576,7 @@ export function answeredWords(a: Pick<AskAnswer, 'byTitle' | 'text'>): string {
  */
 export function answeredAbove(derived: UserStatus, answers: AskAnswer | readonly AskAnswer[] | null | undefined, nowMs = Date.now()): UserStatus {
   if (!answers || derived.state !== 'needs' || derived.source !== 'session' || !derived.ask) return derived;
-  const answer = answerFor(Array.isArray(answers) ? answers : [answers as AskAnswer], derived.ask, nowMs);
+  const answer = answerFor(Array.isArray(answers) ? answers : [answers as AskAnswer], derived.ask, nowMs, derived.decision);
   if (!answer) return derived;
   return {
     state: 'waiting', kind: 'task', waitingOn: answeredWords(answer),

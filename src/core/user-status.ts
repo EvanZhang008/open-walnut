@@ -198,6 +198,9 @@ export interface StatusReport {
   ask_new?: string;
   /** needs: the key of its words when an older Walnut stored it with no id (a watch armed on it then). */
   ask_legacy_key?: string;
+  /** needs: the session itself named this decision this turn (FOR_USER_ASK_ID: <its id>), not Walnut
+   *  from the words. Only then does the id alone keep an answer given above (same-ask.ts answerHolds). */
+  ask_said?: true;
   /** Any other report: the decision the task last asked, so asking it again soon keeps its id. */
   last_ask?: AskMemory;
 }

@@ -32,7 +32,7 @@ import { clearRiding, decisionToldTo, pendingRiding, rideLine, rideNotice } from
 import { emptyThreads, openThread, updateThread } from '../../src/core/org/threads-model.js'
 import { askCheckedAtOf } from '../../src/core/user-status-sync.js'
 import { reportOfChange } from '../../src/core/sessions/report-set.js'
-import { askKey as SAME_KEY } from '../../src/core/same-ask.js'
+import { askKey as SAME_KEY, answerHolds, answeredAbove, type AskAnswer } from '../../src/core/same-ask.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const NOW = Date.parse('2026-11-08T12:00:00Z')
@@ -88,6 +88,12 @@ const REWORDINGS: Array<{ name: string; asks: string[]; numbersReplaced?: true }
     '\u8981\u4e0d\u8981\u73b0\u5728\u4ee5\u4f60\u7684\u540d\u4e49\u7ed9\u82b1\u5e97\u53d1\u50ac\u5355\u90ae\u4ef6,\u8981\u6c42 11/13 \u524d\u4e66\u9762\u7ed9\u51fa $249 \u7684\u82b1\u7bee\u62a5\u4ef7?\u5efa\u8bae\u53d1\u3002',
     '\u8981\u4e0d\u8981\u73b0\u5728\u4ee5\u4f60\u7684\u540d\u4e49\u7ed9\u82b1\u5e97\u53d1\u50ac\u5355\u90ae\u4ef6,\u8981\u6c42\u4ed6\u4eec 11/13 \u524d\u4e66\u9762\u7ed9\u51fa $249 \u7684\u82b1\u7bee\u62a5\u4ef7?\u5efa\u8bae\u53d1\u3002',
   ] },
+  // 2026-11-10: a task's own trigger put an ask its VP had answered back on the user's list, reworded;
+  // the "to" inside a Latin name with a CJK verb after it read as pointing elsewhere.
+  { name: 'a Latin name with "to" in it, the CJK verb after it changed', asks: [
+    '\u4f9b\u5e94\u5546\u8bc4\u5ba1\u8868\u5df2\u7ecf\u586b\u597d\u5e76\u9009\u4e86 Yes\uff0c\u4f60\u770b\u5b8c\u540e\u5728 Door to Door \u70b9\u4e00\u4e0b Submit \u5c31\u884c\u3002',
+    '\u4f9b\u5e94\u5546\u8bc4\u5ba1\u8868\u5df2\u586b\u597d\u5e76\u9009\u4e86 Yes\uff0c\u8bf7\u4f60\u5728 Door to Door \u4e0a\u68c0\u67e5\u4e00\u904d\u540e\u70b9 Submit\u3002',
+  ] },
   { name: 'English, reordered with a recommendation', asks: [
     'Approve testing on your real iPhone?',
     'Can I run the tests on your own iPhone? (recommended: yes)',
@@ -127,6 +133,15 @@ const lead = (brief?: Task['brief']): Task => ({
   id: 'lead', title: 'Marina lead', phase: 'WAITING', status: 'in_progress', org_role: 'lead', project: 'Marina', ...(brief ? { brief } : {}),
 }) as Task
 const LETTER = '### Needs you\n- <task-ref id="asker" label="A"/>: the ask\n### Working\n### Waiting / snoozed'
+
+/** A lead's answer in the user's place to the ask `t` shows, recorded as ask-answer.ts records it. */
+function answerTo(t: Task, opts: { noId?: true } = {}): AskAnswer {
+  const ask = t.status_report!.ask!
+  return {
+    key: SAME_KEY(ask), ask, text: 'go ahead', by: 'lead', byTitle: 'Marina lead', at: iso(NOW - 60_000),
+    ...(!opts.noId && t.status_report!.ask_id ? { askId: t.status_report!.ask_id } : {}),
+  }
+}
 
 /** Every path that tells someone the ask changed, between two readings of the task. */
 function moves(before: Task, after: Task): Record<string, boolean> {
@@ -307,6 +322,68 @@ describe('what is news is still news', () => {
     const next = turn(answer('Approve testing on your real iPhone? Results: https://example.com/run/42'), b, NOW)
     expect(next.ask_id).toBe(b.ask_id)
     expect(changed(b, next)).toEqual(ALL_FACT_PATHS)
+  })
+})
+
+describe('an ask a lead answered for the user stays answered in other words', () => {
+  // Hiding an ask needs more than keeping it quiet: the decision the session named itself, or a close
+  // rewording (same-ask.ts answerHolds). An id Walnut kept from the words alone never hides one.
+  const held = (t: Task, a: AskAnswer) => answeredAbove(t.user_status!, [a], NOW).state !== 'needs'
+  for (const { name, asks } of REWORDINGS) {
+    it(`${name}: the session naming its decision keeps the answer`, () => {
+      let prev = turn(answer(asks[0]!), null, NOW - 4 * 3_600_000)
+      const a = answerTo(taskOf(prev))
+      for (const ask of asks.slice(1)) {
+        const next = turn(answer(ask, [`FOR_USER_ASK_ID: ${prev.ask_id}`]), prev, NOW - 3_600_000)
+        expect(next.ask_said, ask).toBe(true)
+        expect(held(taskOf(next), a), `"${asks[0]}" -> "${ask}"`).toBe(true)
+        prev = next
+      }
+    })
+  }
+  it('the shape of 2026-11-10 holds by its words alone, with no id on either side', () => {
+    const [was, now] = REWORDINGS.find((r) => r.name.startsWith('a Latin name'))!.asks
+    const report = turn(answer(was!), null, NOW - 3_600_000)
+    expect(answerHolds(answerTo(taskOf(report), { noId: true }), now, NOW)).toBe(true)
+    // And as the task reads after the turn that reworded it, said nothing: its kept id is not enough
+    // alone, its words are.
+    const next = turn(answer(now!), report, NOW)
+    expect(next.ask_said).toBeUndefined()
+    expect(held(taskOf(next), answerTo(taskOf(report)))).toBe(true)
+  })
+  it('another ask of the same task sharing a word comes back, though Walnut kept its id', () => {
+    const was = turn(answer('Should the deploy handler wait for the plugin rollout?'), null, NOW - 3_600_000)
+    const now = turn(answer('Pick the alpha launch date for the plugin?'), was, NOW)
+    expect(held(taskOf(now), answerTo(taskOf(was)))).toBe(false)
+  })
+  it('another decision is asked again: said new, or another target, number or sign', () => {
+    const was = turn(answer('Delete the staging database now that the move is done?'), null, NOW - 3_600_000)
+    const a = answerTo(taskOf(was))
+    // Said new: the id differs, so a close rewording alone no longer holds it (the strict word rules,
+    // the same words reworded, still would).
+    const said = turn(answer('Delete the old staging database now, the move being finished?', ['FOR_USER_ASK_ID: new']), was, NOW)
+    expect(said.ask_id).not.toBe(was.ask_id)
+    for (const ask of [
+      'Delete the production database now that the move is done?',
+      'Do not delete the staging database now that the move is done?',
+    ]) {
+      expect(answerHolds(a, ask, NOW, { id: 'ask-other1' }), ask).toBe(false)
+      expect(answerHolds({ ...a, askId: undefined }, ask, NOW), ask).toBe(false)
+    }
+    // Another number in its place.
+    const pay = (n: string) => `Pay the $${n} deposit for the garden plot this week?`
+    expect(answerHolds({ ...a, key: SAME_KEY(pay('20')), ask: pay('20'), askId: undefined }, pay('200'), NOW)).toBe(false)
+    // Pointing elsewhere, in mixed script too.
+    const to = (where: string) => `${'\u628a\u65e7\u6570\u636e\u8fc1\u5230'} ${where} ${'\u6570\u636e\u5e93\u5417\uff1f'}`
+    expect(answerHolds({ ...a, key: SAME_KEY(to('staging')), ask: to('staging'), askId: undefined }, to('production'), NOW)).toBe(false)
+  })
+  it('past the hold the same words are a new decision', () => {
+    const was = turn(answer('Approve testing on your real iPhone?'), null, NOW - 3_600_000)
+    expect(answerHolds({ ...answerTo(taskOf(was)), at: iso(NOW - 8 * 24 * 3_600_000) }, was.ask, NOW, { id: was.ask_id!, said: true })).toBe(false)
+  })
+  it('an answer records the decision it answered, and the status passes its decision in', () => {
+    expect(code('src/core/sessions/ask-answer.ts')).toMatch(/askId: target\.status_report\.ask_id/)
+    expect(code('src/core/same-ask.ts')).toMatch(/answerFor\(.*derived\.ask, nowMs, derived\.decision\)/)
   })
 })
 

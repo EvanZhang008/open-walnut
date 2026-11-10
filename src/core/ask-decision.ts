@@ -56,6 +56,8 @@ export interface StatusDecision {
   rev?: number;
   /** What the session named as new at its last revision. */
   new?: string;
+  /** The session named the decision itself on its last report (StatusReport.ask_said). */
+  said?: true;
 }
 
 export function mintAskId(): string {
@@ -83,6 +85,7 @@ export function reportDecision(r: StatusReport | null | undefined, dueDate?: str
   return {
     id: r.ask_id, key: `${r.ask_id}|${askFactsOf(r, dueDate)}`,
     ...(r.ask_rev ? { rev: r.ask_rev } : {}), ...(r.ask_new ? { new: r.ask_new } : {}),
+    ...(r.ask_said ? { said: true as const } : {}),
   };
 }
 
@@ -152,6 +155,21 @@ export function sameDecisionWords(a: string | undefined | null, b: string | unde
   const shared = sa.words.filter((w) => inB.has(w)).length;
   if (shared / Math.min(sa.words.length, sb.words.length) < DISJOINT_SHARE) return false;
   return !swapsTarget(a ?? '', b ?? '');
+}
+
+/** An answer given above holds on words alone only when the asks share at least this much: real
+ *  rewordings shared 20% and up (tests/core/ask-decision-news-guard.test.ts), and so did two different
+ *  asks of one task about one plugin, so a share that low only keeps an ask quiet, never hides it. */
+const HOLD_SHARE = 0.5;
+
+/** Whether `b` asks what `a` asks closely enough to keep `a`'s answer: sameDecisionWords, with at
+ *  least HOLD_SHARE of their content words shared. Pure. */
+export function closeRewording(a: string | undefined | null, b: string | undefined | null): boolean {
+  if (!sameDecisionWords(a, b)) return false;
+  const sa = askShape(a).words;
+  const inB = new Set(askShape(b).words);
+  const shortest = Math.min(sa.length, inB.size);
+  return shortest > 0 && sa.filter((w) => inB.has(w)).length / shortest >= HOLD_SHARE;
 }
 
 /**
@@ -230,7 +248,7 @@ export function stampAskDecision(
   report: StatusReport, prev: StatusReport | null | undefined,
   declared: AskDeclared = {}, opts: { mint?: () => string; nowMs?: number } = {},
 ): StatusReport {
-  const { ask_id: _id, ask_rev: _rev, ask_new: _new, last_ask: _last, ask_legacy_key: _legacy, ...rest } = report;
+  const { ask_id: _id, ask_rev: _rev, ask_new: _new, last_ask: _last, ask_legacy_key: _legacy, ask_said: _said, ...rest } = report;
   const mint = opts.mint ?? mintAskId;
   // An ask an older Walnut stored with no id is the decision it was: it gets one now, the key of its
   // words kept so a watch armed on them still counts.
@@ -245,8 +263,9 @@ export function stampAskDecision(
   }
   const asked = prev?.state === 'needs' && !!prev.ask;
   let keep = false;
+  let said = false;
   if (memory && recent && !declared.isNew) {
-    if (declared.id && declared.id.toLowerCase() === memory.id.toLowerCase()) keep = true;
+    if (declared.id && declared.id.toLowerCase() === memory.id.toLowerCase()) keep = said = true;
     // Said nothing: the same decision while it kept asking when the words still ask it (sameDecisionWords:
     // never another target, sign, direction or number); after a break only word for word in other words.
     else if (asked) keep = sameDecisionWords(memory.ask, report.ask);
@@ -264,6 +283,7 @@ export function stampAskDecision(
     ...rest, ask_id: memory!.id, ...(rev ? { ask_rev: rev } : {}),
     ...(fresh ? { ask_new: fact } : memory!.new ? { ask_new: memory!.new } : {}),
     ...(memory!.legacy ? { ask_legacy_key: memory!.legacy } : {}),
+    ...(said ? { ask_said: true as const } : {}),
   };
 }
 

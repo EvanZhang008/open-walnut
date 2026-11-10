@@ -189,6 +189,9 @@ export async function prepareAskAnswer(
     ...(caller && words ? { userWords: words.slice(0, 500) } : {}),
     // Only the resolved caller task's own session is recorded; a person's answer has none.
     ...(caller && callerSessionId?.trim() ? { sessionId: callerSessionId.trim() } : {}),
+    // The decision it answers, so the same decision asked again in other words stays answered.
+    ...(target.status_report?.state === 'needs' && target.status_report.ask_id && askKey(target.status_report.ask) === askKey(ask)
+      ? { askId: target.status_report.ask_id } : {}),
   };
   return {
     line: askAnswerLine(ask, byTitle),
