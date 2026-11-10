@@ -41,11 +41,18 @@ async function fixtureCwd(page: Page): Promise<string> {
   return cwd as string
 }
 
-async function openFilesPanel(page: Page): Promise<Locator> {
+async function openFilesPanel(page: Page, opts: { reopened?: boolean } = {}): Promise<Locator> {
   // A reopened console shows the panel as it was left: full screen with Files open
-  // (components/sessions/panel-view.ts). Then there is nothing to open.
-  const kept = page.locator(`.session-panel.open-walnut-fullscreen[data-session-id="${SESSION_ID}"] .session-file-explorer`)
-  if (await kept.isVisible({ timeout: 3_000 }).catch(() => false)) return kept
+  // (components/sessions/panel-view.ts, hooks/fullscreen-owner.ts). Then there is nothing
+  // to open, and the restore is waited for: it draws after the boot settles, and a slow
+  // runner draws it after the clicks below have started, when the full-screen sheet covers
+  // the task row and the click waits on it until the test times out (CI, 2026-11-10).
+  // (`isVisible` takes no wait: its `timeout` is ignored.)
+  if (opts.reopened) {
+    const kept = page.locator(`.session-panel.open-walnut-fullscreen[data-session-id="${SESSION_ID}"] .session-file-explorer`)
+    await expect(kept).toBeVisible({ timeout: 30_000 })
+    return kept
+  }
   await page.locator('.todo-search-input').fill(SESSION_ID)
   const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(task).toBeVisible()
@@ -140,7 +147,7 @@ test('a reload with unsaved text does not put the old copy back over someone els
   await page.close()
   const page2 = await page.context().newPage()
   await bootConsole(page2)
-  const explorer2 = await openFilesPanel(page2)
+  const explorer2 = await openFilesPanel(page2, { reopened: true })
   await nodeByName(explorer2, name).click()
   await expect(page2.locator('.file-content-view')).toBeVisible({ timeout: 15_000 })
 
