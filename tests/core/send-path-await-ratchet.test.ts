@@ -75,6 +75,7 @@ const ALLOWED_AWAITS: Record<string, string> = {
   'pendingSwitchContext': 'engine-switch-io.ts: local store',
   'noteQueuedMessage': 'lead-traffic.ts: local ledger write',
   'pendingOrgDigest': 'org-store.ts: local org store',
+  'pendingLiveStatusNote': 'status-push.ts: at most 20 exact task ids read in one local SQLite query; no host or network calls',
   'pendingAppState': 'app-state.ts: in-memory App state',
   'waitNoteFor': 'task-wait-resume.ts: local task record and trigger list (only for a waiting task)',
   'pendingRetiredLeadNote': 'retired-lead.ts: local org store',
