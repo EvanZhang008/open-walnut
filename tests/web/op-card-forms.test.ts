@@ -222,3 +222,13 @@ describe('review regressions', () => {
     expect(findOpCalls(`python3 -c 'print("a <<EOF b")\nprint(2)'\nwalnut tools call task_send '{"text":"After quotes."}'`, () => true)[0].args?.text).toBe('After quotes.')
   })
 })
+
+describe('a summary reads as words, never markup', () => {
+  // 2026-11-10, the live VP chat: a Brief card's summary showed `<task-ref id=… label=…/>` raw.
+  it('a task chip reads as its label and other tags drop', () => {
+    const f = opCardFields('brief_write', { content: 'You pick. <task-ref id="mvm0n3bu-6910" label="Password manager"/>: live now. <b>Two</b> can wait.' })!
+    const words = `${f.title ?? ''} ${f.summary ?? ''}`
+    expect(words).toContain('Password manager: live now.')
+    expect(words).not.toMatch(/<\/?[A-Za-z]/)
+  })
+})

@@ -219,6 +219,9 @@ function clip(text: string, max: number): string {
 /** Markdown that would print as noise in a one-line title or summary. */
 function plain(text: string): string {
   return text
+    // A task chip reads as its label; any other tag is markup, not words.
+    .replace(/<(?:task-ref|walnut-task)\b[^<>]*?\blabel=(["'])(.*?)\1[^<>]*>/g, '$2')
+    .replace(/<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?\/?>/g, '')
     .split('\n')
     .filter((l) => !/^\s*(```|~~~|\|)/.test(l))
     .map((l) => (/^\s{0,3}#{1,6}\s+\S/.test(l) && !/[.:!?]\s*$/.test(l) ? `${l.trim()}:` : l)
