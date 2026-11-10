@@ -228,8 +228,10 @@ describe('the resumed CLI exits before it reads the message', () => {
       expect(queue[0].parkedReason).toContain('could not load the conversation')
       await vi.waitFor(async () => expect((await getTask(victim.taskId))?.phase).toBe('NEED_ACTION'), { timeout: 10_000 })
       await syncUserStatuses(new Set([victim.taskId]))
-      const status = (await getTask(victim.taskId)) as { user_status?: { ask?: string } }
-      expect(status.user_status?.ask).toMatch(/^A message to it was not delivered: Claude Code exited with code 1/)
+      const status = (await getTask(victim.taskId)) as { user_status?: { state?: string; kind?: string; waitingOn?: string } }
+      // Its lead's to retry, never the user's (2026-11-09, session-error-owner.ts).
+      expect(status.user_status).toMatchObject({ state: 'waiting', kind: 'lead' })
+      expect(status.user_status?.waitingOn).toMatch(/^Its lead, to retry it: a message to it was not delivered \(Claude Code exited with code 1/)
       // Its lead hears it errored, with the cause, and is not handed an older turn's words.
       await vi.waitFor(async () => expect((await subtaskNoticesTo(parent.sid, victim.taskId)).length).toBeGreaterThan(0), { timeout: 20_000 })
       const toLead = (await subtaskNoticesTo(parent.sid, victim.taskId)).join('\n')

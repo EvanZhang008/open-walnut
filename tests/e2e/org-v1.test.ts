@@ -454,7 +454,8 @@ describe('/api/v1/org', () => {
       // The window passes: the folded counts come, without the alerts already told. The counts
       // are the stored user status, so wait for the server's sync to have derived the prompt and the failure.
       await waitUserState(asking.id, 'needs')
-      await waitUserState(broken.id, 'needs')
+      // A failed session is its VP's to retry, never the user's (2026-11-09, session-error-owner.ts).
+      await waitUserState(broken.id, 'waiting')
       const later = await pendingOrgDigest(sid, told + FOLD + 500)
       expect(later!.text).toMatch(/- Walnut: [^\n]*waiting on the user/)
       expect(later!.text).not.toContain('Needs the user now')

@@ -57,6 +57,9 @@ async function v1<T>(p: string): Promise<T> {
 }
 
 /** Every surface's reading of one task, after a sync pass. */
+/** What the consistency check found on the last read, for a failing step's message. */
+let lastMismatches: string[] = []
+
 async function surfaces(taskId: string, leadId: string): Promise<Record<string, State | boolean>> {
   await syncUserStatuses(null)
   const task = await getTask(taskId)
@@ -70,6 +73,7 @@ async function surfaces(taskId: string, leadId: string): Promise<Record<string, 
   const board = buildStatusBoard({ ownerId: leadId, tasks: all as never, now: Date.now(), doneWindowDays: 30 })
   const boardState = (Object.keys(board.groups) as State[]).find((s) => board.groups[s].some((r) => r.task.id === taskId))
   const mismatches = (await checkStatuses(Date.now(), { settleMs: 0 })).filter((m) => m.taskId === taskId)
+  lastMismatches = mismatches.map((m) => `${m.kind}: ${m.detail}`)
   return {
     stored: task.phase === 'COMPLETE' ? 'done' : task.user_status!.state,
     phone: task.phase === 'COMPLETE' ? 'done' : phoneRows.find((r) => r.id === taskId)?.user_status?.state ?? 'missing' as never,
@@ -87,7 +91,7 @@ async function surfaces(taskId: string, leadId: string): Promise<Record<string, 
 async function expectEverywhere(taskId: string, leadId: string, state: State, step: string): Promise<void> {
   const s = await surfaces(taskId, leadId)
   const shown = shownState(state)
-  expect(s, step).toEqual({
+  expect(s, `${step}${lastMismatches.length ? ` (check: ${lastMismatches.join('; ')})` : ''}`).toEqual({
     stored: state, phone: state, web: state, board: shown,
     orgNeedsYou: shown === 'needs', webNeedsYou: state === 'needs', briefNeedsYou: shown === 'needs', checkClean: true,
   })
@@ -96,13 +100,16 @@ async function expectEverywhere(taskId: string, leadId: string, state: State, st
 const at = (offsetMs = 1_000) => new Date(Date.now() + offsetMs).toISOString()
 const report = (r: Partial<StatusReport>): StatusReport => ({ at: at(), turn_ended_at: at(), ...r })
 
+let teamSeq = 0
+
 /** A lead and one worker in a project of their own, the worker's session stopped after a turn. */
 async function team(name: string): Promise<{ lead: Task; worker: Task; sid: string }> {
   const lead = (await addTask({ title: `${name} lead`, project: name })).task
   await updateTaskRaw(lead.id, { org_role: 'lead' } as never, { emitEvent: true })
   const worker = (await addTask({ title: `${name} worker`, project: name })).task
   await updateTask(worker.id, { parent_task_id: lead.id })
-  const sid = `sess-${name.toLowerCase()}-1`
+  // One per call: a retried test must not meet the session state of its first run (Walnut's retry budget).
+  const sid = `sess-${name.toLowerCase()}-${++teamSeq}`
   await createSessionRecord(sid, worker.id, name)
   await updateSessionRecord(sid, { process_status: 'stopped' })
   await updateTaskRaw(worker.id, { session_id: sid } as never, { emitEvent: true })
@@ -273,7 +280,8 @@ describe('every surface shows the same state after every step', () => {
     })
     // An error only the user can fix still reaches him.
     await updateSessionRecord(sid, { errorMessage: 'Invalid API key · Please run /login' })
-    await expectEverywhere(worker.id, lead.id, 'needs', 'a sign-in is his')
+    // The record write moves the status through the server's own sync too; read once it settled.
+    await vi.waitFor(() => expectEverywhere(worker.id, lead.id, 'needs', 'a sign-in is his'), { timeout: 10_000, interval: 250 })
   }, 120_000)
 
   // 2026-11-02, the user, on a task parked on its own build: "if it is runnig it shoud be i
