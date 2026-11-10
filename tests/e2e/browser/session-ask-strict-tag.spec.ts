@@ -30,8 +30,8 @@ async function shot(page: Page, name: string, target?: Locator): Promise<void> {
 
 async function open(page: Page, view: 'linear' | 'stack' = 'linear'): Promise<Locator> {
   // The fixed column width below assumes Home's chat spot is closed. Said here,
-  // not left to the server's synced layout: on the Mac its read timed out at
-  // boot, the chat opened by default and pushed the session off screen (2026-11-09).
+  // not inherited from the test server's shared synced layout, which other
+  // specs change and the two platforms run in different orders.
   await page.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false'))
   await page.goto('/')
   await page.waitForLoadState('networkidle')
