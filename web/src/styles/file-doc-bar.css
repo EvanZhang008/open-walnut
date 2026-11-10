@@ -401,8 +401,12 @@
 .fv-more-path-name { flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--fg-secondary); }
 
 /* ── Fullscreen: the document alone, centred at a reading width ───────────── */
+/* The panel's own controls in the bar have nothing to act on in the sheet: the tree, the chat,
+   and the Terminal dock, which docks under the pane the sheet covers (2026-11-09: its toggle sat
+   after ⋯, so the tools no longer ended with the text). */
 .file-content-view.fv-fullscreen .sfe-tree-toggle,
 .file-content-view.fv-fullscreen .sfe-nav-group,
+.file-content-view.fv-fullscreen .session-terminal-dock-toggle,
 .file-content-view.fv-fullscreen .session-chat-collapse-btn { display: none; }
 /* The line above the document is part of the sheet, so it takes the sheet's colour:
    the page colour it has in the pane is black in dark mode, against a grey sheet. */

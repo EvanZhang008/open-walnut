@@ -66,9 +66,18 @@ for (const sample of [
 test('a click on blank space beside the editor clears the matches the editor left behind', async ({ page }, testInfo) => {
   await openFile(page, 'incident-report.md')
   await selectPassage(page, 'timeline entry', 160)
-  const view = page.locator(`${PANEL} .file-content-view`).first()
-  const box = (await view.boundingBox())!
-  await page.mouse.click(box.x + box.width * 0.6, box.y + 14)
+  // Blank space in the file's own line: the empty end of its lead, past the name. A fixed
+  // fraction of the view's width lands on a tool once the bar gains one (the Terminal dock
+  // toggle moved Source under it, and the click switched views instead).
+  const lead = page.locator(`${PANEL} .fv-doc-bar-lead`).first()
+  const box = (await lead.boundingBox())!
+  const spot = { x: box.x + box.width - 6, y: box.y + box.height / 2 }
+  const hit = await lead.evaluate((el, p) => {
+    const at = document.elementFromPoint(p.x, p.y)
+    return !!at && el.contains(at) && !at.closest('button, a, input, [role="button"], [role="group"]')
+  }, spot)
+  expect(hit, 'the spot is blank bar, no control').toBe(true)
+  await page.mouse.click(spot.x, spot.y)
   await expect.poll(() => page.evaluate(() => document.activeElement?.closest('.ProseMirror') ? 'editor' : 'elsewhere')).toBe('elsewhere')
   await expect.poll(() => paintedPassages(page)).toEqual([])
   await page.locator(PANEL).screenshot({ path: `/tmp/walnut-file-selection/${testInfo.project.name}-blank-click-cleared.png`, scale: 'css' })
