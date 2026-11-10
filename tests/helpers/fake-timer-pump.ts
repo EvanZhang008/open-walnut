@@ -43,3 +43,16 @@ export async function pumpFakeTimers(cond: () => boolean, maxFakeMs: number, max
   }
   return fakeNow() - start
 }
+
+/**
+ * Wait, in real time, until the code under test has armed a fake timer (or `maxRealMs` passed).
+ * Code that reaches its timer through dynamic imports or other real I/O arms it only after a
+ * real loop turn, so a spin of microtasks may end first, and a fake clock moved before the timer
+ * exists never fires it (2026-11-10: a rewind test spun 200 microtasks, moved the clock, and then
+ * hung to its timeout on a loaded runner, failing twice in a day).
+ */
+export async function waitForFakeTimer(maxRealMs = 10_000): Promise<number> {
+  const deadline = realNow() + maxRealMs
+  while (vi.getTimerCount() === 0 && realNow() < deadline) await realTurn()
+  return vi.getTimerCount()
+}

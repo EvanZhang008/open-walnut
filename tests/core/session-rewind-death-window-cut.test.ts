@@ -28,6 +28,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { waitForFakeTimer } from '../helpers/fake-timer-pump.js';
 import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js';
 import { transcript } from '../helpers/transcript-fixtures.js';
 
@@ -230,10 +231,9 @@ describe('recordDeathWindowResumeCut', () => {
     vi.useFakeTimers();
     try {
       const settled = runnerInternals.recordDeathWindowResumeCut(sid, U2);
-      // Spin microtasks until the deadline timer is armed (the method hops a
-      // few awaits — record lookup + dynamic imports — before the read race).
-      for (let i = 0; i < 100 && vi.getTimerCount() === 0; i++) await Promise.resolve();
-      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      // Wait until the deadline timer is armed (the method hops a few awaits,
+      // record lookup and dynamic imports, before the read race: real I/O).
+      expect(await waitForFakeTimer()).toBeGreaterThan(0);
       await vi.advanceTimersByTimeAsync(5_001);
       await settled;                                   // resolves: the spawn is never held hostage
     } finally {
@@ -261,8 +261,7 @@ describe('recordDeathWindowResumeCut', () => {
     vi.useFakeTimers();
     try {
       const settled = runnerInternals.recordDeathWindowResumeCut(sid, U2);
-      for (let i = 0; i < 100 && vi.getTimerCount() === 0; i++) await Promise.resolve();
-      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      expect(await waitForFakeTimer()).toBeGreaterThan(0);
       await vi.advanceTimersByTimeAsync(5_001);
       await settled;
     } finally {
@@ -298,7 +297,7 @@ describe('recordDeathWindowResumeCut', () => {
     vi.useFakeTimers();
     try {
       const reinit = sessionRunner.reinitialize(sid);
-      for (let i = 0; i < 200 && vi.getTimerCount() === 0; i++) await Promise.resolve();
+      expect(await waitForFakeTimer()).toBeGreaterThan(0);
       await vi.advanceTimersByTimeAsync(5_001);
       await reinit;
       await vi.advanceTimersByTimeAsync(10);            // drain the ok-callback work
