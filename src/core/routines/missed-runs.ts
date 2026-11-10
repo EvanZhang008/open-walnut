@@ -30,6 +30,12 @@ export function slotLabel(job: Pick<CronJob, 'schedule'>, slotMs: number): strin
   }
 }
 
+/** A reason as one sentence: its own full stop kept, one added when it has none. */
+export function sentence(text: string): string {
+  const t = text.trim();
+  return /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
 /** The owner's notice: what was missed, why, and the two ways on. */
 export function missedRunNotice(job: Pick<CronJob, 'id' | 'name' | 'schedule'>, missed: MissedRun[], about: 'owner' | 'lead'): string {
   const whose = about === 'owner' ? 'Your routine' : 'The routine';
@@ -102,7 +108,7 @@ function defaultDeps(): MissedRunDeps {
       await addNotification({
         kind: 'cron', severity: 'warning',
         title: `Routine "${job.name}" missed ${missed.length === 1 ? 'a run' : `${missed.length} runs`}`,
-        body: `${slotLabel(job, first.slotMs)}: ${first.reason}. Open Routines to run it now or set it aside.`,
+        body: `${slotLabel(job, first.slotMs)}: ${sentence(first.reason)} Open Routines to run it now or set it aside.`,
         dedupKey: `routine-missed:${job.id}:${first.slotMs}`,
       });
     },

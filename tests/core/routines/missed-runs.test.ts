@@ -83,3 +83,11 @@ describe('telling a missed run', () => {
     expect(text).toContain(`"path":"/api/routines/mvmrfw2l-4dad/missed/dismiss","body":{"slotMs":${SLOT}}`)
   })
 })
+
+describe('the notice reads as sentences', () => {
+  it('a reason ending in a full stop gets no second one', async () => {
+    const { sentence } = await import('../../../src/core/routines/missed-runs.js')
+    expect(sentence('Not started: no room (all 7 slots taken).')).toBe('Not started: no room (all 7 slots taken).')
+    expect(sentence('no run was recorded for this time')).toBe('no run was recorded for this time.')
+  })
+})
