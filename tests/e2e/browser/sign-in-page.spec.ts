@@ -286,8 +286,9 @@ test.describe('on an iPhone', () => {
     await refuseProbe(page)
     // Held until the 6 s slow line shows, then let through. A fixed 20 s hold
     // outlived the exchange's own 15 s deadline, which WebKit enforces on a
-    // held request ("Walnut did not answer"); the slow line's clock starts at
-    // mount, so a fixed shorter hold could end before it on a loaded machine.
+    // held request ("Walnut did not answer"). The slow line's clock starts with
+    // the trade (browser-pair.ts pairTradeStartedAt), not when the screen draws,
+    // so it shows inside the hold however late a loaded machine draws it.
     let release: () => void = () => {}
     const released = new Promise<void>((r) => { release = r })
     await holdExchange(page, 0, async (route) => {

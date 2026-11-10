@@ -21,7 +21,7 @@ import { createPortal } from 'react-dom';
 import { getSignedOutReason, getUnpairedState, noteSignedIn, subscribeUnpaired } from '@/api/unpaired';
 import { getDeviceToken } from '@/api/device-token';
 import {
-  exchangeBrowserCode, getFragmentPairState, subscribeFragmentPair, type FragmentPairState,
+  exchangeBrowserCode, getFragmentPairState, pairTradeStartedAt, subscribeFragmentPair, type FragmentPairState,
 } from '@/api/browser-pair';
 import { log } from '@/utils/log';
 import { formatSignInCode } from './sign-in-code';
@@ -128,7 +128,10 @@ function Brand() {
 function PendingPage() {
   const [slow, setSlow] = useState(false);
   useEffect(() => {
-    const t = window.setTimeout(() => setSlow(true), SLOW_PENDING_MS);
+    // Counted from the trade's start, not this screen's: on a slow device the screen draws seconds
+    // after the code went out, and a clock from here could pass the trade's own 15 s deadline.
+    const started = pairTradeStartedAt() ?? Date.now();
+    const t = window.setTimeout(() => setSlow(true), Math.max(0, SLOW_PENDING_MS - (Date.now() - started)));
     return () => window.clearTimeout(t);
   }, []);
   return (

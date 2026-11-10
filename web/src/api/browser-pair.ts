@@ -74,6 +74,8 @@ function isStandaloneDisplay(): boolean {
 }
 
 let fragmentState: FragmentPairState = { phase: 'idle' };
+/** When the address's code went to Walnut (Date.now()), or null before any trade. */
+let tradeStartedAt: number | null = null;
 const listeners = new Set<() => void>();
 
 function setFragmentState(next: FragmentPairState): void {
@@ -111,6 +113,7 @@ export function consumePairFragment(): Promise<boolean> | null {
       // A sandboxed frame may refuse; the code is one use either way.
     }
   }
+  tradeStartedAt = Date.now();
   setFragmentState({ phase: 'pending', code });
   return exchangeBrowserCode(code).then((result) => {
     // A right code stays 'pending' (the sign-in screen keeps saying so) until
@@ -152,6 +155,14 @@ function keepPendingCode(code: string | null): void {
     if (code) sessionStorage.setItem(PENDING_CODE_KEY, JSON.stringify({ code, at: Date.now() }));
     else sessionStorage.removeItem(PENDING_CODE_KEY);
   } catch { /* storage refused */ }
+}
+
+/**
+ * When the trade of the address's code began. It starts at boot, before the sign-in screen can
+ * draw (main.tsx waits for the stylesheets), so the screen's "still waiting" clock counts from here.
+ */
+export function pairTradeStartedAt(): number | null {
+  return tradeStartedAt;
 }
 
 export function getFragmentPairState(): FragmentPairState {
