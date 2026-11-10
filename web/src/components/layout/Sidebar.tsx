@@ -210,7 +210,7 @@ export function Sidebar({
   // A phone mounts neither the agenda nor the scratchpad panel (spec 5.1), so
   // their toggles would be controls that do nothing there (N3).
   const phone = usePhoneLayout();
-  const homePanelToggles = (
+  const homePanelToggles = railShown['home-todo'] || (chatToggleShown && railShown['home-chat']) ? (
     <div className="sidebar-home-panels" role="group" aria-label="Home panels">
       {railShown['home-todo'] && (
       <button
@@ -233,7 +233,14 @@ export function Sidebar({
           <span className="sidebar-label">Quick question</span>
         </button>
       )}
-      {!phone && (<>
+    </div>
+  ) : null;
+  // The side bars open beside whatever page is on screen, so they are not Home's: their own
+  // group, apart from Home's panels, holding only them (Evan, 2026-11-10). A phone mounts
+  // neither, so the group is not drawn there.
+  const sideBarGroup = !phone && (railShown['home-agenda'] || railShown['home-scratchpad']) ? (
+    <div className="sidebar-side-bar-group" role="group" aria-label="Side bars" data-testid="sidebar-side-bar-group">
+      <div className="sidebar-group-caption sidebar-label" aria-hidden="true">Side bar</div>
       {railShown['home-agenda'] && (
       <button
         className={`sidebar-link sidebar-panel-toggle${agendaOpen ? ' active' : ''}`}
@@ -256,9 +263,8 @@ export function Sidebar({
         <span className="sidebar-label">Scratchpad</span>
       </button>
       )}
-      </>)}
     </div>
-  );
+  ) : null;
   // Org is a page, not a Home panel: its own top-level entry right under the Home group.
   // `sidebar-panel-toggle` only for the button reset and the phone drawer's close-on-tap.
   const orgEntry = (
@@ -412,6 +418,7 @@ export function Sidebar({
             <Fragment key={`${app.key}:${app.generation}`}>
               <div className="sidebar-home-group">{link}{homePanelToggles}</div>
               {railShown.org && orgEntry}
+              {sideBarGroup}
             </Fragment>
           ) : link;
         })}

@@ -282,6 +282,9 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await toggle.click();
   await expect(toggle).toHaveClass(/\bactive\b/);
   expect(await group.evaluate(el => getComputedStyle(el).borderTopWidth)).toBe('1px');
+  // Collapsed, the side bars are boxed on their own too, apart from Home's box.
+  expect(await page.locator('.sidebar-side-bar-group').evaluate(el => getComputedStyle(el).borderTopWidth)).toBe('1px');
+  await expect(group.getByTestId('sidebar-toggle-calendar')).toHaveCount(0);
   await page.locator('.sidebar-collapse-btn').click();
   await expect(page.locator('.sidebar.collapsed')).toHaveCount(0);
   expect(await page.locator('.sidebar-home-panels').evaluate(el => getComputedStyle(el).borderLeftWidth)).toBe('1px');
@@ -1195,7 +1198,7 @@ test('Locate never moves or opens a session column, in an unlocked column or the
   expect(errors).toEqual([]);
 });
 
-test('the Scratchpad is a Home panel in the rail, sharing the side column with the agenda', async ({ page, baseURL }) => {
+test('the Scratchpad is a side bar in its own rail group, sharing the Home side column with the agenda', async ({ page, baseURL }) => {
   const original = (await (await page.request.get('/api/notes/global')).json()).content as string;
   const line = `Scratchpad line ${test.info().project.name} ${Date.now()}`;
   try {
@@ -1209,11 +1212,19 @@ test('the Scratchpad is a Home panel in the rail, sharing the side column with t
     await closeViewMenu(page);
 
     const toggle = page.getByTestId('sidebar-toggle-scratchpad');
-    // The Home panels, Scratchpad last. The Ask Walnut toggle is always there now
-    // (home-panel-flags.ts). Org is a page with its own entry, outside the group.
+    // Home's panels hold only what opens on Home. The Ask Walnut toggle is always there now
+    // (home-panel-flags.ts). Org is a page with its own entry, outside the group. The side
+    // bars open beside any page, so they are a group of their own after Org, and the only
+    // place either toggle appears in the rail.
     await expect(page.locator('.sidebar-home-panels .sidebar-link .sidebar-label'))
-      .toHaveText(['Task panel', 'Quick question', 'Agenda', 'Scratchpad']);
-    await expect(page.locator('.sidebar-home-panels .sidebar-link').last()).toHaveAttribute('data-testid', 'sidebar-toggle-scratchpad');
+      .toHaveText(['Task panel', 'Quick question']);
+    const sideBars = page.getByRole('group', { name: 'Side bars' });
+    await expect(sideBars.locator('.sidebar-link .sidebar-label')).toHaveText(['Agenda', 'Scratchpad']);
+    await expect(sideBars.locator('.sidebar-link').last()).toHaveAttribute('data-testid', 'sidebar-toggle-scratchpad');
+    await expect(page.locator('.sidebar-nav > [data-testid="sidebar-org"] + .sidebar-side-bar-group')).toHaveCount(1);
+    for (const name of ['Agenda', 'Scratchpad']) {
+      await expect(page.locator('.sidebar-nav .sidebar-link .sidebar-label', { hasText: name })).toHaveCount(1);
+    }
     await expect(toggle).not.toHaveClass(/\bactive\b/);
     await toggle.click();
     const pane = page.getByTestId('home-companion-scratchpad');

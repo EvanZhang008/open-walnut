@@ -31,6 +31,8 @@ export interface BuiltinEntry {
   rail?: RailItemId
   /** A Home group toggle rather than a page. */
   homePanel: boolean
+  /** A side bar that opens beside any page (the rail's Side bar group). */
+  sideBar: boolean
   /** Why it can never leave the rail; unset = the user may hide it. */
   lock?: string
   shown: boolean
@@ -57,9 +59,9 @@ const RAIL_COPY: Readonly<Record<RailItemId, Copy & { title: string }>> = {
   'home-scratchpad': { title: 'Scratchpad', line: 'A quick note pad, on Home or beside any page', tint: '#FF9F0A' },
 }
 
-/** Rail order: Home, its panel toggles, Org, then the registry apps as the rail draws them. */
-const HOME_GROUP: readonly RailItemId[] = ['home-todo', 'home-chat', 'home-agenda', 'home-scratchpad']
-const PHONE_ABSENT: ReadonlySet<RailItemId> = new Set(['home-agenda', 'home-scratchpad'])
+/** Rail order: Home, its panel toggles, Org, the side bars, then the registry apps as the rail draws them. */
+const HOME_GROUP: readonly RailItemId[] = ['home-todo', 'home-chat']
+const SIDE_BAR_GROUP: readonly RailItemId[] = ['home-agenda', 'home-scratchpad']
 
 function offRail(preferences: AppPreferences, key: string): boolean {
   return preferences.unpinned.includes(key) || preferences.hidden.includes(key)
@@ -80,7 +82,8 @@ export function builtinEntries(
     const key = railItemKey(id)
     return {
       key, id, title: copy.title, line: copy.line, tint: copy.tint, rail: id,
-      homePanel: id !== 'org', shown: !offRail(preferences, key),
+      homePanel: HOME_GROUP.includes(id), sideBar: SIDE_BAR_GROUP.includes(id),
+      shown: !offRail(preferences, key),
     }
   }
   const appEntry = (app: RegisteredApp): BuiltinEntry => {
@@ -88,15 +91,16 @@ export function builtinEntries(
     const lock = app.lockVisibility ? copy.lock ?? 'Always on the rail' : undefined
     return {
       key: app.key, id: app.id, title: app.title, line: copy.line, tint: copy.tint, app,
-      homePanel: false, ...(lock ? { lock } : {}),
+      homePanel: false, sideBar: false, ...(lock ? { lock } : {}),
       shown: lock ? true : !offRail(preferences, app.key),
     }
   }
   const home = coreApps.find((app) => app.id === 'home')
   if (home) out.push(appEntry(home))
-  // A phone mounts neither the agenda nor the scratchpad, so the rail never shows them there.
-  for (const id of HOME_GROUP) if (!(opts.phone && PHONE_ABSENT.has(id))) out.push(railEntry(id))
+  for (const id of HOME_GROUP) out.push(railEntry(id))
   out.push(railEntry('org'))
+  // A phone mounts neither the agenda nor the scratchpad, so the rail never shows them there.
+  if (!opts.phone) for (const id of SIDE_BAR_GROUP) out.push(railEntry(id))
   for (const app of coreApps) if (app.id !== 'home') out.push(appEntry(app))
   return out
 }

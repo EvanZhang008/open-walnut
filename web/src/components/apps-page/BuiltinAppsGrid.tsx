@@ -87,7 +87,7 @@ export function BuiltinAppsGrid({ query, onOpen }: { query: string; onOpen: (key
           data={{ 'data-shown': entry.shown }}
           icon={<EntryIcon entry={entry} size={40} />}
           name={entry.title}
-          line={entry.homePanel ? `Home panel · ${entry.line}` : entry.line}
+          line={entry.homePanel ? `Home panel · ${entry.line}` : entry.sideBar ? `Side bar · ${entry.line}` : entry.line}
           status={statusOf(entry)}
           statusGlyph={entry.lock ? <LockGlyph /> : undefined}
           control={entry.lock ? undefined : (

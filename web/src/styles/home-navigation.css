@@ -3,7 +3,7 @@
 .app-shell-navigation .sidebar-header { height: 42px; box-sizing: border-box; padding: 0 13px; font-size: 15px; }
 .app-shell-navigation .sidebar.collapsed .sidebar-header { padding: 0; gap: 0; }
 
-/* Home owns three panel toggles; they sit under the Home icon so the rail says whose they are.
+/* Home owns its panel toggles; they sit under the Home icon so the rail says whose they are.
    A toggle whose panel is open wears the rail's active colour, like the page it belongs to. */
 .sidebar-home-panels { margin: -2px 0 4px 21px; padding-left: 6px; border-left: 1px solid var(--border); }
 .sidebar-home-panels .sidebar-link { padding: 6px 10px 6px 12px; font-size: 13px; margin-bottom: 1px; }
@@ -12,6 +12,16 @@
 .sidebar.collapsed .sidebar-home-group > .sidebar-link { margin-bottom: 0; }
 .sidebar.collapsed .sidebar-home-panels { margin: 0; padding: 0; border-left: 0; }
 .sidebar.collapsed .sidebar-home-panels .sidebar-link { padding: 7px 0; }
+
+/* The side bars (Agenda, Scratchpad) open beside any page: a group of their own under a caption,
+   boxed like the Home group when the rail is collapsed (the caption folds away with the labels). */
+.sidebar-side-bar-group { margin: 6px 0 4px; }
+.sidebar-group-caption { display: block; padding: 4px 12px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-muted); }
+.sidebar-side-bar-group .sidebar-link { padding: 6px 10px 6px 12px; font-size: 13px; margin-bottom: 1px; }
+.sidebar-side-bar-group .sidebar-link svg { width: 16px; height: 16px; margin: 0 1px; }
+.sidebar.collapsed .sidebar-side-bar-group { border: 1px solid var(--border); border-radius: 10px; padding: 2px; margin: 4px -3px; }
+.sidebar.collapsed .sidebar-group-caption { display: none; }
+.sidebar.collapsed .sidebar-side-bar-group .sidebar-link { padding: 7px 0; }
 
 .app-shell-navigation .todo-panel { min-height: 0; background: transparent; }
 .app-shell-navigation .todo-panel-toolbar { gap: 8px; padding: 7px 8px 6px 12px; flex-wrap: nowrap; }

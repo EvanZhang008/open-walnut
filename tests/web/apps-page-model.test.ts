@@ -19,12 +19,15 @@ function coreApps(): RegisteredApp[] {
 }
 
 describe('Apps page: built-in entries', () => {
-  it('lists Home, its panels, Org, then the registry apps, in rail order', () => {
+  it('lists Home, its panels, Org, the side bars, then the registry apps, in rail order', () => {
     const entries = builtinEntries(coreApps(), createAppPreferences())
     expect(entries.map((entry) => entry.id)).toEqual([
-      'home', 'home-todo', 'home-chat', 'home-agenda', 'home-scratchpad', 'org', 'notes', 'tasks', 'apps', 'settings',
+      'home', 'home-todo', 'home-chat', 'org', 'home-agenda', 'home-scratchpad', 'notes', 'tasks', 'apps', 'settings',
     ])
     expect(entries.every((entry) => entry.shown)).toBe(true)
+    // The side bars open beside any page, so they are their own group, not Home's panels.
+    expect(entries.filter((entry) => entry.homePanel).map((entry) => entry.id)).toEqual(['home-todo', 'home-chat'])
+    expect(entries.filter((entry) => entry.sideBar).map((entry) => entry.id)).toEqual(['home-agenda', 'home-scratchpad'])
   })
 
   it('locks exactly Home, Apps and Settings, each with its reason', () => {
