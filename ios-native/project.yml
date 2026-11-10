@@ -245,7 +245,8 @@ targets:
           short=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${SRCROOT}/Walnut/Support/Info.plist")
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${build}" "$plist" 2>/dev/null \
             || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string ${build}" "$plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${short}" "$plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${short}" "$plist" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string ${short}" "$plist"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios.widgets
