@@ -292,6 +292,10 @@ export function withLearnedRule(
     rule: Pick<RuleOption, 'when' | 'then' | 'label'>; note: string; id: string; created: string; newGroup?: string; insertAt?: number;
     /** A keep-out-of-Inbox rule (the group card's `Keep out of Inbox…`). */
     skipInbox?: boolean;
+    /** A filter's folder (the filter card's `Move to folder`). */
+    moveTo?: string;
+    /** Who made it: the filter card writes the person's own rule. Default `learned`. */
+    source?: 'user' | 'learned';
   },
 ): RulesDoc {
   const note = input.note.trim() ? input.note : undefined;
@@ -299,11 +303,12 @@ export function withLearnedRule(
     id: input.id,
     when: input.rule.when,
     then: input.rule.then,
-    source: 'learned',
+    source: input.source ?? 'learned',
     ...(note !== undefined ? { note } : {}),
     created: input.created,
     ...(input.rule.label ? { label: input.rule.label } : {}),
     ...(input.skipInbox ? { skipInbox: true } : {}),
+    ...(input.moveTo ? { moveTo: input.moveTo } : {}),
   };
   const at = Math.max(0, Math.min(input.insertAt ?? 0, current.rules.length));
   const rules = [...current.rules.slice(0, at), rule, ...current.rules.slice(at)];

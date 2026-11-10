@@ -216,7 +216,7 @@ describe('POST /groups/read and the job routes', () => {
     expect([...routes.keys()].sort()).toEqual([
       'GET /bulk/:jobId', 'GET /groups/:groupId/unsubscribe-plan', 'GET /unsubscribe/batch/:batchId',
       'POST /bulk/:jobId/retry', 'POST /bulk/:jobId/stop', 'POST /bulk/:jobId/undo', 'POST /groups/archive', 'POST /groups/read',
-      'POST /rules/preview', 'POST /rules/propose', 'POST /unsubscribe/batch', 'POST /unsubscribe/batch/:batchId/stop',
+      'POST /rules/apply', 'POST /rules/preview', 'POST /rules/propose', 'POST /unsubscribe/batch', 'POST /unsubscribe/batch/:batchId/stop',
     ])
   })
 

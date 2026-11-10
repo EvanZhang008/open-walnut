@@ -44,8 +44,10 @@ import {
   FIELD_ORDER,
   SENDER_KINDS,
   defaultValueOf,
+  destinationOf,
   existingGroupLine,
   fieldOfError,
+  folderProblem,
   heldPatternOf,
   previewSentence,
   rowsOfWhen,
@@ -58,6 +60,7 @@ import {
 export const PREVIEW_DEBOUNCE_MS = 400;
 const PLACEHOLDERS: Partial<Record<ConditionField, string>> = {
   from: 'issues@*, Survey Desk',
+  fromContains: 'github.com',
   subject: 'invoice',
   subjectRe: 'invoice #\\d+',
   group: 'Ticket updates',
@@ -71,6 +74,8 @@ export const TURNS_ON = 'Saving turns this rule on.';
 /** How long typing in a condition pauses before it is judged. */
 export const SETTLE_MS = 600;
 const NEW_GROUP = '__new-group__';
+/** The folder box takes a little more than the longest name, so an over-long one is told, not cut. */
+const MAX_FOLDER_INPUT = 240;
 
 export interface PickerOption { value: string; label: string; hint?: string }
 
@@ -154,7 +159,8 @@ export interface MailRuleEditorProps {
   onDirty: (dirty: boolean) => void;
 }
 
-interface RuleForm { rows: ConditionRow[]; then: string; newGroup: string; note: string; skipInbox: boolean }
+/** `skipInbox` is the "Keep out of the Inbox" box; `moveTo` the folder typed under it ('' = Archive). */
+interface RuleForm { rows: ConditionRow[]; then: string; newGroup: string; note: string; skipInbox: boolean; moveTo: string }
 
 /** The form for a rule as stored (or a new one). Row keys count from 1, so the same rule gives the same form. */
 function formOf(initial: MailRule | null): RuleForm {
@@ -165,7 +171,9 @@ function formOf(initial: MailRule | null): RuleForm {
     then: initial?.then ?? 'Important',
     newGroup: '',
     note: initial?.note ?? '',
-    skipInbox: initial?.skipInbox === true,
+    // A filter into a folder keeps its mail out of the Inbox too: the box is ticked, the folder filled.
+    skipInbox: initial?.skipInbox === true || !!initial?.moveTo,
+    moveTo: initial?.moveTo ?? '',
   };
 }
 
@@ -181,18 +189,22 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
   // leaving the pane or reloading keeps it; Save (once it landed) and Cancel end it.
   const form = useDraftValue<RuleForm>(mailRuleDraftKey(props.initial), formOf(props.initial));
   const { rows, then, newGroup, note, skipInbox } = form.value;
+  // A draft kept by an older Walnut has no folder field.
+  const moveTo = form.value.moveTo ?? '';
   const nextKeyOf = (prev: ConditionRow[]) => prev.reduce((max, one) => Math.max(max, one.key), 0) + 1;
   const setRows = (next: (prev: ConditionRow[]) => ConditionRow[]) => form.setValue((f) => ({ ...f, rows: next(f.rows) }));
   const setThen = (value: string) => form.setValue((f) => ({ ...f, then: value }));
   const setNewGroup = (value: string) => form.setValue((f) => ({ ...f, newGroup: value }));
   const setNote = (value: string) => form.setValue((f) => ({ ...f, note: value }));
   const setSkipInbox = (value: boolean) => form.setValue((f) => ({ ...f, skipInbox: value }));
+  const setMoveTo = (value: string) => form.setValue((f) => ({ ...f, moveTo: value }));
   // The last answer, with the input it answers: it shows only while that is still the input.
   const [preview, setPreview] = useState<{ key: string; text: string; samples?: MailSample[]; error?: string } | null>(null);
   // The matching mails under the preview line, once asked for; they stay listed while the rule changes.
   const [samplesOn, setSamplesOn] = useState(false);
   const userOff = props.initial?.enabled === false;
   const noteId = useId();
+  const folderId = useId();
   const noteRef = useRef<HTMLInputElement | null>(null);
   const noteMic = useRef<BoxMicHandle | null>(null);
   const dirtyRef = useRef(false);
@@ -273,15 +285,22 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
     ? targets.find((one) => one.value !== NEW_GROUP && one.value.toLowerCase() === typedGroup.toLowerCase())?.label
     : undefined;
 
-  const errorFor = (field: ConditionField | 'then' | 'note'): string | undefined =>
+  const errorFor = (field: ConditionField | 'then' | 'note' | 'moveTo'): string | undefined =>
     props.serverErrors.find((one) => fieldOfError(one.field) === field)?.message;
-  const otherErrors = props.serverErrors.filter((one) => fieldOfError(one.field) === null);
+  // The folder box shows only while the mail is kept out of the Inbox and the target is a group.
+  const folderShown = skipInbox && !reservedTarget;
+  // A folder error with no folder box to stand under is said with the rest.
+  const otherErrors = props.serverErrors.filter((one) => {
+    const field = fieldOfError(one.field);
+    return field === null || (field === 'moveTo' && !folderShown);
+  });
   const setRow = (key: number, patch: Partial<ConditionRow>, typed = false) => {
     markDirty();
     typedRef.current = typed;
     setRows((prev) => prev.map((one) => (one.key === key ? { ...one, ...patch } : one)));
   };
-  const canSave = problems.size === 0 && !!target && !props.saving;
+  const folderLocal = folderShown ? folderProblem(moveTo) : null;
+  const canSave = problems.size === 0 && !!target && !folderLocal && !props.saving;
   const [attempted, setAttempted] = useState(false);
   const shown = (row: ConditionRow): boolean => !pending && (attempted || row.value.trim() !== '');
   const rowProblem = (row: ConditionRow): string | undefined => {
@@ -292,7 +311,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
   // Save is off while a typed condition waits to be judged and from the moment a problem shows.
   const problemShown = rows.some((row) => problems.has(row.key) && shown(row)) || (attempted && problems.has(-1));
   // A blank text condition holds Save too: there is nothing to save yet, and the placeholder shows what goes there.
-  const saveOff = props.saving || pending || problemShown || blank || (attempted && !canSave);
+  const saveOff = props.saving || pending || problemShown || blank || !!folderLocal || (attempted && !canSave);
 
   const valueControl = (row: ConditionRow) => {
     const label = `${FIELD_LABELS[row.field]} value`;
@@ -329,7 +348,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
       ...(trimmed ? { note } : {}),
       ...(props.initial?.enabled === false ? { enabled: false } : {}),
       ...(props.initial?.label ? { label: props.initial.label } : {}),
-      ...(skipInbox && !reservedTarget ? { skipInbox: true } : {}),
+      ...destinationOf(skipInbox, moveTo, reservedTarget),
       ...(then === NEW_GROUP ? { newGroup: target } : {}),
     });
   };
@@ -411,8 +430,21 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
       <label className="mail-rule-skip-inbox" data-testid="mail-rule-skip-inbox">
         <input type="checkbox" checked={skipInbox && !reservedTarget} disabled={reservedTarget}
           onChange={(event) => { markDirty(); setSkipInbox(event.target.checked); }} />
-        <span>Keep out of the Inbox: Walnut moves this mail to Archive as it arrives</span>
+        <span>Keep out of the Inbox</span>
       </label>
+      {folderShown && (
+        <div className="mail-rule-then">
+          {/* The help colour without its paragraph margin, so the label sits on the input's line. Empty: Archive. */}
+          <label className="mail-rules-help" style={{ margin: 0 }} htmlFor={folderId}>Into folder</label>
+          <input id={folderId} type="text" className="settings-input mail-rule-value-input" maxLength={MAX_FOLDER_INPUT} value={moveTo} placeholder="Archive"
+            data-testid="mail-rule-move-to" data-draft-key={form.key ?? undefined} spellCheck={false}
+            aria-invalid={folderLocal || errorFor('moveTo') ? true : undefined}
+            onChange={(event) => { markDirty(); setMoveTo(event.target.value); }} />
+          {(folderLocal || errorFor('moveTo')) && (
+            <p className="mail-rule-field-error" role="alert" data-testid="mail-rule-move-to-error">{folderLocal || errorFor('moveTo')}</p>
+          )}
+        </div>
+      )}
       <label className="mail-rule-editor-head" htmlFor={noteId}>Note</label>
       <MicField inline fieldClassName="settings-mic-field" boxRef={noteRef} text={note} handleRef={noteMic} disabled={props.saving}
         setText={(t) => { markDirty(); setNote(t.slice(0, 300)); }}>

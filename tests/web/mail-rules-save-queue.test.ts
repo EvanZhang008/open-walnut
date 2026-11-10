@@ -11,8 +11,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { COALESCE_MS, createRulesSaveQueue, RulesQueueCancelled, type RulesDoc } from '../../web/src/components/settings/sections/mail-rules-save-queue';
 import {
   COPY,
+  destinationOf,
   existingGroupLine,
+  FIELD_LABELS,
+  FIELD_ORDER,
   fieldOfError,
+  folderProblem,
+  MAX_FOLDER_CHARS,
   fileErrorSentence,
   isMissingFileError,
   moveItem,
@@ -26,6 +31,7 @@ import {
   whenOfRows,
 } from '../../web/src/components/settings/sections/mail-rules-model';
 import { movesPhrase } from '../../web/src/utils/mail-preview-moves';
+import { MAX_FOLDER_NAME, moveToProblem } from '../../src/integrations/mail/sort-rules-schema';
 import { HINT_NEEDS_MORE, HINT_SLASHES_FLAGS, PATTERN_BACKREFERENCE, PATTERN_TOO_BIG, heldPatternLine, patternTooLong } from '@open-walnut/mail-subject-pattern';
 
 const doc = (tag: string): RulesDoc => ({ groups: [tag], rules: [] });
@@ -300,7 +306,51 @@ describe('mail rule editor rows', () => {
     expect(heldPatternOf(null)).toBeUndefined();
   });
 
+  it('round-trips a "from contains" condition, trimmed, right after From', () => {
+    let key = 0;
+    const when = { from: 'issues@*', fromContains: 'github.com' };
+    const rows = rowsOfWhen(when, () => ++key);
+    expect(rows.map((one) => one.field)).toEqual(['from', 'fromContains']);
+    expect(whenOfRows(rows)).toEqual({ when, problems: new Map(), off: new Map(), hints: new Map(), turnsOn: new Set() });
+    expect(whenOfRows([{ key: 1, field: 'fromContains', value: '  Survey Desk ' }]).when).toEqual({ fromContains: 'Survey Desk' });
+    expect(whenOfRows([{ key: 1, field: 'fromContains', value: '   ' }]).problems.get(1)).toBe('Type a value.');
+    expect(FIELD_LABELS.fromContains).toBe('From contains');
+    expect(FIELD_ORDER.indexOf('fromContains')).toBe(FIELD_ORDER.indexOf('from') + 1);
+    // A text box: switching from From to it keeps what was typed.
+    expect(TEXT_FIELDS.has('fromContains')).toBe(true);
+  });
+
+  it('keeps a rule out of the Inbox into Archive or a named folder, never both', () => {
+    // Empty folder: Archive, as before.
+    expect(destinationOf(true, '', false)).toEqual({ skipInbox: true });
+    expect(destinationOf(true, '   ', false)).toEqual({ skipInbox: true });
+    // A folder name: moveTo alone, trimmed.
+    expect(destinationOf(true, ' Receipts/2026 ', false)).toEqual({ moveTo: 'Receipts/2026' });
+    // Off, or a reserved target: neither field (the server refuses both there).
+    expect(destinationOf(false, 'Receipts', false)).toEqual({});
+    expect(destinationOf(true, 'Receipts', true)).toEqual({});
+    expect(destinationOf(true, '', true)).toEqual({});
+  });
+
+  it('judges a folder name by the server rules; empty means Archive', () => {
+    expect(folderProblem('')).toBeNull();
+    expect(folderProblem('  ')).toBeNull();
+    expect(folderProblem('Receipts')).toBeNull();
+    expect(folderProblem('x'.repeat(MAX_FOLDER_CHARS))).toBeNull();
+    expect(folderProblem('x'.repeat(MAX_FOLDER_CHARS + 1))).toBe(`A folder name is at most ${MAX_FOLDER_CHARS} characters.`);
+    expect(folderProblem('a\tb')).toBe('A folder name cannot hold control characters, * or %.');
+    expect(folderProblem(' inbox ')).toBe('Mail cannot be filed into the Inbox it leaves.');
+    expect(folderProblem('Inbox archive')).toBeNull();
+    // The same verdict and words as the server's check for every name typed (empty is Archive here).
+    for (const name of ['Receipts', ' inbox ', 'INBOX', 'a\nb', 'x'.repeat(MAX_FOLDER_CHARS + 1), 'Work/Builds']) {
+      expect(folderProblem(name), name).toBe(moveToProblem(name));
+    }
+    expect(MAX_FOLDER_CHARS).toBe(MAX_FOLDER_NAME);
+  });
+
   it('maps server error fields onto rows', () => {
+    expect(fieldOfError('when.fromContains')).toBe('fromContains');
+    expect(fieldOfError('rules[2].moveTo')).toBe('moveTo');
     expect(fieldOfError('when.from')).toBe('from');
     expect(fieldOfError('rules[0].when.subject.re')).toBe('subjectRe');
     expect(fieldOfError('then')).toBe('then');

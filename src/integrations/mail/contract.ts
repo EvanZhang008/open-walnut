@@ -193,6 +193,8 @@ export interface MailboxDto {
   unread: number
   total: number
   lastSyncAt?: number
+  /** A filter files mail into this folder (rule `moveTo`): the sidebar keeps it in view. */
+  filter?: true
 }
 
 export interface MailBodyDto {

@@ -84,6 +84,8 @@ export interface MailSortDto {
 
 export interface MailRuleWhen {
   from?: string | string[];
+  /** Text the sender's address or display name contains, case-insensitive. */
+  fromContains?: string;
   subject?: string | { re: string };
   listId?: string;
   addressedToMe?: boolean;
@@ -106,6 +108,8 @@ export interface MailRule {
   label?: string;
   /** Keep the mail out of the Inbox: Walnut moves it to Archive as it arrives. */
   skipInbox?: boolean;
+  /** A filter: Walnut files the mail into this folder (a Gmail label), made when missing. */
+  moveTo?: string;
 }
 
 export interface MailRuleView extends MailRule {
@@ -278,6 +282,11 @@ export function markMailGroupRead(body: {
 }
 
 /** Move a group's unread (inside the watermark) to Archive, under a keep-out-of-Inbox rule just saved. */
+/** Apply a saved filter to the mail already in the Inbox: every mail it decides, read or unread. */
+export function applyMailRule(ruleId: string): Promise<{ found: number; queued: number; skipped: number }> {
+  return apiPost(`${BASE}/rules/apply`, { ruleId }, { ...QUIET, timeoutMs: 60_000 });
+}
+
 export function archiveMailGroup(body: {
   scope: MailGroupsScope;
   group: MailGroupId;

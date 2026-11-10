@@ -46,6 +46,8 @@ export type RuleSenderValue = 'person' | 'bulk' | 'transactional' | 'automated' 
 /** A rule condition (spec 5.5). Every present field must hold (AND). */
 export interface RuleWhen {
   from?: string | string[]
+  /** Text the sender's address or display name contains, case-insensitive (a filter's "From contains"). */
+  fromContains?: string
   subject?: string | { re: string }
   listId?: string
   addressedToMe?: boolean
@@ -77,6 +79,12 @@ export interface Rule {
    * unread (mail-filter-moves.ts). Only with a group `then`, so a move that fails still has a group.
    */
   skipInbox?: boolean
+  /**
+   * A filter: Walnut moves the inbox mail this rule decides into this folder (a Gmail label), made
+   * when the account has none, unread, through the provider's `moveMany` (mail-filter-moves.ts). It
+   * keeps the mail out of the inbox like `skipInbox`, into a folder of its own instead of the archive.
+   */
+  moveTo?: string
 }
 
 /** The rules file, parsed (spec 5.6). */
@@ -97,8 +105,10 @@ export interface CompiledRule {
   source: RuleSource
   note?: string
   summary?: string
-  /** The rule's `skipInbox`: new inbox mail it decides is moved to the archive. */
+  /** The rule's `skipInbox` (or `moveTo`): new inbox mail it decides is moved out of the inbox. */
   skipInbox?: boolean
+  /** The rule's `moveTo`: the folder that mail goes to instead of the archive. */
+  moveTo?: string
   match: (features: SortFeatures) => boolean
 }
 
@@ -325,5 +335,5 @@ export interface MailSortWriteDeps {
   events: import('./events.js').MailEvents
   sort: import('./sort-engine.js').MailSortEngine
   /** "Keep out of the inbox" moves; absent in tests that do not reach them. */
-  filters?: Pick<import('./mail-filter-moves.js').MailFilterMover, 'queue' | 'runNow' | 'canArchive'>
+  filters?: Pick<import('./mail-filter-moves.js').MailFilterMover, 'queue' | 'runNow' | 'canArchive' | 'canFile'>
 }

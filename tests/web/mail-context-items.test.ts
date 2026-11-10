@@ -180,6 +180,7 @@ describe('the ordinary inbox row', () => {
       'New task',
       '-',
       'Find mail from this sender',
+      'Filter mails like this…',
       'Copy Walnut link',
       // S4: the rows that hand the mail to a model, last, under their own name. Every row above acts
       // on the mail itself.
@@ -265,7 +266,7 @@ describe('the send gate', () => {
     // the two Walnut rows that ask a question: reading a mail to a model needs no SMTP.
     expect(pressable(items).map((one) => one.label))
       .toEqual([
-        'Mark as read', 'Open message', 'Talk to CEO', 'New task', 'Find mail from this sender', 'Copy Walnut link',
+        'Mark as read', 'Open message', 'Talk to CEO', 'New task', 'Find mail from this sender', 'Filter mails like this…', 'Copy Walnut link',
         'Summarize with Walnut', 'Ask a quick question about this…',
       ]);
   });

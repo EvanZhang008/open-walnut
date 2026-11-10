@@ -459,6 +459,9 @@
 .mail-unsub-run[data-status='failed'] { color: var(--error); }
 .mail-unsub-buttons { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
 .mail-correct.mail-group-card { width: min(300px, calc(100vw - 24px)); }
+.mail-correct.mail-filter-card { width: min(340px, calc(100vw - 24px)); }
+.mail-filter-field { display: flex; flex-direction: column; gap: 3px; }
+.mail-filter-label { font-size: 11.5px; font-weight: 600; color: var(--fg-secondary); }
 
 /* ── the reader head's sorting line ── */
 

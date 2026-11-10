@@ -1,6 +1,7 @@
 /**
  * "Keep out of the inbox": a rule with `skipInbox` moves the inbox mail it decides to the account's
- * archive, through the provider's `archiveMany`. It is the Outlook-rule half of grouping, done by
+ * archive, through the provider's `archiveMany`; a filter (a rule with `moveTo`) files it into the
+ * folder the person named instead, through `moveMany`, which makes the folder when it is missing. It is the Outlook-rule half of grouping, done by
  * Walnut because neither transport can create a server-side rule (IMAP has no rules at all, and the
  * Outlook tools list has none).
  *
@@ -41,6 +42,7 @@ export const MOVE_PER_MESSAGE_MS = 2_000
 const RETRY_AFTER_MS = [60_000, 5 * 60_000]
 
 export const CANNOT_ARCHIVE = 'This account cannot move mail to an archive.'
+export const CANNOT_FILE = 'This account cannot file mail into a folder.'
 
 export interface FilterMoverDeps {
   store: Pick<MailStore, 'moves' | 'deleteMessages' | 'bumpMailboxUnread' | 'withAccountWrite'>
@@ -48,10 +50,23 @@ export interface FilterMoverDeps {
   providers: Pick<MailProviderRegistry, 'get'>
   /** Group counts moved in these folders (the sort engine's `notifyGroupsChanged`). */
   groupsChanged: (pairs: FolderPair[]) => void
-  /** One batch settled (an open list drops the moved rows). */
-  onSettled?: (event: { accountId: string; moved: number; failed: number; messageIds: string[] }) => void
+  /** One batch settled (an open list drops the moved rows). `folder`: a filter's folder, not the archive. */
+  onSettled?: (event: { accountId: string; moved: number; failed: number; messageIds: string[]; folder?: string }) => void
   /** Is this still a rule that keeps mail out of the inbox? Without it every queued move is made. */
   ruleLive?: (ruleId: string) => Promise<boolean>
+  /**
+   * Where the rule sends its mail now (`{ folder }` for a filter's folder, `{}` for the archive), or
+   * null when it no longer keeps mail out of the inbox. Wins over `ruleLive`. Read at move time, so a
+   * folder renamed on the rule takes the mail still queued under it.
+   */
+  ruleTarget?: (ruleId: string) => Promise<{ folder?: string } | null | undefined>
+  /**
+   * Of these queued moves (one account, one rule), the message ids the rule still decides NOW. A rule
+   * edited after the moves were queued (a narrower "From contains", say) keeps the same id, so its
+   * presence alone is no answer. Undefined `ruleTarget` or a throw here: the sort engine cannot tell
+   * right now, and the rows wait rather than move or drop.
+   */
+  stillDecides?: (ruleId: string, accountId: string, messageIds: string[]) => Promise<Set<string>>
   timeout?: (handler: () => void, ms: number) => { dispose(): void }
   now?: () => number
   log?: {
@@ -76,6 +91,12 @@ export class MailFilterMover {
   canArchive(accountId: string): boolean {
     const spec = this.deps.providers.get(providerIdOf(accountId))
     return !!spec?.capabilities.archive && typeof spec.archiveMany === 'function'
+  }
+
+  /** Can this account's mail be filed into a named folder? */
+  canFile(accountId: string): boolean {
+    const spec = this.deps.providers.get(providerIdOf(accountId))
+    return !!spec?.capabilities.move && typeof spec.moveMany === 'function'
   }
 
   /** Queue these moves and run soon. Returns how many were newly queued. */
@@ -125,16 +146,19 @@ export class MailFilterMover {
   }
 
   private async batch(due: MoveRow[]): Promise<void> {
-    const rows = await this.withLiveRule(due)
-    const byAccount = new Map<string, MoveRow[]>()
+    const { rows, folderOf } = await this.withLiveRule(due)
+    // One provider call per account and destination (the archive, or each filter's folder).
+    const byTarget = new Map<string, { accountId: string; folder?: string; list: MoveRow[] }>()
     for (const row of rows) {
-      const list = byAccount.get(row.account_id) ?? []
-      list.push(row)
-      byAccount.set(row.account_id, list)
+      const folder = folderOf.get(row.rule_id)
+      const key = `${row.account_id}\u0000${folder ?? ''}`
+      const entry = byTarget.get(key) ?? { accountId: row.account_id, ...(folder ? { folder } : {}), list: [] }
+      entry.list.push(row)
+      byTarget.set(key, entry)
     }
     const pairs = new Map<string, FolderPair>()
-    for (const [accountId, list] of byAccount) {
-      const outcomes = await this.move(accountId, list)
+    for (const { accountId, folder, list } of byTarget.values()) {
+      const outcomes = await this.move(accountId, list, folder)
       const now = this.now()
       const settled: SettleRow[] = []
       const movedIds: string[] = []
@@ -155,38 +179,78 @@ export class MailFilterMover {
       await this.deps.store.moves.settle(settled)
       const failed = settled.filter((one) => one[2] === 'failed').length
       if (movedIds.length > 0 || failed > 0) {
-        this.deps.log?.info?.('mail filter moved mail to the archive', { accountId, moved: movedIds.length, failed })
-        this.deps.onSettled?.({ accountId, moved: movedIds.length, failed, messageIds: movedIds.slice(0, 200) })
+        this.deps.log?.info?.(folder ? 'mail filter filed mail into a folder' : 'mail filter moved mail to the archive', { accountId, moved: movedIds.length, failed })
+        this.deps.onSettled?.({ accountId, moved: movedIds.length, failed, messageIds: movedIds.slice(0, 200), ...(folder ? { folder } : {}) })
       }
     }
     if (pairs.size > 0) this.deps.groupsChanged([...pairs.values()])
   }
 
-  /** The rows whose rule still keeps mail out of the inbox; the others leave the ledger unmoved. */
-  private async withLiveRule(rows: MoveRow[]): Promise<MoveRow[]> {
-    const ruleLive = this.deps.ruleLive
-    if (!ruleLive) return rows
+  /**
+   * The rows whose rule still keeps mail out of the inbox AND still decides that mail, with each
+   * rule's folder; rows the rule no longer takes leave the ledger unmoved. When the sort engine cannot
+   * answer (it failed to start, a read failed), the rows are put back for a minute, never moved and
+   * never dropped.
+   */
+  private async withLiveRule(rows: MoveRow[]): Promise<{ rows: MoveRow[]; folderOf: Map<string, string> }> {
+    const folderOf = new Map<string, string>()
+    const { ruleTarget, ruleLive, stillDecides } = this.deps
+    if (!ruleTarget && !ruleLive) return { rows, folderOf }
     const live = new Map<string, boolean>()
-    for (const id of new Set(rows.map((row) => row.rule_id))) live.set(id, await ruleLive(id))
-    const gone = rows.filter((row) => !live.get(row.rule_id))
-    if (gone.length === 0) return rows
-    await this.deps.store.moves.drop(gone.map((row) => [row.account_id, row.message_id]))
-    this.deps.log?.info?.('mail filter moves dropped, their rule is gone', { count: gone.length })
-    return rows.filter((row) => live.get(row.rule_id))
+    const unknown = new Set<string>()
+    for (const id of new Set(rows.map((row) => row.rule_id))) {
+      if (ruleTarget) {
+        const target = await ruleTarget(id).catch(() => undefined)
+        if (target === undefined) { unknown.add(id); continue }
+        live.set(id, target !== null)
+        if (target?.folder) folderOf.set(id, target.folder)
+      } else {
+        live.set(id, await ruleLive!(id))
+      }
+    }
+    const keep: MoveRow[] = []
+    const gone: MoveRow[] = []
+    const later: MoveRow[] = []
+    const groups = new Map<string, MoveRow[]>()
+    for (const row of rows) {
+      if (unknown.has(row.rule_id)) { later.push(row); continue }
+      if (!live.get(row.rule_id)) { gone.push(row); continue }
+      const key = `${row.account_id}\u0000${row.rule_id}`
+      groups.set(key, [...(groups.get(key) ?? []), row])
+    }
+    for (const list of groups.values()) {
+      if (!stillDecides) { keep.push(...list); continue }
+      const decided = await stillDecides(list[0]!.rule_id, list[0]!.account_id, list.map((row) => row.message_id)).catch(() => null)
+      if (decided === null) { later.push(...list); continue }
+      for (const row of list) (decided.has(row.message_id) ? keep : gone).push(row)
+    }
+    if (gone.length > 0) {
+      await this.deps.store.moves.drop(gone.map((row) => [row.account_id, row.message_id]))
+      this.deps.log?.info?.('mail filter moves dropped, their rule no longer takes that mail', { count: gone.length })
+    }
+    if (later.length > 0) {
+      const at = this.now() + RETRY_AFTER_MS[0]!
+      await this.deps.store.moves.settle(later.map((row): SettleRow => [row.account_id, row.message_id, 'queued', row.attempts, row.reason, at]))
+      this.deps.log?.warn('mail filter moves held: the sort engine cannot say which rule takes them yet', { count: later.length })
+    }
+    return { rows: keep, folderOf }
   }
 
   /** The provider's answer per message; `final` = no retry will help (the account cannot move). */
-  private async move(accountId: string, rows: MoveRow[]): Promise<Map<string, { ok: boolean; reason?: string; final?: boolean }>> {
+  private async move(accountId: string, rows: MoveRow[], folder?: string): Promise<Map<string, { ok: boolean; reason?: string; final?: boolean }>> {
     const out = new Map<string, { ok: boolean; reason?: string; final?: boolean }>()
     const spec = this.deps.providers.get(providerIdOf(accountId))
-    if (!spec?.capabilities.archive || typeof spec.archiveMany !== 'function') {
-      for (const row of rows) out.set(row.message_id, { ok: false, reason: CANNOT_ARCHIVE, final: true })
+    const call = folder
+      ? (spec?.capabilities.move && typeof spec.moveMany === 'function' ? (ids: string[]) => spec.moveMany!(accountId, ids, folder) : null)
+      : (spec?.capabilities.archive && typeof spec.archiveMany === 'function' ? (ids: string[]) => spec.archiveMany!(accountId, ids) : null)
+    if (!call) {
+      for (const row of rows) out.set(row.message_id, { ok: false, reason: folder ? CANNOT_FILE : CANNOT_ARCHIVE, final: true })
       return out
     }
     let clock: ReturnType<typeof setTimeout> | undefined
     try {
       const answer = await Promise.race([
-        spec.archiveMany(accountId, rows.map((row) => row.message_id)),
+        call(rows.map((row) => row.message_id)),
         new Promise<never>((_, reject) => {
           clock = setTimeout(() => reject(new Error('The mail server took too long.')), MOVE_CALL_MS + rows.length * MOVE_PER_MESSAGE_MS)
         }),

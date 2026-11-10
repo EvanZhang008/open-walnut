@@ -160,12 +160,19 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     bodies,
     providers,
     groupsChanged: (pairs) => sort.notifyGroupsChanged(pairs, false),
-    onSettled: (event) => events.filtered(event),
-    // Asked once the rules are loaded; a sort engine that could not start keeps every move.
-    ruleLive: async (ruleId) => {
-      try { await sort.ready() } catch { return true }
-      return sort.isFilterRule(ruleId)
+    onSettled: (event) => {
+      events.filtered(event)
+      // A filter may have made its folder just now: list the account's folders again so it shows.
+      if (event.folder && event.moved > 0) void relistNow(event.accountId)
     },
+    // Asked once the rules are loaded. A sort engine that could not start moves nothing: where a
+    // filter files its mail is only known from a loaded rule, and mail left in the inbox is safe.
+    // A sort engine that failed to start cannot say: undefined holds the rows, it never drops them.
+    ruleTarget: async (ruleId) => {
+      try { await sort.ready() } catch { return undefined }
+      return sort.filterTarget(ruleId)
+    },
+    stillDecides: (ruleId, accountId, messageIds) => sort.filterStillDecides(ruleId, accountId, messageIds),
     timeout: (handler, ms) => walnut.timers.timeout(handler, ms),
     log: walnut.log,
   })
@@ -178,6 +185,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // Late-bound like `forgetCapabilities`: the poll loop is built from the service. An unread check that
   // cleared rows moved the folder's own count too, so the loop re-lists that account's folders next.
   let relistDue: (accountId: string) => void = () => undefined
+  let relistNow: (accountId: string) => Promise<void> = async () => undefined
   const service = new MailService({
     store,
     bodies,
@@ -256,6 +264,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const captureIncoming = createMailRouterIntake({ store, home: routingHome })
   sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest, sort, captureIncoming })
   relistDue = (accountId) => sync.markRelistDue(accountId)
+  relistNow = (accountId) => sync.relistNow(accountId)
   setActiveMailSync(sync)
 
   // The letter answers. Owned by the loader through `walnut.letters`, and filtered host-side to

@@ -25,7 +25,10 @@ import { isUnread, rowRecipientLabel, senderLabel } from './mail-format';
 import { mayOfferMarkRead } from './mail-providers';
 import { unsubscribeIsDirect, unsubscribeRowState } from './mail-unsubscribe-state';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
-import { groupsViewKey, requestMailCorrect } from './mail-groups-bus';
+import { groupsViewKey, requestMailCorrect, requestMailFilter } from './mail-groups-bus';
+import { filterDefaultsFor } from './mail-filter-defaults';
+import { FOLDER_FILTER_LETTER_MENU } from './mail-groups-copy';
+import { groupedRows } from './mail-groups-store';
 import { CONTENT_ACTION_WORDS } from '@/utils/content-actions';
 
 /** What the menu's items call. The row is passed back so a handler never has to find it again. */
@@ -231,6 +234,31 @@ export const IMPORTANT_ITEM = 'Important…';
  * Opens the correction card for a grouped row with `preset` picked, anchored on the row itself (the
  * menu is gone by then). Returns false when the row is not on screen, so there is nothing to anchor on.
  */
+/**
+ * Opens "Filter mails like this…" for one letter, anchored on its row: From is its sender, Subject the
+ * head it shares with the same sender's mail in its group, the folder its group's name. Returns false
+ * when the row is not on screen.
+ */
+export function openMailFilter(
+  message: MailMessageDto,
+  merged: boolean,
+  root: Pick<Document, 'querySelector'> | null = typeof document === 'undefined' ? null : document,
+): boolean {
+  if (!root) return false;
+  const esc = (value: string) => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, '\\$&'));
+  const row = root.querySelector(
+    `[data-testid="mail-row"][data-account-id="${esc(message.accountId)}"][data-message-id="${esc(message.messageId)}"]`,
+  ) as HTMLElement | null;
+  if (!row) return false;
+  const group = message.sort?.group;
+  const named = group && group !== 'important' && group !== 'not-important' ? message.sort?.label : undefined;
+  const siblings = group ? groupedRows().filter((one) => one.sort?.group === group && one.messageId !== message.messageId) : [];
+  const defaults = filterDefaultsFor([message, ...siblings], { sender: message.from?.address ?? '', ...(named ? { label: named } : {}) });
+  const scope = merged ? { role: 'inbox' as const } : { accountId: message.accountId, mailboxId: message.mailboxId };
+  requestMailFilter({ scope, viewKey: groupsViewKey(scope), anchor: row, origin: 'letter', draftId: `${message.accountId}|${message.messageId}`, ...defaults, accountId: message.accountId });
+  return true;
+}
+
 export function openMailCorrection(
   message: MailMessageDto,
   merged: boolean,
@@ -399,6 +427,12 @@ export function messageMenuItems(input: MessageMenuInput): ContextMenuItem[] {
       when: !!message.sort && !outbound && !draftsView,
       label: message.sort?.group === 'important' ? NOT_IMPORTANT_ITEM : IMPORTANT_ITEM,
       onSelect: () => { openMailCorrection(message, merged, message.sort?.group === 'important' ? 'not-important' : 'important'); },
+    },
+    {
+      key: 'filter-folder',
+      when: !outbound && !draftsView && !!address,
+      label: FOLDER_FILTER_LETTER_MENU,
+      onSelect: () => { openMailFilter(message, merged); },
     },
     {
       key: 'copy-link',

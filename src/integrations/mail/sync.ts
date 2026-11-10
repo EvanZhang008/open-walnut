@@ -448,6 +448,22 @@ export class MailSync {
   }
 
   /**
+   * List one account's folders again now, in this loop's queue (never beside a tick): a filter that
+   * just made its folder shows in the sidebar without waiting for the next poll. Errors stay here;
+   * the next tick lists them anyway.
+   */
+  relistNow(accountId: string): Promise<void> {
+    this.markRelistDue(accountId)
+    return this.queue(async () => {
+      const state = this.stateFor(accountId)
+      if (!state.relistDue) return
+      await this.refreshMailboxes(accountId, this.deps.service.provider(accountId), state, false)
+    }).catch((error) => {
+      this.deps.walnut.log.warn('mail folder relist failed', { accountId, error: String(error).slice(0, 200) })
+    })
+  }
+
+  /**
    * One tick. Also the test seam: a test drives this directly rather than waiting on a timer.
    *
    * Serialized on `this.running`: two overlapping ticks would double every fetch and race

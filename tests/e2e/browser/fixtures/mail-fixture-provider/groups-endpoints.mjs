@@ -151,6 +151,9 @@ export function handleGroupsFixture(req, res) {
     case 'GET /__fixture/archive-log':
       send(res, 200, { log: state.archiveLog ?? [] });
       return true;
+    case 'GET /__fixture/move-log':
+      send(res, 200, { log: state.moveLog ?? [], folders: state.extraFolders ?? [] });
+      return true;
     case 'POST /__fixture/fail-archive':
       state.failArchive = intParam(url.searchParams, 'count', 1);
       send(res, 200, { ok: true, count: state.failArchive });

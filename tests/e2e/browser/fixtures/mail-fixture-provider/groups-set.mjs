@@ -415,6 +415,33 @@ function archiveOne(messageId) {
   return { ok: true };
 }
 
+/**
+ * marina's `moveMany`: a filter's folder. The folder is made the first time (it then lists like any
+ * folder of the account), and the message moves there under a NEW id, keeping its read flag, the way
+ * an IMAP `UID MOVE` does. Never deletes. Logged in `state.moveLog` (`GET /__fixture/move-log`).
+ */
+function moveOne(messageId, folder) {
+  const state = groupsState();
+  state.moveLog ??= [];
+  state.extraFolders ??= [];
+  const one = messagesOf(MARINA).find((candidate) => candidate.messageId === messageId);
+  if (!one) return { ok: false, reason: 'no such message' };
+  if (one.mailboxId === folder) return { ok: true };
+  if (!MAILBOXES[MARINA].some((box) => box.mailboxId === folder) && !state.extraFolders.includes(folder)) {
+    state.extraFolders.push(folder);
+    state.moveLog.push({ created: folder, at: Date.now() });
+  }
+  const seen = state.seen.get(MARINA);
+  const wasSeen = seen.has(messageId);
+  state.moved = (state.moved ?? 0) + 1;
+  one.messageId = `${folder}:43:${state.moved}`;
+  one.mailboxId = folder;
+  seen.delete(messageId);
+  if (wasSeen) seen.add(one.messageId);
+  state.moveLog.push({ messageId, folder, movedTo: one.messageId, seen: wasSeen, ok: true, at: Date.now() });
+  return { ok: true };
+}
+
 /** ferry's per-message read latency, in ms. */
 export function readDelayMs() {
   const state = groupsState();
@@ -448,14 +475,16 @@ function baseSpec(id, label, accountId, address, send, archive = false) {
   return {
     id,
     label,
-    capabilities: { ...CAPS, send, ...(archive ? { archive: true } : {}) },
+    capabilities: { ...CAPS, send, ...(archive ? { archive: true, move: true } : {}) },
     setup: { fields: [], submit: async () => { throw new Error('this fixture provider adopts its accounts'); } },
     async listAccounts() {
       return [{ accountId, providerId: id, displayName: OWN_NAME, address, state: 'active' }];
     },
     async health() { return { state: 'ok', checkedAt: Date.now() }; },
     async listMailboxes() {
-      return MAILBOXES[accountId].map((mailbox) => {
+      const extra = accountId === MARINA ? (groupsState().extraFolders ?? []) : [];
+      const boxes = [...MAILBOXES[accountId], ...extra.map((folder) => ({ mailboxId: folder, name: folder, role: 'other' }))];
+      return boxes.map((mailbox) => {
         const held = messagesOf(accountId).filter((one) => one.mailboxId === mailbox.mailboxId);
         return { ...mailbox, total: held.length, unread: held.filter((one) => !isSeen(accountId, one.messageId)).length };
       });
@@ -496,6 +525,9 @@ export const marinaSpec = {
   },
   async archiveMany(_accountId, messageIds) {
     return messageIds.map((messageId) => ({ messageId, ...archiveOne(messageId) }));
+  },
+  async moveMany(_accountId, messageIds, folder) {
+    return messageIds.map((messageId) => ({ messageId, ...moveOne(messageId, folder) }));
   },
   async categoryHints(_accountId, mailboxId) {
     groupsState().categoryCalls.push({ mailboxId, at: Date.now() });

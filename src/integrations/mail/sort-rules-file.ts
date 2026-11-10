@@ -54,6 +54,7 @@ export function dumpRulesDoc(doc: RulesFileDoc): string {
     if (rule.enabled === false) out.enabled = false
     if (rule.label) out.label = rule.label
     if (rule.skipInbox) out.skipInbox = true
+    if (rule.moveTo) out.moveTo = rule.moveTo
     return out
   })
   return HEADER + yaml.dump({ version: 1, groups: doc.groups, rules }, { lineWidth: -1, noRefs: true })
@@ -65,11 +66,12 @@ export const EXAMPLE_RULES_FILE = `# Walnut mail sorting rules.
 # must hold) and then (Important, Not important, or a group name). Not important keeps the
 # model's group; a group name puts the mail in that group.
 # Conditions: from (address glob like "issues@*" or "@example.invalid", or a display name),
-#   subject (text it contains, or { re: "pattern" }), listId, addressedToMe (true/false),
+#   fromContains (text the sender's address or name contains), subject (text it contains, or { re: "pattern" }), listId, addressedToMe (true/false),
 #   cc (true), sender (person, bulk, transactional, automated, unknown), account, message,
 #   group (the group the model put the mail in).
 # skipInbox: true keeps the mail out of the inbox: Walnut moves it to the account's archive as it
 #   arrives (unread), while Walnut is running. Only with a group in then.
+# moveTo: "Folder name" files the mail into that folder (a Gmail label) instead, made when missing.
 # Example:
 #   - when: { from: ["issues@*", "noreply-oncall-notifications@*"] }
 #     then: On-call & tickets

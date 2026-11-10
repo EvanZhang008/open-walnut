@@ -16,6 +16,7 @@ export default defineConfig({
       '@open-walnut/letter-frame': path.resolve(import.meta.dirname, 'src/core/human-inbox/letter-frame.ts'),
       '@open-walnut/pending-markup': path.resolve(import.meta.dirname, 'src/core/stream/pending-markup.ts'),
       '@open-walnut/service-url': path.resolve(import.meta.dirname, 'src/core/service-url.ts'),
+      '@open-walnut/mail-folder-name': path.resolve(import.meta.dirname, 'src/integrations/mail/folder-name.ts'),
       '@open-walnut/content-item': path.resolve(import.meta.dirname, 'src/core/content-actions/content-item.ts'),
       '@open-walnut/compaction-notice': path.resolve(import.meta.dirname, 'src/core/stream/compaction-notice.ts'),
       '@open-walnut/hint-format': path.resolve(import.meta.dirname, 'src/core/hints/hint-format.ts'),

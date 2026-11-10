@@ -50,7 +50,24 @@ export interface MailGroupCardRequest {
   cannotArchive?: string[];
 }
 
-export type MailLearnRequest = MailCorrectRequest | MailGroupCardRequest;
+/** "Filter mails like these…" (a group line) or "Filter mails like this…" (one letter). */
+export interface MailFilterRequest {
+  kind: 'filter-folder';
+  scope: MailGroupsScope;
+  viewKey: string;
+  anchor: HTMLElement;
+  /** The card's starting values (mail-filter-defaults.ts). */
+  fromContains: string;
+  subject: string;
+  folder: string;
+  origin: 'group' | 'letter';
+  /** What the card is for (a group id, or a letter's account and id): its fields' drafts are kept under it. */
+  draftId: string;
+  /** The one account the filter is for (a letter's own; a group seen in one account). Unset: every account. */
+  accountId?: string;
+}
+
+export type MailLearnRequest = MailCorrectRequest | MailGroupCardRequest | MailFilterRequest;
 
 let learn: MailLearnRequest | null = null;
 const learnListeners = new Set<() => void>();
@@ -66,6 +83,10 @@ export function requestMailCorrect(request: Omit<MailCorrectRequest, 'kind'>): v
 
 export function requestGroupCard(request: MailGroupCardRequest): void {
   setLearn(request);
+}
+
+export function requestMailFilter(request: Omit<MailFilterRequest, 'kind'>): void {
+  setLearn({ kind: 'filter-folder', ...request });
 }
 
 export function closeMailLearnRequest(): void {

@@ -15,6 +15,7 @@
  * `PRIMARY_ONLY` on a replica.
  */
 import { PRIMARY_ONLY, errorReply, readBody, segmentsAfter } from './contract.js'
+import { ambientTestRun } from '../../core/test-run.js'
 import { pairsOf, parseBodyScope, scopeKey } from './routes-sort.js'
 import { IMPORTANT, isGroupIdShape } from './sort-classify.js'
 import {
@@ -48,6 +49,16 @@ function watermarkOf(value: unknown): Watermark | undefined {
 }
 
 /** Make the bulk runner over the service (per message) and the provider (many at once). */
+
+/**
+ * A test run (CLAUDE.md "Live verification") never moves the person's real mail: its copy of the
+ * rules is the person's file, and a move happens in their account, outside anything a test cleans up.
+ */
+export const TEST_RUN_MOVE = {
+  status: 409,
+  json: { error: 'test_run', message: 'A test run cannot move mail: it would move the real mail in this account.' },
+}
+
 export function createBulkRead(deps: MailSortWriteDeps): MailBulkRead {
   const { service, events, sort, walnut } = deps
   return new MailBulkRead({
@@ -113,6 +124,7 @@ export function registerMailSortWriteRoutes(
   // under the rule they just saved, so the ledger and the rules list count them with the rule's own.
   walnut.http.route('post', '/groups/archive', async (request) => {
     if (walnut.replica) return PRIMARY_ONLY
+    if (ambientTestRun()) return TEST_RUN_MOVE
     const filters = deps.filters
     if (!filters) return { status: 503, json: { error: 'unavailable', message: 'Walnut cannot move mail here.' } }
     const body = await readBody(request)
@@ -129,13 +141,40 @@ export function registerMailSortWriteRoutes(
       if (!sort.isFilterRule(ruleId)) return bad('ruleId must name a rule that keeps mail out of the inbox')
       const pairs = await pairsOf(store, scope)
       const rows = await store.sort.selectBulkRead(pairs, group, undefined, watermark)
-      const movable = rows.filter((row) => filters.canArchive(row.account_id))
+      const folder = sort.filterTarget(ruleId)?.folder
+      const movable = rows.filter((row) => (folder ? filters.canFile(row.account_id) : filters.canArchive(row.account_id)))
       const queued = await filters.queue(movable.map((row) => ({
         accountId: row.account_id, messageId: row.message_id, mailboxId: row.mailbox_id, ruleId,
       })))
       void filters.runNow()
       walnut.log.info('mail group queued for the archive', { group, ruleId, queued, skipped: rows.length - movable.length })
       return { status: 202, json: { queued, skipped: rows.length - movable.length } }
+    } catch (error) {
+      return errorReply(walnut, error)
+    }
+  })
+
+  // A filter's "apply to the mail already there": every inbox mail the saved rule decides, read or
+  // unread, queued under it. Moves the person's own mail between folders; never deletes any.
+  walnut.http.route('post', '/rules/apply', async (request) => {
+    if (walnut.replica) return PRIMARY_ONLY
+    if (ambientTestRun()) return TEST_RUN_MOVE
+    const filters = deps.filters
+    if (!filters) return { status: 503, json: { error: 'unavailable', message: 'Walnut cannot move mail here.' } }
+    const body = await readBody(request)
+    if (!body) return bad('a JSON body is required')
+    const ruleId = typeof body.ruleId === 'string' ? body.ruleId : ''
+    try {
+      await sort.ready()
+      const target = sort.filterTarget(ruleId)
+      if (!target) return bad('ruleId must name a rule that keeps mail out of the inbox')
+      const found = await sort.filterMovesNow(ruleId)
+      const can = (accountId: string) => (target.folder ? filters.canFile(accountId) : filters.canArchive(accountId))
+      const movable = found.filter((one) => can(one.accountId))
+      const queued = await filters.queue(movable)
+      void filters.runNow()
+      walnut.log.info('mail filter applied to the inbox', { ruleId, found: found.length, queued, skipped: found.length - movable.length })
+      return { status: 202, json: { found: found.length, queued, skipped: found.length - movable.length } }
     } catch (error) {
       return errorReply(walnut, error)
     }

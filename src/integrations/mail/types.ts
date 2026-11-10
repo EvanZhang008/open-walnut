@@ -36,6 +36,11 @@ export interface MailCapabilities {
    */
   archive?: boolean
   /**
+   * Can move mail into a named folder (label) of the account, creating it when it is missing
+   * (`moveMany`), which is what a filter rule with `moveTo` does. Optional like `archive`.
+   */
+  move?: boolean
+  /**
    * Can read a meeting invite's place on the calendar and answer it (`inviteDetails` and
    * `respondToInvite`). Optional like `archive`; absent means the reader offers no Accept button.
    */
@@ -550,6 +555,19 @@ export interface MailProviderSpec {
   archiveMany?(
     accountId: string,
     messageIds: string[],
+  ): Promise<Array<{ messageId: string; ok: boolean; reason?: string }>>
+  /**
+   * Move messages into the folder `folder` (a path as the account names it; Gmail: a label), made
+   * first when the account has none by that name. Read only when `capabilities.move` is true.
+   *
+   * Same rules as `archiveMany`: the read flag travels unchanged, one outcome per requested id (a
+   * missing one counts as failed), and a message already in that folder counts as moved. It never
+   * deletes mail.
+   */
+  moveMany?(
+    accountId: string,
+    messageIds: string[],
+    folder: string,
   ): Promise<Array<{ messageId: string; ok: boolean; reason?: string }>>
   /**
    * The provider's own category verdicts for one mailbox (Gmail tabs), as message ids.

@@ -317,13 +317,16 @@ export function importantFolders(
   if (opts.expanded) return { shown, promoted: [], hidden: tail };
   const recent = new Set((opts.recent ?? []).slice(0, RECENT_CAP));
   const wanted = tail.filter((row) => (
-    (opts.arrivals[pairKey(accountId, row.mailboxId)] ?? 0) > 0
+    row.filter === true
+    || (opts.arrivals[pairKey(accountId, row.mailboxId)] ?? 0) > 0
     || row.mailboxId === opts.selectedMailboxId
     || recent.has(row.mailboxId)
   ));
   // Capped in SERVER order, so which three survive does not depend on why each was wanted: the tail is
   // already ordered, and cutting by "reason" would move rows around between ticks.
-  const promoted = wanted.slice(0, PROMOTED_CAP);
+  // A filter's folder is always kept: it is where the person told Walnut to put that mail.
+  let others = 0;
+  const promoted = wanted.filter((row) => row.filter === true || (others += 1) <= PROMOTED_CAP);
   const lifted = new Set(promoted.map((row) => row.mailboxId));
   return { shown, promoted, hidden: tail.filter((row) => !lifted.has(row.mailboxId)) };
 }

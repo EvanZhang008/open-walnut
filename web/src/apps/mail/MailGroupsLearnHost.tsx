@@ -11,6 +11,7 @@
 import { useMailLearnRequest } from './mail-groups-bus';
 import { MailCorrectPopover } from './MailCorrectPopover';
 import { MailGroupCard } from './MailGroupCard';
+import { MailFilterCard } from './MailFilterCard';
 
 let requestSeq = 0;
 const requestKeys = new WeakMap<object, number>();
@@ -30,5 +31,6 @@ export function MailGroupsLearnHost() {
   if (!request) return null;
   const key = keyOf(request);
   if (request.kind === 'correct') return <MailCorrectPopover key={key} request={request} />;
+  if (request.kind === 'filter-folder') return <MailFilterCard key={key} request={request} />;
   return <MailGroupCard key={key} request={request} />;
 }

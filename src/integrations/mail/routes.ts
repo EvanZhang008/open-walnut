@@ -127,6 +127,10 @@ const DIGEST_DEADLINE_MS = 8_000
  */
 const ACCOUNTS_DEADLINE_MS = 2_500
 
+
+/** A folder name compared across servers: lower case, "/" and "." both read as a level. */
+const folderKey = (name: string): string => name.toLowerCase().replace(/[./]/g, '/')
+
 export function registerMailRoutes(
   walnut: WalnutServerPluginApi,
   deps: {
@@ -147,7 +151,7 @@ export function registerMailRoutes(
 ): void {
   const {
     store, service, accounts, providers, sync, drafts, approvals, sends, digest,
-    unsubscribe,
+    unsubscribe, sort,
   } = deps
   const primaryOnly = (): boolean => walnut.replica
 
@@ -219,7 +223,12 @@ export function registerMailRoutes(
     const account = firstQuery(request.query.account)
     if (!account) return { status: 400, json: { error: 'invalid', message: 'account is required' } }
     try {
-      return { json: { mailboxes: await service.listMailboxes(account) } }
+      const mailboxes = await service.listMailboxes(account)
+      // A folder a filter files mail into is marked, so the sidebar shows it rather than folding it away.
+      const filed = [...sort.filterFolders()].map(folderKey)
+      // The server may put its namespace prefix in front (`INBOX.CI`) and use "." between levels.
+      const isFiled = (mailboxId: string) => { const key = folderKey(mailboxId); return filed.some((one) => key === one || key.endsWith(`/${one}`)) }
+      return { json: { mailboxes: filed.length === 0 ? mailboxes : mailboxes.map((one) => (isFiled(one.mailboxId) ? { ...one, filter: true } : one)) } }
     } catch (error) {
       return errorReply(walnut, error)
     }

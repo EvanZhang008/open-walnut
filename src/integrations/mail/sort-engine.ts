@@ -35,6 +35,8 @@ export const GROUPED_META_KEY = 'grouped_on'
 export const FILTER_SINCE_META_KEY = 'mail_filter_since'
 const SENT_ROLES_TTL_MS = 60_000
 const SENT_PAGE = 2_000
+/** Inbox rows read per pass when a filter is applied to the mail already there. */
+const APPLY_SCAN_BATCH = 500
 
 export interface MailSortEngineDeps {
   store: MailStore
@@ -334,6 +336,63 @@ export class MailSortEngine {
     return !!this.byId.get(ruleId)?.skipInbox
   }
 
+  /**
+   * Where an enabled filter sends its mail: `{ folder }` for a `moveTo` rule, `{}` for the archive,
+   * null when no enabled rule keeps mail out of the inbox under this id (its queued moves are dropped).
+   */
+  filterTarget(ruleId: string): { folder?: string } | null {
+    const rule = this.byId.get(ruleId)
+    if (!rule?.skipInbox) return null
+    return rule.moveTo ? { folder: rule.moveTo } : {}
+  }
+
+  /** Every folder an enabled filter files mail into, lowercased (the sidebar keeps them in view). */
+  filterFolders(): Set<string> {
+    return new Set(this.compiled.flatMap((rule) => (rule.moveTo ? [rule.moveTo.toLowerCase()] : [])))
+  }
+
+  /**
+   * "Apply to the mail already there": every cached inbox mail this filter decides, read or unread,
+   * whenever it arrived. Sorts the candidates now (so the answer does not wait for the background
+   * recompute) and returns the moves for the caller to queue. Never touches mail outside an inbox.
+   */
+  async filterMovesNow(ruleId: string): Promise<Array<{ accountId: string; messageId: string; mailboxId: string; ruleId: string }>> {
+    await this.start()
+    const rule = this.byId.get(ruleId)
+    if (!rule?.skipInbox) return []
+    const pairs = await this.inboxFolderPairs()
+    const out: Array<{ accountId: string; messageId: string; mailboxId: string; ruleId: string }> = []
+    if (pairs.length === 0) return out
+    for (let after = 0; ;) {
+      const rows = await this.deps.store.sort.scanScope(pairs, after, APPLY_SCAN_BATCH)
+      if (rows.length === 0 || this.disposed) break
+      after = rows[rows.length - 1]!.rowid
+      const candidates = rows.filter((row) => rule.match(this.features(row)))
+      if (candidates.length === 0) continue
+      const sorted = await this.sortRows(candidates)
+      sorted.rows.forEach((row, n) => {
+        if (sorted.verdicts[n]!.reason !== `rule:${ruleId}`) return
+        out.push({ accountId: row.account_id, messageId: row.message_id, mailboxId: row.mailbox_id, ruleId })
+      })
+    }
+    return out
+  }
+
+  /**
+   * Of these queued moves, the message ids `ruleId` still decides now: the cached row is still there,
+   * the rule's condition still matches it, and no rule above it takes it first. A rule edited after
+   * the moves were queued keeps its id, so the mover asks this at move time.
+   */
+  async filterStillDecides(ruleId: string, accountId: string, messageIds: string[]): Promise<Set<string>> {
+    await this.start()
+    const rule = this.byId.get(ruleId)
+    if (!rule?.skipInbox || messageIds.length === 0) return new Set()
+    const rows = (await this.deps.store.sort.rowsByIds(accountId, messageIds)).filter((row) => rule.match(this.features(row)))
+    if (rows.length === 0) return new Set()
+    const sorted = await this.sortRows(rows)
+    return new Set(sorted.rows.filter((_row, n) => sorted.verdicts[n]!.reason === `rule:${ruleId}`).map((row) => row.message_id))
+  }
+
   private recomputeIfNeeded(): void {
     if (this.disposed) return
     this.currentRev = computeRulesRev(this.file.current.doc.rules, this.identities, (name) => this.idForLabel(name))
@@ -457,7 +516,7 @@ export class MailSortEngine {
     return this.accountLabels.get(accountId) ?? accountId
   }
 
-  summarize(rule: Pick<Rule, 'when' | 'then' | 'label'>): string {
+  summarize(rule: Pick<Rule, 'when' | 'then' | 'label'> & Pick<Partial<Rule>, 'moveTo'>): string {
     return summarizeRule(rule, { accountLabel: (id) => this.accountLabel(id) })
   }
 

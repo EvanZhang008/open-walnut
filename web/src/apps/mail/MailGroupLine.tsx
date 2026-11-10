@@ -27,9 +27,10 @@ import { openMailMessage } from './mail-actions';
 import { filterRuleFor } from './mail-group-filter';
 import { groupBusy, slotKey, startBulkRead, stopBulk, useBulkSlot, type BulkTarget } from './mail-bulk-read';
 import { formatCount, formatMailTime, isUnread, senderLabel } from './mail-format';
-import { groupsViewKey, requestGroupCard } from './mail-groups-bus';
+import { groupsViewKey, requestGroupCard, requestMailFilter } from './mail-groups-bus';
+import { filterDefaultsFor } from './mail-filter-defaults';
 import {
-  CANT_MARK_HERE, FILTER_MENU, GROUPS_UPDATING_TITLE, GROUP_ACTIONS_ARIA, IMPORTANT_MENU, RENAME_MENU,
+  CANT_MARK_HERE, FILTER_MENU, FOLDER_FILTER_GROUP_MENU, GROUPS_UPDATING_TITLE, GROUP_ACTIONS_ARIA, IMPORTANT_MENU, RENAME_MENU,
   UNSUBSCRIBE_ELLIPSIS, groupRowAria, markLabel, progressLabel, readOnlyTitle,
 } from './mail-groups-copy';
 import { loadGroupPage, setGroupOpen, useGroupPage } from './mail-groups-store';
@@ -173,6 +174,15 @@ export function MailGroupLine({
       ...(kind === 'group-filter' ? { watermark: group.watermark, cannotArchive: group.cannotArchive ?? [] } : {}),
     });
   };
+  // "Filter mails like these…": the fields start from the group's own mail (its loaded rows, else its
+  // top sender), and the folder from its name.
+  const openFilter = () => {
+    const anchor = lineRef.current;
+    if (!anchor) return;
+    const top = group.topSenders.find((one) => one.key.includes('@'))?.key;
+    const defaults = filterDefaultsFor(page.rows, { label: group.label, ...(page.rows.length === 0 && top ? { sender: top } : {}) });
+    requestMailFilter({ scope, viewKey, anchor, origin: 'group', draftId: group.id, ...defaults, ...('accountId' in scope ? { accountId: scope.accountId } : {}) });
+  };
   const items: ContextMenuItem[] = [
     { key: 'mark', label: markLabel(markable), when: unread > 0, disabled: markBlocked, title: markTitle, onSelect: mark },
     {
@@ -181,6 +191,7 @@ export function MailGroupLine({
     },
     { divider: true },
     { key: 'important', label: IMPORTANT_MENU, onSelect: () => card('group-important') },
+    { key: 'filter-folder', label: FOLDER_FILTER_GROUP_MENU, onSelect: openFilter },
     { key: 'filter', label: FILTER_MENU, when: filterRuleFor(group.id, group.label) !== null, onSelect: () => card('group-filter') },
     { key: 'rename', label: RENAME_MENU, onSelect: () => card('rename') },
   ];

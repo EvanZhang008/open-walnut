@@ -54,6 +54,7 @@ export interface ImapMailboxInfo {
 export interface ImapListEntry {
   path: string
   name?: string
+  delimiter?: string
   specialUse?: string
   flags?: Iterable<string>
   status?: { messages?: number; unseen?: number }
@@ -90,6 +91,8 @@ export interface ImapFetchedMessage {
 export interface ImapClient {
   usable?: boolean
   capabilities?: Map<string, unknown> | Set<string> | string[]
+  /** The personal namespace (RFC 2342): imapflow puts `prefix` in front of every CREATE and MOVE path. */
+  namespace?: { prefix?: string; delimiter?: string }
   connect(): Promise<void>
   logout(): Promise<void>
   close?(): void
@@ -118,6 +121,11 @@ export interface ImapClient {
    * capability first, because imapflow's COPY + EXPUNGE fallback is not safe (provider.ts).
    */
   messageMove?(range: string, destination: string, options?: unknown): Promise<unknown>
+  /**
+   * `CREATE`. Optional like `messageMove`: only a filter rule's folder is made, when the account has
+   * no folder by that name yet (Gmail makes a label). Never deletes or renames anything.
+   */
+  mailboxCreate?(path: string | string[]): Promise<unknown>
   on(event: string, listener: (payload: unknown) => void): unknown
   removeAllListeners?(event?: string): unknown
 }

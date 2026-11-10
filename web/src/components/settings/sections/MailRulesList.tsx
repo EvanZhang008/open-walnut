@@ -96,7 +96,9 @@ export function MailRulesRulesList(props: RulesListProps) {
                   {summaryParts(rule).map((part, at) => part.code
                     ? <code key={at} className="mail-rule-pattern" data-testid="mail-rule-pattern" title={part.full}>{part.text}</code>
                     : <span key={at} className={part.nowrap ? 'mail-rule-target' : undefined}>{part.text}</span>)}
-                  {rule.skipInbox && <span className="mail-rule-skip-badge" data-testid="mail-rule-skip-badge">· Skips the Inbox</span>}
+                  {rule.moveTo
+                    ? <span className="mail-rule-skip-badge" data-testid="mail-rule-folder-badge">· Files into {rule.moveTo}</span>
+                    : rule.skipInbox && <span className="mail-rule-skip-badge" data-testid="mail-rule-skip-badge">· Skips the Inbox</span>}
                 </span>
                 {provenanceLine(rule) && <span className="mail-rule-provenance" data-testid="mail-rule-provenance">{provenanceLine(rule)}</span>}
                 {/* Said once: while its editor is open, the editor says it under the pattern. */}

@@ -14,19 +14,28 @@
 import { groupIdForName, reservedGroupId } from './sort-classify.js'
 import { compileSubjectPattern } from './sort-regex-safety.js'
 import type { Rule, RuleSenderValue, RuleValidationError, RuleWhen, RulesFileDoc } from './sort-types.js'
+import { folderNameProblem } from './folder-name.js'
 
 export const MAX_GROUP_NAME = 40
 export const MAX_RULES = 500
 // `offReason` is view-only (GET /rules puts it on a rule loaded switched off): a client that sends a
 // rule back as it read it must not be refused for it. It is never stored.
-const RULE_KEYS = new Set(['id', 'when', 'then', 'source', 'note', 'created', 'enabled', 'label', 'skipInbox', 'offReason'])
-const WHEN_KEYS = new Set(['from', 'subject', 'listId', 'addressedToMe', 'cc', 'sender', 'account', 'message', 'group'])
+const RULE_KEYS = new Set(['id', 'when', 'then', 'source', 'note', 'created', 'enabled', 'label', 'skipInbox', 'moveTo', 'offReason'])
+const WHEN_KEYS = new Set(['from', 'fromContains', 'subject', 'listId', 'addressedToMe', 'cc', 'sender', 'account', 'message', 'group'])
 const SENDERS = new Set<RuleSenderValue>(['person', 'bulk', 'transactional', 'automated', 'unknown'])
 /** The display names a `then` may use for the reserved destinations, for the "did you mean" suggestion. */
 const RESERVED_LABELS = ['Important', 'Not important']
 
 export const THEN_REQUIRED = 'then must name a group, Important or Not important.'
 export const SKIP_INBOX_NEEDS_GROUP = 'skipInbox needs a group in then: mail kept out of the inbox is still shown in that group.'
+export const MOVE_TO_NEEDS_GROUP = 'moveTo needs a group in then: mail filed into a folder is still shown in that group until it moves.'
+export { MAX_FOLDER_NAME } from './folder-name.js'
+
+/** Why a filter's folder name cannot be used, or null (the provider checks its own names too). */
+export function moveToProblem(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return 'moveTo must name a folder.'
+  return folderNameProblem(value)
+}
 export const WHEN_EMPTY = 'when must list at least one condition.'
 
 export function tooSimilar(a: string, b: string): string {
@@ -93,6 +102,9 @@ export function whenProblems(when: unknown, options: ValidateOptions = {}): Arra
   }
   const w = when as Record<string, unknown>
   if ('from' in w && !stringList(w.from)) out.push(['when.from', 'from must be a text or a list of texts.'])
+  if ('fromContains' in w && (typeof w.fromContains !== 'string' || !w.fromContains.trim() || w.fromContains.length > 320)) {
+    out.push(['when.fromContains', 'fromContains must be a text (at most 320 characters).'])
+  }
   if ('subject' in w) {
     const subject = w.subject
     if (typeof subject === 'string') {
@@ -212,6 +224,11 @@ export function validateRulesDoc(raw: unknown, options: ValidateOptions = {}): R
     else if (item.skipInbox === true && !then && thenName && reservedGroupId(thenName)) {
       push('skipInbox', SKIP_INBOX_NEEDS_GROUP, id)
     }
+    if (item.moveTo !== undefined) {
+      const problem = moveToProblem(item.moveTo)
+      if (problem) push('moveTo', problem, id)
+      else if (!then && thenName && reservedGroupId(thenName)) push('moveTo', MOVE_TO_NEEDS_GROUP, id)
+    }
     const created = createdOf(item.created)
     if (created === null) push('created', 'created must be a date like 2026-09-28.', id)
     rules.push({
@@ -224,6 +241,7 @@ export function validateRulesDoc(raw: unknown, options: ValidateOptions = {}): R
       ...(item.enabled === false ? { enabled: false } : {}),
       ...(typeof item.label === 'string' ? { label: item.label } : {}),
       ...(item.skipInbox === true ? { skipInbox: true } : {}),
+      ...(typeof item.moveTo === 'string' && item.moveTo.trim() ? { moveTo: item.moveTo.trim() } : {}),
     })
   })
   if (errors.length > 0) return { ok: false, errors }

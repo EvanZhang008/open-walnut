@@ -44,6 +44,7 @@ const config = mergeConfig(
         '@open-walnut/companion-keep': path.resolve(import.meta.dirname, 'src/core/replication/companion-keep.ts'),
         '@open-walnut/three-way-merge': path.resolve(import.meta.dirname, 'src/lib/three-way-merge.ts'),
         '@open-walnut/mail-subject-pattern': path.resolve(import.meta.dirname, 'src/integrations/mail/sort-regex-safety.ts'),
+        '@open-walnut/mail-folder-name': path.resolve(import.meta.dirname, 'src/integrations/mail/folder-name.ts'),
       },
     },
     test: {

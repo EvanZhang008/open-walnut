@@ -22,6 +22,7 @@ export default defineConfig({
       // and a rule only one of them applies reappears as an artifact on reload.
       '@open-walnut/pending-markup': path.resolve(__dirname, '../src/core/stream/pending-markup.ts'),
       '@open-walnut/service-url': path.resolve(__dirname, '../src/core/service-url.ts'),
+      '@open-walnut/mail-folder-name': path.resolve(__dirname, '../src/integrations/mail/folder-name.ts'),
       // Same reason: what "Talk to CEO" sends and what "New task" fills a draft with have ONE
       // definition, read by the server's route and this browser alike.
       '@open-walnut/content-item': path.resolve(__dirname, '../src/core/content-actions/content-item.ts'),

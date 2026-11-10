@@ -60,6 +60,7 @@ import { advanceCursor, hasMore, planPoll } from './poll-range.js'
 import { createImapSender } from './provider-send.js'
 import { imapPortFor, pastedPassword, SETUP_PRESETS, serverFilesSentCopy, submissionPortFor } from './setup-presets.js'
 import { verifySmtp, type SmtpSecurity } from './smtp.js'
+import { folderNameProblem } from '../mail/folder-name.js'
 
 /**
  * Headers the ENVELOPE does not carry, or carries in a lossy form.
@@ -175,6 +176,8 @@ const CAPABILITIES: MailCapabilities = {
   // `UID MOVE` into the account's archive folder (`archiveTarget`); an account without one answers
   // every id as failed, with the reason.
   archive: true,
+  // `UID MOVE` into a folder a filter rule names, made with `CREATE` when missing.
+  move: true,
 }
 
 /** An IMAP server without RFC 6851 MOVE: nothing is moved there (see `archiveMany`). */
@@ -200,6 +203,9 @@ export function archiveTarget(
     ?? boxes.find((one) => mailboxRole(one, roles) === 'archive'))?.path
 }
 
+/** The folder rules every filter path shares (src/integrations/mail/folder-name.ts). */
+export { folderNameProblem }
+
 export function createImapProvider(deps: {
   store: ImapAccountStore
   pool: ImapPool
@@ -214,6 +220,71 @@ export function createImapProvider(deps: {
   }
 
   const sender = createImapSender({ store, pool, log, accountOf })
+
+  type Connection = ImapConnection
+  type ListedBox = Awaited<ReturnType<ImapClient['list']>>[number]
+  /**
+   * `UID MOVE` (RFC 6851) into the folder `pick` names, per source folder, 200 UIDs a command. A server
+   * without MOVE is refused (`NO_MOVE`), never emulated. Flags travel with the message, so unread
+   * mail stays unread. Mail already in the target folder counts as moved. A handle made under
+   * another UIDVALIDITY is refused (`FOLDER_RESET`): after a reset the same UID can be another mail.
+   */
+  const moveInto = async (
+    accountId: string,
+    messageIds: string[],
+    pick: (connection: Connection, boxes: ListedBox[]) => Promise<{ target: string } | { refused: string }>,
+  ): Promise<Array<{ messageId: string; ok: boolean; reason?: string }>> => {
+    const out: Array<{ messageId: string; ok: boolean; reason?: string }> = []
+    const byFolder = new Map<string, { mailbox: string; uidValidity: string; items: Array<{ messageId: string; uid: number }> }>()
+    for (const messageId of messageIds) {
+      const coord = decodeMessageId(messageId)
+      if (!coord) { out.push({ messageId, ok: false, reason: 'not an IMAP message handle' }); continue }
+      const key = `${coord.mailbox}\u0000${coord.uidValidity}`
+      const group = byFolder.get(key) ?? { mailbox: coord.mailbox, uidValidity: coord.uidValidity, items: [] }
+      group.items.push({ messageId, uid: coord.uid })
+      byFolder.set(key, group)
+    }
+    if (byFolder.size === 0) return out
+    const connection = await pool.for(accountId)
+    const boxes = await connection.run('a mailbox list', (client) => client.list())
+    const picked = await pick(connection, boxes)
+    if ('refused' in picked) {
+      for (const group of byFolder.values()) for (const one of group.items) out.push({ messageId: one.messageId, ok: false, reason: picked.refused })
+      return out
+    }
+    const target = picked.target
+    for (const { mailbox, uidValidity, items } of byFolder.values()) {
+      if (mailbox === target) {
+        for (const one of items) out.push({ messageId: one.messageId, ok: true })
+        continue
+      }
+      for (const set of uidChunks(items.map((one) => one.uid))) {
+        const inSet = new Set(set.split(',').map(Number))
+        const chunk = items.filter((one) => inSet.has(one.uid))
+        try {
+          // A refusal is RETURNED, never thrown: a throw inside `run` reads as a dead connection, and
+          // the pool would drop the socket and back the whole account off.
+          const refused = await connection.run(`moving mail from ${mailbox} to ${target}`, async (client) => {
+            if (typeof client.messageMove !== 'function') return 'This IMAP client cannot move mail.'
+            // Checked BEFORE the call: without MOVE, imapflow falls back to COPY + \Deleted + EXPUNGE, and
+            // it deletes even when the copy failed, and a server without UIDPLUS expunges every
+            // \Deleted mail in the folder, not only these. Neither risk is worth a move.
+            if (!hasCapability(client, 'MOVE')) return NO_MOVE
+            const opened = await openMailbox(client, mailbox)
+            if (String(opened.uidValidity) !== uidValidity) return FOLDER_RESET
+            // A refused MOVE resolves to false (and a folder that did not open to undefined), not a throw.
+            const moved = await client.messageMove(set, target, { uid: true })
+            return moved ? null : 'The mail server refused to move this mail.'
+          })
+          for (const one of chunk) out.push(refused ? { messageId: one.messageId, ok: false, reason: refused } : { messageId: one.messageId, ok: true })
+        } catch (error) {
+          const reason = String((error as Error)?.message ?? error).slice(0, 200)
+          for (const one of chunk) out.push({ messageId: one.messageId, ok: false, reason })
+        }
+      }
+    }
+    return out
+  }
 
   const toAccount = (entry: { accountId: string; settings: { address: string }; displayName: string }): MailAccount => ({
     accountId: entry.accountId,
@@ -611,56 +682,56 @@ export function createImapProvider(deps: {
      * another UIDVALIDITY is refused (`FOLDER_RESET`): after a reset the same UID can be another mail.
      */
     async archiveMany(accountId: string, messageIds: string[]) {
-      const out: Array<{ messageId: string; ok: boolean; reason?: string }> = []
-      const byFolder = new Map<string, { mailbox: string; uidValidity: string; items: Array<{ messageId: string; uid: number }> }>()
-      for (const messageId of messageIds) {
-        const coord = decodeMessageId(messageId)
-        if (!coord) { out.push({ messageId, ok: false, reason: 'not an IMAP message handle' }); continue }
-        const key = `${coord.mailbox}\u0000${coord.uidValidity}`
-        const group = byFolder.get(key) ?? { mailbox: coord.mailbox, uidValidity: coord.uidValidity, items: [] }
-        group.items.push({ messageId, uid: coord.uid })
-        byFolder.set(key, group)
-      }
-      if (byFolder.size === 0) return out
       const entry = await accountOf(accountId)
-      const connection = await pool.for(accountId)
-      const boxes = await connection.run('a mailbox list', (client) => client.list())
-      const target = archiveTarget(boxes, entry.roles)
-      for (const { mailbox, uidValidity, items } of byFolder.values()) {
-        if (!target || mailbox === target) {
-          for (const one of items) {
-            out.push(target
-              ? { messageId: one.messageId, ok: true }
-              : { messageId: one.messageId, ok: false, reason: 'This account has no Archive folder.' })
+      return moveInto(accountId, messageIds, async (_connection, boxes) => {
+        const target = archiveTarget(boxes, entry.roles)
+        return target ? { target } : { refused: 'This account has no Archive folder.' }
+      })
+    },
+
+    /**
+     * `UID MOVE` into the folder a filter rule names, made first with `CREATE` when the account has
+     * none by that name. The name is the person's: "/" separates levels and is joined with the
+     * server's own separator, and the server's personal namespace prefix (`INBOX.` on some servers)
+     * is matched as imapflow adds it on CREATE and MOVE. A folder found by that name must be an
+     * ordinary one: never one the server marks or names as Trash, Junk, Sent, Drafts or the Inbox
+     * (filing into Trash is a deletion the server carries out later), never a `\Noselect` one.
+     * MOVE is checked before anything is made, so an account that cannot move mail gets no empty
+     * folder. The same MOVE guards as the archive; nothing is ever deleted.
+     */
+    async moveMany(accountId: string, messageIds: string[], folder: string) {
+      const wanted = folder.trim()
+      const entry = await accountOf(accountId)
+      return moveInto(accountId, messageIds, async (connection, boxes) => {
+        const problem = folderNameProblem(wanted)
+        if (problem) return { refused: problem }
+        return connection.run(`filing mail into ${wanted}`, async (client): Promise<{ target: string } | { refused: string }> => {
+          if (typeof client.messageMove !== 'function') return { refused: 'This IMAP client cannot move mail.' }
+          if (!hasCapability(client, 'MOVE')) return { refused: NO_MOVE }
+          const parts = wanted.split('/').map((part) => part.trim())
+          const prefix = client.namespace?.prefix ?? ''
+          const delimiter = client.namespace?.delimiter || boxes.find((one) => one.delimiter)?.delimiter || '/'
+          const joined = parts.join(delimiter)
+          const names = prefix && !joined.startsWith(prefix) ? [joined, prefix + joined] : [joined]
+          const found = boxes.find((one) => names.includes(one.path))
+            ?? boxes.find((one) => names.some((name) => name.toLowerCase() === one.path.toLowerCase()))
+          if (found) {
+            const role = mailboxRole(found, entry.roles)
+            const flags = [...(found.flags ?? [])].map((flag) => String(flag).toLowerCase())
+            if ((role !== 'other' && role !== 'archive') || flags.includes('\\noselect') || flags.includes('\\nonexistent')) {
+              return { refused: `${found.path} is a folder your mail server keeps for itself; name a folder of your own.` }
+            }
+            return { target: found.path }
           }
-          continue
-        }
-        for (const set of uidChunks(items.map((one) => one.uid))) {
-          const inSet = new Set(set.split(',').map(Number))
-          const chunk = items.filter((one) => inSet.has(one.uid))
+          if (typeof client.mailboxCreate !== 'function') return { refused: 'This IMAP client cannot make a folder.' }
           try {
-            // A refusal is RETURNED, never thrown: a throw inside `run` reads as a dead connection, and
-            // the pool would drop the socket and back the whole account off.
-            const refused = await connection.run(`moving mail from ${mailbox} to ${target}`, async (client) => {
-              if (typeof client.messageMove !== 'function') return 'This IMAP client cannot move mail.'
-              // Checked BEFORE the call: without MOVE, imapflow falls back to COPY + \Deleted + EXPUNGE, and
-              // it deletes even when the copy failed, and a server without UIDPLUS expunges every
-              // \Deleted mail in the folder, not only these. Neither risk is worth an archive.
-              if (!hasCapability(client, 'MOVE')) return NO_MOVE
-              const opened = await openMailbox(client, mailbox)
-              if (String(opened.uidValidity) !== uidValidity) return FOLDER_RESET
-              // A refused MOVE resolves to false (and a folder that did not open to undefined), not a throw.
-              const moved = await client.messageMove(set, target, { uid: true })
-              return moved ? null : 'The mail server refused to move this mail.'
-            })
-            for (const one of chunk) out.push(refused ? { messageId: one.messageId, ok: false, reason: refused } : { messageId: one.messageId, ok: true })
+            const made = await client.mailboxCreate(parts.length > 1 ? parts : joined) as { path?: unknown } | undefined
+            return { target: typeof made?.path === 'string' && made.path ? made.path : names[names.length - 1]! }
           } catch (error) {
-            const reason = String((error as Error)?.message ?? error).slice(0, 200)
-            for (const one of chunk) out.push({ messageId: one.messageId, ok: false, reason })
+            return { refused: `The mail server did not make the folder ${wanted}: ${String((error as Error)?.message ?? error).slice(0, 160)}` }
           }
-        }
-      }
-      return out
+        })
+      })
     },
 
     /**

@@ -134,8 +134,12 @@ export type {
  * `respondToInvite` show a meeting invite's time and current answer in the reader and send the
  * person's Accept / Tentative / Decline; `MailEnvelope.invite` marks which messages are invites, and
  * it IS in the envelope hash, but only when present, so no other row is rewritten.
+ *
+ * 1.12.0 adds the optional `move` capability and `moveMany`: a filter rule moves the mail it decides
+ * into a folder the person named (made when missing), still unread. A provider without it keeps
+ * working; the console says such an account cannot file mail into a folder.
  */
-export const MAIL_BASE_API_VERSION = '1.11.0'
+export const MAIL_BASE_API_VERSION = '1.12.0'
 
 /**
  * The method bag published as `mail:base`.

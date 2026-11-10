@@ -8,6 +8,8 @@
 import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
 import { PRIMARY_ONLY, errorReply } from './contract.js'
 import { testRunPrefsWrite } from '../../core/test-run-prefs.js'
+import { ambientTestRun } from '../../core/test-run.js'
+import { TEST_RUN_MOVE } from './routes-sort-write.js'
 import type { MailSortEngine } from './sort-engine.js'
 import type { MailStore } from './store.js'
 
@@ -28,6 +30,19 @@ function touchOf(value: unknown): { accountId: string; messageId: string } | und
     : undefined
 }
 
+
+/** Does this rules list hold a filter that moves mail (moveTo, skipInbox) the saved file does not have as it is? */
+function addsMove(rules: unknown[], sort: MailSortEngine): boolean {
+  return rules.some((item) => {
+    if (!item || typeof item !== 'object') return false
+    const rule = item as { id?: unknown; moveTo?: unknown; skipInbox?: unknown }
+    if (rule.skipInbox !== true && typeof rule.moveTo !== 'string') return false
+    const current = typeof rule.id === 'string' ? sort.filterTarget(rule.id) : null
+    if (!current) return true
+    return (typeof rule.moveTo === 'string' ? rule.moveTo.trim() : undefined) !== current.folder
+  })
+}
+
 export function registerMailSortRulesRoutes(
   walnut: WalnutServerPluginApi,
   deps: { store: MailStore; sort: MailSortEngine },
@@ -46,6 +61,8 @@ export function registerMailSortRulesRoutes(
     }
     try {
       await sort.ready()
+      // A test run may not add or retarget a filter that moves mail out of the inbox (routes-sort-write.ts).
+      if (ambientTestRun() && addsMove(body.rules, sort)) return TEST_RUN_MOVE
       const touch = touchOf(body.touch)
       const outcome = await sort.saveRules({ groups: body.groups ?? [], rules: body.rules }, body.baseRev, touch)
       if (!outcome.ok) return { status: outcome.status, json: outcome.json }

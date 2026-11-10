@@ -203,6 +203,35 @@ export function filterSavedText(label: string, moving: number): string {
     : `New mail in ${label} now skips the Inbox.`;
 }
 
+// ── filter into a folder (a Walnut-run filter that files mail into a folder of the account) ──
+
+export const FOLDER_FILTER_GROUP_MENU = 'Filter mails like these…';
+export const FOLDER_FILTER_LETTER_MENU = 'Filter mails like this…';
+export const FOLDER_FILTER_TITLE = 'Filter mails like these';
+export const FOLDER_FILTER_FROM = 'From contains';
+export const FOLDER_FILTER_SUBJECT = 'Subject contains';
+export const FOLDER_FILTER_FOLDER = 'Move to folder';
+export const FOLDER_FILTER_SAVE = 'Save filter';
+export const FOLDER_FILTER_NEEDS_MATCH = 'Fill in From or Subject: a filter with neither would take every mail.';
+export const FOLDER_FILTER_NOTE = 'Walnut moves the mail in your account, so it leaves the Inbox in every mail app, and stays unread. Nothing is deleted. Edit or delete the filter in Settings, Mail rules.';
+
+/** The live count under the fields. */
+export function folderFilterCountText(matches: number | null, partial = false): string {
+  if (matches === null) return 'Counting mails…';
+  if (matches === 0) return 'No mail in the Inbox matches yet; new mail that does goes to the folder.';
+  const many = partial ? `${formatCount(matches)}+` : formatCount(matches);
+  return matches === 1 ? '1 mail in the Inbox matches.' : `${many} mails in the Inbox match.`;
+}
+
+/** The box under the count, which already says how many: its label holds only its own words. */
+export const FOLDER_FILTER_MOVE_NOW = 'Also move the mail already in the Inbox';
+
+export function folderFilterSavedText(folder: string, moving: number): string {
+  return moving > 0
+    ? `Filter saved: mail like this goes to ${folder}. Moving ${formatCount(moving)} now.`
+    : `Filter saved: new mail like this goes to ${folder}.`;
+}
+
 // ── the reader head ──
 
 /** `In Ticket updates · Automated ticket status change`. */

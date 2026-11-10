@@ -163,6 +163,10 @@ export function compileWhen(
     const each = (Array.isArray(when.from) ? when.from : [when.from]).map(fromTest)
     tests.push((f) => each.some((test) => test(f)))
   }
+  if (typeof when.fromContains === 'string') {
+    const needle = when.fromContains.trim().toLowerCase()
+    tests.push((f) => (f.fromAddr ?? '').toLowerCase().includes(needle) || (f.fromName ?? '').toLowerCase().includes(needle))
+  }
   if (typeof when.subject === 'string') {
     const needle = when.subject.toLowerCase()
     tests.push((f) => f.subject.slice(0, 300).toLowerCase().includes(needle))
@@ -236,7 +240,8 @@ export function compileRules(
       source: rule.source,
       ...(rule.note ? { note: rule.note } : {}),
       ...(summarize ? { summary: summarize(rule) } : {}),
-      ...(rule.skipInbox ? { skipInbox: true } : {}),
+      ...(rule.skipInbox || rule.moveTo ? { skipInbox: true } : {}),
+      ...(rule.moveTo ? { moveTo: rule.moveTo.trim() } : {}),
       match: compileWhen(rule.when, groupId),
     })
   })

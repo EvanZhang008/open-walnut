@@ -28,6 +28,10 @@ const STRING_TO_REGEX = new Set(['match', 'matchAll', 'search'])
 const KNOWN: Record<string, string> = {
   'integrations/mail/sort-classify.ts: if (rule.match(features)) return { group: rule.group, reason: `rule:${rule.id}`, ruleId: rule.id }':
     "CompiledRule.match, a rule's compiled predicate, not String.prototype.match",
+  'integrations/mail/sort-engine.ts: const candidates = rows.filter((row) => rule.match(this.features(row)))':
+    "CompiledRule.match, a rule's compiled predicate, not String.prototype.match",
+  'integrations/mail/sort-engine.ts: const rows = (await this.deps.store.sort.rowsByIds(accountId, messageIds)).filter((row) => rule.match(this.features(row)))':
+    "CompiledRule.match, a rule's compiled predicate, not String.prototype.match",
   'integrations/mail/sort-preview.ts: if (!plan.match(features)) continue': "a preview plan's compiled predicate, not String.prototype.match",
   'integrations/mail/sort-rules-lines.ts: const pattern = new RegExp(`(^|[\\\\s{,-])${escape(key)}\\\\s*:`)':
     'a field name escaped to a literal: no quantifier or group comes from input, so it costs line length x key length',

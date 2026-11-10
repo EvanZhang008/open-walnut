@@ -33,7 +33,10 @@ export function summarizeWhen(when: RuleWhen, ctx: SummaryContext = {}): string 
   const patternLeads = froms.length === 0 && when.group === undefined && typeof when.subject === 'object' && when.subject !== null
   if (when.group !== undefined && froms.length === 0) parts.push(`Mail Walnut groups as ${when.group.trim()}`)
   else if (patternLeads) parts.push(`Subject matches /${(when.subject as { re: string }).re}/`)
-  else parts.push(froms.length > 0 ? `From ${joinOr(froms.map((one) => one.trim()))}` : 'Mail')
+  else if (froms.length > 0) parts.push(`From ${joinOr(froms.map((one) => one.trim()))}`)
+  else if (when.fromContains) parts.push(`From a sender with "${when.fromContains.trim()}"`)
+  else parts.push('Mail')
+  if (froms.length > 0 && when.fromContains) parts.push(`(sender with "${when.fromContains.trim()}")`)
   if (when.group !== undefined && froms.length > 0) parts.push(`grouped as ${when.group.trim()}`)
   if (typeof when.subject === 'string') parts.push(`with "${when.subject}" in the subject`)
   else if (when.subject && !patternLeads) parts.push(`with a subject matching /${when.subject.re}/`)
@@ -53,8 +56,8 @@ export function messageRuleLabel(rule: Pick<Rule, 'label' | 'when'>): string {
 }
 
 /** `From issues@* or noreply-oncall-notifications@* → On-call & tickets`. */
-export function summarizeRule(rule: Pick<Rule, 'when' | 'then' | 'label'>, ctx: SummaryContext = {}): string {
-  const target = rule.then.trim()
+export function summarizeRule(rule: Pick<Rule, 'when' | 'then' | 'label'> & Pick<Partial<Rule>, 'moveTo'>, ctx: SummaryContext = {}): string {
+  const target = rule.moveTo ? `${rule.then.trim()}, filed into ${rule.moveTo.trim()}` : rule.then.trim()
   if (rule.when.message) return `${messageRuleLabel(rule)} → ${target}`
   return `${summarizeWhen(rule.when, ctx)} → ${target}`
 }

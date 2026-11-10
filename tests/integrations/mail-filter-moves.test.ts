@@ -12,7 +12,11 @@
  * - an account that cannot archive fails at once, without a call;
  * - a mail that comes BACK to the inbox is moved again, no sooner than 10 minutes after the last
  *   move and at most five times (a server that ignores the move cannot loop the mover);
- * - a move still waiting when its rule goes (Undo) is dropped, never made, batch by batch.
+ * - a move still waiting when its rule goes (Undo) is dropped, never made, batch by batch;
+ * - a move whose rule no longer DECIDES that mail (an edit narrowed it) is dropped, never made;
+ * - when the sort engine cannot say (`ruleTarget` undefined or a throw, `stillDecides` a throw) the
+ *   rows wait a minute, neither moved nor dropped;
+ * - a filter's folder goes to `moveMany`, and an account that cannot file fails at once.
  */
 import fsp from 'node:fs/promises'
 import os from 'node:os'
@@ -21,7 +25,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { PluginDatabaseClient } from '../../src/core/plugins/plugin-storage.js'
 import { MailBodyStore } from '../../src/integrations/mail/bodies.js'
 import { MAIL_MIGRATIONS, MailDatabase } from '../../src/integrations/mail/db.js'
-import { CANNOT_ARCHIVE, MOVE_ATTEMPTS, MailFilterMover } from '../../src/integrations/mail/mail-filter-moves.js'
+import { CANNOT_ARCHIVE, CANNOT_FILE, MOVE_ATTEMPTS, MailFilterMover, type FilterMoverDeps } from '../../src/integrations/mail/mail-filter-moves.js'
 import { MailProviderRegistry } from '../../src/integrations/mail/provider-registry.js'
 import { MailService } from '../../src/integrations/mail/service.js'
 import { FILTER_SINCE_META_KEY, MailSortEngine } from '../../src/integrations/mail/sort-engine.js'
@@ -328,5 +332,170 @@ describe('a rule that goes while its moves wait', () => {
     expect(rig.archived[0]).toHaveLength(50)
     expect(await rig.client.get("SELECT COUNT(*) AS n FROM mail_filter_moves WHERE status = 'queued'")).toEqual({ n: 0 })
     expect((await rowIds()).length).toBe(10)
+  })
+})
+
+/**
+ * The mover's own questions at move time, asked of deps the test controls. Mail is ingested through
+ * the rig (so cached rows and queued moves are real); a second mover with these deps runs the ledger.
+ */
+describe('asking the rule at move time', () => {
+  interface Calls { archived: string[][]; filed: Array<{ ids: string[]; folder: string }> }
+
+  function moverWith(deps: Partial<FilterMoverDeps>, options: { canFile?: boolean } = {}): { mover: MailFilterMover; calls: Calls; settled: Array<{ folder?: string; moved: number; failed: number }> } {
+    const calls: Calls = { archived: [], filed: [] }
+    const settled: Array<{ folder?: string; moved: number; failed: number }> = []
+    const providers = new MailProviderRegistry(() => undefined)
+    const base = spec('fx', true, (ids) => { calls.archived.push(ids); return ids.map((messageId) => ({ messageId, ok: true })) })
+    providers.register({
+      ...base,
+      capabilities: { ...base.capabilities, ...(options.canFile === false ? {} : { move: true }) },
+      ...(options.canFile === false ? {} : {
+        moveMany: async (_account: string, ids: string[], folder: string) => {
+          calls.filed.push({ ids, folder })
+          return ids.map((messageId) => ({ messageId, ok: true }))
+        },
+      }),
+    } as MailProviderSpec, 'test')
+    const mover = new MailFilterMover({
+      store: rig.store,
+      bodies: new MailBodyStore(rig.dir),
+      providers,
+      groupsChanged: () => undefined,
+      onSettled: (event) => settled.push({ moved: event.moved, failed: event.failed, ...(event.folder ? { folder: event.folder } : {}) }),
+      timeout: () => ({ dispose: () => undefined }),
+      now: () => rig.clock.now,
+      ...deps,
+    })
+    movers.push(mover)
+    return { mover, calls, settled }
+  }
+
+  const movers: MailFilterMover[] = []
+  afterEach(() => { for (const one of movers.splice(0)) one.dispose() })
+
+  it('stillDecides: only the mail the rule still decides moves; the rest leaves the ledger unmoved', async () => {
+    await rig.service.ingestPage(MARINA, [mail(40, T0 + MINUTE), mail(41, T0 + MINUTE), mail(42, T0 + MINUTE)])
+    const asked: Array<{ ruleId: string; accountId: string; ids: string[] }> = []
+    const { mover, calls } = moverWith({
+      ruleTarget: async () => ({}),
+      stillDecides: async (ruleId, accountId, ids) => { asked.push({ ruleId, accountId, ids: [...ids].sort() }); return new Set(['INBOX:1:41']) },
+    })
+    await mover.runNow()
+    expect(asked).toEqual([{ ruleId: 'r-shop', accountId: MARINA, ids: ['INBOX:1:40', 'INBOX:1:41', 'INBOX:1:42'] }])
+    expect(calls.archived).toEqual([['INBOX:1:41']])
+    expect(await ledger('INBOX:1:41')).toMatchObject({ status: 'moved' })
+    expect(await ledger('INBOX:1:40')).toBeUndefined()
+    expect(await ledger('INBOX:1:42')).toBeUndefined()
+    expect(await rowIds()).toEqual(['INBOX:1:40', 'INBOX:1:42'])
+  })
+
+  it('with the real engine: a rule narrowed after its moves were queued moves only what it still takes', async () => {
+    await rig.service.ingestPage(MARINA, [mail(51, T0 + MINUTE), mail(62, T0 + MINUTE)])
+    expect(await ledger('INBOX:1:51')).toMatchObject({ status: 'queued' })
+    expect(await ledger('INBOX:1:62')).toMatchObject({ status: 'queued' })
+    // Same id, narrower condition: only "Offer 51" is the rule's now.
+    await fsp.writeFile(path.join(rig.dir, RULES_FILE_NAME), [
+      'version: 1', 'groups:', '  - Shop news', 'rules:', '  - id: r-shop',
+      `    when: { from: "${SHOP}", subject: "Offer 51" }`, '    then: Shop news', '    skipInbox: true', '',
+    ].join('\n'))
+    await rig.engine.reloadRules()
+    await rig.engine.idle()
+    const { mover, calls } = moverWith({
+      ruleTarget: async (ruleId) => rig.engine.filterTarget(ruleId),
+      stillDecides: (ruleId, accountId, ids) => rig.engine.filterStillDecides(ruleId, accountId, ids),
+    })
+    await mover.runNow()
+    expect(calls.archived).toEqual([['INBOX:1:51']])
+    expect(await ledger('INBOX:1:62')).toBeUndefined()
+    expect(await rowIds()).toEqual(['INBOX:1:62'])
+  })
+
+  it('stillDecides throws: the rows wait a minute, neither moved nor dropped, and move once it answers', async () => {
+    await rig.service.ingestPage(MARINA, [mail(43, T0 + MINUTE)])
+    let broken = true
+    const { mover, calls } = moverWith({
+      ruleTarget: async () => ({}),
+      stillDecides: async (_rule, _account, ids) => { if (broken) throw new Error('rules not loaded'); return new Set(ids) },
+    })
+    await mover.runNow()
+    expect(calls.archived).toEqual([])
+    expect(await ledger('INBOX:1:43')).toMatchObject({ status: 'queued', attempts: 0, at: T0 + MINUTE })
+    expect(await rowIds()).toEqual(['INBOX:1:43'])
+
+    // Not due yet: nothing is asked or moved before the minute is up.
+    await mover.runNow()
+    expect(calls.archived).toEqual([])
+
+    broken = false
+    rig.clock.now = T0 + MINUTE
+    await mover.runNow()
+    expect(calls.archived).toEqual([['INBOX:1:43']])
+    expect(await ledger('INBOX:1:43')).toMatchObject({ status: 'moved' })
+  })
+
+  for (const [label, answer] of [
+    ['answers undefined (the engine could not start)', async () => undefined],
+    ['throws', async () => { throw new Error('read failed') }],
+  ] as const) {
+    it(`ruleTarget ${label}: the rows wait a minute, never dropped`, async () => {
+      await rig.service.ingestPage(MARINA, [mail(44, T0 + MINUTE), mail(45, T0 + MINUTE)])
+      let asked = 0
+      const { mover, calls } = moverWith({
+        ruleTarget: answer as FilterMoverDeps['ruleTarget'],
+        stillDecides: async (_rule, _account, ids) => { asked += 1; return new Set(ids) },
+      })
+      await mover.runNow()
+      expect(calls.archived).toEqual([])
+      expect(asked).toBe(0)
+      for (const id of ['INBOX:1:44', 'INBOX:1:45']) {
+        expect(await ledger(id)).toMatchObject({ status: 'queued', attempts: 0, at: T0 + MINUTE })
+      }
+      expect(await rowIds()).toEqual(['INBOX:1:44', 'INBOX:1:45'])
+    })
+  }
+
+  it('ruleTarget null: the rule no longer keeps mail out, the rows are dropped without asking stillDecides', async () => {
+    await rig.service.ingestPage(MARINA, [mail(46, T0 + MINUTE)])
+    let asked = 0
+    const { mover, calls } = moverWith({
+      ruleTarget: async () => null,
+      stillDecides: async (_rule, _account, ids) => { asked += 1; return new Set(ids) },
+    })
+    await mover.runNow()
+    expect(asked).toBe(0)
+    expect(calls.archived).toEqual([])
+    expect(await ledger('INBOX:1:46')).toBeUndefined()
+    expect(await rowIds()).toEqual(['INBOX:1:46'])
+  })
+
+  it("ruleTarget wins over ruleLive: a live rule the engine cannot answer for still waits", async () => {
+    await rig.service.ingestPage(MARINA, [mail(47, T0 + MINUTE)])
+    const { mover, calls } = moverWith({ ruleLive: async () => true, ruleTarget: async () => undefined })
+    await mover.runNow()
+    expect(calls.archived).toEqual([])
+    expect(await ledger('INBOX:1:47')).toMatchObject({ status: 'queued', at: T0 + MINUTE })
+  })
+
+  it("a filter's folder goes to moveMany, read at move time", async () => {
+    await rig.service.ingestPage(MARINA, [mail(48, T0 + MINUTE), mail(49, T0 + MINUTE)])
+    const { mover, calls, settled } = moverWith({ ruleTarget: async () => ({ folder: 'Shop/Offers' }) })
+    await mover.runNow()
+    expect(calls.archived).toEqual([])
+    expect(calls.filed).toEqual([{ ids: ['INBOX:1:48', 'INBOX:1:49'], folder: 'Shop/Offers' }])
+    expect(settled).toEqual([{ moved: 2, failed: 0, folder: 'Shop/Offers' }])
+    expect(await rowIds()).toEqual([])
+  })
+
+  it('an account that cannot file into a folder fails at once, without a call', async () => {
+    await rig.service.ingestPage(MARINA, [mail(50, T0 + MINUTE)])
+    const { mover, calls } = moverWith({ ruleTarget: async () => ({ folder: 'Shop/Offers' }) }, { canFile: false })
+    expect(mover.canFile(MARINA)).toBe(false)
+    expect(mover.canArchive(MARINA)).toBe(true)
+    await mover.runNow()
+    expect(calls.filed).toEqual([])
+    expect(calls.archived).toEqual([])
+    expect(await ledger('INBOX:1:50')).toMatchObject({ status: 'failed', attempts: MOVE_ATTEMPTS, reason: CANNOT_FILE })
+    expect(await rowIds()).toEqual(['INBOX:1:50'])
   })
 })

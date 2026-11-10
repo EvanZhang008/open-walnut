@@ -6,6 +6,7 @@
  * (`tests/web/mail-rules-model.test.ts`). The words the server owns (a rule's summary, a validation
  * message) are passed through untouched; a subject pattern is checked with the server's own module.
  */
+import { folderNameProblem } from '@open-walnut/mail-folder-name';
 import { compileSubjectPattern, heldPatternLine, ruleOffReason, type PatternHint } from '@open-walnut/mail-subject-pattern';
 import type { MailPreviewResponse, MailRule, MailRuleView, MailRuleWhen, MailRulesError } from '@/api/mail-groups';
 import { movesPhrase } from '@/utils/mail-preview-moves';
@@ -152,12 +153,13 @@ export function newRuleId(random: () => number = Math.random): string {
 // ── the editor's condition rows ──
 
 export type ConditionField =
-  | 'from' | 'subject' | 'subjectRe' | 'listId' | 'addressedToMe' | 'cc' | 'sender' | 'group' | 'account' | 'message';
+  | 'from' | 'fromContains' | 'subject' | 'subjectRe' | 'listId' | 'addressedToMe' | 'cc' | 'sender' | 'group' | 'account' | 'message';
 
 export interface ConditionRow { key: number; field: ConditionField; value: string }
 
 export const FIELD_LABELS: Record<ConditionField, string> = {
   from: 'From',
+  fromContains: 'From contains',
   subject: 'Subject contains',
   subjectRe: 'Subject pattern',
   listId: 'Mailing list',
@@ -169,7 +171,7 @@ export const FIELD_LABELS: Record<ConditionField, string> = {
   message: 'One mail',
 };
 
-export const FIELD_ORDER: ConditionField[] = ['from', 'subject', 'subjectRe', 'listId', 'addressedToMe', 'cc', 'sender', 'group', 'account', 'message'];
+export const FIELD_ORDER: ConditionField[] = ['from', 'fromContains', 'subject', 'subjectRe', 'listId', 'addressedToMe', 'cc', 'sender', 'group', 'account', 'message'];
 
 export const SENDER_KINDS = ['person', 'bulk', 'transactional', 'automated', 'unknown'] as const;
 
@@ -181,10 +183,13 @@ export function defaultValueOf(field: ConditionField): string {
   return '';
 }
 
-/** The field a server error names (`when.from`, `from`, `when.subject.re`) mapped to a row field. */
-export function fieldOfError(field: string): ConditionField | 'then' | 'note' | null {
+/**
+ * The field a server error names (`when.from`, `from`, `when.subject.re`) mapped to a row field, or
+ * to the editor's own `then`, `note` and folder (`moveTo`) fields.
+ */
+export function fieldOfError(field: string): ConditionField | 'then' | 'note' | 'moveTo' | null {
   const bare = field.replace(/^rules\[\d+\]\./, '').replace(/^when\./, '');
-  if (bare === 'then' || bare === 'note') return bare;
+  if (bare === 'then' || bare === 'note' || bare === 'moveTo') return bare;
   if (bare === 'subject.re') return 'subjectRe';
   return (FIELD_ORDER as string[]).includes(bare) ? bare as ConditionField : null;
 }
@@ -193,6 +198,7 @@ export function rowsOfWhen(when: MailRuleWhen, nextKey: () => number): Condition
   const rows: ConditionRow[] = [];
   const add = (field: ConditionField, value: string) => rows.push({ key: nextKey(), field, value });
   if (when.from !== undefined) add('from', Array.isArray(when.from) ? when.from.join(', ') : when.from);
+  if (when.fromContains !== undefined) add('fromContains', when.fromContains);
   if (typeof when.subject === 'string') add('subject', when.subject);
   else if (when.subject && typeof when.subject === 'object') add('subjectRe', when.subject.re);
   if (when.listId !== undefined) add('listId', when.listId);
@@ -218,7 +224,7 @@ export function heldPatternOf(rule: MailRule | null | undefined): string | undef
 }
 
 /** The fields typed into a text box; switching between two of them keeps what was typed. */
-export const TEXT_FIELDS: ReadonlySet<ConditionField> = new Set(['from', 'subject', 'subjectRe', 'listId', 'group', 'message']);
+export const TEXT_FIELDS: ReadonlySet<ConditionField> = new Set(['from', 'fromContains', 'subject', 'subjectRe', 'listId', 'group', 'message']);
 
 export interface RowsJudged {
   when: MailRuleWhen;
@@ -238,7 +244,7 @@ export interface RowsJudged {
  * where the matcher compares it as written (a subject's text or pattern, a list id, a message id):
  * a space there is part of what matches, so `^re: ` stays `^re: ` and a stored rule round-trips
  * byte for byte. Only a sender's entries and a group name are trimmed, which their matchers ignore
- * anyway. A value of only spaces is empty. `held` is the rule's own pattern that keeps it off
+ * anyway, and a "from contains" text, which is never meant to match on its edge spaces. A value of only spaces is empty. `held` is the rule's own pattern that keeps it off
  * (`heldPatternOf`): a row holding exactly it is kept as written and listed in `off` with
  * `heldPatternLine`, never as a problem; a changed one is judged like any typed pattern.
  */
@@ -257,6 +263,8 @@ export function whenOfRows(rows: readonly ConditionRow[], held?: string): RowsJu
         when.from = list.length === 1 ? list[0]! : list;
         break;
       }
+      // Matched as a case-insensitive substring of the address or display name: edge spaces are noise.
+      case 'fromContains': when.fromContains = value.trim(); break;
       case 'subject': when.subject = value; break;
       case 'subjectRe': {
         if (held !== undefined && value === held) {
@@ -284,4 +292,31 @@ export function whenOfRows(rows: readonly ConditionRow[], held?: string): RowsJu
   }
   if (rows.length === 0) problems.set(-1, 'Add at least one condition, or the rule would match every mail.');
   return { when, problems, off, hints, turnsOn };
+}
+
+// ── where a rule kept out of the Inbox goes ──
+
+/** The longest folder name a filter may use (the server's MAX_FOLDER_NAME, sort-rules-schema.ts). */
+export const MAX_FOLDER_CHARS = 200;
+
+/**
+ * Why a typed folder name cannot be used, or null. Empty is fine: the mail goes to Archive. The same
+ * rules as the server's `moveToProblem` (sort-rules-schema.ts), in words for the person typing.
+ */
+export function folderProblem(folder: string): string | null {
+  const name = folder.trim();
+  if (!name) return null;
+  return folderNameProblem(name);
+}
+
+/**
+ * The rule fields for "Keep out of the Inbox": nothing when it is off or the target is Important or
+ * Not important (the server refuses either field there), `skipInbox` for Archive (no folder typed),
+ * `moveTo` alone for a named folder. A rule saved from these fields replaces the stored one, so
+ * switching a filter back to Archive drops its `moveTo`.
+ */
+export function destinationOf(keepOut: boolean, folder: string, reserved: boolean): { skipInbox?: true; moveTo?: string } {
+  if (!keepOut || reserved) return {};
+  const name = folder.trim();
+  return name ? { moveTo: name } : { skipInbox: true };
 }
