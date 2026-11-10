@@ -194,8 +194,8 @@ orgThreadsV1Router.post('/tasks/:id/threads', route(async (req, res) => {
  * relay of the words cannot carry the thread.
  */
 orgThreadsV1Router.put('/tasks/:id/threads/:thread/follow-ups/:messageId', route(async (req, res) => {
-  const task = await nodeTask(req)
   if (isCompanion()) throw new RouteError(503, 'primary_only', "Threads are kept on the primary; this server could not reach it just now.")
+  const task = await nodeTask(req)
   const id = threadIdOf(req)
   const messageId = param(req.params.messageId)
   if (!/^qm-[A-Za-z0-9-]{1,64}$/.test(messageId)) throw new RouteError(400, 'bad_request', `Not a message id: ${messageId}`)

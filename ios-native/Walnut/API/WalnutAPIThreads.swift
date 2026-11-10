@@ -177,12 +177,13 @@ extension WalnutAPI {
 
     /// Before a Follow up goes out: the message with `messageId` is his reply in this thread. The
     /// companion's relay of the words cannot carry the thread, so the Mac hears it here first
-    /// (`PUT /tasks/:id/threads/:thread/follow-ups/:messageId`, additive 2026-11-10).
+    /// (`PUT /tasks/:id/threads/:thread/follow-ups/:messageId`, additive 2026-11-10). Short: a Mac
+    /// that does not answer costs his send at most this, and the words go anyway.
     func announceThreadFollowUp(taskId: String, threadId: String, messageId: String) async throws {
         struct Ack: Decodable {}
         let _: Ack = try await send(
             "PUT", "/tasks/\(escape(taskId))/threads/\(escape(threadId))/follow-ups/\(escape(messageId))",
-            body: [String: AnyEncodable](), timeout: 10)
+            body: [String: AnyEncodable](), timeout: 3)
     }
 
     func orgBrief(taskId: String) async throws -> OrgBriefReply {

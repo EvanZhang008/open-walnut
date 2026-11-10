@@ -247,6 +247,7 @@ final class OrgThreadsStore {
         busyThreadId = threadId
         defer { busyThreadId = nil }
         let messageId = SendRetryPolicy.newMessageId()
+        let receipt: SessionSendReceipt
         do {
             // The thread first: through the companion the words reach the Mac without it, and the
             // thread he answered stayed on his view (2026-11-10). An older Mac, or one out of
@@ -257,7 +258,7 @@ final class OrgThreadsStore {
                 AppLog.warn("org", "thread follow-up not announced", ["taskId": taskId, "threadId": threadId, "error": error.localizedDescription])
             }
             let payloads = await SelectedImage.buildPayloads(images.map(\.jpegData))
-            _ = try await WalnutAPI().sendThreadFollowUp(
+            receipt = try await WalnutAPI().sendThreadFollowUp(
                 sessionId: sessionId, threadId: threadId, text: words, images: payloads,
                 messageId: messageId)
         } catch {
@@ -266,7 +267,8 @@ final class OrgThreadsStore {
         }
         followUpSentAt[threadId] = Date()
         // His reply makes it the node's move: out of his view at once, as the server's next read says.
-        if let i = threads?.firstIndex(where: { $0.id == threadId }), let t = threads?[i] {
+        // A send the companion holds has not reached the Mac yet, so the next read still shows it.
+        if !receipt.queued, let i = threads?.firstIndex(where: { $0.id == threadId }), let t = threads?[i] {
             threads?[i] = OrgThreadModel.afterHisFollowUp(t)
         }
         await load()

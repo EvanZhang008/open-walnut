@@ -1649,10 +1649,13 @@ team is talked to through that task; the Inbox never gets a lead.
   message_id }` (additive, 2026-11-10): the message the client is about to send into the node's
   chat with this `qm-…` id is the person's Follow up in this thread. The companion forwards it to
   the Mac, and the Mac files the message its relay brings with that id under the thread (the
-  relay carries the words alone). Kept an hour; a send held while the Mac is away is filed by
-  Walnut's own pick. `404 no_thread`, `400 bad_request` for an id that is not `qm-…`. A client
-  that gets any error still sends; an older Mac answers `404`.
-- On the companion, which keeps no Threads, both answer `503 primary_only` (the Mac out of reach,
+  relay carries the words alone). Kept an hour in the Mac's memory, so a send relayed within the
+  hour is filed there, a send held by the companion included; a send whose announcement never
+  reached the Mac (the Mac away, a timeout, a Mac restart in between) is filed by Walnut's own
+  pick. `404 no_thread`, `409 not_org_node`, `400 bad_request` for an id that is not `qm-…`,
+  `503 primary_only` from a companion that cannot reach the Mac. A client that gets any error
+  still sends; an older Mac answers `404`.
+- On the companion, which keeps no Threads, both reads answer `503 primary_only` (the Mac out of reach,
   or its answer too large to carry back), never an empty list. An older companion answered an
   empty list there: a client that sees none while the node's `user_status.threads.shown` counts
   some says it could not read them.
