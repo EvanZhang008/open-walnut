@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest'
 // @ts-expect-error plain .mjs without types
-import { redRange, ABSENT_RUNS_END, failingTestsOf, importStemsOf, suspectReason } from '../../scripts/ci-red-range.mjs'
+import { redRange, ABSENT_RUNS_END, failingTestsOf, importStemsOf, suspectReason, ghText } from '../../scripts/ci-red-range.mjs'
 
 const runs = (list: (string | null)[]) => list.map((c, i) => ({ id: i, c }))
 const of = (r: { c: string | null }) => r.c
@@ -50,5 +50,28 @@ describe('suspects', () => {
     expect(suspectReason(['src/core/x.ts'], 'tests/e2e/a-flow.test.ts', stems)).toMatch(/src\/core\/x\.ts, which a-flow\.test\.ts imports/)
     expect(suspectReason(['tests/e2e/a-flow.test.ts'], 'tests/e2e/a-flow.test.ts', stems)).toMatch(/^changed tests\/e2e\/a-flow/)
     expect(suspectReason(['src/core/other.ts', 'docs/x.md'], 'tests/e2e/a-flow.test.ts', stems)).toBeNull()
+  })
+})
+
+describe('ghText', () => {
+  const answers = (list: { status: number; stderr?: string; stdout?: string }[]) => {
+    const calls: number[] = []
+    return { calls, run: () => { calls.push(1); return list[Math.min(calls.length - 1, list.length - 1)] } }
+  }
+  const noWait = () => {}
+
+  it('tries a GitHub server error again and returns the answer that came', () => {
+    const a = answers([{ status: 1, stderr: 'gh: Server Error (HTTP 502)' }, { status: 0, stdout: '{"ok":1}' }])
+    expect(ghText('repos/x', { run: a.run, wait: noWait })).toBe('{"ok":1}')
+    expect(a.calls.length).toBe(2)
+  })
+
+  it('gives up after a few server errors, and at once on any other failure', () => {
+    const down = answers([{ status: 1, stderr: 'gh: Server Error (HTTP 503)' }])
+    expect(() => ghText('repos/x', { run: down.run, wait: noWait })).toThrow(/HTTP 503/)
+    expect(down.calls.length).toBe(4)
+    const missing = answers([{ status: 1, stderr: 'gh: Not Found (HTTP 404)' }])
+    expect(() => ghText('repos/x', { run: missing.run, wait: noWait })).toThrow(/HTTP 404/)
+    expect(missing.calls.length).toBe(1)
   })
 })

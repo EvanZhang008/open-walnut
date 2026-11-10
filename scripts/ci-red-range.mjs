@@ -25,11 +25,20 @@ const MAX_RUNS = 300
 // Jobs that only sum up the others: their red says nothing of its own.
 const SUMMARY_JOBS = new Set(['CI OK'])
 
-function ghText(apiPath) {
-  const r = spawnSync('gh', ['api', apiPath], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
-  if (r.status !== 0) throw new Error(`gh api ${apiPath}: ${(r.stderr || '').trim()}`)
-  return r.stdout
+// GitHub answers a 5xx now and then (2026-11-10: one 502 on a jobs page ended a whole run):
+// such a call is tried again, a few seconds apart; any other failure ends the run at once.
+const GH_TRIES = 4
+export const isServerError = (stderr) => /HTTP 5\d\d/.test(stderr || '')
+
+function ghText(apiPath, { run = spawnSync, wait = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+  for (let i = 1; ; i++) {
+    const r = run('gh', ['api', apiPath], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+    if (r.status === 0) return r.stdout
+    if (i >= GH_TRIES || !isServerError(r.stderr)) throw new Error(`gh api ${apiPath}: ${(r.stderr || '').trim()}`)
+    wait(i * 3000)
+  }
 }
+export { ghText }
 const gh = (apiPath) => JSON.parse(ghText(apiPath))
 
 function repoName() {
