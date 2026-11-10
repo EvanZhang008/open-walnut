@@ -306,9 +306,11 @@ export function headerNarrowTests(): void {
       await shootHeader(panel, String(width))
     }
     // The movable window buttons are the first to go (400px has room for the chips, not for five
-    // buttons too); Lock, Expand and Close stay at every width.
+    // buttons too); Lock, Expand and Close stay at every width. Since the Scripts chip joined the
+    // row (it leaves just before Terminal), 400px holds every chip but Board, the first to leave.
     expect(states[400].toolRow.hidden).toContain('popout')
-    expect(['changed', 'files', 'board', 'terminal'].every((id) => states[400].toolRow.visible.includes(id)), `400px: ${states[400].toolRow.visible}`).toBe(true)
+    expect(['changed', 'files', 'terminal', 'scripts'].every((id) => states[400].toolRow.visible.includes(id)), `400px: ${states[400].toolRow.visible}`).toBe(true)
+    expect(states[400].toolRow.hidden.filter((id) => VIEW_CHIPS.includes(id) && id !== 'board'), `400px hidden: ${states[400].toolRow.hidden}`).toEqual([])
     // 240px cannot hold five chips (Board, the first to leave, is gone); 180px holds Fork and little else.
     expect(states[240].toolRow.hidden).toEqual(expect.arrayContaining(['board']))
     expect(states[180].toolRow.hidden).toEqual(expect.arrayContaining(['files', 'board', 'terminal']))

@@ -57,5 +57,6 @@ test('project pane shows the empty-state hint and refresh button when no summary
 
   const pane = await openProjectDetails(page, 'BareProj')
   await expect(pane).toContainText('No summary yet')
-  await expect(pane.locator('.detail-summary-refresh')).toBeVisible()
+  // The scripts row's Edit button wears the same class, so name the summary's own button.
+  await expect(pane.locator('.detail-summary-refresh[title^="Regenerate the AI summary"]')).toBeVisible()
 })
