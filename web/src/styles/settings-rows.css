@@ -231,7 +231,9 @@
   scroll-margin-top: 52px;
 }
 
-.settings-checklist .settings-row {
+/* Only the checkbox rows: a checklist group may also hold ordinary rows (the engine split's
+   switch, its Add row), which keep the normal row's height and padding. */
+.settings-checklist .settings-checkbox-row {
   min-height: 36px;
   padding-top: 7px;
   padding-bottom: 7px;
