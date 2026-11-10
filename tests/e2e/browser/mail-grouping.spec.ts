@@ -146,8 +146,14 @@ test.describe('the model answering', () => {
     await expect(line.getByTestId('mail-group-more')).toBeFocused()
   })
 
-  /** `Keep out of Inbox…` is offered for every group it can write a rule for (not `s:unknown`). */
-  const filterItem = (id: string) => (id.startsWith('u:') || (id.startsWith('s:') && id !== 's:unknown') ? ['Keep out of Inbox\u2026'] : [])
+  /**
+   * `Filter mails like these…` (a444c46fd) is on every group's menu; `Keep out of Inbox…` only on a
+   * group it can write a rule for (not `s:unknown`).
+   */
+  const filterItem = (id: string) => [
+    'Filter mails like these\u2026',
+    ...(id.startsWith('u:') || (id.startsWith('s:') && id !== 's:unknown') ? ['Keep out of Inbox\u2026'] : []),
+  ]
 
   test('the group menu says its actions, the unread count and nothing else', async ({ page }) => {
     await openGrouped(page, fixture)

@@ -194,6 +194,8 @@ test('C6, C7, C8, C9, C10, C12, C23: a right-click opens the menu and does nothi
     'Talk to CEO',
     'New task',
     'Find mail from this sender',
+    // A letter's own folder filter (a444c46fd), on every inbound row with a sender.
+    'Filter mails like this\u2026',
     'Copy Walnut link',
     // The Walnut group (28df4326c) and Unsubscribe (432deed2f), added after this spec.
     'Summarize with Walnut',
