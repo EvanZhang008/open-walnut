@@ -78,7 +78,8 @@ import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-f
 import { envelopeSteps, foldStepsPhrase, walnutCompactLine, type FoldStep } from './fold-steps';
 import { lookupTaskByRef } from '@/stores/entity-label-store';
 import { joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type MsgKind, type RowRole } from './fold-rows';
-import { chunkByKind, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
+import { chunkByKind, foldsAsOne, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
+import { isOutboundSendCall } from '@/stream/tool-merge';
 import { isEnvelopeOnly, parseSessionEnvelopes, type EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { NoActionMark, ProcessFoldRow, ReaderOpenedFolds, openTurnFold, turnFoldKey } from './TurnFolds';
 import { RowDisclosureScope, disclosureIds } from './row-disclosure';
@@ -3558,6 +3559,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const stepKinds: StepKind[] = timeline.map((item) => {
     if (isSilentStreamItem(item)) return 'silent';
     if (isMergeableStreamItem(item, consumedBlockIndices, groupedByIndex)) return 'step';
+    // A message this session sent: a step of its turn, folded from the first frame.
+    if (item.kind === 'block' && item.block.type === 'tool_call' && !item.block.parentToolUseId && !stackMode && !convMode
+      && !groupedByIndex.has(item.index) && !consumedBlockIndices.has(item.index) && isOutboundSendCall(item.block)) return 'send';
     if (item.kind === 'user' && !stackMode && !convMode && isAgentCard(item.msg)) return 'card';
     return 'other';
   });
@@ -3567,7 +3571,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // next block, instead of unfolding and folding again.
   const liveTurnAbsorbed = isStreaming && stepKinds.every((k, i) => k === 'silent' || timeline[i].kind === 'indicator')
     && blocks.some((b, i) => i >= completedLen && shownHiddenBlocks.has(i) && b.type === 'tool_call' && !b.parentToolUseId);
-  const leadingGroup = leadingStepGroup(stepKinds) ?? (liveTurnAbsorbed ? { members: [], cards: 0, steps: 0 } : null);
+  const leadingGroup = leadingStepGroup(stepKinds) ?? (liveTurnAbsorbed ? { members: [], cards: 0, steps: 0, sends: 0 } : null);
 
   // The live turn's first blocks continue history's last run across the
   // history/stream boundary. Trailing reasoning that led to whatever ended the
@@ -3854,6 +3858,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     indices.flatMap((k): StreamRunMember[] => {
       const t = timeline[k];
       return t.kind === 'block' && isRunMemberBlock(t.block) ? [t.block] : [];
+    });
+  /** A group's sends, as the tool calls they are (its line's running and failed state). */
+  const sendMembersOf = (group: StepGroup): StreamRunMember[] =>
+    group.members.flatMap((k): StreamRunMember[] => {
+      const t = timeline[k];
+      return stepKinds[k] === 'send' && t.kind === 'block' && t.block.type === 'tool_call' ? [t.block as StreamRunMember] : [];
     });
 
   /** A stream run's calls, read the way a history row's tools are. */
@@ -5314,7 +5324,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         const firstChunk = chunkByKind(group.members, (k) => stepKinds[k])[0];
         const firstChunkSteps = firstChunk?.kind === 'step' ? firstChunk.members : [];
         const stepIdx = group.members.filter((k) => stepKinds[k] === 'step');
-        const members = runMembersOf(stepIdx);
+        const members = [...runMembersOf(stepIdx), ...sendMembersOf(group)];
         // Every failure in it, history's failed calls and error lines too (they are
         // folded with the rest while the turn runs, so the header has to say so).
         const failed = failedOf(tail) + streamFailedOf(members);
@@ -5695,6 +5705,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // exactly the same). `skip`: chunks already drawn joined to a history run.
   const renderGroupBody = (group: StepGroup, skip = 0): React.ReactNode[] => chunkByKind(group.members, (k) => stepKinds[k]).slice(skip).map((chunk) => {
     if (chunk.kind === 'card') return chunk.members.map((k) => renderQueuedRow((timeline[k] as Extract<TimelineItem, { kind: 'user' }>).msg));
+    // A send: its op card, as it draws on its own (folded), inside the turn's fold.
+    if (chunk.kind === 'send') return chunk.members.map((k) => {
+      const t = timeline[k] as Extract<TimelineItem, { kind: 'block' }>;
+      return (
+        <div key={`b-${t.index}`} className="session-msg-bare">
+          <StreamingBlockView block={t.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={false} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+        </div>
+      );
+    });
     const members = runMembersOf(chunk.members);
     const thinkingLive = isThinkingTail(chunk.members[chunk.members.length - 1]);
     if (!members.some((m) => m.type === 'tool_call')) {
@@ -5732,19 +5751,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const mixedMember = new Set<number>();
   if (!stackMode && !convMode) {
     for (const g of stepGroups(stepKinds)) {
-      if (g.cards === 0 || g.steps === 0 || g.members.some((k) => boundaryStreamIndices.has(k))) continue;
+      if (!foldsAsOne(g) || g.members.some((k) => boundaryStreamIndices.has(k))) continue;
       mixedStart.set(g.members[0], g);
       for (const k of g.members.slice(1)) mixedMember.add(k);
     }
   }
   const renderStepGroup = (group: StepGroup): React.ReactNode => {
     const stepIdx = group.members.filter((k) => stepKinds[k] === 'step');
-    const members = runMembersOf(stepIdx);
+    const members = [...runMembersOf(stepIdx), ...sendMembersOf(group)];
     const first = timeline[group.members[0]];
     // A card heads it: the id its history row will carry, so the row keeps its key
     // and open state if the card is taken into history mid-turn (the live tail's key).
     const key = first.kind === 'user' ? (first.msg.msgId ?? first.msg.walnutMessageId ?? first.msg.queueId)
-      : runRowKey(runMembersOf([group.members[0]]), group.members[0]);
+      : runRowKey(first.kind === 'block' ? [first.block as StreamRunMember] : [], group.members[0]);
     const live = isThinkingTail(stepIdx[stepIdx.length - 1] ?? -1);
     return (
       <div key={`turn-${key}`} className="session-msg-bare" data-testid="session-step-group-row">

@@ -20,6 +20,15 @@ export function isPlanWriteCall(name: string | undefined, input: Record<string, 
   return name === 'Write' && typeof input?.file_path === 'string' && input.file_path.includes('.claude/plans/');
 }
 
+/** A message to someone (a send, a thread update, a Brief write: an op card), read from
+ *  the call's input so a call still running reads as its saved row. Not a run member,
+ *  but a step of its turn: it joins the turn's fold, live or saved. */
+export function isOutboundSendCall(tool: { name?: string; input?: Record<string, unknown>; result?: string }): boolean {
+  const name = tool.name ?? 'unknown';
+  if (GROUPABLE_TOOLS.has(name)) return false;
+  return !!detectOutboundSend({ name, input: tool.input ?? {} } as SessionHistoryTool, tool.result);
+}
+
 /** True when the call folds into the run around it, live or saved. */
 export function toolMergesIntoRun(tool: { name?: string; input?: Record<string, unknown>; result?: string }): boolean {
   const name = tool.name ?? 'unknown';
@@ -30,7 +39,7 @@ export function toolMergesIntoRun(tool: { name?: string; input?: Record<string, 
   // "Ran a command" it vanishes from the timeline the way the inbound card
   // never does. Decided by the call's input alone, so a call still running
   // reads the same as its saved row.
-  if (detectOutboundSend({ name, input: tool.input ?? {} } as SessionHistoryTool, tool.result)) return false;
+  if (isOutboundSendCall(tool)) return false;
   // No input and no result: nothing a run's summary could count.
   if (!tool.result && (!tool.input || Object.keys(tool.input).length === 0)) return false;
   return true;

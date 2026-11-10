@@ -27,6 +27,7 @@ import { _resetOpCallStore, _setOpCalls, requestOpCalls, type OpCallRecord } fro
 import { apiPost } from '@/api/client'
 import type { SessionHistoryTool } from '@/types/session'
 import { findOpCalls } from '../../src/lib/walnut-op-command.js'
+import { isOutboundSendCall, toolMergesIntoRun } from '@/stream/tool-merge'
 
 vi.mock('@/utils/log', () => ({ log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } }))
 // The markdown renderer needs a real DOM (DOMPurify); the folded card shows plain
@@ -115,6 +116,22 @@ describe('every carded op shows its words in every call form', () => {
         const html = render(form.tool(op, JSON.stringify(sampleArgs(op))))
         expect(html).toContain(esc(expectedWords(op)))
         expect(html).not.toMatch(/kept no copy|not in this transcript/)
+      })
+    }
+  }
+})
+
+describe('every carded op folds into its turn from its first live frame', () => {
+  // 2026-11-10, the user, of a live turn whose two op cards sat open about 10 s and
+  // folded into "Sent 2" only when the turn ended: "why it has to wait for like 10s
+  // to collapse?". The live step groups take a call as a send (stream-step-groups.ts
+  // 'send') by this rule, read from its input alone, so a call still running counts.
+  for (const op of Object.keys(OP_CARDS)) {
+    for (const form of FORMS.filter((f) => !f.recorded)) {
+      it(`${op}: ${form.name}, still running`, () => {
+        const { result: _r, ...calling } = form.tool(op, JSON.stringify(sampleArgs(op)))
+        expect(isOutboundSendCall(calling), 'a send, live').toBe(true)
+        expect(toolMergesIntoRun(calling), 'never a member of a command run').toBe(false)
       })
     }
   }

@@ -13,17 +13,21 @@
  * Pure: the caller says what each timeline item is.
  *  · `step`: a tool call or reasoning block a run row would take;
  *  · `card`: a card an agent sent, nothing but envelopes (folds on arrival);
+ *  · `send`: a message this session sent (an op card's call): a step of the turn,
+ *    folded with it from the first frame, as the saved turn folds it ("Sent 2 ›";
+ *    2026-11-10, the user: the cards sat open about 10 s until the turn ended);
  *  · `silent`: draws nothing, so it neither joins nor ends a group;
  *  · `other`: anything a reader sees (words, a person's message, a notice, a
  *    question, an agent chip): it ends the group.
  */
-export type StepKind = 'step' | 'card' | 'silent' | 'other';
+export type StepKind = 'step' | 'card' | 'send' | 'silent' | 'other';
 
 export interface StepGroup {
   /** Timeline indices of the group's steps and cards, in order (no silent ones). */
   members: number[];
   cards: number;
   steps: number;
+  sends: number;
 }
 
 /** Every maximal group of steps and cards. */
@@ -33,9 +37,10 @@ export function stepGroups(kinds: readonly StepKind[]): StepGroup[] {
   kinds.forEach((kind, i) => {
     if (kind === 'silent') return;
     if (kind === 'other') { cur = null; return; }
-    if (!cur) { cur = { members: [], cards: 0, steps: 0 }; out.push(cur); }
+    if (!cur) { cur = { members: [], cards: 0, steps: 0, sends: 0 }; out.push(cur); }
     cur.members.push(i);
     if (kind === 'card') cur.cards++;
+    else if (kind === 'send') cur.sends++;
     else cur.steps++;
   });
   return out;
@@ -48,11 +53,20 @@ export function leadingStepGroup(kinds: readonly StepKind[]): StepGroup | null {
   return stepGroups(kinds)[0] ?? null;
 }
 
+/** A group that draws as one fold: one with a send, or with cards and steps both. A
+ *  group of cards alone keeps its "Received N messages" row, steps alone their run. */
+export function foldsAsOne(g: StepGroup): boolean {
+  return g.sends > 0 || (g.cards > 0 && g.steps > 0);
+}
+
+export type ChunkKind = 'step' | 'card' | 'send';
+
 /** Consecutive members of one kind, so each keeps the row it renders as inside the fold. */
-export function chunkByKind(members: readonly number[], kindOf: (i: number) => StepKind): Array<{ kind: 'step' | 'card'; members: number[] }> {
-  const out: Array<{ kind: 'step' | 'card'; members: number[] }> = [];
+export function chunkByKind(members: readonly number[], kindOf: (i: number) => StepKind): Array<{ kind: ChunkKind; members: number[] }> {
+  const out: Array<{ kind: ChunkKind; members: number[] }> = [];
   for (const i of members) {
-    const kind = kindOf(i) === 'card' ? 'card' : 'step';
+    const k = kindOf(i);
+    const kind: ChunkKind = k === 'card' || k === 'send' ? k : 'step';
     const last = out[out.length - 1];
     if (last && last.kind === kind) last.members.push(i);
     else out.push({ kind, members: [i] });
