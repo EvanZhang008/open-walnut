@@ -115,12 +115,17 @@ export interface SessionEnvelope {
   /** Notification only: the target's words Walnut quoted between the outcome
    *  sentence and `Next:` (its last message, the tool calls after it). */
   quote?: NoticeQuoteSection[];
+  /** Notification only, when it quotes nothing: the notice's own lines after its
+   *  outcome sentence (an org digest's projects, a status push's tasks), before
+   *  `Next:`. Walnut's words, not another session's. */
+  detail?: string;
   /** The exact slice this envelope occupied — the "raw envelope" disclosure. */
   raw: string;
 }
 
-/** How a subtask notice names the child (envelope-kit buildSubtaskNotification). */
-const SUBTASK_WHO = /^Your subtask ".*" \([^()\s]+\) /;
+/** How a subtask notice names the child (envelope-kit buildSubtaskNotification),
+ *  and how a followed task's notice names it (org-follow.ts orgNoticeText). */
+const SUBTASK_WHO = /^(?:Your subtask|A task you follow,) ".*" \([^()\s]+\) /;
 
 /**
  * A Walnut notice's outcome as the card shows it. A subtask notice opens by
@@ -144,7 +149,7 @@ export function envelopeCardText(env: SessionEnvelope): string {
   const status = !env.statusLine ? undefined
     : env.kind === 'notification' ? noticeText(env.statusLine)
       : env.kind === 'trigger' && env.statusLine === 'scheduled' ? undefined : env.statusLine;
-  return [env.title, env.askedPreview, status, ...(env.quote ?? []).map((q) => q.text), env.body]
+  return [env.title, env.askedPreview, status, ...(env.quote ?? []).map((q) => q.text), env.detail, env.body]
     .filter((t): t is string => !!t).join(' ');
 }
 
@@ -595,6 +600,8 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
   const nextAt = nl < 0 ? -1 : body.lastIndexOf('\n\nNext:\n');
   const followUp = notify ? findCommand(nl < 0 ? '' : body.slice(nextAt > nl ? nextAt : nl + 1)) : undefined;
   const quote = notify && nl >= 0 ? parseNoticeQuote(body.slice(nl + 1, nextAt > nl ? nextAt : undefined)) : [];
+  // A notice that quotes nothing still says something after its outcome (a digest's lines).
+  const detail = notify && nl >= 0 && quote.length === 0 ? body.slice(nl + 1, nextAt > nl ? nextAt : undefined).trim() : '';
 
   return {
     end,
@@ -609,6 +616,7 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
       ...(replyRequest ? { replyRequest } : {}),
       ...(followUp ? { followUp } : {}),
       ...(quote.length ? { quote } : {}),
+      ...(detail ? { detail } : {}),
       raw: text.slice(at, end),
     },
   };

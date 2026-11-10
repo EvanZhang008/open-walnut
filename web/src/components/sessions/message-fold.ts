@@ -48,6 +48,40 @@ export function fallbackTitle(text: string | undefined, max = FOLD_TITLE_MAX): s
   return points.length > max ? `${points.slice(0, max - 1).join('').trimEnd()}…` : line;
 }
 
+/** How long a card's summary may run (two lines on a wide column; CSS clamps the rest). */
+export const FOLD_SUMMARY_MAX = 280;
+
+/** A message's words as one plain line: a task chip reads as its label, other tags and code drop. */
+function plainText(text: string): string {
+  return text
+    .replace(/<(?:task-ref|walnut-task)\b[^<>]*?\blabel=(["'])(.*?)\1[^<>]*>/g, '$2')
+    .replace(/<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?\/?>/g, '')
+    .split('\n')
+    .filter((l) => !/^\s*(```|~~~|\|)/.test(l))
+    .map(plainLine)
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The card's summary: the first of `sources` that says something past the title,
+ * as plain words, cut to FOLD_SUMMARY_MAX. Undefined when nothing does.
+ */
+export function foldSummary(title: string | undefined, ...sources: (string | undefined)[]): string | undefined {
+  const head = (title ?? '').replace(/…$/, '').trim();
+  for (const source of sources) {
+    if (!source) continue;
+    let text = plainText(source);
+    if (head && text.startsWith(head)) text = text.slice(head.length).replace(/^[\s:;,.\-\u2013]+/, '');
+    if (!text || text === head) continue;
+    const points = [...text];
+    return points.length > FOLD_SUMMARY_MAX ? `${points.slice(0, FOLD_SUMMARY_MAX - 1).join('').trimEnd()}…` : text;
+  }
+  return undefined;
+}
+
 /** A Walnut notice's outcome as the card shows it (shared with the server's
  *  whole-session find, which searches the card's words as shown). */
 export { noticeText };

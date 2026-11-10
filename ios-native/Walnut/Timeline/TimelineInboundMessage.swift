@@ -115,6 +115,8 @@ enum TimelineInboundMessage {
     /// The web's `RIDER_NOTICE_OUTCOMES`, kept equal by tests/web/walnut-riders-producers.test.ts.
     static let riderOutcomes: Set<String> = [
         "moved", "folder-moved", "restarted", "org-update", "status", "waiting", "handed-over", "timeout", "task-routing-policy", "answer-withdrawn",
+        // The status push carries the notices of followed tasks too (status-riding.ts on the server).
+        "completed", "error", "stopped", "blocked",
     ]
 
     private static func isRider(_ attributes: [String: String]) -> Bool {

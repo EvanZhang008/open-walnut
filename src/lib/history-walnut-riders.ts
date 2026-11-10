@@ -48,7 +48,8 @@ const TAG_CLOSE = '\n</walnut-message>';
 /**
  * The outcomes of Walnut's notes that ride in front of a message, one per note
  * session-message-queue.ts prepends: place (`moved`), folder move (`folder-moved`),
- * restart (`restarted`), org digest (`org-update`), status push (`status`), wait
+ * restart (`restarted`), org digest (`org-update`), status push (`status`, and the
+ * state notices of followed tasks it carries: `completed`, `error`, `stopped`, `blocked`), wait
  * note (`waiting`), retired lead (`handed-over`), a request past its deadline held
  * for the next message (`timeout`, sessions/held-notices.ts), plus the changed
  * default instructions the queue's drain
@@ -57,6 +58,10 @@ const TAG_CLOSE = '\n</walnut-message>';
  */
 export const RIDER_NOTICE_OUTCOMES: readonly string[] = [
   'moved', 'folder-moved', 'restarted', 'org-update', 'status', 'waiting', 'handed-over', 'timeout', 'task-routing-policy', 'answer-withdrawn',
+  // The status push also carries the notices of the tasks a node follows (status-riding.ts
+  // renderItems, org-follow.ts): one per SubtaskNoticeKind. 2026-11-10: they were not on the
+  // list, so five of them in front of the user's message drew open above his words.
+  'completed', 'error', 'stopped', 'blocked',
 ];
 const RIDER_OUTCOMES = new Set(RIDER_NOTICE_OUTCOMES);
 /** `name="value"`, first occurrence wins (same rule as the envelope parser). */

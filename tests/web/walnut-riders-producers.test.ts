@@ -51,6 +51,18 @@ describe('the rider list names every note Walnut puts in front of a message', ()
       expect(src.includes(`'${outcome}'`), `${name} (${file}) writes outcome ${outcome}`).toBe(true);
       expect(RIDER_NOTICE_OUTCOMES, name).toContain(outcome);
     }
+    // The status note carries the notices of the tasks a node follows (status-riding.ts
+    // renderItems): every kind of them is a rider too (2026-11-10: five drew open above a
+    // person's words). Read from the types, so a new kind fails here.
+    expect(read('src/core/sessions/status-push.ts')).toMatch(/pendingRiding\(/);
+    const union = (file: string, name: string) => {
+      const m = read(file).match(new RegExp(`export type ${name} = ([^;]+);`));
+      expect(m, `${file} declares ${name}`).toBeTruthy();
+      return [...m![1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+    };
+    for (const kind of [...union('src/core/sessions/status-riding.ts', 'RideNoticeKind'), ...union('src/core/peers/envelope-kit.ts', 'SubtaskNoticeKind')]) {
+      expect(RIDER_NOTICE_OUTCOMES, `followed-task notice ${kind}`).toContain(kind);
+    }
     // The changed default instructions go first at the queue's drain (instruction-notice.ts).
     expect(read('src/core/sessions/instruction-notice.ts')).toContain("const OUTCOME = 'task-routing-policy'");
     expect(RIDER_NOTICE_OUTCOMES).toContain('task-routing-policy');

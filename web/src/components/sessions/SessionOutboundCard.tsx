@@ -41,11 +41,11 @@ import { useEntityLabelsVersion, useRenderedMarkdown, useTaskLabel } from '@/hoo
 import { lookupTaskByRef } from '@/stores/entity-label-store';
 import { copyTextRobust } from '@/utils/clipboard';
 import { fallbackTitle, foldKey, useMessageFold } from './message-fold';
+import { CardMain, CardWho } from './MessageCard';
 import { useOpCallRecords, type OpCallRecord } from '@/stores/op-call-store';
 import type { OpCardFields } from '../../../../src/core/op-cards';
 import { disclosureIds, useDetailsDisclosure } from './row-disclosure';
 import '@/styles/provenance-fold.css';
-import { taskPath } from '@/utils/task-path';
 
 interface ResolvedTarget {
   /** Full session id — present only when it is unambiguous. */
@@ -253,19 +253,6 @@ function withRecord(send: OutboundSend, record: OpCallRecord | undefined): Outbo
   };
 }
 
-/** A task the call names, as a pill (a click opens it), else nothing. */
-function TaskPill({ taskId }: { taskId: string }) {
-  const label = useTaskLabel(taskId);
-  return (
-    <a
-      className="provenance-chip provenance-chip-task task-link op-card-to-pill"
-      data-task-id={taskId}
-      href={taskPath(taskId)}
-      title={label?.project ? `${label.project} / ${label.title}` : label?.title}
-    >{label?.title ?? taskId}</a>
-  );
-}
-
 /** Who the call went to: the target's task as a pill, else its session, else words. */
 function ToLine({ send, resolved, direction }: { send: OutboundSend; resolved: ResolvedTarget; direction: string }) {
   const version = useEntityLabelsVersion();
@@ -281,12 +268,7 @@ function ToLine({ send, resolved, direction }: { send: OutboundSend; resolved: R
       : <span className="op-card-to-text">{resolved.title || send.to || (send.kind === 'reply' ? 'The session that asked' : 'another session')}</span>)
     : (send.fields.to[0] && !send.fields.toLabel ? <span className="op-card-to-text">{send.fields.to[0]}</span> : null);
   return (
-    <div className="op-card-to">
-      <span className="provenance-glyph" aria-hidden="true">{outboundDirectionGlyph(send.kind)}</span>
-      <span className="op-card-dir">{direction}</span>
-      {taskIds.length > 0 ? taskIds.map((id) => <TaskPill key={id} taskId={id} />) : fallback}
-      {send.fields.toLabel && <span className="op-card-to-label">{send.fields.toLabel}</span>}
-    </div>
+    <CardWho glyph={outboundDirectionGlyph(send.kind)} direction={direction} taskIds={taskIds} fallback={fallback} label={send.fields.toLabel} tooltip={isSend ? resolved.title : undefined} />
   );
 }
 
@@ -336,19 +318,7 @@ export function SessionOutboundCard({
       }}
     >
       <ToLine send={send} resolved={resolved} direction={direction} />
-      <button
-        type="button"
-        className="op-card-main"
-        aria-expanded={open}
-        onClick={(e) => { e.stopPropagation(); toggle(); }}
-      >
-        {title && <span className="op-card-title">{title}</span>}
-        {summary && <span className="op-card-summary">{summary}</span>}
-        <span className="op-card-more">
-          <span className="op-card-more-chevron" aria-hidden="true">›</span>
-          {open ? 'Hide details' : 'Details'}
-        </span>
-      </button>
+      <CardMain title={title} summary={summary} open={open} onToggle={toggle} />
       {send.error && <div className="provenance-status">{send.error}</div>}
       {open && (
         <div className="op-card-detail">

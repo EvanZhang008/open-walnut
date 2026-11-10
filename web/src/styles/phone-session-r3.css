@@ -7,7 +7,7 @@
      and its labels read at 12 px. A trigger or peer message's fold (41 px),
      "Load earlier turns" (30 px), and the background-task and subagent chips
      (10 to 11 px) were under the floor on live sessions. */
-  .app-shell-navigation .session-panel.is-phone-layer .provenance-fold {
+  .app-shell-navigation .session-panel.is-phone-layer .op-card-main {
     min-height: 44px;
     justify-content: center;
   }

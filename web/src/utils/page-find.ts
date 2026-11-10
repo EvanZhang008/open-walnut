@@ -64,7 +64,7 @@ export const FIND_DOC_ATTR = 'data-find-doc';
 export const SESSION_FIND_SKIP_SELECTOR = [
   FIND_SKIP_SELECTOR,
   '.session-msg-actions', '.session-show-earlier-btn', '.session-gap-divider', '.session-streaming-indicator',
-  '.scroll-to-bottom-btn', '.tool-run-toggle', '.provenance-fold-from', '.provenance-details',
+  '.scroll-to-bottom-btn', '.tool-run-toggle', '.op-card-to', '.op-card-more', '.provenance-details',
   '.provenance-chips', '.provenance-label', '.provenance-asked-label', '.provenance-quote-label',
   '.provenance-reply-request', '.session-msg-received-badge',
   // A tool call's header line is searched (its name and summary: the server

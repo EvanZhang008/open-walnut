@@ -94,7 +94,7 @@ describe('splitLeadingRiders: the rows Walnut writes', () => {
 describe('splitLeadingRiders: unsafe shapes return null and lose nothing', () => {
   it('an outcome outside the closed list', () => {
     expect(splitLeadingRiders(row([notice('some-other')], 'Words.'))).toBeNull();
-    expect(splitLeadingRiders(row([notice('completed')], 'Words.'))).toBeNull();
+    expect(splitLeadingRiders(row([notice('answered')], 'Words.'))).toBeNull();
   });
 
   it('a rider outcome from someone other than Walnut', () => {

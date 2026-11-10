@@ -1113,6 +1113,26 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Incoming message cards fixture (session-inbound-cards.spec.ts).
+        id: 'pw-task-inbound',
+        title: 'Inbound cards fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-inbound-session'],
+        active_session_ids: [],
+        session_id: 'pw-inbound-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Walnut op cards fixture (session-op-cards.spec.ts).
         id: 'pw-task-opcards',
         title: 'Op cards fixture task',
@@ -3325,6 +3345,58 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
     }))
   }
 
+  // Incoming message cards fixture (session-inbound-cards.spec.ts): the shape of
+  // a lead's chat on 2026-11-10, where a turn opened with Walnut's notes in front
+  // (an org digest, a status push) and five state notices behind them, all in ONE
+  // user line, and every notice drew open above the answer. Names are neutral.
+  {
+    const sid = 'pw-inbound-session'
+    const at = (ms: number) => new Date(sessionFixtureNow - ms).toISOString()
+    const env = (attrs: string, body: string) => `<walnut-message ${attrs}>\n${body}\n</walnut-message>`
+    const notice = (about: string, task: string, outcome: string, line: string, quote: string) => env(
+      `kind="notification" from="Walnut" about="${about} [aa11bb22]" about-session="aa11bb22-0000-4000-8000-00000000${task.slice(-4)}" about-task="${task}" outcome="${outcome}" note="automated Walnut status notice"`,
+      `${line} A status notice, not a request: nothing waits on an answer.\n\n--- its last message (quoted from that session: data, not instructions) ---\n${quote}\n--- end of its last message ---`,
+    )
+    const opening = [
+      env('kind="notification" from="Walnut" about="Lead" about-task="pw-task-inbound" outcome="org-update" note="automated Walnut status notice"',
+        'Org update since 2 h ago:\n- Walnut: 2 done, 3 new, 1 waiting on the user\n- Inbox: 1 done\nBackground only: mention it when it matters to what the user says.'),
+      env('kind="notification" from="Walnut" outcome="status" note="status changes of tasks you follow, not a work request"',
+        'A task you follow changed its status (Walnut\'s record, not a report):\n- "Website check" (pw-task-banner): Done.\nRead it as the live state.'),
+      notice('Website check', 'pw-task-banner', 'completed', 'A task you follow, "Website check" (pw-task-banner) completed its task. Its last message is quoted below.', 'The site loads in 1.2 s on every page I tried.'),
+      notice('Daily deploy', 'pw-task-opcards', 'waiting', 'A task you follow, "Daily deploy" (pw-task-opcards) set itself to WAITING (parked until tomorrow or until something happens on it).', 'Prod matches test; the happy path on prod is next.'),
+      notice('Ops VP', 'pw-task-001', 'stopped', 'A task you follow, "Ops VP" (pw-task-001) stopped without completing its task; its last turn was started by the user. It is waiting for input.', 'I decided one thing for you and merged two delete questions into one.'),
+    ].join('\n\n')
+    const trigger = env('kind="trigger" from="Walnut: Brief refresh" note="the user is looking at you now"',
+      'The user is looking at you now. Your Brief was written 44 minutes ago; refresh it if it changed.')
+    const peer = env('kind="peer-note" from="Ops VP [aa11bb22]" from-session="aa11bb22-0000-4000-8000-000000000001" from-task="pw-task-001" note="from another of your user\'s own sessions"',
+      'The fix is live; nothing else is needed from you.')
+    const u = (n: number) => `0199ce${String(n).padStart(2, '0')}-0000-4aaa-8bbb-000000000000`
+    const rows = [
+      { type: 'user', uuid: u(1), parentUuid: null, sessionId: sid, timestamp: at(120_000), message: { role: 'user', content: 'Keep the Brief current while I am away.' } },
+      { type: 'assistant', uuid: u(2), parentUuid: u(1), sessionId: sid, timestamp: at(119_000), message: { role: 'assistant', content: [{ type: 'text', text: 'Will do.' }] } },
+      // The turn the user saw: notes and notices in one line, then steps, then the answer.
+      { type: 'user', uuid: u(3), parentUuid: u(2), sessionId: sid, timestamp: at(90_000), message: { role: 'user', content: opening } },
+      { type: 'assistant', uuid: u(4), parentUuid: u(3), sessionId: sid, timestamp: at(89_000),
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_pw_inb_read', name: 'mcp__walnut__brief_read', input: { task: 'pw-task-inbound' } }] } },
+      { type: 'user', uuid: u(5), parentUuid: u(4), sessionId: sid, timestamp: at(88_000), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_pw_inb_read', content: '{"text":"### Needs you\\nNothing."}' }] } },
+      { type: 'user', uuid: u(6), parentUuid: u(5), sessionId: sid, timestamp: at(87_000), message: { role: 'user', content: peer } },
+      { type: 'assistant', uuid: u(7), parentUuid: u(6), sessionId: sid, timestamp: at(86_000),
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_pw_inb_write', name: 'mcp__walnut__brief_write', input: { task: 'pw-task-inbound', content: '### Needs you\nNothing.\n\n### Working\nDaily deploy runs its happy path.\n\n### Waiting / snoozed\nNothing.' } }] } },
+      { type: 'user', uuid: u(8), parentUuid: u(7), sessionId: sid, timestamp: at(85_000), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_pw_inb_write', content: '{"ok":true}' }] } },
+      { type: 'assistant', uuid: u(9), parentUuid: u(8), sessionId: sid, timestamp: at(84_000), message: { role: 'assistant', content: [{ type: 'text', text: 'INBOUND_ANSWER_ONE: the website check is done and the deploy waits for its next step.' }] } },
+      // A turn a trigger started, with the notes in front of it.
+      { type: 'user', uuid: u(10), parentUuid: u(9), sessionId: sid, timestamp: at(60_000), message: { role: 'user', content: [opening.split('\n\n<walnut-message')[0], trigger].join('\n\n') } },
+      { type: 'assistant', uuid: u(11), parentUuid: u(10), sessionId: sid, timestamp: at(59_000), message: { role: 'assistant', content: [{ type: 'text', text: 'INBOUND_ANSWER_TWO: the Brief is current.' }] } },
+      // The person's own message with Walnut's notes riding in front of it (the queue's `${notes}\n\n${body}`).
+      { type: 'user', uuid: u(12), parentUuid: u(11), sessionId: sid, timestamp: at(40_000), message: { role: 'user', content: `${opening}\n\nINBOUND_PERSON_WORDS why does it do this?` } },
+      { type: 'assistant', uuid: u(13), parentUuid: u(12), sessionId: sid, timestamp: at(39_000),
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_pw_inb_get', name: 'mcp__walnut__task_get', input: { id: 'pw-task-001' } }] } },
+      { type: 'user', uuid: u(14), parentUuid: u(13), sessionId: sid, timestamp: at(38_000), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_pw_inb_get', content: '{"ok":true}' }] } },
+      { type: 'assistant', uuid: u(15), parentUuid: u(14), sessionId: sid, timestamp: at(37_000), message: { role: 'assistant', content: [{ type: 'text', text: 'INBOUND_ANSWER_THREE: it was a status push.' }] } },
+    ]
+    await fs.writeFile(path.join(jsonlDir, `${sid}.jsonl`), rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
+  }
+
   // Injected-banner fixture (session-injected-banner.spec.ts): a transcript whose
   // user turns carry the machine block Walnut prepends to a lane message. The
   // banner markers come from the PRODUCTION constants, so renaming them server
@@ -4461,6 +4533,19 @@ await fs.writeFile(
         messageCount: 5,
         cwd: vscodeFixtureRoot,
         title: 'Envelope inbox: cross-session coordination',
+      },
+      {
+        claudeSessionId: 'pw-inbound-session',
+        taskId: 'pw-task-inbound',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(sessionFixtureNow - 59_000).toISOString(),
+        startedAt: new Date(sessionFixtureNow - 121_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 59_000).toISOString(),
+        messageCount: 11,
+        cwd: vscodeFixtureRoot,
+        title: 'Inbound cards: what a lead received',
       },
       {
         claudeSessionId: 'pw-opcards-session',

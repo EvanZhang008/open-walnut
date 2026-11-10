@@ -199,7 +199,7 @@ test('N2-08, C19: the timeline\'s own controls take a finger and read 12 px (tri
     const wrap = document.createElement('div')
     wrap.setAttribute('data-testid', 'r3-chrome')
     wrap.innerHTML = '<button type="button" class="session-show-earlier-btn">Load earlier turns</button>'
-      + '<div class="provenance-card"><button type="button" class="provenance-fold"><span class="provenance-label">Trigger</span><span>It is 09:00 at the shed</span></button></div>'
+      + '<div class="provenance-card"><button type="button" class="op-card-main"><span class="provenance-label">Trigger</span><span>It is 09:00 at the shed</span></button></div>'
       + '<p>A step <span class="tool-run-fail">1</span> failed, '
       + '<span class="bg-tasks-chip"><span class="bg-tasks-chip-icon">ok</span><span class="bg-tasks-chip-label">Seed count</span><span class="bg-tasks-chip-status">Done</span></span>'
       + ' <span class="task-group-model">small</span></p>'

@@ -55,12 +55,11 @@ import { useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
 import { copyTextRobust } from '@/utils/clipboard';
 import { log } from '@/utils/log';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
-import { fallbackTitle, foldKey, noticeText, noticeTitle, useMessageFold } from './message-fold';
-import { MessageFoldSummary } from './MessageFoldSummary';
+import { fallbackTitle, foldKey, foldSummary, noticeText, noticeTitle, useMessageFold } from './message-fold';
+import { CardMain, CardWho } from './MessageCard';
 import { disclosureIds, useDetailsDisclosure } from './row-disclosure';
 import '@/styles/provenance-quote.css';
 import '@/styles/provenance-fold.css';
-import { taskPath } from '@/utils/task-path';
 
 /** '__local__' is the wire value; the envelope prints 'local'. */
 function hostLabel(host: string | undefined): string | undefined {
@@ -163,34 +162,35 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
 }
 
 /**
- * Where the other side lives, by name: its task (a click opens that task's
- * session), else its session by title. An id means nothing to a reader, so
- * none shows here; the ids live in the details.
+ * Who the message is from or about, as the reader knows them: its task as a pill
+ * (a click opens it), else its session by title, else words; the host it runs on
+ * beside it. An id means nothing to a reader, so none shows here; the ids live in
+ * the details.
  */
-function PeerChips({ resolved }: { resolved: ResolvedPeer }) {
-  const taskLabel = useTaskLabel(resolved.taskId);
+function InboundWho({ envelope, resolved, sender, senderTitle }: {
+  envelope: SessionEnvelope;
+  resolved: ResolvedPeer;
+  sender: string;
+  senderTitle?: string;
+}) {
   const hostName = useHostDisplayLabels();
-  const chip = resolved.taskId ? (
+  const fallback = resolved.fullId ? (
     <a
-      className="provenance-chip provenance-chip-task task-link"
-      data-task-id={resolved.taskId}
-      href={taskPath(resolved.taskId)}
-      title={taskLabel?.project ? `${taskLabel.project} / ${taskLabel.title}` : taskLabel?.title}
-    >{taskLabel?.title ?? 'Open task'}</a>
-  ) : resolved.fullId ? (
-    <a
-      className="provenance-chip provenance-chip-session session-link"
+      className="provenance-chip provenance-chip-session session-link op-card-to-pill"
       data-session-id={resolved.fullId}
       href={`/sessions?id=${resolved.fullId}`}
       title={resolved.title ? `Open ${resolved.title}` : 'Open the session'}
-    >{resolved.title || 'Open session'}</a>
-  ) : null;
-  if (!chip && !resolved.host) return null;
+    >{resolved.title || sender}</a>
+  ) : <span className="op-card-to-text" title={senderTitle ?? sender}>{sender}</span>;
   return (
-    <div className="provenance-chips">
-      {chip}
-      {resolved.host && <span className="provenance-host">{hostName(resolved.host)}</span>}
-    </div>
+    <CardWho
+      glyph={envelopeDirectionGlyph(envelope.kind)}
+      direction={foldDirection(envelope)}
+      taskIds={resolved.taskId ? [resolved.taskId] : []}
+      fallback={fallback}
+      label={resolved.host ? hostName(resolved.host) : undefined}
+      tooltip={senderTitle}
+    />
   );
 }
 
@@ -217,6 +217,27 @@ function foldTitle(envelope: SessionEnvelope): string | undefined {
   if (envelope.kind === 'notification' && envelope.statusLine) return noticeTitle(envelope.statusLine);
   if (envelope.kind === 'trigger' && envelope.statusLine && envelope.statusLine !== 'scheduled') return envelope.statusLine;
   return fallbackTitle(envelope.body) ?? fallbackTitle(envelope.quote?.[0]?.text);
+}
+
+/**
+ * The folded summary, two lines at most: what the message says past its title.
+ * A notice's is the words it quotes from the task (its last message), else its
+ * own lines (a digest's projects), else the rest of its outcome.
+ */
+function cardSummary(envelope: SessionEnvelope, title: string | undefined): string | undefined {
+  switch (envelope.kind) {
+    case 'notification':
+      return foldSummary(
+        title,
+        envelope.quote?.find((q) => q.kind === 'message')?.text,
+        envelope.detail,
+        envelope.quote?.[0]?.text,
+        envelope.statusLine ? noticeText(envelope.statusLine) : undefined,
+      );
+    // A patch of an App's state reads as noise in a line.
+    case 'app-state': return undefined;
+    default: return foldSummary(title, envelope.body);
+  }
 }
 
 /**
@@ -321,20 +342,18 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
     const titleCopy = !envelope.title && !(envelope.statusLine && !scheduled);
     return (
       <div className="provenance-card" data-envelope-kind={kind} data-folded={open ? 'false' : 'true'}>
-        <MessageFoldSummary
+        <CardWho
           glyph={envelopeDirectionGlyph(kind)}
           direction={scheduled ? 'Routine ran on schedule' : foldDirection(envelope)}
-          sender={name}
-          title={title}
-          titleCopy={titleCopy}
-          open={open}
-          onToggle={toggle}
+          taskIds={[]}
+          fallback={<span className="op-card-to-text">{name}</span>}
         />
+        <CardMain title={title} titleCopy={titleCopy} summary={cardSummary(envelope, title)} open={open} onToggle={toggle} />
         {open && (
-          <>
+          <div className="op-card-detail">
             {envelope.body !== undefined && <EnvelopeBody body={envelope.body} sessionCwd={sessionCwd} />}
             <EnvelopeDetails envelope={envelope} />
-          </>
+          </div>
         )}
       </div>
     );
@@ -346,19 +365,18 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
   if (kind === 'app-state') {
     return (
       <div className="provenance-card" data-envelope-kind={kind} data-folded={open ? 'false' : 'true'}>
-        <MessageFoldSummary
+        <CardWho
           glyph={envelopeDirectionGlyph(kind)}
           direction={foldDirection(envelope)}
-          sender={peer.title || 'an App'}
-          title={envelope.title}
-          open={open}
-          onToggle={toggle}
+          taskIds={peer.taskId ? [peer.taskId] : []}
+          fallback={<span className="op-card-to-text">{peer.title || 'an App'}</span>}
         />
+        <CardMain title={envelope.title} open={open} onToggle={toggle} />
         {open && (
-          <>
+          <div className="op-card-detail">
             {envelope.body !== undefined && <pre className="provenance-app-state">{envelope.body}</pre>}
             <EnvelopeDetails envelope={envelope} />
-          </>
+          </div>
         )}
       </div>
     );
@@ -385,20 +403,14 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
       {...(peer.anonymous ? { 'data-anonymous': 'true' } : {})}
       {...(source ? { 'data-envelope-source': source } : {})}
     >
-      <MessageFoldSummary
-        glyph={envelopeDirectionGlyph(kind)}
-        direction={foldDirection(envelope)}
-        sender={sender}
-        senderTitle={headline}
+      <InboundWho envelope={envelope} resolved={resolved} sender={sender} senderTitle={headline} />
+      <CardMain
         title={title}
         // Derived (no sender title) and the open card shows its source: a copy.
         titleCopy={!envelope.title && !statusIsTitle}
-        open={open}
-        onToggle={toggle}
-      />
+        summary={cardSummary(envelope, title)} open={open} onToggle={toggle} />
       {open && (
-        <>
-          <PeerChips resolved={resolved} />
+        <div className="op-card-detail">
           {envelope.askedPreview && (
             <div className="provenance-asked">
               <span className="provenance-asked-label">You asked</span>
@@ -409,6 +421,7 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
           {envelope.quote?.map((section, i) => (
             <NoticeQuote key={i} section={section} sessionCwd={sessionCwd} />
           ))}
+          {envelope.detail !== undefined && <EnvelopeBody body={envelope.detail} sessionCwd={sessionCwd} />}
           {envelope.body !== undefined && <EnvelopeBody body={envelope.body} sessionCwd={sessionCwd} />}
           {envelope.replyRequest && (
             <div className="provenance-reply-request">
@@ -423,7 +436,7 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
             </div>
           )}
           <EnvelopeDetails envelope={envelope} sessionId={resolved.fullId} />
-        </>
+        </div>
       )}
     </div>
   );
