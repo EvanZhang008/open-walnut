@@ -254,10 +254,17 @@ test('project Pinned from a mixed state lights nothing, and one pick puts every 
   await boot(page)
   const header = projectHeader(page, project)
   await expect(header).toBeVisible({ timeout: 15_000 })
-  const menu = await openMenu(page, header, 'project-ctx-menu', 'Satellite')
-  await expect(menu.locator('[role="menuitemradio"][aria-checked="true"]')).toHaveCount(0)
-  await page.screenshot({ path: '/tmp/group-menu-settings/project-menu.png', clip: (await menu.boundingBox())! })
-  await pill(menu, 'Satellite').click()
+  // Open, check and pick as one gesture, again if the menu closed meanwhile: it closes when its row
+  // moves, and other specs' projects come and go above this one on the shared fixture (2026-11-10,
+  // CI: gone before the screenshot on one try, before the pick on the other).
+  await expect(async () => {
+    const menu = await openMenu(page, header, 'project-ctx-menu', 'Satellite')
+    await expect(menu.locator('[role="menuitemradio"][aria-checked="true"]')).toHaveCount(0)
+    const box = await menu.boundingBox()
+    expect(box, 'the menu is still open').not.toBeNull()
+    await page.screenshot({ path: '/tmp/group-menu-settings/project-menu.png', clip: box! })
+    await pill(menu, 'Satellite').click({ timeout: 2_000 })
+  }).toPass({ timeout: 60_000 })
   await expect.poll(() => tiers([a, b]), { timeout: 15_000 }).toEqual(['satellite', 'satellite'])
 })
 
