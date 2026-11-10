@@ -14,6 +14,8 @@
  */
 import { ext } from './ext'
 import { call, connection } from './walnut-api'
+import { keepForReload } from './agent-keep'
+import { CLEAR_MS } from './bg-clipboard'
 
 const EVERY_MS = 10 * 60_000
 let checkedAt = 0
@@ -48,7 +50,14 @@ export async function selfUpdate(force = false): Promise<void> {
   if (buildOf((await ownFile('manifest.json'))?.version_name) !== want) return
   const { reloadedFor } = await ext.storage.local.get('reloadedFor')
   if (reloadedFor === want) return
+  // A copied secret still due to be cleared off the clipboard: the reload would forget it (its
+  // mark is in storage.session only), so it waits for the next check (a clear that failed holds
+  // it up a minute at most).
+  const copied = (await Promise.resolve(ext.storage.session?.get('clipboardCopied')).catch(() => undefined))?.clipboardCopied as { at?: number } | undefined
+  if (typeof copied?.at === 'number' && Date.now() - copied.at < CLEAR_MS + 60_000) return
   await ext.storage.local.set({ reloadedFor: want })
+  // What the agent holds, stamped, so the reload keeps it (agent-keep.ts).
+  await keepForReload().catch(() => undefined)
   ext.runtime.reload?.()
 }
 

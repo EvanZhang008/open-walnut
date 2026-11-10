@@ -10,6 +10,7 @@
  */
 import type { ExtApi, Tab } from './ext'
 import { AGENT_PAGE } from './agent-groups'
+import { keptReady } from './agent-keep'
 
 /** How the window is made: pinned by tests/core/browser-control/extension-agent-window.test.ts. */
 export const AGENT_WINDOW = { focused: false, width: 1280, height: 900, type: 'normal' } as const
@@ -23,6 +24,8 @@ type Api = Pick<ExtApi, 'windows' | 'tabs' | 'storage'> & { runtime?: { getURL(p
  * the page loads (an agent's recording starts there, agent-net.ts).
  */
 export async function openInAgentWindow(api: Api, url: string, before?: (tabId: number) => Promise<void>): Promise<Tab> {
+  // After an extension reload the window comes back first (agent-keep.ts): never a second one.
+  await keptReady()
   const { agentWindow: id } = await api.storage.session.get('agentWindow')
   let tab: Tab | undefined
   if (typeof id === 'number') {

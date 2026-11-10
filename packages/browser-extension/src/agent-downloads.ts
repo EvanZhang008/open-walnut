@@ -7,11 +7,12 @@
 import { more, type DownloadItem } from './agent-api'
 import { ext } from './ext'
 import { tabStore } from './tab-store'
+import { keptReady } from './agent-keep'
 import { AgentError, acting, agentTabs, sleep } from './agent-shared'
 import { downloadOwner, type AgentTabNow } from './download-owner'
 
 interface Dl { owner: string; tab: number; at: number; told?: boolean }
-const downloads = tabStore<Dl>('agentDownloads')
+const downloads = tabStore<Dl>('agentDownloads', keptReady)
 const KEEP_MS = 24 * 3600_000
 
 /** Whose download it is, from what the browser says of it and of the agent tabs (download-owner.ts). */

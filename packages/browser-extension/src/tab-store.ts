@@ -1,13 +1,15 @@
 /**
  * Per-tab state that must outlive the background: Chrome stops an idle service worker after
  * about 30 s, and a sign in that leaves the page, or a person reading the connect page, takes
- * longer. storage.session is memory only, gone when the browser quits, and closed to content
+ * longer. storage.session is memory only, gone when the browser quits or the extension reloads
+ * (the agent's own stores come back after a reload: agent-keep.ts), and closed to content
  * scripts (TRUSTED_CONTEXTS).
  */
 import { ext } from './ext'
 
-export function tabStore<T>(key: string) {
-  const all = async (): Promise<Record<string, T>> => ((await ext.storage.session.get(key))[key] ?? {}) as Record<string, T>
+/** `ready`: awaited before every read (the agent's stores wait for agent-keep.ts to put them back after a reload). */
+export function tabStore<T>(key: string, ready?: () => Promise<void>) {
+  const all = async (): Promise<Record<string, T>> => { if (ready) await ready(); return ((await ext.storage.session.get(key))[key] ?? {}) as Record<string, T> }
   // Writes one at a time, so two tabs' writes never read the same old map.
   let chain: Promise<unknown> = Promise.resolve()
   const write = (f: (a: Record<string, T>) => void) => {

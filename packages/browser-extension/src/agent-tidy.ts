@@ -12,6 +12,7 @@
 import { ext } from './ext'
 import { agentTabs, agentWindowId } from './agent-shared'
 import { ungroupBeforeClose, type GroupApi } from './agent-groups'
+import { keptReady } from './agent-keep'
 
 export const LEFT_MS = 10 * 60_000
 const KEY = 'agentMade'
@@ -20,6 +21,7 @@ const KEY = 'agentMade'
 type Made = Record<string, number>
 
 async function read(): Promise<Made> {
+  await keptReady()
   return ((await ext.storage.session.get(KEY))[KEY] ?? {}) as Made
 }
 

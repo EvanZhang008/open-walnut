@@ -15,9 +15,10 @@
  *     made again with the old title and colour if it was that group's only tab, else ungrouped;
  *     and back to its old index while the window still has one. A tab the person moved out of the
  *     task's group meanwhile stays where they put it.
- *   - The places are kept in storage.local (review 2026-11-09): Chrome clears storage.session, and
- *     with it every holding, on an extension reload (self-update.ts reloads for every new build)
- *     and a browser restart, while it keeps (and restores) the tab groups. On every start of the
+ *   - The places are kept in storage.local (review 2026-11-09): Chrome clears storage.session on
+ *     an extension reload (self-update.ts reloads for every new build) and a browser restart, while
+ *     it keeps (and restores) the tab groups. A reload's holdings come back while they still name
+ *     the same tab (agent-keep.ts, before this runs); a restart's never do. On every start of the
  *     background (restoreLeftPersonTabs) a kept place whose holding is gone is put back: the same
  *     tab still in our group (a reload), or, after a restart, which gives tabs and groups new ids,
  *     a tab in a restored group of ours, found by the title and colour we gave it. Never a group

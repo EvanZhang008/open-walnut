@@ -34,6 +34,7 @@
  */
 import { more } from './agent-api'
 import { ext, isFirefox } from './ext'
+import { keptReady } from './agent-keep'
 import { CANCEL_COOL_MS, CdpError, acquireDebugger, barCancelled, endAllLingers, endLinger, endMark, holdersOf, keepCancel, lingerAfter, releaseDebugger, type LingerIf } from './cdp'
 import { dialogOf, orphanOf } from './agent-dialog'
 import { LIVE_PICTURES_KEY, REAL_INPUT_KEY, debuggerGranted, livePicturesOn } from './trusted-switch'
@@ -83,6 +84,7 @@ export function cancelKnown(): Promise<void> {
   listen()
   hydrated ??= (async () => {
     try {
+      await keptReady()
       const got = await ext.storage.session.get(CANCELLED_AT_KEY)
       keepCancel((at) => { void ext.storage.session.set({ [CANCELLED_AT_KEY]: at }).catch(() => undefined) }, got?.[CANCELLED_AT_KEY])
     } catch { keepCancel(() => undefined) }

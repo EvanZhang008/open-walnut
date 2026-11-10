@@ -8,6 +8,7 @@ import { groupPersonTab, restorePersonTab } from './agent-groups-person'
 import { ext, type Tab } from './ext'
 import { siteKey } from '../../../src/core/vault/url-match'
 import { tabStore } from './tab-store'
+import { keptReady } from './agent-keep'
 import { walnutAddress } from './walnut-address'
 import { injectContent, pageCheck, reachPage, toPage, type ReachError } from './page-reach'
 import { windowOf } from './agent-window'
@@ -34,7 +35,7 @@ export interface AgentTab {
   /** The holding (its grant) whose hand-over put this tab into its task's group of the person's window: once per holding. */
   grouped?: string
 }
-const rawAgentTabs = tabStore<AgentTab>('agentTabs')
+const rawAgentTabs = tabStore<AgentTab>('agentTabs', keptReady)
 /** One holding of a tab, named: every new hold of it gets its own, so work started for one holding can tell when it ended. */
 export const newGrant = (): string => `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
 /**
@@ -83,6 +84,7 @@ export const nearPerson = (rec: AgentTab | undefined) => personsTab(rec) || !!re
 
 /** The agent window, where an agent's own tabs open. */
 export async function agentWindowId(): Promise<number | undefined> {
+  await keptReady()
   const { agentWindow } = await ext.storage.session.get('agentWindow')
   return typeof agentWindow === 'number' ? agentWindow : undefined
 }
@@ -90,9 +92,9 @@ export async function agentWindowId(): Promise<number | undefined> {
 /**
  * The sites (origins) an owner signed in on with fill_login: no page JavaScript (evaluate) runs
  * there for that owner, since it could read the password Walnut just put in. Memory only, as
- * the agent tabs are.
+ * the agent tabs are (kept across an extension reload, agent-keep.ts).
  */
-const filled = tabStore<string[]>('agentFilled')
+const filled = tabStore<string[]>('agentFilled', keptReady)
 const ownerKey = (owner: string) => [...owner].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7)
 export const originOf = (u: string | undefined) => { try { return new URL(u ?? '').origin } catch { return '' } }
 export async function noteFilled(owner: string, url: string): Promise<void> {
@@ -116,7 +118,7 @@ export async function filledHere(owner: string, url: string): Promise<boolean> {
  * (a navigation or a reload is a new document, so a new id), since a script left in it could
  * read the password Walnut puts in. Memory only, as the agent tabs are.
  */
-const tamperedTabs = tabStore<{ owner: string; doc: string; at: number }>('agentTampered')
+const tamperedTabs = tabStore<{ owner: string; doc: string; at: number }>('agentTampered', keptReady)
 /** Marked when the page did not say which document it is: holds until the tab loads again. */
 const UNKNOWN_DOC = '*'
 export async function noteTampered(tabId: number, owner: string, askPage = true): Promise<void> {

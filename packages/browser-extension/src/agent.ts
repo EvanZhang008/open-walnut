@@ -38,6 +38,7 @@ import { watchMedia } from './agent-media'
 import { noteGroupUse, setGroupBusy, ungroupBeforeClose, type GroupApi } from './agent-groups'
 import { forgetAgentMade, noteAgentMade, tidyLeftovers } from './agent-tidy'
 import { restoreLeftPersonTabs } from './agent-groups-person'
+import { keptReady, startKeep } from './agent-keep'
 import { refuseWhileDialog } from './agent-dialog'
 
 export { setTrustedInput, trustedInputState } from './trusted-switch'
@@ -470,6 +471,8 @@ let running = false
 export async function agentLoop(): Promise<void> {
   if (running) return
   running = true
+  // The first report names the holdings a reload kept (agent-keep.ts), never an empty list.
+  await keptReady()
   // An extension call every 20 s keeps the background alive between polls.
   const keep = setInterval(() => { void ext.runtime.getPlatformInfo().catch(() => undefined) }, 20_000)
   let backoff = 1000
@@ -641,6 +644,8 @@ export async function agentMessage(type: string, sender: Sender): Promise<Record
 
 export function initAgent(deps: { isWalnutPage: (url: string) => Promise<boolean> }): void {
   walnutCheck.isWalnutPage = deps.isWalnutPage
+  // First: what an extension reload cleared comes back before anything reads it (agent-keep.ts).
+  void startKeep()
   watchOpened()
   watchDownloads()
   watchMedia()
@@ -668,8 +673,9 @@ export function initAgent(deps: { isWalnutPage: (url: string) => Promise<boolean
     void tidyLeftovers().catch(() => undefined)
   })
   ext.runtime.onStartup?.addListener(() => { void agentLoop(); restoreLeft() })
-  // An install, an update or a reload clears every holding (storage.session) while Chrome keeps
-  // the tab groups: a tab of the person's left in its task's group goes back (agent-groups-person.ts).
+  // A browser start clears every holding, and so does a reload whose holding no longer names the
+  // same tab (agent-keep.ts puts the rest back first), while Chrome keeps the tab groups: a tab of
+  // the person's left in its task's group with no holding goes back (agent-groups-person.ts).
   ext.runtime.onInstalled?.addListener(() => restoreLeft())
   watchGrantClose()
   restoreLeft()
@@ -678,7 +684,7 @@ export function initAgent(deps: { isWalnutPage: (url: string) => Promise<boolean
 
 /** Every tab of the person's still in a task's group with no holding behind it goes back where it was. */
 function restoreLeft(): void {
-  void restoreLeftPersonTabs(ext as unknown as GroupApi, async (tabId) => !!(await agentTabs.get(tabId))).catch(() => undefined)
+  void keptReady().then(() => restoreLeftPersonTabs(ext as unknown as GroupApi, async (tabId) => !!(await agentTabs.get(tabId)))).catch(() => undefined)
 }
 
 /** For tests: one command as the loop runs it, and the person's Browser view commands. */
