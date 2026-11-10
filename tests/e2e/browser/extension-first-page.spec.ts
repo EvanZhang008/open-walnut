@@ -177,6 +177,9 @@ test('the side panel opens on Chat: the side bar, the list filling the page, New
     const btn = (await rail.getByTestId(`panel-rail-${e}`).boundingBox())!
     expect(name.x, e).toBeGreaterThanOrEqual(btn.x)
     expect(name.x + name.width, e).toBeLessThanOrEqual(btn.x + btn.width)
+    // Room to spare, since macOS draws these words wider than Linux does: at 6 px of rail padding
+    // "Passwords" fit here and was cut by 1 px on the Mac (2026-11-10).
+    expect(btn.width - name.width, e).toBeGreaterThanOrEqual(6)
   }
   const railBox = (await rail.boundingBox())!
   const settingsBox = (await rail.getByTestId('panel-rail-settings').boundingBox())!
