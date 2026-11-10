@@ -211,6 +211,59 @@ describe('routines store: a push reads its own job', () => {
     expect(mocks.fetchRoutine).toHaveBeenCalledWith('r-0')
     expect(mocks.fetchRoutines).not.toHaveBeenCalled()
   })
+
+  // 2026-11-10, the page memory soak: on a busy page every list read was long enough for a
+  // push to land in it, and each such push queued one more 1.5 MB list behind it.
+  it('pushes during a list read queue no second list; their jobs are read one by one after it', async () => {
+    const list = deferred<Routine[]>()
+    mocks.fetchRoutines.mockReturnValueOnce(list.promise)
+    mocks.fetchRoutine.mockImplementation(async (id: string) => routine(id, { name: `fresh ${id}` }))
+    const reading = loadRoutines(true)
+    for (let i = 0; i < 12; i++) {
+      onRoutinesChanged({ action: 'updated', jobId: `r-${i % 4}` })
+      await settle()
+    }
+    expect(mocks.fetchRoutine).not.toHaveBeenCalled()
+    list.resolve(LIST.map((r) => ({ ...r })))
+    await reading
+    await settle()
+    expect(mocks.fetchRoutines).toHaveBeenCalledTimes(1)
+    expect(mocks.fetchRoutine.mock.calls.map(([id]) => id).sort()).toEqual(['r-0', 'r-1', 'r-2', 'r-3'])
+    expect(getRoutinesSnapshot().routines.find((r) => r.id === 'r-2')?.name).toBe('fresh r-2')
+  })
+
+  it('a job changed only before a list read started is not read again after it', async () => {
+    const list = deferred<Routine[]>()
+    mocks.fetchRoutine.mockImplementation(async (id: string) => routine(id))
+    onRoutinesChanged({ action: 'updated', jobId: 'r-9' })
+    mocks.fetchRoutines.mockReturnValueOnce(list.promise)
+    const reading = loadRoutines(true)
+    await settle()
+    list.resolve(LIST.map((r) => ({ ...r })))
+    await reading
+    await settle()
+    expect(mocks.fetchRoutine).not.toHaveBeenCalled()
+  })
+
+  it('a reconnect during a list read still reads the list once more', async () => {
+    const list = deferred<Routine[]>()
+    mocks.fetchRoutines.mockReturnValueOnce(list.promise)
+    const reading = loadRoutines(true)
+    onRoutinesStale()
+    await settle()
+    list.resolve(LIST.map((r) => ({ ...r })))
+    await reading
+    await settle()
+    expect(mocks.fetchRoutines).toHaveBeenCalledTimes(2)
+  })
+
+  it('the burst limit counts jobs, not pushes', async () => {
+    mocks.fetchRoutine.mockImplementation(async (id: string) => routine(id))
+    for (let i = 0; i < 60; i++) onRoutinesChanged({ action: 'updated', jobId: `r-${i % 5}` })
+    await settle()
+    expect(mocks.fetchRoutines).not.toHaveBeenCalled()
+    expect(mocks.fetchRoutine).toHaveBeenCalledTimes(5)
+  })
 })
 
 describe('subscribers of cron:job-* pushes', () => {

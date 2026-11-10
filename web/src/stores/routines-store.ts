@@ -27,6 +27,8 @@ let snapshot: RoutinesSnapshot = { routines: [], loading: true, error: null };
 const subscribers = new Set<() => void>();
 let inflight: Promise<void> | null = null;
 let wantsRefetch = false;
+/** Jobs named by pushes during a list read: read one by one once it lands. */
+let flushAfterLoad = false;
 let loaded = false;
 let writesInFlight = 0;
 let pendingRefetch = false;
@@ -65,6 +67,8 @@ export function loadRoutines(force = false): Promise<void> {
     try {
       do {
         wantsRefetch = false;
+        // This read covers every change named before it started.
+        changed = new Map();
         const routines = await api.fetchRoutines(true);
         loaded = true;
         setSnapshot({ routines, loading: false, error: null });
@@ -75,6 +79,11 @@ export function loadRoutines(force = false): Promise<void> {
       setSnapshot({ loading: false, error: err instanceof Error ? err.message : String(err) });
     } finally {
       inflight = null;
+      if (flushAfterLoad) {
+        flushAfterLoad = false;
+        // A list that failed stays for the next push, which reads it whole anyway.
+        if (!snapshot.error) flushChanges();
+      }
     }
   })();
   return inflight;
@@ -94,7 +103,7 @@ function settleWrite(): void {
 /** The fields of a `cron:job-*` push the store reads. */
 export interface RoutineChange { action?: string; jobId?: string }
 
-/** Past this many changed jobs in one burst, one list fetch is cheaper than one fetch each. */
+/** Past this many changed jobs (distinct ids) in one burst, one list fetch is cheaper than one fetch each. */
 const PER_JOB_LIMIT = 20;
 /** Jobs a burst changed, with the last action each had; `null` = refetch the whole list. */
 let changed: Map<string, string> | null = new Map();
@@ -134,6 +143,10 @@ function takeChanges(): Map<string, string> | null {
 }
 
 function flushChanges(): void {
+  // During a list read, a push that names its job waits for the list and is then read on its own:
+  // queueing another whole list behind it (1.5 MB) for every push of a busy minute was the
+  // page's largest read left after the per-job reads (2026-11-10, the page memory soak).
+  if (inflight && changed && changed.size <= PER_JOB_LIMIT) { flushAfterLoad = true; return; }
   const taken = takeChanges();
   // A list that never loaded (or failed to) is fetched whole: one row at a time would build a partial list.
   if (!taken || !loaded || snapshot.error || inflight || taken.size > PER_JOB_LIMIT) { void loadRoutines(true); return; }
@@ -338,6 +351,7 @@ export function __resetRoutinesStore(): void {
   subscribers.clear();
   inflight = null;
   wantsRefetch = false;
+  flushAfterLoad = false;
   loaded = false;
   writesInFlight = 0;
   pendingRefetch = false;
