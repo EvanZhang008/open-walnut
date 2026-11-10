@@ -150,8 +150,8 @@ export function queuedOutcome(taskId: string, queued: { position?: number; host?
     : Array.isArray(queued.running) ? `${queued.running.length} subtasks of your task are running${typeof queued.cap === 'number' ? ` (at most ${queued.cap} run at once)` : ''}`
     : 'no host has room'
   return [
-    `Task ${taskId} is queued${place}: ${why}. Walnut starts it by itself as soon as a host that can run it has room, `
-      + 'highest priority first.',
+    `An older server queued task ${taskId}${place}: ${why}. Walnut handles that stored queue when a host that can run it has room, `
+      + 'highest priority first. New automatic starts fail with 409 hosts_full instead.',
     'Do not retry the start, and do not do its work yourself: it runs as its own task. task_get shows execution.state '
       + '"queued", with waiting_for and waits_for_host, until it starts. When the user asked for it to start now, task_start '
       + 'with user_request quoting their words starts it at once.',

@@ -47,7 +47,9 @@ describe('Main and a VP never do the work themselves', () => {
     for (const role of ['main', 'lead'] as const) {
       expect(DEFAULT_ORG_INSTRUCTIONS[role].split('\n')[0]).toBe(orgSelfWorkRule(role))
       expect(orgSelfWorkRule(role)).toMatch(/Never do the work yourself: run at most 3 commands of your own in a turn/)
-      expect(orgSelfWorkRule(role)).toMatch(/A full slot is no reason to do it yourself: the start is queued/)
+      expect(orgSelfWorkRule(role)).toMatch(/409 hosts_full, not a queued start/)
+      expect(orgSelfWorkRule(role)).toMatch(/retry task_start/)
+      expect(orgSelfWorkRule(role)).toMatch(/trigger on host_load/)
       expect(orgSelfWorkRule(role)).toMatch(/task_create/)
     }
     expect(orgSelfWorkRule('main')).toMatch(/org_send/)

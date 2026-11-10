@@ -97,6 +97,38 @@ describe('a thread with no reply for too long', () => {
     expect(await runThreadRecheck()).not.toContain(lead.id);
   });
 
+  it('needs threads stay unchanged at four hours, are checked once after a day, and checked-only writes do not repeat it', async () => {
+    const lead = await newLead();
+    const opened = await run(lead, 'thread_create', { title: 'Pick a release date', text: 'Which date works for you?', from: 'node', user_kind: 'user_own', user_kind_why: 'The user asked to choose a release date' });
+    const id = (opened.thread as { id: string }).id;
+    const original = (await readThreads(lead.id)).threads.find((t) => t.id === id)!;
+    const at = Date.parse(original.updatedAt);
+    const hour = 3600_000;
+    expect(await runThreadRecheck(at + 4 * hour)).not.toContain(lead.id);
+    expect(await notes(lead)).toHaveLength(0);
+    expect(await runThreadRecheck(at + 24 * hour)).toContain(lead.id);
+    expect(await notes(lead)).toHaveLength(1);
+    const checked = (await readThreads(lead.id)).threads.find((t) => t.id === id)!;
+    expect(checked.updatedAt).toBe(original.updatedAt);
+    expect(checked.reply).toBe(original.reply);
+    expect(checked.recheck?.pending).toBeUndefined();
+    expect((await notes(lead))[0].message).toContain('If nothing changed, leave the thread unchanged');
+    // Even when the node writes again, the persisted reminder time keeps the daily gap.
+    await run(lead, 'thread_update', { id, state: 'needs', reply: 'Which date works for you?' });
+    expect(await runThreadRecheck(at + 28 * hour)).not.toContain(lead.id);
+    expect(await notes(lead)).toHaveLength(1);
+    const work = (await addTask({ title: 'Release', project: `RcProj${n}`, source: 'local' } as never)).task;
+    await updateTaskRaw(work.id, { due_date: new Date(at + 122 * hour).toISOString() });
+    await run(lead, 'thread_update', { id, add_tasks: [work.id] });
+    expect(await runThreadRecheck(at + 72 * hour)).toContain(lead.id);
+    // No further write: no repeated reminder for that stretch, even days later.
+    expect(await runThreadRecheck(at + 96 * hour)).not.toContain(lead.id);
+    expect(await runThreadRecheck(at + 97 * hour)).not.toContain(lead.id);
+    expect(await runThreadRecheck(at + 98 * hour)).toContain(lead.id);
+    expect((await notes(lead)).at(-1)!.message).toContain('a linked task is due');
+    expect(await runThreadRecheck(at + 99 * hour)).not.toContain(lead.id);
+  });
+
   it('a handoff answer on a working thread stays out of his view until the lead gives it a state', async () => {
     const lead = await newLead();
     const id = (await fileThreadMessage(lead.id, { text: 'can it skip opening the app?', via: 'chat', at: ago(1) })).thread.id;

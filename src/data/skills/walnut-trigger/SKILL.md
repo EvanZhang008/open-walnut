@@ -56,6 +56,36 @@ walnut tools call trigger_create '{"template":"slack:channel-message","params":{
 - Nothing fits? Write a check script (below). Say in one line what you will
   watch and with what, before you arm it.
 
+## A start refused because every suitable host is full
+
+`409 hosts_full` means not started, never queued. Keep the task id. A lead can
+watch admission room with the existing `host_load` op, then retry `task_start`.
+Run the check on `host: "__local__"` so it reads the primary's fleet view. Filter
+for the hosts that can run this task (a Mac-only task must not fire for Linux).
+A first check only records a cursor; a later check with room fires once. Example
+for a task that must run on the primary:
+
+```python
+#!/usr/bin/env python3
+import json, subprocess, sys
+inp = json.load(sys.stdin)
+res = subprocess.run(["walnut", "tools", "call", "host_load", "{}"],
+                     check=True, capture_output=True, text=True, timeout=25)
+hosts = json.loads(res.stdout)["hosts"]
+ready = any(h["host"] == "__local__" and h.get("known") and not h.get("full", True)
+            for h in hosts)
+state = inp.get("state") or {}
+fire = bool(state) and not state.get("fired") and ready
+print(json.dumps({"fire": fire,
+                  "state": {"checked": True, "fired": state.get("fired", False) or fire}}))
+```
+
+Test it with `trigger_test`, then arm it at an interval such as `5m`, with a
+prompt naming the failed task id and `task_start`. Delete it with `trigger_delete`
+when it fires. Room can disappear before the retry: another `hosts_full` is an
+error, not a queued start; rearm the watch rather than creating a duplicate task
+or doing the team's work yourself.
+
 ## No template: where the data comes from
 
 Pick the source the user is already signed in to, in this order:

@@ -51,6 +51,17 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   recheck?: { since: string; at: string; pending?: boolean };
 }
 
+/** The nearest future deadline of this thread's open tasks, never stored on the thread. */
+export function threadDeadline(t: { tasks?: readonly string[] }, tasks: readonly { id: string; due_date?: string; phase?: string }[], now = Date.now()): string | undefined {
+  const linked = new Set(t.tasks ?? []);
+  let due = Infinity;
+  for (const task of tasks) {
+    const at = Date.parse(task.due_date ?? '');
+    if (linked.has(task.id) && task.phase !== 'COMPLETE' && at > now && at < due) due = at;
+  }
+  return Number.isFinite(due) ? new Date(due).toISOString() : undefined;
+}
+
 /** One exchange: his message (or a few in a row the node answered at once) and the answer. */
 export interface ThreadExchange<M extends ViewMessage = ViewMessage> {
   /** 1-based number of its first message in the thread. */
@@ -332,8 +343,8 @@ export function shownToHim<M extends ViewMessage>(t: ViewThread<M> & { state: st
 
 /** A thread in the node's hands (new, working) with nothing new this long is overdue: Walnut wakes the node. */
 export const REPLY_DUE_MS = 30 * 60_000;
-/** A thread waiting on him (needs) with nothing new this long: the node checks it still stands. */
-export const NEEDS_QUIET_MS = 4 * 3600_000;
+/** An unchanged ask is checked at most once a day, never on the reply reminder's clock. */
+export const NEEDS_QUIET_MS = 24 * 3600_000;
 /** After the wake, this long more with nothing new and his view says so plainly. */
 export const OVERDUE_SHOW_MS = 30 * 60_000;
 
@@ -347,6 +358,8 @@ export interface ThreadOverdue {
   showAt: string;
   /** He wrote and no answer of the node's came after it. */
   unanswered: boolean;
+  /** A linked task is due within a day: one check before it, even after a prior quiet check. */
+  deadline?: string;
 }
 
 /**
@@ -354,10 +367,12 @@ export interface ThreadOverdue {
  * for this long, something must be wrong: the AI should go and answer it, and if not, our system
  * reminds.") In the node's hands (new, working) REPLY_DUE_MS after the last thing on it, or waiting on
  * him (needs) NEEDS_QUIET_MS with nothing new: Walnut wakes the node once per stretch
- * (thread-recheck.ts), and OVERDUE_SHOW_MS later his view says so. Answered waits on his reaction,
+ * (thread-recheck.ts), with at least a day between quiet checks. A linked task's deadline permits
+ * one check in the day before it. OVERDUE_SHOW_MS later the card uses the same rule.
+ * Answered waits on his reaction,
  * pending is the node's call and a snoozed thread is put aside: none is ever overdue. Null when not due yet.
  */
-export function threadOverdue(t: ViewThread & { state: string }, now: number = Date.now()): ThreadOverdue | null {
+export function threadOverdue(t: ViewThread & { state: string }, now: number = Date.now(), deadline?: string): ThreadOverdue | null {
   if (t.closed || snoozedNow(t, now)) return null;
   const why = t.state === 'new' || t.state === 'working' ? 'reply' : t.state === 'needs' ? 'needs' : null;
   if (!why) return null;
@@ -371,7 +386,18 @@ export function threadOverdue(t: ViewThread & { state: string }, now: number = D
   if (t.by && t.by !== 'human' && t.updatedAt && t.updatedAt > last) last = t.updatedAt;
   if (!last) return null;
   const at = Date.parse(last);
-  const due = at + (why === 'reply' ? REPLY_DUE_MS : NEEDS_QUIET_MS);
+  const deadlineMs = Date.parse(deadline ?? '');
+  const beforeDue = deadlineMs - NEEDS_QUIET_MS;
+  // A node write inside the deadline window already checked it. Otherwise one
+  // before-deadline check uses the existing reminder timestamp as its receipt.
+  if (why === 'needs' && Number.isFinite(at) && at < beforeDue && deadlineMs > now && now >= beforeDue
+    && !(t.recheck && Date.parse(t.recheck.at) >= deadlineMs - NEEDS_QUIET_MS && !t.recheck.pending)) {
+    return { why, since: last, dueAt: new Date(beforeDue).toISOString(), showAt: new Date(beforeDue + OVERDUE_SHOW_MS).toISOString(), unanswered: false, deadline };
+  }
+  // A checked-only write must not rearm an ask on the reply clock. A successful needs
+  // reminder also holds the daily gap across writes and restarts; failed sends keep their retry.
+  const checked = why === 'needs' && t.recheck && t.recheck.since !== last && !t.recheck.pending ? Date.parse(t.recheck.at) : NaN;
+  const due = Math.max(at, Number.isFinite(checked) ? checked : at) + (why === 'reply' ? REPLY_DUE_MS : NEEDS_QUIET_MS);
   if (!Number.isFinite(at) || now < due) return null;
   const unanswered = !!lastHis && !t.messages.some((m) => !!m.answer && m.answer.at > lastHis);
   return { why, since: last, dueAt: new Date(due).toISOString(), showAt: new Date(due + OVERDUE_SHOW_MS).toISOString(), unanswered };
@@ -389,11 +415,11 @@ function overdueShown<M extends ViewMessage>(t: ViewThread<M> & { state: string 
 }
 
 /** The plain line his card carries for an overdue thread once it is his to see; null otherwise. */
-export function overdueLine(t: ViewThread & { state: string }, name: string, now: number = Date.now(), fmt: (iso: string) => string = (iso) => iso): string | null {
-  const o = threadOverdue(t, now);
+export function overdueLine(t: ViewThread & { state: string }, name: string, now: number = Date.now(), fmt: (iso: string) => string = (iso) => iso, deadline?: string): string | null {
+  const o = threadOverdue(t, now, deadline);
   if (!o || now < Date.parse(o.showAt)) return null;
   const woke = t.recheck && t.recheck.since === o.since && !t.recheck.pending ? ` \u00b7 Walnut reminded ${name} ${fmt(t.recheck.at)}` : '';
-  const head = o.why === 'needs' ? `Nothing new from ${name} on this` : `${o.unanswered ? 'No reply' : 'Nothing new'} from ${name}`;
+  const head = o.deadline ? `A linked task is due ${fmt(o.deadline)}` : o.why === 'needs' ? `Nothing new from ${name} on this` : `${o.unanswered ? 'No reply' : 'Nothing new'} from ${name}`;
   return `${head} \u00b7 last activity ${fmt(o.since)}${woke}`;
 }
 

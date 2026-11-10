@@ -425,7 +425,7 @@ defineOp({
       execution.state === 'not_started'
         ? dispatchHint(id)
         : execution.state === 'queued'
-        ? `Its start is queued until a host that can run it has a free slot (execution.waiting_for says why, waits_for_host where); Walnut starts it by itself. Do not start it again or do its work yourself.`
+        ? `An older server queued this start until a host that can run it has a free slot (execution.waiting_for says why, waits_for_host where); Walnut handles that stored queue. New automatic starts fail with 409 hosts_full instead. Do not duplicate this queued start or do its work yourself.`
         : `Read task_history for its result. Continue the same deliverable with task_send '${JSON.stringify({ to: id, text: '...', ...(phase === 'COMPLETE' ? { force: true, reason: 'What changed in this deliverable' } : {}) })}'; an independent goal needs task_create.`,
     )
   },
@@ -685,7 +685,7 @@ defineOp({
             ...extra, execution: { state: 'not_started', error }, start_error: error,
           }),
           `${where}Task ${id} was created but did not start: no host that can run it has room.${await cardLine(false)}`,
-          `Retry with walnut tools call task_start '{"id":"${id}"}' once one of your running tasks ends; when the user asked for it now, `
+          `This start is not queued. Check host_load and retry walnut tools call task_start '{"id":"${id}"}' when a suitable host has room, or arm a trigger on host_load (full=false) to retry (walnut-trigger). When the user asked for it now, `
             + 'pass their words as user_request, which starts it at once. Do not create another task, and do not do its work yourself.',
         )
       }

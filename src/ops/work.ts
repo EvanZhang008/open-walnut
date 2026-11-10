@@ -20,7 +20,8 @@ defineOp({
     'new-task/clean-context request, needs task_create, even in the same project or client. ' +
     'Only start work the user asked for. If already started, use task_send with the same task id ' +
     'to continue it; do not create a duplicate. Replies return to the caller by default. ' +
-    'An accepted start is not a completed task: read the execution field.',
+    'An accepted start is not a completed task: read the execution field. Automatic starts fail with 409 hosts_full when no suitable host has room, never queued. '
+    + 'Check host_load and retry task_start for this same id when a suitable host has room (full=false), or arm a trigger to retry (walnut-trigger).',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix'),
     ...TASK_START_INPUT,

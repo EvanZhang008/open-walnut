@@ -46,7 +46,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS, shownState } from '@open-walnut/user-status';
-import { cardView, exchangesOf, overdueLine, pinnedFirst, pinnedNow, sharedAnswers, shownToHim, snoozedNow, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
+import { cardView, exchangesOf, overdueLine, threadDeadline, pinnedFirst, pinnedNow, sharedAnswers, shownToHim, snoozedNow, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
@@ -334,7 +334,7 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
   const pinned = pinnedNow(t);
   const card = useMemo(() => cardView(t, shared), [t, shared]);
   // It sat too long with nothing from the node: the card says so (core/org/thread-view.ts threadOverdue).
-  const overdue = closed || snoozed ? null : overdueLine(t, name, now, (iso) => timeAgo(iso, { now }));
+  const overdue = closed || snoozed ? null : overdueLine(t, name, now, (iso) => timeAgo(iso, { now }), threadDeadline(t, tasks, now));
   // The tasks the summary already shows as pills get no second chip (the renderer resolves them
   // from the task labels, so it is read again when one arrives, with the summary itself).
   const labels = useEntityLabelsVersion();

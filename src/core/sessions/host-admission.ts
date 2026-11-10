@@ -91,7 +91,7 @@ export interface HostsFullDetail {
   placement?: string;
 }
 
-/** An automatic start found its host full: the start queue takes it (start-queue.ts). */
+/** An automatic start found its host full: its caller gets an error, never a queued start. */
 export class HostsFullError extends Error {
   readonly statusCode = 409;
   readonly code = 'hosts_full';

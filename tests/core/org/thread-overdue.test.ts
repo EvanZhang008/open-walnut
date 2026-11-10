@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   NEEDS_QUIET_MS, OVERDUE_SHOW_MS, REPLY_DUE_MS, SUMMARY_COVERS_MS, cardView, overdueLine, shownToHim, summaryAt, threadOverdue,
-  type ViewMessage, type ViewThread,
+  threadDeadline, type ViewMessage, type ViewThread,
 } from '../../../src/core/org/thread-view.js'
 import { THREAD_STATES, emptyThreads, fileMessage, normalizeThreads, openThread, setAnswers, stampLegacyReplyAt, updateThread, type OrgThread } from '../../../src/core/org/threads-model.js'
 import { RETRY_MS, threadRecheckBody, threadRecheckMessage, threadsDueRecheck } from '../../../src/core/org/thread-recheck.js'
@@ -166,6 +166,65 @@ describe('3. a thread that waits too long with nothing from the node', () => {
     expect(threadOverdue({ ...t, state: 'pending' }, far)).toBeNull()
     expect(threadOverdue({ ...t, snoozed: { until: iso(20 * NEEDS_QUIET_MS), at: iso(MIN) } }, far)).toBeNull()
     expect(threadOverdue({ ...t, closed: { by: 'human' } }, far)).toBeNull()
+  })
+
+  it('the reported timestamp shape stays quiet instead of repeating the evening check', () => {
+    const t = thread({ state: 'needs', by: 'task:vp', updatedAt: '2026-11-10T03:34:49.769Z',
+      opener: { text: 'Choose a date.', at: '2026-11-09T16:53:59.616Z', from: 'node' },
+      recheck: { since: '2026-11-09T23:30:07.151Z', at: '2026-11-10T03:34:23.151Z' } })
+    expect(threadOverdue(t, Date.parse('2026-11-10T07:35:00Z'))).toBeNull()
+    expect(overdueLine(t, 'VP', Date.parse('2026-11-10T07:35:00Z'))).toBeNull()
+  })
+
+  it('a needs thread never restarts four-hour reminders after a checked-only write', () => {
+    const t = thread({ state: 'needs', by: 'task:vp', updatedAt: iso(0), opener: { text: 'Pick a date.', at: iso(0), from: 'node' } })
+    expect(threadOverdue(t, T0 + 4 * 3600_000)).toBeNull()
+    const checked = { ...t, updatedAt: iso(4 * 3600_000), recheck: { since: iso(0), at: iso(4 * 3600_000) } }
+    expect(threadOverdue(checked, T0 + 8 * 3600_000)).toBeNull()
+    expect(overdueLine(checked, 'VP', T0 + 8 * 3600_000)).toBeNull()
+    expect(threadOverdue(checked, T0 + 4 * 3600_000 + NEEDS_QUIET_MS - 1)).toBeNull()
+    expect(threadOverdue(checked, T0 + 4 * 3600_000 + NEEDS_QUIET_MS)).not.toBeNull()
+  })
+
+  it('checks once before the nearest open linked task deadline, even after a quiet check, never per scan', () => {
+    const f = openThread(emptyThreads('vp'), { title: 'Pick a date', text: 'Pick the date.', from: 'node', tasks: ['open', 'closed'], user_kind: 'user_own', user_kind_why: 'The user asked to pick a date' }, 'task:vp', iso(0)).file
+    const hour = 3600_000
+    const tasks = [{ id: 'open', due_date: iso(50 * hour), phase: 'TODO' as const }, { id: 'closed', due_date: iso(30 * hour), phase: 'COMPLETE' as const }, { id: 'other', due_date: iso(29 * hour) }]
+    const t = { ...f.threads[0], recheck: { since: iso(0), at: iso(24 * hour), why: 'needs' as const } }
+    expect(threadDeadline(t, tasks, T0 + 25 * hour)).toBe(iso(50 * hour))
+    expect(threadsDueRecheck([t], T0 + 25 * hour, tasks)).toEqual([])
+    const due = threadsDueRecheck([t], T0 + 26 * hour, tasks)
+    expect(due).toHaveLength(1)
+    expect(due[0].overdue.deadline).toBe(iso(50 * hour))
+    expect(overdueLine(t, 'VP', T0 + 27 * hour, (s) => s, iso(50 * hour))).toContain('A linked task is due')
+    const sent = { ...t, recheck: { ...t.recheck, at: iso(26 * hour) } }
+    expect(threadsDueRecheck([sent], T0 + 27 * hour, tasks)).toEqual([])
+    expect(threadsDueRecheck([{ ...sent, updatedAt: iso(27 * hour) }], T0 + 28 * hour, tasks)).toEqual([])
+    const pending = { ...sent, recheck: { ...sent.recheck, pending: true } }
+    expect(threadsDueRecheck([pending], T0 + 26 * hour + MIN, tasks)).toEqual([])
+    expect(threadsDueRecheck([pending], T0 + 26 * hour + RETRY_MS, tasks)).toHaveLength(1)
+    expect(threadDeadline(t, [{ id: 'open', due_date: 'bad' }], T0)).toBeUndefined()
+    expect(threadDeadline(t, tasks, T0 + 51 * hour)).toBeUndefined()
+  })
+
+  it('a node write inside the deadline window counts as its check, never wakes it again immediately', () => {
+    const hour = 3600_000
+    const t = thread({ state: 'needs', by: 'task:vp', updatedAt: iso(0), opener: { text: 'Pick a date.', at: iso(0), from: 'node' } })
+    for (const hours of [1, 6, 24]) {
+      expect(threadOverdue(t, T0 + MIN, iso(hours * hour))).toBeNull()
+      expect(overdueLine(t, 'VP', T0 + hour, (s) => s, iso(hours * hour))).toBeNull()
+    }
+    const old = { ...t, opener: { ...t.opener!, at: iso(-30 * hour) }, updatedAt: iso(-30 * hour) }
+    expect(threadOverdue(old, T0, iso(6 * hour))?.deadline).toBe(iso(6 * hour))
+  })
+
+  it('a daily check never tells the node to repeat an unchanged ask or rewrite a checked time', () => {
+    const f = openThread(emptyThreads('vp'), { title: 'Pick a date', text: 'Pick the date.', from: 'node', user_kind: 'user_own', user_kind_why: 'The user asked to pick a date' }, 'task:vp', iso(0)).file
+    const due = threadsDueRecheck(f.threads, T0 + NEEDS_QUIET_MS)
+    expect(due).toHaveLength(1)
+    const body = threadRecheckBody(due, T0 + NEEDS_QUIET_MS)
+    expect(body).toContain('If nothing changed, leave the thread unchanged')
+    expect(body).not.toContain('update its summary with where it stands now')
   })
 
   it('a wake is due once per stretch, and the note names each thread with what to do', () => {
