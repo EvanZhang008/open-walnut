@@ -106,7 +106,8 @@ import { FLAP_WINDOW_MS } from '../core/hosts/host-problem.js'
 // Leaf (no runtime imports): the cloud box alias and the companion's last answer.
 import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
 import { creditCurrentRead } from '../core/hosts/read-progress.js'
-import { markLinkFailure } from './link-failure.js'
+import { linkFailureKind, markLinkFailure } from './link-failure.js'
+import { DRAIN_SWAP_WINDOW_MS, daemonSwapExpected, resendThroughSwap, waitHostLink, wakeHostLink } from './daemon-drain-resend.js'
 import { parseServes, sharedDaemonVerdict, walnutKeyOf, REPLACE_BREAKER_MS, SERVES_FILE, type DaemonServes } from './daemon-shared.js'
 import { selfHostConnection } from '../replica/self-host.js'
 import { dispatchOneShotEvent } from './oneshot-client.js'
@@ -858,6 +859,8 @@ export class DaemonConnection {
    * upload is dialled again at once, onto the old daemon that still serves.
    */
   private _swapInFlight: Promise<void> | null = null
+  /** When the daemon last refused a command because it is shutting down (0: none since the last connect). */
+  private _drainSeenAt = 0
   /** The swap in flight was an overdue one (`--over-busy`): file changes wait for it. */
   private _swapOverBusy = false
   /** An overdue swap the host network updater runs (fenceFileChanges): file changes wait for it. */
@@ -1183,6 +1186,9 @@ export class DaemonConnection {
     if (changed && value) this.netUpdater?.schedule()
     if (value) {
       if (changed) this.endHandover()
+      // A daemon answers again: requests waiting out a swap go to it (daemon-drain-resend.ts).
+      this._drainSeenAt = 0
+      if (changed) wakeHostLink(`daemon:${this.hostKey}`)
       this._disconnectedSince = null
       this._awakeDown.reset()
       this.stopAwakeTick()
@@ -2090,11 +2096,50 @@ export class DaemonConnection {
    * daemon logs, and (via --debug) Claude CLI logs. Callers who want a trace
    * ID that outlives one `send()` (e.g. the whole turn — send → jsonl → result)
    * should supply their own.
+   *
+   * A daemon swap is invisible here: a command the old daemon refused while it drains, or one
+   * the swap left without a link, is sent again on the next daemon (daemon-drain-resend.ts).
    */
   async send(
     cmd: string,
     params: Record<string, unknown> = {},
     timeoutMs: number = DaemonConnection.COMMAND_TIMEOUT_MS,
+  ): Promise<DaemonCommandResult> {
+    const traced = typeof params.traceId === 'string' && params.traceId ? params : { ...params, traceId: crypto.randomBytes(4).toString('hex') }
+    const host = this.hostKey
+    // The pool may replace this instance in the swap: a resend goes to the one serving the host then.
+    const current = (): DaemonConnection => {
+      if (this.usable || (!this._destroyed && !releasedFromPool.has(this))) return this
+      const pooled = connectionPool.get(host)
+      return pooled && pooled.usable ? pooled : this
+    }
+    return resendThroughSwap(cmd, {
+      once: (budget) => current().sendOnce(cmd, traced, budget),
+      failure: (err) => { const kind = linkFailureKind(err); return kind === 'no-link' || kind === 'lost' ? kind : null },
+      swapUnderway: () => current().swapUnderway,
+      noteRefusal: () => { current()._drainSeenAt = Date.now() },
+      waitLink: (ms, fresh) => waitHostLink(`daemon:${host}`, ms, fresh ? () => false : () => current().usable),
+      onWait: (why) => log.session.info('DaemonConnection: a command waits out a daemon swap', { host, cmd, why, traceId: traced.traceId }),
+    }, timeoutMs)
+  }
+
+  /** A command can go out on this instance now. */
+  private get usable(): boolean { return this._connected && !!this.ws }
+
+  /**
+   * A swap of this host's daemon is under way: the daemon refused a command because it is going
+   * away, or a swap this server started dropped the link and the new daemon has not answered yet.
+   * Not the whole of a swap this server runs: its own steps there want a missing link's answer now.
+   */
+  private get swapUnderway(): boolean {
+    return Date.now() - this._drainSeenAt < DRAIN_SWAP_WINDOW_MS || this.handoverPending || daemonSwapExpected(`daemon:${this.hostKey}`)
+  }
+
+  /** One try of `send`. */
+  private async sendOnce(
+    cmd: string,
+    params: Record<string, unknown>,
+    timeoutMs: number,
   ): Promise<DaemonCommandResult> {
     // An overdue swap may end with the old daemon restarted unprepared, and an older daemon's
     // shutdown does not wait for a file write: a file change waits for the swap (bounded).
@@ -4312,6 +4357,8 @@ export class DaemonConnection {
       return
     }
     log.session.warn('DaemonConnection: daemon swap window ended', { host: this.hostKey, why, ms })
+    // Requests waiting out this swap look again now (daemon-drain-resend.ts).
+    wakeHostLink(`daemon:${this.hostKey}`)
     // What it hid reaches every surface now.
     if (!this._connected) {
       notifyDaemonPhaseChange(this.hostKey)

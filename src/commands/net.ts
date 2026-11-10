@@ -20,6 +20,7 @@ import path from 'node:path'
 import { WebSocket } from '#ws'
 import { decodeTicket, TICKET_PREFIX, type JoinTicket } from '../core/net/join-ticket.js'
 import { FETCH_TIMEOUT_MS as NET_FETCH_TIMEOUT_MS } from '../providers/net-binary.js'
+import { DRAIN_SWAP_WINDOW_MS, resendThroughSwap } from '../providers/daemon-drain-resend.js'
 
 const STEP_W = 19
 function step(n: number, label: string, text: string): void {
@@ -37,12 +38,33 @@ async function daemonDir(): Promise<string> {
   return localProductionDaemonDir()
 }
 
-/** One command to this account's own daemon (at `atPort`, else the port its port file names). */
+/**
+ * One command to this account's own daemon (at `atPort`, else the port its port file names).
+ * A refusal of a daemon shutting down for a swap is asked again of the next one (daemon-drain-resend.ts).
+ */
 async function daemonRpc(cmd: string, params: Record<string, unknown> = {}, timeoutMs = 30_000, atPort?: number): Promise<Record<string, unknown>> {
-  const port = atPort ?? Number(fs.readFileSync(path.join(await daemonDir(), 'daemon.port'), 'utf8').trim())
-  if (!Number.isInteger(port) || port <= 0) throw new Error('the Walnut daemon is not running here')
+  let refusedAt = 0
+  return resendThroughSwap(cmd, {
+    once: (budget) => daemonRpcOnce(cmd, params, budget, atPort),
+    // Each try reads the port anew and opens its own socket: one that never opened sent nothing.
+    failure: (err) => ((err as { unopened?: boolean }).unopened ? 'no-link' : null),
+    swapUnderway: () => Date.now() - refusedAt < DRAIN_SWAP_WINDOW_MS,
+    noteRefusal: () => { refusedAt = Date.now() },
+    waitLink: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 1_000))),
+  }, timeoutMs)
+}
+
+async function daemonRpcOnce(cmd: string, params: Record<string, unknown>, timeoutMs: number, atPort?: number): Promise<Record<string, unknown>> {
+  const unopened = (err: unknown) => Object.assign(err instanceof Error ? err : new Error(String(err)), { unopened: true })
+  let port: number
+  try {
+    port = atPort ?? Number(fs.readFileSync(path.join(await daemonDir(), 'daemon.port'), 'utf8').trim())
+  } catch (err) { throw unopened(err) }
+  if (!Number.isInteger(port) || port <= 0) throw unopened(new Error('the Walnut daemon is not running here'))
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`, { maxPayload: 4 * 1024 * 1024 })
+    let opened = false
+    ws.on('open', () => { opened = true })
     const timer = setTimeout(() => { try { ws.terminate() } catch { /* gone */ } reject(new Error(`the daemon did not answer ${cmd}`)) }, timeoutMs)
     ws.on('open', () => ws.send(JSON.stringify({ id: 1, cmd, ...params })))
     ws.on('message', (d: Buffer) => {
@@ -53,7 +75,7 @@ async function daemonRpc(cmd: string, params: Record<string, unknown> = {}, time
       ws.close()
       resolve(m)
     })
-    ws.on('error', (e: Error) => { clearTimeout(timer); reject(e) })
+    ws.on('error', (e: Error) => { clearTimeout(timer); reject(opened ? e : unopened(e)) })
   })
 }
 

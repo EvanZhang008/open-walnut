@@ -90,6 +90,9 @@ jobs:
       - name: Session commit (a real daemon and git repo)
         if: ${{ !cancelled() }}
         run: bun x playwright test -c tests/e2e/browser/session-commit.config.ts --project=chromium
+      - name: Upload through a daemon swap (a real daemon replaced mid-upload)
+        if: ${{ !cancelled() }}
+        run: bun x playwright test -c tests/e2e/browser/daemon-swap-upload.config.ts --project=chromium
       - name: Warm session (the built server and SPA)
         if: ${{ !cancelled() }}
         run: bun x playwright test -c tests/e2e/browser/warm-session.config.ts --project=chromium

@@ -19,6 +19,7 @@ import type { Duplex } from 'node:stream'
 import WebSocket from '#ws'
 import { createStreamEndpoint, type IncomingStreamInfo, type StreamEndpoint } from '../lib/link-stream.js'
 import { assertFrameFits } from '../providers/daemon-frame-cap.js'
+import { DRAIN_SWAP_WINDOW_MS, resendThroughSwap, waitHostLink, wakeHostLink } from '../providers/daemon-drain-resend.js'
 
 export interface FollowerView {
   walnutId: string
@@ -93,8 +94,17 @@ export function wasNotSent(err: unknown): boolean {
 }
 const MAX_REDIAL_MS = 30_000
 
+let linkSeq = 0
+
+/** A request whose link closed under it (drop answers it `closed`), carried to the resend loop. */
+class LinkClosed extends Error {
+  constructor(readonly reply: Record<string, unknown>) { super('the link to the daemon closed') }
+}
+
 export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
   const now = opts.now ?? Date.now
+  const linkKey = `host-server-link:${++linkSeq}`
+  let drainSeenAt = 0
   const pollMs = opts.pollMs ?? 3_000
   let ws: WebSocket | null = null
   let state: DaemonLinkState = 'connecting'
@@ -233,6 +243,9 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
         redialMs = 1_000
         take(hello)
         setState('following', '')
+        // A daemon answers again: requests waiting out a swap go to it (daemon-drain-resend.ts).
+        drainSeenAt = 0
+        wakeHostLink(linkKey)
         error = null
         pollTimer = setInterval(() => {
           void call(socket, 'follower.status').then(take, () => { /* the next poll, or the close, says more */ })
@@ -266,9 +279,25 @@ export function createDaemonLink(opts: DaemonLinkOptions): DaemonLink {
       if (state !== 'following' || !streams) return Promise.reject(new Error('not linked to the daemon'))
       return streams.open(to, purpose ? { purpose } : {})
     },
+    // A daemon swap is invisible here too: a refusal of the draining daemon, or a request the
+    // swap left without a link, is sent again once the next daemon is followed.
     request: (cmd, params = {}, timeoutMs) => {
-      if (state !== 'following' || !ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(notSent(new Error('not linked to the daemon')))
-      return call(ws, cmd, params, timeoutMs)
+      const linked = () => state === 'following' && !!ws && ws.readyState === WebSocket.OPEN
+      return resendThroughSwap(cmd, {
+        once: async (budget) => {
+          if (!linked() || !ws) throw notSent(new Error('not linked to the daemon'))
+          const reply = await call(ws, cmd, params, budget)
+          if (reply.ok === false && reply.error === 'closed') throw new LinkClosed(reply)
+          return reply
+        },
+        failure: (err) => (wasNotSent(err) ? 'no-link' : err instanceof LinkClosed ? 'lost' : null),
+        swapUnderway: () => now() - drainSeenAt < DRAIN_SWAP_WINDOW_MS,
+        noteRefusal: () => { drainSeenAt = now() },
+        waitLink: (ms, fresh) => waitHostLink(linkKey, ms, fresh ? () => false : linked),
+      }, timeoutMs ?? CALL_TIMEOUT_MS).catch((err) => {
+        if (err instanceof LinkClosed) return err.reply
+        throw err
+      })
     },
     report: (body) => {
       if (state !== 'following' || !ws || ws.readyState !== WebSocket.OPEN) return

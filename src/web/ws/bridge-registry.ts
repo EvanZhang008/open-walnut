@@ -40,6 +40,7 @@ import {
 import { eventLoopP99Ms } from '../../core/event-loop-monitor.js'
 import { onCredentialsRevoked } from '../../core/device-auth.js'
 import { assertFrameFits } from '../../providers/daemon-frame-cap.js'
+import { DRAIN_SWAP_WINDOW_MS, resendThroughSwap, waitHostLink, wakeHostLink } from '../../providers/daemon-drain-resend.js'
 import {
   sessionChannelKey, scheduleOfflineAnnouncement, cancelOfflineAnnouncement, offlineAnnouncementPending,
   markAnnouncedOffline, announceOnline, forgetPresence, clearBridgePresence,
@@ -819,6 +820,9 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
 
 /** Resolve every waiter parked on this alias. Never wakes another alias. */
 function wakeBridgeWaiters(hostAlias: string): void {
+  // A daemon answers again: requests waiting out a swap go to it (daemon-drain-resend.ts).
+  bridgeDrainSeenAt.delete(hostAlias)
+  wakeHostLink(`bridge:${hostAlias}`)
   const waiters = bridgeWaiters.get(hostAlias)
   if (!waiters) return
   bridgeWaiters.delete(hostAlias)
@@ -864,7 +868,7 @@ function dropBridge(conn: BridgeConn, reason: string): void {
   }
   for (const [, req] of conn.pending) {
     clearTimeout(req.timer)
-    req.reject(new Error('bridge disconnected'))
+    req.reject(new BridgeLostError())
   }
   conn.pending.clear()
   conn.chunks.clear()
@@ -982,6 +986,11 @@ export class BridgeOfflineError extends Error {
   constructor(hostAlias: string) { super(`No live bridge for host: ${hostAlias}`) }
 }
 
+/** The bridge closed while a request on it waited for its answer. */
+export class BridgeLostError extends Error {
+  constructor() { super('bridge disconnected') }
+}
+
 /**
  * The daemon ANSWERED an attach RPC with an error — the bridge transport is
  * healthy; only THIS session has no tailable stream on that host (dead CLI,
@@ -997,12 +1006,41 @@ export class BridgeAttachRefusedError extends Error {
   }
 }
 
+/** When each host's daemon last refused a bridge command because it is shutting down. */
+const bridgeDrainSeenAt = new Map<string, number>()
+
+/**
+ * A daemon swap is invisible through the bridge too: a command the old daemon refused while it
+ * drains, or one the swap left without a bridge, is sent again once the new daemon dials in.
+ */
+function throughSwap(hostAlias: string, cmd: string, timeoutMs: number, once: (budget: number) => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
+  // A bridge still listed while its socket closes is no link to send on (its 'close' has not run yet).
+  const open = () => { const conn = bridges.get(hostAlias); return !!conn && (conn.ws.readyState === undefined || conn.ws.readyState === 1) }
+  return resendThroughSwap(cmd, {
+    once,
+    failure: (err) => (err instanceof BridgeOfflineError ? 'no-link' : err instanceof BridgeLostError ? 'lost' : null),
+    swapUnderway: () => Date.now() - (bridgeDrainSeenAt.get(hostAlias) ?? 0) < DRAIN_SWAP_WINDOW_MS,
+    noteRefusal: () => { bridgeDrainSeenAt.set(hostAlias, Date.now()) },
+    waitLink: (ms, fresh) => waitHostLink(`bridge:${hostAlias}`, ms, fresh ? () => false : open),
+    onWait: (why) => log.ws.info('bridge: a request waits out a daemon swap', { hostAlias, cmd, why }),
+  }, timeoutMs)
+}
+
 /** Send one RPC to a host's daemon and await its `{id, ...}` response. */
 export function bridgeRequest(
   hostAlias: string,
   cmd: string,
   params: Record<string, unknown> = {},
   timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<Record<string, unknown>> {
+  return throughSwap(hostAlias, cmd, timeoutMs, (budget) => bridgeRequestOnce(hostAlias, cmd, params, budget))
+}
+
+function bridgeRequestOnce(
+  hostAlias: string,
+  cmd: string,
+  params: Record<string, unknown>,
+  timeoutMs: number,
 ): Promise<Record<string, unknown>> {
   const conn = bridges.get(hostAlias)
   if (!conn) return Promise.reject(new BridgeOfflineError(hostAlias))
@@ -1025,6 +1063,15 @@ export function bridgeRequestPrepared(
   cmd: 'send',
   encodedParams: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<Record<string, unknown>> {
+  return throughSwap(hostAlias, cmd, timeoutMs, (budget) => bridgeRequestPreparedOnce(hostAlias, cmd, encodedParams, budget))
+}
+
+function bridgeRequestPreparedOnce(
+  hostAlias: string,
+  cmd: 'send',
+  encodedParams: string,
+  timeoutMs: number,
 ): Promise<Record<string, unknown>> {
   const conn = bridges.get(hostAlias)
   if (!conn || conn.ws.readyState !== undefined && conn.ws.readyState !== 1) return Promise.reject(new BridgeOfflineError(hostAlias))

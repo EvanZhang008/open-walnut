@@ -55,6 +55,7 @@ import { isHostReplica } from '../core/server-role.js'
 import { registryNeedsFoldPrewarm, runFoldPrewarm } from './fold-prewarm.js'
 import { execFileReplaced, singleFile } from '../lib/single-file.js'
 import { isProductionDaemonDir, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
+import { clearDaemonSwap, expectDaemonSwap } from './daemon-drain-resend.js'
 
 /** True only when the config says nothing runs on Claude Code (core/agents/claude-code-needed.ts); a read that fails says it may. */
 async function claudeCodeNotNeeded(): Promise<boolean> {
@@ -580,7 +581,14 @@ export class LocalDaemon {
             expected: expectedVersion,
             runningInstanceId: helloResult.instanceId,
           })
-          await this.stopDaemon()
+          // Requests in the gap wait for the next daemon instead of failing (daemon-drain-resend.ts).
+          expectDaemonSwap('daemon:__local__')
+          try {
+            await this.stopDaemon()
+          } catch (error) {
+            clearDaemonSwap('daemon:__local__')
+            throw error
+          }
           this.noteDaemonReplaced()
         } else {
           this._port = existingPort
@@ -665,9 +673,16 @@ export class LocalDaemon {
     // for a file write: this server's file changes to it wait for the swap (daemon-file-fence.ts).
     const release = this._forceable ? fenceDaemonFileChanges('__local__') : () => {}
     let result: Awaited<ReturnType<typeof runDaemonServiceCommand>>
+    // Requests in the gap of the swap wait for the next daemon instead of failing (daemon-drain-resend.ts).
+    // The update may first wait out the daemon's own work: the mark lasts as long as the CLI may run.
+    expectDaemonSwap('daemon:__local__', 5 * 60_000)
     try {
       result = await runDaemonServiceCommand(binaryPath, ['walnut', 'daemon', 'update', '--yes', '--scope', scope, '--executable', binaryPath, ...(this._forceable ? [OVER_BUSY_FLAG] : [])])
+    } catch (error) {
+      clearDaemonSwap('daemon:__local__')
+      throw error
     } finally { release() }
+    if (result.code !== 0) clearDaemonSwap('daemon:__local__')
     if (result.code !== 0 && daemonBusyRefusal(`${result.stdout}\n${result.stderr}`)) {
       // Refused before anything changed: asked again on the upgrade clock, not held off 10 minutes.
       this._lastManagedUpdate = null
