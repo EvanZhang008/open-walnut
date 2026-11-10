@@ -240,10 +240,78 @@ describe('transcript archive', () => {
     expect(exists('s-hour.jsonl.walnut-orig')).toBe(false)
   })
 
+  for (const finalized of [false, true]) {
+    it(`a file a writer makes at the plain name during a restore is never replaced (${finalized ? 'archive only' : 'originals aside'})`, async () => {
+      const body = makeSession('s-race', Date.now())
+      const plain = path.join(proj, 's-race.jsonl')
+      if (finalized) await archiveFully(); else await archiveTranscripts([projects], OLD)
+      const link = fsp.link
+      vi.spyOn(fsp, 'link').mockImplementation(async (from, to) => {
+        if (to === plain) fs.appendFileSync(plain, '{"late":"race"}\n')
+        return link(from, to)
+      })
+      expect(await restoreSession(proj, 's-race')).toBe(true)
+      vi.restoreAllMocks()
+      expect(fs.readFileSync(plain, 'utf8')).toBe('{"late":"race"}\n')
+      const kept = fs.readdirSync(proj).filter(n => n.startsWith('s-race.jsonl.walnut-conflict-'))
+      expect(kept.map(n => fs.readFileSync(path.join(proj, n), 'utf8'))).toEqual([body.main])
+      expect(leftovers()).toEqual([])
+    })
+  }
+
+  it('an aside a writer rewrote keeps the archive copy too; so does a plain file with the recorded size and mtime but other bytes', async () => {
+    const body = makeSession('s-rw', Date.now())
+    await archiveTranscripts([projects], OLD)
+    fs.writeFileSync(path.join(proj, 's-rw.jsonl.walnut-orig'), '{"new":1}\n')
+    await restoreSession(proj, 's-rw')
+    expect(fs.readFileSync(path.join(proj, 's-rw.jsonl'), 'utf8')).toBe('{"new":1}\n')
+    let kept = fs.readdirSync(proj).filter(n => n.startsWith('s-rw.jsonl.walnut-conflict-'))
+    expect(kept.map(n => fs.readFileSync(path.join(proj, n), 'utf8'))).toEqual([body.main])
+
+    const b2 = makeSession('s-stamp', Date.now())
+    const { first } = await archiveFully()
+    expect(first.failed).toBe(0)
+    const m = JSON.parse(fs.readFileSync(path.join(proj, 's-stamp' + MANIFEST_SUFFIX), 'utf8'))
+    const f = m.files.find((x: { rel: string }) => x.rel === 's-stamp.jsonl')
+    const other = 'y'.repeat(f.size)
+    fs.writeFileSync(path.join(proj, 's-stamp.jsonl'), other)
+    fs.utimesSync(path.join(proj, 's-stamp.jsonl'), f.mtimeMs / 1000, f.mtimeMs / 1000)
+    await restoreSession(proj, 's-stamp')
+    expect(fs.readFileSync(path.join(proj, 's-stamp.jsonl'), 'utf8')).toBe(other)
+    kept = fs.readdirSync(proj).filter(n => n.startsWith('s-stamp.jsonl.walnut-conflict-'))
+    expect(kept.map(n => fs.readFileSync(path.join(proj, n), 'utf8'))).toEqual([b2.main])
+  })
+
+  it('a finalize checks the bytes: an aside rewritten in place with the same size and mtime, or an archive that no longer matches, removes nothing', async () => {
+    const body = makeSession('s-fin', Date.now())
+    await archiveTranscripts([projects], OLD)
+    const aside = path.join(proj, 's-fin.jsonl.walnut-orig')
+    const st = fs.statSync(aside)
+    const other = 'z'.repeat(st.size)
+    // Same inode, same size, mtime set back.
+    const fd = fs.openSync(aside, 'r+')
+    fs.writeSync(fd, other, 0)
+    fs.closeSync(fd)
+    fs.utimesSync(aside, st.atimeMs / 1000, st.mtimeMs / 1000)
+    expect(await archiveTranscripts([projects], OLD)).toMatchObject({ finalized: 0, conflicts: 1 })
+    expect(fs.readFileSync(path.join(proj, 's-fin.jsonl'), 'utf8')).toBe(other)
+    const kept = fs.readdirSync(proj).filter(n => n.startsWith('s-fin.jsonl.walnut-conflict-'))
+    expect(kept.map(n => fs.readFileSync(path.join(proj, n), 'utf8'))).toEqual([body.main])
+
+    const b2 = makeSession('s-gzbad', Date.now())
+    await archiveTranscripts([projects], OLD)
+    fs.writeFileSync(path.join(proj, 's-gzbad.jsonl.gz'), gzipSync('other content\n'))
+    // (s-fin, plain again with a ctime the future clock counts as old, is archived beside it: ignore it.)
+    await archiveTranscripts([projects], OLD)
+    expect(exists('s-gzbad' + MANIFEST_SUFFIX)).toBe(false)
+    expect(fs.readFileSync(path.join(proj, 's-gzbad.jsonl'), 'utf8')).toBe(b2.main)
+    expect(fs.readFileSync(path.join(proj, 's-gzbad/subagents/agent-a1.jsonl'), 'utf8')).toBe(b2.agent)
+  })
+
   it('a restore that cannot finish keeps the archive and the manifest', async () => {
     makeSession('s-fail', Date.now())
     await archiveFully()
-    vi.spyOn(fsp, 'rename').mockRejectedValueOnce(Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }))
+    vi.spyOn(fsp, 'link').mockRejectedValueOnce(Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }))
     await expect(restoreSession(proj, 's-fail')).rejects.toThrow(/no space/)
     vi.restoreAllMocks()
     expect(exists('s-fail' + MANIFEST_SUFFIX)).toBe(true)

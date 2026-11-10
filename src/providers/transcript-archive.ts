@@ -17,13 +17,21 @@
  * is written, and every original is renamed aside to `<file>.walnut-orig`
  * (the transcript last), only while each still has the inode, size, mtime and
  * ctime it had when the pass began. Second, a pass at least ASIDE_KEEP_MS later
- * removes the asides, only when each is still that same file, no file stands
- * at its plain name and no process has the session. Anything a writer did in
+ * removes the asides, only when each is still that same file (inode, size,
+ * mtime, and the ctime it had right after the move), still hashes as recorded,
+ * its archive still decompresses to those bytes, no file stands at its plain
+ * name and no process has the session. Anything a writer did in
  * between (a write into an aside through a handle it held, a new file at the
  * plain name) puts the session back plain with every copy kept: the writer's
  * file stays, the other copy is kept beside it as `<file>.walnut-conflict-<time>`,
- * never merged and never removed. A restore checks every file against its
- * manifest hash, and the archive and manifest go only once the session is whole.
+ * never merged and never removed. A restore puts every file in place with a
+ * link that never replaces one a writer made, keeps the archive's copy too
+ * unless a kept file holds its recorded bytes (by hash), and removes the
+ * archive and manifest only once the session is whole.
+ *
+ * What is left: a process that held a file open for over an hour without
+ * writing, is not a `claude` the checks below see, and writes in the moment
+ * between the last check of an aside and its removal.
  *
  * Both steps and a restore hold one lock file per session, so they never
  * interleave, and every state a crash can leave is one the manifest names. The
@@ -77,7 +85,7 @@ const RESTORE_WAIT_MS = 60_000
 const MANIFEST_VERSION = 1
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
-export interface ManifestFile { rel: string; size: number; mtimeMs: number; sha256: string; ino?: number }
+export interface ManifestFile { rel: string; size: number; mtimeMs: number; sha256: string; ino?: number; asideCtimeMs?: number }
 /** `asideAt` is set while the originals still sit aside (`<file>.walnut-orig`); a finalize clears it. */
 export interface Manifest { version: number; sessionId: string; archivedAt: string; asideAt?: number; files: ManifestFile[] }
 
@@ -245,7 +253,39 @@ async function compressOne(src: string, rel: string, stamp: FileStamp): Promise<
   }
 }
 
-/** Decompress `gz` to `dst` after checking it against `want`; keeps `gz` (the caller drops it once the session is whole). */
+/**
+ * Put `src` at `dst` without ever replacing a file there: a link (or an
+ * exclusive copy where links are refused), then `src` goes. A file a writer
+ * made at `dst` meanwhile stays, and `src` is kept beside it as a conflict
+ * file. Returns where `src`'s bytes are now.
+ */
+async function install(src: string, dst: string): Promise<string> {
+  try {
+    await fsp.link(src, dst)
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code
+    if (code === 'EEXIST') { const c = conflictName(dst); await fsp.rename(src, c); return c }
+    if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EXDEV' && code !== 'EMLINK') throw e
+    try { await fsp.copyFile(src, dst, fs.constants.COPYFILE_EXCL) } catch (e2) {
+      if ((e2 as NodeJS.ErrnoException).code !== 'EEXIST') throw e2
+      const c = conflictName(dst); await fsp.rename(src, c); return c
+    }
+  }
+  await fsp.rm(src, { force: true })
+  return dst
+}
+
+/** Do the first `f.size` bytes of `p` hash to `f.sha256`? (The file holds the recorded bytes, an append after them allowed.) */
+async function holdsRecorded(p: string, f: ManifestFile): Promise<boolean> {
+  try {
+    if ((await fsp.lstat(p)).size < f.size) return false
+    const h = createHash('sha256')
+    if (f.size > 0) await pipeline(fs.createReadStream(p, { start: 0, end: f.size - 1 }), hasher(h), sink())
+    return h.digest('hex') === f.sha256
+  } catch { return false }
+}
+
+/** Decompress `gz` to `dst` after checking it against `want`, never over a file there; keeps `gz` (the caller drops it once the session is whole). */
 async function decompressOne(gz: string, want: ManifestFile | undefined, dst: string): Promise<void> {
   const tmp = tmpName(dst)
   const h = createHash('sha256')
@@ -258,7 +298,7 @@ async function decompressOne(gz: string, want: ManifestFile | undefined, dst: st
     await fsyncPath(tmp)
     const mtime = want?.mtimeMs ?? (await fsp.stat(gz)).mtimeMs
     await fsp.utimes(tmp, mtime / 1000, mtime / 1000)
-    await fsp.rename(tmp, dst)
+    await install(tmp, dst)
   } catch (e) {
     await fsp.rm(tmp, { force: true })
     throw e
@@ -317,8 +357,6 @@ const ORIG_SUFFIX = '.walnut-orig'
 const CONFLICT_TAG = '.walnut-conflict-'
 const conflictName = (p: string) => p + CONFLICT_TAG + new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15) + '-' + randomBytes(2).toString('hex')
 const exists = (p: string) => fsp.lstat(p).then(() => true, () => false)
-/** Is the file at `p` the one the manifest recorded (a restore writes back its size and mtime)? */
-const isRecorded = (s: fs.Stats, f: ManifestFile): boolean => s.size === f.size && s.mtimeMs === f.mtimeMs
 
 /**
  * Archive one session: compress and verify every file, record the manifest
@@ -357,6 +395,15 @@ async function archiveSession(c: Candidate, h: Held, isLiveNow?: ArchiveOptions[
     const p = path.join(c.dir, it.rel)
     await fsp.rename(p, p + ORIG_SUFFIX)
   }
+  // Each aside's ctime right after the move: a finalize removes it only if nothing changed it since.
+  const m = await readManifest(c.dir, c.sid)
+  if (m) {
+    for (const f of m.files) {
+      const st = await fsp.lstat(path.join(c.dir, f.rel + ORIG_SUFFIX)).catch(() => null)
+      if (st && st.ino === f.ino) f.asideCtimeMs = st.ctimeMs
+    }
+    await writeManifest(c.dir, m)
+  }
   return { files: done.length, before: done.reduce((n, f) => n + f.size, 0), after: done.reduce((n, f) => n + f.gzBytes, 0) }
 }
 
@@ -373,20 +420,37 @@ async function archiveSession(c: Candidate, h: Held, isLiveNow?: ArchiveOptions[
 async function finalizeAside(dir: string, m: Manifest, isLiveNow: ArchiveOptions['isLiveNow'], h: Held): Promise<number | null | 'undo' | 'written'> {
   let freed = 0
   let undo = false
-  const asides: string[] = []
+  const asides: Array<{ path: string; f: ManifestFile }> = []
   for (const f of m.files) {
     const p = path.join(dir, f.rel)
     const a = await fsp.lstat(p + ORIG_SUFFIX).catch(() => null)
     const plain = await fsp.lstat(p).catch(() => null)
-    const same = (s: fs.Stats) => s.ino === f.ino && isRecorded(s, f)
     // The original itself still at its name: the pass stopped before it set this one aside.
-    if (plain && !a && same(plain)) { undo = true; continue }
-    if (plain || (a && !same(a))) return 'written'
-    if (a) { asides.push(p + ORIG_SUFFIX); freed += a.size }
+    if (plain && !a && plain.ino === f.ino && plain.size === f.size && plain.mtimeMs === f.mtimeMs) { undo = true; continue }
+    if (plain) return 'written'
+    if (!a) continue
+    // Untouched since it was set aside: same file, same size and mtime, and no change of any kind
+    // since the move (every write moves ctime, which no writer can set back).
+    if (a.ino !== f.ino || a.size !== f.size || a.mtimeMs !== f.mtimeMs) return 'written'
+    if (f.asideCtimeMs !== undefined && a.ctimeMs !== f.asideCtimeMs) return 'written'
+    asides.push({ path: p + ORIG_SUFFIX, f })
+    freed += a.size
   }
   if (undo) return 'undo'
   if (openedRecently(m.sessionId) || (await isLiveNow?.(m.sessionId)) || !stillHeld(h)) return null
-  for (const a of asides) await fsp.rm(a, { force: true })
+  for (const { path: a, f } of asides) {
+    // The bytes themselves: the aside still hashes as recorded, and the archive still decompresses to them.
+    if (!(await holdsRecorded(a, f)) || (await fsp.lstat(a)).size !== f.size) return 'written'
+    const back = await gunzipHash(path.join(dir, f.rel + ARCHIVE_SUFFIX)).catch(() => null)
+    if (!back || back.sha256 !== f.sha256 || back.size !== f.size) return 'undo'
+    beat(h)
+  }
+  if (openedRecently(m.sessionId) || (await isLiveNow?.(m.sessionId)) || !stillHeld(h)) return null
+  for (const { path: a, f } of asides) {
+    const now = await fsp.lstat(a)
+    if (now.size !== f.size || now.mtimeMs !== f.mtimeMs || (f.asideCtimeMs !== undefined && now.ctimeMs !== f.asideCtimeMs)) return 'written'
+    await fsp.rm(a, { force: true })
+  }
   await writeManifest(dir, { ...m, asideAt: undefined })
   return freed
 }
@@ -539,14 +603,15 @@ async function restoreSessionNow(dir: string, sid: string): Promise<boolean> {
 
 /**
  * The restore itself; the caller holds the session's lock. Per file, never
- * merging two copies and never removing one that holds bytes no other has:
- * - a file at the plain name that is the recorded one stays, its archive goes;
- *   one that is not (a writer made it) stays too, and the archive's copy is
- *   kept beside it as a conflict file;
- * - an original set aside comes back by rename (its writes since included),
- *   or is kept as a conflict file when a file already stands at its name;
- * - otherwise the archive is decompressed (checked against its hash).
- * The archive files and the manifest go only once every file is whole; an
+ * merging two copies, never placing a file over another, and never removing
+ * the archive while it holds bytes no kept file has:
+ * - a file at the plain name stays (a writer's or the original);
+ * - an original set aside comes back by a link that never replaces a file
+ *   there (else it is kept beside it as a conflict file);
+ * - with neither, the archive is decompressed the same way;
+ * - the archive's copy is also kept as a conflict file unless a kept file
+ *   holds the recorded bytes (their hash, an append after them allowed).
+ * The archive files and the manifest go only once every file is settled; an
  * error keeps them (a later restore picks up where this one stopped).
  */
 async function restoreLocked(dir: string, sid: string): Promise<boolean> {
@@ -560,23 +625,29 @@ async function restoreLocked(dir: string, sid: string): Promise<boolean> {
     const p = path.join(dir, f.rel)
     const g = p + ARCHIVE_SUFFIX
     const o = p + ORIG_SUFFIX
-    const plain = await fsp.lstat(p).catch(() => null)
-    const hasAside = await exists(o)
     const hasGz = await exists(g)
-    if (plain) {
-      if (hasAside) await fsp.rename(o, conflictName(p))
-      else if (hasGz && !isRecorded(plain, f)) await decompressOne(g, f, conflictName(p))
-      if (hasGz) spent.push(g)
-      if (!isRecorded(plain, f) || hasAside) log(`archive of ${sid}: ${f.rel} was written while archived; every copy kept`)
+    const kept: string[] = []
+    if (await exists(o)) kept.push(await install(o, p))
+    if (await exists(p)) kept.push(p)
+    if (!kept.length) {
+      if (!hasGz) {
+        if (f.rel === sid + '.jsonl') throw new Error(`archive of ${sid} has no transcript`)
+        continue
+      }
+      await decompressOne(g, f, p)
+      spent.push(g)
       continue
     }
-    if (hasAside) { await fsp.rename(o, p); if (hasGz) spent.push(g); continue }
-    if (!hasGz) {
-      if (f.rel === sid + '.jsonl') throw new Error(`archive of ${sid} has no transcript`)
-      continue
+    if (hasGz) {
+      let held = false
+      for (const k of kept) if (await holdsRecorded(k, f)) { held = true; break }
+      if (!held) {
+        await decompressOne(g, f, conflictName(p))
+        log(`archive of ${sid}: ${f.rel} was written while archived; every copy kept`)
+      }
+      spent.push(g)
     }
-    await decompressOne(g, f, p)
-    spent.push(g)
+    if (kept.some((k) => k.includes(CONFLICT_TAG))) log(`archive of ${sid}: ${f.rel} was written while archived; every copy kept`)
   }
   for (const g of spent) await fsp.rm(g, { force: true })
   await fsp.rm(manifestPath(dir, sid), { force: true })

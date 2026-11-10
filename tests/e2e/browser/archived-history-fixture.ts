@@ -47,8 +47,12 @@ export async function writeArchivedHistory(tmpBase: string): Promise<void> {
   const old = start / 1000 + 60
   await fs.utimes(main, old, old)
   // A file's ctime cannot be set back, so the archive runs "61 days from now".
-  const r = await archiveTranscripts([path.join(tmpBase, '.claude', 'projects')], { olderThanMs: 60 * 86_400_000, now: Date.now() + 61 * 86_400_000, isLive: (sid) => sid !== ARCHIVED_SESSION })
-  if (r.sessions !== 1) throw new Error(`archived history fixture: expected one archived session, got ${JSON.stringify(r)}`)
+  // Both steps: compress and set the originals aside, then (the pass an hour later) remove them.
+  const opts = { olderThanMs: 60 * 86_400_000, now: Date.now() + 61 * 86_400_000, isLive: (sid: string) => sid !== ARCHIVED_SESSION }
+  const projects = path.join(tmpBase, '.claude', 'projects')
+  const first = await archiveTranscripts([projects], opts)
+  const second = await archiveTranscripts([projects], opts)
+  if (first.sessions !== 1 || second.finalized !== 1) throw new Error(`archived history fixture: expected one archived session, got ${JSON.stringify({ first, second })}`)
 }
 
 export function archivedHistoryTask(nowIso: string): Record<string, unknown> {
