@@ -1,8 +1,8 @@
 /**
  * The Org list's Routers section (web/src/components/org/OrgRouterSection.tsx). A router is its own
  * Org node (Task.org_role 'router'): not a VP and not a task under one. Its rows come from the page
- * (buildChannels' `routers`), sit after the CEO and before the VPs (so a few routers stay in sight
- * above dozens of VPs), are options of their own group
+ * (buildChannels' `routers`), sit after the CEO and every VP, before the folded Archived (2026-11-10,
+ * the person: "router should be placed below all VPs"), are options of their own group
  * in the list's listbox, and a click selects the node (the page opens its chat). The heading shows
  * even with no router ("Routers · 0").
  *
@@ -104,7 +104,7 @@ describe('the Routers section in the Org list', () => {
   const listCode = code(list)
   const section = code(read('web/src/components/org/OrgRouterSection.tsx'))
 
-  it('sits after the CEO and before the VP rows, inside the listbox', () => {
+  it('sits after the CEO and every VP row, before Archived, inside the listbox', () => {
     const listbox = listCode.indexOf('role="listbox"')
     const ceo = listCode.indexOf('<Row row={main}')
     const vps = listCode.indexOf('{shown.map((r) => (')
@@ -112,9 +112,9 @@ describe('the Routers section in the Org list', () => {
     const archived = listCode.indexOf('<MovedSection moved=')
     expect(listbox).toBeGreaterThan(-1)
     expect(ceo).toBeGreaterThan(listbox)
-    expect(routers).toBeGreaterThan(ceo)
-    expect(vps).toBeGreaterThan(routers)
-    expect(archived).toBeGreaterThan(vps)
+    expect(vps).toBeGreaterThan(ceo)
+    expect(routers).toBeGreaterThan(vps)
+    expect(archived).toBeGreaterThan(routers)
     // Still inside the listbox: VPs, then Archived, then the listbox's own closing tag.
     expect(archived).toBeLessThan(listCode.indexOf('{total === 0'))
   })
@@ -124,8 +124,8 @@ describe('the Routers section in the Org list', () => {
     expect(section).not.toMatch(/onOpenTask/)
   })
 
-  it('walks Up and Down through the routers before the VPs, in drawn order', () => {
-    expect(listCode).toMatch(/const keys = \[main\.key, \.\.\.routers\.map\(\(r\) => r\.key\), \.\.\.shown\.map\(\(r\) => r\.key\)\]/)
+  it('walks Up and Down through the VPs before the routers, in drawn order', () => {
+    expect(listCode).toMatch(/const keys = \[main\.key, \.\.\.shown\.map\(\(r\) => r\.key\), \.\.\.routers\.map\(\(r\) => r\.key\)\]/)
   })
 
   it('searches VPs and routers', () => {

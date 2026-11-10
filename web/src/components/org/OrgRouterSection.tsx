@@ -1,13 +1,14 @@
 /**
  * The Org list's Routers: one row per router node (a task whose org_role is 'router'), drawn after
- * the CEO and before the VPs (few rows, so they stay in sight above dozens of VPs). A router is its own node, not a VP and not a task under one, so it
+ * the CEO and every VP, before the folded Archived (2026-11-10, the person: "router should be placed
+ * below all VPs"). A router is its own node, not a VP and not a task under one, so it
  * has its own section and its own row kind; a click selects it like any node and the page opens its
  * chat (OrgNodeDetail). The rows come from the page (buildChannels' `routers`, already filtered by
  * the list's search); this section fetches nothing. It always shows its heading, "Routers · 0"
  * included, so the place a router will appear is visible before there is one.
  *
  * Inside the list's listbox it is a group of options (all a listbox may hold); Up and Down reach its
- * rows through the list's own key handler, which counts them before the VPs.
+ * rows through the list's own key handler, which counts them after the VPs.
  */
 import { timeAgo } from '@/utils/time';
 import { stateCountLabel } from '@open-walnut/user-status';

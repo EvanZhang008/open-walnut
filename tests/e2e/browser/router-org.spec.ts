@@ -278,6 +278,10 @@ test('an area that has its router opens it: no POST, no new node, the draft stay
   await openOrg(page);
   const rowsBefore = await page.getByTestId('org-channel-router').count();
   expect(rowsBefore).toBe(2);
+  // The Routers sit below every VP row (2026-11-10, the person: "router should be placed below all VPs").
+  const lastVp = await page.getByTestId('org-channel').last().boundingBox();
+  const routersHead = await page.getByTestId('org-routers').boundingBox();
+  expect(lastVp && routersHead && routersHead.y >= lastVp.y + lastVp.height - 0.5).toBe(true);
   await page.getByTestId('org-new-router').click();
   const form = page.getByTestId('org-router-setup');
   await form.getByRole('radio', { name: 'Personal', exact: true }).check();

@@ -4,7 +4,8 @@
  * is, its state dot, when its work last moved, one line of what is happening and,
  * when something waits on the user, how many. Up and Down move the selection. While the
  * pointer is over the list the rows keep their order, so a click lands on the row aimed at.
- * Before the VPs, the Routers (OrgRouterSection): router nodes, which are neither VPs nor tasks under one.
+ * After the VPs, the Routers (OrgRouterSection): router nodes, which are neither VPs nor tasks under one
+ * (2026-11-10, the person: "router should be placed below all VPs").
  * A project another VP took over has no row of its own: it sits in "Archived" at
  * the bottom (folded), saying which VP has it now; a click opens that VP. A right-click on any
  * row opens Walnut's own menu of what that row can do (the page builds it: OrgPage rowMenu).
@@ -278,8 +279,8 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
   // click meant for another. The new order shows once the pointer leaves.
   const hold = usePointerHold(rows);
   const shown = hold.shown;
-  // Up and Down walk the CEO, the routers, then the VPs, in the order they are drawn.
-  const keys = [main.key, ...routers.map((r) => r.key), ...shown.map((r) => r.key)];
+  // Up and Down walk the CEO, the VPs, then the routers, in the order they are drawn.
+  const keys = [main.key, ...shown.map((r) => r.key), ...routers.map((r) => r.key)];
   const keptUnder = (r: ChannelRow) => (keptOf && onOpenTask && onUnwatch
     ? <KeptChildren row={r} kept={keptOf(r)} open={openTaskIds} onOpenTask={onOpenTask} onUnwatch={onUnwatch} />
     : null);
@@ -328,8 +329,6 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
       >
         <Row row={main} selected={selectedKey === main.key} now={now} onSelect={onSelect} onMenu={onMenu} />
         {keptUnder(main)}
-        {/* Routers sit above the VPs: there are few, and below dozens of VPs nobody would see them. */}
-        <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} />
         <div className="org-list-section" role="presentation" data-testid="org-vps-head">VPs · {vps}</div>
         {shown.map((r) => (
           <div key={r.key} className="org-channel-wrap" role="presentation">
@@ -337,6 +336,8 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
             {keptUnder(r)}
           </div>
         ))}
+        {/* Routers sit below every VP (2026-11-10, the person), above the folded Archived. */}
+        <OrgRouterSection rows={routers} selectedKey={selectedKey} now={now} onSelect={onSelect} />
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>
       {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask the CEO to start something.</p>}
