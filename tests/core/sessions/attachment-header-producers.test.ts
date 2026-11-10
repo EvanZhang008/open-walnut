@@ -62,6 +62,7 @@ const KNOWN: Record<string, 'defines' | 'builds' | 'calls' | 'reads'> = {
   'providers/outbound-uploads.ts': 'reads', // a comment: it copies a file header's paths to the session's host
   // Outside src/ (paths from the repo root).
   '../web/src/hooks/useSessionSend.ts': 'reads', // splitAttachmentHeaders for the waiting bubble
+  '../web/src/utils/thread-card.ts': 'reads', // questionPartsOf: a question card's bubble shows the pictures, not the header
   '../web/src/components/sessions/optimistic-dedup.ts': 'reads', // a comment on dedup
   '../web/src/api/file-upload.ts': 'calls', // the web's withFilePaths: attachmentHeaderBlock('files', …)
   '../web/src/api/paste-spill.ts': 'calls', // keeps the files header in front of a spilled paste: withFilePaths
