@@ -105,24 +105,10 @@
    the mod+9 that reaches it. */
 .main-page-session-column:has(> .session-jump-badge) { position: relative; }
 
-/* The current column (useHomeKeyboard's `current`, the one the keys act on, `is-current`, one
-   column or many): its header is tinted with an accent line along its top, drawn
-   by the header itself above its glass (the glass, the header's ::before, paints over anything
-   under it), and its composer carries an accent ring, so it reads at a glance with the caret
-   anywhere. It wins over an unread column's red ring: the person is in it. */
-.main-page-session-column.is-current .session-panel > .session-panel-header::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(var(--accent), var(--accent)) top / 100% 3px no-repeat,
-    color-mix(in srgb, var(--accent) 9%, transparent);
-  pointer-events: none;
-}
-.main-page-session-column.is-current .session-panel .session-panel-input .chat-input-box {
-  border-color: color-mix(in srgb, var(--accent) 75%, transparent);
-  box-shadow: var(--glass-g4-shadow), 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
-}
+/* The current column (useHomeKeyboard's `current`, `is-current`) wears no mark of its own: its
+   header and composer look as every column's do (2026-11-10, the user, of the tinted header with
+   an accent line: "who add this active when i clcik? so ugly"). Only the held modifier's number
+   below says which column the keys act on. tests/web/no-current-column-highlight.test.ts. */
 .session-jump-badge {
   position: absolute;
   top: 6px;

@@ -109,7 +109,7 @@ test('Cmd+1..3 and Cmd+Shift+[ ] move the caret between columns; Cmd+I puts it b
   await expect.poll(() => caretColumn(page)).toBe(SID('b'))
   await page.keyboard.press('Meta+9')
   await expect.poll(() => caretColumn(page)).toBe(SID('c'))
-  // The column the keys act on wears the accent line (is-current); there is one.
+  // The column the keys act on is marked is-current (for the keys, not drawn); there is one.
   await expect(col(page, 'c')).toHaveClass(/\bis-current\b/)
   await expect(page.locator('.main-page-session-column.is-current')).toHaveCount(1)
   // A click right after a jump is where the person is: the mark (and the keys) follow it.
@@ -1466,4 +1466,30 @@ test('a delete the server refuses seconds later puts the column back but leaves 
     await page.request.post('/api/tasks/batch/delete/cancel', { data: { task_ids: [TID('b')] } }).catch(() => {})
   }
   expect((await page.request.get(`/api/tasks/${TID('b')}`)).ok()).toBe(true)
+})
+
+test('a clicked column looks as every column does: no tinted header, no accent line, no composer ring', async ({ page }) => {
+  // 2026-11-10, the user, after clicking a column: "who add this active when i clcik? so ugly".
+  await asMacApp(page)
+  await resetTasks(page)
+  await openColumns(page, ['a', 'b'])
+  await col(page, 'a').getByText('kbd a answer 44').click()
+  await expect(col(page, 'a')).toHaveClass(/\bis-current\b/)
+  const look = (k: Key) => col(page, k).evaluate((el) => {
+    const header = el.querySelector('.session-panel > .session-panel-header') as HTMLElement
+    const box = el.querySelector('.session-panel-input .chat-input-box') as HTMLElement | null
+    const after = getComputedStyle(header, '::after')
+    return {
+      after: `${after.content}|${after.backgroundImage}|${after.backgroundColor}`,
+      header: getComputedStyle(header).backgroundColor,
+      ring: box ? getComputedStyle(box).boxShadow : '',
+    }
+  })
+  // Blur the composer so its own focus style is not compared; the mark stays on the column.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await expect(col(page, 'a')).toHaveClass(/\bis-current\b/)
+  expect(await look('a')).toEqual(await look('b'))
+  const box = (await col(page, 'a').boundingBox())!
+  const box2 = (await col(page, 'b').boundingBox())!
+  await page.screenshot({ path: `${SHOTS}/clicked-column-no-highlight.png`, clip: { x: box.x, y: box.y, width: box2.x + box2.width - box.x, height: 140 } })
 })
