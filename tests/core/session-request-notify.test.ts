@@ -913,7 +913,9 @@ describe('sessionRequestWatchHook — the parent hears about its subtask by stat
     const [n] = parentNotices();
     expect(n.attrs.outcome).toBe('error');
     expect(n.body).toContain('ended its turn with an ERROR: API rate limit');
-    expect(n.body).toContain('second failure with the same error');
+    // 2026-11-09: a failure is the lead's to retry and decide, never passed to the user (session-error-owner.ts).
+    expect(n.body).toContain('retry it once with the retry line below');
+    expect(n.body).not.toContain('tell the user');
 
     // The task was closed before the turn died: COMPLETE is the state the parent needs.
     sendMessageToSession.mockClear();
