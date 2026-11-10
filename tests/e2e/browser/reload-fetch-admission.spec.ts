@@ -24,15 +24,17 @@ test.setTimeout(120_000)
 
 interface Seen { path: string; search: string; at: number }
 
-/** The reloaded page's GETs: counted once its document has answered, so a read the page before
- *  the reload still made is not one of them (2026-11-09: on a loaded runner the reload took 18s,
- *  and the warm page's own list read 84ms after this started was counted as a third). */
+/** The reloaded page's GETs: counted once its document has committed (the main frame navigated),
+ *  after which the page before the reload can send nothing. Its reads before that are not this
+ *  page's: on a loaded runner the warm page sent one 84ms into the reload (2026-11-09), and one
+ *  302ms in, after the new document had answered but before it committed (2026-11-10: the new
+ *  page's first "fetch started", the line useTasks logs before its only list read, came at 12.2s). */
 function watchRequests(page: Page): Seen[] {
   const seen: Seen[] = []
   const t0 = Date.now()
   let reloaded = false
-  page.on('response', (res) => {
-    if (res.request().isNavigationRequest() && res.frame() === page.mainFrame()) reloaded = true
+  page.on('framenavigated', (frame) => {
+    if (frame === page.mainFrame()) reloaded = true
   })
   page.on('request', (req) => {
     if (!reloaded || req.method() !== 'GET') return
