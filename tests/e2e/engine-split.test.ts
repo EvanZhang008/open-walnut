@@ -167,6 +167,34 @@ describe('the engine split', () => {
     expect(next.enginePick?.key).not.toBe(kept?.key)
   }, 60_000)
 
+  it('shares only the projects it names: a task elsewhere runs on the default engine, a kept pick included', async () => {
+    const config = await getConfig()
+    await updateConfig({ defaults: { ...config.defaults, engine_split_projects: ['marina '] } })
+    try {
+      // Named in another case, with a stray space: still the project the split shares.
+      const inside = await op('task_create', { title: 'Inside the split', project: 'Marina', cwd: WALNUT_HOME, message: 'Ready' })
+      expect(inside.enginePick?.key).toBeTruthy()
+      const outside = await op('task_create', { title: 'Org demo elsewhere', project: 'Lighthouse', cwd: WALNUT_HOME, message: 'Ready' })
+      expect(outside.enginePick).toBeUndefined()
+      expect(String(outside.outcome)).not.toContain('engine split')
+      expect((await task(outside.id)).engine_pick).toBeUndefined()
+      await expect.poll(async () => (await getSessionsForTask(outside.id)).length, { timeout: 20_000 }).toBeGreaterThan(0)
+      const [record] = await getSessionsForTask(outside.id)
+      expect(record?.cliModel ?? '').not.toMatch(/sonnet/i)
+      // A pick kept from before the scope (or before the task moved) is not reused outside it.
+      const moved = await op('task_create', { title: 'Moved out of the split', project: 'Lighthouse', record_only: true })
+      await updateTaskRaw(moved.id, { engine_pick: { key: 'claude:sonnet', engine: 'claude', model: 'sonnet', at: new Date().toISOString() } })
+      const replay = await startSessionForTask({ taskIdPrefix: moved.id, cwd: WALNUT_HOME, message: 'Ready', source: 'start-queue', expectReply: false })
+      expect(replay.enginePick).toBeUndefined()
+      await expect.poll(async () => (await getSessionsForTask(moved.id)).length, { timeout: 20_000 }).toBeGreaterThan(0)
+      expect((await getSessionsForTask(moved.id))[0]?.cliModel ?? '').not.toMatch(/sonnet/i)
+    } finally {
+      const now = await getConfig()
+      const { engine_split_projects: _p, ...rest } = now.defaults as typeof now.defaults & { engine_split_projects?: string[] }
+      await updateConfig({ defaults: rest })
+    }
+  }, 60_000)
+
   it('a task completed before first_completed_at existed keeps its completion through a reopen, on both write paths', async () => {
     const old = '2026-10-01T10:00:00.000Z'
     for (const path of ['route', 'raw'] as const) {
@@ -244,11 +272,11 @@ describe('the engine split', () => {
     expect(finished).toMatchObject({ done: true, reopens: 1, reviews: 1, split: true })
     const row = r.body.rows.find((x: { key: string }) => x.key === finished.key)
     expect(row).toMatchObject({ engine: 'claude', done: 1, reopens: 1, reviewsPerTask: 1 })
-    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(13)
-    expect(r.body.taskCount).toBe(13)
+    expect(r.body.rows.reduce((n: number, x: { open: number; done: number }) => n + x.open + x.done, 0)).toBe(14)
+    expect(r.body.taskCount).toBe(14)
     // Only the split's own picks: the starts that named an engine or a model drop out.
     const fair = await api('GET', '/api/usage/engines?project=Marina&split=1')
-    expect(fair.body).toMatchObject({ splitOnly: true, taskCount: 11 })
+    expect(fair.body).toMatchObject({ splitOnly: true, taskCount: 12 })
     expect(r.body.tasks.some((t: { title: string }) => t.title === 'Review the change')).toBe(false)
     expect(r.body.projects).toEqual(expect.arrayContaining([{ project: 'Marina', tasks: expect.any(Number) }]))
   }, 60_000)

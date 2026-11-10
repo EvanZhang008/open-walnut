@@ -111,6 +111,41 @@ test('Share new tasks: two engines turn it on, the other defaults stay, one turn
   await expect(section.getByTestId('engine-split-switch')).toBeDisabled()
 })
 
+test('Share new tasks, In projects: typed projects are kept beside the other defaults, unchecking the last shares every project', async ({ page, request }) => {
+  const before = await serverDefaults(request)
+  const section = await openSessionsSection(page)
+  const row = section.getByTestId('engine-split-projects')
+  await row.scrollIntoViewIfNeeded()
+  await expect(row).toContainText('Every project')
+  const input = section.getByTestId('engine-split-project-input')
+  await input.click()
+  await page.keyboard.type('Walnut')
+  await page.keyboard.press('Enter')
+  await expect.poll(async () => (await serverDefaults(request)).engine_split_projects).toEqual(['Walnut'])
+  await input.fill('Walnut-Idea')
+  await section.getByTestId('engine-split-project-add').click()
+  await expect.poll(async () => (await serverDefaults(request)).engine_split_projects).toEqual(['Walnut', 'Walnut-Idea'])
+  // A project already listed, in another case, is not added twice.
+  await input.fill('walnut')
+  await expect(section.getByTestId('engine-split-project-add')).toBeDisabled()
+  await input.fill('')
+  await expect(row).toContainText('Only tasks in Walnut, Walnut-Idea take turns')
+  const after = await serverDefaults(request)
+  for (const k of ['priority', 'platform', 'project', 'engine', 'engine_split']) expect(after[k]).toEqual(before[k])
+  await page.screenshot({ path: path.join(SHOTS, `split-projects-${test.info().project.name}.png`), clip: await row.boundingBox().then((b) => b ? { x: b.x, y: b.y, width: Math.min(b.width, 1280), height: Math.min(b.height + 90, 400) } : undefined) })
+  const walnut = section.getByTestId('split-project-Walnut')
+  await walnut.uncheck()
+  await expect.poll(async () => (await serverDefaults(request)).engine_split_projects).toEqual(['Walnut-Idea'])
+  // Unchecked, it stays listed so a slip is undone with another click.
+  await expect(walnut).not.toBeChecked()
+  await walnut.check()
+  await expect.poll(async () => (await serverDefaults(request)).engine_split_projects).toEqual(['Walnut-Idea', 'Walnut'])
+  await walnut.uncheck()
+  await section.getByTestId('split-project-Walnut-Idea').uncheck()
+  await expect.poll(async () => 'engine_split_projects' in (await serverDefaults(request))).toBe(false)
+  await expect(row).toContainText('Every project')
+})
+
 test('Engines compared: engines side by side, the best marked, a project filter, the tasks behind it', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))

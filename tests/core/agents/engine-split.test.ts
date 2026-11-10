@@ -3,10 +3,31 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import {
-  _resetSplitReservations, releaseSplitReservation, builderLabel, chooseBuilder, isReviewerTask, MAX_BEHIND, pickSplitEngine, recentPickCounts, recordPick, SPLIT_WINDOW_MS, splitApplies, splitBuilders, splitCredits,
+  _resetSplitReservations, releaseSplitReservation, builderLabel, chooseBuilder, isReviewerTask, MAX_BEHIND, pickSplitEngine, recentPickCounts, recordPick, SPLIT_WINDOW_MS, splitApplies, splitBuilders, splitBuildersFor, splitCredits, splitProjects,
 } from '../../../src/core/agents/engine-split.js';
 
 const picksFile = path.join(WALNUT_HOME, 'cache', 'engine-split.json');
+
+describe('splitBuildersFor (the projects the split shares)', () => {
+  const split = { engine_split: ['claude', 'codex'] };
+  it('shares every project when none are named', () => {
+    expect(splitProjects({ defaults: split })).toBeNull();
+    expect(splitProjects({ defaults: { ...split, engine_split_projects: [] } })).toBeNull();
+    expect(splitProjects({ defaults: { ...split, engine_split_projects: [' ', 3] as unknown as string[] } })).toBeNull();
+    expect(splitBuildersFor({ defaults: split }, { project: 'Anything' })).toHaveLength(2);
+    expect(splitBuildersFor({ defaults: split }, {})).toHaveLength(2);
+  });
+
+  it('gives a task outside the named projects no entries, matching names case-insensitively', () => {
+    const config = { defaults: { ...split, engine_split_projects: ['Walnut', ' walnut-idea '] } };
+    expect(splitBuildersFor(config, { project: 'walnut' })).toHaveLength(2);
+    expect(splitBuildersFor(config, { project: 'Walnut-Idea' })).toHaveLength(2);
+    expect(splitBuildersFor(config, { project: 'Lighthouse' })).toEqual([]);
+    // The Inbox is a project too: not named, not shared.
+    expect(splitBuildersFor(config, { project: '' })).toEqual([]);
+    expect(splitBuildersFor(config, {})).toEqual([]);
+  });
+});
 
 describe('splitBuilders', () => {
   it('is off without two usable entries', () => {

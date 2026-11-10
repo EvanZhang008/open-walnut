@@ -142,6 +142,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
   defaults: {
     engine_split: 'the engine split, applied by the Mac\'s task starts (agents/engine-split.ts)',
     engine_split_off: 'the split\'s off switch, read with it on the Mac',
+    engine_split_projects: 'the projects the split shares, read with it on the Mac',
   },
   // The org runs on the primary only. Named in the copy, an older replica would refuse the whole org row.
   org: { enabled: 'the org switch, read where the org runs, on the Mac (org/org-enabled.ts)' },

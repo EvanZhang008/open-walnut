@@ -239,12 +239,13 @@ async function splitPick(task: Task, params: SessionStartParams) {
   // A task that holds a conversation continues it on the engine it has. A session whose spawn
   // failed before a turn is no conversation: its retry keeps the split's pick.
   if ((task.session_id || task.exec_session_id || task.session_ids?.length) && await taskConversation(task.id)) return null;
-  const { splitApplies, splitBuilders, pickSplitEngine, recordPick, releaseSplitReservation } = await import('../agents/engine-split.js');
+  const { splitApplies, splitBuildersFor, pickSplitEngine, recordPick, releaseSplitReservation } = await import('../agents/engine-split.js');
   const named = params.engine !== undefined || !!params.effort || (!!params.model && params.model !== 'default');
   // A second start of a task already starting is refused just after this (alreadyStarted): it never picks.
   if (pendingStarts.has(task.id)) return null;
   const { getConfig } = await import('../config-manager.js');
-  const builders = splitBuilders(await getConfig());
+  // A task in a project the split does not share gets no entries, so a pick it kept earlier is not reused either.
+  const builders = splitBuildersFor(await getConfig(), task);
   // Reused while the split still lists it: an entry since removed from the config (one that kept
   // failing, say) is not tried again on every retry.
   if (task.engine_pick && !named && builders.some((b) => b.key === task.engine_pick!.key)) return { ...task.engine_pick, reused: true };

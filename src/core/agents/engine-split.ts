@@ -13,6 +13,8 @@
  * Each pick is kept on the task (`engine_pick`) and in a small file of recent picks
  * (`WALNUT_HOME/cache/engine-split.json`), which is what the shares are counted from.
  * Absent, empty or one-entry config = off: every start inherits the default engine as before.
+ * `defaults.engine_split_projects` keeps it to the projects named there (2026-11-10: a lead's
+ * org demo in another project was given Codex; the user: "我们 default 应该用 Claude Code 呀").
  */
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
@@ -72,6 +74,28 @@ export function splitBuilders(config: { defaults?: { engine_split?: unknown; eng
     out.push({ key, engine, ...(model ? { model } : {}), weight });
   }
   return out.length >= 2 ? out : [];
+}
+
+/** The projects the split shares (lower-cased), or null when it shares every project. */
+export function splitProjects(config: { defaults?: { engine_split_projects?: unknown } } | null | undefined): Set<string> | null {
+  const raw = config?.defaults?.engine_split_projects;
+  if (!Array.isArray(raw)) return null;
+  const names = raw.filter((n): n is string => typeof n === 'string' && !!n.trim()).map((n) => n.trim().toLowerCase());
+  return names.length ? new Set(names) : null;
+}
+
+/**
+ * The split's entries for one task: [] when the split is off or the task is in a project it does
+ * not share. Every start that picks goes through this (tests/core/agents/engine-split-scope-guard.test.ts),
+ * so a task outside those projects never takes a pick, a kept one included.
+ */
+export function splitBuildersFor(
+  config: { defaults?: { engine_split?: unknown; engine_split_off?: unknown; engine_split_projects?: unknown } } | null | undefined,
+  task: { project?: string },
+): SplitBuilder[] {
+  const projects = splitProjects(config);
+  if (projects && !projects.has((task.project ?? '').trim().toLowerCase())) return [];
+  return splitBuilders(config);
 }
 
 /** How many turns an entry may run ahead of or behind its share. */

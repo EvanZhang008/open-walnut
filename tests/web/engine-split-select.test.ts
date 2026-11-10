@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { Config } from '@open-walnut/core';
-import { engineSplitSave, engineSplitSwitchSave, entryKey, entryOfKey, splitChecked, splitIsOff, splitModelEntries, splitSize } from '@/components/settings/sections/engine-split-select';
+import { engineSplitProjectsSave, engineSplitSave, engineSplitSwitchSave, entryKey, entryOfKey, splitChecked, splitIsOff, splitModelEntries, splitProjectsOf, splitSize } from '@/components/settings/sections/engine-split-select';
 
 const ORDER = ['claude', 'codex', 'opencode'];
 const cfg = (engine_split?: unknown): Pick<Config, 'defaults'> =>
@@ -62,5 +62,19 @@ describe('engine split settings', () => {
     expect(splitIsOff(on)).toBe(false);
     expect('engine_split_off' in on.defaults).toBe(false);
     expect(on.defaults.engine_split).toEqual(off.defaults.engine_split);
+  });
+});
+
+describe('the projects the split shares', () => {
+  const base = { defaults: { priority: 'none', engine_split: [{ engine: 'claude' }, { engine: 'codex' }] } } as unknown as Parameters<typeof engineSplitProjectsSave>[0];
+  it('reads none as every project, and drops blanks and repeats', () => {
+    expect(splitProjectsOf(base)).toEqual([]);
+    expect(splitProjectsOf({ defaults: { engine_split_projects: [' Walnut ', 'walnut', '', 'Walnut-Idea'] } } as never)).toEqual(['Walnut', 'Walnut-Idea']);
+  });
+  it('writes the list beside every other default, and removes the key when none is left', () => {
+    const on = engineSplitProjectsSave(base, 'Walnut\nWalnut-Idea') as { defaults: Record<string, unknown> };
+    expect(on.defaults).toEqual({ priority: 'none', engine_split: [{ engine: 'claude' }, { engine: 'codex' }], engine_split_projects: ['Walnut', 'Walnut-Idea'] });
+    const off = engineSplitProjectsSave(on as never, '') as { defaults: Record<string, unknown> };
+    expect(off.defaults).toEqual({ priority: 'none', engine_split: [{ engine: 'claude' }, { engine: 'codex' }] });
   });
 });

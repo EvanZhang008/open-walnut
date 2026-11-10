@@ -1451,6 +1451,11 @@ export interface Config {
     engine_split?: EngineSplitEntry[];
     /** The split's switch: true keeps `engine_split` as it is but shares nothing (Settings' off switch). */
     engine_split_off?: boolean;
+    /**
+     * The projects the split shares (task `project` names, case-insensitive). Absent or empty =
+     * every project; a task in any other project runs on the default engine as if the split were off.
+     */
+    engine_split_projects?: string[];
   };
   provider: {
     type: string;

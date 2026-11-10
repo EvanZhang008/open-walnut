@@ -73,3 +73,19 @@ export function splitSize(checked: string, noModel: ReadonlySet<string> = new Se
     return e.model && !noModel.has(e.engine) ? k : e.engine;
   })).size;
 }
+
+/** The projects the split shares, as the config keeps them; [] = every project (`defaults.engine_split_projects`). */
+export function splitProjectsOf(config: Defaults | undefined): string[] {
+  const raw = (config?.defaults as { engine_split_projects?: unknown } | undefined)?.engine_split_projects;
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  return raw.filter((n): n is string => typeof n === 'string' && !!n.trim()).map((n) => n.trim())
+    .filter((n) => !seen.has(n.toLowerCase()) && !!seen.add(n.toLowerCase()));
+}
+
+/** The write for a new list of projects (one per line of `names`): none left removes the key, so the split shares every project. */
+export function engineSplitProjectsSave(config: Defaults, names: string): Partial<Config> {
+  const { engine_split_projects: _p, ...rest } = config.defaults as Config['defaults'] & { engine_split_projects?: string[] };
+  const list = splitProjectsOf({ defaults: { engine_split_projects: names ? names.split('\n') : [] } } as unknown as Defaults);
+  return { defaults: list.length ? { ...rest, engine_split_projects: list } : rest } as Partial<Config>;
+}

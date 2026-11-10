@@ -16,11 +16,13 @@ import { engineName } from './DefaultEngineRow';
 import { defaultEnginePickerReady } from './default-engine-select';
 import { modelLineLabel } from '@open-walnut/model-line';
 import { useModelOptions } from '@/components/sessions/path-selector/model-options';
-import { engineSplitSave, engineSplitSwitchSave, entryKey, entryOfKey, splitChecked, splitIsOff, splitSize } from './engine-split-select';
+import { engineSplitProjectsSave, engineSplitSave, engineSplitSwitchSave, entryKey, entryOfKey, splitChecked, splitIsOff, splitProjectsOf, splitSize } from './engine-split-select';
+import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import type { useSerialSave } from './GeneralSection';
 
 const ROW_KEY = 'sessions.engine-split';
 const SWITCH_KEY = 'sessions.engine-split-switch';
+const PROJECTS_KEY = 'sessions.engine-split-projects';
 
 export function EngineSplitRow({ config, save }: { config: Config; save: ReturnType<typeof useSerialSave> }) {
   const catalog = useEngineCatalog();
@@ -65,12 +67,32 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
     set([...keys, addKey]);
     setAddModel('');
   };
+  // The projects it shares: none named = every project. One unchecked stays listed until the page is left.
+  const projectsPick = useOptimisticSetting<string>(splitProjectsOf(config).join('\n'),
+    (v) => save((c) => engineSplitProjectsSave(c, v), { rowKey: PROJECTS_KEY }), { rowKey: PROJECTS_KEY });
+  const projects = projectsPick.value ? projectsPick.value.split('\n') : [];
+  const [shownProjects, setShownProjects] = useState<string[]>([]);
+  const listedProjects = [...shownProjects, ...projects.filter((n) => !shownProjects.some((s) => s.toLowerCase() === n.toLowerCase()))];
+  useEffect(() => {
+    if (listedProjects.length !== shownProjects.length) setShownProjects(listedProjects);
+  }, [listedProjects.join('\n')]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { projectNames } = useProjectRegistry();
+  const [addProject, setAddProject] = useState('');
+  const projectTyped = addProject.trim();
+  const projectHas = (n: string) => projects.some((p) => p.toLowerCase() === n.toLowerCase());
+  const setProjects = (next: string[]) => projectsPick.set(next.join('\n'));
+  const addOneProject = () => {
+    if (!projectTyped || projectHas(projectTyped)) return;
+    // Spelled as the project is, when it is one.
+    setProjects([...projects, projectNames.find((n) => n.toLowerCase() === projectTyped.toLowerCase()) ?? projectTyped]);
+    setAddProject('');
+  };
   return (
     <>
       <SettingsRow
         label="Share new tasks"
         help={on
-          ? 'Any task start that names no engine takes turns between the checked entries below (not the chat composer, Main, leads, asks, routines, plugin tasks or reviewer subtasks). Usage & Costs compares them. Switch off to run every new task on the default engine again; the entries stay as they are.'
+          ? 'Any task start that names no engine takes turns between the checked entries below (not the chat composer, Main, leads, asks, routines, plugin tasks, reviewer subtasks or a project not listed under In projects). Usage & Costs compares them. Switch off to run every new task on the default engine again; the entries stay as they are.'
           : enough
             ? 'Switched off: every new task runs on the default engine. The entries below are kept; switch on to share tasks between them again.'
             : 'Check two or more entries below to spread new tasks between them; until then they all run on the default engine.'}
@@ -111,6 +133,28 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
         <SettingsRow label="Not installed on this machine" data-testid="engine-split-missing"
           help={`${missing.map((e) => engineName(e.displayName)).join(', ')}. Install one where Walnut runs and it is offered here to share tasks with.`} />
       )}
+      <SettingsRow
+        label="In projects"
+        help={projects.length
+          ? `Only tasks in ${projects.join(', ')} take turns. A task in any other project runs on the default engine.`
+          : 'Every project. Name projects here to share only their tasks; the rest run on the default engine.'}
+        error={projectsPick.error}
+        data-testid="engine-split-projects"
+        control={(
+          <span className="engine-split-add">
+            <input className="settings-input" aria-label="Project" placeholder="Project name" value={addProject} list="engine-split-project-names"
+              onChange={(ev) => setAddProject(ev.target.value)} onKeyDown={(ev) => { if (ev.key === 'Enter') addOneProject(); }}
+              data-testid="engine-split-project-input" data-no-draft="picker" />
+            <datalist id="engine-split-project-names">{projectNames.filter((n) => !projectHas(n)).map((n) => <option key={n} value={n} />)}</datalist>
+            <SettingsButton disabled={!projectTyped || projectHas(projectTyped)} onClick={addOneProject} data-testid="engine-split-project-add">Add</SettingsButton>
+          </span>
+        )}
+      />
+      {listedProjects.map((n) => (
+        <SettingsCheckbox key={n.toLowerCase()} checked={projectHas(n)} label={n}
+          onChange={(v) => setProjects(v ? [...projects, n] : projects.filter((p) => p.toLowerCase() !== n.toLowerCase()))}
+          data-testid={`split-project-${n}`} />
+      ))}
       {modelEngines.length > 0 && (
         <SettingsRow
           label="Add an engine on a model"
