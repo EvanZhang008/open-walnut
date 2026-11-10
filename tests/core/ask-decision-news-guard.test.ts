@@ -381,6 +381,13 @@ describe('an ask a lead answered for the user stays answered in other words', ()
     const was = turn(answer('Approve testing on your real iPhone?'), null, NOW - 3_600_000)
     expect(answerHolds({ ...answerTo(taskOf(was)), at: iso(NOW - 8 * 24 * 3_600_000) }, was.ask, NOW, { id: was.ask_id!, said: true })).toBe(false)
   })
+  it('an ask the user withdrew for good holds past the hold; another decision still comes back', () => {
+    const was = turn(answer('Approve testing on your real iPhone?'), null, NOW - 3_600_000)
+    const gone = { ...answerTo(taskOf(was)), at: iso(NOW - 30 * 24 * 3_600_000), withdrawn: true as const }
+    expect(answerHolds(gone, 'Can I run the tests on your real iPhone now?', NOW)).toBe(true)
+    expect(answerHolds(gone, 'Delete the staging database now that the move is done?', NOW)).toBe(false)
+    expect(answerHolds(gone, 'Approve testing on your real iPhone?', NOW, { id: 'ask-other1' })).toBe(true)
+  })
   it('an answer records the decision it answered, and the status passes its decision in', () => {
     expect(code('src/core/sessions/ask-answer.ts')).toMatch(/askId: target\.status_report\.ask_id/)
     expect(code('src/core/same-ask.ts')).toMatch(/answerFor\(.*derived\.ask, nowMs, derived\.decision\)/)

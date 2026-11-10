@@ -441,6 +441,9 @@ export interface AskAnswer {
   /** The decision the ask carried when it was answered (ask-decision.ts): the same decision asked
    *  again in other words is still answered. Absent on an answer recorded before decisions had ids. */
   askId?: string;
+  /** The user withdrew the ask for good (task_send answers_ask with withdraw_ask, on their own words):
+   *  it holds past ASK_ANSWER_HOLD_MS. Another decision still comes back, by the same rules. */
+  withdrawn?: true;
 }
 
 /** The writer of a status's now/next, kept when a fold or an answer rebuilds it (user-status.ts reportSourceOf). */
@@ -506,7 +509,7 @@ export function answerHolds(
 ): boolean {
   if (!answer || !ask) return false;
   const at = Date.parse(answer.at);
-  if (!Number.isFinite(at) || nowMs - at > ASK_ANSWER_HOLD_MS) return false;
+  if (!Number.isFinite(at) || (!answer.withdrawn && nowMs - at > ASK_ANSWER_HOLD_MS)) return false;
   const sameId = !!decision?.id && !!answer.askId && decision.id.toLowerCase() === answer.askId.toLowerCase();
   if (sameId && decision!.said) return true;
   if (askKey(ask) === answer.key || sameAskReworded(answer.ask, ask)) return true;

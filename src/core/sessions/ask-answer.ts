@@ -147,7 +147,7 @@ export interface PreparedAnswer {
  */
 export async function prepareAskAnswer(
   callerTaskId: string | null, targetTaskId: string | undefined, text: string, userWords?: string,
-  callerSessionId?: string,
+  callerSessionId?: string, opts: { withdraw?: boolean } = {},
 ): Promise<PreparedAnswer> {
   if (!targetTaskId) throw new AskAnswerError('bad_request', 'answers_ask needs a task to answer: name it in `to` (or answer its request)', 400);
   const { listTasks, updateTaskRaw } = await import('../task-manager.js');
@@ -177,6 +177,12 @@ export async function prepareAskAnswer(
       `Not sent: "${target.title}" asks the user to approve a step of kind ${kind}, which only the user decides. `
       + 'Answer it in their place only with their own words: pass user_words quoting what they said (task_history rows with sentBy "person", or their thread message). Otherwise leave it for them.');
   }
+  // A withdrawal ("don't remind me again") holds for good, so only the user's own words make one.
+  if (opts.withdraw && caller && words.length < 10) {
+    throw new AskAnswerError('user_words',
+      `Not sent: withdrawing "${target.title}"'s ask for good is the user's call. Pass user_words quoting what they said `
+      + '(task_history rows with sentBy "person", or their thread message), or answer it without withdraw_ask.');
+  }
   // His words in the task come first: an answer in his place never goes against what he already
   // wrote there unseen (2026-11-07, Main's reflection: "local only" after his "submit the cr").
   const check = caller ? await settleCheck(target, caller.id, userWords, 'sent', everything) : null;
@@ -192,9 +198,12 @@ export async function prepareAskAnswer(
     // The decision it answers, so the same decision asked again in other words stays answered.
     ...(target.status_report?.state === 'needs' && target.status_report.ask_id && askKey(target.status_report.ask) === askKey(ask)
       ? { askId: target.status_report.ask_id } : {}),
+    ...(opts.withdraw ? { withdrawn: true as const } : {}),
   };
   return {
-    line: askAnswerLine(ask, byTitle),
+    line: opts.withdraw
+      ? `${askAnswerLine(ask, byTitle).slice(0, -1)} The user withdrew this ask for good: never put it to them again, in any words, unless they bring it up.]`
+      : askAnswerLine(ask, byTitle),
     target: { id: target.id, title: target.title, phase: target.phase },
     ...(userSaid ? { userSaid } : {}),
     commit: async () => {

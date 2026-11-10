@@ -116,6 +116,18 @@ describe('one decision across rewordings', () => {
     expect((await call('GET', `/api/v1/tasks/${vpId}/brief`)).json.fresh?.stale).toBe(false)
   })
 
+  it('withdrawing an ask for good needs the user\'s words, and is recorded on the answer', async () => {
+    const { prepareAskAnswer, AskAnswerError } = await import('../../src/core/sessions/ask-answer.js')
+    await expect(prepareAskAnswer(vpId, taskId, 'Drop it.', undefined, undefined, { withdraw: true }))
+      .rejects.toMatchObject({ code: 'user_words' })
+    expect(AskAnswerError).toBeDefined()
+    const prepared = await prepareAskAnswer(vpId, taskId, 'Drop it.', 'stop asking me about the alpha account', undefined, { withdraw: true })
+    expect(prepared.line).toContain('withdrew this ask for good')
+    await prepared.commit()
+    const answers = (await getTask(taskId)).asks_answered ?? []
+    expect(answers.at(-1)).toMatchObject({ withdrawn: true, by: vpId, askId: first })
+  })
+
   it('a new decision the session says is new moves the line', async () => {
     await turnEnd(ASK_NEW, ['FOR_USER_ASK_ID: new'])
     const now = await decisionId()
