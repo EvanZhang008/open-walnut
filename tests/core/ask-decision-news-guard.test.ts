@@ -420,6 +420,14 @@ describe('an ask a lead answered for the user stays answered in other words', ()
     expect(answerHolds(gone, 'Can I run the tests on your own iPhone?', NOW, { ...taskDecision(taskOf(was))!, said: true })).toBe(true)
     expect(answerHolds(gone, 'Delete the staging database now that the move is done?', NOW)).toBe(false)
   })
+  it('the user writing in the task after a withdrawal lifts it: past the hold the ask comes back', () => {
+    const was = turn(answer('Approve testing on your real iPhone?'), null, NOW - 3_600_000)
+    const gone = { ...answerTo(taskOf(was)), at: iso(NOW - 30 * 24 * 3_600_000), withdrawn: true as const }
+    const status = taskOf(was).user_status!
+    expect(answeredAbove(status, [gone], NOW).state).toBe('waiting')
+    expect(answeredAbove(status, [gone], NOW, iso(NOW - 40 * 24 * 3_600_000)).state).toBe('waiting')
+    expect(answeredAbove(status, [gone], NOW, iso(NOW - 3_600_000)).state).toBe('needs')
+  })
   it('a withdrawal is never undone by a later plain answer, nor pushed out by plain ones', () => {
     const was = turn(answer('Approve testing on your real iPhone?'), null, NOW - 3_600_000)
     const gone = { ...answerTo(taskOf(was)), withdrawn: true as const }
@@ -428,14 +436,30 @@ describe('an ask a lead answered for the user stays answered in other words', ()
     for (let i = 0; i < 12; i++) list = keptAnswers(list, { ...gone, withdrawn: undefined, key: `other ${i}`, ask: `Other ask number ${i}?` })
     expect(list.filter((a) => a.withdrawn)).toEqual([gone])
     expect(list.filter((a) => !a.withdrawn)).toHaveLength(8)
+    // Nor by other withdrawals: each one is kept.
+    for (let i = 0; i < 12; i++) list = keptAnswers(list, { ...gone, key: `gone ${i}`, ask: `Withdrawn ask number ${i}?` })
+    expect(list.filter((a) => a.withdrawn)).toHaveLength(13)
+    expect(list.filter((a) => a.withdrawn)[0]).toEqual(gone)
     const later = { ...gone, at: iso(NOW - 40 * 24 * 3_600_000) }
     expect(answeredAbove(taskOf(was).user_status!, answersOf({ asks_answered: keptAnswers(list, later) }), NOW).state).toBe('waiting')
     // A plain answer to the same ask replaces the plain one before it, as it did.
     expect(keptAnswers([{ ...gone, withdrawn: undefined }], { ...gone, withdrawn: undefined, text: 'b' }).map((a) => a.text)).toEqual(['b'])
   })
+  it('every place that judges an answer passes the decision, or says why words are enough there', () => {
+    // A path judging an answer by its words alone ignores a new fact named since (2026-11-10 review:
+    // the report gate refused a new revision of a withdrawn ask for good).
+    const WORDS_ENOUGH: Record<string, string> = {
+      'src/core/user-status-sync.ts': 'a teammate\'s ask folded under another task: its own status, judged with its decision, decides',
+    }
+    const callers = filesWith(/\banswerFor\(/).filter((f) => f !== 'src/core/same-ask.ts' && /\banswerFor\b[^;]*from '\.\/same-ask\.js'/.test(code(f)))
+    expect(callers.sort()).toEqual(['src/core/same-ask-tree.ts', 'src/core/user-status-sync.ts'])
+    for (const f of callers) if (!WORDS_ENOUGH[f]) expect(code(f), f).toMatch(/answerFor\([^\n]*decision/)
+    // Every report writer that asks the gate hands it the decision the report will be stored with.
+    for (const f of filesWith(/refuseSameAsk\([^\n]*'report'/)) expect(code(f), f).toMatch(/refuseSameAsk\([^\n]*'report'[^\n]*reportDecision\(/)
+  })
   it('an answer records the decision it answered, and the status passes its decision in', () => {
     expect(code('src/core/sessions/ask-answer.ts')).toMatch(/askId: d\.id, decisionKey: d\.key/)
-    expect(code('src/core/same-ask.ts')).toMatch(/answerFor\(.*derived\.ask, nowMs, derived\.decision\)/)
+    expect(code('src/core/same-ask.ts')).toMatch(/answerFor\(.*derived\.ask, nowMs, \{ \.\.\.derived\.decision/)
   })
 })
 

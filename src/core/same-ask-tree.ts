@@ -19,7 +19,7 @@ import { briefTeam } from './user-status.js';
 import { sameTaskArea } from './router/same-area.js';
 import { askDecisionQuestion } from './ask-decision.js';
 import {
-  FOLDABLE_SOURCES, answeredAskMessage, answerFor, answersOf, findSameAsk, SameAskError, sameAskMessage, sameAskReasonOf, type RelativeAsk, type TreeAsk,
+  FOLDABLE_SOURCES, answeredAskMessage, answerFor, answersOf, findSameAsk, SameAskError, sameAskMessage, sameAskReasonOf, type AnswerDecision, type RelativeAsk, type TreeAsk,
 } from './same-ask.js';
 
 /** How far a leader chain is walked (subtask-limits.ts caps sessions at 3 levels below a top-level task). */
@@ -214,6 +214,9 @@ export async function refuseSameAsk(
   input?: { same_ask_reason?: unknown; sameAskReason?: unknown } | null,
   /** The parts of the ask beside `text` (a letter's numbered items), checked against what was answered. */
   parts: readonly string[] = [],
+  /** The decision the ask carries as it will be stored (a report: ask-decision.ts), so an answer to it
+   *  holds or gives way as it does on the status (a new fact named since asks it again). */
+  decision?: AnswerDecision | null,
 ): Promise<void> {
   if (!taskId || !text?.trim()) return;
   const reason = sameAskReasonOf(input);
@@ -240,7 +243,7 @@ export async function refuseSameAsk(
   const answers = answersOf(self);
   if (answers.length) {
     for (const ask of [text, ...parts]) {
-      const answer = answerFor(answers, ask);
+      const answer = answerFor(answers, ask, Date.now(), ask === text ? decision : null);
       if (!answer) continue;
       log.task.info('same-ask: refused, answered above', { taskId, by: answer.by, what });
       throw new SameAskError(answeredAskMessage(answer, what), { taskId, title: self?.title ?? taskId, ask: answer.ask, where: 'status', relation: 'ancestor' });

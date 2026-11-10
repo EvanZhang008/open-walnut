@@ -499,6 +499,10 @@ export const ASK_ANSWER_HOLD_MS = 7 * 24 * 60 * 60_000;
 /** The answers a task keeps (Task.asks_answered); Task.ask_answered, the last one, for a record written before. */
 export const ASKS_ANSWERED_MAX = 8;
 
+/** What answerHolds knows of the ask now: its decision (ask-decision.ts) and when a person last wrote
+ *  in the task (SessionRecord.humanInputAt), which lifts a withdrawal made before it. */
+export interface AnswerDecision { id?: string; key?: string; said?: boolean; personAt?: string }
+
 /**
  * Whether `answer` still answers `ask` now, inside the hold (past it, for an ask the user withdrew):
  * the decision the session itself named, unchanged (`said` with the id and decision key it had when it
@@ -511,11 +515,13 @@ export const ASKS_ANSWERED_MAX = 8;
  */
 export function answerHolds(
   answer: AskAnswer | null | undefined, ask: string | null | undefined, nowMs = Date.now(),
-  decision?: { id: string; key?: string; said?: boolean } | null,
+  decision?: AnswerDecision | null,
 ): boolean {
   if (!answer || !ask) return false;
   const at = Date.parse(answer.at);
-  if (!Number.isFinite(at) || (!answer.withdrawn && nowMs - at > ASK_ANSWER_HOLD_MS)) return false;
+  // A withdrawal holds for good until the user writes in the task after it: then they brought it up.
+  const withdrawn = !!answer.withdrawn && !(decision?.personAt && decision.personAt > answer.at);
+  if (!Number.isFinite(at) || (!withdrawn && nowMs - at > ASK_ANSWER_HOLD_MS)) return false;
   const sameId = !!decision?.id && !!answer.askId && decision.id.toLowerCase() === answer.askId.toLowerCase();
   // The same decision with a new fact since (a revision, deadline, option or link): asked again,
   // whatever its words.
@@ -551,7 +557,7 @@ export function askIsPartOf(part: string, whole: string): boolean {
 /** The answer of `answers` that still answers `ask` now, or null. Pure. */
 export function answerFor(
   answers: readonly (AskAnswer | null | undefined)[], ask: string | null | undefined, nowMs = Date.now(),
-  decision?: { id: string; key?: string; said?: boolean } | null,
+  decision?: AnswerDecision | null,
 ): AskAnswer | null {
   for (const a of answers) if (answerHolds(a, ask, nowMs, decision)) return a!;
   return null;
@@ -561,14 +567,13 @@ export function answerFor(
  * The answers a task keeps once `answer` is recorded (Task.asks_answered, oldest first): it replaces an
  * earlier answer to the same ask, the newest ASKS_ANSWERED_MAX of them kept, except that an ask the
  * user withdrew for good stays withdrawn: a later plain answer to it never replaces that record, and
- * plain answers never push it out (up to ASKS_ANSWERED_MAX withdrawals of its own). Pure.
+ * nothing pushes it out (one per ask: a withdrawal of the same ask replaces it). Pure.
  */
 export function keptAnswers(prev: readonly AskAnswer[], answer: AskAnswer): AskAnswer[] {
   const others = prev.filter((a) => a.key !== answer.key || (a.withdrawn && !answer.withdrawn));
   const all = [...others, answer];
-  const withdrawn = all.filter((a) => a.withdrawn).slice(-ASKS_ANSWERED_MAX);
   const plain = all.filter((a) => !a.withdrawn).slice(-ASKS_ANSWERED_MAX);
-  return all.filter((a) => withdrawn.includes(a) || plain.includes(a));
+  return all.filter((a) => a.withdrawn || plain.includes(a));
 }
 
 /** Every answer recorded on a task, newest first. */
@@ -598,9 +603,11 @@ export function answeredWords(a: Pick<AskAnswer, 'byTitle' | 'text'>): string {
  * asks the same in the same words. Any other status as derived. Only the session's own question: a
  * Board choice is answered on the Board, a prompt or a failure in the session. Pure.
  */
-export function answeredAbove(derived: UserStatus, answers: AskAnswer | readonly AskAnswer[] | null | undefined, nowMs = Date.now()): UserStatus {
+export function answeredAbove(
+  derived: UserStatus, answers: AskAnswer | readonly AskAnswer[] | null | undefined, nowMs = Date.now(), personAt?: string,
+): UserStatus {
   if (!answers || derived.state !== 'needs' || derived.source !== 'session' || !derived.ask) return derived;
-  const answer = answerFor(Array.isArray(answers) ? answers : [answers as AskAnswer], derived.ask, nowMs, derived.decision);
+  const answer = answerFor(Array.isArray(answers) ? answers : [answers as AskAnswer], derived.ask, nowMs, { ...derived.decision, ...(personAt ? { personAt } : {}) });
   if (!answer) return derived;
   return {
     state: 'waiting', kind: 'task', waitingOn: answeredWords(answer),

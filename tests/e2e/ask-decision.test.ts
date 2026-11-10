@@ -138,3 +138,25 @@ describe('one decision across rewordings', () => {
     expect(fresh?.moved?.map((m: { id: string }) => m.id)).toEqual([taskId])
   })
 })
+
+describe('a report set through the writer, answered or withdrawn before (2026-11-10 review)', () => {
+  it('the same decision with a new fact goes through the same-ask gate; nothing new is refused', async () => {
+    const { setTaskReport } = await import('../../src/core/sessions/report-set.js')
+    const { stampAskDecision, reportDecision } = await import('../../src/core/ask-decision.js')
+    const { askKey } = await import('../../src/core/same-ask.js')
+    const ask = 'Approve testing on the shared garden tablet?'
+    const now = Date.now()
+    const prev = stampAskDecision({ state: 'needs', ask, at: new Date(now - 30 * 86_400_000).toISOString(), ask_own: { kind: 'user_own', why: 'Only the user lends the tablet' } } as never, null)
+    const d = reportDecision(prev)!
+    const t = (await addTask({ title: 'Tablet tests', project: 'Garden' } as never)).task
+    const answer = { ask, key: askKey(ask), askId: d.id, decisionKey: d.key, text: 'Not now', by: vpId, byTitle: 'Garden lead', at: prev.at, withdrawn: true }
+    await updateTaskRaw(t.id, { phase: 'NEED_ACTION', status_report: prev, asks_answered: [answer] } as never, { source: 'test' })
+    const base = { state: 'needs', ask, user_kind: 'user_own', user_kind_why: 'Only the user lends the tablet' }
+    // Nothing new: the withdrawn ask is refused, past the seven-day hold.
+    await expect(setTaskReport(t.id, { ...base, ask_id: d.id }, { taskId: t.id } as never, now)).rejects.toMatchObject({ code: 'same_ask' })
+    // A new fact named: another revision of the decision, asked again.
+    await setTaskReport(t.id, { ...base, ask_id: d.id, ask_new: 'The tests now wipe the tablet' }, { taskId: t.id } as never, now)
+    expect((await getTask(t.id)).status_report).toMatchObject({ ask_id: d.id, ask_rev: 1 })
+  })
+})
+

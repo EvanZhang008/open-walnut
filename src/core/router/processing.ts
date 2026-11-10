@@ -79,7 +79,8 @@ export async function recordAreaWork(raw: Record<string, unknown>, callerSid: st
     report = reportOfChange({ state: 'needs', ask: raw.ask, user_kind: raw.user_kind, user_kind_why: raw.user_kind_why }, 'self', undefined, Date.now());
     const { refuseSameAsk } = await import('../same-ask-tree.js');
     const { SameAskError } = await import('../same-ask.js');
-    await refuseSameAsk(task.id, report.ask, 'report', raw).catch((err: unknown) => {
+    const { reportDecision, stampSaidDecision } = await import('../ask-decision.js');
+    await refuseSameAsk(task.id, report.ask, 'report', raw, [], reportDecision(stampSaidDecision(report, task.status_report), task.due_date)).catch((err: unknown) => {
       throw err instanceof SameAskError ? new ReportChangeError(err.message, err.code, err.status) : err;
     });
   }

@@ -188,7 +188,8 @@ export async function setTaskReport(
   if (report.state === 'needs' && by !== 'human') {
     const { refuseSameAsk } = await import('../same-ask-tree.js');
     const { SameAskError } = await import('../same-ask.js');
-    await refuseSameAsk(task.id, report.ask, 'report', raw as Record<string, unknown>).catch((err) => {
+    const { reportDecision } = await import('../ask-decision.js');
+    await refuseSameAsk(task.id, report.ask, 'report', raw as Record<string, unknown>, [], reportDecision(report, task.due_date)).catch((err) => {
       throw err instanceof SameAskError ? new ReportChangeError(err.message, err.code, err.status) : err;
     });
   }

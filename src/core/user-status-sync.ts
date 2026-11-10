@@ -724,7 +724,7 @@ export function statusOf(
     withdrawnAt: (id, ask) => withdrawnAtOf(facts.tasksById?.get(id)?.asks_withdrawn, ask),
     signIn: (ask) => isSignInAsk(ask, facts.loginWords ?? []),
   });
-  return { input, status: signInHeld(answeredAbove(folded, answersOf(task), nowMs), facts) };
+  return { input, status: signInHeld(answeredAbove(folded, answersOf(task), nowMs, facts.personInputAt?.get(task.id)), facts) };
 }
 
 /** Every task's sign-in asks beside its teammates', when its own ask is one (one sign-in is one ask). */
