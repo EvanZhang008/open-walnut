@@ -37,6 +37,17 @@ describe('flaky-log', () => {
     expect(offenders(readLog(file), { now: NOW, lastChange: unchanged }).map((o: { file: string }) => o.file)).toEqual([A])
   })
 
+  it("the gate leaves out local runs (a task's own clone), a local check reads them", () => {
+    const file = logFile()
+    record([`${A} :: x`], 'test-layers local', { file, now: NOW - 2 * DAY })
+    record([`${A} :: x`], 'test-layers land', { file, now: NOW - DAY })
+    expect(offenders(readLog(file), { now: NOW, lastChange: unchanged, gateOnly: true })).toEqual([])
+    expect(offenders(readLog(file), { now: NOW, lastChange: unchanged })).toHaveLength(1)
+    record([`${A} :: x`], 'push-gate abc', { file, now: NOW - DAY / 2 })
+    record([`${A} :: x`], 'push-gate def', { file, now: NOW - DAY / 4 })
+    expect(offenders(readLog(file), { now: NOW, lastChange: unchanged, gateOnly: true })).toHaveLength(1)
+  })
+
   it('a flake older than the window does not count', () => {
     const file = logFile()
     record([`${A} :: x`], 'old', { file, now: NOW - (WINDOW_DAYS + 1) * DAY })

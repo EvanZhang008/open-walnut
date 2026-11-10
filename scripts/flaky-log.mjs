@@ -68,11 +68,12 @@ function changedAt(testFile) {
  * The files that flaked in REPEATS runs within WINDOW_DAYS and were not fixed since: each with its
  * flakes. A flake older than the file's last change, or than a clear of it, no longer counts.
  */
-export function offenders(rows = readLog(), { now = Date.now(), only = null, lastChange = changedAt } = {}) {
+export function offenders(rows = readLog(), { now = Date.now(), only = null, lastChange = changedAt, gateOnly = false } = {}) {
   const since = now - WINDOW_DAYS * DAY
   const byFile = new Map()
   for (const r of rows) {
     if (!r?.file || (only && !only.has(r.file))) continue
+    if (gateOnly && r.kind !== 'clear' && isLocalRun(r)) continue
     if (!byFile.has(r.file)) byFile.set(r.file, { flakes: [], clearedAt: 0 })
     const e = byFile.get(r.file)
     const at = Date.parse(r.at)
@@ -92,6 +93,14 @@ export function offenders(rows = readLog(), { now = Date.now(), only = null, las
   }
   return out.sort((a, b) => a.file.localeCompare(b.file))
 }
+
+/**
+ * A run on a person's or a task's own machine (test-layers local or land): its tree is that task's
+ * clone with its unlanded changes, often on a Mac the load watchdog pauses, so the gate, which judges
+ * on GitHub's runners, does not count it against everyone's push (2026-11-10: two local runs of one
+ * task's clone refused every land). Local runs still read every row for their own files.
+ */
+export const isLocalRun = (r) => typeof r?.source === 'string' && r.source.startsWith('test-layers ')
 
 export function offenderText(list) {
   return [
@@ -114,7 +123,7 @@ function main(argv) {
       const keys = [...rest.slice(1), ...(rest.length > 1 || process.stdin.isTTY ? [] : stdinKeys())].filter((k) => k.trim())
       record(keys, rest[0] || 'gate')
     }
-    const list = offenders(readLog(), { only })
+    const list = offenders(readLog(), { only, gateOnly: cmd === 'gate' })
     if (!list.length) return 0
     console.log(offenderText(list))
     return 1
