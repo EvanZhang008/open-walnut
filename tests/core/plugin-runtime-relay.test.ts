@@ -203,7 +203,7 @@ describe('primary Plugin runtime control relay', () => {
     )
     expect(called).toEqual({
       ok: true,
-      result: { ok: false, message: 'Unknown op: not_a_real_op. Run `walnut tools list` for the catalog.' },
+      result: { ok: false, message: 'Unknown op: not_a_real_op. Run `walnut tools list` for the catalog.', invalidArgs: true },
     })
   })
 
