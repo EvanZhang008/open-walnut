@@ -92,14 +92,14 @@ export function RecoveryKitCard({ kit, confirmLabel, onConfirmed }: { kit: Recov
 }
 
 /** The recovery kit as a screen of its own: after setup and after a recovery. */
-export function KitScreen({ kit, title, sub, onDone }: { kit: RecoveryKit; title: string; sub: string; onDone: () => void }) {
+export function KitScreen({ kit, title, sub, onDone, doneLabel = 'Open Passwords' }: { kit: RecoveryKit; title: string; sub: string; onDone: () => void; doneLabel?: string }) {
   return (
     <div className="pw-gate">
       <div className="pw-gate-card pw-gate-wide" data-testid="pw-kit">
         <div className="pw-gate-icon"><KeyIcon size={30} /></div>
         <h1>{title}</h1>
         <p className="pw-gate-sub">{sub}</p>
-        <RecoveryKitCard kit={kit} confirmLabel="Open Passwords" onConfirmed={onDone} />
+        <RecoveryKitCard kit={kit} confirmLabel={doneLabel} onConfirmed={onDone} />
       </div>
     </div>
   )
@@ -182,7 +182,11 @@ function useWait(initialMs: number) {
   return { waitS, slowFor: (ms: number) => setWaitUntil(Date.now() + ms) }
 }
 
-export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatus; onUnlocked: () => void; onKit: (k: KitToShow) => void }) {
+/**
+ * `sub`, `onCancel` and `onBusy`: the unlock a plugin asked for (PasswordsUnlockSheet) says who asks,
+ * can be cancelled, and is told when an unlock or a recovery is on its way (it must not close then).
+ */
+export function UnlockScreen({ status, onUnlocked, onKit, sub, onCancel, onBusy }: { status: VaultStatus; onUnlocked: () => void; onKit: (k: KitToShow) => void; sub?: string; onCancel?: () => void; onBusy?: (busy: boolean) => void }) {
   const [mode, setMode] = useState<'unlock' | 'recover'>('unlock')
   const [pw, setPw] = useState('')
   const [secretKey, setSecretKey] = useState('')
@@ -195,6 +199,7 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
   const [wrong, setWrong] = useState(false)
   const { waitS, slowFor } = useWait(status.waitMs)
   const input = useRef<HTMLInputElement>(null)
+  useEffect(() => { onBusy?.(busy) }, [busy, onBusy])
   const unlock = async () => {
     if (!pw || busy) return
     setBusy(true); setError('')
@@ -215,14 +220,14 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
     }
   }
 
-  if (mode === 'recover') return <RecoverFlow status={status} onBack={() => setMode('unlock')} onKit={onKit} />
+  if (mode === 'recover') return <RecoverFlow status={status} onBack={() => setMode('unlock')} onKit={onKit} onBusy={onBusy} />
 
   return (
     <div className="pw-gate">
       <form className="pw-gate-card" onSubmit={(e) => { e.preventDefault(); void unlock() }} data-testid="pw-unlock">
         <div className="pw-gate-icon pw-gate-icon-lock"><LockIcon size={28} /></div>
         <h1>Passwords are locked</h1>
-        <p className="pw-gate-sub">Enter your master password to unlock{status.itemCount ? ` ${status.itemCount} items` : ''}.</p>
+        <p className="pw-gate-sub">{sub ?? `Enter your master password to unlock${status.itemCount ? ` ${status.itemCount} items` : ''}.`}</p>
         <input data-no-draft="secret" ref={input} className="pw-input pw-input-big" type="password" autoComplete="current-password" autoFocus placeholder="Master password" aria-label="Master password"
           value={pw} onChange={(e) => setPw(e.target.value)} disabled={waitS > 0} />
         <ShowHint hint={status.hint} open={wrong} />
@@ -234,6 +239,7 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
         )}
         {error && <div className="pw-hint pw-hint-bad" role="alert">{waitS > 0 ? `Too many wrong tries. Try again in ${waitS} s.` : error}</div>}
         <button type="submit" className="pw-btn pw-btn-primary pw-btn-block" disabled={!pw || busy || waitS > 0 || (needKey && !secretKey)}>{busy ? (checking ? 'Checking…' : 'Unlocking…') : 'Unlock'}</button>
+        {onCancel && <button type="button" className="pw-btn pw-btn-block pw-unlock-cancel" disabled={busy} onClick={onCancel}>Cancel</button>}
         <button type="button" className="pw-link-btn" onClick={() => { setError(''); setMode('recover') }}>Forgot master password?</button>
         <p className="pw-gate-foot">{unlockFootText(status)}</p>
       </form>
@@ -242,7 +248,7 @@ export function UnlockScreen({ status, onUnlocked, onKit }: { status: VaultStatu
 }
 
 /** A forgotten master password: the recovery code from the kit sets a new one. */
-function RecoverFlow({ status, onBack, onKit }: { status: VaultStatus; onBack: () => void; onKit: (k: KitToShow) => void }) {
+function RecoverFlow({ status, onBack, onKit, onBusy }: { status: VaultStatus; onBack: () => void; onKit: (k: KitToShow) => void; onBusy?: (busy: boolean) => void }) {
   const [code, setCode] = useState('')
   const [secretKey, setSecretKey] = useState('')
   const [needKey, setNeedKey] = useState(!status.hasSecretKey)
@@ -252,6 +258,7 @@ function RecoverFlow({ status, onBack, onKit }: { status: VaultStatus; onBack: (
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const { waitS, slowFor } = useWait(status.waitMs)
+  useEffect(() => { onBusy?.(busy) }, [busy, onBusy])
   const ok = !!code.trim() && newPasswordOk(pw, pw2) && (!needKey || !!secretKey.trim()) && !hintError(hint, pw)
 
   const recover = async () => {

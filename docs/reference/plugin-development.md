@@ -1267,6 +1267,17 @@ const result = await walnut.passwords?.save({ title: 'Example PIN', password: pi
 
 It writes through the unlock of the window your App runs in, so it never prompts and never unlocks anything: while that window has no unlock of its own it saves nothing and answers `locked`. With no item of that exact title it creates a login tagged `plugin:<your id>`; with one, it sets that item's password (the old one goes to the item's history, as an edit by hand does) when the item is a login you saved or a login with no website (one the person entered by hand for you), and otherwise leaves it alone (`exists`); with two or more it changes none (`ambiguous`). Saves of one title run one at a time across the browser's tabs (within one page only where the browser has no Web Locks, such as a plain-http page); an item that keeps changing meanwhile answers `conflict`. It never returns a stored value; read one back on your server with the `password_use` op, which the person approves. Save only a secret that just worked, never one that was refused or whose result you do not know, and drop your copy right after. A test run, and a Walnut that does not keep the vault (the cloud companion), answer `unavailable`. Optional on an older host: feature-detect it.
 
+`locked` is the usual answer when the person has not opened Passwords for a while (an unlock ends after 15 idle minutes). Read it first with `walnut.passwords.state()` (`'unlocked' | 'locked' | 'not_set_up' | 'unavailable'`, read without unlocking anything), so your words promise only what will happen, and when a save answers `locked`, hold the secret in memory and offer the person a button that asks:
+
+```ts
+// From the person's click, e.g. "Unlock Passwords and save":
+if (await walnut.passwords?.unlock?.({ reason: 'to save your PIN' })) {
+  await walnut.passwords.save({ title: 'Example PIN', password: pin })
+}
+```
+
+`unlock()` shows Walnut's own unlock over your App, naming your plugin and the reason (or shares an unlock already made on this computer with no prompt). The master password stays in Walnut's sheet; your App hears only `true` (this window is unlocked now, at once when it already was) or `false` (cancelled, or no Passwords set up). Call it only from the person's own click. `state` and `unlock` are optional on an older host that has `save`: feature-detect them.
+
 ### Voice input in your own text box
 
 `walnut.ui.views.MicButton` is the mic of Walnut's own composer, for a textarea or one-line input your plugin draws. It records and transcribes with the person's Voice settings and engine (Settings → Voice), so there is nothing to configure in your plugin and no second voice setup. Words appear in the box while the person speaks when the engine can draft live, then the final text replaces them and the box takes the focus with the caret after it. A right-click on the mic opens the same retry menu as everywhere else (another model, the vocabulary, recent recordings). While voice is not set up, or its engine is not working, a click opens Settings → Voice instead of recording. A browser that cannot record draws no mic at all.

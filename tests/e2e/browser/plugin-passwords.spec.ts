@@ -7,7 +7,7 @@
  * Fake data only. Run on the Mac app's engine: PW_WEBKIT=1 bun x playwright test plugin-passwords --project webkit
  */
 import { expect, test, type Page } from '@playwright/test'
-import { vaultSession } from './vault-session-helper'
+import { VAULT_MASTER, vaultSession } from './vault-session-helper'
 import { holdVaultLock } from './vault-lock'
 
 test.describe.configure({ mode: 'serial' })
@@ -84,4 +84,59 @@ test('a plugin keeps a typed secret in Passwords through the window\'s own unloc
 
   await remove(secondId)
   expect(await items()).toHaveLength(0)
+})
+
+const call = (page: Page, method: 'state' | 'unlock') => page.evaluate(async (method) => {
+  const mod = await import('/src/plugins/plugin-passwords.ts' as string)
+  const api = mod.createWebPasswords('spec-plugin', 'Spec Plugin')
+  const w = window as unknown as { __pwUnlock?: Promise<boolean> }
+  if (method === 'state') return api.state()
+  // The answer comes once the sheet closes: keep it, and read it after acting on the sheet.
+  w.__pwUnlock = api.unlock({ reason: 'to save a test PIN' })
+  return null
+}, method)
+const unlockAnswer = (page: Page) => page.evaluate(() => (window as unknown as { __pwUnlock: Promise<boolean> }).__pwUnlock)
+
+test('unlock() asks with Walnut\'s own sheet, and the plugin hears only whether it worked', async ({ page, request, baseURL }) => {
+  await vaultSession(request, baseURL!)
+  await page.goto('/')
+  await page.waitForLoadState('domcontentloaded')
+  await page.evaluate(key => localStorage.removeItem(key), TOKEN_KEY)
+  expect(await call(page, 'state')).toBe('locked')
+  expect(await page.evaluate(key => localStorage.getItem(key), TOKEN_KEY)).toBeNull()
+
+  // Escape cancels: false, and the window stays locked.
+  await call(page, 'unlock')
+  const sheet = page.getByTestId('pw-unlock-sheet')
+  await expect(sheet).toBeVisible()
+  await expect(sheet).toContainText('Spec Plugin asks to unlock Passwords to save a test PIN. Enter your master password; Walnut does not give it to Spec Plugin.')
+  await expect(sheet.getByLabel('Master password')).toBeFocused()
+  // Tab stays in the sheet, never in the page under it.
+  for (let i = 0; i < 6; i++) {
+    await page.keyboard.press('Tab')
+    expect(await sheet.evaluate(el => el.contains(document.activeElement))).toBe(true)
+  }
+  await page.keyboard.press('Escape')
+  await expect(sheet).toBeHidden()
+  expect(await unlockAnswer(page)).toBe(false)
+  expect(await call(page, 'state')).toBe('locked')
+
+  // Cancel does the same.
+  await call(page, 'unlock')
+  await sheet.getByRole('button', { name: 'Cancel' }).click()
+  expect(await unlockAnswer(page)).toBe(false)
+
+  // The master password unlocks this window (a wrong one is UnlockScreen's own, tested with Passwords).
+  await call(page, 'unlock')
+  await sheet.getByLabel('Master password').fill(VAULT_MASTER)
+  await sheet.getByRole('button', { name: 'Unlock' }).click()
+  await expect(sheet).toBeHidden()
+  expect(await unlockAnswer(page)).toBe(true)
+  expect(await call(page, 'state')).toBe('unlocked')
+  expect(await page.evaluate(key => localStorage.getItem(key), TOKEN_KEY)).not.toBeNull()
+
+  // Already unlocked: true with no sheet.
+  await call(page, 'unlock')
+  expect(await unlockAnswer(page)).toBe(true)
+  await expect(sheet).toHaveCount(0)
 })

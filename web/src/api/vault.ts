@@ -240,21 +240,28 @@ export const vaultApi = {
    * The vault's state for this window: an unlock the server no longer knows is dropped here, and a
    * locked window that may share an unlock made on this computer (`canJoin`) takes it, with no
    * password. `quiet`: a check the page makes by itself (is this window still unlocked?), which is
-   * no use of the vault (a share is none either: it renews nothing).
+   * no use of the vault (a share is none either: it renews nothing). `join: false` only reads: a
+   * locked window stays locked, with `canJoin` saying whether `join()` would unlock it.
    */
-  async status(opts: { quiet?: boolean } = {}): Promise<VaultStatus> {
+  async status(opts: { quiet?: boolean; join?: boolean } = {}): Promise<VaultStatus> {
     const used = { token: null as string | null }
     const quiet: Record<string, string> = opts.quiet ? { 'x-walnut-vault-quiet': '1' } : {}
     const st = await call<VaultStatus>('GET', '/vault/status', undefined, 20_000, quiet, used)
     if (!st.unlocked && used.token) dropSession(used.token)
-    if (st.unlocked || !st.canJoin) return st
+    if (st.unlocked || !st.canJoin || opts.join === false) return st
+    if (!(await vaultApi.join())) return { ...st, canJoin: false } // the unlock ended meanwhile: the lock screen stays
+    return call<VaultStatus>('GET', '/vault/status', undefined, 20_000, quiet)
+  },
+
+  /** Share an unlock made on this computer (`canJoin`), with no password. True when this window has an unlock now. */
+  async join(): Promise<boolean> {
     // Another tab may have taken it meanwhile: share only while this browser still has no unlock.
-    if (vaultSession()) return call<VaultStatus>('GET', '/vault/status', undefined, 20_000, quiet)
+    if (vaultSession()) return true
     try {
       const r = await call<{ session: { token: string } }>('POST', '/vault/join', { client: CLIENT })
       if (!vaultSession()) setSession(r.session.token)
-    } catch { return { ...st, canJoin: false } } // the unlock ended meanwhile: the lock screen stays
-    return call<VaultStatus>('GET', '/vault/status', undefined, 20_000, quiet)
+      return true
+    } catch { return false }
   },
 
   async setup(password: string, hint = ''): Promise<RecoveryKit> {

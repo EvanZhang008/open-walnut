@@ -23,6 +23,7 @@ import { LoadingSpinner } from './components/common/LoadingSpinner';
 import { usePluginUi, useWebPluginRuntime } from './plugins/hooks';
 import { LinkCaptureHost } from './plugins/LinkCaptureHost';
 import { PluginDialogHost } from './plugins/PluginDialogHost';
+import { PasswordsUnlockHost } from './plugins/PasswordsUnlockHost';
 import { SessionRawViewHost } from './components/sessions/SessionRawView';
 import { MainPage } from './pages/MainPage';
 import { AgentsPage } from './pages/AgentsPage';
@@ -158,7 +159,7 @@ export function App() {
   // Home stays mounted under visibility: hidden off its route; its chats' marks must not paint on this page.
   useHidesHighlights(location.pathname !== '/');
 
-  if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><PluginDialogHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /></>;
+  if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><PluginDialogHost /><PasswordsUnlockHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /></>;
 
   const isHome = location.pathname === '/';
 
@@ -168,6 +169,7 @@ export function App() {
       <StaleBuildPill />
       <LinkCaptureHost />
       <PluginDialogHost />
+      <PasswordsUnlockHost />
       <SessionRawViewHost />
       <AnywhereFileViewer />
       <PageFind />

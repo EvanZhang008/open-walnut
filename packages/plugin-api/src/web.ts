@@ -435,6 +435,13 @@ export type PasswordSaveResult =
   | { saved: true; action: 'created' | 'updated' | 'unchanged' }
   | { saved: false; reason: 'locked' | 'ambiguous' | 'exists' | 'conflict' | 'invalid' | 'unavailable' }
 
+/**
+ * Where this window's Passwords stands: `unlocked` (a save writes now), `locked` (a save answers
+ * `locked`; `unlock()` asks the person), `not_set_up` (the person has no Passwords yet), or
+ * `unavailable` (it could not be read: another device than the Mac, a server that is away).
+ */
+export type PasswordsState = 'unlocked' | 'locked' | 'not_set_up' | 'unavailable'
+
 export interface PasswordsService {
   /**
    * Keeps a secret the person just typed into your App (and that you know works) in their
@@ -444,6 +451,16 @@ export interface PasswordsService {
    * back to you.
    */
   save(input: PasswordSaveInput): Promise<PasswordSaveResult>
+  /** This window's Passwords state, read without unlocking anything. Absent on an older host. */
+  state?(): Promise<PasswordsState>
+  /**
+   * Asks the person to unlock Passwords in this window, from their own click (a button such as
+   * "Unlock Passwords and save"): Walnut shows its own unlock over your App, naming your plugin and
+   * `reason`, or uses an unlock already made on this computer with no prompt. The master password
+   * never reaches you. True once this window is unlocked (at once when it already was), false when
+   * the person cancelled or Passwords is not set up. Absent on an older host.
+   */
+  unlock?(input?: { reason?: string }): Promise<boolean>
 }
 
 export interface WalnutWebApi {

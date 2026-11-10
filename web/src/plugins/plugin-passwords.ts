@@ -1,7 +1,8 @@
 /**
  * `walnut.passwords` for web plugins: keep a secret the person just typed into a plugin's App in
- * their Passwords. It writes through this window's own unlock (api/vault.ts), so it works only
- * where the person has Passwords open, never unlocks or prompts, and never hands a stored value back.
+ * their Passwords. A save writes through this window's own unlock (api/vault.ts) and never unlocks
+ * or prompts; `unlock()` is the one way to ask, from the person's click, with Walnut's own unlock
+ * sheet (PasswordsUnlockHost). Nothing here hands a stored value back.
  *
  * One item per title: none is created (tagged `plugin:<id>`), one has its password set (the old one
  * goes to the item's history, as an edit by hand does), two or more are left alone. The one item is
@@ -9,12 +10,25 @@
  * entered by hand); anything else with the title (a website login, a key, a card) is left alone.
  * Nothing here logs the value.
  */
-import type { PasswordSaveInput, PasswordSaveResult, PasswordsService } from '../../../packages/plugin-api/src/web'
-import { isLockedError, vaultApi, vaultSession, VaultApiError, type VaultItemInput } from '@/api/vault'
+import type { PasswordSaveInput, PasswordSaveResult, PasswordsService, PasswordsState } from '../../../packages/plugin-api/src/web'
+import { isLockedError, vaultApi, vaultSession, VaultApiError, type VaultItemInput, type VaultStatus } from '@/api/vault'
 import { NOTES_MAX, SECRET_MAX, TITLE_MAX } from '../../../src/core/vault/types'
+import { askPasswordsUnlock } from './passwords-unlock-store'
+// This file reads the vault state, so the live follower runs wherever a plugin can ask (vault-live-guard).
+import '@/api/vault-live'
 
-type VaultClient = Pick<typeof vaultApi, 'list' | 'get' | 'create' | 'update'> & { session(): string | null }
-const realClient: VaultClient = { ...vaultApi, session: vaultSession }
+type VaultClient = Pick<typeof vaultApi, 'list' | 'get' | 'create' | 'update' | 'join'> & {
+  session(): string | null
+  /** Reads the status only: never joins an unlock (vaultApi.status with join false). */
+  status(): Promise<VaultStatus>
+  /** Shows Walnut's unlock sheet; true once this window is unlocked. */
+  ask(pluginName: string, reason: string, status: VaultStatus): Promise<boolean>
+}
+const realClient: VaultClient = {
+  ...vaultApi, session: vaultSession, ask: askPasswordsUnlock,
+  status: () => vaultApi.status({ quiet: true, join: false }),
+}
+const REASON_MAX = 200
 
 /** One save per title at a time across this browser's tabs (this page's only, with no Web Locks), so two saves never create two items. */
 const chains = new Map<string, Promise<unknown>>()
@@ -28,7 +42,7 @@ async function oneAtATime<T>(title: string, run: () => Promise<T>): Promise<T> {
   return next
 }
 
-export function createWebPasswords(pluginId: string, pluginName: string, client: VaultClient = realClient): PasswordsService {
+export function createWebPasswords(pluginId: string, pluginName: string, client: VaultClient = realClient): Required<PasswordsService> {
   // The server keeps a tag's first 50 characters, so the plugin's tag is compared as stored.
   const tag = `plugin:${pluginId}`.slice(0, 50)
   async function once(title: string, password: string): Promise<PasswordSaveResult> {
@@ -49,7 +63,28 @@ export function createWebPasswords(pluginId: string, pluginName: string, client:
     await client.update(id, next, updatedAt)
     return { saved: true, action: 'updated' }
   }
+  async function unlocked(): Promise<VaultStatus> {
+    const status = await client.status()
+    // The status counts this window's token; a window with none is locked whatever it says.
+    return status.unlocked && !client.session() ? { ...status, unlocked: false } : status
+  }
   return {
+    async state(): Promise<PasswordsState> {
+      try {
+        const status = await unlocked()
+        return !status.setUp ? 'not_set_up' : status.unlocked ? 'unlocked' : 'locked'
+      } catch { return 'unavailable' }
+    },
+    async unlock(input?: { reason?: string }): Promise<boolean> {
+      const reason = typeof input?.reason === 'string' ? input.reason.trim().slice(0, REASON_MAX) : ''
+      let status: VaultStatus
+      try { status = await unlocked() } catch { return false }
+      if (!status.setUp) return false
+      if (status.unlocked) return true
+      // Passwords was unlocked on this computer since: the person's click shares it, as opening Passwords would.
+      if (status.canJoin && await client.join() && client.session()) return true
+      return (await client.ask(pluginName, reason, status)) && !!client.session()
+    },
     async save(input: PasswordSaveInput): Promise<PasswordSaveResult> {
       const title = typeof input?.title === 'string' ? input.title.trim() : ''
       const password = input?.password

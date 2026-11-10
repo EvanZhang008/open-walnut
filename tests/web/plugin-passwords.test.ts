@@ -3,20 +3,27 @@
  * the person typed. One item per title is created (tagged as the plugin's) or updated through this
  * window's own unlock; a locked window (never joined to another unlock), two items of the title, an
  * item the plugin may not change, a bad input or a refusal write nothing, and no answer ever carries
- * a stored value.
+ * a stored value. state() reads without unlocking, and unlock() shares an unlock made on this
+ * computer or shows Walnut's own unlock sheet, and answers only whether this window is unlocked.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createWebPasswords } from '../../web/src/plugins/plugin-passwords'
-import { VaultApiError, type VaultItem, type VaultItemSummary } from '../../web/src/api/vault'
+import { VaultApiError, type VaultItem, type VaultItemSummary, type VaultStatus } from '../../web/src/api/vault'
 
 const summary = (item: VaultItem): VaultItemSummary => ({
   id: item.id, type: item.type, title: item.title, hasPassword: !!item.password, hasTotp: false, agentAccess: 'ask',
   createdAt: item.createdAt, updatedAt: item.updatedAt, ...(item.trashedAt ? { trashedAt: item.trashedAt } : {}),
 })
 
-function fakeVault(items: VaultItem[], opts: { session?: string | null } = {}) {
+const STATUS = { setUp: true, open: true, unlocked: true, agentsWhileAway: false, hasSecretKey: true }
+function fakeVault(items: VaultItem[], opts: { session?: string | null; status?: Partial<VaultStatus> } = {}) {
+  let token = opts.session === undefined ? 'window-token' : opts.session
   return {
-    session: vi.fn(() => (opts.session === undefined ? 'window-token' : opts.session)),
+    session: vi.fn(() => token),
+    setSession(next: string | null) { token = next },
+    status: vi.fn(async (): Promise<VaultStatus> => ({ ...STATUS, unlocked: !!token, ...opts.status })),
+    join: vi.fn(async () => { token = 'joined-token'; return true }),
+    ask: vi.fn(async (_name: string, _reason: string, _status: VaultStatus) => false),
     list: vi.fn(async () => items.map(summary)),
     get: vi.fn(async (id: string) => structuredClone(items.find((item) => item.id === id)!)),
     create: vi.fn(async (input: never) => ({ id: 'new', ...(input as object) }) as never),
@@ -92,6 +99,8 @@ describe('walnut.passwords.save', () => {
     const client = fakeVault([], { session: null })
     expect(await save(client)).toEqual({ saved: false, reason: 'locked' })
     expect(client.list).not.toHaveBeenCalled()
+    expect(client.status).not.toHaveBeenCalled()
+    expect(client.join).not.toHaveBeenCalled()
     const lapsed = fakeVault([])
     lapsed.create.mockRejectedValueOnce(new VaultApiError(401, 'Unlock Passwords', 'vault_session_needed'))
     expect(await save(lapsed)).toEqual({ saved: false, reason: 'locked' })
@@ -139,5 +148,64 @@ describe('walnut.passwords.save', () => {
       expect(await bare(input as never)).toEqual({ saved: false, reason: 'invalid' })
     }
     expect(client.session).not.toHaveBeenCalled()
+  })
+})
+
+describe('walnut.passwords.state and unlock', () => {
+  const api = (client: ReturnType<typeof fakeVault>) => createWebPasswords('example', 'Example', client)
+
+  it('state() reads this window\'s state and never joins or asks', async () => {
+    expect(await api(fakeVault([])).state!()).toBe('unlocked')
+    const locked = fakeVault([], { session: null, status: { canJoin: true } })
+    expect(await api(locked).state!()).toBe('locked')
+    expect(locked.join).not.toHaveBeenCalled()
+    expect(locked.ask).not.toHaveBeenCalled()
+    // A status that says unlocked for a window with no token of its own is still locked here.
+    expect(await api(fakeVault([], { session: null, status: { unlocked: true } })).state!()).toBe('locked')
+    expect(await api(fakeVault([], { session: null, status: { setUp: false } })).state!()).toBe('not_set_up')
+    const down = fakeVault([])
+    down.status.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    expect(await api(down).state!()).toBe('unavailable')
+  })
+
+  it('unlock() answers true at once for an unlocked window, false with no Passwords set up', async () => {
+    const open = fakeVault([])
+    expect(await api(open).unlock!()).toBe(true)
+    expect(open.ask).not.toHaveBeenCalled()
+    const none = fakeVault([], { session: null, status: { setUp: false } })
+    expect(await api(none).unlock!()).toBe(false)
+    expect(none.ask).not.toHaveBeenCalled()
+  })
+
+  it('unlock() shares an unlock made on this computer with no sheet', async () => {
+    const client = fakeVault([], { session: null, status: { canJoin: true } })
+    expect(await api(client).unlock!({ reason: 'to save your PIN' })).toBe(true)
+    expect(client.join).toHaveBeenCalledTimes(1)
+    expect(client.ask).not.toHaveBeenCalled()
+  })
+
+  it('unlock() shows the sheet naming the plugin and reason, and answers what the person did', async () => {
+    const client = fakeVault([], { session: null })
+    expect(await api(client).unlock!({ reason: `  to save your PIN${'x'.repeat(300)}` })).toBe(false)
+    const [name, reason, status] = client.ask.mock.calls[0]
+    expect(name).toBe('Example')
+    expect(reason.startsWith('to save your PIN')).toBe(true)
+    expect(reason).toHaveLength(200)
+    expect(status.unlocked).toBe(false)
+    // The person unlocked in the sheet: true, and the next save writes.
+    client.ask.mockImplementationOnce(async () => { client.setSession('sheet-token'); return true })
+    expect(await api(client).unlock!()).toBe(true)
+    expect(await api(client).save({ title: 'Example PIN', password: '4321' })).toEqual({ saved: true, action: 'created' })
+    // A sheet that says unlocked while this window holds no token is not believed.
+    const liar = fakeVault([], { session: null })
+    liar.ask.mockResolvedValueOnce(true)
+    expect(await api(liar).unlock!()).toBe(false)
+  })
+
+  it('a join that fails falls back to the sheet', async () => {
+    const client = fakeVault([], { session: null, status: { canJoin: true } })
+    client.join.mockResolvedValueOnce(false)
+    await api(client).unlock!()
+    expect(client.ask).toHaveBeenCalledTimes(1)
   })
 })

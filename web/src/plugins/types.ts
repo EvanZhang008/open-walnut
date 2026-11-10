@@ -387,7 +387,7 @@ export interface WalnutWebApiHost {
   /** The user's AI (plugin-ai.ts): one call, Walnut picks the route, interactive by default. */
   readonly ai: import('./plugin-ai').WebAiService
   /** Keep a secret the person typed in their Passwords (plugin-passwords.ts). */
-  readonly passwords: import('../../../packages/plugin-api/src/web').PasswordsService
+  readonly passwords: Required<import('../../../packages/plugin-api/src/web').PasswordsService>
   readonly unsafe: {
     readonly react: unknown
     readonly host: unknown

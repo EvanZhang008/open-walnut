@@ -34,7 +34,9 @@ void firstActionLabel
 
 // walnut.passwords: the host always has it; a plugin reads it as optional and never gets a value back.
 const pinSave: Promise<import('../../packages/plugin-api/src/web.js').PasswordSaveResult> = hostApi.passwords.save({ title: 'Example PIN', password: 'fake' })
-void pinSave
+const pwState: Promise<import('../../packages/plugin-api/src/web.js').PasswordsState> = hostApi.passwords.state()
+const pwUnlock: Promise<boolean> = hostApi.passwords.unlock({ reason: 'to save your PIN' })
+void pinSave; void pwState; void pwUnlock
 
 const app = hostApi.ui.app({
   id: 'main',
