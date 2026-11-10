@@ -9763,6 +9763,11 @@ export class ClaudeCodeSession {
    * it times out. Callers MUST treat null as "don't change what you have" (same
    * contract as reconcileFromDaemon) — never clobber a known value with null.
    */
+  /** A turn end reads the CLI's settings again only this long after the last read (refreshAppliedSettings). */
+  static TURN_END_SETTINGS_GAP_MS = 15 * 60_000
+  private _settingsReadAt = 0
+  private _settingsReadPid: number | null = null
+
   async getSettingsSnapshot(timeoutMs = 5_000): Promise<CliSettingsSnapshot | null> {
     const payload = await this.readControlPayload('gs', 'get_settings', timeoutMs) as {
       applied?: CliAppliedSettings
@@ -10315,9 +10320,18 @@ export class ClaudeCodeSession {
   async refreshAppliedSettings(reason: string, preFetched?: CliAppliedSettings): Promise<{ effort: import('../core/types.js').SessionEffort | null; model: string | null } | null> {
     const sid = this.claudeSessionId
     if (!sid) return null
+    // The CLI writes every get_settings answer (about 200 KB) into the session's stream
+    // file, and a read at every turn end was a quarter to three quarters of those files
+    // (2026-11-10: 82 MB of one 243 MB file, 415 reads for 406 turns). Nothing but a
+    // change Walnut makes (read back under its own reason) moves these settings, so a
+    // turn end reads them at most once per TURN_END_SETTINGS_GAP_MS in one process.
+    if (reason === 'turn-end' && !preFetched && this.pid != null && this._settingsReadPid === this.pid
+      && Date.now() - this._settingsReadAt < ClaudeCodeSession.TURN_END_SETTINGS_GAP_MS) return null
     const snapshot = preFetched ? null : await this.getSettingsSnapshot().catch(() => null)
     const applied = preFetched ?? snapshot?.applied
     if (!applied) return null // untrusted read — don't clobber
+    this._settingsReadAt = Date.now()
+    this._settingsReadPid = this.pid
 
     // ── The two context windows, harvested from the CLI's resolved env ──
     // get_settings is the only cheap read that exposes it, and env cannot change

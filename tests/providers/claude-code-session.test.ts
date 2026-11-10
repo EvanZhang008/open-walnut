@@ -2422,6 +2422,37 @@ describe('ClaudeCodeSession.applyModel', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((session as any)._initModel).toBe('us.anthropic.claude-sonnet-4-6[1m]');
   });
+
+  it('a turn end reads settings again only after the gap, in the same process; other reasons always read', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const s = session as any;
+    s.claudeSessionId = 'sid-gap';
+    s._model = 'claude-opus-4-8';
+    Object.defineProperty(session, 'pid', { configurable: true, get: () => 4242 });
+    const reads = () => writes.map(w => JSON.parse(w)).filter(e => e.request?.subtype === 'get_settings');
+    const answer = async (promise: Promise<unknown>) => {
+      await new Promise((r) => setTimeout(r, 5));
+      const gs = reads().at(-1);
+      feed(session, { type: 'control_response', response: { subtype: 'success', request_id: gs.request_id, response: { applied: { model: 'claude-opus-4-8', effort: 'high' } } } });
+      return promise;
+    };
+    await answer(session.refreshAppliedSettings('turn-end'));
+    expect(reads()).toHaveLength(1);
+    // A second turn end inside the gap writes no request (each answer is ~200 KB of stream file).
+    await expect(session.refreshAppliedSettings('turn-end')).resolves.toBeNull();
+    expect(reads()).toHaveLength(1);
+    // A change Walnut made reads back at once.
+    await answer(session.refreshAppliedSettings('model-change'));
+    expect(reads()).toHaveLength(2);
+    // Past the gap, or in a new process, a turn end reads again.
+    s._settingsReadAt = Date.now() - ClaudeCodeSession.TURN_END_SETTINGS_GAP_MS - 1;
+    await answer(session.refreshAppliedSettings('turn-end'));
+    expect(reads()).toHaveLength(3);
+    Object.defineProperty(session, 'pid', { configurable: true, get: () => 4343 });
+    await answer(session.refreshAppliedSettings('turn-end'));
+    expect(reads()).toHaveLength(4);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════
