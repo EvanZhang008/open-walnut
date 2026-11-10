@@ -21,6 +21,7 @@ import { readInbound } from '../../web/src/popout/ext-panel-model';
 import { initialAskDraft } from '../../web/src/components/chat/ask-object-draft';
 import { applyDraftPathPick, leaveWalnutDraft, makeTierKnown } from '../../web/src/components/sessions/draft-ownership';
 import { DEFAULT_ENGINE_CATALOG } from '../../web/src/utils/engines';
+import { HOME_PLACE_KEY, homePlaceOf, parseHomePlace, readHomePlace, writeHomePlace } from '../../web/src/popout/ext-home-place';
 
 const TIERS = makeTierKnown([], true);
 const draft = () => leaveWalnutDraft(initialAskDraft('ext-home'));
@@ -53,6 +54,56 @@ describe('Send on the first page', () => {
 
   it('the placeholder is the mock\'s', () => {
     expect(HOME_PLACEHOLDER).toBe('New task: what should Walnut do?');
+  });
+});
+
+describe('Where the first page starts its next task (2026-11-10: "choose which folder")', () => {
+  const picked = () => applyDraftPathPick(draft(), { cwd: '/work/marina', host: 'devbox', hostLabel: 'Dev box' }, draft().meta, undefined, () => 'Marina', () => true);
+
+  it('a launch keeps its folder, host and the folder\'s project', () => {
+    const place = homePlaceOf(picked());
+    expect(place).toEqual({ cwd: '/work/marina', host: 'devbox', hostLabel: 'Dev box', project: 'Marina', projectSource: 'folder' });
+    // Read back as a pinned folder, so a seeded row starts there.
+    expect(parseHomePlace(JSON.stringify(place))).toEqual({ cwd: '/work/marina', host: 'devbox', cwdPinned: true, hostLabel: 'Dev box', project: 'Marina', projectSource: 'folder' });
+  });
+
+  it('a project picked with no folder is kept; no folder and no pick is no place', () => {
+    const inProject = { ...draft(), project: 'acme', projectSource: 'user' as const };
+    expect(homePlaceOf(inProject)).toEqual({ cwd: '', host: null, project: 'acme', projectSource: 'user' });
+    expect(parseHomePlace(JSON.stringify(homePlaceOf(inProject)))).toMatchObject({ cwd: '', project: 'acme', projectSource: 'user' });
+    expect(homePlaceOf(draft())).toBeNull();
+  });
+
+  it('a seeded row launches where the last one did, and an empty one still runs in its own folder', () => {
+    const seeded = { ...draft(), ...parseHomePlace(JSON.stringify(homePlaceOf(picked()))) };
+    const body = homeLaunchBody({ draft: seeded, message: 'Go', tierKnown: TIERS, catalog: DEFAULT_ENGINE_CATALOG });
+    expect(body).toMatchObject({ cwd: '/work/marina', host: 'devbox', project: 'Marina', projectFromFolder: true });
+    expect(body.ownTaskDir).toBeUndefined();
+    const inbox = homeLaunchBody({ draft: { ...draft(), project: 'acme', projectSource: 'user' }, message: 'Go', tierKnown: TIERS, catalog: DEFAULT_ENGINE_CATALOG });
+    expect(inbox).toMatchObject({ ownTaskDir: true, project: 'acme' });
+  });
+
+  it('malformed or foreign storage is no place', () => {
+    for (const raw of [null, '', 'nope', '[]', '{}', '{"cwd":5}', JSON.stringify({ cwd: '', project: 'x', projectSource: 'folder' }), JSON.stringify({ cwd: 'x'.repeat(5000) })]) {
+      expect(parseHomePlace(raw)).toBeNull();
+    }
+  });
+
+  it('round-trips through this browser\'s storage, and a launch with no place forgets it', () => {
+    const store = new Map<string, string>();
+    const ls = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); }, removeItem: (k: string) => { store.delete(k); } };
+    const had = (globalThis as { localStorage?: unknown }).localStorage;
+    Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true });
+    try {
+      writeHomePlace(picked());
+      expect(store.has(HOME_PLACE_KEY)).toBe(true);
+      expect(readHomePlace()).toMatchObject({ cwd: '/work/marina', host: 'devbox' });
+      writeHomePlace(draft());
+      expect(store.has(HOME_PLACE_KEY)).toBe(false);
+      expect(readHomePlace()).toBeNull();
+    } finally {
+      Object.defineProperty(globalThis, 'localStorage', { value: had, configurable: true });
+    }
   });
 });
 

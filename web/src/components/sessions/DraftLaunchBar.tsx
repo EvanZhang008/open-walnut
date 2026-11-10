@@ -118,6 +118,12 @@ interface Props {
   getComposer: () => HTMLTextAreaElement | null;
   /** Bumped by the composer's Mod+. shortcut: opens the menu from More. */
   openMenuNonce?: number;
+  /** The folder pill's words with no folder picked, where a start needs none (DraftFolderPill). */
+  emptyFolder?: string;
+  /** The project chip shows before a project is set ("Project: Inbox"). */
+  alwaysProject?: boolean;
+  /** With `emptyFolder`: a picked folder gets a × that goes back to none. */
+  onClearFolder?: (draftId: string) => void;
 }
 
 /** Trailing-slash-tolerant basename: the chip label and the pill label. */
@@ -128,7 +134,7 @@ function basename(cwd: string): string {
 export function DraftLaunchBar({
   draft, pickerOpen, onOpenPicker, onClosePicker,
   onPathChange, onProjectChange, isKnownProject, onBoundProjectMove, onAfterQuickPick,
-  onTaskFieldChange, onReturnFieldToWalnut, composerText, getComposer, openMenuNonce,
+  onTaskFieldChange, onReturnFieldToWalnut, composerText, getComposer, openMenuNonce, emptyFolder, alwaysProject, onClearFolder,
 }: Props) {
   // Anchor for the folder picker's POPOUT: the panel portals to <body> (so the
   // column can't clip it and siblings can't paint over it) but opens FROM this
@@ -204,7 +210,7 @@ export function DraftLaunchBar({
   // client sends, so its More edits the task fields but offers no project.
   const isRepair = draft.intent === 'fix-walnut';
   const projectMenu = decisionsOn && !isRepair;
-  const projectChip = draftProjectChip(draft, { isKnownProject, hasMenu: projectMenu });
+  const projectChip = draftProjectChip(draft, { isKnownProject, hasMenu: projectMenu, always: alwaysProject });
   const pickProject = useCallback((project: string) => {
     if (draft.taskId) onBoundProjectMove?.(project);
     else onProjectChange(draft.id, project);
@@ -314,7 +320,18 @@ export function DraftLaunchBar({
             pickerOpen={pickerOpen}
             ai={isAi('cwd')}
             onOpenPicker={onOpenPicker}
+            {...(emptyFolder ? { emptyFolder } : {})}
           />
+          {emptyFolder && onClearFolder && draft.cwd && !isFork && (
+            <button
+              type="button"
+              className="session-action-chip draft-folder-clear"
+              data-testid="draft-folder-clear"
+              aria-label={`Use ${emptyFolder} folder instead`}
+              title={`The task works in a folder of its own instead of ${draft.cwd}`}
+              onClick={() => { onClearFolder(draft.id); onAfterQuickPick?.(); }}
+            >&times;</button>
+          )}
           <DraftPillsBreak />
           {projectChip && (
             <DraftProjectChip

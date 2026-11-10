@@ -25,6 +25,15 @@ describe('draftProjectChip visibility', () => {
     expect(chip.draftProjectChip(draft(), plain)).toBeNull();
   });
 
+  it('a host that asks for it states the Inbox before any pick (the extension\'s New task)', () => {
+    const c = chip.draftProjectChip(draft(), { ...plain, always: true });
+    expect(c).toMatchObject({ key: 'Project:', name: 'Inbox', isNew: false, action: 'menu' });
+    expect(c?.title).toContain('Inbox until you pick');
+    // A set project reads as it always did.
+    expect(chip.draftProjectChip(draft({ project: 'acme', projectSource: 'folder', cwd: '/w/acme' }), { ...plain, always: true }))
+      .toMatchObject({ key: 'Project:', name: 'acme' });
+  });
+
   it('an explicit Inbox pick stays visible', () => {
     const c = chip.draftProjectChip(draft({ project: '', projectSource: 'user' }), plain);
     expect(c).toMatchObject({ key: 'Project:', name: 'Inbox', isNew: false, action: 'menu' });

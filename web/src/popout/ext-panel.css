@@ -368,6 +368,10 @@
 .session-mode-bar.is-plain-chat-pickers { flex: 0 1 auto; flex-wrap: nowrap; min-width: 0; }
 .is-plain-chat-pickers .mode-toggle-pill-shortcut { display: none; }
 .ext-home-composer.is-docked .is-plain-chat-pickers { display: none; }
+/* Home's launch bar (Folder/Host, Project, More) over the grown composer only (2026-11-10, the user:
+   "we need to be able to choose which folder"); docked, the composer stays one line. */
+.ext-home-composer.is-docked .draft-launch-bar { display: none; }
+.ext-home-composer .draft-launch-bar { margin: 0 2px 6px; }
 /* In the panel they read as the chips beside them do (a capsule at the chips' size), so they are
    seen as the controls they are: "Bypass" and "Auto" as bare grey words were missed. */
 html body .is-plain-chat-pickers .mode-toggle-pill, html body .is-plain-chat-pickers .composer-model-pill {

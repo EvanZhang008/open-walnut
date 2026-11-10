@@ -25,7 +25,7 @@ export const isPanelMode = (v: unknown): v is PanelMode => v === 'home' || v ===
 /**
  * The first message's launch from the first page: Home's New task draft (Start Task), with the
  * page as a hint beside the words. A draft that names no folder starts in the task's own
- * directory (`ownTaskDir`): the extension has no folder picker.
+ * directory (`ownTaskDir`); one whose launch bar picked a folder starts there, as on Home.
  */
 export function homeLaunchBody(input: {
   draft: DraftColumn;

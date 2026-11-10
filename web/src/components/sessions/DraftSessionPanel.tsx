@@ -431,6 +431,15 @@ interface Props {
    * extension's New task): no folder bar, no picker, no "pick a folder" notice, and no hint line.
    */
   ownFolder?: boolean;
+  /**
+   * With `ownFolder`: still draw the launch bar, so the person may pick the folder and the project
+   * (a start with none still runs in the task's own directory); the pill says `ownFolderLabel` then.
+   * 2026-11-10, the user, of the extension's New task: "we need to be able to choose the folder".
+   */
+  pickFolder?: boolean;
+  ownFolderLabel?: string;
+  /** With `pickFolder`: the folder pill's × back to no folder. */
+  onClearFolder?: (draftId: string) => void;
   /** The host is writing (a save as todo or a start on its way): Save as todo waits, so one click makes one todo. */
   saveBusy?: boolean;
 }
@@ -439,7 +448,7 @@ export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
-  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill, ownFolder, saveBusy = false,
+  onCustomizeWalnut, repairTarget, phoneLayer, walnutLabel, plainChat, placeholder, composerBar, composerPill, ownFolder, pickFolder, ownFolderLabel, onClearFolder, saveBusy = false,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const phoneDraft = usePhoneLayerWithBar({
@@ -921,7 +930,7 @@ export function DraftSessionPanel({
             Pick a folder first — the session runs in it.
           </div>
         )}
-        {!ownFolder && <DraftLaunchBar
+        {(!ownFolder || pickFolder) && <DraftLaunchBar
           draft={draft}
           pickerOpen={pickerOpen}
           onOpenPicker={() => setPickerOpen(true)}
@@ -944,6 +953,7 @@ export function DraftSessionPanel({
           composerText={text}
           getComposer={getComposer}
           openMenuNonce={openMenuNonce}
+          {...(ownFolder ? { emptyFolder: ownFolderLabel ?? 'its own', alwaysProject: true, ...(onClearFolder ? { onClearFolder } : {}) } : {})}
         />}
         {/* The default engine is out of usage here: where this task starts instead. */}
         <DraftFallbackNotice now={fallbackNow} named={fallbackNamed}

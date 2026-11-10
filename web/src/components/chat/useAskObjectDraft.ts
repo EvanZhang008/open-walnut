@@ -29,6 +29,8 @@ export interface AskObjectDraft {
   requestFolder: () => void;
   onWalnutToggle: (draftId: string, walnut: boolean) => void;
   onPathChange: (draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta, openedMeta?: QuickStartTaskMeta) => void;
+  /** Back to no folder (the task's own directory, on a host that starts one there); a project the folder set goes with it. */
+  onClearFolder: (draftId: string) => void;
   onProjectChange: (draftId: string, project: string) => void;
   onMetaChange: (draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   onModeChange: (draftId: string, mode: SessionMode) => void;
@@ -37,9 +39,17 @@ export interface AskObjectDraft {
   isKnownProject: (name: string) => boolean;
 }
 
-/** `task`: the row opens as a new task (Start Task) rather than Ask Walnut (the browser extension's New task). */
-export function useAskObjectDraft(draftId: string, opts: { task?: boolean } = {}): AskObjectDraft {
-  const [draft, setDraft] = useState<DraftColumn>(() => (opts.task ? leaveWalnutDraft(initialAskDraft(draftId)) : initialAskDraft(draftId)));
+/**
+ * `task`: the row opens as a new task (Start Task) rather than Ask Walnut (the browser extension's New task).
+ * `seed`: where a task row starts (its folder, host and project), read once when the row is made.
+ */
+export function useAskObjectDraft(draftId: string, opts: { task?: boolean; seed?: () => Partial<DraftColumn> | null } = {}): AskObjectDraft {
+  const [draft, setDraft] = useState<DraftColumn>(() => {
+    if (!opts.task) return initialAskDraft(draftId);
+    const row = leaveWalnutDraft(initialAskDraft(draftId));
+    const seed = opts.seed?.();
+    return seed ? { ...row, ...seed } : row;
+  });
   const draftRef = useRef(draft);
   draftRef.current = draft;
 
@@ -78,6 +88,15 @@ export function useAskObjectDraft(draftId: string, opts: { task?: boolean } = {}
   ) => {
     setDraft((d) => applyDraftPathPick(d, path, meta, openedMeta, projectForDirRef.current, projectTakenRef.current));
   }, []);
+  const onClearFolder = useCallback((_id: string) => {
+    setDraft((d) => {
+      const { hostLabel: _l, ...rest } = clearAiFields(d, d.projectSource === 'folder' ? ['cwd', 'project'] : ['cwd']);
+      return {
+        ...rest, cwd: '', host: null, cwdPinned: false, createCwd: false, userTouched: true,
+        ...(d.projectSource === 'folder' ? { project: undefined, projectSource: undefined } : {}),
+      };
+    });
+  }, []);
   const onProjectChange = useCallback((_id: string, project: string) => {
     setDraft((d) => ({ ...clearAiFields(d, ['project']), project, projectSource: 'user' as const, userTouched: true }));
   }, []);
@@ -96,7 +115,7 @@ export function useAskObjectDraft(draftId: string, opts: { task?: boolean } = {}
   }, []);
 
   return {
-    draft, draftRef, tierKnown, requestFolder, onWalnutToggle, onPathChange, onProjectChange, onMetaChange, onModeChange,
+    draft, draftRef, tierKnown, requestFolder, onWalnutToggle, onPathChange, onClearFolder, onProjectChange, onMetaChange, onModeChange,
     onTaskFieldChange, onReturnFieldToWalnut, isKnownProject,
   };
 }

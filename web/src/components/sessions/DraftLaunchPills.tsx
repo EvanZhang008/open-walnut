@@ -31,12 +31,15 @@ function basename(cwd: string): string {
   return cwd.replace(/\/+$/, '').split('/').pop() || '/';
 }
 
-export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker }: {
+export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker, emptyFolder }: {
   draft: DraftColumn;
   pillRef: RefObject<HTMLButtonElement | null>;
   pickerOpen: boolean;
   ai: boolean;
   onOpenPicker: () => void;
+  /** What the pill says with no folder picked, where a start without one is fine (the browser
+   *  extension's New task runs in the task's own directory). Absent: a folder is asked for. */
+  emptyFolder?: string;
 }) {
   const isFork = !!draft.forkOf;
   const status = useHostStatus(draft.host);
@@ -51,7 +54,9 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker }
   const cls = `session-action-chip draft-folder-pill${pickerOpen ? ' session-action-chip-active' : ''}${ai ? ' session-action-chip-ai' : ''}`;
   let title: string;
   if (isFork) title = `A fork continues the source session, so it runs in its folder: ${draft.cwd}`;
-  else if (!draft.cwd) title = 'Pick the folder this session runs in, on this machine or a remote host';
+  else if (!draft.cwd) title = emptyFolder
+    ? 'With no folder picked, the task works in a folder of its own. Pick one to run it in a folder of yours, on this machine or a remote host'
+    : 'Pick the folder this session runs in, on this machine or a remote host';
   else {
     // An SSH alias that differs from its label is worth knowing; the cloud box's alias is internal.
     const alias = draft.host && draft.host !== CLOUD_BOX_ALIAS && hostName !== draft.host ? ` (alias ${draft.host})` : '';
@@ -71,7 +76,7 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker }
       onClick={isFork ? undefined : onOpenPicker}
       disabled={isFork}
       title={title}
-      aria-label={draft.cwd ? `Folder and host: ${draft.cwd} on ${hostName}. Change` : 'Choose folder and host'}
+      aria-label={draft.cwd ? `Folder and host: ${draft.cwd} on ${hostName}. Change` : emptyFolder ? `Folder: ${emptyFolder}. Choose folder and host` : 'Choose folder and host'}
     >
       {draft.cwd ? (
         <>
@@ -80,6 +85,11 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker }
           <span className="draft-pill-name">{basename(draft.cwd)}</span>{' '}
           <span className="draft-pill-host">· {hostName}</span>
           {saysSomething && <HostStatusDot dot={hostDot!} host={draft.host ?? undefined} className="draft-pill-dot" />}
+        </>
+      ) : emptyFolder ? (
+        <>
+          <span className="draft-pill-key">Folder:</span>{' '}
+          <span className="draft-pill-name">{emptyFolder}</span>
         </>
       ) : 'Choose folder and host…'}
       <AiBadge on={ai} />

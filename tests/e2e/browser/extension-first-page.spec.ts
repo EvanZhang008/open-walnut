@@ -388,6 +388,90 @@ test('typing and Send start a task that knows the page; it opens here, and Back 
   await expect(search).toHaveValue('')
 })
 
+test('the grown composer picks the folder and the project; the task files there, and the next one starts in the same place', async () => {
+  // 2026-11-10, the user: "we need to be able to choose which folder".
+  test.setTimeout(200_000)
+  const v = askView(panel)
+  const composer = v.getByTestId('ext-home-composer')
+  const box = composer.locator('textarea')
+  const folderPill = composer.locator('.draft-composer-bar .draft-folder-pill')
+  const projectChip = composer.locator('.draft-composer-bar .draft-project-chip')
+  // Docked: one line, no launch bar.
+  await expect(composer).toHaveAttribute('data-docked', 'true')
+  await expect(composer.locator('.draft-launch-bar')).toBeHidden()
+  await box.click()
+  await expect(composer).toHaveAttribute('data-docked', 'false')
+  // Grown: Home's launch bar, saying where the task goes before any pick.
+  await expect(folderPill).toBeVisible()
+  await expect(folderPill).toHaveText(/Folder:\s*its own/)
+  await expect(projectChip).toHaveText(/Project:\s*Inbox/)
+  // The folder picker opens from its pill and the composer stays grown under it (its anchor stays).
+  await folderPill.click()
+  const picker = v.locator('.session-path-selector')
+  await expect(picker).toBeVisible({ timeout: 15_000 })
+  await panel.waitForTimeout(700)
+  await expect(composer).toHaveAttribute('data-docked', 'false')
+  await expect(picker).toBeVisible()
+  await shots(panel, 'panel-folder-picker')
+  // A folder picked from it shows on the pill, with a × back to the task's own folder.
+  const row = picker.locator('.sps-path-item').filter({ hasText: /wallets/ }).first()
+  await row.click()
+  // A row fills the path in; Shift+Enter uses it (the picker's footer says so).
+  await expect(picker.locator('.sps-search-input')).toHaveValue(/wallets/)
+  await picker.locator('.sps-search-input').press('Shift+Enter')
+  await expect(folderPill).toHaveText(/Folder\/Host:\s*wallets/, { timeout: 10_000 })
+  await expect(picker).toHaveCount(0)
+  await expect(composer).toHaveAttribute('data-docked', 'false')
+  await shots(panel, 'panel-folder-picked')
+  await composer.getByTestId('draft-folder-clear').click()
+  await expect(folderPill).toHaveText(/Folder:\s*its own/)
+  await expect(composer.getByTestId('draft-folder-clear')).toHaveCount(0)
+  await expect(projectChip).toHaveText(/Project:\s*Inbox/)
+  // The project: the chip opens More, its Project row the project list; pick Travel.
+  await projectChip.click()
+  const menu = v.getByTestId('draft-task-menu')
+  await expect(menu).toBeVisible()
+  await menu.locator('.draft-task-menu-project .task-kebab-project-current').click()
+  const flyout = v.locator('.task-kebab-project-flyout')
+  await expect(flyout).toBeVisible()
+  await flyout.locator('.task-kebab-project-opt').filter({ hasText: /^\s*Travel\s*$/ }).click()
+  await expect(projectChip).toHaveText(/Project:\s*Travel/, { timeout: 10_000 })
+  await expect(menu).toHaveCount(0)
+  await expect(composer).toHaveAttribute('data-docked', 'false')
+  await box.click()
+  const words = 'Plan the Lisbon day trip echo-input'
+  await panel.keyboard.type(words)
+  await shots(panel, 'panel-project-picked')
+  await panel.keyboard.press('Enter')
+  await expect(v.getByTestId('ext-task-head')).toBeVisible({ timeout: 60_000 })
+  const session = v.getByTestId('ask-object-session')
+  await expect(session).toBeVisible({ timeout: 60_000 })
+  const taskId = await taskOfSession((await session.getAttribute('data-session-id')) ?? '')
+  expect(taskId).not.toBe('')
+  made.push(taskId)
+  const task = await getTask(taskId)
+  expect(task.project).toBe('Travel')
+  // No folder picked: still its own task directory.
+  expect(String(task.cwd ?? '')).toContain(taskId)
+  await v.getByTestId('ext-task-back').click()
+  await expect(v.getByTestId('ext-home')).toBeVisible()
+  // The next task starts where this one did, also after the panel opens again.
+  await box.click()
+  await expect(projectChip).toHaveText(/Project:\s*Travel/)
+  await panel.close()
+  panel = await openFirstPage()
+  const v2 = askView(panel)
+  await v2.locator('[data-testid="ext-home-composer"] textarea').click()
+  await expect(v2.locator('[data-testid="ext-home-composer"] .draft-composer-bar .draft-project-chip')).toHaveText(/Project:\s*Travel/)
+  // Back to the Inbox for the tests after this one.
+  await v2.locator('[data-testid="ext-home-composer"] .draft-composer-bar .draft-project-chip').click()
+  await v2.getByTestId('draft-task-menu').locator('.draft-task-menu-project .task-kebab-project-current').click()
+  await v2.locator('.task-kebab-project-flyout .task-kebab-project-opt').filter({ hasText: /^\s*Inbox\s*$/ }).click()
+  await expect(v2.locator('[data-testid="ext-home-composer"] .draft-composer-bar .draft-project-chip')).toHaveText(/Project:\s*Inbox/)
+  await panel.keyboard.press('Escape')
+  await frame(panel).evaluate(() => localStorage.removeItem('walnut-ext-home-place'))
+})
+
 test('× leaves the page out; Save as todo files the words and starts nothing', async () => {
   test.setTimeout(150_000)
   const v = askView(panel)
@@ -862,6 +946,14 @@ test('the popup opens on New task; a question there goes on in the side panel', 
   await modePill.click()
   await expect(modePill).not.toHaveAttribute('data-mode', modeBefore ?? '')
   const pickedMode = await modePill.getAttribute('data-mode')
+  // So is the project picked here (2026-11-10: the popup's place goes with its question).
+  const popProject = v.locator('[data-testid="ext-home-composer"] .draft-composer-bar .draft-project-chip')
+  await popProject.click()
+  await v.getByTestId('draft-task-menu').locator('.draft-task-menu-project .task-kebab-project-current').click()
+  await v.locator('.task-kebab-project-flyout .task-kebab-project-opt').filter({ hasText: /^\s*Home\s*$/ }).click()
+  await expect(popProject).toHaveText(/Project:\s*Home/, { timeout: 10_000 })
+  // A pick closes the menu by itself (an Escape now would close the popup).
+  await expect(v.getByTestId('draft-task-menu')).toHaveCount(0)
   await v.locator('[data-testid="ext-home-composer"] textarea').click()
   await pop.keyboard.type('Compare the two hotel rooms')
   // Grown in the popup, the send button keeps its room (review round 5, Sol #4).
@@ -878,9 +970,12 @@ test('the popup opens on New task; a question there goes on in the side panel', 
   const s = sv.getByTestId('ask-object-session')
   await expect(s).toBeVisible({ timeout: 60_000 })
   const handedSid = (await s.getAttribute('data-session-id')) ?? ''
-  made.push(await taskOfSession(handedSid))
+  const handedTask = await taskOfSession(handedSid)
+  made.push(handedTask)
   const rec = await (await lab.doc.request.get(`${lab.base}/api/v1/sessions/${handedSid}`)).json() as Record<string, any>
   expect(rec.mode ?? rec.session?.mode).toBe(pickedMode)
+  expect((await getTask(handedTask)).project).toBe('Home')
+  await frame(sp).evaluate(() => localStorage.removeItem('walnut-ext-home-place'))
   await sp.close()
 })
 

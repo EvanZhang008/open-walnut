@@ -32,6 +32,9 @@ export interface DraftProjectCtx {
   isKnownProject: (name: string) => boolean;
   /** The draft shows More (and so the Project section lives there). */
   hasMenu: boolean;
+  /** Say the project even before one is set ("Project: Inbox"): a host where where the task lands
+   *  is the first thing the person asks (the browser extension's New task, 2026-11-10). */
+  always?: boolean;
 }
 
 function folderName(cwd: string): string {
@@ -66,7 +69,13 @@ export function draftProjectChip(draft: ChipDraft, ctx: DraftProjectCtx): DraftP
       title: `This task is filed under ${name}. Picking another project moves the task now.`,
     };
   }
-  if (!draft.project && draft.projectSource !== 'user') return null;
+  if (!draft.project && draft.projectSource !== 'user') {
+    if (!ctx.always) return null;
+    return {
+      key: 'Project:', name, isNew: false, ai: false, action: ctx.hasMenu ? 'menu' : 'flyout',
+      title: `The task files in the Inbox until you pick a folder or a project. ${ctx.hasMenu ? 'Change it in More.' : 'Click to change it.'}`,
+    };
+  }
   const isNew = draftProjectIsNew(draft, ctx.isKnownProject);
   const ai = !!draft.aiFields?.has('project');
   const where = ctx.hasMenu ? 'Change it in More.' : 'Click to change it.';

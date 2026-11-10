@@ -7,9 +7,11 @@
  *
  * Send makes a task and its session, as Home's New task draft does, with the page and the tab as
  * Walnut hints beside the words (never in them): the panel then shows its conversation
- * (`onLaunched`). With no folder chosen the task starts in its own directory (`ownTaskDir`): the
- * extension never opens a folder picker. In the toolbar popup, which closes as soon as focus
- * leaves it, the text goes to the side panel instead, which sends it (`preset`).
+ * (`onLaunched`). The grown composer has Home's launch bar (Folder/Host, Project, More: 2026-11-10,
+ * the user: "we need to be able to choose which folder"); with no folder chosen the task starts in
+ * its own directory (`ownTaskDir`), and the place last started in is where the next one starts
+ * (`ext-home-place.ts`). In the toolbar popup, which closes as soon as focus leaves it, the text goes
+ * to the side panel instead, which sends it (`preset`).
  */
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
@@ -34,13 +36,13 @@ import type { HandedLaunch } from './ext-panel-model';
 import type { Attached } from './ext-attached';
 import type { OpenTask } from './ExtHomeTasks';
 import { useHomeSnapshots } from './useHomeSnapshots';
+import { readHomePlace, writeHomePlace } from './ext-home-place';
 
 const ExtHomeTasks = lazy(() => import('./ExtHomeTasks'));
 
 /** One draft for the first page, in this browser: the words wait in the draft store across opens. */
 const HOME_DRAFT_ID = 'ext-home';
-const noop = () => { /* the first page has no folder, project or task fields */ };
-const known = () => true;
+const noop = () => { /* the first page's composer is never closed */ };
 
 /**
  * What a send made: the task, its session, and what went with the first message. `actTab` is the
@@ -49,8 +51,8 @@ const known = () => true;
  */
 export interface HomeLaunched { taskId: string; sessionId?: string; act: boolean; actTab?: number; question: string; attached: Attached; pageUrl: string }
 /** A first message the popup handed over, sent once with the popup's choices. */
-/** The composer's own pop-overs, drawn outside it: the model picker. */
-const COMPOSER_LAYERS = '.model-picker';
+/** The composer's own pop-overs, drawn outside it: the model picker, the folder picker, More and its project list. */
+const COMPOSER_LAYERS = '.model-picker, .session-path-selector, .draft-task-menu, .task-kebab-project-flyout';
 
 export interface HomePreset { id: string; text: string; page: boolean; act: boolean; sel: string; launch?: HandedLaunch }
 
@@ -73,7 +75,7 @@ interface Props {
 }
 
 export function ExtHome(p: Props) {
-  const draft = useAskObjectDraft(HOME_DRAFT_ID, { task: true });
+  const draft = useAskObjectDraft(HOME_DRAFT_ID, { task: true, seed: readHomePlace });
   const rootRef = useRef<HTMLDivElement>(null);
   useHomeSnapshots(rootRef, !p.hidden);
   const page = p.page;
@@ -143,14 +145,20 @@ export function ExtHome(p: Props) {
         name = ACT_CONTEXT_NAME;
       }
       const contextId = await storeObjectContext(name, block, (path, b) => apiPost<{ id: string }>(path, b));
-      // The popup's picks win over this panel's own draft: what the person saw there is what starts.
+      // The popup's picks win over this panel's own draft: what the person saw there is what starts,
+      // its place too (the popup wrote it to this browser's place before handing over).
       const own = draft.draftRef.current;
-      const launchDraft = picked ? { ...own, meta: { ...own.meta, ...picked, engine: (picked.engine ?? own.meta.engine) as typeof own.meta.engine } } : own;
+      const launchDraft = picked ? {
+        ...own, cwd: '', host: null, hostLabel: undefined, cwdPinned: undefined, project: undefined, projectSource: undefined, ...(readHomePlace() ?? {}),
+        meta: { ...own.meta, ...picked, engine: (picked.engine ?? own.meta.engine) as typeof own.meta.engine },
+      } : own;
       const body = homeLaunchBody({
         draft: launchDraft, message: question, ...(images?.length ? { images } : {}), tierKnown: draft.tierKnown, catalog: getEngineCatalog(),
         ...(contextId ? { hints: objectContextHints(contextId) } : {}),
       });
       const r = await quickStartSession(body);
+      // The next task starts where this one did (its folder, host and project), until the person picks another.
+      writeHomePlace(launchDraft);
       log.info('ext-home', 'task started from the panel', { taskId: r.taskId, sessionId: r.sessionId ?? null, withPage, acting, selChars: sel.length });
       const attached: Attached = { ...(withPage ? { page: { title: pg!.title ?? hostOf(pg!.url), host: hostOf(pg!.url) } } : {}), ...(sel ? { sel, ...(withPage ? {} : { from: pg?.title ?? hostOf(pg?.url ?? '') }) } : {}) };
       setStarting('');
@@ -179,6 +187,8 @@ export function ExtHome(p: Props) {
       // With the mode, model and engine picked here: the side panel starts it with them (review 2026-11-09).
       const m = draft.draftRef.current.meta;
       const picked = { ...(m.mode ? { mode: m.mode } : {}), ...(m.model ? { model: m.model } : {}), ...(m.engine ? { engine: m.engine } : {}) };
+      // Its folder and project ride this browser's place (one origin): the side panel starts there.
+      writeHomePlace(draft.draftRef.current);
       toParent({ type: 'open-side-panel', ask: { text: question, page: choice.page, act: choice.act, ...(quote ? { sel: quote } : {}), task: true, ...(Object.keys(picked).length ? { launch: picked } : {}) } });
       return true;
     }
@@ -206,7 +216,8 @@ export function ExtHome(p: Props) {
     if (!preset || !page && preset.page) return;
     onPresetTaken(preset.id);
     const busy = flight.current;
-    void launch(preset.text, undefined, { page: preset.page, act: preset.act && p.canAct, sel: preset.sel }, preset.launch).then((ok) => {
+    // Always as the popup's launch (`{}` when it picked no mode or model): its place is the popup's.
+    void launch(preset.text, undefined, { page: preset.page, act: preset.act && p.canAct, sel: preset.sel }, preset.launch ?? {}).then((ok) => {
       if (ok) return;
       log.info('ext-home', 'handed question not started: back in the composer', { busy });
       if (busy) setError('another task was still starting. Your words are back in the box: send them again.');
@@ -223,6 +234,7 @@ export function ExtHome(p: Props) {
     try {
       const task = await createTask(input);
       log.info('ext-home', 'todo saved from the panel', { taskId: task.id });
+      writeHomePlace(draft.draftRef.current);
       discardDraft(draftComposerKey(HOME_DRAFT_ID));
       setComposerNo((n) => n + 1);
       setPageOn(true); setActOn(false); setGrown(false);
@@ -279,13 +291,18 @@ export function ExtHome(p: Props) {
           onStart={onStart}
           onSaveAsTask={saveTodo}
           onClose={noop}
-          onPathChange={noop}
-          onProjectChange={noop}
+          onPathChange={draft.onPathChange}
+          onProjectChange={draft.onProjectChange}
+          onTaskFieldChange={draft.onTaskFieldChange}
+          onReturnFieldToWalnut={draft.onReturnFieldToWalnut}
           onMetaChange={draft.onMetaChange}
           onModeChange={draft.onModeChange}
-          isKnownProject={known}
+          isKnownProject={draft.isKnownProject}
           plainChat
           ownFolder
+          pickFolder
+          ownFolderLabel="its own"
+          onClearFolder={draft.onClearFolder}
           saveBusy={saving || !!starting}
           placeholder={HOME_PLACEHOLDER}
           composerPill={docked ? undefined : pills}
