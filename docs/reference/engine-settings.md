@@ -76,9 +76,15 @@ Verified against Claude Code 2.1.258:
   the user's global excludes file, which does nothing when `core.excludesFile`
   points elsewhere. Walnut does not depend on it: see "Project scope" below.
 - `--permission-mode` and `--dangerously-skip-permissions` beat
-  `permissions.defaultMode`. Walnut passes `--permission-mode` on every launch,
-  so that row changes terminal sessions only; the mode pill in a Walnut session
-  is the control for Walnut sessions. The row's help says this.
+  `permissions.defaultMode`. Walnut passes `--permission-mode`
+  only when a session explicitly chooses a mode. New Walnut sessions follow
+  `permissions.defaultMode` in the engine's own settings, including project
+  overrides. If none is set, Walnut uses Auto on supported Claude Code builds;
+  older builds and an unreadable setting retain the engine's own default.
+  This is the user-requested exception to Walnut leaving engine defaults alone: it
+  applies only to an absent permission setting and never writes a default file.
+  Settings > Sessions > Claude Code default mode edits the host's user setting,
+  and the session's mode pill changes only that session.
 - `CLAUDE_CONFIG_DIR` relocates both files; `CODEX_HOME` relocates Codex's.
   Resolved from the Walnut server's own environment on the local host. That is
   a known limit: a variable exported only in a shell rc file is seen by the
@@ -410,3 +416,25 @@ check should move to the daemon.
   `restoreSeed`), so the files queue on the user file while every other spec
   keeps running in parallel. A `beforeAll` that waits a minute or two is the
   lock working, not a hang.
+
+## Auto refusals
+
+Claude Code can refuse a tool call before sending a permission request to
+Walnut. New sessions preapprove specific Walnut coordination operations through
+Claude Code's session-only allow rules, including `task_create` and `task_send`
+through both the CLI and MCP. A task started by a restrictive session inherits
+that session's mode and cannot request a looser one. The engine's explicit deny and ask rules still
+apply. Host commands, credentials, external MCP calls and browser actions receive
+no general allow rule. Slim application profiles keep their own restrictions.
+
+Claude Code's classifier refusal text is saved with the session and shown in a notice.
+A person's Deny, a policy rule or a hook refusal does not offer this recovery.
+The notice offers **Switch to asking**, which applies the regular Default mode
+through the live mode control, waiting for the engine's confirmation. A failed switch keeps the notice and
+shows the error. Retry the refused action after the switch succeeds. The SDK
+session server, whose permission vocabulary lacks Auto, uses its Default mode.
+
+Host templates keep an unnamed mode implicit too. Updated daemons recheck their
+own settings before applying an Auto fallback; older daemons retain their
+existing template until upgraded. Managed policy takes precedence, including a
+policy that permits only its own allow rules; Walnut never circumvents it.

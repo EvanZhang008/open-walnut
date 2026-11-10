@@ -58,6 +58,8 @@ export interface HostResume {
   prune(): number
   /** The argv that resumes `sid` in `mode`, built from the last spawn's argv. */
   resumeArgs(args: readonly string[], sid: string, mode?: string): string[]
+  /** The argv with a chosen mode named in it, so a resume keeps that mode. */
+  pinMode(args: readonly string[], mode: string): string[]
 }
 
 export function createHostResume(deps: HostResumeDeps): HostResume {
@@ -180,10 +182,21 @@ export function createHostResume(deps: HostResumeDeps): HostResume {
     drop(args, '--dangerously-skip-permissions', false)
     if (!args.includes('--allow-dangerously-skip-permissions')) args.splice(1, 0, '--allow-dangerously-skip-permissions')
     const cli = typeof mode === 'string' ? deps.modeCli[mode] : undefined
-    if (cli) setValue(args, '--permission-mode', cli)
+    // An unnamed start keeps no mode flag: adding one from a preview would
+    // override current engine/project policy on an offline resume.
+    if (cli && (source.includes('--permission-mode') || source.includes('--fork-session'))) setValue(args, '--permission-mode', cli)
     setValue(args, '--resume', sid)
     return args
   }
 
-  return { remember, recall, prune, resumeArgs }
+  /** A mode someone chose (a live mode change) rides the args from then on, so a
+   *  resume of an unnamed start never falls back to the engine's settings. */
+  function pinMode(source: readonly string[], mode: string): string[] {
+    const args = source.slice()
+    const cli = deps.modeCli[mode]
+    if (cli && args.length > 0) setValue(args, '--permission-mode', cli)
+    return args
+  }
+
+  return { remember, recall, prune, resumeArgs, pinMode }
 }

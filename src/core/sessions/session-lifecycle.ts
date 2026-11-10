@@ -162,7 +162,7 @@ export async function persistSessionModeChange(
 ): Promise<SessionRecord> {
   const { updateSessionRecord, emitSessionStatusChanged } = await import('../session-tracker.js');
   // A mode change is a choice the next ACP start honours (acp-recorded-mode.ts).
-  const updated = await updateSessionRecord(sessionId, { modeChosen: true, ...updates, mode });
+  const updated = await updateSessionRecord(sessionId, { modeChosen: true, autoPermissionDenial: null, ...updates, mode });
   emitSessionStatusChanged(updated, {}, ['*']);
 
   if (updated.taskId && existingRecord.mode !== mode) {

@@ -1649,10 +1649,16 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
  *
  * Exposed so the Bun adapter and unit-test fixtures can share one impl.
  */
-/**
- * Permission policy: should the daemon auto-respond to a control_request?
- * Returns true if daemon should write allow response directly to FIFO.
- */
+/** A daemon observes the engine's confirmed permission mode before it answers
+ * subsequent requests. Unknown values retain the last known restrictive mode. */
+export function observedPermissionMode(event: unknown): SessionMode | null {
+  const e = event as { type?: string; subtype?: string; permissionMode?: string } | null
+  if (!e || e.type !== 'system' || (e.subtype !== 'init' && e.subtype !== 'status')) return null
+  if (e.permissionMode === 'manual') return 'default'
+  return (Object.keys(MODE_CLI) as SessionMode[]).find(id => MODE_CLI[id] === e.permissionMode) ?? null
+}
+
+/** Whether the daemon may answer a permission request without asking Walnut. */
 export function shouldAutoRespond(mode: SessionMode, toolName: string | undefined): boolean {
   // AskUserQuestion is a requiresUserInteraction tool: the CLI emits its
   // control_request even in bypassPermissions (checkPermissions always returns

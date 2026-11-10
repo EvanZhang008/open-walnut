@@ -129,6 +129,7 @@ export interface SessionPinnedMessage {
 }
 
 export interface SessionRecord {
+  autoPermissionDenial?: { tools: string[]; at: string } | null;
   claudeSessionId: string;
   taskId: string;
   project: string;

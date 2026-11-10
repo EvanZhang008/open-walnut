@@ -66,7 +66,7 @@ export interface QuickStartTaskMeta {
    *  ACP-backed and local-only today). */
   engine: LaunchEngine | undefined;
   /** Permission mode the session spawns in. undefined = the launch default
-   *  (DEFAULT_SESSION_MODE, bypass), which is what the draft's mode pill shows
+   *  (the engine setting, else Auto when supported), which is what the draft's mode pill shows
    *  until a pick. Not part of a folder's launch memory: the mode is a choice
    *  about THIS task, so a folder pick never rewrites it and picking one never
    *  switches that memory off. */

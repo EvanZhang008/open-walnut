@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHostStart, type HostStart } from '../../src/providers/host-start-core.js'
-import { buildHostSpawnTemplate, buildRoutineSpawnTemplate, hostRoutineModes } from '../../src/providers/spawn-template.js'
+import { buildHostSpawnTemplate, buildRoutineSpawnTemplate, hostRoutineModes, hostAskModes } from '../../src/providers/spawn-template.js'
 import { START_TASK_TOKEN } from '../../src/providers/trigger-clock-core.js'
 
 const HOME = '/Users/marina/.open-walnut'
@@ -130,6 +130,54 @@ describe('the template filled from fields only', () => {
   })
 })
 
+describe('engine default stays implicit on host starts', () => {
+  it('rechecks current host files before applying a cached Auto fallback', () => {
+    const home = path.join(dir, 'user')
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
+    const hs = createHostStart({ fs, path, dir, env: { HOME: home }, keyOf: () => 'k', now: () => now, log: () => {}, busy: () => 0 })
+    hs.setTemplate(HOME, { ...template(), defaultMode: 'auto', implicitModeCli: 'auto' })
+    const fresh = hs.plan(HOME, fields(), 'marina')
+    if (!fresh.ok) throw new Error(fresh.message)
+    expect(fresh.plan.args[fresh.plan.args.indexOf('--permission-mode') + 1]).toBe('auto')
+    expect(fresh.plan.mode).toBe('default')
+    expect(fresh.plan.record.mode).toBe('default')
+    fs.writeFileSync(path.join(home, '.claude/settings.json'), '{"permissions":{"defaultMode":"plan"}}')
+    const changed = hs.plan(HOME, fields(), 'marina')
+    if (!changed.ok) throw new Error(changed.message)
+    expect(changed.plan.args).not.toContain('--permission-mode')
+    expect(changed.plan.mode).toBe('default')
+  })
+  it('omits a mode flag for settings/policy/unknown and keeps explicit session choices', () => {
+    const hs = make()
+    hs.setTemplate(HOME, { ...template({ bypassAllowed: true }), implicitModeCli: null })
+    const implicit = hs.plan(HOME, fields(), 'marina')
+    if (!implicit.ok) throw new Error(implicit.message)
+    expect(implicit.plan.args).not.toContain('--permission-mode')
+    const named = hs.plan(HOME, fields({ mode: 'plan' }), 'marina')
+    if (!named.ok) throw new Error(named.message)
+    expect(named.plan.args[named.plan.args.indexOf('--permission-mode') + 1]).toBe('plan')
+  })
+  it('a host that does not allow Bypass for asks never falls to an engine setting of Bypass', () => {
+    const home = path.join(dir, 'user-nobypass')
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
+    const hs = createHostStart({ fs, path, dir, env: { HOME: home }, keyOf: () => 'k', now: () => now, log: () => {}, busy: () => 0 })
+    const flagOf = (args: string[]) => args.includes('--permission-mode') ? args[args.indexOf('--permission-mode') + 1] : undefined
+    for (const implicitModeCli of [null, 'auto'] as const) {
+      hs.setTemplate(HOME, { ...template(), implicitModeCli })
+      fs.writeFileSync(path.join(home, '.claude/settings.json'), '{"permissions":{"defaultMode":"bypassPermissions"}}')
+      const by = hs.plan(HOME, fields(), 'marina')
+      if (!by.ok) throw new Error(by.message)
+      expect(flagOf(by.plan.args), String(implicitModeCli)).toBe('default')
+      fs.writeFileSync(path.join(home, '.claude/settings.json'), '{"permissions":{"defaultMode":"plan"}}')
+      const plan = hs.plan(HOME, fields(), 'marina')
+      if (!plan.ok) throw new Error(plan.message)
+      expect(flagOf(plan.plan.args), String(implicitModeCli)).toBeUndefined()
+    }
+    expect(Object.keys(hostAskModes(false, 'bypass').modes)).not.toContain('bypass')
+    expect(hostAskModes(false, 'bypass').defaultMode).toBe('default')
+  })
+})
+
 describe('mode allowlist', () => {
   it('the host default and plan; bypass refused unless the Mac allowed it for this Walnut', () => {
     const hs = make()
@@ -139,7 +187,7 @@ describe('mode allowlist', () => {
     expect(def.plan.mode).toBe('default')
     expect(def.plan.args).toContain('default')
     expect(hs.plan(HOME, fields({ mode: 'bypass' }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
-    expect(hs.plan(HOME, fields({ mode: 'dontAsk' }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
+    expect(hs.plan(HOME, fields({ mode: 'dontAsk' }), 'marina')).toMatchObject({ ok: true })
     hs.setTemplate(HOME, template({ bypassAllowed: true }))
     const by = hs.plan(HOME, fields({ mode: 'bypass' }), 'marina')
     if (!by.ok) throw new Error(by.message)
@@ -442,9 +490,9 @@ describe('a routine run (planRoutine, clock-host-start-v1)', () => {
     expect(hs.planRoutine(HOME, run({ cwd: path.join(dir, 'gone') }), 'marina')).toMatchObject({ ok: false, code: 'cwd_missing' })
     expect(hs.planRoutine(HOME, run({ cwd: 'relative/dir' }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
     expect(hs.planRoutine(HOME, run({ cwd: `${dir}/../x` }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
-    expect(Object.keys(hostRoutineModes().modes).sort()).toEqual(['bypass', 'default'])
-    expect(hs.planRoutine(HOME, run({ mode: 'plan' }), 'marina')).toMatchObject({ ok: false, code: 'mode_not_allowed' })
-    expect(hs.planRoutine(HOME, run({ mode: 'dontAsk' }), 'marina')).toMatchObject({ ok: false, code: 'mode_not_allowed' })
+    expect(Object.keys(hostRoutineModes().modes).sort()).toEqual(['accept', 'auto', 'bypass', 'default', 'dontAsk', 'plan'])
+    expect(hs.planRoutine(HOME, run({ mode: 'unknown' }), 'marina')).toMatchObject({ ok: false, code: 'mode_not_allowed' })
+    expect(hs.planRoutine(HOME, run({ mode: 'unsupported' }), 'marina')).toMatchObject({ ok: false, code: 'mode_not_allowed' })
     expect(hs.planRoutine(HOME, run({ context: '--dangerously-skip-permissions' }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })
     expect(hs.planRoutine(HOME, run({ context: 'x'.repeat(121 * 1024) }), 'marina')).toMatchObject({ ok: false, detail: { why: 'persona_too_large' } })
     expect(hs.planRoutine(HOME, run({ sid: 'not-a-uuid' }), 'marina')).toMatchObject({ ok: false, code: 'bad_request' })

@@ -129,6 +129,7 @@ export interface ClockStartSpec {
   message: string;
   /** Walnut mode id the Mac would run it in (checked against the routine template). */
   mode: string;
+  modeNamed?: boolean;
   model?: string;
   effort?: string;
   /**
@@ -172,7 +173,7 @@ export function validateClockStartSpec(raw: unknown): { ok: true; spec: ClockSta
   return {
     ok: true,
     spec: {
-      home, host, title, project: project ?? '', cwd, message, mode,
+      home, host, title, project: project ?? '', cwd, message, mode, ...(r.modeNamed === false ? { modeNamed: false } : {}),
       ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(context ? { context } : {}),
     },
   };
@@ -180,7 +181,7 @@ export function validateClockStartSpec(raw: unknown): { ok: true; spec: ClockSta
 
 /** The stable text of a start for the set's hash. */
 export function clockStartKey(spec: ClockStartSpec): string {
-  return JSON.stringify([spec.home, spec.host, spec.title, spec.project, spec.cwd, spec.message, spec.mode, spec.model ?? '', spec.effort ?? '', spec.context ?? '']);
+  return JSON.stringify([spec.home, spec.host, spec.title, spec.project, spec.cwd, spec.message, spec.mode, spec.modeNamed ?? true, spec.model ?? '', spec.effort ?? '', spec.context ?? '']);
 }
 
 /** A run nobody has taken: no server claimed it and the host did not deliver it. */

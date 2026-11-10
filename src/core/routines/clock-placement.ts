@@ -108,7 +108,7 @@ export function defaultPlacementDeps(): PlacementDeps {
  * quickStartSession): the instructions as the first message, the routine's folder,
  * model and title ("Routine: <name>" unless it names one, sent as the literal text),
  * its project ("Routines" unless it names one), the mode this Mac runs a routine in
- * (none named: DEFAULT_SESSION_MODE), the configured session effort, and the session
+ * (none named: the engine setting, else Auto when supported), the configured session effort, and the session
  * context this Mac would append, built for the run's task with START_TASK_TOKEN where
  * the id goes (the host mints it).
  *
@@ -130,7 +130,7 @@ export async function routineStartOf(job: CronJob, host: string, home: string = 
     import('../../constants.js'), import('../../utils/entity-refs.js'), import('./executors/claude-code.js'),
   ]);
   if (message.length > QUICK_START_MESSAGE_SPILL_LIMIT || listEntityRefs(message).length > 0 || readTriageCountHint(message) !== undefined) return null;
-  const [{ getConfig, isFallbackConfig }, { resolveDefaultEngine }, { normalizeEngine }, { DEFAULT_SESSION_MODE, VALID_SESSION_EFFORT_IDS }] = await Promise.all([
+  const [{ getConfig, isFallbackConfig }, { resolveDefaultEngine }, { normalizeEngine }, { VALID_SESSION_EFFORT_IDS }] = await Promise.all([
     import('../config-manager.js'), import('../agents/default-engine.js'), import('../agents/engine-registry.js'), import('../types.js'),
   ]);
   const config = await getConfig();
@@ -151,7 +151,8 @@ export async function routineStartOf(job: CronJob, host: string, home: string = 
     return null;
   }
   const spec = validateClockStartSpec({
-    home, host, title, project, cwd, message, mode: DEFAULT_SESSION_MODE,
+    home, host, title, project, cwd, message,
+    mode: (await (await import('../../providers/claude-launch-mode.js')).resolveClaudeLaunchMode(host, cwd)).mode, modeNamed: false,
     ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(context ? { context } : {}),
   });
   if (!spec.ok) {

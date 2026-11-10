@@ -23,9 +23,8 @@
  *     and writes only the local one; a running CLI watches the project's
  *     `.claude/` directory (even before it exists) and applies changes on its
  *     next turn.
- *   - `--permission-mode` (which Walnut passes on every launch) and
- *     `--dangerously-skip-permissions` beat `permissions.defaultMode`, so that
- *     row governs the user's terminal sessions, not Walnut's. Its help says so.
+ *   - A session's explicit mode beats `permissions.defaultMode`. An unnamed
+ *     Walnut start follows the file; only a missing default gets Auto.
  *
  * Deliberately NOT listed: org-memory rows (per-project store, storage not
  * verified), the external-includes approval (per-project, dialog-only) and the
@@ -45,6 +44,7 @@ const opt = (value: string, label = value, help?: string): EngineSettingOption =
 
 const PERMISSION_MODES: readonly EngineSettingOption[] = [
   opt('default', 'Default', 'Ask before anything sensitive'),
+  opt('manual', 'Manual', 'Ask before anything sensitive (newer Claude Code spelling)'),
   opt('acceptEdits', 'Accept edits', 'Auto-accept file edits, still ask for the rest'),
   opt('plan', 'Plan', 'Explore and plan only, no edits or commands'),
   opt('auto', 'Auto', 'Classify each call and auto-allow the safe ones'),
@@ -72,8 +72,8 @@ const SESSION_ITEMS: readonly EngineSettingItem[] = [
   },
   {
     key: 'permissions.defaultMode', label: 'Default permission mode', type: 'select', default: 'default',
-    options: PERMISSION_MODES, file: USER, path: 'permissions.defaultMode', scope: 'sessions', launchOverride: '--permission-mode',
-    help: 'Mode a session starts in when nothing else picks one. Walnut passes --permission-mode on every launch, so this changes terminal sessions only; use the mode pill in a Walnut session instead.',
+    options: PERMISSION_MODES, file: USER, path: 'permissions.defaultMode', scope: 'sessions', appliesOn: 'new-session',
+    help: 'Default for new Claude Code sessions, including Walnut. Your project settings can override it. With no saved mode, Walnut uses Auto on supported engines. The session mode pill changes only that session.',
   },
   {
     key: 'outputStyle', label: 'Output style', type: 'select', default: 'default', allowCustom: true, cliWritesTo: PROJECT_LOCAL,

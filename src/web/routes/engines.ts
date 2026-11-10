@@ -13,7 +13,7 @@
  */
 
 import { Router, type Request, type Response } from 'express'
-import { ENGINE_REGISTRY, DEFAULT_ENGINE, type EngineCapabilities } from '../../core/agents/engine-registry.js'
+import { ENGINE_REGISTRY, DEFAULT_ENGINE, engineCaps, type EngineCapabilities } from '../../core/agents/engine-registry.js'
 import type { SessionEngine } from '../../core/types.js'
 import { probeEngines, type EngineAvailability } from '../../core/agents/engine-probe.js'
 import {
@@ -228,6 +228,38 @@ function answerEngineSettingsError(res: Response, err: unknown, ctx: Record<stri
   log.web.warn('engine settings request failed', { ...ctx, error: message })
   res.status(502).json({ error: message, outcome: 'unknown' })
 }
+
+// A draft previews the same host/project default the native launch will read.
+// A classifier-refusal recovery waits for the CLI confirmation before changing
+// the durable mode. The ordinary picker keeps its existing next-turn contract.
+enginesRouter.post('/:id/recover-permission', async (req: Request, res: Response) => {
+  const caps = ENGINE_REGISTRY.get(String(req.params.id) as SessionEngine)
+  if (caps?.modeControl !== 'claude-modes') { res.status(400).json({ error: 'This engine has no Auto permission mode' }); return }
+  const sid = typeof req.body?.sessionId === 'string' ? req.body.sessionId : ''
+  const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
+  const record = await getSessionByClaudeId(sid)
+  if (!record) { res.status(404).json({ error: 'Session not found' }); return }
+  if (engineCaps(record.engine).modeControl !== 'claude-modes' || record.mode !== 'auto' || !record.autoPermissionDenial) {
+    res.status(409).json({ error: 'This session has no Auto classifier refusal to recover' }); return
+  }
+  try {
+    const { sessionRunner } = await import('../../providers/claude-code-session.js')
+    const applied = await withDeadline(sessionRunner.changePermissionMode(sid, 'default'), 20000, 'The permission mode change')
+    if (applied === 'not-live') throw new Error('The live session is unavailable. Start it again, then switch its mode.')
+    const { persistSessionModeChange } = await import('../../core/sessions/session-lifecycle.js')
+    const session = await persistSessionModeChange(record, sid, 'default')
+    res.json({ session })
+  } catch (err) { res.status(409).json({ error: err instanceof Error ? err.message : String(err) }) }
+})
+
+enginesRouter.get('/:id/launch-mode', async (req: Request, res: Response) => {
+  const caps = ENGINE_REGISTRY.get(String(req.params.id) as SessionEngine)
+  if (caps?.modeControl !== 'claude-modes') { res.json({ mode: 'default', source: 'engine' }); return }
+  const target = await resolveSettingsTarget(req.query)
+  if ('error' in target) { res.status(400).json({ error: target.error }); return }
+  const { resolveClaudeLaunchMode } = await import('../../providers/claude-launch-mode.js')
+  res.json(await resolveClaudeLaunchMode(target.host, target.ctx.cwd))
+})
 
 enginesRouter.get('/:id/settings', async (req: Request, res: Response) => {
   const engine = String(req.params.id)

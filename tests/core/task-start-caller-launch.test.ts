@@ -45,7 +45,7 @@ const tasks: Record<string, Record<string, unknown>> = {}
 function callerSession(extra: Record<string, unknown> = {}) {
   mocks.resolveCaller.mockResolvedValue({
     kind: 'session',
-    record: { claudeSessionId: 'sid-caller', taskId: CALLER_TASK.id, host: '', cwd: '/repo/marina', ...extra },
+    record: { mode: 'bypass', claudeSessionId: 'sid-caller', taskId: CALLER_TASK.id, host: '', cwd: '/repo/marina', ...extra },
   })
 }
 
@@ -81,6 +81,20 @@ beforeEach(() => {
 const remoteFolders = new Set<string>()
 
 describe('a worker starting another task of its own project', () => {
+  it('an Auto caller cannot launch a bypass child, even on another host', async () => {
+    callerSession({ mode: 'auto' })
+    tasks['t-sib'] = { id: 't-sib', title: 'Sibling', project: 'marina' }
+    await expect(startSessionForTask({ taskIdPrefix: 't-sib', callerSid: 'sid-caller', mode: 'bypass', host: 'devbox', cwd: '/work', expectReply: false }))
+      .rejects.toThrow('cannot start a task in bypass')
+    expect(mocks.startSession).not.toHaveBeenCalled()
+  })
+
+  it('an unnamed child inherits Auto from its caller through the actual launcher', async () => {
+    callerSession({ mode: 'auto' })
+    await launchOf({ id: 't-sib', title: 'Sibling', project: 'marina' })
+    expect(mocks.startSession.mock.calls.at(-1)![0].mode).toBe('auto')
+  })
+
   it('with no place of its own: the caller cwd, on the caller host', async () => {
     const launch = await launchOf({ id: 't-sib', title: 'Sibling', project: 'marina' })
     expect(launch).toMatchObject({ cwd: '/repo/marina', host: '' })

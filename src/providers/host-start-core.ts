@@ -87,6 +87,8 @@ export interface SpawnTemplate {
   modes: Record<string, string>
   /** The mode a start that names none gets (one of `modes`). */
   defaultMode: string
+  /** null: an unnamed start leaves mode selection to the engine. Old templates omit it. */
+  implicitModeCli?: string | null
   /** Model id (and its CLI value) to the CLI value, and whether that model takes --effort. */
   models: Record<string, { cli: string; effort: boolean }>
   /** No model (Auto): whether --effort is passed. */
@@ -136,6 +138,7 @@ export interface RoutineStartFields {
   /** Absolute, existing on this host. */
   cwd: string
   mode: string
+  modeNamed?: boolean
   model?: string
   effort?: string
   /** The session context the Mac built for the run's task; `taskToken` stands where the task id goes. */
@@ -176,6 +179,8 @@ export interface HostStartDeps {
   dir: string
   keyOf: (home: string) => string
   now: () => number
+  /** The spawning host's environment, not the primary server's. */
+  env?: Record<string, string | undefined>
   log: (level: 'info' | 'warn' | 'error', msg: string, data?: Record<string, unknown>) => void
   /** Sessions here mid-turn now. */
   busy: () => number
@@ -340,7 +345,8 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     const cwd = use === 'routine' ? '' : raw.cwd
     if (use !== 'routine' && (typeof cwd !== 'string' || !cwd.startsWith('/') || cwd.length > 1024 || cwd.split('/').indexOf('..') !== -1)) throw new Error('spawn template: cwd must be an absolute path')
     return {
-      v: 1, home, argv, modes, defaultMode: raw.defaultMode, models, autoEffort: raw.autoEffort === true, effortRules, efforts,
+      v: 1, home, argv, modes, defaultMode: raw.defaultMode,
+      ...(raw.implicitModeCli === null || (typeof raw.implicitModeCli === 'string' && MODE_RE.test(raw.implicitModeCli)) ? { implicitModeCli: raw.implicitModeCli } : {}), models, autoEffort: raw.autoEffort === true, effortRules, efforts,
       // A routine session gets no agent's tool lists, as a routine run on the Mac gets none.
       agents: use === 'routine' ? {} : agents,
       persona: raw.persona, cwd: cwd as string, builtAt: typeof raw.builtAt === 'number' ? raw.builtAt : deps.now(),
@@ -428,7 +434,7 @@ export function createHostStart(deps: HostStartDeps): HostStart {
   }
 
   interface Fields {
-    t: SpawnTemplate; sid: string; taskId: string; agentId: string; title: string; mode: string
+    t: SpawnTemplate; sid: string; taskId: string; agentId: string; title: string; mode: string; modeNamed: boolean
     model: { id: string; cli: string; effort: boolean } | null; effort?: string
     text: string; context: string; replace: boolean; appendText: string; message: string; tools: AgentTools
   }
@@ -447,7 +453,7 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     const title = str(raw.title ?? '', 500)
     if (title === undefined) return refuse('bad_request', 'follower.start: bad title')
     if (raw.cwd !== undefined && raw.cwd !== t.cwd) return refuse('bad_request', 'follower.start: an ask runs in the folder your Mac set for this host')
-    const mode = raw.mode === undefined || raw.mode === '' ? t.defaultMode : typeof raw.mode === 'string' && Object.prototype.hasOwnProperty.call(t.modes, raw.mode) ? raw.mode : ''
+    const mode = raw.mode === undefined || raw.mode === '' ? (t.implicitModeCli !== undefined ? 'default' : t.defaultMode) : typeof raw.mode === 'string' && Object.prototype.hasOwnProperty.call(t.modes, raw.mode) ? raw.mode : ''
     if (!mode) return refuse('bad_request', 'follower.start: that permission mode is not allowed for an ask on this host', { modes: Object.keys(t.modes) })
     const model = modelOf(t, raw.model)
     if (model === undefined) return refuse('bad_request', 'follower.start: a model must be one CLI value', { models: Object.keys(t.models) })
@@ -471,7 +477,7 @@ export function createHostStart(deps: HostStartDeps): HostStart {
       return refuse('bad_request', `follower.start: the persona is over ${MAX_PERSONA_ARG_BYTES} bytes, too large for one argv string`, { why: 'persona_too_large' })
     }
     const tools = Object.prototype.hasOwnProperty.call(t.agents, agentId) ? t.agents[agentId] : {}
-    return { t, sid, taskId, agentId, title, mode, model, ...(effort ? { effort } : {}), text, context, replace, appendText, message, tools }
+    return { t, sid, taskId, agentId, title, mode, modeNamed: typeof raw.mode === 'string' && !!raw.mode, model, ...(effort ? { effort } : {}), text, context, replace, appendText, message, tools }
   }
 
   /**
@@ -487,9 +493,40 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     return CLI_VALUE_RE.test(id) ? { id, cli: id, effort: effortOf(t, id) } : undefined
   }
 
+  // An offline start rechecks the host's files, so a Settings change since
+  // template publication is honored. Unknown/unreadable policy uses no flag.
+  function implicitModeCli(t: SpawnTemplate, cwd: string): string | null | undefined {
+    // A host that does not allow Bypass for asks (no 'bypass' in its modes) must
+    // never let an unnamed start fall to an engine setting of Bypass.
+    const noBypass = !Object.prototype.hasOwnProperty.call(t.modes, 'bypass')
+    if (t.implicitModeCli !== 'auto' && !(t.implicitModeCli === null && noBypass)) return t.implicitModeCli
+    const engineDecides = noBypass ? t.modes.default ?? 'default' : null
+    const env = deps.env ?? {}
+    const home = env.HOME
+    if (!home) return engineDecides
+    const config = env.CLAUDE_CONFIG_DIR || path.join(home, '.claude')
+    for (const p of ['/Library/Application Support/ClaudeCode/managed-settings.json',
+      '/Library/Application Support/ClaudeCode/managed-settings.d',
+      '/Library/Managed Preferences/com.anthropic.claudecode.plist',
+      '/etc/claude-code/managed-settings.json', '/etc/claude-code/managed-settings.d',
+      path.join(config, 'remote-settings.json')]) {
+      if (fs.existsSync(p)) return engineDecides
+    }
+    for (const p of [path.join(cwd, '.claude/settings.local.json'), path.join(cwd, '.claude/settings.json'), path.join(config, 'settings.json')]) {
+      try {
+        if (!fs.existsSync(p)) continue
+        if (fs.statSync(p).size > 256 * 1024) return engineDecides
+        const obj = JSON.parse(fs.readFileSync(p, 'utf8'))
+        const named = obj?.permissions?.defaultMode
+        if (named !== undefined) return noBypass && named === 'bypassPermissions' ? engineDecides : null
+      } catch { return engineDecides }
+    }
+    return t.implicitModeCli === 'auto' ? 'auto' : null
+  }
+
   /** The template's argv with its slots filled from checked values only (asks and routine runs alike). */
   function fill(t: SpawnTemplate, f: {
-    sid: string; mode: string; model: Fields['model']; effort?: string; tools: AgentTools
+    sid: string; mode: string; modeNamed?: boolean; cwd?: string; model: Fields['model']; effort?: string; tools: AgentTools
     persona: { replace: boolean; text: string; appendText: string; file: string; contextFile: string }
   }): string[] {
     const args: string[] = []
@@ -498,7 +535,11 @@ export function createHostStart(deps: HostStartDeps): HostStart {
       if (typeof a === 'string') { args.push(a); continue }
       switch (a.slot) {
         case 'sid': args.push('--session-id', f.sid); break
-        case 'mode': args.push('--permission-mode', t.modes[f.mode]); break
+        case 'mode': {
+          const cli = f.modeNamed !== false || t.implicitModeCli === undefined ? t.modes[f.mode] : implicitModeCli(t, f.cwd ?? t.cwd)
+          if (cli) args.push('--permission-mode', cli)
+          break
+        }
         case 'model': if (f.model) args.push('--model', f.model.cli); break
         case 'effort': if (f.effort && (f.model ? f.model.effort : t.autoEffort)) args.push('--effort', f.effort); break
         case 'persona':
@@ -544,7 +585,7 @@ export function createHostStart(deps: HostStartDeps): HostStart {
       if (blocked) return blocked
       const file = personaFile(home, sid, replace ? text + (context ? '\n\n' + context : '') : appendText)
       const contextFile = replace && context && t.persona === 'file' ? personaFile(home, sid + '-context', context) : ''
-      const args = fill(t, { sid, mode, model, ...(effort ? { effort } : {}), tools: f.tools, persona: { replace, text, appendText, file, contextFile } })
+      const args = fill(t, { sid, mode, modeNamed: f.modeNamed, cwd: t.cwd, model, ...(effort ? { effort } : {}), tools: f.tools, persona: { replace, text, appendText, file, contextFile } })
       const host = hostOf(hostKey)
       return {
         ok: true,
@@ -588,7 +629,7 @@ export function createHostStart(deps: HostStartDeps): HostStart {
       let isDir = false
       try { isDir = fs.statSync(cwd).isDirectory() } catch { isDir = false }
       if (!isDir) return refuse('cwd_missing', `routine start: the folder ${cwd} does not exist on this host`, { why: 'cwd_missing' })
-      const mode = typeof raw.mode === 'string' && Object.prototype.hasOwnProperty.call(t.modes, raw.mode) ? raw.mode : ''
+      const mode = typeof raw.mode === 'string' && Object.prototype.hasOwnProperty.call(t.modes, raw.mode) ? (raw.modeNamed === false ? 'default' : raw.mode) : ''
       if (!mode) return refuse('mode_not_allowed', 'routine start: your Mac does not let a routine start in that permission mode on this host', { modes: Object.keys(t.modes) })
       const model = modelOf(t, raw.model)
       if (model === undefined) return refuse('bad_request', 'routine start: a model must be one CLI value')
@@ -608,7 +649,7 @@ export function createHostStart(deps: HostStartDeps): HostStart {
       const blocked = limits(home)
       if (blocked) return blocked
       const file = context && t.persona === 'file' ? personaFile(home, sid, context) : ''
-      const args = fill(t, { sid, mode, model, ...(effort ? { effort } : {}), tools: {}, persona: { replace: false, text: '', appendText: context, file, contextFile: '' } })
+      const args = fill(t, { sid, mode, modeNamed: raw.modeNamed, cwd, model, ...(effort ? { effort } : {}), tools: {}, persona: { replace: false, text: '', appendText: context, file, contextFile: '' } })
       return {
         ok: true,
         plan: {

@@ -166,7 +166,7 @@ export function createClockHostStart(deps: ClockHostStartDeps): ClockHostStart {
       const room = deps.offline.checkRoutineRun(home, ids.sid)
       if (!room.ok) return refuse(key, data, room.error.code, room.error.message)
       const planned = deps.hostStart.planRoutine(home, {
-        sid: ids.sid, taskId: ids.taskId, title: spec.title, cwd: spec.cwd, mode: spec.mode,
+        sid: ids.sid, taskId: ids.taskId, title: spec.title, cwd: spec.cwd, mode: spec.mode, ...(spec.modeNamed === false ? { modeNamed: false } : {}),
         ...(spec.model ? { model: spec.model } : {}), ...(spec.effort ? { effort: spec.effort } : {}),
         ...(spec.context ? { context: spec.context, taskToken: deps.taskToken() } : {}),
         firstMessage: spec.message, routine: { id: def.id, slotMs },

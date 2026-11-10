@@ -60,6 +60,8 @@ vi.mock('../../src/providers/cwd-check.js', () => ({
   CwdMissingError: class CwdMissingError extends Error {},
 }))
 vi.mock('../../src/core/sessions/session-stop.js', () => ({ sessionStops: { fence: async () => null } }))
+// A start that names no mode takes the engine's own default; here none is set and the CLI knows Auto.
+vi.mock('../../src/providers/claude-launch-mode.js', () => ({ resolveClaudeLaunchMode: async () => ({ mode: 'auto', source: 'fallback', cli: 'auto' }) }))
 vi.mock('../../src/core/daemon-file-reader.js', () => ({
   DaemonFileReader: class { async readCostState() { return null } },
   DaemonNeedsUpgradeError: class DaemonNeedsUpgradeError extends Error {},
@@ -113,7 +115,6 @@ vi.mock('../../src/core/session-message-queue.js', () => rec.stub([
 
 import { ClaudeCodeSession, SessionRunner } from '../../src/providers/claude-code-session.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
-import { DEFAULT_SESSION_MODE } from '../../src/core/types.js'
 
 const XF = 'xf-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
 const PRE = '11111111-2222-4333-8444-555555555555'
@@ -172,7 +173,7 @@ describe('a transfer fork spawn', () => {
     const [start] = rec.starts
     const { args, onOutput, onExit, ...request } = start as { args: string[]; onOutput: unknown; onExit: unknown }
     // Everything the daemon would be asked besides the argv and the two callbacks.
-    expect(request).toEqual({ stopFence: null, cwd: '/home/dev/repo', message: 'continue', resume: false, fork: true, taskId: 'task-new', spillFile: undefined, mode: DEFAULT_SESSION_MODE })
+    expect(request).toEqual({ stopFence: null, cwd: '/home/dev/repo', message: 'continue', resume: false, fork: true, taskId: 'task-new', spillFile: undefined, mode: 'auto' })
     expect(typeof onOutput).toBe('function')
     expect(typeof onExit).toBe('function')
     const count = (flag: string) => args.filter((a) => a === flag).length

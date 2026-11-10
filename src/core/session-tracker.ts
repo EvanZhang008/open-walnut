@@ -1491,6 +1491,7 @@ export async function createSessionRecord(
     title?: string;
     description?: string;
     mode?: SessionMode;
+    modeChosen?: boolean;
     planFile?: string;
     planCompleted?: boolean;
     host?: string;
@@ -1554,6 +1555,7 @@ export async function createSessionRecord(
         if (extra?.forkedFromSessionId && existing.forkedFromSessionId !== extra.forkedFromSessionId) materialChange = true;
         if (extra?.cliModel && existing.cliModel !== extra.cliModel) materialChange = true;
         if (extra?.effort && existing.effort !== extra.effort) materialChange = true;
+        if (extra?.modeChosen && !existing.modeChosen) materialChange = true;
         // Lane: NEVER written from this path. The runner echoes its spawn-time
         // _lane through here on EVERY turn result, which is stale the moment a
         // side-thread standby is consumed (lane rename) or a thread is promoted
@@ -1603,6 +1605,7 @@ export async function createSessionRecord(
         }
         if (extra?.outputFile) existing.outputFile = extra.outputFile;
         if (extra?.mode) existing.mode = extra.mode;
+        if (extra?.modeChosen) existing.modeChosen = true;
         if (extra?.planFile) existing.planFile = extra.planFile;
         if (extra?.planCompleted != null) existing.planCompleted = extra.planCompleted;
         if (extra?.host) existing.host = extra.host;
@@ -1649,6 +1652,7 @@ export async function createSessionRecord(
         ...(extra?.forkedFromSessionId ? { forkedFromSessionId: extra.forkedFromSessionId } : {}),
         ...(extra?.rewoundAtMessageUuid ? { rewoundAtMessageUuid: extra.rewoundAtMessageUuid } : {}),
         ...(extra?.cliModel ? { cliModel: extra.cliModel } : {}),
+        ...(extra?.modeChosen ? { modeChosen: true } : {}),
         ...(extra?.effort ? { effort: extra.effort } : {}),
         ...(extra?.profile ? { profile: extra.profile } : {}),
         ...(extra?.lane ? { lane: extra.lane } : {}),

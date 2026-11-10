@@ -61,6 +61,17 @@ describe('resumeArgs', () => {
     expect(args[args.indexOf('--permission-mode') + 1]).toBe('default')
   })
 
+  it('an unnamed engine default stays unnamed on an offline resume', () => {
+    const args = hr().resumeArgs(['claude', '-p'], SID, 'bypass')
+    expect(args).not.toContain('--permission-mode')
+    expect(args).toContain('--resume')
+  })
+  it('a mode chosen after an unnamed start is pinned, so a resume keeps it', () => {
+    const pinned = hr().pinMode(['claude', '-p'], 'plan')
+    const args = hr().resumeArgs(pinned, SID, 'plan')
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan')
+    expect(hr().pinMode(['claude', '-p', '--permission-mode', 'plan'], 'default').filter(a => a === '--permission-mode')).toHaveLength(1)
+  })
   it('a fork resumes as itself: its own id, no fork flag, no session-id', () => {
     const fork = ['claude', '--resume', 'parent-id', '--fork-session', '--session-id', SID]
     const args = hr().resumeArgs(fork, SID, 'accept')

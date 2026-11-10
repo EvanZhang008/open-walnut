@@ -67,7 +67,7 @@ import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
 import { createCliArgvFiles } from './cli-argv-files-core.js'
-import { argvNamesSession, boundedExecFile, createNoticeOnce, keepRuntimeFiles } from './daemon-core.js'
+import { argvNamesSession, boundedExecFile, createNoticeOnce, keepRuntimeFiles, observedPermissionMode } from './daemon-core.js'
 import { userLineContent } from './user-line-images-core.js'
 import { createStreamCompact } from './stream-compact-core.js'
 import { createStreamFold } from './stream-fold-core.js'
@@ -291,6 +291,7 @@ export function getDaemonSource(): string {
     ['__CREATE_CLI_ARGV_FILES__', createCliArgvFiles.toString()],
     ['__CREATE_STREAM_COMPACT__', createStreamCompact.toString()],
     ['__CREATE_STREAM_FOLD__', createStreamFold.toString()],
+    ['__OBSERVED_PERMISSION_MODE__', observedPermissionMode.toString()],
     ['__CREATE_HOST_START__', createHostStart.toString()],
     ['__CREATE_CLOCK_HOST_START__', createClockHostStart.toString()],
     ['__CREATE_CLOCK_SCHEDULE__', createClockSchedule.toString()],
@@ -6246,7 +6247,7 @@ function cmdFollowerPending(ws, id, cmd) {
 // A new ask while the Mac is away ('replica-start-v1', host-start-core.ts; WP12). Twin of
 // daemon-standalone.ts hostStart, cmdLeaderSpawnTemplate and cmdFollowerStart.
 var hostStart = (__CREATE_HOST_START__)({
-  fs: fs, path: path,
+  env: process.env, fs: fs, path: path,
   dir: OFFLINE_HOST_DIR,
   keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
   now: function () { return Date.now(); },
@@ -8026,6 +8027,7 @@ async function recordAdoptedOwners() {
   }
 }
 
+var observedPermissionMode = (__OBSERVED_PERMISSION_MODE__);
 function shouldAutoRespond(mode, toolName) {
   // AskUserQuestion is a requiresUserInteraction tool: the CLI emits its
   // control_request even in bypassPermissions (checkPermissions always returns
@@ -10509,8 +10511,13 @@ function ensureWatcher(sid) {
         // bytes already folded out-of-band (appendUserMarker's optimistic
         // overlay, watcher-heal overlap re-reads). Keep in sync with
         // daemon-standalone.ts.
+        const modeLineFresh = v > s.foldState.v
         if (v > s.foldState.v) s.foldState = foldLine(s.foldState, line, v);
         updateCronMetadata(sid, s, line);
+        if (modeLineFresh && line.includes('"permissionMode"')) {
+          try { const actual = observedPermissionMode(JSON.parse(line)); if (actual) s.mode = actual; } catch {}
+        }
+
         // Observe evidence before a result can schedule another billable turn.
         if (usageBudget && (line.includes('"assistant"') || line.includes('"system"') || line.includes('"result"') || line.includes('"control_response"'))) {
           try { const parsed = JSON.parse(line); usageBudget.observe(sid, parsed); budgetControl.noteResponse(sid, parsed); } catch {}
@@ -11350,6 +11357,8 @@ function cmdSetMode(ws, id, cmd) {
 // allows is answered now. Twin of daemon-standalone.ts applyModePolicy.
 function applyModePolicy(session, sid, mode) {
   session.mode = mode;
+  // A chosen mode survives a resume (host-resume-core.ts pinMode).
+  if (session.args && session.args.length > 0) session.args = hostResume.pinMode(session.args, mode);
   if (session.args && session.args.length > 0 && session.cwd) {
     hostResume.remember(sid, { args: session.args, cwd: session.cwd, mode: mode, home: session.spawnInfo && session.spawnInfo.home, task: session.spawnInfo && session.spawnInfo.task });
   }

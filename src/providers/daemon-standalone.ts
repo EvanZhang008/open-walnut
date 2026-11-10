@@ -73,7 +73,7 @@ import {
   LIVE_FIFO_MODE,
   keepRuntimeFiles,
   RUNTIME_KEEP_MS,
-  MODE_CLI,
+  MODE_CLI, observedPermissionMode,
   BUDGET_CHECKING_TEXT,
   type BudgetGate,
 } from './daemon-core.js'
@@ -4944,7 +4944,7 @@ function cmdFollowerPending(ws: ServerWebSocket<WsData>, id: number, cmd: Record
 // journal names the follower's Walnut, so a stop from the Mac after it adopted the
 // session is honoured (owner-home-v1). Keep in sync with daemon-source.ts.
 const hostStart = createHostStart({
-  fs, path,
+  env: process.env, fs, path,
   dir: OFFLINE_HOST_DIR,
   keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
   now: () => Date.now(),
@@ -9040,9 +9040,14 @@ function ensureWatcher(sid: string) {
         if (!line.trim()) continue
 
         // watcher 恢复可能重读同一范围，按完整行的真实 v 去重。
+        const modeLineFresh = v > s.foldState.v
         if (v > s.foldState.v) s.foldState = foldLine(s.foldState, line, v)
 
         updateCronMetadata(sid, s, line)
+        if (modeLineFresh && line.includes('"permissionMode"')) {
+          try { const actual = observedPermissionMode(JSON.parse(line)); if (actual) s.mode = actual } catch {}
+        }
+
         // Evidence is observed before a result can schedule another billable turn.
         if (line.includes('"assistant"') || line.includes('"system"') || line.includes('"result"') || line.includes('"control_response"')) {
           try { const parsed = JSON.parse(line); usageBudget.observe(sid, parsed); budgetControl.noteResponse(sid, parsed) } catch {}
@@ -9636,6 +9641,8 @@ function cmdSetMode(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string,
 /** The session's auto-answer policy follows its mode; a prompt the new mode allows is answered now. */
 function applyModePolicy(session: SessionData, sid: string, mode: SessionMode): void {
   session.mode = mode
+  // A chosen mode survives a resume (host-resume-core.ts pinMode).
+  if (session.args.length > 0) session.args = hostResume.pinMode(session.args, mode)
   if (session.args.length > 0 && session.cwd) {
     hostResume.remember(sid, { args: session.args, cwd: session.cwd, mode, home: session.spawnInfo?.home, task: session.spawnInfo?.task })
   }

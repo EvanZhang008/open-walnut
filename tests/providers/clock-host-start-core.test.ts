@@ -181,7 +181,7 @@ describe('start', () => {
     expect(await cs.start(gone, fire())).toMatchObject({ ok: false, code: 'cwd_missing' })
     expect(logs.filter((l) => l.msg.includes('not started'))).toHaveLength(1)
     expect(logs[0].data).toMatchObject({ id: 'job-nightly', slotMs: SLOT, code: 'cwd_missing' })
-    expect(await cs.start(def({ mode: 'plan' }), fire())).toMatchObject({ ok: false, code: 'mode_not_allowed' })
+    expect(await cs.start(def({ mode: 'unsupported' }), fire())).toMatchObject({ ok: false, code: 'mode_not_allowed' })
     expect(logs.filter((l) => l.msg.includes('not started'))).toHaveLength(2)
     expect(calls).toEqual([])
     expect(hostStart.pendingStarts()).toEqual([])

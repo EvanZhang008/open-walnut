@@ -187,6 +187,7 @@ const PASSING: Record<string, string> = {
   'components/tasks/TodoPanel.tsx#selectedIds': 'tasks picked for one bulk action',
   'components/tasks/TodoSearchBar.tsx#layerOpen': 'the search layer, an overlay',
   'hooks/useContextInspector.ts#isOpen': 'the context inspector, a dialog',
+  'hooks/useClaudeLaunchMode.ts#mode': "the engine's own default mode read from the host, not a choice",
   'hooks/useSessionHistory.ts#olderHidden': 'a count of loaded rows, not a choice',
   'hooks/useTasks.ts#completedHidden': 'a count from the server, not a choice',
   'hooks/useSessionThreads.ts#openCardKey': 'the comment card open now, a popover',

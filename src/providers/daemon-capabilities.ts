@@ -1020,6 +1020,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // The binary twin only: the source twin's `walnut` has no MCP server, so it is never
   // advertised there. Optional: without it a session has the `walnut` CLI alone.
   'walnut-mcp-v1',
+  'implicit-mode-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

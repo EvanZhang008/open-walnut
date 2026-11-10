@@ -21,6 +21,7 @@ import { vi } from 'vitest'
 vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js'
+import { walnutCoordinationAllowRules } from '../../src/providers/claude-walnut-allow.js'
 import { bus } from '../../src/core/event-bus.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
@@ -132,14 +133,14 @@ describe('local session spawn → launching server URL', () => {
 
   it('no server listening here: no env, the post-compaction hook still rides', async () => {
     const args = await spawnArgs('t-no-server')
-    expect(settingsOf(args)).toEqual({ hooks: SESSION_HOOKS })
+    expect(settingsOf(args)).toEqual({ permissions: { allow: walnutCoordinationAllowRules() }, hooks: SESSION_HOOKS })
   })
 
   it('WALNUT_COMPACT_OPEN_ITEMS=0 turns the hook off, the git guard still rides', async () => {
     process.env.WALNUT_COMPACT_OPEN_ITEMS = '0'
     try {
       const args = await spawnArgs('t-hook-off')
-      expect(settingsOf(args)).toEqual({ hooks: TOOL_HOOKS })
+      expect(settingsOf(args)).toEqual({ permissions: { allow: walnutCoordinationAllowRules() }, hooks: TOOL_HOOKS })
     } finally {
       delete process.env.WALNUT_COMPACT_OPEN_ITEMS
     }
@@ -155,10 +156,12 @@ describe('local session spawn → launching server URL', () => {
     process.env.WALNUT_SOUND_GUARD = '0'
     process.env.WALNUT_CODEX_PROVIDER_GUARD = '0'
     process.env.WALNUT_STOP_UNANSWERED = '0'
+    process.env.WALNUT_AUTO_ALLOW_OPS = '0'
     try {
       const args = await spawnArgs('t-hooks-off')
       expect(args).not.toContain('--settings')
     } finally {
+      delete process.env.WALNUT_AUTO_ALLOW_OPS
       delete process.env.WALNUT_COMPACT_OPEN_ITEMS
       delete process.env.WALNUT_TMP_GIT_GUARD
       delete process.env.WALNUT_TMP_WRITE_NOTE

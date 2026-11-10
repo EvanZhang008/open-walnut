@@ -153,7 +153,7 @@ describe('spawn flags: bypass capability must not hijack the requested mode', ()
     // as the bare capability flag, different mechanism.
     const src = read('src/providers/claude-code-session.ts')
     expect(src).not.toMatch(/const sdkMode = mode === 'plan' \? 'plan'/)
-    expect(src).toMatch(/const sdkMode: SessionMode = \(mode && VALID_SESSION_MODE_IDS\.has\(mode\)\)/)
+    expect(src).toMatch(/const sdkMode: SessionMode \| undefined = \(mode && VALID_SESSION_MODE_IDS\.has\(mode\)\)/)
   })
 
   it('the SDK session server rejects an inexpressible mode instead of substituting one', () => {

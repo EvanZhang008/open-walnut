@@ -29,6 +29,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { bashCommandParts, bashRuleCovers, claudeChoiceResponse, cliDenyMessage, MESSAGE_DENIES_PROMPT, pendingPermissionRecordFields, ruleAllowedLine, scopeOfDestination, settingsBashRules, settingsFilesOf, PermissionSaveError, type BashRuleScope, permissionDecisionLine, withPermissionDecision, UnknownPermissionOptionError, permissionEventFields, requestFromPendingRecord, type ClaudeCanUseToolRequest, type ClaudePermissionUpdate } from './claude-permission-options.js'
+import { walnutCoordinationAllowRules } from './claude-walnut-allow.js'
 import { unwritableSettingsFile } from './settings-file-access.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { frameStartData } from '../core/sessions/send-frame.js'
@@ -290,6 +291,7 @@ interface ContentBlock {
   input?: Record<string, unknown>
   tool_use_id?: string
   content?: string | unknown[]
+  is_error?: boolean
 }
 
 /** Assistant or user message event */
@@ -335,6 +337,7 @@ interface StreamResultEvent {
   total_cost_usd?: number
   num_turns?: number
   terminal_reason?: string
+  permission_denials?: Array<{ tool_name: string; tool_use_id: string; tool_input: Record<string, unknown> }>
   usage?: {
     input_tokens: number
     output_tokens: number
@@ -782,6 +785,13 @@ type OpeningWrite = {
   gen: number
   /** The first death reported meanwhile, judged once the send has its answer. */
   held?: () => void
+}
+
+/** The mode a cold resume names. Walnut's own Auto fallback (an Auto nobody chose)
+ *  is not pinned: the resume resolves the engine's settings afresh. */
+function recordedModeToResume(record: { mode?: SessionMode; modeChosen?: boolean }): SessionMode | undefined {
+  const fallbackAuto = record.modeChosen !== true && record.mode !== undefined && SESSION_MODE_CLI_MAP[record.mode] === 'auto'
+  return fallbackAuto ? undefined : record.mode
 }
 
 export class ClaudeCodeSession {
@@ -2617,6 +2627,19 @@ export class ClaudeCodeSession {
    * a remote machine via SSH. The JSONL stdout is piped back through the SSH
    * connection to the local output file, so JsonlTailer works identically.
    */
+  private saveAutoDenial(tools: string[] | null): void {
+    const sid = this.claudeSessionId
+    if (!sid || this._mode !== 'auto' || this._isReplayedByOffset() === true) return
+    const generation = this._turnGen
+    const autoPermissionDenial = tools?.length ? { tools: [...new Set(tools)], at: new Date().toISOString() } : null
+    import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
+      if (generation !== this._turnGen || this._mode !== 'auto') return
+      return updateSessionRecord(sid, { autoPermissionDenial })
+    })
+      .then(() => { if (generation === this._turnGen && this._mode === 'auto') bus.emit(EventNames.SESSION_SETTINGS_APPLIED, { sessionId: sid, autoPermissionDenial }, ['web-ui'], { source: 'session-runner' }) })
+      .catch(err => log.session.warn('auto permission denial could not be saved', { sessionId: sid, error: String(err) }))
+  }
+
   send(
     message: string,
     cwd?: string,
@@ -2718,16 +2741,14 @@ export class ClaudeCodeSession {
     // actually restricted anything (see the mode-registry tests).
     args.push('--allow-dangerously-skip-permissions')
 
-    // Requested mode → CLI vocabulary via the one registry (core/types.ts).
-    // No mode = DEFAULT_SESSION_MODE (bypass): users shouldn't be prompted to
-    // approve every edit; every restrictive mode must be asked for explicitly.
-    // The draft composer's mode pill reads the same constant.
-    const requestedMode: SessionMode = mode && VALID_SESSION_MODE_IDS.has(mode)
-      ? mode as SessionMode
-      : DEFAULT_SESSION_MODE
+    // A named mode is a session choice. An unnamed start reads the engine's
+    // settings on its host before spawn; only absent settings get the Auto fallback.
+    const modeNamed = !!mode && VALID_SESSION_MODE_IDS.has(mode)
+    this._modeWasNamed = modeNamed
+    const requestedMode: SessionMode = modeNamed ? mode as SessionMode : 'default'
     this._mode = requestedMode
     this._activity = requestedMode === 'plan' ? 'planning' : 'implementing'
-    args.push('--permission-mode', SESSION_MODE_CLI_MAP[requestedMode])
+    if (modeNamed) args.push('--permission-mode', SESSION_MODE_CLI_MAP[requestedMode])
     // Map picker short IDs → CLI model aliases via the SESSION_MODELS registry
     // (single source of truth in core/types.ts). The CLI understands the [1m]
     // suffix for the 1M context window. An unknown id falls through to passthrough
@@ -2869,9 +2890,7 @@ export class ClaudeCodeSession {
       // A respawn without mounts: nothing requested, so nothing reads as refused.
       this._requestedMcpServers = []
     }
-    if (profile?.allowedTools && profile.allowedTools.length > 0) {
-      args.push('--allowedTools', profile.allowedTools.join(','))
-    }
+    if (profile?.allowedTools?.length) args.push('--allowedTools', profile.allowedTools.join(','))
     // The AVAILABLE built-in set. A pre-approval list cannot take anything away:
     // the CLI still auto-allows read-only Bash in the cwd under any mode.
     if (profile?.tools && profile.tools.length > 0) {
@@ -2895,7 +2914,10 @@ export class ClaudeCodeSession {
     // Same settings arg carries the post-compaction "what is still open" hook
     // (compact-open-items-hook.ts) and the /tmp git guard (git-tmp-guard-hook.ts),
     // local and remote alike.
-    const sessionSettings: Record<string, unknown> = {}
+    // Auto can refuse before stdio asks us. Specific CLI and MCP rules keep
+    // task coordination running while the engine's deny/ask rules still win.
+    // WALNUT_AUTO_ALLOW_OPS=0 leaves them out.
+    const sessionSettings: Record<string, unknown> = slim || process.env.WALNUT_AUTO_ALLOW_OPS === '0' ? {} : { permissions: { allow: walnutCoordinationAllowRules() } }
     const slimEnv = slim ? { ...readUserSettingsEnv() } : {}
     if (profile?.areaId) {
       if (!slim) throw new Error('Area sessions require a local slim profile')
@@ -3105,6 +3127,25 @@ export class ClaudeCodeSession {
       stepDone('taskDirMs')
       const cwdCheck = await checkCwdExists(resolvedCwd, host, sshTarget)
       stepDone('cwdCheckMs')
+      if (requestedMode === 'auto' && !slim) {
+        const { getHostReadiness } = await import('../core/hosts/host-readiness.js')
+        const { getLocalClaude } = await import('../core/hosts/local-readiness.js')
+        const { claudeVersionAtLeast } = await import('../core/hosts/claude-version-floor.js')
+        const version = host ? getHostReadiness(host)?.claude.version : getLocalClaude()?.claude.version
+        if (claudeVersionAtLeast(version, '2.1.199') === false) {
+          const at = args.indexOf('--permission-mode')
+          if (at >= 0) args.splice(at, 2, '--permission-mode', 'default')
+          this._mode = 'default'
+        }
+      }
+      if (!modeNamed && !slim) {
+        const { resolveClaudeLaunchMode } = await import('./claude-launch-mode.js')
+        const choice = await resolveClaudeLaunchMode(host || '__local__', resolvedCwd)
+        this._mode = choice.mode
+        this._activity = choice.mode === 'plan' ? 'planning' : 'implementing'
+        if (choice.cli) args.push('--permission-mode', choice.cli)
+      }
+      stepDone('modeMs')
       if (!cwdCheck.ok) {
         const errMsg = cwdCheck.error ?? 'Working directory not available'
         log.session.warn('cwd pre-flight failed — aborting spawn', {
@@ -5131,6 +5172,7 @@ export class ClaudeCodeSession {
   /** The first line a fresh start carried inside its `start` (no queue row holds it), and its uuid. */
   private _spawnFirstLine: { text: string; uuid?: string } | null = null
   /** When this process was spawned (ms): the window a dead snapshot may still wait for its offer. */
+  private _modeWasNamed = false
   private _spawnedAtMs = 0
   /** This process's death went to start recovery (core/sessions/start-recovery.ts). Cleared by every spawn. */
   private _startDeathOffered = false
@@ -6889,22 +6931,17 @@ export class ClaudeCodeSession {
           }
         }
 
-        // Parse permissionMode from system events.
-        // Only apply mode changes from 'status' events (EnterPlanMode mid-session).
-        // Skip 'init' events — the init event just reports the CLI's spawn-time mode,
-        // which can differ from the user's intent (e.g. user toggled mode via UI while
-        // the CLI was spawned with a different mode). The session record is authoritative
-        // for display mode; the init event would overwrite it incorrectly.
-        // ExitPlanMode does NOT emit system event → handled by tool_use detection above.
+        // The engine's init is ground truth too: settings and managed policy
+        // can pick another mode. Never show a provisional launch guess as confirmed.
         const permMode = sys.permissionMode
-        if (typeof permMode === 'string' && sys.subtype === 'status') {
+        if (typeof permMode === 'string' && (sys.subtype === 'status' || (sys.subtype === 'init' && this._spawnedAtMs > 0 && this._isReplayedByOffset() !== true))) {
           const mapped = mapPermissionMode(permMode)
           if (mapped && mapped !== this._mode) {
             const oldMode = this._mode
             this._mode = mapped
             if (this.claudeSessionId) {
               import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
-                updateSessionRecord(this.claudeSessionId!, { mode: mapped }).catch(() => {}),
+                updateSessionRecord(this.claudeSessionId!, { mode: mapped, ...(mapped !== 'auto' ? { autoPermissionDenial: null } : {}) }).catch(() => {}),
               )
             }
             // Propagate mode change to daemon so it can auto-respond with new policy.
@@ -8000,6 +8037,11 @@ export class ClaudeCodeSession {
             }
             // Rewrite remote image paths in tool results (no-op for local sessions)
             resultContent = this.rewriteRemoteImages(resultContent)
+            // The CLI emits this text for a classifier refusal before the turn ends.
+            // Do not infer it from an ordinary tool failure or a person's Deny.
+            if ((block as { is_error?: boolean }).is_error === true && /^(This action was blocked by|Permission for this action was denied by) the dangerous action safety classifier\./.test(resultContent)) {
+              this.saveAutoDenial(['a tool call'])
+            }
             log.session.debug('JSONL event: tool-result', {
               // DUP-DEBUG: same ccsId scheme as tool-use — see emit above.
               ccsId: this._ccsId,
@@ -8020,6 +8062,9 @@ export class ClaudeCodeSession {
 
       case 'result': {
         const result = event as StreamResultEvent
+        // permission_denials also contains human, hook and policy refusals. Only
+        // the classifier's own tool-result text earns the mode recovery notice.
+        if (Array.isArray(result.permission_denials) && result.permission_denials.length === 0) this.saveAutoDenial(null)
 
         // Harvest the CLI's raw context window (context% denominator) BEFORE any
         // early-exit guard: replayed/followup results carry a correct modelUsage
@@ -10873,6 +10918,7 @@ export class ClaudeCodeSession {
   private async persistSessionRecord(claudeSessionId: string, cwd?: string): Promise<void> {
     const { createSessionRecord } = await import('../core/session-tracker.js')
     await createSessionRecord(claudeSessionId, this.taskId, this.project, cwd, {
+      ...(this._modeWasNamed ? { modeChosen: true } : {}),
       pid: this.pid ?? undefined,
       outputFile: this._outputFile ?? undefined,
       title: this.pendingTitle,
@@ -13650,9 +13696,12 @@ export class SessionRunner {
     // — written a few lines below from `mode`, not from `sdkMode` — said
     // "dontAsk". Never re-narrow this to a hardcoded subset; add modes to
     // SESSION_MODES in core/types.ts and they arrive here for free.
-    const sdkMode: SessionMode = (mode && VALID_SESSION_MODE_IDS.has(mode))
-      ? mode as SessionMode
-      : DEFAULT_SESSION_MODE
+    // The SDK's permission vocabulary has no Auto (a vocabulary gap, not a provider
+    // restriction), so an explicit Auto runs as the SDK's Default.
+    const SDK_MODES_WITHOUT_VOCABULARY: ReadonlySet<string> = new Set(['auto'])
+    const sdkMode: SessionMode | undefined = (mode && VALID_SESSION_MODE_IDS.has(mode))
+      ? (SDK_MODES_WITHOUT_VOCABULARY.has(mode) ? 'default' : mode as SessionMode)
+      : await (await import('./claude-launch-mode.js')).resolveSdkClaudeLaunchMode(data.host || '__local__', cwd)
 
     // Start via session server client
     const result = await this.sdkClient.startSession({
@@ -13670,7 +13719,7 @@ export class SessionRunner {
     // Create session record
     const { createSessionRecord } = await import('../core/session-tracker.js')
     await createSessionRecord(claudeSessionId, taskId, project ?? '', cwd, {
-      mode: (mode as SessionMode) ?? 'bypass',
+      mode: sdkMode ?? 'default',
       title: sessionTitle,
       description: message.slice(0, 500),
       host: data.host,
@@ -14414,7 +14463,7 @@ export class SessionRunner {
       if (record?.profile?.areaId && record.profile.areaPolicyVersion !== 1) throw new Error('The area session policy version is not supported')
       // record.mode is the durable mode (a PATCH persists it first; CLI-reported
       // changes are written back), so a cold --resume must carry it.
-      if (record?.mode) resolvedMode = record.mode
+      if (record?.mode) resolvedMode = recordedModeToResume(record)
       if (record?.effort) {
         resolvedEffort = record.effort
       }
@@ -14832,7 +14881,8 @@ export class SessionRunner {
     // A respawn someone asked for takes the Walnut tools whatever the cache (resume-mcp-mount.ts).
     const profile = await this.resumeSpawnProfile(sessionId, storedProfile, { respawn: true })
     const refreshedRecord = await getSessionByClaudeId(sessionId)
-    const resumeMode = modeOverride ?? refreshedRecord?.mode ?? record.mode
+    const savedMode = refreshedRecord?.mode ?? record.mode
+    const resumeMode = modeOverride ?? (savedMode === 'auto' && (refreshedRecord?.modeChosen ?? record.modeChosen) !== true ? undefined : savedMode)
     log.session.info('reinitialize: respawning fresh CLI (no turn)', { sessionId, taskId: record.taskId, host: record.host, model, mode: resumeMode })
     // This spawn carries --resume-session-at → the CLI truncates again. Record
     // the cut that creates, AWAITED (bounded) so the anchor is read before the
@@ -15718,7 +15768,7 @@ export class SessionRunner {
 
           // Fall back to record.mode when no explicit mode provided — prevents
           // mode silently reverting to 'default' on --resume (send() treats undefined as default).
-          const resumeMode = mode ?? record.mode
+          const resumeMode = mode ?? recordedModeToResume(record)
           log.session.info('resuming session via CLI', { sessionId, taskId: record.taskId, messageLength: combined.length, model: resolvedModel, mode: resumeMode })
           // Cold resume in the rewind death window: this spawn carries
           // --resume-session-at → the CLI truncates again. Record the cut that
@@ -15776,7 +15826,7 @@ export class SessionRunner {
       // Fall back to the record's mode, then targetSession._mode, so the mode never
       // silently reverts to 'default'. The record comes first: a mode PATCHed while
       // no CLI was live is persisted there but never reached the in-memory session.
-      const existingResumeMode = mode ?? recordMode ?? targetSession.mode
+      const existingResumeMode = mode ?? recordMode ?? (targetSession.mode !== 'auto' ? targetSession.mode : undefined)
       log.session.info('resuming session via CLI (existing target)', { sessionId, taskId: targetSession.taskId, messageLength: combined.length, host: resumeHost, model: resolvedModel, mode: existingResumeMode })
       // Same death-window bookkeeping as the no-target cold resume above,
       // awaited for the same ordering invariant.

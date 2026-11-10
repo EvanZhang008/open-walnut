@@ -256,7 +256,9 @@ describe('a routine run the host started while the Mac was away', () => {
     cron.service = s
     const job = await hostedRoutine(s, 'Planner')
     const { run, create, session } = hostRun(job, 0, 'Routine: Planner')
-    await runOfflineHandover(journal([create, { ...session, mode: 'plan' }]).conn as never)
+    // Every registry mode is a routine mode now (its folder's engine setting may name any);
+    // a name outside the registry is what a routine may not run in.
+    await runOfflineHandover(journal([create, { ...session, mode: 'yolo' }]).conn as never)
     expect(await getSessionByClaudeId(run.sid)).toMatchObject({ mode: 'default' })
   })
 

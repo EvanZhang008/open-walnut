@@ -43,6 +43,15 @@ export function validateLaunchChoices(params: SessionStartParams): void {
 export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStartParams) {
   if (params.startAttemptId || params.source === 'human-inbox') requireFrozenWorkspaceReady(task, params);
   validateLaunchChoices(params);
+  if (params.callerSid) {
+    const { resolveCaller } = await import('./session-send-core.js');
+    const caller = await resolveCaller(params.callerSid);
+    if (caller.kind === 'session') {
+      const { delegatedMode } = await import('./delegated-mode.js');
+      try { params = { ...params, mode: delegatedMode(caller.record.mode, params.mode) }; }
+      catch (err) { throw new QuickStartError(err instanceof Error ? err.message : String(err), 403); }
+    }
+  }
   const model = params.model && params.model !== 'default' ? resolveModelSwitchValue(params.model) ?? undefined : undefined;
   const metadata = await getProjectMetadata(task.project || '');
   const wsPlace = workspaceStartPlace(task, params);

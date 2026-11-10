@@ -1,3 +1,4 @@
+import { apiPost } from '@/api/client';
 import { useState, useEffect, useCallback, useRef, useMemo, Component, lazy, Suspense, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
@@ -655,6 +656,21 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     });
   }, [settingsSessionId]);
 
+  const modeSwitchSession = useRef(settingsSessionId);
+  modeSwitchSession.current = settingsSessionId;
+  const [modeSwitchError, setModeSwitchError] = useState<string>();
+  const [modeSwitchBusy, setModeSwitchBusy] = useState(false);
+  const askAfterAutoDenial = async () => {
+    setModeSwitchBusy(true); setModeSwitchError(undefined);
+    try {
+      await apiPost('/api/engines/claude/recover-permission', { sessionId: settingsSessionId }, { timeoutMs: 25000 });
+      applySessionSettings(settingsSessionId, { mode: 'default' });
+      if (modeSwitchSession.current === settingsSessionId) setSession(prev => prev ? { ...prev, autoPermissionDenial: null } : prev);
+    } catch (err) { if (modeSwitchSession.current === settingsSessionId) setModeSwitchError(err instanceof Error ? err.message : String(err)); }
+    finally { if (modeSwitchSession.current === settingsSessionId) setModeSwitchBusy(false); }
+  };
+  useEffect(() => { setModeSwitchError(undefined); setModeSwitchBusy(false); }, [settingsSessionId]);
+
   // Fetch messages for the UserMessagesSummary
   const {
     messages: historyMessages, loading: historyLoading,
@@ -925,13 +941,15 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       effectiveEffort?: import('@open-walnut/core').SessionEffort | null;
       requestedEffort?: import('@open-walnut/core').SessionEffort | null;
       model?: string;
+      autoPermissionDenial?: SessionRecord['autoPermissionDenial'];
     };
     if (d.sessionId !== sessionId) return;
     setSession(prev => prev ? {
       ...prev,
       // null = "CLI reports no effort set" ⇒ clear the stale value so the badge
       // falls back to the documented API default instead of a dead reading.
-      effectiveEffort: d.effectiveEffort ?? undefined,
+      ...('effectiveEffort' in d ? { effectiveEffort: d.effectiveEffort ?? undefined } : {}),
+      ...('autoPermissionDenial' in d ? { autoPermissionDenial: d.autoPermissionDenial } : {}),
       ...(d.requestedEffort ? { effort: d.requestedEffort } : {}),
       ...(d.model ? { model: d.model } : {}),
     } : prev);
@@ -3504,6 +3522,18 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             )}
           >
             <span className="session-error-banner-text panel-notice-prose">Session returned empty: Claude may have run into a problem.</span>
+          </PanelNotice>
+        )}
+        {session?.mode === 'auto' && session.autoPermissionDenial && (
+          <PanelNotice className="session-error-banner session-error-banner--warning" icon={<WarningTriangleIcon size={14} />}
+            actions={<button className="session-retry-btn" onClick={() => void askAfterAutoDenial()} disabled={modeSwitchBusy}>
+              {modeSwitchBusy ? 'Switching...' : 'Switch to asking'}
+            </button>}>
+            <span className="session-error-banner-text panel-notice-prose" data-testid="auto-permission-denial">
+              Tool calls were refused in Auto mode: {session.autoPermissionDenial.tools.join(', ')}. Claude Code did not provide a reason.
+              Switch to asking, then retry the action.
+              {modeSwitchError && <span role="alert"> {modeSwitchError}</span>}
+            </span>
           </PanelNotice>
         )}
         {/* Split container: when a view (Changed/Files/Terminal) is open, becomes

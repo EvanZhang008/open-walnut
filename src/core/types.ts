@@ -281,10 +281,9 @@ export const SESSION_MODES: readonly SessionModeEntry[] = [
 export const SESSION_MODE_IDS: readonly SessionMode[] = SESSION_MODES.map((m) => m.id);
 
 /**
- * The mode a session spawns in when the launch names none. Bypass: users should
- * not be asked to approve every edit, so every restrictive mode is asked for
- * explicitly. The draft composer's mode pill shows this value before any pick,
- * so what it reads is what the spawn does.
+ * The historical Walnut posture for ACP starts and old spawn templates.
+ * Native Claude starts resolve the engine's own settings, else Auto when supported
+ * (providers/claude-launch-mode.ts); this constant is not their default.
  */
 export const DEFAULT_SESSION_MODE: SessionMode = 'bypass';
 
@@ -302,7 +301,7 @@ export const SESSION_MODE_LABELS: Readonly<Record<SessionMode, string>> =
 /** CLI permissionMode string → Walnut id. Unknown values return null (never
  *  guess: a mode we don't model must not silently masquerade as another). */
 export function sessionModeFromCli(cliMode: string): SessionMode | null {
-  return SESSION_MODES.find((m) => m.cli === cliMode)?.id ?? null;
+  return SESSION_MODES.find((m) => m.cli === cliMode || (m.id === 'default' && cliMode === 'manual'))?.id ?? null;
 }
 
 // ── Session output-mode registry ───────────────────────────────────────────
@@ -3426,6 +3425,8 @@ export interface SessionRecord {
    *  recorded 'default', so an unmarked 'default' there is no choice
    *  (src/core/sessions/acp-recorded-mode.ts). */
   modeChosen?: boolean;
+  /** Latest Auto turn that refused tools. Null clears it after a successful turn. */
+  autoPermissionDenial?: { tools: string[]; at: string } | null;
   provider?: SessionProvider;
   /** Which coding-agent CLI backs this session. Only set when provider='cli'. Undefined = 'claude' (default). */
   engine?: SessionEngine;

@@ -53,8 +53,9 @@ import { DraftLaunchBar } from './DraftLaunchBar';
 import { HostGateErrorBar, useRestoreImages, type DraftGateError } from './HostGateErrorBar';
 import { useModelOptions } from './path-selector/model-options';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
+import { useClaudeLaunchMode } from '@/hooks/useClaudeLaunchMode';
 import { nextSessionMode } from './session-mode-cycle';
-import { DEFAULT_SESSION_MODE, SESSION_MODES, SESSION_MODE_LABELS, type SessionEngine, type SessionMode } from '@open-walnut/core';
+import { SESSION_MODES, SESSION_MODE_LABELS, type SessionEngine, type SessionMode } from '@open-walnut/core';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useHostEngineAvailability } from '@/hooks/useHostEngineAvailability';
 import {
@@ -537,7 +538,8 @@ export function DraftSessionPanel({
   const claudeModes = engineEntry(engineCatalog, onFallback?.engine ?? launchEngine).capabilities.modeControl === 'claude-modes';
   const showModePill = !!onModeChange && !isFork && claudeModes;
   const enabledModes = useEnabledModes();
-  const draftMode: SessionMode = draft.meta.mode ?? DEFAULT_SESSION_MODE;
+  const defaultClaudeMode = useClaudeLaunchMode(draft.host, draft.cwd, claudeModes);
+  const draftMode: SessionMode = draft.meta.mode ?? defaultClaudeMode;
   const nextDraftMode = nextSessionMode(draftMode, enabledModes);
   const cycleDraftMode = useCallback(() => {
     if (!showModePill) return;

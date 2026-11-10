@@ -15,6 +15,11 @@ import path from 'node:path'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-clock-host-start-placement'))
+// The host's engine settings are read over its link; here the host names no mode
+// and runs a CLI that knows Auto (claude-launch-mode.ts decides that itself).
+vi.mock('../../../src/providers/claude-launch-mode.js', () => ({
+  resolveClaudeLaunchMode: async () => ({ mode: 'auto', source: 'fallback', cli: 'auto' }),
+}))
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { updateConfig } from '../../../src/core/config-manager.js'
@@ -48,7 +53,7 @@ describe('routineStartOf: the run the Mac would start, or none', () => {
     const spec = await routineStartOf(job({ model: 'opus' }), HOST)
     expect(spec).toMatchObject({
       home: WALNUT_HOME, host: HOST, title: 'Routine: Nightly report', project: 'Routines', cwd: '/srv/repo',
-      message: 'Write the nightly report', mode: 'bypass', model: 'opus',
+      message: 'Write the nightly report', mode: 'auto', modeNamed: false, model: 'opus',
     })
     expect(spec!.effort).toBeUndefined()
     // The context this Mac appends, for the task the host will make: its id is the token.

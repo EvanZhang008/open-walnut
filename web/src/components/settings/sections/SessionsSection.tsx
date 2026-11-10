@@ -1,3 +1,4 @@
+import { ClaudeDefaultModeRow } from './ClaudeDefaultModeRow';
 import { SESSION_MODES, DEFAULT_SESSION_OUTPUT_MODE } from '@open-walnut/core';
 import type { Config, SessionMode, SessionOutputMode } from '@open-walnut/core';
 import { SettingsGroup, SettingsRow, SettingsSection } from '../SettingsSection';
@@ -140,6 +141,7 @@ export function SessionsSection({ config, onSave }: Props) {
           keeps no config-time default model, so there is no picker here. */}
       <SettingsGroup>
         <DefaultEngineRow config={config} save={save} />
+        <ClaudeDefaultModeRow config={config} />
         <FallbackEngineRow config={config} save={save} />
       </SettingsGroup>
       {/* A multi-select list of engines: a checklist, like Session modes (C14). */}

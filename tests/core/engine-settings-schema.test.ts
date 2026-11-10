@@ -72,10 +72,12 @@ describe('engine settings schema: registry data', () => {
     expect(CODEX_SETTINGS.files.every((f) => f.overlays === undefined)).toBe(true)
   })
 
-  it('claude\'s permission mode row says Walnut sessions are unaffected (they pass --permission-mode)', () => {
+  it('claude\'s permission mode row applies to new Walnut sessions', () => {
     const item = findSchemaItem(CLAUDE_SETTINGS, 'permissions.defaultMode')!
-    expect(item.help).toMatch(/--permission-mode/)
-    expect(item.options!.map((o) => o.value)).toEqual(['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions'])
+    expect(item.help).toMatch(/including Walnut/)
+    expect(item.appliesOn).toBe('new-session')
+    expect(item.launchOverride).toBeUndefined()
+    expect(item.options!.map((o) => o.value)).toEqual(['default', 'manual', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions'])
   })
 
   it('codex declares top-level TOML keys only', () => {

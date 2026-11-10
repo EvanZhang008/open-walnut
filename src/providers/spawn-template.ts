@@ -1,3 +1,4 @@
+import { walnutCoordinationAllowRules } from './claude-walnut-allow.js'
 /**
  * The Mac's per-home SPAWN TEMPLATE for a host (docs/plan/walnut-replica-servers-impl.md
  * section 8, WP12): the argv claude-code-session.ts `send()` builds for a fresh Ask
@@ -38,6 +39,9 @@ export interface SpawnTemplateInputs {
   permissionPrompt?: boolean
   /** The user let asks on this host start in bypassPermissions. */
   bypassAllowed?: boolean
+  /** Effective Claude setting on this host/folder, resolved before publishing. */
+  defaultMode?: SessionMode
+  implicitModeCli?: string | null
   /** Read for WALNUT_CLAUDE_DEBUG and WALNUT_COMPACT_OPEN_ITEMS, as send() reads them. */
   env?: NodeJS.ProcessEnv
   /** Each agent's tool lists from its lane profile (hostAgentTools); absent: none. */
@@ -93,9 +97,12 @@ export async function hostAgentTools(): Promise<Record<string, AgentTools>> {
 }
 
 /** The Walnut mode ids an ask on a host may start in: its default and plan; bypass only when allowed. */
-export function hostAskModes(bypassAllowed: boolean): { modes: Record<string, string>; defaultMode: string } {
-  const defaultMode: SessionMode = bypassAllowed ? DEFAULT_SESSION_MODE : 'default'
-  const ids = new Set<SessionMode>([defaultMode, 'plan'])
+export function hostAskModes(bypassAllowed: boolean, chosen?: SessionMode): { modes: Record<string, string>; defaultMode: string } {
+  // Asks from another machine run in Bypass only when the host allows it, even
+  // when the engine's own setting names Bypass.
+  const named = chosen === 'bypass' && !bypassAllowed ? 'default' : chosen
+  const defaultMode: SessionMode = named ?? (bypassAllowed ? DEFAULT_SESSION_MODE : 'default')
+  const ids = new Set<SessionMode>([defaultMode, 'plan', 'default', 'auto', 'accept', 'dontAsk'])
   if (bypassAllowed) ids.add('bypass')
   const modes: Record<string, string> = {}
   for (const id of ids) modes[id] = SESSION_MODE_CLI_MAP[id]
@@ -110,7 +117,7 @@ export function buildHostSpawnTemplate(i: SpawnTemplateInputs): SpawnTemplate {
   if (env.WALNUT_CLAUDE_DEBUG !== '0') argv.push('--debug')
   argv.push('--allow-dangerously-skip-permissions')
   argv.push({ slot: 'mode' }, { slot: 'model' }, { slot: 'effort' }, { slot: 'sid' }, { slot: 'persona' }, { slot: 'tools' })
-  const sessionSettings: Record<string, unknown> = {}
+  const sessionSettings: Record<string, unknown> = { permissions: { allow: walnutCoordinationAllowRules() } }
   const walnutEnv = walnutApiEnvForSession(i.hostKey)
   if (Object.keys(walnutEnv).length > 0) sessionSettings.env = walnutEnv
   const hooks = sessionSettingsHooks(env)
@@ -121,7 +128,7 @@ export function buildHostSpawnTemplate(i: SpawnTemplateInputs): SpawnTemplate {
   const models: SpawnTemplate['models'] = {}
   for (const m of SESSION_MODELS) models[m.id] = { cli: m.cliModel, effort: modelSupportsEffort(m.cliModel) }
   return {
-    v: 1, home: i.home, argv, ...hostAskModes(i.bypassAllowed === true), models,
+    v: 1, home: i.home, argv, ...(i.implicitModeCli !== undefined ? { implicitModeCli: i.implicitModeCli } : {}), ...hostAskModes(i.bypassAllowed === true, i.defaultMode), models,
     autoEffort: modelSupportsEffort(undefined), effortRules: hostEffortRules(), efforts: [...SESSION_EFFORT_IDS],
     agents: i.agents ?? {},
     // As send() passes it: the string flag (the daemon caps it at 120 KB).
@@ -130,16 +137,15 @@ export function buildHostSpawnTemplate(i: SpawnTemplateInputs): SpawnTemplate {
 }
 
 /**
- * The Walnut mode ids a claude-code routine's run may start in on a host
- * (clock-host-start-v1): the mode this Mac runs a routine in (it names none, so
- * DEFAULT_SESSION_MODE), and plain default. Not the ask rule: a routine is the
- * user's own automation, which this Mac already runs in that mode on that host.
+ * Routine templates accept the registry's modes because each trusted clock
+ * start resolves its own folder's engine setting before it is sent. A follower
+ * cannot use this template to start an ask.
  */
-export function hostRoutineModes(): { modes: Record<string, string>; defaultMode: string } {
-  const ids = new Set<SessionMode>([DEFAULT_SESSION_MODE, 'default'])
+export function hostRoutineModes(chosen: SessionMode = DEFAULT_SESSION_MODE): { modes: Record<string, string>; defaultMode: string } {
+  const ids = new Set<SessionMode>([chosen, 'default', 'bypass', 'auto', 'plan', 'accept', 'dontAsk'])
   const modes: Record<string, string> = {}
   for (const id of ids) modes[id] = SESSION_MODE_CLI_MAP[id]
-  return { modes, defaultMode: DEFAULT_SESSION_MODE }
+  return { modes, defaultMode: chosen }
 }
 
 /**
@@ -149,7 +155,7 @@ export function hostRoutineModes(): { modes: Record<string, string>; defaultMode
  * run names its routine's folder).
  */
 export function buildRoutineSpawnTemplate(i: Omit<SpawnTemplateInputs, 'cwd' | 'bypassAllowed' | 'agents'>): SpawnTemplate {
-  return { ...buildHostSpawnTemplate({ ...i, cwd: '' }), ...hostRoutineModes(), agents: {} }
+  return { ...buildHostSpawnTemplate({ ...i, cwd: '' }), ...hostRoutineModes(i.defaultMode), agents: {} }
 }
 
 /**
@@ -163,11 +169,13 @@ export async function pushRoutineSpawnTemplate(
   host: { hasCapability(cap: string): boolean; send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> },
   o: { home: string; hostKey: string; unlessHash?: string | null },
 ): Promise<string | null> {
-  if (!host.hasCapability('replica-start-v1') || !host.hasCapability('clock-host-start-v1')) return null
+  if (!host.hasCapability('replica-start-v1') || !host.hasCapability('clock-host-start-v1') || !host.hasCapability('implicit-mode-v1')) return null
   const [{ getConfig }, { createHash }] = await Promise.all([import('../core/config-manager.js'), import('node:crypto')])
   const config = await getConfig()
+  const choice = await (await import('./claude-launch-mode.js')).resolveClaudeLaunchMode(o.hostKey)
+  const defaultMode = choice.mode
   const template = buildRoutineSpawnTemplate({
-    home: o.home, hostKey: o.hostKey,
+    defaultMode, implicitModeCli: choice.cli ?? null, home: o.home, hostKey: o.hostKey,
     streamPartialMessages: config.session?.stream_partial_messages, permissionPrompt: config.session?.permission_prompt,
   })
   const { builtAt: _at, ...content } = template
@@ -190,10 +198,13 @@ export async function pushHostSpawnTemplate(
   host: { hasCapability(cap: string): boolean; send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> },
   o: { home: string; hostKey: string; cwd: string; bypassAllowed?: boolean; unlessHash?: string | null },
 ): Promise<false | { hash: string; sent: boolean }> {
-  if (!host.hasCapability('replica-start-v1')) return false
+  if (!host.hasCapability('replica-start-v1') || !host.hasCapability('implicit-mode-v1')) return false
   const [{ getConfig }, { createHash }] = await Promise.all([import('../core/config-manager.js'), import('node:crypto')])
   const config = await getConfig()
+  const choice = await (await import('./claude-launch-mode.js')).resolveClaudeLaunchMode(o.hostKey, o.cwd)
+  const defaultMode = choice.mode
   const template = buildHostSpawnTemplate({
+    defaultMode, implicitModeCli: choice.mode === 'bypass' && o.bypassAllowed !== true ? 'default' : choice.cli ?? null,
     home: o.home, hostKey: o.hostKey, cwd: o.cwd, bypassAllowed: o.bypassAllowed,
     streamPartialMessages: config.session?.stream_partial_messages, permissionPrompt: config.session?.permission_prompt,
     agents: await hostAgentTools(),

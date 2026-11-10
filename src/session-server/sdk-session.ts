@@ -200,6 +200,7 @@ export class SdkSession {
     // Build options
     const options: Options = {
       cwd: params.cwd,
+      settingSources: ['user', 'project', 'local'],
       includePartialMessages: true,
       abortController: this.abortController,
     }

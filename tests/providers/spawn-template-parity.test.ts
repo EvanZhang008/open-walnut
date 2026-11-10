@@ -31,6 +31,7 @@ import { START_TASK_TOKEN } from '../../src/providers/trigger-clock-core.js'
 import { modelSupportsEffort } from '../../src/core/types.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { bus } from '../../src/core/event-bus.js'
+import * as launchMode from '../../src/providers/claude-launch-mode.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, 'mock-claude.mjs')
 const HOME = '/Users/marina/.open-walnut'
@@ -145,7 +146,7 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
 
       const settingsAt = built.indexOf('--settings')
       if (c.env.WALNUT_COMPACT_OPEN_ITEMS === '0' && c.env.WALNUT_TMP_GIT_GUARD === '0' && c.env.WALNUT_TMP_WRITE_NOTE === '0' && c.env.WALNUT_CLONE_IDENTITY === '0' && c.env.WALNUT_SHELL_DOLLAR_GUARD === '0' && c.env.WALNUT_PATTERN_KILL_GUARD === '0' && c.env.WALNUT_SOUND_GUARD === '0' && c.env.WALNUT_CODEX_PROVIDER_GUARD === '0' && c.env.WALNUT_STOP_UNANSWERED === '0') {
-        expect(settingsAt).toBe(-1)
+        expect(JSON.parse(built[settingsAt + 1]).permissions.allow).toContain('mcp__walnut__task_create')
       } else {
         const settings = JSON.parse(built[settingsAt + 1]) as { env?: unknown; hooks?: { SessionStart?: Array<{ matcher: string }>; PreToolUse?: Array<{ matcher: string }>; PostToolUse?: Array<{ matcher: string }> } }
         expect(settings.hooks?.SessionStart?.[0]?.matcher).toBe(c.env.WALNUT_COMPACT_OPEN_ITEMS === '0' ? undefined : 'compact')
@@ -168,6 +169,30 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
       try { session.detach() } catch { /* the mock daemon reaps its CLIs at stop */ }
     })
   }
+})
+
+describe('native launch reads the implicit mode before the daemon starts it', () => {
+  it.each([
+    { mode: 'auto', source: 'fallback', cli: 'auto' },
+    { mode: 'plan', source: 'settings' },
+    { mode: 'default', source: 'engine' },
+  ] as const)('carries $source $mode without overriding engine settings', async choice => {
+    const spy = vi.spyOn(launchMode, 'resolveClaudeLaunchMode').mockResolvedValue(choice)
+    const sid = `44444444-2222-4333-8444-55555555555${choice.mode === 'auto' ? '1' : choice.mode === 'plan' ? '2' : '3'}`
+    const session = new ClaudeCodeSession('task-ask-9', 'Test', MOCK_CLI)
+    ;(session as unknown as { _testDaemonUrl?: string })._testDaemonUrl = `ws://127.0.0.1:${daemon.port}`
+    try {
+      session.send('hello', dir, undefined, undefined, undefined, undefined, 'marina', undefined, undefined,
+        undefined, undefined, undefined, undefined, undefined, { preassignedSessionId: sid })
+      const payload = await startPayload(sid)
+      const args = payload.args as string[]
+      expect(payload.mode).toBe(choice.mode)
+      const at = args.indexOf('--permission-mode')
+      if ('cli' in choice) expect(args[at + 1]).toBe(choice.cli)
+      else expect(at).toBe(-1)
+      expect(spy).toHaveBeenCalledWith('marina', dir)
+    } finally { session.detach(); spy.mockRestore() }
+  })
 })
 
 describe('the template\'s effort rules decide as the Mac does', () => {
@@ -217,7 +242,7 @@ describe('a filled routine template equals what claude-code-session.ts builds fo
       const session = new ClaudeCodeSession(ROUTINE_TASK, 'Routines', MOCK_CLI)
       ;(session as unknown as { _testDaemonUrl?: string })._testDaemonUrl = `ws://127.0.0.1:${daemon.port}`
       session.send(
-        'build the nightly', dir, undefined, undefined, c.model, context(ROUTINE_TASK), 'marina', undefined, undefined,
+        'build the nightly', dir, undefined, 'bypass', c.model, context(ROUTINE_TASK), 'marina', undefined, undefined,
         undefined, undefined, undefined, c.effort, undefined, { preassignedSessionId: c.sid },
       )
       const payload = await startPayload(c.sid)

@@ -426,7 +426,7 @@ describe('engine settings service: project layers', () => {
   it('says when a change is felt from the engine data, never from a client-side engine table', async () => {
     const claude = await readEngineSettings('claude', '__local__', new FakeHost({}))
     expect(claude.appliesOn).toBe('next-turn')
-    expect(claude.groups.flatMap((g) => g.items).every((i) => i.appliesOn === 'next-turn')).toBe(true)
+    expect(claude.groups.flatMap((g) => g.items).every((i) => i.appliesOn === (i.key === 'permissions.defaultMode' ? 'new-session' : 'next-turn'))).toBe(true)
     const codex = await readEngineSettings('codex', '__local__', new FakeHost({}))
     expect(codex.appliesOn).toBe('new-session')
     expect(codex.groups.flatMap((g) => g.items).every((i) => i.appliesOn === 'new-session')).toBe(true)
@@ -455,7 +455,6 @@ describe('engine settings service: project layers', () => {
     const rows = view.groups.flatMap((g) => g.items)
     const notHonored = rows.filter((i) => i.honoredHere === false).map((i) => [i.key, i.launchOverride])
     expect(notHonored).toEqual([
-      ['permissions.defaultMode', '--permission-mode'],
       ['fileCheckpointingEnabled', 'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING'],
     ])
     // The model is forwarded only when the picker chose one; on Auto the file's value is honoured.
