@@ -145,6 +145,9 @@ struct TalkTryRow: View {
                 Label(line.text, systemImage: line.symbol)
                     .font(.footnote)
                     .foregroundStyle(line.color)
+                    // One element that reads the words: the symbol on its own read "Paste".
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(line.text)
                     .accessibilityIdentifier(id("result"))
             }
         }
