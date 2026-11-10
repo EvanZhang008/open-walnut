@@ -25,8 +25,10 @@ export function walnutMcpInstructions(opts: { core?: boolean } = {}): string {
     'with task_update phase=NEED_ACTION when work is done and awaiting review; ' +
     'COMPLETE means the whole task is finished. ' +
     'Never delete tasks unless the user explicitly asked. ' +
-    'These tools were read when your session started: after a Walnut update, a field or tool that Walnut\'s ' +
-    'words name may be missing here, and `walnut tools call <tool> \'<json>\'` always runs the current one.' +
+    'These tools are the same operations as the `walnut` CLI (`walnut tools call <tool> \'<json>\'`), the same ' +
+    'arguments and answers: call them here, and use the CLI only for a scripted chain of calls or where a tool is ' +
+    'missing. They were read when your session started: after a Walnut update, a field or tool that Walnut\'s ' +
+    'words name may be missing here, and the CLI always runs the current one.' +
     (opts.core
       ? ' Only the most used tools are listed. Every other Walnut tool (boards, triggers, folders, notes, hosts, ' +
         'time and more) runs through tool_call; tool_help lists them all and shows one\'s arguments.'

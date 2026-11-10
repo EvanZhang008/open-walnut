@@ -295,6 +295,10 @@ function cutFence(text: string, headStart: number): FenceCut | null {
  * the quoted-argument form first and fall back to the rest of the line.
  */
 function findCommand(slice: string): string | undefined {
+  // The reply trailer names the MCP tool first (`mcp__walnut__task_send {json} (…)`):
+  // the same op as the CLI, given back in the form a person can run.
+  const mcp = /mcp__walnut__([a-z][a-z0-9_]*) (\{.*?\})(?=\s\(|\s*$)/m.exec(slice);
+  if (mcp && !mcp[2].includes("'")) return `walnut tools call ${mcp[1]} '${mcp[2]}'`;
   const quoted = /walnut tools call \S+ '[^']*'/.exec(slice);
   if (quoted) return quoted[0];
   const loose = /walnut tools call [^\n]+/.exec(slice);

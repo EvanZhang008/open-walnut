@@ -202,10 +202,13 @@ describe('profile → CLI arg assembly', () => {
     expect(args.indexOf('--tools')).toBeLessThan(args.indexOf('--input-format'))
   })
 
-  it('no profile → none of the three flags appear (unchanged behavior)', async () => {
+  it('no profile → none of the three flags appear, only the Walnut host mount (unchanged behavior)', async () => {
     const args = await argsForSend('t-none', undefined)
     expect(args).not.toContain('--system-prompt')
-    expect(args).not.toContain('--mcp-config')
+    // 2026-11-10: the mount is decided at spawn, once the host's daemon is known, so a
+    // session with no profile gets the Walnut tools (and only them) when that daemon serves them.
+    const at = args.indexOf('--mcp-config')
+    if (at >= 0) expect(Object.keys(JSON.parse(args[at + 1]!).mcpServers)).toEqual(['walnut'])
     expect(args).not.toContain('--allowedTools')
     expect(args).not.toContain('--tools')
     expect(args).not.toContain('--append-system-prompt')

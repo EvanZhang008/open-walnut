@@ -2862,6 +2862,9 @@ export class ClaudeCodeSession {
       // Remember what we ASKED for: the init event reports only the servers the
       // CLI accepted, so the requested set is what makes a silent refusal visible.
       this._requestedMcpServers = Object.keys(profile.mcpServers)
+    } else {
+      // A respawn without mounts: nothing requested, so nothing reads as refused.
+      this._requestedMcpServers = []
     }
     if (profile?.allowedTools && profile.allowedTools.length > 0) {
       args.push('--allowedTools', profile.allowedTools.join(','))
@@ -3172,6 +3175,7 @@ export class ClaudeCodeSession {
         }
       }
       stepDone('costStateMs')
+      await this.applySpawnWalnutMount(args, profile, host)
       log.session.info('spawn: pre-spawn steps', {
         taskId: this.taskId, sessionId: tmpId, host: host ?? '__local__', resume: isResume && resumeNow,
         ...steps, ...(costStateInTime !== undefined ? { costStateInTime } : {}),
@@ -3532,7 +3536,13 @@ export class ClaudeCodeSession {
     // attached session must inherit the requested mount list — otherwise every
     // init seen after an attach (server restart, reconnect, cold resume) skips
     // the mount-health check and the verdict is never recorded.
-    session._requestedMcpServers = Object.keys(record.profile?.mcpServers ?? {})
+    // The Walnut mount is added at spawn, not stored in the profile: the init's
+    // verdict (mcpMountStatus) names it when this process has it.
+    session._requestedMcpServers = [...new Set([
+      ...Object.keys(record.profile?.mcpServers ?? {}),
+      ...Object.entries(record.mcpMountStatus ?? {})
+        .filter(([, v]) => v === 'connected' || v === 'pending').map(([k]) => k),
+    ])]
     session._processStatus = record.process_status ?? 'running'
     session._mode = record.mode ?? 'default'
     session._activity = record.activity
@@ -4436,6 +4446,8 @@ export class ClaudeCodeSession {
     let ownCut = false
     // The line waited behind one whose answer was still being asked for.
     let waited = false
+    // A process launched without the Walnut tools gets them before its next turn.
+    if (this._processStatus !== 'running') await this.ensureLiveWalnutMount()
     let ok: boolean
     try {
       ok = await transport.writeMessage(message, {
@@ -9595,6 +9607,122 @@ export class ClaudeCodeSession {
       }))
   }
 
+  /** What decides this session's Walnut MCP mount (core/sessions/walnut-mcp-mount.ts). */
+  private async walnutMountInput(
+    profile: import('../core/types.js').SessionProfile | undefined,
+    host: string | null | undefined,
+  ): Promise<import('../core/sessions/walnut-mcp-mount.js').WalnutMcpMountInput> {
+    const [{ getConfig }, { walnutMcpProfile }, { WALNUT_MCP_CAPABILITY }, { getConnectedDaemonConnection }, { isCompanion }] = await Promise.all([
+      import('../core/config-manager.js'), import('../core/sessions/profiles.js'),
+      import('../core/sessions/walnut-mcp-mount.js'), import('./daemon-connection.js'), import('../core/server-role.js'),
+    ])
+    const hostKey = host && host !== '__local__' ? host : '__local__'
+    return {
+      setting: (await getConfig()).session?.premount_walnut_mcp,
+      profile,
+      cloud: isCompanion(),
+      hostServesMcp: getConnectedDaemonConnection(hostKey)?.hasCapability(WALNUT_MCP_CAPABILITY) ?? false,
+      local: hostKey === '__local__',
+      hubMount: walnutMcpProfile,
+    }
+  }
+
+  /**
+   * Put the Walnut MCP mount into this spawn's `--mcp-config` (every spawn: fresh,
+   * cold resume, fork). The record's profile is not changed, so a session decides
+   * again at each spawn and one older than the mount gets it at its next one.
+   * Never fails the spawn: a failure to decide spawns without the mount.
+   */
+  private async applySpawnWalnutMount(
+    args: string[],
+    profile: import('../core/types.js').SessionProfile | undefined,
+    host: string | null | undefined,
+  ): Promise<void> {
+    try {
+      const { withWalnutMcpMount } = await import('../core/sessions/walnut-mcp-mount.js')
+      const mounted = withWalnutMcpMount(await this.walnutMountInput(profile, host))
+      const walnut = mounted?.mcpServers?.walnut
+      if (!walnut || profile?.mcpServers?.walnut) return
+      const mcpServers = { ...(profile?.mcpServers ?? {}), walnut }
+      const value = JSON.stringify({ mcpServers })
+      const at = args.indexOf('--mcp-config')
+      if (at >= 0) args[at + 1] = value
+      else args.push('--mcp-config', value)
+      this._requestedMcpServers = Object.keys(mcpServers)
+    } catch (err) {
+      log.session.warn('walnut MCP mount: could not decide it; this spawn goes without', {
+        sessionId: this.claudeSessionId, taskId: this.taskId, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /** The live mount of one process: the attempt in flight (shared by every writer), and how many ran. */
+  private _liveWalnutMount: { pid: number; inFlight: Promise<void> | null; tries: number; done: boolean } | null = null
+
+  /**
+   * Give a RUNNING process launched without the Walnut tools its mount, with Claude
+   * Code's `mcp_set_servers` control request (verified on 2.1.312: the next turn
+   * calls mcp__walnut__ tools; settings and plugin servers stay). Called before a
+   * new turn's line is written, so no turn is cut. Every writer that comes while the
+   * request is out waits on the same one, so lines go out in the order they came. Done
+   * once per process when it took or the answer is final; a host not serving it yet is
+   * asked again at the next turn, a request that failed at most twice. A CLI that does
+   * not know the request answers an error and keeps running as it was.
+   */
+  private ensureLiveWalnutMount(): Promise<void> {
+    const pid = this.pid
+    if (!this._transport || pid === null || this._requestedMcpServers.includes('walnut')) return Promise.resolve()
+    if (this._liveWalnutMount?.pid !== pid) this._liveWalnutMount = { pid, inFlight: null, tries: 0, done: false }
+    const state = this._liveWalnutMount
+    if (state.done) return Promise.resolve()
+    if (state.inFlight) return state.inFlight
+    state.inFlight = this.tryLiveWalnutMount(state).finally(() => { state.inFlight = null })
+    return state.inFlight
+  }
+
+  private async tryLiveWalnutMount(state: { pid: number; tries: number; done: boolean }): Promise<void> {
+    try {
+      const { liveWalnutMcpServers } = await import('../core/sessions/walnut-mcp-mount.js')
+      const input = await this.walnutMountInput(this._profile, this._host)
+      const servers = liveWalnutMcpServers(input)
+      if (!servers) {
+        // Final unless the host's daemon simply does not serve it yet (it may after an upgrade).
+        if (input.hostServesMcp) state.done = true
+        return
+      }
+      state.tries++
+      if (state.tries >= 2) state.done = true
+      const reply = await this.readControlPayloadWithRequest(
+        `mcp-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+        { subtype: 'mcp_set_servers', servers }, 15_000,
+      )
+      const added = Array.isArray(reply?.added) && (reply!.added as unknown[]).includes('walnut')
+      const error = (reply?.errors as Record<string, string> | undefined)?.walnut
+      if (reply) state.done = true
+      if (added && !error) {
+        this._requestedMcpServers = [...this._requestedMcpServers, 'walnut']
+        // So a re-attach after a server restart knows this process asked for it. Only
+        // when no verdict is there yet: the next turn's init records the real one.
+        const sid = this.claudeSessionId
+        if (sid) {
+          void import('../core/session-tracker.js').then(async ({ getSessionByClaudeId, updateSessionRecord }) => {
+            const record = await getSessionByClaudeId(sid)
+            if (record?.mcpMountStatus?.walnut) return
+            await updateSessionRecord(sid, { mcpMountStatus: { ...(record?.mcpMountStatus ?? {}), walnut: 'pending' } })
+          }).catch(() => {})
+        }
+      }
+      log.session.info('walnut MCP mount: given to a running session', {
+        sessionId: this.claudeSessionId, taskId: this.taskId, pid: state.pid, added, ...(error ? { error } : {}),
+        ...(reply ? {} : { answered: false }),
+      })
+    } catch (err) {
+      log.session.warn('walnut MCP mount: the running session could not take it', {
+        sessionId: this.claudeSessionId, taskId: this.taskId, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   /**
    * Change the session's reasoning effort MID-SESSION, without respawning the CLI.
    *
@@ -13252,26 +13380,9 @@ export class SessionRunner {
     // Carry the HTTP request ts onto the session instance so the init handler can
     // compute the full route→init latency breakdown (instrumentation only).
     session._requestTs = data.requestTs ?? 0
-    // Profile: the caller's bundle, plus the Walnut MCP tools served by the host
-    // daemon's own `walnut mcp-server` (`session.premount_walnut_mcp`, default on;
-    // src/core/sessions/walnut-mcp-mount.ts). A caller's own mounts survive, and its
-    // own walnut mount is never doubled. Decided here, at the first spawn only: the
-    // record keeps it, so a resumed session keeps the tools it started with. A fork
-    // takes its parent's profile as it is (its tools are part of the cache prefix it
-    // reuses), so a fork of a session that started without the tools stays without.
-    const { walnutMcpProfile } = await import('../core/sessions/profiles.js')
-    const { withWalnutMcpMount, WALNUT_MCP_CAPABILITY } = await import('../core/sessions/walnut-mcp-mount.js')
-    const mountHost = data.host && data.host !== '__local__' ? data.host : '__local__'
-    const { getConnectedDaemonConnection } = await import('./daemon-connection.js')
-    const { isCompanion } = await import('../core/server-role.js')
-    const resolvedProfile = isFork ? data.profile : withWalnutMcpMount({
-      setting: config.session?.premount_walnut_mcp,
-      profile: data.profile,
-      cloud: isCompanion(),
-      hostServesMcp: getConnectedDaemonConnection(mountHost)?.hasCapability(WALNUT_MCP_CAPABILITY) ?? false,
-      local: mountHost === '__local__',
-      hubMount: walnutMcpProfile,
-    })
+    // The Walnut MCP mount is decided at each spawn, not here (applySpawnWalnutMount):
+    // the record keeps the caller's own profile.
+    const resolvedProfile = data.profile
     const sendOpts = {
       ...(data.preassignedSessionId ? { preassignedSessionId: data.preassignedSessionId } : {}),
       ...(resolvedProfile ? { profile: resolvedProfile } : {}),

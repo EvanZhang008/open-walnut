@@ -9,9 +9,14 @@
  * the shim beside it in `<daemon dir>/bin`), never a `walnut` on PATH: on a Mac
  * with Walnut installed, PATH's `walnut` is the hub CLI, which has no such command.
  *
- * Decided once, at a session's first spawn: the result is stored on the session
- * record's profile, and every later spawn (a resume) replays that, so a session
- * that started without the tools keeps running without them.
+ * Decided at EVERY spawn of a Claude Code process (a fresh start, a cold resume, a
+ * fork), never stored on the session record: the record keeps the caller's own
+ * profile. Until 2026-11-10 it was decided once, at a session's first spawn, and
+ * stored, so every session older than the mount (Main, the VPs, every long-lived
+ * lead) replayed a record with no mount on each resume and never got the tools.
+ * A process that is already running is given the mount live, before the next turn
+ * it is sent, with Claude Code's own `mcp_set_servers` control request
+ * (liveWalnutMcpServers), so no turn is cut and no process is restarted for it.
  *
  * Context cost (Claude Code 2.1.312, measured 2026-11-01): Claude Code defers MCP
  * tools behind ToolSearch, so the 150-odd tools cost about 2K tokens at session
@@ -68,4 +73,19 @@ export function withWalnutMcpMount(input: WalnutMcpMountInput): SessionProfile |
   else if (input.setting === true && input.local) walnut = input.hubMount().mcpServers?.walnut
   if (!walnut) return profile
   return { ...(profile ?? {}), mcpServers: { ...(profile?.mcpServers ?? {}), walnut } }
+}
+
+/**
+ * The servers to hand a RUNNING process that has no Walnut mount, or null when it
+ * should get none. `mcp_set_servers` replaces the session's dynamically added set
+ * (its `--mcp-config` servers; settings and plugin servers are untouched), so a
+ * process launched with other servers of its own is left alone: only one launched
+ * with none is given the set it would get at a new spawn.
+ */
+export function liveWalnutMcpServers(
+  input: WalnutMcpMountInput,
+): Record<string, SessionMcpServer & { type: 'stdio' }> | null {
+  if (input.profile?.mcpServers && Object.keys(input.profile.mcpServers).length > 0) return null
+  const walnut = withWalnutMcpMount(input)?.mcpServers?.walnut
+  return walnut ? { walnut: { type: 'stdio', ...walnut } } : null
 }

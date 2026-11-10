@@ -253,7 +253,7 @@ describe.each(twins)('offline host on the real %s daemon', (twin) => {
     expect(got.startsWith(buildPeerWrapper(text, {
       title: 'Parent work', shortId: A.slice(0, 8), sessionId: A, taskId: TASK_A, host: 'devbox', requestId,
     }))).toBe(true)
-    expect(got).toContain(`Reply when done: walnut tools call task_send '{"in_reply_to":"${requestId}"`)
+    expect(got).toContain(`Reply when done: mcp__walnut__task_send {"in_reply_to":"${requestId}"`)
     // The stream file shows the message as a turn start (the UI reads it back).
     const stream = fs.readFileSync(path.join(d.dir, 'streams', `${B}.jsonl`), 'utf8')
     expect(stream).toContain('"subtype":"walnut-injected"')

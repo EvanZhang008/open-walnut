@@ -299,9 +299,11 @@ export function createEnvelopeKit(): EnvelopeKit {
 
   /** The ONE line Walnut appends to a message delivered with expect_reply. */
   function buildReplyTrailer(request: { id: string }): string {
-    return `Reply when done: walnut tools call task_send `
-      + `'{"in_reply_to":"${request.id}","title":"<one-line TL;DR>","text":"<your result summary>"}'`
-      + ` (handing it to another task instead: add "hands_on":"${request.id}" to your ask to that task)`;
+    // The MCP tool first, the CLI its stand-in (2026-11-10, the user: MCP whenever it is there).
+    return `Reply when done: mcp__walnut__task_send `
+      + `{"in_reply_to":"${request.id}","title":"<one-line TL;DR>","text":"<your result summary>"}`
+      + ` (no such tool: walnut tools call task_send with that JSON;`
+      + ` handing it to another task instead: add "hands_on":"${request.id}" to your ask to that task)`;
   }
 
   function buildReplyDeliveryText(

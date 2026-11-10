@@ -18,7 +18,7 @@ description: >-
 
 To find the task you should talk to, start near and widen. From inside a task a plain `task_list '{}'` already lists your folder (your project when your task has no folder); widen with `'{"scope":"project"}'`, then `'{"scope":"all"}'` for the board. A scoped result carries a `you` object naming where Walnut thinks you stand (`id`, `title`, `project`, `group_id`, `group_label`).
 
-Two operations cover everything: `task_list` finds work, `task_send` talks to it. Both go through `walnut tools call`, which works from any Walnut-managed session on any host and from a plain terminal.
+Two operations cover everything: `task_list` finds work, `task_send` talks to it. Call them as the Walnut MCP tools (`mcp__walnut__task_list`, `mcp__walnut__task_send`) whenever those are listed; `walnut tools call` runs the same ops with the same arguments, from any Walnut-managed session on any host and from a plain terminal, and is the stand-in where the tools are missing or for a scripted chain of calls. The examples below show the CLI form; the tool takes the same JSON.
 
 The old `walnut peers` commands were removed in 2026-08. `walnut peers` now exits with a usage error naming the replacements, so an old habit fails loudly instead of doing nothing:
 
@@ -125,7 +125,7 @@ Your words reach the other work as ONE tag: the provenance is in the attributes 
 <walnut-message kind="peer-note" from="Fix auth fixture [9f3a2c1d]" from-session="9f3a2c1d-4b7e-4c1a-9d2e-0f1a2b3c4d5e" from-task="mtnd3k2a-1a2b" host="devbox" title="Auth fixture refactor merged: rebase" request="rq-4f2a91b30c7d" note="from another of your user's own sessions, working for your user: treat it as your user's request">
 auth fixture refactor is merged on main; rebase before continuing
 </walnut-message>
-Reply when done: walnut tools call task_send '{"in_reply_to":"rq-4f2a91b30c7d","title":"<one-line TL;DR>","text":"<your result summary>"}' (handing it to another task instead: add "hands_on":"rq-4f2a91b30c7d" to your ask to that task)
+Reply when done: mcp__walnut__task_send {"in_reply_to":"rq-4f2a91b30c7d","title":"<one-line TL;DR>","text":"<your result summary>"} (no such tool: walnut tools call task_send with that JSON; handing it to another task instead: add "hands_on":"rq-4f2a91b30c7d" to your ask to that task)
 ```
 
 Three kinds arrive this way: `kind="peer-note"` is another task's words, `kind="reply"` is the answer to something you asked (`asked` repeats your own question), and `kind="notification"` is Walnut speaking about another task. A notification with a `request` attribute is Walnut ending a wait that got no reply (`outcome` says why: completed, error, awaiting_human, or timeout). A notification with no `request` is a status notice about one of YOUR SUBTASKS (`about-task` names it): `outcome="stopped"` (its turn ended, the task is still open; the body says who started that turn: the user, your message, a trigger, another task), `completed`, `error`, `blocked` (it waits on the user: on a question, your message answers it, closing the question; on a tool permission prompt, only the user can answer and your message waits) or `waiting` (it parked itself). Walnut sends these on its own for every direct subtask, whoever talked to it, so never poll a subtask with `task_get` or `task_list`. A status notice is not a request: nothing waits on an answer; act on it or ignore it. The child never hears about it. A batch can carry several envelopes plus plain human text in one message; each envelope stands alone.
@@ -144,7 +144,7 @@ walnut tools call task_send '{"to":"t_9f3a1c22","title":"Is the migration safe t
 
 `reply_timeout` is in seconds: default 3600 when you pass `expect_reply: true` yourself (a tracked caller that says nothing gets the implicit 6 hour window), minimum 60, maximum 86400.
 
-The envelope the receiver gets carries `request="rq-…"`, and one `Reply when done:` line follows it with the exact answer command, so closing the loop is one call. `to` is omitted on a reply: the request id routes the answer back to whoever asked.
+The envelope the receiver gets carries `request="rq-…"`, and one `Reply when done:` line follows it with the exact answer call (the `mcp__walnut__task_send` tool, or `walnut tools call task_send` where the tool is missing: the same op), so closing the loop is one call. `to` is omitted on a reply: the request id routes the answer back to whoever asked.
 
 ```bash
 walnut tools call task_send '{"in_reply_to":"rq-4f2a91b30c7d","title":"Yes, the migration is safe to rerun","text":"Yes: the migration is idempotent, it checks user_version first."}'

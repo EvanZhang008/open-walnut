@@ -43,7 +43,7 @@ export function unansweredStopReason(
   return [
     `Walnut: before this turn ends, you hold ${open.length === 1 ? 'a request' : `${open.length} requests`} that waits for your reply, still unanswered:`,
     ...lines,
-    `Answer it now: walnut tools call task_send '{"in_reply_to":"${first}","title":"<one line>","text":"<your result>"}'.`,
+    `Answer it now: mcp__walnut__task_send {"in_reply_to":"${first}","title":"<one line>","text":"<your result>"} (no such tool: walnut tools call task_send with that JSON).`,
     'Still working on it in a later turn: end this turn as you planned, and reply when the work is done (a reply settles the request, so do not send a progress note). '
       + 'Handed it to another task: name that request with hands_on on your ask to it. '
       + 'Needs no answer: reply in one line saying why, so the asker stops waiting.',

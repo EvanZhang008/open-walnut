@@ -139,7 +139,10 @@ enum PeerMessagePresentation {
                     if parsed.request, parsed.kind == "peer-note", text[cursor...].hasPrefix("\n") {
                         let trailerStart = text.index(after: cursor)
                         let trailerEnd = text[trailerStart...].firstIndex(of: "\n") ?? text.endIndex
-                        if text[trailerStart..<trailerEnd].hasPrefix("Reply when done: walnut tools call ") {
+                        let trailerLine = text[trailerStart..<trailerEnd]
+                        // Walnut's reply line names the MCP tool first, or (older servers) the CLI.
+                        if trailerLine.hasPrefix("Reply when done: mcp__walnut__")
+                            || trailerLine.hasPrefix("Reply when done: walnut tools call ") {
                             cursor = trailerEnd
                         }
                     }

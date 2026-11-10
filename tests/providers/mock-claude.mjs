@@ -172,6 +172,8 @@ let appendSystemPrompt = null;
 let outputFormat = 'json';
 let inputFormat = null;
 let modelFlag = null;
+// Servers added live with mcp_set_servers (real CLI 2.1.312): named in the next results.
+let liveMcpServers = [];
 let effortFlag = null;
 let dangerouslySkipPermissions = false;
 
@@ -385,6 +387,15 @@ if (inputFormat === 'stream-json') {
           process.stdout.write(JSON.stringify({
             type: 'control_response',
             response: { subtype: 'success', request_id: parsed.request_id, response: {} },
+          }) + '\n');
+        } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'mcp_set_servers') {
+          const names = Object.keys(parsed.request.servers ?? {});
+          const added = names.filter((n) => !liveMcpServers.includes(n));
+          const removed = liveMcpServers.filter((n) => !names.includes(n));
+          liveMcpServers = names;
+          process.stdout.write(JSON.stringify({
+            type: 'control_response',
+            response: { subtype: 'success', request_id: parsed.request_id, response: { added, removed, errors: {} } },
           }) + '\n');
         } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'side_question') {
           // side_question is auto-title's PRIMARY channel (main-model prompt we
@@ -697,9 +708,10 @@ function computeMessageParts() {
   const sysPart = appendSystemPrompt ? ` [has-system-prompt]` : '';
   const modelPart = modelFlag ? ` [model:${modelFlag}]` : '';
   const effortPart = effortFlag ? ` [effort:${effortFlag}]` : '';
+  const livePart = liveMcpServers.length ? ` [live-mcp:${liveMcpServers.join(',')}]` : '';
   const bypassCapabilityPart = dangerouslySkipPermissions ? ' [dangerously-skip-permissions:true]' : '';
   const tagPart = tagSwitch ? `[Q${tagSwitch.seq}]\n` : questionSeq ? `[Q${questionSeq}]\n` : '';
-  const flags = plainEcho ? '' : `${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${bypassCapabilityPart}`;
+  const flags = plainEcho ? '' : `${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${livePart}${bypassCapabilityPart}`;
   const said = `Hello! I processed your message: ${rawEcho ? message : effectiveMessage}${flags}`;
   // A tag switch moves on to an older question (`[Qn]`, the fixtures' old protocol).
   resultText = strictAsk && !tagSwitch ? askAnswerOf(strictAsk, said) : `${tagPart}${said}`;

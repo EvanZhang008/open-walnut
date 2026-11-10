@@ -1,5 +1,6 @@
 // The collapsed tool-run line: "Ran 3 commands, read a file ›". Pure, so the
 // history row and the streaming row (which must read the same) share it.
+import { walnutToolView } from './session-outbound';
 
 /** Phrase category per tool name; unknown tools fall into 'other'. */
 function toolPhraseCategory(name: string): string {
@@ -67,7 +68,8 @@ export function toolRunPhrase(tools: ToolRunMember[]): string {
   const counts = new Map<string, number>();
   const files = new Map<string, Set<string>>();
   for (const t of tools) {
-    const cat = toolPhraseCategory(t.name);
+    // A Walnut op through the CLI counts as the MCP call it stands in for.
+    const cat = toolPhraseCategory(walnutToolView(t).name);
     const p = cat === 'read' || cat === 'edit' ? filePathOf(t.input) : undefined;
     if (p !== undefined) {
       const seen = files.get(cat) ?? new Set<string>();

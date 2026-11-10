@@ -257,6 +257,12 @@ USAGE
   walnut browser open <url> | snapshot | click <ref> | type [<ref>] <text> | screenshot [<file>] | ...   the user's own browser (walnut browser for all actions)
   walnut --help | walnut tools --help
 
+MCP FIRST
+  Every Claude Code task session also has these operations as the Walnut MCP
+  tools, mcp__walnut__<op> (load them with ToolSearch): the same ops, the same
+  arguments, the same answers. Use the tools whenever they are listed; this CLI
+  is the stand-in where they are missing, or for a scripted chain of calls.
+
 THE MODEL (one identity: the task)
   The TASK is the work. task_create creates it AND starts it, and every later
   call uses that same task id; record_only:true saves a placeholder that runs
@@ -319,6 +325,10 @@ EXIT CODES
 `
 
 const HELP_TOOLS = `walnut tools — call Walnut operations (tasks, search, memory, notes) from any session
+
+The same operations are the Walnut MCP tools mcp__walnut__<op> in a Claude Code task
+session: use those whenever they are listed, and this CLI where they are missing or
+for a scripted chain of calls.
 
 USAGE
   walnut tools list [--json]           catalog of available operations, each with its arguments

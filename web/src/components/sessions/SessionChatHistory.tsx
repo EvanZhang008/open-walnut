@@ -87,6 +87,7 @@ import { foldPlace, joinedRows, readReaderView, restoreReaderRow, rowKeysAttr, r
 import { shapeTurns, type PagedTurnShape as TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
 import { detectOutboundCalls, type OutboundSend } from './session-outbound';
+import { detectOutboundSend, walnutToolView } from './session-outbound';
 import { isRoutedQuestion, isUserDenied } from './tool-run-phrase';
 import { DeniedNowContext, ToolDecisionsContext, useSessionToolDecisions, WaitingToolsContext } from './waiting-tools';
 import { permissionRequestStore } from '@/stores/permission-request-store';
@@ -4900,7 +4901,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   );
   // A message to someone: a send card, or Walnut's other messaging ops (to a
   // lead, to the inbox, an answer in it), which render as plain tool rows.
-  const isOutboundTool = (t: SessionHistoryTool) => outboundCallsOf(t).length > 0 || MESSAGE_OPS.test(t.name);
+  const isOutboundTool = (t: SessionHistoryTool) => outboundCallsOf(t).length > 0 || MESSAGE_OPS.test(walnutToolView(t).name);
   /** A message or notice the session received: a sent-in row with no person's words in it. */
   const isInboundPart = (part: HistoryPart): boolean => {
     if (part.kind !== 'msg' || part.m.role !== 'user') return false;

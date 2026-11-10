@@ -87,8 +87,9 @@ describe('task start confirmation and reply contract', () => {
     expect(mocks.startSession.mock.calls[0][0].message).toBe(buildPeerWrapper('Fix the flake.', {
       title: '', shortId: 'asker-1', sessionId: 'asker-1', host: 'local', requestId: result.requestId!,
     }) + '\n'
-      + `Reply when done: walnut tools call task_send '{"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}'`
-      + ` (handing it to another task instead: add "hands_on":"${result.requestId}" to your ask to that task)`);
+      + `Reply when done: mcp__walnut__task_send {"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}`
+      + ` (no such tool: walnut tools call task_send with that JSON;`
+      + ` handing it to another task instead: add "hands_on":"${result.requestId}" to your ask to that task)`);
   });
 
   it.each(['human', 'external'])('does not request a reply from an untracked %s caller', async (kind) => {

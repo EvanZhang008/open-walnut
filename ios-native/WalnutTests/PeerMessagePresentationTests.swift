@@ -137,6 +137,11 @@ final class PeerMessagePresentationTests: XCTestCase {
         XCTAssertEqual(parts, [.text(human), .message(PeerMessageDescription(sender: "Build check", title: "One")),
                               .text("Keep this"), .message(PeerMessageDescription(sender: "Build check", title: "Two")),
                               .text("Last human line")])
+        // The reply line as Walnut writes it now: the MCP tool first, the CLI its stand-in.
+        let mcpFirst = envelope("peer-note", title: "One", extra: "request=\"rq-fixture\"")
+            + "\nReply when done: mcp__walnut__task_send {\"in_reply_to\":\"rq-fixture\"} (no such tool: walnut tools call task_send with that JSON)"
+        XCTAssertEqual(try XCTUnwrap(PeerMessagePresentation.segments(mcpFirst + "\n\nAfter")),
+                       [.message(PeerMessageDescription(sender: "Build check", title: "One")), .text("After")])
         XCTAssertEqual(PeerMessagePresentation.segments(envelope() + "\nReply when done: my own words")?.last,
                        .text("Reply when done: my own words"))
     }

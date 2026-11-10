@@ -29,6 +29,7 @@ import { BashToolCall } from './BashToolCall';
 import { parseSessionEnvelopes, type EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { injectedContextKind } from './injected-context';
 import { detectOutboundCalls } from './session-outbound';
+import { detectOutboundSend, walnutToolView } from './session-outbound';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { SessionOutboundCards } from './SessionOutboundCard';
 import { splitLeadingBanners } from '@open-walnut/history-injected-banner';
@@ -791,6 +792,10 @@ export const GenericToolCall = memo(function GenericToolCall(props: GenericToolC
   if (outbound.length > 0) {
     return <SessionOutboundCards calls={outbound} toolUseId={props.tool.toolUseId} running={sendResult === undefined && props.status === 'calling'} result={sendResult} sessionCwd={props.sessionCwd} sessionHost={props.sessionHost} sessionId={props.sessionId} onTaskClick={props.onTaskClick} onSessionClick={props.onSessionClick} />;
   }
+  // A Walnut op through the CLI (`walnut tools call <op> …`) renders as the MCP
+  // tool it stands in for, never as a raw Bash card.
+  const asTool = walnutToolView(props.tool as SessionHistoryTool);
+  if (asTool !== props.tool) return <GenericToolCallInner {...props} tool={asTool} />;
   // Bash gets terminal-style rendering (real newlines, plain-pre output, popup)
   // instead of the JSON input dump. Dispatch BEFORE any hooks; single choke
   // point covering history, streaming, and ClaudeStreamView callers alike.

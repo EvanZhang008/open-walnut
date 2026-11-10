@@ -539,8 +539,8 @@ describe('performSessionSend — expect_reply', () => {
       status: 'pending', fromSessionId: 'sess-caller-4', toSessionId: 'sess-target-1',
     });
     expect(deliveredText()).toContain(`request="${result.requestId}"`);
-    expect(deliveredText()).toContain(`Reply when done: walnut tools call task_send `
-      + `'{"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}'`);
+    expect(deliveredText()).toContain(`Reply when done: mcp__walnut__task_send `
+      + `{"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}`);
   });
 
   it('the DEFAULT degrades to no request for the human — it must not 400 like an explicit true does', async () => {
@@ -632,9 +632,10 @@ describe('performSessionSend — expect_reply', () => {
     // Walnut speaks the trailer, so it sits OUTSIDE the envelope: exactly one
     // newline after the closing tag, then exactly one line and nothing more.
     expect(text).toBe(`${parsed.raw}\n`
-      + `Reply when done: walnut tools call task_send `
-      + `'{"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}'`
-      + ` (handing it to another task instead: add "hands_on":"${result.requestId}" to your ask to that task)`);
+      + `Reply when done: mcp__walnut__task_send `
+      + `{"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}`
+      + ` (no such tool: walnut tools call task_send with that JSON;`
+      + ` handing it to another task instead: add "hands_on":"${result.requestId}" to your ask to that task)`);
   });
 });
 
@@ -1600,7 +1601,7 @@ describe('routeWorkerQuestion: a worker AskUserQuestion goes to its leader', () 
     expect(env.body).toContain('Question (Wrap up), pick any number: Which of these should I do on P5?');
     expect(env.body).toContain('  - 1 Post reply + resolve: Post the drafted reply, then resolve');
     expect(env.body).toContain('  - 2 Log follow-up: Comment on the tracking item');
-    expect(delivered).toContain(`Reply when done: walnut tools call task_send '{"in_reply_to":"${routed!.requestId}"`);
+    expect(delivered).toContain(`Reply when done: mcp__walnut__task_send {"in_reply_to":"${routed!.requestId}"`);
     expect((await getSessionRequest(routed!.requestId!))).toMatchObject({ fromSessionId: WORKER, toSessionId: LEADER, status: 'pending' });
   });
 

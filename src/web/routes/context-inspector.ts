@@ -102,7 +102,13 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
     // `undefined` is legal: a named session whose record carries no profile.
     const profile = record?.profile ?? fallbackProfile
     const systemPrompt = profile?.systemPrompt ?? ''
-    const mcpServers = profile?.mcpServers ?? {}
+    // The Walnut mount is added at each spawn, not stored in the profile: the init's verdict
+    // (mcpMountStatus) says the process has it.
+    const mcpServers: NonNullable<NonNullable<typeof profile>['mcpServers']> = {
+      ...(profile?.mcpServers ?? {}),
+      ...(!profile?.mcpServers?.walnut && record?.mcpMountStatus?.walnut
+        ? { walnut: (await import('../../core/sessions/walnut-mcp-mount.js')).hostWalnutMcpServer() } : {}),
+    }
     // Which engine actually answers this session. Only the native runtime (the
     // long-running `claude` CLI over FIFO) is launched with Walnut's assembled
     // `--append-system-prompt`; an ACP engine owns its own prompt, so the notes

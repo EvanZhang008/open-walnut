@@ -610,11 +610,13 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     + (mainAgent || projectLead
       ? 'Your teams do the work, never this session: Walnut is how you hand it on and follow it. '
       : 'Walnut is not your toolbox: do the work with your own tools. ')
-    + 'The `walnut` CLI on your '
-    + 'PATH reaches the layer above: read and update your task, search the '
+    // 2026-11-10, the user: use the MCP whenever it is there, the CLI when it gets a bit
+    // more complex. The MCP tools and the CLI are the same ops; the CLI is the stand-in.
+    + 'Walnut\'s ops reach the layer above: read and update your task, search the '
     + 'user\'s tasks, memory and past conversations, message another task '
-    + '(`task_send`). Where they are listed as `mcp__walnut__<op>` tools, prefer '
-    + 'those (same arguments, typed, no shell quoting). '
+    + '(`task_send`). Use the MCP tools `mcp__walnut__<op>` whenever listed; the `walnut` '
+    + 'CLI on your PATH runs the same ops (`walnut tools call <op> \'<json>\'`), only where '
+    + 'they are missing or for a scripted chain of calls. '
     + '`walnut tools list` names every operation; '
     + '`walnut guide` is the manual. Questions about the user\'s tasks or work '
     + '(even which one made a commit) are answered by Walnut, never by '

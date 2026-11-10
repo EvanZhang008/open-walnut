@@ -392,3 +392,61 @@ export function commandRunsOp(command: string, op: string, path?: string): boole
   const base = path.slice(path.lastIndexOf('/') + 1)
   return calls.some((c) => c.path === path) || calls.some((c) => !!c.path && c.path.slice(c.path.lastIndexOf('/') + 1) === base)
 }
+
+/** What a call's output may be piped into and still be that call alone: readers that run nothing. */
+const PIPE_READERS = new Set(['head', 'tail', 'jq', 'cat', 'grep', 'wc', 'less', 'sort', 'cut', 'column'])
+/** A redirect that only sends output away. */
+const NULL_REDIRECT = /^\d?>>?\/dev\/null$/
+
+/**
+ * The ONE Walnut op `command` runs when the command is that call and nothing else
+ * (env prefixes before it, its own heredoc, a redirect to nowhere or a pipe into a
+ * reader after it), or null. The web shows such a row as the MCP tool the CLI
+ * stands in for (`mcp__walnut__<op>`): a chain, a loop, a script, a pipe into a
+ * writer, a redirect into a file or anything the shell expands stays a command,
+ * so the card never hides what ran.
+ */
+export function soleOpCall(command: string): CommandOpCall | null {
+  if (!command.includes('tools') || command.length > MAX_COMMAND_CHARS) return null
+  const { text, bodies } = extractHeredocs(command)
+  if (bodies.some((b) => b === EXPANDED_BODY)) return null
+  const tokens = tokenizeCommand(text)
+  if (tokens.some((t) => t.expands)) return null
+  // `2>&1` splits at its `&`: put it back together before reading commands.
+  const words: ShellToken[] = []
+  for (let k = 0; k < tokens.length; k++) {
+    const t = tokens[k]
+    if (t.op && t.value === '&' && /^\d?>$/.test(words[words.length - 1]?.value ?? '') && tokens[k + 1]?.value === '1' && !tokens[k + 1].op) {
+      words[words.length - 1] = { ...words[words.length - 1], value: `${words[words.length - 1].value}&1` }
+      k++
+      continue
+    }
+    words.push(t)
+  }
+  const segs = segmentsOf(words)
+  while (segs.length > 1 && segs[segs.length - 1].words.length === 0 && segs[segs.length - 2].end === '\n') segs.pop()
+  const [first, ...after] = segs
+  if (!first || !(first.end === '' || first.end === '|' || first.end === '\n')) return null
+  const w = first.words
+  let i = 0
+  while (i < w.length && !w[i].quoted && (ENV_ASSIGN.test(w[i].value) || COMMAND_WRAPPERS.has(w[i].value))) i++
+  if (!w[i] || w[i].quoted || !isWalnutBinary(w[i].value)) return null
+  const call = opCallIn({ words: w.slice(i), end: first.end }, bodies, () => true, undefined, new Map())
+  if (!call || !/^[a-z][a-z0-9_]*$/.test(call.op)) return null
+  // The call's own words: its argument(s) and redirects to nowhere, never a second command.
+  const rest = w.slice(i + 4).filter((t) => !(!t.quoted && t.value.startsWith(HEREDOC_WORD)))
+  const isRedirect = (t: ShellToken) => !t.quoted && (NULL_REDIRECT.test(t.value) || /^\d?>&\d$/.test(t.value))
+  const argWords = rest.filter((t) => !isRedirect(t))
+  if (call.form !== 'flags' && argWords.length > 1) return null
+  if (rest.some((t, k) => !t.quoted && /[<>]/.test(t.value) && !isRedirect(t) && !(t.value === '>' && rest[k + 1]?.value === '/dev/null'))) return null
+  if (first.end === '\n' && after.some((s) => s.words.length > 0)) return null
+  for (let k = 0; k < after.length; k++) {
+    const s = after[k]
+    if (s.words.length === 0) return null
+    const head = s.words[0]
+    if (head.quoted || !PIPE_READERS.has(head.value)) return null
+    if (s.words.some((t) => !t.quoted && /[<>]/.test(t.value) && !isRedirect(t))) return null
+    if (!(s.end === '|' || (s.end === '' && k === after.length - 1))) return null
+  }
+  return call
+}

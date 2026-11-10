@@ -2,7 +2,7 @@
  * Which Walnut MCP mount a new Claude Code session gets (src/core/sessions/walnut-mcp-mount.ts).
  */
 import { describe, it, expect } from 'vitest'
-import { withWalnutMcpMount, hostWalnutMcpServer, WALNUT_MCP_DEFAULT, type WalnutMcpMountInput } from '../../../src/core/sessions/walnut-mcp-mount.js'
+import { withWalnutMcpMount, liveWalnutMcpServers, hostWalnutMcpServer, WALNUT_MCP_DEFAULT, type WalnutMcpMountInput } from '../../../src/core/sessions/walnut-mcp-mount.js'
 import type { SessionProfile } from '../../../src/core/types.js'
 
 const HUB: SessionProfile = { mcpServers: { walnut: { command: '/hub/walnut', args: ['mcp'] } } }
@@ -68,5 +68,14 @@ describe('walnut MCP mount', () => {
     const profile: SessionProfile = { mcpServers: { other: { command: 'o' } } }
     withWalnutMcpMount(base({ profile, setting: true }))
     expect(Object.keys(profile.mcpServers!)).toEqual(['other'])
+  })
+
+  it('a running process that has none gets the same mount live, as a stdio server; never one with its own servers', () => {
+    expect(liveWalnutMcpServers(base({}))).toEqual({ walnut: { type: 'stdio', ...hostWalnutMcpServer() } })
+    expect(liveWalnutMcpServers(base({ profile: { mcpServers: { other: { command: 'o' } } } }))).toBeNull()
+    expect(liveWalnutMcpServers(base({ setting: false }))).toBeNull()
+    expect(liveWalnutMcpServers(base({ cloud: true }))).toBeNull()
+    expect(liveWalnutMcpServers(base({ hostServesMcp: false }))).toBeNull()
+    expect(liveWalnutMcpServers(base({ profile: { slim: true } }))).toBeNull()
   })
 })

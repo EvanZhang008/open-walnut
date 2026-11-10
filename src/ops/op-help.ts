@@ -174,6 +174,7 @@ export function formatOpHelp(row: ToolRow): string {
   lines.push(
     '',
     'Usage:',
+    `  MCP tool mcp__walnut__${row.name} with ${example.slice(1, -1)}   # whenever the tool is listed`,
     `  walnut tools call ${row.name} ${example}`,
     `  echo ${example} | walnut tools call ${row.name}`,
     `  walnut tools call ${row.name} @/tmp/args.json   # payloads over ~128KB must not go in argv`,

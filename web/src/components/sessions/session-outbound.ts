@@ -37,7 +37,7 @@
 import type { SessionHistoryTool } from '@/types/session';
 import { sendTargetRefs } from '@open-walnut/send-targets';
 import { isCardedOp, opCardFields, type OpCardFields } from '../../../../src/core/op-cards';
-import { findOpCalls, tokenizeCommand, type OpArgForm } from '../../../../src/lib/walnut-op-command';
+import { findOpCalls, soleOpCall, tokenizeCommand, type OpArgForm } from '../../../../src/lib/walnut-op-command';
 
 export { tokenizeCommand };
 
@@ -96,6 +96,38 @@ const MCP_OP = /^mcp__[^_].*?__([a-z][a-z0-9_]*)$/;
 /** The send ops: their answer names a target session (task_send, and
  *  session_send, the deprecated alias that takes the same arguments). */
 const SEND_OPS = new Set(['task_send', 'session_send']);
+
+/** One Walnut op run through the CLI, read as the MCP call it stands in for. */
+export interface CliWalnutCall {
+  op: string;
+  /** The op's arguments, as the MCP tool would have taken them ({} when they never rode the command). */
+  input: Json;
+  /** The arguments came from a file (`@path`) or stdin the transcript does not hold. */
+  payloadFrom?: 'file' | 'stdin';
+}
+
+
+/**
+ * A Bash command that is ONE Walnut op through the CLI, `walnut tools call <op> <args>`,
+ * read as the MCP call it stands in for, or `null` (soleOpCall in
+ * src/lib/walnut-op-command.ts decides what counts as the call alone).
+ */
+export function parseCliWalnutCall(command: string): CliWalnutCall | null {
+  const call = soleOpCall(command);
+  if (!call) return null;
+  if (call.args) return { op: call.op, input: call.args };
+  if (call.form === 'none') return { op: call.op, input: {} };
+  if (call.form === 'file' || call.form === 'stdin') return { op: call.op, input: {}, payloadFrom: call.form };
+  // Arguments that do not read as an object stay a command the reader can open.
+  return null;
+}
+
+/** The MCP tool a call is: its own name, or `mcp__walnut__<op>` for a CLI call of a Walnut op. */
+export function walnutToolView<T extends { name: string; input?: Record<string, unknown> }>(tool: T): T {
+  if (tool.name !== 'Bash' || typeof tool.input?.command !== 'string') return tool;
+  const call = parseCliWalnutCall(tool.input.command);
+  return call ? { ...tool, name: `mcp__walnut__${call.op}`, input: call.input } : tool;
+}
 
 /** Keys that identify a session_send answer among other JSON in the output. */
 const RESULT_KEYS = [

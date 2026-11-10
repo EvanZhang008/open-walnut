@@ -140,6 +140,16 @@ describe('v2 peer-note', () => {
     expect(env.raw).toBe(text);
   });
 
+  it('reads the MCP-first trailer and gives back the command a person can run', async () => {
+    const { createEnvelopeKit } = await import('../../src/core/peers/envelope-kit');
+    const line = createEnvelopeKit().buildReplyTrailer({ id: RQ });
+    expect(line).toMatch(/^Reply when done: mcp__walnut__task_send /);
+    const env = onlyEnvelope(`${peerNote('rebase before continuing', { request: RQ })}\n${line}`);
+    expect(env.replyRequest?.requestId).toBe(RQ);
+    expect(env.replyRequest?.command)
+      .toBe(`walnut tools call task_send '{"in_reply_to":"${RQ}","title":"<one-line TL;DR>","text":"<your result summary>"}'`);
+  });
+
   it('leaves a Reply-when-done line alone when the envelope carries no request', () => {
     // No request means nothing to reply to: the line is the human's own text.
     const text = `${peerNote('fyi only')}\n${trailer(RQ)}`;
