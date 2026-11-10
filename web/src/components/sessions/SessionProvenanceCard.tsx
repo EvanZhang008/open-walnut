@@ -368,7 +368,8 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
         <CardWho
           glyph={envelopeDirectionGlyph(kind)}
           direction={foldDirection(envelope)}
-          taskIds={peer.taskId ? [peer.taskId] : []}
+          // The App is who sent it; its about-task is the task receiving the state, not a sender.
+          taskIds={[]}
           fallback={<span className="op-card-to-text">{peer.title || 'an App'}</span>}
         />
         <CardMain title={envelope.title} open={open} onToggle={toggle} />

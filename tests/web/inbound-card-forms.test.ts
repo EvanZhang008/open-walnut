@@ -104,9 +104,13 @@ describe('every incoming kind reads Who, Title, Summary, Details, folded', () =>
   }
 
   it('a task the message is from or about is a pill', () => {
-    for (const kind of ['peer-note', 'reply', 'notification', 'app-state'] as const) {
+    for (const kind of ['peer-note', 'reply', 'notification'] as const) {
       expect(render(SAMPLES[kind]), kind).toMatch(/class="[^"]*task-link op-card-to-pill" data-task-id="mw0abcde-/)
     }
+  })
+
+  it('an App state names the App that sent it, never only the task it is about', () => {
+    expect(render(SAMPLES['app-state'])).toMatch(/class="op-card-to-text">Shed board</)
   })
 
   it('a digest keeps its own lines as its summary', () => {

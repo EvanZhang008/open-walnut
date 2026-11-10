@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  FOLD_TITLE_MAX, _clearOpenedFolds, fallbackTitle, foldKey, noticeText, noticeTitle, openMessageFolds,
+  FOLD_TITLE_MAX, _clearOpenedFolds, fallbackTitle, foldKey, foldSummary, noticeText, noticeTitle, openMessageFolds,
 } from '../../web/src/components/sessions/message-fold';
 
 describe('fallbackTitle', () => {
@@ -84,5 +84,18 @@ describe('openMessageFolds', () => {
     expect(openMessageFolds([a, b])).toBe(true);
     expect(openMessageFolds([])).toBe(false);
     _clearOpenedFolds();
+  });
+});
+
+describe('foldSummary', () => {
+  it('never shows what the body hides: style, script, comments', () => {
+    const body = '<style>.warning { color: red }</style><script>const internal = 42</script><!-- note --><p>Actual user-facing words.</p>';
+    expect(foldSummary('Title', body)).toBe('Actual user-facing words.');
+    // A long style block cannot crowd the words out of the summary.
+    expect(foldSummary('Title', `<style>${'.x{color:red}'.repeat(80)}</style>Real words.`)).toBe('Real words.');
+  });
+
+  it('reads a task chip as its label', () => {
+    expect(foldSummary('T', 'Done for <task-ref id="mw0" label="Website check"/> today.')).toBe('Done for Website check today.');
   });
 });

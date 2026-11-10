@@ -54,6 +54,9 @@ export const FOLD_SUMMARY_MAX = 280;
 /** A message's words as one plain line: a task chip reads as its label, other tags and code drop. */
 function plainText(text: string): string {
   return text
+    // What a body never shows (sanitized away or invisible): the element with its contents.
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|style|template|noscript|head|title|svg|iframe|object)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
     .replace(/<(?:task-ref|walnut-task)\b[^<>]*?\blabel=(["'])(.*?)\1[^<>]*>/g, '$2')
     .replace(/<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?\/?>/g, '')
     .split('\n')
