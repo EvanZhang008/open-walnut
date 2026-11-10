@@ -7,6 +7,7 @@ import type { ImageAttachment } from '@/api/chat';
 import type { SlashCommandItem } from '@/api/slash-commands';
 import { MAX_QUEUE_SIZE } from '@/hooks/useChat';
 import { CommandPalette, type PaletteItem } from './CommandPalette';
+import { DrawingPad } from './DrawingPad';
 import { detectSlashCommand } from './slash-trigger';
 import { FileMentionPopup, type FileMentionHandle } from './FileMentionPopup';
 import { MentionPalette, type MentionPaletteHandle } from './MentionPalette';
@@ -509,6 +510,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // "+" attach menu + send split-button dropdown (Claude-style). Both close on
   // outside click; refs anchor the click-outside test to each group.
   const [plusOpen, setPlusOpen] = useState(false);
+  const [drawingOpen, setDrawingOpen] = useState(false);
+  useEffect(() => { setDrawingOpen(false); }, [draftKey, sessionMentionSelfId]);
   const [sendMenuOpen, setSendMenuOpen] = useState(false);
   const plusGroupRef = useRef<HTMLDivElement>(null);
   const plusBtnRef = useRef<HTMLButtonElement>(null);
@@ -1928,6 +1931,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      <DrawingPad draftId={draftKey ?? sessionMentionSelfId ?? 'drawing'} open={drawingOpen} onClose={() => { setDrawingOpen(false); textareaRef.current?.focus(); }} onAttach={(file) => attachments.add([file])} canAttach={!disabled && !atAttachLimit} />
       {paletteOpen && (
         <CommandPalette
           commands={paletteResults}
@@ -2072,6 +2076,12 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
                 </svg>
                 <span>{atAttachLimit ? 'Attachment limit reached' : acceptsFiles ? 'Attach files or images' : 'Attach image'}</span>
+              </button>
+              <button className="chat-plus-menu-item" type="button" role="menuitem" disabled={atAttachLimit} onClick={() => { setPlusOpen(false); setDrawingOpen(true); }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m16 3 5 5-12 12H4v-5L16 3Z" /><path d="m14 5 5 5" />
+                </svg>
+                <span>Draw</span>
               </button>
               {/* Shortcuts — the discoverable index of the composer's special
                   commands (each row inserts its trigger and opens its picker). */}

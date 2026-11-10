@@ -45,6 +45,7 @@ const BOXES: Record<string, Kind> = {
   'components/sessions/TriggerPickerPopover.tsx': COMPOSER,
   // Forms and editors: settings, code, instructions, never an answer to an ask.
   'components/common/AnswerBox.tsx': form('the shared box itself'),
+  'components/chat/DrawingPad.tsx': form('a canvas label editor, committed into the drawing before it is attached'),
   'components/agents/AgentForm.tsx': form("an agent's instructions"),
   'components/commands/CommandForm.tsx': form("a command's prompt text"),
   'components/workspaces/ProjectScriptsDialog.tsx': form("a project script's shell command"),

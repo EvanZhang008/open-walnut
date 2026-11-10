@@ -1,0 +1,45 @@
+import { test, expect } from '@playwright/test';
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import { seedColumns } from './draft-helpers';
+import { startSessionAt, fixtureRoot, panelFor, openPlusMenu } from './engine-settings-popover-helpers';
+
+test.describe.configure({ timeout: 180_000 });
+test('a long label at the bottom right stays inside the exported drawing', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const sid = await startSessionAt(page.request, path.join(await fixtureRoot(), 'projects'), 'claude');
+  await seedColumns(page, [sid]);
+  await page.evaluate(() => { location.href = 'http://localhost:3457/'; });
+  const panel = panelFor(page, sid);
+  await expect(panel.locator('.chat-plus-btn')).toBeVisible({ timeout: 60_000 });
+  const menu = await openPlusMenu(panel);
+  await menu.getByRole('menuitem', { name: 'Draw', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Drawing', exact: true });
+  const canvas = dialog.getByLabel('Drawing canvas');
+  await dialog.getByRole('button', { name: 'Text', exact: true }).click();
+  const box = (await canvas.boundingBox())!;
+  await page.mouse.click(box.x + box.width * .99, box.y + box.height * .99);
+  await page.keyboard.type('A long label near the edge must stay visible');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Second line');
+  const editor = dialog.getByLabel('Canvas text');
+  const ebox = (await editor.boundingBox())!;
+  expect(ebox.x + ebox.width).toBeLessThanOrEqual(box.x + box.width);
+  expect(ebox.y + ebox.height).toBeLessThanOrEqual(box.y + box.height);
+  await fs.mkdir('/tmp/session-drawing', { recursive: true });
+  await page.screenshot({ path: '/tmp/session-drawing/10-edge-typing.png', scale: 'css' });
+  await page.keyboard.press('Meta+Enter');
+  const pixels = await canvas.evaluate(el => {
+    const ctx = (el as HTMLCanvasElement).getContext('2d')!;
+    return [560, 590, 620].map(y => [...ctx.getImageData(690, y, 305, 28).data].filter((v, i) => i % 4 === 0 && v < 100).length);
+  });
+  expect(pixels.every(count => count > 20)).toBe(true);
+  await page.screenshot({ path: '/tmp/session-drawing/11-edge-committed.png', scale: 'css' });
+  await dialog.getByRole('button', { name: 'Text', exact: true }).click();
+  await page.mouse.click(box.x + box.width * .2, box.y + box.height * .2);
+  await editor.fill('Too many lines\n'.repeat(30));
+  await expect(dialog.getByRole('alert')).toContainText('taller than the canvas');
+  await expect(dialog.getByRole('button', { name: 'Attach drawing', exact: true })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(dialog.getByRole('button', { name: 'Attach drawing', exact: true })).toBeEnabled();
+});
