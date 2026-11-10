@@ -72,7 +72,7 @@ const ALLOW: Record<string, AllowSpec> = {
   tag_links: { '*': true },
   link_tags: { '*': true },
   pull_requests: { watch: true, auto_complete_on_merge: true, wake_agent: true },
-  ui: { session_panels: true, show_priority: true, show_walnut_additions: true, next_after_complete: true },
+  ui: { session_panels: true, show_priority: true, show_walnut_additions: true, next_after_complete: true, taskbar_hide_recent_only: true, taskbar_leaving: true },
   time: {
     outside: { enabled: true },
     screentime: { enabled: true, include_this_mac: true },

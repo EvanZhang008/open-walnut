@@ -12,11 +12,13 @@ import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { openSessionOnHome } from '@/utils/open-session';
 import { requestOpenOnPage } from '@/utils/taskbar-minimize';
 import { closeChip, closeRecent, moveTaskbarChip, takeFromTaskbar, useTaskbarLists } from '@/pages/sessionTaskbarStore';
+import { useTaskbarSettings } from '@/hooks/useTaskbarSettings';
 import { SessionTaskbar } from './SessionTaskbar';
 
 export function AppTaskbar() {
   const phone = usePhoneLayout();
   const { chips, recent } = useTaskbarLists();
+  const settings = useTaskbarSettings();
   const store = useTasksContextSafe();
   const navigate = useNavigate();
   const location = useLocation();
@@ -44,6 +46,7 @@ export function AppTaskbar() {
       onClose={closeChip}
       onCloseRecent={closeRecent}
       onMove={moveTaskbarChip}
+      settings={settings}
     />
   );
 }

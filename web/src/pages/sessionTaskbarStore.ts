@@ -13,6 +13,7 @@ import {
   minimizeOffStrip, moveChip, removeChip, restoreTaskbar, sameList, taskbarAfterStripChange, type TaskbarLists,
 } from './sessionTaskbar';
 import type { SessionSlot } from './sessionColumns';
+import { taskbarSettingsNow } from '@/hooks/useTaskbarSettings';
 
 let lists: TaskbarLists | null = null;
 const listeners = new Set<() => void>();
@@ -57,7 +58,7 @@ export function useTaskbarLists(): TaskbarLists {
 
 /** Home's strip went from `before` to `after`; `minimized` are the ids its Minimize took off. */
 export function applyStripChange(before: readonly SessionSlot[], after: readonly SessionSlot[], minimized: ReadonlySet<string>): void {
-  set(prev => taskbarAfterStripChange(prev, before, after, minimized));
+  set(prev => taskbarAfterStripChange(prev, before, after, minimized, taskbarSettingsNow().leaving));
 }
 
 export function closeChip(sessionId: string): void {

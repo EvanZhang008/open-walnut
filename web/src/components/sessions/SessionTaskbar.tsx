@@ -15,7 +15,9 @@
  * strip without a Minimize (a close, a column pushed out), as lighter pills (2026-11-07,
  * design A). A click opens one back onto the strip; its × only takes it off the list. Only
  * the newest RECENT_SHOWN are pills; the rest are rows of one "N more" menu after them, in
- * the same order with the same open and × (2026-11-09).
+ * the same order with the same open and × (2026-11-09). Two switches in Settings > General
+ * (2026-11-10): with only Recent the bar is not drawn (default), and a session leaving the strip
+ * can become a chip instead of a Recent pill, as before (pages/sessionTaskbar.ts taskbarView).
  *
  * The rules of what is a chip live in pages/sessionTaskbar.ts; this file only draws.
  */
@@ -29,7 +31,7 @@ import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
-import { RECENT_SHOWN, chipStateOf, type ChipState } from '@/pages/sessionTaskbar';
+import { RECENT_SHOWN, chipStateOf, taskbarView, type ChipState, type TaskbarSettings } from '@/pages/sessionTaskbar';
 import { fetchSessionHistory } from '@/api/sessions';
 import { taskOfSession, taskStatusLabel } from '@/utils/session-status';
 import { ICON_CLOSE } from '@/components/common/Icons';
@@ -46,6 +48,8 @@ export interface SessionTaskbarProps {
   onClose: (sessionId: string) => void;
   onCloseRecent: (sessionId: string) => void;
   onMove: (sessionId: string, toIndex: number) => void;
+  /** Settings > General's taskbar switches (hooks/useTaskbarSettings.ts). */
+  settings: TaskbarSettings;
 }
 
 
@@ -53,9 +57,11 @@ export interface SessionTaskbarProps {
 const PEEK_OPEN_MS = 350;
 const PEEK_CLOSE_MS = 250;
 
-export function SessionTaskbar({ chips, recent, tasks, onRestore, onClose, onCloseRecent, onMove }: SessionTaskbarProps) {
+export function SessionTaskbar({ chips, recent, tasks, onRestore, onClose, onCloseRecent, onMove, settings }: SessionTaskbarProps) {
   const [dragged, setDragged] = useState<string | null>(null);
-  if (chips.length === 0 && recent.length === 0) return null;
+  // What the bar draws is taskbarView's: no bar with only Recent while that switch is on.
+  const view = taskbarView({ chips, recent }, settings);
+  if (!view.shown) return null;
   const dropAt = (e: DragEvent, index: number) => {
     e.preventDefault();
     const id = dragged ?? e.dataTransfer.getData('text/x-walnut-chip');
@@ -77,7 +83,7 @@ export function SessionTaskbar({ chips, recent, tasks, onRestore, onClose, onClo
           onDrop={(e) => dropAt(e, i)}
         />
       ))}
-      {recent.length > 0 && (
+      {view.recent && (
         <div className="session-taskbar-recent" role="group" aria-label="Recently open" data-testid="session-taskbar-recent">
           <span className="session-taskbar-recent-label" aria-hidden="true">Recent</span>
           {recent.slice(0, RECENT_SHOWN).map((sid) => (

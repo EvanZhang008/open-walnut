@@ -10,6 +10,7 @@ import { iconInkOffsets, ICON_CENTER_TOLERANCE_PX } from './icon-ink'
 import { setPanelMode } from './draft-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
 import { closeSessionKebab, kebabRow, openSessionKebab } from './session-kebab-helpers'
+import { pinTaskbarConfig } from './taskbar-settings-helpers'
 
 // One test sets the fixture's panel count (a full strip pushes a column out).
 holdPanelCountLock('test')
@@ -82,6 +83,8 @@ test('Minimize puts the column on the taskbar; its chip brings it back', async (
 })
 
 test('× on a column never makes a chip: the session goes to Recent at the right end, which opens it again', async ({ page }) => {
+  // Recent alone draws a bar only with that switch off (default on: session-taskbar-settings.spec.ts).
+  await pinTaskbarConfig(page, { taskbar_hide_recent_only: false })
   const panel = await openSessionPanel(page)
   await beat(page)
   await panel.getByRole('button', { name: 'Close session panel' }).click()
@@ -110,6 +113,8 @@ test('× on a column never makes a chip: the session goes to Recent at the right
 })
 
 test('a column pushed out by a full strip never makes a chip: it goes to Recent', async ({ page }) => {
+  // Recent alone draws a bar only with that switch off (default on: session-taskbar-settings.spec.ts).
+  await pinTaskbarConfig(page, { taskbar_hide_recent_only: false })
   test.setTimeout(120_000)
   // The lock (holdPanelCountLock) puts the count back as it found it after the test.
   await setPanelMode(page, '1')
@@ -155,6 +160,8 @@ test('the bar is the same on every page: Minimize on the Org side panel shows th
 })
 
 test('a taskbar an older Walnut saved (pushed-out sessions mixed in) opens with no chips, its sessions under Recent', async ({ page }) => {
+  // Recent alone draws a bar only with that switch off (default on: session-taskbar-settings.spec.ts).
+  await pinTaskbarConfig(page, { taskbar_hide_recent_only: false })
   await page.addInitScript((id) => {
     if (sessionStorage.getItem('pw-legacy-seeded')) return
     sessionStorage.setItem('pw-legacy-seeded', '1')

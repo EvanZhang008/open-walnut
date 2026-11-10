@@ -6,6 +6,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { pinTaskbarConfig } from './taskbar-settings-helpers'
 
 const RECENT_KEY = 'open-walnut-layout:home-recent'
 const CHIPS_KEY = 'open-walnut-layout:home-minimized'
@@ -35,7 +36,11 @@ const more = (page: Page) => page.getByTestId('session-taskbar-recent-more')
 const menu = (page: Page) => page.getByTestId('session-taskbar-recent-more-menu')
 
 test('Recent shows at most two pills, the rest behind "N more": 0, 1, 2, 3 and 10 sessions', async ({ page }) => {
+  // Six page loads, each read through the config pin.
+  test.setTimeout(150_000)
   await isolateUiPrefs(page)
+  // Recent alone draws a bar only with that switch off (default on: session-taskbar-settings.spec.ts).
+  await pinTaskbarConfig(page, { taskbar_hide_recent_only: false })
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
@@ -109,6 +114,7 @@ test('Recent shows at most two pills, the rest behind "N more": 0, 1, 2, 3 and 1
 
 test('in a short window the "N more" menu is cut to fit, and the row the keyboard moves to is scrolled into view', async ({ page }) => {
   await isolateUiPrefs(page)
+  await pinTaskbarConfig(page, { taskbar_hide_recent_only: false })
   await page.setViewportSize({ width: 900, height: 300 })
   await page.goto('/')
   await page.waitForLoadState('networkidle')

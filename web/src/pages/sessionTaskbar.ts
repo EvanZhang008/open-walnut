@@ -27,6 +27,37 @@ export const RECENT_MAX = 12;
  *  the user: "max shoudl be 2 and a drop down that has more"). */
 export const RECENT_SHOWN = 2;
 
+/** Where a session that leaves the strip without a Minimize goes (2026-11-10, the user: "if we
+ *  should have "recnet" side also have a setting to contorl, liek before all the redne tor
+ *  minized will all go to below, have 2 otpions"): 'recent', the Recent end of the bar (a close,
+ *  a column pushed out), or 'chips', a chip like a minimized one, as before Recent existed. */
+export type TaskbarLeaving = 'recent' | 'chips';
+
+export interface TaskbarSettings {
+  /** No bar while it would hold only Recent (2026-11-10, the user: "this bar, if only has the
+   *  recent don;t sow", then "add a setting for this"). Default on. */
+  hideRecentOnly: boolean;
+  leaving: TaskbarLeaving;
+}
+
+export const DEFAULT_TASKBAR_SETTINGS: TaskbarSettings = { hideRecentOnly: true, leaving: 'recent' };
+
+/** The settings from config's `ui` values (or a stored copy), each falling back to its default. */
+export function taskbarSettingsOf(v: { hideRecentOnly?: unknown; leaving?: unknown } | null | undefined): TaskbarSettings {
+  return {
+    hideRecentOnly: v?.hideRecentOnly !== false,
+    leaving: v?.leaving === 'chips' ? 'chips' : 'recent',
+  };
+}
+
+/** What the bar draws. Recent only with `leaving: 'recent'` (with 'chips' nothing goes there, and
+ *  what an earlier choice left there waits unseen); the bar at all only with a chip, or with
+ *  Recent while hideRecentOnly is off. */
+export function taskbarView(lists: { chips: readonly string[]; recent: readonly string[] }, settings: TaskbarSettings): { shown: boolean; recent: boolean } {
+  const recent = settings.leaving === 'recent' && lists.recent.length > 0;
+  return { shown: lists.chips.length > 0 || (recent && !settings.hideRecentOnly), recent };
+}
+
 export interface TaskbarLists {
   /** Minimized by the user, in the order they joined (drag to reorder). */
   chips: string[];
@@ -39,13 +70,15 @@ export interface TaskbarLists {
  * user minimized in that change: only those become chips. Every other real session that
  * left goes to the front of Recent. A column whose id changed in place (a draft becoming
  * its session, plan -> exec) is a swap, not a session leaving: the swapped slot names the
- * id it replaced (SessionSlot.from). Returns `lists` itself when nothing changed.
+ * id it replaced (SessionSlot.from). With `leaving: 'chips'` every real session that left
+ * becomes a chip, as before Recent existed. Returns `lists` itself when nothing changed.
  */
 export function taskbarAfterStripChange(
   lists: TaskbarLists,
   before: readonly SessionSlot[],
   after: readonly SessionSlot[],
   minimized: ReadonlySet<string>,
+  leaving: TaskbarLeaving = 'recent',
 ): TaskbarLists {
   const shown = new Set(after.map(c => c.id));
   // Only a slot this change wrote can name a swap; an older one's `from` is history.
@@ -54,7 +87,7 @@ export function taskbarAfterStripChange(
   let recent = lists.recent.filter(id => !shown.has(id));
   for (const slot of before) {
     if (shown.has(slot.id) || !isRealSessionColumn(slot.id) || swappedAway.has(slot.id)) continue;
-    if (minimized.has(slot.id)) {
+    if (minimized.has(slot.id) || leaving === 'chips') {
       if (!chips.includes(slot.id)) chips.push(slot.id);
       recent = recent.filter(id => id !== slot.id);
     } else if (!chips.includes(slot.id)) {

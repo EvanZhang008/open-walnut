@@ -1984,6 +1984,12 @@ export interface Config {
     /** Completing a task from its session column (or with the keyboard) goes on to the next
      *  task that needs the person: its column opens and takes the caret. Default: true. */
     next_after_complete?: boolean;
+    /** The app's bottom taskbar is not drawn while it would hold only Recent (no minimized
+     *  session). Default: true. */
+    taskbar_hide_recent_only?: boolean;
+    /** Where a session that leaves Home's strip without a Minimize goes: 'recent' (the Recent
+     *  end of the taskbar, the default) or 'chips' (a chip like a minimized one). */
+    taskbar_leaving?: 'recent' | 'chips';
   };
   /** How a task's tags show (core/tag-display-rules.ts): a tag (`label:urgent`) or a key
    *  (`ticket-id:*`) to `shown` (whole), `value` (the text after the key) or `hidden`. Display

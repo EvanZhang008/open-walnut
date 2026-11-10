@@ -9,6 +9,8 @@ import { useTheme, type ThemePreference } from '@/hooks/useTheme';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { announceSessionPanelMode, useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
+import { setTaskbarHideRecentOnly, setTaskbarLeaving, useTaskbarSettings } from '@/hooks/useTaskbarSettings';
+import type { TaskbarLeaving } from '@/pages/sessionTaskbar';
 import { AppUpdateRow } from '../AppUpdateRow';
 import '@/styles/settings-sections-configure.css';
 
@@ -136,10 +138,16 @@ function UpdateOnStartRow({ config, save }: { config: Config; save: ReturnType<t
  * storage, no config write) that ui-prefs sync copies to every window of this
  * Walnut, so their help says so; every other row is a config row via onSave.
  */
+const TASKBAR_LEAVING_OPTIONS: Array<{ value: TaskbarLeaving; label: string }> = [
+  { value: 'recent', label: 'Recent' },
+  { value: 'chips', label: 'Bar chips' },
+];
+
 export function GeneralSection({ config, onSave }: Props) {
   const { theme, setTheme } = useTheme();
   const focusBar = useFocusBarContext();
   const { mode: panelMode } = useSessionPanelMode();
+  const taskbar = useTaskbarSettings();
   const save = useSerialSave(config, onSave);
 
   const configuredPanels = config.ui?.session_panels;
@@ -195,6 +203,34 @@ export function GeneralSection({ config, onSave }: Props) {
               value={panels.value}
               options={PANEL_OPTIONS.map((o) => ({ ...o, testId: `settings-panels-${o.value}` }))}
               onChange={panels.set}
+            />
+          }
+        />
+        <SettingsRow
+          label="Closed sessions go to"
+          help="Where a session goes when it leaves the columns with × or is pushed out. Recent: the right end of the bottom bar; only Minimize makes a chip. Bar chips: a chip like a minimized one."
+          data-testid="settings-taskbar-leaving-row"
+          control={
+            <SegmentedControl
+              id="settings-taskbar-leaving"
+              aria-label="Closed sessions go to"
+              value={taskbar.leaving}
+              options={TASKBAR_LEAVING_OPTIONS.map((o) => ({ ...o, testId: `settings-taskbar-leaving-${o.value}` }))}
+              onChange={setTaskbarLeaving}
+            />
+          }
+        />
+        <SettingsRow
+          label="Hide the bottom bar when it has only Recent"
+          help="The bar shows once a session is minimized, with Recent beside its chips."
+          htmlFor="settings-taskbar-hide-recent-only"
+          data-testid="settings-taskbar-hide-recent-only-row"
+          control={
+            <ToggleSwitch
+              id="settings-taskbar-hide-recent-only"
+              aria-label="Hide the bottom bar when it has only Recent"
+              checked={taskbar.hideRecentOnly}
+              onChange={setTaskbarHideRecentOnly}
             />
           }
         />
