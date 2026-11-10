@@ -15,7 +15,7 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import { centreInHistory, resetThreadsFixture, switchView, test } from './threads-helpers'
 import { PLACE_READY, PLACE_SESSION, PLACE_TASK, PLACE_TITLES } from './threads-fixture'
-import { captureSends, leftHalf, openQuestion, pagesOnScreen, rightBody, rightComposer, scrollBoxOf, send } from './tree-split-helpers'
+import { captureSends, leftHalf, pagesOnScreen, rightBody, rightComposer, scrollBoxOf, send } from './tree-split-helpers'
 import { openThreadsSession, sessionPanel } from './threads-helpers'
 
 const T = PLACE_TITLES
@@ -119,6 +119,33 @@ async function wheel(page: Page, scope: Locator, dy: number): Promise<void> {
   }
 }
 
+/**
+ * The question list's openQuestion (tree-split-helpers.ts), with the reader's own click on the
+ * list's icon. The icon rides the timeline's scroll box (the map is sticky), and Playwright's
+ * click scrolls its target into view first, which for a sticky element means its place in the
+ * flow: the box jumped back up to where the page had landed, within a second of the reader's
+ * wheel, so the timeline took it for his scroll and kept that as the page's place (CI 2026-11-10:
+ * question 2 came back at its landing, not where he had scrolled it). A reader's click moves nothing.
+ */
+async function openQuestionAt(page: Page, panel: Locator, title: string): Promise<void> {
+  const map = panel.locator('.session-panel-body .thread-map')
+  await expect(map.locator('.thread-map-body')).toBeVisible()
+  if (await map.getAttribute('data-shape') === 'rail') {
+    const overlay = map.locator('.thread-map-overlay')
+    if (await overlay.count() === 0) await map.locator('.thread-map-rail').dispatchEvent('click')
+    await expect(overlay).toBeVisible()
+  }
+  const icon = map.locator('.thread-map-icon[aria-label="Open the question list"]')
+  await expect(icon).toBeVisible()
+  await clickAt(page, icon)
+  const drawer = page.locator('.thread-drawer')
+  await expect(drawer).toBeVisible()
+  await drawer.locator('.thread-drawer-chip', { hasText: /^All\b/ }).click()
+  await drawer.locator('.thread-tree-row').filter({ has: page.locator('.thread-tree-title', { hasText: title }) }).first().focus()
+  await page.keyboard.press('Enter')
+  await expect(drawer).toHaveCount(0)
+}
+
 /** One page at a time: how deep the page on screen is (0 = Main). */
 async function expectDepth(panel: Locator, depth: number): Promise<void> {
   await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 10_000 })
@@ -185,12 +212,12 @@ test.describe('every chat pane keeps the reader\'s place', () => {
     const q2 = await settledPlace(page, rightBody(panel))
     test.info().annotations.push({ type: 'kept after q2', description: await kept(page) })
     // Back to question 1 from the list: its place; Main unmoved.
-    await openQuestion(panel, T.Q1)
+    await openQuestionAt(page, panel, T.Q1)
     await expectPages(panel, ['L Main conversation', 'R 1'])
     expectSamePlace(await settledPlace(page, rightBody(panel)), q1, 'question 1, picked again')
     expectSamePlace(await settledPlace(page, leftHalf(panel)), main, 'Main, while the right page changed')
     test.info().annotations.push({ type: 'kept before q2 again', description: await kept(page) })
-    await openQuestion(panel, T.Q2)
+    await openQuestionAt(page, panel, T.Q2)
     expectSamePlace(await settledPlace(page, rightBody(panel)), q2, `question 2, picked again (kept: ${await kept(page)})`)
   })
 
@@ -214,7 +241,7 @@ test.describe('every chat pane keeps the reader\'s place', () => {
     // At the bottom, a question opens: Main stays at the bottom.
     const atEnd = await placeOf(rightBody(panel))
     expect(atEnd.fromBottom).toBeLessThan(40)
-    await openQuestion(panel, T.Q2)
+    await openQuestionAt(page, panel, T.Q2)
     await expectPages(panel, ['L Main conversation', 'R 2'])
     await page.waitForTimeout(800)
     expect((await placeOf(leftHalf(panel))).fromBottom, 'Main left at the bottom').toBeLessThan(40)
@@ -240,7 +267,7 @@ test.describe('every chat pane keeps the reader\'s place', () => {
     await page.keyboard.press('ControlOrMeta+BracketLeft')
     await expectDepth(panel, 0)
     expectSameOnScreen(await settledPlace(page, rightBody(panel)), mainAtRow, 'Main, back from question 1')
-    await openQuestion(panel, T.Q1)
+    await openQuestionAt(page, panel, T.Q1)
     await expectDepth(panel, 1)
     expectSamePlace(await settledPlace(page, rightBody(panel)), q1, 'question 1, opened again')
   })
