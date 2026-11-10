@@ -34,6 +34,8 @@ const R = {
 }
 const INPUTS = new Set<string>(INPUT_PROGRAMS)
 /** `WALNUT_INPUT_REASON=<10+ characters>` in front of the command lets its foreground input through. */
+/** Above 0 while judging a command whose line named its reason: input checks are off, sound checks are not. */
+let inputOff = 0
 const isInputReason = (w: string) => w.startsWith(`${INPUT_REASON_VAR}=`) && w.length >= INPUT_REASON_VAR.length + 1 + INPUT_REASON_MIN
 const PLAYS = new Set<string>(ALWAYS_PLAYS)
 const MAX_DEPTH = 8
@@ -132,12 +134,14 @@ export function osaHit(raw: string, depth = 0): string | null {
   if (R.osaBeep.test(t0)) return 'AppleScript beep'
   if (R.osaTell.test(t) && R.osaPlay.test(t0)) return 'a media app told to play'
   if (R.appVolume.test(t0)) return 'an app volume change'
-  if (t.includes(OSA_SYSTEM_EVENTS) && R.osaInput.test(t0)) return INPUT_PREFIX + 'System Events clicks or keys'
   for (let at = t0.indexOf(OSA_SET_VOLUME_RE); at >= 0; at = t0.indexOf(OSA_SET_VOLUME_RE, at + 1)) {
     // An AppleScript comment (-- or #) ends the statement.
     if (!R.muteOnly.test(t0.slice(at).split(/[\n;]/)[0].replace(/(--|#).*$/, ''))) return 'set volume'
   }
   for (const m of t.matchAll(R.jxaVol)) if (!R.jxaMuteOnly.test(t.slice(m.index!))) return 'setVolume'
+  if (!inputOff && t.includes(OSA_SYSTEM_EVENTS) && R.osaInput.test(t0)) return INPUT_PREFIX + 'System Events clicks or keys'
+  // JXA's ObjC bridge ($.CGEventPost).
+  if (!inputOff && R.codeInput.test(t0)) return INPUT_PREFIX + 'an input event API'
   return null
 }
 
@@ -145,8 +149,8 @@ export function osaHit(raw: string, depth = 0): string | null {
 export function codeHit(raw: string, depth = 0): string | null {
   const t2 = raw.toLowerCase().replace(R.string, '""')
   if (R.codeApi.test(t2)) return 'an audio or speech API'
-  if (R.codeInput.test(t2)) return INPUT_PREFIX + 'an input event API'
   for (const line of spawnedLines(raw)) { const h = lineHit(line, depth + 1); if (h) return h }
+  if (!inputOff && R.codeInput.test(t2)) return INPUT_PREFIX + 'an input event API'
   return null
 }
 
@@ -174,8 +178,8 @@ function lastAudioSilent(name: string, args: string[]): boolean {
 /** A player or mixer program's own verdict on its arguments, or null. */
 function programHit(name: string, all: string[]): string | null {
   if (PLAYS.has(name)) return name
-  if (INPUTS.has(name)) return INPUT_PREFIX + name
-  if (name === 'peekaboo') { const sub = all.find((a) => !a.startsWith('-')); return sub !== undefined && R.peekaboo.test(sub.toLowerCase()) ? `${INPUT_PREFIX}peekaboo ${sub}` : null }
+  if (!inputOff && INPUTS.has(name)) return INPUT_PREFIX + name
+  if (name === 'peekaboo') { const sub = inputOff ? undefined : all.find((a) => !a.startsWith('-') && R.peekaboo.test(a.toLowerCase())); return sub === undefined ? null : `${INPUT_PREFIX}peekaboo ${sub}` }
   // Options end at `--`: what follows is text (`espeak -- hello -q` speaks "-q").
   const end = all.indexOf('--')
   const args = end >= 0 ? all.slice(0, end) : all
@@ -311,8 +315,11 @@ function commandHit(words: string[], start: number, input: CommandInput, depth: 
     else if (name === 'unbuffer') while (i < words.length && words[i].startsWith('-')) i++
   }
   if (i >= words.length) return null
-  const allowInput = words.slice(start, i).some(isInputReason)
-  const own = (h: string | null) => (h !== null && allowInput && h.startsWith(INPUT_PREFIX) ? null : h)
+  // A reason on this command's line turns input checks off for all it runs; sound stays judged.
+  if (!inputOff && words.slice(start, i).some(isInputReason)) {
+    inputOff++
+    try { return commandHit(words, start, input, depth, scanExec) } finally { inputOff-- }
+  }
   // python3.11 is python3.
   const name = path.posix.basename(words[i]).replace(/^(python[23]?)(\.[0-9]+)+$/, '$1')
   const args = words.slice(i + 1)
@@ -332,15 +339,15 @@ function commandHit(words: string[], start: number, input: CommandInput, depth: 
   if (name === 'osascript') {
     const script = inlineCode(['-e'], name, args.filter((a, k) => !(a === '-l' || a === '-s' || args[k - 1] === '-l' || args[k - 1] === '-s')))
     if (script === null) return null
-    return own(osaHit((script === 'stdin' ? stdinOf(input) : script).join('\n'), depth))
+    return osaHit((script === 'stdin' ? stdinOf(input) : script).join('\n'), depth)
   }
   const flags = Object.hasOwn(CODE_FLAGS, name) ? CODE_FLAGS[name] : undefined
   if (flags) {
     const code = inlineCode(flags, name, args)
     if (code === null) return null
-    return own(codeHit((code === 'stdin' ? stdinOf(input) : code).join('\n'), depth))
+    return codeHit((code === 'stdin' ? stdinOf(input) : code).join('\n'), depth)
   }
-  const prog = own(programHit(name, args))
+  const prog = programHit(name, args)
   if (prog) return prog
   if (scanExec) {
     for (let k = i + 1; k < words.length; k++) {
