@@ -505,9 +505,11 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // values back, and the write's own echo, eaten by guardEcho, would never correct them
   // (2026-10-17: a rename on a host replica, whose list read is answered while its write
   // waits on the host's journal, showed the old title until the next refetch). Returns
-  // the settle to call once, when the write is answered or fails.
-  const holdOptimistic = (id: string, apply: (rows: Task[]) => Task[]): (() => void) => {
-    const current = tasksNow.current.find((t) => t.id === id);
+  // the settle to call once, when the write is answered or fails. `base`: the caller's copy of a
+  // row the list does not hold yet (its first answer still on the way), so that answer, read
+  // before the write, is laid under the edit too.
+  const holdOptimistic = (id: string, apply: (rows: Task[]) => Task[], base?: Task): (() => void) => {
+    const current = tasksNow.current.find((t) => t.id === id) ?? (base?.id === id ? base : undefined);
     const next = current ? apply([current]).find((t) => t.id === id) : undefined;
     const fields = current && next ? changedFields(current, next) : {};
     if (Object.keys(fields).length === 0) return () => {};
@@ -1124,15 +1126,16 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // `undoOf`: an Undo of the task's last phase move, with its phase_changed_at before that move
   // (TaskUndoContext restorePhase; the server tells whether a NEED_ACTION was the person's ask).
   // `unread`: the read marker to keep rather than the one the phase implies (an Undo puts a
-  // task the person had read back as read).
-  const setPhase = useCallback((id: string, phase: string, opts?: { undoOf?: string; unread?: boolean }) => {
+  // task the person had read back as read). `row`: the caller's copy of a row the list does
+  // not hold yet (holdOptimistic).
+  const setPhase = useCallback((id: string, phase: string, opts?: { undoOf?: string; unread?: boolean; row?: Task }) => {
     guardEcho(`phase:${id}`);
     const unread = opts?.unread;
     const apply = (rows: Task[]) => {
       const next = applyPhaseChange(rows, id, phase);
       return unread === undefined ? next : next.map((t) => (t.id === id && t.unread !== unread ? { ...t, unread } : t));
     };
-    const settle = holdOptimistic(id, apply);
+    const settle = holdOptimistic(id, apply, opts?.row);
     setTasks(apply);
     return withWriteRetry((opId) => tasksApi.updateTask(id, {
       phase,

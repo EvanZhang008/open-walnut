@@ -267,12 +267,17 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       };
     });
     const id = task.id;
-    const shared = storeFor(id);
+    // A column's own completion before the board's first list has come (a slow load): the
+    // store takes it all the same and holds the phase over the row when the list brings it, so
+    // the column closes at once and a refusal still gives it back. The direct path below waited
+    // for the server, so a late refusal kept the column, and a list answer read before the
+    // click put the old phase back under the ring and kept the column too (2026-11-09).
+    const shared = storeFor(id) ?? (completing && onCompleted && store?.loading ? store : null);
     if (shared) {
       // A column's own completion takes its Undo from the column (useColumnCompleteClose);
       // anywhere else a complete or reopen takes the plain one.
       if (completing && onCompleted) {
-        shared.setPhase(id, phase);
+        shared.setPhase(id, phase, { row: task });
         onCompleted({ taskId: id, from: task.phase });
       } else if (taskUndo) taskUndo.setPhase(id, phase, ring ? { ring } : undefined);
       else shared.setPhase(id, phase);

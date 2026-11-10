@@ -26,7 +26,8 @@ export interface TasksContextValue {
   update: (id: string, updates: UpdateTaskInput) => Promise<boolean>;
   toggleComplete: (id: string) => Promise<boolean>;
   /** Resolves true once the server took the write, false when it refused (already reported). */
-  setPhase: (id: string, phase: string, opts?: { undoOf?: string; unread?: boolean }) => Promise<boolean>;
+  /** `row`: the caller's copy of a row the list does not hold yet; its first answer keeps the new phase. */
+  setPhase: (id: string, phase: string, opts?: { undoOf?: string; unread?: boolean; row?: Task }) => Promise<boolean>;
   /** Reorder within ONE project group. `project: ''` = Inbox. */
   reorder: (project: string, taskIds: string[]) => void;
   /** Move a task to another project ('' = Inbox), optionally next to a sibling. */

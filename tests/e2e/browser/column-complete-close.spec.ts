@@ -311,6 +311,43 @@ test('a refusal that lands after the column has gone gives the column back and t
   await expect(ring(page, 'b')).toBeEnabled()
 })
 
+test('a Complete clicked before the board has its list closes the column at once, and a late refusal gives it back', async ({ page }) => {
+  // A slow load (2026-11-09, CI under load): the columns and their rings are up before the
+  // board's first task list has come. The completion is the column's all the same: it closes at
+  // once, the list read before the click does not put the old phase back, and a refusal that
+  // lands later gives the column back.
+  await resetTasks(page)
+  await setPanelMode(page, '3')
+  await seedColumns(page, KEYS.map(SID))
+  let releaseList!: () => void
+  const listHeld = new Promise<void>((resolve) => { releaseList = resolve })
+  await page.route(/\/api\/tasks\?/, async (route) => {
+    if (new URL(route.request().url()).searchParams.get('fields') === 'list') await listHeld
+    await route.fallback()
+  })
+  await page.route(`**/api/tasks/${TID('b')}`, async (route) => {
+    if (route.request().method() === 'PATCH') {
+      await new Promise((resolve) => setTimeout(resolve, 6_000))
+      await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'refused late, for the test' }) })
+      return
+    }
+    await route.fallback()
+  })
+  await page.goto('/')
+  await expect(homeColumns(page)).toHaveCount(3, { timeout: 30_000 })
+  await expect(ring(page, 'b')).toBeEnabled({ timeout: 30_000 })
+  await ring(page, 'b').click()
+  // The list the board asked for before the click lands now, still saying IN_PROGRESS.
+  releaseList()
+  await expect(col(page, 'b')).toHaveCount(0, { timeout: 20_000 })
+  await expect(undoToast(page)).toBeVisible()
+
+  await expect(col(page, 'b')).toHaveCount(1, { timeout: 30_000 })
+  await expect.poll(async () => (await order(page)).join(), { timeout: 10_000 }).toBe(KEYS.map(SID).join())
+  await expect(undoToast(page)).toHaveCount(0)
+  expect(await phase(page, 'b')).toBe('IN_PROGRESS')
+})
+
 test('two columns completed back to back each keep their own Undo and their own place', async ({ page }) => {
   await stretchToasts(page)       // the second Undo comes after several slow steps
   await openThree(page)
