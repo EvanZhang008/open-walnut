@@ -554,6 +554,20 @@ export function answerFor(
   return null;
 }
 
+/**
+ * The answers a task keeps once `answer` is recorded (Task.asks_answered, oldest first): it replaces an
+ * earlier answer to the same ask, the newest ASKS_ANSWERED_MAX of them kept, except that an ask the
+ * user withdrew for good stays withdrawn: a later plain answer to it never replaces that record, and
+ * plain answers never push it out (up to ASKS_ANSWERED_MAX withdrawals of its own). Pure.
+ */
+export function keptAnswers(prev: readonly AskAnswer[], answer: AskAnswer): AskAnswer[] {
+  const others = prev.filter((a) => a.key !== answer.key || (a.withdrawn && !answer.withdrawn));
+  const all = [...others, answer];
+  const withdrawn = all.filter((a) => a.withdrawn).slice(-ASKS_ANSWERED_MAX);
+  const plain = all.filter((a) => !a.withdrawn).slice(-ASKS_ANSWERED_MAX);
+  return all.filter((a) => withdrawn.includes(a) || plain.includes(a));
+}
+
 /** Every answer recorded on a task, newest first. */
 export function answersOf(t: { ask_answered?: AskAnswer | null; asks_answered?: AskAnswer[] | null } | null | undefined): AskAnswer[] {
   const list = [...(t?.asks_answered ?? [])].reverse();

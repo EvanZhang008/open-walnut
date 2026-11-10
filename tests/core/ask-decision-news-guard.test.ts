@@ -32,7 +32,7 @@ import { clearRiding, decisionToldTo, pendingRiding, rideLine, rideNotice } from
 import { emptyThreads, openThread, updateThread } from '../../src/core/org/threads-model.js'
 import { askCheckedAtOf } from '../../src/core/user-status-sync.js'
 import { reportOfChange } from '../../src/core/sessions/report-set.js'
-import { askKey as SAME_KEY, answerHolds, answeredAbove, type AskAnswer } from '../../src/core/same-ask.js'
+import { askKey as SAME_KEY, answerHolds, answeredAbove, answersOf, keptAnswers, type AskAnswer } from '../../src/core/same-ask.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const NOW = Date.parse('2026-11-08T12:00:00Z')
@@ -404,6 +404,19 @@ describe('an ask a lead answered for the user stays answered in other words', ()
     expect(answerHolds(gone, 'Approve testing on your real iPhone?', NOW)).toBe(true)
     expect(answerHolds(gone, 'Can I run the tests on your own iPhone?', NOW, { ...taskDecision(taskOf(was))!, said: true })).toBe(true)
     expect(answerHolds(gone, 'Delete the staging database now that the move is done?', NOW)).toBe(false)
+  })
+  it('a withdrawal is never undone by a later plain answer, nor pushed out by plain ones', () => {
+    const was = turn(answer('Approve testing on your real iPhone?'), null, NOW - 3_600_000)
+    const gone = { ...answerTo(taskOf(was)), withdrawn: true as const }
+    let list = keptAnswers([], gone)
+    list = keptAnswers(list, { ...answerTo(taskOf(was)), text: 'fine, go' })
+    for (let i = 0; i < 12; i++) list = keptAnswers(list, { ...gone, withdrawn: undefined, key: `other ${i}`, ask: `Other ask number ${i}?` })
+    expect(list.filter((a) => a.withdrawn)).toEqual([gone])
+    expect(list.filter((a) => !a.withdrawn)).toHaveLength(8)
+    const later = { ...gone, at: iso(NOW - 40 * 24 * 3_600_000) }
+    expect(answeredAbove(taskOf(was).user_status!, answersOf({ asks_answered: keptAnswers(list, later) }), NOW).state).toBe('waiting')
+    // A plain answer to the same ask replaces the plain one before it, as it did.
+    expect(keptAnswers([{ ...gone, withdrawn: undefined }], { ...gone, withdrawn: undefined, text: 'b' }).map((a) => a.text)).toEqual(['b'])
   })
   it('an answer records the decision it answered, and the status passes its decision in', () => {
     expect(code('src/core/sessions/ask-answer.ts')).toMatch(/askId: d\.id, decisionKey: d\.key/)
