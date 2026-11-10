@@ -15,6 +15,7 @@ import { initAppInfo } from './utils/app-info';
 import { initBrowserLogger } from './utils/browser-logger';
 import { initLongTaskMonitor } from './utils/longtask-monitor';
 import { initInputLatencyMonitor } from './utils/input-latency-monitor';
+import { initTypingIntegrity } from './utils/typing-integrity';
 import { initPageVitals } from './utils/page-vitals';
 import { initMainThreadTracer, startPhase, endPhase, tracePhase } from './utils/main-thread-tracer';
 import { initUiPrefsSync, setLatePrefsHost } from './utils/ui-prefs-sync';
@@ -166,6 +167,9 @@ function bootApp(): void {
   // Keystroke → paint latency per 30s window, tagged mac-app vs browser, so
   // "typing feels laggy" is a number in the server log, not a description.
   initInputLatencyMonitor();
+  // Where a typed key went when it did not reach its box (prevented, dropped, overwritten,
+  // or typed after the box lost the caret), with the code that did it.
+  initTypingIntegrity();
   // How much the page holds, every 5 min while visible, beside the Mac app's memory lines.
   initPageVitals();
   // Cache server version/mode for crash reports (survives to server-down crashes).

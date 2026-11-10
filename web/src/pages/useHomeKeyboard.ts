@@ -328,8 +328,11 @@ export function useHomeKeyboard(deps: Deps): { jumpHints: boolean; env: KeyEnv; 
     let hintTimer: ReturnType<typeof setTimeout> | undefined;
     let hintsShown = false;
     let cancelFocus: (() => void) | null = null;
+    // Runs on every key, typing included: it touches React only when the numbers are up, so a
+    // typed letter never sets Home's state (2026-11-10, the user: "did we hook anything to the input").
     const hideHints = () => {
       if (hintTimer) { clearTimeout(hintTimer); hintTimer = undefined; }
+      if (!hintsShown) return;
       hintsShown = false;
       setJumpHints(false);
     };
