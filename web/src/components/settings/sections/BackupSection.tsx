@@ -158,6 +158,8 @@ export function BackupSection({ config, onSave }: Props) {
   const [keyState, setKeyState] = useState<KeyState>({ hasKey: false, needsKey: false })
   // Read once the key group answered: before that nothing is said as missing or paused.
   const [keyKnown, setKeyKnown] = useState(false)
+  // "Switch and restart" chosen: the pane waits for the page to load again.
+  const [switchingNow, setSwitchingNow] = useState(false)
 
   // A config refresh re-seeds only what its SAVED value moved, so the refresh
   // after one field's save never wipes text typed meanwhile in another.
@@ -483,14 +485,18 @@ export function BackupSection({ config, onSave }: Props) {
       ? `In use: backups go to ${inUse}.`
       : `In use: ${inUse}.`
 
+  // Keys that are not AWS keys (AKIA.../ASIA...) sent to AWS: most likely MinIO or B2 without its endpoint.
+  const endpointHint = type === 's3' && testResult && !testResult.ok && !(draft.endpoint ?? '').trim()
+    && !/^(AKIA|ASIA)/.test((draft.auth?.aws_access_key_id ?? draft.access_key_id ?? '').trim())
+    ? ' Using MinIO or Backblaze B2? Set its endpoint under Advanced.' : ''
   const connectionHelp = (): string => {
     if (legacyMode) return testHelp(testResult, true)
     if (missing.length > 0) return `Fill in: ${missing.join(', ')}.`
     if (problem) return problem
     if (testResult && !testResult.ok && savedDest?.type === type && !draftIsSaved) {
-      return `${testHelp(testResult, false)} Nothing was saved: backups still use the settings that worked.`
+      return `${testHelp(testResult, false)}${endpointHint} Nothing was saved: backups still use the settings that worked.`
     }
-    if (testResult) return testHelp(testResult, false)
+    if (testResult) return `${testHelp(testResult, false)}${endpointHint}`
     if (draftIsSaved) return 'Backups go here. Test again any time.'
     // Edits to a saved service (kept across a reload) are said to be edits, not saved settings.
     if (kept && !draftIsKept) return `Edited, not saved yet. "${savedDest?.type === type ? 'Test and save' : `Use ${labelOf(type)}`}" checks and saves it; Cancel goes back to the saved settings.`
@@ -501,6 +507,8 @@ export function BackupSection({ config, onSave }: Props) {
 
   return (
     <SectionCard id="backup" title="Backup" onSave={handleSave} showSave={false}>
+      {/* While Walnut restarts into restored data, the rest of the pane is out of reach. */}
+      <div className={switchingNow ? 'backup-contents backup-restarting' : 'backup-contents'} data-testid="backup-pane">
       <SettingsGroup
         heading="Where backups go"
         footer={legacyMode ? undefined : DESTINATION_NOTE[type]}
@@ -633,7 +641,8 @@ export function BackupSection({ config, onSave }: Props) {
               : legacyMode ? 'Only changed files upload after the first run.' : 'Encrypted on this computer first. After the first backup only changes upload.'}
           state={blocked && enabled && !loading ? 'warning' : undefined}
           data-testid="backup-enabled-row"
-          control={<ToggleSwitch id="backup-enabled" checked={enabled} onChange={setAutomatic} disabled={!!blocked && !enabled} />}
+          // On but paused (the reason is the help): the switch reads as paused too, not plainly on.
+          control={<span className={enabled && blocked && !loading ? 'backup-toggle-paused' : undefined}><ToggleSwitch id="backup-enabled" checked={enabled} onChange={setAutomatic} disabled={!!blocked && !enabled} /></span>}
         />
         <SettingsRow
           label="Every"
@@ -646,9 +655,11 @@ export function BackupSection({ config, onSave }: Props) {
           control={
             <NumberInput id="backup-interval" min={1} max={MAX_INTERVAL_HOURS} unit="hours" value={intervalHours}
               onChange={(v) => { setIntervalHours(v); setIntervalNote(null) }} disabled={!enabled}
+              // Back in the field (even to type the same number again), the old note has done its job.
+              onFocus={() => setIntervalNote(null)}
               // A value never saved does not stay on screen: leaving the field shows the one in use again, and says so.
               onBlur={() => {
-                if (intervalOk) return
+                if (intervalOk) { setIntervalNote(null); return }
                 const kept = saved.interval_hours ?? 24
                 setIntervalNote(`Enter 1 to ${MAX_INTERVAL_HOURS} hours: kept ${kept} hours.`)
                 setIntervalHours(kept)
@@ -711,8 +722,10 @@ export function BackupSection({ config, onSave }: Props) {
           switchDone={status?.switchDone}
           onSwitchChanged={loadStatus}
           canRestart={status?.canRestart}
+          onRestarting={setSwitchingNow}
         />
       </SettingsGroup>
+      </div>
     </SectionCard>
   )
 }

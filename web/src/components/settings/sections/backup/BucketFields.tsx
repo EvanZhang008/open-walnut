@@ -96,7 +96,7 @@ export function S3Fields({ dest, onChange, profiles }: Props) {
   return (
     <>
       <TextRow id="backup-s3-bucket" label="Bucket" value={dest.bucket} onChange={(v) => set({ bucket: v })} placeholder="e.g. my-walnut-backup" />
-      <TextRow id="backup-s3-region" label="Region" value={dest.region} onChange={(v) => set({ region: v })} placeholder="e.g. us-west-2" />
+      <TextRow id="backup-s3-region" label="Region" value={dest.region} onChange={(v) => set({ region: v })} placeholder="Optional, e.g. us-west-2" help="Empty: Walnut finds the bucket's region." />
       {!custom && (
         <SettingsRow
           label="Credentials"

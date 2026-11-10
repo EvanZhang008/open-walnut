@@ -233,6 +233,10 @@ test.describe('Backup settings', () => {
     await section.locator('#backup-interval').blur()
     await expect(section.locator('#backup-interval')).toHaveValue('24')
     await expect(section.getByRole('alert')).toContainText('Enter 1 to 168 hours: kept 24 hours.')
+    // Back in the field, even to type the same 24 again, the note has done its job.
+    await section.locator('#backup-interval').fill('24')
+    await section.locator('#backup-interval').blur()
+    await expect(section.getByTestId('backup-interval-row')).not.toContainText('kept 24 hours')
     await section.getByTestId('backup-service-gdrive').click()
     await expect(section.getByTestId('backup-service-r2')).toHaveClass(/backup-service-in-use/)
     // Walnut's own Google client: Connect is all there is; the user's own client is optional and folded.
@@ -467,6 +471,53 @@ test.describe('Backup settings', () => {
     await expect(row).toContainText('Restore cancelled')
     await expect(row).toContainText(`${targetDir}) was removed`)
     await expect(section.getByTestId('backup-restore-use')).toHaveCount(0)
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
+  test('keys that are not AWS keys, refused by AWS, point to the endpoint under Advanced', async ({ page }) => {
+    await holdConfigWrites(page, { enabled: false, interval_hours: 24 })
+    await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true, engine: null })
+    await answer(page, '**/api/backup/recovery-key', { key: null })
+    await answer(page, '**/api/backup/destination/test', { ok: false, error: 'AWS refused these credentials.' })
+    const section = await openBackup(page)
+    await section.getByTestId('backup-service-s3').click()
+    await section.locator('#backup-s3-bucket').fill('walnut-backup')
+    await section.getByTestId('backup-auth-access_keys').click()
+    await section.locator('#backup-s3-access-key').fill('minioadmin')
+    await section.locator('#backup-s3-secret').fill('minio-secret')
+    await section.getByTestId('backup-test-connection').click()
+    await expect(section.getByTestId('backup-destination-group')).toContainText('Using MinIO or Backblaze B2? Set its endpoint under Advanced.')
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  })
+
+  test('Switch and restart: the rest of the pane is out of reach at once', async ({ page }) => {
+    const r2 = { type: 'r2', bucket: 'my-bucket', account_id: '0123456789abcdef0123456789abcdef', access_key_id: 'AKEXAMPLE', secret_access_key: '\u2022\u2022\u2022\u2022\u2022\u2022mple' }
+    await holdConfigWrites(page, { enabled: true, interval_hours: 24, destination: r2, recovery_key_saved_at: '2026-11-01T00:00:00Z' })
+    const restored = '/Users/me/open-walnut-restored-2026-11-04T10-00-00'
+    await page.route('**/api/backup/status', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted', dataDir: '/Users/me/.open-walnut', canRestart: true,
+      restore: { running: false, targetDir: restored, doneFiles: 10, doneBytes: 1000, totalFiles: 10, finishedAt: new Date().toISOString(), source: 'Cloudflare R2' },
+      pendingSwitch: null,
+    }) }))
+    await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })
+    let release: () => void = () => {}
+    const held = new Promise<void>((r) => { release = r })
+    await page.route('**/api/backup/restore/use', async (route) => {
+      await held
+      return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'held for the test' }) })
+    })
+    const section = await openBackup(page)
+    await expect(section.getByTestId('backup-pane')).not.toHaveClass(/backup-restarting/)
+    await section.getByTestId('backup-restore-use').click()
+    await expect(section.getByTestId('backup-restore-use-confirm')).toContainText('as its data folder')
+    await section.getByTestId('backup-restore-use-yes').click()
+    // Before Walnut even answers, the pane is dimmed and out of reach.
+    await expect(section.getByTestId('backup-pane')).toHaveClass(/backup-restarting/)
+    await expect(section.getByTestId('backup-destination-group')).toHaveCSS('pointer-events', 'none')
+    // A switch that fails gives the pane back, with the reason.
+    release()
+    await expect(section.getByTestId('backup-pane')).not.toHaveClass(/backup-restarting/)
+    await expect(section.getByTestId('backup-backups-group')).toContainText('held for the test')
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 

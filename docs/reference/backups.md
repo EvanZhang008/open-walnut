@@ -18,7 +18,7 @@ Code: `src/core/backup/` (engine), `src/web/routes/backup*.ts` (routes),
      writes, reads back and deletes a small test file, and only then makes R2 the destination.
    - **Google Drive**: "Connect Google Drive" opens Google's sign-in. Walnut asks only for
      `drive.file`, so it sees only the files it makes, all in one "Walnut Backup" folder.
-   - **Amazon S3**: bucket, region, and the AWS credential chain, a profile, or keys.
+   - **Amazon S3**: bucket, an optional region (empty: the SDK follows the bucket's own region), and the AWS credential chain, a profile, or keys.
 2. The recovery key appears (Show, Copy, Download). Keep it outside this computer.
 3. "Back up automatically" turns on once there is a destination and a key. The first backup
    uploads everything; after that only changes upload.
@@ -99,7 +99,9 @@ stops backing up there. A service chosen while Walnut runs backs up within a min
 Settings, Backup, "Choose a backup": pick one, optionally a folder, Restore. It goes into a
 new, empty folder (by default `open-walnut-restored-<date>` next to the data folder), never
 over the data Walnut runs on. Every chunk is checked on the way back (the AES-GCM tag, then
-its id) and every file's size; mtimes and executable bits come back.
+its id) and every file's size; mtimes and executable bits come back. A restore under way can
+be cancelled (`POST /api/backup/restore/cancel`, the person's step): it stops within a chunk
+and removes the folder it was writing, which was new or empty when it began.
 
 "Use this data" makes the restored folder the data folder, after a confirm. A running
 Walnut cannot swap its own folder, so it writes a small request beside the data folder

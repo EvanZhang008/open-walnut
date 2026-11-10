@@ -45,6 +45,8 @@ export function makeStoreS3Client(o: S3StoreOptions): S3Client {
   return new S3Client({
     region: o.region || (o.kind === 'r2' ? 'auto' : 'us-west-2'),
     ...(custom ? { endpoint: o.endpoint, forcePathStyle: true } : {}),
+    // Amazon S3 without a region typed: the SDK follows the bucket's own region.
+    ...(!custom && o.kind === 's3' ? { followRegionRedirects: true } : {}),
     ...(custom || o.kind === 'r2'
       ? { requestChecksumCalculation: 'WHEN_REQUIRED' as const, responseChecksumValidation: 'WHEN_REQUIRED' as const }
       : {}),

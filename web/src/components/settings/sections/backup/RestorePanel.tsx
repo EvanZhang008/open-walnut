@@ -63,6 +63,8 @@ interface Props {
   onSwitchChanged?: () => void
   /** Walnut can restart by itself into the restored data (else the user quits and opens it). */
   canRestart?: boolean
+  /** Told when "Switch and restart" starts (and if it fails): the pane is out of reach meanwhile. */
+  onRestarting?: (on: boolean) => void
 }
 
 /** When a backup was made; to the second when another one shares its minute. */
@@ -71,7 +73,7 @@ const whenOf = (iso: string, seconds = false): string =>
     weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}),
   })
 
-export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, destLabel, others = [], pendingSwitch, switchError, switchDone, onSwitchChanged, canRestart }: Props) {
+export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, destLabel, others = [], pendingSwitch, switchError, switchDone, onSwitchChanged, canRestart, onRestarting }: Props) {
   const sources = dest ? [{ label: destLabel ?? 'In use', dest }, ...others] : []
   const [from, setFrom] = useState(0)
   const source = sources[Math.min(from, Math.max(0, sources.length - 1))]?.dest ?? null
@@ -139,12 +141,15 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
     if (!restore?.targetDir) return
     setUsing(true)
     setUseError(null)
+    if (canRestart) onRestarting?.(true)
     try {
       const r = await apiPost<{ restarting: boolean }>('/api/backup/restore/use', { targetDir: restore.targetDir })
       setConfirmUse(false)
       setRestarting(r.restarting)
+      if (!r.restarting) onRestarting?.(false)
       onSwitchChanged?.()
     } catch (err) {
+      onRestarting?.(false)
       setUseError(saveErrorMessage(err))
     } finally {
       setUsing(false)
@@ -250,7 +255,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
     <>
       {!resultRow && <SettingsRow
         label="Restore"
-        help={blocked && !items && blockedWhy ? 'Bring a backup back into a new folder. Set up backups above first.' : 'Bring a backup back into a new folder; the data in use is not touched. On a new computer, set up the same service first.'}
+        help={blocked && !items && blockedWhy ? `Bring a backup back into a new folder. ${blockedWhy}` : 'Bring a backup back into a new folder; the data in use is not touched. On a new computer, set up the same service first.'}
         error={error ?? undefined}
         data-testid="backup-restore-row"
         control={
@@ -357,8 +362,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             wide
             data-testid="backup-restore-use-confirm"
             help={canRestart
-              ? <>Walnut restarts and runs on <code>{restore.targetDir}</code>: tasks, notes and settings as they were in that backup. Your current data is kept beside it, renamed; nothing is deleted.</>
-              : <>From its next start Walnut runs on <code>{restore.targetDir}</code> (quit Walnut and open it again): tasks, notes and settings as they were in that backup. Your current data is kept beside it, renamed; nothing is deleted.</>}
+              ? <>Walnut restarts with the restored copy in <code>{restore.targetDir}</code> as its data folder: tasks, notes and settings as they were in that backup. Your current data is moved beside it and renamed; nothing is deleted.</>
+              : <>From its next start (quit Walnut and open it again) the restored copy in <code>{restore.targetDir}</code> becomes Walnut's data folder: tasks, notes and settings as they were in that backup. Your current data is moved beside it and renamed; nothing is deleted.</>}
             error={useError ?? undefined}
             control={
               <span className="settings-inline-pair">

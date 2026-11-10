@@ -99,3 +99,11 @@
   background: rgba(255, 59, 48, 0.08);
 }
 .backup-contents { display: contents; }
+/* Backups on, paused for a reason the row says: the switch is shown dimmed. */
+.backup-toggle-paused { opacity: 0.5; }
+/* Restarting into the restored data: nothing here can be used until the page loads again. */
+.backup-restarting .settings-group-block:not([data-testid='backup-backups-group']),
+.backup-restarting [data-testid='backup-backups-group'] .settings-row:not([data-testid^='backup-restore-switch']) {
+  pointer-events: none;
+  opacity: 0.5;
+}

@@ -71,7 +71,11 @@ describe('testHelp', () => {
     expect(testHelp({ ok: true, hasBackups: false, savedNow: true }, false)).toBe('Connected and saved: backups go here now.');
     expect(testHelp({ ok: true, hasBackups: false }, false)).toBe('Connected. Walnut can write here; no backups yet.');
     expect(testHelp({ ok: true, hasBackups: true, keyMatches: true, thisWriter: true, savedNow: true }, false))
-      .toBe("Connected and saved: backups go here now. It holds this computer's Walnut backups.");
+      .toBe("Connected and saved: backups go here now. This computer's backups are already there.");
+    expect(testHelp({ ok: true, hasBackups: true, keyMatches: true, thisWriter: true, snapshotCount: 3, savedNow: true }, false))
+      .toBe('Connected and saved: backups go here now. 3 backups from this computer are already there.');
+    expect(testHelp({ ok: true, hasBackups: true, keyMatches: true, thisWriter: true, snapshotCount: 1 }, false))
+      .toBe('Connected. 1 backup from this computer is already there.');
     expect(testHelp({ ok: true, hasBackups: true, keyMatches: false, hasKey: true }, false)).toMatch(/different key from this computer's/);
     // A new computer (no key of its own): its own backups, asked for the key it saved, no warning.
     expect(testHelp({ ok: true, hasBackups: true, keyMatches: false, hasKey: false, savedNow: true }, false))

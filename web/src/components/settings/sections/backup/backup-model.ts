@@ -151,6 +151,8 @@ export interface DestinationTest {
   arn?: string
   versioningEnabled?: boolean
   hasBackups?: boolean
+  /** How many backups it holds (when the key opens them). */
+  snapshotCount?: number
   keyMatches?: boolean
   hasKey?: boolean
   writer?: string
@@ -174,7 +176,8 @@ export function testHelp(r: DestinationTest | null, legacy: boolean): string {
     ? `${head} It holds Walnut backups made with a different key from this computer's.`
     : `${head} It already has Walnut backups: enter the recovery key you saved for them below.`
   if (r.thisWriter === false && r.writer) return `${head} It holds Walnut backups from the computer "${r.writer}".`
-  return `${head} It holds this computer's Walnut backups.`
+  const n = r.snapshotCount
+  return `${head} ${n ? `${n === 1 ? '1 backup from this computer is' : `${n} backups from this computer are`} already there.` : "This computer's backups are already there."}`
 }
 
 /**
