@@ -43,7 +43,9 @@ export function TaskDetailModal({
     kind: 'task-detail',
     open: true,
     bar: { title: task.title || 'Task' },
-    onClose: () => {
+    // A wider window keeps it: the desktop shows the same modal (phone-overlay-breakpoint-guard).
+    onClose: (info) => {
+      if (info.breakpoint) return;
       onClose();
       const next = afterCloseRef.current;
       afterCloseRef.current = null;

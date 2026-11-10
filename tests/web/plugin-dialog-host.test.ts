@@ -15,7 +15,7 @@ vi.mock('@/hooks/useOverlayLayer', () => ({
   useOverlayLayer: () => {},
   overlayTabStops: (root: HTMLElement) => Array.from(root.querySelectorAll<HTMLElement>('button,input')).filter(el => !(el as HTMLButtonElement).disabled),
 }))
-vi.mock('@/utils/log', () => ({ log: { error: vi.fn(), warn: vi.fn() } }))
+vi.mock('@/utils/log', () => ({ log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 import { PluginDialogHost } from '../../web/src/plugins/PluginDialogHost'
 import { Lightbox } from '../../web/src/components/common/Lightbox'
 import { ConfirmDialog } from '../../web/src/components/common/ConfirmDialog'
@@ -24,7 +24,7 @@ import { pluginUiRegistry } from '../../web/src/plugins/registry'
 import { publishWebPluginRuntime, resetWebPluginRuntime } from '../../web/src/plugins/runtime-store'
 import type { PluginDialogSlotProps } from '../../web/src/plugins/types'
 import { closeModalOverlays, useModalOverlay } from '../../web/src/hooks/useModalOverlay'
-import { __resetPhoneOverlaysForTest, phoneOverlayIds, stateWithoutMarker, usePhoneOverlay } from '../../web/src/hooks/usePhoneOverlayHistory'
+import { __phoneOverlayInternals, __resetPhoneOverlaysForTest, phoneOverlayIds, stateWithoutMarker, usePhoneOverlay } from '../../web/src/hooks/usePhoneOverlayHistory'
 
 let root: ReturnType<typeof createRoot>
 let host: HTMLElement
@@ -380,6 +380,40 @@ describe('plugin dialog host boundaries', () => {
       expect(entries[2]).toEqual({ key: 'settings' })
     } finally {
       await act(async () => { root.render(createElement(Router, { location: '/', navigator }, createElement(PluginDialogHost))) })
+      __resetPhoneOverlaysForTest()
+      if (historyDescriptor) Object.defineProperty(window, 'history', historyDescriptor)
+      else Reflect.deleteProperty(window, 'history')
+      if (mediaDescriptor) Object.defineProperty(window, 'matchMedia', mediaDescriptor)
+      else Reflect.deleteProperty(window, 'matchMedia')
+    }
+  })
+
+  it('keeps the dialog and the plugin\'s work in it when the window leaves the phone layout', async () => {
+    const historyDescriptor = Object.getOwnPropertyDescriptor(window, 'history')
+    const mediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    const entries: unknown[] = [{ key: 'home' }]
+    let index = 0
+    const history = {
+      get state() { return entries[index] },
+      pushState(state: unknown) { entries.splice(index + 1); entries.push(state); index++ },
+      replaceState(state: unknown) { entries[index] = state },
+      back() {}, go(delta: number) { index = Math.max(0, index + delta) },
+    }
+    try {
+      __resetPhoneOverlaysForTest()
+      Object.defineProperty(window, 'history', { configurable: true, value: history })
+      Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }) })
+      await act(async () => { slot(); openPluginDialog('sample', 'record') })
+      expect(phoneOverlayIds()).toHaveLength(1)
+      await act(async () => { __phoneOverlayInternals.leavePhone() })
+      // Still open and still mounted: a sign-in running in it is not cancelled.
+      expect(getPluginDialog()).not.toBeNull()
+      expect(text()).toContain('record')
+      expect(cleanup).not.toHaveBeenCalled()
+      // Its own close still closes it.
+      await act(async () => { (document.querySelector('.plugin-dialog-close') as HTMLButtonElement).click() })
+      expect(getPluginDialog()).toBeNull()
+    } finally {
       __resetPhoneOverlaysForTest()
       if (historyDescriptor) Object.defineProperty(window, 'history', historyDescriptor)
       else Reflect.deleteProperty(window, 'history')
