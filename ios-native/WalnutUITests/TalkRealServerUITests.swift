@@ -130,7 +130,12 @@ final class TalkRealServerUITests: XCTestCase {
 
     private func tile(_ shortcuts: XCUIApplication, _ name: String = "Talk to Walnut") -> XCUIElement {
         let tile = labelled(shortcuts, name)
-        XCTAssertTrue(tile.waitForExistence(timeout: 30), "\(name) is not in the Shortcuts app")
+        // A fresh install's shortcuts reach the Shortcuts app once iOS has indexed them.
+        if !tile.waitForExistence(timeout: 30) {
+            shortcuts.terminate()
+            shortcuts.launch()
+        }
+        XCTAssertTrue(tile.waitForExistence(timeout: 60), "\(name) is not in the Shortcuts app")
         return tile
     }
 

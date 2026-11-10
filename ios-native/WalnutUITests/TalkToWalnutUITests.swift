@@ -56,7 +56,13 @@ final class TalkToWalnutUITests: XCTestCase {
         let shortcuts = XCUIApplication(bundleIdentifier: "com.apple.shortcuts")
         shortcuts.launch()
         let tile = labelled(shortcuts, "Talk to Walnut")
-        XCTAssertTrue(tile.waitForExistence(timeout: 30), "Talk to Walnut is not in the Shortcuts app")
+        // A fresh install's shortcuts reach the Shortcuts app once iOS has indexed them:
+        // open it again once before calling them missing.
+        if !tile.waitForExistence(timeout: 30) {
+            shortcuts.terminate()
+            shortcuts.launch()
+        }
+        XCTAssertTrue(tile.waitForExistence(timeout: 60), "Talk to Walnut is not in the Shortcuts app")
         shot("1-shortcuts-lists-it")
         XCTAssertNotEqual(app.state, .notRunning, "Walnut stopped: the tap would start an unpinned one")
         XCTAssertNotEqual(app.state, .runningForeground, "Walnut is in front before the press: the test would not show it coming forward")
@@ -208,6 +214,13 @@ final class TalkToWalnutUITests: XCTestCase {
         resend.tap()
         XCTAssertTrue(element(app, "talk.unsent.triedAgain").waitForExistence(timeout: 30), "a failed Copy changed nothing on screen")
         shot("d5-tried-again")
+        // Delete it: a take that needs the person opens its list on the next launch.
+        element(app, "talk.unsent.delete").tap()
+        let confirm = app.buttons["Delete Recording"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Delete did not ask first")
+        XCTAssertTrue(labelled(app, "never copied").exists, "Delete does not say it was never copied")
+        confirm.tap()
+        XCTAssertTrue(open.waitForNonExistence(timeout: 10) || !element(app, "talk.unsent.row").exists, "Delete left the dictation")
     }
 
     /// At the largest text sizes each Not Sent row stacks its reason and buttons,
