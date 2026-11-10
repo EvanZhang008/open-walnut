@@ -49,8 +49,10 @@ export async function findSmallTargets(page: Page, root = 'body'): Promise<Small
         const wrap = el instanceof HTMLInputElement ? el.closest('label') : null
         return !!t && (t === el || el.contains(t) || (!!wrap && wrap.contains(t)))
       }
-      const w = Math.max(r.width, 44) / 2 - 0.5
-      const h = Math.max(r.height, 44) / 2 - 0.5
+      // A whole pixel inside the 44 px: elementFromPoint rounds a half pixel up, so a probe 21.5 px
+      // below the center of a box in a row of exactly 44 px landed on the next row (2026-11-10, N20).
+      const w = Math.max(r.width, 44) / 2 - 1
+      const h = Math.max(r.height, 44) / 2 - 1
       if (hits(cx - w, cy) && hits(cx + w, cy) && hits(cx, cy - h) && hits(cx, cy + h)) continue
       const label = (el.getAttribute('aria-label') || el.textContent || el.getAttribute('placeholder') || '').trim().slice(0, 40)
       out.push({ tag: el.tagName.toLowerCase() + (el.className && typeof el.className === 'string' ? `.${el.className.split(' ')[0]}` : ''), label, width: Math.round(r.width), height: Math.round(r.height), x: Math.round(r.left), y: Math.round(r.top) })
