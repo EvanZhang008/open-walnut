@@ -23,6 +23,7 @@ import {
   type AgentTab, type WireCommand,
 } from './agent-shared'
 import { PAGE_OPS, pageOp, watchOpened } from './agent-page'
+import { CHANGE_ACTS, withChange } from './agent-change'
 import { screenshot } from './agent-shot'
 import { downloadsAction, watchDownloads } from './agent-downloads'
 import { DEBUGGER_OPS, TRUSTED_OPS, defaultTrustedAct, trustedAct, trustedByDefault, trustedReady } from './agent-trusted'
@@ -316,14 +317,19 @@ async function act(cmd: WireCommand): Promise<unknown> {
     // An agent's click, type, press or hover in its own tab goes through the debugger by default
     // (agent-trusted.ts trustedByDefault); where real input cannot take it, the page's events do.
     let found: Parameters<typeof pageOp>[4]
+    let why: string | undefined
     if (await trustedByDefault(c, tabId, tab, rec)) {
       const r = await defaultTrustedAct(c, tabId, tab, rec)
       if ('done' in r) return r.done
       found = r.found
+      why = r.why
     }
     await checkPage(c.allow, tab.url ?? '')
     await reached(tabId)
-    return pageOp(c, tabId, tab, rec, found)
+    // Real input could not reach the page (its window covered, agent-delivery.ts): the answer says
+    // the page's events did it, never that real input did.
+    const out = await pageOp(c, tabId, tab, rec, found)
+    return why ? { ...out, trusted: false, why } : out
   }
   throw new AgentError(`Unknown action ${c.action}.`, 'bad_action')
 }
@@ -425,7 +431,8 @@ async function run(c: WireCommand): Promise<void> {
         if (late) throw late
         // A click or a key acts on the tab in front: a folded group left the agent window's page there.
         if (screenTab !== undefined && c.action !== 'screenshot' && c.action !== 'zoom') await bringUpForCommand(screenTab)
-        return act(c)
+        // An acting step says what it changed on the page (agent-change.ts).
+        return CHANGE_ACTS.has(c.action) && typeof c.args.tab === 'number' ? withChange(c.args.tab, c.action, c.args, async () => (await act(c)) as Record<string, unknown>) : act(c)
       }) }
     } finally {
       if (typeof c.args.tab === 'number') noteWorked(c.args.tab)

@@ -19,12 +19,16 @@ function textNodes(root: Node, out: Text[] = []): Text[] {
 
 const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'WALNUT-EXT'])
 
+/** How many matches `find` gives unless `limit` says. */
+export const FIND_LIMIT = 8
+
 export function find(args: { text?: unknown; exact?: unknown; role?: unknown; limit?: unknown }): { matches: Array<{ ref: string; role: string; name: string; text: string; offscreen?: boolean }>; count: number } {
   const want = typeof args.text === 'string' ? args.text.trim() : ''
   if (!want) throw new PageError('Say what text to find.', 'no_text')
   const exact = args.exact === true
   const role = typeof args.role === 'string' && args.role ? args.role.toLowerCase() : undefined
-  const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(100, Math.floor(args.limit)) : 20
+  // The best few by default (`limit` for more): the answer says how many matched in all.
+  const limit = typeof args.limit === 'number' && args.limit > 0 ? Math.min(100, Math.floor(args.limit)) : FIND_LIMIT
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase()
   const w = norm(want)
   const hit = (s: string) => (exact ? norm(s) === w : norm(s).includes(w))
@@ -41,7 +45,11 @@ export function find(args: { text?: unknown; exact?: unknown; role?: unknown; li
     if (exact ? !hit(p.textContent ?? '') : !hit(t.data) && !hit(p.textContent ?? '')) continue
     add(p.closest(INTERACTIVE) ?? p)
   }
+  // Best first: the words as a control's whole name, then a control, then what is on screen (else page order).
+  const onScreen = (el: Element) => { const r = el.getBoundingClientRect(); return !(r.bottom < 0 || r.top > innerHeight) }
+  const score = (el: Element) => (norm(nameOf(el)) === w ? 4 : 0) + (roleOf(el) !== 'generic' ? 2 : 0) + (onScreen(el) ? 1 : 0)
   const list = found.filter((el) => !role || roleOf(el) === role || el.tagName.toLowerCase() === role)
+    .map((el, i) => ({ el, i, s: score(el) })).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.el)
   const matches = list.slice(0, limit).map((el) => {
     const r = el.getBoundingClientRect()
     return {

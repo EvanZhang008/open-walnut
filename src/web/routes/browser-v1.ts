@@ -430,7 +430,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
         }
       }
       const o = h.tabOwner(c.device, tab)
-      if (o !== owner) throw new h.BrowserError(o ? 'That tab belongs to another task.' : 'That tab is not one an agent opened (or the person took it back with Stop).', 403, 'not_your_tab')
+      if (o !== owner) throw new h.BrowserError(o ? 'That tab belongs to another task: tabs lists yours, open <url> starts a new one.' : 'That tab is not one an agent opened (or the person took it back with Stop): tabs lists yours, open <url> starts a new one.', 403, 'not_your_tab')
       args.tab = tab
     }
     // What an older extension would get wrong is refused before it reaches it (input-v2.ts).
@@ -601,6 +601,13 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     const refusal = (await import('../../core/browser-control/sign-in-refusal.js')).signInRefusalOf(r as Record<string, unknown>)
     if (refusal) { extra.hand_off = refusal; log.web.info('browser act met a sign-in refusal', { action, device: c.device, owner, tab: used, why: refusal.why }) }
     if (theirs?.length) { extra.person_tabs = theirs; extra.person_tabs_note = w.personTabsNote(w.siteOf(String(args.url)), theirs) }
+    // `read_text`: the page's main text in the same call (a read takes 3 to 5 calls: open --read,
+    // click --read, close). A tab the step opened is the one read; a page holding a dialog open
+    // answers nothing until it is handled, so it is not read.
+    if (b.read_text === true && READ_AFTER.has(action) && !(r as Record<string, unknown>).dialog) {
+      const readTab = typeof r.opened?.tab === 'number' ? r.opened.tab : used
+      if (typeof readTab === 'number') extra.page_text = await readAfter(c.device, readTab, typeof args.max === 'number' ? args.max : undefined, { ...s.allowOf(f), walnut: own }, left())
+    }
     if (action === 'tabs') {
       const all = Array.isArray(r.tabs) ? r.tabs : []
       for (const t of all) if (t.owner === owner && h.tabOwner(c.device, t.id) !== owner) h.ownTab(c.device, t.id, owner)
@@ -648,6 +655,21 @@ async function signInAct(res: Response, b: Record<string, unknown>, at: { device
     error: `Waiting for the person to sign in${now.site ? ` to ${now.site}` : ''} themselves: the task's Browser view asks them (Take over, sign in, Done)`,
   })
   return undefined
+}
+
+/** Actions that may read the page's text right after (`read_text`). */
+const READ_AFTER = new Set<Action>(['open', 'navigate', 'back', 'take', 'click', 'press', 'type', 'select', 'fill_form', 'scroll', 'hover'])
+
+/** The page's main text after a step, or why it could not be read (the step itself went through). */
+async function readAfter(device: string, tab: number, max: number | undefined, allow: import('../../core/browser-control/hub.js').WireCommand['allow'], left: number): Promise<Record<string, unknown>> {
+  const h = await hub()
+  if (left < 8000) return { tab, error: 'No time was left in this call to read the page: call text.', code: 'browser_timeout' }
+  try {
+    const t = await h.send(device, 'text', { tab, ...(max !== undefined ? { max } : {}) }, allow, Math.min(20_000, left - 3000)) as Record<string, unknown>
+    return { tab, text: t.text, ...(t.scope ? { scope: t.scope } : {}), ...(typeof t.chars === 'number' ? { chars: t.chars } : {}), ...(t.cut ? { cut: true } : {}) }
+  } catch (err) {
+    return { tab, error: err instanceof Error ? err.message : String(err), code: err instanceof h.BrowserError ? err.code : 'browser_error' }
+  }
 }
 
 /** Actions whose answer names the window and tab (where-words.ts). */

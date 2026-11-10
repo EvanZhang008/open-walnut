@@ -165,7 +165,7 @@ describe('a click, type, press or hover in the agent\'s own tab goes through the
     expect(await act('press', { key: 'Tab' })).toMatchObject({ pressed: 'Tab', trusted: true })
     fake.log = []
     expect(await act('hover', { ref: 'e5' })).toMatchObject({ hovered: 'button "Next"', trusted: true })
-    expect(mouse().map((m) => m.type)).toEqual(['mouseMoved'])
+    expect(mouse().map((m) => m.type)).toEqual(['mouseMoved', 'mouseMoved'])
     expect(pageOps('type')).toEqual([])
     expect(pageOps('press')).toEqual([])
     expect(pageOps('hover')).toEqual([])

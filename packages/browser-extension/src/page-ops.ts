@@ -6,10 +6,12 @@
  */
 import * as pa from './page-agent'
 import * as forms from './page-agent-forms'
+import * as pr from './page-read'
 import { clickFacts, clickTarget, enterFacts, judgeOutward, messageOf, orderTotal, outwardHold, pressFacts } from './page-agent-outward'
 import { cancelTyping, dragPoints, scrollIn, typeField, typeSlowly } from './page-input'
 import { annotate, refOfLabel } from './page-annotate'
 import { onScreenMiddle, pointAt, type CursorKind } from './page-cursor'
+import { armProbe, readProbe } from './page-probe'
 
 /** position:fixed and sticky elements hidden after the first slice of a full screenshot, so they are drawn once. */
 let hiddenFixed: Array<{ el: HTMLElement; v: string }> = []
@@ -110,6 +112,22 @@ async function locate(args: Record<string, unknown>): Promise<Record<string, unk
   // a date, time or colour picker. The page's own events set those without opening anything.
   const native = args.blank === true && opensPicker(el)
   return { x, y, what: `${pa.roleOf(el)} "${pa.clip(pa.nameOf(el), 60)}"`, ...(newTab ? { newTab } : {}), ...(native ? { native: true } : {}) }
+}
+
+/** Mouse steps: their probe counts events at the point only (page-probe.ts). */
+const AT_POINT = new Set(['click', 'hover', 'drag', 'scroll'])
+
+/**
+ * `probe` (with `probe_kind`): the delivery probe is armed on the answer the debugger presses on,
+ * last thing before it does (page-probe.ts), never on a step held or handed to the page's events.
+ */
+async function armedLocate(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const r = await locate(args)
+  if (typeof args.probe === 'string' && typeof args.probe_kind === 'string' && !r.hold && r.newTab === undefined && r.native !== true) {
+    const point = AT_POINT.has(args.probe_kind) && typeof r.x === 'number' && typeof r.y === 'number'
+    armProbe(args.probe, args.probe_kind, point ? r.x as number : undefined, point ? r.y as number : undefined)
+  }
+  return r
 }
 
 const PICKER_TYPES = new Set(['file', 'date', 'time', 'datetime-local', 'month', 'week', 'color'])
@@ -251,8 +269,8 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
   // A number from an annotated screenshot names its element (page-annotate.ts).
   if (typeof args.label === 'number' && args.ref === undefined && (op === 'click' || op === 'hover' || op === 'locate')) args = { ...args, ref: refOfLabel(args.label) }
   switch (op) {
-    case 'snapshot': return pa.snapshot(typeof args.max === 'number' ? args.max : undefined)
-    case 'text': return pa.text(typeof args.max === 'number' ? args.max : undefined)
+    case 'snapshot': return pr.snapshot(args)
+    case 'text': return pr.text(args)
     case 'click': {
       // The cursor first (a held click points at what it waits on; one that goes ahead shows its
       // ripple there), then the element is found again, judged and clicked with nothing awaited
@@ -287,7 +305,10 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
       }
       // Found again and judged after the cursor, right before the debugger drags.
       const d = dragPoints(args)
-      return held(args, [d.common, d.fromEl, d.toEl].map((el): Part => [{ click: true }, el])) ?? { from: d.from, to: d.to }
+      const h = held(args, [d.common, d.fromEl, d.toEl].map((el): Part => [{ click: true }, el]))
+      if (h) return h
+      if (typeof args.probe === 'string') armProbe(args.probe, 'drag', d.from.x, d.from.y)
+      return { from: d.from, to: d.to }
     }
     case 'cancel_input': return { cancelled: cancelTyping() }
     case 'wait': return pa.wait(args)
@@ -297,7 +318,8 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
     case 'fill_form': return forms.fillForm(args)
     case 'upload': await toElement(() => (typeof args.selector === 'string' && args.ref === undefined ? forms.bySelector(args.selector) : pa.byRef(args.ref))); return forms.upload(args)
     case 'capture': return capture(args)
-    case 'locate': return locate(args)
+    case 'locate': return armedLocate(args)
+    case 'probe_read': return readProbe(args.probe, args.done === true)
   }
   throw new pa.PageError(`Unknown page action ${op}.`, 'bad_action')
 }

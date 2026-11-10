@@ -298,10 +298,25 @@ The `browser` op (one tool with an `action`) and `walnut browser <action>` in a 
 same thing; the shell command saves a screenshot as a file
 (`$WALNUT_TASK_DIR/shots/browser-<time>.jpg`, or the file you name).
 
+A read takes 3 to 5 calls: `open <url> --read` (the tab and its main text), `click --text
+"<words>" --read` (the click, what it changed, and the page's text after), `close`. Every acting
+step (click, type, press, select, hover, scroll, navigate, back, fill_form, drag, upload) answers
+`changed`: `went to <url> "<title>"`, `opened a new tab N`, `the page content changed`, `a field's
+value changed`, `the page scrolled`, or `nothing changed on the page`. The page watches itself
+from right before the step to its answer (any change to its elements or attributes outside
+Walnut's own, a scroll of the page or of a box in it, a hash of its fields' values; never its
+words), and a click, key or form step looks twice more within 1.2 s before it says nothing
+changed. A step inside a frame says the frame's own change is not checked, and a page that could
+not be watched gives no `changed` at all, never a guess. A page that changes by itself (a clock,
+a live feed) reads as changed. Subagents of a session drive the browser as that session: the same task,
+tabs, approvals and agent cursor (the CLI and the MCP server both send the session's id).
+
 ```bash
 walnut browser status                         # browsers that let agents in, the sites
-walnut browser open https://example.com/      # a new tab in the agent window
-walnut browser snapshot                       # the page as text, with element refs
+walnut browser open https://example.com/ --read   # a new tab in the agent window, and its main text
+walnut browser snapshot                       # the elements on screen, with refs (--all: the whole page)
+walnut browser text                           # the main content, 4000 characters (--max N, --all)
+walnut browser text e31                       # one element's text (or --selector 'article .body')
 walnut browser find "Place order" --role button
 walnut browser form-values                    # every field: label, name, type, value
 walnut browser fill-form "Full name=Test Person" "Size=Large" e14=true
@@ -334,7 +349,10 @@ walnut browser close                          # closes a tab it opened, gives ba
 
 | Action | Arguments | What it does |
 |---|---|---|
-| `find` | `text`, `exact?`, `role?`, `limit?` (20) | elements whose name or text holds the words: `{ matches: [{ ref, role, name, text }] }` |
+| `text` | `max?` (4000), `ref?` or `selector?`, `all?` | the main content: an open modal dialog, `main`, `[role=main]` or the page's one `article`, else the page without its navigation, page header and footer, sidebars and cookie banners (hidden elements are never read): `{ text, scope, chars, cut? }`, cut text ending with how many characters are left and how to read them; `ref` or `selector` reads one element; `all` the whole page (20000). A default read of a long page leaves its frames out and says how many (`all_frames` reads each) |
+| `snapshot` | `all?`, `max?` | the elements on screen (and a quarter screen around), at most 80, one line each, then how many more are off screen (`more`); `all` the whole page, at most 300, and its text. A link on the page's own site shows its path only |
+| any acting step | `read_text?`, `max?` | also reads the page's main text after the step (`page_text: { tab, text, scope, chars, cut? }`, or `{ error, code }`); a tab the step opened is the one read |
+| `find` | `text`, `exact?`, `role?`, `limit?` (8) | elements whose name or text holds the words, the best first (the words as a control's whole name, then a control, then on screen): `{ matches: [{ ref, role, name, text }], count }` |
 | `form_values` | | every field with its label, name, type, value (secrets as `(hidden)`), options of a list |
 | `fill_form` | `fields: [{ ref or label, value }]` | fills each like `type` does (a checkbox takes true or false, a list its label or value); a field it cannot find fills nothing (`no_field`) |
 | `hover` | `ref` or `x, y` | pointer over, enter and move events (menus that open on hover) |
@@ -344,7 +362,7 @@ walnut browser close                          # closes a tab it opened, gives ba
 | `click_label` | `label` | clicks the element numbered `label` by the last annotated screenshot of this page (`no_labels`, `stale_ref` once it is gone); the server sends it as `click {label}`, so it waits for the person's yes as any click does |
 | `zoom` | `x, y, width, height` (CSS px), `format?` | that region of the screen at the picture's own resolution (device pixels): `{ image, zoom, pixels: { width, height }, scale }`; nothing of it on screen is `bad_request` |
 | `drag` | `ref` or `x, y`; `to_ref` or `to_x, to_y`; `steps?` (12) | real input, top frame: press, move in steps, release; a page that uses the browser's own drag and drop gets its drag data dropped on the end (`native: true`, through `Input.setInterceptDrags`). Both ends must be on screen together (`drag_offscreen`; a start given as a point is refused also when bringing the end into view scrolled the page); a drag under 8 px, or one that starts and ends on the same button or link, is a click (`drag_too_short`). Judged as the clicks it may make (the start, the end, and the control both are in): one that buys, sends or deletes waits for the person's yes |
-| `wait` | `text`, `textGone`, `url` (a part of the address or `/regex/`), or `ms` | at most 30 s (`wait_timeout`) |
+| `wait` | `text`, `textGone`, `url` (a part of the address or `/regex/`), or `ms` | 10 s unless `ms` says, at most 30 s (`wait_timeout`, which says where the tab is and what to try) |
 | `screenshot` | `full?`, `format?` (`png`, default `jpeg`), `annotate?` | `full` scrolls through the page and draws one image, cut at 12000 CSS px (`cut: true`), without the agent frame in its own tabs; the scroll is put back. `annotate` (not with `full`): every element a person could act on that is on screen is outlined and numbered top to bottom on the picture (drawn by the extension; the page draws nothing), and `labels: [{ label, ref, role, name }]` maps each number to its ref, at most 150 (`note` says how many more) |
 | `upload` | `ref`, `files: [{ name, type?, base64 }]` | sets the file input's files as a pick would (input and change); 10 MB in all (`too_big`) |
 | `downloads` | `wait?`, `ms?` | downloads started from this task's tabs (filename, url, state, bytes); `wait` for the next to finish |
@@ -359,8 +377,8 @@ walnut browser close                          # closes a tab it opened, gives ba
 
 `tab` may be left out once a task has used one. A snapshot lists headings, then each element a
 person could act on with its ref, role, name and state (`[e12] button "Place order"`,
-`[e7] textbox "Search" value="rye"`), then the page's visible text, then each frame's own
-elements and text (`[f3:e2] button "Pay"`); a ref holds while the
+`[e7] textbox "Search" value="rye"`) that is on screen, then each frame's own elements
+(`[f3:e2] button "Pay"`); `all` adds the rest of the page and its visible text. A ref holds while the
 element is on the page, so snapshot again after the page changes. Refs follow the page's own
 order, not the order actions read it: snapshot, `form_values`, `find` and `fill_form` name a
 field the same way, and the same page loaded again gets the same refs. `open` and `navigate`
@@ -383,11 +401,24 @@ says what it waits for. After you disconnect the extension (its popup, Settings,
 browser), `walnut browser status` says so at once and every command fails at once with
 `browser_disconnected` ("the person disconnected this browser from Walnut"); turning agents off
 answers `browser_off`. `walnut browser --help` prints the usage. Exit codes: 0 done, 1 refused or a
-choice to make (`site_denied`, `not_your_tab`, `test_run`, `which_tab`, `person_is_here`, `person_driving`,
+choice to make (`site_denied`, `not_your_tab`, `test_run`, `which_tab`, `person_is_here`, `person_driving`, `window_hidden`, `input_dropped`,
 `trusted_off`, `which_login`, `denied`, `agents_tab_only`; a choice lists its options), 2 no
 answer in time (`browser_timeout`, `outward_expired`, or no approval in 10 minutes), 3 any other
 error. `walnut browser screenshot x.png` asks for a PNG; a JPEG an older extension sends is saved
 under `.jpg`, and it says so.
+
+**A covered agent window.** Chrome does not draw a page whose window is covered by other windows
+or minimized (`document.visibilityState` is `hidden`), and it drops the input its debugger sends
+there while answering "ok" (2026-11-10: a click on a link said done and the page received no
+event). So every step that sends real input (click, hover, type, press, the wheel, drag) checks:
+on a hidden page a default step takes the page's events at once, and the answer says `trusted:
+false` with `why`; asked for by name (`trusted: true`, or a drag) it is refused with
+`window_hidden` and the fix (leave `trusted` out, or the person shows the window). On a drawn
+page the content script arms a one-time probe right before the debugger acts, counting the
+step's trusted events (at its point, for a mouse step); a page that saw none had the input dropped:
+a default step is done again with the page's events (judged again first, so a step that buys,
+sends or deletes still waits for the person), a named one answers `input_dropped`. Walnut never
+raises, shows or focuses a window to make a page visible.
 
 In the agent's own tabs a click, hover, type or press is real input by default (see above);
 elsewhere, and for the rest, input is the page's own DOM events (`isTrusted` false). Nearly every
@@ -458,7 +489,7 @@ panel is `packages/browser-extension/src/sidepanel.ts` and `web/src/popout/Popou
 
 | Method | Path | Who | What |
 |---|---|---|---|
-| POST | `/api/v1/browser/act` | an agent | `{ action, tab?, device?, url?, ref?, x?, y?, text?, exact?, role?, limit?, fields?, clear?, submit?, value?, key?, direction?, amount?, by?, to?, textGone?, ms?, full?, files?, paths?, all?, wait?, item?, request?, purpose?, trusted?, accept?, expression?, wait_ms?, to_ref?, to_x?, to_y?, steps?, label?, annotate?, all_frames?, slowly?, read?, width?, height? }` |
+| POST | `/api/v1/browser/act` | an agent | `{ action, tab?, device?, url?, ref?, x?, y?, text?, exact?, role?, limit?, fields?, clear?, submit?, value?, key?, direction?, amount?, by?, to?, textGone?, ms?, full?, max?, read_text?, selector?, files?, paths?, all?, wait?, item?, request?, purpose?, trusted?, accept?, expression?, wait_ms?, to_ref?, to_x?, to_y?, steps?, label?, annotate?, all_frames?, slowly?, read?, width?, height? }` |
 | GET | `/api/v1/browser/status` | anyone | `{ browsers, mode, sites }` |
 | GET | `/api/v1/browser/panel` | anyone | `{ panel: 1, extension?: { version, build, folder? } }`: this Walnut has the side panel, the extension build it ships, and its folder's id |
 | PUT | `/api/v1/browser/settings` | the person only | `{ mode?: "ask" \| "any", removeSite? }` |

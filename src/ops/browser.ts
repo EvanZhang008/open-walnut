@@ -73,6 +73,7 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       return {
         outcome: `${where}${theirs}${rec}`,
         next: theirs ? 'Ask the person for their tab (or take it) before you sign in anywhere; else snapshot to see the page.'
+          : body.page_text ? `${args.action === 'open' ? 'Tell the person in your first line which window and tab you are working in; then r' : 'R'}ead page_text (the main content); snapshot for the element refs to act on.`
           : args.action === 'open' ? 'Tell the person in your first line which window and tab you are working in; then snapshot to see the page and its element refs.'
             : 'snapshot to see what is on the page and its element refs.',
       }
@@ -81,7 +82,8 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       outcome: `${typeof body.where === 'string' ? `${body.where} ` : ''}You may act in the person's tab ${body.tab} (${body.url ?? ''}); it shows your frame and their Stop button.`,
       next: 'Tell the person which tab you took; snapshot it; close gives it back (it stays open).',
     }
-    case 'snapshot': return { outcome: `Page snapshot${tab}.`, next: 'click, type or select an element by its ref (e12, or f3:e12 in a frame); refs hold until the page changes, then snapshot again.' }
+    case 'text': return { outcome: `${String(body.scope ?? 'The page\'s text')}${tab}: ${String(body.chars ?? '?')} characters${body.cut ? ', cut (max reads more, ref or selector one part)' : ''}.`, next: 'click or find what you need next.' }
+    case 'snapshot': return { outcome: `Page snapshot${tab}${typeof body.more === 'number' ? `, ${body.more} more element(s) off screen (all: true lists them)` : ''}.`, next: 'click, type or select an element by its ref (e12, or f3:e12 in a frame); refs hold until the page changes, then snapshot again.' }
     case 'find': return { outcome: `${body.count ?? 0} match(es)${tab}.`, next: 'Act on a match by its ref.' }
     case 'form_values': return { outcome: `${body.count ?? 0} field(s)${tab}.`, next: 'fill_form {fields: [{ref or label, value}]} to fill several at once.' }
     case 'fill_form': return { outcome: `Filled ${(body.filled as unknown[] | undefined)?.length ?? 0} field(s)${tab}.`, next: 'form_values or snapshot to check, then send the form only if the person asked for that step.' }
@@ -96,7 +98,7 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       const px = (body.pixels ?? {}) as { width?: number; height?: number }
       return { outcome: `Zoomed in on ${String(px.width ?? '?')}x${String(px.height ?? '?')} pixels of the screen${tab}${body.image ? '' : '; the image is not in this result'}.`, next: 'In a shell, `walnut browser zoom X Y W H <file>` saves it as a file to Read.' }
     }
-    case 'drag': return { outcome: `Dragged ${String(body.dragged ?? '')}${body.native ? ' (the page\'s own drag and drop)' : ''}${tab}.${dialogLine(body)}`, next: body.dialog ? 'dialog accept or dismiss answers the dialog.' : 'snapshot or screenshot to see the result.' }
+    case 'drag': return { outcome: `Dragged ${String(body.dragged ?? '')}${body.native ? ' (the page\'s own drag and drop)' : ''}${tab}${typeof body.changed === 'string' ? `: ${body.changed}` : ''}.${dialogLine(body)}`, next: body.dialog ? 'dialog accept or dismiss answers the dialog.' : 'snapshot or screenshot to see the result.' }
     case 'dialog': {
       if (args.read) {
         const d = body.dialog as { type?: string; message?: string; default_prompt?: string } | undefined
@@ -107,9 +109,17 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       }
       return { outcome: `The dialog was ${String(body.dialog ?? 'answered')}${tab}.`, next: 'snapshot to see the page now.' }
     }
-    case 'click': case 'type': case 'press': case 'click_label': {
+    case 'click': case 'type': case 'press': case 'click_label': case 'select': case 'hover': case 'scroll': {
       if (body.dialog) return { outcome: `Done${tab}.${dialogLine(body)}`, next: 'dialog accept (with text for a prompt) or dialog dismiss answers it; nothing else works on the page until then.' }
-      return { outcome: `Done${tab}${body.url ? ` at ${body.url}` : ''}.${also}${body.matched ? ` It clicked the best of ${String((body.matched as { of?: number }).of ?? 1)} match(es), ${String((body.matched as { ref?: string }).ref ?? '')}.` : ''}`, next: 'snapshot again to see the result.' }
+      const changed = typeof body.changed === 'string' ? body.changed : undefined
+      const where = changed ? `: ${changed}` : body.url ? ` at ${body.url}` : ''
+      const why = body.trusted === false && typeof body.why === 'string' ? ` (trusted false: ${body.why})` : ''
+      const matched = body.matched ? ` It clicked the best of ${String((body.matched as { of?: number }).of ?? 1)} match(es), ${String((body.matched as { ref?: string }).ref ?? '')}.` : ''
+      return {
+        outcome: `Done${tab}${where}.${changed?.startsWith('opened') ? '' : also}${matched}${why}`,
+        next: changed === 'nothing changed on the page' ? 'Nothing to wait for (no change in its text, fields, scroll or address): snapshot to check before acting again.'
+          : body.page_text ? 'Read page_text; act again by ref (snapshot lists them).' : 'snapshot to act on what is there now, or text to read it.',
+      }
     }
     case 'upload': return { outcome: `Put ${(body.uploaded as unknown[] | undefined)?.length ?? 0} file(s) into ${body.into ?? 'the field'}${tab}.`, next: 'snapshot to see what the page made of it.' }
     case 'downloads': return body.finished
@@ -155,15 +165,20 @@ defineOp({
   title: 'Use the person\'s browser',
   description:
     'Act in the user\'s own browser (Chrome or Firefox with the Walnut extension, signed in to their sites), in a separate Walnut agent window. '
+    + 'Start here (a read takes 3 to 5 calls): open {url, read_text: true} (the tab and its main text); snapshot (the elements on screen, a ref each: e12); '
+    + 'click {ref} or {text: its words} (read_text: true reads the page after); type {ref, text, submit?}; text (the main content without menus, header or footer, 4000 characters; ref or selector: one element; max; all: the whole page); '
+    + 'find {text} (the best few matches); wait {text | url | textGone, ms?} (10 s unless ms); close. '
+    + 'Every acting step answers `changed`: went to <url>, opened tab N, the page content changed, or nothing changed on the page (then do not wait: snapshot and act again). '
+    + 'Subagents may use it too: the same task, tabs and approvals. '
     + 'You act only in tabs your task opened (and the tabs those open), or a tab of the user\'s you take. Actions: tabs (all: every tab of the browser, title and address only); '
     + 'take {tab} (one of the user\'s tabs, never the one they are on: person_is_here); open {url}; navigate {tab, url}; back; close (a taken tab is given back, not closed); '
-    + 'snapshot (the page as text with element refs like e12, f3:e12 inside a frame); text; find {text, exact?, role?, limit?}; form_values (every field: label, name, type, value; secrets hidden); '
+    + 'snapshot (all: the whole page and its text; refs like e12, f3:e12 inside a frame); find {text, exact?, role?, limit?}; form_values (every field: label, name, type, value; secrets hidden); '
     + 'click {ref} or {x, y} or {text} (the best match by its words, in the page or a frame); hover {ref} or {x, y}; type {ref or x, y, text, clear?, submit?, slowly? (one key at a time)}; fill_form {fields: [{ref or label, value}]}; select {ref, value}; press {key: Enter, Tab, Escape...}; '
     + 'scroll {direction: up|down|left|right, amount? (screens) or by? (px)} or {to: top|bottom} or {ref} (into view); with a direction and a ref or x, y it scrolls that box inside the page; wait {text} or {textGone} or {url: substring or /regex/} or {ms}; '
     + 'screenshot (full: the whole page, cut at 12000 px; annotate: numbers on the elements on screen, labels map number to ref); click_label {label}; '
     + 'zoom {x, y, width, height} (that region of the screen at full pixel resolution); text {all_frames: each frame\'s text on its own}; upload {ref, files: [{name, type, base64}]} (10 MB in all; `walnut browser upload e5 ./a.pdf` in a shell); '
     + 'downloads {wait?, ms?}; fill_login {item?} (signs in with the user\'s saved login for the page: you never see the password; needs_ok waits for their approval: call again with request); fill_code {item?} (on the page that asks for a sign-in\'s one-time code: fills the code of the saved login\'s two-step setup, you never see it; the same approvals). '
-    + 'Real input (Chrome only; on unless the user turned it off in the extension: trusted_off): click, hover, type and press in your own tab in the agent window use it by default (trusted: false for the page\'s events; a frame, a link to a new tab, a picker, a shortcut with Control, Meta or Alt, or long text stay the page\'s); trusted: true asks for it by name on click, hover, type, press, scroll (the wheel), upload {paths on the browser\'s machine}; '
+    + 'Real input (Chrome only; on unless the user turned it off in the extension: trusted_off): click, hover, type and press in your own tab in the agent window use it by default (trusted: false for the page\'s events; a covered or minimized agent window gets the page\'s events, and the answer says trusted: false and why; a frame, a link to a new tab, a picker, a shortcut with Control, Meta or Alt, or long text stay the page\'s); trusted: true asks for it by name on click, hover, type, press, scroll (the wheel), upload {paths on the browser\'s machine}; '
     + 'drag {ref or x, y; to_ref or to_x, to_y; steps?} (always real input, top frame); a trusted step that opens an alert, confirm or prompt answers with it (dialog), and the page waits: '
     + 'dialog {read: true} reads it (type, message, default_prompt), dialog {accept, text?} answers it (text: a prompt\'s answer); evaluate {expression} runs page JavaScript in a tab you opened (result JSON, 50 KB). '
     + 'Recording, in a tab you opened, also with that switch (Chrome shows its debugging bar there): network {url?, method?, status?: 404 or "4xx", type?, limit?, include_static?, stop?} lists the requests the page made '
@@ -178,7 +193,7 @@ defineOp({
     + 'A sign-in only the person can do (a login you have no saved login for, a code sent to their phone, a check, or a page that refuses this browser: the answer carries hand_off): '
     + 'request_sign_in {tab, text: what to sign in to} asks them on the task\'s Browser view (they take the tab over, sign in themselves, and hand it back); it answers needs_ok with request: call again with it and wait_ms until it answers done. '
     + 'While the person has a tab (Take over), every action there answers person_driving: work elsewhere or wait. '
-    + 'Refusals: browser_not_connected (the user turns agents on in the extension popup), browser_disconnected (the user disconnected the extension: ask them to connect it), site_denied, not_your_tab, person_is_here, trusted_off (its message says which switch the user turns on, and where: pass it on as it is), not_agent_opened (open the page in a tab of your own), filled_here, test_run. '
+    + 'Refusals: window_hidden or input_dropped (real input asked by name on a covered agent window: leave trusted out), browser_not_connected (the user turns agents on in the extension popup), browser_disconnected (the user disconnected the extension: ask them to connect it), site_denied, not_your_tab, person_is_here, trusted_off (its message says which switch the user turns on, and where: pass it on as it is), not_agent_opened (open the page in a tab of your own), filled_here, test_run. '
     + 'Passwords: sign in with fill_login, then fill_code where a one-time code is asked; never type one you read from elsewhere. A click, Enter or other key that buys or pays, sends or posts, or deletes '
     + '(Place order, Pay, Send, Post, Publish, Delete, a form with card details or a message) waits for the user\'s approval: needs_ok with request, call the same action again with it; '
     + 'only the user can approve it. Add to cart, search, sign in, Next, filters and opening pages never ask. The ask does not judge evaluate, the page\'s own scripts '
@@ -186,8 +201,10 @@ defineOp({
   input: {
     action: z.enum(ACTIONS).describe('What to do'),
     tab: z.number().int().optional().describe('The tab id (from open or tabs); default the tab you used last'),
+    read_text: z.boolean().optional().describe('open / navigate / back / click / press / type / select / fill_form: also read the page\'s main text (page_text; a new tab the step opened is the one read)'),
+    max: z.number().int().min(1).max(100_000).optional().describe('text (or read_text): at most this many characters (default 4000)'),
     url: z.string().max(4000).optional().describe('open / navigate: the page; wait: a substring of the address or /regex/; network: a part of the request\'s address'),
-    ref: z.string().max(40).optional().describe('click / hover / type / select / scroll / upload / drag (its start): an element ref from snapshot or find (e12, f3:e12)'),
+    ref: z.string().max(40).optional().describe('click / hover / type / select / scroll / upload / drag (its start) / text (that element\'s text): an element ref from snapshot or find (e12, f3:e12)'),
     x: z.number().optional().describe('click / hover / type / scroll / drag (its start) / zoom: a point in the page (CSS pixels of the viewport), instead of ref'),
     y: z.number().optional(),
     to_ref: z.string().max(40).optional().describe('drag: the element it ends on'),
@@ -214,13 +231,13 @@ defineOp({
     amount: z.number().optional().describe('scroll: screens (default 1)'),
     by: z.number().optional().describe('scroll: pixels instead of screens'),
     to: z.enum(['top', 'bottom']).optional().describe('scroll: to the top or bottom of the page'),
-    ms: z.number().int().min(0).max(30_000).optional().describe('wait: how long, when not waiting for text; downloads: how long to wait'),
+    ms: z.number().int().min(0).max(30_000).optional().describe('wait: how long (text, textGone and url wait 10 s unless ms says); downloads: how long to wait'),
     full: z.boolean().optional().describe('screenshot: the whole page, not only what is on screen'),
     format: z.enum(['jpeg', 'png']).optional().describe('screenshot / zoom: the image format (default jpeg)'),
     files: z.array(z.object({ name: z.string().max(255), type: z.string().max(200).optional(), base64: z.string().max(14_000_000) })).max(20).optional()
       .describe('upload: the files, their bytes as base64 (10 MB in all)'),
     paths: z.array(z.string().max(4000)).max(20).optional().describe('upload with trusted: files on the browser\'s own machine'),
-    all: z.boolean().optional().describe('tabs: every tab of the browser (the user\'s too), title and address only'),
+    all: z.boolean().optional().describe('tabs: every tab of the browser (the user\'s too), title and address only; snapshot / text: the whole page, not only what is on screen or the main content'),
     wait: z.boolean().optional().describe('downloads: wait for the next one to finish'),
     request: z.string().max(100).optional().describe('fill_login, fill_code, request_sign_in, or a click / press / type that waits for the user: the request id from needs_ok, to wait for their answer'),
     site: z.string().max(200).optional().describe('request_sign_in: the site to sign in to (default the tab\'s)'),
@@ -233,7 +250,7 @@ defineOp({
     inline: z.boolean().optional().describe('screenshot / zoom: put the image (a data URL) in the result; the shell command uses this'),
     wait_ms: z.number().int().min(0).max(25_000).optional().describe('needs_ok: hold this long for the person\'s answer'),
     device: z.string().max(80).optional().describe('Which browser, when more than one is connected (browser_status names them)'),
-    selector: z.string().max(500).optional().describe('upload: a CSS selector of the file field, for one a page hides (snapshot does not list it)'),
+    selector: z.string().max(500).optional().describe('text: the text of the first element it matches; upload: a CSS selector of the file field, for one a page hides (snapshot does not list it)'),
     record: z.boolean().optional().describe('open: record the tab\'s requests and console from before the page loads (real input switch)'),
     stop: z.boolean().optional().describe('network: stop recording this tab'),
     method: z.string().max(40).optional().describe('network: only requests of this method (GET, POST...)'),

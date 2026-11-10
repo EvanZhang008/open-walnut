@@ -44,6 +44,7 @@ export function cleanArgs(b: Record<string, unknown>): Record<string, unknown> {
   for (const k of ['max_chars', 'width', 'height', 'to_x', 'to_y']) if (out[k] !== undefined && (typeof out[k] !== 'number' || !Number.isFinite(out[k]))) delete out[k]
   if (out.format !== undefined && out.format !== 'png' && out.format !== 'jpeg') delete out.format
   if (typeof out.text === 'string') out.text = (out.text as string).slice(0, 20_000)
+  if (out.max !== undefined) { if (typeof out.max === 'number' && Number.isFinite(out.max) && out.max > 0) out.max = Math.min(100_000, Math.floor(out.max)); else delete out.max }
   if (typeof out.textGone === 'string') out.textGone = (out.textGone as string).slice(0, 2000)
   // An address to open (wait's `url` is a part of one, or a /regex/: left as given).
   if (typeof out.url === 'string') out.url = b.action === 'open' || b.action === 'navigate' ? webAddress((out.url as string).slice(0, 4000)) : (out.url as string).slice(0, 4000)

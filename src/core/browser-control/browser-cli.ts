@@ -8,41 +8,34 @@ import path from 'node:path'
 import { noBrowserLine, type GoneBrowser } from './gone-words.js'
 
 export const BROWSER_USAGE = [
-  'usage: walnut browser status',
-  '       walnut browser tabs [--all]                    (--all: every tab of the browser, title and address)',
-  '       walnut browser take <tab>                      (act in one of the person\'s tabs; close gives it back)',
-  '       walnut browser open <url> [--record]       (--record: its requests and console from before the page loads)',
-  '       walnut browser navigate <url> [--tab N]      (also: go)',
-  '       walnut browser back | close [--tab N]',
-  '       walnut browser snapshot | text [--all-frames] | form-values [--tab N]   (--all-frames: each frame\'s text on its own)',
-  '       walnut browser find <text> [--exact] [--role R] [--limit N] [--tab N]',
-  '       walnut browser click <ref> | --at X,Y | --text <words> [--trusted] [--tab N]   (--text: the best match, frames too)',
-  '       walnut browser click-label <N> [--trusted] [--tab N]          (a number from screenshot --annotate)',
-  '       walnut browser hover <ref> | --at X,Y | --text <words> [--trusted] [--tab N]',
-  '       walnut browser type [<ref>] <text> [--at X,Y] [--clear] [--submit] [--slowly] [--trusted] [--tab N]   (--slowly: one key at a time)',
-  '       walnut browser drag <ref|X,Y> <ref|X,Y> [--steps N] [--tab N]   (real input)',
-  '       walnut browser fill-form <ref-or-label>=<value> ... [--tab N]',
-  '       walnut browser select <ref> <value> [--tab N]',
-  '       walnut browser press <key> [--trusted] [--tab N]',
-  '       walnut browser scroll [up|down|left|right|top|bottom] [<ref> | --at X,Y] [--amount N | --by PX] [--trusted] [--tab N]   (a ref or point with a direction: that box scrolls)',
-  '       walnut browser wait <text> | --gone <text> | --url <part or /regex/> | --ms N [--tab N]',
-  '       walnut browser screenshot [<file>] [--full] [--annotate] [--tab N]   (default: a .jpg in $WALNUT_TASK_DIR/shots; a .png name saves a PNG; --annotate numbers the elements)',
-  '       walnut browser zoom <X> <Y> <W> <H> [<file>] [--tab N]   (that region of the screen at full pixel resolution)',
-  '       walnut browser upload <ref> <file>... [--tab N]          (10 MB in all; --trusted --path P: a file on the browser\'s machine)',
-  '       walnut browser upload --selector <css> <file>... [--tab N] (a file field the page hides)',
-  '       walnut browser downloads [--wait] [--ms N]',
-  '       walnut browser fill-login [--item <id|name>] [--fresh-sign-in] [--tab N]   (signs in with the saved login; you never see the password)',
-  '       walnut browser request-sign-in [<what to sign in to>] [--site S] [--tab N]   (the person signs in themselves, Take over; waits for them)',
-  '       walnut browser fill-code [--item <id|name>] [--tab N]   (the saved login\'s one-time code into the page; you never see it)',
-  '       walnut browser dialog [read] | accept|dismiss [--text T] [--tab N]   (real input; read: the open dialog\'s type and message)',
-  '       walnut browser evaluate <expression> [--tab N]             (real input; a tab you opened)',
-  '       walnut browser network [--url part] [--method M] [--status 404|4xx] [--type XHR] [--limit N] [--include-static] [--stop] [--tab N]',
-  '       walnut browser network-body <request id> [--max-chars N] | network-request-body <request id> [--tab N]',
-  '       walnut browser console [--level error|warn|info|log|debug] [--limit N] [--tab N]   (recording: real input; a tab you opened)',
-  '       walnut browser resize <width> <height> [--viewport] [--tab N]   (Walnut\'s agent window; --viewport: the page\'s size)',
-  '  Refs: e12 in the page, f3:e12 inside a frame. --json prints the whole result. A site agents have not used yet waits for the',
-  '  person only when they chose "Ask me first" in Settings. Real input (by default for click, hover, type and press in your own tab, --no-trusted for page events; --trusted, dialog, evaluate) is on unless the person turned it off in the extension.',
-  'Exit: 0 done; 1 refused or a choice to make (the person said no, not your tab, which tab or login: the message lists them); 2 no answer in time; 3 an error.',
+  'usage: walnut browser <command> [--tab N] [--json]',
+  'Start here (a read takes 3 to 5 calls; every step says what it changed):',
+  '  open <url> [--read]               a tab in Walnut\'s agent window; --read prints its main text too',
+  '  snapshot [--all]                  the elements on screen, a ref each (e12); --all: the whole page',
+  '  click <ref> | --text <words> [--read]   then says: went to <url>, opened tab N, or nothing changed',
+  '  type [<ref>] <text> [--submit] [--clear]',
+  '  text [<ref> | --selector css] [--max N] [--all]   the main content (no menus, header, footer); 4000 chars',
+  '  find <words> [--role button]      the best few matches, with refs',
+  '  wait <text> | --url <part or /regex/> | --gone <text> [--ms N]   10 s unless --ms (up to 30000)',
+  '  close                             when you are done',
+  '  e.g.  open https://example.com/issues --read;  click --text "Login fails" --read;  close',
+  'More:',
+  '  status | tabs [--all] | take <tab> | navigate <url> | back       (tabs --all: every tab of the browser)',
+  '  hover <ref> | --at X,Y | --text <words>;  press <key>;  select <ref> <value>;  fill-form <ref-or-label>=<value> ...',
+  '  scroll [up|down|left|right|top|bottom] [<ref> | --at X,Y] [--amount N | --by PX]',
+  '  click --at X,Y | click-label <N>;  type <text> --at X,Y [--slowly];  drag <ref|X,Y> <ref|X,Y> [--steps N]',
+  '  screenshot [<file>] [--full] [--annotate];  zoom <X> <Y> <W> <H> [<file>]   (default: a .jpg in $WALNUT_TASK_DIR/shots)',
+  '  upload <ref> <file>... | --selector <css> <file>...   (10 MB in all; --trusted --path P: a file on the browser\'s machine)',
+  '  downloads [--wait] [--ms N];  resize <width> <height> [--viewport];  find <text> [--exact] [--limit N]',
+  '  fill-login [--item <id|name>] [--fresh-sign-in];  fill-code [--item <id|name>];  request-sign-in [<what>] [--site S]',
+  '  open <url> --record;  network [--url part] [--method M] [--status 4xx] [--type XHR] [--limit N] [--include-static] [--stop]',
+  '  network-body <id> [--max-chars N];  network-request-body <id>;  console [--level error] [--limit N]',
+  '  dialog [read] | accept|dismiss [--text T];  evaluate <expression>   (a tab you opened)',
+  '  Refs: e12 in the page, f3:e12 inside a frame. Real input (Chrome\'s debugger) is the default for click, hover, type and',
+  '  press in your own tab; --no-trusted uses page events, --trusted asks for it by name. A covered agent window takes page',
+  '  events (the answer says trusted false and why). --json prints the whole result.',
+  'Exit: 0 done; 1 refused or a choice to make (the person said no, not your tab, which tab or login: the message',
+  '  lists them); 2 no answer in time; 3 an error.',
 ].join('\n')
 
 export const BROWSER_EXIT = { ok: 0, refused: 1, timeout: 2, error: 3 } as const
@@ -113,6 +106,8 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
       else if (w === '--viewport') args.viewport = true
       else if (w === '--annotate') args.annotate = true
       else if (w === '--all-frames') args.all_frames = true
+      else if (w === '--read') args.read_text = true
+      else if (w === '--max') { const n = Number(val()); if (!Number.isInteger(n) || n < 1) return { ok: false, error: '--max takes a whole number (characters for text, elements for snapshot)' }; args.max = n }
       else if (w === '--slowly') args.slowly = true
       else if (w === '--steps') args.steps = Number(val())
       else if (w === '--site') args.site = val()
@@ -156,8 +151,12 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
         if (!Number.isInteger(n) || n < 1) return { ok: false, error: 'click-label takes a number from screenshot --annotate' }
         return { ok: true, op: 'browser', args: { action: 'click_label', label: n, ...args }, json }
       }
-      case 'tabs': case 'back': case 'close': case 'snapshot': case 'text':
+      case 'tabs': case 'back': case 'close': case 'snapshot':
         return { ok: true, op: 'browser', args: { action: verb, ...args }, json }
+      // `text e12` reads that element alone (as --ref does).
+      case 'text':
+        if (rest[0] && !REFS.test(rest[0])) return { ok: false, error: `text takes a ref (e12) from snapshot, or --selector css: not "${rest[0].slice(0, 40)}"` }
+        return { ok: true, op: 'browser', args: { action: 'text', ...(rest[0] ? { ref: rest[0] } : {}), ...args }, json }
       case 'form-values': case 'form_values': return { ok: true, op: 'browser', args: { action: 'form_values', ...args }, json }
       case 'downloads': return { ok: true, op: 'browser', args: { action: 'downloads', ...args }, json }
       case 'fill-login': case 'fill_login': return { ok: true, op: 'browser', args: { action: 'fill_login', ...args }, json }
@@ -252,7 +251,7 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   return { ok: false, error: `unknown action ${verb}` }
 }
 
-const REFUSED = new Set(['site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab', 'not_agent_opened', 'filled_here', 'request_site_not_allowed', 'recording_cancelled', 'person_window', 'person_driving'])
+const REFUSED = new Set(['window_hidden', 'input_dropped', 'site_denied', 'not_your_tab', 'test_run', 'which_tab', 'person_is_here', 'trusted_off', 'denied', 'agents_off', 'agent_never', 'which_login', 'other_site', 'agents_tab_only', 'site_open_in_person_tab', 'not_agent_opened', 'filled_here', 'request_site_not_allowed', 'recording_cancelled', 'person_window', 'person_driving'])
 
 const MIME: Record<string, string> = {
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
@@ -360,7 +359,8 @@ function render(action: string | undefined, b: Record<string, unknown>): string 
   }
   if (action === 'find') {
     const m = (b.matches as Array<{ ref: string; role: string; name: string; text: string }> | undefined) ?? []
-    return m.length ? m.map((x) => `[${x.ref}] ${x.role} "${x.name}"${x.text && x.text !== x.name ? `  ${x.text}` : ''}`).join('\n') : 'Nothing found.'
+    const more = Number(b.count ?? m.length) - m.length
+    return m.length ? m.map((x) => `[${x.ref}] ${x.role} "${x.name}"${x.text && x.text !== x.name ? `  ${x.text.slice(0, 100)}` : ''}`).join('\n') + (more > 0 ? `\n… ${more} more match(es): --limit N, or --role button / --exact to narrow` : '') : 'Nothing found.'
   }
   if (action === 'form_values') {
     const f = (b.fields as Array<{ ref: string; label: string; type: string; value: string; checked?: boolean; name?: string }> | undefined) ?? []
@@ -408,14 +408,56 @@ function render(action: string | undefined, b: Record<string, unknown>): string 
     }
     return typeof b.text === 'string' ? b.text : ''
   }
+  if (action && ACT_WORDS[action] && typeof b.where !== 'string') return actLine(action, b) + readLines(b)
   const where = [typeof b.tab === 'number' ? `tab ${b.tab}` : '', typeof b.url === 'string' ? b.url : '', typeof b.title === 'string' ? `"${b.title}"` : ''].filter(Boolean).join('  ')
   // Which window and tab, and the person's own tabs on the site (where-words.ts), each on a line of its own.
   if (typeof b.where === 'string') {
     const theirs = typeof b.person_tabs_note === 'string' ? `\n${b.person_tabs_note}` : ''
     const rec = b.recording === true ? '\nRecording its requests and console (network, console).' : b.record_refused ? `\nNot recording: ${(b.record_refused as { message?: string }).message ?? ''}` : ''
-    return `ok  ${b.where}${theirs}${rec}${typeof b.note === 'string' ? `\n${b.note}` : ''}`
+    return `ok  ${b.where}${theirs}${rec}${typeof b.note === 'string' ? `\n${b.note}` : ''}${readLines(b)}`
   }
   const opened = b.opened as { tab?: number; url?: string } | undefined
   const also = opened && typeof opened.tab === 'number' ? `\nOpened a new tab: ${opened.tab}  ${opened.url ?? ''} (this task's too: --tab ${opened.tab})` : ''
   return `ok${where ? `  ${where}` : ''}${also}${typeof b.note === 'string' ? `\n${b.note}` : ''}`
+}
+
+/** What each acting step did, from its answer. */
+const ACT_WORDS: Record<string, (b: Record<string, unknown>) => string> = {
+  click: (b) => `clicked ${String(b.clicked ?? '')}`,
+  hover: (b) => `hovered ${String(b.hovered ?? '')}`,
+  type: (b) => `typed ${String(b.typed ?? '')}`,
+  press: (b) => `pressed ${String(b.pressed ?? '')}`,
+  select: (b) => `selected "${String(b.selected ?? '')}"`,
+  scroll: (b) => `scrolled ${String(b.scrolled ?? '')}`,
+  fill_form: (b) => `filled ${(b.filled as unknown[] | undefined)?.length ?? 0} field(s)`,
+  drag: (b) => `dragged ${String(b.dragged ?? '')}`,
+  upload: (b) => `uploaded ${(b.uploaded as unknown[] | undefined)?.length ?? 0} file(s) into ${String(b.into ?? 'the field')}`,
+}
+
+/**
+ * One line for an acting step: what it did and what changed (agent-change.ts in the extension),
+ * then why real input did not do it when it did not, and a new tab or a match it chose.
+ */
+function actLine(action: string, b: Record<string, unknown>): string {
+  const did = ACT_WORDS[action](b).replace(/\s+$/, '')
+  const changed = typeof b.changed === 'string' ? `: ${b.changed}` : ''
+  // An older extension says nothing of what changed: the address it is at, as before.
+  const tab = typeof b.tab === 'number' ? `  [tab ${b.tab}${!changed && typeof b.url === 'string' ? ` at ${b.url}` : ''}]` : ''
+  const lines = [`ok  ${did}${changed}${tab}`]
+  const m = b.matched as { ref?: string; of?: number } | undefined
+  if (m?.ref && (m.of ?? 1) > 1) lines.push(`(the best of ${m.of} matches, ${m.ref})`)
+  if (b.trusted === false && typeof b.why === 'string') lines.push(`(trusted false: ${b.why})`)
+  const opened = b.opened as { tab?: number; url?: string } | undefined
+  if (opened && typeof opened.tab === 'number' && !String(b.changed ?? '').startsWith('opened')) lines.push(`Opened a new tab: ${opened.tab}  ${opened.url ?? ''} (this task's too: --tab ${opened.tab})`)
+  if (b.changed === 'nothing changed on the page') lines.push('(no change in its text, fields, scroll or address: nothing to wait for; snapshot to check before acting again)')
+  if (typeof b.note === 'string') lines.push(b.note)
+  return lines.join('\n')
+}
+
+/** The page's text read in the same call (`--read`). */
+function readLines(b: Record<string, unknown>): string {
+  const t = b.page_text as { text?: string; scope?: string; error?: string; tab?: number } | undefined
+  if (!t) return ''
+  if (typeof t.error === 'string') return `\n(could not read the page: ${t.error})`
+  return `\n\n${t.scope ? `== ${t.scope} ==\n` : ''}${t.text ?? ''}`
 }

@@ -17,6 +17,10 @@
  *     the wheel cannot).
  *   - `trusted: true` (and `dialog`, `evaluate`, `drag`, always): real input wherever the agent may
  *     act, or a refusal that says why.
+ * Chrome drops real input on a page it does not draw (Walnut's agent window covered or minimized,
+ * agent-delivery.ts): a step that sends it (INPUT_OPS) checks first and after, and a default step
+ * takes the page's events instead (its answer says `trusted: false` and why); one that asked for
+ * real input by name is refused (`window_hidden`, `input_dropped`), never answered as done.
  * Either way a step that buys, sends or deletes is judged the same (page-ops.ts held, right after
  * the cursor and again with the debugger attached): it waits for the person's yes.
  * `evaluate` runs the page's own JavaScript, so only in a tab an agent opened, never the person's
@@ -38,12 +42,26 @@ import type { DialogInfo } from './agent-dialog'
 import { dialogAct } from './agent-dialog-act'
 import { dragAct } from './agent-drag'
 import { SLOW_KEY_MS, SLOW_MAX, wheelDelta } from './input-math'
+import { DROPPED_WHY, HIDDEN_WHY, delivered, droppedWords, hiddenWords, probeId } from './agent-delivery'
+import { sleep } from './page-reach'
 
 export const TRUSTED_OPS = new Set(['click', 'type', 'press', 'hover', 'upload', 'scroll'])
 /** A click by its words: the search may take this much of the command's time, the click the rest. */
 const SEARCH_MS = 8000
 /** These use the debugger whatever the command says. */
 export const DEBUGGER_OPS = new Set(['dialog', 'evaluate', 'drag'])
+/**
+ * The steps of those two sets that send the debugger's mouse, wheel or keys (Input.*): each checks
+ * that the page received them (agent-delivery.ts). Every one of TRUSTED_OPS and DEBUGGER_OPS is
+ * here or in NO_INPUT_OPS (tests/core/browser-control/extension-hidden-input.test.ts).
+ */
+export const INPUT_OPS = new Set(['click', 'hover', 'type', 'press', 'scroll', 'drag'])
+/** The debugger steps that send no input, and why a page Chrome does not draw takes them all the same. */
+export const NO_INPUT_OPS: Record<string, string> = {
+  dialog: 'Page.handleJavaScriptDialog answers the dialog itself',
+  evaluate: 'Runtime.evaluate runs a script, no input',
+  upload: 'DOM.setFileInputFiles sets the files, no input',
+}
 
 /**
  * Where the person turns real input on, step by step (an agent passes it on as it is). Real input,
@@ -95,7 +113,8 @@ export async function trustedByDefault(c: WireCommand, tabId: number, tab: Tab, 
 
 /** Real input could not take this default step before it acted: the page's events take it instead. */
 class Fallback extends Error {
-  constructor(readonly found?: Awaited<ReturnType<typeof refByText>>) { super('real input falls back to the page') }
+  /** `why`: the page was not drawn, or did not receive the input (the answer says so). */
+  constructor(readonly found?: Awaited<ReturnType<typeof refByText>>, readonly why?: string) { super('real input falls back to the page') }
 }
 /** Refusals that come before anything is pressed: a default step falls back on them. */
 const FALLBACK_CODES = new Set(['trusted_frame', 'debugger_busy'])
@@ -105,11 +124,11 @@ const FALLBACK_CODES = new Set(['trusted_frame', 'debugger_busy'])
  * by its words found it in a frame) for the page's events. Every other answer, an outward step's
  * hold included, is the step's own.
  */
-export async function defaultTrustedAct(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<{ done: Record<string, unknown> } | { fallback: true; found?: Awaited<ReturnType<typeof refByText>> }> {
+export async function defaultTrustedAct(c: WireCommand, tabId: number, tab: Tab, rec: AgentTab): Promise<{ done: Record<string, unknown> } | { fallback: true; found?: Awaited<ReturnType<typeof refByText>>; why?: string }> {
   try {
     return { done: await trustedAct(c, tabId, tab, rec, true) }
   } catch (err) {
-    if (err instanceof Fallback) return { fallback: true, ...(err.found ? { found: err.found } : {}) }
+    if (err instanceof Fallback) return { fallback: true, ...(err.found ? { found: err.found } : {}), ...(err.why ? { why: err.why } : {}) }
     if (err instanceof AgentError && FALLBACK_CODES.has(err.code)) return { fallback: true }
     throw err
   }
@@ -123,9 +142,28 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
   await checkPage(c.allow, tab.url ?? '')
   // A dialog blocks the page's script, so the page is not asked first.
   if (c.action === 'dialog') return dialogAct(c, tabId, rec)
-  const page = await reached(tabId)
+  let page = await reached(tabId)
+  // A tab just brought to the front may still read hidden for a moment: a named step asks twice more.
+  for (let i = 0; i < 2 && page.hidden && !soft && INPUT_OPS.has(c.action); i++) { await sleep(150); page = await reached(tabId) }
   if (page.walnut) throw new AgentError(WALNUT_PAGE, 'walnut_page')
   await checkPage(c.allow, page.href)
+  // A page Chrome does not draw drops the debugger's input: never sent there (agent-delivery.ts).
+  if (page.hidden && INPUT_OPS.has(c.action)) {
+    if (soft) throw new Fallback(undefined, HIDDEN_WHY)
+    throw new AgentError(hiddenWords(c.action), 'window_hidden')
+  }
+  // The step's delivery probe, armed by the last look before the debugger acts (page-probe.ts);
+  // after it, a page that saw none of its events had the input dropped.
+  const probe = probeId()
+  // Armed and not read yet: a step that fails after arming disarms it (finally, below).
+  let armed = false
+  const probing = (kind: string) => { armed = true; return { probe, probe_kind: kind } }
+  const check = async (kind: string) => {
+    armed = false
+    if (await delivered(tabId, probe, c.allow)) return
+    if (soft) throw new Fallback(matched, DROPPED_WHY)
+    throw new AgentError(droppedWords(kind), 'input_dropped')
+  }
   // `cursor`: the page draws the agent's cursor at the point before the debugger acts there (page-cursor.ts).
   const locate = async (extra: Record<string, unknown> = {}) => {
     const r = await frameOp(tabId, 0, 'locate', { ref: a.ref, x: a.x, y: a.y, ...(typeof a.label === 'number' ? { label: a.label } : {}), ...(a.outward_ok ? { outward_ok: a.outward_ok } : {}), ...extra }, c.allow)
@@ -148,7 +186,10 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
     a = { ...a, ref: m.ref, text: undefined }
     matched = m
   }
-  if (c.action === 'drag') return dragAct({ ...c, args: a }, tabId, rec)
+  if (c.action === 'drag') {
+    armed = true
+    try { return await dragAct({ ...c, args: a }, tabId, rec, { probe, check: () => check('drag') }) } finally { if (armed) disarmProbe(tabId, probe, c.allow) }
+  }
   let out: Record<string, unknown>
   let dialog: DialogInfo | undefined
   // A default step sends only mouse and key events: the page stays fillable (agent-debugger.ts run).
@@ -176,20 +217,29 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
         let l = await locate({ ...judge, cursor: 'click', ...blank })
         if (pageTakes(l)) throw new Fallback(matched)
         dialog = await watched(tabId, rec.owner, async (send) => {
-          l = await again({ ...judge, ...blank })
+          l = await again({ ...judge, ...blank, ...probing('click') })
           // What is under the point changed once the debugger attached: still nothing pressed.
           if (pageTakes(l)) throw new Fallback(matched)
           await cdpClick(send, l.x, l.y)
         }, undefined, taint)
+        if (!dialog) await check('click')
         out = { clicked: l.what, trusted: true }
         break
       }
-      case 'hover': { const l = await locate({ cursor: 'move' }); await run(tabId, rec.owner, (send) => cdpHover(send, l.x, l.y), taint); out = { hovered: l.what, trusted: true }; break }
+      case 'hover': {
+        const l = await locate({ cursor: 'move', ...probing('hover') })
+        // A step aside first: a mouse already at the point would move nowhere and the page see nothing.
+        await run(tabId, rec.owner, async (send) => { await cdpHover(send, l.x + 1, l.y); await cdpHover(send, l.x, l.y) }, taint)
+        await check('hover')
+        out = { hovered: l.what, trusted: true }
+        break
+      }
       case 'press': {
         const k = String(a.key ?? '')
         // Every combo that ends in Enter, and Space or Enter on a focused button or link, is judged.
         await locate({ active: true, ...trustedOutward('press', a) })
-        dialog = await watched(tabId, rec.owner, async (send) => { await again({ active: true, ...trustedOutward('press', a) }); await cdpPress(send, k) }, undefined, taint)
+        dialog = await watched(tabId, rec.owner, async (send) => { await again({ active: true, ...trustedOutward('press', a), ...probing('press') }); await cdpPress(send, k) }, undefined, taint)
+        if (!dialog) await check('press')
         out = { pressed: k, trusted: true }
         break
       }
@@ -206,22 +256,30 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
         const atJudge = { outward: 'click', ...(enter.outward ? { then_enter: true, typing: enter.typing } : {}) }
         let l = at ? await locate({ focus: true, clear: a.clear === true, cursor: 'click', ...atJudge })
           : a.ref !== undefined ? await locate({ focus: true, clear: a.clear === true, cursor: 'move', ...enter }) : (await locate({ active: true, ...enter }), undefined)
+        // Nothing is sent for no text, no Enter and no click at a point: nothing to check. A click
+        // with no keys after it is checked as a click.
+        const keys = text.length > 0 || a.submit === true
+        const sends = keys || at
+        const kind = keys ? 'type' : 'click'
+        const typeProbe = sends ? probing(kind) : {}
         dialog = await watched(tabId, rec.owner, async (send) => {
           // Judged again on what is there now: at the point, or the focused field the text goes to.
-          if (at) l = await again(atJudge)
-          else await again({ active: true, ...enter })
+          if (at) l = await again({ ...atJudge, ...typeProbe })
+          else await again({ active: true, ...enter, ...typeProbe })
           if (at && l) await cdpClick(send, l.x, l.y)
           await cdpType(send, text, slowly ? SLOW_KEY_MS : 0)
           if (a.submit === true) await cdpPress(send, 'Enter')
         }, undefined, taint)
+        if (!dialog && sends) await check(kind)
         out = { typed: `${text.length} characters${l ? ` into ${l.what}` : ''}${slowly ? ', one key at a time' : ''}`, trusted: true }
         break
       }
       case 'scroll': {
         // The wheel over the element (or point, or the middle of the page): what is under it scrolls.
-        const l = await locate(a.ref === undefined && typeof a.x !== 'number' ? { middle: true, cursor: 'move' } : { cursor: 'move' })
+        const l = await locate({ ...(a.ref === undefined && typeof a.x !== 'number' ? { middle: true, cursor: 'move' } : { cursor: 'move' }), ...probing('scroll') })
         const d = wheelDelta(a)
         await run(tabId, rec.owner, (send) => cdpWheel(send, l.x, l.y, d.x, d.y))
+        await check('scroll')
         out = { scrolled: `${d.said} over ${l.what}`, trusted: true }
         break
       }
@@ -247,5 +305,11 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
     return { ...out, ...(matched ? { matched } : {}), ...(await where(tabId)), ...(popup ? { opened: popup } : {}) }
   } finally {
     acting.set(tabId, Date.now() + ACTING_MS)
+    if (armed) disarmProbe(tabId, probe, c.allow)
   }
+}
+
+/** A probe the step armed and never read (it failed, or a dialog took the page): taken off, in the background. */
+function disarmProbe(tabId: number, probe: string, allow: WireCommand['allow']): void {
+  void frameOp(tabId, 0, 'probe_read', { probe, done: true }, allow).catch(() => undefined)
 }

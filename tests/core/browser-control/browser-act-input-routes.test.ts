@@ -27,7 +27,7 @@ const A = { device: 'extension-input', label: 'Browser A', browser: 'chrome', ve
 /** The extension of before this input: the same caps but `input-v2`. */
 const OLD = { device: 'extension-old', label: 'Browser Old', browser: 'chrome', version: '0.6.1', caps: ['screenshot', 'trusted-input'] }
 /** What the extension answers an action with, when a test says (else ok). */
-let answerOf: (action: string, args: Record<string, unknown>) => { ok: boolean; error?: { message: string; code: string; extra?: Record<string, unknown> } } = () => ({ ok: true })
+let answerOf: (action: string, args: Record<string, unknown>) => { ok: boolean; result?: Record<string, unknown>; error?: { message: string; code: string; extra?: Record<string, unknown> } } = () => ({ ok: true })
 const AGENT = { 'x-walnut-caller-kind': 'agent' }
 let server: Server
 let base = ''
@@ -70,13 +70,42 @@ beforeEach(async () => {
       for (const cmd of await h.poll(dev, 0)) {
         seen.push({ action: cmd.action, args: cmd.args })
         const a = answerOf(cmd.action, cmd.args)
-        h.answer(dev.device, cmd.id, a.ok, { tab, url: 'https://shop.example.test/board', echo: cmd.action }, a.error)
+        h.answer(dev.device, cmd.id, a.ok, { tab, url: 'https://shop.example.test/board', echo: cmd.action, ...(a.result ?? {}) }, a.error)
       }
     }
   }, 10)
 })
 
 describe('what reaches the extension', () => {
+  it('read_text: the step, then the page\'s main text in the same call (max rides along, the step never sees read_text)', async () => {
+    const r = await act({ action: 'click', ref: 'e2', read_text: true, max: 900 })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(seen.map((c) => c.action)).toEqual(['click', 'text'])
+    expect(seen[0].args.read_text).toBeUndefined()
+    expect(seen[1].args).toMatchObject({ tab: 43, max: 900 })
+    expect(r.body.page_text).toMatchObject({ tab: 43 })
+    // A read itself, or a step without it, sends no second command.
+    seen = []
+    await act({ action: 'snapshot', read_text: true })
+    await act({ action: 'click', ref: 'e2' })
+    expect(seen.map((c) => c.action)).toEqual(['snapshot', 'click'])
+  })
+
+  it('read_text after a step that opened a dialog reads nothing (the page answers nothing until it is handled)', async () => {
+    answerOf = (action) => (action === 'click' ? { ok: true, result: { dialog: { type: 'confirm', message: 'Sure?' } } } : { ok: true })
+    const r = await act({ action: 'click', ref: 'e2', read_text: true })
+    expect(r.status).toBe(200)
+    expect(seen.map((c) => c.action)).toEqual(['click'])
+    expect(r.body.page_text).toBeUndefined()
+  })
+
+  it('read_text whose read fails says why on page_text; the step itself still answers done', async () => {
+    answerOf = (action) => (action === 'text' ? { ok: false, error: { message: 'That site is not allowed for agents yet.', code: 'page_error' } } : { ok: true })
+    const r = await act({ action: 'click', ref: 'e2', read_text: true })
+    expect(r.status).toBe(200)
+    expect(r.body.page_text).toMatchObject({ tab: 43, code: 'page_error' })
+  })
+
   it('click_label goes as a click on that label', async () => {
     const r = await act({ action: 'click_label', label: 5 })
     expect(r.status, JSON.stringify(r.body)).toBe(200)
@@ -187,6 +216,11 @@ describe('act-args', () => {
   it('keeps the new keys of the right type only', () => {
     expect(cleanArgs({ action: 'drag', to_ref: 'e9'.padEnd(80, '9'), to_x: 'far', to_y: 4, steps: 1 })).toEqual({ to_ref: 'e9'.padEnd(40, '9'), to_y: 4, steps: 2 })
     expect(cleanArgs({ action: 'text', all_frames: 'yes', annotate: 1, slowly: true, read: false })).toEqual({ slowly: true, read: false })
+    // text's max: a whole number of characters, at most 100,000; anything else is dropped.
+    expect(cleanArgs({ action: 'text', max: 250_000 })).toEqual({ max: 100_000 })
+    expect(cleanArgs({ action: 'text', max: 1200.7 })).toEqual({ max: 1200 })
+    expect(cleanArgs({ action: 'text', max: 'lots' })).toEqual({})
+    expect(cleanArgs({ action: 'text', max: -5 })).toEqual({})
     expect(cleanArgs({ action: 'click', label: 2.5 })).toEqual({})
     expect(cleanArgs({ action: 'click', label: 1001 })).toEqual({})
     expect(cleanArgs({ action: 'click', label: 12 })).toEqual({ label: 12 })
@@ -196,6 +230,27 @@ describe('act-args', () => {
 describe('the browser op', () => {
   const op = () => getOp('browser')!
   const map = (args: Record<string, unknown>, body: Record<string, unknown>) => op().mapResult!({ args, body }) as Record<string, any>
+
+  it('starts with the commands an agent needs first, and types the short read args', () => {
+    const d = op().description
+    expect(d.indexOf('Start here')).toBeLessThan(200)
+    for (const k of ['open {url, read_text: true}', 'snapshot', 'click {ref} or {text', 'text (the main content', 'find {text}', 'wait {text', 'close']) expect(d).toContain(k)
+    expect(d).toContain('Subagents may use it too')
+    const schema = opInputJsonSchema(op()) as { properties: Record<string, { type?: string }> }
+    expect(schema.properties.read_text.type).toBe('boolean')
+    expect(schema.properties.max.type).toBe('integer')
+  })
+
+  it('an acting step says what changed; nothing changed says not to wait; trusted false says why', () => {
+    expect(map({ action: 'click' }, { tab: 43, changed: 'went to https://x.test/issues/1 "Issue 1"' }).outcome).toBe('Done (tab 43): went to https://x.test/issues/1 "Issue 1".')
+    const none = map({ action: 'click' }, { tab: 43, changed: 'nothing changed on the page' })
+    expect(none.outcome).toContain('nothing changed on the page')
+    expect(none.next).toMatch(/^Nothing to wait for/)
+    expect(map({ action: 'click' }, { tab: 43, changed: 'the page content changed', trusted: false, why: 'the agent window is covered' }).outcome).toContain('(trusted false: the agent window is covered)')
+    // An older extension, with no line: the address, as before.
+    expect(map({ action: 'click' }, { tab: 43, url: 'https://x.test/a' }).outcome).toBe('Done (tab 43) at https://x.test/a.')
+    expect(map({ action: 'text' }, { tab: 43, scope: 'main content', chars: 5200, cut: true }).outcome).toContain('main content (tab 43): 5200 characters, cut')
+  })
 
   it('names the new actions and fields in its schema', () => {
     const schema = opInputJsonSchema(op()) as { properties: Record<string, { enum?: string[] }> }

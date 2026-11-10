@@ -33,7 +33,12 @@ function listen(): void {
 
 type End = { x: number; y: number; what: string }
 
-export async function dragAct(c: WireCommand, tabId: number, rec: AgentTab): Promise<Record<string, unknown>> {
+/**
+ * `delivery`: the step's probe, armed by the look right before the press (page-probe.ts), and the
+ * check after it that the page received the drag (agent-delivery.ts: Chrome drops real input on a
+ * page it does not draw).
+ */
+export async function dragAct(c: WireCommand, tabId: number, rec: AgentTab, delivery?: { probe: string; check: () => Promise<void> }): Promise<Record<string, unknown>> {
   const a = c.args
   const hasFrom = typeof a.ref === 'string' || (typeof a.x === 'number' && typeof a.y === 'number')
   const hasTo = typeof a.to_ref === 'string' || (typeof a.to_x === 'number' && typeof a.to_y === 'number')
@@ -43,7 +48,7 @@ export async function dragAct(c: WireCommand, tabId: number, rec: AgentTab): Pro
       ...(typeof a.ref === 'string' ? { ref: a.ref } : { x: a.x, y: a.y }),
       ...(typeof a.to_ref === 'string' ? { to_ref: a.to_ref } : { to_x: a.to_x, to_y: a.to_y }),
       ...(typeof a.outward_ok === 'string' ? { outward_ok: a.outward_ok } : {}),
-      ...(recheck ? { recheck: true } : {}),
+      ...(recheck ? { recheck: true, ...(delivery ? { probe: delivery.probe } : {}) } : {}),
     }, c.allow)
     // A drag that would buy, send or delete: nothing was pressed, the person is asked.
     if (found.hold) throw outwardHeld(found.hold)
@@ -70,6 +75,7 @@ export async function dragAct(c: WireCommand, tabId: number, rec: AgentTab): Pro
     if (state.intercepting) void send('Input.setInterceptDrags', { enabled: false }).catch(() => undefined)
   })
   intercepted.delete(tabId)
+  if (!dialog) await delivery?.check()
   const out = { dragged: `${r.from.what} to ${r.to.what}`, from: { x: r.from.x, y: r.from.y }, to: { x: r.to.x, y: r.to.y }, ...(native ? { native: true } : {}), trusted: true }
   if (dialog) return { ...out, dialog, note: 'The drag opened a dialog: dialog accept or dismiss answers it.', ...(await where(tabId)) }
   await settled(tabId)

@@ -224,13 +224,13 @@ async function firstGrouping(tabId: number, grant: string): Promise<boolean> {
 }
 
 const UNREACHED: Record<ReachError, string> = {
-  gone: 'That tab was closed.',
+  gone: 'That tab was closed: open <url> starts a new one (tabs lists yours).',
   not_web: 'Agents use web pages only (http or https).',
   no_script: 'Walnut could not reach this page (the browser keeps the extension out of it, or it stopped answering): reload the tab and try again.',
 }
 
 /** The page's script answers, put in first when the tab had none (page-reach.ts). */
-export async function reached(tabId: number, wake = true): Promise<{ walnut: boolean; href: string; doc?: string }> {
+export async function reached(tabId: number, wake = true): Promise<{ walnut: boolean; href: string; doc?: string; hidden?: boolean }> {
   const r = await reachPage(tabId, wake)
   if (!r.ok) throw new AgentError(UNREACHED[r.why], r.why === 'gone' ? 'not_your_tab' : 'page_not_ready')
   return r
@@ -239,9 +239,9 @@ export async function reached(tabId: number, wake = true): Promise<{ walnut: boo
 export async function ownTab(args: Record<string, unknown>): Promise<{ tabId: number; tab: Tab; rec: AgentTab }> {
   const tabId = typeof args.tab === 'number' ? args.tab : NaN
   const rec = await agentTabs.get(tabId)
-  if (!rec) throw new AgentError('That tab is not one an agent opened (or the person took it back with Stop).', 'not_your_tab')
+  if (!rec) throw new AgentError('That tab is not one an agent opened (or the person took it back with Stop): tabs lists yours, open <url> starts a new one.', 'not_your_tab')
   const tab = await ext.tabs.get(tabId).catch(() => null)
-  if (!tab) { await agentTabs.delete(tabId); throw new AgentError('That tab was closed.', 'not_your_tab') }
+  if (!tab) { await agentTabs.delete(tabId); throw new AgentError('That tab was closed: open <url> starts a new one (tabs lists yours).', 'not_your_tab') }
   return { tabId, tab, rec }
 }
 

@@ -164,6 +164,14 @@ export function unmask(): void {
   masked = []
 }
 
+/** A link's address as a snapshot shows it: the path alone on the page's own site. */
+function shortHref(href: string): string {
+  try {
+    const u = new URL(href)
+    return u.origin === location.origin ? `${u.pathname}${u.search}${u.hash}` : href
+  } catch { return href }
+}
+
 export function stateOf(el: Element): string {
   const parts: string[] = []
   if (el instanceof HTMLInputElement) {
@@ -177,44 +185,13 @@ export function stateOf(el: Element): string {
   if (checked) parts.push(`${checked === 'true' ? 'on' : 'off'}`)
   if (el.getAttribute('aria-expanded')) parts.push(el.getAttribute('aria-expanded') === 'true' ? 'expanded' : 'collapsed')
   if ((el as HTMLButtonElement).disabled || el.getAttribute('aria-disabled') === 'true') parts.push('disabled')
-  if (el instanceof HTMLAnchorElement && el.href && !el.href.startsWith('javascript:')) parts.push(`-> ${clip(el.href, 100)}`)
+  if (el instanceof HTMLAnchorElement && el.href && !el.href.startsWith('javascript:')) parts.push(`-> ${clip(shortHref(el.href), 100)}`)
   const r = el.getBoundingClientRect()
   if (r.bottom < 0 || r.top > innerHeight) parts.push('offscreen')
   return parts.join(' ')
 }
 
-export function snapshot(max = 300): { snapshot: string; url: string; title: string; count: number } {
-  const seen = new Set<Element>()
-  const lines: string[] = [`Page: ${clip(document.title, 120)}`, `URL: ${location.href}`, '']
-  const heads = all(document, 'h1, h2, h3').filter(visible).slice(0, 30)
-  if (heads.length) {
-    lines.push('Headings:')
-    for (const h of heads) lines.push(`  ${h.tagName.toLowerCase()} ${clip(h.textContent ?? '', 120)}`)
-    lines.push('')
-  }
-  const dialog = all(document, 'dialog[open], [role=dialog], [aria-modal=true]').find(visible)
-  if (dialog) lines.push(`A dialog is open: ${clip(nameOf(dialog), 80)}`, '')
-  lines.push('Elements:')
-  let count = 0
-  for (const el of all(document, INTERACTIVE)) {
-    if (seen.has(el) || !visible(el)) continue
-    seen.add(el)
-    if (count >= max) { lines.push(`  ... more elements (scroll and snapshot again)`); break }
-    const name = clip(nameOf(el), 100)
-    const role = roleOf(el)
-    if (role === 'generic' && !name) continue
-    lines.push(`  [${refFor(el)}] ${role}${name ? ` "${name}"` : ''}${stateOf(el) ? ` ${stateOf(el)}` : ''}`)
-    count++
-  }
-  const text = clip(document.body?.innerText ?? '', 2500)
-  if (text) lines.push('', 'Text:', text)
-  return { snapshot: lines.join('\n'), url: location.href, title: document.title, count }
-}
-
-export function text(max = 20_000): { text: string; url: string; title: string } {
-  const t = (document.body?.innerText ?? '').replace(/\n{3,}/g, '\n\n').trim()
-  return { text: t.length > max ? `${t.slice(0, max)}\n… (cut at ${max} characters)` : t, url: location.href, title: document.title }
-}
+// snapshot and text: page-read.ts.
 
 /**
  * What the side panel is told about the page: its address, title, the person's selection (in a

@@ -74,7 +74,7 @@ function needsOk(id: string, p: Pick<PendingFill, 'item' | 'what'>): FillOutcome
 async function tabUrl(deps: FillDeps, owner: string, tab: number): Promise<string> {
   const r = await deps.send('tabs', { owner }, 15_000) as { tabs?: Array<{ id: number; url?: string; owner?: string }> }
   const t = (r.tabs ?? []).find((x) => x.id === tab && x.owner === owner)
-  if (!t?.url) throw new BrowserError('That tab is not one an agent opened (or the person took it back with Stop).', 403, 'not_your_tab')
+  if (!t?.url) throw new BrowserError('That tab is not one an agent opened (or the person took it back with Stop): tabs lists yours, open <url> starts a new one.', 403, 'not_your_tab')
   return t.url
 }
 

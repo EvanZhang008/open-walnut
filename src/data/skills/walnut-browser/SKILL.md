@@ -35,22 +35,36 @@ there answers `site_open_in_person_tab`; only when the user asked you for a fres
 it again with `--fresh-sign-in` (op: `fresh_sign_in: true`): that asks them to approve it on
 their Mac and phone, and only their yes fills (the shell command waits for it).
 
-## The loop
+## Quick start
+
+A read takes 3 to 5 calls. Every acting step (click, type, press, select, hover, scroll, navigate,
+back, fill-form) prints what it changed: `went to <url> "<title>"`, `opened a new tab N`, `the page
+content changed`, or `nothing changed on the page`. Nothing changed means the step did nothing:
+snapshot and act again; never wait for an address it will not reach.
 
 ```bash
-walnut browser open https://example.com/orders   # opens a tab in the Walnut agent window
-walnut browser snapshot                          # headings, elements with refs, page text
-walnut browser fill-login                        # a sign-in page: fills the saved login, you never see it
-walnut browser fill-code                         # its one-time code page: fills the code, you never see it
-walnut browser type e7 "order 1234" --submit
-walnut browser click e12
-walnut browser wait "Order details"              # or --gone "Loading", --url /orders\/\d+/
-walnut browser text                              # the whole visible text, to read
-walnut browser screenshot                        # saves a JPEG (or a PNG: name a .png file), prints its path: Read it to look
-walnut browser close                             # when you are done with the tab
+walnut browser open https://example.com/issues --read   # a tab in Walnut's agent window, and its main text
+walnut browser click --text "Login fails" --read         # click by its words; says what changed, then the new page's text
+walnut browser close                                     # when you are done with the tab
 ```
 
-More actions, when the loop above is not enough:
+The commands you need first:
+
+```bash
+walnut browser snapshot                  # the elements on screen, one line each with a ref (e12); --all: the whole page
+walnut browser click e12                 # or --text "Next"; prints what changed
+walnut browser type e7 "order 1234" --submit
+walnut browser text                      # the main content (no menus, header, footer), 4000 characters
+walnut browser text e31                  # one element's text (or --selector 'article .body'); --max 20000 for more
+walnut browser find "Place order"        # the best few matches, with refs (--role button to narrow)
+walnut browser wait "Order details"      # 10 s unless --ms (up to 30000); or --gone "Loading", --url /orders\/\d+/
+walnut browser fill-login                # a sign-in page: fills the saved login, you never see it
+walnut browser screenshot                # saves a JPEG and prints its path: Read it to look
+```
+
+Subagents can drive the browser too: the same task, the same tabs, the same approvals and rules.
+
+More actions, when the commands above are not enough:
 
 - `find "Place order" --role button` finds elements by their words (refs to act on);
   `form-values` lists every field with its label, name, type and value;
@@ -92,8 +106,12 @@ More actions, when the loop above is not enough:
   back. Take one only when the work is in that tab (a page they left open for you, a sign-in
   they did), and say which tab you took.
 - Real mouse and keys (Chrome): click, hover, type and press in your own tab in Walnut's agent
-  window use them by default; a frame, a link to a new tab, a select or file field, a shortcut
-  with Control, Meta or Alt, and long text stay the page's events, and `--no-trusted` asks for
+  window use them by default. Chrome drops real input while that window is covered or minimized
+  (the usual case): then the page's events do the step and the answer says `trusted: false` and
+  why, so nothing is needed from you; a step you asked `--trusted` for answers `window_hidden` (or
+  `input_dropped`): run it without `--trusted`, or ask the person to show the window (a drag
+  has no page events, so it needs the window shown). Otherwise a frame, a link to a new tab, a
+  select or file field, a shortcut with Control, Meta or Alt, and long text stay the page's events, and `--no-trusted` asks for
   page events. `--trusted` asks for real input by name (also on scroll, the wheel, and in a tab of
   the user's you took); `drag e3 e9` or `drag 100,200 300,240`, `dialog` and `evaluate <js>` (in
   a tab you opened) are always real input. All of it is on unless the user turned off "Let agents

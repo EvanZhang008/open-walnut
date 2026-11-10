@@ -92,6 +92,13 @@ const PAGES: Record<string, () => string> = {
     onchange="Promise.all([...this.files].map(async (f) => f.name + ':' + f.size + ':' + f.type + ':' + await f.text())).then((l) => document.getElementById('o').textContent = l.join(','))"></label><p id="o"></p>`,
   '/login': () => `<h1>Sign in</h1><form id="lf" onsubmit="return false"><label>Email <input id="user" name="email" type="email" autocomplete="username"></label>
     <label>Password <input id="pass" name="password" type="password" autocomplete="current-password"></label><button>Sign in</button></form>`,
+  // A code host's issues, with its menus, header, sidebar and footer around the content.
+  '/issues': () => `<header><a href="/">Home</a> Site menu Pull requests Marketplace</header><nav><a href="/x">Explore</a></nav>
+    <main><h1>Issues</h1><p>12 Open 30 Closed</p><ul><li><a href="/issues/42">Login fails on Safari</a> opened 2 hours ago</li>
+    <li><a href="/issues/41">Older issue</a></li></ul></main><footer>Terms Privacy Footer</footer>`,
+  '/issues/42': () => `<header>Site menu Pull requests</header><main><h1>Login fails on Safari</h1>
+    <div class="body"><p>First paragraph: the sign-in button does nothing on Safari 18.</p><p>Second paragraph.</p></div>
+    <aside>Assignees Labels bug</aside></main><footer>Terms Privacy Footer</footer>`,
   '/verify': () => `<h1>Two-step verification</h1><form id="vf" onsubmit="return false"><label>Code from your app <input id="otp" name="otp" inputmode="numeric" autocomplete="one-time-code"></label><button>Verify</button></form>`,
 }
 /** The fixture vault's fake master password (shared with the other extension specs). */
@@ -403,6 +410,57 @@ test('scroll to the bottom and top, by pixels, and sideways; each says where the
   const right = await act(page, { action: 'scroll', direction: 'right' })
   expect(right.body.scrollLeft).toBeGreaterThan(100)
   expect((await act(page, { action: 'scroll', direction: 'left', by: 100_000 })).body.scrollLeft).toBe(0)
+})
+
+test('every step says what it changed; a read is small; a minimized agent window still takes a default step, with page events', async () => {
+  const page = ctx.pages()[0]
+  expect((await act(page, { action: 'navigate', url: site('shop.example.test', '/forms') })).status).toBe(200)
+  // A click on a button that does nothing: said at once, so nobody waits for an address.
+  const none = await act(page, { action: 'click', text: 'Checkout now' })
+  expect(none.status, JSON.stringify(none.body)).toBe(200)
+  expect(none.body, JSON.stringify(none.body)).toMatchObject({ trusted: true, changed: 'nothing changed on the page' })
+  // The page's text, without the snapshot's element list, and small.
+  const t = await act(page, { action: 'text', max: 60 })
+  expect(t.body.cut).toBe(true)
+  expect(String(t.body.text)).toMatch(/more characters: --max N/)
+  // The agent window minimized (the person's other windows covering it is the same to Chrome): the
+  // page is hidden, Chrome would drop the debugger's input, so the page's events take the step.
+  const sw = ctx.serviceWorkers()[0]
+  const win = await sw.evaluate(async (id: number) => (await chrome.tabs.get(id)).windowId, agentTab)
+  await sw.evaluate(async (w: number) => { await chrome.windows.update(w, { state: 'minimized' }) }, win).catch(() => undefined)
+  try {
+    const hidden = await expect.poll(() => agentPage()!.evaluate(() => document.visibilityState), { timeout: 5000 }).toBe('hidden').then(() => true, () => false)
+    test.skip(!hidden, 'this Chromium does not report a minimized window as hidden')
+    const r = await act(page, { action: 'click', text: 'Load results' })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body).toMatchObject({ trusted: false, why: expect.stringMatching(/covered/) })
+    // It landed: the page's own handler ran (it moves the address 800 ms later).
+    await expect.poll(() => agentPage()!.url(), { timeout: 5000 }).toBe(site('shop.example.test', '/forms?done=1'))
+    // Asked for real input by name: refused with the fix, nothing pressed.
+    const named = await act(page, { action: 'click', text: 'Checkout now', trusted: true })
+    expect(named.status).toBe(409)
+    expect(named.body.code).toBe('window_hidden')
+    expect(named.body.error).toMatch(/Drop --trusted/)
+  } finally {
+    await sw.evaluate(async (w: number) => { await chrome.windows.update(w, { state: 'normal' }) }, win).catch(() => undefined)
+  }
+})
+
+test('a read in 3 calls: open with its text, a click by its words with the next page\'s text, close', async () => {
+  const page = ctx.pages()[0]
+  const o = await act(page, { action: 'open', url: site('shop.example.test', '/issues'), read_text: true })
+  expect(o.status, JSON.stringify(o.body)).toBe(200)
+  const list = String(o.body.page_text.text)
+  expect(list).toContain('12 Open')
+  expect(list).toContain('Login fails on Safari')
+  for (const w of ['Site menu', 'Explore', 'Footer']) expect(list).not.toContain(w)
+  const c = await act(page, { action: 'click', tab: o.body.tab, text: 'Login fails on Safari', read_text: true })
+  expect(c.status, JSON.stringify(c.body)).toBe(200)
+  expect(c.body.changed).toBe(`went to ${site('shop.example.test', '/issues/42')} "Test shop"`)
+  const issue = String(c.body.page_text.text)
+  expect(issue).toContain('First paragraph: the sign-in button does nothing on Safari 18.')
+  for (const w of ['Site menu', 'Assignees', 'Footer']) expect(issue).not.toContain(w)
+  expect((await act(page, { action: 'close', tab: o.body.tab })).body).toMatchObject({ closed: true })
 })
 
 test('frames: the snapshot reads same-origin and cross-origin frames, a frame ref acts there, a frame on a site not allowed is left out', async () => {

@@ -106,6 +106,8 @@ function frameOfCommand(a: Record<string, unknown>): number {
 
 /** A frame is given at most this long to answer a whole-tab read; all frames are asked at once. */
 const FRAME_READ_MS = 6000
+/** A default `text` shorter than this reads the page's frames too (the page may be little more than a frame). */
+const FRAMES_IF_SHORT = 500
 
 /**
  * The whole tab read: the top frame's answer, then each frame's under its own heading. The frames
@@ -118,6 +120,11 @@ async function wholeTab(c: WireCommand, tabId: number, top: Record<string, unkno
   const each = c.action === 'text' && c.args.all_frames === true
   const topFrame = { frame: 'top', url: top.url, text: top.text }
   if (!frames.length) return each ? { ...withoutText(top), frames: [topFrame] } : top
+  // A default `text` that found the page's content keeps to it (the frames of a page are mostly ads
+  // and widgets): it says how many frames it left, and how to read them.
+  if (c.action === 'text' && !each && c.args.all !== true && String(top.text ?? '').length >= FRAMES_IF_SHORT) {
+    return { ...top, text: `${String(top.text ?? '')}\n(${frames.length} frame(s) not read: text --all-frames reads each)` }
+  }
   const out = each ? withoutText(top) : { ...top }
   const notes: string[] = []
   const perFrame: Array<Record<string, unknown>> = each ? [topFrame] : []
@@ -193,6 +200,14 @@ export async function refByText(c: WireCommand, tabId: number, deadline: number)
   return { ref: m.ref, name: m.name, role: m.role, ...(m.frame ? { frame: m.frame } : {}), of: Number(all.count ?? matches.length) }
 }
 
+/**
+ * How long a wait for an address or text waits unless `ms` says (at most 30 s). Short: an agent
+ * whose step changed nothing (its answer says so) waits for nothing (2026-11-10: 30 s on an address
+ * a click that never landed would never reach).
+ */
+export const WAIT_MS = 10_000
+const waitLimit = (ms: unknown) => (typeof ms === 'number' && ms >= 0 ? Math.min(30_000, ms) : WAIT_MS)
+
 /** `wait {url}`: a substring of the address, or /a regex/ with its flags. Waited for here: a load replaces the page's script. */
 async function waitUrl(tabId: number, pattern: string, ms: unknown): Promise<Record<string, unknown>> {
   const m = /^\/(.+)\/([dgimsuy]*)$/.exec(pattern)
@@ -201,16 +216,18 @@ async function waitUrl(tabId: number, pattern: string, ms: unknown): Promise<Rec
     const re = m ? new RegExp(m[1], m[2].replace('g', '')) : null
     test = re ? (u) => re.test(u) : (u) => u.includes(pattern)
   } catch { throw new AgentError(`Not a pattern: ${pattern}.`, 'bad_request') }
-  const limit = typeof ms === 'number' && ms >= 0 ? Math.min(30_000, ms) : 30_000
+  const limit = waitLimit(ms)
   const until = Date.now() + limit
+  let at = ''
   for (;;) {
     const t = await ext.tabs.get(tabId).catch(() => null)
-    if (!t) throw new AgentError('That tab was closed.', 'not_your_tab')
-    if (test(t.url ?? '')) { await loaded(tabId, 10_000); return { waited: `at ${t.url}` } }
+    if (!t) throw new AgentError('That tab was closed: open <url> starts a new one (tabs lists yours).', 'not_your_tab')
+    at = t.url ?? ''
+    if (test(at)) { await loaded(tabId, 10_000); return { waited: `at ${t.url}` } }
     if (Date.now() >= until) break
     await sleep(250)
   }
-  throw new AgentError(`The address did not match ${pattern} within ${Math.round(limit / 1000)} s.`, 'wait_timeout')
+  throw new AgentError(`The address did not match ${pattern} within ${Math.round(limit / 1000)} s (the tab is at ${at.slice(0, 200)}). If the step had no effect, snapshot and act again; for a slow page, wait longer with ms (up to 30000).`, 'wait_timeout')
 }
 
 /**
@@ -221,7 +238,8 @@ async function waitText(c: WireCommand, tabId: number): Promise<Record<string, u
   const want = typeof c.args.text === 'string' && c.args.text ? c.args.text : undefined
   const gone = !want && typeof c.args.textGone === 'string' && c.args.textGone ? c.args.textGone : undefined
   const text = (want ?? gone)!
-  const until = Date.now() + 30_000
+  const limit = waitLimit(c.args.ms)
+  const until = Date.now() + limit
   let frames: Frame[] = []
   let framesAt = 0
   for (;;) {
@@ -243,7 +261,8 @@ async function waitText(c: WireCommand, tabId: number): Promise<Record<string, u
     if (Date.now() >= until) break
     await sleep(300)
   }
-  throw new AgentError(want ? `"${want}" did not show within 30 s (the page and its frames were looked at).` : `"${gone}" was still on the page after 30 s.`, 'wait_timeout')
+  const s = Math.round(limit / 1000)
+  throw new AgentError(`${want ? `"${want}" did not show within ${s} s (the page and its frames were looked at)` : `"${gone}" was still on the page after ${s} s`}: text or snapshot shows what is there; for a slow page, wait longer with ms (up to 30000).`, 'wait_timeout')
 }
 
 /** The page held a step for the person's yes (page-ops.ts held). */
@@ -399,7 +418,9 @@ export async function pageOp(c: WireCommand, tabId: number, tab: Tab, rec: Agent
     } finally { dialogWatch?.cancel() }
     // A step that buys, sends or deletes: nothing was done, the person is asked (routes/browser-v1.ts).
     if (r.hold) throw outwardHeld(r.hold)
-    if (frameId === 0 && WHOLE_TAB.has(c.action)) r = await wholeTab(c, tabId, r)
+    // `text` of one element (ref, selector) reads that element alone.
+    const onePart = c.action === 'text' && (a.ref !== undefined || (typeof a.selector === 'string' && !!a.selector))
+    if (frameId === 0 && WHOLE_TAB.has(c.action) && !onePart) r = await wholeTab(c, tabId, r)
     let link: { tab: number; url: string } | undefined
     if (typeof r.newTab === 'string') { link = await openLink(c, tabId, tab, rec, r.newTab); delete r.newTab }
     if (MAY_NAVIGATE.has(c.action)) await settled(tabId)

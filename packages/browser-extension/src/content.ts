@@ -33,6 +33,7 @@ import { closeMenu, focusMoved, hideIcon, menu, onFieldKey, openingFor, openMenu
 import { fillCode, fillLogin, fillNewPassword, fillWalletForm } from './content-fill'
 import * as pageAgent from './page-agent'
 import { runPageOp } from './page-ops'
+import { pageDigest } from './page-probe'
 import { cursorMask, cursorOff, listenCursor } from './page-cursor'
 import { walnutAddress } from './walnut-address'
 import { siteKey } from '../../../src/core/vault/url-match'
@@ -426,7 +427,11 @@ ext.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ ok: true }); return
     case 'show-savebar': showBar(String(msg.nonce ?? '')); sendResponse({ ok: true }); return
     case 'agent-mark': showAgentMark(msg.on === true, typeof msg.who === 'string' ? msg.who : undefined, typeof msg.mode === 'string' ? msg.mode : undefined); sendResponse({ ok: true }); return
-    case 'agent-check': sendResponse({ ok: true, walnut: isWalnutApp(), href: location.href, doc: DOC_ID }); return
+    // `hidden`: the page is not drawn (its window covered or minimized, or a tab behind): Chrome drops
+    // the debugger's real input there (agent-trusted.ts), so a step takes the page's events instead.
+    case 'agent-check': sendResponse({ ok: true, walnut: isWalnutApp(), href: location.href, doc: DOC_ID, hidden: document.visibilityState === 'hidden' }); return
+    // What an acting step changed (agent-change.ts): whether the page changed, never its words.
+    case 'agent-digest': sendResponse(SELF === 'top' ? { ok: true, href: location.href, doc: DOC_ID, ...pageDigest(msg) } : { ok: false }); return
     case 'page-context':
       // The side panel asks about the page the person is on: the top frame answers.
       if (SELF !== 'top') { sendResponse({ ok: false }); return }

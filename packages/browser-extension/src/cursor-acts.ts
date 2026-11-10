@@ -33,7 +33,7 @@ export const NO_CURSOR: Record<string, string> = {
   fill_code: 'fills a one-time code as autofill does; no pointer moves',
   snapshot: 'reads the page', text: 'reads the page', find: 'reads the page', form_values: 'reads the page',
   has_text: 'reads the page', wait: 'waits for the page', annotate: 'numbers what is on screen for a screenshot',
-  capture: 'a step of a full screenshot', cancel_input: 'stops typing a dialog cut short',
+  capture: 'a step of a full screenshot', cancel_input: 'stops typing a dialog cut short', probe_read: 'reads whether real input reached the page',
   screenshot: 'takes a picture (the cursor is hidden for it)', zoom: 'crops a picture',
   evaluate: 'runs a script; no pointer', dialog: 'answers the browser\'s own dialog, outside the page',
   tabs: 'lists tabs', take: 'takes a tab', open: 'opens a tab', close: 'closes or gives back a tab', resize: 'sizes the window',
