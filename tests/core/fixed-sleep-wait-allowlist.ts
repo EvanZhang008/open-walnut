@@ -377,6 +377,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/providers/stream-lane.test.ts", sleep: "await sleep(200)", reason: "negative: no lane without stream-lane-v1" },
   { file: "tests/providers/stream-relay.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: no more frames go out while the reader is paused" },
   { file: "tests/providers/stream-relay.test.ts", sleep: "await new Promise((r) => setTimeout(r, 10))", reason: "negative: no uncaught exception after the link drop" },
+  { file: "tests/providers/transcript-archive.test.ts", sleep: "await new Promise(r => setTimeout(r, 300))", reason: "negative: a restore must still be waiting while the pass holds its lock" },
   { file: "tests/providers/turn-settings-twins-e2e.test.ts", sleep: "await new Promise((r) => setTimeout(r, 1500))", reason: "negative: A's session must take no snapshot" },
   { file: "tests/providers/turn-settings-twins-e2e.test.ts", sleep: "await new Promise((r) => setTimeout(r, 1500))", reason: "negative: the unnamed session must take no snapshot" },
   { file: "tests/providers/turn-speed-edges.test.ts", sleep: "await new Promise((r) => setTimeout(r, 20));", reason: "time under test: lets the real clock move so a restarted meter would carry a new startedAt" },

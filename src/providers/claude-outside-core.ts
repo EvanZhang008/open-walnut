@@ -12,6 +12,7 @@ import { constants } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setImmediate } from 'node:timers/promises';
+import { gunzipChunks, isArchivedLog } from './usage-scan-core.js';
 
 /** Marker for the source twin: this sidecar can list outside Claude sessions (claude-outside-v1). */
 export const CLAUDE_OUTSIDE = true;
@@ -46,7 +47,26 @@ function quoted(re: RegExp, text: string): string {
  * the file ended before an entrypoint showed (a session that has just begun), so it is read again; `capped` means the limit was
  * reached with none, which is remembered with the file's size and looked at again only if the file grows.
  */
+/** The head of an archived transcript (transcript-archive.ts), through gunzip, never restored. */
+async function readArchivedHead(file: string): Promise<{ entrypoint: string; cwd: string; complete: boolean; size: number } | undefined> {
+  let tail = '';
+  let total = 0;
+  let cwd = '';
+  let entrypoint = '';
+  for await (const piece of gunzipChunks(file)) {
+    total += piece.length;
+    const text = tail + piece.toString('utf8');
+    if (!entrypoint) entrypoint = quoted(ENTRYPOINT, text);
+    if (!cwd) cwd = quoted(CWD, text);
+    // An archive never grows: what it holds is all there is.
+    if ((entrypoint && cwd) || total >= HEAD_MAX_BYTES) break;
+    tail = text.slice(-OVERLAP_CHARS);
+  }
+  return entrypoint || cwd ? { entrypoint, cwd, complete: true, size: total } : undefined;
+}
+
 async function readHead(file: string): Promise<{ entrypoint: string; cwd: string; complete: boolean; size: number } | undefined> {
+  if (isArchivedLog(file)) return readArchivedHead(file);
   const handle = await fs.open(file, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
   try {
     const buffer = Buffer.alloc(64 * 1024);
@@ -102,9 +122,13 @@ export async function claudeSessionMetas(projectsDir: string, indexDir?: string)
   for (const project of projects) {
     let names: string[];
     try { names = await fs.readdir(path.join(projectsDir, project)); } catch { continue; }
+    const here = new Set(names);
     for (const name of names) {
-      if (!name.endsWith('.jsonl')) continue;
-      const sessionId = name.slice(0, -'.jsonl'.length);
+      // `<id>.jsonl`, or `<id>.jsonl.gz` when only the archive is there (transcript-archive.ts).
+      let sessionId: string;
+      if (name.endsWith('.jsonl')) sessionId = name.slice(0, -'.jsonl'.length);
+      else if (isArchivedLog(name) && !here.has(name.slice(0, -3))) sessionId = name.slice(0, -'.jsonl.gz'.length);
+      else continue;
       const key = `${project}/${name}`;
       const file = path.join(projectsDir, project, name);
       let hit: Cache[string] | undefined = cache[key];

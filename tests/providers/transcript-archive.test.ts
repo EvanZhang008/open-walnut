@@ -1,10 +1,11 @@
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  MANIFEST_SUFFIX, MIN_FILE_BYTES, archiveTranscripts, archivedSessionOf, ensurePlain, plainFindResults, restoreForRead, restoreSession, restoreSessionAnywhere, transcriptSessionId,
+  MANIFEST_SUFFIX, MIN_FILE_BYTES, archiveTranscripts, archivedSessionOf, ensurePlain, noteSessionOpened, plainFindResults, restoreForRead, restoreSession, restoreSessionAnywhere, resumeSourceId, transcriptSessionId,
 } from '../../src/providers/transcript-archive.js'
 
 const DAY = 86_400_000
@@ -19,7 +20,7 @@ beforeEach(() => {
   proj = path.join(root, '-Users-someone-repo')
   fs.mkdirSync(proj, { recursive: true })
 })
-afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }) })
 
 const line = (i: number) => JSON.stringify({ type: 'assistant', uuid: `u-${i}`, message: { content: `reply ${i} é中 ${'x'.repeat(200)}` } }) + '\n'
 function writeAt(p: string, body: string, mtimeMs: number) {
@@ -101,6 +102,97 @@ describe('transcript archive', () => {
     fs.writeFileSync(path.join(proj, '.s-lock.walnut-archive.lock'), JSON.stringify({ pid: process.pid, at: Date.now() }))
     expect((await archiveTranscripts([root], OLD)).sessions).toBe(0)
     expect(exists('s-lock.jsonl')).toBe(true)
+  })
+
+  it('a lock its live holder stopped touching for 10 minutes is broken; a fresh one never is', async () => {
+    makeSession('s-aged', Date.now())
+    const lock = path.join(proj, '.s-aged.walnut-archive.lock')
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, at: Date.now(), token: 'other' }))
+    expect((await archiveTranscripts([root], OLD)).sessions).toBe(0)
+    const past = (Date.now() - 11 * 60_000) / 1000
+    fs.utimesSync(lock, past, past)
+    expect((await archiveTranscripts([root], OLD)).sessions).toBe(1)
+  })
+
+  it('a pass whose lock someone else took gives up, keeps the originals and leaves their lock', async () => {
+    const body = makeSession('s-taken', Date.now())
+    const lock = path.join(proj, '.s-taken.walnut-archive.lock')
+    const r = await archiveTranscripts([root], { ...OLD, isLiveNow: () => {
+      fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, at: Date.now(), token: 'thief' }))
+      return false
+    } })
+    expect(r).toMatchObject({ sessions: 0, failed: 1 })
+    expect(fs.readFileSync(path.join(proj, 's-taken.jsonl'), 'utf8')).toBe(body.main)
+    expect(exists('s-taken.jsonl.gz')).toBe(false)
+    expect(exists('s-taken' + MANIFEST_SUFFIX)).toBe(false)
+    expect(JSON.parse(fs.readFileSync(lock, 'utf8')).token).toBe('thief')
+  })
+
+  it('a session that turns live during the pass, or is opened, stays plain', async () => {
+    const live = makeSession('s-golive', Date.now())
+    let r = await archiveTranscripts([root], { ...OLD, isLiveNow: (sid) => sid === 's-golive' })
+    expect(r).toMatchObject({ sessions: 0, failed: 1 })
+    expect(fs.readFileSync(path.join(proj, 's-golive.jsonl'), 'utf8')).toBe(live.main)
+    expect(fs.readdirSync(proj).filter(n => n.endsWith('.gz') || n.endsWith(MANIFEST_SUFFIX))).toEqual([])
+    makeSession('s-opened', Date.now())
+    r = await archiveTranscripts([root], { ...OLD, isLiveNow: (sid) => { if (sid === 's-opened') noteSessionOpened('s-opened'); return false } })
+    expect(exists('s-opened.jsonl')).toBe(true)
+    expect(exists('s-opened.jsonl.gz')).toBe(false)
+    // Opened recently: the next pass leaves it alone.
+    expect((await archiveTranscripts([root], OLD)).skippedLive).toBeGreaterThanOrEqual(1)
+  })
+
+  it('a line appended by path at the moment of removal is kept: the transcript comes back whole', async () => {
+    const body = makeSession('s-append', Date.now())
+    const plain = path.join(proj, 's-append.jsonl')
+    const rename = fsp.rename
+    vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+      await rename(from, to)
+      // Claude Code appends by path: after the original was set aside, that makes a new file.
+      if (from === plain) fs.appendFileSync(plain, '{"type":"user","message":"late line"}\n')
+    })
+    const r = await archiveTranscripts([root], OLD)
+    vi.restoreAllMocks()
+    expect(r).toMatchObject({ sessions: 0, failed: 1 })
+    expect(fs.readFileSync(plain, 'utf8')).toBe(body.main + '{"type":"user","message":"late line"}\n')
+    expect(fs.readFileSync(path.join(proj, 's-append/subagents/agent-a1.jsonl'), 'utf8')).toBe(body.agent)
+    expect(fs.readdirSync(proj).filter(n => n.endsWith('.gz') || n.endsWith(MANIFEST_SUFFIX) || n.includes('walnut-tmp'))).toEqual([])
+  })
+
+  it('a write through a handle opened before removal is kept', async () => {
+    const body = makeSession('s-fd', Date.now())
+    const plain = path.join(proj, 's-fd.jsonl')
+    const fd = fs.openSync(plain, 'a')
+    const rename = fsp.rename
+    vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+      await rename(from, to)
+      if (from === plain) fs.writeSync(fd, '{"late":true}\n')
+    })
+    const r = await archiveTranscripts([root], OLD)
+    vi.restoreAllMocks()
+    fs.closeSync(fd)
+    expect(r).toMatchObject({ sessions: 0, failed: 1 })
+    expect(fs.readFileSync(plain, 'utf8')).toBe(body.main + '{"late":true}\n')
+  })
+
+  it('a restore waits for a pass at work on the session (its lock, no manifest yet)', async () => {
+    makeSession('s-wait', Date.now())
+    const lock = path.join(proj, '.s-wait.walnut-archive.lock')
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, at: Date.now(), token: 'pass' }))
+    let done = false
+    const job = restoreSession(proj, 's-wait').then((v) => { done = true; return v })
+    await new Promise(r => setTimeout(r, 300))
+    expect(done).toBe(false)
+    fs.unlinkSync(lock)
+    expect(await job).toBe(true)
+  })
+
+  it('names the transcript a resume or a fork reads', () => {
+    expect(resumeSourceId(['-p', '--resume', 'old-id', '--fork-session', '--session-id', 'new-id'])).toBe('old-id')
+    expect(resumeSourceId(['-r', 'abc'])).toBe('abc')
+    expect(resumeSourceId(['--resume=abc'])).toBe('abc')
+    expect(resumeSourceId(['--session-id', 'new'])).toBe(null)
+    expect(resumeSourceId(['--resume', '../x'])).toBe(null)
   })
 
   it('a stale lock (dead pid) is broken', async () => {

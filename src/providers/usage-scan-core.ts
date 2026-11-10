@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { setImmediate } from 'node:timers/promises';
 import { createGunzip } from 'node:zlib';
+import { Readable } from 'node:stream';
 
 export interface CanonicalUsageRecord {
   responseId: string;
@@ -151,15 +152,41 @@ async function assertRoot(dir: string): Promise<void> {
   if (!(await lstat(dir)).isDirectory()) throw new Error('Canonical projects path must be a directory');
 }
 
+const ARCHIVED = '.jsonl.gz';
+/** An archived transcript (transcript-archive.ts): read through gunzip, never restored for a usage read. */
+export const isArchivedLog = (p: string): boolean => p.endsWith(ARCHIVED);
+/** The decompressed bytes of an archived transcript, chunk by chunk. */
+export async function* gunzipChunks(p: string): AsyncGenerator<Buffer> {
+  const gunzip = createGunzip();
+  const source = createReadStream(p);
+  source.on('error', (err) => gunzip.destroy(err));
+  source.pipe(gunzip);
+  try { for await (const chunk of gunzip as AsyncIterable<Buffer>) yield chunk; }
+  finally { source.destroy(); gunzip.destroy(); }
+}
+
+/**
+ * `<name>.jsonl`, or `<name>.jsonl.gz` when only the archive is there: the
+ * name it reads under (`<name>`), or null. A plain file wins over its archive.
+ */
+function logName(entry: { name: string }, names: Set<string>): string | null {
+  if (entry.name.endsWith('.jsonl')) return entry.name.slice(0, -6);
+  if (entry.name.endsWith(ARCHIVED) && !names.has(entry.name.slice(0, -3))) return entry.name.slice(0, -ARCHIVED.length);
+  return null;
+}
+
 async function* canonicalFiles(root: string, diag: UsageScanDiagnostics): AsyncGenerator<LogFile> {
   const projects = (await directories(root, diag)).filter(entry => entry.isDirectory());
   const subagentDirs: string[] = [];
   for (const project of projects) {
     const projectDir = path.join(root, project.name);
-    for (const entry of await directories(projectDir, diag)) {
+    const entries = await directories(projectDir, diag);
+    const names = new Set(entries.map(e => e.name));
+    for (const entry of entries) {
       const filePath = path.join(projectDir, entry.name);
-      if (entry.name.endsWith('.jsonl')) {
-        if (entry.isFile()) yield { path: filePath, sessionId: entry.name.slice(0, -6) };
+      const sessionId = logName(entry, names);
+      if (sessionId !== null) {
+        if (entry.isFile()) yield { path: filePath, sessionId };
         else diag.skipped_non_regular_files++;
       }
       if (entry.isDirectory()) subagentDirs.push(filePath);
@@ -172,10 +199,13 @@ async function* canonicalFiles(root: string, diag: UsageScanDiagnostics): AsyncG
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') diag.unreadable_files++;
       continue;
     }
-    for (const entry of await directories(agentsDir, diag)) {
-      if (!entry.name.endsWith('.jsonl')) continue;
+    const agents = await directories(agentsDir, diag);
+    const agentNames = new Set(agents.map(e => e.name));
+    for (const entry of agents) {
+      const agentId = logName(entry, agentNames);
+      if (agentId === null) continue;
       if (!entry.isFile()) { diag.skipped_non_regular_files++; continue; }
-      yield { path: path.join(agentsDir, entry.name), sessionId: path.basename(sessionDir), agentId: entry.name.slice(0, -6) };
+      yield { path: path.join(agentsDir, entry.name), sessionId: path.basename(sessionDir), agentId };
     }
   }
 }
@@ -189,9 +219,12 @@ async function* readObjects(file: LogFile, diag: UsageScanDiagnostics, end?: num
     const stat = await handle.stat();
     if (!stat.isFile()) { diag.skipped_non_regular_files++; return; }
     diag.files_scanned++;
-    const size = Math.min(stat.size, end ?? stat.size);
+    // An archive is read whole (its size on disk is the compressed one), never restored.
+    const archived = isArchivedLog(file.path);
+    const size = archived ? stat.size : Math.min(stat.size, end ?? stat.size);
     if (!size) return;
-    const stream = handle.createReadStream({ encoding: 'utf8', autoClose: false, end: size - 1 });
+    const stream = archived ? Readable.from(gunzipChunks(file.path)).setEncoding('utf8')
+      : handle.createReadStream({ encoding: 'utf8', autoClose: false, end: size - 1 });
     const lines = createInterface({ input: stream, crlfDelay: Infinity });
     const pause = yieldBudget(diag);
     try {
@@ -801,8 +834,17 @@ export async function scanCostState(options: { projectsDir: string; sessionId: s
     if (index > 0) projects.unshift(...projects.splice(index, 1));
   }
   for (const project of projects) {
-    const file = { path: path.join(options.projectsDir, project, `${options.sessionId}.jsonl`), sessionId: options.sessionId };
-    try { const stat = await lstat(file.path); if (!stat.isFile() || !stat.size) continue; } catch { continue; }
+    const plain = { path: path.join(options.projectsDir, project, `${options.sessionId}.jsonl`), sessionId: options.sessionId };
+    let file = plain;
+    try { const stat = await lstat(file.path); if (!stat.isFile() || !stat.size) continue; }
+    catch {
+      // Only the archive is there: read it whole through gunzip (transcript-archive.ts).
+      file = { ...plain, path: plain.path + '.gz' };
+      try { if (!(await lstat(file.path)).isFile()) continue; } catch { continue; }
+      let latest: CanonicalCostState | undefined;
+      for await (const row of readObjects(file, diag)) latest = costState(row, file.sessionId) ?? latest;
+      return latest;
+    }
     const last = await lastCostState(file, diag, options.stats ?? { bytesRead: 0 });
     if (last !== SHRANK) return last;
     let latest: CanonicalCostState | undefined;
@@ -819,5 +861,6 @@ export async function scanCostState(options: { projectsDir: string; sessionId: s
 export const scanFold = {
   diagnostics, yieldBudget, assertRoot, boundary, object, canonicalFiles, candidateLines, parseLine, responseIdentity,
   invalidUsage, sourceOwner, ownerBefore, chooseOwner, updateUsage, strongerFinal, toRecord, NEWLINE, CANDIDATES, CHUNK_BYTES,
+  isArchivedLog, gunzipChunks,
 };
 export type { LogFile as ScanLogFile, ResponseSnapshot as ScanSnapshot, ResponseOwner as ScanOwner, ResponseGroup as ScanGroup, CanonicalScanResult };

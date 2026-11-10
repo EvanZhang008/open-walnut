@@ -46,11 +46,11 @@ const SITES: Record<string, string> = {
   'src/providers/daemon-cron-host.ts': 'a session with an armed cron, which expires after 7 days',
   'src/providers/follower-reads-core.ts': 'a gate on the plain path; the read behind it restores',
   'src/utils/session-liveness.ts': 'stream captures of live sessions',
-  // Usage and cost: the archive starts on a host only after its whole history was read once.
-  'src/providers/usage-scan-core.ts': 'usage: archived sessions are older than every incremental window; the sweep waits for the first full read',
-  'src/providers/usage-scan-index.ts': 'usage: as usage-scan-core',
-  'src/providers/session-cost-core.ts': 'a session cost of an archived session reads after the history read restored it',
-  'src/providers/claude-outside-core.ts': 'usage of sessions Walnut did not start: read in full before any archive',
+  // Usage and cost read an archive through gunzip, never restoring it (usage-archived-history.test.ts).
+  'src/providers/usage-scan-core.ts': 'reads `.jsonl.gz` through gunzip: canonicalFiles, readObjects, the cost state, foldTail',
+  'src/providers/usage-scan-index.ts': 'reads `.jsonl.gz` whole through gunzip, once per archive',
+  'src/providers/session-cost-core.ts': 'reads `.jsonl.gz` for a session and its subagents',
+  'src/providers/claude-outside-core.ts': 'lists `.jsonl.gz` and reads its head through gunzip',
   'src/providers/external-session-scan-core.ts': 'import lists only recent sessions; an archived one is older than its window',
   // Not Claude Code transcripts.
   'src/core/health-monitor/store.ts': 'not a transcript (health log)',
@@ -100,7 +100,7 @@ describe('transcript archive: every transcript site is listed', () => {
 
   it('the restoring sites really call the archive', () => {
     const calls: Record<string, RegExp> = {
-      'src/providers/daemon-standalone.ts': /restoreForRead\(filePath, CLAUDE_PROJECTS_DIRS\)[\s\S]*plainFindResults\(found, name\)[\s\S]*restoreSessionAnywhere\(CLAUDE_PROJECTS_DIRS, ownedSid\)|restoreSessionAnywhere\(CLAUDE_PROJECTS_DIRS, ownedSid\)[\s\S]*restoreForRead\(filePath, CLAUDE_PROJECTS_DIRS\)/,
+      'src/providers/daemon-standalone.ts': /restoreForRead\(filePath, CLAUDE_PROJECTS_DIRS\)[\s\S]*plainFindResults\(found, name\)[\s\S]*restoreSessionAnywhere\(CLAUDE_PROJECTS_DIRS, archivedSource\)|restoreSessionAnywhere\(CLAUDE_PROJECTS_DIRS, archivedSource\)[\s\S]*restoreForRead\(filePath, CLAUDE_PROJECTS_DIRS\)/,
       'src/providers/daemon-source.ts': /transcriptRestoreForRead\(filePath\)[\s\S]*transcriptPlainFind\(found, name\)/,
       'src/core/session-file-reader.ts': /restoreArchivedAt\(/,
       'src/providers/session-changes-core.ts': /restoreArchivedAt\(/,

@@ -7336,8 +7336,12 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   const notOurs = ownedSid ? strictStartRefusal(ownedSid, cmd, ownerHome, resumesTranscript) : null;
   if (notOurs) throw notOurs;
   // An archived transcript comes back plain before the CLI resumes it (transcript-archive.ts).
-  if (ownedSid && resumesTranscript && taskDirCore && typeof taskDirCore.restoreSessionAnywhere === 'function') {
-    await taskDirCore.restoreSessionAnywhere(CLAUDE_PROJECTS_DIRS, ownedSid).catch(() => null);
+  // A fork reads its --resume source, not the new transcript it owns.
+  const archivedSource = taskDirCore && typeof taskDirCore.resumeSourceId === 'function'
+    ? (taskDirCore.resumeSourceId(args) || (resumesTranscript ? ownedSid : null))
+    : (resumesTranscript ? ownedSid : null);
+  if (archivedSource && taskDirCore && typeof taskDirCore.restoreSessionAnywhere === 'function') {
+    await taskDirCore.restoreSessionAnywhere(CLAUDE_PROJECTS_DIRS, archivedSource).catch(() => null);
   }
   // A start that a stop or a newer supervision request overtook ends here.
   const superseded = () => (!!canStart && !canStart()) || (!!isCurrent && !isCurrent());
@@ -13406,9 +13410,20 @@ async function cmdTranscriptArchive(ws, id, cmd) {
     if (out === null) return sendError(ws, id, 'transcript.archive: the process table could not be read');
     for (const sid of taskDirCore.liveTranscriptIdsFromPs(out)) live.add(sid);
     const budgetMs = Number(cmd.budgetMs);
+    // Asked again right before a session's originals go: this daemon's sessions now, then a fresh
+    // process table (a CLI started since the pass began, a terminal's included). Unreadable = live.
+    const isLiveNow = async (sid) => {
+      const s = sessions.get(sid);
+      if (s && !s.exitedAt) return true;
+      const now = await new Promise((resolve) => {
+        execFile('ps', ['-A', '-o', 'args='], { encoding: 'utf-8', timeout: 15000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout || '')));
+      });
+      return now === null || taskDirCore.liveTranscriptIdsFromPs(now).has(sid);
+    };
     const report = await taskDirCore.archiveTranscripts(CLAUDE_PROJECTS_DIRS, {
       olderThanMs: days * 86400000,
       isLive: (sid) => live.has(sid),
+      isLiveNow,
       dryRun: cmd.dryRun === true,
       ...(Number.isFinite(budgetMs) && budgetMs > 0 ? { budgetMs } : {}),
     });

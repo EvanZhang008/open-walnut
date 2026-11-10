@@ -20,7 +20,17 @@
  * A restore checks every file against its manifest hash before the rename.
  * Both hold one lock file per session, so an archive and a restore never
  * interleave, and a crash at any point leaves the plain file in place or the
- * archive whole (a plain file always wins over a stale `.gz`).
+ * archive whole (a plain file always wins over a stale `.gz`). The lock names
+ * its holder with a token and a pid; its holder touches it while it works, so
+ * only a lock whose process is gone, or one nobody touched for LOCK_STALE_MS,
+ * is ever broken, and a holder removes only its own lock.
+ *
+ * A session someone opens while it is archived wins: a restore waits for the
+ * pass's lock, a resume (or a fork of it) marks the session opened first
+ * (noteSessionOpened), and right before an original is removed the pass asks
+ * again whether the session is live or opened (`isLiveNow`, a fresh look at
+ * the processes) and gives up if so. What is left is a CLI started from a
+ * terminal in the few milliseconds between that look and the removal.
  *
  * A session is old when its transcript's mtime AND ctime, and every sidecar
  * file's mtime, are older than the cutoff. A restore renames a fresh file into
@@ -45,8 +55,14 @@ const LOCK_SUFFIX = '.walnut-archive.lock'
 const TMP_TAG = '.walnut-tmp-'
 /** Files this small save nothing on a 4 KB-block disk; they stay plain. */
 export const MIN_FILE_BYTES = 8 * 1024
-/** A lock older than this, or whose process is gone, is broken. */
+/** A lock nobody touched for this long, or whose process is gone, is broken. */
 const LOCK_STALE_MS = 10 * 60_000
+/** Its holder touches the lock this often. */
+const LOCK_BEAT_MS = 30_000
+/** How long removed originals sit aside before they go, so a write already on its way lands where it is seen. */
+const SETTLE_MS = 200
+/** A session opened this recently is never archived (its CLI may still be starting). */
+const OPENED_GRACE_MS = 30 * 60_000
 /** How long a restore waits for an archive pass of the same session. */
 const RESTORE_WAIT_MS = 60_000
 const MANIFEST_VERSION = 1
@@ -61,6 +77,8 @@ export interface ArchiveOptions {
   now?: number
   /** A session the daemon still runs (or any other reason to keep it plain). */
   isLive?: (sessionId: string) => boolean
+  /** Asked again right before a session's originals are removed: a fresh look (the process table). */
+  isLiveNow?: (sessionId: string) => boolean | Promise<boolean>
   /** Stop starting new sessions after this long; the next pass goes on. */
   budgetMs?: number
   /** Stop after this many sessions in one pass. */
@@ -103,33 +121,67 @@ function pidAlive(pid: unknown): boolean {
   try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' }
 }
 
-/** Take the session's lock, breaking a stale one; false when someone live holds it. */
-function tryLock(dir: string, sid: string): boolean {
+const opened = new Map<string, number>()
+/** A resume or a fork of `sid` is starting: no pass archives it for a while, and a pass at work on it gives up. */
+export function noteSessionOpened(sid: string): void {
+  opened.set(sid, Date.now())
+  if (opened.size > 2000) for (const [k, at] of opened) if (Date.now() - at > OPENED_GRACE_MS) opened.delete(k)
+}
+const openedRecently = (sid: string): boolean => Date.now() - (opened.get(sid) ?? -Infinity) < OPENED_GRACE_MS
+
+interface Held { token: string; path: string }
+
+/** Take the session's lock, breaking a stale one; null when someone live holds it. */
+function tryLock(dir: string, sid: string): Held | null {
   const p = lockPath(dir, sid)
   for (let i = 0; i < 2; i++) {
+    const token = randomBytes(8).toString('hex')
     try {
       const fd = fs.openSync(p, 'wx', 0o600)
-      try { fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() })) } finally { fs.closeSync(fd) }
-      return true
+      try { fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now(), token })) } finally { fs.closeSync(fd) }
+      return { token, path: p }
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
       let held: { pid?: number; at?: number } = {}
       try { held = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { /* torn or gone: judge by age */ }
       let age = 0
       try { age = Date.now() - fs.statSync(p).mtimeMs } catch { continue }
-      if (age < LOCK_STALE_MS && (pidAlive(held.pid) || (held.pid === undefined && age < 5_000))) return false
+      // A live holder touches its lock every LOCK_BEAT_MS; one whose pid is gone, or that stopped
+      // touching it, is broken. A lock still being written (no pid yet) gets a few seconds.
+      if (age < LOCK_STALE_MS && (pidAlive(held.pid) || (held.pid === undefined && age < 5_000))) return null
       try { fs.unlinkSync(p) } catch { /* someone else broke it */ }
     }
   }
-  return false
+  return null
 }
-const unlock = (dir: string, sid: string) => { try { fs.unlinkSync(lockPath(dir, sid)) } catch { /* gone */ } }
+function lockToken(p: string): string | undefined {
+  try { return (JSON.parse(fs.readFileSync(p, 'utf8')) as { token?: string }).token } catch { return undefined }
+}
+/** Is the lock still ours? */
+const stillHeld = (h: Held): boolean => lockToken(h.path) === h.token
+/** Touch our lock so nobody takes it for stale. */
+function beat(h: Held): void {
+  if (!stillHeld(h)) return
+  const t = new Date()
+  try { fs.utimesSync(h.path, t, t) } catch { /* gone */ }
+}
+/** Remove the lock, only while it is ours. */
+function unlock(h: Held): void {
+  if (stillHeld(h)) { try { fs.unlinkSync(h.path) } catch { /* gone */ } }
+}
+/** Run `fn` holding `h`, touching the lock while it runs. */
+async function withBeat<T>(h: Held, fn: () => Promise<T>): Promise<T> {
+  const timer = setInterval(() => beat(h), LOCK_BEAT_MS)
+  timer.unref?.()
+  try { return await fn() } finally { clearInterval(timer); unlock(h) }
+}
 
-async function lockWait(dir: string, sid: string, waitMs: number): Promise<boolean> {
+async function lockWait(dir: string, sid: string, waitMs: number): Promise<Held | null> {
   const until = Date.now() + waitMs
   for (;;) {
-    if (tryLock(dir, sid)) return true
-    if (Date.now() > until) return false
+    const h = tryLock(dir, sid)
+    if (h) return h
+    if (Date.now() > until) return null
     await new Promise(r => setTimeout(r, 100))
   }
 }
@@ -244,25 +296,89 @@ async function candidate(dir: string, sid: string, cutoff: number): Promise<Cand
 }
 
 /** Archive one session; returns bytes before and after, or throws with the originals kept. */
-async function archiveSession(c: Candidate): Promise<{ files: number; before: number; after: number }> {
+async function archiveSession(c: Candidate, h: Held, isLiveNow?: ArchiveOptions['isLiveNow']): Promise<{ files: number; before: number; after: number }> {
   const items = [...c.side, { rel: c.sid + '.jsonl', stamp: c.stamp }]
   const done: Array<ManifestFile & { gzBytes: number }> = []
   try {
-    for (const it of items) done.push(await compressOne(path.join(c.dir, it.rel), it.rel, it.stamp))
+    for (const it of items) {
+      done.push(await compressOne(path.join(c.dir, it.rel), it.rel, it.stamp))
+      beat(h)
+    }
     await writeManifest(c.dir, { version: MANIFEST_VERSION, sessionId: c.sid, archivedAt: new Date().toISOString(), files: done.map(({ gzBytes: _g, ...f }) => f) })
-    // Every original must be exactly as it was before any is removed.
+    // Someone opened the session meanwhile: it stays plain.
+    if (openedRecently(c.sid) || (await isLiveNow?.(c.sid))) throw new Error(`${c.sid} was opened while it was archived`)
+    // Every original must be exactly as it was before any is removed, and the lock still ours.
     for (const it of items) {
       const now = stampOf(await fsp.lstat(path.join(c.dir, it.rel)))
       if (!sameStamp(now, it.stamp)) throw new Error(`${it.rel} changed while it was archived`)
     }
+    if (!stillHeld(h) || openedRecently(c.sid)) throw new Error(`${c.sid} lost its archive lock`)
+    beat(h)
   } catch (e) {
     await fsp.rm(manifestPath(c.dir, c.sid), { force: true })
     for (const f of done) await fsp.rm(path.join(c.dir, f.rel + ARCHIVE_SUFFIX), { force: true })
     throw e
   }
-  // The transcript goes last: while it is plain, the session reads as plain.
-  for (const it of items) await fsp.rm(path.join(c.dir, it.rel), { force: true })
+  try { await removeOriginals(c, items) } catch (e) {
+    // The originals are back (merged with anything written meanwhile): the archive goes.
+    await fsp.rm(manifestPath(c.dir, c.sid), { force: true })
+    for (const f of done) await fsp.rm(path.join(c.dir, f.rel + ARCHIVE_SUFFIX), { force: true })
+    throw e
+  }
   return { files: done.length, before: done.reduce((n, f) => n + f.size, 0), after: done.reduce((n, f) => n + f.gzBytes, 0) }
+}
+
+const unchanged = (s: fs.Stats, st: FileStamp): boolean => s.ino === st.ino && s.size === st.size && s.mtimeMs === st.mtimeMs
+
+/** Put an original set aside back; anything written at `p` meanwhile is appended after it, never lost. */
+async function putBack(p: string, aside: string): Promise<void> {
+  try {
+    await fsp.link(aside, p)
+    await fsp.rm(aside, { force: true })
+    return
+  } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e }
+  // A writer made a new file at `p` (an append by path): old bytes first, then the new ones.
+  const merged = tmpName(p)
+  await pipeline(fs.createReadStream(aside), fs.createWriteStream(merged, { mode: 0o600 }))
+  await pipeline(fs.createReadStream(p), fs.createWriteStream(merged, { flags: 'a' }))
+  await fsyncPath(merged)
+  await fsp.rename(merged, p)
+  await fsp.rm(aside, { force: true })
+}
+
+/**
+ * Remove a session's originals (archived and verified): each is renamed aside
+ * (the transcript last), and after SETTLE_MS each must still be the file it
+ * was and no new file may stand at its name. Anything else puts every one back
+ * (merging a new file a writer made) and throws, so the caller drops the archive.
+ */
+async function removeOriginals(c: Candidate, items: Array<{ rel: string; stamp: FileStamp }>): Promise<void> {
+  const aside: Array<{ p: string; tmp: string; stamp: FileStamp }> = []
+  let moved = false
+  try {
+    for (const it of items) {
+      const p = path.join(c.dir, it.rel)
+      const tmp = tmpName(p)
+      await fsp.rename(p, tmp)
+      aside.push({ p, tmp, stamp: it.stamp })
+      if (!unchanged(await fsp.lstat(tmp), it.stamp)) { moved = true; break }
+    }
+    if (!moved) {
+      await new Promise(r => setTimeout(r, SETTLE_MS))
+      for (const a of aside) {
+        if (!unchanged(await fsp.lstat(a.tmp), a.stamp)) { moved = true; break }
+        if (await fsp.lstat(a.p).then(() => true, () => false)) { moved = true; break }
+      }
+    }
+  } catch (e) {
+    for (const a of aside.reverse()) await putBack(a.p, a.tmp)
+    throw e
+  }
+  if (moved) {
+    for (const a of aside.reverse()) await putBack(a.p, a.tmp)
+    throw new Error(`${c.sid} was written while it was archived`)
+  }
+  for (const a of aside) await fsp.rm(a.tmp, { force: true })
 }
 
 /** Remove temp files a crashed pass left in a project dir (and its session folders). */
@@ -270,7 +386,8 @@ async function sweepTemps(dir: string, names: string[], now: number): Promise<vo
   for (const n of names) {
     if (!n.includes(TMP_TAG)) continue
     const p = path.join(dir, n)
-    try { if (now - (await fsp.lstat(p)).mtimeMs > 3_600_000) await fsp.rm(p, { force: true }) } catch { /* gone */ }
+    // By ctime: an original set aside keeps its old mtime, and the rename that set it aside moved its ctime.
+    try { if (now - (await fsp.lstat(p)).ctimeMs > 3_600_000) await fsp.rm(p, { force: true }) } catch { /* gone */ }
   }
 }
 
@@ -308,19 +425,23 @@ export async function archiveTranscripts(projectsDirs: string[], opts: ArchiveOp
           r.bytesBefore += c.stamp.size + c.side.reduce((n, s) => n + s.stamp.size, 0)
           continue
         }
-        if (!tryLock(dir, sid)) continue
+        if (openedRecently(sid)) { r.skippedLive++; continue }
+        const h = tryLock(dir, sid)
+        if (!h) continue
         try {
-          // A pass that stopped halfway left a manifest: finish the way back first, so
-          // the new manifest names every file of the session, then archive it whole.
-          let cur: Candidate | null = c
-          if (fs.existsSync(manifestPath(dir, sid))) { await restoreLocked(dir, sid); cur = await candidate(dir, sid, cutoff) }
-          if (!cur) continue
-          const got = await archiveSession(cur)
-          r.sessions++; r.files += got.files; r.bytesBefore += got.before; r.bytesAfter += got.after
+          await withBeat(h, async () => {
+            // A pass that stopped halfway left a manifest: finish the way back first, so
+            // the new manifest names every file of the session, then archive it whole.
+            let cur: Candidate | null = c
+            if (fs.existsSync(manifestPath(dir, sid))) { await restoreLocked(dir, sid); cur = await candidate(dir, sid, cutoff) }
+            if (!cur) return
+            const got = await archiveSession(cur, h, opts.isLiveNow)
+            r.sessions++; r.files += got.files; r.bytesBefore += got.before; r.bytesAfter += got.after
+          })
         } catch (e) {
           r.failed++
           if (r.errors.length < 10) r.errors.push(`${path.join(dir, name)}: ${(e as Error).message}`)
-        } finally { unlock(dir, sid) }
+        }
       }
     }
   }
@@ -347,9 +468,12 @@ export function restoreSession(dir: string, sid: string): Promise<boolean> {
 async function restoreSessionNow(dir: string, sid: string): Promise<boolean> {
   const plain = path.join(dir, sid + '.jsonl')
   const exists = (p: string) => fsp.lstat(p).then(() => true, () => false)
-  if (!(await exists(manifestPath(dir, sid)))) return exists(plain)
-  if (!(await lockWait(dir, sid, RESTORE_WAIT_MS))) throw new Error(`session ${sid} is being archived; try again`)
-  try { return await restoreLocked(dir, sid) } finally { unlock(dir, sid) }
+  // No manifest and no pass at work on it: nothing to do. A pass at work (its lock) is
+  // waited for, since it may write a manifest and remove the plain file next.
+  if (!(await exists(manifestPath(dir, sid))) && !(await exists(lockPath(dir, sid)))) return exists(plain)
+  const h = await lockWait(dir, sid, RESTORE_WAIT_MS)
+  if (!h) throw new Error(`session ${sid} is being archived; try again`)
+  return withBeat(h, async () => (await exists(manifestPath(dir, sid))) ? restoreLocked(dir, sid) : exists(plain))
 }
 
 /** The restore itself; the caller holds the session's lock. */
@@ -417,16 +541,21 @@ export function archivedSessionOf(p: string): { dir: string; sid: string } | nul
   return null
 }
 
-/** Find session `sid` archived in any project dir under the roots; restore it and return its plain path. */
+/**
+ * Find session `sid` archived (or being archived) in any project dir under the
+ * roots; restore it and return its plain path. A resume calls this: it marks
+ * the session opened first, so a pass at work on it gives up.
+ */
 export async function restoreSessionAnywhere(projectsDirs: string[], sid: string): Promise<string | null> {
   if (!SID_RE.test(sid)) return null
+  noteSessionOpened(sid)
   for (const root of [...new Set(projectsDirs)]) {
     let projects: fs.Dirent[]
     try { projects = await fsp.readdir(root, { withFileTypes: true }) } catch { continue }
     for (const p of projects) {
       if (!p.isDirectory()) continue
       const dir = path.join(root, p.name)
-      if (!fs.existsSync(manifestPath(dir, sid))) continue
+      if (!fs.existsSync(manifestPath(dir, sid)) && !fs.existsSync(lockPath(dir, sid))) continue
       try { if (await restoreSession(dir, sid)) return path.join(dir, sid + '.jsonl') } catch { return null }
     }
   }
@@ -469,6 +598,18 @@ export async function plainFindResults(found: readonly string[], name: string): 
     if (!out.includes(f)) out.push(f)
   }
   return out
+}
+
+/** The transcript a CLI's argv resumes (`--resume <id>`, `-r <id>`, `=` forms), a fork's source included. */
+export function resumeSourceId(args: readonly string[]): string | null {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    let v: string | undefined
+    if (a === '--resume' || a === '-r') v = args[i + 1]
+    else if (a.startsWith('--resume=')) v = a.slice(9)
+    if (v && SID_RE.test(v)) return v
+  }
+  return null
 }
 
 /**

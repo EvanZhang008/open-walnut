@@ -189,7 +189,7 @@ import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { createDaemonPorts } from './port-scan-core.js'
-import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, restoreSessionAnywhere, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
+import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, restoreSessionAnywhere, resumeSourceId, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
 import { createHostMcp } from './host-mcp-core.js'
@@ -6138,9 +6138,21 @@ async function cmdTranscriptArchive(ws: ServerWebSocket<WsData>, id: number, cmd
     if (ps.error) return sendError(ws, id, 'transcript.archive: the process table could not be read')
     for (const sid of liveTranscriptIdsFromPs(ps.stdout)) live.add(sid)
     const budgetMs = Number(cmd.budgetMs)
+    // Asked again right before a session's originals go: this daemon's sessions now, then a fresh
+    // process table (a CLI started since the pass began, a terminal's included). Unreadable = live.
+    const isLiveNow = async (sid: string): Promise<boolean> => {
+      const s = sessions.get(sid)
+      if (s && !s.exitedAt) return true
+      const now = await boundedExecFile(
+        (f, a, options, callback) => execFile(f, a, options, (error, stdout) => callback(error, String(stdout ?? ''))),
+        'ps', ['-A', '-o', 'args='], { encoding: 'utf-8' as const, timeout: 15_000, maxBuffer: 64 * 1024 * 1024 },
+      )
+      return !!now.error || liveTranscriptIdsFromPs(now.stdout).has(sid)
+    }
     const report = await archiveTranscripts(CLAUDE_PROJECTS_DIRS, {
       olderThanMs: days * 86_400_000,
       isLive: (sid) => live.has(sid),
+      isLiveNow,
       dryRun: cmd.dryRun === true,
       ...(Number.isFinite(budgetMs) && budgetMs > 0 ? { budgetMs } : {}),
     })
@@ -6491,8 +6503,10 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   const resumesTranscript = !!resume || (args.includes('--resume') && !args.includes('--fork-session'))
   const notOurs = ownedSid ? strictStartRefusal(ownedSid, cmd, ownerHome, resumesTranscript) : null
   if (notOurs) throw notOurs
-  // An archived transcript comes back plain before the CLI resumes it (transcript-archive.ts).
-  if (ownedSid && resumesTranscript) await restoreSessionAnywhere(CLAUDE_PROJECTS_DIRS, ownedSid)
+  // An archived transcript comes back plain before the CLI resumes it, or forks it: the source a
+  // fork reads is its --resume id, not the new transcript it owns (transcript-archive.ts).
+  const archivedSource = resumeSourceId(args) ?? (resumesTranscript ? ownedSid : null)
+  if (archivedSource) await restoreSessionAnywhere(CLAUDE_PROJECTS_DIRS, archivedSource)
   // A start that a stop or a newer supervision request overtook ends here.
   const superseded = () => (!!canStart && !canStart()) || (!!isCurrent && !isCurrent())
   const stopIfSuperseded = () => {

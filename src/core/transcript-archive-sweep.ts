@@ -19,6 +19,8 @@ import type { Config } from './types.js'
 export const DEFAULT_HISTORY_COMPRESS_DAYS = 60
 const FIRST_SWEEP_MS = 20 * 60_000
 const SWEEP_EVERY_MS = 6 * 3_600_000
+/** A pass that stopped at its budget goes on this soon (the first pass on a host with years of history). */
+const RESUME_AFTER_MS = 30 * 60_000
 /** A pass is cut short here; the next one goes on where it stopped. */
 const PASS_BUDGET_MS = 10 * 60_000
 const PASS_TIMEOUT_MS = PASS_BUDGET_MS + 5 * 60_000
@@ -124,14 +126,19 @@ export function archiveHistoryNow(): Promise<ArchivePassRow[]> {
 
 export function startTranscriptArchiveSweep(): { stop: () => void } {
   let stopped = false
+  let again: ReturnType<typeof setTimeout> | null = null
   const run = (): void => {
     if (stopped) return
-    void historyArchiveAllowed().then((ok) => (ok ? archiveHistoryNow() : null)).catch(() => { /* next round */ })
+    void historyArchiveAllowed().then((ok) => (ok ? archiveHistoryNow() : null)).then((rows) => {
+      if (stopped || again || !rows?.some((r) => r.partial)) return
+      again = setTimeout(() => { again = null; run() }, RESUME_AFTER_MS)
+      again.unref?.()
+    }).catch(() => { /* next round */ })
   }
   const firstMs = Number(process.env.WALNUT_HISTORY_ARCHIVE_FIRST_MS)
   const first = setTimeout(run, Number.isFinite(firstMs) && firstMs >= 0 ? firstMs : FIRST_SWEEP_MS)
   first.unref?.()
   const every = setInterval(run, SWEEP_EVERY_MS)
   every.unref?.()
-  return { stop: () => { stopped = true; clearTimeout(first); clearInterval(every) } }
+  return { stop: () => { stopped = true; clearTimeout(first); clearInterval(every); if (again) clearTimeout(again) } }
 }

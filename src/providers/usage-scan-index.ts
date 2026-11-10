@@ -188,6 +188,41 @@ async function refreshFile(prev: IndexEntry | undefined, file: ScanLogFile, keep
       && hash(await readAt(handle, markStart, prev.offset - markStart, stats)) === prev.mark;
     let entry: IndexEntry;
     let rest: Buffer;
+    // An archived transcript (transcript-archive.ts) never changes: read whole through gunzip
+    // once, and again only when it is another file. Offsets count decompressed bytes.
+    if (F.isArchivedLog(file.path)) {
+      if (prev && prev.dev === stat.dev && prev.ino === stat.ino && prev.size === stat.size && prev.ctimeMs === stat.ctimeMs) {
+        stats.filesUnchanged++;
+        return { entry: { ...prev, file } };
+      }
+      if (prev) stats.filesReread++;
+      entry = { file, dev: stat.dev, ino: stat.ino, size: stat.size, ctimeMs: stat.ctimeMs, offset: 0, line: 0, head: '', mark: '', snapshots: new Map(), old: Buffer.alloc(0) };
+      stats.filesRead++;
+      diag.files_scanned++;
+      const old: Buffer[] = [];
+      let tail = Buffer.alloc(0);
+      for await (const piece of F.gunzipChunks(file.path)) {
+        stats.bytesRead += piece.length;
+        const buf = tail.length ? Buffer.concat([tail, piece]) : piece;
+        const complete = buf.lastIndexOf(F.NEWLINE) + 1;
+        for (const start of F.candidateLines(buf, complete)) {
+          const wait = pause();
+          if (wait) await wait;
+          const row = F.parseLine(buf, start, buf.indexOf(F.NEWLINE, start), diag);
+          if (row) foldRow(entry.snapshots, old, file, ++entry.line, row, keepFrom, diag);
+        }
+        entry.offset += complete;
+        tail = Buffer.from(buf.subarray(complete));
+      }
+      if (tail.length && F.CANDIDATES.some(p => tail.includes(p))) {
+        try {
+          const row: unknown = JSON.parse(tail.toString('utf8').replace(/^\0+/, ''));
+          if (F.object(row)) foldRow(entry.snapshots, old, file, ++entry.line, row, keepFrom, diag);
+        } catch { /* a torn last line, as the plain read leaves it */ }
+      }
+      if (old.length) entry.old = Buffer.concat([entry.old, ...old]);
+      return { entry };
+    }
     if (same && markOk && prev.size === stat.size && prev.ctimeMs === stat.ctimeMs) {
       // Not written since the last scan: only a last line without its newline is read again.
       stats.filesUnchanged++;

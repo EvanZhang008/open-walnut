@@ -178,4 +178,30 @@ describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
     // Nothing of the archive is left behind.
     expect(fs.readdirSync(proj).filter((n) => n.endsWith('.gz') || n.includes('walnut-archive'))).toEqual([])
   }, 120_000)
+
+  it('a fork of an archived session restores its source before the CLI starts', async () => {
+    const home = path.join(root, slug + '-f', 'home')
+    const proj = path.join(home, '.claude', 'projects', '-work-marina')
+    const body = writeSession(proj, 'fork-parent')
+    const { archiveTranscripts } = await import('../../src/providers/transcript-archive.js')
+    expect((await archiveTranscripts([path.join(home, '.claude', 'projects')], { olderThanMs: 86_400_000, now: Date.now() + 2 * 86_400_000 })).sessions).toBe(1)
+    const parent = path.join(proj, 'fork-parent.jsonl')
+    const marker = path.join(root, slug + '-f', 'seen.json')
+    // A stand-in CLI that only says what it found when it started.
+    const fake = path.join(root, slug + '-f', 'fake-cli.cjs')
+    fs.writeFileSync(fake, [
+      "const fs = require('fs')",
+      'const a = process.argv',
+      `fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ plain: fs.existsSync(${JSON.stringify(parent)}) ? fs.readFileSync(${JSON.stringify(parent)}, 'utf8') : null, gz: fs.existsSync(${JSON.stringify(parent + '.gz')}) }))`,
+      "console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: a[a.indexOf('--session-id') + 1] }))",
+      'process.stdin.resume()',
+    ].join('\n'))
+    const d = await boot(command, slug + '-f', home)
+    const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fake)} "$@"`
+    const reply = await rpc(d, { cmd: 'start', sid: 'fork-child', cwd: root, message: '', resume: false, args: ['/bin/sh', '-c', sh, 'sh', '--resume', 'fork-parent', '--fork-session', '--session-id', 'fork-child'] })
+    expect(reply.ok).toBe(true)
+    for (let n = 0; n < 200 && !fs.existsSync(marker); n++) await new Promise((r) => setTimeout(r, 50))
+    expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toEqual({ plain: body.main, gz: false })
+    await rpc(d, { cmd: 'stop', sid: 'fork-child' })
+  }, 120_000)
 })
