@@ -11,8 +11,10 @@
  *             store order) → the ids the companion lacks → those rows, in
  *             batches of at most 512 KB;
  *   registry  projects, folders and custom tiers as one document.
- * An unchanged manifest is not sent again; the 5-minute sweep sends it anyway,
- * so a companion that lost its copy is found within one sweep. A row's hash is
+ * An unchanged manifest is not sent again; a change that only edits or adds
+ * rows goes as those rows alone, proven by the follower's digest
+ * (kind-delta.ts); the 5-minute sweep compares digests, so a companion that
+ * lost its copy is found within one sweep. A row's hash is
  * kept against the row object itself: the store keeps an unchanged row's object
  * between writes, so a round hashes only what changed.
  *
@@ -30,8 +32,9 @@ import type { TaskReplicaRegistry } from '../task-manager.js'
 import { HELD_RETRY_MS, confirmRetryMs, sha12 } from './kind.js'
 // One build sends the schema its own follower side stores.
 import { REGISTRY_SCHEMA_VERSION, TASKS_SCHEMA_VERSION } from './task-replica-store.js'
-import { buildKindManifest, confirmKindRemoval, runKindRound, StepFailed, type KindManifest, type LeaderKind } from './kind-leader.js'
-import { _resetReplicaStatusForTesting, confirmWaiting, dropTargetsNotIn, forgetKindManifests, peekKindState } from './replica-status.js'
+import { buildKindManifest, confirmKindRemoval, runKindRound, StepFailed, type KindManifest, type KindRoundResult, type LeaderKind } from './kind-leader.js'
+import { noteManifestTaken, runDeltaRound, type DeltaKind } from './kind-delta.js'
+import { _resetReplicaStatusForTesting, confirmWaiting, dropTargetsNotIn, forgetKindManifests, kindState, peekKindState } from './replica-status.js'
 import type { ReplicaTarget } from './replica-targets.js'
 
 const DEBOUNCE_MS = 3_000
@@ -50,12 +53,18 @@ function hashOf(row: Task): string {
   return h
 }
 
-/** The `tasks` kind: every row as it is (no projection), in store order. */
-export const TASKS_KIND: LeaderKind<Task> = {
+/**
+ * The `tasks` kind: every row as it is (no projection), in store order. A
+ * change goes as a delta (kind-delta.ts): the whole manifest of every task, on
+ * every change, was most of what a host's link carried up (2026-11-10).
+ */
+export const TASKS_KIND: DeltaKind<Task> = {
   kind: 'tasks',
   schemaVersion: TASKS_SCHEMA_VERSION,
   key: (t) => t.id,
   hash: hashOf,
+  ordered: true,
+  digest: true,
 }
 
 /** The `registry` kind: projects, folders and custom tiers as one document. */
@@ -159,7 +168,7 @@ async function serveTarget(
     const startedAt = Date.now()
     try {
       const r = kind === 'tasks'
-        ? await runKindRound(TASKS_KIND, manifests.tasks, s.target, { asOf, log: log.task })
+        ? await tasksRound(manifests.tasks, s.target, asOf)
         : await runKindRound(REGISTRY_KIND, manifests.registry, s.target, { asOf, log: log.task })
       results.push(named(s, r as Omit<TaskReplicaRoundResult, 'target'>))
       if (r.action === 'synced') log.task.info('task replica: round', { target: s.target.id, ...r, ms: Date.now() - startedAt })
@@ -171,6 +180,17 @@ async function serveTarget(
       break // the other kind waits for the next round
     }
   }
+}
+
+/** The tasks on one target: the delta, else the manifest round. */
+async function tasksRound(manifest: KindManifest<Task>, target: Served['target'], asOf: number): Promise<KindRoundResult> {
+  const st = kindState(target, TASKS_KIND.kind)
+  if (st.restUntil > Date.now()) return { kind: TASKS_KIND.kind, action: 'unsupported', error: st.restWhy }
+  const quick = await runDeltaRound(TASKS_KIND, manifest, target, st, { asOf, now: Date.now, log: log.task })
+  if (quick) return quick
+  const r = await runKindRound(TASKS_KIND, manifest, target, { asOf, log: log.task })
+  if (r.action === 'synced') noteManifestTaken(st, manifest)
+  return r
 }
 
 /** Every running scheduler's "round soon" and "round now": a scheduler that stops takes only its own. */

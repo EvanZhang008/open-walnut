@@ -34,6 +34,12 @@ export interface KindState {
   /** Rest after `unknown_kind` / `schema_newer` / an older follower: no step before this (ms epoch). */
   restUntil: number
   restWhy?: string
+  /**
+   * The follower answered a digest step without a digest (a build before its
+   * kind had one): no delta before this (ms epoch), only manifest rounds
+   * (kind-delta.ts). A follower that restarts may be newer: forgetTarget ends it.
+   */
+  deltaRestUntil?: number
   /** Rounds refused in a row by the half rule, of the same leader manifest (count and keys). */
   refusals: number
   lastRefusal?: KindRefusal
@@ -140,6 +146,7 @@ export function forgetTarget(id: string): void {
     s.manifest = null
     s.restUntil = 0
     s.restWhy = undefined
+    s.deltaRestUntil = undefined
   }
 }
 

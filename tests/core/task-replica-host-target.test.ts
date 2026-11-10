@@ -209,10 +209,10 @@ describe('at the real store size (src/core/host-slice.ts: 6,500 tasks)', () => {
     expect((await hostIds()).length).toBe(6_500)
     calls = []
     expect((await syncTaskReplica(deps)).map((r) => r.action)).toEqual(['unchanged', 'unchanged'])
-    forgetTaskReplica() // the sweep: a manifest, and still no put
+    forgetTaskReplica() // the sweep: the tasks' digest (kind-delta.ts), not their 6,500-entry manifest, and no put
     calls = []
     await syncTaskReplica(deps)
-    expect(calls.map((c) => `${c.op}:${c.kind}`)).toEqual(['sync:tasks', 'sync:registry'])
+    expect(calls.map((c) => `${c.op}:${c.kind}`)).toEqual(['status:tasks', 'sync:registry'])
   }, 60_000)
 
   it('the leader\'s side of a round never holds its event loop over 50 ms', async () => {

@@ -79,7 +79,7 @@ describe('host copy pacing', () => {
     await settle()
     expect(slicePushes(send)).toBe(1)
 
-    // It goes once the gap (capped at a minute) has passed, by itself.
+    // It goes once the gap (capped at 3 minutes) has passed, by itself.
     await vi.advanceTimersByTimeAsync(HOST_SLICE_MAX_GAP_MS - 13_000 + 50)
     await settle()
     expect(slicePushes(send)).toBe(2)
@@ -87,7 +87,7 @@ describe('host copy pacing', () => {
 
   it('a small copy keeps the debounce pace', async () => {
     const { conn, send } = connected('devbox')
-    slices.next = () => copyOf(20_000)
+    slices.next = () => copyOf(15_000)
     conn.pushHostSlice()
     await settle()
     await vi.advanceTimersByTimeAsync(3_000)
@@ -179,10 +179,10 @@ describe('host copy pacing', () => {
     })
   })
 
-  it('the wait: none for a first copy, in proportion to size, capped at a minute', () => {
+  it('the wait: none for a first copy, in proportion to size, capped at 3 minutes', () => {
     expect(hostSliceWaitMs({ lastSentAt: 0, lastBytes: 2_000_000, now: 10, namesNewSession: false })).toBe(0)
-    expect(hostSliceWaitMs({ lastSentAt: 1_000, lastBytes: 250_000, now: 4_000, namesNewSession: false })).toBe(7_000)
-    expect(hostSliceWaitMs({ lastSentAt: 1_000, lastBytes: 50_000, now: 4_000, namesNewSession: false })).toBe(0)
+    expect(hostSliceWaitMs({ lastSentAt: 1_000, lastBytes: 240_000, now: 4_000, namesNewSession: false })).toBe(37_000)
+    expect(hostSliceWaitMs({ lastSentAt: 1_000, lastBytes: 15_000, now: 4_000, namesNewSession: false })).toBe(0)
     expect(hostSliceWaitMs({ lastSentAt: 1_000, lastBytes: 9_000_000, now: 1_000, namesNewSession: false })).toBe(HOST_SLICE_MAX_GAP_MS)
     expect(hostSliceWaitMs({ lastSentAt: 1_000, lastBytes: 9_000_000, now: 1_000, namesNewSession: true })).toBe(0)
   })

@@ -42,6 +42,8 @@ let primary: Task[] = []
 let registry: TaskReplicaRegistry = { projects: {}, task_groups: {}, custom_tiers: [] }
 let calls: Array<{ op: string; kind: string; n: number }> = []
 let unsupported = false
+/** The companion runs a build whose tasks have no digest: no `status` step, no digest on a put. */
+let oldFollower = false
 
 const deps: TaskReplicaDeps = {
   view: async () => ({ tasks: primary, registry }),
@@ -51,7 +53,9 @@ const deps: TaskReplicaDeps = {
     const body = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>
     const n = Array.isArray(body.rows) ? body.rows.length : Array.isArray(body.entries) ? body.entries.length : 1
     calls.push({ op: String(body.op), kind: String(body.kind), n })
-    const r = body.op === 'sync' ? await store.replicaSync(body) : await store.replicaPut(body)
+    if (oldFollower && body.op === 'status') return { ok: false, outcome: 'failed', status: 400, error: 'unknown_op' }
+    const r = body.op === 'sync' ? await store.replicaSync(body) : body.op === 'status' ? await store.replicaStatus(body) : await store.replicaPut(body)
+    if (oldFollower && r.ok) delete (r as Record<string, unknown>).digest
     return r.ok ? { ok: true, reply: r } : { ok: false, outcome: 'failed', status: r.status, error: r.error }
   },
 }
@@ -76,6 +80,7 @@ beforeEach(async () => {
   _resetDeleteTombstonesForTesting()
   calls = []
   unsupported = false
+  oldFollower = false
   registry = { projects: { Acme: { source: 'local', order_index: 0 } }, task_groups: { g_rel: { label: 'Release', project: 'Acme' } }, custom_tiers: [{ id: 'ct_now', label: 'Now' }] }
   primary = [
     row('lead', { description: 'Ship the release on Friday.', note: '- 08:00 drill passed', session_ids: ['s-1'], group_id: 'g_rel', pinned: true, focus_tier: 'ct_now' } as Partial<Task>),
@@ -294,5 +299,92 @@ describe('the copy keeps the primary\'s field times', () => {
     const lead = await tm.getTask('lead')
     expect(lead.priority).toBe('immediate')
     expect(lead.field_at).toEqual({ title: '2026-10-02T00:00:00.000Z' })
+  })
+})
+
+/**
+ * A change goes as its rows alone (kind-delta.ts): the whole manifest on every
+ * task change was most of what a host's link carried up, and the path to one
+ * host dropped the SSH connection every few MB it carried (2026-11-10).
+ */
+describe('the tasks go as a delta after the first manifest', () => {
+  const steps = () => calls.filter((c) => c.kind === 'tasks').map((c) => `${c.op}:${c.n}`)
+
+  it('an edit is one put of that row, no manifest; the copy matches', async () => {
+    await syncTaskReplica(deps)
+    calls = []
+    edit('worker', { summary: 'edited on the Mac' })
+    const [tasks] = await syncTaskReplica(deps)
+    expect(tasks).toMatchObject({ kind: 'tasks', action: 'synced', sent: 1 })
+    expect(steps()).toEqual(['put:1'])
+    expect((await tm.getTask('worker')).summary).toBe('edited on the Mac')
+    calls = []
+    expect((await syncTaskReplica(deps)).map((r) => r.action)).toEqual(['unchanged', 'unchanged'])
+    expect(calls).toEqual([])
+  })
+
+  it('a new task added at the end is one put, and lands last on the copy', async () => {
+    await syncTaskReplica(deps)
+    calls = []
+    primary = [...primary, row('fresh')]
+    await syncTaskReplica(deps)
+    expect(steps()).toEqual(['put:1'])
+    expect(await companionIds()).toEqual(['lead', 'worker', 'old-done', 'fresh'])
+  })
+
+  it('a removal, a move or a row added in the middle takes the manifest', async () => {
+    await syncTaskReplica(deps)
+    calls = []
+    primary = primary.filter((t) => t.id !== 'old-done')
+    await syncTaskReplica(deps)
+    expect(steps()[0]).toBe('sync:2')
+    expect(await companionIds()).toEqual(['lead', 'worker'])
+    calls = []
+    primary = [primary[1], primary[0]]
+    await syncTaskReplica(deps)
+    expect(steps()[0]).toBe('sync:2')
+    expect(await companionIds()).toEqual(['worker', 'lead'])
+    calls = []
+    primary = [primary[0], row('middle'), primary[1]]
+    await syncTaskReplica(deps)
+    expect(steps()[0]).toBe('sync:3')
+    expect(await companionIds()).toEqual(['worker', 'middle', 'lead'])
+  })
+
+  it('the sweep asks the digest, not the manifest; a copy that differs gets the manifest', async () => {
+    await syncTaskReplica(deps)
+    forgetTaskReplica()
+    calls = []
+    await syncTaskReplica(deps)
+    expect(steps()).toEqual(['status:1'])
+    // The copy lost its state: its digest no longer matches, and the manifest brings every row again.
+    fs.rmSync(path.join(WALNUT_HOME, 'cache', 'task-replica.json'))
+    store._resetTaskReplicaStoreForTesting()
+    forgetTaskReplica()
+    calls = []
+    await syncTaskReplica(deps)
+    expect(steps()).toEqual(['status:1', 'sync:3', 'put:3'])
+  })
+
+  it('a row the copy holds of its own sends the manifest, as before', async () => {
+    await syncTaskReplica(deps)
+    store.noteLocalTaskWrite('lead')
+    edit('lead', { summary: 'primary side' })
+    calls = []
+    const [tasks] = await syncTaskReplica(deps)
+    expect(tasks).toMatchObject({ kind: 'tasks' })
+    expect(steps()).toContain('sync:3')
+  })
+
+  it('an older companion with no digest: manifests only, after one try', async () => {
+    oldFollower = true
+    await syncTaskReplica(deps)
+    // The first round asks the digest once; `unknown_op` rests the shortcut for this target.
+    expect(steps()).toEqual(['status:1', 'sync:3', 'put:3'])
+    calls = []
+    edit('worker', { summary: 'one' })
+    await syncTaskReplica(deps)
+    expect(steps()).toEqual(['sync:3', 'put:1'])
+    expect((await tm.getTask('worker')).summary).toBe('one')
   })
 })

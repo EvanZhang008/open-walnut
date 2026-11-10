@@ -12,7 +12,7 @@
  * watcher.
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { setCopyWatcher } from '../../../src/core/replication/kind-follower.js'
+import { rowSetDigest, setCopyWatcher } from '../../../src/core/replication/kind-follower.js'
 import { sha12 } from '../../../src/core/replication/kind.js'
 import { memFollower, type Row } from '../../helpers/replica-kind-harness.js'
 
@@ -50,6 +50,29 @@ describe('copy watcher: which watched keys a round stored', () => {
     f.held.add('made-here-2')
     await f.handler.sync({ kind: KIND, entries: [entry(a), entry(b2)], asOf: 3_000 })
     expect(told[2]).toEqual({ kind: KIND, keys: ['made-here-1', 'task-b'], asOf: 3_000 })
+  })
+
+  it('a delta round tells the watched keys too: an equal digest on a status or on the last put, with its asOf', async () => {
+    // kind-delta.ts: a round that only changed rows sends no manifest, so the digest is what proves the copy whole.
+    const f = memFollower({ digest: true })
+    const a: Row = { id: 'task-a', title: 'Leader work' }
+    const b: Row = { id: 'task-b', title: 'Worker' }
+    await f.handler.sync({ kind: KIND, entries: [entry(a), entry(b)], asOf: 1_000 })
+    await f.handler.put({ kind: KIND, rows: [a, b], last: true })
+    const told = watcher(['task-a', 'made-here'])
+    const digestOf = (rows: Row[]) => rowSetDigest(rows.map((r) => r.id), Object.fromEntries(rows.map((r) => [r.id, hashOf(r)])), true)
+    // Nothing changed (the sweep): the status matches, and every watched key not held here is stored as of it.
+    expect(await f.handler.step('status', { kind: KIND, digest: digestOf([a, b]), asOf: 2_000 })).toMatchObject({ ok: true, inSync: true })
+    expect(told).toEqual([{ kind: KIND, keys: ['made-here', 'task-a'], asOf: 2_000 }])
+    // A delta's last put of a renamed row: the digest matches after it, told with the delta's asOf.
+    const a2 = { ...a, title: 'Leader work, renamed' }
+    f.held.add('made-here')
+    expect(await f.handler.put({ kind: KIND, rows: [a2], last: true, digest: digestOf([a2, b]), asOf: 3_000 })).toMatchObject({ ok: true, stored: 1 })
+    expect(told.at(-1)).toEqual({ kind: KIND, keys: ['task-a'], asOf: 3_000 })
+    // A digest that does not match tells nothing new.
+    const n = told.length
+    await f.handler.step('status', { kind: KIND, digest: 'other', asOf: 4_000 })
+    expect(told.length).toBe(n)
   })
 
   it('no watcher: a round tells nothing and still stores', async () => {

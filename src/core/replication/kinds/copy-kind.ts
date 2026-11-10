@@ -4,13 +4,8 @@
  * replication kind (kind-leader.ts runs the manifest round). This file adds
  * what those kinds share:
  *
- *   - the digest shortcut for digest kinds: a round whose target took a
- *     manifest before and whose rows only changed (none removed) puts just the
- *     changed rows and asks the follower's digest on the last put; equal, the
- *     round ends without a manifest. With nothing changed (the 5-minute sweep,
- *     or the first round after a restart of this server) a `status` step
- *     compares digests and an equal one ends the round. Anything else runs
- *     the full manifest round;
+ *   - the digest shortcut for digest kinds (kind-delta.ts, shared with the
+ *     tasks): changed rows alone, proven by the follower's digest;
  *   - the targets: a host whose program is the replica (the default since
  *     D13; the plain host server and the daemon's fallback keep no copies)
  *     takes every kind; the companion takes the kinds it keeps (gate.ts
@@ -30,9 +25,9 @@
 
 import { log } from '../../../logging/index.js'
 import { isFollower } from '../../server-role.js'
-import { HELD_RETRY_MS, PUT_BATCH_BYTES, PUT_TIMEOUT_MS, REST_ERRORS, confirmRetryMs, keptManifestHash, sha12 } from '../kind.js'
-import { buildKindManifest, confirmKindRemoval, putRow, runKindRound, StepFailed, type KindManifest, type KindRoundResult, type LeaderKind } from '../kind-leader.js'
-import { DigestMap } from '../search-digest.js'
+import { HELD_RETRY_MS, REST_ERRORS, confirmRetryMs, keptManifestHash } from '../kind.js'
+import { buildKindManifest, confirmKindRemoval, runKindRound, StepFailed, type KindManifest, type KindRoundResult, type LeaderKind } from '../kind-leader.js'
+import { forgetTaken, noteManifestTaken, runDeltaRound } from '../kind-delta.js'
 import { confirmWaiting, forgetKindManifests, kindState, peekKindState, type KindState } from '../replica-status.js'
 import type { ReplicaTarget } from '../replica-targets.js'
 import { COMPANION_COPY_KINDS } from './gate.js'
@@ -40,8 +35,7 @@ import { COMPANION_COPY_KINDS } from './gate.js'
 export const COPY_DEBOUNCE_MS = 3_000
 export const COPY_SWEEP_MS = 5 * 60_000
 export const COPY_FIRST_ROUND_MS = 15_000
-/** A delta of more rows than this goes as a manifest round instead. */
-export const DELTA_MAX_ROWS = 1_000
+export { DELTA_MAX_ROWS, manifestDigest } from '../kind-delta.js'
 
 /**
  * Which kinds a replica copies (hosts.<key>.server.copies). Every kind is on unless the
@@ -127,121 +121,8 @@ export function copyKindHeldBy(targetId: string, kind: string): boolean {
   return action === 'synced' || action === 'unchanged'
 }
 
-/** The digest of a manifest, worked out once per manifest object. */
-const manifestDigests = new WeakMap<object, string>()
-/** An ordered kind's digest also names its order (kind-follower.ts rowSetDigest works it out the same way). */
-export function manifestDigest(manifest: KindManifest<unknown>, ordered = false): string {
-  let d = manifestDigests.get(manifest)
-  if (d === undefined) {
-    const map = new DigestMap()
-    let i = 0
-    for (const e of manifest.entries) map.set(i++, e.k, e.h)
-    d = ordered ? `${map.digest}.${sha12(manifest.entries.map((e) => e.k).join('\n'))}` : map.digest
-    manifestDigests.set(manifest, d)
-  }
-  return d
-}
-
-/** What each target took whole last (key -> hash), kept against its kind state. */
-const taken = new WeakMap<KindState, Map<string, string>>()
 /** The kind is off for this target and the target dropped its store (or cannot): no purge again until it is turned on. */
 const purged = new WeakSet<KindState>()
-
-function entriesMap(manifest: KindManifest<unknown>): Map<string, string> {
-  return new Map(manifest.entries.map((e) => [e.k, e.h]))
-}
-
-/** One step; null on any failure (the full manifest round then runs and notes it). */
-async function quietStep(target: CopyTarget, payload: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown> | null> {
-  try {
-    const r = await target.post(payload, timeoutMs ? { timeoutMs } : undefined)
-    return r.ok && r.reply.ok === true ? r.reply : null
-  } catch { return null }
-}
-
-function encode<Row>(kind: CopyKind<Row>, rows: readonly Row[], last: boolean): Record<string, unknown> {
-  return kind.encodePut ? kind.encodePut(rows, last) : { rows, ...(last ? { last: true } : {}) }
-}
-
-function noteTaken(st: KindState, manifest: KindManifest<unknown>, asOf: number, at: number, action: 'synced' | 'unchanged', sent: number): void {
-  st.manifest = manifest.hash
-  taken.set(st, entriesMap(manifest))
-  st.refusals = 0
-  st.lastRefusal = undefined
-  Object.assign(st, { action, entries: manifest.entries.length, held: 0, sent, removed: 0, asOf, syncedAt: at, error: undefined })
-}
-
-/** The rows a delta must put, or null when only a manifest round can bring the target up to date. */
-function deltaKeys(kind: CopyKind<unknown>, manifest: KindManifest<unknown>, prev: Map<string, string>): string[] | null {
-  const changed: string[] = []
-  let shared = 0
-  for (const e of manifest.entries) {
-    if (prev.has(e.k)) shared++
-    if (prev.get(e.k) !== e.h) changed.push(e.k)
-  }
-  if (shared < prev.size) return null // a row went: only a manifest removes (and the half rule guards it)
-  if (changed.length > DELTA_MAX_ROWS) return null
-  if (kind.ordered) {
-    // A new row's place, or a move, needs the manifest's order.
-    if (manifest.entries.length !== prev.size) return null
-    let i = 0
-    for (const k of prev.keys()) if (manifest.entries[i++].k !== k) return null
-  }
-  return changed
-}
-
-/**
- * The digest shortcut of a digest kind (see the header), or null when the full
- * manifest round must run. Never throws: a failed step falls back to the round.
- */
-async function digestShortcut<Row>(
-  kind: CopyKind<Row>, manifest: KindManifest<Row>, target: CopyTarget, st: KindState, asOf: number, now: () => number,
-): Promise<KindRoundResult | null> {
-  // A kind turned on again after a purge takes the manifest: only a sync replaces the host's off marker
-  // (kinds/gate.ts), even when both sides are empty and the digests agree.
-  // Rows the leader could not read ride only on a sync (`keep`), never on a delta.
-  if (!kind.digest || st.confirmNext || st.manifest === manifest.hash || st.action === 'off' || (manifest.keep?.length ?? 0) > 0) return null
-  const digest = manifestDigest(manifest, kind.ordered)
-  const prev = taken.get(st)
-  const changed = prev ? deltaKeys(kind as CopyKind<unknown>, manifest, prev) : []
-  if (changed === null) return null
-  const base = { kind: kind.kind, schemaVersion: kind.schemaVersion }
-  if (changed.length === 0) {
-    // asOf rides along: an equal digest means the follower holds the leader's rows as of now (hold after ack, WP10).
-    const r = await quietStep(target, { op: 'status', ...base, digest, asOf })
-    if (!r || r.digest !== digest) return null
-    noteTaken(st, manifest, asOf, now(), 'unchanged', 0)
-    return { kind: kind.kind, action: 'unchanged', entries: manifest.entries.length }
-  }
-  let batch: Row[] = []
-  let bytes = 0
-  let sent = 0
-  let held = 0
-  let lastReply: Record<string, unknown> | null = null
-  const flush = async (last: boolean): Promise<boolean> => {
-    const r = await quietStep(target, { op: 'put', ...base, ...encode(kind, batch, last), ...(last ? { digest, asOf } : {}) }, PUT_TIMEOUT_MS)
-    if (!r) return false
-    const stored = Number(r.stored) || 0
-    sent += stored
-    held += Math.max(Number(r.held) || 0, batch.length - stored)
-    if (last) lastReply = r
-    batch = []
-    bytes = 0
-    return true
-  }
-  for (const k of changed) {
-    const row = await putRow(kind, manifest, k)
-    if (row === undefined) return null // went away since the manifest: the round decides
-    const size = Buffer.byteLength(JSON.stringify(row))
-    if (batch.length > 0 && bytes + size > PUT_BATCH_BYTES && !(await flush(false))) return null
-    batch.push(row)
-    bytes += size
-  }
-  if (!(await flush(true))) return null
-  if (held > 0 || (lastReply as Record<string, unknown> | null)?.digest !== digest) return null
-  noteTaken(st, manifest, asOf, now(), 'synced', sent)
-  return { kind: kind.kind, action: 'synced', entries: manifest.entries.length, sent, held: 0, removed: 0 }
-}
 
 /** One copy kind on one host target: the digest shortcut, else the manifest round. */
 export async function runCopyRound<Row>(
@@ -250,10 +131,10 @@ export async function runCopyRound<Row>(
   const now = opts.now ?? Date.now
   const st = kindState(target, kind.kind)
   if (st.restUntil > now()) return { kind: kind.kind, action: 'unsupported', error: st.restWhy }
-  const quick = await digestShortcut(kind, manifest, target, st, opts.asOf, now)
+  const quick = await runDeltaRound(kind, manifest, target, st, { asOf: opts.asOf, now, log: log.session })
   if (quick) return quick
   const r = await runKindRound(kind, manifest, target, { asOf: opts.asOf, now, log: log.session })
-  if (r.action === 'synced' && st.manifest === manifest.hash) taken.set(st, entriesMap(manifest))
+  if (r.action === 'synced') noteManifestTaken(st, manifest)
   return r
 }
 
@@ -308,7 +189,7 @@ export async function syncCopyKinds(kinds: readonly CopyKind<any>[], deps: CopyK
         // Turned off for this host: it drops what it holds of the kind (once), and its state says so.
         const removed = purged.has(st) ? undefined : await purgeKind(kind, target, st)
         Object.assign(st, { action: 'off', manifest: null })
-        taken.delete(st)
+        forgetTaken(st)
         results.push({ target: target.id, kind: kind.kind, action: 'unsupported', error: 'kind_not_copied', ...(removed !== undefined ? { removed } : {}) })
         continue
       }
@@ -512,5 +393,5 @@ export function startCopyKindsSync(kinds: readonly CopyKind<any>[], deps: CopyKi
 
 /** Tests only: forget what every target took (the shortcut asks the digest again). */
 export function _forgetCopyTakenForTesting(st: KindState): void {
-  taken.delete(st)
+  forgetTaken(st)
 }

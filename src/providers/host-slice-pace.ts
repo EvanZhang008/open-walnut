@@ -12,16 +12,20 @@
  * days had a copy in flight, a copy being in flight a few percent of the time.
  *
  * So after a copy went out, the next waits in proportion to its size: a small
- * copy keeps the debounce's pace, a large one goes at most once a minute. The
+ * copy keeps the debounce's pace, a large one goes at most once in 3 minutes.
+ * 2026-11-10: the path to one host still dropped the connection every few MB
+ * carried up (a plain upload test dropped the same way), and the 760 KB copy
+ * every 30 s at 25 KB/s was, after the task copy's manifests (kind-delta.ts),
+ * the largest upload left: 6 KB/s puts it at about two minutes. The
  * first copy of a connection never waits (it also tells the daemon which socket
  * is ours), and neither does one naming a session the last copy did not: a host
  * answers a session's calls while the Mac is away only once its copy names it.
  */
 
 /** Average upload a host's copies may use (bytes per second). */
-export const HOST_SLICE_UPLOAD_BYTES_PER_SEC = 25_000
+export const HOST_SLICE_UPLOAD_BYTES_PER_SEC = 6_000
 /** The longest a changed copy waits behind the last one. */
-export const HOST_SLICE_MAX_GAP_MS = 60_000
+export const HOST_SLICE_MAX_GAP_MS = 3 * 60_000
 
 export interface HostSlicePaceInput {
   /** When the last copy on this connection went out (0: none yet). */

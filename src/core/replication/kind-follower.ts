@@ -388,7 +388,7 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     // A put sent without a manifest (the leader's delta) asks whether this side now matches.
     if (spec.digest && typeof body.digest === 'string') {
       answer.digest = rowSetDigest(await spec.localKeys(), s.hashes, spec.ordered)
-      if (answer.digest === body.digest) await heardAsOf(s, body.asOf)
+      if (answer.digest === body.digest) await heardAsOf(s, body.asOf, held)
     }
     return answer
   })
@@ -400,10 +400,15 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
    * the leader's rows as of the leader's `asOf`, as after a manifest (the hold
    * after ack of WP10 reads it). Never moves back.
    */
-  const heardAsOf = async (s: RowSetState, raw: unknown): Promise<void> => {
+  const heardAsOf = async (s: RowSetState, raw: unknown, held: HeldSource): Promise<void> => {
     const asOf = Number(raw)
     // Proven whole as of `asOf` (an equal digest), whatever the stored clock says.
     noteRoundComplete(spec.kind, asOf)
+    // An equal digest says what a manifest's step says: every key here holds the
+    // leader's row, and the leader has no row this side lacks. The watched keys
+    // (a host replica's awaiting marks) are told so with this asOf, as a sync
+    // tells them; a delta round sends no sync (2026-11-10, kind-delta.ts).
+    if (Number.isFinite(asOf) && asOf > 0) tellStored(spec.kind, (k) => !held.has(k), asOf)
     if (!Number.isFinite(asOf) || asOf <= s.asOf) return
     s.asOf = asOf
     s.at = Date.now()
@@ -417,7 +422,7 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     const s = await spec.load()
     const digest = rowSetDigest(await spec.localKeys(), s.hashes, spec.ordered)
     const inSync = typeof body.digest === 'string' && body.digest === digest
-    if (inSync) await heardAsOf(s, body.asOf)
+    if (inSync) await heardAsOf(s, body.asOf, await spec.held())
     return { ok: true, digest, inSync }
   })
 

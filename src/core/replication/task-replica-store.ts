@@ -237,6 +237,8 @@ function makeTasksFollower(): RowSetFollower {
     log: log.task,
     removalFloor: MASS_REMOVE_FLOOR,
     ordered: true,
+    // The leader sends a change as a delta and asks this digest (kind-delta.ts).
+    digest: true,
     serial: (fn) => serial(fn),
     refuse,
     load,
@@ -294,7 +296,7 @@ export function registerTaskFollowerKinds(): () => void {
   return () => { a(); b() }
 }
 
-function stepOf(op: 'sync' | 'put', body: Record<string, unknown>): Promise<ReplicaStepResult> | ReplicaStepResult {
+function stepOf(op: 'sync' | 'put' | 'status', body: Record<string, unknown>): Promise<ReplicaStepResult> | ReplicaStepResult {
   tasksFollower ??= makeTasksFollower()
   registryFollower ??= makeRegistryFollower()
   if (body.kind === 'registry') return registryFollower.step(op, body)
@@ -321,6 +323,11 @@ export async function replicaSync(body: { kind?: unknown; entries?: unknown; asO
  */
 export async function replicaPut(body: { kind?: unknown; rows?: unknown; registry?: unknown; last?: unknown }): Promise<ReplicaStepResult> {
   return stepOf('put', body as Record<string, unknown>)
+}
+
+/** The digest step of the tasks (an equal digest ends a round without a manifest). */
+export async function replicaStatus(body: { kind?: unknown; digest?: unknown; asOf?: unknown }): Promise<ReplicaStepResult> {
+  return stepOf('status', body as Record<string, unknown>)
 }
 
 /**
