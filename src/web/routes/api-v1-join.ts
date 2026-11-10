@@ -11,7 +11,7 @@
  * without `join` never comes here: an older phone gets what it always got.
  */
 import type { Response } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../../core/server-role.js'
 import * as chatHistory from '../../core/chat-history.js'
 import type { LaneTurnJoiner } from '../../core/sessions/lane-turn.js'
 import { log } from '../../logging/index.js'
@@ -127,7 +127,7 @@ export async function answerJoin(
 ): Promise<boolean> {
   let offer: JoinOffer | null
   let claim: ReturnType<typeof claimChatSend>
-  if (!CLOUD_MODE) {
+  if (!isCompanion()) {
     offer = offerJoin(agentId, conversationId, runningTurnId, text, messageId)
     if (!offer) return false
     claim = claimChatSend(agentId, conversationId, messageId, offer.turnId)

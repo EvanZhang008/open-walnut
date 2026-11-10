@@ -19,6 +19,8 @@ type How =
   | { carries: 'ws'; mustContain: RegExp }
   /** The companion's relay: the thread the phone announced for the message id. */
   | { carries: 'announced'; mustContain: RegExp }
+  /** A Follow up on a thread that moved to another node, sent on to where it lives now. */
+  | { carries: 'moved'; mustContain: RegExp }
   /** No Follow up can come this way. */
   | { carries: 'none'; why: string }
 
@@ -26,6 +28,7 @@ const CALLS: Record<string, How> = {
   'src/web/routes/session-send-v1.ts': { carries: 'body', mustContain: /threadIdOf\(req\.body\?\.threadId\)/ },
   'src/web/routes/session-chat.ts': { carries: 'ws', mustContain: /data\.threadId/ },
   'src/providers/daemon-connection.ts': { carries: 'announced', mustContain: /followUpIntentFor\(record\.taskId, messageId\)[\s\S]{0,400}threadKey: messageId/ },
+  'src/core/org/thread-follow.ts': { carries: 'moved', mustContain: /prepareHintedSend\([^)]*threadId: input\.threadId/ },
   'src/core/hints/hint-send.ts': { carries: 'none', why: 'the queue path for automated sources (routines, the wait clock, peers): no person typed a Follow up' },
   'src/core/sessions/side-thread-manager.ts': { carries: 'none', why: 'a side question files nothing (threads: false)' },
   'src/web/routes/quick-input-v1.ts': { carries: 'none', why: 'a launcher on the Mac sends into a task with no thread card' },

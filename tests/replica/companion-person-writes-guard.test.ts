@@ -56,6 +56,7 @@ const TABLE: Record<string, Row> = {
   'PATCH /tasks/:id/threads/:thread': { offline: 'leader', why: 'threads are kept on the Mac only, the companion holds no copy' },
   'POST /tasks/:id/threads/:thread/split': { offline: 'leader', why: 'threads are kept on the Mac only, the companion holds no copy' },
   'POST /tasks/:id/threads/:thread/move': { offline: 'leader', why: 'threads are kept on the Mac only, the companion holds no copy' },
+  'PUT /tasks/:id/threads/:thread/follow-ups/:messageId': { offline: 'leader', why: 'a Follow up\'s thread is noted in the Mac\'s memory; with the Mac away the send is filed by Walnut\'s pick, as before' },
   // Sessions.
   'POST /sessions/:id/messages': { offline: 'queue', store: 'send-queue (core/send-queue.ts), drained when the bridge returns' },
   'PUT /sessions/:id/uploads/:uploadId': { offline: 'local' },

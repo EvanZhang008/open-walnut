@@ -27,6 +27,7 @@ const LAZY: Record<string, Kind> = {
   'Markdown/MarkdownView.swift:1': { kind: 'nested', why: 'only when a caller passes lazy: true, which is listed in LAZY_MARKDOWN below' },
   'Views/Inbox/InboxItemTaskSelector.swift:1': { kind: 'scroll-root' },
   'Views/Sessions/FileSourceLinesView.swift:1': { kind: 'scroll-root' },
+  'Views/Sessions/Changes/SessionFileDiffView.swift:1': { kind: 'scroll-root' },
   'Views/Tasks/WorkCardSheet.swift:1': { kind: 'nested', why: 'rows of one fixed shape with no fold inside, and nothing is drawn around the stack' },
   'Views/Passwords/PasswordsHomeView.swift:1': { kind: 'nested', why: 'a grid of fixed-size tiles in a List section, which sizes its own rows' },
 }

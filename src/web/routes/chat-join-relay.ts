@@ -9,7 +9,7 @@
  * never mistakes the request for a replay of the running turn.
  */
 import crypto from 'node:crypto'
-import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { joinedReceiptOf, rememberJoined, type JoinOffer } from './api-v1-join.js'
 import { claimChatSend, priorChatSend } from './chat-send-once.js'
@@ -29,7 +29,7 @@ const TURN_ACTIVE = 'A turn is already active on this conversation'
 export async function relayChatJoinToPrimary(
   agentId: string, conversationId: string, turnId: string, text: string, messageId: string,
 ): Promise<JoinOffer | null> {
-  if (!CLOUD_MODE || followedRelayTurnId(conversationId) === undefined) return null
+  if (!isCompanion() || followedRelayTurnId(conversationId) === undefined) return null
   const { callPrimaryControl } = await import('./v1-control-relay.js')
   const outcome = await callPrimaryControl(
     'server.chat.turn' as never,

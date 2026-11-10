@@ -213,6 +213,7 @@ const INTERNAL_QUEUE_READS: Record<string, number> = {
   'providers/claude-code-session.ts': 8, // +1: the retry clock of a delivery that threw (retryAfterDeliveryThrow)
   'providers/acp-stranded-rows.ts': 1, // settles an ACP row left 'processing' with no delivery in flight
   'core/sessions/queued-change.ts': 1, // queueOf: was a refused Edit or Delete's row taken or gone
+  'core/sessions/lane-turn.ts': 2, // a joined message: which rows wait, and whether its own row was taken
 }
 const DISPLAY_QUEUE_READS: Record<string, number> = {
   'core/sessions/session-extras.ts': 1, // GET /api/v1/sessions/:id/queue and the Mac relay

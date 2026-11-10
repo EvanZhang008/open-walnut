@@ -125,7 +125,7 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/brief-refresh.ts': 1,
   'src/core/sessions/endpoint-wait.ts': 1,         // its one continue, as auto-continue
   'src/core/sessions/folder-gone.ts': 1,           // a new conversation's first line: a notice, then the rows that waited as stored
-  'src/core/sessions/lane-turn.ts': 2,             // frames the first line for its source
+  'src/core/sessions/lane-turn.ts': 3,             // frames the first line for its source; a joined message goes as its lane's source
   'src/core/sessions/letter-recheck.ts': 1,
   'src/core/sessions/machine-wake.ts': 1,
   'src/core/sessions/needs-recheck.ts': 1,
