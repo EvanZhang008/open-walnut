@@ -129,8 +129,11 @@ describe('prune refuses when it could be wrong', () => {
 describe('one data home, one job at a time across processes', () => {
   it('a second holder is refused while the first is alive, and a dead holder\'s lock is taken over', async () => {
     let release!: () => void;
-    const first = withBackupLock(home, () => new Promise<void>((r) => { release = r; }));
-    await new Promise((r) => setTimeout(r, 20));
+    let entered!: () => void;
+    const holding = new Promise<void>((r) => { entered = r; });
+    const first = withBackupLock(home, () => { entered(); return new Promise<void>((r) => { release = r; }); });
+    // The first holder is inside the lock: the second is asked only then.
+    await holding;
     await expect(withBackupLock(home, async () => 1)).rejects.toBeInstanceOf(BackupLockedError);
     release();
     await first;
@@ -199,7 +202,8 @@ describe('the recovery key', () => {
     expect((await fsp.readFile(path.join(dir, kept[0]), 'utf8')).trim()).toBe(first);
     // A damaged file is kept too.
     await fsp.writeFile(recoveryKeyPath(home), 'WB1-damaged by hand\n');
-    await new Promise((r) => setTimeout(r, 5));
+    // Each kept copy is named by its time: let the clock move past the first copy's name.
+    for (const t = Date.now(); Date.now() <= t + 2;) await new Promise((r) => setImmediate(r));
     await writeRecoveryKey(home, first);
     const all = await asides();
     expect(all).toHaveLength(2);

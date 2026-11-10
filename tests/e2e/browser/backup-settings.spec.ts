@@ -377,7 +377,7 @@ test.describe('Backup settings', () => {
     let pending: { restored: string; aside: string } | null = null
     await page.route('**/api/backup/status', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({
       configured: true, running: false, consecutiveFailures: 0, primary: true, engine: 'encrypted', dataDir: '/Users/me/.open-walnut',
-      restore: { running: false, targetDir: restored, doneFiles: 22597, doneBytes: 7_300_000_000, totalFiles: 22597, finishedAt: '2026-11-04T10:00:00Z' },
+      restore: { running: false, targetDir: restored, doneFiles: 22597, doneBytes: 7_300_000_000, totalFiles: 22597, finishedAt: new Date().toISOString() },
       pendingSwitch: pending,
     }) }))
     await answer(page, '**/api/backup/recovery-key', { key: KEY, savedAt: '2026-11-01T00:00:00Z' })

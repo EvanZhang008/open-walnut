@@ -338,6 +338,8 @@ describe('ratchet: every sound in the web app stays silent under automation', ()
     'web/src/components/common/FileContentView.tsx': 'its <audio>/<video> are muted by the page silencer, and its HTML preview runs it per load',
     'web/src/apps/mail/mail-html.ts': 'drops every media element from a mail',
     'web/src/utils/file-kind.ts': 'only names the media kinds a file view shows',
+    'web/src/components/settings/sections/BackupSection.tsx': "a backup's destination setting (cfg.destination), no audio",
+    'web/src/components/settings/sections/backup/backup-model.ts': "a backup's destination setting (cfg.destination), no audio",
     'plugin-store/walnut-rhythm/src/web/music.ts': 'a media element in the page: muted by the page silencer',
   };
 

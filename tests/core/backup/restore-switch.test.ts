@@ -50,7 +50,8 @@ describe('restore switch', () => {
     // Nothing moves while Walnut runs.
     expect(await read(path.join(home, 'notes', 'a.md'))).toBe('live');
 
-    const out = await applyPendingSwitch(home);
+    // Started a minute after the ask (the request is dated, and one older than a day is dropped).
+    const out = await applyPendingSwitch(home, { now: () => Date.parse('2026-11-04T10:06:00Z') });
     expect(out).toEqual({ kind: 'switched', aside: p.aside });
     expect(await read(path.join(home, 'notes', 'a.md'))).toBe('restored');
     expect(await read(path.join(p.aside, 'notes', 'a.md'))).toBe('live');
