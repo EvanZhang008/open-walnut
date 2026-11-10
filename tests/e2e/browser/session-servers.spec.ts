@@ -211,10 +211,13 @@ test('a session\'s servers are listed, open in the Web view, and stop without to
   await webRow.getByTestId('session-server-open').click()
   await expect(view.locator('.session-web-address')).toHaveValue(`http://localhost:${webPort}/`)
   await expect(panel.frameLocator('.session-web-iframe').getByText('DEV_SERVER_MARKER')).toBeVisible({ timeout: 20_000 })
-  // The chat beside the Web view is narrow: the turn card's rows still show every Open and Stop
-  // clear of the name and its tags (a tag that ran under the buttons hid "Open").
-  await expect(turnCard).toBeVisible()
-  const overlaps = await turnCard.getByTestId('session-server-row').evaluateAll((rows) => rows.flatMap((row) => {
+  // With the Web view open, the header pill's card still shows every Open and Stop clear of the
+  // name and its tags (a tag that ran under the buttons hid "Open"). The servers are drawn only
+  // there and in the Web view, never in the chat (2026-11-09).
+  await webChip0.click()
+  const pillCard = page.getByTestId('session-web-card')
+  await expect(pillCard).toBeVisible()
+  const overlaps = await pillCard.getByTestId('session-server-row').evaluateAll((rows) => rows.flatMap((row) => {
     const main = row.querySelector('.session-server-row-main') as HTMLElement
     const actions = row.querySelector('.session-server-row-actions') as HTMLElement
     const clip = getComputedStyle(main).overflow === 'hidden' ? main.getBoundingClientRect().right : Infinity
@@ -223,6 +226,8 @@ test('a session\'s servers are listed, open in the Web view, and stop without to
       .map((c) => `${row.getAttribute('data-port')}: ${c.textContent}`)
   }))
   expect(overlaps, 'nothing in a row runs under its buttons').toEqual([])
+  await page.keyboard.press('Escape')
+  await expect(pillCard).toHaveCount(0)
   // One chip per web page (as many as the menu counts); the raw service is counted on "Servers"
   // that opens the list. Only the page shown carries a Stop.
   const strip = view.getByTestId('session-servers-strip')
