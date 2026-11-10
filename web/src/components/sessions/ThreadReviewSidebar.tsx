@@ -19,7 +19,7 @@
  * scroll with the text. Their tops are written straight to the DOM after each
  * render and on a card's resize: one read of the heights, one write each.
  */
-import { memo, useCallback, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { ThreadMarkState } from '@/utils/thread-mark-state';
@@ -174,6 +174,9 @@ export interface ThreadReviewSidebarProps {
   onPick: (key: string) => void;
 }
 
+/** How long a card's conversation follows the answer to a send from its box. */
+const FOLLOW_ANSWER_MS = 5 * 60_000;
+
 function answerLine(e: ReviewEntry): string {
   if (e.state === 'waiting') return 'Waiting for an answer…';
   if (e.state === 'failed' && !e.answer) return 'No answer came back.';
@@ -273,6 +276,47 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
     return () => { ro.disconnect(); mo.disconnect(); if (raf) cancelAnimationFrame(raf); };
   }, [cardSet, place, p.layerRef]);
 
+  // After a send from a card's box, its conversation keeps its end in view while
+  // the question and its answer come in, until the reader scrolls or types in it
+  // (2026-11-10 review: a third follow-up's answer arrived below the card's fold).
+  const follows = useRef(new Map<string, () => void>());
+  useEffect(() => () => { for (const stop of [...follows.current.values()]) stop(); }, []);
+  const followEnd = useCallback((key: string) => {
+    follows.current.get(key)?.();
+    const body = cards.current.get(key)?.querySelector<HTMLElement>('.thread-review-body');
+    if (!body) return;
+    let at = 0;
+    // A card gone from the column (its body out of the page) follows no more.
+    const toEnd = () => {
+      if (!body.isConnected) { stop(); return; }
+      body.scrollTop = body.scrollHeight;
+      at = body.scrollTop;
+    };
+    const mo = new MutationObserver(toEnd);
+    mo.observe(body, { childList: true, subtree: true, characterData: true });
+    // Its cap changes (place) and a picture loading grow it with no mutation.
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(toEnd);
+    ro?.observe(body);
+    if (body.firstElementChild) ro?.observe(body.firstElementChild);
+    const READER = ['wheel', 'pointerdown', 'keydown', 'touchstart'] as const;
+    const stop = () => {
+      mo.disconnect();
+      ro?.disconnect();
+      for (const t of READER) body.removeEventListener(t, stop);
+      body.removeEventListener('scroll', onScroll);
+      window.clearTimeout(timer);
+      if (follows.current.get(key) === stop) follows.current.delete(key);
+    };
+    // A scroll up from where it was put, short of the end: the reader dragged its
+    // scrollbar (a taller cap pulls scrollTop back too, but to the end).
+    const onScroll = () => { if (body.scrollTop < at - 2 && body.scrollHeight - body.scrollTop - body.clientHeight > 2) stop(); };
+    for (const t of READER) body.addEventListener(t, stop, { passive: true });
+    body.addEventListener('scroll', onScroll, { passive: true });
+    const timer = window.setTimeout(stop, FOLLOW_ANSWER_MS);
+    follows.current.set(key, stop);
+    toEnd();
+  }, [cards]);
+
   const refFor = useCallback((key: string) => (el: HTMLDivElement | null) => {
     if (el) cards.current.set(key, el); else cards.current.delete(key);
   }, []);
@@ -323,10 +367,7 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
             placeholder={cardFollowUpPlaceholder(e.title)}
             onSend={(text, images) => p.onSend(e.key, text, images)}
             onFocus={() => p.onPick(e.key)}
-            onSent={() => {
-              const body = cards.current.get(e.key)?.querySelector<HTMLElement>('.thread-review-body');
-              if (body) body.scrollTop = body.scrollHeight;
-            }}
+            onSent={() => followEnd(e.key)}
           />}
         </div>
       ))}

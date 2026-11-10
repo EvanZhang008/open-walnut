@@ -57,6 +57,7 @@ export async function getStatus(): Promise<SttStatus> {
       cacheTimestamp = Date.now();
       cacheIsError = false;
       fetchPromise = null;
+      announce();
       return s;
     })
     .catch((err) => {
@@ -67,13 +68,15 @@ export async function getStatus(): Promise<SttStatus> {
       // 15s timeout) must NOT flip a working engine to "not configured" — that used
       // to disable the mic mid-recording. Keep the last good status; the short
       // error TTL retries soon.
-      if (cachedStatus?.engine) return cachedStatus;
+      if (cachedStatus?.engine) { announce(); return cachedStatus; }
       if (lastGoodStatus) {
         cachedStatus = lastGoodStatus;
+        announce();
         return lastGoodStatus;
       }
       const fallback: SttStatus = { engine: null, available: false, error: String(err) };
       cachedStatus = fallback;
+      announce();
       return fallback;
     });
 
@@ -104,6 +107,13 @@ function subscribe(fn: () => void) {
   return () => { listeners = listeners.filter(l => l !== fn); };
 }
 
+/** Every mounted mic shows the read that just came back: each kept its own copy
+ *  until its next re-check, so mics in one view said "Voice input" and "Set up
+ *  dictation" at once (2026-11-10, the review column's reply boxes). */
+function announce(): void {
+  queueMicrotask(() => { for (const fn of [...listeners]) fn(); });
+}
+
 /** Invalidate cache and notify all mounted MicButtons to refresh. */
 export function refreshSttStatus(): void {
   invalidateSttStatusCache();
@@ -120,7 +130,10 @@ export function useSttStatus(): SttStatusState {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    // A stale read shows while it is read again: a mic mounted then would say
+    // "Voice input" (loading) beside mics that show the last read.
+    if (cachedStatus) setStatus(cachedStatus);
+    setLoading(!cachedStatus);
     getStatus().then((s) => {
       setStatus(s);
       setLoading(false);

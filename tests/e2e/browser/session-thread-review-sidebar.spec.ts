@@ -601,6 +601,19 @@ test.describe('the fullscreen review sidebar', () => {
     await expect(panel.locator('.thread-card')).toHaveCount(0)
     expect(Math.abs((await history.evaluate((el) => el.scrollTop)) - topBefore), 'the timeline stayed where the reader was').toBeLessThan(40)
     await shot(page, '8-reply-from-review-card')
+    // Two more in a row from the keyboard: each answer comes into view inside the
+    // card, whose conversation now scrolls on its own (2026-11-10 review: the
+    // third answer arrived below the card's fold).
+    const body3 = third.locator('.thread-review-body')
+    for (const q of ['And if it is retried twice?', 'And a third time?']) {
+      await expect(box, 'the keyboard is back in the box').toBeFocused()
+      await page.keyboard.type(q)
+      await page.keyboard.press('Enter')
+      await expect(body3).toContainText(`processed your message: ${q}`, { timeout: 30_000 })
+      await expect.poll(() => body3.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 3_000 }).toBeLessThan(2)
+    }
+    expect(await body3.evaluate((el) => el.scrollHeight - el.clientHeight), 'the conversation scrolls in its card').toBeGreaterThan(40)
+    expect(Math.abs((await history.evaluate((el) => el.scrollTop)) - topBefore), 'the timeline stayed where the reader was').toBeLessThan(40)
     // Words typed and left stay the question's: the open card holds them too.
     await clickInPlace(page, box)
     await page.keyboard.type('half a follow-up')
