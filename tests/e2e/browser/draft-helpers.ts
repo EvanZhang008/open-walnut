@@ -1044,13 +1044,29 @@ export async function draftEngineButton(page: Page, panel: Locator, engineId: st
   await expect(picker).toBeVisible({ timeout: 10_000 })
   const button = picker.locator(`.provider-rail-item[data-provider="${engineId}"]`)
   await expect(button).toBeVisible({ timeout: 15_000 })
+  // The picker is placed up from the pill and re-placed when its content grows: an ACP
+  // engine's pane opens on "Loading <engine> models…" and the list that replaces it moves the
+  // whole picker, rail included. A click aimed during that move presses on one spot and
+  // releases on another, so no click fires (the draft opened on a folder whose remembered
+  // engine is an ACP one, which a parallel spec's launch writes). Wait for the pane to settle.
+  await waitForModelPickerSettled(picker)
   return button
+}
+
+/** The picker's ACP pane has its list (no "Loading <engine> models…"), so the picker is not
+ *  about to be re-placed under the pointer. */
+async function waitForModelPickerSettled(picker: Locator): Promise<void> {
+  await expect(picker.locator('.model-picker-status', { hasText: /^Loading .* models/ })).toHaveCount(0, { timeout: 30_000 })
 }
 
 /** Close the composer model picker with its × and wait until it is gone. */
 export async function closeDraftModelPicker(page: Page): Promise<void> {
   const picker = draftModelPicker(page)
-  if (await picker.count()) await picker.locator('.model-picker-close').click()
+  if (await picker.count()) {
+    // A pick just made may have started the new engine's model list loading: the × moves with it.
+    await waitForModelPickerSettled(picker)
+    await picker.locator('.model-picker-close').click()
+  }
   await expect(picker).toHaveCount(0)
 }
 

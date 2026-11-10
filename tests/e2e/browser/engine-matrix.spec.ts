@@ -90,11 +90,21 @@ async function openDraftWithEngine(page: Page, cwd: string, id: string): Promise
 
   // Exact id (`data-provider`), so a short id ("pi") can never ride inside
   // another engine's name the day one is added.
-  const button = await draftEngineButton(page, panel, id)
+  let button = await draftEngineButton(page, panel, id)
   // Unlocked = the catalog reports it installed AND the picked host is local; a
   // locked button here would mean the fixture's probe override never applied.
   await expect(button).not.toHaveClass(/provider-rail-item-locked/)
   await expect(button).not.toHaveAttribute('aria-disabled', 'true')
+  // The folder is shared with every parallel spec, and the folder pick applies its launch
+  // memory: the engine (and model) of the last launch there. When that already is this
+  // engine the click below would change nothing and the remembered model would ride the
+  // launch, so step to Claude Code first: the pick under test is always a real switch.
+  if (await button.getAttribute('aria-selected') === 'true') {
+    const claude = await draftEngineButton(page, panel, 'claude')
+    await claude.click()
+    await expect(claude).toHaveAttribute('aria-selected', 'true')
+    button = await draftEngineButton(page, panel, id)
+  }
   await button.click()
   await expect(button).toHaveAttribute('aria-selected', 'true')
   await closeDraftModelPicker(page)
