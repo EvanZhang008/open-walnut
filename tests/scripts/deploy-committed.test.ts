@@ -3,7 +3,7 @@
  * it clones the commit into a temp dir, links the checkout's dependencies (the
  * npm workspace packages excepted: those must be the committed ones), and runs
  * the clone's dev-prod.sh with WALNUT_DEVPROD_SERVE_ROOT pointing back at the
- * checkout. Pinned here against a throwaway repo whose dev-prod.sh is a stub that
+ * checkout. The tests below turn the deploy's node_modules mirror off unless they pin it. Pinned here against a throwaway repo whose dev-prod.sh is a stub that
  * reports what it saw, so nothing is built and no server is touched.
  */
 import { afterEach, describe, expect, it } from 'vitest'
@@ -82,7 +82,7 @@ function run(f: ReturnType<typeof fixture>, env: Record<string, string> = {}, ar
     encoding: 'utf-8',
     // Never read the real production server: a config file stands in for it. The deploy
     // itself, not its queue (tests/scripts/deploy-queue.test.ts), is what these pin.
-    env: { ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_TEST_REPORT: f.report, WALNUT_DEPLOY_CONFIG_URL: `file://${f.tmp}/no-config.json`, WALNUT_DEPLOY_QUEUE: '0', ...env },
+    env: { ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_TEST_REPORT: f.report, WALNUT_DEPLOY_CONFIG_URL: `file://${f.tmp}/no-config.json`, WALNUT_DEPLOY_QUEUE: '0', WALNUT_DEPLOY_DEPS_MIRROR: '0', WALNUT_DEPLOY_DEPS_DIR: path.join(f.tmp, '..', 'deps'), ...env },
   })
   const report = fs.existsSync(f.report)
     ? Object.fromEntries(fs.readFileSync(f.report, 'utf-8').trim().split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]))
@@ -114,6 +114,98 @@ describe('deploy-committed.sh', () => {
     expect(fs.readFileSync(path.join(f.repo, 'app.txt'), 'utf-8')).toBe('half-written app\n')
     expect(git(f.repo, 'status', '--porcelain')).toBe('M app.txt\n M packages/lib/index.js'.trim())
     expect(git(f.repo, 'worktree', 'list').split('\n')).toHaveLength(1)
+  })
+
+  // bun and esbuild read every package.json above a dependency's real path, so a link into the
+  // checkout made its own package.json part of the build: one left mid-merge failed every deploy
+  // (2026-11-10). Where the volume clones files (macOS), dependencies come from the deploy's mirror.
+  const clones = process.platform === 'darwin'
+  it('takes dependencies from its own copy-on-write mirror, so a checkout mid-merge cannot break the build', () => {
+    const f = fixture()
+    fs.writeFileSync(path.join(f.repo, 'package.json'), '<<<<<<< HEAD\n{"name":"open-walnut"}\n=======\n{}\n>>>>>>> theirs\n')
+    const deps = path.join(f.tmp, '..', 'deps')
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', WALNUT_DEPLOY_DEPS_MIRROR: '1' })
+    expect(r.status).toBe(0)
+    const rep = r.report!
+    expect(rep.ws).toBe(path.join(rep.here, 'packages', 'lib'))
+    if (!clones && !r.stdout.includes('Copying')) {
+      expect(r.stdout).toContain('No copy-on-write mirror of node_modules here')
+      return
+    }
+    const [key] = fs.readdirSync(deps).filter((n) => !n.startsWith('.'))
+    const mirror = path.join(fs.realpathSync(deps), key)
+    for (const p of [rep.dep, rep.scoped_dep, rep.web_dep]) {
+      expect(p.startsWith(mirror + '/')).toBe(true)
+      expect(p.startsWith(f.repo + '/')).toBe(false)
+    }
+    // The directory above the mirror's node_modules holds a package.json that parses.
+    expect(JSON.parse(fs.readFileSync(path.join(mirror, 'package.json'), 'utf-8'))).toEqual({ private: true })
+    expect(JSON.parse(fs.readFileSync(path.join(mirror, 'web', 'package.json'), 'utf-8'))).toEqual({ private: true })
+    // The checkout itself is untouched.
+    expect(fs.readFileSync(path.join(f.repo, 'package.json'), 'utf-8')).toContain('<<<<<<< HEAD')
+  })
+
+  it('copies the mirror once per install, and drops an old one once unused for two hours', () => {
+    if (!clones) return
+    const f = fixture()
+    const deps = path.join(f.tmp, '..', 'deps')
+    const env = { WALNUT_DEVPROD_DRY_RUN: '1', WALNUT_DEPLOY_DEPS_MIRROR: '1' }
+    const mirrors = () => fs.readdirSync(deps).filter((n) => /^[0-9a-f]{16}$/.test(n)).sort()
+    const first = run(f, env)
+    expect(first.status).toBe(0)
+    expect(first.stdout).toContain('Copying this checkout')
+    const [k1] = mirrors()
+    const again = run(f, env)
+    expect(again.status).toBe(0)
+    expect(again.stdout).not.toContain('Copying this checkout')
+    expect(mirrors()).toEqual([k1])
+    // An install changes what the checkout holds: a new mirror; the old one stays while recent.
+    fs.mkdirSync(path.join(f.repo, 'node_modules', 'rightpad'))
+    fs.writeFileSync(path.join(f.repo, 'node_modules', 'rightpad', 'package.json'), '{"name":"rightpad"}')
+    const third = run(f, env)
+    expect(third.status).toBe(0)
+    expect(third.stdout).toContain('Copying this checkout')
+    expect(mirrors()).toHaveLength(2)
+    const k2 = mirrors().find((k) => k !== k1)!
+    expect(fs.existsSync(path.join(deps, k2, 'node_modules', 'rightpad', 'package.json'))).toBe(true)
+    // Unused for over two hours: the next deploy removes it, and nothing it does not own.
+    const old = (Date.now() - 3 * 3600_000) / 1000
+    fs.utimesSync(path.join(deps, k1), old, old)
+    fs.mkdirSync(path.join(deps, 'not-a-mirror'))
+    fs.utimesSync(path.join(deps, 'not-a-mirror'), old, old)
+    expect(run(f, env).status).toBe(0)
+    expect(mirrors()).toEqual([k2])
+    expect(fs.existsSync(path.join(deps, 'not-a-mirror'))).toBe(true)
+  })
+
+  it('loading a dependency fails on a checkout mid-merge with the links, and builds with the mirror', () => {
+    if (!clones) return
+    const stub = `#!/usr/bin/env bash
+# knows WALNUT_DEVPROD_SERVE_ROOT
+set -uo pipefail
+here="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd -P)"
+out="$(cd "$here" && bun -e "console.log(require('leftpad'))" 2>&1)"; rc=$?
+{ echo "rc=$rc"; echo "out=$(printf '%s' "$out" | tr '\\n' ' ')"; } > "$WALNUT_TEST_REPORT"
+`
+    const f = fixture({ stub })
+    fs.writeFileSync(path.join(f.repo, 'node_modules', 'leftpad', 'package.json'), '{"name":"leftpad","main":"index.js"}')
+    fs.writeFileSync(path.join(f.repo, 'node_modules', 'leftpad', 'index.js'), 'module.exports = "padded"\n')
+    fs.writeFileSync(path.join(f.repo, 'package.json'), '<<<<<<< HEAD\n{"name":"open-walnut"}\n=======\n{}\n>>>>>>> theirs\n')
+    const linked = run(f, { WALNUT_DEVPROD_DRY_RUN: '1' })
+    // bun reads the checkout's package.json above the linked package's real path.
+    expect(linked.report!.out).toMatch(/<<<<<<<|not allowed in JSON|Expected/)
+    const mirrored = run(f, { WALNUT_DEVPROD_DRY_RUN: '1', WALNUT_DEPLOY_DEPS_MIRROR: '1' })
+    expect(mirrored.report!.out).not.toMatch(/<<<<<<<|not allowed in JSON|Expected/)
+    expect(mirrored.report!.out).toContain('padded')
+    expect(mirrored.report!.rc).toBe('0')
+  })
+
+  it('links the checkout\'s node_modules as before when the mirror is off', () => {
+    const f = fixture()
+    const r = run(f, { WALNUT_DEVPROD_DRY_RUN: '1' })
+    expect(r.status).toBe(0)
+    expect(r.report!.dep).toBe(path.join(f.repo, 'node_modules', 'leftpad'))
+    expect(fs.existsSync(path.join(f.tmp, '..', 'deps'))).toBe(false)
   })
 
   it('copies the checkout\'s built SQLite into the clone, so a deploy never downloads it again', () => {

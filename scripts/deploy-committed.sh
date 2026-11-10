@@ -131,13 +131,96 @@ if ! grep -q 'WALNUT_DEVPROD_SERVE_ROOT' "$BUILD/scripts/dev-prod.sh"; then
   exit 1
 fi
 
+# Dependencies come from the deploy's own copy-on-write mirror of this checkout's
+# node_modules, never from links into the checkout: bun and esbuild resolve a linked
+# package to its real path and read every package.json above it, so the checkout's own
+# package.json joined every build, and one left mid-merge (conflict markers) failed every
+# deploy (2026-11-10). The mirror is copied again only when the checkout's install changed,
+# and older ones go once unused for two hours. Where the volume cannot clone files, or
+# WALNUT_DEPLOY_DEPS_MIRROR=0, the build links the checkout's node_modules as before.
+deps_src="$SERVE_ROOT"
+deps_root="${WALNUT_DEPLOY_DEPS_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/open-walnut-deploy-deps}"
+if [[ "$BUILD" == "${rehearsal_dir%/}"/open-walnut-build.* ]]; then deps_root="${rehearsal_dir%/}/deploy-deps"; fi
+deps_key() { # what this checkout has installed, as a short hash
+  (cd "$BUILD" && "${JS_RUN[@]}" "$SERVE_ROOT" <<'JS'
+const fs = require('fs')
+const path = require('path')
+const crypto = require('crypto')
+const [root] = process.argv.slice(2)
+const h = crypto.createHash('sha256')
+const list = (d) => { try { return fs.readdirSync(d).sort() } catch { return [] } }
+const at = (p) => { try { return String(fs.statSync(p).mtimeMs) } catch { return '' } }
+for (const nm of ['node_modules', 'web/node_modules']) {
+  const dir = path.join(root, nm)
+  for (const n of list(dir)) {
+    for (const e of n.startsWith('@') ? list(path.join(dir, n)).map((c) => `${n}/${c}`) : [n]) {
+      // The package's directory too: an install that replaces or adds files moves it.
+      h.update(`${nm}/${e} ${at(path.join(dir, e))} ${at(path.join(dir, e, 'package.json'))}\n`)
+    }
+  }
+}
+for (const f of ['bun.lock', 'web/bun.lock']) { try { h.update(fs.readFileSync(path.join(root, f))) } catch {} }
+// Patched dependencies change files inside a package, not its package.json.
+for (const f of list(path.join(root, 'patches'))) { try { h.update(fs.readFileSync(path.join(root, 'patches', f))) } catch {} }
+process.stdout.write(h.digest('hex').slice(0, 16))
+JS
+  )
+}
+dev_of() { if [[ "$(uname -s)" == Darwin ]]; then stat -f %d "$1"; else stat -c %d "$1"; fi; }
+clone_tree() { # copy-on-write copy of a directory tree, or fail
+  if [[ "$(uname -s)" == Darwin ]]; then cp -c -R "$1" "$2"; else cp -a --reflink=always "$1" "$2"; fi
+}
+mirror_deps() {
+  local key dir tmp old pid probe
+  [[ -d "$SERVE_ROOT/node_modules" ]] || return 1
+  mkdir -p "$deps_root" || return 1
+  # Only a clone on the same volume costs no disk: macOS cp -c copies in full across volumes,
+  # and a volume that cannot clone would copy 2 GB. One small file proves it can.
+  [[ "$(dev_of "$deps_root")" == "$(dev_of "$SERVE_ROOT/node_modules")" ]] || return 1
+  probe="$deps_root/.probe.$$"
+  if [[ "$(uname -s)" != Darwin ]]; then
+    cp --reflink=always "$SERVE_ROOT/package.json" "$probe" 2>/dev/null || { rm -f "$probe"; return 1; }
+    rm -f "$probe"
+  fi
+  key="$(deps_key)" && [[ "$key" =~ ^[0-9a-f]{16}$ ]] || return 1
+  dir="$deps_root/$key"
+  for old in "$deps_root"/.copy.*; do   # a copy a killed deploy left
+    pid="${old##*.copy.}"
+    [[ -d "$old" && "$pid" =~ ^[0-9]+$ ]] && ! kill -0 "$pid" 2>/dev/null && rm -rf "$old"
+  done
+  if [[ ! -d "$dir/node_modules" ]]; then
+    tmp="$deps_root/.copy.$$"; rm -rf "$tmp"; mkdir -p "$tmp/web"
+    echo "Copying this checkout's node_modules into the deploy's own mirror (copy-on-write, once per install): $dir"
+    if ! clone_tree "$SERVE_ROOT/node_modules" "$tmp/node_modules" 2>/dev/null \
+      || { [[ -d "$SERVE_ROOT/web/node_modules" ]] && ! clone_tree "$SERVE_ROOT/web/node_modules" "$tmp/web/node_modules" 2>/dev/null; } \
+      || [[ "$(deps_key)" != "$key" ]]; then   # it failed, or an install ran during the copy
+      rm -rf "$tmp"; return 1
+    fi
+    printf '{"private":true}\n' > "$tmp/package.json" && printf '{"private":true}\n' > "$tmp/web/package.json" \
+      && [[ -s "$tmp/package.json" && -s "$tmp/web/package.json" ]] || { rm -rf "$tmp"; return 1; }
+    if [[ -e "$dir" ]]; then rm -rf "$tmp"; else mv "$tmp" "$dir" || { rm -rf "$tmp"; return 1; }; fi
+    rm -rf "$dir/.copy.$$"   # another deploy made the same mirror first: mv put ours inside it
+  fi
+  touch "$dir"
+  # Older mirrors go once nothing has used them for two hours: a deploy that bypasses the
+  # queue (a dry run, WALNUT_DEVPROD_FORCE) may still be building from one.
+  for old in "$deps_root"/*; do
+    [[ "$old" != "$dir" && -d "$old" && "${old##*/}" =~ ^[0-9a-f]{16}$ ]] || continue
+    [[ -n "$(find "$old" -maxdepth 0 -mmin +120 2>/dev/null)" ]] && rm -rf "$old"
+  done
+  deps_src="$dir"
+}
+if [[ "${WALNUT_DEPLOY_DEPS_MIRROR:-1}" != 0 ]] && ! mirror_deps; then
+  echo "No copy-on-write mirror of node_modules here; linking the checkout's node_modules (a package.json there that does not parse fails the build)."
+fi
+
 # Dependencies: every top-level entry of this checkout's node_modules is linked,
 # except the workspace packages, which must be the COMMITTED ones in the
 # clone (this checkout's links point at its own, possibly edited, packages/).
 # It prints each dependency the commit declares that the checkout has not
 # installed (a commit that adds one lands before anyone runs bun install here;
 # 2026-11-03: the web type-check then failed on a missing module).
-missing="$("${JS_RUN[@]}" "$SERVE_ROOT/node_modules" "$BUILD/node_modules" "$BUILD" <<'JS'
+missing="$(cd "$BUILD" && "${JS_RUN[@]}" "$deps_src/node_modules" "$BUILD/node_modules" "$BUILD" <<'JS'
 const fs = require('fs')
 const path = require('path')
 const [src, dst, build] = process.argv.slice(2)
@@ -174,8 +257,8 @@ if (fs.existsSync(path.join(webDir, 'package.json'))) out.push(...lacks(webDir, 
 process.stdout.write(out.join('\n'))
 JS
 )"
-if [[ -d "$SERVE_ROOT/web/node_modules" ]]; then
-  ln -s "$SERVE_ROOT/web/node_modules" "$BUILD/web/node_modules"
+if [[ -d "$deps_src/web/node_modules" ]]; then
+  ln -s "$deps_src/web/node_modules" "$BUILD/web/node_modules"
 fi
 # A dependency the commit needs and the checkout lacks: install the commit's own
 # lockfile into the clone instead of linking, never into the shared checkout.
