@@ -1,8 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
-index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..7b232fe72dc1a1b653db048eae0ce02133a754a0 100755
+index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..0b3dca4cd9338e05050ad1a4bc47d43c2da30cee 100755
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -22065,14 +22065,133 @@ var Logger = class {
+@@ -22065,14 +22065,146 @@ var Logger = class {
  var logger = new Logger();
  
  // src/CodexJsonRpcConnection.ts
@@ -46,6 +46,14 @@ index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..7b232fe72dc1a1b653db048eae0ce021
 +  }
 +  return args;
 +}
++// Walnut: where the model catalog lives, a state dir that outlives the session (the
++// app-server rereads it each turn). WALNUT_CODEX_CATALOG_DIR names another.
++function walnutCodexCatalogDir(os2) {
++  const named = process.env["WALNUT_CODEX_CATALOG_DIR"];
++  if (named) return named;
++  const state = process.env["XDG_STATE_HOME"] || path.join(os2.homedir(), ".local", "state");
++  return path.join(state, "open-walnut", "codex-models");
++}
 +// Walnut: an endpoint whose model ids carry a prefix (env WALNUT_CODEX_MODEL_PREFIX)
 +// gets a model catalog for those ids, read from this Codex itself (`codex debug
 +// models`), so Codex knows each model's metadata (reasoning levels, context window,
@@ -71,7 +79,12 @@ index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..7b232fe72dc1a1b653db048eae0ce021
 +    });
 +    if (models.length === 0) return [];
 +    const body = JSON.stringify({ ...listed, models });
-+    const file = path.join(os2.tmpdir(), `walnut-codex-models-${createHash("sha256").update(body).digest("hex").slice(0, 16)}.json`);
++    // Not the OS temp dir: the app-server reads this file again on every turn, and macOS
++    // purges its per-user temp dir under disk pressure, which failed every Codex turn with
++    // "failed to load configuration: No such file or directory" (2026-11-10).
++    const dir = walnutCodexCatalogDir(os2);
++    fs.mkdirSync(dir, { recursive: true, mode: 448 });
++    const file = path.join(dir, `walnut-codex-models-${createHash("sha256").update(body).digest("hex").slice(0, 16)}.json`);
 +    if (!fs.existsSync(file)) {
 +      // A catalog this Codex cannot read ends its app-server, so it is tried first and kept only when it loads.
 +      const tmp = `${file}.${process.pid}.tmp`;
@@ -139,7 +152,7 @@ index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..7b232fe72dc1a1b653db048eae0ce021
    }
    attachLogs(codex);
    const reader = createJSONRPCReader(codex.stdout);
-@@ -32728,7 +32847,10 @@ function startAcpServer() {
+@@ -32728,7 +32860,10 @@ function startAcpServer() {
      authRequest: authRequestString ?? null,
      defaultAuthRequest: defaultAuthRequest ?? null
    });

@@ -342,6 +342,14 @@ process.stdin.resume(); process.stdin.on('end', () => process.exit(0))
     expect(argv.some((a) => a.startsWith('model_catalog_json='))).toBe(false)
   }, 30_000)
 
+  it('WALNUT_CODEX_CATALOG_DIR names where the catalog lives', async () => {
+    const place = path.join(dir, 'catalogs')
+    const argv = appServer(await runAdapter(resolveCodexAdapterConfig({ engines: { codex: { provider: { ...PROXY, model_prefix: 'vendor.' } } } }, undefined), { WALNUT_CODEX_MODEL_PREFIX: 'vendor.', WALNUT_CODEX_CATALOG_DIR: place }))
+    const file = JSON.parse(argv.find((a) => a.startsWith('model_catalog_json='))!.slice('model_catalog_json='.length)) as string
+    expect(path.dirname(file)).toBe(place)
+    expect(fs.existsSync(file)).toBe(true)
+  }, 30_000)
+
   it('with a model prefix, Codex gets a catalog of its own models under the prefixed ids, so no fallback metadata', async () => {
     const runs = await runAdapter(resolveCodexAdapterConfig({ engines: { codex: { provider: { ...PROXY, model_prefix: 'vendor.' } } } }, undefined), { WALNUT_CODEX_MODEL_PREFIX: 'vendor.' })
     // The catalog is read through the same provider the sessions use.
@@ -350,7 +358,9 @@ process.stdin.resume(); process.stdin.on('end', () => process.exit(0))
     const argv = appServer(runs)
     const arg = argv.find((a) => a.startsWith('model_catalog_json='))!
     const file = JSON.parse(arg.slice('model_catalog_json='.length)) as string
-    expect(path.dirname(fs.realpathSync(file))).toBe(fs.realpathSync(dir))
+    // A state dir, never the OS temp dir: the app-server rereads it on every turn, and macOS
+    // purges its temp dir (2026-11-10: every Codex turn failed "failed to load configuration").
+    expect(path.dirname(fs.realpathSync(file))).toBe(fs.realpathSync(path.join(dir, 'home', '.local', 'state', 'open-walnut', 'codex-models')))
     const written = JSON.parse(fs.readFileSync(file, 'utf8')) as { models: Array<Record<string, unknown>> }
     expect(written.models.map((m) => m.slug)).toEqual(['vendor.gpt-example', 'vendor.gpt-other', 'vendor.gpt-hidden'])
     // Tools sent as tools (no tool mode, no responses-lite), the rest of the metadata kept.
