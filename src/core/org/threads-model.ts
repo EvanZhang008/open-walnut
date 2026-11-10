@@ -544,6 +544,10 @@ export function recentConversation(file: ThreadsFile, at: string, within = SAME_
     }
   }
   if (!best || !Number.isFinite(now) || now - best.ms > within || now < best.ms - 60_000) return undefined;
+  // The node opened a thread of its own since: the conversation moved on to it, so his next
+  // message is not joined to the one before.
+  const since = best.ms;
+  if (file.threads.some((t) => t.opener && Date.parse(t.opener.at) > since)) return undefined;
   return isOpen(best.t) ? best.t : undefined;
 }
 

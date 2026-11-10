@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  emptyThreads, fileMessage, FOLLOW_UP_REOPENS_MS, SAME_CONVERSATION_MS, updateThread, type ThreadsFile,
+  emptyThreads, fileMessage, FOLLOW_UP_REOPENS_MS, openThread, SAME_CONVERSATION_MS, updateThread, type ThreadsFile,
 } from '../../../src/core/org/threads-model.js'
 import { threadHintText, type ThreadHintState } from '../../../src/core/org/thread-capture.js'
 
@@ -74,6 +74,12 @@ describe('a chat message right after his last one', () => {
     expect(fileMessage(f, { text: 'raw store call', via: 'chat', at: at(20_000) }).created).toBe(true)
     // A letter's note keeps its own way.
     expect(fileMessage(f, { text: 'note', via: 'letter', joinRecent: SAME_CONVERSATION_MS, at: at(20_000) }).created).toBe(true)
+  })
+
+  it('a thread the node opened after his last message ends that conversation', () => {
+    const { f } = one('subject one')
+    const opened = openThread(f, { title: 'Learning budget', text: 'Decide: let it lapse?', from: 'node', user_kind: 'user_own', user_kind_why: 'His own benefit and his own call' }, 'task:vp', at(30_000)).file
+    expect(fileMessage(opened, { text: 'close this thread', via: 'chat', joinRecent: SAME_CONVERSATION_MS, at: at(60_000) }).created).toBe(true)
   })
 
   it('the node is told where it went and how to split it out', () => {
