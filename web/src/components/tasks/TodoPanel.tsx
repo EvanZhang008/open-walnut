@@ -1,6 +1,7 @@
 import { matchParentRef, refNamesId } from '../../../../src/lib/id-ref';
 import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
+import { manualMoved, orderToDraw } from './draw-order';
 import { useDraft } from '@/hooks/useDraft';
 import { useIntegrations } from '@/hooks/useIntegrations';
 import { draftKey } from '@/utils/drafts';
@@ -5391,8 +5392,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Only the POSITION (sort order) is debounced by 3s on reorder-only changes.
   const [sortOrder, setSortOrder] = useState<string[]>(() => computeSortOrder(filtered));
   // The sort settings the current order was computed with (computeSortOrder is rebuilt
-  // exactly when sortBy, groupBy or a project's own order changes).
+  // exactly when sortBy, groupBy or a project's own order changes). The ref is the effect's;
+  // the state is the render's, which draws the new order before the effect takes it.
   const sortSettingsRef = useRef(computeSortOrder);
+  const [sortedWith, setSortedWith] = useState(() => computeSortOrder);
   const prevFilteredIdsRef = useRef<Set<string>>(new Set(filtered.map((t) => t.id)));
   // Equality check for sort order — prevents no-op re-renders when task data changes
   // but the sorted order is identical (e.g. focus_tier change doesn't affect sort position).
@@ -5403,8 +5406,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
   }, []);
 
+  // The order the tasks sort to now. The effect below decides when `sortOrder` takes it; the
+  // render draws it at once for every change the effect takes at once (orderToDraw).
+  const liveOrder = useMemo(() => computeSortOrder(filtered), [computeSortOrder, filtered]);
+  // Manual order: store order IS the truth, so a change among manually ordered
+  // tasks (a drag, Move up) lands at once. Projects can mix modes, hence the projection.
+  const manualIds = useMemo(
+    () => new Set(filtered.filter((t) => sortForProject(t.project || '') === 'manual').map((t) => t.id)),
+    [filtered, sortForProject],
+  );
+
   useEffect(() => {
-    const newOrder = computeSortOrder(filtered);
+    const newOrder = liveOrder;
 
     // Sort settings changed or structural change (IDs added/removed): flush immediately
     const currIds = new Set(filtered.map((t) => t.id));
@@ -5412,29 +5425,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const structural = currIds.size !== prevIds.size || !filtered.every((t) => prevIds.has(t.id));
     if (sortSettingsRef.current !== computeSortOrder || structural) {
       sortSettingsRef.current = computeSortOrder;
+      setSortedWith(() => computeSortOrder);
       prevFilteredIdsRef.current = currIds;
       stableSortUpdate(newOrder);
       return;
     }
     prevFilteredIdsRef.current = currIds;
 
-    // Manual order: store order IS the truth, so a change among manually ordered
-    // tasks (a drag, Move up) lands at once. A stray debounced re-sort must never
-    // override the user's drag result. Projects can mix modes, hence the projection.
-    const manualIds = new Set(filtered.filter((t) => sortForProject(t.project || '') === 'manual').map((t) => t.id));
-    if (manualIds.size > 0) {
-      setSortOrder((prev) => {
-        const was = prev.filter((id) => manualIds.has(id));
-        const now = newOrder.filter((id) => manualIds.has(id));
-        const moved = was.length !== now.length || was.some((id, i) => id !== now[i]);
-        return moved ? newOrder : prev;
-      });
-    }
+    // A stray debounced re-sort must never override the user's drag result.
+    if (manualIds.size > 0) setSortOrder((prev) => (manualMoved(prev, newOrder, manualIds) ? newOrder : prev));
 
     // Same set of tasks, just reordered (e.g. priority change): debounce 3s
     const timer = setTimeout(() => stableSortUpdate(newOrder), 3000);
     return () => clearTimeout(timer);
-  }, [filtered, computeSortOrder, sortForProject, stableSortUpdate]);
+  }, [filtered, liveOrder, computeSortOrder, manualIds, stableSortUpdate]);
 
   // --- Combine: latest task data arranged in deferred sort order ---
   // This ensures badges/fields update INSTANTLY while position delays.
@@ -5442,17 +5446,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const taskById = new Map(filtered.map((t) => [t.id, t]));
     const result: Task[] = [];
     const emitted = new Set<string>();
-    // Emit tasks in deferred sort order (stale position), using fresh task objects
-    for (const id of sortOrder) {
+    // Emit tasks in deferred sort order (stale position), using fresh task objects, or in the live
+    // order for a change the list takes at once: new sort settings, a task that arrived or left,
+    // a manual reorder (see orderToDraw).
+    const order = orderToDraw(sortOrder, liveOrder, { settingsChanged: sortedWith !== computeSortOrder, manual: manualIds });
+    for (const id of order) {
       const task = taskById.get(id);
       if (task) { result.push(task); emitted.add(id); }
     }
-    // Append any new tasks not yet in sortOrder (just added)
+    // A task the order leaves out (a parent cycle) is still drawn, last.
     for (const task of filtered) {
       if (!emitted.has(task.id)) result.push(task);
     }
     return result;
-  }, [filtered, sortOrder]);
+  }, [filtered, sortOrder, liveOrder, sortedWith, computeSortOrder, manualIds]);
   const sorted = usePhoneHomeList(sortedLive, tasks);
 
   // Projects created THIS session via the bottom "New Project" row. They have
