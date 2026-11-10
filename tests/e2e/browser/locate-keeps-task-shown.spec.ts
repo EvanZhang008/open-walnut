@@ -160,8 +160,10 @@ test.describe('Flat', () => {
     const stamp = Date.now()
     await openHome(page)
     await expect(statusSectionToggle(page, 'waiting')).toHaveAttribute('aria-expanded', 'false', { timeout: 30_000 })
-    // Made and parked outside the page, located before (or as) the page hears of it.
-    const id = await seed(request, `locate late ${stamp}`, { project: `LocateLate${stamp}`, phase: 'WAITING' })
+    // Made and parked outside the page, located before (or as) the page hears of it. The park is a
+    // PATCH: a create takes no phase, so a new task is TODO, which reads Not started since ebff4795a
+    // (it read Waiting before, which is why a `phase` in the create body used to look like a park).
+    const id = await seed(request, `locate late ${stamp}`, { project: `LocateLate${stamp}` }, { phase: 'WAITING' })
     await locate(page, id)
     await expectShownAndSelected(page, id)
     await expect(statusSectionToggle(page, 'waiting')).toHaveAttribute('aria-expanded', 'true')
