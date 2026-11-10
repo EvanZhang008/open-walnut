@@ -36,7 +36,7 @@ type ServerWebKit = { new (): { _prepareToLaunch(options?: Record<string, unknow
 /** Stands in for lib/server/webkit/webkit.js: picks the installed build's pw_run.sh, as Playwright does. */
 const FAKE_SERVER = (pwRun: string) => `class BrowserType { async _prepareToLaunch(options) {
   return { executable: (options && options.executablePath) || ${JSON.stringify(pwRun)}, browserArguments: ['--headless'] } } }
-class WebKit extends BrowserType {}
+class WebKit extends BrowserType { amendEnvironment(env) { return { ...env, CURL: 'x' } } }
 module.exports = { WebKit }
 `
 
@@ -92,6 +92,23 @@ describe('a Mac WebKit test browser starts through the no-activation runner', ()
     const linux = setup('linux')
     expect(linux.preload.quietWebkitServer(linux.server)).toBe(false)
     expect((await new linux.server.WebKit()._prepareToLaunch({})).executable).toBe(path.join(linux.browser, 'pw_run.sh'))
+  })
+
+  it('a launch through the private pasteboard runner loads the no-activation library too', async () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' })
+    const s = setup('pasteboard')
+    s.preload.quietWebkitServer(s.server)
+    type Amend = (env: Record<string, string>, dir: string, persistent: boolean, options: Record<string, unknown>) => Record<string, string>
+    const amend = (new s.server.WebKit() as unknown as { amendEnvironment: Amend }).amendEnvironment.bind(new s.server.WebKit())
+    const runner = path.join(ROOT, 'tests/e2e/browser/pw-pasteboard/run-webkit.sh')
+    const env = amend({ WALNUT_PW_PASTEBOARD_DYLIB: '/pb.dylib', KEEP: '1' }, '/data', false, { executablePath: runner })
+    expect(env).toEqual({ WALNUT_PW_PASTEBOARD_DYLIB: `/pb.dylib:${s.lib}`, KEEP: '1', CURL: 'x' })
+    // Once only, and nothing for a launch without that runner.
+    expect(amend(env, '/data', false, { executablePath: runner }).WALNUT_PW_PASTEBOARD_DYLIB).toBe(`/pb.dylib:${s.lib}`)
+    expect(amend({ KEEP: '1' }, '/data', false, {})).toEqual({ KEEP: '1', CURL: 'x' })
+    // The runner itself hands both to the browser.
+    const out = execFileSync(runner, ['--headless'], { encoding: 'utf8', env: { ...process.env, WALNUT_PW_WEBKIT_RUN: path.join(s.browser, 'pw_run.sh'), WALNUT_PW_PASTEBOARD_DYLIB: env.WALNUT_PW_PASTEBOARD_DYLIB } })
+    expect(out.split('|')[0]).toBe(`/pb.dylib:${s.lib}`)
   })
 
   it('with no library and no tools to build one, the launch goes on as it was, with one warning', async () => {

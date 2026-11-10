@@ -70,8 +70,11 @@ describe('a WebKit test browser on a Mac has its own pasteboard', () => {
 
   it('pw-silence, which every Playwright config imports, applies it to WebKit', () => {
     const src = fs.readFileSync(path.join(__dirname, '../e2e/browser/pw-silence.ts'), 'utf8')
-    const tail = src.slice(src.lastIndexOf('} catch (e) {'))
-    expect(tail, 'the guard is installed outside the silencer try, so it cannot fail quietly').toMatch(/guardWebkitPasteboard\(core\.webkit/)
+    // After the silencer's own catch, and in no try after it.
+    const tail = src.slice(src.indexOf('could not silence test browsers'))
+    const guard = tail.search(/guardWebkitPasteboard\(core\.webkit/)
+    expect(guard, 'the guard is installed outside the silencer try, so it cannot fail quietly').toBeGreaterThan(0)
+    expect(tail.slice(0, guard), 'and outside any later try').not.toMatch(/\btry \{/)
   })
 
   it.skipIf(process.platform !== 'darwin')('on a Mac, the library redirects the general pasteboard and the real one is untouched', () => {
