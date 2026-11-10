@@ -220,16 +220,28 @@ final class OrgThreadsStoreRulesTests: XCTestCase {
         XCTAssertTrue(code.contains(".refreshable { await store.refresh() }"), "the native pull uses the cancellation-independent read")
     }
 
-    func testAnUnavailablePrimaryNamesTheCloudToMacReadAndKeepsTheCopy() {
-        let cause = APIError.server(status: 503, code: "primary_only", message: "Primary not answering", serverHash: nil, serverContent: nil)
-        for fromCache in [false, true] {
-            let message = OrgThreadsStore.readError(hasThreads: true, fromCache: fromCache, cause: cause)
-            XCTAssertTrue(message.contains("cloud companion"))
-            XCTAssertTrue(message.contains("your Mac"))
-            XCTAssertTrue(message.contains("not been refreshed"))
-            XCTAssertTrue(message.contains("automatically"))
+    /// Every replica answers primary_only in its own words (src/web/routes/org-threads-v1.ts
+    /// primaryOnly): the companion and a host replica alike, so the phone names neither itself.
+    func testAnUnavailablePrimaryNamesTheReplicaThatCouldNotReachTheMacAndKeepsTheCopy() {
+        let replicas = [
+            "The cloud companion could not get the threads from your Mac just now.",
+            "The Walnut server on Dev Box could not get the threads from your Mac just now.",
+        ]
+        for sentence in replicas {
+            let cause = APIError.server(status: 503, code: "primary_only", message: sentence, serverHash: nil, serverContent: nil)
+            for fromCache in [false, true] {
+                let message = OrgThreadsStore.readError(hasThreads: true, fromCache: fromCache, cause: cause)
+                XCTAssertTrue(message.hasPrefix(sentence), message)
+                XCTAssertTrue(message.contains("not been refreshed"))
+                XCTAssertTrue(message.contains("automatically"))
+            }
+            XCTAssertFalse(OrgThreadsStore.readError(hasThreads: false, fromCache: false, cause: cause).contains("shown here"))
         }
-        XCTAssertFalse(OrgThreadsStore.readError(hasThreads: false, fromCache: false, cause: cause).contains("shown here"))
+        // An older server's sentence with no stop, and one with none at all.
+        let bare = APIError.server(status: 503, code: "primary_only", message: "this server could not reach the primary", serverHash: nil, serverContent: nil)
+        XCTAssertTrue(OrgThreadsStore.readError(hasThreads: false, fromCache: false, cause: bare).hasPrefix("this server could not reach the primary. It will"))
+        let empty = APIError.server(status: 503, code: "primary_only", message: "  ", serverHash: nil, serverContent: nil)
+        XCTAssertTrue(OrgThreadsStore.readError(hasThreads: false, fromCache: false, cause: empty).hasPrefix("Walnut couldn't reach your Mac"))
         XCTAssertEqual(OrgThreadsStore.readError(hasThreads: true, fromCache: false, cause: .unauthorized), "Couldn't refresh the threads.")
     }
 

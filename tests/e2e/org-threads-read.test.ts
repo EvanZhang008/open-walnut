@@ -10,7 +10,7 @@
  *   2. `open=1` and `closed=1` split the list, `limit` keeps the newest, `answer_max` cuts each
  *      answer he already reacted to (`clipped`) so a read stays small, while an answer his card
  *      shows stays whole; one thread reads whole on its own route;
- *   3. the companion, which keeps no Threads, answers 503 `primary_only`, never an empty list.
+ *   3. every replica (the companion, a host replica), which keeps no Threads, answers 503 `primary_only`, never an empty list.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -19,10 +19,16 @@ import type { AddressInfo } from 'node:net'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-org-threads-read'))
-const role = vi.hoisted(() => ({ companion: false }))
+// Which replica this server plays for one case: the companion, or a host replica (not cloud mode).
+const role = vi.hoisted(() => ({ kind: null as null | 'companion' | 'host' }))
 vi.mock('../../src/core/server-role.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../src/core/server-role.js')>()
-  return { ...real, isCompanion: () => role.companion }
+  return {
+    ...real,
+    isCompanion: () => role.kind === 'companion',
+    isFollower: () => role.kind !== null,
+    followerName: () => real.followerNameOf(role.kind, { WALNUT_HOST_LABEL: 'Test Box' }),
+  }
 })
 
 import { WALNUT_HOME } from '../../src/constants.js'
@@ -160,15 +166,22 @@ describe('reading Threads as the phone does', () => {
     expect((await fetch(`${base}/api/v1/tasks/${leadId}/threads/th-ffffff`)).status).toBe(404)
   })
 
-  it('a companion, which keeps no Threads, refuses instead of answering an empty list', async () => {
-    role.companion = true
+  // Every replica keeps no Threads, the companion and a host replica alike (2026-11-10, the user:
+  // "cloud companion is just walnut replica server with some special capability").
+  it.each([
+    ['the companion', 'companion', 'The cloud companion could not get the threads from your Mac just now.'],
+    ['a host replica (not cloud mode)', 'host', 'The Walnut server on Test Box could not get the threads from your Mac just now.'],
+  ] as const)('%s, which keeps no Threads, refuses instead of answering an empty list, and says who could not reach the Mac', async (_name, kind, sentence) => {
+    role.kind = kind
     try {
       const res = await read('?open=1')
       expect(res.status).toBe(503)
-      expect(((await res.json()) as { error?: { code?: string }; code?: string }).error?.code ?? '').toBe('primary_only')
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      expect(body.error?.code).toBe('primary_only')
+      expect(body.error?.message).toBe(sentence)
       expect((await fetch(`${base}/api/v1/tasks/${leadId}/threads/th-a00001`)).status).toBe(503)
     } finally {
-      role.companion = false
+      role.kind = null
     }
   })
 })

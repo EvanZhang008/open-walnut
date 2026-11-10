@@ -103,8 +103,23 @@ export function _resetServerRoleForTesting(): void {
   replicaProgram = null
 }
 
+/** This server is a replica (role replica, docs/plan/walnut-companion-unified-replica.md): the companion or a host replica. */
 export function isFollower(): boolean {
   return followerKind() !== null
+}
+
+/**
+ * How a replica names itself in a sentence a person reads ("<name> could not reach your Mac"):
+ * the companion, or the Walnut server on the host it runs on (WALNUT_HOST_LABEL, set by the Mac).
+ */
+export function followerName(): string {
+  return followerNameOf(followerKind(), process.env)
+}
+
+export function followerNameOf(kind: FollowerKind | null, env: NodeJS.ProcessEnv): string {
+  if (kind === 'companion') return 'The cloud companion'
+  const label = (env.WALNUT_HOST_LABEL ?? '').trim()
+  return label ? `The Walnut server on ${label}` : 'The Walnut server on this host'
 }
 
 let answers = false

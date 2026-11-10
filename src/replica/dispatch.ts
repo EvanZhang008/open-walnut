@@ -16,6 +16,10 @@
  *                         client's own deadline ends it, a presence flip answers
  *                         it at once, 20 min is the backstop
  *     GET/HEAD failed before any byte answered: the companion if it stands in, else away
+ *     a leader-read row (route-table.ts: a file of the Mac's) about to be answered away while
+ *                   the link to the Mac only just dropped: it waits for the Mac and goes to it
+ *                   again under the rule the companion's file reads follow too
+ *                   (core/leader-read-recovery.ts: one 15 s deadline, at most 3 rounds)
  *     a write failed after it was written: 504 primary_timeout (never journaled)
  *     a write failed before the stream opened: away (provably not sent)
  *     the Mac really away (presence.ts macAway: the quiet window, no daemon,
@@ -59,6 +63,7 @@ import { wasNotSent } from '../host-server/daemon-link.js'
 import type { Route } from '../host-server/route.js'
 import { classify, isRead, type AwayRule, type RouteDecision } from './route-table.js'
 import { closeAtFrame, closeFrame, FrameCursor } from './ws-frames.js'
+import { LEADER_READ_DEADLINE_MS, LEADER_READ_MAX_TRIES, mayTryLeaderReadAgain } from '../core/leader-read-recovery.js'
 
 /** The shortest budget of a write that says its wait, and a WebSocket handshake's budget. */
 export const WRITE_BUDGET_MS = 15_000
@@ -78,6 +83,11 @@ const OP_RELINK_POLL_MS = 50
 const OP_RETRY_GAP_MS = 200
 /** A write body read here (an away write that may be replayed) is at most this. */
 const MAX_BODY_BYTES = 15 * 1024 * 1024
+/** How often a leader-read row waiting for the Mac looks at the route again. */
+const LEADER_READ_POLL_MS = 250
+
+/** A leader-read row's rounds so far and when it came in (route-table.ts leaderRead). */
+interface ReadTries { tries: number; startedAt: number }
 
 export const OP_ID_HEADER = 'x-walnut-op-id'
 export const FORWARDED_AT_HEADER = 'x-walnut-forwarded-at'
@@ -153,6 +163,12 @@ export interface DispatchDeps {
   followerOpCap?(): boolean | null
   /** Whether the link to the daemon is up now: a try after a failed one waits for it. */
   linked?(): boolean
+  /**
+   * The link to the Mac only just dropped: a stream to a Mac the daemon hears failed (a suspect
+   * mark), or the Mac was last heard inside the leader-read deadline. A leader-read row
+   * (route-table.ts) waits for the Mac only then. Absent: never.
+   */
+  leaderDropRecent?(): boolean
   /** The replica's own /ws (away). */
   ownUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void
   log(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
@@ -162,6 +178,8 @@ export interface DispatchDeps {
   refuse?(req: IncomingMessage): Promise<{ status: number; body: unknown }>
   now?(): number
   writeBudgetMs?: number
+  /** A leader-read row's whole deadline (tests); absent: LEADER_READ_DEADLINE_MS. */
+  leaderReadMs?: number
   /** Tests: a fixed table. */
   classify?(method: string, path: string): RouteDecision
   /**
@@ -289,6 +307,14 @@ interface Handshake { req: IncomingMessage; socket: Duplex; head: Buffer; to: Ta
 
 function ignoreSocketError(): void { /* the peer went away; its close ends the work */ }
 
+/**
+ * The client left (a closed tab, an aborted fetch): its socket is gone even when `res` was never
+ * destroyed. The request's socket, never `res.socket`, which a pipelined request has none of yet.
+ */
+function clientGone(req: IncomingMessage, res: ServerResponse): boolean {
+  return res.destroyed || req.socket.destroyed
+}
+
 function detach(up: http.ClientRequest): void {
   up.removeAllListeners('error')
   up.on('error', () => { /* answered already */ })
@@ -298,6 +324,7 @@ function detach(up: http.ClientRequest): void {
 export function createDispatcher(deps: DispatchDeps): Dispatcher {
   const now = deps.now ?? Date.now
   const writeBudget = deps.writeBudgetMs ?? WRITE_BUDGET_MS
+  const leaderReadMs = deps.leaderReadMs ?? LEADER_READ_DEADLINE_MS
   const decide = deps.classify ?? classify
   const flights = new Set<Flight>()
   const splices = new Set<Splice>()
@@ -339,10 +366,10 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         ...(write ? { opId: req.headers[OP_ID_HEADER] } : {}), ...extra,
       })
     }
-    res.once('finish', finish)
-    res.once('close', finish)
-    res.once('finish', () => tell(flight.flipped ? 'flipped' : 'answered'))
-    res.once('close', () => tell(flight.flipped ? 'flipped' : 'closed'))
+    const onFinish = (): void => { finish(); tell(flight.flipped ? 'flipped' : 'answered') }
+    const onClose = (): void => { finish(); tell(flight.flipped ? 'flipped' : 'closed') }
+    res.once('finish', onFinish)
+    res.once('close', onClose)
     const budget = write ? writeBudgetOf(req, writeBudget) : 0
     const headers: Record<string, string> = write ? { [OP_ID_HEADER]: ensureOpId(req) } : {}
     forwardHttp(req, res, target(route), (err) => {
@@ -351,6 +378,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // A browser that went away is no failure of the target (proxy.ts never calls for it; kept here too).
       if (res.destroyed) return
       tell(sent ? 'lost' : 'unreachable', { error: err.message })
+      // The next forward of this request (a resend, a leader read's next try) brings its own.
+      res.off('finish', onFinish)
+      res.off('close', onClose)
       onFail(err, sent)
     }, {
       headers,
@@ -600,19 +630,60 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     socket.once('close', () => { if (h) handshakes.delete(h) })
   }
 
+  /**
+   * Whether a leader-read row (route-table.ts) about to be answered away waits for the Mac and
+   * goes to it again instead: the rule every replica's leader-only read follows
+   * (core/leader-read-recovery.ts), here on this replica's link to the Mac.
+   */
+  function waitsForLeader(req: IncomingMessage, res: ServerResponse, decision: RouteDecision, st: ReadTries): boolean {
+    if (!decision.row?.leaderRead || !isRead(req.method ?? 'GET') || res.headersSent || res.destroyed) return false
+    return mayTryLeaderReadAgain({ tries: st.tries, startedAt: st.startedAt, now: now(), dropRecent: deps.leaderDropRecent?.() ?? false }, leaderReadMs)
+  }
+
+  /** How a leader-read row's wait ended: a target answers again (the route is no longer this replica), or why not. */
+  async function leaderBack(req: IncomingMessage, res: ServerResponse, st: ReadTries): Promise<'back' | 'client-left' | 'deadline' | 'not-recent'> {
+    const by = st.startedAt + leaderReadMs
+    for (;;) {
+      if (clientGone(req, res)) return 'client-left'
+      if (deps.route().kind !== 'alone') return 'back'
+      if (!(deps.leaderDropRecent?.() ?? false)) return 'not-recent'
+      if (now() >= by) return 'deadline'
+      await sleep(Math.min(LEADER_READ_POLL_MS, Math.max(1, by - now())))
+    }
+  }
+
   /** A request for the leader (or answered as away): the forward path every leader row takes. */
-  function routeOn(req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void, decision: RouteDecision): void {
+  function routeOn(
+    req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void, decision: RouteDecision,
+    st: ReadTries = { tries: 0, startedAt: now() },
+  ): void {
     const route = deps.route()
     stampPresence(res)
-    if (route.kind === 'alone') return answerAway(req, res, next, decision, route.why)
+    // Answered away, unless a leader-read row waits for the Mac and comes back here first.
+    const answer = (why: string): void => {
+      if (res.headersSent || res.destroyed) return
+      if (!waitsForLeader(req, res, decision, st)) return answerAway(req, res, next, decision, why)
+      deps.log('info', 'replica: a read only the Mac can answer waits for it', { path: pathOf(req), why, tries: st.tries, waitedMs: now() - st.startedAt })
+      void leaderBack(req, res, st).then((end) => {
+        deps.log('info', 'replica: a read stopped waiting for the Mac', { path: pathOf(req), end, tries: st.tries, waitedMs: now() - st.startedAt })
+        // Gone for good: nothing to answer. Anything else is answered, by the Mac or here.
+        if (res.headersSent || end === 'client-left' || clientGone(req, res)) return
+        if (end === 'back') routeOn(req, res, next, decision, st)
+        else answerAway(req, res, next, decision, why)
+      })
+    }
+    if (route.kind === 'alone') return answer(route.why)
+    st.tries++
     const write = !isRead(req.method ?? 'GET')
     // A read the Mac went away under (a flip, before any answer byte): the copies answer it.
-    const away = () => { if (!res.headersSent && !res.destroyed) answerAway(req, res, next, decision, 'mac-away') }
+    const away = () => answer('mac-away')
     let again = false
     const onFail = (err: Error, sent: boolean): void => {
       // The link under it dropped, not the target: a read goes to it once more (proxy.ts isLinkDropped).
-      if (!write && !again && isLinkDropped(err)) {
+      // A leader read counts it as one of its tries (core/leader-read-recovery.ts), and has it while one is left.
+      if (!write && !again && isLinkDropped(err) && (!decision.row?.leaderRead || st.tries < LEADER_READ_MAX_TRIES)) {
         again = true
+        st.tries++
         deps.log('info', 'replica: a read lost its link, sending it again', { to: route.kind, path: pathOf(req) })
         forward(req, res, route, false, onFail, { away })
         return
@@ -624,11 +695,11 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         if (nextRoute.kind !== 'alone' && nextRoute.kind !== route.kind) {
           forward(req, res, nextRoute, false, (err2) => {
             deps.suspect(nextRoute.kind, err2)
-            answerAway(req, res, next, decision, 'nobody-answers')
+            answer('nobody-answers')
           })
           return
         }
-        return answerAway(req, res, next, decision, nextRoute.kind === 'alone' ? nextRoute.why : 'unreachable')
+        return answer(nextRoute.kind === 'alone' ? nextRoute.why : 'unreachable')
       }
       // A write that may have reached the target is never repeated nor journaled here.
       if (sent) {

@@ -12,7 +12,8 @@ import { WALNUT_HOME } from '../../constants.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { OrgThreadsChangedEvent } from '../event-types.js';
-import { isCompanion } from '../server-role.js';
+// Only the leader keeps Threads: every replica (the companion and a host replica alike) holds none.
+import { isFollower } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
   addMovedMessages, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
@@ -33,17 +34,17 @@ function emit(event: OrgThreadsChangedEvent): void {
 }
 
 function leaderOnly(): void {
-  if (isCompanion()) throw new ThreadError('bad_input', 501, 'Threads are kept on the primary; this server holds no copy.');
+  if (isFollower()) throw new ThreadError('bad_input', 501, 'Threads are kept on the primary; this server holds no copy.');
 }
 
 export async function readThreads(taskId: string): Promise<ThreadsFile> {
-  if (isCompanion()) return emptyThreads(taskId);
+  if (isFollower()) return emptyThreads(taskId);
   return normalizeThreads(await readJsonFile<unknown>(threadsFile(taskId), null), taskId);
 }
 
 /** Every node that has a threads file (the follow rule reads them all: thread-follow.ts). */
 export async function listThreadNodes(): Promise<string[]> {
-  if (isCompanion()) return [];
+  if (isFollower()) return [];
   const names = await fs.readdir(threadsDir()).catch(() => [] as string[]);
   return names.map((n) => (n.endsWith('.json') ? n.slice(0, -5) : '')).filter((id) => TASK_ID_RE.test(id));
 }
@@ -75,7 +76,7 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
 
 /** The phone buzzed for this thread's move into needs (push/thread-push.ts). Quiet: nothing he sees changed. */
 export async function markNeedsBuzzed(taskId: string, threadId: string, at: string): Promise<void> {
-  if (isCompanion()) return;
+  if (isFollower()) return;
   await mutateThreads(taskId, (cur) => ({
     file: { ...cur, threads: cur.threads.map((t) => (t.id === threadId ? { ...t, needsBuzzedAt: at } : t)) },
     out: undefined,
@@ -266,20 +267,20 @@ async function moveThreadNow(input: MoveThreadInput): Promise<OrgThread> {
 
 /** The node was told these threads closed. Quiet: nothing the user sees changed. */
 export async function noteClosesTold(taskId: string, ids: readonly string[]): Promise<void> {
-  if (!ids.length || isCompanion()) return;
+  if (!ids.length || isFollower()) return;
   await mutateThreads(taskId, (cur) => ({ file: markClosesTold(cur, ids), out: undefined }));
 }
 
 /** Walnut woke the node about these threads (thread-recheck.ts): the card's line names when. */
 export async function noteThreadsRechecked(taskId: string, marks: ReadonlyMap<string, ThreadRecheck>): Promise<void> {
-  if (!marks.size || isCompanion()) return;
+  if (!marks.size || isFollower()) return;
   await mutateThreads(taskId, (cur) => ({ file: markRechecked(cur, marks), out: undefined }));
   emit({ taskId, kind: 'updated', ...(marks.size === 1 ? { threadId: [...marks.keys()][0] } : {}) });
 }
 
 /** Answers Walnut read from the node's chat (thread-answers.ts), each onto its message. Returns how many landed. */
 export async function setThreadAnswers(taskId: string, answers: ReadonlyMap<string, ThreadAnswer>): Promise<number> {
-  if (!answers.size || isCompanion()) return 0;
+  if (!answers.size || isFollower()) return 0;
   const changed = await mutateThreads(taskId, (cur) => {
     const r = setAnswers(cur, answers);
     return { file: r.file, out: r.changed };
@@ -291,7 +292,7 @@ export async function setThreadAnswers(taskId: string, answers: ReadonlyMap<stri
 
 /** The primary's sweep: every node's closed threads past their week are deleted for good. */
 export async function sweepClosedThreads(now = Date.now()): Promise<number> {
-  if (isCompanion()) return 0;
+  if (isFollower()) return 0;
   const names = await fs.readdir(threadsDir()).catch(() => [] as string[]);
   let dropped = 0;
   const at = new Date(now).toISOString();

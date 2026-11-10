@@ -166,11 +166,21 @@ final class OrgThreadsStore {
         return nodeCount ?? 0
     }
 
+    /// Which server could not reach the Mac, in its own words: every replica answers this (the cloud
+    /// companion, the Walnut server on a host), so the phone names none itself.
+    nonisolated static func unreachableSentence(_ cause: APIError) -> String {
+        if case .server(_, _, let sentence, _, _) = cause {
+            let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed.last.map { ".!?".contains($0) } == true ? trimmed : trimmed + "." }
+        }
+        return "Walnut couldn't reach your Mac for the threads just now."
+    }
+
     /// What a failed list read says, by what the page still shows.
     nonisolated static func readError(hasThreads: Bool, fromCache: Bool, cause: APIError? = nil) -> String {
-        if cause?.isPrimaryOnly == true {
+        if let cause, cause.isPrimaryOnly {
             let kept = hasThreads ? " The threads shown here have not been refreshed." : ""
-            return "The cloud companion couldn't get the threads from your Mac.\(kept) It will try again automatically."
+            return "\(unreachableSentence(cause))\(kept) It will try again automatically."
         }
         if !hasThreads { return "Couldn't load the threads. Pull to try again." }
         if fromCache { return "These are the threads as the phone last saw them. Pull to try again." }

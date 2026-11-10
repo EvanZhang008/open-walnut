@@ -24,6 +24,7 @@ import type { FollowerView } from '../host-server/daemon-link.js'
 import { SUSPECT_MS, VIEW_STALE_MS, type Route } from '../host-server/route.js'
 // The daemon twins' own parse of a timer knob (daemon-source.ts mirrors it verbatim).
 import { envTimerMs } from '../providers/daemon-core.js'
+import { LEADER_READ_DEADLINE_MS } from '../core/leader-read-recovery.js'
 
 /** The one quiet window (C4): the Mac not heard this long is away. Pinned equal to both twins. */
 export const LEADER_QUIET_MS = envTimerMs(process.env.WALNUT_LEADER_QUIET_MS, 30_000, 500)
@@ -104,6 +105,8 @@ export class SuspectMarks {
   /** Until when each target is skipped (PresenceInput.suspect). */
   readonly until: { leader?: number; companion?: number } = {}
   private readonly fails: Record<TargetKind, number> = { leader: 0, companion: 0 }
+  /** When the failures in a row began: the moment the target was first found out of reach. */
+  private readonly since: Partial<Record<TargetKind, number>> = {}
 
   constructor(private readonly cap: () => number) {}
 
@@ -111,6 +114,7 @@ export class SuspectMarks {
   fail(kind: TargetKind, now: number): number {
     const held = (this.until[kind] ?? 0) - now
     if (held > 0) return held
+    if (this.fails[kind] === 0) this.since[kind] = now
     this.fails[kind]++
     const ms = Math.min(SUSPECT_MS * 2 ** Math.min(this.fails[kind] - 1, 16), Math.max(SUSPECT_MS, this.cap()))
     this.until[kind] = now + ms
@@ -120,12 +124,37 @@ export class SuspectMarks {
   /** `kind` answered: the next failure is marked SUSPECT_MS again. */
   answered(kind: TargetKind): void {
     this.fails[kind] = 0
+    delete this.since[kind]
   }
 
   /** Failures in a row with no answer between them (the report, tests). */
   failures(kind: TargetKind): number {
     return this.fails[kind]
   }
+
+  /** When the current failures in a row began; null while `kind` answers. */
+  failingSince(kind: TargetKind): number | null {
+    return this.fails[kind] > 0 ? (this.since[kind] ?? null) : null
+  }
+}
+
+/**
+ * Whether the Mac only just stopped answering, so a leader read waits for it
+ * (core/leader-read-recovery.ts): the companion's rule, "the link dropped inside
+ * the deadline", read from what a host replica knows. Each kind of absence has
+ * its own start: a suspect mark from the first failed stream in a row (marks that
+ * go on, a Mac whose stream door keeps refusing, are no recent drop: 2026-11-10
+ * review), an absence from when the Mac was last heard, a drain from when it
+ * began (the Mac is back and its drain will end).
+ */
+export function leaderDropRecent(
+  p: Presence, o: { now: number; failingSince: number | null; drainingSince: number | null }, windowMs = LEADER_READ_DEADLINE_MS,
+): boolean {
+  const began = p.why === 'unreachable' ? o.failingSince
+    : p.why === 'mac-away' ? (p.asOf > 0 ? p.asOf : null)
+    : p.why === 'draining' ? o.drainingSince
+    : null
+  return began !== null && o.now - began < windowMs
 }
 
 export interface LeaderReturnDeps {

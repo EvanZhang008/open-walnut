@@ -1,5 +1,8 @@
 /**
- * Cloud-replica file-content relay (WALNUT_CLOUD_MODE only).
+ * The companion's file-content relay: its transport is the bridge its daemons dial in to, which
+ * only the companion has (WALNUT_CLOUD_MODE). A host replica reaches the Mac's files through its
+ * dispatcher instead (replica/dispatch.ts); both follow one leader-read rule on a dropped link
+ * (core/leader-read-recovery.ts).
  *
  * GET /api/v1/file-content on a REPLICA used to answer 501 for any `host=`
  * read ("the bridge has no arbitrary-read channel"). That made every phone
@@ -42,6 +45,7 @@ import { sendV1Error } from './v1-control-relay.js'
 import { RAW_INLINE_MIME, rawTextMime, attachmentDisposition, sendRawText } from './file-content.js'
 import { resolveReplicaCopy } from './file-content-replica-copy.js'
 import { BRIDGE_MEDIA_EXTENSIONS, serveBridgeMedia } from './file-content-bridge-media.js'
+import { LEADER_READ_DEADLINE_MS, mayTryLeaderReadAgain } from '../../core/leader-read-recovery.js'
 
 /** Primary box's daemon always registers under this bridge alias. */
 const PRIMARY_BRIDGE_ALIAS = '__local__'
@@ -51,9 +55,9 @@ const PRIMARY_BRIDGE_ALIAS = '__local__'
  *  both daemon twins. */
 export const MAX_BRIDGE_FILE_BYTES = 2 * 1024 * 1024
 
-/** One bounded read = one bridge round trip; a host that can't answer in
- *  this window gets a degraded 503, never a hung route. */
-export const FILE_RELAY_TIMEOUT_MS = 15_000
+/** One bounded read, its tries over a redialled bridge included; a host that
+ *  can't answer in this window gets a degraded 503, never a hung route. */
+export const FILE_RELAY_TIMEOUT_MS = LEADER_READ_DEADLINE_MS
 
 /** JSON viewer payload truncation — same contract as file-content.ts. */
 const MAX_TEXT_PAYLOAD = 512 * 1024
@@ -120,7 +124,8 @@ export async function readBridgeFile(
   host: string, params: Record<string, unknown>, signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const { bridgeRequest, bridgeForHost, BridgeOfflineError, BridgeLostError, lastBridgeLossAt, waitForBridge } = await import('../ws/bridge-registry.js')
-  const deadline = Date.now() + FILE_RELAY_TIMEOUT_MS
+  const startedAt = Date.now()
+  const deadline = startedAt + FILE_RELAY_TIMEOUT_MS
   for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted()
     try {
@@ -130,8 +135,9 @@ export async function readBridgeFile(
       const lostAt = lastBridgeLossAt(host)
       const left = deadline - Date.now()
       const connected = bridgeForHost(host).connected
-      if (attempt >= 2 || left <= 0 || signal?.aborted
-        || (!connected && (lostAt === null || Date.now() - lostAt > FILE_RELAY_TIMEOUT_MS))) throw err
+      // The rule every replica's leader-only read follows (core/leader-read-recovery.ts).
+      const dropRecent = connected || (lostAt !== null && Date.now() - lostAt <= FILE_RELAY_TIMEOUT_MS)
+      if (signal?.aborted || !mayTryLeaderReadAgain({ tries: attempt + 1, startedAt, now: Date.now(), dropRecent })) throw err
       // A read may be repeated; range reads keep expectedVersion so a redial cannot mix files.
       if (!connected && !(await waitForBridge(host, left))) throw err
       if (Date.now() >= deadline) throw err

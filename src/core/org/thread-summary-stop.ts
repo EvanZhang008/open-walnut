@@ -35,8 +35,8 @@ export async function staleSummariesAtStop(callerSid: string | undefined, nowMs 
   const sid = (callerSid ?? '').trim();
   if (!sid) return null;
   try {
-    const { isCompanion } = await import('../server-role.js');
-    if (isCompanion()) return null;
+    const { isFollower } = await import('../server-role.js');
+    if (isFollower()) return null;
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const taskId = (await getSessionByClaudeId(sid).catch(() => null))?.taskId;
     if (!taskId) return null;

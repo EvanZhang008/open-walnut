@@ -125,8 +125,9 @@ export async function prepareThreadCapture(input: {
   if (!task || (task.org_role !== 'main' && task.org_role !== 'lead')) return null;
   const words = userWordsOf(input.message, { inChat: input.inChat });
   if (!words) return null;
-  const { isCompanion } = await import('../server-role.js');
-  if (isCompanion()) return null;
+  // Every replica keeps no Threads: the leader files his message when it gets it.
+  const { isFollower } = await import('../server-role.js');
+  if (isFollower()) return null;
   const store = await import('./threads-store.js');
   const cur = await store.readThreads(task.id);
   const at = new Date(input.now ?? Date.now()).toISOString();

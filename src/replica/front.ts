@@ -65,7 +65,7 @@ import type { Route } from '../host-server/route.js'
 import { createHostExpose, followExposeSettings, type HostExpose } from '../host-server/expose.js'
 import { answerTunnelProbe } from '../core/expose/probe.js'
 import type { DeviceCopy } from '../host-server/device-copy.js'
-import { chooseReplicaRoute, presenceOf, quietWindow, SuspectMarks, wireLeaderPresence, type Presence, type PresenceInput, type ToldPresence } from './presence.js'
+import { chooseReplicaRoute, leaderDropRecent, presenceOf, quietWindow, SuspectMarks, wireLeaderPresence, type Presence, type PresenceInput, type ToldPresence } from './presence.js'
 import { createDispatcher, PRESENCE_BOOT_HEADER, PRESENCE_SEQ_HEADER, type Dispatcher, type OfflineWhy } from './dispatch.js'
 import { rpcAway } from './ws-rpc-table.js'
 import { replicaRefusal, verifyReplicaToken } from './auth.js'
@@ -149,6 +149,8 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
   const marks: SuspectMarks = new SuspectMarks((): number => quietWindow(input()))
   const suspect: { leader?: number; companion?: number } = marks.until
   let last: Presence | null = null
+  /** When the Mac's drain began (presence 'draining'), for a leader read waiting through it. */
+  let drainingSince: number | null = null
   let lastRoute: Route['kind'] | null = null
   let ownUpgrade: ((req: IncomingMessage, socket: Duplex, head: Buffer) => void) | null = null
   let reported = false
@@ -218,6 +220,7 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
     probe: () => probeStream('primary'),
     probeCompanion: () => probeStream('companion'),
     changed: (p) => {
+      drainingSince = p.why !== 'draining' ? null : last?.why === 'draining' ? drainingSince : Date.now()
       last = p
       setLeaderPresence(p.answers, p.why)
       log.web.info('replica presence', { answers: p.answers, why: p.why, asOf: p.asOf, host: env.label, hostKey: env.hostKey ?? null, home: env.leaderHome })
@@ -255,6 +258,7 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       return caps === null ? null : caps.includes(REPLICA_OPS_CAP)
     },
     linked: () => link.linkState() === 'following',
+    leaderDropRecent: () => leaderDropRecent(look(), { now: Date.now(), failingSince: marks.failingSince('leader'), drainingSince }),
     // WP6: a session or a file of this host is read here, through the follower link (self-host.ts).
     localHere: (req, decision) => (decision.row?.local ? isLocalHere(req.url ?? '', decision.row.local, lookupSessionHost, decision.row.cap) : true),
     ownUpgrade: (req, socket, head) => {

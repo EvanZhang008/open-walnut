@@ -7,7 +7,7 @@
  *   GET   /api/v1/tasks/:id/threads[?open=1|closed=1][&limit=N][&answer_max=N]
  *                                                        { task_id, threads, closed_count, shown_count }  (open first; each message with
  *                                                          the node's answer, read from its chat in the background; each thread's
- *                                                          `shown` is his view's rule over all of them; 503 primary_only on the companion)
+ *                                                          `shown` is his view's rule over all of them; 503 primary_only on every replica)
  *   GET   /api/v1/tasks/:id/threads/:thread                { task_id, thread }  (one thread whole, its `shown` as above)
  *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
  *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, same_ask_reason?, reply?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, pin?, merge_into? }
@@ -18,7 +18,7 @@
  *   PUT   /api/v1/tasks/:id/threads/:thread/follow-ups/:messageId -> the message with that id, relayed
  *                                                          by the companion, is his Follow up in this thread
  *
- * The caller comes from `x-walnut-caller-sid`: none = the user. Writes answer 501 on the companion.
+ * The caller comes from `x-walnut-caller-sid`: none = the user. Writes answer 501 on every replica.
  * The session that wrote a summary or a first post is the caller's own, read from its session
  * record (core/org/thread-caller.ts); a `sid`, `host` or `by` in the body is never read.
  */
@@ -30,7 +30,7 @@ import { ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, type Or
 import { fileThreadMessage, mergeThread, openNodeThread, patchThread, readThreads, splitThread } from '../../core/org/threads-store.js'
 import { resolveThreadAnswers } from '../../core/org/thread-answers.js'
 import { cardView, sharedAnswers, shownToHim, threadCounts } from '../../core/org/thread-view.js'
-import { isCompanion } from '../../core/server-role.js'
+import { followerName, isFollower } from '../../core/server-role.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
@@ -85,6 +85,15 @@ function ids(b: Record<string, unknown>, k: string): string[] | undefined {
   return v as string[]
 }
 
+/**
+ * Every replica, the companion and a host replica alike, keeps no Threads (core/server-role.ts
+ * isFollower): it says which server could not reach the Mac, never an empty list (the phone shows
+ * the sentence and tries again: OrgThreadsStore.readError).
+ */
+function primaryOnly(what: 'get the threads from' | 'reach'): RouteError {
+  return new RouteError(503, 'primary_only', `${followerName()} could not ${what} your Mac just now.`)
+}
+
 const flag = (v: unknown) => v === '1' || v === 'true'
 const positive = (v: unknown) => {
   const n = typeof v === 'string' ? Number(v) : NaN
@@ -93,10 +102,10 @@ const positive = (v: unknown) => {
 
 orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   const task = await nodeTask(req)
-  // Only the primary keeps Threads. A companion asked for them (the Mac out of reach, or its answer
+  // Only the primary keeps Threads. A replica asked for them (the Mac out of reach, or its answer
   // too large to carry back) has none to give, and an empty list read as "no open threads" on the
   // phone while its header counted four (2026-11-06): it says it cannot answer instead.
-  if (isCompanion()) throw new RouteError(503, 'primary_only', "Threads are kept on the primary; this server could not get them from it just now.")
+  if (isFollower()) throw primaryOnly('get the threads from')
   const file = await readThreads(task.id)
   const all = sortedThreads(file.threads)
   // `shown`: his view shows it, judged over ALL the node's threads (an answer shared with a closed
@@ -162,7 +171,7 @@ function markShared(t: OrgThread, shared: ReadonlySet<string>): OrgThread {
 /** One thread whole: what a phone opens a thread's Conversation with after a cut list read. */
 orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
   const task = await nodeTask(req)
-  if (isCompanion()) throw new RouteError(503, 'primary_only', "Threads are kept on the primary; this server could not get them from it just now.")
+  if (isFollower()) throw primaryOnly('get the threads from')
   const id = threadIdOf(req)
   const all = (await readThreads(task.id)).threads
   const thread = all.find((t) => t.id === id)
@@ -194,7 +203,7 @@ orgThreadsV1Router.post('/tasks/:id/threads', route(async (req, res) => {
  * relay of the words cannot carry the thread.
  */
 orgThreadsV1Router.put('/tasks/:id/threads/:thread/follow-ups/:messageId', route(async (req, res) => {
-  if (isCompanion()) throw new RouteError(503, 'primary_only', "Threads are kept on the primary; this server could not reach it just now.")
+  if (isFollower()) throw primaryOnly('reach')
   const task = await nodeTask(req)
   const id = threadIdOf(req)
   const messageId = param(req.params.messageId)

@@ -274,8 +274,8 @@ function watchSet(nodes: ReadonlyArray<{ threads: readonly OrgThread[] }>, p: Or
 
 /** One pass of the state rule over every lead's open threads. Returns how many moved. */
 export async function runThreadFollowPass(): Promise<number> {
-  const { isCompanion } = await import('../server-role.js');
-  if (isCompanion()) return 0;
+  const { isFollower } = await import('../server-role.js');
+  if (isFollower()) return 0;
   const { orgTasks } = await import('./org-store.js');
   const p = orgPlaces(await orgTasks());
   const nodes = await readAllNodes(p);
