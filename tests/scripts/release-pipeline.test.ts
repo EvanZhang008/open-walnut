@@ -968,7 +968,7 @@ describe('ci.yml', () => {
     const cap = Number(/budget=\$\(\( left < (\d+) \? left : \1 \)\)/.exec(test)?.[1])
     expect(cap * 1000).toBeLessThan((jobMin - 10) * 60_000)
     // Every engine a spec launches is installed: *.webkit.spec.ts specs launch WebKit.
-    expect(test).toContain('bun x playwright install --with-deps chromium webkit')
+    expect(test).toContain('bash scripts/ci/install-browsers.sh chromium webkit')
     expect(test).toContain('bun scripts/playwright-summary.mjs')
   })
 
