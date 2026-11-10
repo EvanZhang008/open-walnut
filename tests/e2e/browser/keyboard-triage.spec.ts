@@ -35,6 +35,10 @@ const toast = (page: Page, title: string) => page.locator('.notification-toast',
 async function asMacApp(page: Page) {
   await page.addInitScript(() => {
     Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'MacIntel', configurable: true })
+    // Chromium's userAgentData names the runner's own system and is read first (isMacPlatform).
+    if ('userAgentData' in Navigator.prototype) {
+      Object.defineProperty(Navigator.prototype, 'userAgentData', { get: () => ({ platform: 'macOS', mobile: false, brands: [] }), configurable: true })
+    }
     const w = window as unknown as { webkit?: { messageHandlers?: Record<string, unknown> } }
     const handlers = { walnutChrome: { postMessage: () => {} } }
     try { Object.defineProperty(window, 'webkit', { value: { messageHandlers: handlers }, configurable: true }) } catch {
@@ -630,6 +634,9 @@ test('a browser that quits inside the window still has the task deleted, a while
 test('in a browser elsewhere, session switching uses Alt, the task keys Ctrl, and the sheet says why', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(Navigator.prototype, 'platform', { get: () => 'Linux x86_64', configurable: true })
+    if ('userAgentData' in Navigator.prototype) {
+      Object.defineProperty(Navigator.prototype, 'userAgentData', { get: () => ({ platform: 'Linux', mobile: false, brands: [] }), configurable: true })
+    }
   })
   await resetTasks(page)
   await openColumns(page, ['a', 'b'])
@@ -1240,6 +1247,35 @@ test('a completion refused at once gives what was typed after the key back to it
   } finally {
     await page.unrouteAll({ behavior: 'ignoreErrors' })
   }
+})
+
+test('a completion refused after its column went takes the next task back, and the typed text with it', async ({ page }) => {
+  await asMacApp(page)
+  await resetTasks(page)
+  await setPhases(page, { c: 'NEED_ACTION', b: 'NEED_ACTION' }, ['c', 'b'])
+  await openColumns(page, ['a', 'b'])
+  // The refusal comes back after the close tick: B has gone and C has opened in its place.
+  await page.route(`**/api/tasks/${TID('b')}`, async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback()
+    await new Promise((r) => setTimeout(r, 900))
+    await route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'refused for the test' }) })
+  })
+  try {
+    await page.keyboard.press('Meta+2')
+    await expect.poll(() => caretColumn(page)).toBe(SID('b'))
+    await page.keyboard.press('Meta+Shift+D')
+    await page.keyboard.type('still mine')
+    await expect(col(page, 'b')).toHaveCount(1, { timeout: 15_000 })
+    await expect(col(page, 'c')).toHaveCount(0, { timeout: 15_000 })
+    await expect(composer(page, 'b')).toHaveValue('still mine', { timeout: 10_000 })
+    await expect.poll(() => caretColumn(page)).toBe(SID('b'))
+    expect(await phase(page, 'b')).toBe('NEED_ACTION')
+  } finally {
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  }
+  // C's box keeps nothing of B's text.
+  await openColumns(page, ['a', 'c'])
+  await expect(composer(page, 'c')).toHaveValue('')
 })
 
 test('with no next task and no other column, the keys work again as soon as the column goes', async ({ page }) => {

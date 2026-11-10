@@ -20,7 +20,7 @@ import { realColumnCount, restoreSessionColumn, toggleLockSlot } from './session
 import { phaseSnapshot, type PhaseSnapshot, type TaskUndo } from '@/undo/TaskUndoContext';
 import { needsYouQueue } from '@/components/tasks/next-needs-you';
 import { afterStrip } from './after-strip';
-import { endCarry, lastTextBox } from './useHomeKeyboard';
+import { endCarry, lastTextBox, takeBackCarried } from './useHomeKeyboard';
 import { CLOSE_TICK_MS } from './hold-strip-animation';
 import { UNDO_WINDOW_MS } from '@/undo/undo-stack';
 
@@ -302,7 +302,11 @@ export function useColumnCompleteClose(deps: Deps): ColumnCompleteClose {
       // next task's box) keeps what they are in: only the column comes back.
       const entry = watch.entry;
       const movedOn = latest.current.movedSince?.(entry.closedAt ?? entry.at) ?? false;
-      if (entry.takeBack && !movedOn) entry.takeBack(true); else restoreColumn(entry);
+      if (entry.takeBack && !movedOn) {
+        // What was typed during the tick went into the next box with the advance: it goes back too.
+        takeBackCarried();
+        entry.takeBack(true);
+      } else restoreColumn(entry);
       entry.takeBack = undefined;
     }
     // A column a revived Undo says was closed, back from the address bar (the reload came

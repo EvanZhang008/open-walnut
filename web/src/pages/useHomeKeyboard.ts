@@ -43,7 +43,8 @@ function trackPointer(): void {
   if (pointerTracked || typeof document === 'undefined') return;
   pointerTracked = true;
   document.addEventListener('pointerdown', () => { pointerAt = performance.now(); }, { capture: true, passive: true });
-  document.addEventListener('input', () => { typedAt = performance.now(); }, { capture: true, passive: true });
+  // A carry putting kept keys into the next box is not the person typing there.
+  document.addEventListener('input', () => { if (!carryPutting) typedAt = performance.now(); }, { capture: true, passive: true });
   document.addEventListener('focusin', (e) => { if (isText(e.target as Element | null)) lastText = e.target as HTMLElement; }, { capture: true, passive: true });
 }
 let lastText: HTMLElement | null = null;
@@ -141,14 +142,61 @@ export function focusColumnComposer(id: string): () => void {
  */
 const CARRY_MS = 6000;
 let stopCarry: ((giveBack: boolean) => void) | null = null;
+let carryPutting = false;
+/** What the last carry put into the next task's box, so a refusal that takes the advance back
+ *  can take the text back too (while the box still holds just that). */
+let carried: { box: HTMLTextAreaElement; text: string; fromColumn: string } | null = null;
 const isText = (el: Element | null): el is HTMLElement =>
   !!el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || (el as HTMLElement).isContentEditable);
 /** End the carry of a completion: `giveBack` puts what was kept, and the caret, back where it was. */
 export function endCarry(giveBack: boolean): void {
   stopCarry?.(giveBack);
 }
+/** Insert text at the caret as typed (the box's input event, so React's state and its text undo
+ *  see it), without counting as the person typing (personMovedSince). */
+function insertQuietly(box: HTMLElement, text: string): void {
+  carryPutting = true;
+  try {
+    if (!document.execCommand?.('insertText', false, text) && (box instanceof HTMLTextAreaElement || box instanceof HTMLInputElement)) {
+      const at = box.selectionStart ?? box.value.length;
+      box.setRangeText(text, at, box.selectionEnd ?? at, 'end');
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  } finally {
+    carryPutting = false;
+  }
+}
+
+/**
+ * A completion refused after its column went takes the advance back: what the carry put into
+ * the next task's box leaves it and goes into the completed column's box once that is back and
+ * takes the caret (up to 3 s). Only while the next box still holds exactly what was put there.
+ */
+export function takeBackCarried(): void {
+  const c = carried;
+  carried = null;
+  if (!c || typeof document === 'undefined' || !c.box.isConnected || c.box.value !== c.text) return;
+  carryPutting = true;
+  try {
+    c.box.setRangeText('', 0, c.box.value.length, 'end');
+    c.box.dispatchEvent(new Event('input', { bubbles: true }));
+  } finally {
+    carryPutting = false;
+  }
+  const onFocus = (e: FocusEvent) => {
+    const el = e.target as HTMLElement | null;
+    if (!el?.classList.contains('chat-input-textarea') || el.closest(COLUMN)?.getAttribute('data-column-id') !== c.fromColumn) return;
+    done();
+    insertQuietly(el, c.text);
+  };
+  const done = () => { clearTimeout(timer); document.removeEventListener('focusin', onFocus, true); };
+  const timer = setTimeout(done, 3000);
+  document.addEventListener('focusin', onFocus, true);
+}
+
 export function carryTypingToNextBox(closingColumnId: string): void {
   stopCarry?.(false);
+  carried = null;
   if (typeof document === 'undefined') return;
   const active = document.activeElement as HTMLElement | null;
   const from = active?.closest(COLUMN) && isText(active) ? active : null;
@@ -167,12 +215,8 @@ export function carryTypingToNextBox(closingColumnId: string): void {
     if (!kept.length) return;
     const text = kept.join('');
     kept.length = 0;
-    // As typed: the box's own input event (React's state) and its text undo both see it.
-    if (!document.execCommand?.('insertText', false, text) && (box instanceof HTMLTextAreaElement || box instanceof HTMLInputElement)) {
-      const at = box.selectionStart ?? box.value.length;
-      box.setRangeText(text, at, box.selectionEnd ?? at, 'end');
-      box.dispatchEvent(new Event('input', { bubbles: true }));
-    }
+    insertQuietly(box, text);
+    carried = box instanceof HTMLTextAreaElement && box !== ownBox() ? { box, text, fromColumn: closingColumnId } : null;
   };
   const onKey = (e: KeyboardEvent) => {
     if (e.metaKey || e.ctrlKey || e.altKey) {
