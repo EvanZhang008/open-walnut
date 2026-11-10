@@ -67,7 +67,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODEL_ID = sys.argv[1]
 PORT = int(sys.argv[2])
-IDLE_TTL_S = float(sys.argv[3]) if len(sys.argv) > 3 else 3600.0
+IDLE_TTL_S = float(sys.argv[3]) if len(sys.argv) > 3 else 600.0
 TMP_ROOT = os.path.realpath(tempfile.gettempdir())
 
 from mlx_audio.stt.utils import load_model

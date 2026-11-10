@@ -26,7 +26,9 @@ const execFileAsync = promisify(execFile);
 export const DEFAULT_CLEANUP_MODEL = 'mlx-community/Qwen3-4B-Instruct-2507-4bit';
 // Next to the ASR daemon's 7893 — fixed so successor servers adopt it warm.
 const DEFAULT_CLEANUP_PORT = 7894;
-const IDLE_TTL_MS = 60 * 60 * 1000;
+// About 2.3 GB held while it runs: it exits after 10 idle minutes like the speech
+// daemon (2026-11-10, the Mac ran memory-tight with an hour's TTL).
+const IDLE_TTL_MS = 10 * 60 * 1000;
 // First-ever run downloads ~2.3GB of weights; warm load is ~4s.
 const STARTUP_TIMEOUT_MS = 300_000;
 
@@ -41,7 +43,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODEL_ID = sys.argv[1]
 PORT = int(sys.argv[2])
-IDLE_TTL_S = float(sys.argv[3]) if len(sys.argv) > 3 else 3600.0
+IDLE_TTL_S = float(sys.argv[3]) if len(sys.argv) > 3 else 600.0
 
 from mlx_lm import load, generate
 model, tokenizer = load(MODEL_ID)
