@@ -28,7 +28,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-status-
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, getTask, listTasks, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
-import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
+import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { syncUserStatuses } from '../../src/core/user-status-sync.js'
 import { applyReportPhase } from '../../src/core/sessions/report-phase.js'
 import { applySessionPhase } from '../../src/core/phase.js'
@@ -270,6 +270,10 @@ describe('every surface shows the same state after every step', () => {
     expect((await getTask(worker.id)).user_status).toMatchObject({ kind: 'machine', waitingOn: expect.stringContaining('Walnut, retrying its failed turn by itself') })
     // The retry goes out, and its turn fails the same way: no retry is left, so it is its lead's.
     await expect.poll(() => getSessionAutoContinue()?.firedCount(sid), { timeout: 15_000 }).toBe(1)
+    // The retry's message starts a turn; it fails only once that turn runs (else its delivery,
+    // landing late on a busy machine, would read as a new turn after the second failure).
+    await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 15_000 }).toBe('IN_PROGRESS')
+    await expect.poll(async () => (await getSessionByClaudeId(sid))?.process_status, { timeout: 15_000 }).not.toBe('error')
     await updateSessionRecord(sid, { process_status: 'error', errorMessage: OVERLOADED })
     bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: OVERLOADED, isError: true }, ['*'], { source: 'session-runner' })
     await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
