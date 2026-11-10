@@ -14,7 +14,11 @@ extension WalnutAPI {
 
     private struct PrefValue: Codable { let v: String; let ts: Double }
     private struct PrefsBody: Codable { let prefs: [String: PrefValue] }
-    private struct PrefsRead: Decodable { let prefs: [String: PrefValue]? }
+    /// What a read gets back. `v` is null when a device deleted the key (the web's crash
+    /// recovery syncs `{v: null}` for every `walnut-todo-*` key it clears), so it is
+    /// optional here: a null reads as an empty list, never as a failed read.
+    private struct ReadValue: Decodable { let v: String?; let ts: Double? }
+    private struct PrefsRead: Decodable { let prefs: [String: ReadValue]? }
     private struct Ack: Decodable {}
 
     /// The synced list as the server holds it (`[]` when nobody opened anything yet).
@@ -22,8 +26,17 @@ extension WalnutAPI {
         let key = Self.recentOpenedKey
         let read: PrefsRead = try await sendAbsolute(
             "GET", "/api/ui-prefs?key=\(key)", body: nil as [String: String]?, retrySafe: true)
-        guard let raw = read.prefs?[key]?.v, let data = raw.data(using: .utf8) else { return [] }
-        return Self.decodeRecentOpened(data)
+        return Self.recentOpened(from: read)
+    }
+
+    /// The list in a ui-prefs read body: `[]` when the key is absent or deleted (`v: null`).
+    static func decodeRecentOpenedRead(_ body: Data) throws -> [RecentOpenedEntry] {
+        recentOpened(from: try JSONDecoder().decode(PrefsRead.self, from: body))
+    }
+
+    private static func recentOpened(from read: PrefsRead) -> [RecentOpenedEntry] {
+        guard let raw = read.prefs?[recentOpenedKey]?.v, let data = raw.data(using: .utf8) else { return [] }
+        return decodeRecentOpened(data)
     }
 
     /// Record opens (one, or several when the phone's own old list is handed over once).

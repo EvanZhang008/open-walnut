@@ -301,4 +301,17 @@ final class RecentOpensTests: XCTestCase {
         XCTAssertEqual(WalnutAPI.decodeRecentOpened(Data("not json".utf8)), [])
         XCTAssertNotNil(RecentOpens.date(RecentOpens.iso(t0)))
     }
+
+    /// The web's crash recovery deletes the key and syncs `{v: null}`: the read must give an
+    /// empty list, not fail (a failed read left the phone's list empty until another open).
+    func testADeletedKeyReadsAsAnEmptyList() throws {
+        let key = WalnutAPI.recentOpenedKey
+        let deleted = #"{"prefs":{"\#(key)":{"v":null,"ts":1794270000000}}}"#
+        XCTAssertEqual(try WalnutAPI.decodeRecentOpenedRead(Data(deleted.utf8)), [])
+        XCTAssertEqual(try WalnutAPI.decodeRecentOpenedRead(Data(#"{"prefs":{}}"#.utf8)), [])
+        XCTAssertEqual(try WalnutAPI.decodeRecentOpenedRead(Data(#"{}"#.utf8)), [])
+        let stored = #"[{"id":"t1","at":"2026-11-09T00:00:00Z"}]"#
+        let body = try JSONSerialization.data(withJSONObject: ["prefs": [key: ["v": stored, "ts": 1]]])
+        XCTAssertEqual(try WalnutAPI.decodeRecentOpenedRead(body).map(\.id), ["t1"])
+    }
 }
