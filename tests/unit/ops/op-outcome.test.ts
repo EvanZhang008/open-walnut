@@ -498,7 +498,10 @@ describe('a failed launch keeps the task and the id', () => {
     expect(String(created.start_error)).toContain('hosts_full')
     expect(created.outcome).toContain(`Task ${TASK.id} was created but did not start: no host that can run it has room.`)
     expect(created.next).toContain(`task_start '{"id":"${TASK.id}"}'`)
-    expect(`${created.outcome} ${created.next}`).not.toMatch(/queued/i)
+    expect(created.next).toContain('This start is not queued.')
+    expect(created.next).toContain('Check host_load')
+    expect(created.next).toContain('arm a trigger')
+    expect(`${created.outcome} ${created.next}`).not.toMatch(/(?:is|was|will be) queued/i)
   })
 
 
