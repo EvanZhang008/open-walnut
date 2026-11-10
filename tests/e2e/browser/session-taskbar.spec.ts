@@ -29,6 +29,27 @@ async function openSessionPanel(page: Page) {
   return panel
 }
 
+/**
+ * Make the fixture session name `taskId` as its task: its record and its status, both (the
+ * status batch's taskId wins over the record's, so a late status alone would point it back).
+ */
+async function pointSessionAt(page: Page, sessionId: string, taskId: string) {
+  await page.route((url) => url.pathname.endsWith(`/api/sessions/${sessionId}`), async (route) => {
+    const response = await route.fetch()
+    const body = await response.json()
+    if (body.session) body.session.taskId = taskId
+    else body.taskId = taskId
+    await route.fulfill({ response, json: body })
+  })
+  await page.route((url) => url.pathname.endsWith('/api/sessions/status'), async (route) => {
+    const response = await route.fetch()
+    const body = await response.json() as { statuses?: Record<string, { taskId?: string }> }
+    const snap = body.statuses?.[sessionId]
+    if (snap) snap.taskId = taskId
+    await route.fulfill({ response, json: body })
+  })
+}
+
 /** A beat a person can follow, only while recording (PW_VIDEO, walnut-dev webkit --video). */
 const beat = (page: Page) => (process.env.PW_VIDEO ? page.waitForTimeout(1200) : Promise.resolve())
 
@@ -158,13 +179,7 @@ test('a taskbar an older Walnut saved (pushed-out sessions mixed in) opens with 
 
 test('Watch on a task the board does not hold (an archived one) brings it onto the Watching list', async ({ page }) => {
   const ARCHIVED = 'mpwold01-aa11'
-  await page.route(`**/api/sessions/${SESSION_ID}`, async (route) => {
-    const response = await route.fetch()
-    const body = await response.json()
-    if (body.session) body.session.taskId = ARCHIVED
-    else body.taskId = ARCHIVED
-    await route.fulfill({ response, json: body })
-  })
+  await pointSessionAt(page, SESSION_ID, ARCHIVED)
   await page.addInitScript((id) => {
     localStorage.setItem('open-walnut-layout:home-columns', JSON.stringify({ v: 1, value: [{ id, locked: false }] }))
   }, SESSION_ID)
@@ -189,13 +204,7 @@ test('Watch on a task the board does not hold (an archived one) brings it onto t
 
 test('Watch clicked while its write is still on its way reads Stop watching when the menu opens again', async ({ page }) => {
   const ARCHIVED = 'mpwold01-aa11'
-  await page.route(`**/api/sessions/${SESSION_ID}`, async (route) => {
-    const response = await route.fetch()
-    const body = await response.json()
-    if (body.session) body.session.taskId = ARCHIVED
-    else body.taskId = ARCHIVED
-    await route.fulfill({ response, json: body })
-  })
+  await pointSessionAt(page, SESSION_ID, ARCHIVED)
   // A slow network: the first write takes 2 s, the second 6 s, so the first one's echo comes back
   // while the second click's write is still out. The menu row unmounts long before either.
   const writes: string[] = []
@@ -233,13 +242,7 @@ test('Watch clicked while its write is still on its way reads Stop watching when
 
 test('two Watch clicks while the first write is out reach the server in order: the last click is what is stored', async ({ page }) => {
   const ARCHIVED = 'mpwold01-aa11'
-  await page.route(`**/api/sessions/${SESSION_ID}`, async (route) => {
-    const response = await route.fetch()
-    const body = await response.json()
-    if (body.session) body.session.taskId = ARCHIVED
-    else body.taskId = ARCHIVED
-    await route.fulfill({ response, json: body })
-  })
+  await pointSessionAt(page, SESSION_ID, ARCHIVED)
   // Each write is held until the test lets it go.
   const writes: string[] = []
   const releases: Array<() => void> = []
