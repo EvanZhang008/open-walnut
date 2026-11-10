@@ -14,6 +14,16 @@
  * Personal AI chat lane has no status of its own (the turn-end hook skips it too), and an ACP
  * engine answers a hidden ask with a turn of its own, so neither is asked. The same tick runs out
  * the watches set on tasks (task-watch.ts).
+ *
+ * The ask itself is no turn (2026-11-09, cost review): the side question's stream lines reach the
+ * session record a minute or three after the answer, as a status change with nothing run, so its
+ * last_status_change moved past the answer and the next pass read a new turn end to ask about. 124
+ * sessions were asked every 30 to 90 minutes for days, each ask on a cold prompt cache rewriting
+ * the whole conversation (about $2.40 a time, $700 a day). A turn of the task's work makes a
+ * main-loop request; a side question makes none (`promptCache.requestAt` is the last one's start),
+ * so a status change within minutes of an answer about the turn that held the last request is that
+ * answer's echo, and the per-turn cap counts asks by that request, not by a status change the asks
+ * themselves make.
  */
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
@@ -37,7 +47,7 @@ let passRunning = false;
 /** Whether a task's stored status misses its session's last turn. Pure; exported for tests. */
 export function statusMissed(
   task: Pick<Task, 'phase' | 'status' | 'status_report' | 'plugin_only'>,
-  session: Pick<SessionRecord, 'process_status' | 'last_status_change' | 'provider' | 'archived' | 'lane' | 'engine' | 'idleCompaction'>,
+  session: Pick<SessionRecord, 'process_status' | 'last_status_change' | 'provider' | 'archived' | 'lane' | 'engine' | 'idleCompaction' | 'promptCache'>,
   nowMs: number,
 ): number | null {
   if (task.phase === 'COMPLETE' || task.status === 'done' || task.plugin_only) return null;
@@ -48,10 +58,37 @@ export function statusMissed(
   const ended = lastWorkTurnEnd(session);
   if (!Number.isFinite(ended) || nowMs - ended < MISSED_AFTER_MS) return null;
   const said = Date.parse(task.status_report?.turn_ended_at ?? task.status_report?.at ?? '');
-  if (!Number.isFinite(said) || said < ended - MISSED_AFTER_MS) return ended;
+  if ((!Number.isFinite(said) || said < ended - MISSED_AFTER_MS) && !isAnswerEcho(task, session, ended)) return ended;
   // A wait reported under the rules before 2026-11-02 may be the task's own build or test run, which
   // reads Working now: asked once again under the current rules (MAX_PER_TURN_END bounds it).
   return reportUnderOldWaitRule(task.status_report) ? ended : null;
+}
+
+/** A side question's own stream lines reach the record within minutes of its answer (3.5 measured under load). */
+export const ASK_ECHO_MS = 10 * 60_000;
+
+/**
+ * True when the status change at `ended` is the echo of the stored answer rather than a turn: the
+ * answer describes a turn that held the session's last main-loop request (a mid-turn answer keeps
+ * the turn end before it, so it does not count), and the change came within ASK_ECHO_MS of it. A
+ * real turn after the answer makes a new request (the answer no longer covers it), and a record
+ * whose request was not stored (a turn replayed after a restart) is only mistaken inside that window.
+ * Unknown (no request recorded, no answer time) is false, so the turn-end rule decides.
+ */
+export function isAnswerEcho(
+  task: Pick<Task, 'status_report'>, session: Pick<SessionRecord, 'promptCache'>, ended: number,
+): boolean {
+  const request = Date.parse(session.promptCache?.requestAt ?? '');
+  const answered = Date.parse(task.status_report?.at ?? '');
+  const about = Date.parse(task.status_report?.turn_ended_at ?? task.status_report?.at ?? '');
+  if (![request, answered, about].every(Number.isFinite)) return false;
+  return about >= request && answered >= request && ended <= answered + ASK_ECHO_MS;
+}
+
+/** The turn a missed status belongs to: its last main-loop request when known, else its last status change. */
+function turnKey(session: Pick<SessionRecord, 'promptCache'>, ended: number): number {
+  const request = Date.parse(session.promptCache?.requestAt ?? '');
+  return Number.isFinite(request) ? request : ended;
 }
 
 /**
@@ -104,11 +141,12 @@ export async function runStatusReconcile(nowMs = Date.now()): Promise<string[]> 
       if (ended === null) continue;
       const last = lastAsked.get(s.claudeSessionId);
       if (last && nowMs - last.at < RETRY_GAP_MS) continue;
-      if (last && last.ended === ended && last.n >= MAX_PER_TURN_END) continue;
+      const turn = turnKey(s, ended);
+      if (last && last.ended === turn && last.n >= MAX_PER_TURN_END) continue;
       // After a server restart the runner holds only the sessions it reconnected: attach on
       // demand, as a normal send does. A process that is gone is never started for it.
       if (!(await sessionRunner.getOrAttachLiveSession(s.claudeSessionId).catch(() => undefined))) continue;
-      lastAsked.set(s.claudeSessionId, { at: nowMs, ended, n: last?.ended === ended ? last.n + 1 : 1 });
+      lastAsked.set(s.claudeSessionId, { at: nowMs, ended: turn, n: last?.ended === turn ? last.n + 1 : 1 });
       if (lastAsked.size > 2000) lastAsked.clear();
       asked.push(task.id);
       log.session.info('status reconcile: its status misses its last turn, asked again', { taskId: task.id, sessionId: s.claudeSessionId });

@@ -247,6 +247,28 @@ describe('the reconcile loop', () => {
     expect(statusMissed({ ...(t(30) as object), phase: 'COMPLETE' } as never, idle, now)).toBeNull()
   })
 
+  it('its own ask is no turn: an answer after the last request covers the status changes since', async () => {
+    const { statusMissed } = await import('../../../src/core/sessions/status-reconcile.js')
+    const now = Date.parse('2026-11-09T18:00:00Z')
+    const iso = (min: number) => new Date(now - min * 60_000).toISOString()
+    // The turn's last request at 120 min ago, its answer at 60, and the side question's own stream
+    // lines moved the record's status change to 55 (2026-11-08: asked every 30 to 90 minutes for days).
+    const task = { phase: 'WAITING', status: 'in_progress', status_report: { at: iso(60), turn_ended_at: iso(118), state: 'waiting', rule: STATUS_RULE_VERSION } } as never
+    const echoed = { process_status: 'idle', last_status_change: iso(55), provider: 'cli', promptCache: { tokens: 300_000, requestAt: iso(120) } } as never
+    expect(statusMissed(task, echoed, now)).toBeNull()
+    // A real turn after the answer made a request: its missed status is asked.
+    const worked = { process_status: 'idle', last_status_change: iso(30), provider: 'cli', promptCache: { tokens: 310_000, requestAt: iso(32) } } as never
+    expect(statusMissed(task, worked, now)).toBe(Date.parse(iso(30)))
+    // No request recorded: the turn-end rule decides, as before.
+    expect(statusMissed(task, { process_status: 'idle', last_status_change: iso(55), provider: 'cli' } as never, now)).toBe(Date.parse(iso(55)))
+    // A change long after the answer is no echo (a turn whose request the record missed, say a
+    // replay after a restart): asked.
+    expect(statusMissed(task, { ...(echoed as object), last_status_change: iso(20) } as never, now)).toBe(Date.parse(iso(20)))
+    // An answer given mid-turn (a watch) keeps the turn end before it: the turn's end is still missed.
+    const midTurn = { phase: 'WAITING', status: 'in_progress', status_report: { at: iso(60), turn_ended_at: iso(200), state: 'working', rule: STATUS_RULE_VERSION } } as never
+    expect(statusMissed(midTurn, echoed, now)).toBe(Date.parse(iso(55)))
+  })
+
   it('a pass asks a missed status, at most twice for one turn end, one pass at a time', async () => {
     const { runStatusReconcile, stopStatusReconcile } = await import('../../../src/core/sessions/status-reconcile.js')
     const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js')
@@ -268,6 +290,36 @@ describe('the reconcile loop', () => {
       expect(await runStatusReconcile(now + 31 * 60_000)).toEqual([own.id])
       // An answer that never reads is not asked all day for the same turn end.
       expect(await runStatusReconcile(now + 62 * 60_000)).toEqual([])
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(2)
+    } finally {
+      sessions.delete(sid)
+      stopStatusReconcile()
+    }
+  })
+
+  it('asks that never read are capped per request, though each ask moves the status change', async () => {
+    const { runStatusReconcile, stopStatusReconcile } = await import('../../../src/core/sessions/status-reconcile.js')
+    const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js')
+    const own = (await addTask({ title: 'Prune the hedge', project: 'Garden' })).task
+    await updateTaskRaw(own.id, { phase: 'IN_PROGRESS' }, { source: 'test' })
+    const sid = 'status-q-reconcile-echo'
+    const fake = { sessionId: sid, askSideQuestion: vi.fn(async () => 'nothing to read'), detach: () => {}, kill: () => {}, get active() { return false } }
+    const sessions = (sessionRunner as unknown as { sessions: Map<string, unknown> }).sessions
+    sessions.set(sid, fake)
+    try {
+      await createSessionRecord(sid, own.id, 'Garden')
+      const now = Date.now()
+      const requestAt = new Date(now - 15 * 60_000).toISOString()
+      await updateSessionRecord(sid, { process_status: 'idle', last_status_change: new Date(now - 10 * 60_000).toISOString(), promptCache: { tokens: 250_000, requestAt } })
+      stopStatusReconcile()
+      const asked: string[][] = []
+      for (let i = 0; i < 6; i++) {
+        const at = now + i * 31 * 60_000
+        asked.push(await runStatusReconcile(at))
+        // The ask's own stream lines reach the record a few minutes later as a status change.
+        await updateSessionRecord(sid, { last_status_change: new Date(at + 3 * 60_000).toISOString() })
+      }
+      expect(asked.flat()).toEqual([own.id, own.id])
       expect(fake.askSideQuestion).toHaveBeenCalledTimes(2)
     } finally {
       sessions.delete(sid)
