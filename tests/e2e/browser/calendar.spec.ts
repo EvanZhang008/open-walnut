@@ -1198,11 +1198,13 @@ test.describe('Calendar view', () => {
     await expect(menu).toBeVisible()
     await expect(menu.locator('button:has-text("Complete task")')).toBeVisible()
 
-    // Delete is two-step (misclick protection), then the task is really gone.
+    // Delete is two-step (misclick protection), then the task is really gone. The delete is held
+    // for its Undo window (UNDO_WINDOW_MS, 5 s, 031b89ebe) and only then sent, so a 5 s poll raced
+    // the window itself (CI 2026-11-10, both tries): the poll outlasts the window.
     await menu.locator('button:has-text("Delete task")').click()
     await menu.locator('button:has-text("are you sure")').click()
     await expect
-      .poll(async () => (await fetch(`${API}/api/tasks/${task.id}`)).status, { timeout: 5000 })
+      .poll(async () => (await fetch(`${API}/api/tasks/${task.id}`)).status, { timeout: 15_000 })
       .toBe(404)
   })
 
