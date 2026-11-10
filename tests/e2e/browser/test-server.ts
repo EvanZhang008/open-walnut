@@ -31,6 +31,7 @@ import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SES
 import { fixtureHome, fixtureRealHome } from './fixture-home'
 import { buildCompareFixture, compareFixtureTask } from './compare-fixture'
 import { writeHealthMonitorSeed } from './health-monitor-fixture'
+import { REAL_VOICE_STT, realVoiceInstall } from './real-voice-fixture'
 
 // Set WALNUT_HOME to temp dir BEFORE importing server modules.
 // Ephemeral identity is argv-based (see IS_EPHEMERAL in src/constants.ts) — the
@@ -201,6 +202,9 @@ const mockMainAgent = path.resolve(
 )
 // Remote history storage for session-history-remote.spec.ts: a fake S3 in this process.
 const fixtureS3 = await startFakeS3('walnut-fixture-history')
+// stt-install.spec.ts really installs Whisper and needs voice on here (real-voice-fixture.ts).
+const REAL_VOICE_INSTALL = realVoiceInstall(process.env)
+if (REAL_VOICE_INSTALL) process.env.WALNUT_STT_AUTO_SETUP = '1'
 await fs.writeFile(
   path.join(tmpBase, 'config.yaml'),
   JSON.stringify({
@@ -219,6 +223,7 @@ await fs.writeFile(
     // and two other specs' live mock sessions refused an Org lead's own start with "no room"
     // (2026-11-10, CI). The slots of a real Mac are not under test here; their specs mock them.
     session_limits: { local: 32 },
+    ...(REAL_VOICE_INSTALL ? { stt: REAL_VOICE_STT } : {}),
     provider: { type: 'claude-code' },
     agent: {
       main_provider: 'playwright-cli',
