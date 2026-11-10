@@ -56,6 +56,10 @@ const intoFrame = (el: Element | null) => !!el && FRAMES.has(el.tagName)
  * the element, refused when something covers it, the same as a click here, or when it is a frame.
  * `focus` puts the caret in it first (and `clear` empties it); `mark` tags a file input so the
  * debugger can find it; `active` only checks that the focus is not inside a frame.
+ *
+ * The cursor goes there FIRST; only then is the element found again and judged (held), with nothing
+ * awaited between that and the answer the debugger presses on (review 2026-11-09: the page could
+ * swap the element while the cursor moved, and an element nobody judged, "Place order", was pressed).
  */
 
 async function locate(args: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -73,6 +77,12 @@ async function locate(args: Record<string, unknown>): Promise<Record<string, unk
     input.setAttribute('data-walnut-upload', args.mark)
     return { x: 0, y: 0, what: `the file field ${pa.clip(args.selector, 80)}` }
   }
+  // The point the debugger is about to use (agent-trusted.ts names the kind: a click shows its ripple).
+  const first = pa.target(args)
+  if ((args.cursor === 'click' || args.cursor === 'move') && first.el.getBoundingClientRect().width > 0) {
+    await pointAt(first.x, first.y, wouldHold(args, trustedHow(args).map((how): Part => [how, first.el])) ? 'move' : args.cursor)
+  }
+  // From here to the answer nothing is awaited: what is judged is what is there when the debugger presses.
   const { el, x, y } = pa.target(args)
   // Checked before the focus moves: a held step leaves the page as it was.
   const h = held(args, trustedHow(args).map((how): Part => [how, el]))
@@ -90,8 +100,6 @@ async function locate(args: Record<string, unknown>): Promise<Record<string, unk
     if (!input) throw new pa.PageError(`${String(args.ref)} is not a file field (input type=file).`, 'not_a_file_field')
     input.setAttribute('data-walnut-upload', args.mark)
   }
-  // The point the debugger is about to use (agent-trusted.ts names the kind: a click shows its ripple).
-  if ((args.cursor === 'click' || args.cursor === 'move') && el.getBoundingClientRect().width > 0) await pointAt(x, y, args.cursor)
   return { x, y, what: `${pa.roleOf(el)} "${pa.clip(pa.nameOf(el), 60)}"` }
 }
 
@@ -136,6 +144,9 @@ function joinHolds(hs: Hold[]): Hold {
  * then Enter in the field it focused; a drag's press, release and the click the release makes) is
  * one ask: one hold names them all, and the one yes covers them all.
  */
+/** Whether the step looks held now: only for how the cursor shows (no ripple); the step itself is judged again after the cursor. */
+const wouldHold = (args: Record<string, unknown>, parts: Part[]): boolean => held(args, parts) !== null
+
 function held(args: Record<string, unknown>, parts: Part[]): Record<string, unknown> | null {
   const holds: Hold[] = []
   for (const [how, el] of parts) {
@@ -186,16 +197,24 @@ const typeTarget = (args: Record<string, unknown>): Element | null => (args.ref 
 const scrollsInside = (args: Record<string, unknown>) => (args.ref !== undefined || atPoint(args))
   && (args.direction !== undefined || args.to !== undefined || args.by !== undefined || args.amount !== undefined)
 
-/** `type {x, y}`: a click at the point (judged as a click), then the text into the field it focused; one ask for both. */
+/**
+ * `type {x, y}`: a click at the point (judged as a click), then the text into the field it focused;
+ * one ask for both. The cursor goes first; the field is found again and judged after it, with
+ * nothing awaited before the typing starts.
+ */
 async function typeOp(args: Record<string, unknown>): Promise<unknown> {
-  const field = typeTarget(args)
-  const how = typedEnter(args)
-  const parts: Part[] = [...(atPoint(args) ? [[{ click: true }, field] as Part] : []), ...(how ? [[how, field] as Part] : [])]
-  const h = held(args, parts)
+  const parts = (field: Element | null): Part[] => {
+    const how = typedEnter(args)
+    return [...(atPoint(args) ? [[{ click: true }, field] as Part] : []), ...(how ? [[how, field] as Part] : [])]
+  }
+  const early = typeTarget(args)
+  // The cursor to where the text goes: a click at the point (no ripple when it looks held), else
+  // the field (scrolled into view as the typing does).
+  if (atPoint(args)) await pointAt(Number(args.x), Number(args.y), wouldHold(args, parts(early)) ? 'move' : 'click')
+  else await toElement(() => { if (early instanceof HTMLElement && args.ref !== undefined) pa.centerOf(early); return early })
+  // Judged on what is there now, and acted on at once.
+  const h = held(args, parts(typeTarget(args)))
   if (h) return h
-  // The cursor to where the text goes: a click at the point, else the field (scrolled into view as the typing does).
-  if (atPoint(args)) await pointAt(Number(args.x), Number(args.y), 'click')
-  else await toElement(() => { if (field instanceof HTMLElement && args.ref !== undefined) pa.centerOf(field); return field })
   if (atPoint(args)) {
     const el = typeField(args)
     if (!el) throw new pa.PageError(`Nothing to type in at ${String(args.x)},${String(args.y)}.`, 'no_field')
@@ -217,11 +236,13 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
     case 'snapshot': return pa.snapshot(typeof args.max === 'number' ? args.max : undefined)
     case 'text': return pa.text(typeof args.max === 'number' ? args.max : undefined)
     case 'click': {
+      // The cursor first (a held click points at what it waits on; one that goes ahead shows its
+      // ripple there), then the element is found again, judged and clicked with nothing awaited
+      // between: what the page put there meanwhile is what is judged (review 2026-11-09).
       const t = pa.target(args)
-      const h = held(args, [[{ click: true }, t.el]])
-      // A held click points at what it waits on; one that goes ahead shows its ripple there.
-      await pointAt(t.x, t.y, h ? 'move' : 'click')
-      return h ?? pa.click(args)
+      await pointAt(t.x, t.y, wouldHold(args, [[{ click: true }, t.el]]) ? 'move' : 'click')
+      const now = pa.target(args)
+      return held(args, [[{ click: true }, now.el]]) ?? pa.click(args)
     }
     case 'hover': { const t = pa.target(args); await pointAt(t.x, t.y); return pa.hover(args) }
     case 'type': return typeOp(args)
@@ -240,9 +261,14 @@ export async function runPageOp(op: string, args: Record<string, unknown>): Prom
     case 'drag_points': {
       // A drag presses and releases: judged as the clicks it may make (where it starts, where it
       // ends, and the control both are in, which the release clicks), one ask for all.
-      const d = dragPoints(args)
       // Where it starts; the background moves it on to the end while the debugger drags (agent-drag.ts).
-      await pointAt(d.from.x, d.from.y, 'drag')
+      // A recheck (agent-drag.ts, with the debugger attached) only judges: the cursor is there already.
+      if (args.recheck !== true) {
+        const start = dragPoints(args).from
+        await pointAt(start.x, start.y, 'drag')
+      }
+      // Found again and judged after the cursor, right before the debugger drags.
+      const d = dragPoints(args)
       return held(args, [d.common, d.fromEl, d.toEl].map((el): Part => [{ click: true }, el])) ?? { from: d.from, to: d.to }
     }
     case 'cancel_input': return { cancelled: cancelTyping() }

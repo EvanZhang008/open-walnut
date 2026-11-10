@@ -29,6 +29,8 @@ export interface AgentTab {
   owner: string; who?: string; history?: string[]; handed?: string; taken?: boolean; popup?: boolean; fromPerson?: boolean; viaHanded?: boolean; grant?: string
   /** The person took the tab over from the Browser view (agent-takeover.ts): since when; agents wait. */
   driving?: number
+  /** The holding (its grant) whose hand-over put this tab into its task's group of the person's window: once per holding. */
+  grouped?: string
 }
 const rawAgentTabs = tabStore<AgentTab>('agentTabs')
 /** One holding of a tab, named: every new hold of it gets its own, so work started for one holding can tell when it ended. */
@@ -187,9 +189,11 @@ export function settled(tabId: number): Promise<void> {
 
 /**
  * The frame and pill on an agent's tab (content.ts): `driving` while the person took it over. A tab
- * an agent opened in the agent window goes into its task's tab group as it is marked (agent-groups.ts);
- * a tab it holds in a window of the person's, into that task's group of that window
- * (agent-groups-person.ts), until it is let go (letGo).
+ * an agent opened in the agent window goes into its task's tab group as it is marked (agent-groups.ts).
+ * A tab the person handed over (Act in tab: `handed`) goes into that task's group of their window
+ * once per holding, at its first mark (agent-groups-person.ts), until it is let go (letGo): a later
+ * mark (Take over, Hand back) never puts it back after the person dragged it out, and a tab the
+ * agent took or opened from a handed one is never grouped there (review 2026-11-09).
  */
 export async function mark(tabId: number, on: boolean, who?: string, mode?: 'driving'): Promise<void> {
   const rec = on ? await agentTabs.get(tabId) : undefined
@@ -197,8 +201,22 @@ export async function mark(tabId: number, on: boolean, who?: string, mode?: 'dri
   await toPage(tabId, { type: 'agent-mark', on, ...(who ? { who } : {}), ...(driving ? { mode: 'driving' } : {}) }, 4000)
   // Grouped, then folded once the agent is quiet (a new group opens unfolded: review 2026-11-08).
   if (rec && !personsTab(rec)) void groupAgentTab(ext as unknown as GroupApi, tabId, rec.owner, rec.who, await agentWindowId()).then(() => noteGroupUse(ext as unknown as GroupApi, rec.owner))
-  // Outside the agent window (groupPersonTab leaves that one alone): the task's group of the person's window.
-  if (rec) void groupPersonTab(ext as unknown as GroupApi, tabId, rec.owner, rec.who, async () => (await agentTabs.get(tabId))?.grant === rec.grant)
+  // A hand-over, outside the agent window (groupPersonTab leaves that one alone): the task's group
+  // of the person's window, once for this holding (recorded with its grant before it is grouped).
+  if (rec?.handed && rec.grant && rec.grouped !== rec.grant && await firstGrouping(tabId, rec.grant)) {
+    void groupPersonTab(ext as unknown as GroupApi, tabId, rec.owner, rec.who, async () => (await agentTabs.get(tabId))?.grant === rec.grant)
+  }
+}
+
+/** Records that this holding's tab is grouped now: true for the one mark that recorded it (a second at once finds it done). */
+async function firstGrouping(tabId: number, grant: string): Promise<boolean> {
+  let first = false
+  await agentTabs.update(tabId, (cur) => {
+    if (cur.grant !== grant || cur.grouped === grant) return cur
+    first = true
+    return { ...cur, grouped: grant }
+  })
+  return first
 }
 
 const UNREACHED: Record<ReachError, string> = {

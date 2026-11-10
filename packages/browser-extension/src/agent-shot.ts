@@ -10,7 +10,7 @@ import { siteKey } from '../../../src/core/vault/url-match'
 import { toPage } from './page-reach'
 import { framesOf } from './agent-page'
 import { WindowCovered, capture, withCapture } from './capture-gate'
-import { endShot, liveShot, liveState } from './agent-live'
+import { endShot, liveHeld, liveShot, liveState } from './agent-live'
 import { frontDriven } from './agent-takeover'
 import { base64, cropPicture, drawLabels } from './agent-picture'
 import type { LabelBox } from './input-math'
@@ -25,9 +25,10 @@ const FULL_BUDGET_MS = 25_000
 type Shoot = (o: { format: 'jpeg' | 'png'; quality?: number }) => Promise<string>
 
 /**
- * The window's picture; a covered window's through the debugger while the person has live
- * pictures on (agent-live.ts: it draws the page off screen, no window moves), else the covered
- * error as it was.
+ * The window's picture; a covered window's through the debugger only while the Browser view's
+ * stream holds it for this tab (agent-live.ts liveHeld: someone watches the card, and live pictures
+ * are on; it draws the page off screen, no window moves). Nobody watching: the covered error as it
+ * was, with no attach and no debugging bar for a picture nobody asked to see live (review 2026-11-09).
  */
 export function shooter(tabId: number, windowId: number, liveOk: boolean): Shoot {
   return async (o) => {
@@ -35,7 +36,7 @@ export function shooter(tabId: number, windowId: number, liveOk: boolean): Shoot
       return await capture(windowId, o)
     } catch (err) {
       // Only an agent's own tab in Walnut's agent window: never the debugger on a tab of the person's.
-      if (!(err instanceof WindowCovered) || !liveOk || await liveState(tabId) !== 'on') throw err
+      if (!(err instanceof WindowCovered) || !liveOk || !liveHeld(tabId) || await liveState(tabId) !== 'on') throw err
       return liveShot(tabId, o)
     }
   }

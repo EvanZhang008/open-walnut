@@ -13,7 +13,9 @@
  *   - for the Browser view: only while its stream for the tab runs (the card is watched) and the
  *     window is covered. It lets go when the stream ends, the tab goes, or a capture works again
  *     (the window shows: back to captureVisibleTab, no bar);
- *   - for an agent's screenshot of a covered window: for that screenshot only.
+ *   - for an agent's screenshot of a covered window: only while the Browser view's stream holds it
+ *     (someone watches the card), and joining that session; nobody watching, the screenshot says
+ *     the window is covered (window_covered), with no attach and no bar.
  * The session is the tab's one shared session (cdp.ts acquireDebugger): a recording, a dialog or a
  * real-input step meanwhile uses the same attach, and nobody's let-go detaches it from under
  * another. It sends Page.captureScreenshot alone: no input, no script, nothing in the page changes.
@@ -45,8 +47,14 @@ export const FAIL_BACKOFF_MS = 30_000
 /** After the person cancelled Chrome's debugging bar, no live picture of any tab for this long. */
 export const CANCEL_COOL_MS = 10 * 60_000
 
-/** Tabs whose stream holds the debugger for pictures now, and when the window was last tried. */
-const streaming = new Map<number, { probedAt: number }>()
+/**
+ * Tabs whose stream holds the debugger for pictures now, when the window was last tried, and the
+ * holder name of this start (cdp.ts): each start its own, so an endLive that came while the attach
+ * was still on its way is seen when it lands (review 2026-11-09: the attach landed after the
+ * release and held the debugger, and Chrome's bar, until the tab closed).
+ */
+const streaming = new Map<number, { probedAt: number; by: string }>()
+let starts = 0
 /** Tabs where the person cancelled Chrome's debugging bar: no live pictures there again. */
 const cancelled = new Set<number>()
 let cancelledAt = 0
@@ -90,10 +98,15 @@ export async function liveState(tabId: number, now = Date.now()): Promise<LiveSt
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-async function take(tabId: number, by: string, o: { format: 'jpeg' | 'png'; quality?: number }): Promise<string> {
+async function take(tabId: number, by: string, o: { format: 'jpeg' | 'png'; quality?: number }, still: () => boolean = () => true): Promise<string> {
   listen()
   try {
     const send = await acquireDebugger(more.debugger!, tabId, by)
+    // Ended while the browser attached: let go of this hold now, and no picture.
+    if (!still()) {
+      await releaseDebugger(more.debugger, tabId, by)
+      throw new Superseded()
+    }
     const wait = lastAt + LIVE_GAP_MS - Date.now()
     if (wait > 0) await sleep(wait)
     lastAt = Date.now()
@@ -109,20 +122,25 @@ async function take(tabId: number, by: string, o: { format: 'jpeg' | 'png'; qual
     failedAt.delete(tabId)
     return `data:image/${o.format};base64,${r.data}`
   } catch (err) {
-    failedAt.set(tabId, Date.now())
+    // Ended meanwhile (the attach landed late, or the stream let go while the picture was drawn): no failure of the page.
+    if (!(err instanceof Superseded) && still()) failedAt.set(tabId, Date.now())
     throw err
   }
 }
 
+/** The pictures ended while their attach was on its way (not a failure of the page). */
+class Superseded extends Error { constructor() { super('Live pictures of this tab ended meanwhile.') } }
+
 /** The stream's picture of a covered tab; the debugger stays attached for the next one, until endLive. */
 export async function livePicture(tabId: number, quality: number): Promise<string> {
-  const s = streaming.get(tabId)
-  if (!s) streaming.set(tabId, { probedAt: Date.now() })
+  let s = streaming.get(tabId)
+  if (!s) { s = { probedAt: Date.now(), by: `picture:${++starts}` }; streaming.set(tabId, s) }
+  const mine = s
   try {
-    return await take(tabId, 'picture', { format: 'jpeg', quality })
+    return await take(tabId, mine.by, { format: 'jpeg', quality }, () => streaming.get(tabId) === mine)
   } catch (err) {
     // No picture this way (DevTools holds the tab, the page went): nothing kept attached for it.
-    await endLive(tabId)
+    if (streaming.get(tabId) === mine) await endLive(tabId)
     throw err
   }
 }
@@ -145,13 +163,17 @@ export const liveHeld = (tabId: number): boolean => streaming.has(tabId)
 
 /** The stream lets go: it ended, nobody watches, the tab went, or the window shows again. */
 export async function endLive(tabId: number): Promise<void> {
-  if (!streaming.delete(tabId)) return
-  await releaseDebugger(more.debugger, tabId, 'picture')
+  const s = streaming.get(tabId)
+  if (!s) return
+  streaming.delete(tabId)
+  // A hold still attaching is let go when it lands (livePicture's `still`); a landed one, now.
+  await releaseDebugger(more.debugger, tabId, s.by)
 }
 
 /**
- * An agent's screenshot of a covered tab: a picture through the debugger, held for the rest of
- * that screenshot (a full page takes several) and let go by endShot right after it.
+ * An agent's screenshot of a covered tab while the Browser view's stream holds the debugger for it
+ * (liveHeld: the person watches the card; agent-shot.ts asks only then): a picture through the same
+ * session, held for the rest of that screenshot (a full page takes several) and let go by endShot.
  */
 export const liveShot = (tabId: number, o: { format: 'jpeg' | 'png'; quality?: number }): Promise<string> => take(tabId, 'shot', o)
 

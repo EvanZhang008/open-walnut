@@ -38,22 +38,29 @@ export async function dragAct(c: WireCommand, tabId: number, rec: AgentTab): Pro
   const hasFrom = typeof a.ref === 'string' || (typeof a.x === 'number' && typeof a.y === 'number')
   const hasTo = typeof a.to_ref === 'string' || (typeof a.to_x === 'number' && typeof a.to_y === 'number')
   if (!hasFrom || !hasTo) throw new AgentError('drag takes where it starts (ref, or x and y) and where it ends (to_ref, or to_x and to_y).', 'bad_request')
-  const found = await frameOp(tabId, 0, 'drag_points', {
-    ...(typeof a.ref === 'string' ? { ref: a.ref } : { x: a.x, y: a.y }),
-    ...(typeof a.to_ref === 'string' ? { to_ref: a.to_ref } : { to_x: a.to_x, to_y: a.to_y }),
-    ...(typeof a.outward_ok === 'string' ? { outward_ok: a.outward_ok } : {}),
-  }, c.allow)
-  // A drag that would buy, send or delete: nothing was pressed, the person is asked.
-  if (found.hold) throw outwardHeld(found.hold)
-  const r = found as { from: End; to: End }
-  // The agent's cursor (at the start since drag_points) goes along to the end as the debugger drags.
-  void toPage(tabId, { type: 'agent-cursor', x: r.to.x, y: r.to.y, kind: 'drag', ms: DRAG_CURSOR_MS }, 3000)
+  const points = async (recheck: boolean): Promise<{ from: End; to: End }> => {
+    const found = await frameOp(tabId, 0, 'drag_points', {
+      ...(typeof a.ref === 'string' ? { ref: a.ref } : { x: a.x, y: a.y }),
+      ...(typeof a.to_ref === 'string' ? { to_ref: a.to_ref } : { to_x: a.to_x, to_y: a.to_y }),
+      ...(typeof a.outward_ok === 'string' ? { outward_ok: a.outward_ok } : {}),
+      ...(recheck ? { recheck: true } : {}),
+    }, c.allow)
+    // A drag that would buy, send or delete: nothing was pressed, the person is asked.
+    if (found.hold) throw outwardHeld(found.hold)
+    return found as { from: End; to: End }
+  }
+  let r = await points(false)
   listen()
   intercepted.delete(tabId)
   const steps = typeof a.steps === 'number' && a.steps > 0 ? a.steps : undefined
   let native = false
   const state: DragState = { pressed: false, at: r.from, intercepting: false }
   const dialog = await watched(tabId, rec.owner, async (send) => {
+    // Judged once more with the debugger attached, right before the press (its bar may move the page).
+    r = await points(true)
+    state.at = r.from
+    // The agent's cursor (at the start since drag_points) goes along to the end as the debugger drags.
+    void toPage(tabId, { type: 'agent-cursor', x: r.to.x, y: r.to.y, kind: 'drag', ms: DRAG_CURSOR_MS }, 3000)
     native = (await cdpDrag(send, r.from, r.to, { ...(steps ? { steps } : {}), intercepted: () => intercepted.get(tabId), state })).native
   }, (send) => {
     // A dialog stopped the drag half way: the button goes up where the pointer is (so the page

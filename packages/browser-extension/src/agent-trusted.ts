@@ -60,6 +60,12 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
     if (r.hold) throw outwardHeld(r.hold)
     return r as { x: number; y: number; what: string }
   }
+  /**
+   * The step judged once more with the debugger attached, right before it presses (review
+   * 2026-11-09): attaching shows Chrome's debugging bar, which makes the page shorter and may move
+   * a "Place order" bar under the point. No cursor, no focus: only what is there now, and where.
+   */
+  const again = (extra: Record<string, unknown>) => locate({ ...extra, recheck: true })
   // A click by its words: the match, top frame only (real input).
   let matched: Record<string, unknown> | undefined
   if ((c.action === 'click' || c.action === 'hover') && typeof a.text === 'string' && a.text && a.ref === undefined && typeof a.x !== 'number' && typeof a.label !== 'number') {
@@ -80,13 +86,19 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
       out = { ...(await run(tabId, rec.owner, (send) => cdpEvaluate(send, expression))) }
       break
     }
-    case 'click': { const l = await locate({ ...trustedOutward('click', a), cursor: 'click' }); dialog = await watched(tabId, rec.owner, (send) => cdpClick(send, l.x, l.y)); out = { clicked: l.what, trusted: true }; break }
+    case 'click': {
+      const judge = trustedOutward('click', a)
+      let l = await locate({ ...judge, cursor: 'click' })
+      dialog = await watched(tabId, rec.owner, async (send) => { l = await again(judge); await cdpClick(send, l.x, l.y) })
+      out = { clicked: l.what, trusted: true }
+      break
+    }
     case 'hover': { const l = await locate({ cursor: 'move' }); await run(tabId, rec.owner, (send) => cdpHover(send, l.x, l.y)); out = { hovered: l.what, trusted: true }; break }
     case 'press': {
       const k = String(a.key ?? '')
       // Every combo that ends in Enter, and Space or Enter on a focused button or link, is judged.
       await locate({ active: true, ...trustedOutward('press', a) })
-      dialog = await watched(tabId, rec.owner, (send) => cdpPress(send, k))
+      dialog = await watched(tabId, rec.owner, async (send) => { await again({ active: true, ...trustedOutward('press', a) }); await cdpPress(send, k) })
       out = { pressed: k, trusted: true }
       break
     }
@@ -100,9 +112,13 @@ export async function trustedAct(c: WireCommand, tabId: number, tab: Tab, rec: A
       const at = a.ref === undefined && typeof a.x === 'number' && typeof a.y === 'number'
       // The click at the point is judged as any click is (a Pay button there waits for the person),
       // and with the Enter the text presses, as one step: one ask, one yes for both.
-      const l = at ? await locate({ focus: true, clear: a.clear === true, outward: 'click', cursor: 'click', ...(enter.outward ? { then_enter: true, typing: enter.typing } : {}) })
+      const atJudge = { outward: 'click', ...(enter.outward ? { then_enter: true, typing: enter.typing } : {}) }
+      let l = at ? await locate({ focus: true, clear: a.clear === true, cursor: 'click', ...atJudge })
         : a.ref !== undefined ? await locate({ focus: true, clear: a.clear === true, cursor: 'move', ...enter }) : (await locate({ active: true, ...enter }), undefined)
       dialog = await watched(tabId, rec.owner, async (send) => {
+        // Judged again on what is there now: at the point, or the focused field the text goes to.
+        if (at) l = await again(atJudge)
+        else await again({ active: true, ...enter })
         if (at && l) await cdpClick(send, l.x, l.y)
         await cdpType(send, text, slowly ? SLOW_KEY_MS : 0)
         if (a.submit === true) await cdpPress(send, 'Enter')

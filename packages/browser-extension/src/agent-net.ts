@@ -16,7 +16,7 @@
  */
 import { more } from './agent-api'
 import { ext, isFirefox } from './ext'
-import { CdpError, acquireDebugger, dropDebugger, releaseDebugger, type Send } from './cdp'
+import { CdpError, acquireDebugger, dropDebugger, holdersOf, releaseDebugger, type Send } from './cdp'
 import { AgentError, agentTabs, allowed, filledHere, filledOrigins, nearPerson, originOf, walnutCheck, where, type AgentTab, type WireCommand } from './agent-shared'
 import { walnutAddress } from './walnut-address'
 import { siteKey } from '../../../src/core/vault/url-match'
@@ -147,10 +147,24 @@ export async function stopRecording(tabId: number): Promise<boolean> {
   const r = records.get(tabId)
   if (!r) return false
   records.delete(tabId)
-  // Detached only when nobody else holds the session (live pictures of the tab, a step under way).
+  const shared = holdersOf(tabId).some((b) => b !== 'record')
+  // Detached only when nobody else holds the session (let go at once, as before: a new recording
+  // may start right after this).
   await releaseDebugger(more.debugger, tabId, 'record')
+  // Another holder keeps the session (live pictures of the tab, a step under way): what the
+  // recording turned on goes off, so the browser stops filling its buffers for nobody (Page stays:
+  // a step under way watches it for dialogs). A recording started meanwhile keeps its own.
+  if (shared) {
+    for (const m of RECORDING_DOMAINS) {
+      if (records.has(tabId)) break
+      await r.send(`${m}.disable`).catch(() => undefined)
+    }
+  }
   return true
 }
+
+/** The domains a recording turns on beside Page (startRecording), turned off when it stops in a session kept for another holder. */
+export const RECORDING_DOMAINS = ['Network', 'Runtime', 'Log'] as const
 
 const reqIdOf = (a: Record<string, unknown>): string => {
   const id = typeof a.request_id === 'string' ? a.request_id.trim() : ''

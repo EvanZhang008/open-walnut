@@ -12,13 +12,14 @@
  *   - a step in a frame has its cursor drawn in the top document at the frame's place.
  */
 import { readFileSync, readdirSync } from 'node:fs'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 type FTab = { id: number; windowId: number; index: number; groupId: number; url: string; active: boolean; status: string; title?: string }
 type FGroup = { id: number; windowId: number; title?: string; color?: string; collapsed?: boolean }
 const ev = () => ({ addListener() {}, removeListener() {} })
 const fake = {
   session: {} as Record<string, unknown>,
+  local: {} as Record<string, unknown>,
   tabs: new Map<number, FTab>(),
   groups: new Map<number, FGroup>(),
   nextGroup: 100,
@@ -43,7 +44,8 @@ const copy = (t: FTab) => ({ ...t })
   runtime: { id: 'test', getURL: (p: string) => `chrome-extension://test/${p}`, getManifest: () => ({ version: '0' }), onMessage: ev() },
   storage: {
     session: { get: async (k: string) => ({ [k]: fake.session[k] }), set: async (o: Record<string, unknown>) => { Object.assign(fake.session, o) }, remove: async () => undefined },
-    local: { get: async () => ({ agentControl: true }), set: async () => {} },
+    // Kept across a reload (the person's places, agent-groups-person.ts); agents are on.
+    local: { get: async (k: string) => ({ [k]: k === 'agentControl' ? true : fake.local[k] }), set: async (o: Record<string, unknown>) => { Object.assign(fake.local, o) } },
     onChanged: ev(),
   },
   tabs: {
@@ -114,7 +116,7 @@ const agent = await import('../../../packages/browser-extension/src/agent')
 const { agentTabs, mark, walnutCheck } = await import('../../../packages/browser-extension/src/agent-shared')
 const { foldIdleGroup, noteGroupUse, _resetGroupsForTesting } = await import('../../../packages/browser-extension/src/agent-groups')
 const { cursorUp, _resetCursorRelayForTesting } = await import('../../../packages/browser-extension/src/agent-cursor')
-const { RESTORE_RETRY_MS } = await import('../../../packages/browser-extension/src/agent-groups-person')
+const { RESTORE_RETRY_MS, restoreLeftPersonTabs, restorePersonTab } = await import('../../../packages/browser-extension/src/agent-groups-person')
 walnutCheck.isWalnutPage = async () => false
 
 const api = (globalThis as any).chrome
@@ -129,6 +131,7 @@ const idle = () => new Promise((r) => setTimeout(r, 30))
  */
 function browser(): void {
   fake.session = { agentWindow: 3 }
+  fake.local = {}
   fake.tabs.clear(); fake.groups.clear(); fake.nextGroup = 100
   fake.sent = []; fake.shown = []; fake.frameBoxes = {}; fake.frames = []
   fake.hold = null; fake.ungroupRefusals = 0; fake.joinOnMove = -1
@@ -181,15 +184,15 @@ describe('a tab the agent holds in the person\'s window joins its task\'s group 
     expect(fake.shown).toEqual([])
   })
 
-  it('a tab taken with `take` and a tab an agent opened from a handed one join the same group', async () => {
+  it('only a hand-over (Act in tab) is grouped: a tab taken with `take` and one opened from a handed tab stay where they are', async () => {
     await agentTabs.set(4, { owner: OWNER, who: WHO, taken: true })
     await mark(4, true, WHO)
     await agentTabs.set(1, { owner: OWNER, who: WHO, popup: true, viaHanded: true })
     await mark(1, true, WHO)
     await idle()
-    expect(place(4).group).toBe('walnut-order-printer-paper')
-    expect(place(1).group).toBe('walnut-order-printer-paper')
-    expect(walnutGroups()).toHaveLength(1)
+    expect(place(4).group).toBe('Solo')
+    expect(place(1).group).toBe('Work')
+    expect(walnutGroups()).toEqual([])
   })
 
   it('handed on to another conversation: it moves to that task\'s group, and still goes back to where it was at first', async () => {
@@ -266,8 +269,8 @@ describe('let go, it goes back where it was', () => {
     await agent.releaseTab(3)
     await idle()
     expect(place(3).group).toBe('walnut-order-printer-paper')
-    await new Promise((r) => setTimeout(r, RESTORE_RETRY_MS + 80))
-    expect(place(3)).toEqual({ index: 2, group: undefined })
+    // Tried once more after RESTORE_RETRY_MS: waited on the tab going back, not on a clock.
+    await vi.waitFor(() => expect(place(3)).toEqual({ index: 2, group: undefined }), { timeout: RESTORE_RETRY_MS + 5000, interval: 20 })
   })
 
   it('no group of its own before: one its move back landed it inside is not kept', async () => {
@@ -328,7 +331,7 @@ describe('every release path takes the cursor away and puts the tab back (enumer
     await hand(3)
     fake.tabs.delete(3)
     await agentTabs.delete(3)
-    expect(((fake.session.agentGroupBefore ?? {}) as Record<string, unknown>)['3']).toBeUndefined()
+    expect(((fake.local.agentGroupBefore ?? {}) as Record<string, unknown>)['3']).toBeUndefined()
   })
 
   it('every holding ends through agentTabs.delete or deleteIf, which let the tab go (no other writer of the store)', () => {
@@ -401,5 +404,167 @@ describe('a step in a frame: the cursor in the top document', () => {
     expect(fake.sent).toEqual([])
     expect(await up(4, 6)).toEqual({ ok: true, placed: false })
     expect(await up(0)).toEqual({ ok: true, placed: false })
+  })
+})
+
+/** Every grouping and restore queued so far has run (they go one at a time, in one line). */
+const groupsSettled = () => restorePersonTab(api as never, -12345)
+const heldNow = async (tabId: number) => !!(await agentTabs.get(tabId))
+
+describe('a hand-over is grouped once per holding, and nothing else of the person\'s is (review 2026-11-09)', () => {
+  it('the person drags it out of the task\'s group: Take over, Hand back and any later mark leave it where they put it', async () => {
+    await hand(3)
+    expect(place(3).group).toBe('walnut-order-printer-paper')
+    await api.tabs.ungroup(3)
+    await mark(3, true, WHO, 'driving')
+    await mark(3, true, WHO)
+    await groupsSettled()
+    expect(place(3).group).toBeUndefined()
+    expect((await agentTabs.get(3))?.grouped).toBe((await agentTabs.get(3))?.grant)
+  })
+
+  it('marks at once (the frame and the Browser view both mark): one grouping, one group', async () => {
+    await agentTabs.set(3, { owner: OWNER, who: WHO, handed: 'example.test' })
+    await Promise.all([mark(3, true, WHO), mark(3, true, WHO), mark(3, true, WHO)])
+    await groupsSettled()
+    expect(place(3).group).toBe('walnut-order-printer-paper')
+    expect(walnutGroups()).toHaveLength(1)
+  })
+
+  it('the grouping is only in mark, and only for a hand-over recorded with its grant', () => {
+    const shared = readFileSync('packages/browser-extension/src/agent-shared.ts', 'utf8')
+    expect(shared).toMatch(/if \(rec\?\.handed && rec\.grant && rec\.grouped !== rec\.grant && await firstGrouping\(tabId, rec\.grant\)\)/)
+    for (const f of readdirSync('packages/browser-extension/src').filter((x) => x.endsWith('.ts') && x !== 'agent-groups-person.ts')) {
+      const calls = readFileSync(`packages/browser-extension/src/${f}`, 'utf8').match(/groupPersonTab\(/g) ?? []
+      expect(calls.length, f).toBe(f === 'agent-shared.ts' ? 1 : 0)
+    }
+  })
+})
+
+describe('a tab left in its task\'s group by an extension reload or a browser restart goes back (review 2026-11-09)', () => {
+  /** An extension reload or update: storage.session (every holding) is cleared, the tabs and groups keep their ids. */
+  const reload = () => { fake.session = { agentWindow: 3 } }
+
+  /** A browser restart: storage.session is cleared, and Chrome restores the windows, tabs and groups under new ids. */
+  function restart(): void {
+    const tabs = [...fake.tabs.values()]
+    const groups = [...fake.groups.values()]
+    fake.tabs.clear(); fake.groups.clear()
+    for (const g of groups) fake.groups.set(g.id + 1000, { ...g, id: g.id + 1000, windowId: g.windowId + 10 })
+    for (const t of tabs) fake.tabs.set(t.id + 200, { ...t, id: t.id + 200, windowId: t.windowId + 10, groupId: t.groupId >= 0 ? t.groupId + 1000 : -1 })
+    fake.session = {}
+  }
+  const byUrl = (n: number) => [...fake.tabs.values()].find((t) => t.url === `https://shop.example.test/${n}`)!
+  const placeOf = (n: number) => place(byUrl(n).id)
+
+  it('the places are kept in storage.local, which a reload and a restart keep', async () => {
+    await hand(3)
+    expect(Object.keys((fake.local.agentGroupBefore ?? {}) as object)).toEqual(['3'])
+    expect(fake.session.agentGroupBefore).toBeUndefined()
+    expect((fake.local.agentGroupBefore as Record<string, Record<string, unknown>>)['3']).toMatchObject({ windowId: 5, index: 2, groupId: -1, oursTitle: 'walnut-order-printer-paper' })
+  })
+
+  it('a reload: the same tab, still in our group with no holding, goes back as a release would; Work, Solo and their order as they were', async () => {
+    await hand(3)
+    await hand(2)
+    await hand(4)
+    await api.tabs.move(3, { index: 4 })
+    reload()
+    await restoreLeftPersonTabs(api as never, heldNow)
+    expect(place(3)).toEqual({ index: 2, group: undefined })
+    expect(place(2).group).toBe('Work')
+    expect(place(4).group).toBe('Solo')
+    expect(walnutGroups()).toEqual([])
+    expect(fake.local.agentGroupBefore).toEqual({})
+    expect(fake.shown).toEqual([])
+  })
+
+  it('a restart: tabs found again in restored groups of ours by title and colour, put back by title, the only-tab group made again', async () => {
+    await hand(3)
+    await hand(2)
+    await hand(4)
+    restart()
+    await restoreLeftPersonTabs(api as never, heldNow)
+    expect(placeOf(3).group).toBeUndefined()
+    expect(placeOf(2).group).toBe('Work')
+    expect(placeOf(4)).toMatchObject({ group: 'Solo' })
+    expect([...fake.groups.values()].find((g) => g.title === 'Solo')).toMatchObject({ color: 'red' })
+    expect(walnutGroups()).toEqual([])
+    expect(fake.shown).toEqual([])
+  })
+
+  it('never a group we did not make, never the agent window\'s, never a tab held now', async () => {
+    // The agent window (3) has its own page and its task's group of the same name, in orange.
+    fake.tabs.set(8, { id: 8, windowId: 3, index: 1, groupId: -1, url: 'chrome-extension://test/agent-window.html', active: false, status: 'complete' })
+    fake.tabs.get(9)!.groupId = 70
+    fake.groups.set(70, { id: 70, windowId: 3, title: 'walnut-order-printer-paper', color: 'orange' })
+    // The person named a group of theirs the same, in another colour (window 7).
+    fake.tabs.get(11)!.groupId = 80
+    fake.groups.set(80, { id: 80, windowId: 7, title: 'walnut-order-printer-paper', color: 'blue' })
+    await hand(3)
+    restart()
+    // After the restart another task's hand-over is held in a group named like ours: it is theirs now.
+    await agentTabs.set(201, { owner: OWNER, who: WHO, handed: 'example.test' })
+    fake.tabs.get(201)!.groupId = 1100
+    fake.groups.set(1100, { id: 1100, windowId: 15, title: 'walnut-order-printer-paper', color: 'orange' })
+    await restoreLeftPersonTabs(api as never, heldNow)
+    expect(placeOf(3).group).toBeUndefined()
+    expect(fake.tabs.get(209)!.groupId).toBe(1070)
+    expect(fake.tabs.get(211)!.groupId).toBe(1080)
+    expect(fake.tabs.get(201)!.groupId).toBe(1100)
+  })
+
+  it('a restart with the agent window\'s own page gone: its tabs are known by being muted, and left alone', async () => {
+    // Every agent tab is muted (agent-window.ts); the person's handed tab is not.
+    ;(fake.tabs.get(9) as FTab & { mutedInfo?: { muted: boolean } }).mutedInfo = { muted: true }
+    fake.tabs.get(9)!.groupId = 70
+    fake.groups.set(70, { id: 70, windowId: 3, title: 'walnut-order-printer-paper', color: 'orange' })
+    await hand(3)
+    restart()
+    await restoreLeftPersonTabs(api as never, heldNow)
+    expect(placeOf(3).group).toBeUndefined()
+    expect(fake.tabs.get(209)!.groupId).toBe(1070)
+  })
+
+  it('a reload with the agent window unknown (storage.session cleared, its page closed): only the person\'s own window is swept', async () => {
+    ;(fake.tabs.get(9) as FTab & { mutedInfo?: { muted: boolean } }).mutedInfo = { muted: false }
+    fake.tabs.get(9)!.groupId = 70
+    fake.groups.set(70, { id: 70, windowId: 3, title: 'walnut-order-printer-paper', color: 'orange' })
+    await hand(3)
+    // The person moved it out meanwhile; its place is kept, our title is known.
+    await api.tabs.ungroup(3)
+    fake.session = {}
+    await restoreLeftPersonTabs(api as never, heldNow)
+    expect(fake.tabs.get(9)!.groupId).toBe(70)
+    expect(fake.local.agentGroupBefore).toEqual({})
+  })
+
+  it('a tab still held (the background only woke) is left in its group', async () => {
+    await hand(3)
+    await restoreLeftPersonTabs(api as never, heldNow)
+    expect(place(3).group).toBe('walnut-order-printer-paper')
+    expect(Object.keys(fake.local.agentGroupBefore as object)).toEqual(['3'])
+  })
+
+  it('a refused move (the person drags a tab) never loses the rest', async () => {
+    await hand(3)
+    await hand(2)
+    reload()
+    fake.ungroupRefusals = 1
+    await expect(restoreLeftPersonTabs(api as never, heldNow)).resolves.toBeUndefined()
+    await vi.waitFor(() => expect(place(2).group).toBe('Work'))
+  })
+
+  it('runs on every start of the background: its first wake, a browser start, an install or update', () => {
+    const src = readFileSync('packages/browser-extension/src/agent.ts', 'utf8')
+    const init = src.slice(src.indexOf('export function initAgent('), src.indexOf('\n}\n', src.indexOf('export function initAgent(')))
+    expect(init).toMatch(/onStartup\?\.addListener\(\(\) => \{[^}]*restoreLeft\(\)/)
+    expect(init).toMatch(/onInstalled\?\.addListener\(\(\) => restoreLeft\(\)\)/)
+    expect(init).toMatch(/\n  restoreLeft\(\)\n/)
+    expect(src).toMatch(/restoreLeftPersonTabs\(ext as unknown as GroupApi, async \(tabId\) => !!\(await agentTabs\.get\(tabId\)\)\)/)
+    // The places live in storage.local, never only in storage.session.
+    const person = readFileSync('packages/browser-extension/src/agent-groups-person.ts', 'utf8')
+    expect(person).toMatch(/const placeStore = \(api: GroupApi\) => api\.storage\.local \?\? api\.storage\.session/)
+    expect(person).not.toMatch(/storage\.session\.(get|set)\([^)]*BEFORE/)
   })
 })

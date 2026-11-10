@@ -193,8 +193,10 @@ describe('scroll inside a box, and typing', () => {
     fake.page = (op) => (op === 'locate' ? { x: 30, y: 40, what: 'textbox "Name"' } : {})
     const r = await act('type', { trusted: true, x: 30, y: 40, text: 'ab', slowly: true })
     expect(r.typed).toBe('2 characters into textbox "Name", one key at a time')
-    const located = pageOps('locate').map((p) => p.args)
+    // The step's own locate (cursor, focus), then the same judged again with the debugger attached.
+    const located = pageOps('locate').filter((p) => !p.args.recheck).map((p) => p.args)
     expect(located).toHaveLength(1)
+    expect(pageOps('locate').filter((p) => p.args.recheck).map((p) => p.args)).toEqual([expect.objectContaining({ x: 30, y: 40, outward: 'click' })])
     expect(located[0]).toMatchObject({ x: 30, y: 40, outward: 'click', focus: true })
     expect(located[0].then_enter).toBeUndefined()
     expect(mouse().map((m) => m.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased'])
@@ -205,7 +207,7 @@ describe('scroll inside a box, and typing', () => {
     fake.pageLog = []
     fake.log = []
     await act('type', { trusted: true, x: 30, y: 40, text: 'ab', submit: true })
-    expect(pageOps('locate').map((p) => p.args)).toEqual([expect.objectContaining({ outward: 'click', then_enter: true, typing: 'ab' })])
+    expect(pageOps('locate').filter((p) => !p.args.recheck).map((p) => p.args)).toEqual([expect.objectContaining({ outward: 'click', then_enter: true, typing: 'ab' })])
     expect(mouse().map((m) => m.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased'])
   })
 
@@ -434,6 +436,48 @@ describe('a dialog left unanswered is the person\'s', () => {
     fake.page = (op) => (op === 'text' ? { text: 'Renamed', url: PAGE_URL } : {})
     expect(await code(act('text'))).toBe('ok')
     expect(dialogs.orphanOf(7)).toBeUndefined()
+  })
+})
+
+describe('judged once more with the debugger attached, right before the press (review 2026-11-09)', () => {
+  // Attaching shows Chrome's debugging bar: the page gets shorter and a bar at its foot moves up,
+  // so what is at the point when the debugger presses may not be what the first locate judged.
+  const hold = { kind: 'buy', why: '"Place order" buys or pays', what: 'click button "Place order"', url: PAGE_URL, sig: 'buy|click button "Place order"|x||' }
+  /** The page: safe at the first look, "Place order" there once the debugger is attached. */
+  const swapsOnAttach = (safe: Record<string, unknown>) => (op: string, args: Record<string, unknown>) => {
+    if (op !== 'locate' && op !== 'drag_points') return {}
+    return methods().includes('attach') ? { hold } : safe
+  }
+
+  it.each([
+    ['click', { trusted: true, x: 30, y: 40 }],
+    ['click by ref', { trusted: true, ref: 'e5' }],
+    ['type at a point', { trusted: true, x: 30, y: 40, text: 'ab' }],
+    ['type into a ref that submits', { trusted: true, ref: 'e5', text: 'ab', submit: true }],
+    ['press Enter', { trusted: true, key: 'Enter' }],
+  ] as const)('%s: held, nothing pressed or typed', async (name, args) => {
+    fake.page = swapsOnAttach({ x: 30, y: 40, what: 'button "Add to cart"' })
+    const action = name.startsWith('click') ? 'click' : name.startsWith('type') ? 'type' : 'press'
+    const err = await act(action, args).catch((e) => e)
+    expect(err.code).toBe('outward_needs_ok')
+    expect(err.extra.hold).toMatchObject({ kind: 'buy' })
+    expect(mouse().filter((m) => m.type === 'mousePressed')).toEqual([])
+    expect(fake.log.filter((l) => l[0] === 'Input.dispatchKeyEvent' || l[0] === 'Input.insertText')).toEqual([])
+    expect(debuggerHeld(7)).toBe(false)
+  })
+
+  it('a drag: held, nothing pressed', async () => {
+    fake.page = swapsOnAttach({ from: { x: 10, y: 20, what: 'a' }, to: { x: 110, y: 70, what: 'b' } })
+    const err = await act('drag', { ref: 'e3', to_ref: 'e9' }).catch((e) => e)
+    expect(err.code).toBe('outward_needs_ok')
+    expect(mouse().filter((m) => m.type === 'mousePressed')).toEqual([])
+    expect(pageOps('drag_points').at(-1)!.args.recheck).toBe(true)
+  })
+
+  it('the press goes where the element is now (the bar moved it)', async () => {
+    fake.page = (op) => (op === 'locate' ? (methods().includes('attach') ? { x: 30, y: 12, what: 'button "Next"' } : { x: 30, y: 40, what: 'button "Next"' }) : {})
+    await act('click', { trusted: true, ref: 'e5' })
+    expect(mouse().find((m) => m.type === 'mousePressed')).toMatchObject({ x: 30, y: 12 })
   })
 })
 

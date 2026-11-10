@@ -27,7 +27,11 @@ export interface GroupApi {
   }
   runtime?: { getURL(path: string): string }
   windows?: { get(windowId: number): Promise<{ focused?: boolean }> }
-  storage: { session: { get(k: string): Promise<Record<string, unknown>>; set(o: Record<string, unknown>): Promise<void> } }
+  storage: {
+    session: { get(k: string): Promise<Record<string, unknown>>; set(o: Record<string, unknown>): Promise<void> }
+    /** Kept across an extension reload and a browser restart (agent-groups-person.ts keeps the person's places there). */
+    local?: { get(k: string): Promise<Record<string, unknown>>; set(o: Record<string, unknown>): Promise<void> }
+  }
 }
 
 /** A group's title stays short enough to read on its chip. */

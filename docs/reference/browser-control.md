@@ -115,8 +115,10 @@ extension's Settings, reached from the key's popover in the side panel or the to
   recording, `cdp.ts`). Without the permission, the view offers **Show it live**: the extension
   opens its own small page in your window (`POST /api/v1/browser/view/grant`, `grant-open.ts`),
   where Allow, then Allow in Chrome's box, turns live pictures on (an agent may ask for that page
-  too: it opens in the background, and the grant is still your clicks). An agent's screenshot of
-  a covered window uses the same live pictures. The picture is the
+  too: it opens in the background, and the grant is still your clicks; after you close it without
+  allowing, an agent's ask opens it again only 10 minutes later). An agent's screenshot of a
+  covered window uses the same session only while you watch that tab's Browser view; nobody
+  watching, it answers `window_covered` (snapshot and text still read the page). The picture is the
   screenshot path (`captureVisibleTab`), so it works on a window behind yours and takes no focus;
   a tab of yours is pictured only while it is on screen (Walnut never switches your tabs), and a
   picture waits for nothing an agent is doing (`agent-view.ts`, `capture-gate.ts`,
@@ -149,8 +151,11 @@ extension's Settings, reached from the key's popover in the side panel or the to
   another task, and only its own task's view shows or answers it. An extension older than Take
   over answers `request_sign_in` with `old_extension`, and the agent asks you in its chat instead.
 - **One tab group per task, folded.** The tabs a task opens in Walnut's agent window sit in one
-  Chrome tab group named `walnut-<task name>` (`agent-groups.ts`); your own tabs are never moved or
-  grouped. The group folds to its chip once no command of the task ran for 8 seconds (Chrome opens
+  Chrome tab group named `walnut-<task name>` (`agent-groups.ts`). A tab you hand over with Act in
+  tab joins that task's group of your window once, when you hand it over (never folded, and never
+  put back after you drag it out), and goes back where it was when the agent lets it go, also after
+  an extension update or a browser restart (`agent-groups-person.ts`); no other tab of yours is
+  moved or grouped. The agent window's group folds to its chip once no command of the task ran for 8 seconds (Chrome opens
   it by itself while one of its tabs is in front). A folded group cannot hold the window's front
   tab, so the agent window keeps a page of its own as its first tab (`agent-window.html`, "Walnut
   agent window"), which comes in front before the fold. A tab leaves its group before it closes,

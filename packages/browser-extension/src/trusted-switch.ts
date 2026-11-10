@@ -99,3 +99,29 @@ export function setLivePictures(on: boolean, heldBefore: boolean): Promise<boole
   }
   return ext.storage.local.set({ [LIVE_PICTURES_KEY]: false }).then(dropIfUnused).then(() => false, () => false)
 }
+
+/**
+ * The grant page's Allow (grant.ts), straight from the person's click: live pictures on and
+ * Chrome's permission asked, nothing awaited before the request. What real input should be is read
+ * in the same click, not when the page opened (review 2026-11-09: a page left open for hours held a
+ * stale "no permission" and wrote real input off over the person's fresh choice). Real input is
+ * written only when it means nothing yet: never stored (the background's migration stores one, so
+ * this is rare), or stored on while the permission was not held at the click (a grant for live
+ * pictures alone must not bring that old switch back to life). Answers whether live pictures are on now.
+ */
+export function grantLivePictures(): Promise<boolean> {
+  if (isFirefox) return Promise.resolve(false)
+  // Started before the request and not awaited: reading them takes nothing from the click.
+  const before = Promise.all([
+    ext.storage.local.get(REAL_INPUT_KEY).catch(() => ({} as Record<string, unknown>)),
+    debuggerGranted(),
+  ])
+  const stored = ext.storage.local.set({ [LIVE_PICTURES_KEY]: true }).catch(() => undefined)
+  return more.permissions.request(DEBUGGER).catch(() => false).then(async (granted) => {
+    await stored
+    const [got, held] = await before
+    const v = got[REAL_INPUT_KEY]
+    if (typeof v !== 'boolean' || (v && !held)) await ext.storage.local.set({ [REAL_INPUT_KEY]: false }).catch(() => undefined)
+    return granted
+  })
+}

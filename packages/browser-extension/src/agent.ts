@@ -31,11 +31,12 @@ import { inHandedReach } from './agent-tab-kind'
 import { openInAgentWindow, resizeAgentWindow, windowOf } from './agent-window'
 import { bringUpForCommand, noteWorked, viewFrame, viewWatch, watchedOwner, type PushAnswer } from './agent-view'
 import { drivingRefusal, handBack, takeOver } from './agent-takeover'
-import { openGrant } from './grant-open'
+import { openGrant, watchGrantClose } from './grant-open'
 import { NET_OPS, netAct, startRecording, stopRecording } from './agent-net'
 import { watchMedia } from './agent-media'
 import { noteGroupUse, setGroupBusy, ungroupBeforeClose, type GroupApi } from './agent-groups'
 import { forgetAgentMade, noteAgentMade, tidyLeftovers } from './agent-tidy'
+import { restoreLeftPersonTabs } from './agent-groups-person'
 import { refuseWhileDialog } from './agent-dialog'
 
 export { setTrustedInput, trustedInputState } from './trusted-switch'
@@ -651,8 +652,18 @@ export function initAgent(deps: { isWalnutPage: (url: string) => Promise<boolean
     // Tabs it opened that no agent holds any more are closed after a while (agent-tidy.ts).
     void tidyLeftovers().catch(() => undefined)
   })
-  ext.runtime.onStartup?.addListener(() => { void agentLoop() })
+  ext.runtime.onStartup?.addListener(() => { void agentLoop(); restoreLeft() })
+  // An install, an update or a reload clears every holding (storage.session) while Chrome keeps
+  // the tab groups: a tab of the person's left in its task's group goes back (agent-groups-person.ts).
+  ext.runtime.onInstalled?.addListener(() => restoreLeft())
+  watchGrantClose()
+  restoreLeft()
   void agentLoop()
+}
+
+/** Every tab of the person's still in a task's group with no holding behind it goes back where it was. */
+function restoreLeft(): void {
+  void restoreLeftPersonTabs(ext as unknown as GroupApi, async (tabId) => !!(await agentTabs.get(tabId))).catch(() => undefined)
 }
 
 /** For tests: one command as the loop runs it, and the person's Browser view commands. */

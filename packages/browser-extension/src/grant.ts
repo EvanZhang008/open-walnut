@@ -3,13 +3,13 @@
  * (grant-open.ts opens it from "Show it live" in a task's Browser view). Chrome asks for the
  * debugger permission only inside a click on an extension page, so the request is the first thing
  * the Allow button does, with nothing awaited before it. Allow stores live pictures on
- * (trusted-switch.ts setLivePictures; real input is not turned on by it), says it is done and
- * closes the page.
+ * (trusted-switch.ts grantLivePictures, which reads real input in the click; it is not turned on
+ * by it), says it is done and closes the page.
  */
 import { ext } from './ext'
 import { h } from './dom'
 import { followTheme } from './panel-theme'
-import { debuggerGranted, migrateRealInput, setLivePictures } from './trusted-switch'
+import { grantLivePictures, migrateRealInput } from './trusted-switch'
 
 export const GRANT_WORDS = {
   title: "Show Walnut's agent window live",
@@ -32,18 +32,13 @@ export async function startGrantPage(root: HTMLElement): Promise<void> {
   followTheme()
   // Before any click: a never-stored real-input switch is settled first (it must not follow this grant).
   await migrateRealInput().catch(() => false)
-  // Read again whenever the page comes back into view: a page opened in the background may wait
-  // hours, and the person may turn real input on meanwhile (then this grant must not turn it off).
-  let heldBefore = await debuggerGranted()
-  const refresh = () => { void debuggerGranted().then((v) => { heldBefore = v }) }
-  document.addEventListener('visibilitychange', refresh)
-  globalThis.addEventListener?.('focus', refresh)
   const line = h('p', { class: 'grant-line', role: 'status', 'data-testid': 'grant-line' })
   const allow = h('button', { class: 'btn btn-primary btn-block', type: 'button', 'data-testid': 'grant-allow' }, 'Allow') as HTMLButtonElement
   allow.onclick = () => {
     // Asked inside the click: nothing is awaited before Chrome's permission request.
     allow.disabled = true
-    void setLivePictures(true, heldBefore).then((on) => {
+    // What real input is now is read inside this click (grantLivePictures), never kept from the page's opening.
+    void grantLivePictures().then((on) => {
       if (!on) { line.textContent = GRANT_WORDS.no; allow.disabled = false; return }
       line.textContent = GRANT_WORDS.done
       allow.remove()
