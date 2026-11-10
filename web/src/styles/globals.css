@@ -26793,10 +26793,14 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   backdrop-filter: none;
 }
 /* The composer row is a stacking context (z-index 40), so a sheet inside it would
-   stay under the body-level backdrop (9000): while it holds the sheet the row rises
-   above the backdrop, and everything of it but the sheet is hidden, as the dim had it. */
+   stay under the body-level backdrop (9000). While it holds the sheet the row stops
+   being one (z-index auto), so the sheet stacks on the page itself, over the backdrop.
+   Never raise the row instead: a stacking context inside the column, which clips at
+   its edges, is what paints the sheet, and WebKit (the Mac app) then cut the sheet at
+   the column's left edge (2026-11-10). Everything of the row but the sheet is hidden,
+   as the dim had it. Guard: tests/e2e/browser/fullscreen-sheet-cover.spec.ts */
 .session-panel-input:has(.side-question-popover.open-walnut-fullscreen) {
-  z-index: 9001;
+  z-index: auto;
   visibility: hidden;
 }
 .session-panel-input .side-question-popover.open-walnut-fullscreen {
