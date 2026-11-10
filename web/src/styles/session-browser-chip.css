@@ -43,33 +43,24 @@
 }
 .session-browser-chip.is-ended .session-browser-chip-dot { background: var(--fg-muted); }
 
+/* The popover: the servers popover's frame (.session-web-card), so the two read as a pair. */
 .session-browser-popover {
   position: fixed;
   z-index: 10050;
+  box-sizing: border-box;
   width: min(560px, calc(100vw - 24px));
   max-height: min(80vh, 720px);
   overflow-y: auto;
+  padding: 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--bg-elevated, var(--card-bg));
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
 }
 .session-browser-popover:empty { display: none; }
-/* The view fills the popover: no margin or border of its own there. */
-.session-browser-popover > .session-browser-card { margin: 0; border: 0; border-radius: 0; background: transparent; }
-/* The picture sized to the popover, so its foot never scrolls away; Larger widens the popover
-   itself (the picture keeps its shape, so only a wider popover draws it larger). */
-.session-browser-popover .session-browser-shot { height: min(38vh, 320px); }
+/* Larger widens the popover itself (the picture keeps its shape, so only a wider popover draws it
+   larger); the picture is sized to it, so the foot never scrolls away. */
 .session-browser-popover:has(> .session-browser-card--large) { width: min(1040px, calc(100vw - 24px)); }
-.session-browser-popover .session-browser-card--large .session-browser-shot { height: min(62vh, 600px); }
-
-/* A narrow popover (a phone): the view's actions take their own row under the names, so the
-   title and address keep the width. */
-@media (max-width: 520px) {
-  .session-browser-popover .session-browser-head { flex-wrap: wrap; }
-  .session-browser-popover .session-browser-names { flex: 1 1 0; min-width: 0; }
-  .session-browser-popover .session-browser-actions { flex: 1 0 100%; justify-content: flex-end; }
-}
 
 /* The phone's top bar, beside the kebab: a browser glyph in a 44 px target. Its colour outranks
    phone-fixes-r2.css's touch rule (a tapped button's stuck :hover takes `color: inherit`). */

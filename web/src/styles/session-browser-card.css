@@ -1,23 +1,17 @@
-/* The task's Browser view in the session panel (components/sessions/SessionBrowserCard.tsx). */
+/* The task's Browser view (components/sessions/SessionBrowserCard.tsx), drawn only in the browser
+   pill's popover (session-browser-chip.css). It reads as a pair with the servers pill's popover
+   (session-servers.css .session-web-card): the same bold 13 px title row with a boxed ×, the same
+   24 px bordered buttons, and Stop quiet at the far left, red only on hover. */
 .session-browser-card {
-  margin: 6px 10px 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md, 8px);
-  background: var(--card-bg, var(--bg-secondary));
   color: var(--fg);
   font-size: 12px;
   line-height: 1.4;
-  overflow: hidden;
-  flex: 0 0 auto;
 }
-.session-browser-card--folded,
 .session-browser-card--ended {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px 5px 10px;
 }
-.session-browser-fold-text,
 .session-browser-ended-text {
   flex: 1 1 auto;
   min-width: 0;
@@ -26,28 +20,37 @@
   white-space: nowrap;
 }
 .session-browser-muted { color: var(--fg-muted); }
+/* The title row: as the servers popover's (.session-servers-list-title in a dense list). */
 .session-browser-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  padding: 7px 8px 6px 10px;
+  margin-bottom: 4px;
 }
 .session-browser-dot {
   flex: 0 0 auto;
   width: 8px;
   height: 8px;
-  margin-top: 5px;
   border-radius: 50%;
   background: var(--success, #2e9e5b);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #2e9e5b) 22%, transparent);
 }
-.session-browser-card--folded .session-browser-dot,
-.session-browser-card--ended .session-browser-dot { margin-top: 0; }
 .session-browser-dot--idle { background: var(--warning, #c98a14); box-shadow: none; }
 .session-browser-dot--off { background: var(--fg-muted); box-shadow: none; }
-.session-browser-names { flex: 1 1 auto; min-width: 0; }
 .session-browser-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
   font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The address and the window, each one line under the title. */
+.session-browser-names { min-width: 0; margin-bottom: 10px; }
+.session-browser-url,
+.session-browser-where {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -56,31 +59,49 @@
   color: var(--fg-secondary, var(--fg-muted));
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .session-browser-where { color: var(--fg-muted); font-size: 11px; }
-.session-browser-actions { flex: 0 0 auto; display: flex; gap: 4px; }
+
+/* Buttons: the servers popover's (.session-server-btn), clear over the popover as its row
+   buttons are, so they look the same in both themes. */
 .session-browser-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 24px;
+  padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
-  background: var(--bg);
+  border-radius: 6px;
+  background: transparent;
   color: var(--fg);
   font: inherit;
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1;
   cursor: pointer;
   white-space: nowrap;
 }
-.session-browser-btn:hover { background: var(--bg-hover, var(--bg-tertiary)); }
-.session-browser-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.session-browser-btn:disabled { opacity: 0.6; cursor: default; }
-.session-browser-btn--stop { color: var(--error, #c0392b); border-color: color-mix(in srgb, var(--error, #c0392b) 45%, var(--border)); }
+.session-browser-btn:hover:not(:disabled) { background: var(--bg-hover, var(--bg-tertiary)); }
+.session-browser-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.session-browser-btn:disabled { opacity: 0.45; cursor: default; }
+/* The boxed × (.session-server-btn-icon .session-servers-list-close). */
+.session-browser-btn--icon {
+  flex: 0 0 auto;
+  width: 26px;
+  padding: 0;
+  background: transparent;
+  color: var(--fg-muted);
+}
+/* Stop as quiet as the servers' Stop: red only under the pointer. */
+.session-browser-btn--stop { color: var(--fg-secondary, var(--fg)); }
+.session-browser-btn--stop:hover:not(:disabled) { color: var(--error, #c0392b); border-color: color-mix(in srgb, var(--error, #c0392b) 45%, var(--border)); }
+.session-browser-btn--primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg, #fff); }
+.session-browser-btn--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 86%, #000); }
+
 .session-browser-tabs {
   display: flex;
   gap: 4px;
-  padding: 0 10px 6px;
+  margin-bottom: 8px;
   overflow-x: auto;
 }
 .session-browser-tab {
@@ -99,17 +120,18 @@
 }
 .session-browser-tab.is-on { border-color: var(--accent); color: var(--fg); background: var(--accent-subtle, transparent); }
 .session-browser-shot {
-  margin: 0 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: 10px;
   background: var(--bg-tertiary, var(--bg));
-  height: min(44vh, 440px);
+  height: min(38vh, 320px);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
 }
-.session-browser-card--large .session-browser-shot { height: min(80vh, 960px); }
+/* Larger: as tall as the popover (session-browser-chip.css, at most min(80vh, 720px)) holds with
+   its title, lines, ask row and buttons, so the buttons never scroll out of view. */
+.session-browser-card--large .session-browser-shot { height: min(62vh, 600px, calc(min(80vh, 720px) - 230px)); }
 .session-browser-shot img {
   max-width: 100%;
   max-height: 100%;
@@ -123,21 +145,27 @@
   display: flex;
   flex-wrap: wrap;
   gap: 2px 10px;
-  padding: 4px 10px 7px;
+  padding-top: 6px;
   color: var(--fg-muted);
   font-size: 11px;
-  min-height: 1.4em;
 }
+.session-browser-foot:empty { display: none; }
 .session-browser-note { color: var(--fg-secondary, var(--fg-muted)); }
-.session-browser-btn--primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg, #fff); }
-.session-browser-btn--primary:hover { background: color-mix(in srgb, var(--accent) 86%, #000); }
+/* Stop alone on the left, Larger and Take over together on the right. */
+.session-browser-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.session-browser-actions-gap { flex: 1 1 auto; min-width: 16px; }
 .session-browser-hand {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 10px 6px;
+  margin-bottom: 8px;
   padding: 6px 8px 6px 10px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: 6px;
   border: 1px solid color-mix(in srgb, var(--warning, #c98a14) 45%, var(--border));
   background: color-mix(in srgb, var(--warning, #c98a14) 12%, var(--bg));
   color: var(--fg);

@@ -12,8 +12,9 @@
  * pixels, and the card holds one request open for the next (`after`: the number of the picture it
  * has), so a picture shows as soon as it is taken; an older extension is asked once a second or so.
  * Each picture is decoded before it replaces the last, so the view never blinks. When the last tab
- * goes, the card says why. Hide folds it to one line (kept per task); the line still says the
- * browser is in use.
+ * goes, the card says why. It is drawn only in the header pill's popover (SessionBrowserChip.tsx),
+ * laid out as the servers pill's popover is: a bold title and a boxed ×, quiet bordered buttons,
+ * and Stop on its own at the far left, away from Larger and Take over.
  *
  * Take over (the person's click) brings the tab forward in their browser and makes every agent
  * command there wait; Hand back (here or on the tab's own pill) gives it to the agent again. An
@@ -30,9 +31,12 @@ import {
 } from './browser-view-model';
 import '@/styles/session-browser-card.css';
 
+/** The × of the popover's title row, the servers popover's own (SessionServerList.tsx). */
+const CLOSE_GLYPH = (
+  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2 8 8M8 2 2 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+);
+
 interface CardPrefs {
-  /** Folded to one line by the person. */
-  folded: boolean;
   /** The picture drawn large. */
   large: boolean;
   /** The tab followed when the task has several, as browser:tab (null: the newest). */
@@ -41,11 +45,13 @@ interface CardPrefs {
   dismissed: string | null;
 }
 
-const PREFS: CardPrefs = { folded: false, large: false, pick: null, dismissed: null };
+// A view kept by an older build also carries `folded` (the card it drew in the chat could fold to
+// one line); it is ignored, so its other choices still read.
+const PREFS: CardPrefs = { large: false, pick: null, dismissed: null };
 const isPrefs = (v: unknown): v is CardPrefs => {
   if (!v || typeof v !== 'object') return false;
   const p = v as Record<string, unknown>;
-  return typeof p.folded === 'boolean' && typeof p.large === 'boolean'
+  return typeof p.large === 'boolean'
     && (p.pick === null || typeof p.pick === 'string') && (p.dismissed === null || typeof p.dismissed === 'string');
 };
 
@@ -72,8 +78,8 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
   taskId: string;
   /** The tabs, read by the host (the header pill, SessionBrowserChip.tsx): no second read here. */
   view?: ReturnType<typeof useBrowserView>;
-  /** Shown in the pill's popover: × closes the popover (no fold), and so does Dismiss. */
-  onClose?: () => void;
+  /** Closes the pill's popover: its ×, Dismiss, and nothing left to show. */
+  onClose: () => void;
 }) {
   const own = useBrowserView(view ? undefined : taskId);
   const { state, reread } = view ?? own;
@@ -99,9 +105,7 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
   const followedDevice = followed?.device;
   // The picture belongs to this task, browser and tab: any of them changing starts it afresh.
   const shownKey = followed ? `${taskId}|${tabKey(followed)}` : undefined;
-  // In the pill's popover the view is open or not there: never folded.
-  const folded = !onClose && prefs.folded;
-  const watching = !!followed && !folded && onScreen;
+  const watching = !!followed && onScreen;
 
   // A new tab followed (another browser's, another task's): no picture of the old one under its title.
   const shownTab = useRef<string | undefined>(undefined);
@@ -223,7 +227,7 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
   useEffect(() => { if (!offerNow) setGranting(null); }, [offerNow]);
   // In the pill's popover, nothing to show closes it (no empty popover left open).
   const nothing = !!state && !followed && (!state.ended || prefs.dismissed === state.ended.at);
-  useEffect(() => { if (nothing) onClose?.(); }, [nothing, onClose]);
+  useEffect(() => { if (nothing) onClose(); }, [nothing, onClose]);
 
   if (!state) return null;
 
@@ -234,8 +238,8 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
       <div className="session-browser-card session-browser-card--ended" data-testid="session-browser-ended" role="status">
         <span className="session-browser-dot session-browser-dot--off" aria-hidden />
         <span className="session-browser-ended-text">Browser: {endedLine(ended.why)} <span className="session-browser-muted">{agoLine(ended.at, Date.now())}</span></span>
-        <button type="button" className="session-browser-btn" aria-label="Dismiss" title="Dismiss"
-          onClick={() => { setPrefs((p) => ({ ...p, dismissed: ended.at })); onClose?.(); }}>&times;</button>
+        <button type="button" className="session-browser-btn session-browser-btn--icon" aria-label="Dismiss" title="Dismiss"
+          onClick={() => { setPrefs((p) => ({ ...p, dismissed: ended.at })); onClose(); }}>{CLOSE_GLYPH}</button>
       </div>
     );
   }
@@ -243,7 +247,10 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
   const mineFrame = frame?.tab === followed.tab && (frame.device === undefined || frame.device === followed.device);
   const title = mineFrame && frame?.title ? frame.title : followed.title;
   const url = mineFrame && frame?.url ? frame.url : followed.url;
-  const where = windowLine({ window: frame?.window ?? followed.window, windowState: frame?.windowState ?? followed.windowState, handed: frame?.handed, taken: frame?.taken });
+  const at = { window: frame?.window ?? followed.window, windowState: frame?.windowState ?? followed.windowState, handed: frame?.handed, taken: frame?.taken };
+  // One line at the popover's width: which window, which browser. The tooltip has it all.
+  const where = `${windowLine(at)} · ${followed.browser}`;
+  const whereFull = `${windowLine(at, true)} · tab ${followed.tab} · ${followed.browser}`;
   const offer = offerNow;
   const noPicture = trouble ?? (followed.connected ? (followed.pictures ? noPictureLine(frame, !!picture, offer) : noPictureLine({ why: 'no_permission' }, false)) : 'The browser does not answer right now.');
   // Beside the covered line: the one button, or what to do in Chrome once its page is open.
@@ -259,39 +266,18 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
   const driving = !!followed.driving;
   const asks = handLine({ driving, signIn: followed.signIn });
 
-  if (folded) {
-    return (
-      <div className="session-browser-card session-browser-card--folded" data-testid="session-browser-folded">
-        <span className="session-browser-dot" aria-hidden />
-        <span className="session-browser-fold-text">{followed.signIn && !driving ? <>Browser: <strong>the agent asks you to sign in</strong> </> : driving ? <>Browser: <strong>you have the tab</strong> </> : <>Browser in use: <strong>{title || url || `tab ${followed.tab}`}</strong> </>}<span className="session-browser-muted">· {where}</span></span>
-        <button type="button" className="session-browser-btn" onClick={() => setPrefs((p) => ({ ...p, folded: false }))} data-testid="session-browser-show">Show</button>
-      </div>
-    );
-  }
-
   return (
     <section className={`session-browser-card${prefs.large ? ' session-browser-card--large' : ''}`} data-testid="session-browser-card" aria-label="Browser view">
       <header className="session-browser-head">
         <span className={`session-browser-dot${live ? '' : ' session-browser-dot--idle'}`} aria-hidden />
-        <div className="session-browser-names">
-          <div className="session-browser-title" data-testid="session-browser-title" title={title}>{title || 'Untitled page'}</div>
-          <div className="session-browser-url" data-testid="session-browser-url" title={url}>{url}</div>
-          <div className="session-browser-where" data-testid="session-browser-where">{where} · tab {followed.tab} · {followed.browser}</div>
-        </div>
-        <div className="session-browser-actions">
-          <button type="button" className="session-browser-btn" onClick={() => setPrefs((p) => ({ ...p, large: !p.large }))}
-            aria-pressed={prefs.large} data-testid="session-browser-size">{prefs.large ? 'Smaller' : 'Larger'}</button>
-          {driving
-            ? <button type="button" className="session-browser-btn session-browser-btn--primary" onClick={() => { void hand('back'); }} disabled={handing !== null}
-                title="The agent may use this tab again" data-testid="session-browser-handback">{handing === 'back' ? 'Handing back…' : followed.signIn ? 'Done, hand back' : 'Hand back'}</button>
-            : <button type="button" className={`session-browser-btn${followed.signIn ? ' session-browser-btn--primary' : ''}`} onClick={() => { void hand('take'); }} disabled={handing !== null || !followed.connected}
-                title="Bring this tab up in your browser and use it yourself; the agent waits until you hand it back" data-testid="session-browser-takeover">{handing === 'take' ? 'Taking over…' : 'Take over'}</button>}
-          <button type="button" className="session-browser-btn session-browser-btn--stop" onClick={() => { void stop(); }} disabled={stopping}
-            title="The agent stops using this tab. The tab stays open, yours." data-testid="session-browser-stop">{stopping ? 'Stopping…' : 'Stop'}</button>
-          <button type="button" className="session-browser-btn" aria-label={onClose ? 'Close the Browser view' : 'Hide the Browser view'} title={onClose ? 'Close' : 'Hide (one line stays)'}
-            onClick={() => { if (onClose) onClose(); else setPrefs((p) => ({ ...p, folded: true })); }} data-testid="session-browser-hide">&times;</button>
-        </div>
+        <div className="session-browser-title" data-testid="session-browser-title" title={title}>{title || 'Untitled page'}</div>
+        <button type="button" className="session-browser-btn session-browser-btn--icon" aria-label="Close the Browser view" title="Close"
+          onClick={onClose} data-testid="session-browser-hide">{CLOSE_GLYPH}</button>
       </header>
+      <div className="session-browser-names">
+        <div className="session-browser-url" data-testid="session-browser-url" title={url}>{url}</div>
+        <div className="session-browser-where" data-testid="session-browser-where" title={whereFull}>{where}</div>
+      </div>
       {tabs.length > 1 && (
         <div className="session-browser-tabs" role="tablist" aria-label="The task's tabs">
           {tabs.map((t) => (
@@ -317,6 +303,20 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
       <div className="session-browser-foot" data-testid="session-browser-foot">
         {picture && (live ? <span>Live · {agoLine(picture.at, now)}</span> : <span>Last picture {agoLine(picture.at, now)}</span>)}
         {picture && (noPicture || late) && <span className="session-browser-note" data-testid="session-browser-why">{[late, noPicture].filter(Boolean).join(' ')}{liveOffer}</span>}
+      </div>
+      {/* Stop on its own at the far left, so a click meant for Larger or Take over never ends the
+          agent's use. All quiet: the ask row above holds the filled button when something is asked. */}
+      <div className="session-browser-actions">
+        <button type="button" className="session-browser-btn session-browser-btn--stop" onClick={() => { void stop(); }} disabled={stopping}
+          title="The agent stops using this tab. The tab stays open, yours." data-testid="session-browser-stop">{stopping ? 'Stopping…' : 'Stop'}</button>
+        <span className="session-browser-actions-gap" aria-hidden />
+        <button type="button" className="session-browser-btn" onClick={() => setPrefs((p) => ({ ...p, large: !p.large }))}
+          aria-pressed={prefs.large} data-testid="session-browser-size">{prefs.large ? 'Smaller' : 'Larger'}</button>
+        {driving
+          ? <button type="button" className="session-browser-btn" onClick={() => { void hand('back'); }} disabled={handing !== null}
+              title="The agent may use this tab again" data-testid="session-browser-handback">{handing === 'back' ? 'Handing back…' : followed.signIn ? 'Done, hand back' : 'Hand back'}</button>
+          : <button type="button" className="session-browser-btn" onClick={() => { void hand('take'); }} disabled={handing !== null || !followed.connected}
+              title="Bring this tab up in your browser and use it yourself; the agent waits until you hand it back" data-testid="session-browser-takeover">{handing === 'take' ? 'Taking over…' : 'Take over'}</button>}
       </div>
     </section>
   );

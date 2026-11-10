@@ -61,15 +61,19 @@ export interface BrowserFrame {
   live?: 'off' | 'no_permission' | 'cancelled' | 'unavailable' | 'failed' | 'dialog' | 'devtools' | string;
 }
 
-/** Which window the tab is in, as the person reads it. */
-export function windowLine(t: { window?: string; windowState?: string; handed?: boolean; taken?: boolean }): string {
+/**
+ * Which window the tab is in, as the person reads it. Short for the view's one line; `full` adds
+ * what the short form leaves out (the window is not minimized), for its tooltip.
+ */
+export function windowLine(t: { window?: string; windowState?: string; handed?: boolean; taken?: boolean }, full = false): string {
   if (t.window === 'person') {
     return t.taken ? 'Your own window: the agent took this tab of yours'
       : t.handed ? 'Your own window: you handed this tab over'
         : 'Your own window';
   }
   if (t.window === 'agent') {
-    return t.windowState === 'minimized' ? "Walnut's agent window (you minimized it)" : "Walnut's agent window, behind yours (not minimized)";
+    if (t.windowState === 'minimized') return "Walnut's agent window (you minimized it)";
+    return full ? "Walnut's agent window, behind yours (not minimized)" : "Walnut's agent window, behind yours";
   }
   return 'Your browser';
 }

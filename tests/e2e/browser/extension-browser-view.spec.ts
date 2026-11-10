@@ -204,8 +204,9 @@ test('the Browser view shows itself when the task\'s session opens a page, follo
   await expect(card(page)).toBeVisible({ timeout: 20_000 })
   await expect(card(page).getByTestId('session-browser-title')).toHaveText('Sign in to Test Bank')
   await expect(card(page).getByTestId('session-browser-url')).toHaveText(site('login.bank.test', '/signin'))
-  await expect(card(page).getByTestId('session-browser-where')).toContainText("Walnut's agent window, behind yours (not minimized)")
-  await expect(card(page).getByTestId('session-browser-where')).toContainText(`tab ${agentTab}`)
+  // One line: which window, which browser; the tooltip adds that it is not minimized and the tab.
+  await expect(card(page).getByTestId('session-browser-where')).toHaveText(/^Walnut's agent window, behind yours · [^·]+$/)
+  await expect(card(page).getByTestId('session-browser-where')).toHaveAttribute('title', new RegExp(`^Walnut's agent window, behind yours \\(not minimized\\) · tab ${agentTab} · `))
   const picture = card(page).getByTestId('session-browser-picture')
   await expect(picture).toBeVisible({ timeout: 30_000 })
   await expect(card(page).getByTestId('session-browser-foot')).toContainText('Live')

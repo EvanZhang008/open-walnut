@@ -10,7 +10,10 @@ const tab = (n: number): BrowserViewTab => ({ device: 'extension-aaaaaa', browse
 
 describe('the Browser view\'s words', () => {
   it('names the window', () => {
-    expect(windowLine({ window: 'agent', windowState: 'normal' })).toBe("Walnut's agent window, behind yours (not minimized)")
+    expect(windowLine({ window: 'agent', windowState: 'normal' })).toBe("Walnut's agent window, behind yours")
+    // The tooltip's full form says what the one line leaves out.
+    expect(windowLine({ window: 'agent', windowState: 'normal' }, true)).toBe("Walnut's agent window, behind yours (not minimized)")
+    expect(windowLine({ window: 'agent', windowState: 'minimized' }, true)).toBe("Walnut's agent window (you minimized it)")
     expect(windowLine({ window: 'agent', windowState: 'minimized' })).toBe("Walnut's agent window (you minimized it)")
     expect(windowLine({ window: 'person', handed: true })).toBe('Your own window: you handed this tab over')
     expect(windowLine({ window: 'person', taken: true })).toBe('Your own window: the agent took this tab of yours')

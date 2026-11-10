@@ -78,6 +78,13 @@ async function startServer(port: number): Promise<void> {
   throw new Error(`server on ${port} did not start`)
 }
 
+/** Both themes, as the app sets them. */
+async function dark(page: Page, on: boolean): Promise<void> {
+  await page.emulateMedia({ colorScheme: on ? 'dark' : 'light' })
+  await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), on ? 'dark' : 'light')
+  await page.waitForTimeout(150)
+}
+
 async function press(page: Page, loc: Locator): Promise<void> {
   await expect(loc).toBeVisible()
   const b = (await loc.boundingBox())!
@@ -146,6 +153,15 @@ test('servers and the browser show only as header pills, their details in popove
   await expect(webCard.locator(`[data-port="${port}"]`)).toBeVisible()
   await expect(webCard.locator(`[data-port="${port}"] [data-testid="session-server-open"]`)).toBeVisible()
   await page.screenshot({ path: `${SHOTS}/${testInfo.project.name}-2-servers-popover.png`, scale: 'css' })
+  // Its title row, which the Browser view's matches (below).
+  const webTitle = await webCard.evaluate((el) => {
+    const t = getComputedStyle(el.querySelector('.session-servers-list-title')!)
+    const x = el.querySelector('.session-servers-list-close')!.getBoundingClientRect()
+    return { size: t.fontSize, weight: t.fontWeight, close: [Math.round(x.width), Math.round(x.height)] }
+  })
+  await dark(page, true)
+  await page.screenshot({ path: `${SHOTS}/${testInfo.project.name}-2-servers-popover-dark.png`, scale: 'css' })
+  await dark(page, false)
   await page.keyboard.press('Escape')
   await expect(webCard).toHaveCount(0)
 
@@ -164,12 +180,39 @@ test('servers and the browser show only as header pills, their details in popove
   const chipBox = (await chip.boundingBox())!
   expect(popBox.y).toBeGreaterThanOrEqual(chipBox.y + chipBox.height - 1)
   expect(popBox.x + popBox.width).toBeLessThanOrEqual(1280)
+  // A pair with the servers popover: the same title row (bold 13 px title, a boxed × of one size).
+  const head = await card.evaluate((el) => {
+    const t = getComputedStyle(el.querySelector('[data-testid="session-browser-title"]')!)
+    const x = el.querySelector('[data-testid="session-browser-hide"]')!.getBoundingClientRect()
+    return { size: t.fontSize, weight: t.fontWeight, close: [Math.round(x.width), Math.round(x.height)] }
+  })
+  expect(head).toEqual(webTitle)
+  // The window on one line: which window and which browser; the tab and "not minimized" in its tooltip.
+  const where = card.getByTestId('session-browser-where')
+  await expect(where).toHaveText("Walnut's agent window, behind yours · Chrome")
+  await expect(where).toHaveAttribute('title', "Walnut's agent window, behind yours (not minimized) · tab 41 · Chrome")
+  expect((await where.boundingBox())!.height).toBeLessThan(20)
+  // Stop on its own at the far left, Larger and Take over together at the right.
+  const stopBox = (await card.getByTestId('session-browser-stop').boundingBox())!
+  const sizeBox = (await card.getByTestId('session-browser-size').boundingBox())!
+  const takeBox = (await card.getByTestId('session-browser-takeover').boundingBox())!
+  expect(sizeBox.x - (stopBox.x + stopBox.width)).toBeGreaterThan(200)
+  expect(takeBox.x - (sizeBox.x + sizeBox.width)).toBeLessThan(12)
   await page.screenshot({ path: `${SHOTS}/${testInfo.project.name}-3-browser-popover.png`, scale: 'css' })
+  await dark(page, true)
+  await page.screenshot({ path: `${SHOTS}/${testInfo.project.name}-3-browser-popover-dark.png`, scale: 'css' })
+  await dark(page, false)
   // Larger widens the popover (the picture keeps its shape), and its foot stays in view.
   await press(page, card.getByTestId('session-browser-size'))
   await expect.poll(async () => (await pop.boundingBox())!.width, { timeout: 5_000 }).toBeGreaterThan(900)
   const foot = (await card.getByTestId('session-browser-foot').boundingBox())!
   expect(foot.y + foot.height).toBeLessThanOrEqual(820)
+  // Its buttons too, inside the popover with no scrolling.
+  for (const id of ['session-browser-stop', 'session-browser-size', 'session-browser-takeover']) {
+    const b = (await card.getByTestId(id).boundingBox())!
+    expect(b.y + b.height, id).toBeLessThanOrEqual(Math.min(820, (await pop.boundingBox())!.y + (await pop.boundingBox())!.height))
+  }
+  expect(await pop.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1)
   await page.screenshot({ path: `${SHOTS}/${testInfo.project.name}-3b-browser-larger.png`, scale: 'css' })
   await press(page, card.getByTestId('session-browser-size'))
   await expect.poll(async () => (await pop.boundingBox())!.width, { timeout: 5_000 }).toBeLessThan(600)
@@ -190,6 +233,8 @@ test('servers and the browser show only as header pills, their details in popove
   await press(page, chip)
   await expect(card.getByTestId('session-browser-hand')).toContainText('sign in')
   browserState.signIn = false
+  // The ask row goes, and the buttons under the picture move up with it: click Stop where it ends.
+  await expect(card.getByTestId('session-browser-hand')).toHaveCount(0, { timeout: 20_000 })
 
   // ── Stop: the view says why in the open popover; dismissed, the pill is gone ──
   await press(page, card.getByTestId('session-browser-stop'))
