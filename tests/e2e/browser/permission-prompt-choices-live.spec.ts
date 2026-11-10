@@ -66,8 +66,13 @@ test('the server offers the rule; 2 then Enter tells the CLI to allow it for the
   await expect(card.getByTestId('permission-request-command')).toHaveText('pwd')
   await page.locator('body').click({ position: { x: 5, y: 5 } })
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
-  await page.keyboard.press('2')
-  await expect(card.locator('.is-picked')).toContainText('Allow for this session')
+  // A card takes keys only PROMPT_KEY_ARM_MS after it is first shown (prompt-keys.ts), counted
+  // from when its history is on screen, which Playwright's visible does not wait for: a key before
+  // that is ignored by design, so press until the card takes it.
+  await expect(async () => {
+    await page.keyboard.press('2')
+    await expect(card.locator('.is-picked')).toContainText('Allow for this session', { timeout: 1_000 })
+  }).toPass({ timeout: 20_000 })
   await page.keyboard.press('Enter')
   await expect(page.getByText('Bash decision received: allow rules=session:Bash(pwd)')).toBeVisible({ timeout: 30_000 })
   // The answer is kept on the record, by the call it gated, for the timeline's rows.
