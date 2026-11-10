@@ -381,6 +381,24 @@ describe('the looks', () => {
     expect(cur._cursorForTesting()!.look).toBe(looks.DEFAULT_CURSOR_STYLE)
   })
 
+  it('the shipped look is the Walnut badge; a stored Walnut buddy counts only when the person picked it', async () => {
+    expect(looks.DEFAULT_CURSOR_STYLE).toBe('badge')
+    for (const [settings, want] of [
+      [{ cursorStyle: 'nut' }, 'badge'],
+      [{ cursorStyle: 'nut', cursorStyleChosen: true }, 'nut'],
+      [{ cursorStyle: 'arrow' }, 'arrow'],
+      [{ cursorStyle: 'laser', cursorStyleChosen: true }, 'badge'],
+      [undefined, 'badge'],
+    ] as const) {
+      expect(looks.storedCursorStyle(settings), JSON.stringify(settings)).toBe(want)
+      cur._resetCursorForTesting()
+      stored = settings ? { settings } : {}
+      await cur.cursorAt(10, 10)
+      expect(cur._cursorForTesting()!.look, JSON.stringify(settings)).toBe(want)
+    }
+    expect(read('popup-cursor-pick.ts')).toMatch(/setSettings\(\{ cursorStyle: select\.value, cursorStyleChosen: true \}\)/)
+  })
+
   it('a pick changed while it is on show draws it again in place, still masked if it was; content listens for the change', async () => {
     await cur.cursorAt(40, 60)
     const before = cur._cursorForTesting()!.host
@@ -415,11 +433,11 @@ describe('the looks', () => {
   })
 
   it('a storage slower than the wait: drawn in the default first, then in the pick, in place', async () => {
-    stored = { settings: { cursorStyle: 'badge' } }
+    stored = { settings: { cursorStyle: 'paw' } }
     storeDelay = 400
     await cur.cursorAt(25, 35)
     expect(cur._cursorForTesting()!.look).toBe(looks.DEFAULT_CURSOR_STYLE)
-    await vi.waitFor(() => expect(cur._cursorForTesting()!.look).toBe('badge'), { timeout: 3000, interval: 20 })
+    await vi.waitFor(() => expect(cur._cursorForTesting()!.look).toBe('paw'), { timeout: 3000, interval: 20 })
     const c = cur._cursorForTesting()!
     expect({ x: c.x, y: c.y }).toEqual({ x: 25, y: 35 })
   })

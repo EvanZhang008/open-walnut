@@ -5,7 +5,7 @@
  * `pageFill` from the background and follows its changes (content.ts).
  */
 import { ext } from './ext'
-import { DEFAULT_CURSOR_STYLE, isCursorStyle, type CursorStyle } from './cursor-looks'
+import { DEFAULT_CURSOR_STYLE, storedCursorStyle, type CursorStyle } from './cursor-looks'
 import { DEFAULT_PASSWORD, DEFAULT_PASSPHRASE, type PassphraseOptions, type PasswordOptions } from '../../../src/core/vault/generator'
 
 /**
@@ -42,6 +42,8 @@ export interface Settings {
   copyTotp: boolean
   /** How an agent's cursor looks in a page (cursor-looks.ts); page-cursor.ts reads it from storage itself. */
   cursorStyle: CursorStyle
+  /** The person picked `cursorStyle` here (an older extension saved its default with every setting). */
+  cursorStyleChosen?: boolean
   generator: GeneratorPrefs
 }
 
@@ -64,7 +66,8 @@ export async function getSettings(): Promise<Settings> {
     ...(s.autoLockChosen === true ? { autoLockChosen: true } : {}),
     pageFill: typeof s.pageFill === 'boolean' ? s.pageFill : DEFAULT_SETTINGS.pageFill,
     copyTotp: typeof s.copyTotp === 'boolean' ? s.copyTotp : DEFAULT_SETTINGS.copyTotp,
-    cursorStyle: isCursorStyle(s.cursorStyle) ? s.cursorStyle : DEFAULT_SETTINGS.cursorStyle,
+    cursorStyle: storedCursorStyle(s),
+    ...(s.cursorStyleChosen === true ? { cursorStyleChosen: true } : {}),
     generator: {
       kind: g.kind === 'words' ? 'words' : 'random',
       random: { ...DEFAULT_PASSWORD, ...(g.random ?? {}), kind: 'random' },

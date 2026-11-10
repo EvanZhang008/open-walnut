@@ -27,7 +27,7 @@ export function cursorPickRow(current: CursorStyle): { row: HTMLElement; sync: (
   select.onchange = () => {
     if (!isCursorStyle(select.value)) return
     drawPreview(preview, select.value, true)
-    void setSettings({ cursorStyle: select.value })
+    void setSettings({ cursorStyle: select.value, cursorStyleChosen: true })
   }
   const row = h('div', { class: 'setting setting-stack', 'data-testid': 'popup-cursor-row' },
     preview, h('label', { class: 'row-title', for: 'cursor-style' }, 'Agent cursor'), select,

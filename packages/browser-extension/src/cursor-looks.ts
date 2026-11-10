@@ -16,7 +16,7 @@
 export const CURSOR_STYLES = ['nut', 'badge', 'arrow', 'paw'] as const
 export type CursorStyle = typeof CURSOR_STYLES[number]
 /** The shipped look: change this one line to ship another. */
-export const DEFAULT_CURSOR_STYLE: CursorStyle = 'nut'
+export const DEFAULT_CURSOR_STYLE: CursorStyle = 'badge'
 export const CURSOR_STYLE_LABELS: Record<CursorStyle, string> = {
   nut: 'Walnut buddy',
   badge: 'Walnut badge',
@@ -24,6 +24,16 @@ export const CURSOR_STYLE_LABELS: Record<CursorStyle, string> = {
   paw: 'Squirrel paw',
 }
 export const isCursorStyle = (v: unknown): v is CursorStyle => typeof v === 'string' && (CURSOR_STYLES as readonly string[]).includes(v)
+/**
+ * The look stored settings ask for. An extension before `cursorStyleChosen` saved its default
+ * ('nut') with every setting change, so a stored 'nut' counts only when the person picked it; any
+ * other stored look could only come from a pick and is kept.
+ */
+export function storedCursorStyle(settings: unknown): CursorStyle {
+  const s = (settings ?? {}) as { cursorStyle?: unknown; cursorStyleChosen?: unknown }
+  if (!isCursorStyle(s.cursorStyle)) return DEFAULT_CURSOR_STYLE
+  return s.cursorStyle === 'nut' && s.cursorStyleChosen !== true ? DEFAULT_CURSOR_STYLE : s.cursorStyle
+}
 
 /** How long a click's animation runs. */
 export const CLICK_MS = 520

@@ -21,7 +21,7 @@
  *     the tab over.
  */
 import { dropHost, hostStyle, makeHost, type Host } from './content-host'
-import { CLICK_MS, DEFAULT_CURSOR_STYLE, cursorCss, cursorParts, isCursorStyle, type CursorStyle } from './cursor-looks'
+import { CLICK_MS, DEFAULT_CURSOR_STYLE, cursorCss, cursorParts, isCursorStyle, storedCursorStyle, type CursorStyle } from './cursor-looks'
 import { ask, ext } from './ext'
 
 export type CursorKind = 'move' | 'click' | 'drag'
@@ -63,10 +63,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const still = () => typeof matchMedia !== 'function' || document.visibilityState === 'hidden' || matchMedia('(prefers-reduced-motion: reduce)').matches
 const isTop = () => { try { return window.top == null || window.top === window } catch { return false } }
 
-const lookOf = (settings: unknown): CursorStyle => {
-  const v = (settings as { cursorStyle?: unknown } | undefined)?.cursorStyle
-  return isCursorStyle(v) ? v : DEFAULT_CURSOR_STYLE
-}
+const lookOf = (settings: unknown): CursorStyle => storedCursorStyle(settings)
 
 /**
  * The chosen look, read once per document. A storage slower than LOOK_READ_MS lets the first
