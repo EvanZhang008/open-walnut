@@ -408,8 +408,9 @@ export type CronJob = {
    */
   wake?: CronWake;
   /**
-   * The task told when this routine misses a run (run-log.ts): the task whose session made it,
-   * or one set later. Absent: a session routine's own target, else the user's notifications.
+   * The task told first when this routine misses a run (run-log.ts routineOwnerChain): the task
+   * whose session made it, or one set later. After it, the task it delivers into and the org's
+   * Main, read at the sweep; with none of them, the user's notifications.
    */
   ownerTaskId?: string;
   state: CronJobState;

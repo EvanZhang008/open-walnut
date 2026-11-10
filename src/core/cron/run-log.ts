@@ -199,12 +199,23 @@ export function missedRuns(job: CronJob, nowMs: number): MissedRun[] {
   return out;
 }
 
-/** The task told about this routine's missed runs: its owner, else the task a session routine runs in. */
-export function routineOwnerTaskId(job: CronJob): string | undefined {
-  if (job.ownerTaskId) return job.ownerTaskId;
+/**
+ * The tasks that may be told about this routine's missed runs, in order: its owner (the task whose
+ * session made it), the task it delivers into now (a session routine, a trigger on a task, a router
+ * wake: its executor's `target`), the org's Main. The sweep tells the first one it can reach. Only
+ * a routine with none of them goes on the user's notifications (2026-11-10, Walnut VP: the org
+ * reflection's and Inbox Triage's missed runs reached the user). The defaults are read from the
+ * routine as it is at the sweep, never stored, so a target repaired or edited later counts.
+ */
+export function routineOwnerChain(job: Pick<CronJob, 'ownerTaskId' | 'executor'>, mainTaskId?: string): string[] {
   const cfg = job.executor?.config as { target?: unknown } | undefined;
-  if (job.executor?.type === 'session' && typeof cfg?.target === 'string' && cfg.target.trim()) return cfg.target.trim();
-  return undefined;
+  const target = typeof cfg?.target === 'string' ? cfg.target.trim() : '';
+  return [...new Set([job.ownerTaskId?.trim(), target, mainTaskId?.trim()].filter((t): t is string => !!t))];
+}
+
+/** The first task of routineOwnerChain. */
+export function routineOwnerTaskId(job: Pick<CronJob, 'ownerTaskId' | 'executor'>, mainTaskId?: string): string | undefined {
+  return routineOwnerChain(job, mainTaskId)[0];
 }
 
 /** What a catch-up run's executor reads first: which run it stands for, and that it is late. */

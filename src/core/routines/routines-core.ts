@@ -285,6 +285,7 @@ export async function createRoutine(body: unknown, origin?: string, opts?: { id?
   const { normalizeCronJobCreate } = await import('../cron/index.js');
   const input = normalizeCronJobCreate(body);
   // The task whose session made it owns it: that task hears when it misses a run (cron/run-log.ts).
+  // With none, the sweep tells the task it delivers into, else the org's Main (routineOwnerChain).
   if (input && !input.ownerTaskId && opts?.callerSid) {
     const { callerTaskOf } = await import('../sessions/user-spoke.js');
     const owner = await callerTaskOf(opts.callerSid);

@@ -3832,8 +3832,10 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
   `slotMs`, `error`, `summary`, `manual`, `catchUpMs`, `attempt`,
   `willRetryAtMs`, `repeats`), and every read of a routine carries `missed:
   [{ slotMs, reason, failedAtMs? }]` when a slot of an hourly-or-slower routine
-  ended with no good run. `ownerTaskId` is the task told about it (the creating
-  session's task). `POST /api/v1/routines/:id/missed/dismiss { slotMs }` →
+  ended with no good run. It is told to the first task that can be reached of
+  `ownerTaskId` (the creating session's task), the task the routine delivers
+  into, and the org's Main; only with none of them does it go on the user's
+  notifications. `POST /api/v1/routines/:id/missed/dismiss { slotMs }` →
   `{ "job" }` sets one aside. Older clients ignore all three fields.
 - `POST /api/v1/routines/trigger` (the `trigger_create` op) body `{ run, every,
   prompt, description, session?, host?, cwd?, name?, timeoutSeconds?,

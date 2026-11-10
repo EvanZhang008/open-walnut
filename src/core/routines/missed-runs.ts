@@ -5,14 +5,16 @@
  *
  * Every few minutes the primary looks at each routine's missed runs and tells, once per missed
  * slot: the routine's owner task (or its lead, when the owner has no session), the way a failing
- * trigger is told (trigger-health.ts), never the user; a routine nobody owns (one the user made)
- * goes on the user's notifications. Either way the Routines page shows it.
+ * trigger is told (trigger-health.ts), never the user. The task is the first of the routine's
+ * owner, the task it delivers into now, and the org's Main that can be reached
+ * (cron/run-log.ts routineOwnerChain); only a routine with none of them (a Walnut whose org was
+ * never used) goes on the user's notifications. Either way the Routines page shows it.
  * The notice says how to run the missed one now and how to set it aside.
  */
 
 import { log } from '../../logging/index.js';
 import type { CronJob } from '../cron/types.js';
-import { missedRuns, routineOwnerTaskId, type MissedRun } from '../cron/run-log.js';
+import { missedRuns, routineOwnerChain, type MissedRun } from '../cron/run-log.js';
 
 export const MISSED_SWEEP_MS = 5 * 60_000;
 const FIRST_SWEEP_MS = 90_000;
@@ -59,6 +61,8 @@ export interface MissedRunDeps {
   service(): Promise<Service | null>;
   tellTeam(input: { taskId: string; job: CronJob; missed: MissedRun[] }): Promise<boolean>;
   bell(input: { job: CronJob; missed: MissedRun[] }): Promise<void>;
+  /** The org's Main now, the owner of a routine that has none and delivers into no task. */
+  mainTaskId(): Promise<string | undefined>;
   now(): number;
 }
 
@@ -67,6 +71,7 @@ export async function noticeMissedRunsOnce(deps: MissedRunDeps = defaultDeps()):
   const service = await deps.service();
   if (!service) return 0;
   const now = deps.now();
+  const main = await deps.mainTaskId();
   let told = 0;
   for (const job of await service.list({ includeDisabled: false })) {
     const known = new Set(job.state.missedToldMs ?? []);
@@ -74,10 +79,16 @@ export async function noticeMissedRunsOnce(deps: MissedRunDeps = defaultDeps()):
     if (!fresh.length) continue;
     // Recorded first: a notice that fails is not retried every five minutes into a session.
     await service.markMissed(job.id, { told: fresh.map((m) => m.slotMs) });
-    const owner = routineOwnerTaskId(job);
-    // A routine a session made tells its team, never the user; one nobody owns is the user's own.
-    const reached = owner ? await deps.tellTeam({ taskId: owner, job, missed: fresh }) : false;
-    if (!owner) await deps.bell({ job, missed: fresh });
+    const chain = routineOwnerChain(job, main);
+    // Its owner, else the task it delivers into, else Main: the first that can be told. Never the
+    // user while one of them exists; a routine with none is the user's own.
+    let owner: string | undefined;
+    let reached = false;
+    for (const taskId of chain) {
+      owner = taskId;
+      if ((reached = await deps.tellTeam({ taskId, job, missed: fresh }))) break;
+    }
+    if (!chain.length) await deps.bell({ job, missed: fresh });
     log.cron.warn('routine missed a run', {
       jobId: job.id, jobName: job.name, slots: fresh.map((m) => new Date(m.slotMs).toISOString()),
       reasons: fresh.map((m) => m.reason), told: owner ? (reached ? 'owner' : 'nobody (Routines page only)') : 'notifications',
@@ -111,6 +122,10 @@ function defaultDeps(): MissedRunDeps {
         body: `${slotLabel(job, first.slotMs)}: ${sentence(first.reason)} Open Routines to run it now or set it aside.`,
         dedupKey: `routine-missed:${job.id}:${first.slotMs}`,
       });
+    },
+    async mainTaskId() {
+      const { currentMainTaskId } = await import('./routine-owner.js');
+      return currentMainTaskId();
     },
     now: () => Date.now(),
   };

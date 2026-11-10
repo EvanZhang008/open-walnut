@@ -148,4 +148,20 @@ describe('a routine’s run history and missed runs, through the routes', () => 
     await noticeMissedRunsOnce()
     expect((await listNotifications()).feed.filter((n: any) => String(n.dedupKey ?? '').startsWith('routine-missed:'))).toHaveLength(count)
   })
+
+  it('with a Main, a routine nobody owns no longer goes on the user’s notifications', async () => {
+    const { ensureMainTask } = await import('../../src/core/org/org-store.js')
+    await ensureMainTask()
+    const [, b] = pastSlots()
+    const { json: made } = await call('POST', '/api/routines', daily('after-main', {
+      expectFromMs: b - HOUR, runLogSinceMs: b - HOUR,
+      runLog: [{ atMs: b + DAY + 5, slotMs: b + DAY, status: 'ok', durationMs: 1 }],
+    }))
+    expect(made.job.ownerTaskId).toBeUndefined()
+    await noticeMissedRunsOnce()
+    const keys = (await listNotifications()).feed.map((n: any) => String(n.dedupKey ?? ''))
+    expect(keys).not.toContain(`routine-missed:${made.job.id}:${b}`)
+    // It was handled: told once, not again.
+    expect((await call('GET', `/api/routines/${made.job.id}`)).json.job.state.missedToldMs).toEqual([b])
+  })
 })

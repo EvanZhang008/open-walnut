@@ -23,7 +23,7 @@ function job(over: Partial<CronJob> = {}): CronJob {
   } as CronJob
 }
 
-function deps(jobs: CronJob[], reached = true): MissedRunDeps & { told: unknown[]; bells: unknown[]; marked: unknown[] } {
+function deps(jobs: CronJob[], reached = true, main?: string): MissedRunDeps & { told: unknown[]; bells: unknown[]; marked: unknown[] } {
   const told: unknown[] = []
   const bells: unknown[] = []
   const marked: unknown[] = []
@@ -40,6 +40,7 @@ function deps(jobs: CronJob[], reached = true): MissedRunDeps & { told: unknown[
     }),
     tellTeam: vi.fn(async (input) => { told.push(input); return reached }),
     bell: vi.fn(async (input) => { bells.push(input) }),
+    mainTaskId: async () => main,
     now: () => SLOT + 2 * HOUR,
   }
 }
@@ -55,7 +56,18 @@ describe('telling a missed run', () => {
     expect(d.told).toHaveLength(1)
   })
 
-  it('goes to the user’s notifications only for a routine nobody owns (the user’s own)', async () => {
+  it('a routine with no owner and no task of its own goes to Main, never the user’s notifications', async () => {
+    const d = deps([job()], true, 'main-ceo')
+    await noticeMissedRunsOnce(d)
+    expect(d.told).toEqual([expect.objectContaining({ taskId: 'main-ceo' })])
+    expect(d.bells).toEqual([])
+    // A routine that delivers into a task tells that task, not Main.
+    const t = deps([job({ executor: { type: 'session', config: { target: 'lead-task' } } } as Partial<CronJob>)], true, 'main-ceo')
+    await noticeMissedRunsOnce(t)
+    expect(t.told).toEqual([expect.objectContaining({ taskId: 'lead-task' })])
+  })
+
+  it('goes to the user’s notifications only with no owner, no task and no Main (a Walnut whose org was never used)', async () => {
     const d = deps([job()])
     await noticeMissedRunsOnce(d)
     expect(d.told).toEqual([])
@@ -89,5 +101,34 @@ describe('the notice reads as sentences', () => {
     const { sentence } = await import('../../../src/core/routines/missed-runs.js')
     expect(sentence('Not started: no room (all 7 slots taken).')).toBe('Not started: no room (all 7 slots taken).')
     expect(sentence('no run was recorded for this time')).toBe('no run was recorded for this time.')
+  })
+})
+
+describe('the owner chain is read from the routine as it is now (review 2026-11-10)', () => {
+  const tellsOnly = (reachable: string[]) => vi.fn(async (input: { taskId: string }) => reachable.includes(input.taskId))
+
+  it('an owner that cannot be told falls to the task it delivers into, then Main', async () => {
+    const j = job({ ownerTaskId: 'gone-task', executor: { type: 'session', config: { target: 'sid-not-a-task' } } } as Partial<CronJob>)
+    const d = deps([j], true, 'main-ceo')
+    d.tellTeam = tellsOnly(['main-ceo'])
+    await noticeMissedRunsOnce(d)
+    expect((d.tellTeam as ReturnType<typeof vi.fn>).mock.calls.map(([i]) => i.taskId)).toEqual(['gone-task', 'sid-not-a-task', 'main-ceo'])
+    expect(d.bells).toEqual([])
+  })
+
+  it('a target edited after the routine was made is the one told, never the old one', async () => {
+    const j = job({ executor: { type: 'session', config: { target: 'task-old' } } } as Partial<CronJob>)
+    j.executor = { type: 'session', config: { target: 'task-new' } } as CronJob['executor']
+    const d = deps([j], true, 'main-ceo')
+    await noticeMissedRunsOnce(d)
+    expect(d.told).toEqual([expect.objectContaining({ taskId: 'task-new' })])
+  })
+
+  it('nothing is stored: a routine made with no owner keeps none, and still reaches Main', async () => {
+    const j = job()
+    const d = deps([j], true, 'main-ceo')
+    await noticeMissedRunsOnce(d)
+    expect(j.ownerTaskId).toBeUndefined()
+    expect(d.told).toEqual([expect.objectContaining({ taskId: 'main-ceo' })])
   })
 })
