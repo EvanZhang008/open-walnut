@@ -54,8 +54,13 @@ describe('accumulatorAfterSnapshot', () => {
   });
 
   it('never seeds from a finished turn', () => {
-    expect(accumulatorAfterSnapshot({ blocks, completedLen: blocks.length, atSnapshot: { buffer: '' }, now: { buffer: '' }, cut: false }))
+    expect(accumulatorAfterSnapshot({ blocks, completedLen: blocks.length, atSnapshot: { buffer: 'old', msgId: 'm2' }, now: { buffer: 'old', msgId: 'm2' }, cut: false }))
       .toEqual({ buffer: '', msgId: undefined });
+  });
+
+  it('an empty snapshot leaves the text the column already received', () => {
+    expect(accumulatorAfterSnapshot({ blocks: [], completedLen: 0, atSnapshot: { buffer: 'See the', msgId: 'm9' }, now: { buffer: 'See the plan', msgId: 'm9' }, cut: false }))
+      .toBeNull();
   });
 
   it('events with no ids (legacy) append to the snapshot\'s text', () => {

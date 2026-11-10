@@ -538,14 +538,16 @@ export function registerSessionChatRpc(): void {
     // session:status-changed / session:result handlers in server.ts.
     const sid = data.sessionId
     const STALE_RUNNING_MS = 5 * 60 * 1000
-    const snapshot = sessionStreamBuffer.getSnapshot(sid)
-    let correctedIsStreaming = snapshot.isStreaming
+    // The snapshot is read after every await below, just before the answer: a delta sent while
+    // this handler waited reaches the client before the answer, and the client takes the
+    // snapshot as holding everything it received before it (accumulatorAfterSnapshot).
+    let forceIdle = false
     try {
       const record = await getSessionByClaudeId(sid)
       // Idle is the authoritative between-turn state, so a buffer that still
       // claims streaming is stale just like one paired with a terminal record.
       if (record && (record.process_status === 'idle' || record.process_status === 'stopped' || record.process_status === 'error')) {
-        correctedIsStreaming = false
+        forceIdle = true
       } else if (record && record.process_status === 'running') {
         // The newer of the two clocks. `last_status_change` is stamped only by a
         // classification verdict, so a resume (idle → running through the
@@ -574,7 +576,7 @@ export function registerSessionChatRpc(): void {
               sessionId: sid,
               staleMs: Date.now() - lastChangeMs,
             })
-            correctedIsStreaming = false
+            forceIdle = true
           }
         }
       }
@@ -588,7 +590,8 @@ export function registerSessionChatRpc(): void {
       })
     }
 
-    return { ...snapshot, isStreaming: correctedIsStreaming }
+    const snapshot = sessionStreamBuffer.getSnapshot(sid)
+    return { ...snapshot, isStreaming: forceIdle ? false : snapshot.isStreaming }
   })
 
   // ── Team RPCs ──
