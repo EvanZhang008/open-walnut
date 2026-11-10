@@ -492,6 +492,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // over a server echo: a drop's tier write is answered, and echoed, before its folder
   // write goes out, and that echo drew the card outside the folder for a moment.
   const localEdits = useRef(new Map<string, LocalEdit>());
+  // The row a held edit was made on, for a task the list did not hold yet (holdOptimistic).
+  const heldRows = useRef(new Map<string, Task>());
   // The list as last committed, for a write that has to know a row's fields up front.
   const tasksNow = useCommittedRef(allTasks);
   const noteLocalEdits = (patches: Record<string, Partial<Task>>, pending = false) => {
@@ -507,11 +509,23 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // waits on the host's journal, showed the old title until the next refetch). Returns
   // the settle to call once, when the write is answered or fails. `base`: the caller's copy of a
   // row the list does not hold yet (its first answer still on the way), so that answer, read
-  // before the write, is laid under the edit too.
+  // before the write, is laid under the edit too. Every later write for that id builds on the
+  // row the edit holds (`heldRows`), so it replaces the held fields even when it names no row
+  // itself (an Undo of that Complete, also made before the list came: 2026-11-10 review); a
+  // write that cannot read its row at all drops the held edit rather than leave it in force.
   const holdOptimistic = (id: string, apply: (rows: Task[]) => Task[], base?: Task): (() => void) => {
-    const current = tasksNow.current.find((t) => t.id === id) ?? (base?.id === id ? base : undefined);
-    const next = current ? apply([current]).find((t) => t.id === id) : undefined;
-    const fields = current && next ? changedFields(current, next) : {};
+    const listed = tasksNow.current.find((t) => t.id === id);
+    const held = !listed && localEdits.current.has(id) ? heldRows.current.get(id) : undefined;
+    const current = listed ?? held ?? (base?.id === id ? base : undefined);
+    if (!current) {
+      localEdits.current.delete(id);
+      heldRows.current.delete(id);
+      return () => {};
+    }
+    const next = apply([current]).find((t) => t.id === id);
+    if (!listed && next) heldRows.current.set(id, next);
+    else heldRows.current.delete(id);
+    const fields = next ? changedFields(current, next) : {};
     if (Object.keys(fields).length === 0) return () => {};
     noteLocalEdits({ [id]: fields }, true);
     let settled = false;
@@ -1015,7 +1029,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         const byId = new Map(rows.map((t) => [t.id, t]));
         const asked = new Set(wanted);
         // The server's rows now: an optimistic edit the server refused must not come back.
-        for (const id of asked) localEdits.current.delete(id);
+        for (const id of asked) { localEdits.current.delete(id); heldRows.current.delete(id); }
         setTasks((prev) => {
           const seen = new Set<string>();
           const next: Task[] = [];
