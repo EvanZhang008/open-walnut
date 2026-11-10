@@ -156,8 +156,14 @@ test('a limited session: the banner, the Limited row, and its three buttons', as
   await expect(flashed).toBeInViewport()
   // The topmost limited row at the top of the list, just under the stuck headings, never mid-list
   // under unrelated rows. Another worker's limited rows may sit above this one, so the check reads
-  // the section's first limited row, not this task's.
-  const firstLimited = page.getByTestId('status-section-waiting-rows').locator('.status-section-card:has(.status-card-limit-tag)').first()
+  // the topmost of the rows the count led to (the ones it marks), not this task's. Not "the first
+  // row wearing the Limited tag": a row the summary counts (its task has a limit) can be drawn
+  // without the tag for a moment while another worker's session continues (its state is no longer
+  // waiting), and the count scrolls to that row, leaving the first tagged one a few rows lower
+  // (CI 2026-11-10: "at 150", "at 210", "at 270", a row's height apart).
+  const firstLedId = await page.getByTestId('status-section-waiting-rows').locator('.status-section-card.is-limit-flash').first().getAttribute('data-task-id')
+  expect(firstLedId, 'the count marks the rows it led to').toBeTruthy()
+  const firstLimited = page.getByTestId('status-section-waiting-rows').locator(`.status-section-card[data-task-id="${firstLedId}"]`)
   await expect.poll(() => firstLimited.evaluate((el) => {
     let sc = el.parentElement
     while (sc && !(/(auto|scroll)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight)) sc = sc.parentElement
