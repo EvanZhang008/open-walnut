@@ -204,6 +204,19 @@ async function readTree(taskId: string, forWrite: boolean): Promise<{ self?: Tas
   return { self, asks: treeAsksOf(taskId, everything, letters, forWrite), everything };
 }
 
+/** When a person last wrote in the task, read from its sessions (SessionRecord.humanInputAt), or undefined. */
+async function personInputAtOf(task: Task): Promise<string | undefined> {
+  try {
+    const { listSessionsForTasks } = await import('./session-tracker.js');
+    const sids = new Set([task.session_id, ...(task.session_ids ?? [])].filter((x): x is string => !!x));
+    let at: string | undefined;
+    for (const rec of await listSessionsForTasks(new Set([task.id]), sids)) if (rec.humanInputAt && (!at || rec.humanInputAt > at)) at = rec.humanInputAt;
+    return at;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Refuse a new ask of the user from `taskId` that its tree already holds (409 `same_ask`), unless
  * `input.same_ask_reason` says why it is a different decision. Never throws anything else: a tree
@@ -242,8 +255,10 @@ export async function refuseSameAsk(
   const self = everything.find((t) => t.id === taskId);
   const answers = answersOf(self);
   if (answers.length) {
+    // A withdrawal holds until the user writes in the task after it (same-ask.ts answerHolds).
+    const personAt = answers.some((a) => a.withdrawn) ? await personInputAtOf(self!) : undefined;
     for (const ask of [text, ...parts]) {
-      const answer = answerFor(answers, ask, Date.now(), ask === text ? decision : null);
+      const answer = answerFor(answers, ask, Date.now(), { ...(ask === text ? decision : null), ...(personAt ? { personAt } : {}) });
       if (!answer) continue;
       log.task.info('same-ask: refused, answered above', { taskId, by: answer.by, what });
       throw new SameAskError(answeredAskMessage(answer, what), { taskId, title: self?.title ?? taskId, ask: answer.ask, where: 'status', relation: 'ancestor' });

@@ -158,5 +158,33 @@ describe('a report set through the writer, answered or withdrawn before (2026-11
     await setTaskReport(t.id, { ...base, ask_id: d.id, ask_new: 'The tests now wipe the tablet' }, { taskId: t.id } as never, now)
     expect((await getTask(t.id)).status_report).toMatchObject({ ask_id: d.id, ask_rev: 1 })
   })
+
+  it('the user writing in the task after a withdrawal lifts it, on the status and at the report gate', async () => {
+    const { setTaskReport } = await import('../../src/core/sessions/report-set.js')
+    const { stampAskDecision, reportDecision } = await import('../../src/core/ask-decision.js')
+    const { askKey } = await import('../../src/core/same-ask.js')
+    const ask = 'Approve watering the shared garden beds twice a day?'
+    const now = Date.now()
+    const prev = stampAskDecision({ state: 'needs', ask, at: new Date(now - 30 * 86_400_000).toISOString(), ask_own: { kind: 'user_own', why: 'Only the user pays for the water' } } as never, null)
+    const d = reportDecision(prev)!
+    const t = (await addTask({ title: 'Garden watering', project: 'Garden' } as never)).task
+    const sid = '00000009-aaaa-4bbb-8ccc-dddddddddddd'
+    await createSessionRecord(sid, t.id, 'Garden', WALNUT_HOME)
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
+    const answer = { ask, key: askKey(ask), askId: d.id, decisionKey: d.key, text: 'Never ask again unless I bring it up', by: vpId, byTitle: 'Garden lead', at: prev.at, withdrawn: true }
+    await updateTaskRaw(t.id, { phase: 'NEED_ACTION', session_id: sid } as never, { source: 'test' })
+    // Its last turn asked it again, after that phase move.
+    await updateTaskRaw(t.id, { status_report: { ...prev, at: new Date(Date.now() + 1_000).toISOString() }, asks_answered: [answer] } as never, { source: 'test' })
+    for (let i = 0; i < 3; i++) await syncUserStatuses(null, Date.now() + 60_000)
+    expect((await getTask(t.id)).user_status?.state).toBe('waiting')
+    const base = { state: 'needs', ask, ask_id: d.id, user_kind: 'user_own', user_kind_why: 'Only the user pays for the water' }
+    await expect(setTaskReport(t.id, base, { taskId: t.id } as never, now)).rejects.toMatchObject({ code: 'same_ask' })
+    // He writes in the task: he brought it up again.
+    await updateSessionRecord(sid, { humanInputAt: new Date().toISOString() } as never)
+    for (let i = 0; i < 3; i++) await syncUserStatuses(null, Date.now() + 60_000)
+    expect((await getTask(t.id)).user_status?.state).toBe('needs')
+    await setTaskReport(t.id, base, { taskId: t.id } as never, Date.now())
+    expect((await getTask(t.id)).status_report?.ask).toBe(ask)
+  })
 })
 

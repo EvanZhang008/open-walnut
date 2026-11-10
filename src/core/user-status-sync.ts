@@ -600,6 +600,7 @@ export function completeStatusFacts(facts: StatusFacts, everything: readonly Tas
 /**
  * When a person last wrote to each task a stored same-ask fold names (same-ask.ts): the evidence
  * that the user answered the deeper task, so its ancestor's fold may stay once that task asks no more.
+ * And to each task holding an ask the user withdrew: writing there after it lifts the withdrawal.
  */
 export async function readFoldEvidence(facts: StatusFacts, targets: readonly Task[]): Promise<void> {
   // One sign-in is one ask (sign-in-ask.ts): the user's login command words, every task's sign-in
@@ -614,6 +615,8 @@ export async function readFoldEvidence(facts: StatusFacts, targets: readonly Tas
     .map((t) => ({ id: t.id, title: t.title, ask: t.user_status!.ask!, createdAt: t.created_at }));
   facts.signIn = await safely('sign-in-state', async () => (await import('./sign-in-ask.js')).readSignInState(), {});
   const ids = new Set(targets.map((t) => t.user_status?.sameAsk?.id).filter((id): id is string => !!id));
+  // A task holding a withdrawal too: a person writing in it after it lifts it (same-ask.ts answerHolds).
+  for (const t of targets) if (answersOf(t).some((a) => a.withdrawn)) ids.add(t.id);
   facts.personInputAt = new Map();
   if (!ids.size) return;
   await safely('fold-evidence', async () => {
