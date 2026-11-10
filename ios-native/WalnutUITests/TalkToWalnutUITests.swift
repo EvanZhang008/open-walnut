@@ -26,6 +26,16 @@ final class TalkToWalnutUITests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS[c] %@", fragment)).firstMatch
     }
 
+    /// The labels an app shows, in order, for a failure message.
+    private static func labels(_ app: XCUIApplication) -> String {
+        let tree = app.debugDescription
+        guard let pattern = try? NSRegularExpression(pattern: "label: '([^']+)'") else { return "" }
+        let found = pattern.matches(in: tree, range: NSRange(tree.startIndex..., in: tree)).compactMap { match in
+            Range(match.range(at: 1), in: tree).map { String(tree[$0]) }
+        }
+        return found.prefix(40).joined(separator: " / ")
+    }
+
     private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", identifier)).firstMatch
     }
@@ -53,7 +63,18 @@ final class TalkToWalnutUITests: XCTestCase {
         tile.tap()
 
         // Refused from behind, the press brings Walnut forward, already listening, on its own screen.
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "the shortcut did not bring Walnut forward")
+        // When it does not, the failure says what was on screen instead (a prompt, an error, a
+        // detail page): CI's job log keeps the message even when no screenshot is uploaded.
+        guard app.wait(for: .runningForeground, timeout: 10) else {
+            let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            let seen = "Shortcuts: \(Self.labels(shortcuts)) | SpringBoard: \(Self.labels(springboard))"
+            let text = XCTAttachment(string: shortcuts.debugDescription + "\n\n" + springboard.debugDescription)
+            text.name = "not-forward-hierarchy"
+            text.lifetime = .keepAlways
+            add(text)
+            XCTFail("the shortcut did not bring Walnut forward (Walnut is \(app.state.rawValue)); on screen: \(seen)")
+            return
+        }
         let panel = element(app, "talk.panel")
         XCTAssertTrue(panel.waitForExistence(timeout: 10), "Walnut came forward without the Talk screen")
         let title = element(app, "talk.panel.title")
