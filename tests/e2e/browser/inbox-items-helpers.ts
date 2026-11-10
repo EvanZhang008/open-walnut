@@ -177,10 +177,16 @@ export function meeting(count: number) {
  */
 export async function markUnreadElsewhere(request: APIRequestContext, item: InboxLetterItem) {
   const file = path.join(await fixtureDataHome(request), 'inbox-provider-state.json');
-  let states: Record<string, { read: boolean; observedAt: string }> = {};
-  try { states = JSON.parse(await fs.readFile(file, 'utf8')); } catch { /* none observed yet */ }
-  states[JSON.stringify([item.source.account, item.source.message])] = { read: false, observedAt: new Date().toISOString() };
-  await fs.writeFile(file, JSON.stringify(states));
+  // Under the file's lock: the fixture provider writes it on every mark read (inbox-items-fixture.ts).
+  await withFileLock(file, async () => {
+    let states: Record<string, { read: boolean; observedAt: string }> = {};
+    try { states = JSON.parse(await fs.readFile(file, 'utf8')); } catch { /* none observed yet */ }
+    states[JSON.stringify([item.source.account, item.source.message])] = { read: false, observedAt: new Date().toISOString() };
+    // Whole or not at all: the provider's resolve reads it without the lock.
+    const tmp = `${file}.unread-${process.pid}-${Date.now()}`;
+    await fs.writeFile(tmp, JSON.stringify(states));
+    await fs.rename(tmp, file);
+  });
 }
 
 /** Mark the item read, have the mailbox show it unread again, and open the Mark read again form. */

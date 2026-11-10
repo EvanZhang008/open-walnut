@@ -44,8 +44,18 @@ export async function installInboxItemsFixture(root: string) {
       if (args.messages[0].includes('wrong-read')) return JSON.stringify({ account: args.account, read: false, changed: 1, failed: [] });
       if (args.messages[0].includes('zero-change')) return JSON.stringify({ account: args.account, read: true, changed: 0, failed: [] });
       if (args.messages[0].includes('provider-refusal')) return JSON.stringify({ error: 'Fixture provider refused the action' });
-      states[JSON.stringify([args.account, args.messages[0]])] = { read: true, observedAt: new Date().toISOString() };
-      await fs.writeFile(stateFile, JSON.stringify(states));
+      // Read, change and write the file under its lock: a spec's markUnreadElsewhere writes it too, and
+      // writing this process's last copy back put another spec's "unread again" over (2026-11-10, CI:
+      // a mark read in a parallel spec, and Mark read again never showed).
+      const { withFileLock } = await import('../../../src/utils/file-lock.js');
+      await withFileLock(stateFile, async () => {
+        try { states = JSON.parse(await fs.readFile(stateFile, 'utf8')); } catch { /* none observed yet */ }
+        states[JSON.stringify([args.account, args.messages[0]])] = { read: true, observedAt: new Date().toISOString() };
+        // Whole or not at all: a resolve reads it without the lock.
+        const tmp = `${stateFile}.${process.pid}-${Date.now()}`;
+        await fs.writeFile(tmp, JSON.stringify(states));
+        await fs.rename(tmp, stateFile);
+      });
       return JSON.stringify({ account: args.account, read: true, changed: 1, failed: [] });
     } });
   return () => { unregister(); op.dispose(); };
