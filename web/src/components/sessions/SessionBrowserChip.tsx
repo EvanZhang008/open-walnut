@@ -9,7 +9,8 @@
  *            person to sign in, "Yours" while the person has the tab; nothing while no tab is used
  *   popover  on a click (or Enter): the Browser view, which asks for pictures only while it is open
  *
- * `compact`: the phone's top bar, beside the kebab: the dot and a "B" in a 44 px target.
+ * `compact`: the phone's top bar, beside the kebab: a browser window glyph in a 44 px target,
+ * coloured by the same state.
  *
  * Overlay rules (web/src/AGENTS.md): portalled to <body>, placed by useMenuPlacement, one
  * useOverlayLayer layer (Escape and an outside pointerdown close it). Click only, never hover: the
@@ -23,6 +24,16 @@ import type { useBrowserView } from './useBrowserView';
 import { SessionBrowserCard } from './SessionBrowserCard';
 import type { BrowserViewTab } from './browser-view-model';
 import '@/styles/session-browser-chip.css';
+
+/** A browser window: its title bar and page. */
+const BROWSER_ICON = (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="3" y="4" width="18" height="16" rx="2.5" />
+    <path d="M3 9h18" />
+    <circle cx="6.5" cy="6.5" r="0.6" fill="currentColor" />
+    <circle cx="9" cy="6.5" r="0.6" fill="currentColor" />
+  </svg>
+);
 
 export type BrowserChipTone = 'live' | 'ask' | 'yours' | 'ended';
 
@@ -89,7 +100,7 @@ export function SessionBrowserChip({ taskId, view, compact = false }: {
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((o) => !o); }}
       >
         <span className="session-browser-chip-dot" aria-hidden="true" />
-        {compact ? <span className="session-browser-chip-short" aria-hidden="true">B</span> : <span className="session-browser-chip-label">{label}</span>}
+        {compact ? <span className="session-browser-chip-icon" aria-hidden="true">{BROWSER_ICON}</span> : <span className="session-browser-chip-label">{label}</span>}
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(

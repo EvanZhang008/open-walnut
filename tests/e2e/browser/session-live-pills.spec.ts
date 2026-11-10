@@ -155,6 +155,14 @@ test('servers and the browser show only as header pills, their details in popove
   expect(popBox.y).toBeGreaterThanOrEqual(chipBox.y + chipBox.height - 1)
   expect(popBox.x + popBox.width).toBeLessThanOrEqual(1280)
   await page.screenshot({ path: `${SHOTS}/${testInfo.project.name}-3-browser-popover.png`, scale: 'css' })
+  // Larger widens the popover (the picture keeps its shape), and its foot stays in view.
+  await press(page, card.getByTestId('session-browser-size'))
+  await expect.poll(async () => (await pop.boundingBox())!.width, { timeout: 5_000 }).toBeGreaterThan(900)
+  const foot = (await card.getByTestId('session-browser-foot').boundingBox())!
+  expect(foot.y + foot.height).toBeLessThanOrEqual(820)
+  await page.screenshot({ path: `${SHOTS}/${testInfo.project.name}-3b-browser-larger.png`, scale: 'css' })
+  await press(page, card.getByTestId('session-browser-size'))
+  await expect.poll(async () => (await pop.boundingBox())!.width, { timeout: 5_000 }).toBeLessThan(600)
   // × closes it, the pill stays; an outside click closes it too.
   await press(page, card.getByTestId('session-browser-hide'))
   await expect(pop).toHaveCount(0)

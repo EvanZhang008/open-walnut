@@ -29990,16 +29990,16 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    sibling: the split and the history must NOT pad for the header a second time.
    Doing so left a blank band the height of the header under every error banner
    (2026-09-11). */
-.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel, > .session-browser-card) .session-panel-split.is-changed-open {
+.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-split.is-changed-open {
   padding-top: 0;
 }
-.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel, > .session-browser-card) .session-panel-body .session-history {
+.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-body .session-history {
   padding-top: 12px;
 }
 /* Set on the panel and read by the first flow child's rule above: a `:has()` followed by that
    universal `:first-child:not(...)` made every row a chat inserted restyle the whole page
    (tests/web/css-has-invalidation-ratchet.test.ts). */
-.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel, > .session-browser-card) {
+.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) {
   --sp-first-flow-top: 4px;
 }
 
@@ -30207,12 +30207,11 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 /* Flow siblings that render between the header and the split (messages
-   summary panel, the Browser view, error banners) must clear the absolute header — only the
+   summary panel, error banners) must clear the absolute header — only the
    FIRST one; the rest stack naturally below it. The split is exempt (its
    content is what scrolls under the glass). */
 .session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header + .session-action-panel,
-.session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header + .session-error-banner,
-.session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header + .session-browser-card {
+.session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header + .session-error-banner {
   margin-top: calc(var(--sp-header-h, 76px) + 6px);
 }
 

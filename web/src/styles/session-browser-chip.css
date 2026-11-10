@@ -57,8 +57,13 @@
 .session-browser-popover:empty { display: none; }
 /* The view fills the popover: no margin or border of its own there. */
 .session-browser-popover > .session-browser-card { margin: 0; border: 0; border-radius: 0; background: transparent; }
+/* The picture sized to the popover, so its foot never scrolls away; Larger widens the popover
+   itself (the picture keeps its shape, so only a wider popover draws it larger). */
+.session-browser-popover .session-browser-shot { height: min(38vh, 320px); }
+.session-browser-popover:has(> .session-browser-card--large) { width: min(1040px, calc(100vw - 24px)); }
+.session-browser-popover .session-browser-card--large .session-browser-shot { height: min(62vh, 600px); }
 
-/* The phone's top bar, beside the kebab: a dot and "B" in a 44 px target. */
+/* The phone's top bar, beside the kebab: a browser glyph in a 44 px target. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .phone-topbar .phone-bar-slot .session-browser-chip.is-compact {
     justify-content: center;
@@ -73,6 +78,10 @@
     font-weight: 600;
   }
   .phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-ask { color: var(--warning); }
+  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-yours { color: var(--accent); }
+  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-ended { color: var(--fg-muted); }
+  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact .session-browser-chip-dot { display: none; }
+  .phone-topbar .phone-bar-slot .session-browser-chip.is-compact .session-browser-chip-icon svg { width: 16px; height: 16px; }
   /* The title's gutters grow by every pill in the slot beside the kebab (the slot's children:
      the kebab and each pill), whichever pills they are: wait, pull request, web, browser. */
   .app-shell-navigation .phone-topbar:has(.phone-bar-slot .session-browser-chip) .phone-topbar-title {
