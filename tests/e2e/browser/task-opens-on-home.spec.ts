@@ -33,7 +33,9 @@ const located = (page: Page, id: string) =>
  * (2026-11-05 CI shard 14: task-move-project.spec.ts had just picked Focus): either way is the rule.
  */
 async function expectOnHome(page: Page, id: string): Promise<void> {
-  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
+  // The shim moves the address once the app has loaded, which on a cold fixture page waits on
+  // Vite's first transform (above): the same minute the task gets.
+  await expect.poll(() => new URL(page.url()).pathname, { timeout: 60_000 }).toBe('/')
   const note = page.locator('#home-task-navigation [data-testid="todo-offview-note"]')
   await expect.poll(async () => (await located(page, id).count()) + (await note.count()), { timeout: 60_000 }).toBeGreaterThan(0)
   if (await located(page, id).count() === 0) {
