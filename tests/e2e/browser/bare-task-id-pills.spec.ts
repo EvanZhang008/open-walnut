@@ -110,11 +110,15 @@ test('task ids in a reply render as task pills and open the task', async ({ page
   await expect(reply).toContainText('550e8400-e29b-41d4-a716-446655440000')
   await expect(reply).toContainText('mzzzzzzz-0000')
 
-  // Every pill wears its task's live status; a link inside code stays plain.
+  // Every pill wears its task's live status; a link inside code stays plain. An open task's is
+  // any state but done: the seed's in-progress task has a stopped session, so 10 minutes into a
+  // run the health monitor hands it back as phase drift and it reads To read (`read`); a spec
+  // that runs late in a long shard sees that (2026-11-09, CI).
+  const OPEN_STATE = /^(needs|read|working|waiting)$/
   await expect(donePills.nth(0)).toHaveAttribute('data-user-state', 'done')
   await expect(oldPill).toHaveAttribute('data-user-state', 'done')
-  await expect(titlePill).toHaveAttribute('data-user-state', /^(needs|working|waiting)$/)
-  await expect(uuidPill).toHaveAttribute('data-user-state', /^(needs|working|waiting)$/)
+  await expect(titlePill).toHaveAttribute('data-user-state', OPEN_STATE)
+  await expect(uuidPill).toHaveAttribute('data-user-state', OPEN_STATE)
   await expect(codeLink).not.toHaveAttribute('data-user-state', /.*/)
   const dot = await donePills.nth(0).evaluate((a) => {
     const st = getComputedStyle(a, '::before')
