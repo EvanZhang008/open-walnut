@@ -27,9 +27,10 @@
  *     the TypeScript configs, the scripts that pick and run the tests, this gate itself);
  *   - a changed file is a module the tree stands on: SHARED_IMPORTERS or more files import it
  *     directly (src/constants.ts, src/core/types.ts, the logger, the server: 16 files on
- *     2026-11-08). The land layer runs only the tests importing a changed file directly, and
- *     through such a module nearly every test reaches it (every src/core file reaches about 2,090
- *     of the 3,320 quick files in some steps, so a count of that says nothing);
+ *     2026-11-08). The land layer follows import chains only short of such modules
+ *     (test-layers.mjs HUB_IMPORTERS), and through one nearly every test reaches it (every
+ *     src/core file reaches about 2,090 of the 3,320 quick files in some steps, so a count of
+ *     that says nothing);
  *   - its land layer costs over COST_SHARE of the whole tier's measured time.
  *
  *   bun scripts/push-gate-plan.mjs [--mode land|full] [--base <ref>] [--changed-from <file>]

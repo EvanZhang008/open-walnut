@@ -134,8 +134,12 @@ export function buildImportGraph(root) {
     }
   }
 
-  /** Test files (repo-relative) within `depth` import steps of each changed file, with their step. */
-  function testsWithin(changed, depth) {
+  /**
+   * Test files (repo-relative) within `depth` import steps of each changed file, with their step.
+   * `hubAt`: a file reached on the way that this many files or more import directly is counted but
+   * not walked past (the tree's foundations: through one, nearly every test reaches the change).
+   */
+  function testsWithin(changed, depth, { hubAt = Infinity } = {}) {
     const best = new Map()
     for (const rel of changed) {
       const start = path.join(root, rel)
@@ -150,7 +154,10 @@ export function buildImportGraph(root) {
       }
       for (let i = known.has(start) ? 1 : 2; frontier.length && i <= depth; i++) {
         const next = []
-        for (const f of frontier) for (const g of importers.get(f) || []) if (!level.has(g)) { level.set(g, i); next.push(g) }
+        for (const f of frontier) {
+          if (f !== start && (importers.get(f)?.size ?? 0) >= hubAt) continue
+          for (const g of importers.get(f) || []) if (!level.has(g)) { level.set(g, i); next.push(g) }
+        }
         frontier = next
       }
       for (const [p, l] of level) {

@@ -153,34 +153,47 @@ function namers(changed) {
 }
 
 /**
+ * The land layer follows every import chain from a changed file to a test, except through a module
+ * this many files or more import directly: through one of those (61 files, 2026-11-10) nearly every
+ * test reaches nearly every file, and the whole tier runs on every push of main. Depth 1 missed a
+ * test two steps away (2026-11-10: a change to src/core/team-charter.ts left main red for 90
+ * minutes on tests/core/sessions/session-context.test.ts, reached through session-context.ts,
+ * and seven later lands were refused for it). Measured on 300 commits of main: every chain sends
+ * 64 of 241 lands to the full gate, every chain short of these modules 1, depth 1 none.
+ */
+export const HUB_IMPORTERS = 60
+
+/**
  * What each layer holds. The land layer runs every test the change needs to the end, whatever it
- * costs: its own tests (of any tier), every test importing or naming a changed file, and the scan
+ * costs: its own tests (of any tier), every test importing a changed file by any chain short of
+ * the shared modules (HUB_IMPORTERS) or naming one, and the scan
  * tests; it is fast because it holds only those (2026-11-08, the user: tests in layers, "and the
  * tests it needs, run them"; no timer, no budget). The local layer is the quick look while
  * editing: the same, with only fast reached files.
  */
 export const LIMITS = {
   local: { fileMaxMs: LOCAL_MAX_MS, maxReached: 60, scanMaxMs: SCAN_MAX_MS, depth: 1 },
-  land: { fileMaxMs: Infinity, maxReached: Infinity, scanMaxMs: LAND_SCAN_MAX_MS, depth: 1 },
+  land: { fileMaxMs: Infinity, maxReached: Infinity, scanMaxMs: LAND_SCAN_MAX_MS, depth: Infinity, hubAt: HUB_IMPORTERS },
 }
 
 /**
  * The files a layer runs for a change: { files, slowFiles, why, leftToGate, predictedMs }.
  *   the change's own test files (any cost; slowFiles: the ones outside the quick tier, each run with
  *     its own tier's config: configOf),
- *   the tests importing a changed file directly and the tests naming one by path (the local
- *     layer: within its cost per file and count, cheapest first, the rest left to the land),
+ *   the tests importing a changed file (the local layer: directly, within its cost per file and
+ *     count, cheapest first, the rest left to the land; the land layer: by any import chain that
+ *     does not pass through a shared module, HUB_IMPORTERS) and the tests naming one by path,
  *   every fast scan test (ratchets, guards: they caught most real problems, in milliseconds),
  *   and for a change to the test setup, the tests of the setup itself.
  */
 export function scopedLayer(layer, changed, { universe = quickUniverse(), slow = slowUniverse(), durations = readDurations(), graph, namedBy = namers, read, limits = {}, exists = (f) => fs.existsSync(path.join(ROOT, f)) } = {}) {
-  const { fileMaxMs, maxReached, scanMaxMs, depth } = { ...LIMITS[layer], ...limits }
+  const { fileMaxMs, maxReached, scanMaxMs, depth, hubAt } = { ...LIMITS[layer], ...limits }
   const inTier = new Set(universe)
   const why = new Map()
   const add = (f, r) => { if (inTier.has(f) && !why.has(f)) why.set(f, r) }
   for (const f of changed) if (isTestFile(f)) add(f, 'changed')
   const g = graph ?? buildImportGraph(ROOT)
-  const direct = new Set(g.testsWithin(changed.filter((f) => !isTestFile(f)), depth).keys())
+  const direct = new Set(g.testsWithin(changed.filter((f) => !isTestFile(f)), depth, { hubAt }).keys())
   const reached = [...new Set([...direct, ...namedBy(changed)])].filter((f) => inTier.has(f) && !why.has(f))
   const leftToGate = []
   const affordable = reached.filter((f) => (cost(durations, f) <= fileMaxMs ? true : (leftToGate.push(f), false)))

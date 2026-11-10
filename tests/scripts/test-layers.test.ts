@@ -152,6 +152,32 @@ describe('the import graph', () => {
     expect([...g.testsWithin(['src/a.ts'], 2).keys()].sort()).toEqual(['tests/a.test.ts', 'tests/b.test.ts'])
   })
 
+  it('a chain is followed to its end, but not through a module that many files import', () => {
+    const r = fs.mkdtempSync(path.join(os.tmpdir(), 'import-graph-hub-'))
+    const w = (p: string, s: string) => { fs.mkdirSync(path.dirname(path.join(r, p)), { recursive: true }); fs.writeFileSync(path.join(r, p), s) }
+    w('src/leaf.ts', 'export const l = 1')
+    w('src/mid.ts', "import { l } from './leaf.js'\nexport const m = l")
+    w('src/hub.ts', "import { m } from './mid.js'\nexport const h = m")
+    for (const i of [1, 2, 3]) w(`src/user${i}.ts`, "import { h } from './hub.js'")
+    w('tests/far.test.ts', "import { m } from '../src/mid.js'")
+    w('tests/hub.test.ts', "import { h } from '../src/hub.js'")
+    w('tests/beyond.test.ts', "import '../src/user1.js'")
+    try {
+      const g = buildImportGraph(r)
+      expect([...g.testsWithin(['src/leaf.ts'], Infinity).keys()].sort()).toEqual(['tests/beyond.test.ts', 'tests/far.test.ts', 'tests/hub.test.ts'])
+      // src/hub.ts has 4 importers: the walk stops there, so none of them (its own test included) is reached.
+      expect([...g.testsWithin(['src/leaf.ts'], Infinity, { hubAt: 4 }).keys()]).toEqual(['tests/far.test.ts'])
+      // A changed hub is still walked from: its own importers are the change's.
+      expect([...g.testsWithin(['src/hub.ts'], Infinity, { hubAt: 4 }).keys()].sort()).toEqual(['tests/beyond.test.ts', 'tests/hub.test.ts'])
+    } finally { fs.rmSync(r, { recursive: true, force: true }) }
+  })
+
+  it('the land layer reaches a test two imports away (2026-11-10: team-charter.ts, session-context.test.ts)', () => {
+    const plan = layers.landLayer(['src/core/team-charter.ts'], { namedBy: () => new Set<string>(), read: () => '' })
+    expect(plan.files).toContain('tests/core/sessions/session-context.test.ts')
+    expect(plan.why.get('tests/core/sessions/session-context.test.ts')).toBe('imports a changed file')
+  })
+
   it('a deleted or renamed module still selects the tests that import it', () => {
     const r = fs.mkdtempSync(path.join(os.tmpdir(), 'import-graph-gone-'))
     const w = (p: string, s: string) => { fs.mkdirSync(path.dirname(path.join(r, p)), { recursive: true }); fs.writeFileSync(path.join(r, p), s) }
