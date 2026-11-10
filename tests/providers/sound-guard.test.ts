@@ -14,8 +14,8 @@ import fs from 'node:fs'
 import { guardedPath } from '../setup/exec-guard.js'
 import { SOUND_AWK_PROGRAM, SOUND_GUARD_COMMAND, soundGuardHooks } from '../../src/providers/sound-guard-hook.js'
 import { soundGuardOn, soundRisk } from '../../src/providers/sound-guard.js'
-import { ALWAYS_PLAYS } from '../../src/providers/sound-rules.js'
-import { SOUND_CASES } from './sound-guard-cases.js'
+import { ALWAYS_PLAYS, INPUT_PREFIX, INPUT_PROGRAMS } from '../../src/providers/sound-rules.js'
+import { INPUT_CASES, SOUND_CASES } from './sound-guard-cases.js'
 
 const SHELLS = ['/bin/sh', '/bin/bash', '/bin/dash', '/usr/bin/dash', '/bin/zsh'].filter((s) => fs.existsSync(s))
 
@@ -94,6 +94,38 @@ describe('the rule set', () => {
   it.each(ALWAYS_PLAYS.map((p) => [p]))('always refuses %s', (p) => {
     expect(soundRisk(`${p} x.wav`)).toBe(p)
     if (SHELLS.length) expect(run(SHELLS[0], `${p} x.wav`).reason).toContain(`(${p})`)
+  })
+})
+
+describe('real foreground input (2026-11-09: cliclick on a Mac whose person was watching a video)', () => {
+  const INPUT_REFUSAL = /^Walnut refused this command: it would send real input to the front window of the machine it runs on \((.+?)\): the pointer/
+  describe.each(SHELLS)('the hook under %s', (shell) => {
+    it.each(INPUT_CASES)('%j -> refused=%s', (command, refused) => {
+      const r = run(shell, command)
+      expect(r.status).toBe(0)
+      if (refused) {
+        expect(r.reason).toMatch(INPUT_REFUSAL)
+        expect(r.reason).toContain("WALNUT_INPUT_REASON='<why, 10+ characters>'")
+      } else expect(r.stdout).toBe('')
+    })
+  })
+  it.each(INPUT_CASES)('on the server: %j -> refused=%s', (command, refused) => {
+    const what = soundRisk(command)
+    expect(what !== null).toBe(refused)
+    if (what) expect(what.startsWith(INPUT_PREFIX)).toBe(true)
+  })
+  it('both twins name the same thing', () => {
+    for (const [command, refused] of INPUT_CASES) {
+      if (!refused || SHELLS.length === 0) continue
+      const hook = run(SHELLS[0], command).reason.match(INPUT_REFUSAL)?.[1]
+      expect({ command, what: soundRisk(command) }).toEqual({ command, what: INPUT_PREFIX + hook })
+    }
+  })
+  // A new input program added to the list is refused by both twins with no further code, and the case table names it.
+  it.each(INPUT_PROGRAMS.map((p) => [p]))('always refuses %s, and the case table lists it', (p) => {
+    expect(soundRisk(`${p} x`)).toBe(INPUT_PREFIX + p)
+    if (SHELLS.length) expect(run(SHELLS[0], `${p} x`).reason).toMatch(new RegExp(`\\(${p}\\): the pointer`))
+    expect(INPUT_CASES.some(([c, refused]) => refused && new RegExp(`(^|[ /|"])${p}( |$)`).test(c))).toBe(true)
   })
 })
 

@@ -225,3 +225,58 @@ export const SOUND_CASES: Array<[string, boolean]> = [
   ['cd /Users/me/open-walnut && git status', false],
   ['ls -la', false],
 ]
+
+/**
+ * Real foreground input (sound-rules.ts INPUT_*), for both twins: [command, refused?]. Every input
+ * program, Peekaboo's input subcommands, System Events clicks and keys, and input event APIs in code
+ * are listed; a reason on the command's own line lets one through.
+ */
+export const INPUT_CASES: Array<[string, boolean]> = [
+  // The 2026-11-09 incident: a session clicked on a Mac whose person was watching a video.
+  ['cliclick c:640,400', true],
+  ['/opt/homebrew/bin/cliclick m:100,200 c:.', true],
+  ['sleep 1 && cliclick kp:return', true],
+  ['ssh studio-mac "cliclick c:10,10"', true],
+  ['bash -c "xdotool key ctrl+l"', true],
+  ['xdotool mousemove 10 10 click 1', true],
+  ['ydotool click 0xC0', true],
+  ['wtype hello', true],
+  ['xte "key Return"', true],
+  ['echo key enter | dotool', true],
+  ['peekaboo click --on B1', true],
+  ['peekaboo type "hello"', true],
+  ['peekaboo hotkey --keys cmd,c', true],
+  ['peekaboo press return', true],
+  ['peekaboo scroll --direction down', true],
+  ['peekaboo drag --from B1 --to B2', true],
+  ['peekaboo move --to 10,10', true],
+  [`osascript -e 'tell application "System Events" to keystroke "v" using command down'`, true],
+  [`osascript -e 'tell application "System Events" to key code 36'`, true],
+  [`osascript -e 'tell application "System Events" to click button "OK" of window 1 of process "Safari"'`, true],
+  [`osascript -l JavaScript -e 'Application("System Events").keystroke("a")'`, true],
+  ["osascript <<'EOF'\ntell application \"System Events\"\n  keystroke return\nend tell\nEOF", true],
+  [`python3 -c 'import pyautogui; pyautogui.click(10, 10)'`, true],
+  [`python3 -c 'from pynput.mouse import Controller; Controller().position = (1, 1)'`, true],
+  [`node -e 'require("robotjs").moveMouse(1, 1)'`, true],
+  ["swift - <<'EOF'\nimport CoreGraphics\nCGWarpMouseCursorPosition(CGPoint(x: 1, y: 1))\nEOF", true],
+  ["swift - <<'EOF'\nlet e = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: true)\ne?.post(tap: .cghidEventTap)\nCGEventPost(.cghidEventTap, e)\nEOF", true],
+  // A reason on the command's own line, 10+ characters.
+  [`WALNUT_INPUT_REASON='drives its own test window' cliclick c:5,5`, false],
+  [`env WALNUT_INPUT_REASON='drives its own test window' xdotool key a`, false],
+  [`WALNUT_INPUT_REASON=short cliclick c:5,5`, true],
+  [`WALNUT_INPUT_REASON='a reason on another command'; cliclick c:5,5`, true],
+  // Not input: looking, a test's own clicks, reading, text that names the tools.
+  ['peekaboo see --app Safari', false],
+  ['peekaboo image --mode screen --path /tmp/s.png', false],
+  ['peekaboo list apps', false],
+  ['cliclick -h | head', true],
+  [`osascript -e 'tell application "Finder" to get name of front window'`, false],
+  [`osascript -e 'tell application "System Events" to get name of every process'`, false],
+  [`osascript -e 'display dialog "click OK"'`, false],
+  [`node -e 'await page.click("#ok"); await page.keyboard.type("hi")'`, false],
+  ['xcrun simctl io booted screenshot s.png', false],
+  ['grep -rn "cliclick\\|xdotool" src', false],
+  ['echo "never run cliclick on his Mac"', false],
+  ['brew info cliclick', false],
+  ['git commit -m "refuse cliclick and System Events keystrokes"', false],
+]

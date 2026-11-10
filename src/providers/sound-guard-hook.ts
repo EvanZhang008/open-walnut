@@ -21,6 +21,10 @@
  * code. A word that only names a player (`grep afplay`, `echo "say -o"`) and a
  * quoted heredoc written to a file are left alone; a script file is not read.
  *
+ * The same guard refuses real foreground input (cliclick, xdotool, peekaboo click, System Events
+ * keystrokes, input event APIs in code; sound-rules.ts), unless the command's own line names why
+ * (WALNUT_INPUT_REASON).
+ *
  * POSIX sh + awk, like the kill guard (pattern-kill-guard-hook.ts), plus base64 and
  * gzip to unpack the program; where those are missing the hook allows. A command
  * over 100,000 characters is not parsed: it is refused when it names afplay or
@@ -32,6 +36,7 @@ import {
   ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_SPAWN_RE, FFMPEG_AUDIO_OUT_RE, JXA_MUTE_ONLY_RE, MEDIA_APPS_RE,
   OSA_BEEP_RE, OSA_JXA_VOLUME_RE, OSA_MEDIA_TELL_RE, OSA_MUTE_ONLY_RE, OSA_PLAY_RE, OSA_SAVING_RE, OSA_SAY_RE,
   OSA_SET_VOLUME_RE, OSA_SHELL_RE, OSA_APP_VOLUME_RE, STRING_RE, soundAdvice,
+  CODE_INPUT_API_RE, INPUT_PREFIX, INPUT_PROGRAMS, INPUT_REASON_MIN, INPUT_REASON_VAR, INPUT_SUBCOMMANDS, OSA_INPUT_RE, OSA_SYSTEM_EVENTS, inputAdvice,
 } from './sound-rules.js'
 
 /** A string as an awk string literal (a regex of sound-rules.ts is used as a dynamic regex) ("..."), its backslashes doubled. */
@@ -39,11 +44,17 @@ import {
 const s = (re: string) => '"' + re.replace(/\\t/g, '\t').replace(/\\n/g, '\n').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\t/g, '\\t') + '"'
 /** The refusal around what was found, which awk puts between. */
 const [ADVICE_PRE, ADVICE_POST] = soundAdvice('\u0000').split('\u0000')
+const [INPUT_PRE, INPUT_POST] = inputAdvice('\u0000').split('\u0000')
+/** The assignment that lets a command's foreground input through: the name and = and at least INPUT_REASON_MIN characters. */
+const REASON_LEN = INPUT_REASON_VAR.length + 1 + INPUT_REASON_MIN
 
 const SOUND_AWK = JSON_AWK + String.raw`
 function base(w,   k) { k = w; sub(/^.*\//, "", k); return k }
 function isshell(w) { return w ~ /^(ba|z|da|k|mk|y|c|tc|a)?sh$/ || w == "fish" }
 function hit(what) { if (found == "") found = what }
+# A hit, except foreground input when the command named its reason (ok).
+function ihit(what, ok) { if (ok && index(what, ${s(INPUT_PREFIX)}) == 1) return; hit(what) }
+function isreason(w) { return index(w, "${INPUT_REASON_VAR}=") == 1 && length(w) >= ${REASON_LEN} }
 function closer(s, i,   n, lvl, c, q, hd, tab, rest, m, L, k, t) {
   n = length(s); lvl = 1; q = ""; hd = ""
   for (; i <= n; i++) {
@@ -200,6 +211,7 @@ function osahit(raw, d,   t, t0, off, r, at, j) {
   if (t0 ~ ${s(OSA_BEEP_RE)}) return "AppleScript beep"
   if (t ~ ${s(OSA_MEDIA_TELL_RE)} && t0 ~ ${s(OSA_PLAY_RE)}) return "a media app told to play"
   if (t0 ~ ${s(OSA_APP_VOLUME_RE)}) return "an app volume change"
+  if (index(t, ${s(OSA_SYSTEM_EVENTS)}) && t0 ~ ${s(OSA_INPUT_RE)}) return ${s(INPUT_PREFIX + 'System Events clicks or keys')}
   r = t0; at = 0
   while ((j = index(r, ${s(OSA_SET_VOLUME_RE)})) > 0) {
     at += j
@@ -219,6 +231,7 @@ function osahit(raw, d,   t, t0, off, r, at, j) {
 function codehit(raw, d,   t2) {
   t2 = tolower(raw); gsub(${s(STRING_RE)}, "\"\"", t2)
   if (t2 ~ ${s(CODE_AUDIO_API_RE)}) return "an audio or speech API"
+  if (t2 ~ ${s(CODE_INPUT_API_RE)}) return ${s(INPUT_PREFIX + 'an input event API')}
   spawned(raw, d)
   return ""
 }
@@ -256,6 +269,8 @@ function lastsilent(name, A, n,   k, v, nullout, notrack) {
 }
 function prog(name, A, n,   k, v, first, dev, j, sub1) {
   if (index(" ${ALWAYS_PLAYS.join(' ')} ", " " name " ")) return name
+  if (index(" ${INPUT_PROGRAMS.join(' ')} ", " " name " ")) return ${s(INPUT_PREFIX)} name
+  if (name == "peekaboo") { for (k = 1; k <= n; k++) if (A[k] !~ /^-/) return tolower(A[k]) ~ ${s(INPUT_SUBCOMMANDS.peekaboo)} ? ${s(INPUT_PREFIX + 'peekaboo ')} A[k] : ""; return "" }
   # Options end at --: what follows is text, except open's files.
   k = has(A, n, "--")
   if (name == "open" || name == "xdg-open") {
@@ -316,12 +331,12 @@ function wrapopt(b, w) {
   return 0
 }
 # Judge command ci of depth d from its word j on.
-function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F) {
+function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F, ok) {
   n = CN[d, ci]
   for (; j <= n; j++) {
     w = CW[d, ci, j]
     if (w ~ /^[0-9]*(>|>>|<|&>|&>>|>&|<&|<>|>\|)$/) { j++; continue }
-    if (w ~ /^[A-Za-z_][A-Za-z0-9_]*\+?=/ || w ~ /^[0-9]*[<>]/ || w ~ /^&>/) continue
+    if (w ~ /^[A-Za-z_][A-Za-z0-9_]*\+?=/ || w ~ /^[0-9]*[<>]/ || w ~ /^&>/) { if (isreason(w)) ok = 1; continue }
     if (w ~ /^(if|then|else|elif|do|while|until|!|\{|\}|fi|done|esac|coproc)$/) continue
     b = base(w)
     if (b !~ /^(sudo|doas|env|command|exec|nohup|time|nice|ionice|timeout|gtimeout|xargs|builtin|caffeinate|stdbuf|setsid|unbuffer|watch|arch|launchctl)$/) break
@@ -337,7 +352,7 @@ function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F) {
       }
       if (w == "--") { j++; break }
       if (w ~ /^-./) { if (wrapopt(b, w)) j++; continue }
-      if ((b == "env" || b == "sudo") && w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
+      if ((b == "env" || b == "sudo") && w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { if (isreason(w)) ok = 1; continue }
       break
     }
     if (b == "timeout" || b == "gtimeout") j++
@@ -371,8 +386,8 @@ function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F) {
     r = 0; F = 0
     for (k = 1; k <= na; k++) { if (A[k] == "-l" || A[k] == "-s") { k++; continue } F++; A2[F] = A[k] }
     r = inline(A2, F, " -e ", 0)
-    if (r == 1) hit(osahit(CODE, d))
-    else if (r == 2) hit(osahit(stdintext(d, ci), d))
+    if (r == 1) ihit(osahit(CODE, d), ok)
+    else if (r == 2) ihit(osahit(stdintext(d, ci), d), ok)
     return
   }
   F = ""
@@ -385,11 +400,11 @@ function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F) {
   else if (b == "deno" || b == "swift") F = " "
   if (F != "") {
     r = inline(A, na, F, b == "deno")
-    if (r == 1) hit(codehit(CODE, d))
-    else if (r == 2) hit(codehit(stdintext(d, ci), d))
+    if (r == 1) ihit(codehit(CODE, d), ok)
+    else if (r == 2) ihit(codehit(stdintext(d, ci), d), ok)
     return
   }
-  hit(prog(b, A, na))
+  ihit(prog(b, A, na), ok)
   if (exec && found == "") for (k = j + 1; k <= n && found == ""; k++) if (CW[d, ci, k] ~ /^-(exec|execdir|ok|okdir)$/) judge(d, ci, k + 1, 0)
 }
 function flush(d,   ci) { for (ci = 1; ci <= NC[d] && found == ""; ci++) judge(d, ci, 1, 1); NC[d] = 0; newcmd(d, 0) }
@@ -472,7 +487,8 @@ function scan(s, d,   n, i, c, q, w, qb, j, nh, HD, HT, HQ, HO, h, rest, m, L, k
   flush(d)
 }
 function deny(what) {
-  printf "%s", jesc("Walnut refused this command: " ${s(ADVICE_PRE)} what ${s(ADVICE_POST)})
+  if (index(what, ${s(INPUT_PREFIX)}) == 1) printf "%s", jesc("Walnut refused this command: " ${s(INPUT_PRE)} substr(what, ${INPUT_PREFIX.length + 1}) ${s(INPUT_POST)})
+  else printf "%s", jesc("Walnut refused this command: " ${s(ADVICE_PRE)} what ${s(ADVICE_POST)})
 }
 BEGIN {
   RS = "\001"
@@ -490,7 +506,7 @@ BEGIN {
 
 
 /** Names that may make sound, for the fast bail-out: anything else is allowed unparsed. */
-const TRIGGERS = ['say', 'play', 'afplay', 'aplay', 'paplay', 'pacat', 'pw-cat', 'espeak', 'mpv', 'mplayer', 'mpg', 'ogg123', 'vlc', 'sox', 'ffmpeg', 'festival', 'beep', 'speaker-test', 'canberra', 'open', 'volume', 'mute', 'amixer', 'pactl', 'pamixer', 'wpctl', 'osascript', 'Sound', 'Speech', 'sound', 'speech', 'pyttsx3', 'Volume', 'Say', 'Beep', 'Play', 'Audio', 'audio']
+const TRIGGERS = [...INPUT_PROGRAMS, 'peekaboo', 'Peekaboo', 'keystroke', 'click', 'CGEvent', 'cgevent', 'CGWarp', 'CGDisplayMove', 'pyautogui', 'pynput', 'robotjs', 'nut-tree', 'autopy', 'moveMouse', 'mouseClick', 'keyTap', 'typeString', 'say', 'play', 'afplay', 'aplay', 'paplay', 'pacat', 'pw-cat', 'espeak', 'mpv', 'mplayer', 'mpg', 'ogg123', 'vlc', 'sox', 'ffmpeg', 'festival', 'beep', 'speaker-test', 'canberra', 'open', 'volume', 'mute', 'amixer', 'pactl', 'pamixer', 'wpctl', 'osascript', 'Sound', 'Speech', 'sound', 'speech', 'pyttsx3', 'Volume', 'Say', 'Beep', 'Play', 'Audio', 'audio']
 
 /** The awk program as the hook runs it: comment lines and indentation left out. */
 export const SOUND_AWK_PROGRAM = SOUND_AWK.replace(/^[ \t]*#.*\n/gm, '').replace(/^[ \t]+/gm, '')
@@ -504,7 +520,7 @@ const PACKED = gzipSync(Buffer.from(SOUND_AWK_PROGRAM), { level: 9 }).toString('
 
 /** Too long to parse: refused when any of these names appears as a word at all. */
 const LONG_NAMES = [...ALWAYS_PLAYS, 'say', 'espeak', 'espeak-ng', 'aplay', 'pacat', 'pw-cat', 'mpv', 'mplayer', 'ffplay', 'ffmpeg', 'sox', 'festival',
-  'osascript', 'amixer', 'pactl', 'pamixer', 'wpctl', 'open', 'xdg-open']
+  'osascript', 'amixer', 'pactl', 'pamixer', 'wpctl', 'open', 'xdg-open', ...INPUT_PROGRAMS, 'peekaboo']
 
 /** The hook command: a fast `case` bail-out, then the awk check. */
 export const SOUND_GUARD_COMMAND = [
@@ -513,7 +529,7 @@ export const SOUND_GUARD_COMMAND = [
   `case $in in ${TRIGGERS.map((t) => `*${t}*`).join('|')}) ;; *) exit 0 ;; esac`,
   'if [ ${#in} -gt 100000 ]; then',
   `  printf '%s' "$in" | grep -Eiq '(^|[^A-Za-z0-9_-]|\\\\[nt])(${LONG_NAMES.join('|')})([^A-Za-z0-9_-]|$)|set volume' || exit 0`,
-  "  msg='Walnut refused this command: it is too long to check and names a program that can make sound. Make no sound on this machine; write long text with the Write tool.'",
+  "  msg='Walnut refused this command: it is too long to check and names a program that can make sound or send input to the front window. Make no sound and send no input on this machine; write long text with the Write tool.'",
   'else',
   `  b='${PACKED}'`,
   `  p=$( (printf '%s' "$b" | base64 -d 2>/dev/null || printf '%s' "$b" | base64 -D 2>/dev/null) | gzip -dc 2>/dev/null)`,

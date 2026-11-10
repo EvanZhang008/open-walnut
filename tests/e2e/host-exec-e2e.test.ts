@@ -623,6 +623,19 @@ describe('host_exec', () => {
     }
   }, 30_000)
 
+  it('a command that sends real input to the front window never runs there, unless its line says why (2026-11-09)', async () => {
+    const runs = () => sent.filter((m) => m.cmd === 'exec.run').length
+    const before = runs()
+    for (const command of ['cliclick c:640,400', `osascript -e 'tell application "System Events" to keystroke "v" using command down'`, 'peekaboo click --on B1']) {
+      const r = await api('POST', '/api/v1/hosts/macbox/exec', { command, allow_prompts: true }, OWN_SID)
+      expect(r).toMatchObject({ status: 409, body: { code: 'foreground_input', error: expect.stringContaining('send real input to the front window') } })
+    }
+    expect(runs()).toBe(before)
+    for (const command of [`WALNUT_INPUT_REASON='drives its own test window' cliclick c:1,1; true`, 'peekaboo see --app Safari; true']) {
+      expect((await api('POST', '/api/v1/hosts/macbox/exec', { command }, OWN_SID)).status).toBe(200)
+    }
+  }, 30_000)
+
   it('the line runs in bash with WALNUT_TASK_DIR set to the task\'s directory on that host', async () => {
     const taskDir = path.join(hostRoot, 'tasks', ownTaskId)
     const r = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo ===; echo hi > "$WALNUT_TASK_DIR/x.txt"; cat "$WALNUT_TASK_DIR/x.txt"; echo "$WALNUT_TASK_DIR"' }, OWN_SID)

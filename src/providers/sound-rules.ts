@@ -75,3 +75,39 @@ export function soundAdvice(what: string): string {
     + '(BlackHole, a null sink), a player with a null output (mpv --ao=null). Muting alone and reading the volume are fine; setting any level is not. '
     + 'Text that only names these: write it with the Write tool.'
 }
+
+/*
+ * Real foreground input: the same guard refuses a command that moves or clicks the pointer, types or
+ * presses keys into whatever window is in front (2026-11-09: a task session drove cliclick on a Mac
+ * while its person watched a video there; telling the session was not enough). A test drives its own
+ * window without it: Playwright's page.click and XCUITest send their events inside the app, and a
+ * simulator takes `xcrun simctl io` / idb. A command that truly must drive its own window this way names
+ * why on its own line: `WALNUT_INPUT_REASON='<why, 10+ characters>' cliclick ...`.
+ */
+
+/** Programs that send real input to the front app whatever their arguments. */
+export const INPUT_PROGRAMS = ['cliclick', 'xdotool', 'ydotool', 'wtype', 'xte', 'dotool'] as const
+/** Programs whose subcommand (the first word that is no option) sends real input. */
+export const INPUT_SUBCOMMANDS = { peekaboo: '^(click|type|press|hotkey|scroll|swipe|drag|move|paste)$' } as const
+/** AppleScript / JXA through System Events (matched on the text as written) clicking or pressing keys (strings emptied). */
+export const OSA_SYSTEM_EVENTS = 'system events'
+export const OSA_INPUT_RE = word('keystroke|key code|key down|key up|click')
+/** Code that posts input events or moves the pointer, outside its strings. */
+export const CODE_INPUT_API_RE = 'cgeventpost|cgeventcreatemouseevent|cgeventcreatekeyboardevent|cgwarpmousecursorposition|cgdisplaymovecursortopoint|pyautogui|pynput|robotjs|nut-tree|autopy|movemouse|mouseclick|keytap|typestring'
+/** What a hit of this kind starts with; the rest names what was found. */
+export const INPUT_PREFIX = 'foreground input: '
+/** The assignment, on the command's own line, that lets one through: its value at least 10 characters. */
+export const INPUT_REASON_VAR = 'WALNUT_INPUT_REASON'
+export const INPUT_REASON_MIN = 10
+
+export function inputAdvice(what: string): string {
+  return `it would send real input to the front window of the machine it runs on (${what}): the pointer moves or clicks, or keys are typed, `
+    + 'wherever the person there is working. Drive only a window the test owns, from inside it: Playwright (page.click, keyboard.type), '
+    + 'XCUITest, `xcrun simctl io` or idb for a simulator. If this command truly must drive a window it owns this way, '
+    + `put ${INPUT_REASON_VAR}='<why, ${INPUT_REASON_MIN}+ characters>' in front of it on the same line.`
+}
+
+/** The refusal both guards give for a hit, after "Walnut refused this command: ". */
+export function refusalAdvice(what: string): string {
+  return what.startsWith(INPUT_PREFIX) ? inputAdvice(what.slice(INPUT_PREFIX.length)) : soundAdvice(what)
+}

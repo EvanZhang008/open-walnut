@@ -19,6 +19,7 @@ import {
   ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_SPAWN_RE, FFMPEG_AUDIO_OUT_RE, JXA_MUTE_ONLY_RE, MEDIA_APPS_RE,
   OSA_BEEP_RE, OSA_JXA_VOLUME_RE, OSA_MEDIA_TELL_RE, OSA_MUTE_ONLY_RE, OSA_PLAY_RE, OSA_SAVING_RE, OSA_SAY_RE,
   OSA_SET_VOLUME_RE, OSA_SHELL_RE, OSA_APP_VOLUME_RE, STRING_RE,
+  CODE_INPUT_API_RE, INPUT_PREFIX, INPUT_PROGRAMS, INPUT_REASON_MIN, INPUT_REASON_VAR, INPUT_SUBCOMMANDS, OSA_INPUT_RE, OSA_SYSTEM_EVENTS,
 } from './sound-rules.js'
 
 const re = (s: string) => new RegExp(s)
@@ -29,7 +30,11 @@ const R = {
   osaTell: re(OSA_MEDIA_TELL_RE), osaPlay: re(OSA_PLAY_RE), osaShell: all(OSA_SHELL_RE),
   muteOnly: re(OSA_MUTE_ONLY_RE), appVolume: re(OSA_APP_VOLUME_RE), jxaVol: all(OSA_JXA_VOLUME_RE), jxaMuteOnly: re(JXA_MUTE_ONLY_RE),
   codeApi: re(CODE_AUDIO_API_RE), spawn: all(CODE_SPAWN_RE), string: all(STRING_RE),
+  osaInput: re(OSA_INPUT_RE), codeInput: re(CODE_INPUT_API_RE), peekaboo: re(INPUT_SUBCOMMANDS.peekaboo),
 }
+const INPUTS = new Set<string>(INPUT_PROGRAMS)
+/** `WALNUT_INPUT_REASON=<10+ characters>` in front of the command lets its foreground input through. */
+const isInputReason = (w: string) => w.startsWith(`${INPUT_REASON_VAR}=`) && w.length >= INPUT_REASON_VAR.length + 1 + INPUT_REASON_MIN
 const PLAYS = new Set<string>(ALWAYS_PLAYS)
 const MAX_DEPTH = 8
 const MAX_WRAPPER_HOPS = 16
@@ -127,6 +132,7 @@ export function osaHit(raw: string, depth = 0): string | null {
   if (R.osaBeep.test(t0)) return 'AppleScript beep'
   if (R.osaTell.test(t) && R.osaPlay.test(t0)) return 'a media app told to play'
   if (R.appVolume.test(t0)) return 'an app volume change'
+  if (t.includes(OSA_SYSTEM_EVENTS) && R.osaInput.test(t0)) return INPUT_PREFIX + 'System Events clicks or keys'
   for (let at = t0.indexOf(OSA_SET_VOLUME_RE); at >= 0; at = t0.indexOf(OSA_SET_VOLUME_RE, at + 1)) {
     // An AppleScript comment (-- or #) ends the statement.
     if (!R.muteOnly.test(t0.slice(at).split(/[\n;]/)[0].replace(/(--|#).*$/, ''))) return 'set volume'
@@ -137,7 +143,9 @@ export function osaHit(raw: string, depth = 0): string | null {
 
 /** What a script's code does that makes sound: an audio API outside its strings, or a process it starts that would. */
 export function codeHit(raw: string, depth = 0): string | null {
-  if (R.codeApi.test(raw.toLowerCase().replace(R.string, '""'))) return 'an audio or speech API'
+  const t2 = raw.toLowerCase().replace(R.string, '""')
+  if (R.codeApi.test(t2)) return 'an audio or speech API'
+  if (R.codeInput.test(t2)) return INPUT_PREFIX + 'an input event API'
   for (const line of spawnedLines(raw)) { const h = lineHit(line, depth + 1); if (h) return h }
   return null
 }
@@ -166,6 +174,8 @@ function lastAudioSilent(name: string, args: string[]): boolean {
 /** A player or mixer program's own verdict on its arguments, or null. */
 function programHit(name: string, all: string[]): string | null {
   if (PLAYS.has(name)) return name
+  if (INPUTS.has(name)) return INPUT_PREFIX + name
+  if (name === 'peekaboo') { const sub = all.find((a) => !a.startsWith('-')); return sub !== undefined && R.peekaboo.test(sub.toLowerCase()) ? `${INPUT_PREFIX}peekaboo ${sub}` : null }
   // Options end at `--`: what follows is text (`espeak -- hello -q` speaks "-q").
   const end = all.indexOf('--')
   const args = end >= 0 ? all.slice(0, end) : all
@@ -301,6 +311,8 @@ function commandHit(words: string[], start: number, input: CommandInput, depth: 
     else if (name === 'unbuffer') while (i < words.length && words[i].startsWith('-')) i++
   }
   if (i >= words.length) return null
+  const allowInput = words.slice(start, i).some(isInputReason)
+  const own = (h: string | null) => (h !== null && allowInput && h.startsWith(INPUT_PREFIX) ? null : h)
   // python3.11 is python3.
   const name = path.posix.basename(words[i]).replace(/^(python[23]?)(\.[0-9]+)+$/, '$1')
   const args = words.slice(i + 1)
@@ -320,16 +332,16 @@ function commandHit(words: string[], start: number, input: CommandInput, depth: 
   if (name === 'osascript') {
     const script = inlineCode(['-e'], name, args.filter((a, k) => !(a === '-l' || a === '-s' || args[k - 1] === '-l' || args[k - 1] === '-s')))
     if (script === null) return null
-    return osaHit((script === 'stdin' ? stdinOf(input) : script).join('\n'), depth)
+    return own(osaHit((script === 'stdin' ? stdinOf(input) : script).join('\n'), depth))
   }
   const flags = Object.hasOwn(CODE_FLAGS, name) ? CODE_FLAGS[name] : undefined
   if (flags) {
     const code = inlineCode(flags, name, args)
     if (code === null) return null
-    return codeHit((code === 'stdin' ? stdinOf(input) : code).join('\n'), depth)
+    return own(codeHit((code === 'stdin' ? stdinOf(input) : code).join('\n'), depth))
   }
-  const own = programHit(name, args)
-  if (own) return own
+  const prog = own(programHit(name, args))
+  if (prog) return prog
   if (scanExec) {
     for (let k = i + 1; k < words.length; k++) {
       if (EXEC_FLAGS.has(words[k])) { const h = commandHit(words, k + 1, NO_INPUT, depth, false); if (h) return h }
@@ -389,7 +401,7 @@ function lineHit(line: string, depth: number): string | null {
   return null
 }
 
-/** What in `line` (a shell line) would make sound on the machine that runs it, or null. */
+/** What in `line` (a shell line) would make sound, or send real foreground input (INPUT_PREFIX), on the machine that runs it, or null. */
 export function soundRisk(line: string): string | null {
   return lineHit(line, 0)
 }

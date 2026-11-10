@@ -41,7 +41,7 @@ import { JOB_ID_RE, shellQuote } from '../../providers/host-exec-core.js'
 import type { RunShape } from './host-exec-legacy.js'
 import { redact } from './host-exec-redact.js'
 import { soundGuardOn, soundRisk } from '../../providers/sound-guard.js'
-import { soundAdvice } from '../../providers/sound-rules.js'
+import { INPUT_PREFIX, refusalAdvice } from '../../providers/sound-rules.js'
 
 export { redact }
 import { GRANT_ID_RE, assertStillGranted, grantFor, isOwnHost, pinnedGrant } from './host-exec-grant.js'
@@ -357,11 +357,17 @@ export async function jobAnswer(host: string, jobId: string, reply: Record<strin
 /**
  * A command that would make sound on that machine (speech, a player, a volume change or an unmute) never
  * runs, with no override: the same rule the Bash hook holds every session to (src/providers/sound-guard.ts).
+ * Nor one that sends real input to its front window (cliclick, System Events keys), unless its own line
+ * names why (WALNUT_INPUT_REASON).
  */
 function refuseSound(line: string): void {
   if (!soundGuardOn()) return
   const what = soundRisk(line)
-  if (what) throw new HostExecError(`Walnut refused this command: ${soundAdvice(what)} Nothing ran.`, 409, 'makes_sound', { sound: what })
+  if (!what) return
+  if (what.startsWith(INPUT_PREFIX)) {
+    throw new HostExecError(`Walnut refused this command: ${refusalAdvice(what)} Nothing ran.`, 409, 'foreground_input', { input: what.slice(INPUT_PREFIX.length) })
+  }
+  throw new HostExecError(`Walnut refused this command: ${refusalAdvice(what)} Nothing ran.`, 409, 'makes_sound', { sound: what })
 }
 
 /** A command that can show a dialog on a Mac's screen runs only with `allow_prompts` (host-exec-prompts.ts). */
