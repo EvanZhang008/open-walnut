@@ -816,7 +816,17 @@ jobs:
       - run: bun run build && (cd web && bun x vite build)
       # WebKit too: the *.webkit.spec.ts specs launch it themselves (the Mac app
       # is WebKit), and without it each one failed at launch (98 tests, 2026-10-23).
-      - run: bun x playwright install --with-deps chromium webkit
+      # apt can hang with no output on a runner (run 42763058265: Report (browser 2/16) sat 58
+      # minutes in this step until the job's limit cancelled it, before one spec ran): each try
+      # gets 8 minutes, three tries (tests/scripts/ci-playwright-install.test.ts).
+      - name: Install the browsers
+        shell: bash
+        run: |
+          for try in 1 2 3; do
+            timeout 480 bun x playwright install --with-deps chromium webkit && exit 0
+            echo "::warning::playwright install try $try did not finish; trying again"
+          done
+          exit 1
       - name: browser tests
         id: report
         continue-on-error: true

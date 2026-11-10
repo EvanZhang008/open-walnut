@@ -64,7 +64,17 @@ jobs:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       # warm-session and unified-update-notice serve the built server and SPA.
       - run: bun run build && (cd web && bun x vite build)
-      - run: bun x playwright install --with-deps chromium
+      # apt can hang with no output on a runner (run 42763058265: Report (browser 2/16) sat 58
+      # minutes in this step until the job's limit cancelled it, before one spec ran): each try
+      # gets 8 minutes, three tries (tests/scripts/ci-playwright-install.test.ts).
+      - name: Install the browsers
+        shell: bash
+        run: |
+          for try in 1 2 3; do
+            timeout 480 bun x playwright install --with-deps chromium && exit 0
+            echo "::warning::playwright install try $try did not finish; trying again"
+          done
+          exit 1
       - name: Cloud host (a real replica beside the Mac)
         if: ${{ !cancelled() }}
         env: { PW_WORKERS: '1' }
