@@ -57,10 +57,49 @@ final class ForegroundRecordingGuardTests: XCTestCase {
         return text.ranges(of: regex)
     }
 
+    /// The extensions of protocols declared in the app's sources, by protocol: an intent that
+    /// runs its press from one (`TalkPressIntent`, shared by Talk to Walnut and Dictate to
+    /// Clipboard) is judged with that code, so sharing it never hides a missing step.
+    static func protocolExtensions(in texts: [String]) -> [String: String] {
+        let all = texts.joined(separator: "\n")
+        let names = Set(Self.matches(#"(?m)^(?:public |internal )?protocol\s+\w+"#, in: all).map {
+            String(all[$0].split(separator: " ").last ?? "")
+        })
+        var found: [String: String] = [:]
+        for text in texts {
+            let starts = Self.matches(#"(?m)^(?:@\w+\s+)*(?:public |private |fileprivate |internal |final )*(?:struct|class|enum|actor|extension)\b"#, in: text)
+            for (n, start) in starts.enumerated() {
+                let end = n + 1 < starts.count ? starts[n + 1].lowerBound : text.endIndex
+                let block = String(text[start.lowerBound..<end])
+                let header = block.prefix(while: { $0 != "{" }).split(whereSeparator: \.isWhitespace)
+                guard let at = header.firstIndex(of: "extension"), at + 1 < header.count else { continue }
+                let name = String(header[at + 1])
+                if names.contains(name) { found[name, default: ""] += block }
+            }
+        }
+        return found
+    }
+
+    /// An intent's block with the extensions of the protocols it conforms to, each only when
+    /// the block calls one of the functions that extension declares (dead code proves nothing).
+    static func judged(_ block: String, extensions: [String: String]) -> String {
+        let header = block.prefix(while: { $0 != "{" })
+        guard let colon = header.firstIndex(of: ":") else { return block }
+        let conforms = header[header.index(after: colon)...].split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let body = String(block.drop(while: { $0 != "{" }))
+        let used = conforms.compactMap { extensions[$0] }.filter { shared in
+            Self.matches(#"func\s+\w+\("#, in: shared).contains { range in
+                let name = shared[range].dropFirst(4).trimmingCharacters(in: .whitespaces).dropLast()
+                return body.contains("\(name)(")
+            }
+        }
+        return block + used.joined(separator: "\n")
+    }
+
     /// Each top-level declaration that is an App Intent which starts a take (it calls
     /// `TalkSession`'s toggle or start, or conforms to `AudioRecordingIntent`), with its body: from its line to the
     /// next top-level declaration, so two intents in one file are judged apart.
-    static func recordingIntents(in text: String) -> [String] {
+    static func recordingIntents(in text: String, extensions: [String: String] = [:]) -> [String] {
         let starts = Self.matches(#"(?m)^(?:@\w+\s+)*(?:public |private |fileprivate |internal |final )*(?:struct|class|enum|actor|extension)\b"#, in: text)
         var found: [String] = []
         for (n, start) in starts.enumerated() {
@@ -68,8 +107,10 @@ final class ForegroundRecordingGuardTests: XCTestCase {
             let block = String(text[start.lowerBound..<end])
             let header = block.prefix(while: { $0 != "{" })
             let isIntent = header.range(of: #"\b(App|AudioRecording|LiveActivity)Intent\b"#, options: .regularExpression) != nil
-            // A take starts with `toggle(source:)` or `start(source:)`; Send now and Cancel only end one.
-            let startsTake = block.contains("TalkSession") && !Self.matches(#"\.(toggle|start)\(source:"#, in: block).isEmpty
+            // A take starts with `toggle(source:)` or `start(source:)`, here or in the press its
+            // protocol's extension gives it; Send now and Cancel only end one.
+            let code = Self.judged(block, extensions: extensions)
+            let startsTake = code.contains("TalkSession") && !Self.matches(#"\.(toggle|start)\(source:"#, in: code).isEmpty
             if isIntent, header.contains("AudioRecordingIntent") || startsTake { found.append(block) }
         }
         return found
@@ -115,7 +156,7 @@ final class ForegroundRecordingGuardTests: XCTestCase {
     /// the microphone on and no Live Activity is a fatal error in AppIntents, so a start
     /// skipped in front (build 162's first try) killed every press that opened Walnut.
     static func startsTheLiveActivityBeforeTheMicrophone(in session: String) -> Bool {
-        guard let start = session.range(of: "func start(source: String)") else { return false }
+        guard let start = session.range(of: "func start(source: String") else { return false }
         let rest = session[start.upperBound...]
         let body = rest.range(of: "\n    func ").map { rest[..<$0.lowerBound] } ?? rest
         guard let live = body.range(of: "activity.start("), let mic = body.range(of: "recorder.begin(") else { return false }
@@ -136,11 +177,13 @@ final class ForegroundRecordingGuardTests: XCTestCase {
 
     func testEveryIntentThatRecordsCanRecordOnARealPhone() throws {
         var intents = 0
-        for (name, text) in try sources() {
-            for block in Self.recordingIntents(in: text) {
+        let all = try sources()
+        let extensions = Self.protocolExtensions(in: all.map(\.text))
+        for (name, text) in all {
+            for block in Self.recordingIntents(in: text, extensions: extensions) {
                 intents += 1
                 let title = block.prefix(while: { $0 != "{" }).trimmingCharacters(in: .whitespacesAndNewlines)
-                XCTAssertNil(Self.recordingProblem(block), "\(name), \(title)")
+                XCTAssertNil(Self.recordingProblem(Self.judged(block, extensions: extensions)), "\(name), \(title)")
             }
         }
         XCTAssertGreaterThan(intents, 0, "no intent that starts a take found: the guard reads nothing")
@@ -170,7 +213,7 @@ final class ForegroundRecordingGuardTests: XCTestCase {
 
     /// The guard itself: each declaration is judged on its own, and each way of getting it
     /// wrong is named.
-    func testTheGuardJudgesEachDeclaration() {
+    func testTheGuardJudgesEachDeclaration() throws {
         let text = """
         struct A: AppIntent {
             static let openAppWhenRun = true
@@ -203,6 +246,40 @@ final class ForegroundRecordingGuardTests: XCTestCase {
         """
         let blocks = Self.recordingIntents(in: text)
         XCTAssertEqual(blocks.count, 5, "A, B, C, E and F start takes; D does not")
+        // An intent whose press lives in its protocol's extension is judged with that code.
+        let shared = """
+        protocol Press: ForegroundContinuableIntent {}
+        extension Press {
+            func press() async throws {
+                if !TalkSession.shared.showsLiveActivity { return }
+                try await TalkSession.shared.toggle(source: "x")
+                try await continueInForeground(nil, alwaysConfirm: false)
+                try await requestToContinueInForeground()
+                _ = await TalkSession.shared.waitUntilInFront()
+            }
+        }
+        struct G: Press, AudioRecordingIntent, LiveActivityIntent, ForegroundContinuableIntent {
+            static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
+            func perform() async throws { try await press() }
+        }
+        """
+        let extensions = Self.protocolExtensions(in: [shared])
+        let g = try XCTUnwrap(Self.recordingIntents(in: shared, extensions: extensions).first { $0.hasPrefix("struct G") })
+        XCTAssertNotNil(Self.recordingProblem(g), "G alone shows none of its press")
+        XCTAssertNil(Self.recordingProblem(Self.judged(g, extensions: extensions)), "G with its protocol's press")
+        let noFallback = Self.protocolExtensions(in: [shared.replacingOccurrences(of: "requestToContinueInForeground", with: "other")])
+        XCTAssertNotNil(Self.recordingProblem(Self.judged(g, extensions: noFallback))?.range(of: "open Walnut"), "a shared press with no fallback")
+        // A plain intent that records through the shared press is found, and refused.
+        let plain = shared + "\nstruct H: Press, AppIntent {\n    func perform() async throws { try await press() }\n}\n"
+        let h = try XCTUnwrap(
+            Self.recordingIntents(in: plain, extensions: Self.protocolExtensions(in: [plain])).first { $0.hasPrefix("struct H") },
+            "an intent that records through its protocol's press is not judged"
+        )
+        XCTAssertNotNil(Self.recordingProblem(Self.judged(h, extensions: extensions))?.range(of: "no AudioRecordingIntent"))
+        // The press merged in only when the intent calls it.
+        let idle = shared.replacingOccurrences(of: "func perform() async throws { try await press() }", with: "func perform() async throws {}")
+        let gIdle = try XCTUnwrap(Self.recordingIntents(in: idle, extensions: extensions).first { $0.hasPrefix("struct G") })
+        XCTAssertNotNil(Self.recordingProblem(Self.judged(gIdle, extensions: extensions)), "an extension the intent never calls counts")
         XCTAssertNil(Self.recordingProblem(blocks[0]), "A opens Walnut and waits")
         XCTAssertNotNil(Self.recordingProblem(blocks[1])?.range(of: "LiveActivityIntent"), "B cannot start the Live Activity")
         XCTAssertNotNil(Self.recordingProblem(blocks[2])?.range(of: "no AudioRecordingIntent"), "C records from behind as a plain intent")

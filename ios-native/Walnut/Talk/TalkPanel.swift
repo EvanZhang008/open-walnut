@@ -142,8 +142,8 @@ struct TalkPanelView: View {
             switch phase {
             // A failure to start belongs to the press that caused it, not the take after it.
             case .starting: model.error = nil
-            // A sent take shows its words a moment, then Walnut is as it was.
-            case .sent: TalkPanel.shared.hide(after: 2)
+            // A sent (or copied) take shows its words a moment, then Walnut is as it was.
+            case .sent, .copied: TalkPanel.shared.hide(after: 2)
             // Nothing sent: long enough to read why; the take stays on the Live Activity
             // and in Settings when it is kept.
             case .notSent: TalkPanel.shared.hide(after: 8)
@@ -167,6 +167,8 @@ struct TalkPanelView: View {
                 Image(systemName: "arrow.up.circle")
             case .sent:
                 Image(systemName: "checkmark.circle.fill")
+            case .copied:
+                Image(systemName: "doc.on.clipboard.fill")
             case .notSent(let reason, let kept):
                 Image(systemName: kept && TalkReason.goesOutLater(reason) ? "clock.arrow.circlepath" : "exclamationmark.triangle.fill")
             case .idle:
@@ -179,11 +181,13 @@ struct TalkPanelView: View {
         if model.error != nil { return TalkTone.red }
         switch talk.phase {
         case .listening: return TalkTone.orange
-        case .sent: return TalkTone.green
+        case .sent, .copied: return TalkTone.green
         case .notSent(let reason, let kept): return kept && TalkReason.goesOutLater(reason) ? TalkTone.orange : TalkTone.red
         default: return .secondary
         }
     }
+
+    private var copying: Bool { talk.destination == .clipboard }
 
     private var title: String {
         if model.error != nil { return "Couldn't start listening" }
@@ -193,19 +197,25 @@ struct TalkPanelView: View {
         case .transcribing: return "Getting your words"
         case .sending: return "Sending to your CEO"
         case .sent: return "Sent to your CEO"
+        case .copied: return "Copied"
         case .notSent(let reason, let kept):
+            if copying { return "Not copied" }
             return kept && TalkReason.goesOutLater(reason) ? "Waiting to send" : "Not sent"
-        case .idle: return "Talk to Walnut"
+        case .idle: return copying ? "Dictate to Clipboard" : "Talk to Walnut"
         }
     }
 
     private var detail: String? {
         if let error = model.error { return error }
         switch talk.phase {
-        case .listening: return "Say anything, then tap anywhere here, or press the Action Button again, to send."
-        case .sent(let words): return "\u{201C}\(TalkSession.preview(words))\u{201D}"
+        case .listening:
+            return copying
+                ? "Say anything, then tap anywhere here, or press the Action Button again, to copy it."
+                : "Say anything, then tap anywhere here, or press the Action Button again, to send."
+        case .sent(let words), .copied(let words): return "\u{201C}\(TalkSession.preview(words))\u{201D}"
         case .notSent(let reason, let kept):
             guard kept else { return reason }
+            if copying { return reason + " It is kept in Settings, Action Button, to copy." }
             if TalkReason.goesOutLater(reason) {
                 return reason + " It goes to your CEO by itself the next time Walnut reaches your server."
             }
@@ -224,7 +234,7 @@ struct TalkPanelView: View {
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("talk.panel.cancel")
                 Button { talk.finishSoon(source: "panel-send") } label: {
-                    Text("Send").font(.title3.weight(.bold)).foregroundStyle(TalkTone.onProminent)
+                    Text(copying ? "Copy" : "Send").font(.title3.weight(.bold)).foregroundStyle(TalkTone.onProminent)
                         .frame(maxWidth: .infinity, minHeight: 64)
                 }
                 .buttonStyle(.borderedProminent)

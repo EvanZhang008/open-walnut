@@ -40,7 +40,7 @@ struct TalkLiveActivityWidget: Widget {
                             .foregroundStyle(.white.opacity(0.85))
                             .lineLimit(state.phase == .listening ? 1 : 2)
                             .multilineTextAlignment(.center)
-                        if state.phase == .listening { TalkButtons() }
+                        if state.phase == .listening { TalkButtons(copy: state.copy == true) }
                     }
                 }
             } compactLeading: {
@@ -93,7 +93,7 @@ struct TalkLockScreenView: View {
                         .frame(maxWidth: 64, alignment: .trailing)
                 }
             }
-            if state.phase == .listening { TalkButtons() }
+            if state.phase == .listening { TalkButtons(copy: state.copy == true) }
         }
         .padding(14)
     }
@@ -103,6 +103,9 @@ struct TalkLockScreenView: View {
 /// big one, easy to hit without looking (the user, 2026-11-07: "a button that is
 /// very easy to press"); Cancel is small, so it is not hit by mistake.
 struct TalkButtons: View {
+    /// The take goes to the clipboard: the big button reads Copy.
+    var copy = false
+
     var body: some View {
         HStack(spacing: 10) {
             Button(intent: TalkCancelIntent()) {
@@ -115,7 +118,7 @@ struct TalkButtons: View {
             Button(intent: TalkSendNowIntent()) {
                 // A Live Activity is at most 160 pt tall: with the button's own padding
                 // this keeps Send about 44 pt high, the title and one line above it.
-                Label("Send", systemImage: "arrow.up")
+                Label(copy ? "Copy" : "Send", systemImage: copy ? "doc.on.doc" : "arrow.up")
                     .font(.title3.weight(.bold))
                     .frame(maxWidth: .infinity, minHeight: 30)
             }
@@ -142,12 +145,12 @@ enum TalkStyle {
     static func shortWord(_ state: TalkActivityAttributes.ContentState) -> String {
         switch state.phase {
         case .listening: return ""
-        case .transcribing, .sending: return "Sending"
-        case .sent: return "Sent"
+        case .transcribing, .sending: return state.copy == true ? "Copying" : "Sending"
+        case .sent: return state.copy == true ? "Copied" : "Sent"
         case .failed:
             if state.later == true { return "Waiting" }
             if state.quiet == true { return "No words" }
-            return "Not sent"
+            return state.copy == true ? "Not copied" : "Not sent"
         }
     }
 }

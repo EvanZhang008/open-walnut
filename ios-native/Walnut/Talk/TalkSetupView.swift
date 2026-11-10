@@ -3,17 +3,19 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-/// Settings, Action Button: what Talk to Walnut does, a way to try it here, the
-/// exact steps to put it on the Action Button (only the person can, in iOS
-/// Settings), other places it runs, and anything it could not send.
+/// Settings, Action Button: what Talk to Walnut and Dictate to Clipboard do, a way
+/// to try each here, the exact steps to put one on the Action Button (only the
+/// person can, in iOS Settings), other places they run, and anything not delivered.
 struct TalkSetupView: View {
     @State private var talk = TalkSession.shared
     @State private var mic = TalkSession.systemMicAccess()
     @State private var tryError: String?
+    @State private var dictateError: String?
     @State private var showingUnsent = false
     @Environment(\.scenePhase) private var scenePhase
 
     private var allWait: Bool { talk.outbox.unsent.allSatisfy(TalkSession.waits) }
+    private var allCopy: Bool { talk.outbox.unsent.allSatisfy { $0.copy == true } }
 
     var body: some View {
         List {
@@ -28,7 +30,7 @@ struct TalkSetupView: View {
                             Image(systemName: allWait ? "clock.arrow.circlepath" : "exclamationmark.bubble")
                                 .foregroundStyle(allWait ? TalkTone.orange : TalkTone.red)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(allWait ? "Waiting to Send" : "Not Sent")
+                                Text(allWait ? "Waiting to Send" : allCopy ? "Not Copied" : "Not Sent")
                                     .foregroundStyle(allWait ? TalkTone.orange : TalkTone.red)
                                 Text(latest.reason ?? "")
                                     .font(.footnote)
@@ -56,13 +58,21 @@ struct TalkSetupView: View {
             }
 
             Section {
+                Text("Dictate to Clipboard listens the same way, but puts your words on the clipboard exactly as heard, ready to paste into any app. Nothing goes to your CEO.")
+                    .accessibilityIdentifier("talk.dictate.intro")
+                TalkTryRow(talk: talk, error: $dictateError, destination: .clipboard)
+            } header: {
+                Text("Dictate to Clipboard")
+            }
+
+            Section {
                 TalkStepRow(number: 1, text: "Open the **Settings** app and tap **Action Button**.")
                 TalkStepRow(number: 2, text: "Swipe to **Shortcut**.")
-                TalkStepRow(number: 3, text: "Tap **Choose a Shortcut**, then pick **Talk to Walnut**.")
+                TalkStepRow(number: 3, text: "Tap **Choose a Shortcut**, then pick **Talk to Walnut**, or **Dictate to Clipboard** to paste what you say anywhere.")
             } header: {
                 Text("Set Up the Action Button")
             } footer: {
-                Text("Talk to Walnut is already in your shortcuts, so there is nothing to add. iOS lets only you pick what the Action Button does. When your iPhone is locked, iOS asks for Face ID first.")
+                Text("Both are already in your shortcuts, so there is nothing to add. iOS lets only you pick what the Action Button does. When your iPhone is locked, iOS asks for Face ID first.")
             }
 
             Section {
@@ -113,10 +123,18 @@ struct TalkSetupView: View {
     }
 }
 
-/// Try it here: the same take the Action Button starts, with its state.
+/// Try it here: the same take the Action Button starts, with its state. One row per
+/// destination; a take shows on the row of the destination it was started for.
 struct TalkTryRow: View {
     let talk: TalkSession
     @Binding var error: String?
+    var destination: TalkDestination = .ceo
+
+    private var copy: Bool { destination == .clipboard }
+    /// The take on screen (or the last one) is this row's.
+    private var mine: Bool { talk.destination == destination }
+    /// Identifiers: the CEO row keeps its own, the clipboard row's carry "dictate".
+    private func id(_ name: String) -> String { copy ? "talk.dictate.\(name)" : "talk.\(name)" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -127,7 +145,7 @@ struct TalkTryRow: View {
                 Label(line.text, systemImage: line.symbol)
                     .font(.footnote)
                     .foregroundStyle(line.color)
-                    .accessibilityIdentifier("talk.result")
+                    .accessibilityIdentifier(id("result"))
             }
         }
         .padding(.vertical, 4)
@@ -137,7 +155,7 @@ struct TalkTryRow: View {
 
     @ViewBuilder
     private var control: some View {
-            switch talk.phase {
+            switch mine ? talk.phase : .idle {
             case .listening:
                 HStack {
                     Label("Listening", systemImage: "waveform")
@@ -146,30 +164,35 @@ struct TalkTryRow: View {
                     Spacer()
                     Button("Cancel") { Task { await talk.cancel(source: "settings-cancel") } }
                         .buttonStyle(.bordered)
-                        .accessibilityIdentifier("talk.cancel")
+                        .accessibilityIdentifier(id("cancel"))
                     Button { Task { await talk.finishNow(source: "settings-send") } } label: {
-                        Text("Send").foregroundStyle(TalkTone.onProminent)
+                        Text(copy ? "Copy" : "Send").foregroundStyle(TalkTone.onProminent)
                     }
                         .buttonStyle(.borderedProminent)
-                        .accessibilityIdentifier("talk.send")
+                        .accessibilityIdentifier(id(copy ? "copy" : "send"))
                 }
             case .starting, .transcribing, .sending:
                 HStack(spacing: 8) {
                     ProgressView()
                     Text(Self.busyWords(talk.phase))
+                        .accessibilityIdentifier(id("busy"))
                     Spacer(minLength: 0)
                 }
             default:
                 Button {
                     error = nil
                     Task {
-                        do { try await talk.toggle(source: "settings-try") } catch { self.error = error.localizedDescription }
+                        do {
+                            try await talk.toggle(source: copy ? "settings-try-dictate" : "settings-try", to: destination)
+                        } catch {
+                            self.error = error.localizedDescription
+                        }
                     }
                 } label: {
                     // Icon and words centred together; they wrap as one at large sizes.
                     HStack(spacing: 8) {
-                        Image(systemName: "waveform")
-                        Text("Try It Now")
+                        Image(systemName: copy ? "doc.on.clipboard" : "waveform")
+                        Text(copy ? "Try Dictation" : "Try It Now")
                     }
                     .multilineTextAlignment(.center)
                     .foregroundStyle(TalkTone.onProminent)
@@ -177,7 +200,9 @@ struct TalkTryRow: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .accessibilityIdentifier("talk.try")
+                // The other row's take is on screen: one take at a time.
+                .disabled(!mine && talk.isBusy)
+                .accessibilityIdentifier(id("try"))
             }
     }
 
@@ -191,8 +216,10 @@ struct TalkTryRow: View {
 
     private var resultLine: (text: String, symbol: String, color: Color)? {
         if let error { return (error, "exclamationmark.triangle", TalkTone.red) }
+        guard mine else { return nil }
         switch talk.phase {
         case .sent(let words): return ("Sent to your CEO: \u{201C}\(TalkSession.preview(words))\u{201D}", "checkmark.circle", TalkTone.green)
+        case .copied(let words): return ("Copied: \u{201C}\(TalkSession.preview(words))\u{201D}", "doc.on.clipboard", TalkTone.green)
         // A kept take is said once, by the Not Sent row right below, with its reason.
         case .notSent(_, kept: true) where !talk.outbox.unsent.isEmpty:
             return nil
@@ -250,7 +277,9 @@ struct TalkUnsentRows: View {
             .confirmationDialog(
                 // A recording with no words was never sent; words may have reached
                 // the server before an answer was lost, so they say only what is known.
-                entry.text == nil
+                entry.copy == true
+                    ? (entry.text == nil ? "Delete this recording? It was never copied." : "Delete these words? They were never copied.")
+                    : entry.text == nil
                     ? "Delete this recording? It was never sent to your CEO chat."
                     : "Delete these words? Walnut could not confirm they reached your CEO chat.",
                 isPresented: Binding(
@@ -274,7 +303,7 @@ struct TalkUnsentRows: View {
     private func status(_ entry: TalkOutbox.Entry) -> some View {
         if talk.resending.contains(entry.id) {
             Label {
-                Text(entry.text == nil ? "Getting words\u{2026}" : "Sending\u{2026}")
+                Text(entry.text == nil ? "Getting words\u{2026}" : entry.copy == true ? "Copying\u{2026}" : "Sending\u{2026}")
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
                 ProgressView()
@@ -321,7 +350,11 @@ struct TalkUnsentRows: View {
     private func resendButton(_ entry: TalkOutbox.Entry, wide: Bool) -> some View {
         // A take that sends by itself offers a quiet Send Now; one that needs
         // the person keeps the filled Resend.
-        if TalkSession.waits(entry) {
+        // A take for the clipboard waits only for the person's Copy.
+        if entry.copy == true {
+            resendCore(entry, wide: wide, title: "Copy", onFill: true)
+                .buttonStyle(.borderedProminent)
+        } else if TalkSession.waits(entry) {
             resendCore(entry, wide: wide, title: "Send Now", onFill: false)
                 .buttonStyle(.bordered)
         } else {
@@ -422,6 +455,7 @@ struct TalkUnsentList: View {
     }
 
     private var allWait: Bool { talk.outbox.unsent.allSatisfy(TalkSession.waits) }
+    private var allCopy: Bool { talk.outbox.unsent.allSatisfy { $0.copy == true } }
 
     /// The reason once, then when it goes out: one fixed place, so it never
     /// moves into a row as rows leave.
@@ -429,6 +463,8 @@ struct TalkUnsentList: View {
         let one = talk.outbox.unsent.count == 1
         let tail = allWait
             ? "Walnut tries again each time you open it."
+            : allCopy
+            ? (one ? "Tap Copy to put it on the clipboard." : "Tap Copy to put one on the clipboard.")
             : (one ? "This did not reach your CEO chat." : "These did not reach your CEO chat.")
         return [sharedReason, tail].compactMap { $0 }.joined(separator: " ")
     }
@@ -441,7 +477,12 @@ struct TalkUnsentList: View {
                 // A Resend that went out says so here: its row leaves, as a
                 // Delete's does, and the words are what reached the CEO chat.
                 if let words = talk.lastResent {
-                    Label("Sent to your CEO chat: \u{201C}\(TalkSession.preview(words))\u{201D}", systemImage: "checkmark.circle.fill")
+                    Label(
+                        talk.lastResentCopied
+                            ? "Copied: \u{201C}\(TalkSession.preview(words))\u{201D}"
+                            : "Sent to your CEO chat: \u{201C}\(TalkSession.preview(words))\u{201D}",
+                        systemImage: talk.lastResentCopied ? "doc.on.clipboard.fill" : "checkmark.circle.fill"
+                    )
                         .font(.footnote)
                         .foregroundStyle(TalkTone.green)
                         .accessibilityIdentifier("talk.unsent.sent")
@@ -457,7 +498,7 @@ struct TalkUnsentList: View {
                     }
                 }
             }
-            .navigationTitle(allWait ? "Waiting to Send" : "Not Sent to Your CEO")
+            .navigationTitle(allWait ? "Waiting to Send" : allCopy ? "Not Copied" : "Not Sent to Your CEO")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.visible, for: .navigationBar)
             .talkHardTopEdge()

@@ -128,9 +128,9 @@ final class TalkRealServerUITests: XCTestCase {
 
     // MARK: - The press
 
-    private func tile(_ shortcuts: XCUIApplication) -> XCUIElement {
-        let tile = labelled(shortcuts, "Talk to Walnut")
-        XCTAssertTrue(tile.waitForExistence(timeout: 30), "Talk to Walnut is not in the Shortcuts app")
+    private func tile(_ shortcuts: XCUIApplication, _ name: String = "Talk to Walnut") -> XCUIElement {
+        let tile = labelled(shortcuts, name)
+        XCTAssertTrue(tile.waitForExistence(timeout: 30), "\(name) is not in the Shortcuts app")
         return tile
     }
 
@@ -224,6 +224,40 @@ final class TalkRealServerUITests: XCTestCase {
         element(app, "talk.panel.send").tap()
         XCUIDevice.shared.press(.home)
         XCTAssertTrue(reachesTheCEO(after: before, "fallback"), "the send stopped when Walnut was left")
+    }
+
+    /// Dictate to Clipboard, the Action Button's other shortcut: press, the sentence, press
+    /// again, with Walnut closed all along. The words land on the clipboard and never in the
+    /// CEO chat; Walnut's Action Button page then shows what it copied.
+    @MainActor
+    func testDictateToClipboardCopiesTheWordsWithWalnutClosedAndSendsNothing() throws {
+        let app = UITestLaunch.launch(try pairing())
+        sendAway(app)
+        let shortcuts = XCUIApplication(bundleIdentifier: "com.apple.shortcuts")
+        shortcuts.launch()
+        let dictate = tile(shortcuts, "Dictate to Clipboard")
+        shot("shortcuts-dictate")
+        XCTAssertNotEqual(app.state, .runningForeground, "Walnut is in front before the press")
+        XCTAssertNotEqual(app.state, .notRunning, "Walnut stopped: the tap would start an unpinned one")
+        let before = try timesInCEOChat()
+        dictate.tap()
+        listensBehind(app, "dictate", seconds: 9)
+        dictate.tap()
+        // Copied with Walnut closed: open it and read what the Action Button page says it copied.
+        _ = film("dictate-finishing", seconds: 20) { false }
+        XCTAssertNotEqual(app.state, .runningForeground, "the copy opened Walnut")
+        app.activate()
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 30))
+        app.tabBars.buttons["Settings"].tap()
+        let row = element(app, "settings.talkToWalnut")
+        for _ in 0..<6 where !row.isHittable { app.swipeUp() }
+        row.tap()
+        let result = element(app, "talk.dictate.result")
+        for _ in 0..<4 where !result.exists { app.swipeUp() }
+        let copied = film("dictate-copied", seconds: 10) { result.exists && result.label.contains(Self.sentence) }
+        XCTAssertTrue(copied, "the page does not show the copied words: \(result.exists ? result.label : "no result")")
+        XCTAssertTrue(result.label.hasPrefix("Copied"), result.label)
+        XCTAssertEqual(try timesInCEOChat(), before, "a dictation reached the CEO chat")
     }
 
     /// Right after Walnut's own voice input (the chat's microphone), with Walnut sent away.

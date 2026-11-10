@@ -161,6 +161,55 @@ final class TalkToWalnutUITests: XCTestCase {
         shot("7-after-delete")
     }
 
+    /// The Action Button page offers Dictate to Clipboard with a try of its own; one the
+    /// server never transcribed waits in the list with Copy, never Send, and is not copied
+    /// or sent by itself.
+    @MainActor
+    func testTheSetupOffersDictationAndKeepsOneItCouldNotCopy() throws {
+        let audio = try XCTUnwrap(Bundle(for: Self.self).path(forResource: "talk-en", ofType: "caf"))
+        let app = UITestLaunch.launch([
+            UITestLaunch.serverURLArgument, "http://127.0.0.1:9", "-walnut.deviceToken", "talk-ui-test",
+            "-walnut.debug.talkReplayFile", audio, "-walnut.debug.talkClearOutbox", "YES",
+        ])
+        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60), "Walnut never opened")
+        app.tabBars.buttons["Settings"].tap()
+        let row = element(app, "settings.talkToWalnut")
+        for _ in 0..<6 where !row.isHittable { app.swipeUp() }
+        row.tap()
+        let intro = element(app, "talk.dictate.intro")
+        let tryIt = element(app, "talk.dictate.try")
+        for _ in 0..<4 where !tryIt.isHittable { app.swipeUp() }
+        XCTAssertTrue(intro.exists, "the page does not explain Dictate to Clipboard")
+        XCTAssertTrue(labelled(app, "Dictate to Clipboard").exists)
+        XCTAssertTrue(labelled(app, "or **Dictate to Clipboard**").exists || labelled(app, "or Dictate to Clipboard").exists,
+                      "the steps do not offer it for the Action Button")
+        shot("d1-offered")
+        tryIt.tap()
+        let copy = element(app, "talk.dictate.copy")
+        XCTAssertTrue(copy.waitForExistence(timeout: 15), "Try Dictation did not start listening")
+        XCTAssertFalse(element(app, "talk.send").exists, "the dictation offers Send")
+        XCTAssertFalse(element(app, "talk.try").isEnabled, "the other try starts a second take")
+        shot("d2-listening")
+        sleep(6)
+        copy.tap()
+        // The server is unreachable: the recording is kept to copy.
+        let open = element(app, "talk.unsentOpen")
+        for _ in 0..<8 where !open.exists { app.swipeDown() }
+        XCTAssertTrue(open.waitForExistence(timeout: 40), "the dictation that was not copied is not kept")
+        XCTAssertTrue(labelled(app, "Not Copied").exists, "the kept dictation is not called Not Copied")
+        shot("d3-not-copied")
+        for _ in 0..<8 where !open.isHittable { app.swipeDown() }
+        open.tap()
+        let resend = element(app, "talk.unsent.resend")
+        XCTAssertTrue(resend.waitForExistence(timeout: 10))
+        XCTAssertEqual(resend.label, "Copy", "a kept dictation offers Send")
+        XCTAssertTrue(labelled(app, "Tap Copy").exists, "the list does not say how it goes on")
+        shot("d4-list")
+        resend.tap()
+        XCTAssertTrue(element(app, "talk.unsent.triedAgain").waitForExistence(timeout: 30), "a failed Copy changed nothing on screen")
+        shot("d5-tried-again")
+    }
+
     /// At the largest text sizes each Not Sent row stacks its reason and buttons,
     /// so no word breaks letter by letter.
     @MainActor

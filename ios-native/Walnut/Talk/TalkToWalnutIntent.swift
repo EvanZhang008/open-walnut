@@ -21,7 +21,7 @@ import Foundation
 ///
 /// Also a `LiveActivityIntent`: only that lets a run that did not open Walnut start
 /// the Live Activity ("not foreground" otherwise, and with none, no recording).
-struct TalkToWalnutIntent: AudioRecordingIntent, LiveActivityIntent, ForegroundContinuableIntent {
+struct TalkToWalnutIntent: TalkPressIntent, AudioRecordingIntent, LiveActivityIntent, ForegroundContinuableIntent {
     static let title: LocalizedStringResource = "Talk to Walnut"
     static let description = IntentDescription(
         "Say something and Walnut sends it to your CEO chat, as if you typed it there. Tap Send, or run it again, to send.",
@@ -33,48 +33,80 @@ struct TalkToWalnutIntent: AudioRecordingIntent, LiveActivityIntent, ForegroundC
     /// iOS 26: runs in the background, and may bring Walnut forward (the fallback).
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
-
-    /// A press is bringing Walnut forward to listen there (Face ID, a cold launch).
-    @MainActor private static var opening = false
+    static let destination: TalkDestination = .ceo
 
     @MainActor
     func perform() async throws -> some IntentResult {
+        try await press()
+        return .result()
+    }
+}
+
+/// Dictate to Clipboard: the same take as Talk to Walnut, but the words go onto the
+/// clipboard exactly as heard, to paste anywhere, and never to the CEO chat. Locked,
+/// iOS asks for Face ID first, as for Talk to Walnut: the words land on this
+/// iPhone's clipboard.
+struct DictateToClipboardIntent: TalkPressIntent, AudioRecordingIntent, LiveActivityIntent, ForegroundContinuableIntent {
+    static let title: LocalizedStringResource = "Dictate to Clipboard"
+    static let description = IntentDescription(
+        "Say something and Walnut puts your words on the clipboard, exactly as heard. Tap Copy, or run it again, to finish.",
+        categoryName: "Walnut"
+    )
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+    static let openAppWhenRun = false
+    @available(iOS 26.0, *)
+    static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
+    static let destination: TalkDestination = .clipboard
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        try await press()
+        return .result()
+    }
+}
+
+/// One press of Talk to Walnut or Dictate to Clipboard: both run this, so the two can
+/// never drift apart on the rules a real phone enforces (`ForegroundRecordingGuardTests`
+/// reads this extension as part of each intent that conforms).
+protocol TalkPressIntent: ForegroundContinuableIntent {
+    /// Where a take this press starts delivers its words.
+    static var destination: TalkDestination { get }
+}
+
+/// A press is bringing Walnut forward to listen there (Face ID, a cold launch), for
+/// either intent: there is one take at a time.
+@MainActor private var talkPressOpening = false
+
+extension TalkPressIntent {
+    @MainActor
+    func press() async throws {
         let talk = TalkSession.shared
+        let destination = Self.destination
         // A second press while the first still brings Walnut forward ("nothing happened"):
         // the first starts the take; this one only shows the panel, never ends it.
-        if Self.opening {
+        if talkPressOpening {
             AppLog.info("talk", "intent press ignored", ["reason": "opening-walnut"])
             if talk.inFront { TalkPanel.shared.show() }
-            return .result()
+            return
         }
-        // A press while a take listens sends it, wherever it shows; one while it opens
+        // A press while a take listens finishes it, wherever it shows; one while it opens
         // the microphone or sends leaves that take alone.
         if talk.isBusy || talk.inFront {
             try await Self.takeInFront(talk)
-            return .result()
+            return
         }
         do {
-            try await talk.toggle(source: "intent")
-            return .result()
-        } catch let refused as TalkSession.StartError where Self.opensWalnut(for: refused) {
+            try await talk.toggle(source: "intent", to: destination)
+            return
+        } catch let refused as TalkSession.StartError where TalkToWalnutIntent.opensWalnut(for: refused) {
             AppLog.info("talk", "listening in Walnut instead", ["reason": refused.localizedDescription])
         }
-        Self.opening = true
-        defer { Self.opening = false }
+        talkPressOpening = true
+        defer { talkPressOpening = false }
         try await openWalnut()
         // The take waits until Walnut is in front: from behind it was just refused.
         guard await talk.waitUntilInFront() else { throw TalkSession.StartError.notInFront }
         try await Self.takeInFront(talk)
-        return .result()
-    }
-
-    /// The refusals the Talk screen fixes: everything but an unpaired iPhone and a
-    /// microphone turned off in Settings, which opening Walnut does not change.
-    static func opensWalnut(for refused: TalkSession.StartError) -> Bool {
-        switch refused {
-        case .needsFront, .micNotAsked: return true
-        default: return false
-        }
     }
 
     /// Bring Walnut forward: on iOS 26 with no question first; before it iOS asks.
@@ -97,24 +129,24 @@ struct TalkToWalnutIntent: AudioRecordingIntent, LiveActivityIntent, ForegroundC
             AppLog.info("talk", "take moves after the run", ["reason": "no-live-activity"])
             TalkPanel.shared.show()
             Task { @MainActor in
-                try? await Task.sleep(for: afterRun)
-                await startAfterRun(talk)
+                try? await Task.sleep(for: TalkToWalnutIntent.afterRun)
+                await TalkToWalnutIntent.startAfterRun(talk, to: destination)
             }
             return
         }
-        // A press while it listens sends: the panel is already up and says so.
+        // A press while it listens finishes it: the panel is already up and says so.
         guard TalkPanel.shared.show() else {
-            // Behind the app on screen: a take listening there is sent; one opening the
+            // Behind the app on screen: a take listening there is finished; one opening the
             // microphone or sending carries on, with nothing to say about it.
             do {
-                try await talk.toggle(source: "intent")
+                try await talk.toggle(source: "intent", to: destination)
             } catch TalkSession.StartError.busy {
                 AppLog.info("talk", "intent press ignored", ["reason": "busy-behind"])
             }
             return
         }
         do {
-            try await talk.toggle(source: "intent")
+            try await talk.toggle(source: "intent", to: destination)
         } catch TalkSession.StartError.busy {
             // A quick second press while the first take opens the microphone or sends:
             // that take carries on, and the panel keeps showing it.
@@ -128,13 +160,22 @@ struct TalkToWalnutIntent: AudioRecordingIntent, LiveActivityIntent, ForegroundC
 }
 
 extension TalkToWalnutIntent {
+    /// The refusals the Talk screen fixes: everything but an unpaired iPhone and a
+    /// microphone turned off in Settings, which opening Walnut does not change.
+    static func opensWalnut(for refused: TalkSession.StartError) -> Bool {
+        switch refused {
+        case .needsFront, .micNotAsked: return true
+        default: return false
+        }
+    }
+
     /// How long after the run a take with no Live Activity starts or ends.
     static let afterRun: Duration = .milliseconds(800)
 
     @MainActor
-    static func startAfterRun(_ talk: TalkSession) async {
+    static func startAfterRun(_ talk: TalkSession, to destination: TalkDestination = .ceo) async {
         do {
-            try await talk.toggle(source: "intent-after-run")
+            try await talk.toggle(source: "intent-after-run", to: destination)
         } catch TalkSession.StartError.busy {
             AppLog.info("talk", "intent press ignored", ["reason": "busy"])
         } catch {
@@ -144,7 +185,7 @@ extension TalkToWalnutIntent {
     }
 }
 
-/// Listed in the Shortcuts app, Spotlight and Siri with no setup, and offered
+/// Both listed in the Shortcuts app, Spotlight and Siri with no setup, and offered
 /// by Settings, Action Button, Shortcut.
 struct WalnutShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
@@ -157,6 +198,15 @@ struct WalnutShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Talk to Walnut",
             systemImageName: "waveform"
+        )
+        AppShortcut(
+            intent: DictateToClipboardIntent(),
+            phrases: [
+                "Dictate with \(.applicationName)",
+                "Dictate to clipboard with \(.applicationName)",
+            ],
+            shortTitle: "Dictate to Clipboard",
+            systemImageName: "doc.on.clipboard"
         )
     }
 

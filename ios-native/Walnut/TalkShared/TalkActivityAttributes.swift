@@ -2,6 +2,12 @@ import ActivityKit
 import AppIntents
 import Foundation
 
+/// Where a take's words go: the CEO chat (Talk to Walnut), or the clipboard as heard,
+/// to paste anywhere (Dictate to Clipboard).
+enum TalkDestination: String, Codable, Hashable {
+    case ceo, clipboard
+}
+
 /// The Live Activity a Talk to Walnut take shows on the Lock Screen and in the
 /// Dynamic Island. Compiled into the app (which starts and updates it) and the
 /// widget extension (which draws it), so both read the same shape.
@@ -34,6 +40,9 @@ struct TalkActivityAttributes: ActivityAttributes {
         /// The kept take a failed card speaks of, so the card goes once that
         /// take is sent or deleted instead of saying it still waits.
         var take: String?
+        /// The words go to the clipboard, not the CEO chat (Dictate to Clipboard):
+        /// "sent" reads "Copied". Nil, in a state written before this field, is the CEO.
+        var copy: Bool?
     }
 }
 
@@ -43,11 +52,11 @@ extension TalkActivityAttributes.ContentState {
         case .listening: return "Listening"
         case .transcribing: return "Getting your words"
         case .sending: return "Sending to your CEO"
-        case .sent: return "Sent to your CEO"
+        case .sent: return copy == true ? "Copied" : "Sent to your CEO"
         case .failed:
             if later == true { return "Waiting to send" }
             if quiet == true { return "Nothing heard" }
-            return "Not sent"
+            return copy == true ? "Not copied" : "Not sent"
         }
     }
 
@@ -57,13 +66,15 @@ extension TalkActivityAttributes.ContentState {
 
     var subtitle: String {
         switch phase {
-        case .listening: return "Tap Send, or press the Action Button again"
+        case .listening:
+            return copy == true ? "Tap Copy, or press the Action Button again" : "Tap Send, or press the Action Button again"
         case .transcribing, .sending: return words ?? "One moment"
         case .sent: return words ?? ""
         case .failed:
             let why = reason ?? "Something went wrong."
             if later == true { return why + " It sends the next time you open Walnut." }
-            return kept == false ? why : why + " Open Walnut to resend it."
+            if kept == false { return why }
+            return why + (copy == true ? " Open Walnut to copy it." : " Open Walnut to resend it.")
         }
     }
 
@@ -71,7 +82,7 @@ extension TalkActivityAttributes.ContentState {
         switch phase {
         case .listening: return "waveform"
         case .transcribing, .sending: return "arrow.up.circle"
-        case .sent: return "checkmark.circle.fill"
+        case .sent: return copy == true ? "doc.on.clipboard.fill" : "checkmark.circle.fill"
         case .failed:
             if later == true { return "tray.and.arrow.up.fill" }
             if quiet == true { return "mic.slash" }
@@ -80,7 +91,8 @@ extension TalkActivityAttributes.ContentState {
     }
 }
 
-/// The Live Activity's Send button: end the take now and send it.
+/// The Live Activity's Send button (Copy, for a take going to the clipboard): end the
+/// take now and deliver it.
 struct TalkSendNowIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Send to Walnut Now"
     static let isDiscoverable = false

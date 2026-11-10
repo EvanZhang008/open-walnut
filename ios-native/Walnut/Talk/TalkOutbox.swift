@@ -32,6 +32,10 @@ final class TalkOutbox {
         /// The attempt went on to start the CEO chat with these words, a request that
         /// carries no message id: if Walnut was ended then, they may have arrived.
         var startingChat: Bool? = nil
+        /// The words go to the clipboard (Dictate to Clipboard), never to the CEO chat,
+        /// and only when the person taps Copy: nothing copies them by itself later, over
+        /// whatever they copied since.
+        var copy: Bool? = nil
     }
 
     private(set) var entries: [Entry] = []
@@ -118,6 +122,8 @@ enum TalkReason {
     /// before this was sent." of builds 160 and 161, whose entries still wait for
     /// the person: they may be days old, or a start.
     static let closedMidSend = "Walnut was closed before this went out."
+    /// iOS did not take the words onto the clipboard (Walnut was behind another app).
+    static let notCopied = "iOS didn't let Walnut copy this from the background."
 
     /// The failures the next try fixes by itself: the server was away, or Walnut
     /// was ended before the send finished.
