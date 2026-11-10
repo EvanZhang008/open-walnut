@@ -10,8 +10,9 @@
  * Code is out of usage, then a quick-start that names no engine starts on Codex (the mock ACP
  * agent). The fixture server is shared by parallel specs, and a
  * fallback that is on while Claude Code is limited would move THEIR new tasks to Codex too: the
- * setting is on only for this spec's own start, and the draft's line reads a routed answer (the
- * server's answer is tests/e2e/fallback-engine-e2e.test.ts's).
+ * setting is on only for this spec's own start, the Settings case holds the limit-window lock while
+ * it turns the setting on and off (so no sibling makes Claude Code limited meanwhile), and the
+ * draft's line reads a routed answer (the server's answer is tests/e2e/fallback-engine-e2e.test.ts's).
  */
 import { test, expect, type APIRequestContext, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs'
@@ -36,6 +37,8 @@ test.beforeEach(async ({ page }) => {
 
 test.afterEach(async ({ request }) => {
   await setFallback(request, null).catch(() => undefined)
+  // Only once the setting is off again: a sibling may make Claude Code limited from here on.
+  if (testHoldsLock) { testHoldsLock = false; fs.rmSync(LOCK_DIR, { recursive: true, force: true }) }
   for (const sid of litter.sessions) await request.post(`/api/sessions/${sid}/terminate`).catch(() => undefined)
   for (const id of litter.tasks) await request.delete(`/api/tasks/${id}?force=true`).catch(() => undefined)
 })
@@ -79,6 +82,9 @@ async function claudeReading(request: APIRequestContext, cwd: string, status: 'r
 /** The fixture's one local host is shared by every spec that writes its Claude reading
  *  (subscription-limit-window.spec.ts holds the same lock for its whole flow). */
 const LOCK_DIR = path.join(os.tmpdir(), `walnut-pw-limit-window-${process.env.PW_TEST_PORT ?? 3457}.lock`)
+
+/** The running test took the lock for its whole flow; afterEach frees it. */
+let testHoldsLock = false
 
 async function takeLock(): Promise<void> {
   const deadline = Date.now() + 8 * 60_000
@@ -146,6 +152,11 @@ async function shot(page: Page, loc: Locator, name: string, pad = 16): Promise<v
 }
 
 test('Settings: the fallback engine and its model save, read back after a reload, and turn off', async ({ page, request }) => {
+  // The setting goes on below, and a fallback that is on while a sibling holds Claude Code limited
+  // moves every parallel spec's new task to Codex (a draft spec's native launch then sent no
+  // session id): hold the lock until afterEach has turned the setting off.
+  await takeLock()
+  testHoldsLock = true
   await setFallback(request, null)
   await page.goto('/settings#sessions')
   const row = page.getByTestId('fallback-engine-row')
