@@ -207,6 +207,11 @@ await fs.writeFile(
         enabled: false,
       },
     },
+    // Every spec of a run shares this server, so its automatic starts share this machine's
+    // slots: by its size, a 4-CPU CI runner gets 2 (src/core/hosts/placement.ts hostSlots),
+    // and two other specs' live mock sessions refused an Org lead's own start with "no room"
+    // (2026-11-10, CI). The slots of a real Mac are not under test here; their specs mock them.
+    session_limits: { local: 32 },
     provider: { type: 'claude-code' },
     agent: {
       main_provider: 'playwright-cli',
