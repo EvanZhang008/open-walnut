@@ -1,7 +1,7 @@
 /**
  * The popup's Settings: the connection, when the extension locks itself, filling and saving on
  * web pages, copying the one-time code after a fill, the sites Walnut never offers to save for (each removable), and
- * agents in this browser.
+ * agents in this browser (with the look of their cursor).
  */
 import { ask, ext } from './ext'
 import { followStorage, isCurrent, nextView, paint } from './popup-view'
@@ -9,6 +9,7 @@ import { h, icon } from './dom'
 import { AUTO_LOCKS, getSettings, setSettings, type AutoLock } from './settings'
 import { errLine, iconButton, popupIcon, switchRow, topBar } from './popup-ui'
 import { disconnectControl } from './popup-disconnect'
+import { cursorPickRow } from './popup-cursor-pick'
 import { setLivePictures, setTrustedInput, trustedInputState } from './trusted-switch'
 
 /** The live pictures switch's name (the Browser view's lines name it: web/src/components/sessions/browser-view-model.ts). */
@@ -123,6 +124,8 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
     lockSub.textContent = lockHelp(lock.value as AutoLock, walnutSt)
   }).catch(() => undefined)
   const agentsBox = h('div', { 'data-testid': 'popup-agents-section' }, await agentSection())
+  // Outside agentsBox, which is drawn again when agents are turned on or off.
+  const cursorPick = cursorPickRow(settings.cursorStyle)
   const neverBox = h('div', {}, await neverSection())
   // What a person changes comes first (lock, filling, agents), so it fits the popup's first
   // screen; the sites never offered for saving, the connection and Disconnect close the page.
@@ -144,6 +147,7 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
           (on) => void setSettings({ copyTotp: on }), 'popup-copytotp')),
       h('p', { class: 'group-note', 'data-testid': 'popup-shortcut-note' }, 'Ctrl+Shift+L (⌘⇧L on a Mac) fills the login for the page. In a field, the arrow keys open the menu.'),
       agentsBox,
+      h('div', { class: 'group' }, cursorPick.row),
       neverBox,
       h('div', { class: 'section-label' }, 'This browser'),
       h('div', { class: 'group', 'data-testid': 'popup-connection' }, h('div', { class: 'row' }, h('span', { class: 'logo' }, icon('key')),
@@ -162,6 +166,7 @@ export async function settingsView(root: HTMLElement, st: { serverUrl?: string; 
   followStorage(['settings'], g, () => void getSettings().then((now) => {
     if (!isCurrent(g)) return
     if (document.activeElement !== lock && lock.value !== now.autoLock) { lock.value = now.autoLock; lockSub.textContent = lockHelp(lock.value as AutoLock, walnutSt) }
+    cursorPick.sync(now.cursorStyle)
     for (const [id, on] of [['pagefill', now.pageFill], ['copytotp', now.copyTotp]] as const) {
       const box = root.querySelector<HTMLInputElement>(`#${id}`)
       if (box && box.checked !== on) box.checked = on

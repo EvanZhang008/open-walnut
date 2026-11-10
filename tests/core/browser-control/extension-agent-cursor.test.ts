@@ -8,19 +8,36 @@
  *   - the cursor never takes a click (pointer-events none on the host and inside), sits above all
  *     at the highest z-index, has no size (no layout), and moving it scrolls and focuses nothing;
  *   - it moves in an animated step, a first appearance shows before the step acts, a click shows
- *     its ripple; with prefers-reduced-motion it jumps and waits for nothing;
+ *     its animation; with prefers-reduced-motion it jumps and waits for nothing;
+ *   - each look (cursor-looks.ts) draws with no pointer events, is masked in screenshots and plays
+ *     its click; the person's pick is read from storage.local (`settings.cursorStyle`), a bad or
+ *     missing one is the default, and a change redraws a cursor on show in place;
  *   - an agent's screenshot hides it (with the secrets mask), and it is back after;
  *   - from a frame it is drawn in the top document when the background places it, else in the
  *     frame's own document; a frame's place is read with runtime.getFrameId.
  */
 import { readFileSync, readdirSync } from 'node:fs'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { installFakePage } from './page-dom-fake'
 
 const frameIds = new Map<Element, number>()
 const sent: Array<Record<string, unknown>> = []
 let upAnswer: Record<string, unknown> | undefined = { ok: true, placed: true }
+/** What storage.local holds; `null`: a storage that never answers; a number: one that answers after that many ms. */
+let stored: Record<string, unknown> | null = {}
+let storeDelay = 0
 ;(globalThis as any).chrome = {
+  storage: {
+    local: {
+      get: async (k: string) => {
+        if (stored === null) return new Promise(() => undefined)
+        const now = stored
+        if (storeDelay) await new Promise((r) => setTimeout(r, storeDelay))
+        return { [k]: now[k] }
+      },
+    },
+    onChanged: { addListener() {}, removeListener() {} },
+  },
   runtime: {
     id: 'test',
     getFrameId: (el: Element) => frameIds.get(el) ?? -1,
@@ -36,6 +53,7 @@ const { CURSOR_ACTS, NO_CURSOR } = await import('../../../packages/browser-exten
 const { PAGE_OPS } = await import('../../../packages/browser-extension/src/agent-page')
 const { TRUSTED_OPS, DEBUGGER_OPS } = await import('../../../packages/browser-extension/src/agent-trusted')
 const { NET_OPS } = await import('../../../packages/browser-extension/src/agent-net')
+const looks = await import('../../../packages/browser-extension/src/cursor-looks')
 
 const SRC = 'packages/browser-extension/src'
 const read = (f: string) => readFileSync(`${SRC}/${f}`, 'utf8')
@@ -49,6 +67,8 @@ beforeEach(() => {
   delete g.top
   sent.length = 0
   upAnswer = { ok: true, placed: true }
+  stored = {}
+  storeDelay = 0
   frameIds.clear()
   page.load('')
 })
@@ -195,9 +215,13 @@ describe('the cursor never gets in the way', () => {
     expect({ x: page.scroll.x, y: page.scroll.y, focus: document.activeElement, intoView: page.intoView }).toEqual(before)
     // Nothing a click looks for is ever the cursor.
     expect(document.elementFromPoint(300, 200)).not.toBe(host)
-    // Every rule inside it takes no pointer events either (the shadow root is closed: its style text is read from the source).
-    for (const rule of read('page-cursor.ts').match(/^\.c[^{]*\{[^}]*\}/gm) ?? []) {
-      if (/position:absolute|position:fixed/.test(rule)) expect(rule, rule).toMatch(/pointer-events:none/)
+    // Every rule inside it takes no pointer events either, in every look (the shadow root is closed: its style text is read from the looks).
+    for (const style of looks.CURSOR_STYLES) {
+      const css = looks.cursorCss(style)
+      expect(css.startsWith('.c,.c *{pointer-events:none !important}'), style).toBe(true)
+      for (const rule of css.match(/^\.c[^{]*\{[^}]*\}/gm) ?? []) {
+        if (/position:absolute|position:fixed/.test(rule)) expect(rule, rule).toMatch(/pointer-events:none/)
+      }
     }
   })
 
@@ -263,7 +287,7 @@ describe('motion', () => {
     await cur.cursorAt(900, 700, 'click')
     expect(Date.now() - t).toBeLessThan(60)
     expect(at()).toEqual({ x: 900, y: 700 })
-    expect(read('page-cursor.ts')).toMatch(/@media \(prefers-reduced-motion: reduce\)\{\.c\{transition:none\}/)
+    for (const style of looks.CURSOR_STYLES) expect(looks.cursorCss(style), style).toMatch(/@media \(prefers-reduced-motion: reduce\)\{\.c\{transition:none\}[^\n]*\.c \*,\.c\.on \*\{animation:none !important\}/)
   })
 })
 
@@ -310,5 +334,117 @@ describe('in a frame', () => {
     // Not one of this document's frames, and the top frame itself: no place here.
     expect(cur.frameBox(42)).toBeNull()
     expect(cur.frameBox(0)).toBeNull()
+  })
+})
+
+describe('the looks', () => {
+  it('each look draws with no pointer events, its tag, no size of its own, hidden in screenshots, and plays its click', async () => {
+    page.load('<button id="a">A</button>')
+    page.place('#a', { x: 100, y: 100, w: 100, h: 40 })
+    expect(looks.CURSOR_STYLES.length).toBe(4)
+    for (const style of looks.CURSOR_STYLES) {
+      cur._resetCursorForTesting()
+      cur.setCursorLook(style)
+      await cur.cursorAt(150, 120, 'click')
+      const c = cur._cursorForTesting()!
+      expect(c.look, style).toBe(style)
+      expect(c.box.dataset.look).toBe(style)
+      expect([...c.host.style.cssText.matchAll(/pointer-events:\s*(\w+)/g)].at(-1)![1]).toBe('none')
+      expect(c.host.style.cssText).toMatch(/width:\s*0/)
+      expect(document.elementFromPoint(150, 120)).toBe(page.$('#a'))
+      expect(c.box.querySelector('.tag')!.textContent).toBe('Walnut')
+      expect(c.box.querySelector('svg'), style).not.toBeNull()
+      expect(c.rippling, style).toBe(true)
+      cur.cursorMask(true)
+      expect(cur._cursorForTesting()!.hidden, style).toBe(true)
+      expect(looks.cursorCss(style)).toMatch(/\.c\.hid\{visibility:hidden\}/)
+      cur.cursorMask(false)
+      expect(cur._cursorForTesting()!.hidden, style).toBe(false)
+    }
+  })
+
+  it('the person\'s pick is read from storage.local before the first drawing; a bad or missing one, or a storage that does not answer, is the default', async () => {
+    stored = { settings: { cursorStyle: 'paw' } }
+    await cur.cursorAt(10, 10)
+    expect(cur._cursorForTesting()!.look).toBe('paw')
+    for (const [value, want] of [[{ settings: { cursorStyle: 'laser' } }, looks.DEFAULT_CURSOR_STYLE], [{}, looks.DEFAULT_CURSOR_STYLE]] as const) {
+      cur._resetCursorForTesting()
+      stored = value as Record<string, unknown>
+      await cur.cursorAt(10, 10)
+      expect(cur._cursorForTesting()!.look).toBe(want)
+    }
+    cur._resetCursorForTesting()
+    stored = null
+    const t = Date.now()
+    await cur.cursorAt(10, 10)
+    expect(Date.now() - t).toBeLessThan(1000)
+    expect(cur._cursorForTesting()!.look).toBe(looks.DEFAULT_CURSOR_STYLE)
+  })
+
+  it('a pick changed while it is on show draws it again in place, still masked if it was; content listens for the change', async () => {
+    await cur.cursorAt(40, 60)
+    const before = cur._cursorForTesting()!.host
+    cur.cursorMask(true)
+    const other = looks.CURSOR_STYLES.find((s) => s !== looks.DEFAULT_CURSOR_STYLE)!
+    cur.setCursorLook(other)
+    const now = cur._cursorForTesting()!
+    expect(before.isConnected).toBe(false)
+    expect(now.look).toBe(other)
+    expect({ x: now.x, y: now.y }).toEqual({ x: 40, y: 60 })
+    expect(now.hidden).toBe(true)
+    expect(now.box.style.transform).toBe('translate(40px, 60px)')
+    expect(read('page-cursor.ts')).toMatch(/onChanged\?\.addListener\(\(changes, area\) => \{\s*if \(area === 'local' && 'settings' in changes\) setCursorLook\(/)
+  })
+
+  it('let go while the look is still being read: nothing is drawn after it', async () => {
+    stored = { settings: { cursorStyle: 'paw' } }
+    storeDelay = 80
+    const drawing = cur.cursorAt(10, 10)
+    cur.cursorOff()
+    await drawing
+    expect(cur._cursorForTesting()).toBeNull()
+  })
+
+  it('a change that comes while the first read is on its way wins over the older read', async () => {
+    stored = { settings: { cursorStyle: 'paw' } }
+    storeDelay = 80
+    const drawing = cur.cursorAt(10, 10)
+    cur.setCursorLook('arrow')
+    await drawing
+    expect(cur._cursorForTesting()!.look).toBe('arrow')
+  })
+
+  it('a storage slower than the wait: drawn in the default first, then in the pick, in place', async () => {
+    stored = { settings: { cursorStyle: 'badge' } }
+    storeDelay = 400
+    await cur.cursorAt(25, 35)
+    expect(cur._cursorForTesting()!.look).toBe(looks.DEFAULT_CURSOR_STYLE)
+    await vi.waitFor(() => expect(cur._cursorForTesting()!.look).toBe('badge'), { timeout: 3000, interval: 20 })
+    const c = cur._cursorForTesting()!
+    expect({ x: c.x, y: c.y }).toEqual({ x: 25, y: 35 })
+  })
+
+  it('every look places its picture from its tip, is hidden from screen readers, and gives each gradient copy its own id', () => {
+    for (const style of looks.CURSOR_STYLES) {
+      expect(looks.cursorCss(style), style).toMatch(/\.c \.b\{left:-\d+(\.\d+)?px;top:-\d+(\.\d+)?px;transform-origin:\d+(\.\d+)?px \d+(\.\d+)?px\}/)
+      const { box } = looks.cursorParts(document, style)
+      expect(box.getAttribute('aria-hidden')).toBe('true')
+      const ids = [...box.querySelectorAll('[id]')].map((e) => e.id)
+      expect(new Set(ids).size, `${style}: ${ids}`).toBe(ids.length)
+    }
+  })
+
+  it('the shipped look is one constant, it is the settings default, and the popup offers every look', () => {
+    expect(looks.isCursorStyle(looks.DEFAULT_CURSOR_STYLE)).toBe(true)
+    expect(read('settings.ts')).toMatch(/cursorStyle: DEFAULT_CURSOR_STYLE/)
+    expect(read('popup-settings.ts')).toMatch(/cursorPickRow\(settings\.cursorStyle\)/)
+    expect(read('popup-cursor-pick.ts')).toMatch(/CURSOR_STYLES\.map/)
+    for (const s of looks.CURSOR_STYLES) expect(looks.CURSOR_STYLE_LABELS[s]).toBeTruthy()
+  })
+
+  it('nothing in a look can be refused by a page CSP: no inline handler, no style attribute, no external asset', () => {
+    const src = read('cursor-looks.ts')
+    expect(src).not.toMatch(/\bon[a-z]+=|setAttribute\('style'|style: '|url\((?!#)|https?:\/\/(?!www\.w3\.org\/2000\/svg)/)
+    expect(src).not.toMatch(/innerHTML/)
   })
 })

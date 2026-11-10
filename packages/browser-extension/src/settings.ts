@@ -1,10 +1,11 @@
 /**
  * The person's extension settings (storage.local, so they last across restarts): the auto-lock
- * timeout, filling and saving on web pages, copying the one-time code after a fill, and the
- * generator's last options. Read by the background and the popup; the page script learns
+ * timeout, filling and saving on web pages, copying the one-time code after a fill, the look of an
+ * agent's cursor in a page, and the generator's last options. Read by the background and the popup; the page script learns
  * `pageFill` from the background and follows its changes (content.ts).
  */
 import { ext } from './ext'
+import { DEFAULT_CURSOR_STYLE, isCursorStyle, type CursorStyle } from './cursor-looks'
 import { DEFAULT_PASSWORD, DEFAULT_PASSPHRASE, type PassphraseOptions, type PasswordOptions } from '../../../src/core/vault/generator'
 
 /**
@@ -39,6 +40,8 @@ export interface Settings {
   pageFill: boolean
   /** After a login with a one-time code is filled, its code goes on the clipboard (as Bitwarden does). */
   copyTotp: boolean
+  /** How an agent's cursor looks in a page (cursor-looks.ts); page-cursor.ts reads it from storage itself. */
+  cursorStyle: CursorStyle
   generator: GeneratorPrefs
 }
 
@@ -46,6 +49,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoLock: 'walnut',
   pageFill: true,
   copyTotp: true,
+  cursorStyle: DEFAULT_CURSOR_STYLE,
   generator: { kind: 'random', random: DEFAULT_PASSWORD, words: DEFAULT_PASSPHRASE },
 }
 
@@ -60,6 +64,7 @@ export async function getSettings(): Promise<Settings> {
     ...(s.autoLockChosen === true ? { autoLockChosen: true } : {}),
     pageFill: typeof s.pageFill === 'boolean' ? s.pageFill : DEFAULT_SETTINGS.pageFill,
     copyTotp: typeof s.copyTotp === 'boolean' ? s.copyTotp : DEFAULT_SETTINGS.copyTotp,
+    cursorStyle: isCursorStyle(s.cursorStyle) ? s.cursorStyle : DEFAULT_SETTINGS.cursorStyle,
     generator: {
       kind: g.kind === 'words' ? 'words' : 'random',
       random: { ...DEFAULT_PASSWORD, ...(g.random ?? {}), kind: 'random' },
