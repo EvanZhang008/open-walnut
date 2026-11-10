@@ -57,9 +57,22 @@ export function useFocusRequest(
   useEffect(() => {
     if (!request) { done.current = undefined; return; }
     if (Object.is(done.current, request)) return;
-    return focusWhenShown(() => live.current.get(), (el) => {
+    // A request counts as served only once a frame has passed with the caret placed. An effect torn
+    // down before that (StrictMode's mount, unmount, mount, in the same commit) has not served it: a
+    // sibling's cleanup in between may have moved focus (the Ask drawer's focus return put the caret
+    // back on the mail row), so the effect's second run asks again.
+    let settled = false;
+    let raf = 0;
+    const cancel = focusWhenShown(() => live.current.get(), (el) => {
       done.current = request;
       live.current.onFocused?.(el);
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => { settled = true; });
     });
+    return () => {
+      cancel();
+      cancelAnimationFrame(raf);
+      if (!settled && Object.is(done.current, request)) done.current = undefined;
+    };
   }, [request]);
 }
