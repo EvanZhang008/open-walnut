@@ -65,7 +65,7 @@ function changedAt(testFile) {
 }
 
 /**
- * The files that flaked REPEATS times within WINDOW_DAYS and were not fixed since: each with its
+ * The files that flaked in REPEATS runs within WINDOW_DAYS and were not fixed since: each with its
  * flakes. A flake older than the file's last change, or than a clear of it, no longer counts.
  */
 export function offenders(rows = readLog(), { now = Date.now(), only = null, lastChange = changedAt } = {}) {
@@ -84,7 +84,11 @@ export function offenders(rows = readLog(), { now = Date.now(), only = null, las
     const changed = lastChange(file)
     if (changed === 'gone') continue
     const fresh = e.flakes.filter((r) => Date.parse(r.at) > Math.max(e.clearedAt, changed ?? 0))
-    if (fresh.length >= REPEATS) out.push({ file, flakes: fresh })
+    // Runs, not rows: one run writes a row per flaky test under one time, and two tests of one file
+    // flaking in a single run are one flake of that file (2026-11-10: three files each flaked in one
+    // local run, counted twice, and the gate refused five lands whose tiers had all passed).
+    const runs = new Set(fresh.map((r) => `${r.source}|${r.at}`))
+    if (runs.size >= REPEATS) out.push({ file, flakes: fresh })
   }
   return out.sort((a, b) => a.file.localeCompare(b.file))
 }
