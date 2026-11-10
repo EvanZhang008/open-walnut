@@ -94,6 +94,35 @@ describe('text', () => {
   })
 })
 
+describe('text keeps the words innerText misses: a shadow root\'s and a date\'s', () => {
+  it('a relative-time drawn in its shadow root reads with its full date; an empty time reads its datetime; a component\'s shadow words', async () => {
+    page.load('<main id="m"><p id="r">github-actions released this <relative-time id="rt" datetime="2026-11-10T12:11:37Z" title="Nov 10, 2026, 4:11 AM PST"></relative-time></p>'
+      + '<p>Updated <time id="t" datetime="2026-11-09T08:00:00Z"></time></p><x-label id="x"></x-label><p>Plain words.</p></main>')
+    page.place('#m', { x: 0, y: 0, w: 800, h: 400 })
+    page.$('#rt').attachShadow({ mode: 'open' }).innerHTML = '<span part="root">37 minutes ago</span>'
+    const sr = page.$('#x').attachShadow({ mode: 'open' })
+    sr.innerHTML = '<style>b { color: red }</style><span>Shadow words</span>'
+    const r = await op('text')
+    expect(r.text).toContain('released this')
+    expect(r.text).toContain('37 minutes ago (Nov 10, 2026, 4:11 AM PST)')
+    expect(r.text).toMatch(/Updated\n\w{3} \d{1,2}, 2026/)
+    expect(r.text).toContain('Shadow words')
+    expect(r.text).not.toContain('color: red')
+    expect(r.text).toContain('Plain words.')
+    // One element by its selector, and the whole page, read the same way.
+    expect((await op('text', { selector: '#r' })).text).toContain('Nov 10, 2026, 4:11 AM PST')
+    expect((await op('text', { all: true })).text).toContain('37 minutes ago')
+  })
+
+  it('a date element with only its title (no shadow root, no words) reads its title', async () => {
+    page.load('<main id="m"><span>Opened <relative-time datetime="2026-11-10T12:11:37Z" title="Nov 10, 2026, 4:11 AM PST"></relative-time> by someone</span></main>')
+    page.place('#m', { x: 0, y: 0, w: 800, h: 400 })
+    const r = await op('text')
+    expect(r.text).toContain('Nov 10, 2026, 4:11 AM PST')
+    expect(r.text).toContain('by someone')
+  })
+})
+
 describe('snapshot', () => {
   it('lists what is on screen, says how many more elsewhere, and shows a same-site link by its path', async () => {
     page.load('<h1 id="h">Issues</h1><a id="a1" href="https://shop.example.test/issues/12">Login fails</a><a id="a2" href="https://other.test/x">Elsewhere</a>'
@@ -115,6 +144,24 @@ describe('snapshot', () => {
   })
 })
 
+describe('snapshot: on screen means on screen', () => {
+  it('elements just below the screen are under their own heading, never flagged offscreen under "on screen"', async () => {
+    page.load('<a id="top" href="/s">Skip to content</a><input id="q" aria-label="Search the site"><a id="foot" href="/terms">Terms</a><a id="far" href="/x">Far</a>', { pageHeight: 5000 })
+    page.place('#top', { x: 0, y: 0, w: 100, h: 20 })
+    page.place('#q', { x: 0, y: 40, w: 300, h: 30 })
+    page.place('#foot', { x: 0, y: 900, w: 100, h: 20 })
+    page.place('#far', { x: 0, y: 4000, w: 100, h: 20 })
+    const r = await op('snapshot')
+    const [onScreen, near] = r.snapshot.split('Just off screen')
+    expect(onScreen).toContain('"Skip to content"')
+    expect(onScreen).toContain('"Search the site"')
+    expect(onScreen).not.toContain('Terms')
+    expect(near).toMatch(/\[e\d+\] link "Terms" -> \/terms\n/)
+    expect(r.snapshot).not.toMatch(/offscreen/)
+    expect(r.more).toBe(1)
+  })
+})
+
 describe('find', () => {
   it('the best few, best first (the whole name of a control before text that holds the words), and how many in all', async () => {
     const many = Array.from({ length: 12 }, (_, i) => `<p id="p${i}">Checkout note ${i}</p>`).join('')
@@ -125,6 +172,22 @@ describe('find', () => {
     expect(r.matches).toHaveLength(8)
     expect(r.matches[0]).toMatchObject({ role: 'button', name: 'Checkout' })
     expect(r.count).toBe(13)
+  })
+})
+
+describe('find: the short text first, never only the region around it', () => {
+  it('a page region focusable as a whole (a tabindex) is not the match; the short leaf text is, and its ref reads', async () => {
+    const long = 'claude-code Public Watch 903 Fork 24.9k Star 155k main 222 Branches 266 Tags ' + 'more words in the region '.repeat(12)
+    page.load(`<div id="region" tabindex="0"><p>${long}</p><div class="side"><span id="count">155k stars</span></div></div><p id="block">${'A long paragraph that mentions stars once. '.repeat(8)}</p>`)
+    page.place('#region', { x: 0, y: 0, w: 900, h: 500 })
+    page.place('#count', { x: 700, y: 100, w: 100, h: 20 })
+    page.place('#block', { x: 0, y: 520, w: 900, h: 100 })
+    const r = await op('find', { text: 'stars' })
+    expect(r.matches[0]).toMatchObject({ role: 'generic', name: '155k stars' })
+    expect(r.matches.some((m: { name: string }) => m.name.startsWith('claude-code Public'))).toBe(false)
+    // The long block that holds the word comes after the short text.
+    expect(r.matches[1].text).toMatch(/^A long paragraph/)
+    expect((await op('text', { ref: r.matches[0].ref })).text).toBe('155k stars')
   })
 })
 

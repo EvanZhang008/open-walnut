@@ -21,6 +21,8 @@ const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'WALNUT-EXT'])
 
 /** How many matches `find` gives unless `limit` says. */
 export const FIND_LIMIT = 8
+/** Past this many characters of text an element only focusable is a region of the page, not a control. */
+const CONTAINER_CHARS = 200
 
 export function find(args: { text?: unknown; exact?: unknown; role?: unknown; limit?: unknown }): { matches: Array<{ ref: string; role: string; name: string; text: string; offscreen?: boolean }>; count: number } {
   const want = typeof args.text === 'string' ? args.text.trim() : ''
@@ -35,21 +37,29 @@ export function find(args: { text?: unknown; exact?: unknown; role?: unknown; li
   const seen = new Set<Element>()
   const found: Element[] = []
   const add = (el: Element | null) => { if (el && !seen.has(el) && visible(el)) { seen.add(el); found.push(el) } }
-  // Controls by their name (a label, aria-label, placeholder, a button's value).
-  for (const el of all(document, INTERACTIVE)) if (hit(nameOf(el))) add(el)
-  // Text anywhere: the control it sits in, else its own element.
+  const words = (el: Element) => ((el as HTMLElement).innerText ?? el.textContent ?? '').replace(/\s+/g, ' ').trim()
+  /** A box that is only focusable (a tabindex on a whole page region): a container, not the control the words are on. */
+  const container = (el: Element) => roleOf(el) === 'generic' && words(el).length > CONTAINER_CHARS
+  // Controls by their name (a label, aria-label, placeholder, a button's value); a region's whole text is not a name.
+  for (const el of all(document, INTERACTIVE)) if (!container(el) && hit(nameOf(el))) add(el)
+  // Text anywhere: the control it sits in, else its own element (never a container around it:
+  // 2026-11-10, "stars" gave only the repository's whole header region, not "155k stars").
   for (const t of textNodes(document.body ?? document.documentElement)) {
     const p = t.parentElement
     if (!p || SKIP.has(p.tagName) || !t.data.trim()) continue
     // Words split over inline tags ("Hello <b>world</b>") are matched on the element that holds them.
     if (exact ? !hit(p.textContent ?? '') : !hit(t.data) && !hit(p.textContent ?? '')) continue
-    add(p.closest(INTERACTIVE) ?? p)
+    const ctl = p.closest(INTERACTIVE)
+    add(ctl && !container(ctl) ? ctl : p)
   }
-  // Best first: the words as a control's whole name, then a control, then what is on screen (else page order).
+  // Best first: the words as a control's whole name, then a control, then short text (a label, a
+  // count, a link) before a long block, then what is on screen; then the shorter, then page order.
   const onScreen = (el: Element) => { const r = el.getBoundingClientRect(); return !(r.bottom < 0 || r.top > innerHeight) }
+  const size = (el: Element) => words(el).length
   const score = (el: Element) => (norm(nameOf(el)) === w ? 4 : 0) + (roleOf(el) !== 'generic' ? 2 : 0) + (onScreen(el) ? 1 : 0)
+    + (size(el) <= 60 ? 2 : size(el) <= CONTAINER_CHARS ? 1 : -2)
   const list = found.filter((el) => !role || roleOf(el) === role || el.tagName.toLowerCase() === role)
-    .map((el, i) => ({ el, i, s: score(el) })).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.el)
+    .map((el, i) => ({ el, i, s: score(el), n: size(el) })).sort((a, b) => b.s - a.s || a.n - b.n || a.i - b.i).map((x) => x.el)
   const matches = list.slice(0, limit).map((el) => {
     const r = el.getBoundingClientRect()
     return {

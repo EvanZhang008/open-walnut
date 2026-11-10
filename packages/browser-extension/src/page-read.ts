@@ -10,6 +10,11 @@
  *     `all` the whole page as before.
  *   - `snapshot`: the elements on screen now, one line each with its ref, and how many are
  *     elsewhere on the page; `all` lists the whole page (and its text) as before.
+ *
+ * Words innerText misses are read too: an open shadow root's (a component that draws its text
+ * there), and a date element's full date (its title, else its datetime) beside the words it shows
+ * ("37 minutes ago (Nov 10, 2026, 4:11 AM PST)"). 2026-11-10:
+ * a release page's date sat in a `relative-time` element and `text` had none.
  */
 import { INTERACTIVE, PageError, all, byRef, clip, nameOf, refFor, roleOf, stateOf, visible } from './page-agent'
 
@@ -26,6 +31,62 @@ const PAGE_EDGE = 'header, footer'
 const COOKIE = /(^|[\s_-])(cookie|consent|gdpr|onetrust|cmp-|truste)/i
 
 const innerOf = (el: Element) => ((el as HTMLElement).innerText ?? el.textContent ?? '')
+
+/** Date elements a site fills by script (or in a shadow root): their words may be only in an attribute. */
+const DATES = 'relative-time, time, local-time, time-ago'
+
+/** A date's words from its attributes: its title (the full date a person reads on hover), else its datetime. */
+function dateWords(el: Element): string {
+  const title = el.getAttribute('title')?.trim()
+  if (title) return title
+  const dt = el.getAttribute('datetime')?.trim()
+  if (!dt) return ''
+  const d = new Date(dt)
+  return Number.isNaN(d.getTime()) ? dt : d.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+/** The words of a shadow root as it draws them: its slots show the host's own children. */
+function shadowText(root: ShadowRoot | Element, depth = 0): string {
+  if (depth > 8) return ''
+  const parts: string[] = []
+  for (const n of Array.from(root.childNodes)) {
+    if (n.nodeType === 3) { const t = (n.textContent ?? '').trim(); if (t) parts.push(t); continue }
+    if (n.nodeType !== 1) continue
+    const c = n as Element
+    if (/^(STYLE|SCRIPT|TEMPLATE)$/.test(c.tagName) || !shown(c)) continue
+    if (c.tagName === 'SLOT') {
+      const got = (c as HTMLSlotElement).assignedNodes?.({ flatten: true }) ?? []
+      for (const a of got.length ? got : Array.from(c.childNodes)) {
+        const t = a.nodeType === 1 ? deepOf(a as Element, depth + 1) : (a.textContent ?? '').trim()
+        if (t) parts.push(t)
+      }
+      continue
+    }
+    const t = deepOf(c, depth + 1)
+    if (t) parts.push(t)
+  }
+  return parts.join(' ')
+}
+
+/** An element's words, its shadow root's and its dates' included. */
+function deepOf(el: Element, depth = 0): string {
+  const drawn = el.shadowRoot ? shadowText(el.shadowRoot, depth).trim() : ''
+  if (el.matches(DATES)) {
+    // "37 minutes ago" says little a day later: the full date with it, when the element has one.
+    const words = drawn || innerOf(el).trim()
+    const full = dateWords(el)
+    return words && full && !words.includes(full) ? `${words} (${full})` : words || full
+  }
+  if (el.shadowRoot) return drawn || innerOf(el).trim() || el.getAttribute('title')?.trim() || ''
+  return special(el) ? shadowText(el, depth) : innerOf(el).trim()
+}
+
+/** Whether an element holds words innerText misses: an open shadow root or a date element, in it or below it. */
+function special(el: Element): boolean {
+  if (el.shadowRoot || el.matches(DATES)) return true
+  for (const x of Array.from(el.querySelectorAll('*'))) if (x.shadowRoot || x.matches(DATES)) return true
+  return false
+}
 
 /** A box laid over the page (a banner or a dialog), as a cookie notice is. */
 function overlay(el: Element): boolean {
@@ -74,11 +135,18 @@ const CANDIDATES = `${CHROME}, ${PAGE_EDGE}, walnut-ext, [id*=cookie], [class*=c
  * The text of `root` without its furniture: the furniture is found once, then the walk reads an
  * element whole unless furniture sits inside it (then its children, one by one).
  */
-function readable(root: Element, inContent: boolean): string {
+function readable(root: Element, inContent: boolean, keepFurniture = false): string {
   const skip = new Set<Element>()
-  for (const el of Array.from(root.querySelectorAll(CANDIDATES))) if (el.tagName === 'WALNUT-EXT' || furniture(el, inContent)) skip.add(el)
+  for (const el of Array.from(root.querySelectorAll(keepFurniture ? 'walnut-ext' : CANDIDATES))) {
+    if (el.tagName === 'WALNUT-EXT' || furniture(el, inContent)) skip.add(el)
+  }
   const holds = new Set<Element>()
-  for (const f of skip) for (let p = f.parentElement; p && p !== root && !holds.has(p); p = p.parentElement) holds.add(p)
+  const hold = (f: Element) => { for (let p = f.parentElement; p && p !== root && !holds.has(p); p = p.parentElement) holds.add(p) }
+  for (const f of skip) hold(f)
+  // An element whose words innerText misses (a shadow root's, a date's): the walk goes down to it.
+  const deep = new Set<Element>()
+  for (const el of Array.from(root.querySelectorAll('*'))) if (el.shadowRoot || el.matches(DATES)) { deep.add(el); hold(el) }
+  if (root.shadowRoot) return deepOf(root)
   const parts: string[] = []
   const walk = (el: Element) => {
     for (const n of Array.from(el.childNodes)) {
@@ -86,7 +154,8 @@ function readable(root: Element, inContent: boolean): string {
       if (n.nodeType !== 1) continue
       const c = n as Element
       if (skip.has(c) || !shown(c)) continue
-      if (holds.has(c)) walk(c)
+      if (deep.has(c)) { const t = deepOf(c); if (t) parts.push(t) }
+      else if (holds.has(c)) walk(c)
       else { const t = innerOf(c).trim(); if (t) parts.push(t) }
     }
   }
@@ -105,20 +174,20 @@ export function text(args: TextArgs = {}): { text: string; url: string; title: s
   let part = false
   if (args.ref !== undefined) {
     const el = byRef(args.ref)
-    t = innerOf(el); scope = `${roleOf(el)} ${String(args.ref)}`; part = true
+    t = readable(el, true, true); scope = `${roleOf(el)} ${String(args.ref)}`; part = true
   } else if (typeof args.selector === 'string' && args.selector) {
     let el: Element | null
     try { el = document.querySelector(args.selector) } catch { throw new PageError(`Not a CSS selector: ${clip(args.selector, 80)}.`, 'bad_request') }
     if (!el) throw new PageError(`Nothing matches ${clip(args.selector, 80)} on the page: snapshot or find to see what is there.`, 'not_found')
-    t = innerOf(el); scope = clip(args.selector, 80); part = true
+    t = readable(el, true, true); scope = clip(args.selector, 80); part = true
   } else if (args.all === true || !document.body) {
-    t = document.body ? innerOf(document.body) : ''; scope = 'the whole page'
+    t = document.body ? readable(document.body, false, true) : ''; scope = 'the whole page'
   } else {
     const m = mainOf()
     t = m ? readable(m.el, true) : readable(document.body, false)
     scope = m ? m.scope : 'the page without its menus, header and footer'
     // A page whose content is all furniture (a link list, a menu page): the whole of it.
-    if (!t.trim()) { t = innerOf(document.body); scope = 'the whole page' }
+    if (!t.trim()) { t = readable(document.body, false, true); scope = 'the whole page' }
   }
   t = tidy(t)
   const chars = t.length
@@ -151,6 +220,9 @@ export function snapshot(args: SnapshotArgs = {}): { snapshot: string; url: stri
   const dialog = all(document, 'dialog[open], [role=dialog], [aria-modal=true]').find(visible)
   if (dialog) lines.push(`A dialog is open: ${clip(nameOf(dialog), 80)}`, '')
   lines.push(whole ? 'Elements:' : 'Elements on screen:')
+  // Near the screen but not on it (a quarter of a screen around it): under their own heading, so
+  // "on screen" means on screen (2026-11-10: a page footer listed there, each line "offscreen").
+  const near: string[] = []
   let count = 0
   let elsewhere = 0
   let full = false
@@ -163,9 +235,14 @@ export function snapshot(args: SnapshotArgs = {}): { snapshot: string; url: stri
     if (!whole && !nearView(el)) { elsewhere++; continue }
     if (count >= max) { full = true; elsewhere++; continue }
     const state = stateOf(el)
-    lines.push(`  [${refFor(el)}] ${role}${name ? ` "${name}"` : ''}${state ? ` ${state}` : ''}`)
+    const off = !whole && / ?\boffscreen$/.test(state)
+    const words = off ? state.replace(/ ?\boffscreen$/, '') : state
+    const line = `  [${refFor(el)}] ${role}${name ? ` "${name}"` : ''}${words ? ` ${words}` : ''}`
+    if (off) near.push(line); else lines.push(line)
     count++
   }
+  if (!whole && count === near.length) lines.push('  (none)')
+  if (near.length) lines.push('Just off screen (scroll to them, or act by ref):', ...near)
   if (whole) {
     if (full) lines.push('  ... more elements (scroll and snapshot again)')
     const t = clip(document.body?.innerText ?? '', 2500)
