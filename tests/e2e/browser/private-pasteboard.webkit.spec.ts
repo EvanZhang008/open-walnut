@@ -9,7 +9,8 @@ import { execFileSync } from 'node:child_process'
 import { PASTEBOARD_GUARDED } from './pw-pasteboard'
 
 const SENTINEL = `private pasteboard check ${Date.now().toString(36)}`
-const general = (expr: string) => execFileSync('osascript', ['-l', 'JavaScript', '-e', `ObjC.import("AppKit"); ${expr}`], { encoding: 'utf8' }).trim()
+// osascript exists only on macOS; the test skips elsewhere before it reads the pasteboard.
+const general = (expr: string) => (process.platform === 'darwin' ? execFileSync('osascript', ['-l', 'JavaScript', '-e', `ObjC.import("AppKit"); ${expr}`], { encoding: 'utf8' }).trim() : '')
 const changeCount = () => Number(general('$.NSPasteboard.generalPasteboard.changeCount'))
 
 test('copy, cut and paste in WebKit on a Mac stay off the real clipboard', async () => {
