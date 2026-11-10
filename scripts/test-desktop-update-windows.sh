@@ -16,16 +16,18 @@ end = source.index('    private func launchApplyScript', start)
 source = source[:start] + '    var testInstallCalls = 0\n    func install(done: @escaping (Bool, Bool) -> Void) { testInstallCalls += 1; done(true, false) }\n\n' + source[end:]
 (out / 'AppUpdater.swift').write_text(source)
 PY
+# The whole app (scripts/lib/desktop-app-sources.sh), with main.swift cut before its entry point and the updater's install stubbed.
+SOURCES=()
+while IFS= read -r f; do
+    case "$(basename "$f")" in
+        main.swift) SOURCES+=("$OUT/AppDelegate.swift") ;;
+        AppUpdater.swift) SOURCES+=("$OUT/AppUpdater.swift") ;;
+        *) SOURCES+=("$f") ;;
+    esac
+done < <(bash "$ROOT/scripts/lib/desktop-app-sources.sh" "$ROOT")
 swiftc -parse-as-library -D WALNUT_APP -D WALNUT_DESKTOP_TEST \
-    "$OUT/AppDelegate.swift" "$ROOT/tests/desktop/update-window-tests.swift" \
-    "$ROOT/desktop/DesktopDiagnostics.swift" "$ROOT/desktop/GlobalDictation.swift" \
-    "$ROOT/desktop/WebContentPolicy.swift" "$ROOT/desktop/WebContentWatchdog.swift" \
-    "$ROOT/desktop/LinkPolicy.swift" "$ROOT/desktop/SessionHost.swift" \
-    "$ROOT/desktop/CalendarBridge.swift" "$ROOT/desktop/ReaderBridge.swift" \
-    "$ROOT/desktop/BundledRuntime.swift" "$ROOT/desktop/AppBuiltCheckout.swift" "$ROOT/desktop/AppUpdateMachine.swift" \
-    "$OUT/AppUpdater.swift" "$ROOT/desktop/AppUpdateBridge.swift" "$ROOT/desktop/ApprovalBridge.swift" "$ROOT/desktop/NotificationBridge.swift" "$ROOT/desktop/DesktopUpdateBridge.swift" \
-    "$ROOT/desktop/AppLink.swift" "$ROOT/desktop/CommandLineTool.swift" \
-    "$ROOT/src/data/walnut-calendar.swift" "$ROOT/src/data/walnut-reader.swift" \
+    "${SOURCES[@]}" "$ROOT/tests/desktop/update-window-tests.swift" \
+    -Xlinker -weak_framework -Xlinker AppIntents \
     -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -framework UserNotifications \
     -o "$OUT/update-tests"
 "$OUT/update-tests" | tee "$OUT/result.log"
