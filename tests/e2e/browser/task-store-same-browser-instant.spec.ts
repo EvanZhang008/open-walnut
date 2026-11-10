@@ -50,13 +50,24 @@ test('a task edit in the session header reaches the board row before the server 
 
   // Hold every PATCH for this task at the network layer. The server does not
   // even see the request until the hold ends, so no WS echo can arrive before it.
+  // Each step checks its OWN write is still held when the other surface has
+  // flipped: the hold starts when that step sends it, so time a slow runner spends
+  // before a step's click lands (Playwright waiting for the row to be stable and
+  // not covered) cannot use up the budget, as one count for all three steps did
+  // on CI (two writes already answered when step 3 checked).
   let patchesAnswered = 0
+  const patches: Array<{ answered: boolean }> = []
   await page.route(`**/api/tasks/${TASK_ID}`, async (route) => {
     if (route.request().method() !== 'PATCH') { await route.continue(); return }
+    const patch = { answered: false }
+    patches.push(patch)
     await new Promise((r) => setTimeout(r, HOLD_MS))
+    patch.answered = true
     patchesAnswered++
     await route.continue()
   })
+  /** The step's write (the nth PATCH) has not been answered, or not even sent. */
+  const heldOrUnsent = (n: number) => !(patches[n]?.answered ?? false)
 
   // 1. Rename in the session header → board row, same frame.
   const renamed = 'Renamed from the session header'
@@ -66,7 +77,7 @@ test('a task edit in the session header reaches the board row before the server 
   await input.press('Enter')
   await expect(rowTitle).toHaveText(renamed, { timeout: INSTANT_MS })
   await expect(headerTitle).toHaveText(renamed, { timeout: INSTANT_MS })
-  expect(patchesAnswered).toBe(0)
+  expect(heldOrUnsent(0)).toBe(true)
 
   // 2. Complete from the session header's phase badge → board row flips, same frame.
   const headerPhase = panel.locator('.session-panel-title-area .task-quick-phase-btn')
@@ -74,12 +85,12 @@ test('a task edit in the session header reaches the board row before the server 
   await expect(headerPhase).toHaveAttribute('title', 'Click to complete')
   await headerPhase.click()
   await expect(rowPhase).toHaveAttribute('title', 'Done: click to reopen', { timeout: INSTANT_MS })
-  expect(patchesAnswered).toBe(0)
+  expect(heldOrUnsent(1)).toBe(true)
 
   // 3. Reopen from the BOARD row → session header flips, same frame.
   await rowPhase.click()
   await expect(headerPhase).toHaveAttribute('title', 'Click to complete', { timeout: INSTANT_MS })
-  expect(patchesAnswered).toBe(0)
+  expect(heldOrUnsent(2)).toBe(true)
 
   // 4. Let the held requests land. The echoes must not undo what the user did:
   //    the title stays renamed and the task stays reopened on both surfaces.
