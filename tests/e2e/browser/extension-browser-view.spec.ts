@@ -147,7 +147,7 @@ test.afterAll(async () => {
   await new Promise<void>((r) => sites?.close(() => r()) ?? r())
 })
 
-test('the Browser view shows itself when the task\'s session opens a page, follows it live, folds, and Stop ends the agent\'s use', async ({ page }) => {
+test('the Browser view shows itself when the task\'s session opens a page, follows it live from its header pill, and Stop ends the agent\'s use', async ({ page }) => {
   test.setTimeout(300_000)
   await page.setViewportSize({ width: 1280, height: 860 })
   await page.goto('/')
