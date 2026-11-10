@@ -1377,8 +1377,10 @@
 /* The drill-down pane is the WHOLE window, and a row that stretches to fill it puts its count 660px from
    its name. Rows keep a sane measure, and so does the HEAD above them: capping only the rows left them
    ending 312px short of a pane whose New message button and search field filled it, with the badges mid
-   page and the smart group's hairline reading as a line that failed to draw. One block, one measure. */
+   page and the smart group's hairline reading as a line that failed to draw. One block, one measure.
+   The Routers list is one of those blocks too (2026-11-09: its rows ran 723px wide there). */
 .mail-console[data-narrow-pane='accounts'] .mail-smart,
+.mail-console[data-narrow-pane='accounts'] .mail-router-list,
 .mail-console[data-narrow-pane='accounts'] .mail-mailboxes {
   max-width: 420px;
 }
