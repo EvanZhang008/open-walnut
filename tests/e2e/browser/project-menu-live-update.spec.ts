@@ -44,21 +44,35 @@ test.afterEach(async ({ request }) => {
  * A project of 24 rows on a short window, opened, its list scrolled by `past` px relative to the
  * header (negative: the header sits that far below the pane's top; positive: scrolled past it, so it
  * sticks with its rows going under it), and its right-click menu open and settled.
+ *
+ * A second project of this spec's own, opened right below it, keeps the list's end well below the
+ * view. Without it the project could be the last one, the pane scrolled to its end, and a project
+ * another spec removes on the shared fixture (CI runs two workers on one) shortened the list under
+ * the scroll position: the browser clamps it, every row on screen moves down, and the menu closes
+ * as it must for content that moved (2026-11-10: the second case failed 1 run in 3 that way).
  */
 async function openMenuOnScrolledProject(page: Page, baseURL: string, project: string, past: number) {
   await page.setViewportSize({ width: 1280, height: 640 })
-  await Promise.all(Array.from({ length: 24 }, (_, i) => make(page, `row ${i}`, project)))
+  // Listed by name, so "<project> tail" comes right after it.
+  const tail = `${project} tail`
+  await Promise.all([
+    ...Array.from({ length: 24 }, (_, i) => make(page, `row ${i}`, project)),
+    ...Array.from({ length: 24 }, (_, i) => make(page, `tail ${i}`, tail)),
+  ])
   await isolateUiPrefs(page)
   await presetPanelDesign(page, 'project')
   await openHome(page, baseURL)
+  await openListProject(page, tail)
   await openListProject(page, project)
   const header = listProjectHeader(page, project)
   const scrolled = await header.evaluate((el, by) => {
     const pane = el.closest('.home-navigation-scroll') as HTMLElement
     pane.scrollTop += el.getBoundingClientRect().top - pane.getBoundingClientRect().top + by
-    return pane.scrollTop
+    return { top: pane.scrollTop, room: pane.scrollHeight - pane.clientHeight - pane.scrollTop }
   }, past)
-  expect(scrolled).toBeGreaterThan(0)
+  expect(scrolled.top).toBeGreaterThan(0)
+  // Far from the end: a removal anywhere cannot make the browser clamp the scroll position.
+  expect(scrolled.room).toBeGreaterThan(400)
   await frames(page)
   // Count the scrolls of the list pane the churn causes: without one, a case proves nothing.
   await page.evaluate(() => {
@@ -116,17 +130,28 @@ test('the project menu stays open while its own project grows above the rows on 
   // the rows on screen whatever the project's sort: scroll anchoring answers the block's growth by
   // shifting scrollTop and the project's block top with it, while the rows on screen stay put
   // (home-list-keeps-place.spec.ts adds real tasks there).
+  //
+  // Each change is made in an animation frame callback, after the frame's scroll events. The list's
+  // scroll keeper answers a change made outside React from its ResizeObserver, after layout in the
+  // same frame, so a change made by a plain script could land between a scroll the keeper had just
+  // made (another spec's tasks going away above, on the shared fixture) and that scroll's event, and
+  // the menu read the rows before the keeper put them back (2026-11-10: closed 1 run in 10 with two
+  // workers). A change React renders is answered in its own commit, before any scroll event.
   for (let round = 0; round < 4; round++) {
-    await header.evaluate((el, n) => {
+    await header.evaluate((el, n) => new Promise<void>((done) => requestAnimationFrame(() => {
       const row = document.createElement('div')
       row.className = 'pw-staged-row'
       row.style.height = '56px'
       row.dataset.round = String(n)
       el.parentElement!.insertBefore(row, el.nextSibling)
-    }, round)
+      done()
+    })), round)
     await page.waitForTimeout(250)
   }
-  await header.evaluate((el) => { el.parentElement!.querySelectorAll('.pw-staged-row')[0]?.remove() })
+  await header.evaluate((el) => new Promise<void>((done) => requestAnimationFrame(() => {
+    el.parentElement!.querySelectorAll('.pw-staged-row')[0]?.remove()
+    done()
+  })))
   await page.waitForTimeout(250)
   await expect.poll(() => paneScrolls(page)).toBeGreaterThan(0)
   await expect(menu).toBeVisible()
@@ -145,3 +170,4 @@ test('the project menu stays open while its own project grows above the rows on 
   await page.mouse.wheel(0, 240)
   await expect(menu).toHaveCount(0)
 })
+

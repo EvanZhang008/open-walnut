@@ -93,11 +93,17 @@ async function openScrolledProject(page: Page, baseURL: string, project: string,
   const ids: string[] = []
   // One at a time, so their order (newest first) is fixed.
   for (let i = 0; i < 24; i++) ids.push(await make(page, `row ${i}`, project))
+  // A second project of this spec's own, opened right below (listed by name), keeps the list's end
+  // well below the view, so a project another spec removes on the shared fixture never shortens
+  // the list under the scroll position (the browser would clamp it and move every row).
+  const tail = `${project} tail`
+  await Promise.all(Array.from({ length: 24 }, (_, i) => make(page, `tail ${i}`, tail)))
   await isolateUiPrefs(page)
   await presetPanelDesign(page, 'project')
   await openHome(page, baseURL)
   if (view) await chooseViewOption(page, view)
   if (manual) await arrange(page, 'Manual')
+  await openListProject(page, tail)
   await openListProject(page, project)
   await expect(page.locator(`[data-task-id="${ids[ids.length - 1]}"]`)).toBeAttached()
   const scrolled = await listProjectHeader(page, project).evaluate((header, by) => {
@@ -106,9 +112,9 @@ async function openScrolledProject(page: Page, baseURL: string, project: string,
     el.scrollTop += header.getBoundingClientRect().top - el.getBoundingClientRect().top + by
     return { top: el.scrollTop, max: el.scrollHeight - el.clientHeight }
   }, past)
-  // Scrolled into the project, with room left below: an end-of-list clamp is another case.
+  // Scrolled into the project, far from the end: an end-of-list clamp is another case.
   expect(scrolled.top).toBeGreaterThan(past > 0 ? 200 : 0)
-  expect(scrolled.max - scrolled.top).toBeGreaterThan(100)
+  expect(scrolled.max - scrolled.top).toBeGreaterThan(400)
   await frames(page)
   return ids
 }
