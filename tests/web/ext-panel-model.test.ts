@@ -208,6 +208,16 @@ describe('a question the popup hands over carries the mode, model and engine pic
   it('keeps a known mode and well-formed model and engine', () => {
     expect(hand({ mode: 'plan', model: 'sonnet', engine: 'claude' })).toMatchObject({ type: 'hand', ask: { text: 'Compare rooms', launch: { mode: 'plan', model: 'sonnet', engine: 'claude' } } })
   })
+  it('carries where the task starts: folder, host, project, Sync and Create folder (2026-11-10)', () => {
+    const place = { cwd: '/work/new-trip', host: 'devbox', hostLabel: 'Dev box', project: 'Travel', projectSource: 'user', createCwd: true }
+    expect(hand({ sync: 'project', place })).toMatchObject({ ask: { launch: { sync: 'project', place } } })
+    // No folder: its own one, with the Inbox or a picked project.
+    expect(hand({ place: { cwd: '', host: null } })).toMatchObject({ ask: { launch: { place: { cwd: '', host: null } } } })
+    // Create folder needs a folder; a relative or control-character path is no place.
+    expect((hand({ place: { cwd: '', host: null, createCwd: true } }) as any).ask.launch.place).not.toHaveProperty('createCwd')
+    for (const cwd of ['work/x', '/a\u0000b', 5]) expect((hand({ mode: 'plan', place: { cwd, host: null } }) as any).ask.launch.place).toBeUndefined()
+    expect((hand({ sync: 'elsewhere' }) as any).ask.launch).toBeUndefined()
+  })
   it('drops what is not one, and the launch when nothing of it is', () => {
     const r = hand({ mode: 'root', model: 'a b<script>', engine: 42 }) as { ask?: Record<string, unknown> }
     expect(r.ask).toBeDefined()

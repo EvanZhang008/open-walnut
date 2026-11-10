@@ -42,6 +42,8 @@ function taskMetaOf(draft: DraftColumn, tierKnown: TierKnown): NonNullable<AskSe
     ...(meta.dueDate ? { due_date: meta.dueDate } : {}),
     ...(meta.startDate ? { start_date: meta.startDate } : {}),
     ...(meta.endDate ? { end_date: meta.endDate } : {}),
+    // The launch bar's Sync chip: Local unless the person picked the project's service.
+    ...(meta.sync ? { sync: meta.sync } : {}),
   };
 }
 
@@ -117,6 +119,9 @@ export function askTaskForLater(input: {
     ...(description ? { description } : {}),
     // Start Task only (the panel hides this exit in Ask Walnut mode), so the project is the person's.
     ...(input.draft.project ? { project: input.draft.project } : {}),
+    // Local unless the Sync chip picked the project's service: an explicit 'local' outranks a
+    // project's service, as a launch's does (quick-start), so what the chip said is what happens.
+    ...(input.draft.meta.sync === 'project' ? {} : { source: 'local' }),
     ...(tier ? { pinned: true, ...(input.tierKnown(tier) !== false ? { focus_tier: tier } : {}) } : { pinned: false }),
     ...(meta.dueDate ? { due_date: meta.dueDate } : {}),
     ...(meta.startDate ? { start_date: meta.startDate } : {}),

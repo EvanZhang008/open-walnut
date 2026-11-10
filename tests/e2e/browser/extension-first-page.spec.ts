@@ -431,6 +431,8 @@ test('the grown composer picks the folder and the project; the task files there,
   await projectChip.click()
   const menu = v.getByTestId('draft-task-menu')
   await expect(menu).toBeVisible()
+  // The panel's launch makes no isolated workspace, so More offers none (review 2026-11-10, #1).
+  await expect(menu.getByTestId('draft-menu-workspace')).toHaveCount(0)
   await menu.locator('.draft-task-menu-project .task-kebab-project-current').click()
   const flyout = v.locator('.task-kebab-project-flyout')
   await expect(flyout).toBeVisible()

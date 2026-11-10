@@ -124,6 +124,8 @@ interface Props {
   alwaysProject?: boolean;
   /** With `emptyFolder`: a picked folder gets a × that goes back to none. */
   onClearFolder?: (draftId: string) => void;
+  /** false: the host's launch makes no isolated workspace (the browser extension), so none is offered. */
+  workspaces?: boolean;
 }
 
 /** Trailing-slash-tolerant basename: the chip label and the pill label. */
@@ -134,7 +136,7 @@ function basename(cwd: string): string {
 export function DraftLaunchBar({
   draft, pickerOpen, onOpenPicker, onClosePicker,
   onPathChange, onProjectChange, isKnownProject, onBoundProjectMove, onAfterQuickPick,
-  onTaskFieldChange, onReturnFieldToWalnut, composerText, getComposer, openMenuNonce, emptyFolder, alwaysProject, onClearFolder,
+  onTaskFieldChange, onReturnFieldToWalnut, composerText, getComposer, openMenuNonce, emptyFolder, alwaysProject, onClearFolder, workspaces = true,
 }: Props) {
   // Anchor for the folder picker's POPOUT: the panel portals to <body> (so the
   // column can't clip it and siblings can't paint over it) but opens FROM this
@@ -310,7 +312,7 @@ export function DraftLaunchBar({
       {/* The "Isolated workspace" body, right above the folder it isolates: nothing
           while off (the switch is in More), so a folder pick never grows the bar.
           A bound draft has no More: its inline toggle shows from the first paint. */}
-      {!isWalnut && !isFork && <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} project={draft.project} />}
+      {!isWalnut && !isFork && workspaces && <DraftWorkspaceRow draftId={draft.id} cwd={draft.cwd} host={draft.host ?? null} boundTaskId={draft.taskId} project={draft.project} />}
 
       {!isWalnut && (
         <div className="draft-launch-pills draft-composer-bar">
@@ -371,7 +373,7 @@ export function DraftLaunchBar({
           focusNonce={menu.mode === 'keyboard' ? menu.focusNonce : 0}
           focusTarget={menu.anchor?.classList.contains('draft-project-chip') ? 'project' : 'tier'}
           project={menuProject}
-          workspace={!isWalnut && !isFork
+          workspace={!isWalnut && !isFork && workspaces
             ? <DraftWorkspaceMenuItem draftId={draft.id} hasFolder={!!draft.cwd} onDone={() => menu.close('select')} />
             : undefined}
         />

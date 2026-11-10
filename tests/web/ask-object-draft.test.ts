@@ -133,6 +133,17 @@ describe('a task for later', () => {
     expect(input).not.toHaveProperty('description');
   });
 
+  it('stays Local unless the Sync chip picked the project\'s service, on a todo and on a launch alike', () => {
+    // An explicit 'local' outranks a project's service on the server (task-manager addTask), so the
+    // chip's default "Local" is what happens; before, a todo in a synced project took its service.
+    const draft = inFolder(leaveWalnutDraft(initialAskDraft(ID)), '/work/marina-app');
+    expect(askTaskForLater({ draft, text: 'T', contextBlock: '', tierKnown: TIERS })?.source).toBe('local');
+    const toService = { ...draft, meta: { ...draft.meta, sync: 'project' as const } };
+    expect(askTaskForLater({ draft: toService, text: 'T', contextBlock: '', tierKnown: TIERS })).not.toHaveProperty('source');
+    expect(askLaunchBody({ draft: toService, agentId: '', message: 'Go', tierKnown: TIERS, catalog: DEFAULT_ENGINE_CATALOG }).taskMeta?.sync).toBe('project');
+    expect(askLaunchBody({ draft, agentId: '', message: 'Go', tierKnown: TIERS, catalog: DEFAULT_ENGINE_CATALOG }).taskMeta).not.toHaveProperty('sync');
+  });
+
   it('says unpinned when More took the tier away', () => {
     const draft = applyDraftTaskFieldEdit(leaveWalnutDraft(initialAskDraft(ID)), { pinTier: undefined });
     expect(askTaskForLater({ draft, text: 'T', contextBlock: '', tierKnown: TIERS })?.pinned).toBe(false);

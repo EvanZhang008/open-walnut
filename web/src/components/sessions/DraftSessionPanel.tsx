@@ -438,7 +438,7 @@ interface Props {
    */
   pickFolder?: boolean;
   ownFolderLabel?: string;
-  /** With `pickFolder`: the folder pill's × back to no folder. */
+  /** With `pickFolder`: the folder pill's × back to no folder. Such a host makes no isolated workspace, so none is offered. */
   onClearFolder?: (draftId: string) => void;
   /** The host is writing (a save as todo or a start on its way): Save as todo waits, so one click makes one todo. */
   saveBusy?: boolean;
@@ -953,7 +953,7 @@ export function DraftSessionPanel({
           composerText={text}
           getComposer={getComposer}
           openMenuNonce={openMenuNonce}
-          {...(ownFolder ? { emptyFolder: ownFolderLabel ?? 'its own', alwaysProject: true, ...(onClearFolder ? { onClearFolder } : {}) } : {})}
+          {...(ownFolder ? { emptyFolder: ownFolderLabel ?? 'its own', alwaysProject: true, workspaces: false, ...(onClearFolder ? { onClearFolder } : {}) } : {})}
         />}
         {/* The default engine is out of usage here: where this task starts instead. */}
         <DraftFallbackNotice now={fallbackNow} named={fallbackNamed}

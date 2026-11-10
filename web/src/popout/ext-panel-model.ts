@@ -62,8 +62,32 @@ export interface VaultState { locked: boolean; siteCount: number | null; host: s
  */
 export interface HandedAsk { text: string; page: boolean; act: boolean; sel?: string; task?: boolean; launch?: HandedLaunch }
 
-/** The mode, model and engine the popup's New task picked (2026-11-09): the side panel starts the task with them. */
-export interface HandedLaunch { mode?: SessionMode; model?: string; engine?: string }
+/**
+ * The mode, model and engine the popup's New task picked (2026-11-09), and where it starts (its
+ * folder, host, project, Sync pick, and "Create folder & start": 2026-11-10): the side panel starts
+ * the task with them, and its next draft starts there too.
+ */
+export interface HandedLaunch { mode?: SessionMode; model?: string; engine?: string; sync?: 'local' | 'project'; place?: HandedPlace }
+export interface HandedPlace { cwd: string; host: string | null; hostLabel?: string; project?: string; projectSource?: 'folder' | 'user'; createCwd?: boolean }
+
+const PLACE_TEXT = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.length <= max && !/[\u0000-\u001f]/.test(v) ? v : undefined);
+/** A handed place, read strictly: a folder is an absolute path or none. */
+export function readHandedPlace(v: unknown): HandedPlace | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const r = v as Record<string, unknown>;
+  const cwd = PLACE_TEXT(r.cwd, 4096);
+  if (cwd === undefined || (cwd && !cwd.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(cwd) && !cwd.startsWith('~'))) return undefined;
+  const host = PLACE_TEXT(r.host, 300) || null;
+  const hostLabel = PLACE_TEXT(r.hostLabel, 300);
+  const project = PLACE_TEXT(r.project, 200);
+  const projectSource = r.projectSource === 'folder' || r.projectSource === 'user' ? r.projectSource : undefined;
+  return {
+    cwd, host,
+    ...(hostLabel ? { hostLabel } : {}),
+    ...(project !== undefined && projectSource ? { project, projectSource } : {}),
+    ...(cwd && r.createCwd === true ? { createCwd: true } : {}),
+  };
+}
 
 const LAUNCH_WORD = /^[\w.:\[\]\/@-]{1,120}$/;
 /** What of a handed launch is well formed; nothing when none of it is. */
@@ -74,7 +98,10 @@ export function readHandedLaunch(v: unknown): HandedLaunch | undefined {
     ...(typeof l.mode === 'string' && VALID_SESSION_MODE_IDS.has(l.mode) ? { mode: l.mode as SessionMode } : {}),
     ...(typeof l.model === 'string' && LAUNCH_WORD.test(l.model) ? { model: l.model } : {}),
     ...(typeof l.engine === 'string' && LAUNCH_WORD.test(l.engine) ? { engine: l.engine } : {}),
+    ...(l.sync === 'local' || l.sync === 'project' ? { sync: l.sync } : {}),
   };
+  const place = readHandedPlace(l.place);
+  if (place) out.place = place;
   return Object.keys(out).length ? out : undefined;
 }
 

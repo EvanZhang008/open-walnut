@@ -7,6 +7,7 @@
  * is no place: the task then works in its own directory and files in the Inbox, as before.
  */
 import type { DraftColumn } from '@/components/sessions/draft-column';
+import type { HandedLaunch, HandedPlace } from './ext-panel-model';
 
 export const HOME_PLACE_KEY = 'walnut-ext-home-place';
 
@@ -65,4 +66,39 @@ export function writeHomePlace(d: DraftColumn): void {
     if (place) ls.setItem(HOME_PLACE_KEY, JSON.stringify(place));
     else ls.removeItem(HOME_PLACE_KEY);
   } catch { /* storage off or full: the next task starts in its own folder */ }
+}
+
+/** Where this draft starts now, for the popup to hand over with its question (createCwd included: it is this launch's). */
+export function launchPlaceOf(d: DraftColumn): HandedPlace {
+  const project = d.projectSource === 'folder' || d.projectSource === 'user' ? d.projectSource : undefined;
+  return {
+    cwd: d.cwd, host: d.host ?? null,
+    ...(d.hostLabel ? { hostLabel: d.hostLabel } : {}),
+    ...(project ? { project: d.project ?? '', projectSource: project } : {}),
+    ...(d.cwd && d.createCwd ? { createCwd: true } : {}),
+  };
+}
+
+/**
+ * The draft as the popup's launch left it: its mode, model, engine and Sync pick over the meta, and
+ * its place in full (no place handed: the draft keeps its own). The side panel launches this, and
+ * makes it its own draft, so the next task and a retry of a failed one start there too.
+ */
+export function withHandedLaunch(d: DraftColumn, l: HandedLaunch): DraftColumn {
+  const meta = {
+    ...d.meta,
+    ...(l.mode ? { mode: l.mode } : {}),
+    ...(l.model ? { model: l.model } : {}),
+    ...(l.engine ? { engine: l.engine as DraftColumn['meta']['engine'] } : {}),
+    ...(l.sync ? { sync: l.sync } : {}),
+  };
+  if (!l.place) return { ...d, meta };
+  const p = l.place;
+  const { hostLabel: _h, project: _p, projectSource: _s, ...rest } = d;
+  return {
+    ...rest, meta,
+    cwd: p.cwd, host: p.host, cwdPinned: !!p.cwd, createCwd: p.createCwd === true,
+    ...(p.hostLabel ? { hostLabel: p.hostLabel } : {}),
+    ...(p.projectSource ? { project: p.project ?? '', projectSource: p.projectSource } : {}),
+  };
 }

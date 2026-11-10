@@ -36,7 +36,7 @@ import type { HandedLaunch } from './ext-panel-model';
 import type { Attached } from './ext-attached';
 import type { OpenTask } from './ExtHomeTasks';
 import { useHomeSnapshots } from './useHomeSnapshots';
-import { readHomePlace, writeHomePlace } from './ext-home-place';
+import { launchPlaceOf, readHomePlace, withHandedLaunch, writeHomePlace } from './ext-home-place';
 
 const ExtHomeTasks = lazy(() => import('./ExtHomeTasks'));
 
@@ -146,12 +146,9 @@ export function ExtHome(p: Props) {
       }
       const contextId = await storeObjectContext(name, block, (path, b) => apiPost<{ id: string }>(path, b));
       // The popup's picks win over this panel's own draft: what the person saw there is what starts,
-      // its place too (the popup wrote it to this browser's place before handing over).
+      // its place included (the preset effect has made them this draft's too, for the next task).
       const own = draft.draftRef.current;
-      const launchDraft = picked ? {
-        ...own, cwd: '', host: null, hostLabel: undefined, cwdPinned: undefined, project: undefined, projectSource: undefined, ...(readHomePlace() ?? {}),
-        meta: { ...own.meta, ...picked, engine: (picked.engine ?? own.meta.engine) as typeof own.meta.engine },
-      } : own;
+      const launchDraft = picked ? withHandedLaunch(own, picked) : own;
       const body = homeLaunchBody({
         draft: launchDraft, message: question, ...(images?.length ? { images } : {}), tierKnown: draft.tierKnown, catalog: getEngineCatalog(),
         ...(contextId ? { hints: objectContextHints(contextId) } : {}),
@@ -186,10 +183,12 @@ export function ExtHome(p: Props) {
       if (!question) return false;
       // With the mode, model and engine picked here: the side panel starts it with them (review 2026-11-09).
       const m = draft.draftRef.current.meta;
-      const picked = { ...(m.mode ? { mode: m.mode } : {}), ...(m.model ? { model: m.model } : {}), ...(m.engine ? { engine: m.engine } : {}) };
-      // Its folder and project ride this browser's place (one origin): the side panel starts there.
-      writeHomePlace(draft.draftRef.current);
-      toParent({ type: 'open-side-panel', ask: { text: question, page: choice.page, act: choice.act, ...(quote ? { sel: quote } : {}), task: true, ...(Object.keys(picked).length ? { launch: picked } : {}) } });
+      // And where it starts (folder, host, project, Sync, Create folder): this launch's own, whole.
+      const picked = {
+        ...(m.mode ? { mode: m.mode } : {}), ...(m.model ? { model: m.model } : {}), ...(m.engine ? { engine: m.engine } : {}),
+        ...(m.sync ? { sync: m.sync } : {}), place: launchPlaceOf(draft.draftRef.current),
+      };
+      toParent({ type: 'open-side-panel', ask: { text: question, page: choice.page, act: choice.act, ...(quote ? { sel: quote } : {}), task: true, launch: picked } });
       return true;
     }
     return launch(text, images, choice);
@@ -215,15 +214,17 @@ export function ExtHome(p: Props) {
   useEffect(() => {
     if (!preset || !page && preset.page) return;
     onPresetTaken(preset.id);
+    // The popup's launch is this draft's now: a retry, and the next task, start where it did.
+    const handed = preset.launch;
+    if (handed) draft.update((d) => withHandedLaunch(d, handed));
     const busy = flight.current;
-    // Always as the popup's launch (`{}` when it picked no mode or model): its place is the popup's.
-    void launch(preset.text, undefined, { page: preset.page, act: preset.act && p.canAct, sel: preset.sel }, preset.launch ?? {}).then((ok) => {
+    void launch(preset.text, undefined, { page: preset.page, act: preset.act && p.canAct, sel: preset.sel }, handed).then((ok) => {
       if (ok) return;
       log.info('ext-home', 'handed question not started: back in the composer', { busy });
       if (busy) setError('another task was still starting. Your words are back in the box: send them again.');
       giveBack(preset.text, preset.page);
     });
-  }, [preset, page, launch, onPresetTaken, p.canAct, giveBack]);
+  }, [preset, page, launch, onPresetTaken, p.canAct, giveBack, draft.update]);
 
   const saveTodo = useCallback(async (_id: string, text: string) => {
     const input = homeTodoInput({ draft: draft.draftRef.current, text, page, withPage: !!page && pageOn, tierKnown: draft.tierKnown });

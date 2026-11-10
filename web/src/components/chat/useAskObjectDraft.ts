@@ -31,6 +31,8 @@ export interface AskObjectDraft {
   onPathChange: (draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta, openedMeta?: QuickStartTaskMeta) => void;
   /** Back to no folder (the task's own directory, on a host that starts one there); a project the folder set goes with it. */
   onClearFolder: (draftId: string) => void;
+  /** The whole row rewritten by its host (the side panel taking the popup's launch as its own). */
+  update: (fn: (d: DraftColumn) => DraftColumn) => void;
   onProjectChange: (draftId: string, project: string) => void;
   onMetaChange: (draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
   onModeChange: (draftId: string, mode: SessionMode) => void;
@@ -97,6 +99,7 @@ export function useAskObjectDraft(draftId: string, opts: { task?: boolean; seed?
       };
     });
   }, []);
+  const update = useCallback((fn: (d: DraftColumn) => DraftColumn) => { setDraft(fn); }, []);
   const onProjectChange = useCallback((_id: string, project: string) => {
     setDraft((d) => ({ ...clearAiFields(d, ['project']), project, projectSource: 'user' as const, userTouched: true }));
   }, []);
@@ -115,7 +118,7 @@ export function useAskObjectDraft(draftId: string, opts: { task?: boolean; seed?
   }, []);
 
   return {
-    draft, draftRef, tierKnown, requestFolder, onWalnutToggle, onPathChange, onClearFolder, onProjectChange, onMetaChange, onModeChange,
+    draft, draftRef, tierKnown, requestFolder, onWalnutToggle, onPathChange, onClearFolder, update, onProjectChange, onMetaChange, onModeChange,
     onTaskFieldChange, onReturnFieldToWalnut, isKnownProject,
   };
 }

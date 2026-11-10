@@ -21,7 +21,7 @@ import { readInbound } from '../../web/src/popout/ext-panel-model';
 import { initialAskDraft } from '../../web/src/components/chat/ask-object-draft';
 import { applyDraftPathPick, leaveWalnutDraft, makeTierKnown } from '../../web/src/components/sessions/draft-ownership';
 import { DEFAULT_ENGINE_CATALOG } from '../../web/src/utils/engines';
-import { HOME_PLACE_KEY, homePlaceOf, parseHomePlace, readHomePlace, writeHomePlace } from '../../web/src/popout/ext-home-place';
+import { HOME_PLACE_KEY, homePlaceOf, launchPlaceOf, parseHomePlace, readHomePlace, withHandedLaunch, writeHomePlace } from '../../web/src/popout/ext-home-place';
 
 const TIERS = makeTierKnown([], true);
 const draft = () => leaveWalnutDraft(initialAskDraft('ext-home'));
@@ -82,6 +82,27 @@ describe('Where the first page starts its next task (2026-11-10: "choose which f
     const inbox = homeLaunchBody({ draft: { ...draft(), project: 'acme', projectSource: 'user' }, message: 'Go', tierKnown: TIERS, catalog: DEFAULT_ENGINE_CATALOG });
     expect(inbox).toMatchObject({ ownTaskDir: true, project: 'acme' });
   });
+
+  it('the popup hands this launch\'s place whole, Create folder included, and the side panel makes it its own', () => {
+    const created = { ...applyDraftPathPick(draft(), { cwd: '/work/new-trip', host: null, createCwd: true }, draft().meta, undefined, () => '', () => false) }
+    const place = launchPlaceOf(created)
+    expect(place).toMatchObject({ cwd: '/work/new-trip', host: null, createCwd: true })
+    // The side panel's own draft was elsewhere (folder A, project Ops): the popup's place replaces all of it.
+    const panelOwn = { ...applyDraftPathPick(draft(), { cwd: '/work/a', host: 'devbox', hostLabel: 'Dev box' }, draft().meta, undefined, () => 'Ops', () => true) }
+    const next = withHandedLaunch(panelOwn, { mode: 'plan', sync: 'project', place })
+    expect(next).toMatchObject({ cwd: '/work/new-trip', host: null, createCwd: true, cwdPinned: true })
+    expect(next.hostLabel).toBeUndefined()
+    expect(next.meta).toMatchObject({ mode: 'plan', sync: 'project' })
+    const body = homeLaunchBody({ draft: next, message: 'Go', tierKnown: TIERS, catalog: DEFAULT_ENGINE_CATALOG })
+    expect(body).toMatchObject({ cwd: '/work/new-trip', createCwd: true, taskMeta: { sync: 'project' } })
+    // A project picked with no folder: its own folder, that project.
+    const inProject = withHandedLaunch(panelOwn, { place: { cwd: '', host: null, project: 'Travel', projectSource: 'user' } })
+    expect(homeLaunchBody({ draft: inProject, message: 'Go', tierKnown: TIERS, catalog: DEFAULT_ENGINE_CATALOG })).toMatchObject({ ownTaskDir: true, project: 'Travel' })
+    // No place handed: the draft keeps its own.
+    expect(withHandedLaunch(panelOwn, { mode: 'plan' })).toMatchObject({ cwd: '/work/a', host: 'devbox', project: 'Ops' })
+    // The kept place never holds Create folder: the folder exists after this launch.
+    expect(homePlaceOf(next)).not.toHaveProperty('createCwd')
+  })
 
   it('malformed or foreign storage is no place', () => {
     for (const raw of [null, '', 'nope', '[]', '{}', '{"cwd":5}', JSON.stringify({ cwd: '', project: 'x', projectSource: 'folder' }), JSON.stringify({ cwd: 'x'.repeat(5000) })]) {
