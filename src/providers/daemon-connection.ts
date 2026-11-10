@@ -37,6 +37,7 @@ import { bulkForwardHook, laneForwardForTesting, sshLaneForward, StreamLane, typ
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { acpUpgradeHolds } from './acp-upgrade-hold.js'
+import { assertDaemonDialsOpen, daemonDialsClosed } from './daemon-dial-gate.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
 import { gateSessionCommand, settleSessionCommand } from './ephemeral-session-gate.js'
 import { buildRemotePreamble } from './session-io.js'
@@ -1238,6 +1239,12 @@ export class DaemonConnection {
    * broadcast the new daemon status to the frontend.
    */
   private setConnected(value: boolean): void {
+    // A dial that began before the server's stop and finished after it connects nothing:
+    // no connected edge, so no redelivery from a server that is going away (daemon-dial-gate.ts).
+    if (value && !this._connected && daemonDialsClosed()) {
+      this.closeTransport()
+      assertDaemonDialsOpen(this.hostKey)
+    }
     const changed = this._connected !== value
     this._connected = value
     if (changed) this._connectionEpoch++
@@ -1927,6 +1934,8 @@ export class DaemonConnection {
    */
   async connect(): Promise<void> {
     if (this._connected || this._connecting) return
+    // A stopping server dials nothing (daemon-dial-gate.ts).
+    assertDaemonDialsOpen(this.hostKey)
     this._connecting = true
     // A reconnect timer must never fire under a running connect: its reconnect()
     // stops the ControlMaster this attempt is building (C12b). A failure below
@@ -5845,6 +5854,7 @@ export class DaemonConnection {
    */
   async connectDirect(wsUrl: string): Promise<void> {
     if (this._connected) return
+    assertDaemonDialsOpen(this.hostKey)
     // One dial per connection (runner gate r3, section 4). The reconnect loop
     // owns a local connection it is dialling or waiting to re-dial: join it.
     // It dials the local daemon's CURRENT address; `wsUrl` is the caller's,
@@ -6657,6 +6667,8 @@ export class DaemonConnection {
 
   private scheduleReconnect(delayMs: number, chainDelayMs: number = delayMs): void {
     if (this._destroyed || this._connected || this.reconnectTimer) return
+    // A stopping server starts no reconnect loop; the next server dials for itself.
+    if (daemonDialsClosed()) return
     this._reconnectChainDelayMs = chainDelayMs
 
     // Auto-reconnect for __local__ is a pool-instance privilege. A __local__
@@ -6677,7 +6689,7 @@ export class DaemonConnection {
     this.reconnectTimerAt = Date.now() + delayMs
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      if (this._destroyed || this._connected) return
+      if (this._destroyed || this._connected || daemonDialsClosed()) return
       // A connect() owns this instance right now: reconnect() would stop the
       // ControlMaster it is building (C12b). Wait one more step; a success ends the loop.
       if (this._connecting) {
@@ -6784,6 +6796,7 @@ export class DaemonConnection {
    */
   private async reconnect(): Promise<void> {
     if (this._destroyed) return
+    assertDaemonDialsOpen(this.hostKey)
 
     log.session.info('DaemonConnection: attempting reconnect', { host: this.hostKey })
 
@@ -8030,6 +8043,8 @@ async function getDaemonConnectionOrThrow(hostKey: string, sshTarget: SshTarget)
   // Fast path: already connected
   const existing = connectionPool.get(hostKey)
   if (existing?.connected) return existing
+  // A stopping server dials nothing new, nor joins a reconnect (daemon-dial-gate.ts).
+  assertDaemonDialsOpen(hostKey)
 
   // The reconnect loop owns this instance (dialling, or waiting out its backoff):
   // join it through reconnectNow. A second connect() on the same instance would
@@ -8135,6 +8150,7 @@ export async function getDirectDaemonConnection(hostKey: string, wsUrl: string):
   const poolKey = `direct:${wsUrl}`
   const existing = connectionPool.get(poolKey)
   if (existing?.connected) return existing
+  assertDaemonDialsOpen(hostKey)
 
   const pending = connectingPromises.get(poolKey)
   if (pending) return pending

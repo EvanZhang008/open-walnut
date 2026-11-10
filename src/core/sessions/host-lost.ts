@@ -23,6 +23,7 @@
 import os from 'node:os';
 import { AWAKE_TICK_MS, AwakeDownClock } from '../../providers/awake-down-clock.js';
 import type { SessionRecord } from '../types.js';
+import { daemonDialsClosed } from '../../providers/daemon-dial-gate.js';
 
 /** How long a fresh connect may take before the host counts as unreachable. */
 export const HOST_LOST_PROBE_MS = 8_000;
@@ -148,6 +149,9 @@ export async function probeHost(host: string | null | undefined, ms = HOST_LOST_
   if (isLocalHost(host)) return { reachable: true };
   const key = String(host);
   if (override) return override(key);
+  // A stopping server dials nothing (daemon-dial-gate.ts), so it cannot tell: never call a
+  // host lost on its word. The caller finds no link and keeps its work pending for the next server.
+  if (daemonDialsClosed()) return { reachable: true };
   const dc = await import('../../providers/daemon-connection.js');
   if (dc.getConnectedDaemonConnection(key)) {
     memo.delete(key);

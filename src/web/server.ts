@@ -6,6 +6,8 @@
  */
 
 import { markServerStopping, resetServerStopping } from '../core/sessions/shutdown-death.js'
+import { closeHttpServer } from './http-close.js'
+import { closeDaemonDials, reopenDaemonDials } from '../providers/daemon-dial-gate.js'
 import { serverBindAddress } from './bind-address.js'
 import { createServer, type Server as HttpServer } from 'node:http'
 import { attachClientErrorAnswer } from './client-error-answer.js'
@@ -1142,6 +1144,7 @@ let serverPortHold: import('./port-hold.js').PortHold | null = null
 export async function startServer(options: ServerOptions = {}): Promise<HttpServer> {
   resetServerStopping()
   if (httpServer) throw new Error('Server already running. Call stopServer() first.')
+  reopenDaemonDials()
   // Bound before the first await: a stopServer or a newer boot from here on overtakes this
   // one's lane. An older boot's lane (its listener and timer) stops in this same tick.
   const laneOwner = ++localDaemonLaneOwner
@@ -6992,6 +6995,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   localDaemonLane = null
   // A session that dies from here on died with this computer's shutdown (sessions/shutdown-death.ts).
   markServerStopping()
+  // No daemon link is dialled from here on: the next server dials its own (daemon-dial-gate.ts).
+  closeDaemonDials()
   // A boot stopped before it listened leaves its port held.
   void serverPortHold?.release()
   serverPortHold = null
@@ -7423,17 +7428,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
 
   try {
     if (httpServer) {
-      await new Promise<void>((resolve, reject) => {
-        const closing = httpServer!
-        closing.close((err) => {
-          httpServer = null
-          if (err) reject(err)
-          else resolve()
-        })
-        // A restart into an update keeps this process (web-restart.ts): an open window's
-        // keep-alive socket would hold the port past the bail, so they go now.
-        if (opts.dropConnections) closing.closeAllConnections?.()
-      })
+      // Bounded: a long poll in flight held every deploy's shutdown into the bail (http-close.ts).
+      try { await closeHttpServer(httpServer, { dropConnections: opts.dropConnections }) } finally { httpServer = null }
     }
   } finally {
     releaseSelfApiRoot()
