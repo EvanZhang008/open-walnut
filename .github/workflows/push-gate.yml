@@ -10,6 +10,11 @@ name: Push gate
 # `walnut/push-gate` for the whole. The hook pushes main only when that reads success, then
 # deletes the ref; scripts/push-gate-sweep.sh removes one a killed hook left.
 #
+# A land's gate (a `Walnut-Gate: land` line in the gate commit, push-gate.sh --run with
+# WALNUT_PUSH_GATE_MODE=land) runs only the tests the land needs, in one or two jobs; the plan
+# job decides, and falls back to the whole tier for a change to a foundation
+# (scripts/push-gate-plan.mjs). The whole tier still runs on every push of main.
+#
 # Why: every team pushed to main without CI's checks, so one team's red test turned every later
 # run red and mailed "Run failed" each hour (2026-11-04, the user: "this happens every day").
 # Run on a shared dev host instead, the same tiers took 41 minutes and reported 15 failures, all
@@ -45,37 +50,57 @@ env:
   GATE_SHA: ${{ inputs.sha || github.sha }}
 
 jobs:
+  # The tiers this run writes: CI's quick and frontend legs (scripts/push-gate-plan.mjs FULL_TIERS,
+  # pinned to ci.yml), or a land's own tests. Its `walnut/gate-plan` status tells push-gate.sh
+  # how many tier statuses to wait for.
+  plan:
+    name: Gate plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      tiers: ${{ steps.plan.outputs.tiers }}
+      ios: ${{ steps.plan.outputs.ios }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.GATE_SHA }}
+          fetch-depth: 2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # GitHub's main, to tell whether the commit touches the iOS app (as the browser job tells
+      # its specs): a land's gate commit sits on the main it lands on, so its parent is the base.
+      - run: git fetch -q --depth=1 origin main
+      - id: plan
+        run: |
+          base=FETCH_HEAD
+          msg=$(git log -1 --format=%B HEAD)
+          case $msg in 'push gate: the files of '*) printf '%s\n' "$msg" | grep -qx 'Walnut-Gate: land' && base=HEAD^ ;; esac
+          bun scripts/push-gate-plan.mjs --ios-base "$base"
+      # Through env, never pasted into the script: `why` names files of the change.
+      - name: Status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.plan.outputs.mode }}
+          TIERS: ${{ steps.plan.outputs.tiers }}
+          WHY: ${{ steps.plan.outputs.why }}
+        run: bash scripts/push-gate-status.sh --plan "$MODE" "$TIERS" "$WHY"
+
   test:
     name: Gate (${{ matrix.tier }})
+    needs: plan
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # ci.yml's quick and frontend legs, command for command.
-          - tier: quick 1/8
-            cmd: bun run test:baseline -- --maxWorkers=1 --shard=1/8
-          - tier: quick 2/8
-            cmd: bun run test:baseline -- --maxWorkers=1 --shard=2/8
-          - tier: quick 3/8
-            cmd: bun run test:baseline -- --maxWorkers=1 --shard=3/8
-          - tier: quick 4/8
-            cmd: bun run test:baseline -- --maxWorkers=1 --shard=4/8
-          - tier: quick 5/8
-            cmd: bun run test:baseline -- --maxWorkers=1 --shard=5/8
-          - tier: quick 6/8
-            cmd: bun run test:baseline -- --maxWorkers=1 --shard=6/8
-          - tier: quick 7/8
-            cmd: bun run test:baseline -- --maxWorkers=1 --shard=7/8
-          - tier: quick 8/8
-            cmd: bun run test:baseline -- --maxWorkers=1 --shard=8/8
-          - tier: frontend
-            cmd: bun run test:frontend:ci
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ env.GATE_SHA }}
+          fetch-depth: 2
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -104,6 +129,22 @@ jobs:
           OUTCOME: ${{ steps.tests.outcome }}
           CONTEXT: walnut/push-gate (${{ matrix.tier }})
         run: bash scripts/push-gate-status.sh "$RUNNER_TEMP/out.txt"
+      # A land's first job runs the frontend tier too (about ten seconds of tests): one runner
+      # set up once instead of a job of its own.
+      - name: frontend tests
+        id: frontend
+        if: ${{ matrix.frontend }}
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bun run test:frontend:ci 2>&1 | tee "$RUNNER_TEMP/frontend.txt"
+      - name: Frontend status
+        if: ${{ matrix.frontend && !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.frontend.outcome }}
+          CONTEXT: walnut/push-gate (frontend)
+        run: bash scripts/push-gate-status.sh "$RUNNER_TEMP/frontend.txt"
 
   browser:
     name: Gate (browser specs)
@@ -113,11 +154,16 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ env.GATE_SHA }}
-      # GitHub's main, to tell which browser specs this commit touches (two trees are enough).
+          fetch-depth: 2
+      # GitHub's main, to tell which browser specs this commit touches (two trees are enough); a
+      # land's gate commit sits on the main it lands on, so its parent is that base.
       - run: git fetch -q --depth=1 origin main
       - id: specs
         run: |
-          specs=$(bash scripts/push-gate.sh --specs FETCH_HEAD HEAD)
+          base=FETCH_HEAD
+          msg=$(git log -1 --format=%B HEAD)
+          case $msg in 'push gate: the files of '*) printf '%s\n' "$msg" | grep -qx 'Walnut-Gate: land' && base=HEAD^ ;; esac
+          specs=$(bash scripts/push-gate.sh --specs "$base" HEAD)
           echo "specs=$specs" >> "$GITHUB_OUTPUT"
           echo "browser specs: ${specs:-none}"
       # The Playwright runner runs on Node, as in ci.yml's browser job.
@@ -164,9 +210,54 @@ jobs:
           CONTEXT: walnut/push-gate (browser specs)
         run: bash scripts/push-gate-status.sh "$RUNNER_TEMP/out.txt"
 
+  # The iOS app's build, when the commit touches ios-native/ (the plan's `ios`): build-for-testing,
+  # so the test targets compile too, with no simulator and no signing. ci.yml runs its tests after
+  # the push; this keeps a commit that does not compile off main.
+  ios:
+    name: Gate (iOS build)
+    needs: plan
+    if: ${{ needs.plan.outputs.ios == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.GATE_SHA }}
+      - name: XcodeGen
+        run: command -v xcodegen >/dev/null || brew install xcodegen
+      - name: iOS build
+        id: tests
+        continue-on-error: true
+        shell: bash
+        working-directory: ios-native
+        run: |
+          set -o pipefail
+          xcodegen generate || { echo 'the iOS app failed to build: xcodegen could not generate the project' | tee "$RUNNER_TEMP/out.txt"; exit 1; }
+          rc=0
+          xcodebuild build-for-testing -project Walnut.xcodeproj -scheme Walnut \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO > "$RUNNER_TEMP/build.txt" 2>&1 || rc=$?
+          # The compiler's errors, not 20,000 lines of build log: the status names the first one.
+          # GitHub runs this under bash -e and pipefail: a build with no error line, or one with so
+          # many that a cut closes the pipe early, must not end the step before the verdict below.
+          { grep -aE ': error: ' "$RUNNER_TEMP/build.txt" || true; } | sort -u | sed -n '1,40p' | tee "$RUNNER_TEMP/out.txt"
+          tail -5 "$RUNNER_TEMP/build.txt"
+          if [ $rc != 0 ]; then
+            e=$({ grep -a -m1 -E ': error: ' "$RUNNER_TEMP/build.txt" || true; } | sed -E 's#^.*/ios-native/##')
+            echo "the iOS app failed to build: ${e:-xcodebuild exited $rc}" | tee -a "$RUNNER_TEMP/out.txt"
+            exit 1
+          fi
+      - name: Status
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.tests.outcome }}
+          CONTEXT: walnut/push-gate (iOS build)
+        run: bash scripts/push-gate-status.sh "$RUNNER_TEMP/out.txt"
+
   verdict:
     name: Gate verdict
-    needs: [test, browser]
+    needs: [plan, test, browser, ios]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -177,5 +268,7 @@ jobs:
       - name: Verdict
         env:
           GH_TOKEN: ${{ github.token }}
-          NEEDS: ${{ needs.test.result }} ${{ needs.browser.result }}
+          # The iOS build is skipped when the commit leaves ios-native/ alone: that is no failure.
+          NEEDS: ${{ needs.plan.result }} ${{ needs.test.result }} ${{ needs.browser.result }} ${{ needs.ios.result == 'skipped' && 'success' || needs.ios.result }}
+          GATE_TIERS: ${{ needs.plan.outputs.tiers }}
         run: bash scripts/push-gate-status.sh --verdict
