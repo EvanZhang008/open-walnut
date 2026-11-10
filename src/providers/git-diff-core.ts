@@ -208,19 +208,21 @@ export function createGitDiffCore(exec: ExecFn, readText: ReadTextFn) {
     const current = br.code === 0 && br.stdout.trim() !== 'HEAD' ? br.stdout.trim() : '';
     const up = current ? await exec(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], root) : null;
     const upstream = up && up.code === 0 ? up.stdout.trim() : '';
-    const rem = await exec(['git', 'remote'], root);
-    const remotes = rem.code === 0 ? rem.stdout.split('\n').map((r) => r.trim()).filter(Boolean) : [];
-    remotes.sort((a, b) => (a === 'origin' ? -1 : b === 'origin' ? 1 : a < b ? -1 : a > b ? 1 : 0));
+    // Every remote's main and master, read from the refs themselves: a clone can hold another
+    // remote's branches (fetched with its own refspec) without that remote being configured.
+    const fer = await exec(['git', 'for-each-ref', '--format=%(refname)', 'refs/remotes/*/main', 'refs/remotes/*/master'], root);
+    const remoteMains = fer.code === 0 ? fer.stdout.split('\n').map((r) => r.trim().slice(13)).filter((r) => r.split('/').length === 2) : [];
+    const originFirst = (n: string): number => (n.indexOf('origin/') === 0 ? 0 : 1);
+    remoteMains.sort((a, b) => originFirst(a) - originFirst(b) || (a < b ? -1 : a > b ? 1 : 0));
     const ownCopy = (name: string): boolean => {
       if (!current) return false;
       if (name === current || name === upstream) return true;
-      const slash = name.indexOf('/');
-      return slash > 0 && remotes.indexOf(name.slice(0, slash)) >= 0 && name.slice(slash + 1) === current;
+      return name.length > current.length + 1 && name.slice(-(current.length + 1)) === '/' + current;
     };
     if (originHead && !local && ownCopy(originHead)) return originHead;
     const names: string[] = [];
     if (originHead && !local) names.push(originHead);
-    for (const r of remotes.slice(0, 6)) names.push(r + '/main', r + '/master');
+    for (const r of remoteMains.slice(0, 12)) names.push(r);
     names.push('main', 'master');
     let best = '';
     let bestDist = -1;
