@@ -272,7 +272,6 @@ describe('the WebKit voice specs, the one place a test browser may make an Audio
     'tests/e2e/browser/mic-stall.webkit.spec.ts': 'the mic warning in WebKit, from a synthetic mic',
     'tests/e2e/browser/send-waits-for-dictation.webkit.spec.ts': 'send waits for dictation, from a synthetic mic',
     'tests/e2e/browser/session-voice-selection.webkit.spec.ts': 'the quote pill hold while dictating, from a synthetic mic',
-    'tests/e2e/browser/stt-clipboard.webkit.spec.ts': 'dictation into the clipboard, from a synthetic mic',
     'tests/e2e/browser/stt-failure-recovery.webkit.spec.ts': 'dictation failures in WebKit, from a synthetic mic',
     'tests/e2e/browser/stt-final-whole-clip.webkit.spec.ts': 'the final transcript of a whole clip, from a synthetic mic',
     'tests/e2e/browser/stt-live-draft-recorder.webkit.spec.ts': 'the live draft while recording, from a synthetic mic',
