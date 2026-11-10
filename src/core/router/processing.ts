@@ -89,6 +89,7 @@ export async function recordAreaWork(raw: Record<string, unknown>, callerSid: st
   let seen = false;
   const { updateTaskRaw } = await import('../task-manager.js');
   const { needsSinceOf } = await import('../sessions/user-spoke.js');
+  const { stampSaidDecision } = await import('../ask-decision.js');
   await updateTaskRaw(task.id, (current) => {
     seen = true;
     if (current.source !== 'local' || current.org_role === 'main' || current.org_role === 'router' || current.router_area_id !== area.id) {
@@ -101,8 +102,9 @@ export async function recordAreaWork(raw: Record<string, unknown>, callerSid: st
     const now = new Date().toISOString();
     const patch: Partial<Task> = {
       ...(repeated ? {} : { note: existing ? `${existing}\n\n${note}` : note }),
-      // Its own ask, stamped with when it began asking (kept across asks in a row), as a turn-end report is.
-      ...(report ? { status_report: withNeedsSince(report, needsSinceOf(report, current.status_report)) } : {}),
+      // Its own ask, stamped with when it began asking (kept across asks in a row) and the decision it
+      // keeps across rewordings (ask-decision.ts), as a turn-end report is.
+      ...(report ? { status_report: stampSaidDecision(withNeedsSince(report, needsSinceOf(report, current.status_report)), current.status_report) } : {}),
       ...(phase && phase !== current.phase ? { phase, ...(phase === 'COMPLETE' ? { completed_at: now } : {}) } : {}),
     };
     return Object.keys(patch).length ? { ...patch, updated_at: now } : null;
