@@ -30,11 +30,16 @@ final class NotificationBridge: NSObject, WKScriptMessageHandlerWithReply, UNUse
 
     private final class WeakWebView { weak var view: WKWebView?; init(_ v: WKWebView?) { view = v } }
 
-    private var center: UNUserNotificationCenter { UNUserNotificationCenter.current() }
+    /// The system's notification center, or nil in a program with no app bundle (the window tests
+    /// compile the app as a bare binary): there `UNUserNotificationCenter.current()` throws
+    /// "bundleProxyForCurrentProcess is nil" and ends the process (2026-11-10, nightly run 43003008304).
+    private var center: UNUserNotificationCenter? {
+        Bundle.main.bundleIdentifier == nil ? nil : UNUserNotificationCenter.current()
+    }
 
     /// Call once at launch, so a click that arrives while the app runs reaches the page.
     func install() {
-        center.delegate = self
+        center?.delegate = self
     }
 
     static func identifier(_ id: String) -> String { "walnut-approval-" + id }
@@ -59,15 +64,16 @@ final class NotificationBridge: NSObject, WKScriptMessageHandlerWithReply, UNUse
             post(id: id, title: text("title", 200), body: text("body", 400), from: message.webView) { replyHandler($0, nil) }
         case "clear":
             guard !id.isEmpty else { replyHandler(nil, "no id"); return }
-            center.removeDeliveredNotifications(withIdentifiers: [Self.identifier(id)])
-            center.removePendingNotificationRequests(withIdentifiers: [Self.identifier(id)])
+            center?.removeDeliveredNotifications(withIdentifiers: [Self.identifier(id)])
+            center?.removePendingNotificationRequests(withIdentifiers: [Self.identifier(id)])
             poster.removeValue(forKey: id)
             replyHandler(["cleared": true], nil)
         case "keep":
             let keep = Set((body["ids"] as? [Any] ?? []).compactMap { $0 as? String }.map(Self.identifier))
+            guard let center else { replyHandler(["removed": 0], nil); return }
             center.getDeliveredNotifications { delivered in
                 let stale = delivered.map(\.request.identifier).filter { $0.hasPrefix("walnut-approval-") && !keep.contains($0) }
-                if !stale.isEmpty { self.center.removeDeliveredNotifications(withIdentifiers: stale) }
+                if !stale.isEmpty { center.removeDeliveredNotifications(withIdentifiers: stale) }
                 DispatchQueue.main.async { replyHandler(["removed": stale.count], nil) }
             }
         case "take":
@@ -90,6 +96,7 @@ final class NotificationBridge: NSObject, WKScriptMessageHandlerWithReply, UNUse
     }
 
     private func status(_ done: @escaping (String) -> Void) {
+        guard let center else { done("off"); return }
         center.getNotificationSettings { s in
             let word: String
             switch s.authorizationStatus {
@@ -104,6 +111,7 @@ final class NotificationBridge: NSObject, WKScriptMessageHandlerWithReply, UNUse
     private func post(id: String, title: String, body: String, from view: WKWebView?, done: @escaping ([String: Any]) -> Void) {
         poster[id] = WeakWebView(view)
         if posted.contains(id) { done(["posted": false, "status": "already"]); return }
+        guard let center else { done(["posted": false, "status": "off"]); return }
         posted.insert(id)
         center.requestAuthorization(options: [.alert, .sound]) { granted, err in
             DispatchQueue.main.async {
@@ -120,7 +128,7 @@ final class NotificationBridge: NSObject, WKScriptMessageHandlerWithReply, UNUse
                 content.userInfo = ["approvalId": id]
                 content.threadIdentifier = "walnut-approvals"
                 let req = UNNotificationRequest(identifier: Self.identifier(id), content: content, trigger: nil)
-                self.center.add(req) { addErr in
+                center.add(req) { addErr in
                     DispatchQueue.main.async {
                         if let addErr {
                             self.posted.remove(id)
