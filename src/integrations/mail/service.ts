@@ -40,7 +40,7 @@ import {
   type StoredListUnsubscribe,
 } from './service-dto.js'
 import { unsubscribeFromBodyHtml } from './unsubscribe-link.js'
-import { reconcileUnread, type UnreadReconcileResult } from './unread-reconcile.js'
+import { reconcileUnread, reconcileReadState, type UnreadReconcileResult } from './unread-reconcile.js'
 import { mailRouterKey, mailRowDeliveryVersion } from './router-source.js'
 import {
   MAX_PAGE_CHECKS,
@@ -1014,7 +1014,7 @@ export class MailService {
    * The poll loop's periodic question, and the reason mail read on another device leaves the cache
    * without anybody opening the list: a provider whose poll never lists an old message again (the
    * Outlook one) has no other way to carry the new read flag. Null when there is nothing to ask:
-   * no `listUnread`, a folder with nothing unread on either side, or one asked within the gap. The
+   * neither `listUnread` nor `unreadIds`, a folder with nothing unread on either side, or one asked within the gap. The
    * "nothing unread" skip is what makes the common case free: an empty inbox costs no call at all.
    */
   async checkUnreadInBackground(
@@ -1036,7 +1036,8 @@ export class MailService {
 
   private canAskUnread(accountId: string): boolean {
     try {
-      return !!this.provider(accountId).listUnread
+      const spec = this.provider(accountId)
+      return !!(spec.listUnread || spec.unreadIds)
     } catch {
       return false
     }
@@ -1083,7 +1084,9 @@ export class MailService {
   }
 
   /**
-   * One unread check: upsert the provider's current unread set, then mark read what it proves read.
+   * One unread check. A provider with `unreadIds` is asked about the cache's own newest rows and its
+   * answer corrects their read flags both ways (`correctReadState`); otherwise its current unread set is
+   * upserted and what it proves read is marked read.
    *
    * A provider that fails or times out changes nothing: the cache answers as it is, and the failure is
    * logged rather than shown, because the list itself is still a truthful (if possibly stale) answer.
@@ -1097,15 +1100,29 @@ export class MailService {
     } catch {
       return { cleared: 0, failed: true }
     }
-    if (!spec.listUnread) return { cleared: 0, failed: false }
+    if (!spec.listUnread && !spec.unreadIds) return { cleared: 0, failed: false }
     try {
+      const startedAt = Date.now()
+      if (spec.unreadIds) {
+        // The exact answer first, when the provider has it; `listUnread` is then only the fallback for
+        // a provider that has both and could not answer this one.
+        try {
+          const corrected = await this.correctReadState(spec, accountId, mailboxId, options.deadlineMs)
+          if (corrected !== null || !spec.listUnread) return { cleared: corrected ?? 0, failed: false }
+        } catch (error) {
+          if (!spec.listUnread) throw error
+          this.deps.log?.debug('mail falls back to the unread list', { accountId, mailboxId, error: String(error).slice(0, 200) })
+        }
+      }
+      const deadlineMs = options.deadlineMs - (Date.now() - startedAt)
+      if (deadlineMs <= 0) return { cleared: 0, failed: true }
       // Stamped BEFORE the call: everything the answer can speak about was already delivered by now, so a
       // mail that arrives while the provider is thinking is out of scope for it (see `snapshotAt`).
       const snapshotAt = this.now
       const envelopes = await callProvider(
         `the unread list of ${mailboxId}`,
         () => spec.listUnread!(accountId, mailboxId, options.limit),
-        options.deadlineMs,
+        deadlineMs,
       )
       // Only envelopes of the mailbox asked for: a provider that answers a broader set must not
       // be able to move rows between folders through this door.
@@ -1136,7 +1153,9 @@ export class MailService {
    * down to a watermark (the Outlook one): a conversation already below the line is never listed again,
    * so this is the only listing that can carry the new flag. Measured on a real account on 2026-09-21:
    * the folder badge said 4 unread, the cache listed 12, and eight had been read hours earlier on a
-   * phone. IMAP does not have the illness because its poll re-fetches flags for the cached range.
+   * phone. IMAP has it as well (a quiet folder's poll fetches nothing) and answers `unreadIds` instead,
+   * which `correctReadState` reads; this is the path for a provider without it (or whose `unreadIds`
+   * could not answer).
    *
    * `reconcileUnread` decides what an absence proves; this only writes it down. The folder's own badge
    * rides along as the second opinion that keeps an answer of `[]` from being read as "nothing is
@@ -1154,7 +1173,7 @@ export class MailService {
     if (cached.length === 0) return { cleared: 0 }
     const plan = reconcileUnread({
       answered: answered.map((one) => ({ messageId: one.messageId, sentAt: sentAtOf(one) })),
-      cached: cached.map((row) => ({ messageId: row.message_id, sentAt: row.sent_at })),
+      cached: cached.map((row) => ({ messageId: row.message_id, sentAt: row.sent_at, updatedAt: row.updated_at })),
       limit: window.limit,
       returned: window.returned,
       snapshotAt: window.snapshotAt,
@@ -1168,6 +1187,50 @@ export class MailService {
       answered: answered.length, basis: plan.basis, providerUnread,
     })
     return { cleared: plan.readNow.length, basis: plan.basis }
+  }
+
+  /**
+   * Correct the read flags of one folder's newest cached rows from the provider's exact answer
+   * (`MailProviderSpec.unreadIds`), in both directions: an asked unread row it leaves out becomes read,
+   * an asked read row it names becomes unread again. The question is the cache's own newest unread and
+   * newest read rows (at most `UNREAD_KEYS_MAX` each), so the answer never grows with the folder. Each
+   * write is a compare-and-set on the row as it was read (`correctReadFlags`): a row the person or a
+   * poll rewrote while the provider was thinking keeps that write. `null` when the provider could not
+   * say; otherwise how many rows changed.
+   */
+  private async correctReadState(
+    spec: MailProviderSpec, accountId: string, mailboxId: string, deadlineMs: number,
+  ): Promise<number | null> {
+    const [unreadRows, readRows] = await Promise.all([
+      this.deps.store.unreadKeys(accountId, mailboxId),
+      this.deps.store.readKeys(accountId, mailboxId),
+    ])
+    const asked = [...unreadRows, ...readRows]
+    if (asked.length === 0) return 0
+    const answer = await callProvider(
+      `the read state of ${mailboxId}`,
+      () => spec.unreadIds!(accountId, mailboxId, asked.map((row) => row.message_id)),
+      deadlineMs,
+    )
+    if (!Array.isArray(answer)) return null
+    const unread = answer.filter((one): one is string => typeof one === 'string')
+    const plan = reconcileReadState({
+      asked: [
+        ...unreadRows.map((row) => ({ messageId: row.message_id, seen: false })),
+        ...readRows.map((row) => ({ messageId: row.message_id, seen: true })),
+      ],
+      unread,
+    })
+    if (plan.readNow.length === 0 && plan.unreadNow.length === 0) return 0
+    const byId = new Map(asked.map((row) => [row.message_id, row]))
+    const rowsOf = (ids: string[]) => ids.map((id) => byId.get(id)).filter((row): row is UnreadKeyRow => !!row)
+    const markedRead = await this.deps.store.correctReadFlags(rowsOf(plan.readNow), true, this.now)
+    const markedUnread = await this.deps.store.correctReadFlags(rowsOf(plan.unreadNow), false, this.now)
+    this.deps.log?.info?.('mail corrected read flags from the provider', {
+      accountId, mailboxId, markedRead, markedUnread, asked: asked.length, unread: unread.length,
+      skipped: plan.readNow.length + plan.unreadNow.length - markedRead - markedUnread, basis: 'ids',
+    })
+    return markedRead + markedUnread
   }
 
   private async requireMessage(accountId: string, messageId: string): Promise<MessageRow> {

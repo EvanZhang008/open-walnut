@@ -72,6 +72,9 @@ export interface ImapEnvelopeInfo {
 
 export interface ImapFetchedMessage {
   uid: number
+  /** Sequence number at the time of the reply. imapflow always sets it; the poll uses it to tell a
+   *  newest page that came back whole from one padded with a duplicate or unsolicited reply. */
+  seq?: number
   size?: number
   flags?: Set<string> | string[]
   envelope?: ImapEnvelopeInfo
@@ -103,8 +106,9 @@ export interface ImapClient {
   messageFlagsAdd(range: string, flags: string[], options?: unknown): Promise<boolean>
   messageFlagsRemove(range: string, flags: string[], options?: unknown): Promise<boolean>
   /**
-   * `UID SEARCH`. Optional in this structural slice because only the Gmail category hint uses it
-   * (`{ gmraw: 'category:promotions' }` is imapflow's `X-GM-RAW`). Read only: it never changes a flag.
+   * `UID SEARCH`. Optional in this structural slice: the Gmail category hint uses it
+   * (`{ gmraw: 'category:promotions' }` is imapflow's `X-GM-RAW`), and so does `unreadIds`
+   * (`{ uid: '4,7:9', seen: false }`, `UID 4,7:9 UNSEEN`). Read only: it never changes a flag.
    */
   search?(query: unknown, options?: unknown): Promise<number[] | false>
   /**

@@ -96,6 +96,14 @@ interface Wire {
   /** Every IMAP APPEND, which is how a Sent copy is filed. */
   appends: Array<{ mailbox: string; bytes: string; flags: string[]; hasDate: boolean }>;
   failAppendWith: unknown;
+  /** `UID SEARCH` answers `false`, which is how imapflow reports a server refusing the search. */
+  refuseSearch?: boolean;
+  /** UIDs a misbehaving server adds to every SEARCH answer, asked or not. */
+  searchExtra?: number[];
+  /** A message removed between SELECT and FETCH (by UID), the way another client's expunge lands. */
+  expungeOnFetch?: number;
+  /** Every FETCH answers its last message twice, as a server pushing a flag change mid-command does. */
+  fetchRepeatsLast?: boolean;
   gate: Promise<void> | null;
   fireExists: (() => void) | null;
   /** Simulate the socket going away: the connection sees `close` and builds a new client. */
@@ -109,6 +117,12 @@ const log = {
   info: (message: string, meta?: Record<string, unknown>) => logLines.push(`${message} ${JSON.stringify(meta ?? {})}`),
   warn: (message: string, meta?: Record<string, unknown>) => logLines.push(`${message} ${JSON.stringify(meta ?? {})}`),
 };
+
+/** Membership test for an IMAP sequence set like `4,7:9` (no `*`: the provider never sends one). */
+function uidSetTest(set: string): (uid: number) => boolean {
+  const parts = set.split(',').map((part) => part.split(':').map(Number));
+  return (uid) => parts.some(([from, to]) => (to === undefined ? uid === from : uid >= Math.min(from!, to) && uid <= Math.max(from!, to)));
+}
 
 class FakeImap implements ImapClient {
   usable = true;
@@ -182,6 +196,7 @@ class FakeImap implements ImapClient {
   ): AsyncIterable<ImapFetchedMessage> {
     await this.step(`fetch ${this.open} ${range}${options?.uid === false ? ' seq' : ''}`);
     const box = wire.boxes[this.open]!;
+    if (wire.expungeOnFetch !== undefined) box.messages = box.messages.filter((one) => one.uid !== wire.expungeOnFetch);
     const [rawFrom, rawTo] = range.split(':');
     const from = Number(rawFrom) || 1;
     const openEnded = rawTo === '*' || rawTo === undefined;
@@ -197,9 +212,11 @@ class FakeImap implements ImapClient {
       // BOUNDED range has no such rule and answers with nothing when nothing is inside it.
       answer = within.length > 0 || !openEnded ? within : box.messages.slice(-1);
     }
+    if (wire.fetchRepeatsLast && answer.length > 0) answer = [...answer, answer[answer.length - 1]!];
     for (const message of answer) {
       yield {
         uid: message.uid,
+        seq: box.messages.indexOf(message) + 1,
         size: message.size ?? 1_024,
         flags: new Set(message.flags),
         envelope: {
@@ -237,6 +254,25 @@ class FakeImap implements ImapClient {
     });
     if (wire.failAppendWith) throw wire.failAppendWith;
     return true;
+  }
+
+  /**
+   * `UID SEARCH [UID <set>] UNSEEN` (`{ uid, seen: false }`), the only query the read-state check sends.
+   * The step names the set, so a test can see the question is bounded and never holds `*`.
+   */
+  async search(query: unknown, options?: unknown): Promise<number[] | false> {
+    const { seen, uid } = query as { seen?: boolean; uid?: string };
+    const unseen = seen === false;
+    const scope = uid === undefined ? '' : ` uid ${uid}`;
+    await this.step(`search ${this.open}${scope} ${unseen ? 'unseen' : JSON.stringify(query)}${(options as { uid?: boolean } | undefined)?.uid ? ' uid' : ''}`);
+    if (wire.refuseSearch) return false;
+    const box = wire.boxes[this.open]!;
+    if (!unseen) return [];
+    const inSet = uid === undefined ? () => true : uidSetTest(uid);
+    return [
+      ...box.messages.filter((one) => inSet(one.uid) && !one.flags.includes('\\Seen')).map((one) => one.uid),
+      ...(wire.searchExtra ?? []),
+    ];
   }
 
   async messageFlagsAdd(range: string, flags: string[], options?: unknown): Promise<boolean> {
@@ -1015,6 +1051,59 @@ describe('a poll', () => {
     expect(page.more).toBe(true);
   });
 
+  it('stays caught up on a folder whose newest mail was deleted, instead of re-opening it every tick', async () => {
+    // Found in production (2026-11-11): Gmail Drafts held 3 drafts, UIDs up to 182, under a UIDNEXT of
+    // 267 (drafts saved and deleted since). The newest page covered only up to 182, so the cursor stayed
+    // "far behind" the top and the folder was opened cold again on every tick, 1,157 times in one day.
+    wire.boxes.Drafts = {
+      uidValidity: '6',
+      uidNext: 267,
+      messages: [message(180, 'Draft one'), message(181, 'Draft two'), message(182, 'Draft three')],
+    };
+
+    const first = await live.provider.poll(ACCOUNT_ID, { mailbox: 'Drafts', limit: 50, cursor: '6:182:0' });
+
+    expect(wire.commands).toEqual(['open Drafts', 'fetch Drafts 1:3 seq']);
+    expect(first.cursor).toBe('6:266:0');
+    expect(first.more).toBe(false);
+
+    wire.commands.length = 0;
+    const quiet = await live.provider.poll(ACCOUNT_ID, { mailbox: 'Drafts', limit: 50, cursor: first.cursor });
+
+    expect(wire.commands).toEqual(['open Drafts']);
+    expect(quiet.messages).toEqual([]);
+
+    // And a draft saved after that is still found: it gets a UID at or above UIDNEXT.
+    wire.boxes.Drafts.messages.push(message(267, 'Draft four'));
+    wire.boxes.Drafts.uidNext = 268;
+    wire.commands.length = 0;
+    const later = await live.provider.poll(ACCOUNT_ID, { mailbox: 'Drafts', limit: 50, cursor: quiet.cursor });
+    expect(later.messages.map((one) => one.subject)).toEqual(['Draft four']);
+  });
+
+  it('covers up to UIDNEXT only when every message of the newest page answered', async () => {
+    // A page an expunge cut short (between SELECT and FETCH) is not known to end at the newest message,
+    // and a repeated reply must not make it look whole: the top stays the newest UID it saw.
+    wire.boxes.Drafts = {
+      uidValidity: '6',
+      uidNext: 267,
+      messages: [message(180, 'Draft one'), message(181, 'Draft two'), message(182, 'Draft three')],
+    };
+    wire.expungeOnFetch = 181;
+    wire.fetchRepeatsLast = true;
+
+    const short = await live.provider.poll(ACCOUNT_ID, { mailbox: 'Drafts', limit: 50 });
+
+    expect(wire.commands).toEqual(['open Drafts', 'fetch Drafts 1:3 seq']);
+    expect(short.cursor).toBe('6:182:0');
+
+    // The next poll sees the folder as it is now (two drafts), gets both, and only then covers the top.
+    wire.expungeOnFetch = undefined;
+    wire.fetchRepeatsLast = false;
+    const whole = await live.provider.poll(ACCOUNT_ID, { mailbox: 'Drafts', limit: 50, cursor: short.cursor });
+    expect(whole.cursor).toBe('6:266:0');
+  });
+
   it('lifts a container written by an older build to the newest page', async () => {
     // The upgrade path, which is the same shape: a two-part cursor with a low ceiling would
     // otherwise crawl the whole mailbox upward before showing anything from this year.
@@ -1310,6 +1399,85 @@ describe('a body', () => {
     wire.source = null;
     await expect(live.provider.getBody(ACCOUNT_ID, 'INBOX:9001:2')).rejects.toMatchObject({ code: 'not-found' });
     await expect(live.provider.getBody(ACCOUNT_ID, 'nonsense')).rejects.toMatchObject({ code: 'invalid' });
+  });
+});
+
+/**
+ * Mail read on another device, which no poll can carry: a quiet folder costs a SELECT and no FETCH.
+ * 2026-11-11: two interview mails read in Gmail a day earlier still showed unread in the console.
+ */
+describe('the read state of cached messages', () => {
+  const ids = (...uids: number[]) => uids.map((uid) => `INBOX:9001:${uid}`);
+
+  it('names which asked messages are unread with one bounded UID SEARCH, and fetches and flags nothing', async () => {
+    wire.boxes.INBOX!.messages = [
+      message(1, 'Read on the phone', { flags: ['\\Seen'] }),
+      message(2, 'Still unread'),
+      message(3, 'Answered and read', { flags: ['\\Answered', '\\Seen'] }),
+      message(4, 'Flagged, unread', { flags: ['\\Flagged'] }),
+      message(5, 'Unread, never cached'),
+    ];
+
+    const unread = await live.provider.unreadIds!(ACCOUNT_ID, 'INBOX', ids(4, 1, 2, 3));
+
+    expect(unread).toEqual(ids(2, 4));
+    expect(wire.commands).toEqual(['open INBOX', 'search INBOX uid 1,2,3,4 unseen uid']);
+    expect(wire.flagOps).toEqual([]);
+  });
+
+  it('keeps the answer as long as the question in a folder with thousands unread', async () => {
+    wire.boxes.INBOX!.messages = Array.from({ length: 5_000 }, (_, index) => message(index + 1, `Note ${index + 1}`));
+    const asked = Array.from({ length: 1_000 }, (_, index) => 4_001 + index);
+
+    const unread = await live.provider.unreadIds!(ACCOUNT_ID, 'INBOX', ids(...asked));
+
+    expect(unread).toHaveLength(1_000);
+    // One folder open, five sets of 200, none holding `*` (an ESEARCH reply to an open range can come
+    // back cut short with nothing but a log line to say so).
+    expect(wire.commands).toHaveLength(6);
+    expect(wire.commands[0]).toBe('open INBOX');
+    expect(wire.commands.slice(1).every((one) => one.startsWith('search INBOX uid ') && !one.includes('*'))).toBe(true);
+  });
+
+  it('asks the server nothing when there is nothing to ask about', async () => {
+    expect(await live.provider.unreadIds!(ACCOUNT_ID, 'INBOX', [])).toEqual([]);
+    expect(await live.provider.unreadIds!(ACCOUNT_ID, 'INBOX', ['Archive:9001:1', 'not a handle'])).toEqual([]);
+    expect(wire.commands).toEqual([]);
+  });
+
+  it('answers null, never [], when the server refuses or the ids are from an older UIDVALIDITY', async () => {
+    wire.boxes.INBOX!.messages = [message(1, 'Unread')];
+    // `[]` would tell the base that none of these is unread, and it acts on that.
+    wire.refuseSearch = true;
+    expect(await live.provider.unreadIds!(ACCOUNT_ID, 'INBOX', ids(1))).toBeNull();
+    wire.refuseSearch = false;
+
+    wire.commands.length = 0;
+    expect(await live.provider.unreadIds!(ACCOUNT_ID, 'INBOX', ['INBOX:8000:1'])).toBeNull();
+    expect(await live.provider.unreadIds!(ACCOUNT_ID, 'INBOX', ['INBOX:8000:1', ...ids(1)])).toBeNull();
+    expect(wire.commands.some((one) => one.startsWith('search'))).toBe(false);
+  });
+
+  it('never names a message it was not asked about, whatever the server answers', async () => {
+    wire.boxes.INBOX!.messages = [message(1, 'Unread'), message(2, 'Read', { flags: ['\\Seen'] })];
+    wire.searchExtra = [2, 77];
+    expect(await live.provider.unreadIds!(ACCOUNT_ID, 'INBOX', ids(1))).toEqual(ids(1));
+  });
+
+  it('speaks the same ids as the poll, so the base can match them to its rows', async () => {
+    // Every other test builds both ends from one fixture; this one asks with what a poll handed out.
+    wire.boxes.INBOX!.messages = [
+      message(7, 'Read', { flags: ['\\Seen'] }),
+      message(8, 'Unread'),
+      message(9, 'Unread too'),
+    ];
+    const page = await live.provider.poll(ACCOUNT_ID, { mailbox: 'INBOX', limit: 50 });
+    const polled = page.messages.map((one) => one.messageId);
+
+    const unread = await live.provider.unreadIds!(ACCOUNT_ID, 'INBOX', polled);
+
+    expect(unread).toEqual(page.messages.filter((one) => !one.flags.includes('\\Seen')).map((one) => one.messageId));
+    expect(unread).toHaveLength(2);
   });
 });
 

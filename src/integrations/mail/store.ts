@@ -240,6 +240,8 @@ export interface UnreadKeyRow extends Record<string, unknown> {
   message_id: string
   sent_at: number
   flags_json: string | null
+  /** When the cache last wrote the row: an unread answer asked before then cannot overrule it. */
+  updated_at: number
 }
 
 /**
@@ -812,8 +814,23 @@ export class MailStore {
     // backfill is far behind can hold thousands of unread rows. Newest first is also the half a reader can
     // see, and the rest is corrected by a later pass rather than by making one page pay for all of it.
     return this.db.all<UnreadKeyRow>(
-      'SELECT rowid, message_id, sent_at, flags_json FROM messages'
+      'SELECT rowid, message_id, sent_at, flags_json, updated_at FROM messages'
       + ' WHERE account_id = ? AND mailbox_id = ? AND seen = 0'
+      + ' ORDER BY sent_at DESC LIMIT ?',
+      [accountId, mailboxId, Math.max(1, Math.min(limit, UNREAD_KEYS_MAX))],
+    )
+  }
+
+  /**
+   * The newest READ rows of one folder, bounded like `unreadKeys`: the other half of what a provider
+   * with `unreadIds` is asked about, so a message marked unread on another device after the cache saw
+   * it read comes back unread. Newest first because that is where a person marks mail unread to keep it
+   * as a reminder; served by `messages_by_unread`, whose `seen` column comes before `sent_at`.
+   */
+  readKeys(accountId: string, mailboxId: string, limit = UNREAD_KEYS_MAX): Promise<UnreadKeyRow[]> {
+    return this.db.all<UnreadKeyRow>(
+      'SELECT rowid, message_id, sent_at, flags_json, updated_at FROM messages'
+      + ' WHERE account_id = ? AND mailbox_id = ? AND seen = 1'
       + ' ORDER BY sent_at DESC LIMIT ?',
       [accountId, mailboxId, Math.max(1, Math.min(limit, UNREAD_KEYS_MAX))],
     )
@@ -867,6 +884,42 @@ export class MailStore {
       if (!flags.includes(SEEN_FLAG)) flags.push(SEEN_FLAG)
       await this.setMessageFlags(row.rowid, JSON.stringify(flags), now)
       changed += 1
+    }
+    return changed
+  }
+
+  /**
+   * Set or clear `\Seen` on these rows, each only if the row is still exactly as it was read.
+   *
+   * The write of a read-state answer the provider gave about rows read BEFORE it was asked
+   * (`unreadIds`). Anything the cache wrote to a row since (the person marking it here, a poll page that
+   * carried its flags) changes `updated_at` or `flags_json`, and then that write wins and this one is
+   * skipped for the row: the next check asks again. Compare-and-set on both columns rather than a
+   * clock, so it holds with a clock that does not move (tests) and within one millisecond. Only `\Seen`
+   * moves; any other provider flag on the row is kept. Returns how many rows it changed.
+   */
+  async correctReadFlags(
+    rows: ReadonlyArray<{ rowid: number; flags_json: string | null; updated_at: number }>, seen: boolean, now: number,
+  ): Promise<number> {
+    let changed = 0
+    for (const row of rows) {
+      let flags: string[]
+      try {
+        const parsed: unknown = row.flags_json ? JSON.parse(row.flags_json) : []
+        flags = Array.isArray(parsed) ? parsed.filter((one): one is string => typeof one === 'string') : []
+      } catch {
+        flags = []
+      }
+      const next = seen
+        ? (flags.includes(SEEN_FLAG) ? flags : [...flags, SEEN_FLAG])
+        : flags.filter((one) => one !== SEEN_FLAG)
+      const json = JSON.stringify(next)
+      const result = await this.db.run(
+        'UPDATE messages SET flags_json = ?, seen = ?, updated_at = ?'
+        + ' WHERE rowid = ? AND updated_at = ? AND flags_json IS ?',
+        [json, seenOf(json), now, row.rowid, row.updated_at, row.flags_json],
+      )
+      if (result.changes === 1) changed += 1
     }
     return changed
   }

@@ -121,6 +121,8 @@ export function advanceCursor(input: {
   page: PageFacts
   /** Nothing older than this instant is kept by the cache. 0 = no horizon known. */
   since: number
+  /** UIDNEXT from SELECT, for a `newest` page that came back whole: it then covers up to here. 0 = unknown. */
+  uidNext?: number
 }): PollCursorState {
   const { plan, held, page, since } = input
   const past = since > 0 && page.oldestAt > 0 && page.oldestAt < since
@@ -132,7 +134,13 @@ export function advanceCursor(input: {
       // whatever the UIDs happen to be. Without this line a box of 51 messages numbered 900-950
       // would spend eighteen pages walking a floor of 900 down to 1 through UIDs that never existed.
       const bottom = plan.from === 1 || past ? 0 : page.lowest
-      return { lastUid: Math.max(lastUid, page.highest), floorUid: bottom > 1 ? bottom : 0 }
+      // A whole page ends at the newest message, so every UID above it up to UIDNEXT is gone (deleted,
+      // or moved out). Covering only up to `highest` left a folder whose newest mail was deleted "far
+      // behind" for good: Gmail Drafts, 3 drafts with UIDs up to 182 under a UIDNEXT of 267, was opened
+      // as a cold container on every tick, 1,157 times in one day (2026-11-11). The caller passes
+      // `uidNext` only for a page that came back whole.
+      const top = page.highest > 0 ? ceilingOf(input.uidNext ?? 0) : 0
+      return { lastUid: Math.max(lastUid, page.highest, top), floorUid: bottom > 1 ? bottom : 0 }
     }
     case 'newer':
       return { lastUid: Math.max(lastUid, plan.ceiling, page.highest), floorUid }

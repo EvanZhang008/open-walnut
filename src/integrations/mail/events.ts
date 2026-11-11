@@ -168,8 +168,9 @@ export interface MailUnsubscribedEvent {
 /**
  * An unread check of one folder ended (see `unread-checks.ts`).
  *
- * Emitted in two cases and no others. When it CLEARED rows: mail read on another device left the
- * cache, and an open list has to read again (the poll loop's own checks only ever speak this way, so a
+ * Emitted in two cases and no others. When it CLEARED rows (`cleared` counts every row whose read flag
+ * it corrected: mail read on another device left the unread list, or, from `unreadIds`, mail marked
+ * unread there came back), and an open list has to read again (the poll loop's own checks only ever speak this way, so a
  * quiet tick says nothing). And when a page had named the check in its `checking`: that console is
  * showing "Checking…" and is owed an end, so it goes out with `cleared: 0`, or with `failed: true` when
  * the provider never answered. Bounded either way: by mail read elsewhere, and by pages a human opened.

@@ -7,7 +7,7 @@
  * anything: when is the provider's answer complete enough that a message it did not name is read?
  */
 import { describe, expect, it } from 'vitest'
-import { reconcileUnread } from '../../src/integrations/mail/unread-reconcile.js'
+import { reconcileReadState, reconcileUnread } from '../../src/integrations/mail/unread-reconcile.js'
 
 const row = (messageId: string, sentAt: number) => ({ messageId, sentAt })
 
@@ -197,5 +197,61 @@ describe('reconcileUnread', () => {
     })
     expect(result.basis).toBe('capped')
     expect(result.readNow).toEqual(['stale'])
+  })
+})
+
+/**
+ * A row the cache wrote AFTER the provider was asked is newer than the answer: the person marked it
+ * unread in this console while the answer was on its way, and an answer from before that cannot undo it.
+ */
+describe('a row rewritten after the snapshot', () => {
+  it('is left alone by a complete answer that does not name it', () => {
+    const result = reconcileUnread({
+      answered: [row('a', 300)],
+      cached: [row('a', 300), { messageId: 'b', sentAt: 200, updatedAt: 1_500 }, { messageId: 'c', sentAt: 100, updatedAt: 900 }],
+      limit: 50,
+      providerUnread: 1,
+      snapshotAt: 1_000,
+    })
+    expect(result.basis).toBe('complete')
+    expect(result.readNow).toEqual(['c'])
+  })
+})
+
+/** The exact answer (`MailProviderSpec.unreadIds`): the complete unread set of a folder, ids only. */
+describe('reconcileReadState', () => {
+  const asked = (unread: string[], read: string[]) => [
+    ...unread.map((messageId) => ({ messageId, seen: false })),
+    ...read.map((messageId) => ({ messageId, seen: true })),
+  ]
+
+  it('marks read every asked unread row the answer leaves out, however many there are', () => {
+    // The real case: an INBOX whose server counted 0 unread while the cache held 2 (read in Gmail), and
+    // an All Mail with far more stale rows than any page of `listUnread` could cover.
+    const unreadRows = Array.from({ length: 500 }, (_, index) => `m${index}`)
+    const plan = reconcileReadState({ asked: asked(unreadRows, []), unread: ['m3', 'm400'] })
+
+    expect(plan.readNow).toHaveLength(498)
+    expect(plan.readNow).not.toContain('m3')
+    expect(plan.readNow).not.toContain('m400')
+    expect(plan.unreadNow).toEqual([])
+  })
+
+  it('marks unread again an asked read row the answer names', () => {
+    // Read on the phone (the last check marked it read here), then "mark as unread" there to keep it.
+    const plan = reconcileReadState({ asked: asked(['u1'], ['r1', 'r2']), unread: ['u1', 'r2'] })
+    expect(plan).toEqual({ readNow: [], unreadNow: ['r2'] })
+  })
+
+  it('reads an empty answer as none of them unread', () => {
+    expect(reconcileReadState({ asked: asked(['a', 'b'], ['c']), unread: [] })).toEqual({ readNow: ['a', 'b'], unreadNow: [] })
+  })
+
+  it('ignores ids it was not asked about, so an answer cannot reach past the question', () => {
+    expect(reconcileReadState({ asked: asked([], ['r1']), unread: ['other', 'more'] })).toEqual({ readNow: [], unreadNow: [] })
+  })
+
+  it('asks nothing and changes nothing with nothing cached', () => {
+    expect(reconcileReadState({ asked: [], unread: ['x'] })).toEqual({ readNow: [], unreadNow: [] })
   })
 })

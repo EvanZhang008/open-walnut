@@ -515,6 +515,10 @@ export function createImapProvider(deps: {
         let lowest = 0
         let highest = 0
         let oldestAt = 0
+        // Sequence numbers of the newest page's own range that answered: a page is WHOLE only when every
+        // one did. Counting replies instead would let an unsolicited FETCH (a flag change the server
+        // pushes mid-command) or a duplicate pad a page an expunge had cut short.
+        const answered = new Set<number>()
         if (plan.mode !== 'idle') {
           for await (const message of client.fetch(
             plan.range,
@@ -529,6 +533,9 @@ export function createImapProvider(deps: {
             // with the newest message even when nothing was at or above n.
             if (plan.mode === 'newer' && message.uid <= (held?.lastUid ?? 0)) continue
             messages.push(toEnvelope(request.mailbox, uidValidity, message))
+            if (plan.mode === 'newest' && typeof message.seq === 'number' && message.seq >= plan.from && message.seq <= exists) {
+              answered.add(message.seq)
+            }
             if (message.uid > highest) highest = message.uid
             if (lowest === 0 || message.uid < lowest) lowest = message.uid
             const at = message.internalDate ? new Date(message.internalDate).getTime() : 0
@@ -542,6 +549,8 @@ export function createImapProvider(deps: {
           ...(held ? { held } : {}),
           page: { lowest, highest, oldestAt },
           since: Math.max(0, Math.floor(Number(request.since) || 0)),
+          // Only a newest page that came back WHOLE is known to end at the newest message.
+          ...(plan.mode === 'newest' && answered.size === exists - plan.from + 1 ? { uidNext } : {}),
         })
         // Numbers only, never a subject or an address. The FIRST page of a container is the one
         // worth a line everybody can see: it is where the window comes from, it happens once per
@@ -731,6 +740,48 @@ export function createImapProvider(deps: {
             return { refused: `The mail server did not make the folder ${wanted}: ${String((error as Error)?.message ?? error).slice(0, 160)}` }
           }
         })
+      })
+    },
+
+    /**
+     * Which of these cached messages of one folder are unread now: `UID SEARCH UNSEEN UID <set>`
+     * (contract 1.13.0).
+     *
+     * The poll cannot carry a read flag: a quiet folder costs a SELECT and no FETCH (poll-range.ts), so
+     * mail read in Gmail on a phone kept its unread dot here for good (2026-11-11). The search is bounded
+     * by the ids asked (at most 1,000, in sets of 200), so the answer is as long as the question however
+     * many unread messages the folder holds, and no `*` or open range is ever sent, which keeps an
+     * ESEARCH reply exact. Numbers only, no envelope, and nothing changes on the server (SEARCH never
+     * sets a flag). `null` when this client cannot search, the server refuses, or the ids belong to an
+     * older UIDVALIDITY of the folder (the poll resets those rows), so the base concludes nothing.
+     */
+    async unreadIds(accountId: string, mailboxId: string, among: readonly string[]) {
+      const uids = new Set<number>()
+      const validities = new Set<string>()
+      for (const messageId of among) {
+        const coord = decodeMessageId(messageId)
+        if (!coord || coord.mailbox !== mailboxId) continue
+        uids.add(coord.uid)
+        validities.add(coord.uidValidity)
+      }
+      if (uids.size === 0) return []
+      const asked = [...uids].sort((a, b) => a - b)
+      const connection = await pool.for(accountId)
+      return connection.run(`the read state of ${asked.length} messages in ${mailboxId}`, async (client) => {
+        if (typeof client.search !== 'function') return null
+        const info = await openMailbox(client, mailboxId)
+        const generation = String(info.uidValidity)
+        if (validities.size !== 1 || !validities.has(generation)) return null
+        const unread = new Set<number>()
+        for (const set of uidChunks(asked)) {
+          const found = await client.search!({ uid: set, seen: false }, { uid: true })
+          // `false` is imapflow's "the server refused the search" (and `undefined` "no folder open"),
+          // which is not "none of these is unread".
+          if (!Array.isArray(found)) return null
+          for (const uid of found) unread.add(uid)
+        }
+        // Only what was asked: a server that answers more cannot widen the base's write.
+        return asked.filter((uid) => unread.has(uid)).map((uid) => encodeMessageId(mailboxId, generation, uid))
       })
     },
 

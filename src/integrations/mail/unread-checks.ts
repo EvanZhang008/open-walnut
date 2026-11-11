@@ -36,7 +36,7 @@ export const PAGE_UNREAD_WAIT_MS = 1_200
 export const MAX_PAGE_CHECKS = 2
 
 export interface UnreadCheckResult {
-  /** Cached rows the answer proved read. */
+  /** Cached rows whose read flag the answer corrected: read, or (from `unreadIds`) unread again. */
   cleared: number
   /** The provider did not answer (timeout, error). Nothing was changed. */
   failed: boolean

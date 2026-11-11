@@ -138,8 +138,14 @@ export type {
  * 1.12.0 adds the optional `move` capability and `moveMany`: a filter rule moves the mail it decides
  * into a folder the person named (made when missing), still unread. A provider without it keeps
  * working; the console says such an account cannot file mail into a folder.
+ *
+ * 1.13.0 adds the optional `unreadIds`: which of a bounded list of cached ids the server counts
+ * unread now. The base marks read the asked unread rows it leaves out and unread again the asked read
+ * rows it names, so mail read (or marked unread) on another device shows here on a provider whose
+ * poll never lists a quiet folder again (IMAP). Additive: a provider without it keeps the
+ * `listUnread` path, or none.
  */
-export const MAIL_BASE_API_VERSION = '1.12.0'
+export const MAIL_BASE_API_VERSION = '1.13.0'
 
 /**
  * The method bag published as `mail:base`.

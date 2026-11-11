@@ -95,6 +95,15 @@ interface Fixture {
   pollQuiet?: boolean;
   /** Every poll throws this, as an unreachable server would. */
   pollFail?: string;
+  /**
+   * The IMAP shape (contract 1.13.0): `unreadIds`, which of the asked ids of a folder are unread. `live`
+   * answers from the fixture's flags as they are when asked (then waits `unreadDelayMs`), `null` is a
+   * server refusing the search. Unarmed, the provider has no `unreadIds`.
+   */
+  unreadIdsFromProvider?: 'live' | null | { fail: string };
+  unreadIdsCalls?: string[];
+  /** How many ids each call asked about. */
+  unreadIdsAsked?: number[];
 }
 
 let server: HttpServer;
@@ -328,6 +337,24 @@ export function activate(walnut) {
         const armed = S().unreadFromProvider;
         if ('fail' in armed) throw new Error(armed.fail);
         return armed.messageIds.map((id) => envelope(findMessage(id), mailbox));
+      },
+    } : {}),
+    ...(S().unreadIdsFromProvider !== undefined ? {
+      unreadIds: async (accountId, mailbox, among) => {
+        (S().unreadIdsCalls ??= []).push(mailbox);
+        (S().unreadIdsAsked ??= []).push(among.length);
+        const armed = S().unreadIdsFromProvider;
+        if (armed && typeof armed === 'object') throw new Error(armed.fail);
+        // Read at the moment of asking, like a SEARCH: a flag changed while the answer travels is not in
+        // it. Only asked ids of the asked folder, like UID SEARCH UNSEEN UID <set> on that folder.
+        const asked = new Set(among);
+        const answer = armed === 'live'
+          ? S().messages
+            .filter((one) => asked.has(one.messageId) && envelope(one, mailbox).mailboxId === mailbox && !S().isSeen(one.flags))
+            .map((one) => one.messageId)
+          : null;
+        if (S().unreadDelayMs) await new Promise((resolve) => setTimeout(resolve, S().unreadDelayMs));
+        return answer;
       },
     } : {}),
     getBody: async (accountId, messageId) => {
@@ -1146,5 +1173,193 @@ describe('the poll loop checks unread mail by itself', () => {
       expect((await cachedUnread()).sort(), 'a failed question changes nothing').toEqual([...cached].sort());
       expect(named(seen, RECONCILED), 'nobody was told it was running, so its failure is quiet').toEqual([]);
     });
+  });
+});
+
+/**
+ * Mail read (or marked unread) on another device, on a provider whose poll never lists a quiet folder
+ * again and which can say which of the cache's rows are unread (IMAP's `UID SEARCH UNSEEN UID <set>`,
+ * contract 1.13.0). 2026-11-11: two interview mails read in Gmail a day earlier still showed unread in
+ * All Inboxes, the folder's own count already 0, because the IMAP provider had no way at all to say so.
+ */
+describe('a provider that answers the read state of cached rows', () => {
+  const RECONCILED = 'plugin:mail:unread-reconciled';
+
+  async function arm(armed: Fixture['unreadIdsFromProvider'], delayMs = 0): Promise<void> {
+    marks().unreadFromProvider = undefined;
+    marks().unreadIdsFromProvider = armed;
+    marks().unreadIdsCalls = [];
+    marks().unreadIdsAsked = [];
+    marks().unreadDelayMs = delayMs;
+    const reloaded = await fetch(`http://127.0.0.1:${port}/api/plugin-runtime/${FIXTURE_ID}/reload`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(reloaded.status).toBe(200);
+  }
+
+  function readEverywhereBut(stillUnread: string[]): void {
+    const fixture = marks();
+    const keep = new Set(stillUnread);
+    for (const one of fixture.messages) one.flags = fixture.setSeen(one.flags, !keep.has(one.messageId));
+  }
+
+  /** The next tick polls the inbox without re-listing the folders first (see the block above). */
+  function nextTickIsNarrow(): void {
+    const sync = mailSyncForTesting() as unknown as {
+      states: Map<string, { polls: number; staleRelistAt: number; relistDue: boolean; nextAt: number; paused: boolean }>
+    };
+    const state = sync.states.get(ACCOUNT_ID)!;
+    state.polls = 1;
+    state.staleRelistAt = 0;
+    state.relistDue = false;
+    state.nextAt = 0;
+    state.paused = false;
+  }
+
+  async function cachedUnread(): Promise<string[]> {
+    return (await rows<{ message_id: string }>('SELECT message_id FROM messages WHERE seen = 0 ORDER BY sent_at DESC'))
+      .map((row) => row.message_id);
+  }
+
+  async function recording<T>(body: (seen: unknown[]) => Promise<T>): Promise<T> {
+    const seen: unknown[] = [];
+    const name = `mail-ids-probe-${Math.random().toString(36).slice(2)}`;
+    bus.subscribe(name, (event) => { if (event.name === RECONCILED) seen.push(event.data); }, { global: true });
+    try { return await body(seen); } finally { bus.unsubscribe(name); }
+  }
+
+  afterAll(async () => {
+    marks().pollQuiet = false;
+    marks().unreadDelayMs = 0;
+    marks().unreadIdsFromProvider = undefined;
+  });
+
+  it('clears mail read elsewhere on a tick, with a folder count that is still stale', async () => {
+    const cached = await cacheUnread(6);
+    const stillUnread = cached.slice(4);
+    readEverywhereBut(stillUnread);
+    // The count still says 6: no re-list has run since the phone read four. The set needs no second opinion.
+    await setFolderBadge(6);
+    marks().pollQuiet = true;
+    await arm('live');
+    nextTickIsNarrow();
+
+    await recording(async (seen) => {
+      await mailSyncForTesting()!.runTick({});
+      expect(marks().unreadIdsCalls).toEqual(['INBOX']);
+      expect((await cachedUnread()).sort()).toEqual([...stillUnread].sort());
+      expect(seen).toEqual([{ accountId: ACCOUNT_ID, mailboxId: 'INBOX', cleared: 4 }]);
+    });
+    const cleared = await rows<{ flags_json: string }>('SELECT flags_json FROM messages WHERE message_id = ?', [cached[0]]);
+    expect(JSON.parse(cleared[0]!.flags_json)).toContain(SEEN);
+  });
+
+  it('clears a stale set larger than any page, down to the oldest row', async () => {
+    const cached = await cacheUnread(100);
+    // Still unread on the server: three of the OLDEST. A page-sized answer could never reach them.
+    const stillUnread = cached.slice(97);
+    readEverywhereBut(stillUnread);
+    await setFolderBadge(100);
+    marks().pollQuiet = true;
+    await arm('live');
+    nextTickIsNarrow();
+
+    await mailSyncForTesting()!.runTick({});
+
+    expect((await cachedUnread()).sort()).toEqual([...stillUnread].sort());
+    // The question is the cache's own rows of the folder (the 100 unread and the read rest, each side
+    // bounded at 500), never the folder's whole unread set on the server.
+    const [held] = await rows<{ n: number }>("SELECT COUNT(*) AS n FROM messages WHERE mailbox_id = 'INBOX'");
+    expect(marks().unreadIdsAsked).toEqual([Math.min(100, 500) + Math.min(held!.n - 100, 500)]);
+  });
+
+  it('marks unread again what was marked unread on another device after this console saw it read', async () => {
+    await cacheUnread(0);
+    readEverywhereBut([]);
+    await setFolderBadge(0);
+    marks().pollQuiet = true;
+    await arm('live');
+    nextTickIsNarrow();
+    await mailSyncForTesting()!.runTick({});
+    expect(await cachedUnread()).toEqual([]);
+
+    // On the phone: "mark as unread" on two of them, to keep them as reminders.
+    const kept = marks().messages.slice(0, 2).map((one) => one.messageId);
+    readEverywhereBut(kept);
+    await setFolderBadge(2);
+    // The shared clock asks a folder at most once a minute; a reload starts the next minute's clock.
+    await arm('live');
+    nextTickIsNarrow();
+
+    await recording(async (seen) => {
+      await mailSyncForTesting()!.runTick({});
+      expect((await cachedUnread()).sort()).toEqual([...kept].sort());
+      expect(seen).toEqual([{ accountId: ACCOUNT_ID, mailboxId: 'INBOX', cleared: 2 }]);
+    });
+    const back = await rows<{ flags_json: string }>('SELECT flags_json FROM messages WHERE message_id = ?', [kept[0]]);
+    expect(JSON.parse(back[0]!.flags_json)).not.toContain(SEEN);
+  });
+
+  it('clears them for a page too, with no tick', async () => {
+    const cached = await cacheUnread(5);
+    readEverywhereBut([]);
+    await setFolderBadge(5);
+    await arm('live');
+
+    await recording(async (seen) => {
+      const page = await listPage({ limit: PAGE });
+      expect(page.status).toBe(200);
+      await expect.poll(async () => (await cachedUnread()).length, { timeout: 10_000, interval: 100 }).toBe(0);
+      await expect.poll(() => seen.length, { timeout: 10_000, interval: 100 }).toBe(1);
+      expect(seen[0]).toEqual({ accountId: ACCOUNT_ID, mailboxId: 'INBOX', cleared: cached.length });
+    });
+  });
+
+  it('keeps what the person changed here while the answer was on its way, in both directions', async () => {
+    const cached = await cacheUnread(3);
+    // The server: none of the three unread any more, and one read row marked unread again. The answer is
+    // taken, then held 1.5 s before it arrives.
+    const readHere = (await rows<{ message_id: string }>(
+      'SELECT message_id FROM messages WHERE seen = 1 ORDER BY sent_at DESC LIMIT 1',
+    ))[0]!.message_id;
+    readEverywhereBut([readHere]);
+    await setFolderBadge(1);
+    marks().pollQuiet = true;
+    await arm('live', 1_500);
+    nextTickIsNarrow();
+
+    const running = mailSyncForTesting()!.runTick({});
+    await expect.poll(() => marks().unreadIdsCalls!.length, { timeout: 10_000, interval: 50 }).toBe(1);
+    // While the answer travels: one of the three is read here and marked unread again (the server
+    // agrees: unread), and the read row the answer will call unread is opened here (read).
+    const keptUnread = cached[0]!;
+    const route = (id: string) => `/messages/${encodeURIComponent(ACCOUNT_ID)}/${encodeURIComponent(id)}/read`;
+    expect((await sendJson('POST', route(keptUnread), { read: true })).status).toBe(200);
+    expect((await sendJson('POST', route(keptUnread), { read: false })).status).toBe(200);
+    expect((await sendJson('POST', route(readHere), { read: true })).status).toBe(200);
+    await running;
+
+    const left = await cachedUnread();
+    expect(left, 'the later write here wins over the answer').toContain(keptUnread);
+    expect(left, 'and so does a read here').not.toContain(readHere);
+    for (const id of cached.slice(1)) expect(left).not.toContain(id);
+  });
+
+  it('changes nothing when the server refuses the search, or the call fails', async () => {
+    const cached = await cacheUnread(3);
+    readEverywhereBut([]);
+    await setFolderBadge(0);
+    marks().pollQuiet = true;
+    await arm(null);
+    nextTickIsNarrow();
+    await mailSyncForTesting()!.runTick({});
+    expect(marks().unreadIdsCalls).toEqual(['INBOX']);
+    expect((await cachedUnread()).sort()).toEqual([...cached].sort());
+
+    await arm({ fail: 'the server went away' });
+    nextTickIsNarrow();
+    await mailSyncForTesting()!.runTick({});
+    expect(marks().unreadIdsCalls).toEqual(['INBOX']);
+    expect((await cachedUnread()).sort()).toEqual([...cached].sort());
   });
 });

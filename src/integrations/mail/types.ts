@@ -505,6 +505,25 @@ export interface MailProviderSpec {
    */
   listUnread?(accountId: string, mailbox: string, limit: number): Promise<MailEnvelope[]>
   /**
+   * Which of these cached messages of one mailbox the server counts unread right now, or `null` when it
+   * cannot say. Optional (1.13.0).
+   *
+   * The exact question about read state, ids only: `among` is a bounded list of `messageId`s the base
+   * holds for that mailbox (its newest unread rows and its newest read ones, at most 1,000), and the
+   * answer is the subset the server holds unread. A provider whose server can test that cheaply (IMAP's
+   * `UID SEARCH UNSEEN UID <set>`) keeps the cache's read flags true in BOTH directions with no envelope
+   * fetched and no reliance on the folder count: an asked row the answer leaves out is marked read, an
+   * asked read row it names is marked unread again (read here, then marked unread on a phone). Rows the
+   * cache wrote after it asked are left alone, so a read flag the person changed meanwhile wins.
+   *
+   * Return `null`, never `[]`, when the answer cannot be known (the server refuses the search, or the
+   * ids belong to an older generation of the folder): `[]` means "none of these is unread", and the base
+   * acts on it. An asked message the server no longer holds is left out (read): its row goes with the
+   * poll's next move or reset. Ids are the same `messageId`s the poll hands out for that mailbox. A
+   * provider with this method is asked even when it has no `listUnread`, and before it when it has both.
+   */
+  unreadIds?(accountId: string, mailbox: string, among: readonly string[]): Promise<string[] | null>
+  /**
    * The capabilities of ONE account, when they differ from the provider's own.
    *
    * Optional, and the base prefers it whenever it exists. IMAP is why it does: reading needs

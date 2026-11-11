@@ -8,9 +8,12 @@
  * newest-first walk with a watermark (the Outlook one) never re-lists a conversation that is already
  * below the line, so the only listing that could ever carry the new flag is this one. Measured on a
  * real account on 2026-09-21: the folder badge said 4 unread, the cache held 12 rows, and eight of
- * them had been read elsewhere hours earlier. IMAP does not have the illness, because its poll
- * re-fetches flags for the whole cached range, which is exactly the "re-read what you hold" this
- * file adds for the providers that cannot.
+ * them had been read elsewhere hours earlier. IMAP has it too: its poll costs nothing on a quiet
+ * folder (UIDNEXT says nothing is new, so nothing is fetched), so a flag flipped in Gmail on mail the
+ * cache already holds never arrives (2026-11-11: two interview mails read in Gmail a day earlier
+ * still showed unread, the folder's own count already 0). IMAP answers the exact form of the
+ * question instead, `unreadIds` (`reconcileReadState` below): which of the cache's own rows are
+ * unread, ids only, in both directions.
  *
  * So an absence has to mean something. It can only mean something when the answer is COMPLETE, and
  * these functions are about being honest regarding when that is.
@@ -21,6 +24,12 @@ export interface CachedUnreadRow {
   messageId: string
   /** The row's sort key, which is also what bounds a capped answer. */
   sentAt: number
+  /**
+   * When the cache last wrote the row. A row written AFTER the provider was asked (the person marked it
+   * unread in this console while the answer was on its way) is newer than the answer, which therefore
+   * cannot overrule it. Absent: judged by `sentAt` alone.
+   */
+  updatedAt?: number
 }
 
 /** One envelope out of the provider's unread answer, as little of it as the decision needs. */
@@ -110,7 +119,7 @@ export function reconcileUnread(input: UnreadReconcileInput): UnreadReconcileRes
   const returned = input.returned ?? answered.length
   const snapshotAt = input.snapshotAt ?? Number.POSITIVE_INFINITY
   // Rows the answer could have covered at all. A row newer than the snapshot is not one of them.
-  const judgeable = cached.filter((row) => row.sentAt <= snapshotAt)
+  const judgeable = cached.filter((row) => answerable(row, snapshotAt))
   // Nothing cached is nothing to reconcile. The basis is the one that claims least, because the caller
   // logs it and "complete" over an empty sweep reads as a conclusion nobody drew.
   if (cached.length === 0) return { readNow: [], basis: 'no-answer' }
@@ -132,4 +141,34 @@ export function reconcileUnread(input: UnreadReconcileInput): UnreadReconcileRes
     basis: capped ? 'capped' : (providerUnread === undefined ? 'no-badge' : 'short-of-badge'),
     horizon,
   }
+}
+
+/** A row the answer can speak about: delivered, and last written by the cache, before it was asked. */
+function answerable(row: CachedUnreadRow, snapshotAt: number): boolean {
+  return row.sentAt <= snapshotAt && (row.updatedAt === undefined || row.updatedAt <= snapshotAt)
+}
+
+/**
+ * What a provider's answer about ASKED rows proves (`MailProviderSpec.unreadIds`).
+ *
+ * Exact by construction, so no badge, no horizon and no limit: the provider was asked about these rows
+ * and named the ones it holds unread. An asked unread row it leaves out is read there (or gone from the
+ * folder, which for the unread list is the same answer); an asked read row it names was marked unread
+ * there again. Ids it names that were not asked are ignored, so an answer cannot reach past the
+ * question. Rows that arrived while the provider was thinking were never asked, and rows the cache
+ * rewrote meanwhile are refused at the write (`MailStore.correctReadFlags`), so neither is judged here.
+ */
+export function reconcileReadState(input: {
+  asked: ReadonlyArray<{ messageId: string; seen: boolean }>
+  unread: readonly string[]
+}): { readNow: string[]; unreadNow: string[] } {
+  const unread = new Set(input.unread)
+  const readNow: string[] = []
+  const unreadNow: string[] = []
+  for (const row of input.asked) {
+    const there = unread.has(row.messageId)
+    if (!row.seen && !there) readNow.push(row.messageId)
+    else if (row.seen && there) unreadNow.push(row.messageId)
+  }
+  return { readNow, unreadNow }
 }
