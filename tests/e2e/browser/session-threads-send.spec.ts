@@ -436,6 +436,15 @@ test.describe('Question stack: asking and sending', () => {
   /** C49: three questions asked while a 35s root answer is still coming; back on
    *  root once they are all out. */
   async function askThreeDuringRoot(page: Page, request: APIRequestContext, tag: string): Promise<{ panel: Locator; history: Locator }> {
+    // The test before this one leaves its own root turn and questions running on this session
+    // (its root answer takes 35s): this root turn waits for them to end, else it queues behind
+    // them and the process that ends their run takes this test's first question with them (CI
+    // 2026-11-10, the retry after a whole-file rerun: question 1 "missing" from the queue).
+    // Rows still on their way only: a parked row of an earlier test stays in the list for good.
+    await expect.poll(async () => {
+      const rows = (await queueRows(request)).filter((r) => r.status === 'pending' || r.status === 'processing')
+      return `${rows.length} queued, ${(await readRecord(request, SEND_SESSION)).process_status}`
+    }, { timeout: 120_000, intervals: [500] }).toMatch(/^0 queued, (?!running$)/)
     await boot(page)
     const panel = await openThreadsSession(page, SEND_SESSION, SEND_TASK, READY)
     const history = mainPage(panel).locator('.session-history')
