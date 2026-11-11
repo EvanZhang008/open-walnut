@@ -159,7 +159,12 @@ export async function remoteStore(r: ResolvedRemote): Promise<OffloadStore & Fet
     // An object kept in another bucket (the setting changed since) is read where it was put, with these credentials.
     const other = remote.bucket !== r.bucket || (remote.endpoint ?? '') !== (r.endpoint ?? '')
     const use = other ? (await client({ ...r, region: remote.region || r.region, endpoint: remote.endpoint, forcePathStyle: remote.endpoint ? true : r.forcePathStyle })).c : c
-    await read(use, remote.bucket, key, () => fs.createWriteStream(dst, { mode: 0o600 }))
+    await read(use, remote.bucket, key, () => {
+      const out = fs.createWriteStream(dst, { mode: 0o600 })
+      // pipeline() reports its errors; heard here too, so one before it takes the stream is never uncaught.
+      out.on('error', () => {})
+      return out
+    })
   }
   return {
     bucket: r.bucket,

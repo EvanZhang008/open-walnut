@@ -13572,11 +13572,13 @@ if (taskDirCore && typeof taskDirCore.setRemoteFetcher === 'function') {
   taskDirCore.setRemoteFetcher((dir, sid) => new Promise((resolve, reject) => {
     const target = pickTrustedClient('').client;
     if (!target) return reject(new taskDirCore.RemoteHistoryError('the history of ' + sid + ' is in remote storage, and no Walnut server is connected to fetch it'));
-    relayToPrimary(target, undefined, 'history.fetch', EXTERNAL_CALLER_SID, { dir: dir, sessionId: sid }, (resp) => {
+    const respond = (resp) => {
       if (resp.ok) return resolve();
       const code = resp.error && resp.error.code;
       reject(new taskDirCore.RemoteHistoryError((resp.error && resp.error.message) || 'the server could not fetch it from remote storage', { stillRunning: code === 'hub_timeout' }));
-    }, false, Date.now() + HISTORY_FETCH_MS);
+    };
+    const deadline = Date.now() + HISTORY_FETCH_MS;
+    relayToPrimary(target, undefined, 'history.fetch', EXTERNAL_CALLER_SID, { dir: dir, sessionId: sid }, respond, false, deadline);
   }));
 }
 async function cmdTaskDirPruneCaches(ws, id, cmd) {

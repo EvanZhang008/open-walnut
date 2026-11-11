@@ -6193,11 +6193,13 @@ setArchiveLog((msg) => logMsg('warn', 'transcript archive', { msg }))
 setRemoteFetcher((dir, sid) => new Promise<void>((resolve, reject) => {
   const target = pickTrustedClient('').client
   if (!target) return reject(new RemoteHistoryError('the history of ' + sid + ' is in remote storage, and no Walnut server is connected to fetch it'))
-  relayToPrimary(target, undefined, 'history.fetch', EXTERNAL_CALLER_SID, { dir, sessionId: sid }, (resp) => {
+  const respond = (resp: Parameters<Parameters<typeof relayToPrimary>[5]>[0]) => {
     if (resp.ok) return resolve()
     const code = resp.error?.code
     reject(new RemoteHistoryError(resp.error?.message || 'the server could not fetch it from remote storage', { stillRunning: code === 'hub_timeout' }))
-  }, false, Date.now() + HISTORY_FETCH_MS)
+  }
+  const deadline = Date.now() + HISTORY_FETCH_MS
+  relayToPrimary(target, undefined, 'history.fetch', EXTERNAL_CALLER_SID, { dir, sessionId: sid }, respond, false, deadline)
 }))
 
 /** Rebuildable tool caches older than `olderThanMs` (host-cache-prune.ts, host-cache-prune-v1). Keep in sync with daemon-source.ts. */
