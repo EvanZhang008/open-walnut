@@ -1,6 +1,6 @@
 /** What a lead hears about its teams before its next message (src/core/org/team-note.ts), pure part. */
 import { describe, it, expect } from 'vitest'
-import { buildTeamNoteText, groupTeamAsks, noteDue, planTeamNote, teamFingerprint, TEAM_NOTE_FORM, TEAM_NOTE_GAP_MS, TEAM_NOTE_MAX } from '../../../src/core/org/team-note.js'
+import { buildTeamNoteText, groupTeamAsks, noteDue, OWED_TOLD_MAX, planTeamNote, teamFingerprint, TEAM_NOTE_FORM, TEAM_NOTE_GAP_MS, TEAM_NOTE_MAX } from '../../../src/core/org/team-note.js'
 import type { TeamNewsTask } from '../../../src/core/org/team-news.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 9, 26, 12, min)).toISOString()
@@ -359,5 +359,27 @@ describe('team note: no progress lines, paced like the main agent\'s', () => {
     // A wait it was not told about is still news.
     const fresh = planTeamNote({ ...old, seen: { ...old.seen, w: hash('||') } }, team, [], at(10), ctx)
     expect(fresh.waits.map((w) => w.taskId)).toEqual(['w'])
+  })
+
+  it('an owed ask that goes quiet and comes back is news once; a new one is news again', () => {
+    // 2026-11-11, the Walnut VP: owedTold kept only the ids listed now, so an ask whose status handed it
+    // back (not owed) and that the session then judged owed again re-notified the lead each time.
+    const owe = (...ids: string[]) => ({ owed: [{ taskId: 'b', title: 'b title', asks: ids.map((id) => ({ id, at: at(0), text: `words ${id}` })) }] })
+    const first = planTeamNote(undefined, base, [], NOW, owe('ua-0001'))
+    expect(first.owedNew).toBe(1)
+    const quiet = planTeamNote(first.next, base, [], at(70), {})
+    expect(quiet.owedNew).toBeUndefined()
+    expect(quiet.next.owedTold).toEqual(['ua-0001'])
+    const back = planTeamNote(quiet.next, base, [], at(80), owe('ua-0001'))
+    expect(back.owed?.map((o) => o.taskId)).toEqual(['b'])
+    expect(back.owedNew).toBe(0)
+    const more = planTeamNote(back.next, base, [], at(90), owe('ua-0001', 'ua-0002'))
+    expect(more.owedNew).toBe(1)
+    expect(more.next.owedTold).toEqual(['ua-0001', 'ua-0002'])
+    // Bounded, newest kept.
+    let state = more.next
+    for (let i = 0; i < OWED_TOLD_MAX + 5; i++) state = planTeamNote(state, base, [], at(100), owe(`ua-x${i}`)).next
+    expect(state.owedTold).toHaveLength(OWED_TOLD_MAX)
+    expect(state.owedTold?.at(-1)).toBe(`ua-x${OWED_TOLD_MAX + 4}`)
   })
 })

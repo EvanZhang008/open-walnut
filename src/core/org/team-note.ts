@@ -53,7 +53,8 @@ export interface TeamNoteState {
   led?: string[];
   /** The fingerprint's form (TEAM_NOTE_FORM); absent when an older Walnut wrote it (words were in it). */
   form?: number;
-  /** The user's unanswered messages (sessions/user-asks.ts) the lead was told of, by ask id. */
+  /** The user's unanswered messages (sessions/user-asks.ts) the lead was ever told of, by ask id, newest last
+   *  (OWED_TOLD_MAX): one that stops being owed and comes back is no news a second time. */
   owedTold?: string[];
 }
 
@@ -288,6 +289,9 @@ function formOneFingerprint(t: TeamNewsTask): string {
   return hashKey(`|${clean(t.user_status?.now)}|${isStuck(t) ? 'stuck' : ''}${isMachineStop(t) ? `|machine:${clean(t.user_status?.waitingOn)}` : ''}`);
 }
 
+/** Ask ids a lead's state keeps as told: far more than its teams ever owe at once (OPEN_MAX per task). */
+export const OWED_TOLD_MAX = 300;
+
 /** What the lead's next message carries, given what it was told and its teams now. */
 export function planTeamNote(
   prev: TeamNoteState | undefined,
@@ -322,7 +326,10 @@ export function planTeamNote(
   const toldBefore = new Set(prev?.owedTold ?? []);
   const owedNew = owedIds.filter((id) => !toldBefore.has(id)).length;
   const owedPart = owed.length ? { owed, owedNew } : {};
-  const next: TeamNoteState = { at: now, seen, ...(ctx.led ? { led } : {}), form: TEAM_NOTE_FORM, ...(owedIds.length ? { owedTold: owedIds } : {}) };
+  // Every id told stays told: an ask id is never reused, and one that went quiet and is owed again
+  // (its status handed it back, then the session judged it owed once more) would re-notify the lead.
+  const owedTold = [...[...toldBefore].filter((id) => !owedIds.includes(id)), ...owedIds].slice(-OWED_TOLD_MAX);
+  const next: TeamNoteState = { at: now, seen, ...(ctx.led ? { led } : {}), form: TEAM_NOTE_FORM, ...(owedTold.length ? { owedTold } : {}) };
   // A task whose own notice the lead reads (its edge, org-follow.ts) is told there, not here again.
   const news = teamNews(open).filter((i) => !ctx.told?.has(i.taskId));
   const byId = new Map(open.map((t) => [t.id, t] as const));
