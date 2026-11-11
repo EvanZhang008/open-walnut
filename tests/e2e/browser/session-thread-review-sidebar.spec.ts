@@ -814,14 +814,20 @@ test.describe('asks on turns that are not loaded', () => {
     const panel = await openThreadsSession(page, REVIEW_MIXED_SESSION, REVIEW_MIXED_TASK, REVIEW_MIXED_READY, { view: 'linear' })
     const history = panel.locator('.session-history')
     await expect(history.getByText(REVIEW_MIXED_PASSAGES[0])).toHaveCount(0)
+    // The newest row on screen: the reader's place. (Not a fixed passage: the
+    // session keeps the follow-ups earlier tests sent from its cards, since a
+    // reset puts back the questions, not the transcript.)
+    const newest = history.locator('[data-message-id]').last()
+    await expect(newest).toBeInViewport()
+    const newestId = await newest.getAttribute('data-message-id')
     await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
     await expect(sidebarCards(panel)).toHaveCount(3, { timeout: 20_000 })
     for (const t of ['Mixed point 1', 'Mixed point 2', 'Mixed point 3']) {
       await expect(sidebarCards(panel).filter({ hasText: t })).toHaveCount(1)
     }
-    // The reader stays where they were: the recent ask's passage is still on screen.
-    await expect(history.getByText(REVIEW_MIXED_PASSAGES[2].slice(0, 24))).toBeInViewport()
+    // The reader stays where they were: that row is still on screen.
+    await expect(history.locator(`[data-message-id="${newestId}"]`).first()).toBeInViewport()
 
     // A picture sent from a card's box, read back from the transcript after a
     // reload: its bubble shows the picture and the words, never Walnut's
