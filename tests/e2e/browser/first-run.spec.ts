@@ -257,3 +257,58 @@ test('a machine that is not Linux (another Mac) says so and how to add it, with 
   await expect(page.getByTestId('first-run-undo-mac-mini')).toBeVisible();
   await shot(page, 'not-linux', dialog(page).locator('.fr-modal'));
 });
+
+test('Settings › Remote Hosts walks a failed host through the same way: a Mac gets Join with a link, a password host the key steps', async ({ page }) => {
+  const fake = await serve(page, { pending: [] });
+  // Both hosts are saved and their last try failed, as a host added from the setup would be.
+  for (const host of ['mac-mini', 'home-pc']) fake.found[host] = { ...fake.found[host], connect: 'yes', enabled: true };
+  fake.keys['home-pc'] = { path: '~/.ssh/id_home', exists: false };
+  await page.route((url) => url.pathname === '/api/hosts/status', (route) => route.fulfill({ json: { hosts: [notLinux('mac-mini'), needsPassword('home-pc')] } }));
+  let invites = 0;
+  await page.route((url) => url.pathname === '/api/hosts/net/invites', async (route) => {
+    if (route.request().method() === 'POST') invites++;
+    await route.fulfill({ status: 502, json: { error: 'no host network in this test' } });
+  });
+  await page.goto('/');
+  await page.waitForLoadState('domcontentloaded');
+  await page.getByRole('link', { name: /settings/i }).first().click();
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId('settings-nav-remote-hosts').click();
+
+  const mac = page.locator('[data-host-alias="mac-mini"]');
+  await expect(mac.getByTestId('rh-row-state')).toHaveText('mac-mini is not a Linux machine', { timeout: 30_000 });
+  await expect(mac.getByTestId('rh-walk-mac-mini')).toContainText('press Join with a link');
+  await expect(mac.getByText('Retry SSH')).toHaveCount(0);
+  await mac.scrollIntoViewIfNeeded();
+  await shot(page, 'settings-not-linux', mac);
+  await mac.getByTestId('rh-row-join').click();
+  await expect.poll(() => invites).toBe(1);
+
+  const pc = page.locator('[data-host-alias="home-pc"]');
+  await expect(pc.getByTestId('rh-row-state')).toHaveText('home-pc needs a one-time setup');
+  await expect(pc.getByTestId('rh-command-home-pc-0')).toContainText('ssh-keygen -t ed25519 -f ~/.ssh/id_home');
+  await expect(pc.getByTestId('rh-command-home-pc-1')).toContainText('ssh-copy-id -i ~/.ssh/id_home home-pc');
+  await expect(pc.getByTestId('rh-walk-home-pc')).toContainText('Then press Retry SSH.');
+  await expect(pc.getByTestId('rh-row-connect')).toHaveText('Retry SSH');
+  await pc.scrollIntoViewIfNeeded();
+  await shot(page, 'settings-password', pc);
+});
+
+test('a long connecting sentence wraps beside a long address, never crushing it to a word a line', async ({ page }) => {
+  const fake = await serve(page, { pending: ['hosts'] });
+  const alias = 'build-box-west-2.compute.example.internal';
+  fake.found[alias] = { hostname: alias, user: 'developer', discovered: true, connect: 'ask', enabled: false };
+  fake.onYes[alias] = (host) => statusOf(host, { phase: 'probe', phaseLabel: 'Checking whether the session daemon is running on build-box…internal' });
+  await page.goto('/');
+  await expect(dialog(page)).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId(`first-run-add-${alias}`).click();
+  const state = page.getByTestId(`first-run-state-${alias}`);
+  await expect(state).toContainText('Checking whether the session daemon is running');
+  const row = state.locator('xpath=ancestor::li[1]');
+  const address = row.locator('.fr-host-address');
+  const [a, s, r] = await Promise.all([address.boundingBox(), state.boundingBox(), row.boundingBox()]);
+  // The address keeps at least half the row; the sentence wraps in the rest.
+  expect(a!.width).toBeGreaterThanOrEqual(r!.width * 0.4);
+  expect(s!.width).toBeLessThanOrEqual(r!.width * 0.55);
+  await shot(page, 'long-state', row);
+});

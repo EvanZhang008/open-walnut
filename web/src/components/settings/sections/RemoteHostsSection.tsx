@@ -23,7 +23,7 @@ import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
 import { AddHostButton } from './AddHostMenu';
-import { ADD_SSH_HOST_EVENT, openFirstRunHosts, takeAddSshRequest } from '@/api/first-run';
+import { ADD_SSH_HOST_EVENT, JOIN_HOST_EVENT, openFirstRunHosts, takeAddSshRequest } from '@/api/first-run';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { RemoteHostSshRow } from './RemoteHostSshRow';
 import { HostJoinClosed, HostJoinError, HostJoinLink, HostJoinMaking } from './HostJoinLink';
@@ -136,6 +136,14 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
     land.join();
     void network.add();
   };
+  // A row's "Join with a link" (a Mac that SSH cannot set up) opens the same join link.
+  const joinRef = useRef(joinWithLink);
+  joinRef.current = joinWithLink;
+  useEffect(() => {
+    const join = () => joinRef.current();
+    window.addEventListener(JOIN_HOST_EVENT, join);
+    return () => window.removeEventListener(JOIN_HOST_EVENT, join);
+  }, []);
   // Close (or Escape) gives the focus back to Add host; a link that still works says so in its
   // place, read out as it appears (HostJoinClosed).
   const closeJoin = () => { network.dismiss(); land.after('add'); };

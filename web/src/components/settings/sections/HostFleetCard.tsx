@@ -20,6 +20,7 @@ import { FleetNumber } from './FleetNumber';
 import { Chips, FleetFacts, Ring, SparkRow } from './HostFleetVitals';
 import type { ActionState } from './useHostFleet';
 import { RETRY_FAILED_TEXT, useHostActions } from '@/hooks/useHostActions';
+import { useHostStatus } from '@/hooks/useHostStatus';
 
 /** How old the card is, or that a read of it runs now. */
 function ReadMark({ host, now }: { host: FleetHost; now: number }) {
@@ -126,7 +127,10 @@ export function HostFleetOfflineRow({ host, now, onDetails }: { host: FleetHost;
   const actions = useHostActions(host.host);
   const connecting = actions.pending === 'retry';
   const failed = actions.failed !== 'retry' ? null : actions.failedReason ? `Could not connect: ${actions.failedReason}.` : RETRY_FAILED_TEXT;
-  const canConnect = host.connection.kind === 'ssh-tunnel' || host.connection.kind === 'host-network';
+  // A machine that is not Linux never connects over SSH: its row below offers the join link instead.
+  const status = useHostStatus(host.host);
+  const notLinux = (status?.kind ?? status?.lastKind) === 'not_linux';
+  const canConnect = (host.connection.kind === 'ssh-tunnel' || host.connection.kind === 'host-network') && !notLinux;
   return (
     <div className="hf-off" data-testid="hf-dash-offline" data-host={host.host} id={`hf-card-${host.host}`} tabIndex={-1}>
       <div className="hf-off-line">

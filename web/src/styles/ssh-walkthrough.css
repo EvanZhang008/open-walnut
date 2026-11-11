@@ -1,0 +1,18 @@
+/* The SSH walkthrough (components/hosts/SshWalkthrough.tsx): first-run dialog and Remote Hosts rows. */
+.fr-walk-lead { margin-top: 4px; }
+.fr-walk-steps { margin: 6px 0 0; padding-left: 18px; }
+.fr-walk-steps li { margin-top: 6px; }
+.fr-walk-steps li > span { display: block; }
+.fr-command { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.fr-command code {
+  flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12px;
+  background: var(--bg-tertiary); color: var(--fg); padding: 3px 8px; border-radius: 6px;
+  overflow-wrap: anywhere; user-select: all;
+}
+.fr-copy {
+  flex: none; font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-elevated, transparent); color: var(--fg);
+}
+.fr-copy:hover { background: var(--bg-tertiary); }
+.fr-copy:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
+.rh-row-walk { display: block; margin-top: 4px; font-size: 12px; line-height: 1.5; }

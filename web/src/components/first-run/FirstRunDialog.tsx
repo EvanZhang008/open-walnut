@@ -20,53 +20,18 @@ import { ModalOverlayOwner, useModalOverlay } from '@/hooks/useModalOverlay';
 import { useEvent } from '@/hooks/useWebSocket';
 import { fetchConfig } from '@/api/config';
 import { answerFoundHost, connectHost } from '@/api/hosts';
-import { fetchSshKey } from '@/api/first-run';
 import { seedHostStatus, serverNow, useAllHostStatus, useHostStatus } from '@/hooks/useHostStatus';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
-import { copyTextRobust } from '@/utils/clipboard';
 import type { FirstRunStep } from '@/api/first-run';
-import { addedRowState, firstRunHostRows, type FirstRunHostRow, type SshKey, type Walkthrough } from './first-run-model';
+import { WalkthroughSteps, useSshKey } from '@/components/hosts/SshWalkthrough';
+import { addedRowState, firstRunHostRows, type FirstRunHostRow } from './first-run-model';
 import '@/styles/first-run.css';
 
 export type FirstRunMode = 'first-run' | 'picker';
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-function CopyCommand({ command, testId }: { command: string; testId?: string }) {
-  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null);
-  const copy = () => {
-    void copyTextRobust(command).then((r) => {
-      setCopied(r === 'failed' ? 'failed' : 'yes');
-      window.setTimeout(() => setCopied(null), 2000);
-    });
-  };
-  return (
-    <span className="fr-command">
-      <code data-testid={testId}>{command}</code>
-      <button type="button" tabIndex={0} className="fr-copy" onClick={copy} aria-label={`Copy ${command}`}>
-        {copied === 'yes' ? 'Copied' : copied === 'failed' ? 'Select and copy' : 'Copy'}
-      </button>
-    </span>
-  );
-}
-
-function WalkthroughSteps({ walk, alias }: { walk: Walkthrough; alias: string }) {
-  return (
-    <div className="fr-walk" data-testid={`first-run-walk-${alias}`}>
-      <div className="fr-walk-lead">{walk.lead}</div>
-      {walk.steps.length > 0 && <ol className="fr-walk-steps">
-        {walk.steps.map((s, i) => (
-          <li key={i}>
-            <span>{s.text}</span>
-            {s.command && <CopyCommand command={s.command} testId={`first-run-command-${alias}-${i}`} />}
-          </li>
-        ))}
-      </ol>}
-    </div>
-  );
 }
 
 /** A host already said yes to, while it connects or once it did (a failure is AddedFailure, under the row). */
@@ -83,18 +48,6 @@ function AddedState({ row }: { row: FirstRunHostRow }) {
     return <span className="fr-state fr-state-busy" data-testid={`first-run-state-${row.alias}`}><span className="fr-spinner" aria-hidden="true" />{state.words}</span>;
   }
   return null;
-}
-
-/** The key ssh signs in to a host with, read once while a sign-in walkthrough shows (null: unknown). */
-function useSshKey(alias: string, wanted: boolean): SshKey | null {
-  const [key, setKey] = useState<SshKey | null>(null);
-  useEffect(() => {
-    if (!wanted) return;
-    let live = true;
-    fetchSshKey(alias).then((k) => { if (live) setKey(k); }).catch(() => {});
-    return () => { live = false; };
-  }, [alias, wanted]);
-  return key;
 }
 
 /** A try that fails at once would look like nothing happened: the button stays busy this long. */

@@ -32,6 +32,12 @@ import { problemsOf } from './host-fleet-dashboard-model';
 import { connectAction, liveLine, needsLook as cardNeedsLook } from './host-row-model';
 import type { ActionState } from './useHostFleet';
 import { RowLine as Line, type RowPrimary } from './HostRow';
+import { requestJoinWithLink } from '@/api/first-run';
+import { REMOTE_HOSTS_WORDS, walkthroughOf } from '@/components/first-run/first-run-model';
+import { WalkthroughSteps, useSshKey } from '@/components/hosts/SshWalkthrough';
+
+/** Failures the person fixes outside Walnut: the row walks them through, as first-run setup does. */
+const WALKED_KINDS: ReadonlySet<string> = new Set(['auth', 'agent_missing', 'not_linux']);
 
 const plain = (text: string) => text.replace(/\u2026/g, '...');
 
@@ -99,6 +105,8 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
   const label = status?.label || name;
   const hydrating = hydration === 'never' || hydration === 'pending';
   const problem = hostProblemOf(status, { replica });
+  // The key ssh offers this host, for a sign-in walkthrough's commands (read only when one shows).
+  const sshKey = useSshKey(alias, via === 'ssh' && problem?.type === 'connect' && (problem.kind === 'auth' || problem.kind === 'agent_missing'));
   const connecting = !!status && !status.connected && isConnectingPhaseWire(status.phase) && status.phase !== 'reconnecting';
   const busy = actions.pending === 'retry' || asked;
   const tick = useServerTick(connecting || !!actions.fixing);
@@ -173,7 +181,15 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
     stateTitle = 'This test server never dials remote hosts. Start it with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to test one.';
   } else if (problem?.type === 'connect') {
     state = problem.headline;
-    primary = connect(true, 'retry');
+    const walk = via === 'ssh' && WALKED_KINDS.has(problem.kind) ? walkthroughOf(problem.kind, alias, label, status?.error || problem.summary, sshKey, undefined, REMOTE_HOSTS_WORDS) : null;
+    if (walk) {
+      state = walk.headline;
+      lines.push(<span key="walk" className="rh-row-walk"><WalkthroughSteps walk={walk} alias={alias} testIdPrefix="rh" /></span>);
+    }
+    // A machine that is not Linux never connects over SSH: its way in is a join link, not a retry.
+    primary = problem.kind === 'not_linux' && via === 'ssh'
+      ? { label: 'Join with a link', reserve: ['Join with a link'], testId: 'rh-row-join', ariaLabel: `Join ${label} with a link`, onClick: requestJoinWithLink }
+      : connect(true, 'retry');
   } else if (problem?.type === 'reconnecting') {
     state = `Reconnecting to ${label}`;
     primary = connect(false, 'connectNow');

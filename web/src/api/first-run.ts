@@ -44,6 +44,15 @@ export function takeAddSshRequest(): boolean {
   return was;
 }
 
+/**
+ * "Join a machine with a link" from a host row that cannot be set up over SSH (a Mac): Settings ›
+ * Remote Hosts opens its join link, the same as Add host › Join a machine with a link.
+ */
+export const JOIN_HOST_EVENT = 'walnut:remote-hosts-join';
+export function requestJoinWithLink(): void {
+  window.dispatchEvent(new CustomEvent(JOIN_HOST_EVENT));
+}
+
 /** The key this machine's ssh signs in to a host with (GET /api/hosts/:host/ssh-key); null when unknown. */
 export async function fetchSshKey(host: string): Promise<{ path: string; exists: boolean } | null> {
   const res = await apiGet<{ key?: { path: string; exists: boolean } | null }>(`/api/hosts/${encodeURIComponent(host)}/ssh-key`, undefined, { quietStatuses: [404] });

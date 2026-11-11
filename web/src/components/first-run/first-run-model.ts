@@ -63,6 +63,11 @@ export interface WalkStep { text: string; command?: string }
 /** `headline` replaces the failure's: these are a one-time setup, not an error. */
 export interface Walkthrough { headline: string; lead: string; steps: WalkStep[] }
 
+/** The words a walkthrough points at: the button that tries again, and where a join link is made. */
+export interface WalkWords { retry: string; join: string }
+export const FIRST_RUN_WORDS: WalkWords = { retry: 'Try again', join: 'use Settings › Remote Hosts › Add host › Join a machine with a link' };
+export const REMOTE_HOSTS_WORDS: WalkWords = { retry: 'Retry SSH', join: 'press Join with a link' };
+
 /** The sign-in methods ssh said the host offers ("Permission denied (publickey,password)"). */
 export function offeredMethods(error: string | undefined): string[] {
   const m = /permission denied \(([a-z0-9@.,-]+)\)/i.exec(error ?? '');
@@ -90,7 +95,9 @@ const DEFAULT_KEY = '~/.ssh/id_ed25519';
  */
 export function walkthroughOf(
   kind: string | undefined, alias: string, name: string, error?: string, key?: SshKey | null, port?: number,
+  words: WalkWords = FIRST_RUN_WORDS,
 ): Walkthrough | null {
+  const retry = words.retry;
   const keyPath = key?.path ?? DEFAULT_KEY;
   const keyWord = shellWord(keyPath);
   const isDefault = keyPath === DEFAULT_KEY;
@@ -103,7 +110,7 @@ export function walkthroughOf(
       lead: `Your SSH key for ${name} is not loaded, so Walnut cannot sign in.`,
       steps: [
         { text: 'Load it in Terminal (it asks for the key\'s passphrase if it has one):', command: key ? `ssh-add ${keyWord}` : 'ssh-add' },
-        { text: 'Then press Try again.' },
+        { text: `Then press ${retry}.` },
       ],
     };
   }
@@ -117,7 +124,7 @@ export function walkthroughOf(
         steps: [
           ...(makeKey ? [makeKey] : []),
           { text: `Copy your key to ${name} (it asks for the password this one last time):`, command: isDefault && !key ? `ssh-copy-id ${alias}` : `ssh-copy-id -i ${keyWord} ${alias}` },
-          { text: 'Then press Try again.' },
+          { text: `Then press ${retry}.` },
         ],
       };
     }
@@ -128,22 +135,22 @@ export function walkthroughOf(
         ...(makeKey ? [makeKey] : []),
         { text: 'Show your public key:', command: `cat ${shellWord(`${keyPath}.pub`)}` },
         { text: `Add that line to ~/.ssh/authorized_keys on ${name}, or ask whoever runs it to.` },
-        { text: 'Check that this logs in with no password, then press Try again:', command: `ssh ${alias}` },
+        { text: `Check that this logs in with no password, then press ${retry}:`, command: `ssh ${alias}` },
       ],
     };
   }
   // A host that does not answer: what to check, in plain words (the ssh output stays behind its toggle).
   if (kind === 'timeout' || kind === 'unreachable') {
-    return { headline: `${name} did not answer`, lead: `Check that ${name} is on and that this computer can reach it (Wi-Fi, VPN), then press Try again.`, steps: [] };
+    return { headline: `${name} did not answer`, lead: `Check that ${name} is on and that this computer can reach it (Wi-Fi, VPN), then press ${retry}.`, steps: [] };
   }
   if (kind === 'refused') {
-    return { headline: `Nothing answers SSH on ${name}`, lead: `${name} is reachable, but no SSH server listens on port ${port ?? 22}. Turn on its SSH server (on a Mac: System Settings › General › Sharing › Remote Login), then press Try again.`, steps: [] };
+    return { headline: `Nothing answers SSH on ${name}`, lead: `${name} is reachable, but no SSH server listens on port ${port ?? 22}. Turn on its SSH server (on a Mac: System Settings › General › Sharing › Remote Login), then press ${retry}.`, steps: [] };
   }
   if (kind === 'not_linux') {
-    return { headline: `${name} is not a Linux machine`, lead: `Walnut adds machines from your SSH config when they run Linux. To add a Mac, use Settings › Remote Hosts › Add host › Join a machine with a link, and run its one command on that Mac.`, steps: [] };
+    return { headline: `${name} is not a Linux machine`, lead: `Walnut adds machines from your SSH config when they run Linux. To add it, ${words.join}, and run its one command on ${name}.`, steps: [] };
   }
   if (kind === 'dns') {
-    return { headline: `This computer cannot find ${name}`, lead: `Its name does not resolve here. Check the HostName in ~/.ssh/config, or connect to the network it lives on (VPN), then press Try again.`, steps: [] };
+    return { headline: `This computer cannot find ${name}`, lead: `Its name does not resolve here. Check the HostName in ~/.ssh/config, or connect to the network it lives on (VPN), then press ${retry}.`, steps: [] };
   }
   return null;
 }

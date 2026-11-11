@@ -88,7 +88,12 @@ async function parseSshConfigFile(sshConfigPath: string): Promise<Map<string, Di
     const content = await fs.readFile(sshConfigPath, 'utf-8');
     const lines = content.split('\n');
 
-    let currentHost: DiscoveredHost | null = null;
+    // One Host line may name several hosts (`Host build-1 build-2`): each name is its own host,
+    // and the block's settings apply to every one (2026-11-11 review: only the first was listed).
+    // Patterns (`*`, `?`) and negations (`!name`) name no host to connect to.
+    let current: DiscoveredHost[] = [];
+    let hostNameSet = false;
+    const flush = () => { for (const h of current) if (h.hostname) discovered.set(h.alias, h); current = []; };
 
     for (const rawLine of lines) {
       const line = rawLine.trim();
@@ -97,54 +102,44 @@ async function parseSshConfigFile(sshConfigPath: string): Promise<Map<string, Di
       if (!line || line.startsWith('#')) continue;
 
       // Host directive
-      if (line.match(/^Host\s+/i)) {
-        // Save previous host
-        if (currentHost && currentHost.hostname) {
-          discovered.set(currentHost.alias, currentHost);
-        }
-
-        // Extract host alias (first word after Host, no wildcards)
-        const hostMatch = line.match(/^Host\s+(\S+)/i);
-        if (hostMatch) {
-          const alias = hostMatch[1];
-          // Skip wildcards
-          if (alias.includes('*') || alias.includes('?')) {
-            currentHost = null;
-            continue;
-          }
-          currentHost = { alias, hostname: alias }; // Default hostname = alias
-        }
+      const hostLine = line.match(/^Host\s+(.+)$/i);
+      if (hostLine) {
+        flush();
+        hostNameSet = false;
+        const names = hostLine[1].split(/\s+/).filter((n) => n && !/[*?]/.test(n) && !n.startsWith('!'));
+        current = names.map((alias) => ({ alias, hostname: alias })); // Default hostname = alias
         continue;
       }
+      // A Match block names no host of its own: what follows belongs to no listed host.
+      if (/^Match\s+/i.test(line)) { flush(); continue; }
 
-      if (!currentHost) continue;
+      if (current.length === 0) continue;
 
-      // HostName
+      // HostName (`%h` is the name it was reached by); the first one wins, as in ssh
       const hostnameMatch = line.match(/^HostName\s+(\S+)/i);
       if (hostnameMatch) {
-        currentHost.hostname = hostnameMatch[1];
+        if (!hostNameSet) for (const h of current) h.hostname = hostnameMatch[1].replace(/%h/g, h.alias);
+        hostNameSet = true;
         continue;
       }
 
       // User
       const userMatch = line.match(/^User\s+(\S+)/i);
       if (userMatch) {
-        currentHost.user = userMatch[1];
+        for (const h of current) h.user = userMatch[1];
         continue;
       }
 
       // Port
       const portMatch = line.match(/^Port\s+(\d+)/i);
       if (portMatch) {
-        currentHost.port = Number.parseInt(portMatch[1], 10);
+        for (const h of current) h.port = Number.parseInt(portMatch[1], 10);
         continue;
       }
     }
 
-    // Don't forget the last host
-    if (currentHost && currentHost.hostname) {
-      discovered.set(currentHost.alias, currentHost);
-    }
+    // Don't forget the last block
+    flush();
 
     // ── CX filters ──
     // 1. Drop git/code servers — no shell to run a session on.

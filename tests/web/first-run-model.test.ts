@@ -9,7 +9,7 @@ import type { HostStatus } from '../../web/src/api/hosts'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  addedRowState, addressOf, firstRunHostRows, offeredMethods, walkthroughOf,
+  addedRowState, addressOf, firstRunHostRows, offeredMethods, REMOTE_HOSTS_WORDS, walkthroughOf,
 } from '../../web/src/components/first-run/first-run-model'
 
 const hosts = {
@@ -88,6 +88,15 @@ describe('walkthroughOf', () => {
     expect(w.headline).toBe('Mac mini is not a Linux machine')
     expect(w.lead).toContain('Join a machine with a link')
     expect(w.steps).toEqual([])
+  })
+  it('in Remote Hosts every walkthrough names that row\'s own buttons, never the dialog\'s Try again', () => {
+    for (const kind of ['auth', 'agent_missing', 'timeout', 'unreachable', 'refused', 'dns', 'not_linux']) {
+      const w = walkthroughOf(kind, 'lab-mac', 'Lab Mac', 'sam@lab: Permission denied (publickey,password).', null, 22, REMOTE_HOSTS_WORDS)!
+      const all = [w.headline, w.lead, ...w.steps.map((s) => s.text)].join(' ')
+      expect(all, kind).not.toContain('Try again')
+      if (kind === 'not_linux') expect(w.lead).toContain('press Join with a link')
+      else expect(all, kind).toContain('Retry SSH')
+    }
   })
   it('a key not loaded: ssh-add', () => {
     expect(walkthroughOf('agent_missing', 'lab-mac', 'Lab Mac')!.steps[0].command).toBe('ssh-add')
