@@ -144,6 +144,9 @@ if [ -f "$HOME/.config/walnut/night-quiet" ] || { [ -n "$HOLD_DIR" ] && [ -f "$H
   esac
 fi
 export SIM_TEST_AUDIO=${AUDIO_WHY:-}
+# The caller judged the run by what it does (scripts/lib/ios-run-audio.py). With no reason it is no
+# audio run, and the lent queue must not guess again from the words of the task.
+[ -n "$AUDIO_WHY" ] || export SIM_TEST_NOT_AUDIO="judged by the tests it runs (ios-fleet-test.sh)"
 FREE_KB=$(df -k "$RUN_DIR" | awk 'NR == 2 {print $4}')
 [ "${FREE_KB:-0}" -ge $((6 * 1024 * 1024)) ] || refuse 70 "only $((FREE_KB / 1024 / 1024)) GB free on this Mac, the build needs 6" no-room
 

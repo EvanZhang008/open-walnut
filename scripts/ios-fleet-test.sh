@@ -41,8 +41,8 @@
 #                    foreground limit: start the script in the background to wait
 #   --udid U         drive that simulator on the Mac instead of the run's own one
 #   --clean          remove this task's build products on that Mac afterwards
-#   --audio WHY      the run touches voice, the microphone or audio (found from the task's own
-#                    words when not given): a Mac where a person sits does not take it
+#   --audio WHY      the run touches voice, the microphone or audio (found from the tests or the
+#                    command it runs when not given): a Mac where a person sits does not take it
 #   --here-because W keep the run on that Mac when its simulator queue says its lane runs on
 #                    another Mac now (SIM_LANE_B_HERE there; W says why)
 #   --verbose        print the whole run log (default: the lines that matter; all of it
@@ -129,29 +129,14 @@ op() { # $1 = op, $2 = JSON args; prints the answer's JSON only (a notice on std
 }
 js() { python3 -c "import json,sys; d=json.load(sys.stdin); $1"; }
 # Voice, microphone and audio tests never run on a Mac where a person sits (2026-11-08, the Walnut
-# VP: the CEO's rule; an iPhone voice recording run went to another person's Mac). A run is one when --audio
-# or SIM_TEST_AUDIO says why, or this task's title and description name voice, the microphone,
-# audio, dictation, speech or transcription (English or Chinese; how the user typed a quote, "voice
-# input", does not count). The Mac half then refuses it on a Mac marked for no audio, as busy, so
-# the next Mac is tried (remote-run.sh --audio).
+# VP: the CEO's rule; an iPhone voice recording run went to another person's Mac). A run is one when
+# --audio or SIM_TEST_AUDIO says why, or by what it does (scripts/lib/ios-run-audio.py): the tests
+# it selects and what their sources call, or the command it runs. Never by the words of its task:
+# a board test was refused because its task quoted the user's "voice" message (2026-11-11). The Mac
+# half then refuses it on a Mac marked for no audio, as busy, so the next Mac is tried
+# (remote-run.sh --audio).
 if [ -z "$AUDIO_WHY" ]; then
-  AUDIO_WHY=$(op task_get "$(printf '{"id":"%s"}' "$TASK_ID")" 2>/dev/null | python3 -c 'import json,re,sys
-try: d=json.load(sys.stdin)
-except Exception: sys.exit()
-t=d.get("task") or d
-s=((t.get("title") or "")+"\n"+(t.get("description") or ""))[:6000]
-# How the quoted words were made (typed by voice, a word the recognizer got wrong) is no audio test.
-s=re.sub(r"语音输入|语音转写|语音识别错误|语音识别的错|voice[- ]?(input|typed|typing|dictated)|by voice|dictated by|(speech|voice)[- ]recognition (error|mistake)", " ", s, flags=re.I)
-# A rule against sound is no audio test (the rule of sim-queue.sh audio_why): sound words alone count
-# only in a sentence with no quiet, mute or "no" in it; the words of a voice feature always count.
-strong=re.compile(r"voice|microphone|\bmic\b|dictat|speech|transcrib|\bstt\b|\basr\b|\btts\b|read aloud|siri|语音|麦克风|录音|听写|朗读|说一段话", re.I)
-weak=re.compile(r"audio|speaker|声音|音频", re.I)
-quiet=re.compile(r"静音|安静|出声|不许|不要|不能|绝不|别开|别用|别放|mute|silent|silence|quiet|never|don.?t|do not|must not|\bno\b|without", re.I)
-m=None
-for c in re.split(r"[。！？；;!?\n，,]|\.(?:\s|$)", s):
-    m=strong.search(c) or (weak.search(c) if not quiet.search(c) else None)
-    if m: break
-if m: print("its task says \""+m.group(0)+"\"")' 2>/dev/null) || AUDIO_WHY=
+  AUDIO_WHY=$(python3 "$(dirname "${BASH_SOURCE[0]}")/lib/ios-run-audio.py" "$ROOT/ios-native" "$MODE" ${ARGS[@]+"${ARGS[@]}"} 2>/dev/null) || AUDIO_WHY=
 fi
 [ -z "$AUDIO_WHY" ] || { say "this run touches voice, the microphone or audio ($AUDIO_WHY): a Mac where a person sits does not take it"; FLAGS+=(--audio "$AUDIO_WHY"); }
 # A call Walnut may drop while the Mac it runs on is loaded (hub_timeout, hub_unreachable,

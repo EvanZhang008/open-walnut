@@ -846,35 +846,66 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
   })
 
   // 2026-11-08: an iPhone voice recording run went to another person's Mac.
-  it('a voice task tells the Mac half, which refuses it as busy where a person sits', () => {
-    const r = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: 'iPhone action button: \u6309\u4e00\u4e0b\u8bf4\u4e00\u6bb5\u8bdd' }))
-    expect(r.status, r.stderr).toBe(0)
-    expect(r.stderr).toContain('this run touches voice, the microphone or audio (its task says')
-    expect((r.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).toMatch(/unit --audio .*its task says/)
-    fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
-    // How the user typed a quote ("voice input") is no audio test; a board task is not one either.
-    const q = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: 'Board layout (\u8bed\u97f3\u8f93\u5165, voice input)' }))
-    expect(q.status, q.stderr).toBe(0)
-    expect((q.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).not.toContain('--audio')
-    // Nor is a note that the recognizer misheard a word of that quote (2026-11-09: a chat task
-    // whose description says so was refused by every Mac where a person sits).
-    fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
-    const misheard = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: 'Chat send order. (\u300c\u83dc\u4e0a\u300d\u662f\u8bed\u97f3\u8bc6\u522b\u9519\u8bef, a speech recognition error)' }))
-    expect(misheard.status, misheard.stderr).toBe(0)
-    expect((misheard.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).not.toContain('--audio')
-    // A speech recognition feature still is one.
-    fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
-    const stt = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: '\u8bed\u97f3\u8bc6\u522b\u8d28\u91cf\u4e0b\u964d' }))
-    expect(stt.status, stt.stderr).toBe(0)
-    expect((stt.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).toMatch(/unit --audio .*its task says/)
-    // A rule against sound ("the run starts only while its sound is muted") is no audio test.
-    fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
-    const rule = run(['unit'], fakeWalnut([{ host: 'mac-mini', loadPerCpu: 0.3 }], outTgz(), { taskText: 'Board layout. lane B \u53ea\u5728\u90a3\u53f0\u7684\u58f0\u97f3\u662f\u9759\u97f3\u65f6\u624d\u5f00\u59cb\u8dd1' }))
-    expect(rule.status, rule.stderr).toBe(0)
-    expect((rule.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2]).not.toContain('--audio')
+  // 2026-11-11: a board test was refused there because its task quoted the user's "voice" message.
+  it('a run is an audio run by the tests it runs, never by the words of its task', () => {
+    const macs = [{ host: 'mac-mini', loadPerCpu: 0.3 }]
+    const sent = (args: string[], taskText?: string, env: Record<string, string> = {}) => {
+      fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
+      const r = run(args, fakeWalnut(macs, outTgz(), { taskText }), SCRIPT, env)
+      expect(r.status, r.stderr).toBe(0)
+      // The task's words are never read for it.
+      expect(r.calls.some((c) => c.op === 'task_get')).toBe(false)
+      // The command line sent to the Mac, without its shell quoting.
+      return (r.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2].replace(/\\/g, '')
+    }
+    const ui = path.join(repo, 'ios-native/WalnutUITests')
+    fs.mkdirSync(ui, { recursive: true })
+    fs.writeFileSync(path.join(ui, 'VoiceDictationUITests.swift'), 'final class VoiceDictationUITests: XCTestCase {}\n')
+    fs.writeFileSync(path.join(ui, 'BoardRingTapUITests.swift'), 'final class BoardRingTapUITests: XCTestCase {}\n')
+    const unit = path.join(repo, 'ios-native/WalnutTests')
+    // A logic test of voice code names the audio types and starts nothing.
+    fs.writeFileSync(path.join(unit, 'VoiceSessionDiagnosisTests.swift'),
+      'final class VoiceSessionDiagnosisTests: XCTestCase {\n  // AVAudioRecorder( in a comment starts nothing\n  let code = AVAudioSession.ErrorCode.isBusy\n}\n')
+
+    // The class of the bug: whatever a task says about voice or sound, a run of tests that
+    // touch no audio is no audio run.
+    const words = [
+      'Evan, his words exactly (voice, 11-11): Watching follows the tier tab',
+      'iPhone action button: \u6309\u4e00\u4e0b\u8bf4\u4e00\u6bb5\u8bdd',
+      '\u8bed\u97f3\u8bc6\u522b\u8d28\u91cf\u4e0b\u964d',
+      'microphone, dictation, speech, transcribe, STT, TTS, Siri, audio, speaker, \u9ea6\u514b\u98ce, \u5f55\u97f3, \u58f0\u97f3',
+      'Board layout. lane B \u53ea\u5728\u90a3\u53f0\u7684\u58f0\u97f3\u662f\u9759\u97f3\u65f6\u624d\u5f00\u59cb\u8dd1',
+    ]
+    for (const text of words) {
+      expect(sent(['unit'], text), text).not.toContain('--audio')
+      expect(sent(['unit', '--', '-only-testing:WalnutTests/RepoTests'], text), text).not.toContain('--audio')
+      expect(sent(['ui', '--', '-only-testing:WalnutUITests/BoardRingTapUITests'], text), text).not.toContain('--audio')
+      expect(sent(['build'], text), text).not.toContain('--audio')
+    }
+
+    // What the run does decides. A UI test of a voice screen opens the microphone in the app.
+    expect(sent(['ui', '--', '-only-testing:WalnutUITests/VoiceDictationUITests'], 'Board layout')).toMatch(/ui --audio .*it runs VoiceDictationUITests, a voice test/)
+    // The whole UI suite holds it; skipped, it does not.
+    expect(sent(['ui'], 'Board layout')).toMatch(/ui --audio .*VoiceDictationUITests/)
+    expect(sent(['ui', '--', '-skip-testing:WalnutUITests/VoiceDictationUITests'], 'Board layout')).not.toContain('--audio')
+    // A unit test counts only when its source starts audio hardware, whatever its name.
+    expect(sent(['unit', '--', '-only-testing:WalnutTests/VoiceSessionDiagnosisTests'], 'Board layout')).not.toContain('--audio')
+    fs.writeFileSync(path.join(unit, 'RecorderTests.swift'), 'final class RecorderTests: XCTestCase {\n  func testIt() { _ = try? AVAudioRecorder(url: u, settings: [:]) }\n}\n')
+    expect(sent(['unit'], 'Board layout')).toMatch(/unit --audio .*RecorderTests starts audio hardware \(AVAudioRecorder\)/)
+    expect(sent(['unit', '--', '-only-testing:WalnutTests/RepoTests'], 'Board layout')).not.toContain('--audio')
+    // A command is judged by the tests it names, else by its own words.
+    expect(sent(['run', '--', 'xcodebuild', 'test', '-only-testing:WalnutUITests/VoiceDictationUITests'], 'Board layout')).toMatch(/run --audio .*VoiceDictationUITests/)
+    expect(sent(['run', '--', 'bash', 'tests/voice/record.sh'], 'Board layout')).toMatch(/run --audio .*its command names "voice"/)
+    expect(sent(['run', '--', 'bash', 'tests/passwords/autofill-e2e.sh'], 'voice')).not.toContain('--audio')
+    // The caller's own word still wins.
+    expect(sent(['--audio', 'records a memo', 'unit'], 'Board layout')).toMatch(/unit --audio records a memo/)
+    expect(sent(['unit'], 'Board layout', { SIM_TEST_AUDIO: 'plays a cue' })).toMatch(/unit --audio plays a cue/)
+
     const src = fs.readFileSync(REMOTE, 'utf8')
     expect(src).toMatch(/if \[ -n "\$AUDIO_WHY" \] && \{ \[ -f "\$HOME\/\.config\/walnut\/no-audio" \]/)
     expect(src).toContain('refuse 75 "BUSY: this run touches voice, the microphone or audio')
+    // A run judged no audio run says so to the lent queue, which must not guess from the task's words.
+    expect(src).toContain('[ -n "$AUDIO_WHY" ] || export SIM_TEST_NOT_AUDIO=')
     // A Mac on hold, or in its quiet nights (2026-11-08, the user: a computer at home made sound at night).
     expect(src).toContain('for hf in "$HOME/.config/walnut/hold" ${HOLD_DIR:+"$HOLD_DIR/HOLD"}; do')
     expect(src).toContain('22|23|00|01|02|03|04|05|06|07) refuse 75 "BUSY: this Mac runs nothing from 22:00 to 08:00 Pacific')
