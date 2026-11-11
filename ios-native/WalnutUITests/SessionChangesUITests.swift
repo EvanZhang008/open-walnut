@@ -241,6 +241,10 @@ final class SessionChangesUITests: XCTestCase {
         element(app, "changes.compare.other").tap()
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 10), "no search in the picker")
+        // The field shows under the title as it opens, not folded into a blank round
+        // button at the bottom (2026-11-11 acceptance, shot a17).
+        XCTAssertTrue(search.isHittable, "the picker's search is not on screen as it opens")
+        XCTAssertLessThan(search.frame.midY, app.frame.height / 3, "the picker's search is not under its title")
         search.tap()
         type(app, search, "annual")
         let commit = element(app, "compare.commit.4f2c9e1")

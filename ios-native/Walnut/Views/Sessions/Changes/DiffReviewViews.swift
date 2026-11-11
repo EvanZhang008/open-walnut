@@ -448,7 +448,9 @@ struct DiffComparePickerView: View {
                 HStack { Spacer(); ProgressView(); Spacer() }
             }
         }
-        .searchable(text: $query, prompt: "Branch, commit or message")
+        // A field under the title, as the app's other searches: left to iOS 26, a sheet
+        // folds it into a round bottom-bar button with no glyph that reads as nothing.
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Branch, commit or message")
         .navigationTitle("Compare With")
         .navigationBarTitleDisplayMode(.inline)
         .task { if model.refs == nil { await model.loadRefs() } }

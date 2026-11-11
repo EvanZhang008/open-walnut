@@ -220,6 +220,33 @@ final class PresentationLoweringGuardTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(inViews, 45, "the walk finds the presentations under Views/")
     }
 
+    /// Every search says where it sits. Left to iOS 26, a search in a sheet becomes a round
+    /// bottom-bar button with no glyph and no words (2026-11-11: the Changed page's
+    /// branch-or-commit picker), which reads as a button that does nothing.
+    func testEverySearchNamesItsPlace() throws {
+        var searches = 0
+        for (path, code) in try appSources() {
+            let text = Array(code.joined(separator: "\n"))
+            let needle = Array(".searchable(")
+            var i = 0
+            while i + needle.count <= text.count {
+                guard Array(text[i..<(i + needle.count)]) == needle else { i += 1; continue }
+                // The call's arguments, to its closing parenthesis.
+                var depth = 1, j = i + needle.count
+                while j < text.count && depth > 0 {
+                    if text[j] == "(" { depth += 1 } else if text[j] == ")" { depth -= 1 }
+                    j += 1
+                }
+                let args = String(text[(i + needle.count)..<max(i + needle.count, j - 1)])
+                searches += 1
+                XCTAssertTrue(args.contains("placement:"),
+                              "\(path): a .searchable with no placement: iOS 26 puts it in a sheet as a blank round bottom-bar button. Name its place (.navigationBarDrawer(displayMode: .always), as the app's other searches)")
+                i = j
+            }
+        }
+        XCTAssertGreaterThanOrEqual(searches, 5, "the walk finds the app's searches")
+    }
+
     func testEverySheetThatRefusesToCloseIsListed() throws {
         var seen: [String: Int] = [:]
         for (path, code) in try appSources() {
