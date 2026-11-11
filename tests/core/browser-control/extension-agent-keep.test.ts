@@ -338,9 +338,8 @@ describe('a browser start trusts no kept id', () => {
     b.windows.set(600, { id: 600, type: 'normal', focused: false })
     await fake.storage.session.set({ agentWindow: 600 })
     for (const f of listeners.startup) f()
-    await new Promise((r) => setTimeout(r, 10))
+    await vi.waitFor(() => { for (const k of KEPT_KEYS.filter((x) => x !== 'agentWindow')) expect(b.session[k], k).toBeUndefined() }, { timeout: 2000, interval: 5 })
     expect(b.session.agentWindow).toBe(600)
-    for (const k of KEPT_KEYS.filter((x) => x !== 'agentWindow')) expect(b.session[k], k).toBeUndefined()
   })
 
   it('no stamp and no word from Chrome within EVENT_WAIT_MS: nothing comes back', async () => {
