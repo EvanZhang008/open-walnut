@@ -29,7 +29,12 @@ const NEXT = 'a fake next master password 8'
 let dir = ''
 let kdf: KdfParams
 let keychainHolds: string | null = MASTER
+/** This boot's id, as the Mac's kernel gives it; the same for the whole file, as a real boot's is. */
+const FAKE_BOOT_ID = '0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0'
 const runner: VaultRunner = async (cmd, args) => {
+  // A Mac reads its boot id through this runner (Linux reads /proc). Without an answer the boot
+  // check falls back to the boot time, which a fake clock moves, and every restart reads another boot.
+  if (cmd === 'sysctl' && args.join(' ') === '-n kern.bootsessionuuid') return { code: 0, stdout: `${FAKE_BOOT_ID}\n`, stderr: '', timedOut: false }
   if (cmd !== 'security' || !args.includes(KEYCHAIN_SERVICE) || keychainHolds === null) return { code: 44, stdout: '', stderr: '', timedOut: false }
   return { code: 0, stdout: args.includes('-w') ? `${keychainHolds}\n` : 'keychain: "login.keychain-db"\n', stderr: '', timedOut: false }
 }
