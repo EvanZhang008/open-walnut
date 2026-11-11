@@ -202,6 +202,16 @@ for (let i = 0; i < args.length; i++) {
     else if (name === '--input-format') inputFormat = value;
     else if (name === '--model') modelFlag = value;
     else if (name === '--effort') effortFlag = value;
+    // Like the real CLI, init lists the --mcp-config servers it took. MOCK_CLAUDE_MCP_ABSENT
+    // names ones this process does not have (a policy refusal, or a launch without them).
+    else if (name === '--mcp-config') {
+      let text = value;
+      try { if (!value.trim().startsWith('{')) text = fs.readFileSync(value, 'utf8'); } catch { /* inline */ }
+      try {
+        const absent = (process.env.MOCK_CLAUDE_MCP_ABSENT ?? '').split(',').filter(Boolean);
+        liveMcpServers = Object.keys(JSON.parse(text).mcpServers ?? {}).filter((n) => !absent.includes(n));
+      } catch { /* not JSON: none */ }
+    }
     // Pre-assigned session id (init-only spawn): adopted like --resume's.
     else if (name === '--session-id') sessionId = value;
   } else if (name === '--dangerously-skip-permissions' || name === '--allow-dangerously-skip-permissions') {
@@ -834,7 +844,7 @@ if (outputFormat === 'stream-json') {
     cwd: process.cwd(),
     model: modelFlag || 'mock-model',
     tools: ['Read', 'Edit', 'Bash'],
-    mcp_servers: [],
+    mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })),
     permissionMode: permissionMode || 'default',
     // Mirrors CLI 2.1.240: the command set THIS process accepts (names only) and
     // the terminal-only ones the palette must hide. `__internal-thing` stands in
@@ -916,7 +926,7 @@ if (outputFormat === 'stream-json') {
       // question's follow-up queued behind a running turn lost its anchor.
       lastInputUserUuid = queued.uuid ?? null;
       if (queued.uuid) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: queued.uuid, state: 'started', session_id: outputSessionId }) + '\n');
-      if (opts.announce) process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: outputSessionId, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' }) + '\n');
+      if (opts.announce) process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: outputSessionId, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' }) + '\n');
       const c = queued.message.content;
       setTimeout(() => onUserLine?.(typeof c === 'string' ? c : JSON.stringify(c)), 0);
     }
@@ -1317,7 +1327,7 @@ if (outputFormat === 'stream-json') {
       const sid = outputSessionId;
       const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
       emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
-      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' });
+      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
       setTimeout(() => {
         const refused = { id: `msg_ptl_${randomUUID()}`, type: 'message', role: 'assistant', model: '<synthetic>', stop_reason: 'stop_sequence',
           content: [{ type: 'text', text: 'Prompt is too long' }], usage: { input_tokens: 0, output_tokens: 0 } };
@@ -1350,7 +1360,7 @@ if (outputFormat === 'stream-json') {
       mockContextTokens = tokens;
       emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
       // The real CLI announces itself at every turn's start (probed 2026-11-04, CLI 2.1.312).
-      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' });
+      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
       setTimeout(() => {
         emit(wrap({ type: 'message_start', message: { id, type: 'message', role: 'assistant', model: 'mock-model', content: [], usage } }));
         emit(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
@@ -1388,7 +1398,7 @@ if (outputFormat === 'stream-json') {
       onInterrupt = () => {
         clearTimeout(compacting);
         emit({ type: 'system', subtype: 'status', status: null, session_id: sid, uuid: randomUUID() });
-        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' });
+        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
         emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, message: { id: `msg_compact_cancel_${randomUUID()}`, type: 'message', role: 'assistant', model: '<synthetic>',
           content: [{ type: 'text', text: 'Compaction canceled.' }], stop_reason: 'end_turn', usage: { input_tokens: 0, output_tokens: 0 } } });
         emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 300, num_turns: 0, result: '', session_id: sid,
@@ -1403,7 +1413,7 @@ if (outputFormat === 'stream-json') {
         mockContextTokens = 18_000;
         // Claude Code 2.1.31x re-announces itself mid-compaction, before the boundary (probed 2026-11-04).
         emit({ type: 'system', subtype: 'status', status: null, session_id: sid, uuid: randomUUID() });
-        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' });
+        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
         // One uuid on the stream and in the transcript, as the real CLI writes it.
         const boundaryUuid = randomUUID();
         emit({ type: 'system', subtype: 'compact_boundary', session_id: sid, uuid: boundaryUuid,
@@ -1731,7 +1741,7 @@ if (outputFormat === 'stream-json') {
       setTimeout(() => {
         // ── Turn B: a BARE init. No {running}, no user line, no marker — this
         //    is the whole incident. Streaming follows immediately.
-        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' });
+        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
         emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'message_start', message: { id: `msg_edge_b_${seq}`, role: 'assistant', content: [], model: modelFlag || 'mock-model', usage: { input_tokens: 40, output_tokens: 0 } } } });
         emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
         emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'turnB ' } } });

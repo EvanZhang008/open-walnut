@@ -78,4 +78,14 @@ describe('walnut MCP mount', () => {
     expect(liveWalnutMcpServers(base({ hostServesMcp: false }))).toBeNull()
     expect(liveWalnutMcpServers(base({ profile: { slim: true } }))).toBeNull()
   })
+
+  it('a process whose profile names walnut but has none gets that profile\'s own set', () => {
+    const host = hostWalnutMcpServer()
+    expect(liveWalnutMcpServers(base({ profile: { mcpServers: { walnut: host } } }))).toEqual({ walnut: { type: 'stdio', ...host } })
+    expect(liveWalnutMcpServers(base({ profile: { mcpServers: { walnut: { command: 'hub' }, other: { command: 'o' } } } })))
+      .toEqual({ walnut: { type: 'stdio', command: 'hub' }, other: { type: 'stdio', command: 'o' } })
+    // The host mount from a daemon that no longer serves it: nothing to start.
+    expect(liveWalnutMcpServers(base({ hostServesMcp: false, profile: { mcpServers: { walnut: host } } }))).toBeNull()
+    expect(liveWalnutMcpServers(base({ cloud: true, profile: { mcpServers: { walnut: host } } }))).toBeNull()
+  })
 })

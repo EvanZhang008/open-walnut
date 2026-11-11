@@ -838,6 +838,9 @@ export class ClaudeCodeSession {
   private _exitStderr: string | undefined
   /** MCP server names passed via `--mcp-config` at the last spawn (see init handler). */
   private _requestedMcpServers: string[] = []
+  /** The process's own verdict on the walnut mount (latest init, or the record's on attach):
+   *  'blocked' = its init did not list it, so the process has none whatever was requested. */
+  private _walnutMountVerdict: string | undefined
   /** The slash commands the CLI itself advertised in its latest `init` line —
    *  already filtered by the CLI to what works in `-p` mode (skills, command
    *  templates, plugin skills, built-ins). The composer palette lists THIS, so
@@ -3543,6 +3546,7 @@ export class ClaudeCodeSession {
       ...Object.entries(record.mcpMountStatus ?? {})
         .filter(([, v]) => v === 'connected' || v === 'pending').map(([k]) => k),
     ])]
+    session._walnutMountVerdict = record.mcpMountStatus?.walnut
     session._processStatus = record.process_status ?? 'running'
     session._mode = record.mode ?? 'default'
     session._activity = record.activity
@@ -6877,6 +6881,7 @@ export class ClaudeCodeSession {
                 : undefined,
             })
           }
+          this._walnutMountVerdict = status.walnut
           if (this.claudeSessionId) {
             import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
               updateSessionRecord(this.claudeSessionId!, { mcpMountStatus: status }).catch(() => {}),
@@ -9671,7 +9676,10 @@ export class ClaudeCodeSession {
    */
   private ensureLiveWalnutMount(): Promise<void> {
     const pid = this.pid
-    if (!this._transport || pid === null || this._requestedMcpServers.includes('walnut')) return Promise.resolve()
+    // Requested is not had: a process whose init did not list walnut ('blocked') has none,
+    // whatever its record's profile says (2026-11-11: four sessions read so and never got it).
+    const has = this._requestedMcpServers.includes('walnut') && this._walnutMountVerdict !== 'blocked'
+    if (!this._transport || pid === null || has) return Promise.resolve()
     if (this._liveWalnutMount?.pid !== pid) this._liveWalnutMount = { pid, inFlight: null, tries: 0, done: false }
     const state = this._liveWalnutMount
     if (state.done) return Promise.resolve()
@@ -9700,14 +9708,17 @@ export class ClaudeCodeSession {
       const error = (reply?.errors as Record<string, string> | undefined)?.walnut
       if (reply) state.done = true
       if (added && !error) {
-        this._requestedMcpServers = [...this._requestedMcpServers, 'walnut']
+        this._requestedMcpServers = [...new Set([...this._requestedMcpServers, ...Object.keys(servers)])]
+        this._walnutMountVerdict = 'pending'
         // So a re-attach after a server restart knows this process asked for it. Only
-        // when no verdict is there yet: the next turn's init records the real one.
+        // when no verdict is there yet or it said the process had none: the next turn's
+        // init records the real one.
         const sid = this.claudeSessionId
         if (sid) {
           void import('../core/session-tracker.js').then(async ({ getSessionByClaudeId, updateSessionRecord }) => {
             const record = await getSessionByClaudeId(sid)
-            if (record?.mcpMountStatus?.walnut) return
+            const was = record?.mcpMountStatus?.walnut
+            if (was && was !== 'blocked') return
             await updateSessionRecord(sid, { mcpMountStatus: { ...(record?.mcpMountStatus ?? {}), walnut: 'pending' } })
           }).catch(() => {})
         }

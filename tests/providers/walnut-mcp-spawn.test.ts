@@ -161,6 +161,49 @@ describe('a RUNNING process without the mount gets it before its next turn, with
     await session.gracefulStop(true).catch(() => {})
   }, 60_000)
 
+  // 2026-11-11 on prod: four sessions whose record's profile named the mount ran a
+  // process without it (init: blocked), and the live mount skipped them as "requested".
+  it('a process whose init did not list walnut gets it, though its profile names it; once', async () => {
+    let results = 0
+    bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
+    process.env.MOCK_CLAUDE_MCP_ABSENT = 'walnut'
+    try {
+      const profile: SessionProfile = { mcpServers: { walnut: hostWalnutMcpServer() } }
+      const { config, session } = await spawnMcpConfig('t-live-blocked', { profile, message: 'snapshot-clean-turn:one' })
+      expect(config?.mcpServers.walnut).toEqual(hostWalnutMcpServer())
+      await waitUntil(() => results >= 1, 15000, 'first result')
+      const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js')
+      let verdict: string | undefined
+      for (let i = 0; i < 100 && verdict !== 'blocked'; i++) {
+        verdict = (await getSessionByClaudeId(session.sessionId!))?.mcpMountStatus?.walnut
+        if (verdict !== 'blocked') await new Promise((r) => setTimeout(r, 30))
+      }
+      expect(verdict).toBe('blocked')
+      const setServers = () => daemon.getCommandHistory().filter((e) => e.cmd === 'sendRaw' && JSON.stringify(e.payload).includes('mcp_set_servers'))
+      expect(await session.writeMessage('snapshot-clean-turn:two')).toBe(true)
+      expect(setServers()).toHaveLength(1)
+      expect(JSON.stringify(setServers()[0]!.payload)).toContain('mcp-server')
+      await waitUntil(() => results >= 2, 15000, 'second result')
+      expect(await session.writeMessage('snapshot-clean-turn:three')).toBe(true)
+      await waitUntil(() => results >= 3, 15000, 'third result')
+      expect(setServers()).toHaveLength(1)
+      await session.gracefulStop(true).catch(() => {})
+    } finally {
+      delete process.env.MOCK_CLAUDE_MCP_ABSENT
+    }
+  }, 60_000)
+
+  it('a process that lists walnut in its init is never asked again', async () => {
+    let results = 0
+    bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
+    const { session } = await spawnMcpConfig('t-live-has', { message: 'snapshot-clean-turn:one' })
+    await waitUntil(() => results >= 1, 15000, 'first result')
+    expect(await session.writeMessage('snapshot-clean-turn:two')).toBe(true)
+    await waitUntil(() => results >= 2, 15000, 'second result')
+    expect(daemon.getCommandHistory().filter((e) => e.cmd === 'sendRaw' && JSON.stringify(e.payload).includes('mcp_set_servers'))).toHaveLength(0)
+    await session.gracefulStop(true).catch(() => {})
+  }, 60_000)
+
   it('two writers while the mount request is out: one request, both wait for it, lines go out in order', async () => {
     let results = 0
     bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })

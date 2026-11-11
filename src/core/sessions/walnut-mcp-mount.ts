@@ -81,11 +81,25 @@ export function withWalnutMcpMount(input: WalnutMcpMountInput): SessionProfile |
  * (its `--mcp-config` servers; settings and plugin servers are untouched), so a
  * process launched with other servers of its own is left alone: only one launched
  * with none is given the set it would get at a new spawn.
+ *
+ * A profile that names `walnut` while the process has none (its init did not list it:
+ * 2026-11-11, four clouddev sessions spawned before their record's profile carried the
+ * mount) is given that profile's own set, the one it was meant to run with. A profile
+ * that leaves `walnut` out chose to, and gets nothing.
  */
 export function liveWalnutMcpServers(
   input: WalnutMcpMountInput,
 ): Record<string, SessionMcpServer & { type: 'stdio' }> | null {
-  if (input.profile?.mcpServers && Object.keys(input.profile.mcpServers).length > 0) return null
+  const own = input.profile?.mcpServers
+  if (own && Object.keys(own).length > 0) {
+    if (!own.walnut || input.cloud || input.profile?.slim) return null
+    if (sameServer(own.walnut, hostWalnutMcpServer()) && !input.hostServesMcp) return null
+    return Object.fromEntries(Object.entries(own).map(([name, server]) => [name, { type: 'stdio' as const, ...server }]))
+  }
   const walnut = withWalnutMcpMount(input)?.mcpServers?.walnut
   return walnut ? { walnut: { type: 'stdio', ...walnut } } : null
+}
+
+function sameServer(a: SessionMcpServer, b: SessionMcpServer): boolean {
+  return a.command === b.command && JSON.stringify(a.args ?? []) === JSON.stringify(b.args ?? [])
 }
