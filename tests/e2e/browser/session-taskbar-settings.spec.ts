@@ -20,16 +20,24 @@ const CHIPS_KEY = 'open-walnut-layout:home-minimized'
 /** A beat a person can follow, only while recording (PW_VIDEO, walnut-dev webkit --video). */
 const beat = (page: Page) => (process.env.PW_VIDEO ? page.waitForTimeout(1200) : Promise.resolve())
 
+// Each test loads the app two to four times and walks Home and Settings by clicks; GitHub's
+// runners take about twice this machine's time (2026-11-11: two of them ran out of 60 s there).
+test.describe.configure({ timeout: 150_000 })
+
 const bar = (page: Page) => page.getByTestId('session-taskbar')
 const column = (page: Page, sid: string) => page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)
 const recentPill = (page: Page, sid: string) => page.locator(`.session-taskbar-recent-pill[data-session-id="${sid}"]`)
 const chip = (page: Page, sid: string) => page.locator(`.session-taskbar-chip[data-session-id="${sid}"]`)
 
 async function home(page: Page) {
+  // An empty bar to start from, set once before the first load (a later reload keeps the test's own).
+  await page.addInitScript(({ r, c }) => {
+    if (sessionStorage.getItem('pw-taskbar-settings-seeded')) return
+    sessionStorage.setItem('pw-taskbar-settings-seeded', '1')
+    localStorage.setItem(c, JSON.stringify({ v: 1, value: [] }))
+    localStorage.setItem(r, JSON.stringify({ v: 1, value: null }))
+  }, { r: RECENT_KEY, c: CHIPS_KEY })
   await page.goto('/')
-  await page.waitForLoadState('networkidle')
-  await page.evaluate(({ r, c }) => { localStorage.setItem(c, JSON.stringify({ v: 1, value: [] })); localStorage.setItem(r, JSON.stringify({ v: 1, value: null })) }, { r: RECENT_KEY, c: CHIPS_KEY })
-  await page.reload()
   await page.waitForLoadState('networkidle')
 }
 
