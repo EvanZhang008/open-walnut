@@ -200,7 +200,7 @@ describe('biometric approvals and device keys', () => {
     await rejects(enrollKey({ publicKey: 'AAAA', name: 'x', kind: 'iphone' }), 'bad_key')
   })
 
-  it('the first key comes only from the paired iPhone app, never from a request on this computer', async () => {
+  it('the first key comes only from a device app itself (firstAllowed), never from a plain request', async () => {
     const agent = softKey()
     await rejects(enrollKey({ publicKey: agent.spki, name: 'Mac', kind: 'mac-app' }), 'first_key_from_phone')
     await rejects(enrollKey({ publicKey: agent.spki, name: 'iPhone', kind: 'iphone' }), 'first_key_from_phone')

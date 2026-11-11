@@ -20,7 +20,7 @@
  * companion forwards with the caller headers dropped). So a tap guards against an agent working
  * through Walnut's tools, not against a hostile process here. A biometric approval does not rest
  * on it: its Approve needs a device key's signature that only Face ID or Touch ID unlocks, and the
- * first key comes only from the paired iPhone app (keys.ts).
+ * first key comes only from the paired iPhone app or the Mac app's own signed process (keys.ts).
  */
 import os from 'node:os'
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -30,6 +30,7 @@ import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN, hostOrigin } from '../../lib/caller-o
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { APPROVAL_WAIT_MAX_MS, type ApprovalDeviceKind, type ApprovalMode, type ApprovalRequester } from '../../core/approvals/types.js'
 import { ambientTestRun } from '../../core/test-run.js'
+import { log } from '../../logging/index.js'
 import type { SessionProc } from '../../core/approvals/caller-proof.js'
 
 export const approvalsV1Router = Router()
@@ -325,10 +326,17 @@ approvalsV1Router.post('/approvals/keys', (req: Request, res: Response, next: Ne
   if (!notInTestRun(res)) return
   void answer(res, next, async () => {
     const body = (req.body ?? {}) as Record<string, unknown>
-    const { enrollKey } = await import('../../core/approvals/keys.js')
+    const { activeKeys, enrollKey } = await import('../../core/approvals/keys.js')
     const kind = body.kind === 'mac-app' ? 'mac-app' : body.kind === 'iphone' ? 'iphone' : ''
-    // The first key only from the iPhone app with its paired device token (core/approvals/keys.ts).
-    const firstAllowed = kind === 'iphone' && !!(req as Request & { deviceName?: string }).deviceName
+    // The first key only from the iPhone app with its paired device token, or from the Mac app's
+    // own signed process (core/approvals/keys.ts, mac-app-proof.ts); never from a script.
+    let firstAllowed = kind === 'iphone' && !!(req as Request & { deviceName?: string }).deviceName
+    if (!firstAllowed && kind === 'mac-app' && !(await activeKeys()).length) {
+      const { requestFromMacApp } = await import('../../core/approvals/mac-app-proof.js')
+      const proof = await requestFromMacApp(connOf(req))
+      firstAllowed = proof.ok
+      if (!proof.ok) log.web.info('approval first key refused', { kind, why: proof.why })
+    }
     const out = await enrollKey({ publicKey: String(body.publicKey ?? ''), name: String(body.name ?? ''), kind: kind as 'iphone', firstAllowed })
     const { enrollApprovalId: _e, ...key } = out.key
     return { key, ...(out.enrollment ? { enrollment: out.enrollment } : {}) }

@@ -56,3 +56,21 @@ export async function touchIdSign(approval: Approval, decision: 'approve' | 'den
   if (!out?.signature || !out.keyId) throw new Error(out?.error ?? 'Not signed.');
   return { keyId: out.keyId, signature: out.signature };
 }
+
+/**
+ * The app adds its own key: the request goes out from the app's process, the one Walnut trusts
+ * for a first key (src/core/approvals/mac-app-proof.ts). null from an app older than this op.
+ */
+export async function touchIdEnroll(): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  const h = handler();
+  if (!h) return null;
+  let out: { status?: number; body?: Record<string, unknown>; error?: string };
+  try {
+    out = (await h.postMessage({ op: 'enroll' })) as typeof out;
+  } catch (err) {
+    if (String(err instanceof Error ? err.message : err).includes('unknown op')) return null;
+    throw err;
+  }
+  if (out?.error || typeof out?.status !== 'number') throw new Error(out?.error ?? 'Not enrolled.');
+  return { status: out.status, body: out.body ?? {} };
+}

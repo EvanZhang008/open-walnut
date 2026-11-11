@@ -8,6 +8,10 @@ import WebKit
 // (web/src/components/approvals/touch-id-bridge.ts):
 //   {op:"status"}                       -> {available, reason?, keyId?, publicKey?, name}
 //   {op:"sign", approval, decision}     -> Touch ID, then {keyId, signature} or {error}
+//   {op:"enroll"}                       -> {status, body}: this app's own request adding its key
+// The enroll request goes out from this process, never the page's: Walnut trusts a first key
+// only from the signed Mac app's own process (src/core/approvals/mac-app-proof.ts), so the
+// person's first approval here is one touch, with nothing to set up.
 // The key is made in this Mac's Secure Enclave and signs only after Touch ID (no password
 // fallback), so no process on this Mac, an agent's included, can sign without a finger.
 // The digest is rebuilt here from the fields the page sends, with the server's own rules
@@ -37,6 +41,8 @@ final class ApprovalBridge: NSObject, WKScriptMessageHandlerWithReply {
         switch body["op"] as? String ?? "" {
         case "status":
             replyHandler(status(), nil)
+        case "enroll":
+            enroll(page: page) { replyHandler($0, nil) }
         case "sign":
             let fields = body["approval"] as? [String: Any] ?? [:]
             let decision = body["decision"] as? String ?? ""
@@ -86,6 +92,11 @@ final class ApprovalBridge: NSObject, WKScriptMessageHandlerWithReply {
         if let blob = try? Data(contentsOf: blobURL), let key = try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: blob) {
             return key
         }
+        return try makeKey()
+    }
+
+    /// A new Secure Enclave key that signs only after Touch ID, written over any blob on disk.
+    private func makeKey() throws -> SecureEnclave.P256.Signing.PrivateKey {
         var cfErr: Unmanaged<CFError>?
         guard let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
                                                            [.privateKeyUsage, .biometryAny], &cfErr) else {
@@ -108,6 +119,34 @@ final class ApprovalBridge: NSObject, WKScriptMessageHandlerWithReply {
         } catch {
             return ["available": false, "reason": error.localizedDescription, "name": deviceName]
         }
+    }
+
+    private func enroll(page: URL, done: @escaping ([String: Any]) -> Void) {
+        if let why = unavailableReason() { done(["error": why]); return }
+        // Always a key this process makes now, never one read from disk: another program of this
+        // account could have left a blob there for a key it made without Touch ID, and the app
+        // would then hand the server that program's key. A blob changed after this is only a key
+        // the server does not know, so its signatures are refused.
+        let spki: Data
+        do { spki = try makeKey().publicKey.derRepresentation } catch { done(["error": error.localizedDescription]); return }
+        // The page's own origin (an IPv6 host keeps its brackets).
+        guard let url = URL(string: "/api/v1/approvals/keys", relativeTo: page)?.absoluteURL else { done(["error": "no Walnut address"]); return }
+        var request = URLRequest(url: url, timeoutInterval: 20)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = ["publicKey": spki.base64EncodedString(), "name": deviceName, "kind": "mac-app"]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        // An ephemeral session: its own connection, held by this process.
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.finishTasksAndInvalidate() }
+        session.dataTask(with: request) { data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) } ?? [:]
+            DispatchQueue.main.async {
+                if let error = error { done(["error": error.localizedDescription]); return }
+                done(["status": status, "body": json])
+            }
+        }.resume()
     }
 
     private func sign(fields: [String: Any], decision: String, done: @escaping ([String: Any]) -> Void) {

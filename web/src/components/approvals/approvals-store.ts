@@ -13,7 +13,7 @@ import { answerApproval, enrollApprovalKey, listApprovals, type Approval, type A
 import { onVaultSessionChange, vaultSession } from '@/api/vault';
 import { checkVault, vaultLive } from '@/api/vault-live';
 import { howToApprove, signerKinds } from '../../../../src/core/approvals/signer-words';
-import { hasTouchIdBridge, touchIdSign, touchIdStatus, type TouchIdStatus } from './touch-id-bridge';
+import { hasTouchIdBridge, touchIdEnroll, touchIdSign, touchIdStatus, type TouchIdStatus } from './touch-id-bridge';
 import { clearApprovalNotice, keepApprovalNotices, setApprovalOpener, showApprovalNotice } from './approval-notify';
 import { testRunLabel } from '@/api/test-run';
 import { log } from '@/utils/log';
@@ -204,6 +204,10 @@ export async function refreshApprovals(): Promise<void> {
     // One that left the list while this window was away was answered elsewhere: its notice goes too.
     for (const id of state.items.keys()) if (!items.has(id)) clearApprovalNotice(id);
     set({ items, keys: r.keys, ...lookForUnlock(items) });
+    // The Mac app whose key did not get in at start (Walnut was away): it tries again while no
+    // device signs, so the person's next approval here is still one touch.
+    if (state.touchId?.available && myKeyOf(state)?.status !== 'active' && !r.keys.some((k) => k.status === 'active')
+      && !enrollRefused && Date.now() - lastEnrollTry > ENROLL_RETRY_MS) void startTouchId();
     // The Mac app also takes back notices from before it started whose approval is gone now.
     keepApprovalNotices([...items.keys()]);
     for (const a of fresh) notice(a);
@@ -236,21 +240,42 @@ export function applyApprovalEvent(a: Approval): void {
 }
 
 let enrolling = false;
+let lastEnrollTry = 0;
+const ENROLL_RETRY_MS = 60_000;
+/** The server said this app cannot be the first device: retried only when the page loads again. */
+let enrollRefused = false;
 /** The Mac app: learn whether Touch ID signs here, and enroll its key once. */
 export async function startTouchId(): Promise<void> {
   if (!hasTouchIdBridge()) return;
+  lastEnrollTry = Date.now();
   const touchId = await touchIdStatus();
   set({ touchId });
   if (!touchId.available || !touchId.publicKey || enrolling) return;
   await refreshApprovals();
-  if (state.keys.some((k) => k.id === touchId.keyId)) return;
+  // Known already, unless it waits with no device to let it in (a key that is not this app's own
+  // making, say): then the app makes its own.
+  const known = state.keys.find((k) => k.id === touchId.keyId);
+  if (known && (known.status === 'active' || state.keys.some((k) => k.status === 'active'))) return;
   enrolling = true;
   try {
-    const r = await enrollApprovalKey({ publicKey: touchId.publicKey, name: touchId.name ?? 'Mac', kind: 'mac-app' });
-    log.info('approvals', 'Mac app key enrolled', { keyId: r.key.id, status: r.key.status });
+    // The app sends it from its own process, which may be the first device (no setup step for
+    // the person); an older app has no such op, and the page's own request joins as before.
+    const native = await touchIdEnroll();
+    if (native && native.status >= 400) {
+      if (native.body.code === 'first_key_from_phone') enrollRefused = true;
+      throw new Error(`HTTP ${native.status}: ${String(native.body.error ?? '')}`);
+    }
+    // The app made a new key for this (never one it found on disk), so read its id again.
+    if (native) set({ touchId: await touchIdStatus() });
+    const r = native
+      ? native.body as { key: ApprovalKey }
+      : await enrollApprovalKey({ publicKey: touchId.publicKey, name: touchId.name ?? 'Mac', kind: 'mac-app' });
+    log.info('approvals', 'Mac app key enrolled', { keyId: r.key?.id, status: r.key?.status, native: !!native });
     await refreshApprovals();
   } catch (err) {
     log.warn('approvals', 'Mac app key enroll failed', { error: String(err) });
+  } finally {
+    enrolling = false;
   }
 }
 
@@ -308,5 +333,7 @@ export function resetApprovalsForTest(): void {
   settledAt.clear();
   readSeq = 0;
   enrolling = false;
+  lastEnrollTry = 0;
+  enrollRefused = false;
   for (const fn of subs) fn();
 }

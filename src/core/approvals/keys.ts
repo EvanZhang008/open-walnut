@@ -5,9 +5,12 @@
  * or Touch ID (the iPhone app, the Mac app); Walnut holds only the public half.
  *
  * Who may add one:
- *  - the first key is trusted on first use, and only from the iPhone app over a request that
- *    carries its paired device token (`firstAllowed`): a process on this computer can call the
- *    console's routes, so a first key from here would let it sign for the person;
+ *  - the first key is trusted on first use (`firstAllowed`), and only from a device app itself:
+ *    the iPhone app over a request that carries its paired device token, or the Mac app's own
+ *    signed process (mac-app-proof.ts), which enrolls its Touch ID key when it starts, so the
+ *    person's first approval on the Mac is one touch with nothing to set up (2026-11-11, the
+ *    user: "it must just work"). Never a script: a process on this computer can call the
+ *    console's routes, and a first key of its own would let it sign for the person;
  *  - every later key stays pending until an active key approves it, through a biometric
  *    approval Walnut itself asks ("Let <device> sign your approvals"), so a new key can
  *    never vouch for itself.
@@ -57,9 +60,9 @@ export interface EnrollInput {
   firstAllowed?: boolean
 }
 
-export const FIRST_KEY_MESSAGE = 'The first device that signs approvals is your iPhone: open Walnut on it while it reaches this '
-  + 'computer directly (the same network or your tailnet, not through the cloud companion). Other devices join after that, '
-  + 'with the iPhone\'s Face ID.'
+export const FIRST_KEY_MESSAGE = 'The first device that signs approvals is the Walnut Mac app (Touch ID) or your iPhone (Face ID), '
+  + 'added by the app itself: open it, and for the iPhone while it reaches this computer directly (the same network or your '
+  + 'tailnet, not through the cloud companion). Other devices join after that, with a touch on a device that already signs.'
 
 // One enrollment at a time: a key and its enrollment approval are written in two steps, and two
 // concurrent calls for one new key (the app's launch and foreground refreshes) must make one ask.

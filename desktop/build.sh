@@ -158,11 +158,21 @@ fi
 # (`|| true`: grep exits 1 on no-match, which set -euo pipefail would fatal.)
 CANDIDATES=$(security find-identity -v -p codesigning 2>/dev/null \
     | { grep -o '"\(Developer ID Application\|Apple Development\)[^"]*"' || true; } | tr -d '"')
+# The identity that signed the installed app goes first: macOS keys the app's permission grants
+# (microphone, calendar, local network) on it, so another certificate would ask for each again.
+INSTALLED_ID=$(codesign -dvvv /Applications/Walnut.app 2>&1 | grep -E '^Authority=(Developer ID Application|Apple Development):' | head -1 | sed 's/^Authority=//' || true)
+if [ -n "$INSTALLED_ID" ] && printf '%s\n' "$CANDIDATES" | grep -qxF "$INSTALLED_ID"; then
+    CANDIDATES=$(printf '%s\n' "$INSTALLED_ID"; printf '%s\n' "$CANDIDATES" | grep -vxF "$INSTALLED_ID" || true)
+fi
 
+# The hardened runtime, as release builds have it (build-release.sh): no other program
+# may load code into the app (DYLD_INSERT_LIBRARIES) or attach a debugger to it. Walnut
+# trusts the app's own process to add the first approval signing key
+# (src/core/approvals/mac-app-proof.ts), and refuses an app without it.
 SIGNED_WITH=""
 while IFS= read -r ID; do
     [ -n "$ID" ] || continue
-    if ! codesign --force --sign "$ID" "$APP_BUNDLE" 2>/dev/null; then
+    if ! codesign --force --options runtime --entitlements "$SCRIPT_DIR/Walnut.entitlements" --sign "$ID" "$APP_BUNDLE" 2>/dev/null; then
         echo "  Skipping identity (codesign failed): $ID"
         continue
     fi

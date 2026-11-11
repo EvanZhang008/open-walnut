@@ -173,12 +173,21 @@ requests on the phone; a user without the phone app gets tap approvals.
 
 ## Signing devices
 
-The first device that signs is your iPhone: the app sets itself up the first time it opens while
-it reaches your computer directly (the same network or your tailnet; a request through the cloud
-companion does not carry the phone's own sign-in, so it cannot be the first). A request from the
-computer itself is never the first device, because any program on it can call the console's
-routes. Every later device, the Mac app included, waits until an existing one approves it: Walnut
-asks "Let <device> sign your approvals" as a biometric approval on the devices that already sign.
+The first device that signs sets itself up, with nothing for you to do: the Walnut Mac app adds
+its Touch ID key when it opens, and the iPhone app its Face ID key the first time it opens while it
+reaches your computer directly (the same network or your tailnet; a request through the cloud
+companion does not carry the phone's own sign-in, so it cannot be the first). So your first
+approval of an agent's step on the Mac is one touch, never the Passwords master password. The Mac
+app's key counts only when the app's own process sends it: Walnut checks that the process holding
+the request runs the signed Mac app's code: its bundle identifier, a certificate Apple issued to a
+team (never ad-hoc, which anyone can make), the hardened runtime with no entitlement that lets
+another program load code into it or attach a debugger, and the same code hash as the signed
+bundle on disk. The app also makes a new key for this enrollment rather than using a key file it
+finds on disk. A Mac app built without a developer certificate cannot be the first device; its
+approvals then take the iPhone's Face ID, or an unlock in Passwords as before. A request from any other program on the computer is never the first
+device, because any program on it can call the console's routes. Every later device waits until
+an existing one approves it: Walnut asks "Let <device> sign your approvals" as a biometric
+approval on the devices that already sign.
 `walnut approvals list` shows the devices. Removing one is done from a device while another
 remains. Walnut never removes the last one, since the next device would then be trusted on first
 use; if that phone is lost, delete `approvals/keys.json` in the Walnut data folder by hand.
@@ -190,11 +199,12 @@ What each strength guards:
   Walnut's own screens, so a program running as you on this computer that calls the console's
   route directly can answer it too.
 - **Biometric** also holds against that program: Approve needs a signature that only Face ID or
-  Touch ID on an enrolled device unlocks, the first device comes only from the paired phone, and
-  each new device needs an existing one's Face ID. The Mac app signs only for the console page
+  Touch ID on an enrolled device unlocks, the first device comes only from the paired phone or the
+  signed Mac app's own process, and each new device needs an existing one's Face ID. The Mac app signs only for the console page
   itself, never for a frame inside it. What no check on this computer can stop is a program that
-  rewrites Walnut's own files or code on disk; Walnut's data lives in your home directory, like
-  every tool you run.
+  rewrites Walnut's own files or code on disk, or that builds and signs a look-alike Mac app with
+  your own developer certificate before the first device exists; Walnut's data lives in your home
+  directory, like every tool you run.
 
 ## API
 
