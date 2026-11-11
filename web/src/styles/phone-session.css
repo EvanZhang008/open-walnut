@@ -217,11 +217,6 @@
     overflow-x: auto;
   }
 
-  /* A run of tool calls is one 44 px row: `<n> tool calls`. */
-  .app-shell-navigation .session-history .tool-run-toggle {
-    min-height: 44px;
-  }
-
   .app-shell-navigation .session-history .tool-run-toggle:has(.tool-run-count) .tool-run-label {
     display: none;
   }

@@ -244,3 +244,11 @@
 /* A send that failed: its error is the second line (the summary gives way to it). */
 :root .session-history .provenance-card[data-outbound-error="true"] > .op-card-summary { display: none; }
 :root .session-history .provenance-card > .provenance-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* On a phone every row a finger opens is 44 px tall (the desktop's 26 px row is
+   under a fingertip). Last in this file and with :root, so it outranks every row
+   size above whatever the order the sheets load in (2026-11-11: the desktop rows
+   above outranked phone-session.css and the fold line shrank to 26 px there). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  :root .app-shell-navigation .session-history .tool-run-toggle { min-height: 44px; }
+}
