@@ -55,6 +55,18 @@ describe.each([
     expect(chain).toMatch(/bootWriteDeadline\(session\)/)
   })
 
+  it('a part-written line into a CLI still booting is held, never reaped, until the boot hold (2026-11-11)', () => {
+    // Every write goes through chainFifoWrite (above), which hands the writer the hold.
+    const chain = src.slice(bodyOf(src, 'chainFifoWrite').start, bodyOf(src, 'chainFifoWrite').end)
+    expect(chain).toMatch(/if \(!stillBooting\(session\)\) return false/)
+    // A write queued behind the hold counts as behind a boot.
+    expect(chain).toMatch(/session\.fifoBootWaitUntil = Math\.max\(session\.fifoBootWaitUntil (\?\?|\|\|) 0, holdUntil\)/)
+    const writer = src.slice(bodyOf(src, 'writeFifoFullyAsync').start, bodyOf(src, 'writeFifoFullyAsync').end)
+    // Past the deadline, only a write with nothing in or no hold gives up.
+    expect(writer).toMatch(/if \(offset === 0 \|\| !\(?holdPartial/)
+    expect(src).toMatch(/FIFO_BOOT_HOLD_MAX_MS = 15 \* 60_?000/)
+  })
+
   it('a partial write reaps only after chainFifoWrite gave up', () => {
     // Each reap for a partial write follows a chainFifoWrite result in the same handler.
     const reaps = [...src.matchAll(/reapSession\([^)]*'(send|sendRaw)-partial-write'/g)]

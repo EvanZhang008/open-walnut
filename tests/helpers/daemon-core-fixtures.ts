@@ -75,6 +75,7 @@ export async function buildDeps(opts: {
   orphanPollIntervalMs?: number
   fifoWriteDeadlineMs?: number
   fifoBootWriteDeadlineMs?: number
+  fifoBootHoldMaxMs?: number
 } = {}): Promise<{
   deps: DaemonCoreDeps<TestSession>
   sessions: Map<string, TestSession>
@@ -129,6 +130,7 @@ export async function buildDeps(opts: {
     orphanPollIntervalMs: opts.orphanPollIntervalMs ?? 1000,
     fifoWriteDeadlineMs: opts.fifoWriteDeadlineMs,
     fifoBootWriteDeadlineMs: opts.fifoBootWriteDeadlineMs,
+    fifoBootHoldMaxMs: opts.fifoBootHoldMaxMs,
     logger,
     broadcastSessionStateFn,
     broadcastExitToWatchersFn,

@@ -14,8 +14,15 @@
  * a spawn under load 300 filled the pipe of a CLI still booting, and the 20s plain
  * deadline reaped it ('sendRaw-partial-write', exit -1, no transcript).
  *
- * Deadlines are shortened here (plain 300ms, boot 2.5s); the FIFO and its reader
- * are real.
+ * The boot hold (2026-11-11): past the boot deadline, part of a line in a CLI that
+ * still has not shown its init waits for it to read on, until the hold after its
+ * spawn. Under memory pressure a resume's 11 KB first line went 8 KB in, and the
+ * daemon reaped the booting CLI and started it again three times, 4 to 5 minutes
+ * after each spawn: the message took 16.6 minutes, the fourth start read it 106 s
+ * after its spawn.
+ *
+ * Deadlines are shortened here (plain 300ms, boot 2.5s, hold 6s); the FIFO and its
+ * reader are real.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
@@ -25,6 +32,7 @@ import { buildDeps, makeTestSession, createDaemonCore } from '../helpers/daemon-
 
 const PLAIN_MS = 300
 const BOOT_MS = 2_500
+const HOLD_MS = 6_000
 /** Beyond any pipe buffer, so part of the line waits in the write. */
 const BIG = 'z'.repeat(256 * 1024)
 
@@ -35,7 +43,7 @@ describe('send-boot-wait-v1: daemon-core', () => {
   beforeEach(async () => {
     vi.spyOn(process, 'kill').mockImplementation(() => { throw new Error('Unexpected process signal in a FIFO test') })
     vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {})
-    ctx = await buildDeps({ fifoWriteDeadlineMs: PLAIN_MS, fifoBootWriteDeadlineMs: BOOT_MS })
+    ctx = await buildDeps({ fifoWriteDeadlineMs: PLAIN_MS, fifoBootWriteDeadlineMs: BOOT_MS, fifoBootHoldMaxMs: HOLD_MS })
   })
 
   afterEach(async () => {
@@ -129,7 +137,7 @@ describe('send-boot-wait-v1: daemon-core', () => {
   it.each([
     ['a CLI that already showed its init line', { spawnTs: Date.now(), sawInit: true }],
     ['an adopted CLI with no spawn time', { sawInit: false }],
-    ['a CLI spawned longer ago than the boot deadline', { spawnTs: Date.now() - 10_000, sawInit: false }],
+    ['a CLI spawned longer ago than the boot hold', { spawnTs: Date.now() - 10_000, sawInit: false }],
   ])('bootWait into %s gets only the plain deadline', async (_label, extra) => {
     const core = createDaemonCore(ctx.deps)
     const { fifo, fd } = stalledFifo()
@@ -143,7 +151,7 @@ describe('send-boot-wait-v1: daemon-core', () => {
     expect(ctx.sessions.get('sid')!.exitReason).toBe('send-partial-write')
   }, 15_000)
 
-  it('a CLI that never reads is still reaped, at the boot deadline after its spawn', async () => {
+  it('a CLI that never reads is still reaped, at the boot hold after its spawn', async () => {
     const core = createDaemonCore(ctx.deps)
     const { fifo } = stalledFifo()
     const spawnTs = Date.now() - 1_000
@@ -152,8 +160,29 @@ describe('send-boot-wait-v1: daemon-core', () => {
     const at = Date.now() - spawnTs
     expect(res).toMatchObject({ ok: false, reason: 'session_dead' })
     expect(ctx.sessions.get('sid')!.exitReason).toBe('send-partial-write')
-    expect(at).toBeGreaterThanOrEqual(BOOT_MS - 50)
-    expect(at).toBeLessThan(BOOT_MS + 1_500)
+    expect(at).toBeGreaterThanOrEqual(HOLD_MS - 50)
+    expect(at).toBeLessThan(HOLD_MS + 1_500)
+    expect(ctx.spies.logger.mock.calls.filter(([, msg]) => msg === 'send: a booting CLI holds part of the line; waiting for it to read on')).toHaveLength(1)
+  }, 15_000)
+
+  it.each([
+    ['a boot-wait send', (core: ReturnType<typeof createDaemonCore>) => core.handleSendCommand('sid', BIG, undefined, undefined, { bootWait: true })],
+    ['a plain send', (core: ReturnType<typeof createDaemonCore>) => core.handleSendCommand('sid', BIG)],
+    ['a raw line', (core: ReturnType<typeof createDaemonCore>) =>
+      core.handleSendRawCommand('sid', JSON.stringify({ type: 'control_request', request_id: 'sq-3', request: { subtype: 'side_question', question: BIG } }))],
+  ])('%s into a CLI booting past the boot deadline waits for it, never reaps it (the 2026-11-11 kill loop)', async (_label, write) => {
+    const core = createDaemonCore(ctx.deps)
+    const { fifo, fd } = stalledFifo()
+    // Spawned past the boot deadline, still inside the hold, as each 2026-11-11 start was.
+    ctx.sessions.set('sid', makeTestSession({ pid: 908, pipePath: fifo, spawnTs: Date.now() - BOOT_MS - 500, sawInit: false }))
+    const reader = drainAfter(fd, 1_500)
+    const t0 = Date.now()
+    const res = await write(core)
+    const wire = reader.stop()
+    expect(res).toMatchObject({ ok: true })
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_300)
+    expect(ctx.sessions.get('sid')!.state).toBe('running')
+    expect(wire.trim().length).toBeGreaterThan(BIG.length)
   }, 15_000)
 
   it('a CLI that dies while the line waits ends the wait at once', async () => {
@@ -192,6 +221,32 @@ describe('send-boot-wait-v1: daemon-core', () => {
     const lines = wire.trim().split('\n').map((l) => JSON.parse(l).message.content.slice(0, 6))
     expect(lines).toEqual(['zzzzzz', 'second'])
   }, 15_000)
+
+  it('a line queued behind a hold gets its own window once the CLI boots (no reap of the booted CLI)', async () => {
+    await ctx.cleanup()
+    ctx = await buildDeps({ fifoWriteDeadlineMs: 1_000, fifoBootWriteDeadlineMs: 1_500, fifoBootHoldMaxMs: 20_000 })
+    const core = createDaemonCore(ctx.deps)
+    const { fifo, fd } = stalledFifo()
+    // Past its boot deadline already: the first write is held from its first full pipe.
+    const session = makeTestSession({ pid: 909, pipePath: fifo, spawnTs: Date.now() - 2_000, sawInit: false })
+    ctx.sessions.set('sid', session)
+    const first = core.handleSendCommand('sid', BIG)
+    // Queued once the first write holds (its plain window ran out at 1 s).
+    await new Promise((r) => setTimeout(r, 1_300))
+    const second = core.handleSendCommand('sid', 'second'.padEnd(BIG.length, 'q'))
+    // The CLI reads 2.5 s later, past the second write's own plain window, and shows its
+    // init once it took the first line, before the second one is in.
+    await new Promise((r) => setTimeout(r, 2_500))
+    void first.then(() => { session.sawInit = true })
+    const reader = drainAfter(fd, 0)
+    const [a, b] = await Promise.all([first, second])
+    const wire = reader.stop()
+    expect(a).toEqual({ ok: true })
+    expect(b).toEqual({ ok: true })
+    expect(session.state).toBe('running')
+    expect(wire.trim().split('\n').map((l) => JSON.parse(l).message.content.slice(0, 6))).toEqual(['zzzzzz', 'second'])
+    expect(session.fifoBootWaitUntil).toBeUndefined()
+  }, 20_000)
 
   it('a line that fits the pipe buffer is written at once, bootWait or not', async () => {
     const core = createDaemonCore(ctx.deps)

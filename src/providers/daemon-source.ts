@@ -8212,9 +8212,18 @@ function bootWriteDeadline(session) {
   const until = session.spawnTs + FIFO_BOOT_WRITE_DEADLINE_MS;
   return until > Date.now() + FIFO_WRITE_DEADLINE_MS ? until : undefined;
 }
+// the boot hold (twin of daemon-core.ts FIFO_BOOT_HOLD_MAX_MS): past the deadline, part
+// of a line in a CLI still booting waits for it to read on; only a CLI that has not
+// booted this long after its spawn is reaped.
+const FIFO_BOOT_HOLD_MAX_MS = 15 * 60000;
+function stillBooting(session) {
+  return session.sawInit === false && session.state !== 'dead' && typeof session.spawnTs === 'number'
+    && Date.now() - session.spawnTs < FIFO_BOOT_HOLD_MAX_MS;
+}
 // progress (optional): kept up to date with the bytes in so far, also when the write fails or throws.
-async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned, beforeNewline, progress) {
+async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned, beforeNewline, progress, holdPartial, who) {
   const RETRY_INTERVAL_MS = 25;
+  let held = false;
   let fd;
   try {
     fd = fs.openSync(pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
@@ -8243,8 +8252,16 @@ async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned, beforeN
         if (err && err.code === 'EPIPE') return 'ENXIO';
         if (!err || err.code !== 'EAGAIN') throw err;
       }
-      if (Date.now() >= deadline || (isAbandoned && isAbandoned())) {
-        return offset === 0 ? 'EAGAIN' : 'partial';
+      if (isAbandoned && isAbandoned()) return offset === 0 ? 'EAGAIN' : 'partial';
+      if (Date.now() >= deadline) {
+        // Part of the line is in a CLI still booting: it reads on once it boots (the boot hold).
+        if (offset === 0 || !(holdPartial && holdPartial())) return offset === 0 ? 'EAGAIN' : 'partial';
+        if (!held) {
+          held = true;
+          logMsg('info', 'send: a booting CLI holds part of the line; waiting for it to read on', {
+            sid: who ? who.sid : undefined, pid: who ? who.pid : null, bytes: buf.length, sent: offset,
+          });
+        }
       }
       await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
     }
@@ -8277,6 +8294,7 @@ async function chainFifoWrite(sid, session, buf, beforeNewline, line, raw) {
   // it, one full pipe would reap the CLI that just booted (twin of daemon-core.ts).
   const behindBoot = (session.fifoBootWaitUntil || 0) > Date.now();
   if (bootDeadline !== undefined) session.fifoBootWaitUntil = Math.max(session.fifoBootWaitUntil || 0, bootDeadline);
+  let holdUntil;
   const prev = session.fifoWriteChain || Promise.resolve();
   const run = prev.catch(() => {}).then(async () => {
     if (behindBoot) deadline = Math.max(deadline, Date.now() + FIFO_WRITE_DEADLINE_MS);
@@ -8311,8 +8329,16 @@ async function chainFifoWrite(sid, session, buf, beforeNewline, line, raw) {
       while (lead < out.length && out[lead] === 10) lead++;
       progress.lead = lead;
     }
+    // While it holds, a write queued behind it is behind a boot too (twin of daemon-core.ts).
+    const hold = function () {
+      if (!stillBooting(session)) return false;
+      holdUntil = session.spawnTs + FIFO_BOOT_HOLD_MAX_MS;
+      session.fifoBootWaitUntil = Math.max(session.fifoBootWaitUntil || 0, holdUntil);
+      return true;
+    };
     if (line && line.begin) line.begin(true);
-    const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline, progress);
+    const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline, progress,
+      hold, { sid: sid, pid: session.pid });
     if (written === 'ok' && line && line.written) line.written();
     // Not one byte went in: the write left nothing, so a resend must not be told of a cut.
     else if (written === 'EAGAIN' && line && line.begin) line.begin(false);
@@ -8324,7 +8350,8 @@ async function chainFifoWrite(sid, session, buf, beforeNewline, line, raw) {
     result = await run;
   } finally {
     // Settled: only writes queued while it waited count as behind it.
-    if (bootDeadline !== undefined && session.fifoBootWaitUntil === bootDeadline) session.fifoBootWaitUntil = undefined;
+    if ((bootDeadline !== undefined && session.fifoBootWaitUntil === bootDeadline)
+      || (holdUntil !== undefined && session.fifoBootWaitUntil === holdUntil)) session.fifoBootWaitUntil = undefined;
   }
   if (session.fifoWriteChain === run) session.fifoWriteChain = undefined;
   return result;

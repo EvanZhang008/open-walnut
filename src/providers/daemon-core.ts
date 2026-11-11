@@ -186,6 +186,8 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
    *  transcript over 100MB took 18 to 22s on a loaded Mac just after a wake
    *  (2026-10-30), past the 20s above, and was killed twice mid-boot. */
   fifoBootWriteDeadlineMs?: number
+  /** How long after its spawn a booting CLI may hold part of a line before it is reaped, ms (FIFO_BOOT_HOLD_MAX_MS). */
+  fifoBootHoldMaxMs?: number
   /** Checked inside the final FIFO serializer, before any cost-producing line. */
   allowBudgetFn?: (sid: string) => Promise<BudgetGate>
   /** The Claude Code transcript of this session's CLI, or null (line-answer-v1 asks it when the stream lost a line's frames). */
@@ -274,6 +276,17 @@ export const LIVE_FIFO_MODE = 0o200
 /** send-boot-wait-v1: how long after its spawn a booting CLI may take to start
  *  reading a boot-wait send. Keep in sync with daemon-source.ts. */
 export const FIFO_BOOT_WRITE_DEADLINE_MS = 120_000
+/**
+ * How long after its spawn a CLI that has not shown its init may hold part of a
+ * line before the write gives up and reaps it (the boot hold). Past the boot
+ * deadline a part-written line used to reap the CLI at once: 2026-11-11, under
+ * memory pressure, a resume's 11 KB first line went 8 KB in and the CLI was
+ * killed and started again three times (each 4 to 5 minutes after its spawn),
+ * so the message took 16.6 minutes; the fourth start read it 106 s after its
+ * spawn. A CLI still booting is slow, not broken: the write waits for it to
+ * read on, and only a CLI that never boots is reaped.
+ */
+export const FIFO_BOOT_HOLD_MAX_MS = 15 * 60_000
 
 /** Lock a live stdin FIFO against readers (LIVE_FIFO_MODE). False when the chmod failed. */
 export function lockLiveFifo(fs: typeof import('node:fs'), pipePath: string): boolean {
@@ -546,6 +559,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     ?? ((pid: number) => Promise.resolve(readStartTimeFn(pid)))
   const fifoWriteDeadlineMs = deps.fifoWriteDeadlineMs ?? 20_000
   const fifoBootWriteDeadlineMs = deps.fifoBootWriteDeadlineMs ?? FIFO_BOOT_WRITE_DEADLINE_MS
+  const fifoBootHoldMaxMs = deps.fifoBootHoldMaxMs ?? FIFO_BOOT_HOLD_MAX_MS
 
   /** send-boot-wait-v1: the deadline of a boot-wait send into a CLI that has not
    *  taken its first line since this daemon spawned it, else none (the plain
@@ -556,6 +570,12 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     if (session.sawInit !== false || typeof session.spawnTs !== 'number') return undefined
     const until = session.spawnTs + fifoBootWriteDeadlineMs
     return until > clock() + fifoWriteDeadlineMs ? until : undefined
+  }
+
+  /** A CLI this daemon spawned that has not shown its init yet, alive, within the boot hold: part of a line in its pipe waits for it. */
+  function stillBooting(session: S): boolean {
+    return session.sawInit === false && session.state !== 'dead' && typeof session.spawnTs === 'number'
+      && clock() - session.spawnTs < fifoBootHoldMaxMs
   }
 
   /**
@@ -1491,6 +1511,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // it, one full pipe would reap the CLI that just booted (send-boot-wait-v1).
     const behindBoot = (session.fifoBootWaitUntil ?? 0) > clock()
     if (bootAt !== undefined) session.fifoBootWaitUntil = Math.max(session.fifoBootWaitUntil ?? 0, bootAt)
+    let holdUntil: number | undefined
     const prev = session.fifoWriteChain ?? Promise.resolve()
     const run = prev.catch(() => {}).then(async () => {
       if (behindBoot) deadline = Math.max(deadline, clock() + fifoWriteDeadlineMs)
@@ -1517,9 +1538,18 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         while (lead < out.length && out[lead] === 10) lead++
         progress.lead = lead
       }
+      // While it holds, a write queued behind it is behind a boot too: it gets its own
+      // window once its turn comes, not a deadline that ran out during the hold.
+      const hold = () => {
+        if (!stillBooting(session)) return false
+        holdUntil = session.spawnTs! + fifoBootHoldMaxMs
+        session.fifoBootWaitUntil = Math.max(session.fifoBootWaitUntil ?? 0, holdUntil)
+        return true
+      }
       // Noted before the first byte: a daemon killed inside the write leaves it as the line's newest record.
       line?.begin?.(true)
-      const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline, progress)
+      const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline, progress,
+        hold, { sid, pid: session.pid })
       if (written === 'ok') line?.written?.()
       // Not one byte went in: the write left nothing, so a resend must not be told of a cut.
       else if (written === 'EAGAIN') line?.begin?.(false)
@@ -1531,7 +1561,8 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       result = await run
     } finally {
       // Settled: only writes queued while it waited count as behind it.
-      if (bootAt !== undefined && session.fifoBootWaitUntil === bootAt) session.fifoBootWaitUntil = undefined
+      if ((bootAt !== undefined && session.fifoBootWaitUntil === bootAt)
+        || (holdUntil !== undefined && session.fifoBootWaitUntil === holdUntil)) session.fifoBootWaitUntil = undefined
     }
     // Drop the chain pointer once the tail settles so it doesn't grow unbounded.
     if (session.fifoWriteChain === run) session.fifoWriteChain = undefined
@@ -1571,6 +1602,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     beforeNewline?: () => void,
     /** Kept up to date with the bytes in so far, also when the write fails or throws. */
     progress?: { sent: number },
+    /** Past the deadline with part of the line in: keep waiting while this holds (a CLI still booting: the boot hold). */
+    holdPartial?: () => boolean,
+    who?: { sid: string; pid: number | null | undefined },
   ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial'> {
     const RETRY_INTERVAL_MS = 25
     let fd: number
@@ -1584,6 +1618,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // Fence = the last payload byte (the newline): write the whole body, call back once, then release the newline so the full line becomes readable.
     const barrier = beforeNewline && buf.length > 1 ? buf.length - 1 : buf.length
     let barrierDone = barrier >= buf.length
+    let held = false
     try {
       let offset = 0
       while (offset < buf.length) {
@@ -1618,8 +1653,17 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
           if (code !== 'EAGAIN') throw err
         }
         // Pipe full (EAGAIN) or zero-byte write: wait for the reader to drain.
-        if (clock() >= deadline || isAbandoned?.()) {
-          return offset === 0 ? 'EAGAIN' : 'partial'
+        if (isAbandoned?.()) return offset === 0 ? 'EAGAIN' : 'partial'
+        if (clock() >= deadline) {
+          // Part of the line is in a CLI still booting: it reads on once it boots, and
+          // reaping it would only start the slow boot again (the boot hold).
+          if (offset === 0 || !holdPartial?.()) return offset === 0 ? 'EAGAIN' : 'partial'
+          if (!held) {
+            held = true
+            logger('info', 'send: a booting CLI holds part of the line; waiting for it to read on', {
+              sid: who?.sid, pid: who?.pid ?? null, bytes: buf.length, sent: offset,
+            })
+          }
         }
         await new Promise<void>((resolve) => setTimeoutFn(resolve, RETRY_INTERVAL_MS))
       }
