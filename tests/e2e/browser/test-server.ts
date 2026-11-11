@@ -5344,11 +5344,10 @@ const { startServer, stopServer } = await import('../../../src/web/server.js')
 // writable, so event-chip specs can drag/resize/create against them.
 {
   const { CalendarService, _setCalendarServiceForTest } = await import('../../../src/integrations/calendar/service.js')
-  const { createMockCalendarSource, fixtureCalendars } = await import('../../helpers/mock-calendar-source.js')
-  // Events anchor to TODAY (specs navigate by local date, not a fixed one).
-  const pad2 = (n: number) => String(n).padStart(2, '0')
-  const now = new Date()
-  const today = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
+  const { createMockCalendarSource, fixtureCalendars, localDay } = await import('../../helpers/mock-calendar-source.js')
+  // Events anchor to TODAY (specs navigate by local date, not a fixed one), and keep to it past
+  // midnight (followToday below).
+  const today = localDay()
   _setCalendarServiceForTest(new CalendarService(createMockCalendarSource({
     events: [
       {
@@ -5418,6 +5417,7 @@ const { startServer, stopServer } = await import('../../../src/web/server.js')
       ...fixtureCalendars(),
       { id: 'cal-personal', title: 'Personal', account: 'iCloud', color: '#af52de', readonly: false, hidden: false },
     ],
+    followToday: { day: today },
   }).source))
 }
 

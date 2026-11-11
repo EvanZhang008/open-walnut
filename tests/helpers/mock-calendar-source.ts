@@ -125,9 +125,27 @@ export function fixtureEvents(): CalendarEvent[] {
   ];
 }
 
+/** The local date, as a day string. */
+export function localDay(at = new Date()): string {
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}`;
+}
+
+/** `day` (YYYY-MM-DD, with any time after it) moved by `days` whole days. */
+export function shiftDay(value: string, days: number): string {
+  const d = new Date(`${value.slice(0, 10)}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10) + value.slice(10);
+}
+
 export function createMockCalendarSource(opts?: {
   events?: CalendarEvent[];
   calendars?: CalendarInfo[];
+  /** The events are written for this day and move with the local date: when the date changes,
+   *  every event moves by as many days. The browser fixture's events sit on the day it booted,
+   *  and a run that went past midnight found none on its own today (2026-11-11, CI: a shard that
+   *  booted at 23:49 ran its calendar specs after midnight, and every one waited for its event). */
+  followToday?: { day: string; now?: () => Date };
 }): { source: CalendarSource; state: MockCalendarState } {
   const state: MockCalendarState = {
     calendars: opts?.calendars ?? fixtureCalendars(),
@@ -138,9 +156,20 @@ export function createMockCalendarSource(opts?: {
   };
   let createdSeq = 0;
 
+  let anchor = opts?.followToday?.day;
+  const followToday = () => {
+    if (!anchor) return;
+    const today = localDay(opts?.followToday?.now?.() ?? new Date());
+    if (today === anchor) return;
+    const days = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${anchor}T00:00:00Z`)) / 86_400_000);
+    for (const ev of state.events) { ev.start = shiftDay(ev.start, days); ev.end = shiftDay(ev.end, days); }
+    anchor = today;
+  };
+
   const guard = (method: string, args: unknown[]) => {
     state.calls.push({ method, args });
     if (state.failWith) throw state.failWith;
+    followToday();
   };
 
   const findEvent = (id: string): CalendarEvent => {
