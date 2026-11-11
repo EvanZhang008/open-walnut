@@ -623,6 +623,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
             ...(launch.effort ? { effort: launch.effort } : {}),
             ...(launch.profile ? { profile: launch.profile } : {}),
             engine, initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
+            ...(startBody.trim() ? {} : { startedIdle: true }),
           });
           seeded = true;
           await linkSession(task.id, sid);

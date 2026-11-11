@@ -1908,8 +1908,9 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
   if (messages.length === 0 && !sourceAvailable && !record.forkedFromSessionId) {
     // Still booting: an absent transcript is expected, not a fault. Answer a plain
     // empty history so the client shows its normal "starting…" empty state instead
-    // of a scary "History unavailable" card (see isHistoryStartupWindow).
-    if (isHistoryStartupWindow(record)) return { messages: [], total: 0 };
+    // of a scary "History unavailable" card (history-not-written.ts: booting, started
+    // with no message, or a router waiting for its first mail).
+    if (await (await import('./history-not-written.js')).historyNotWrittenYet(record)) return { messages: [], total: 0 };
     return { messages: [], total: 0, historyUnavailable: unavailableHistoryReason(record) };
   }
 
@@ -1971,7 +1972,7 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
   // ancestors got their chance. If they produced nothing either, THIS is the
   // point where "nothing to show" becomes true, so report it here instead.
   if (messages.length === 0 && !sourceAvailable && record.forkedFromSessionId) {
-    if (isHistoryStartupWindow(record)) return { messages: [], total: 0 };
+    if (await (await import('./history-not-written.js')).historyNotWrittenYet(record)) return { messages: [], total: 0 };
     return { messages: [], total: 0, historyUnavailable: unavailableHistoryReason(record) };
   }
 

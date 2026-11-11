@@ -834,10 +834,10 @@ import {
   getSessionFileChange,
   getSessionGitRefs,
   getSessionPendingPermissions,
-  isHistoryStartupWindow,
   CLAUDE_SESSION_MODES,
 } from '../../core/sessions/session-lifecycle.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
+import { historyNotWrittenYet } from '../../core/sessions/history-not-written.js'
 import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundHostRead, boundSharedHostRead, isRemoteHost } from '../../core/hosts/remote-read-bound.js'
 
 /** A SessionControlError as the web shape: `{ error }`, plus its `code` when it has one. */
@@ -1732,7 +1732,8 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // "File not found" is TRUE here but not a fault — reporting it made every
       // task creation flash "History unavailable". Serve a plain empty history so
       // the panel shows its normal starting state; the next turn's fetch fills in.
-      if (isHistoryStartupWindow(record)) {
+      // So does a session started with no message, or a router's (history-not-written.ts).
+      if (await historyNotWrittenYet(record)) {
         res.json({ messages: [], total: 0, cursor: 0, delta: false })
         return
       }
@@ -1884,7 +1885,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         })
         return
       }
-      if (isHistoryStartupWindow(record)) {
+      if (await historyNotWrittenYet(record)) {
         res.json({ messages: [], total: 0, cursor: 0, delta: false })
         return
       }

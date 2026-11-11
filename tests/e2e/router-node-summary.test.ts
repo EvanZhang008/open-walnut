@@ -13,6 +13,9 @@ import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { ensureProjectLead } from '../../src/core/org/org-store.js';
 import { addTask } from '../../src/core/task-manager.js';
+import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js';
+import { isHistoryStartupWindow } from '../../src/core/sessions/session-lifecycle.js';
+import { routerAreaProfile } from '../../src/core/router/session-policy.js';
 import { routerStore } from '../../src/core/router/runtime.js';
 import { routerKey, routerMessageId } from '../../src/core/router/store.js';
 import type { RouterItem, RouterSource } from '../../src/core/router/types.js';
@@ -75,5 +78,25 @@ describe('the router node summary', () => {
     const id = await createRouter('kitchen');
     const refused = await summary(id, { 'x-walnut-caller-sid': 'session-of-another-task' });
     expect(refused.status).toBe(403);
+  });
+
+  it('a router session with no transcript yet reads as no conversation, never History unavailable', async () => {
+    const id = await createRouter('cellar');
+    // No startedIdle flag: the routers started before it was recorded (the prod Personal router).
+    const sid = '7b0c9a1e-0000-4000-8000-00000000c111';
+    await createSessionRecord(sid, id, '', WALNUT_HOME, { title: 'cellar router', initialProcessStatus: 'idle', profile: routerAreaProfile('cellar', 'router'), mode: 'dontAsk' });
+    // Hours past the launch grace, as the prod router was.
+    const old = new Date(Date.now() - 6 * 3600_000).toISOString();
+    await updateSessionRecord(sid, { startedAt: old, last_status_change: old } as Parameters<typeof updateSessionRecord>[1]);
+    // The launch grace is out of play: only the router rule can answer an empty history here.
+    const stored = await getSessionByClaudeId(sid);
+    expect(stored && isHistoryStartupWindow(stored)).toBe(false);
+    for (const query of ['', '?tail=400&turns=10']) {
+      const response = await fetch(`${base}/api/sessions/${sid}/history${query}`);
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.messages).toEqual([]);
+      expect(body.historyUnavailable, query).toBeUndefined();
+    }
   });
 });

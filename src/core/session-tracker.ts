@@ -1515,6 +1515,8 @@ export async function createSessionRecord(
      *  record seeded before its CLI process exists). */
     initialStatusReason?: import('./types.js').StatusReason;
     messageCount?: number;
+    /** Started with no message: no transcript until its first one (SessionRecord.startedIdle). */
+    startedIdle?: boolean;
     engine?: import('./types.js').SessionEngine;
     acpRuntimeId?: string;
     acpJournalPath?: string;
@@ -1634,6 +1636,7 @@ export async function createSessionRecord(
         process_status: extra?.initialProcessStatus ?? 'running',
         mode: extra?.mode ?? 'default',
         ...(extra?.initialStatusReason ? { status_reason: extra.initialStatusReason } : {}),
+        ...(extra?.startedIdle ? { startedIdle: true } : {}),
         last_status_change: now,
         startedAt: now,
         lastActiveAt: now,

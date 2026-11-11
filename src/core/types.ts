@@ -3494,6 +3494,10 @@ export interface SessionRecord {
   /** Set when a switch back to this session's engine resumed it (the latest such resume):
    *  the session it took over from, and how many turns it was given that it had missed. */
   resumedBySwitch?: { fromSessionId: string; fromEngine?: SessionEngine; at: string; carriedTurns: number };
+  /** Started with no message (an org router, an idle engine switch): its CLI writes no transcript
+   *  until the first message reaches it, so a missing transcript reads as no conversation yet,
+   *  never "History unavailable" (src/core/sessions/history-not-written.ts). */
+  startedIdle?: boolean;
   /**
    * Set only on a session born from a REWIND: the parent message uuid its spawn
    * resumed at (`--resume-session-at`). Two consumers depend on it:
