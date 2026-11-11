@@ -189,7 +189,7 @@ import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { createDaemonPorts } from './port-scan-core.js'
-import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, restoreSessionAnywhere, resumeSourceId, setArchiveLog, setRemoteFetcher, RemoteHistoryError, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
+import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, findNameMatch, restoreSessionAnywhere, resumeSourceId, setArchiveLog, setRemoteFetcher, RemoteHistoryError, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
 import { ensurePwSilencePreload, pwSilenceDir, pwSilenceSessionEnv } from './pw-silence-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
@@ -11099,7 +11099,7 @@ async function cmdFsFind(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       for (const e of entries) {
         if (found.length >= 10) return
         const full = path.join(dir, e.name)
-        if (e.isFile() && e.name.includes(name)) {
+        if (e.isFile() && findNameMatch(e.name, name)) {
           found.push(full)
           if (found.length >= 10) return
         } else if (e.isDirectory()) {
@@ -11108,7 +11108,8 @@ async function cmdFsFind(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       }
     }
     for (const root of roots) await walk(root, 0)
-    // A `<sid>.jsonl` find also matches an archived `<sid>.jsonl.gz`: answer it restored, as its plain path.
+    // A `<sid>.jsonl` find also matches an archived `<sid>.jsonl.gz`, or the manifest of one kept
+    // only in remote storage: answer it restored, as its plain path.
     sendOk(ws, id, { files: await plainFindResults(found, name) })
   } catch (err: unknown) {
     sendError(ws, id, 'fs.find failed: ' + (err as Error).message)

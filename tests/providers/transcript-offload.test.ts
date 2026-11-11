@@ -9,9 +9,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { MANIFEST_SUFFIX, RemoteHistoryError, archiveTranscripts, ensurePlain, restoreSession, setRemoteFetcher } from '../../src/providers/transcript-archive.js'
+import { MANIFEST_SUFFIX, RemoteHistoryError, archiveTranscripts, ensurePlain, findNameMatch, plainFindResults, restoreSession, setRemoteFetcher } from '../../src/providers/transcript-archive.js'
 import { OFFLOAD_KEEP_MS, fetchRemoteArchive, offloadArchived, remoteTierStatus, type OffloadStore } from '../../src/providers/transcript-offload.js'
-import { remoteStore, resolveRemote, testRemote } from '../../src/core/history-remote/store.js'
+import { LIFECYCLE_RULE_ID, remoteStore, remoteTimeouts, resolveRemote, setupBucket, testRemote } from '../../src/core/history-remote/store.js'
 import { fetchLocalArchive } from '../../src/core/history-remote/service.js'
 import { remoteOnlyHere, withRemoteLoading } from '../../src/core/history-remote/loading.js'
 import { HostStillLoadingError } from '../../src/core/hosts/remote-read-bound.js'
@@ -50,7 +50,8 @@ beforeEach(() => {
   fs.mkdirSync(proj, { recursive: true })
   s3.objects.clear()
   s3.requests.length = 0
-  Object.assign(s3.faults, { dropNextPut: 0, corruptNextGet: 0, failAll: false })
+  Object.assign(s3.faults, { dropNextPut: 0, corruptNextGet: 0, failAll: false, opaqueEtag: false, hang: false, stallBody: false })
+  s3.bucketConfig.clear()
 })
 afterEach(() => { setRemoteFetcher(null); fs.rmSync(root, { recursive: true, force: true }) })
 
@@ -237,3 +238,145 @@ describe('the loading line while a session downloads', () => {
     expect(await remoteOnlyHere('nope', cwd, [projects])).toBe(false)
   })
 })
+
+describe('review round 1 (2026-11-11): integrity, conflicts, deadlines, setup, find', () => {
+  async function offloaded(sid: string) {
+    const body = await archived(sid)
+    await offloadArchived([projects], { ...TIER, store: await store() })
+    await offloadArchived([projects], { ...TIER, now: LATER + OFFLOAD_KEEP_MS, store: await store() })
+    expect(await remoteOnlyHere(sid, cwd, [projects])).toBe(true)
+    return body
+  }
+  const flip = (key: string) => { const b = Buffer.from(s3.objects.get(key)!); b[b.length >> 1] ^= 0xff; s3.objects.set(key, b) }
+
+  it('an ETag that is no md5 has the object read back: one changed in storage, same size, keeps the local files', async () => {
+    s3.faults.opaqueEtag = true
+    await archived('s-kms')
+    const up = await offloadArchived([projects], { ...TIER, store: await store() })
+    expect(up).toMatchObject({ uploaded: 1, failed: 0 })
+    // The upload's check read the objects back (no md5 to compare).
+    expect(s3.requests.filter((r) => r.method === 'GET').length).toBe(2)
+    const key = manifest('s-kms').remote.files.find((f: { rel: string }) => f.rel === 's-kms.jsonl').key
+    flip(key)
+    const r = await offloadArchived([projects], { ...TIER, now: LATER + OFFLOAD_KEEP_MS, store: await store() })
+    expect(r).toMatchObject({ offloaded: 0, failed: 1 })
+    expect(r.errors[0]).toMatch(/not in remote storage as uploaded/)
+    expect(fs.existsSync(gz('s-kms.jsonl'))).toBe(true)
+    expect(manifest('s-kms').remote.offloadedAt).toBeUndefined()
+  })
+
+  it('an object already under the name with other bytes of the same size is uploaded again', async () => {
+    await archived('s-pre')
+    const first = await offloadArchived([projects], { ...TIER, now: LATER, store: await store() })
+    expect(first.uploaded).toBe(1)
+    const m = manifest('s-pre')
+    // Forget the upload and spoil the object: the next pass must not take it on its size.
+    fs.writeFileSync(path.join(proj, 's-pre' + MANIFEST_SUFFIX), JSON.stringify({ ...m, remote: undefined }))
+    for (const f of m.remote.files) flip(f.key)
+    const puts = s3.requests.filter((r) => r.method === 'PUT').length
+    const again = await offloadArchived([projects], { ...TIER, store: await store() })
+    expect(again).toMatchObject({ uploaded: 1, failed: 0 })
+    expect(s3.requests.filter((r) => r.method === 'PUT').length).toBe(puts + 2)
+    for (const f of manifest('s-pre').remote.files) expect(s3.objects.get(f.key)!.equals(fs.readFileSync(path.join(proj, f.rel + '.gz')))).toBe(true)
+  })
+
+  it('a plain file with other bytes written after the offload does not stand in: the archive comes back and both are kept', async () => {
+    const body = await offloaded('s-new')
+    fs.writeFileSync(path.join(proj, 's-new.jsonl'), 'new unrelated bytes\n')
+    useFetcher()
+    expect(await restoreSession(proj, 's-new')).toBe(true)
+    expect(fs.readFileSync(path.join(proj, 's-new.jsonl'), 'utf8')).toBe('new unrelated bytes\n')
+    const conflicts = fs.readdirSync(proj).filter((n) => n.startsWith('s-new.jsonl.walnut-conflict-'))
+    expect(conflicts).toHaveLength(1)
+    expect(fs.readFileSync(path.join(proj, conflicts[0]), 'utf8')).toBe(body.main)
+    expect(fs.readFileSync(path.join(proj, 's-new/subagents/agent-a1.jsonl'), 'utf8')).toBe(body.agent)
+    expect(fs.existsSync(path.join(proj, 's-new' + MANIFEST_SUFFIX))).toBe(false)
+  })
+
+  it('a plain file holding the recorded bytes (an append after them) stands in: nothing is downloaded for it', async () => {
+    const body = await offloaded('s-app')
+    fs.writeFileSync(path.join(proj, 's-app.jsonl'), body.main + line(9999))
+    useFetcher()
+    const gets = () => s3.requests.filter((r) => r.method === 'GET' && r.key.includes('/s-app.jsonl.')).length
+    expect(await restoreSession(proj, 's-app')).toBe(true)
+    expect(gets()).toBe(0)
+    expect(fs.readFileSync(path.join(proj, 's-app.jsonl'), 'utf8')).toBe(body.main + line(9999))
+    expect(fs.readdirSync(proj).filter((n) => n.includes('walnut-conflict'))).toEqual([])
+  })
+
+  it('a find for <sid>.jsonl matches the manifest of a session only in remote storage and answers its restored transcript', async () => {
+    const body = await offloaded('s-find')
+    expect(findNameMatch('s-find' + MANIFEST_SUFFIX, 's-find.jsonl')).toBe(true)
+    expect(findNameMatch('s-other' + MANIFEST_SUFFIX, 's-find.jsonl')).toBe(false)
+    expect(findNameMatch('s-find' + MANIFEST_SUFFIX, 's-find')).toBe(true)
+    useFetcher()
+    const out = await plainFindResults([path.join(proj, 's-find' + MANIFEST_SUFFIX)], 's-find.jsonl')
+    expect(out).toEqual([path.join(proj, 's-find.jsonl')])
+    expect(fs.readFileSync(out[0], 'utf8')).toBe(body.main)
+    // A manifest a find for something else matched (a substring) is still left out.
+    expect(await plainFindResults([path.join(proj, 's-x' + MANIFEST_SUFFIX)], 's-x')).toEqual([])
+  })
+
+  describe('a storage that takes requests and never answers', () => {
+    const saved = { ...remoteTimeouts }
+    beforeEach(() => Object.assign(remoteTimeouts, { networkMs: 400, connectMs: 400 }))
+    afterEach(() => Object.assign(remoteTimeouts, saved))
+
+    it('fails a check within its deadline instead of hanging', async () => {
+      s3.faults.hang = true
+      const t0 = Date.now()
+      await expect((await store()).head('walnut-history/x')).rejects.toThrow()
+      expect(Date.now() - t0).toBeLessThan(5_000)
+      const r = await offloadArchived([projects], { ...TIER, store: await store() })
+      expect(r.failed).toBe(0)
+      await archived('s-hang')
+      const t1 = Date.now()
+      const p = await offloadArchived([projects], { ...TIER, store: await store() })
+      expect(p).toMatchObject({ uploaded: 0, failed: 1 })
+      expect(Date.now() - t1).toBeLessThan(10_000)
+    })
+
+    it('a download whose body stops is ended and leaves nothing behind', async () => {
+      await offloaded('s-stall')
+      useFetcher()
+      s3.faults.stallBody = true
+      const t0 = Date.now()
+      await expect(restoreSession(proj, 's-stall')).rejects.toBeInstanceOf(RemoteHistoryError)
+      expect(Date.now() - t0).toBeLessThan(10_000)
+      expect(fs.readdirSync(proj).filter((n) => n.includes('walnut-tmp'))).toEqual([])
+      s3.faults.stallBody = false
+      expect(await ensurePlain(path.join(proj, 's-stall.jsonl'))).toBe(true)
+    })
+  })
+
+  it('Set up on a bucket that exists keeps its encryption and its other lifecycle rules', async () => {
+    const kms = '<?xml version="1.0" encoding="UTF-8"?><ServerSideEncryptionConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Rule><ApplyServerSideEncryptionByDefault><SSEAlgorithm>aws:kms</SSEAlgorithm><KMSMasterKeyID>alias/team</KMSMasterKeyID></ApplyServerSideEncryptionByDefault></Rule></ServerSideEncryptionConfiguration>'
+    const lc = '<?xml version="1.0" encoding="UTF-8"?><LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Rule><ID>expire-logs</ID><Filter><Prefix>logs/</Prefix></Filter><Status>Enabled</Status><Expiration><Days>14</Days></Expiration></Rule></LifecycleConfiguration>'
+    s3.bucketConfig.set('encryption', kms)
+    s3.bucketConfig.set('lifecycle', lc)
+    const r = await setupBucket(setting())
+    expect(r.created).toBe(false)
+    expect(r.steps.join('; ')).toMatch(/keeps its default encryption \(aws:kms\)/)
+    expect(r.steps.join('; ')).toMatch(/1 other lifecycle rule kept/)
+    expect(s3.bucketConfig.get('encryption')).toBe(kms)
+    // Nothing was put over the public access settings of a bucket that exists.
+    expect(s3.bucketConfig.has('publicAccessBlock')).toBe(false)
+    const after = s3.bucketConfig.get('lifecycle')!
+    expect(after).toContain('<ID>expire-logs</ID>')
+    expect(after).toContain('<Days>14</Days>')
+    expect(after).toContain(`<ID>${LIFECYCLE_RULE_ID}</ID>`)
+    // Again: still one rule of ours, the other kept.
+    await setupBucket(setting())
+    const twice = s3.bucketConfig.get('lifecycle')!
+    expect(twice.split(`<ID>${LIFECYCLE_RULE_ID}</ID>`).length).toBe(2)
+    expect(twice).toContain('<ID>expire-logs</ID>')
+  })
+
+  it('Set up on a bucket with no encryption or rules turns on SSE-S3 and adds only its rule', async () => {
+    const r = await setupBucket(setting())
+    expect(r.steps.join('; ')).toMatch(/turned on default encryption \(SSE-S3\)/)
+    expect(s3.bucketConfig.get('encryption')).toContain('AES256')
+    expect(s3.bucketConfig.get('lifecycle')).toContain(`<Prefix>walnut-history/</Prefix>`)
+  })
+})
+

@@ -282,6 +282,17 @@ async function install(src: string, dst: string): Promise<string> {
   return dst
 }
 
+/**
+ * Does this host still hold the recorded bytes of `f`: its archive file, or a plain or
+ * set-aside copy that holds them? A copy with other bytes (written after the offload) does
+ * not stand in for the remote one, which then comes back and is kept beside it.
+ */
+async function heldHere(dir: string, f: ManifestFile): Promise<boolean> {
+  const p = path.join(dir, f.rel)
+  if (await exists(p + ARCHIVE_SUFFIX)) return true
+  return (await holdsRecorded(p, f)) || (await holdsRecorded(p + ORIG_SUFFIX, f))
+}
+
 /** Do the first `f.size` bytes of `p` hash to `f.sha256`? (The file holds the recorded bytes, an append after them allowed.) */
 async function holdsRecorded(p: string, f: ManifestFile): Promise<boolean> {
   try {
@@ -630,10 +641,8 @@ async function restoreLocked(dir: string, sid: string): Promise<boolean> {
   if (m.remote) {
     const missing: RemoteFile[] = []
     for (const f of m.files) {
-      const p = path.join(dir, f.rel)
-      const there = (await exists(p)) || (await exists(p + ORIG_SUFFIX)) || (await exists(p + ARCHIVE_SUFFIX))
       const r = m.remote.files.find((x) => x.rel === f.rel)
-      if (!there && r) missing.push(r)
+      if (r && !(await heldHere(dir, f))) missing.push(r)
     }
     if (missing.length) {
       if (!remoteFetcher) throw new RemoteHistoryError(`the history of ${sid} is in remote storage, and this host cannot fetch it now`)
@@ -794,15 +803,34 @@ export async function restoreForRead(p: unknown, projectsDirs: readonly string[]
 }
 
 /**
+ * Does a directory entry answer an `fs.find` for `name`? By substring, as before, and a find
+ * for `<sid>.jsonl` also matches that session's manifest (its history may be only in remote
+ * storage, with no file named for the transcript here). Both daemons' finds use it.
+ */
+export function findNameMatch(entry: string, name: string): boolean {
+  if (entry.includes(name)) return true
+  if (!name.endsWith('.jsonl')) return false
+  const sid = name.slice(0, -'.jsonl'.length)
+  return SID_RE.test(sid) && entry === sid + MANIFEST_SUFFIX
+}
+
+/**
  * An `fs.find` for `<sid>.jsonl` matches names by substring, so it also finds
  * `<sid>.jsonl.gz`: such a hit is restored and answered as its plain path (or
- * left out when it cannot be), our own manifest, lock and temp files are left
- * out, and each path is named once.
+ * left out when it cannot be), and so is a manifest it matched (findNameMatch);
+ * our own lock and temp files and other manifests are left out, and each path is named once.
  */
 export async function plainFindResults(found: readonly string[], name: string): Promise<string[]> {
   const out: string[] = []
   for (const f of found) {
     const base = path.basename(f)
+    // A session kept only in remote storage has nothing here but its manifest: restore it, answer its transcript.
+    if (base.endsWith(MANIFEST_SUFFIX) && findNameMatch(base, name) && !base.includes(name)) {
+      const plain = path.join(path.dirname(f), name)
+      if (!(await ensurePlain(plain).catch(() => false))) continue
+      if (!out.includes(plain)) out.push(plain)
+      continue
+    }
     if (base.includes(TMP_TAG) || base.includes(CONFLICT_TAG) || base.endsWith(ORIG_SUFFIX) || base.endsWith(MANIFEST_SUFFIX) || base.endsWith(LOCK_SUFFIX)) continue
     if (isArchivedTranscriptName(base) && !name.endsWith(ARCHIVE_SUFFIX)) {
       const plain = f.slice(0, -ARCHIVE_SUFFIX.length)
@@ -856,7 +884,7 @@ export async function restoreArchivedAt(dir: string, sid: string): Promise<boole
 
 /** The pieces transcript-offload.ts shares with the archive: one lock, one manifest format, one way to place a file. */
 export const archiveInternals = {
-  tryLock, withBeat, beat, stillHeld, readManifest, writeManifest, manifestPath, install, tmpName, fsyncPath, exists, ORIG_SUFFIX, SID_RE,
+  tryLock, withBeat, beat, stillHeld, readManifest, writeManifest, manifestPath, install, tmpName, fsyncPath, exists, heldHere, ORIG_SUFFIX, SID_RE,
 }
 
 /** Is session `sid` archived in `dir`? Sync, one stat. */

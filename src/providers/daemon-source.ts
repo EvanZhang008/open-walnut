@@ -12771,7 +12771,7 @@ async function cmdFsFind(ws, id, cmd) {
       for (const e of entries) {
         if (found.length >= 10) return;
         const full = path.join(dir, e.name);
-        if (e.isFile() && e.name.includes(name)) {
+        if (e.isFile() && transcriptFindMatch(e.name, name)) {
           found.push(full);
           if (found.length >= 10) return;
         } else if (e.isDirectory()) {
@@ -12780,7 +12780,8 @@ async function cmdFsFind(ws, id, cmd) {
       }
     }
     for (const root of roots) await walk(root, 0);
-    // A <sid>.jsonl find also matches an archived <sid>.jsonl.gz: answer it restored, as its plain path.
+    // A <sid>.jsonl find also matches an archived <sid>.jsonl.gz, or the manifest of one kept
+    // only in remote storage: answer it restored, as its plain path.
     sendOk(ws, id, { files: await transcriptPlainFind(found, name) });
   } catch (err) {
     sendError(ws, id, 'fs.find failed: ' + err.message);
@@ -13515,6 +13516,9 @@ const TASK_DIR_ROOT = taskDirCore ? taskDirCore.taskDirRoot(process.env, HOME_DI
 const transcriptArchiveLoaded = () => !!taskDirCore && typeof taskDirCore.archiveTranscripts === 'function';
 function transcriptRestoreForRead(p) {
   return transcriptArchiveLoaded() ? taskDirCore.restoreForRead(p, CLAUDE_PROJECTS_DIRS).catch(() => {}) : Promise.resolve();
+}
+function transcriptFindMatch(entry, name) {
+  return transcriptArchiveLoaded() && typeof taskDirCore.findNameMatch === 'function' ? taskDirCore.findNameMatch(entry, name) : entry.includes(name);
 }
 function transcriptPlainFind(found, name) {
   return transcriptArchiveLoaded() ? taskDirCore.plainFindResults(found, name).catch(() => found) : Promise.resolve(found);

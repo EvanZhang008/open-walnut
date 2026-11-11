@@ -9,30 +9,13 @@ import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave';
 import { saveErrorMessage } from '../settings-pane-context';
 import { apiGet, apiPost } from '@/api/client';
 import { fetchAwsProfiles } from '@/api/config';
-
-type Remote = NonNullable<NonNullable<Config['session']>['history_remote']>;
-type Target = 'aws' | 'other';
-type Method = 'aws_chain' | 'profile';
+import { remoteFormConfig, type Method, type Remote, type Target } from './history-remote-model';
 
 interface Status { enabled: boolean; days: number; bucket: string; uploaded: number; remoteOnly: number; remoteBytes: number }
 interface TestResult { ok: boolean; step?: string; error?: string; ms?: number }
 interface SetupResult { ok: boolean; created?: boolean; steps?: string[]; error?: string }
 
 const fmtBytes = (n: number) => (n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`);
-
-/** The form as stored: only what is set, never a credential (those stay in the AWS chain or ~/.aws). */
-export function remoteFormConfig(f: {
-  enabled: boolean; target: Target; bucket: string; region: string; endpoint: string; days: number | undefined; method: Method; profile: string;
-}): Remote {
-  return {
-    enabled: f.enabled,
-    ...(f.days !== undefined ? { days: f.days } : {}),
-    bucket: f.bucket.trim(),
-    ...(f.region.trim() ? { region: f.region.trim() } : {}),
-    ...(f.target === 'other' && f.endpoint.trim() ? { endpoint: f.endpoint.trim() } : {}),
-    auth: f.method === 'profile' && f.profile.trim() ? { method: 'profile', profile: f.profile.trim() } : { method: 'aws_chain' },
-  };
-}
 
 /**
  * Settings > Sessions > History: the tier after the archive. Sessions compressed and untouched
@@ -76,10 +59,10 @@ export function HistoryRemoteGroup({ config, save }: { config: Config; save: (pa
     fetchAwsProfiles().then(setProfiles).catch(() => {});
   }, [loadStatus]);
 
-  const current = remoteFormConfig(form);
+  const current = remoteFormConfig(form, saved);
   useSettingsAutoSave({
     current: JSON.stringify(current),
-    baseline: JSON.stringify(remoteFormConfig(savedForm())),
+    baseline: JSON.stringify(remoteFormConfig(savedForm(), saved)),
     save: async () => { await save({ history_remote: current }); loadStatus(); },
   });
 
@@ -88,6 +71,8 @@ export function HistoryRemoteGroup({ config, save }: { config: Config; save: (pa
     try { done(await apiPost<T>(path, { setting: current }, { timeoutMs: 90000 })); } catch (e) { done(fail(saveErrorMessage(e))); } finally { busy(false); }
   };
   const noBucket = !form.bucket.trim();
+  // An S3-compatible store takes 'auto' where it has no regions (R2); AWS needs one.
+  const regionHint = form.endpoint.trim() && form.target !== 'aws' ? 'auto' : 'us-west-2';
 
   const statusLine = status
     ? status.uploaded === 0
@@ -152,7 +137,7 @@ export function HistoryRemoteGroup({ config, save }: { config: Config; save: (pa
         htmlFor="history-remote-region"
         indent
         control={<input id="history-remote-region" type="text" data-no-draft="autosave" className="settings-input settings-input--short"
-          value={form.region} onChange={(e) => set('region')(e.target.value)} placeholder={form.target === 'other' ? 'auto' : 'us-west-2'} />}
+          value={form.region} onChange={(e) => set('region')(e.target.value)} placeholder={regionHint} />}
       />
       <SettingsRow
         label="Credentials"
@@ -209,7 +194,7 @@ export function HistoryRemoteGroup({ config, save }: { config: Config; save: (pa
           state={setup && !setup.ok ? 'error' : undefined}
           help={setup
             ? setup.ok ? `Done: ${(setup.steps ?? []).join(', ')}.` : `Couldn't set it up: ${setup.error}`
-            : 'Creates it if missing, blocks all public access, turns on encryption, and moves history to the cheaper Standard-IA class after 30 days.'}
+            : 'Creates it if missing, private and encrypted. On a bucket that exists, only adds Walnut\'s rule moving its history to the cheaper Standard-IA class after 30 days; its other settings and rules stay as they are.'}
           control={
             <SettingsButton onClick={() => run<SetupResult>('/api/history-remote/setup', setSettingUp, setSetup, (error) => ({ ok: false, error }))}
               disabled={noBucket} title={noBucket ? 'Enter a bucket first.' : undefined} busy={settingUp} busyLabel="Setting up..." data-testid="history-remote-setup">

@@ -9,10 +9,10 @@
  * Nothing is lost, in two steps, as with the archive itself. First each archive file is
  * hashed (sha256 and md5), uploaded under a name holding its hash (so an object is never
  * replaced by other bytes), and the upload is checked: the store verifies the md5 it was
- * sent, and a HEAD must answer its size (and, where the store reports it, that md5 as the
- * ETag). Only then does the manifest record the objects (`remote`). Second, a pass at least
+ * sent, and a HEAD must answer its size and that md5 as the ETag (an ETag that is no plain
+ * md5 has the object read back and its sha256 compared). Only then does the manifest record the objects (`remote`). Second, a pass at least
  * OFFLOAD_KEEP_MS later checks every local file still hashes as recorded and every object is
- * still there with its size, records `offloadedAt`, and removes the local files. A crash at
+ * still holds those bytes (the same check), records `offloadedAt`, and removes the local files. A crash at
  * any point leaves files the manifest names: a restore fetches only what is missing, and
  * checks each download's sha256 before it is put in place (never over a file there).
  *
@@ -42,6 +42,8 @@ export interface OffloadStore {
   put(key: string, file: string, info: { size: number; md5: string; sha256: string }): Promise<void>
   /** The object's size and ETag, or null when there is none. */
   head(key: string): Promise<{ size: number; etag?: string } | null>
+  /** Read the whole object back and hash it (for an ETag that is no plain md5), or null when there is none. */
+  readHash(key: string): Promise<{ size: number; sha256: string } | null>
 }
 
 export interface FetchStore {
@@ -84,10 +86,24 @@ async function hashFile(p: string): Promise<{ size: number; sha256: string; md5:
   return { size, sha256: sha.digest('hex'), md5: md5.digest('hex') }
 }
 
-/** An ETag that is a plain md5 (a single-part upload without KMS) must be the one sent. */
-function etagMatches(etag: string | undefined, md5: string): boolean {
+/** The md5 an ETag carries: only a single-part upload's ETag without KMS is one. */
+function plainMd5(etag: string | undefined): string | null {
   const e = (etag ?? '').replace(/"/g, '').toLowerCase()
-  return !/^[0-9a-f]{32}$/.test(e) || e === md5
+  return /^[0-9a-f]{32}$/.test(e) ? e : null
+}
+
+/**
+ * Does the object hold exactly these bytes? Its size first; then an ETag that is a plain md5
+ * answers it, and any other ETag (KMS, multipart, a store's own) means reading it back, since
+ * only its content proves it (metadata can be written by anyone who can write the object).
+ */
+async function holds(store: OffloadStore, key: string, h: { size: number; md5: string; sha256: string }): Promise<boolean> {
+  const there = await store.head(key)
+  if (!there || there.size !== h.size) return false
+  const md5 = plainMd5(there.etag)
+  if (md5) return md5 === h.md5
+  const back = await store.readHash(key)
+  return !!back && back.size === h.size && back.sha256 === h.sha256
 }
 
 const posix = (rel: string) => rel.split(path.sep).join('/')
@@ -113,10 +129,11 @@ async function upload(dir: string, m: Manifest, o: OffloadOptions, now: number):
     const gz = path.join(dir, f.rel + ARCHIVE_SUFFIX)
     const h = await hashFile(gz)
     const key = objectKey(o.keyPrefix, dir, f.rel, h.sha256)
-    const there = await o.store.head(key)
-    if (!there || there.size !== h.size) await o.store.put(key, gz, h)
-    const back = await o.store.head(key)
-    if (!back || back.size !== h.size || !etagMatches(back.etag, h.md5)) throw new Error(`${key} did not check out after its upload`)
+    // An object already under the name (an earlier pass) is used only when it holds these bytes.
+    if (!(await holds(o.store, key, h))) {
+      await o.store.put(key, gz, h)
+      if (!(await holds(o.store, key, h))) throw new Error(`${key} did not check out after its upload`)
+    }
     files.push({ rel: f.rel, key, gzSize: h.size, gzSha256: h.sha256, md5: h.md5 })
     bytes += h.size
   }
@@ -135,8 +152,7 @@ async function removeLocal(dir: string, m: Manifest, o: OffloadOptions, now: num
     if (!rf) throw new Error(`${f.rel} has no remote copy recorded`)
     const local = await hashFile(path.join(dir, f.rel + ARCHIVE_SUFFIX))
     if (local.sha256 !== rf.gzSha256 || local.size !== rf.gzSize) throw new Error(`${f.rel}${ARCHIVE_SUFFIX} changed since its upload`)
-    const there = await o.store.head(rf.key)
-    if (!there || there.size !== rf.gzSize || !etagMatches(there.etag, rf.md5)) throw new Error(`${rf.key} is not in remote storage as uploaded`)
+    if (!(await holds(o.store, rf.key, { size: rf.gzSize, md5: rf.md5, sha256: rf.gzSha256 }))) throw new Error(`${rf.key} is not in remote storage as uploaded`)
     freed += local.size
   }
   await A.writeManifest(dir, { ...m, remote: { ...r, offloadedAt: now } })
@@ -205,9 +221,10 @@ export async function fetchRemoteArchive(dir: string, sid: string, store: FetchS
   if (!m?.remote) return 0
   let got = 0
   for (const rf of m.remote.files) {
-    const p = path.join(dir, rf.rel)
-    const gz = p + ARCHIVE_SUFFIX
-    if ((await A.exists(gz)) || (await A.exists(p)) || (await A.exists(p + A.ORIG_SUFFIX))) continue
+    const gz = path.join(dir, rf.rel) + ARCHIVE_SUFFIX
+    // A plain or set-aside copy stands in only when it holds the recorded bytes (restoreLocked keeps both otherwise).
+    const f = m.files.find((x) => x.rel === rf.rel)
+    if (await A.exists(gz) || (f && (await A.heldHere(dir, f)))) continue
     await fsp.mkdir(path.dirname(gz), { recursive: true })
     const tmp = A.tmpName(gz)
     try {

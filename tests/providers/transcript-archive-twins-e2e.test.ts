@@ -185,6 +185,7 @@ describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
     const proj = path.join(home, '.claude', 'projects', '-work-marina')
     const body = writeSession(proj, 's-remote')
     writeSession(proj, 's-alone')
+    const found = writeSession(proj, 's-found')
     const { archiveTranscripts, setRemoteFetcher } = await import('../../src/providers/transcript-archive.js')
     const { offloadArchived, fetchRemoteArchive, OFFLOAD_KEEP_MS } = await import('../../src/providers/transcript-offload.js')
     const { remoteStore, resolveRemote } = await import('../../src/core/history-remote/store.js')
@@ -199,8 +200,8 @@ describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
     try {
       const store = await remoteStore(resolveRemote({ enabled: true, bucket: s3.bucket, endpoint: s3.url, region: 'us-east-1' }))
       const tier = { olderThanMs: 180 * 86_400_000, keyPrefix: 'walnut-history/twin' }
-      expect((await offloadArchived(projects, { ...tier, now: later, store })).uploaded).toBe(2)
-      expect((await offloadArchived(projects, { ...tier, now: later + OFFLOAD_KEEP_MS, store })).offloaded).toBe(2)
+      expect((await offloadArchived(projects, { ...tier, now: later, store })).uploaded).toBe(3)
+      expect((await offloadArchived(projects, { ...tier, now: later + OFFLOAD_KEEP_MS, store })).offloaded).toBe(3)
       expect(fs.readdirSync(proj).filter((n) => n.endsWith('.gz'))).toEqual([])
       setRemoteFetcher(null)
 
@@ -224,6 +225,13 @@ describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
       expect(asked).toEqual([{ dir: proj, sessionId: 's-remote' }])
       expect(fs.readFileSync(path.join(proj, 's-remote', 'subagents', 'agent-a1.jsonl'), 'utf8')).toBe(body.agent)
       expect(fs.existsSync(path.join(proj, 's-remote.walnut-archive.json'))).toBe(false)
+
+      // A find by id (cwd unknown): only the manifest is here, and it answers the transcript, restored.
+      const f = await rpc(d, { cmd: 'fs.find', name: 's-found.jsonl' })
+      expect(f.ok).toBe(true)
+      expect(f.files).toEqual([path.join(proj, 's-found.jsonl')])
+      expect(fs.readFileSync(path.join(proj, 's-found.jsonl'), 'utf8')).toBe(found.main)
+      expect(asked).toEqual([{ dir: proj, sessionId: 's-remote' }, { dir: proj, sessionId: 's-found' }])
 
       // Storage down: the read finds no file and the session stays as it was, only in remote storage.
       s3.faults.failAll = true
