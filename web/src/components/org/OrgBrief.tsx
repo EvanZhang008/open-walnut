@@ -55,7 +55,10 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded, fresh, u
   // Held to the live state (brief-structure.ts `live`): each line in its task's section, a finished
   // task's line gone, and every task asking the user in Needs you, in its own words when missing.
   const shaped = useMemo(
-    () => (brief?.text && owner ? structureBrief(brief.text, owner.id, tasks, { live: owner }) : null),
+    // Walnut's earlier lines are written again from the live state, in the letter's language.
+    () => (brief?.text && owner ? structureBrief(brief.text, owner.id, tasks, {
+      live: owner, ...(brief.added?.length ? { walnut: brief.added } : {}), ...(brief.lang ? { lang: brief.lang } : {}),
+    }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [brief?.text, owner?.id, sectionKey],
   );

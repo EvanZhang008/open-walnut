@@ -204,11 +204,18 @@ function sameLabel(a: string, b: string): boolean {
   return sameDecisionWords(a, b);
 }
 
-/** The options the user picks from now differ from those of before: another way to answer, or
- *  another option (its words compared by sameDecisionWords, so a label reworded is the same one). */
+/** The options the user picks from now differ from those of before: another way to pick (one or
+ *  several), or another option (its words compared by sameDecisionWords, so a label reworded is the
+ *  same one). Buttons taken off a question (he answers it freely now), or put on it only as yes and
+ *  no, are the same question shown another way, never news. Options with words of their own are
+ *  news: told as the same ask with new options, never as another ask (brief-refresh.ts). */
 export function optionsChanged(was: Pick<AskMemory, 'kind' | 'options'>, now: Pick<StatusReport, 'ask_kind' | 'ask_options'>): boolean {
   const a = choiceOf(was.kind, was.options);
   const b = choiceOf(now.ask_kind, now.ask_options?.map((o) => o.label));
+  // Buttons taken off: he answers freely what he could pick before.
+  if (b.kind === 'free') return false;
+  // Buttons put on: news unless they only say yes or no.
+  if (a.kind === 'free') return !optionsAnswerAsk(b.options);
   if (a.kind !== b.kind) return true;
   if (a.options.length !== b.options.length) return true;
   const used = new Set<number>();
@@ -218,6 +225,16 @@ export function optionsChanged(was: Pick<AskMemory, 'kind' | 'options'>, now: Pi
     used.add(i);
     return true;
   });
+}
+
+/** An option that is only a yes or a no ("Yes", "No (recommended)", and the same in Chinese). */
+const ANSWER_ONLY = /^\s*(?:yes|no|ok|okay|sure|go ahead|\u53ef\u4ee5|\u597d|\u884c|\u540c\u610f|\u4e0d|\u4e0d\u8981|\u4e0d\u540c\u610f)\s*[.!\u3002\uff01]?\s*(?:[(\uff08](?:recommended|\u63a8\u8350)[)\uff09])?\s*$/i;
+
+/** Every option only says yes or no: the question as it was, with two buttons for its answers. Any
+ *  option with words of its own may bring a new target, direction or number, so it is news
+ *  (review 2026-11-11: "Yes, run tests on the production cluster" on a question about staging). */
+function optionsAnswerAsk(labels: readonly string[]): boolean {
+  return labels.length > 0 && labels.every((l) => ANSWER_ONLY.test(l));
 }
 
 /** What the session said of its decision (FOR_USER_ASK_ID, FOR_USER_ASK_NEW), read off the report. */

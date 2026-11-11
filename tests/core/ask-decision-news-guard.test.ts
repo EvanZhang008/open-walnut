@@ -25,7 +25,7 @@ import { askDecisionQuestion, stampSaidDecision, taskDecision } from '../../src/
 import { askNews, seenOf } from '../../src/core/sessions/status-push.js'
 import { briefFreshness, briefLineMark, briefSnapshot, lineMoved } from '../../src/core/sessions/brief-fresh.js'
 import { briefHintStateOf } from '../../src/core/sessions/brief-hint.js'
-import { briefRefreshDue, needsChanges } from '../../src/core/sessions/brief-refresh.js'
+import { briefRefreshDue, needsChanges, refreshBody } from '../../src/core/sessions/brief-refresh.js'
 import { briefNeedsAsks, briefNeedsDecisions } from '../../src/core/sessions/brief.js'
 import { nextRecheckCount } from '../../src/core/sessions/needs-recheck.js'
 import { clearRiding, decisionToldTo, pendingRiding, rideLine, rideNotice } from '../../src/core/sessions/status-riding.js'
@@ -317,9 +317,30 @@ describe('what is news is still news', () => {
     expect(changed(multi, same)).toEqual([])
   })
   it('new options', () => {
-    const b = base()
+    const b = turn(answer('Which phone should run the tests?', ['FOR_USER_ASK_KIND: single', 'FOR_USER_ASK_OPTIONS: your iPhone (recommended) | the simulator only']), null, NOW - 3_600_000)
     const next = turn(answer('Which phone should run the tests?', [`FOR_USER_ASK_ID: ${b.ask_id}`, 'FOR_USER_ASK_KIND: single', 'FOR_USER_ASK_OPTIONS: your iPhone (recommended) | the test iPad | the simulator only']), b, NOW)
     expect(next.ask_id).toBe(b.ask_id)
+    expect(changed(b, next)).toEqual(ALL_FACT_PATHS)
+  })
+  // 2026-11-10, the CEO's reflection: a blog ask in the same words that only gained its answers as
+  // buttons read "now asks something else" at a Brief refresh.
+  it('yes and no buttons put on a question he could answer freely, or buttons taken off, are no news', () => {
+    const ask = 'Approve testing on the staging cluster?'
+    const b = turn(answer(ask), null, NOW - 3_600_000)
+    const buttons = turn(answer(ask, ['FOR_USER_ASK_KIND: single', 'FOR_USER_ASK_OPTIONS: Yes (recommended) | No']), b, NOW)
+    expect(buttons.ask_id).toBe(b.ask_id)
+    expect(buttons.ask_rev).toBeUndefined()
+    expect(changed(b, buttons)).toEqual([])
+    const free = turn(answer(ask), buttons, NOW + 60_000)
+    expect(free.ask_rev).toBeUndefined()
+    expect(changed(buttons, free)).toEqual([])
+  })
+  // Review 2026-11-11: an option with words of its own may bring a new target.
+  it('buttons with words of their own are new options, even when one starts with yes', () => {
+    const b = turn(answer('Approve testing on the staging cluster?'), null, NOW - 3_600_000)
+    const next = turn(answer('Approve testing on the staging cluster?', ['FOR_USER_ASK_KIND: single', 'FOR_USER_ASK_OPTIONS: Yes, run tests on the production cluster | No']), b, NOW)
+    expect(next.ask_id).toBe(b.ask_id)
+    expect(next.ask_rev).toBe(1)
     expect(changed(b, next)).toEqual(ALL_FACT_PATHS)
   })
   it('a new deadline', () => {
@@ -595,5 +616,79 @@ describe('every path that tells an ask changed compares the decision', () => {
     // Both the status question and the summary path ask through sameAskQuestionFor, which leads with it.
     expect(code('src/core/same-ask-tree.ts')).toMatch(/export async function sameAskQuestionFor[\s\S]*?askDecisionQuestion\(/)
     expect(code('src/ops/tasks.ts')).toMatch(/ask_id: z\.string\(\)/)
+  })
+})
+
+/**
+ * The four asks Main's 2026-11-10 Brief refresh told as "now asks something else" (the CEO's
+ * reflection that day), replayed in their shapes with invented subjects. Read at the source: one
+ * only gained buttons (no news at all now), two kept their decision with a fact the session named
+ * (new drafts with other picks; a deadline in the proposed message moved), one asked another question.
+ * The refresh tells each as what it is: nothing, the new fact alone, or another decision.
+ */
+describe('the 2026-11-10 refresh, replayed', () => {
+  const told = (before: StatusReport, after: StatusReport) => {
+    const owner = lead()
+    const was = taskOf(before)
+    const is = taskOf(after)
+    const changes = needsChanges(briefNeedsAsks(owner, [is]), briefNeedsAsks(owner, [was]), briefNeedsDecisions(owner, [is]), briefNeedsDecisions(owner, [was]))
+    const body = refreshBody(owner, { writtenAt: iso(NOW - 3_600_000), moved: [], finished: [], newAsks: [], stale: true }, [is], NOW, changes)
+    return { kinds: changes.map((c) => c.kind), body }
+  }
+  it('a question that gained its answers as buttons: the same ask, with its new options', () => {
+    const ask = 'Blog note one (first person): add an "I" paragraph only at the start and the end, keep "we" elsewhere: is that the right amount?'
+    const b = turn(answer(ask), null, NOW - 4 * 3_600_000)
+    const next = turn(answer(ask, ['FOR_USER_ASK_KIND: single', 'FOR_USER_ASK_OPTIONS: yes, only two places | the whole start as "I" | none, keep "we"']), b, NOW)
+    expect(next.ask_id).toBe(b.ask_id)
+    const { kinds, body } = told(b, next)
+    expect(kinds).toEqual(['fact'])
+    expect(body).toContain('the same ask, with a new fact: "new options: yes, only two places')
+    expect(body).not.toContain('now asks another decision')
+  })
+  // Review 2026-11-11: a fact told at an earlier revision is never told again as this change's.
+  it('only the deadline moved after a fact was told: the deadline is the news, never the old fact', () => {
+    const b = turn(answer('Send the reminder to the supplier?', ['FOR_USER_ASK_NEW: two new drafts are ready']), turn(answer('Send the reminder to the supplier?'), null, NOW - 5 * 3_600_000), NOW - 4 * 3_600_000)
+    expect(b.ask_rev).toBe(1)
+    const next = turn(answer('Send the reminder to the supplier now?'), b, NOW)
+    const owner = lead()
+    const was = taskOf(b, { due_date: '2026-11-13' })
+    const is = taskOf(next, { due_date: '2026-11-24' })
+    const changes = needsChanges(briefNeedsAsks(owner, [is]), briefNeedsAsks(owner, [was]), briefNeedsDecisions(owner, [is]), briefNeedsDecisions(owner, [was]))
+    expect(changes.map((c) => c.kind)).toEqual(['fact'])
+    const body = refreshBody(owner, { writtenAt: iso(NOW - 3_600_000), moved: [], finished: [], newAsks: [], stale: true }, [is], NOW, changes)
+    expect(body).toContain('its deadline is now 2026-11-24')
+    expect(body).not.toContain('two new drafts are ready')
+  })
+  it("a day's new batch with other picks, named by the session: the same ask with that fact", () => {
+    const b = turn(answer('Today\'s 10 drafts are in the outreach chat: post the recommended first and sixth?'), null, NOW - 12 * 3_600_000)
+    const next = turn(answer('Today\'s 10 drafts are in the outreach chat: post the recommended first (a forum comment) and second?', ['FOR_USER_ASK_NEW: a new batch of 10 today; the top picks are now the first and the second']), b, NOW)
+    expect(next.ask_id).toBe(b.ask_id)
+    const { kinds, body } = told(b, next)
+    expect(kinds).toEqual(['fact'])
+    expect(body).toContain('the same ask, with a new fact: "a new batch of 10 today; the top picks are now the first and the second"')
+    expect(body).not.toContain('now asks another decision')
+  })
+  it('a deadline in the proposed message moved, named by the session: the same ask with that fact', () => {
+    const b = turn(answer('Send the reminder to the supplier in your name, asking for a written quote by 11/13? Recommended.'), null, NOW - 12 * 3_600_000)
+    const next = turn(answer('Send the reminder to the supplier in your name now, asking for a written quote by 11/24? Recommended.', [`FOR_USER_ASK_ID: ${b.ask_id}`, 'FOR_USER_ASK_NEW: the reply date moved from 11/13 to 11/24, the old one was three days out']), b, NOW)
+    expect(next.ask_id).toBe(b.ask_id)
+    const { kinds, body } = told(b, next)
+    expect(kinds).toEqual(['fact'])
+    expect(body).toContain('the reply date moved from 11/13 to 11/24')
+  })
+  it('another question about the same machine: another decision', () => {
+    const b = turn(answer('Once home, allow the read-only chat task read, write and run rights, and click the Windows prompt once more?'), null, NOW - 12 * 3_600_000)
+    const next = turn(answer('Can you see that Windows computer\'s screen right now?', ['FOR_USER_ASK_ID: new']), b, NOW)
+    expect(next.ask_id).not.toBe(b.ask_id)
+    const { kinds, body } = told(b, next)
+    expect(kinds).toEqual(['changed'])
+    expect(body).toContain('now asks another decision')
+  })
+  it('the same decision reworded is never told at all', () => {
+    for (const { asks, numbersReplaced } of REWORDINGS) {
+      if (numbersReplaced || asks.length < 2) continue
+      const b = turn(answer(asks[0]!), null, NOW - 3_600_000)
+      expect(told(b, turn(answer(asks[1]!), b, NOW)).kinds, asks[1]).toEqual([])
+    }
   })
 })

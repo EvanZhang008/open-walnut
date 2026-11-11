@@ -81,9 +81,9 @@ export function refreshBody(owner: Task, fresh: BriefFreshness, tasks: readonly 
       return `- ${name(id)} now asks the user: "${(s?.ask ?? '').replace(/\s+/g, ' ').slice(0, 200)}" (not in your Brief)`;
     }),
     ...(fresh.newAsks.length > 8 ? [`- and ${fresh.newAsks.length - 8} more new asks`] : []),
-    ...needsLines(changes, name),
+    ...needsLines(changes, name, (id) => byId.get(id)?.user_status?.decision?.new),
     changes.length
-      ? 'Bring what the user reads up to date: check what you must (task_get on a task above), then update your Brief with brief_write, tell him in your chat in a few short lines only the Needs you changes above (new, now asking something else, no longer needed), never again an ask he was already told and that did not change, and end the turn. This is a refresh: act on something only when it is yours to act on now.'
+      ? 'Bring what the user reads up to date: check what you must (task_get on a task above), then update your Brief with brief_write, tell him in your chat in a few short lines only the Needs you changes above (new, now asking another decision, the same ask with a new fact: only that fact, no longer needed), never again an ask he was already told and that did not change, and end the turn. This is a refresh: act on something only when it is yours to act on now.'
       : 'Nothing that needs the user changed since you last told him: do not repeat his Needs you list. Check what you must (task_get on a task above), update your Brief with brief_write, and end the turn with only the agent-ack line, <walnut-turn status="agent-ack"/>, so nothing new shows in his chat. This is a refresh: act on something only when it is yours to act on now.',
     // 2026-11-04: three VPs each told the user "nothing changed, only reworded" at a refresh.
     'When your Brief has no real change for the user (an ask in other words is no change), the agent-ack line is your whole answer: never tell him "no change" or "only reworded".',
@@ -91,7 +91,19 @@ export function refreshBody(owner: Task, fresh: BriefFreshness, tasks: readonly 
   return lines.join('\n');
 }
 
-export interface NeedsChange { id: string; kind: 'new' | 'changed' | 'gone'; ask: string }
+/** `changed`: it asks another decision now; `fact`: the same decision with a new fact (its
+ *  revision, deadline or links moved), told as that fact alone, never as a new ask. */
+export interface NeedsChange {
+  id: string; kind: 'new' | 'changed' | 'fact' | 'gone'; ask: string;
+  /** With `fact`: what of the decision moved (its revision, its deadline, its links), and the deadline now. */
+  moved?: { rev?: true; due?: string | null; links?: true };
+}
+
+/** A decision key's parts (ask-decision.ts decisionKey: `<id>|r<rev>|d<due>|<links>`). */
+function keyParts(key: string): { id: string; rev: string; due: string; links: string } {
+  const [id = '', rev = '', due = '', ...links] = key.split('|');
+  return { id, rev, due: due.replace(/^d/, ''), links: links.join('|') };
+}
 
 /**
  * What needs the user changed since the last refresh told the node (2026-11-02 org review: a lead
@@ -110,19 +122,43 @@ export function needsChanges(
     if (!told || !(id in told)) { out.push({ id, kind: 'new', ask }); continue; }
     const was = toldDecisions?.[id];
     const is = nowDecisions[id];
-    const changed = was && is ? was !== is : told[id] !== ask && !sameAskReworded(told[id], ask);
-    if (changed) out.push({ id, kind: 'changed', ask });
+    if (was && is) {
+      // A decision key is `<id>|r<rev>|d<due>|<links>`: the same id is the same decision.
+      if (was === is) continue;
+      const a = keyParts(was);
+      const b = keyParts(is);
+      if (a.id !== b.id) { out.push({ id, kind: 'changed', ask }); continue; }
+      out.push({ id, kind: 'fact', ask, moved: {
+        ...(a.rev !== b.rev ? { rev: true as const } : {}), ...(a.due !== b.due ? { due: b.due || null } : {}), ...(a.links !== b.links ? { links: true as const } : {}),
+      } });
+      continue;
+    }
+    if (told[id] !== ask && !sameAskReworded(told[id], ask)) out.push({ id, kind: 'changed', ask });
   }
   for (const [id, ask] of Object.entries(told ?? {})) if (!(id in now)) out.push({ id, kind: 'gone', ask });
   return out;
 }
 
-function needsLines(changes: readonly NeedsChange[], name: (id: string) => string): string[] {
+function needsLines(changes: readonly NeedsChange[], name: (id: string) => string, factOf: (id: string) => string | undefined = () => undefined): string[] {
   if (!changes.length) return [];
-  const word = { new: 'new', changed: 'now asks something else', gone: 'no longer needs him' } as const;
+  const word = { new: 'new', changed: 'now asks another decision', fact: 'the same ask, with a new fact', gone: 'no longer needs him' } as const;
+  const line = (c: NeedsChange): string => {
+    if (c.kind === 'gone') return `- ${name(c.id)}: ${word.gone}`;
+    if (c.kind !== 'fact') return `- ${name(c.id)}: ${word[c.kind]}: "${c.ask}"`;
+    // Only what moved since he was told: the fact the session named for a new revision (an older
+    // one was told already), the deadline as it is now, new links.
+    const m = c.moved ?? {};
+    const named = m.rev ? factOf(c.id)?.replace(/\s+/g, ' ').trim().slice(0, 200) : undefined;
+    const facts = [
+      ...(m.rev ? [named ? `"${named}"` : 'a new fact (task_get shows it)'] : []),
+      ...(m.due !== undefined ? [m.due ? `its deadline is now ${m.due}` : 'its deadline was removed'] : []),
+      ...(m.links ? ['it points to new links'] : []),
+    ];
+    return `- ${name(c.id)}: ${word.fact}${facts.length ? `: ${facts.join('; ')}` : ''} (the ask: "${c.ask}")`;
+  };
   return [
     'Needs you, changed since you last told him:',
-    ...changes.slice(0, 12).map((c) => `- ${name(c.id)}: ${word[c.kind]}${c.kind === 'gone' ? '' : `: "${c.ask}"`}`),
+    ...changes.slice(0, 12).map(line),
     ...(changes.length > 12 ? [`- and ${changes.length - 12} more`] : []),
   ];
 }

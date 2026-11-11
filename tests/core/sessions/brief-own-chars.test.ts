@@ -171,7 +171,7 @@ const KNOWN_LINE_SOURCES = [
   'pieces.push(...l.pieces)', // who wrote each part of a line (brief-source.ts), not a line
   "pieces.push({ text: '\\n', layout: true })", // the line break between two lines, Walnut's layout
   'walnut({ text: words, pieces: [{ text: words, writer: askLineWriter(t) }] })', // an ask the letter did not name
-  'walnut(layout(`- And ${more} more ${more === 1 ? \'ask\' : \'asks\'} the user: the Task view lists ${more === 1 ? \'it\' : \'them\'}.`))', // the count past the cap: ADDED_MORE_RE
+  'walnut(layout(BRIEF_WALNUT_WORDS[lang].more(more)))', // the count past the cap, in the Brief's language: ADDED_MORE_RE
 ]
 
 describe('source ratchet: every line structureBrief writes is accounted for', () => {

@@ -16,7 +16,7 @@
  *     written bare becomes a list item.
  */
 import { ABOUT_TAG_NAME } from '../org/message-about.js';
-import { BRIEF_SECTIONS, NEEDS_CATEGORY_LABELS, briefTeam, fallbackUserState, needsLineOf, shownState, storedUserState, type BriefSectionTask, type BriefTask, type UserState } from '../user-status.js';
+import { ANSWER_TO_READ, BRIEF_SECTIONS, MARKED_ASK, NEEDS_CATEGORY_LABELS, RESULT_TO_READ, TURN_TO_READ, briefTeam, fallbackUserState, lastWordsOfStatus, needsLineOf, shownState, storedUserState, type BriefSectionTask, type BriefTask, type NeedsCategory, type UserState } from '../user-status.js';
 import { pickLead } from '../org/org-tree.js';
 import { sameAreaTasks } from '../router/same-area.js';
 import { askLineWriter, sourcesOfPieces, type BriefPiece, type BriefTextSource } from './brief-source.js';
@@ -88,14 +88,71 @@ const words = (v: string) => v.replace(/\s+/g, ' ').trim().replace(/</g, '&lt;')
  *  can edit (brief-write.ts). */
 export const ADDED_ASKS_MAX = 8;
 const ADDED_ASK_CHARS = 200;
-/** Walnut's line for the asks past ADDED_ASKS_MAX: no task of its own, never a rule issue. */
-export const ADDED_MORE_RE = /^- And \d+ more asks? the user: the Task view lists (?:it|them)\.$/;
 
-/** Walnut's line for a task that asks the user and that the letter does not name: its own ask. */
-export function addedAskLine(task: BriefSectionTask, main: boolean, tasks: readonly BriefSectionTask[]): string {
+/** The languages Walnut writes its own lines of a Brief in (the letters' languages, languages.ts). */
+export type BriefLang = 'en' | 'zh';
+export const BRIEF_LANGS: readonly BriefLang[] = ['en', 'zh'];
+
+/**
+ * Walnut's own words in a Brief, per language (2026-11-10, the CEO's reflection: the lines Walnut
+ * added to a Chinese Brief led with "Decide:", "Take a look:", "Can close:"). The Brief is the
+ * user's letter, so these follow his reply language like every Walnut letter. A phrase table:
+ * tests/core/sessions/brief-walnut-words.test.ts renders every line Walnut writes in each language.
+ */
+export const BRIEF_WALNUT_WORDS: Readonly<Record<BriefLang, {
+  labels: Readonly<Record<NeedsCategory, string>>;
+  /** Between a line's label and its words. */
+  sep: string;
+  /** Walnut's fixed status words (user-status.ts) as the Brief says them. */
+  fixed: Readonly<Record<string, string>>;
+  lastWords: (words: string) => string;
+  needsYou: string;
+  more: (n: number) => string;
+}>> = {
+  en: {
+    labels: NEEDS_CATEGORY_LABELS, sep: ': ', fixed: {}, lastWords: (w) => `${TURN_TO_READ}; its last words: "${w}"`, needsYou: 'Needs you',
+    more: (n) => `- And ${n} more ${n === 1 ? 'ask' : 'asks'} the user: the Task view lists ${n === 1 ? 'it' : 'them'}.`,
+  },
+  zh: {
+    labels: { look: '看一下', decide: '要你决定', review: '要你审阅', close: '可以关闭' },
+    sep: '：',
+    fixed: {
+      [RESULT_TO_READ]: '结果已经好了', [ANSWER_TO_READ]: '它回答了你的问题',
+      [TURN_TO_READ]: '这一轮结束了，没有问你什么', [MARKED_ASK]: '有人手动把它设成了需要你：打开看看。',
+    },
+    lastWords: (w) => `这一轮结束了，没有问你什么；最后一句：「${w}」`,
+    needsYou: '需要你',
+    more: (n) => `- 还有 ${n} 件事要你处理：在 Task 视图里看。`,
+  },
+};
+
+/** The language of Walnut's lines in a Brief: the one given (a code or a name), else the letter's
+ *  own script. */
+export function briefLangOf(language: string | undefined, text = ''): BriefLang {
+  if (language) return /chinese|中文|^zh/i.test(language) ? 'zh' : 'en';
+  return /[\u4e00-\u9fff]/.test(text.replace(/<task-ref\b[^>]*>/g, '')) ? 'zh' : 'en';
+}
+
+/** Walnut's line for the asks past ADDED_ASKS_MAX, in any of its languages: no task of its own, never a rule issue. */
+export const ADDED_MORE_RE = /^- (?:And \d+ more asks? the user: the Task view lists (?:it|them)\.|还有 \d+ 件事要你处理：在 Task 视图里看。)$/;
+
+/** A status's line words as the Brief says them in `lang`: its fixed words translated, else as written. */
+function statusWords(text: string, s: BriefSectionTask['user_status'], lang: BriefLang): string {
+  const w = BRIEF_WALNUT_WORDS[lang];
+  if (lang === 'en') return text;
+  const last = lastWordsOfStatus(s);
+  if (last) return w.lastWords(last);
+  return w.fixed[text] ?? text;
+}
+
+/** Walnut's line for a task that asks the user and that the letter does not name: its own ask,
+ *  Walnut's words in the Brief's language. */
+export function addedAskLine(task: BriefSectionTask, main: boolean, tasks: readonly BriefSectionTask[], lang: BriefLang = 'en'): string {
+  const w = BRIEF_WALNUT_WORDS[lang];
   // What to do with it, then its ask or what there is to read (needsLineOf, 2026-11-03).
   const line = task.user_status ? needsLineOf(task.user_status) : null;
-  const ask = (line ? [NEEDS_CATEGORY_LABELS[line.category], words(line.text)].filter(Boolean).join(': ') : words(task.user_status?.ask ?? '')).slice(0, ADDED_ASK_CHARS) || 'Needs you';
+  const said = line ? words(statusWords(line.text, task.user_status, lang)) : '';
+  const ask = (line ? [w.labels[line.category], said].filter(Boolean).join(w.sep) : words(task.user_status?.ask ?? '')).slice(0, ADDED_ASK_CHARS) || w.needsYou;
   return askLineOf(task, main, tasks, ask);
 }
 
@@ -105,10 +162,10 @@ function askLineOf(task: BriefSectionTask, main: boolean, tasks: readonly BriefS
 }
 
 const reEscape = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-/** addedAskLine's shape with a category, its ask clipped as Walnut clips it. */
+/** addedAskLine's shape with a category in any of its languages, its ask clipped as Walnut clips it. */
 const LABELED_ASK_RE = new RegExp(
   `^- <task-ref id="[^"]+" label="[^"]*"/>(?: \\(VP <task-ref id="[^"]+" label="[^"]*"/>\\))?: `
-  + `((?:${Object.values(NEEDS_CATEGORY_LABELS).map(reEscape).join('|')})(?:: .*)?)$`,
+  + `(${BRIEF_LANGS.map((l) => `(?:${Object.values(BRIEF_WALNUT_WORDS[l].labels).map(reEscape).join('|')})(?:${reEscape(BRIEF_WALNUT_WORDS[l].sep)}.*)?`).join('|')})$`,
 );
 
 /**
@@ -127,7 +184,7 @@ export function briefWalnutLines(
   const main = owner.org_role === 'main';
   const known = new Set<string>();
   for (const t of briefAskScope(owner, tasks)) {
-    known.add(addedAskLine(t, main, tasks));
+    for (const lang of BRIEF_LANGS) known.add(addedAskLine(t, main, tasks, lang));
     known.add(askLineOf(t, main, tasks, words(t.user_status?.ask ?? '').slice(0, ADDED_ASK_CHARS) || 'Needs you'));
   }
   return brief.text.split('\n').map((l) => l.trim()).filter((l) => {
@@ -231,8 +288,33 @@ export function structureBrief(
     live?: BriefSectionTask;
     /** Who wrote each part of `text`: with it the result carries `text_sources` for its own text. */
     sources?: readonly BriefTextSource[];
+    /** With `live`: the language of Walnut's own lines (TaskBrief.lang), else read from `language`
+     *  and the letter (briefLangOf). */
+    lang?: BriefLang;
+    /** With `live`: the lines Walnut wrote into this letter before, as the letter records them
+     *  (TaskBrief.added; never lines guessed by their shape, which may be the writer's). One still
+     *  there word for word gives way when its task is named by a line of the writer's (2026-11-10,
+     *  the CEO's reflection: a reworded line of the writer's sat beside Walnut's line for the same
+     *  task) or still asks the user, so Walnut writes it again from the live state in the letter's
+     *  language; any other stays and moves with its task. A line its writer edited is the writer's. */
+    walnut?: readonly string[];
   } = {},
 ): StructuredBrief {
+  const lang = opts.lang ?? briefLangOf(opts.language, text);
+  // Walnut's earlier lines, each excused once and only word for word, and the tasks the writer's own lines name.
+  const priorWalnut = new Map<string, number>();
+  for (const l of opts.live ? opts.walnut ?? [] : []) priorWalnut.set(l.trim(), (priorWalnut.get(l.trim()) ?? 0) + 1);
+  const writerNames = new Set<string>();
+  if (priorWalnut.size) {
+    const left = new Map(priorWalnut);
+    for (const l of text.split('\n')) {
+      const k = left.get(l.trim());
+      if (k) { left.set(l.trim(), k - 1); continue; }
+      const id = l.match(REF_RE)?.[1];
+      if (id) writerNames.add(id);
+    }
+  }
+  const rewritten = opts.live ? new Set(briefAskScope(opts.live, tasks).filter((t) => briefSectionOf(t) === 'needs' && !t.user_status?.transient).map((t) => t.id)) : new Set<string>();
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
   const lead: Ln[] = [];
   const body: Record<BriefSectionKey, Ln[]> = { needs: [], working: [], waiting: [] };
@@ -254,6 +336,14 @@ export function structureBrief(
     let line: Ln = { text: kept, pieces: kept ? [{ text: kept, src: rawAt }] : [] };
     // Walnut's own count of the asks past the cap is made again below, from the live state.
     if (opts.live && ADDED_MORE_RE.test(line.text.trim())) { last = null; continue; }
+    // So is a line Walnut wrote before, still as it wrote it, whose task the writer names now or
+    // that Walnut writes again below (it still asks the user); any other stays, with its task.
+    const prior = priorWalnut.get(line.text.trim());
+    if (prior) {
+      priorWalnut.set(line.text.trim(), prior - 1);
+      const id = line.text.match(REF_RE)?.[1];
+      if (!id || writerNames.has(id) || rewritten.has(id)) { last = null; continue; }
+    }
     const indented = /^\s+\S/.test(line.text);
     if (dropping && indented && !REF_RE.test(line.text)) continue;
     dropping = false;
@@ -305,13 +395,13 @@ export function structureBrief(
       .filter((t) => !named.has(t.id) && briefSectionOf(t) === 'needs' && !t.user_status?.transient)
       .sort((a, b) => askedAt(b) - askedAt(a));
     for (const t of missing.slice(0, ADDED_ASKS_MAX)) {
-      const words = addedAskLine(t, main, tasks);
+      const words = addedAskLine(t, main, tasks, lang);
       // The ask's words are its task's writer's (a session's report, a turn's last words), never the Brief's owner.
       walnut({ text: words, pieces: [{ text: words, writer: askLineWriter(t) }] });
       added.push(t.id);
     }
     const more = missing.length - ADDED_ASKS_MAX;
-    if (more > 0) walnut(layout(`- And ${more} more ${more === 1 ? 'ask' : 'asks'} the user: the Task view lists ${more === 1 ? 'it' : 'them'}.`));
+    if (more > 0) walnut(layout(BRIEF_WALNUT_WORDS[lang].more(more)));
   }
   const trim = (ls: Ln[]) => {
     let a = 0; let b = ls.length;

@@ -1392,6 +1392,9 @@ export interface TaskBrief {
   /** The lines of `text` Walnut wrote (sessions/brief-structure.ts briefWalnutLines), word for
    *  word: not its writer's, so BRIEF_MAX_CHARS leaves them out. Absent on a letter stored before. */
   added?: string[];
+  /** The language Walnut wrote its own lines in (sessions/brief-structure.ts BriefLang): the page
+   *  writes them again in it. Absent on a letter stored before: read from the letter. */
+  lang?: 'en' | 'zh';
   /** Who wrote each part of `text` (sessions/brief-source.ts): a path opens on its writer's
    *  machine. Absent on a letter stored before: every part reads as an unknown writer. */
   text_sources?: import('./boards/board-html-source.js').BoardHtmlSource[];

@@ -228,6 +228,48 @@ test('a task the Brief names moves: its line shows it now, the head counts it, a
   expect(back.ok(), await back.text()).toBe(true)
 })
 
+// 2026-11-10, the CEO's reflection: Walnut's lines in a Chinese Brief led with English words, and a
+// task the writer then named itself read twice (Walnut's line and the writer's).
+test('in a Chinese Brief Walnut writes its line in Chinese, and a task the writer names reads once', async ({ page, request }) => {
+  await isolateUiPrefs(page)
+  const asker = await createTask(request, `Asker ${STAMP}`, LED)
+  const ask = await request.patch(`/api/tasks/${asker}`, { data: { phase: 'NEED_ACTION' } })
+  expect(ask.ok(), await ask.text()).toBe(true)
+  const none = '- \u65e0'
+  const letter = `### Needs you\n${none}\n### Working\n- <task-ref id="${ids.review}" label="Review"/>\uff1a\u5728\u7b49\u4ee3\u7801\u5ba1\u9605\u3002\n### Waiting / snoozed\n${none}`
+  await writeBrief(request, { content: letter })
+  const stored = (await (await request.get(`/api/tasks/${ids.lead}`)).json()).task.brief as { text: string; added?: string[]; lang?: string }
+  const walnutLine = (stored.added ?? []).find((l) => l.includes(asker))
+  expect(walnutLine, stored.text).toBeTruthy()
+  expect(stored.lang).toBe('zh')
+  expect(walnutLine).not.toMatch(/Decide|Take a look|Can close|Needs you/)
+  await loadHome(page)
+  await openNode(page, LED)
+  const detail = page.getByTestId('org-detail')
+  await detail.getByTestId('org-top-brief').click()
+  const body = detail.getByTestId('org-brief-body')
+  const pills = body.locator(`a.task-link[data-task-id="${asker}"]`)
+  await expect(pills).toHaveCount(1, { timeout: 30_000 })
+  const line = body.locator('li', { has: page.locator(`a.task-link[data-task-id="${asker}"]`) })
+  await expect(line).toContainText(/[\u4e00-\u9fff]/)
+  await expect(line).not.toContainText(/Decide|Take a look|Can close/)
+  await detail.screenshot({ path: `test-results/org-brief-walnut-zh-${test.info().project.name}.png` })
+  // The writer names the task in its own line, leaving Walnut's line as it was: one line shows.
+  const own = `- <task-ref id="${asker}" label="Asker"/>\uff1a\u7b49\u4f60\u770b\u4e00\u4e0b\u63d0\u95ee\u3002`
+  await writeBrief(request, { edits: [{ old: '### Working', new: `${own}\n### Working` }] })
+  const after = (await (await request.get(`/api/tasks/${ids.lead}`)).json()).task.brief as { text: string }
+  expect(after.text.split('\n').filter((l) => l.includes(asker))).toEqual([own])
+  await expect(body.locator('li', { has: page.locator(`a.task-link[data-task-id="${asker}"]`) })).toContainText('\u7b49\u4f60\u770b\u4e00\u4e0b\u63d0\u95ee', { timeout: 30_000 })
+  await expect(body.locator(`a.task-link[data-task-id="${asker}"]`)).toHaveCount(1)
+  await detail.screenshot({ path: `test-results/org-brief-one-line-${test.info().project.name}.png` })
+  await removeTask(request, asker)
+  // The lead's letter as the tests after this one expect it.
+  await writeBrief(request, { content: [
+    `- <task-ref id="${ids.review}" label="Review"/>: waits on the code review.`,
+    `- <task-ref id="${ids.parser}" label="Parser"/>: the parser is half done, pick its output format.`,
+  ].join('\n') })
+})
+
 test('Fold keeps the first lines and survives a reload; each node opens on the view it was left on', async ({ page }) => {
   await isolateUiPrefs(page)
   await loadHome(page)

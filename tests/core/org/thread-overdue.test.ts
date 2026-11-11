@@ -186,6 +186,25 @@ describe('3. a thread that waits too long with nothing from the node', () => {
     expect(threadOverdue(checked, T0 + 4 * 3600_000 + NEEDS_QUIET_MS)).not.toBeNull()
   })
 
+  // 2026-11-10, the CEO's reflection: the Personal VP's three threads waiting on the user were
+  // flagged overdue every 4 hours two days in a row (11-09 11:16, 15:22, 19:22, 23:29; 11-10 03:34,
+  // 07:37, and 16:00 as its own snooze ran out), the node rewriting each summary at every wake.
+  it('three days of an unchanged wait, the node answering every wake and snoozing once: at most one reminder a day', () => {
+    const hour = 3600_000
+    let t: T = thread({ state: 'needs', by: 'task:vp', updatedAt: iso(0), opener: { text: 'Update the travel card on the website?', at: iso(0), from: 'node' } })
+    const fired: number[] = []
+    for (let at = 0; at <= 72 * hour; at += 10 * MIN) {
+      const o = threadOverdue(t, T0 + at)
+      if (!o) continue
+      fired.push(at)
+      // The wake is recorded, then the node writes the thread (a summary, or a snooze of 8 hours).
+      t = { ...t, recheck: { since: o.since, at: iso(at), why: 'needs' }, updatedAt: iso(at + MIN),
+        ...(fired.length === 1 ? { snoozed: { until: iso(at + 8 * hour), at: iso(at + MIN) } } : {}) }
+    }
+    expect(fired.length).toBeLessThanOrEqual(3)
+    for (let i = 1; i < fired.length; i++) expect(fired[i]! - fired[i - 1]!).toBeGreaterThanOrEqual(NEEDS_QUIET_MS)
+  })
+
   it('checks once before the nearest open linked task deadline, even after a quiet check, never per scan', () => {
     const f = openThread(emptyThreads('vp'), { title: 'Pick a date', text: 'Pick the date.', from: 'node', tasks: ['open', 'closed'], user_kind: 'user_own', user_kind_why: 'The user asked to pick a date' }, 'task:vp', iso(0)).file
     const hour = 3600_000

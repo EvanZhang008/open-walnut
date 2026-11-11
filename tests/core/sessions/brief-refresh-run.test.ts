@@ -141,7 +141,7 @@ describe('a refresh restates only the Needs you items that changed', () => {
     stale()
     tasks.set('w1', worker('Review sections 3 and 4'))
     expect((await look(3)).sent).toBe(true)
-    expect(sends[3]!.text).toContain('(w1): now asks something else: "Review sections 3 and 4"')
+    expect(sends[3]!.text).toContain('(w1): now asks another decision: "Review sections 3 and 4"')
     expect(sends[3]!.text).toContain('only the Needs you changes above')
 
     stale()

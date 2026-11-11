@@ -13,7 +13,7 @@
 import type { Task } from '../types.js';
 import { BRIEF_MAX_CHARS, type TaskBrief } from '../user-status.js';
 import { briefSnapshot } from './brief-fresh.js';
-import { briefOwnChars, briefWalnutLines, structureBrief } from './brief-structure.js';
+import { briefLangOf, briefOwnChars, briefWalnutLines, structureBrief, type BriefLang } from './brief-structure.js';
 import { briefIssues, completeBriefRefs, type BriefIssue } from './brief-rules.js';
 import { briefSourcesOf, sourcesAfterInsertions, sourcesAfterRewrite, spliceBriefEdit, UNKNOWN_WRITER, type BriefTextSource, type BriefWriter } from './brief-source.js';
 import { wholeHtmlSource } from '../boards/board-html-source.js';
@@ -44,23 +44,28 @@ export function applyBriefEdits(text: string, edits: readonly BriefEdit[], onApp
 }
 
 /** A letter in its stored shape, against the live tasks. Pure. `prior`: the lines Walnut wrote into
- *  the letter it replaces (briefWalnutLines); those still in it word for word stay Walnut's. */
+ *  the letter it replaces (briefWalnutLines); those still in it word for word stay Walnut's.
+ *  `walnut`: the ones that letter records (TaskBrief.added), which Walnut may write again. */
 export function shapeBriefText(
   text: string, owner: Task, tasks: readonly Task[],
-  opts: { language?: string; nowIso?: string; prior?: readonly string[]; sources?: readonly BriefTextSource[] } = {},
+  opts: { language?: string; lang?: BriefLang; nowIso?: string; prior?: readonly string[]; walnut?: readonly string[]; sources?: readonly BriefTextSource[] } = {},
 ): { brief: TaskBrief; issues: BriefIssue[] } {
   const full = completeBriefRefs({ text }, tasks).text;
   // Completing a ref only lengthens its id: the words keep their writers.
   const sources = opts.sources
     ? (full === text ? opts.sources : sourcesAfterInsertions(text, full, opts.sources) ?? wholeHtmlSource(full.length, UNKNOWN_WRITER.by))
     : undefined;
-  const shaped = structureBrief(full, owner.id, tasks, { ...(opts.language ? { language: opts.language } : {}), live: owner, ...(sources ? { sources } : {}) });
+  // Walnut's lines are written again from the live state, in the Brief's language (brief-structure.ts).
+  const lang = opts.lang ?? briefLangOf(opts.language, full);
+  const shaped = structureBrief(full, owner.id, tasks, {
+    ...(opts.language ? { language: opts.language } : {}), lang, live: owner, ...(opts.walnut?.length ? { walnut: opts.walnut } : {}), ...(sources ? { sources } : {}),
+  });
   const issues = briefIssues(shaped.text, owner, tasks);
   const at = opts.nowIso ?? new Date().toISOString();
   const added = walnutLinesKept(shaped.text, shaped.walnutLines ?? [], opts.prior ?? []);
   return {
     brief: {
-      text: shaped.text, at, ...briefSnapshot(shaped.text, owner, tasks), ...(issues.length ? { issues } : {}), added,
+      text: shaped.text, at, ...briefSnapshot(shaped.text, owner, tasks), ...(issues.length ? { issues } : {}), added, lang,
       ...(shaped.text_sources ? { text_sources: shaped.text_sources } : {}),
     },
     issues,
@@ -116,6 +121,11 @@ export async function writeNodeBrief(
     }
   };
   const first = textOf(task.brief?.text ?? '');
+  // Walnut's own lines follow the user's reply language when it is one Walnut writes; else the
+  // letter's own (briefLangOf).
+  const { walnutLetterLanguage } = await import('../human-inbox/walnut-letters/languages.js');
+  const letterLang = await walnutLetterLanguage();
+  const lang: BriefLang = letterLang === 'zh' ? 'zh' : briefLangOf(input.language, first);
   // Every status it names is derived now (user-status-sync.ts debounces 1.5 s): a phase set right
   // before the write would otherwise be stored as its old mark and read as a move a moment later.
   let tasks = await listTasks();
@@ -142,7 +152,7 @@ export async function writeNodeBrief(
       if (sourceMs >= 25) sources = wholeHtmlSource(text.length, UNKNOWN_WRITER.by);
       // A whole letter keeps every unchanged character's stored writer (the same words sent again too).
       if (input.content !== undefined) sources = sourcesAfterRewrite(base, text, sources, writer);
-      out = shapeBriefText(text, current, tasks, { ...(input.language ? { language: input.language } : {}), prior, sources });
+      out = shapeBriefText(text, current, tasks, { ...(input.language ? { language: input.language } : {}), lang, prior, ...(current.brief?.added ? { walnut: current.brief.added } : {}), sources });
       checkOwn(out.brief, base, prior);
       return { brief: out.brief };
     } catch (err) {
