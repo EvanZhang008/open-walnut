@@ -79,12 +79,12 @@ async function settledPlace(page: Page, scope: Locator): Promise<Place> {
   return prev
 }
 
-async function openSheet(page: Page, width = 1440): Promise<Locator> {
+async function openSheet(page: Page, width = 1440, pages: 'one' | 'room' = 'room'): Promise<Locator> {
   await page.setViewportSize({ width, height: 900 })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   await page.addStyleTag({ content: '.notification-toaster { display: none !important; }' })
-  const panel = await openThreadsSession(page, PLACE_SESSION, PLACE_TASK, undefined, { view: 'stack', pages: 'room' })
+  const panel = await openThreadsSession(page, PLACE_SESSION, PLACE_TASK, undefined, { view: 'stack', pages })
   await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
   await expect(panel).toHaveClass(/open-walnut-fullscreen/)
   await expect(rightBody(panel).locator('.session-history')).toContainText('Main answer 12', { timeout: 30_000 })
@@ -229,8 +229,8 @@ test.describe('every chat pane keeps the reader\'s place', () => {
   })
 
   test('one page at a time: Main and a question each come back to their place in the same box', async ({ page }) => {
-    // Too narrow for two pages: the question replaces Main in the one box.
-    const panel = await openSheet(page, 960)
+    // The reader's one-page view (two pages show at every width from 600px): the question replaces Main in the one box.
+    const panel = await openSheet(page, 960, 'one')
     const row = await askedRow(page, rightBody(panel), T.Q1)
     const mainAtRow = await settledPlace(page, rightBody(panel))
     await clickAt(page, row)

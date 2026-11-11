@@ -227,7 +227,7 @@ test.describe('Tree Mode keeps its pages', () => {
     await expectPages(panel, TWO_DEEP)
   })
 
-  for (const shape of [{ name: 'wide sheet', width: 1440, height: 900, pages: TWO_DEEP }, { name: 'narrow sheet', width: 800, height: 720, pages: TWO_DEEP }]) {
+  for (const shape of [{ name: 'wide sheet', width: 1440, height: 640, pages: TWO_DEEP }, { name: 'narrow sheet', width: 800, height: 720, pages: TWO_DEEP }]) {
     test(`a turn in one page never scrolls another (${shape.name})`, async ({ page }) => {
       const panel = await openSheet(page, shape.width, shape.height)
       await openQuestion(panel, T.Q111)

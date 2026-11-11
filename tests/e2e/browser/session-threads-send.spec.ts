@@ -316,8 +316,9 @@ test.describe('Question stack: asking and sending', () => {
     await resetThreadsFixture(request, DENSE_SESSION)
     await boot(page)
     let panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
-    // One page at a time, with its back button (a split's halves have none).
-    await pinColumnWidth(page, DENSE_SESSION, 860)
+    // One page at a time, with its back button (a split's halves have none): under
+    // 600px only one page fits, so the Ask below does not bring the split back.
+    await pinColumnWidth(page, DENSE_SESSION, 560)
     await composer(panel).click()
     await composer(panel).fill('half a root thought')
     // Part of an asked passage: a partial overlap opens a new, unwritten page.
@@ -346,7 +347,7 @@ test.describe('Question stack: asking and sending', () => {
     await page.reload()
     await page.waitForLoadState('networkidle')
     panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
-    await pinColumnWidth(page, DENSE_SESSION, 860)
+    await pinColumnWidth(page, DENSE_SESSION, 560)
     await expect(composer(panel)).toHaveValue('half a root thought')
     const row = panel.locator('.thread-asked-row.is-draft')
     await expect(row).toBeVisible()

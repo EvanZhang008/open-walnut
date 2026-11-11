@@ -70,8 +70,9 @@ test.describe('question stack visual fixes', () => {
 
   test('a new question keeps its subtitle under its title; the Archive toast stays under the session header', async ({ page }) => {
     const panel = await openDense(page)
-    // The single page's title row (a split's half row has no title or subtitle).
-    await pinColumnWidth(page, DENSE_SESSION, 860)
+    // The single page's title row (a split's half row has no title or subtitle):
+    // under 600px only one page fits, so asking does not bring the split back.
+    await pinColumnWidth(page, DENSE_SESSION, 560)
     const phrase = await panel.evaluate((root) => {
       const rows = Array.from(root.querySelectorAll('.session-history .session-msg-assistant .markdown-body p'))
       const words = (rows[rows.length - 1]?.textContent ?? '').split(/\s+/).filter(Boolean)
