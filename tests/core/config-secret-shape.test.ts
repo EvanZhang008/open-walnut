@@ -679,6 +679,7 @@ describe('every free-form map in the Config type is accounted for', () => {
     stt_corrections: 'a term the user says to the forms speech mishears it as (src/core/stt/corrections.ts)',
     joined: 'net.joined: keyed by network id (a public key); each value is a machine name, platform and time',
     where: 'net.where: keyed by network id (a public key); each value is ip:port addresses and a relay URL',
+    experimental: 'an on/off switch per experiment id (src/core/experimental.ts registry)',
   }
 
   it('each map the types declare is masked or explained', () => {
