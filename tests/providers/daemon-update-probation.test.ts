@@ -18,7 +18,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { daemonInstallRoot, renderDaemonSystemdUnit } from '../../src/providers/daemon-service-config.js'
 import { parseUpdateTail, updateSnapshotScript, updateTailScript, type UpdateTailOptions } from '../../src/providers/daemon-update-tail.js'
 import { answerOfRecord, LAUNCHED, launcherScript, PROBATION_BUSY, readNetUpdateRecord, RUNNER_BUSY, runnerScript } from '../../src/providers/daemon-net-update-io.js'
-import { parseProbing, PROBATION_GRACE_SECONDS, PROBATION_SECONDS, PROBATION_STARTING_NAME, PROBATION_STARTING_SECONDS, probationRecordLines, probingCheckScript } from '../../src/providers/daemon-update-probation.js'
+import { parseProbing, probationScript, PROBATION_GRACE_SECONDS, PROBATION_SECONDS, PROBATION_STARTING_NAME, PROBATION_STARTING_SECONDS, probationRecordLines, probingCheckScript } from '../../src/providers/daemon-update-probation.js'
 import { servicePreamble } from '../../src/providers/daemon-update-shell.js'
 import { judgeUpdateRecord } from '../../src/providers/daemon-update-readback.js'
 import { createServiceStubs, type ServiceStubs } from '../helpers/service-stubs.js'
@@ -405,6 +405,20 @@ describe('a later update while the probation runs', () => {
 
 // 2026-11-05 review 6b: a probation's process counted as at work for as long as it lived, so one
 // that hung (a launchctl in its put-back that never answered) held every later update for good.
+describe('the daemon a probation counts restarts from', () => {
+  it('is read before its pid says it is at work, so a restart right after that is counted', () => {
+    // 2026-11-11: a restart that came between the pid and this look was taken for the daemon it
+    // watched, and a crash loop's second restart then counted as the first.
+    const lines = probationScript([], { waitSeconds: 1, staySeconds: 1 }).split('\n')
+    const base = lines.findIndex((l) => l.trim() === 't_up && tp0=$p')
+    const pid = lines.findIndex((l) => l.includes('/probation.pid" &&'))
+    const reset = lines.findIndex((l) => /(^|; )tp0=;/.test(l))
+    expect(base).toBeGreaterThan(-1)
+    expect(reset).toBeLessThan(base)
+    expect(base).toBeLessThan(pid)
+  })
+})
+
 describe('a probation that is past its time', () => {
   it('counts as at work only up to its end and a grace after it; a hung one stops holding updates', async () => {
     const copies = path.join(tb(), 'update-before')

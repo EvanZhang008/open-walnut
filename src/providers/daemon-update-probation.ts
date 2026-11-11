@@ -119,12 +119,15 @@ export function probationScript(fns: string[], o: { waitSeconds: number; staySec
     // anything else, during the detach included, is not this update's service any more. Read before
     // its pid says it is at work, so nothing written after that goes unseen.
     `tv_c=$(sed -n 2p "$tsb/${PROBATION_STARTING_NAME}" 2>/dev/null); [ -n "$tv_c" ] || tv_c=$(cksum < "$tc" 2>/dev/null)`,
-    `echo $$ > "$tsb/probation.pid" && rm -f "$tsb/${PROBATION_STARTING_NAME}"`,
     'tl=0; tx=0; tn=0; ty=0; tt=; tw=; tg_on=; tsx0=; tp0=; tm=0; tvr=0; tvf=',
+    // The daemon it counts restarts from, read before its pid says it is at work too: a restart
+    // right after that is seen as one (2026-11-11: on a loaded runner a restart came between the pid
+    // and this look, was taken for the daemon it watched, and a crash loop's second restart counted once).
+    't_up && tp0=$p',
+    `echo $$ > "$tsb/probation.pid" && rm -f "$tsb/${PROBATION_STARTING_NAME}"`,
     // On the wall clock (a Mac that slept through it still looks once after the wake), to the end
     // the tail wrote down; a miss at the end gets its second look.
     'tv_0=$(date +%s); tv_u=$(cat "$tsb/before.until" 2>/dev/null); case "$tv_u" in ""|*[!0-9]*) tv_u=$((tv_0 + tv_s));; esac',
-    't_up && tp0=$p',
     'while [ "$(date +%s)" -lt "$tv_u" ] || [ "$tm" -gt 0 ]; do',
     '  sleep "$tv_e"; i=$(( $(date +%s) - tv_0 ))',
     '  t_ours || exit 0',
