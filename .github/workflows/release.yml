@@ -193,6 +193,7 @@ jobs:
     needs: stable-build
     permissions:
       contents: read
+      actions: read
     uses: ./.github/workflows/binary-matrix.yml
     with:
       files: ${{ needs.stable-build.outputs.files }}
@@ -398,6 +399,7 @@ jobs:
     if: needs.nightly-build.outputs.publish == 'true'
     permissions:
       contents: read
+      actions: read
     uses: ./.github/workflows/binary-matrix.yml
     with:
       files: ${{ needs.nightly-build.outputs.files }}
@@ -602,6 +604,7 @@ jobs:
     if: needs.promote-plan.outputs.publish == 'true'
     permissions:
       contents: read
+      actions: read
     uses: ./.github/workflows/binary-matrix.yml
     with:
       files: ${{ needs.promote-build.outputs.files }}

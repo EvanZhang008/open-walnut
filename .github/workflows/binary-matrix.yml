@@ -52,6 +52,30 @@ env:
   # api.nuget.org) on every Linux x64 `bun install`; Walnut embeds on the CPU, as in
   # ci.yml. 2026-10-28: a nuget timeout failed a flake hunt leg before any test ran.
   ONNXRUNTIME_NODE_INSTALL: skip
+  # A second download that cannot hang (2026-11-11, push run 43016273510, centos:7 row): both of
+  # actions/download-artifact's tries stalled on the blob for their full 8 minutes while every other
+  # row got the same artifact in under a minute, so the row failed. The retry reads the artifact
+  # through the REST API with curl, which gives up on a stream slower than 1 MB/s for 30 s and asks
+  # again (a fresh signed link each time), three times. Inline, not a script or a local action: a
+  # release checks out `ref`, which may predate any file added here
+  # (tests/scripts/binary-matrix-download.test.ts).
+  FETCH_ARTIFACT: |
+    set -eu
+    name=$1; dir=$2
+    api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions"
+    auth="Authorization: Bearer $GH_TOKEN"
+    zip="$RUNNER_TEMP/fetch-$name.zip"
+    try=1
+    while :; do
+      id=$(curl -fsS --retry 3 --max-time 60 -H "$auth" "$api/runs/$GITHUB_RUN_ID/artifacts?name=$name&per_page=1" | jq -r '.artifacts[0].id // empty') || id=
+      if [ -n "$id" ] && curl -fL --connect-timeout 20 --speed-limit 1048576 --speed-time 30 --max-time 300 -sS -H "$auth" -o "$zip" "$api/artifacts/$id/zip"; then break; fi
+      echo "::warning::fetching artifact $name (try $try of 3) stalled or failed"
+      [ "$try" -lt 3 ] || exit 1
+      try=$((try + 1)); sleep 10
+    done
+    mkdir -p "$dir"
+    unzip -oq "$zip" -d "$dir"
+    rm -f "$zip"
 
 # Runner images are pinned, as in ci.yml.
 jobs:
@@ -95,6 +119,10 @@ jobs:
     needs: build
     # A release's files skip the build; a failed build runs nothing.
     if: ${{ !cancelled() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.files != '')) }}
+    # actions: read for the artifact fetch (FETCH_ARTIFACT).
+    permissions:
+      contents: read
+      actions: read
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
@@ -127,7 +155,7 @@ jobs:
         # A failed download (2026-10-31: the artifact service timed out, macos-26-intel)
         # leaves the file missing too: the check below downloads once more.
         continue-on-error: true
-        timeout-minutes: 8
+        timeout-minutes: 4
         with:
           name: walnut-files
           path: dist-bin
@@ -138,12 +166,11 @@ jobs:
         run: |
           if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
-      - uses: actions/download-artifact@v4
-        if: inputs.files == '' && steps.files.outputs.missing == 'true'
-        timeout-minutes: 8
-        with:
-          name: walnut-files
-          path: dist-bin
+      - if: inputs.files == '' && steps.files.outputs.missing == 'true'
+        timeout-minutes: 16
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh -c "$FETCH_ARTIFACT" fetch walnut-files dist-bin
       - if: inputs.files == ''
         run: |
           [ -s "dist-bin/$FILE" ] || { echo "::error::dist-bin/$FILE is not in the walnut-files artifact after two downloads"; ls -la dist-bin || true; exit 1; }
@@ -157,7 +184,7 @@ jobs:
       - uses: actions/download-artifact@v4
         if: inputs.files != ''
         continue-on-error: true
-        timeout-minutes: 8
+        timeout-minutes: 4
         with:
           name: ${{ inputs.files }}
           path: ${{ runner.temp }}/release
@@ -167,12 +194,12 @@ jobs:
           gz="$RUNNER_TEMP/release/walnut-$VERSION-${FILE#walnut-}.gz"
           if [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::$gz or SHA256SUMS is missing after the download; downloading ${{ inputs.files }} again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
-      - uses: actions/download-artifact@v4
-        if: inputs.files != '' && steps.release.outputs.missing == 'true'
-        timeout-minutes: 8
-        with:
-          name: ${{ inputs.files }}
-          path: ${{ runner.temp }}/release
+      - if: inputs.files != '' && steps.release.outputs.missing == 'true'
+        timeout-minutes: 16
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ inputs.files }}
+        run: sh -c "$FETCH_ARTIFACT" fetch "$NAME" "$RUNNER_TEMP/release"
       - uses: oven-sh/setup-bun@v2
         if: inputs.files != ''
         with:
@@ -188,6 +215,10 @@ jobs:
     name: ${{ matrix.runner }} (${{ matrix.file }})
     needs: build
     if: ${{ !cancelled() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.files != '')) }}
+    # actions: read for the artifact fetch (FETCH_ARTIFACT).
+    permissions:
+      contents: read
+      actions: read
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
@@ -210,7 +241,7 @@ jobs:
         # A failed download (2026-10-31: the artifact service timed out, macos-26-intel)
         # leaves the file missing too: the check below downloads once more.
         continue-on-error: true
-        timeout-minutes: 8
+        timeout-minutes: 4
         with:
           name: walnut-files
           path: dist-bin
@@ -221,12 +252,11 @@ jobs:
         run: |
           if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
-      - uses: actions/download-artifact@v4
-        if: inputs.files == '' && steps.files.outputs.missing == 'true'
-        timeout-minutes: 8
-        with:
-          name: walnut-files
-          path: dist-bin
+      - if: inputs.files == '' && steps.files.outputs.missing == 'true'
+        timeout-minutes: 16
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh -c "$FETCH_ARTIFACT" fetch walnut-files dist-bin
       - if: inputs.files == ''
         run: |
           [ -s "dist-bin/$FILE" ] || { echo "::error::dist-bin/$FILE is not in the walnut-files artifact after two downloads"; ls -la dist-bin || true; exit 1; }
@@ -238,7 +268,7 @@ jobs:
       - uses: actions/download-artifact@v4
         if: inputs.files != ''
         continue-on-error: true
-        timeout-minutes: 8
+        timeout-minutes: 4
         with:
           name: ${{ inputs.files }}
           path: ${{ runner.temp }}/release
@@ -248,12 +278,12 @@ jobs:
           gz="$RUNNER_TEMP/release/walnut-$VERSION-${FILE#walnut-}.gz"
           if [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::$gz or SHA256SUMS is missing after the download; downloading ${{ inputs.files }} again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
-      - uses: actions/download-artifact@v4
-        if: inputs.files != '' && steps.release.outputs.missing == 'true'
-        timeout-minutes: 8
-        with:
-          name: ${{ inputs.files }}
-          path: ${{ runner.temp }}/release
+      - if: inputs.files != '' && steps.release.outputs.missing == 'true'
+        timeout-minutes: 16
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ inputs.files }}
+        run: sh -c "$FETCH_ARTIFACT" fetch "$NAME" "$RUNNER_TEMP/release"
       - uses: oven-sh/setup-bun@v2
         if: inputs.files != ''
         with:
@@ -276,6 +306,10 @@ jobs:
     name: centos 7 VM (kernel 3.10)
     needs: build
     if: ${{ !cancelled() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.files != '')) }}
+    # actions: read for the artifact fetch (FETCH_ARTIFACT).
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -289,7 +323,7 @@ jobs:
         # A failed download (2026-10-31: the artifact service timed out, macos-26-intel)
         # leaves the file missing too: the check below downloads once more.
         continue-on-error: true
-        timeout-minutes: 8
+        timeout-minutes: 4
         with:
           name: walnut-files
           path: dist-bin
@@ -302,12 +336,11 @@ jobs:
         run: |
           if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
-      - uses: actions/download-artifact@v4
-        if: inputs.files == '' && steps.files.outputs.missing == 'true'
-        timeout-minutes: 8
-        with:
-          name: walnut-files
-          path: dist-bin
+      - if: inputs.files == '' && steps.files.outputs.missing == 'true'
+        timeout-minutes: 16
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh -c "$FETCH_ARTIFACT" fetch walnut-files dist-bin
       - if: inputs.files == ''
         env:
           FILE: walnut-linux-x64
@@ -321,7 +354,7 @@ jobs:
       - uses: actions/download-artifact@v4
         if: inputs.files != ''
         continue-on-error: true
-        timeout-minutes: 8
+        timeout-minutes: 4
         with:
           name: ${{ inputs.files }}
           path: ${{ runner.temp }}/release
@@ -333,12 +366,12 @@ jobs:
           gz="$RUNNER_TEMP/release/walnut-$VERSION-${FILE#walnut-}.gz"
           if [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::$gz or SHA256SUMS is missing after the download; downloading ${{ inputs.files }} again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
-      - uses: actions/download-artifact@v4
-        if: inputs.files != '' && steps.release.outputs.missing == 'true'
-        timeout-minutes: 8
-        with:
-          name: ${{ inputs.files }}
-          path: ${{ runner.temp }}/release
+      - if: inputs.files != '' && steps.release.outputs.missing == 'true'
+        timeout-minutes: 16
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ inputs.files }}
+        run: sh -c "$FETCH_ARTIFACT" fetch "$NAME" "$RUNNER_TEMP/release"
       - uses: oven-sh/setup-bun@v2
         if: inputs.files != ''
         with:
