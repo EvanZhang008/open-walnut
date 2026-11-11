@@ -20,7 +20,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-file'))
 
 import {
-  createHostFileSource, defaultNpmRegistry, defaultReleaseBase, fileContains, runningOrigin, sumsFor, versionLineMatches,
+  createHostFileSource, REFUSED_HOLD_MS, defaultNpmRegistry, defaultReleaseBase, fileContains, runningOrigin, sumsFor, versionLineMatches,
   type BuildOrigin, type FileVersion, type HostFileSourceOptions,
 } from '../../src/core/host-server/host-file.js'
 import { sha512sOf } from '../../src/core/host-server/host-file-download.js'
@@ -199,6 +199,54 @@ describe('from this server\'s checkout', () => {
     })
     await expect(src.file('linux-x64')).rejects.toThrow(/failed \(exit 1\): boom/)
     expect((await src.file('linux-x64')).target).toBe('linux-x64')
+  })
+
+  it('the build is asked for this server\'s daemon version; one refused for another is not kept, and is not built again until its hold ends', async () => {
+    const { calls, build } = fakeBuild()
+    let now = Date.parse('2026-11-11T11:29:00Z')
+    let n = 0
+    const mismatch = () => Object.assign(new Error('the walnut file built for darwin-x64 runs walnut-daemon-8cc613a6c30f, but this server runs walnut-daemon-9f80db843b90, so it was not kept'), { name: 'DaemonMismatchError' })
+    const src = source({
+      origin: async () => checkout(),
+      daemonVersion: () => 'walnut-daemon-9f80db843b90',
+      now: () => now,
+      build: async (b) => { n++; if (n === 1) { calls.push(b); throw mismatch() } return build(b) },
+    })
+    await expect(src.file('darwin-x64')).rejects.toThrow(/runs walnut-daemon-8cc613a6c30f, but this server runs walnut-daemon-9f80db843b90/)
+    expect(fs.existsSync(path.join(cacheDir, 'files', '0.6.14-80dc024a8', 'walnut-darwin-x64.gz'))).toBe(false)
+    // The updater asks again in 10 minutes: the same answer, at once, with no build.
+    now += 10 * 60_000
+    await expect(src.file('darwin-x64')).rejects.toThrow(/so it was not kept \(refused at 2026-11-11T11:29:00.000Z; built again after 2026-11-11T17:29:00.000Z, or at once after the next deploy\)/)
+    expect(n).toBe(1)
+    // Another target was never refused.
+    expect((await src.file('linux-x64')).target).toBe('linux-x64')
+    expect(n).toBe(2)
+    // After the hold, it is built again.
+    now += REFUSED_HOLD_MS
+    expect((await src.file('darwin-x64')).target).toBe('darwin-x64')
+    expect(n).toBe(3)
+    expect(calls.map((c) => c.expectDaemonVersion)).toEqual(['walnut-daemon-9f80db843b90', 'walnut-daemon-9f80db843b90', 'walnut-daemon-9f80db843b90'])
+  })
+
+  it('a refusal holds for its build only: the next deploy builds at once', async () => {
+    const { build } = fakeBuild()
+    let n = 0
+    const src = source({
+      origin: async () => checkout(),
+      daemonVersion: () => 'walnut-daemon-9f80db843b90',
+      build: async (b) => { n++; if (n === 1) throw Object.assign(new Error('mismatch'), { name: 'DaemonMismatchError' }); return build(b) },
+    })
+    await expect(src.file('darwin-x64')).rejects.toThrow(/mismatch/)
+    // A new process after a deploy is a new source; in this one, a new build id is what a deploy changes.
+    const next = source({ origin: async () => checkout({ commit: 'a315a8aef' }, '0.6.14-a315a8aef'), daemonVersion: () => 'walnut-daemon-9f80db843b90', build })
+    expect((await next.file('darwin-x64')).id).toBe('0.6.14-a315a8aef')
+  })
+
+  it('a daemon version that cannot be read is not compared, and the build still runs', async () => {
+    const { calls, build } = fakeBuild()
+    const src = source({ origin: async () => checkout(), build, daemonVersion: () => { throw new Error('no sources') } })
+    expect((await src.file('linux-x64')).target).toBe('linux-x64')
+    expect(calls[0]!.expectDaemonVersion).toBeNull()
   })
 
   it('without bun, or a build with no commit, says what is missing', async () => {

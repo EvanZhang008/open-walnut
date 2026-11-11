@@ -17,6 +17,7 @@ import path from 'node:path'
 import {
   buildFileInClone, findBun, linkDependencies, packageJsonAt, pinnedBun, pruneAbandonedWork, WORK_OWNER, BUILD_MS,
 } from '../../src/core/host-server/host-file-build.js'
+import { daemonVersionAt } from '../../src/core/host-server/clone-deps.js'
 import type { HostFileTarget } from '../../src/core/host-server/host-target.js'
 import { gitChildEnv } from '../../src/lib/git-env.js'
 
@@ -47,7 +48,12 @@ const seen = {
   web: fs.existsSync('dist/web/static/index.html') ? fs.readFileSync('dist/web/static/index.html', 'utf8') : null,
   dep: real('node_modules/dep'), api: real('node_modules/@open-walnut/plugin-api'), other: real('node_modules/@open-walnut/other'),
   webModules: real('web/node_modules'),
+  depFresh: fs.existsSync('node_modules/dep/FRESH'),
 }
+// The daemon version build-binary.mjs bakes in, where it writes it.
+fs.mkdirSync('dist/binary-stage', { recursive: true })
+const daemonVersion = process.env.HSFB_DAEMON ?? (fs.existsSync('DAEMON') ? fs.readFileSync('DAEMON', 'utf8').trim() : 'walnut-daemon-aaaaaaaaaaaa')
+fs.writeFileSync('dist/binary-stage/sizes.json', JSON.stringify({ daemonVersion }))
 fs.mkdirSync('dist-bin', { recursive: true })
 for (const t of targets) fs.writeFileSync(path.join('dist-bin', 'walnut-' + t), JSON.stringify({ ...seen, target: t }))
 }
@@ -82,7 +88,9 @@ beforeEach(() => {
   write('dist/web/static/index.html', '<html>served</html>')
   // A stand-in bun: this test's own runtime runs the script.
   bun = path.join(dir, 'bin', 'bun')
-  write('bin/bun', `#!/bin/sh\nif [ "$1" = --version ]; then echo 1.4.4; exit 0; fi\nexec ${JSON.stringify(process.execPath)} "$@"\n`, dir)
+  // `bun install --frozen-lockfile`: a fresh dependency in the dir it runs in (fails on INSTALL_FAIL).
+  const install = 'if [ "$1" = install ]; then [ -f INSTALL_FAIL ] && { echo install refused >&2; exit 7; }; echo "$@" > INSTALLED; mkdir -p node_modules/dep && echo fresh > node_modules/dep/FRESH && exit 0; fi'
+  write('bin/bun', `#!/bin/sh\nif [ "$1" = --version ]; then echo 1.4.4; exit 0; fi\n${install}\nexec ${JSON.stringify(process.execPath)} "$@"\n`, dir)
   fs.chmodSync(bun, 0o755)
 })
 
@@ -180,6 +188,137 @@ describe('the clone build', () => {
     const work = fs.mkdtempSync(path.join(dir, 'work-'))
     await expect(buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit: 'deadbeef1', targets: ['linux-x64'], work, log: path.join(dir, 'b.log'), bun }))
       .rejects.toThrow(/git checkout failed/)
+  })
+})
+
+describe('the clone build\'s dependencies and daemon', () => {
+  /** The next commit patches `dep`; the checkout's install of it predates the patch. */
+  function patchDep(): string {
+    write('package.json', JSON.stringify({ name: 'open-walnut', version: '0.6.14', workspaces: ['packages/plugin-api'], dependencies: { dep: '1.0.0' }, patchedDependencies: { 'dep@1.0.0': 'patches/dep@1.0.0.patch' } }))
+    write('patches/dep@1.0.0.patch', ['--- a/index.js', '+++ b/index.js', '@@ -0,0 +1 @@', '+patched', ''].join('\n'))
+    git(['add', '-A'])
+    git(['commit', '-qm', 'patch dep'])
+    write('node_modules/dep/package.json', '{}')
+    return git(['rev-parse', 'HEAD'])
+  }
+
+  it('a checkout installed with an older patch: the commit\'s lockfile is installed in the clone, never in the checkout', async () => {
+    const commit = patchDep()
+    const before = fs.readdirSync(path.join(repo, 'node_modules')).sort()
+    const { work, log, seen } = await buildOnce(commit)
+    expect(seen.depFresh).toBe(true)
+    expect(seen.dep).toBe(path.join(work, 'tree', 'node_modules', 'dep'))
+    expect(fs.readFileSync(path.join(work, 'tree', 'INSTALLED'), 'utf8').trim()).toBe('install --frozen-lockfile')
+    expect(fs.readFileSync(log, 'utf8')).toMatch(/not this commit's install \(root patched dep\); installing the commit's lockfile in the clone/)
+    expect(fs.readdirSync(path.join(repo, 'node_modules')).sort()).toEqual(before)
+    expect(fs.existsSync(path.join(repo, 'node_modules', 'dep', 'FRESH'))).toBe(false)
+    expect(fs.existsSync(path.join(repo, 'INSTALLED'))).toBe(false)
+  })
+
+  it('a checkout whose install is this commit\'s is linked, with no install', async () => {
+    const commit = patchDep()
+    write('node_modules/dep/index.js', 'patched\n')
+    write('node_modules/dep/package.json', '{}')
+    const { work, seen } = await buildOnce(commit)
+    expect(seen.dep).toBe(path.join(repo, 'node_modules', 'dep'))
+    expect(seen.depFresh).toBe(false)
+    expect(fs.existsSync(path.join(work, 'tree', 'INSTALLED'))).toBe(false)
+  })
+
+  it('an install that fails says why the checkout\'s could not be used, and builds nothing', async () => {
+    patchDep()
+    write('INSTALL_FAIL', '')
+    git(['add', 'INSTALL_FAIL'])
+    git(['commit', '-qm', 'install fails'])
+    const work = fs.mkdtempSync(path.join(dir, 'work-'))
+    await expect(buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit: 'HEAD', targets: ['linux-x64'], work, log: path.join(dir, 'b.log'), bun }))
+      .rejects.toThrow(/installing this commit's dependencies for the walnut file failed \(exit 7\): the checkout's node_modules is not this commit's install \(root patched dep\)/)
+    expect(fs.existsSync(path.join(work, 'tree', 'dist-bin'))).toBe(false)
+  })
+
+  it('a file whose daemon is not this server\'s is refused, naming both versions', async () => {
+    const work = fs.mkdtempSync(path.join(dir, 'work-'))
+    await expect(buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit: 'HEAD', targets: ['darwin-x64'], work, log: path.join(dir, 'b.log'), bun, expectDaemonVersion: 'walnut-daemon-bbbbbbbbbbbb' }))
+      .rejects.toThrow(/built for darwin-x64 runs walnut-daemon-aaaaaaaaaaaa, but this server runs walnut-daemon-bbbbbbbbbbbb, so it was not kept/)
+  })
+
+  it('the same daemon passes; a version that is not a build hash is not compared', async () => {
+    for (const expectDaemonVersion of ['walnut-daemon-aaaaaaaaaaaa', 'walnut-daemon-pkg-0.6.14', 'dev-source', null]) {
+      const work = fs.mkdtempSync(path.join(dir, 'work-'))
+      const files = await buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit: 'HEAD', targets: ['linux-x64'], work, log: path.join(dir, 'b.log'), bun, expectDaemonVersion })
+      expect(files['linux-x64']).toBe(path.join(work, 'tree', 'dist-bin', 'walnut-linux-x64'))
+    }
+  })
+
+  it('a build that does not say its daemon version is refused when one is expected', async () => {
+    write('DAEMON', '')
+    git(['add', 'DAEMON'])
+    git(['commit', '-qm', 'no version'])
+    const work = fs.mkdtempSync(path.join(dir, 'work-'))
+    await expect(buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit: 'HEAD', targets: ['linux-x64'], work, log: path.join(dir, 'b.log'), bun, expectDaemonVersion: 'walnut-daemon-aaaaaaaaaaaa' }))
+      .rejects.toThrow(/runs a daemon of unknown version/)
+  })
+
+  /** The daemon's version in these fixtures hashes the commit's src/a.txt and the installed dep. */
+  const SOURCES = ['src/a.txt', 'node_modules/dep/index.js'] as const
+  async function withDaemon<T>(version: string, fn: () => Promise<T>): Promise<T> {
+    process.env.HSFB_DAEMON = version
+    try { return await fn() } finally { delete process.env.HSFB_DAEMON }
+  }
+
+  it('the daemon decides: a server that runs the checkout\'s own install (dev:prod) gets links, stale patch or not', async () => {
+    const commit = patchDep()
+    // What the linked clone hashes to: the commit's src/a.txt, the checkout's (unpatched) dep.
+    const ref = path.join(dir, 'ref')
+    write('src/a.txt', 'v1', ref)
+    write('node_modules/dep/index.js', '', ref)
+    const want = (await daemonVersionAt(ref, SOURCES))!
+    const work = fs.mkdtempSync(path.join(dir, 'work-'))
+    const files = await withDaemon(want, () => buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit, targets: ['linux-x64'], work, log: path.join(dir, 'b.log'), bun, expectDaemonVersion: want, daemonSources: SOURCES }))
+    const seen = JSON.parse(fs.readFileSync(files['linux-x64']!, 'utf8'))
+    expect(seen.dep).toBe(path.join(repo, 'node_modules', 'dep'))
+    expect(fs.existsSync(path.join(work, 'tree', 'INSTALLED'))).toBe(false)
+  })
+
+  it('the daemon decides: links that would build another daemon are dropped and the commit is installed (the deploy\'s case)', async () => {
+    const commit = patchDep()
+    const want = 'walnut-daemon-9f80db843b90'
+    const before = fs.readdirSync(path.join(repo, 'node_modules')).sort()
+    const work = fs.mkdtempSync(path.join(dir, 'work-'))
+    const log = path.join(dir, 'b.log')
+    const files = await withDaemon(want, () => buildFileInClone({ checkout: repo, distDir: path.join(repo, 'dist'), commit, targets: ['darwin-x64'], work, log, bun, expectDaemonVersion: want, daemonSources: SOURCES }))
+    const seen = JSON.parse(fs.readFileSync(files['darwin-x64']!, 'utf8'))
+    expect(seen.depFresh).toBe(true)
+    expect(seen.dep).toBe(path.join(work, 'tree', 'node_modules', 'dep'))
+    expect(fs.readFileSync(log, 'utf8')).toMatch(/the checkout's install builds walnut-daemon-[0-9a-f]{12}, not this server's walnut-daemon-9f80db843b90; root patched dep; installing the commit's lockfile in the clone\n/)
+    // The links went, not what they pointed at.
+    expect(fs.readdirSync(path.join(repo, 'node_modules')).sort()).toEqual(before)
+    expect(fs.existsSync(path.join(repo, 'node_modules', 'dep', 'package.json'))).toBe(true)
+    expect(fs.existsSync(path.join(repo, 'web', 'node_modules', 'vite', 'index.js'))).toBe(true)
+  })
+
+  it('a web dependency the checkout lacks matters only when the build makes the web app', async () => {
+    write('web/package.json', JSON.stringify({ name: 'web', dependencies: { vite: '7.0.0', react: '19.0.0' } }))
+    git(['add', '-A'])
+    git(['commit', '-qm', 'web adds react'])
+    write('web/node_modules/vite/package.json', '{}')
+    // The running dist's web app is reused: nothing to install, web/ linked as before.
+    const reused = await buildOnce(git(['rev-parse', 'HEAD']))
+    expect(fs.existsSync(path.join(reused.work, 'tree', 'INSTALLED'))).toBe(false)
+    expect(reused.seen.webModules).toBe(path.join(repo, 'web', 'node_modules'))
+    // No web app to reuse: web/ alone is installed, the root still linked.
+    fs.rmSync(path.join(repo, 'dist'), { recursive: true, force: true })
+    const own = await buildOnce(git(['rev-parse', 'HEAD']))
+    expect(fs.readFileSync(path.join(own.work, 'tree', 'web', 'INSTALLED'), 'utf8').trim()).toBe('install --frozen-lockfile')
+    expect(own.seen.dep).toBe(path.join(repo, 'node_modules', 'dep'))
+    expect(fs.lstatSync(path.join(own.work, 'tree', 'web', 'node_modules')).isSymbolicLink()).toBe(false)
+    expect(fs.readFileSync(own.log, 'utf8')).toMatch(/web\/node_modules lacks what this commit declares \(web react\); installing the commit's lockfile in the clone's web\//)
+  })
+
+  it('build-binary.mjs writes the daemon version where the check reads it', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'build-binary.mjs'), 'utf8')
+    expect(src).toMatch(/const stage = path\.join\(repo, 'dist\/binary-stage'\)/)
+    expect(src).toMatch(/fs\.writeFileSync\(path\.join\(stage, 'sizes\.json'\), JSON\.stringify\(\{ id, daemonVersion,/)
   })
 })
 

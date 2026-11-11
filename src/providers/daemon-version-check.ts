@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url'
 import { log } from '../logging/index.js'
 import { CLOUD_MODE, DAEMON_BINARIES_DIR } from '../constants.js'
 
-const DAEMON_SOURCE_FILES = [
+export const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-standalone.ts',
   'src/providers/daemon-core.ts',
   'src/providers/daemon-fold.ts',

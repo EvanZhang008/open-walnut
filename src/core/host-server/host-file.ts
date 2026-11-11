@@ -109,6 +109,13 @@ export interface HostFileSourceOptions {
   workDir?: string
   /** Asks this close together are one build (default 1.5 s). */
   batchWindowMs?: number
+  /**
+   * The daemon version this server runs: a clone build whose daemon says another is
+   * refused, not cached (host-file-build.ts). Read once per build; absent: not compared.
+   */
+  daemonVersion?: () => string | null
+  /** The clock a refused build's hold runs on (default Date.now). */
+  now?: () => number
 }
 
 /** The build in use and the one before it (a rollback's): about 125 MB each. */
@@ -118,6 +125,13 @@ const LOG_KEEP_MS = 7 * 24 * 3_600_000
 const DOWNLOAD_KEEP_MS = 60 * 60_000
 const RELEASE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 const WORK_PREFIX = 'walnut-host-file-'
+/**
+ * A clone build refused for its daemon (DaemonMismatchError) is answered the same, at once,
+ * for this long: the next build of the same commit on the same install would be refused
+ * again, and each one is a clone, maybe an install, and a compile (a host updater asks every
+ * few minutes). A deploy is a new build id, so it builds at once.
+ */
+export const REFUSED_HOLD_MS = 6 * 3_600_000
 export const SOURCE_ROOT_MARKER = '.walnut-source-root'
 /** src/binary/runtime-tree.ts RUNTIME_MARKER: an unpacked runtime tree's file naming its asset archive id. */
 const RUNTIME_MARKER = '.walnut-runtime'
@@ -253,6 +267,11 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
   let originOnce: Promise<BuildOrigin> | null = null
   // A deploy replaces the build this process runs only by restarting it.
   const getOrigin = (): Promise<BuildOrigin> => (originOnce ??= origin().catch((err) => { originOnce = null; throw err }))
+  const clock = opts.now ?? Date.now
+  /** By build id, target and the daemon version asked: what a refused build said, and until when it stands. */
+  const refused = new Map<string, { message: string; at: number }>()
+  const refusalKey = (id: string, target: HostFileTarget, want: string | null) => `${id}\n${target}\n${want ?? ''}`
+  const expectedDaemon = (): string | null => { try { return opts.daemonVersion?.() ?? null } catch { return null } }
   let swept: Promise<unknown> | null = null
   let open: Batch | null = null
   let previous: Promise<unknown> = Promise.resolve()
@@ -383,9 +402,16 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
     try {
       // Who made it, so a server that starts after this one stopped mid-build removes it.
       await fs.promises.writeFile(path.join(work, WORK_OWNER), JSON.stringify({ pid: process.pid, at: Date.now() }))
+      const expectDaemonVersion = expectedDaemon()
       const built = await build({
         checkout: o.checkout, distDir: o.distDir, commit, targets, work,
-        log: path.join(opts.cacheDir, `build-${o.id}.log`), bun: pick.path,
+        log: path.join(opts.cacheDir, `build-${o.id}.log`), bun: pick.path, expectDaemonVersion,
+      }).catch((err: unknown) => {
+        // By name: tests replace the build with a double that throws its own.
+        if (err instanceof Error && err.name === 'DaemonMismatchError') {
+          for (const t of targets) refused.set(refusalKey(o.id, t, expectDaemonVersion), { message: err.message, at: clock() })
+        }
+        throw err
       })
       const out = new Map<HostFileTarget, HostFile>()
       for (const t of targets) {
@@ -477,7 +503,14 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
       return near ?? fromRelease(o, target)
     }
     const commit = checkCommitted(o, target)
-    return (await cached(o.id, o.info.version, commit, target)) ?? (await sibling(o, commit, target)) ?? fromCheckout(o, commit, target)
+    const hit = (await cached(o.id, o.info.version, commit, target)) ?? (await sibling(o, commit, target))
+    if (hit) return hit
+    const held = refused.get(refusalKey(o.id, target, expectedDaemon()))
+    if (held && clock() - held.at < REFUSED_HOLD_MS) {
+      const again = new Date(held.at + REFUSED_HOLD_MS).toISOString()
+      throw new Error(`${held.message} (refused at ${new Date(held.at).toISOString()}; built again after ${again}, or at once after the next deploy)`)
+    }
+    return fromCheckout(o, commit, target)
   }
 
   return {

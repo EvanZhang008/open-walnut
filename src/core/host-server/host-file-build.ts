@@ -10,7 +10,10 @@
  *
  *   git clone --shared --no-checkout <checkout> <work>/tree; checkout <commit>
  *   node_modules: every entry linked to the checkout's, except the workspace
- *     packages, which are the clone's own (as deploy-committed.sh links them)
+ *     packages, which are the clone's own (as deploy-committed.sh links them);
+ *     when the checkout's install cannot stand in for the commit's (a dependency
+ *     it lacks, or one patched with another patch: clone-deps.ts), the commit's
+ *     lockfile is installed in the clone instead, as the deploy does
  *   dist/web/static: a copy of the running server's, so the file serves the same
  *     web app and the web build is skipped (--reuse-web)
  *   bun scripts/build-binary.mjs --target <t> [--target <u>...]   one run for
@@ -18,7 +21,10 @@
  *
  * Every step is a child process in its own process group with a deadline: a
  * build that runs too long is ended with its children, and nothing here holds
- * the event loop.
+ * the event loop. A build whose daemon is not the one this server runs (its
+ * version, from the build's dist/binary-stage/sizes.json) is refused, never
+ * handed on: the host would refuse it after the upload anyway, and the cache
+ * would send that same file on every later try.
  */
 
 import { spawn } from 'node:child_process'
@@ -28,6 +34,8 @@ import path from 'node:path'
 import { gitChildEnv } from '../../lib/git-env.js'
 import { withUtilityQosClamp } from '../../lib/background-qos.js'
 import { safeKillProcessGroup } from '../process-group-kill.js'
+import { DAEMON_SOURCE_FILES } from '../../providers/daemon-version-check.js'
+import { daemonVersionAt, staleDependencies } from './clone-deps.js'
 import type { HostFileTarget } from './host-target.js'
 
 export interface CloneBuild {
@@ -44,10 +52,21 @@ export interface CloneBuild {
   log: string
   bun: string
   timeoutMs?: number
+  /**
+   * The daemon version this server runs (walnut-daemon-<12 hex>): a build whose
+   * daemon says another is refused. Absent, or not of that form (a package
+   * version, a source run): not compared.
+   */
+  expectDaemonVersion?: string | null
+  /** The files the daemon's version hashes (default daemon-version-check.ts's list); tests give their own. */
+  daemonSources?: readonly string[]
 }
 
 const STEP_MS = 120_000
 export const BUILD_MS = 15 * 60_000
+/** `bun install --frozen-lockfile` in the clone, when the checkout's install is stale for the commit. */
+export const INSTALL_MS = 10 * 60_000
+const DAEMON_VERSION = /^walnut-daemon-[0-9a-f]{12}$/
 /** After SIGTERM at the deadline, the group gets this long before SIGKILL. */
 const KILL_GRACE_MS = 10_000
 
@@ -100,8 +119,8 @@ async function workspaces(tree: string): Promise<Map<string, string>> {
   return out
 }
 
-/** node_modules of the clone: links to the checkout's entries, the workspace packages to the clone's own. */
-export async function linkDependencies(checkout: string, tree: string): Promise<void> {
+/** node_modules of the clone: links to the checkout's entries, the workspace packages to the clone's own (web/'s too, unless `web: false`). */
+export async function linkDependencies(checkout: string, tree: string, opts: { web?: boolean } = {}): Promise<void> {
   const src = path.join(checkout, 'node_modules')
   const dst = path.join(tree, 'node_modules')
   const ws = await workspaces(tree)
@@ -122,7 +141,47 @@ export async function linkDependencies(checkout: string, tree: string): Promise<
     if (!fs.existsSync(link)) { await fs.promises.mkdir(path.dirname(link), { recursive: true }); await fs.promises.symlink(dir, link) }
   }
   const webModules = path.join(checkout, 'web', 'node_modules')
-  if (fs.existsSync(webModules) && fs.existsSync(path.join(tree, 'web'))) await fs.promises.symlink(webModules, path.join(tree, 'web', 'node_modules'))
+  if (opts.web !== false && fs.existsSync(webModules) && fs.existsSync(path.join(tree, 'web'))) await fs.promises.symlink(webModules, path.join(tree, 'web', 'node_modules'))
+}
+
+/**
+ * How the clone gets its dependencies: the checkout's linked, or the commit's lockfile
+ * installed (`root`, or `web` alone). The daemon a host checks decides first: when this
+ * server runs a build-hash daemon and the linked clone hashes to it, the links build that
+ * same daemon (a server built in the checkout itself, `dev:prod`, expects the checkout's
+ * install, stale or not); when it hashes to another, the commit is installed fresh (the
+ * deploy did that: 2026-11-11). With no such version to compare, the deploy's rules
+ * (clone-deps.ts) decide. A root dependency the checkout lacks is always installed, and
+ * web/'s matter only when the build makes the web app (no --reuse-web).
+ */
+async function chooseDependencies(b: CloneBuild, tree: string, reuseWeb: boolean): Promise<{ install: 'root' | 'web' | null; why: string }> {
+  const stale = await staleDependencies(b.checkout, tree)
+  const lacking = stale.filter((r) => /^root (?!patched |unpatched )/.test(r))
+  const webStale = reuseWeb ? [] : stale.filter((r) => r.startsWith('web '))
+  if (lacking.length) return { install: 'root', why: `the checkout's node_modules lacks what this commit declares (${lacking.join(', ')})` }
+  const want = b.expectDaemonVersion
+  if (want && DAEMON_VERSION.test(want)) {
+    await linkDependencies(b.checkout, tree, { web: webStale.length === 0 })
+    const linked = await daemonVersionAt(tree, b.daemonSources ?? DAEMON_SOURCE_FILES)
+    if (linked === want) return webStale.length ? { install: 'web', why: `the checkout's web/node_modules lacks what this commit declares (${webStale.join(', ')})` } : { install: null, why: '' }
+    // Links only (to the checkout's entries and the clone's own packages): removing them touches neither.
+    await fs.promises.rm(path.join(tree, 'node_modules'), { recursive: true, force: true })
+    await fs.promises.rm(path.join(tree, 'web', 'node_modules'), { force: true })
+    const rules = stale.length ? `; ${stale.join(', ')}` : ''
+    return { install: 'root', why: `the checkout's install builds ${linked ?? 'a daemon of unknown version'}, not this server's ${want}${rules}` }
+  }
+  const rootStale = stale.filter((r) => r.startsWith('root '))
+  if (rootStale.length) return { install: 'root', why: `the checkout's node_modules is not this commit's install (${rootStale.join(', ')})` }
+  await linkDependencies(b.checkout, tree, { web: webStale.length === 0 })
+  return webStale.length ? { install: 'web', why: `the checkout's web/node_modules lacks what this commit declares (${webStale.join(', ')})` } : { install: null, why: '' }
+}
+
+/** A clone build whose daemon is not the one this server runs: a host would refuse it, so it is not kept. */
+export class DaemonMismatchError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DaemonMismatchError'
+  }
 }
 
 /** Build the files in a clone; returns each target's path (inside `work`). */
@@ -131,17 +190,26 @@ export async function buildFileInClone(b: CloneBuild): Promise<Partial<Record<Ho
   const tree = path.join(b.work, 'tree')
   await git(b.work, ['clone', '--quiet', '--shared', '--no-checkout', b.checkout, tree])
   await git(tree, ['checkout', '--quiet', '--detach', b.commit])
-  await linkDependencies(b.checkout, tree)
   const args = ['scripts/build-binary.mjs', ...b.targets.flatMap((t) => ['--target', t])]
   const statics = path.join(b.distDir, 'web', 'static')
-  if (fs.existsSync(path.join(statics, 'index.html'))) {
+  const reuseWeb = fs.existsSync(path.join(statics, 'index.html'))
+  if (reuseWeb) {
     await fs.promises.cp(statics, path.join(tree, 'dist', 'web', 'static'), { recursive: true, dereference: true })
     args.push('--reuse-web')
   }
+  const deps = await chooseDependencies(b, tree, reuseWeb)
   const log = await fs.promises.open(b.log, 'a')
   try {
     await log.write(`${new Date().toISOString()} building the walnut file for ${b.targets.join(', ')} from ${b.commit}\n`)
     const env = gitChildEnv({ PATH: `${path.dirname(b.bun)}${path.delimiter}${process.env.PATH ?? ''}` })
+    if (deps.install) {
+      await log.write(`${deps.why}; installing the commit's lockfile in the clone${deps.install === 'web' ? "'s web/" : ''}\n`)
+      const [icmd, iargs] = withUtilityQosClamp(b.bun, ['install', '--frozen-lockfile'])
+      const ri = await run(icmd, iargs, { cwd: deps.install === 'root' ? tree : path.join(tree, 'web'), env, timeoutMs: INSTALL_MS, logFd: log.fd })
+      if (ri.code !== 0) {
+        throw new Error(`installing this commit's dependencies for the walnut file failed (${ri.code === null ? 'it took too long' : `exit ${ri.code}`}): ${deps.why}; the whole log is ${b.log}`)
+      }
+    }
     const [cmd, cmdArgs] = withUtilityQosClamp(b.bun, args)
     const r = await run(cmd, cmdArgs, { cwd: tree, env, timeoutMs: b.timeoutMs ?? BUILD_MS, logFd: log.fd })
     if (r.code !== 0) {
@@ -157,7 +225,24 @@ export async function buildFileInClone(b: CloneBuild): Promise<Partial<Record<Ho
     if (!fs.existsSync(file)) throw new Error(`the build left no dist-bin/walnut-${t}; see ${b.log}`)
     files[t] = file
   }
+  const want = b.expectDaemonVersion
+  if (want && DAEMON_VERSION.test(want)) {
+    const built = await builtDaemonVersion(tree)
+    if (built !== want) {
+      throw new DaemonMismatchError(`the walnut file built for ${b.targets.join(', ')} runs ${built ?? 'a daemon of unknown version'}, but this server runs ${want}, so it was not kept: a host would refuse it. Its build log is ${b.log}`)
+    }
+  }
   return files
+}
+
+/** The daemon version build-binary.mjs baked into the files (its stage's sizes.json), or null. */
+async function builtDaemonVersion(tree: string): Promise<string | null> {
+  try {
+    const sizes = JSON.parse(await fs.promises.readFile(path.join(tree, 'dist', 'binary-stage', 'sizes.json'), 'utf8')) as { daemonVersion?: unknown }
+    return typeof sizes.daemonVersion === 'string' && sizes.daemonVersion.trim() ? sizes.daemonVersion.trim() : null
+  } catch {
+    return null
+  }
 }
 
 /** package.json as of `commit` in the checkout (never its working tree, which may hold other changes). */

@@ -10,6 +10,7 @@ import { log } from '../../logging/index.js'
 import type { CloudReplicaReply } from '../cloud-ingest.js'
 import { createHostServerManager, type HostServerHost, type HostServerManager, type HostServerSettings, type HostServerView } from './manager.js'
 import { createHostFileSource, type HostFileSource } from './host-file.js'
+import { resolveDaemonSourceVersion } from '../../providers/daemon-source.js'
 import { DEFAULT_UPDATE_MAX_BEHIND_MS, DEFAULT_UPDATE_QUIET_MS, minutesFromEnv } from './update-hold.js'
 import { getExposeProvider, onExposeProvidersChanged, type CommandProviderConfig } from '../expose/registry.js'
 import { exposePlacement, tunnelKey, type PlacementHost } from '../expose/placement.js'
@@ -153,7 +154,11 @@ export function hostRunsServer(
  * (providers/daemon-connection.ts), and the companion share its cache and batching.
  */
 export function sharedHostFileSource(): HostFileSource {
-  return (fileSource ??= createHostFileSource({ cacheDir: path.join(WALNUT_HOME, 'cache', 'host-server') }))
+  return (fileSource ??= createHostFileSource({
+    cacheDir: path.join(WALNUT_HOME, 'cache', 'host-server'),
+    // The daemon a host gets must be the one this server expects of it, or the host refuses the upload.
+    daemonVersion: () => resolveDaemonSourceVersion(),
+  }))
 }
 
 /** The root of a host's Walnut server install on the host (install.ts HOST_ROOT, or the WALNUT_HOST_SERVER_ROOT knob). */
