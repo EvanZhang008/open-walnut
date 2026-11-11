@@ -18,6 +18,7 @@ const FILE = path.resolve(__dirname, '../../web/src/components/chat/ChatInput.ts
 /** Reads of `value` that only draw the render or mirror it, each with why. */
 const RENDER_READS: Record<string, string> = {
   'const [value, setValue] = useState(initialDraft.body);': 'the state itself',
+  'const valueRef = useRef(value);': 'the mirror itself, read only through liveText',
   'valueRef.current = value;': 'the mirror that liveText falls back to when no box is mounted',
   '}, [value, fitForText]);': 'the fit effect is keyed on it; it reads the box itself',
   'onValueChangeRef.current?.(composeRefs(value, tableRef.current));': 'reports the rendered text upward, read-only',

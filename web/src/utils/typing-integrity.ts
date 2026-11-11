@@ -44,6 +44,8 @@ export interface IntegrityWindow {
   /** An "@" or "/" query replaced by what was picked from its menu: not lost. */
   picks: number;
   offBox: number;
+  /** Keys that reached no box and were moved into the replacement of the box typed in (utils/composer-caret-keep.ts). */
+  rescued: number;
   preventedBy: string[];
   overwrittenBy: string[];
   /** Where the caret was when a key landed outside the box (tag.class of the active element). */
@@ -51,7 +53,15 @@ export interface IntegrityWindow {
 }
 
 export function emptyWindow(): IntegrityWindow {
-  return { keys: 0, inserted: 0, prevented: 0, dropped: 0, overwrites: 0, overwrittenChars: 0, picks: 0, offBox: 0, preventedBy: [], overwrittenBy: [], offBoxAt: [] };
+  return { keys: 0, inserted: 0, prevented: 0, dropped: 0, overwrites: 0, overwrittenChars: 0, picks: 0, offBox: 0, rescued: 0, preventedBy: [], overwrittenBy: [], offBoxAt: [] };
+}
+
+/** Two windows summed: what a test reads across the 30 s windows its run spans. */
+export function sumWindows(a: IntegrityWindow, b: IntegrityWindow): IntegrityWindow {
+  const out = emptyWindow();
+  for (const k of ['keys', 'inserted', 'prevented', 'dropped', 'overwrites', 'overwrittenChars', 'picks', 'offBox', 'rescued'] as const) out[k] = a[k] + b[k];
+  for (const k of ['preventedBy', 'overwrittenBy', 'offBoxAt'] as const) out[k] = [...new Set([...a[k], ...b[k]])].slice(0, 10);
+  return out;
 }
 
 export function lostAny(w: IntegrityWindow): boolean {
@@ -143,12 +153,16 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
   const { doc, win } = deps;
 
   let w = emptyWindow();
+  /** Every window already flushed, for the test probe below. */
+  let flushed = emptyWindow();
   let windowStart = deps.now();
   let lastReport = deps.now();
   /** Keydowns still waiting for their input event, per box. */
   const pending = new Map<EventTarget, PendingKey[]>();
   const typedAt = new WeakMap<EventTarget, number>();
   let lastTypedAt = -Infinity;
+  /** The box typed in last: gone from the page means it was replaced under the person. */
+  let lastBox: Element | null = null;
   const preventers = new WeakMap<Event, string>();
 
   const flush = (t: number) => {
@@ -159,6 +173,7 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
         lastReport = t;
       }
     }
+    flushed = sumWindows(flushed, w);
     w = emptyWindow();
     windowStart = t;
   };
@@ -190,15 +205,19 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
     const k = e as KeyboardEvent;
     if (!isPrintable(k)) return;
     const t = deps.now();
-    if (!isTextBox(k.target)) {
+    // The caret keeper moved this key into the replacement of the box typed in: that box's key.
+    const rescued = !isTextBox(k.target) && isTextBox(doc.activeElement);
+    if (!isTextBox(k.target) && !rescued) {
       // Typing went on, but the caret is no longer in a box.
-      if (t - lastTypedAt < OFF_BOX_MS) { w.offBox++; note(w.offBoxAt, describe(doc.activeElement)); }
+      if (t - lastTypedAt < OFF_BOX_MS) { w.offBox++; note(w.offBoxAt, `${describe(doc.activeElement)}${lastBox && !lastBox.isConnected ? ' (box replaced)' : ''}`); }
       return;
     }
+    const box = (rescued ? doc.activeElement : k.target) as EventTarget;
     lastTypedAt = t;
+    lastBox = box as Element;
     tick(t);
     w.keys++;
-    const box = k.target as EventTarget;
+    if (rescued) w.rescued++;
     const list = pending.get(box) ?? [];
     list.push({ at: t, ev: k });
     pending.set(box, list);
@@ -243,7 +262,7 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
 
   // A test browser reads the running window (tests/e2e/browser/composer-fast-typing.spec.ts).
   const probe = win as Window & { __walnutTypingIntegrity?: () => IntegrityWindow };
-  if ((win.navigator as Navigator | undefined)?.webdriver) probe.__walnutTypingIntegrity = () => { tick(deps.now()); return { ...w, preventedBy: [...w.preventedBy], overwrittenBy: [...w.overwrittenBy], offBoxAt: [...w.offBoxAt] }; };
+  if ((win.navigator as Navigator | undefined)?.webdriver) probe.__walnutTypingIntegrity = () => { tick(deps.now()); return sumWindows(flushed, w); };
   doc.addEventListener('keydown', onKeyCapture, true);
   doc.addEventListener('input', onInput, true);
   const timer = win.setInterval(() => tick(deps.now()), SETTLE_MS);

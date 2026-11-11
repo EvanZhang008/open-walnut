@@ -38,6 +38,7 @@ import { ComposerAttachmentStrip } from './ComposerAttachmentStrip';
 import { MAX_FILES, withFilePaths, type UploadTarget } from '@/api/file-upload';
 import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { useFocusRequest } from '@/utils/focus-when-shown';
+import { caretBackOnMount } from '@/utils/composer-caret-keep';
 import { caretOnEdgeLine, noteSentPrompt, recallPrompts, stepRecall, type RecallPos } from './prompt-recall';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
@@ -678,6 +679,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey]);
+
+  // A box mounted in place of the one the person was typing in takes the caret back
+  // (utils/composer-caret-keep.ts), so the keys after a re-mount are not typed onto the page.
+  useLayoutEffect(() => { caretBackOnMount(textareaRef.current); }, []);
 
   // Unmount: the pending save is written now, not dropped with its timer.
   useEffect(() => {
