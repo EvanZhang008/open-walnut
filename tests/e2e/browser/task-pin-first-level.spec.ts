@@ -36,6 +36,7 @@ test('first-level pin choices switch tiers, unpin, undo and keep custom names in
     const data = await (await request.get(`/api/tasks/${task.id}`)).json()
     return data.task.pinned ? (data.task.focus_tier ?? 'satellite') : null
   }
+  let releaseHeld: (() => void) | undefined
   try {
     await page.setContent(`<a href="${API}/">Open Walnut</a>`)
     await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
@@ -45,21 +46,53 @@ test('first-level pin choices switch tiers, unpin, undo and keep custom names in
     await expect(menu.locator('[aria-pressed="true"]')).toHaveCount(0)
     // A pin and its chosen tier share one request, even when that write is held.
     let releasePin!: () => void
-    const held = new Promise<void>((resolve) => { releasePin = resolve })
+    const held = new Promise<void>((resolve) => { releasePin = resolve; releaseHeld = resolve })
     let enteredPin!: () => void
     const pinEntered = new Promise<void>((resolve) => { enteredPin = resolve })
     let tierRequests = 0
     await page.route(`**/api/focus/tasks/${task.id}/tier`, async route => { tierRequests++; await route.continue() })
-    await page.route('**/api/focus/batch', async route => { enteredPin(); await held; await route.continue() })
+    await page.route('**/api/focus/batch', async route => {
+      const response = await route.fetch()
+      enteredPin()
+      await held
+      await route.fulfill({ response })
+    })
     await menu.getByTestId('kebab-pin-focus').click()
     await expect(menu).toHaveCount(0)
     await pinEntered
     expect(tierRequests).toBe(0)
+    // Undo before the write answers must survive a fresh list read and the delayed response.
+    await page.keyboard.press('Meta+z')
+    menu = await openMenu(page, task.id)
+    await expect(menu.getByTestId('kebab-unpin')).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    // The server already applied the pin, but its answer is held from the browser.
+    expect(await storedTier()).toBe('focus')
+    const listAnswered = page.waitForResponse(response => new URL(response.url()).pathname === '/api/tasks' && response.request().method() === 'GET')
+    await page.evaluate(async () => {
+      const { wsClient } = await import('/src/api/ws.ts')
+      await wsClient.resync('pull')
+    })
+    const listResponse = await listAnswered
+    expect(listResponse.ok()).toBe(true)
+    expect((await listResponse.json()).tasks.find((row: { id: string }) => row.id === task.id)?.pinned).toBe(true)
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    menu = await openMenu(page, task.id)
+    await expect(menu.getByTestId('kebab-unpin')).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    const pinAnswered = page.waitForResponse(response => response.url().endsWith('/api/focus/batch') && response.request().method() === 'POST')
+    const undoAnswered = page.waitForResponse(response => response.url().endsWith(`/api/focus/tasks/${task.id}`) && response.request().method() === 'DELETE')
     releasePin()
-    await expect.poll(storedTier).toBe('focus')
+    expect((await pinAnswered).ok()).toBe(true)
+    expect((await undoAnswered).ok()).toBe(true)
+    await expect.poll(storedTier).toBeNull()
+    await expect.poll(async () => (await request.get(`/api/focus/tasks`)).json().then(data => data.pinned_tasks.includes(task.id))).toBe(false)
     expect(tierRequests).toBe(0)
     await page.unroute('**/api/focus/batch')
     await page.unroute(`**/api/focus/tasks/${task.id}/tier`)
+    menu = await openMenu(page, task.id)
+    await menu.getByTestId('kebab-pin-focus').click()
+    await expect.poll(storedTier).toBe('focus')
     for (const tier of ['wait', tierId, 'satellite']) {
       menu = await openMenu(page, task.id)
       await expect(menu.locator('[data-testid^="kebab-pin-"][aria-pressed="true"]')).toHaveCount(1)
@@ -94,6 +127,8 @@ test('first-level pin choices switch tiers, unpin, undo and keep custom names in
     await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
     expect(errors).toEqual([])
   } finally {
+    releaseHeld?.()
+    await page.unroute('**/api/focus/batch')
     await request.delete(`/api/focus/tasks/${task.id}`)
     await request.delete(`/api/tasks/${task.id}?force=true`)
     await request.delete(`/api/focus/tiers/${tierId}`)

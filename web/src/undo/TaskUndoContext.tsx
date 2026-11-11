@@ -296,12 +296,13 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     freshPins.current.delete(id);
     let pending = true;
     let undone = false;
+    let settleUndo = () => {};
     const withdraw = push({
       key: `pin:${id}`, title: `${snap.pinned ? 'Moved to' : 'Pinned to'} ${tierName(tier)}`,
       ...(t ? { body: t.title } : {}), undo: () => {
         if (pending) {
           undone = true;
-          latest.current.store.patchTasksLocal({ [id]: { pinned: snap.pinned, focus_tier: snap.pinned ? snap.tier : undefined } });
+          settleUndo = latest.current.store.patchTasksLocal({ [id]: { pinned: snap.pinned, focus_tier: snap.pinned ? snap.tier : undefined } }, { pending: true });
         } else restorePin(id, snap);
       },
       revive: { kind: 'pin', data: { id, snap } },
@@ -314,6 +315,7 @@ export function TaskUndoProvider({ children }: { children: ReactNode }) {
     } catch { withdraw(); }
     finally {
       pending = false;
+      settleUndo();
       // Undo cannot reach the server ahead of the write it undoes.
       if (undone) restorePin(id, snap);
     }

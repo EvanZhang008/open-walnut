@@ -45,6 +45,7 @@ const SITES: Site[] = [
   { file: 'hooks/useProjectActions.ts', in: 'moveLoadedTasks', pending: false, why: 'the undo, made after its settle' },
   // ── web/src/undo/TaskUndoContext.tsx ──
   { file: 'undo/TaskUndoContext.tsx', in: 'setStartDate', pending: true, why: "a snooze's Undo: the start date write is out until update answers; settled on both paths" },
+  { file: 'undo/TaskUndoContext.tsx', in: 'pinToTier', pending: true, why: 'an Undo while the original pin write is out; its local restoration is held until that write answers or fails, then settled before the restoration request' },
 ]
 
 function sourceFiles(dir: string): string[] {
