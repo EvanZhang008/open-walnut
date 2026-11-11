@@ -780,6 +780,52 @@ describe('the pre-push hook', () => {
 })
 
 /**
+ * The hook's type check runs unless the pusher names the exact, clean tree it already checked
+ * (WALNUT_PUSH_TYPECHECKED_TREE): runs the real hook in a scratch repository with a stand-in bun.
+ */
+describe('the pre-push type check', () => {
+  function scratch(): { dir: string; env: NodeJS.ProcessEnv; tree: string; marker: string } {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pre-push-tc-'))
+    dirs.push(dir)
+    const env = cleanEnv()
+    const git = (...a: string[]) => spawnSync('git', a, { cwd: dir, env, encoding: 'utf8' })
+    git('init', '-q', '-b', 'main')
+    fs.mkdirSync(path.join(dir, '.husky'), { recursive: true })
+    fs.copyFileSync(path.join(ROOT, '.husky/pre-push'), path.join(dir, '.husky/pre-push'))
+    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'scripts/check-committed-bundle.sh'), 'exit 0\n')
+    fs.writeFileSync(path.join(dir, 'scripts/push-gate.sh'), 'cat >/dev/null; exit 0\n')
+    fs.writeFileSync(path.join(dir, 'a.ts'), 'export const a = 1\n')
+    git('add', '-A'); git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'base')
+    const bin = path.join(dir, '.bin'); fs.mkdirSync(bin)
+    const marker = path.join(dir, '.lint-ran')
+    fs.writeFileSync(path.join(bin, 'bun'), `#!/bin/sh\necho ran >> '${marker}'\nexit 0\n`, { mode: 0o755 })
+    fs.writeFileSync(path.join(dir, '.git/info/exclude'), '.bin\n.lint-ran\n')
+    env.PATH = guardedPath([bin], env.PATH)
+    const tree = git('rev-parse', 'HEAD^{tree}').stdout.trim()
+    return { dir, env, tree, marker }
+  }
+  const hookRun = (dir: string, env: NodeJS.ProcessEnv) =>
+    spawnSync('sh', ['-e', '.husky/pre-push', 'origin', 'https://example.invalid/r.git'], { cwd: dir, env, input: '', encoding: 'utf8' })
+
+  it('skips only for a clean checkout of the named tree', () => {
+    const s = scratch()
+    let r = hookRun(s.dir, s.env)
+    expect(r.status).toBe(0); expect(fs.existsSync(s.marker), 'no tree named: checked').toBe(true)
+    fs.rmSync(s.marker)
+    r = hookRun(s.dir, { ...s.env, WALNUT_PUSH_TYPECHECKED_TREE: s.tree })
+    expect(r.status).toBe(0); expect(fs.existsSync(s.marker), 'the named clean tree: not again').toBe(false)
+    expect(r.stdout).toMatch(/not run again/)
+    r = hookRun(s.dir, { ...s.env, WALNUT_PUSH_TYPECHECKED_TREE: '0'.repeat(40) })
+    expect(fs.existsSync(s.marker), 'another tree: checked').toBe(true)
+    fs.rmSync(s.marker)
+    fs.writeFileSync(path.join(s.dir, 'a.ts'), 'export const a: number = "x"\n')
+    r = hookRun(s.dir, { ...s.env, WALNUT_PUSH_TYPECHECKED_TREE: s.tree })
+    expect(fs.existsSync(s.marker), 'the named tree with an edit: checked').toBe(true)
+  })
+})
+
+/**
  * Every GitHub read of the gate has a time limit (2026-11-06: one `gh api` call hung for most of
  * an hour, the gate never read the failed tier written meanwhile, and reported "did not answer"
  * at its deadline). Fails on a new bare `gh api` call, and pins that the limit really ends a call.

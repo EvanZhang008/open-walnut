@@ -23,14 +23,24 @@
 # The refs being pushed, read once: the scanner and the test gate below both read them.
 refs=$(cat)
 
-echo "Type-checking before push (tsc --noEmit)…"
-if ! bun run --silent lint; then
-  echo ""
-  echo "Push blocked: TypeScript errors above (CI would fail too)."
-  echo "Fix them, or bypass with: git push --no-verify"
-  exit 1
+# A tool that already type-checked the exact tree it pushes names that tree in
+# WALNUT_PUSH_TYPECHECKED_TREE, and the hook does not check it again (2026-11-11: on a busy machine a
+# push spent 25 minutes repeating the check its land had just passed, and the pushes queued behind
+# it gave up). Only a clean checkout of that very tree skips; anything else is checked here.
+checked_tree=${WALNUT_PUSH_TYPECHECKED_TREE:-}
+if [ -n "$checked_tree" ] && [ "$checked_tree" = "$(git rev-parse -q --verify 'HEAD^{tree}' 2>/dev/null)" ] \
+  && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "✓ Type-check: this tree passed one before the push (WALNUT_PUSH_TYPECHECKED_TREE), not run again."
+else
+  echo "Type-checking before push (tsc --noEmit)…"
+  if ! bun run --silent lint; then
+    echo ""
+    echo "Push blocked: TypeScript errors above (CI would fail too)."
+    echo "Fix them, or bypass with: git push --no-verify"
+    exit 1
+  fi
+  echo "✓ Type-check passed."
 fi
-echo "✓ Type-check passed."
 
 bash scripts/check-committed-bundle.sh || exit 1
 
