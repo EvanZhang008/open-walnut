@@ -501,6 +501,29 @@ esac
     expect(fs.readFileSync(g.seen, 'utf8')).toContain(`refs/gate/${gated.slice(0, 12)}`)
   })
 
+  it('reads GitHub\'s main again when a read fails, and refuses only when every try failed, naming git\'s words', () => {
+    // A git that fails ls-remote while a counter file says so (2026-11-11: one failed read refused 8 lands).
+    const flaky = (fails: number) => {
+      const g = ghRepo({ statuses: [st('walnut/push-gate', 'success', 'all 5 tiers passed')] })
+      git(g.r, 'push', '-q', URL, 'main:main')
+      const tip = commit(g.r, { 'a.txt': '1\n' }, 'one')
+      const dir = path.join(path.dirname(g.r), 'flaky-git'), n = path.join(dir, 'fails')
+      fs.mkdirSync(dir); fs.writeFileSync(n, String(fails))
+      const real = spawnSync('bash', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim()
+      fs.writeFileSync(path.join(dir, 'git'), `#!/bin/bash\nif [ "$1" = ls-remote ] && [ "$(cat '${n}')" -gt 0 ]; then echo $(( $(cat '${n}') - 1 )) > '${n}'; echo "fatal: unable to access: Could not resolve host: github.com" >&2; exit 128; fi\nexec '${real}' "$@"\n`, { mode: 0o755 })
+      const env = cleanEnv({ ...g.env, WALNUT_PUSH_GATE_READ_SECS: '0' })
+      env.PATH = `${dir}:${env.PATH}`
+      return spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env })
+    }
+    const two = flaky(2)
+    expect(two.status, two.stdout + two.stderr).toBe(0)
+    expect(two.stderr).toMatch(/push-gate --run: try 2: fatal: unable to access: Could not resolve host/)
+    const all = flaky(9)
+    expect(all.status).toBe(1)
+    expect(all.stderr).toMatch(/try 4: fatal: unable to access/)
+    expect(all.stderr).toMatch(/push-gate --run: could not read main from https:\/\/github\.com\/acme\/demo\.git/)
+  })
+
   it('names the commits GitHub has no copy of when --run is refused, not the gate commit', () => {
     const g = ghRepo({ statuses: [st('walnut/push-gate (quick 1/3)', 'failure', '1 NEW failure(s)')] })
     git(g.r, 'push', '-q', URL, 'main:main')

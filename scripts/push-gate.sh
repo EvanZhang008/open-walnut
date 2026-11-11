@@ -117,9 +117,23 @@ fi
 if [ "${1:-}" = --run ]; then
   remote_url=${2:-}
   t=$(git rev-parse -q --verify "${3:-}^{commit}") || { echo "push-gate --run: no commit ${3:-}" >&2; exit 2; }
-  b=$(git ls-remote "$remote_url" refs/heads/main 2>/dev/null | cut -f1)
+  # GitHub's main, read and fetched with a few tries: one failed read at a load near 230 refused
+  # 8 lands with no test run (2026-11-11). git's own words go to the log on each failed try.
+  b= rerr=$(mktemp); rtry=0; rwait=${WALNUT_PUSH_GATE_READ_SECS:-5}
+  while :; do
+    b=$(git ls-remote "$remote_url" refs/heads/main 2>"$rerr" | cut -f1)
+    if [ -n "$b" ]; then
+      git cat-file -e "$b^{commit}" 2>/dev/null || git fetch -q "$remote_url" main 2>"$rerr" || b=fetch
+      [ "$b" = fetch ] || break
+    fi
+    rtry=$((rtry + 1))
+    echo "push-gate --run: try $rtry: $(tail -2 "$rerr" | tr '\n' ' ')" >&2
+    [ "$rtry" -lt 4 ] || break
+    sleep $((rwait * rtry))
+  done
+  rm -f "$rerr"
   [ -n "$b" ] || { echo "push-gate --run: could not read main from $remote_url" >&2; exit 1; }
-  git cat-file -e "$b^{commit}" 2>/dev/null || git fetch -q "$remote_url" main 2>/dev/null || { echo "push-gate --run: could not fetch main from $remote_url" >&2; exit 1; }
+  [ "$b" != fetch ] || { echo "push-gate --run: could not fetch main from $remote_url" >&2; exit 1; }
   gk=full
   if [ "${WALNUT_PUSH_GATE_MODE:-}" = files ]; then
     gk=files
