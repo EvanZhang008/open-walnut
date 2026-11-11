@@ -244,7 +244,12 @@ export function buildIsolatedRetireScript(root: string, opts: { remove?: boolean
     `if [ ! -e "$R" ]; then echo walnut-isolated-retired; exit 0; fi`,
     // Never a symlink or another user's dir: what it points at is not ours to remove.
     `if [ -L "$R" ] || [ ! -O "$R" ]; then echo walnut-isolated-not-owned; exit 1; fi`,
-    `S=$( (${buildDaemonStopCmd(l.daemonDir).split('\n').join('\n')}) 2>&1 )`,
+    // The stop runs as a function, never pasted inside `$( ... )`: its case patterns
+    // close with `)`, which bash 3.2 (macOS /bin/sh) reads as the end of the substitution.
+    'w_stop() {',
+    buildDaemonStopCmd(l.daemonDir),
+    '}',
+    'S=$(w_stop 2>&1)',
     'case "$S" in *walnut-daemon-stop-confirmed*) ;; *) printf "%s\\n" "$S"; exit 1;; esac',
     ...(remove ? [
       ...also,

@@ -10,7 +10,7 @@
  * mtime before and after), never written. The "daemons" are children of this test.
  */
 import { describe, it, expect, afterEach } from 'vitest'
-import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -248,6 +248,29 @@ describe('the isolated dir probe, run for real', () => {
     expect(chooseDaemonDir(probe)).toMatchObject({ path: cache, fallback: true })
     expect(fs.existsSync(path.join(home, '.cache', 'open-walnut'))).toBe(false)
   })
+})
+
+describe('every script this file sends to a host parses under each shell a host may have', () => {
+  // A host's /bin/sh may be dash, bash in POSIX mode, or macOS's bash 3.2, whose
+  // parser ends a `$( ... )` at the `)` of a case pattern inside it (2026-11-11:
+  // the retire script exited 2 on the Mac). Every shell present here is asked.
+  const shells = ['/bin/sh', '/bin/bash', '/bin/dash', '/usr/bin/dash'].filter((s) => fs.existsSync(s))
+  const iso = isolated()
+  const root = iso.roots[0]
+  const scripts: Record<string, string> = {
+    'retire': buildIsolatedRetireScript(root, { alsoRemove: iso.roots }),
+    'retire, keep the root': buildIsolatedRetireScript(root, { remove: false }),
+    'stale root sweep': buildStaleIsolatedRootSweepScript('0123456789abcdef'),
+    'isolated dir probe': buildDaemonDirProbeScript(isolatedProbeOpts(iso)),
+  }
+  for (const [name, script] of Object.entries(scripts)) {
+    it(name, () => {
+      for (const sh of shells) {
+        const r = spawnSync(sh, ['-n'], { input: script, encoding: 'utf-8' })
+        expect({ sh, code: r.status, err: r.stderr }).toEqual({ sh, code: 0, err: '' })
+      }
+    })
+  }
 })
 
 describe('the retire script, run for real', () => {
