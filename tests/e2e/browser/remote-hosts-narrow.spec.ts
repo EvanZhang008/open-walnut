@@ -116,11 +116,16 @@ test.describe('Settings > Remote Hosts at 700 px', () => {
     await page.getByTestId('remote-hosts-more-toggle').scrollIntoViewIfNeeded()
     const add = page.locator('[data-testid="remote-hosts-add"]:visible').first()
     await expect(add).toBeVisible()
-    const bar = await box(page.locator('.phone-topbar, [data-testid="phone-topbar"]').first())
+    const topBar = page.locator('.phone-topbar, [data-testid="phone-topbar"]').first()
+    const bar = await box(topBar)
     expect(bar.height).toBeLessThanOrEqual(64)
-    const addBox = await box(add)
-    expect(addBox.y).toBeGreaterThanOrEqual(bar.y - 0.5)
-    expect(addBox.y + addBox.height).toBeLessThanOrEqual(bar.y + bar.height + 0.5)
+    // The header's Add host scrolls away and the bar's own comes in as a new element: wait for the
+    // one shown to sit in the bar (2026-11-11: read mid-scroll on a GitHub runner, the header's was
+    // already gone and its box null).
+    await expect.poll(async () => {
+      const [a, t] = [await add.boundingBox(), await topBar.boundingBox()]
+      return !!a && !!t && a.y >= t.y - 0.5 && a.y + a.height <= t.y + t.height + 0.5
+    }, { message: 'Add host sits in the top bar', timeout: 10_000 }).toBe(true)
 
     // The join card: the system picker's segments inset in their track, Copy as tall as the command.
     await add.click()
