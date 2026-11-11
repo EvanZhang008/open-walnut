@@ -81,11 +81,11 @@ function isRider(attrs: Record<string, string>): boolean {
   return attrs.kind === 'notification' && attrs.from === 'Walnut' && RIDER_OUTCOMES.has(attrs.outcome ?? '');
 }
 
-/** Split Walnut's leading riders off a stored user message, or `null`. */
-export function splitLeadingRiders(text: string): RiderSplit | null {
-  if (!text || !text.startsWith(TAG_HEAD)) return null;
+/** The riders that start at `pos`, one after another, each a complete tag on the
+ *  closed list followed by a blank line or the end of the text. `end` is where the
+ *  run stops (after the blank line of its last rider, or the text's end). */
+function readRiders(text: string, pos: number): { riders: SessionEnvelope[]; end: number } {
   const riders: SessionEnvelope[] = [];
-  let pos = 0;
   while (text.startsWith(TAG_HEAD, pos)) {
     const headEnd = text.indexOf('\n', pos);
     if (headEnd < 0) break;
@@ -100,17 +100,63 @@ export function splitLeadingRiders(text: string): RiderSplit | null {
     const end = closeAt + TAG_CLOSE.length;
     const segments = parseSessionEnvelopes(text.slice(pos, end));
     if (!segments || segments.length !== 1 || segments[0].kind !== 'envelope') break;
-    if (!text.startsWith('\n\n', end)) break;
+    const atEnd = !text.slice(end).trim();
+    if (!atEnd && !text.startsWith('\n\n', end)) break;
     riders.push(segments[0].envelope);
+    if (atEnd) return { riders, end: text.length };
     pos = end + 2;
   }
+  return { riders, end: pos };
+}
+
+/** Split Walnut's leading riders off a stored user message, or `null`. */
+export function splitLeadingRiders(text: string): RiderSplit | null {
+  if (!text || !text.startsWith(TAG_HEAD)) return null;
+  const { riders, end } = readRiders(text, 0);
   if (riders.length === 0) return null;
-  const body = text.slice(pos);
+  const body = text.slice(end);
   if (!body.trim()) return null;
   return { riders, body };
+}
+
+/**
+ * Walnut's notes that came AFTER the person's words in one stored line: the queue
+ * hands the CLI the rows waiting for it as one line, in the order they came, so a
+ * person's message followed by status notices before the session took it reads
+ * `${words}\n\n${notice}\n\n${notice}` (2026-11-11, the VP's chat: three "System,
+ * about" cards stood open under the person's words, which lost their bubble). The
+ * same closed list and the same care: the run must reach the end of the text, each
+ * rider a complete tag, and words must stay in front; else `null`.
+ */
+export function splitTrailingRiders(text: string): { body: string; riders: SessionEnvelope[] } | null {
+  if (!text) return null;
+  const sep = `\n\n${TAG_HEAD}`;
+  for (let at = text.indexOf(sep); at >= 0; at = text.indexOf(sep, at + 1)) {
+    const body = text.slice(0, at);
+    // Only after words: notes behind another envelope (a delivery's own) stay its row.
+    if (!body.trim() || parseSessionEnvelopes(body.trim()) !== null) return null;
+    const { riders, end } = readRiders(text, at + 2);
+    if (riders.length > 0 && end === text.length) return { body, riders };
+  }
+  return null;
+}
+
+/** Walnut's notes on both sides of the person's words: the ones in front, the
+ *  words, the ones after. `null` when neither side has any. */
+export function splitRiders(text: string): (RiderSplit & { trailing: SessionEnvelope[] }) | null {
+  const lead = splitLeadingRiders(text);
+  const rest = lead ? lead.body : text;
+  const trail = splitTrailingRiders(rest);
+  if (!lead && !trail) return null;
+  return { riders: lead?.riders ?? [], body: trail ? trail.body : rest, trailing: trail?.riders ?? [] };
 }
 
 /** The row without its leading riders; the text itself when it has none. */
 export function withoutLeadingRiders(text: string): string {
   return splitLeadingRiders(text)?.body ?? text;
+}
+
+/** The row without Walnut's notes on either side: the words the person typed. */
+export function withoutRiders(text: string): string {
+  return splitRiders(text)?.body ?? text;
 }

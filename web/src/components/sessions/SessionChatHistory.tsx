@@ -95,7 +95,7 @@ import { DeniedNowContext, ToolDecisionsContext, useSessionToolDecisions, Waitin
 import { permissionRequestStore } from '@/stores/permission-request-store';
 import { isMergeableHistoryTool } from './SessionMessage';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
-import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
+import { splitLeadingRiders, splitRiders } from '@open-walnut/history-walnut-riders';
 import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import { injectedContextKind } from './injected-context';
 import { stripQuestionTag } from '@/utils/question-tag';
@@ -3669,6 +3669,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const stopAt = historyParts[s - 1];
     const personStart = stopAt?.kind === 'msg' && isHistoryUserTurn(stopAt.m);
     if (inbound || (leadingGroup.cards > 0 && s < historyParts.length && personStart)) return s;
+    // Notes that came after the person's words open the live turn's row (pushVisible carries them).
+    if (personStart && alwaysShowAdded && stopAt.kind === 'msg' && (splitRiders(stopAt.m.text ?? '')?.trailing.length ?? 0) > 0) return s;
     // Context alone opens it only right after the person's message: that is
     // where the answered turn's fold starts too (pushTurnFold), so the row keeps
     // its key and open state when the turn ends. After words mid-turn it would not.
@@ -4757,6 +4759,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Answers whose reasoning the turn's fold holds (pushTurnFold): they show the words alone.
   const thinkingFolded = new Set<number>();
   const ridersFolded = new Set<number>();
+  // Person rows whose notes after the words the next fold draws (pushVisible).
+  const trailingFolded = new Set<number>();
   // The textless rows that drew their streaming words in this render.
   const overlaidReplies = new Set<string>();
   /** `trailing`: the live turn's first steps, continuing this run inside a fold
@@ -4845,7 +4849,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             {noActionSet.has(globalIndex) ? <NoActionMark /> : null}
           </>
         ) : (
-          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} {...(ridersFolded.has(globalIndex) ? { ridersFolded: true } : {})} showCopyActions={stream ? stream.showCopy : globalIndex === lastAssistantTextIndex && !part.toolsAfter} {...(part.toolsAfter ? { noActions: true } : {})} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} {...(ridersFolded.has(globalIndex) ? { ridersFolded: true } : {})} {...(trailingFolded.has(globalIndex) ? { trailingFolded: true } : {})} showCopyActions={stream ? stream.showCopy : globalIndex === lastAssistantTextIndex && !part.toolsAfter} {...(part.toolsAfter ? { noActions: true } : {})} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         )}
       </div>
     );
@@ -5171,22 +5175,51 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // The last row the reader reads that was placed, for the time a fold after it worked.
   let lastVisible: { g: number; at?: string } | null = null;
   const lastAt = (part: HistoryPart) => { const r = rowsOf(part); return r[r.length - 1]?.timestamp; };
+  // The notes that came after a person's words in their line (history-walnut-riders.ts
+  // splitTrailingRiders): received while the line waited, so they open the work that
+  // answers it, the first rows of the next fold (2026-11-11, the user, of three "System,
+  // about" cards standing open under his words: "this system also need to be collapsed").
+  type Carried = { id: string; g: number; key: string; riders: EnvelopeSegment[] };
+  let carried: Carried | null = null;
+  // Read through a call: the closures that set it are invisible to the narrowing at the tail.
+  const takeCarried = (): Carried | null => { const c = carried; carried = null; return c; };
+  const carriedRow = (c: Carried) => (
+    <div key={`fold-trail-${c.id}`} className="session-msg session-msg-envelope session-msg-riders" data-testid="session-rider-row">
+      <div className="session-msg-rider-content"><SessionEnvelopeSegments segments={c.riders} /></div>
+    </div>
+  );
+  /** Notes after a person's words with no step after them: their own fold, under the
+   *  words, with the reasoning of the answer that follows when it gave it to the fold. */
+  const emitCarried = (c: Carried, answerThinking?: string) => {
+    const key = turnFoldKey(`${c.id}:after`);
+    const steps = [...envelopeSteps(c.riders), ...(answerThinking ? [{ kind: 'thought' as const }] : [])];
+    pageRows.push(
+      <div key={`turn-${c.id}:after`} data-turn-fold-index={c.g} className="session-msg-bare">
+        <ProcessFoldRow foldId={`${c.id}:after`} foldKey={key} testId="turn-fold" phrase={foldStepsPhrase(steps)}>
+          {carriedRow(c)}
+          {answerThinking && <SessionThinking key={`fold-thinking-${c.id}:after`} text={answerThinking} />}
+        </ProcessFoldRow>
+      </div>,
+    );
+  };
   const emitQuiet = (answerThinking?: string, riders?: EnvelopeSegment[], next?: Item) => {
     const items = quiet;
     quiet = [];
-    if (items.length === 0) return;
+    const carry = takeCarried();
+    if (items.length === 0) { if (carry) emitCarried(carry, answerThinking); return; }
     // A row drawn as itself is a row the reader reads: a fold after it worked from there.
     const show = (x: Item) => { renderOne(x); lastVisible = { g: headOf(x.part).globalIndex, at: lastAt(x.part) }; };
     // One step alone renders as itself, except a message received or sent: that
     // is always a folded row, never its whole card between two answers.
     const sends = (part: HistoryPart) => rowsOf(part).some((m) => (m.tools ?? []).some(isOutboundTool));
-    if (items.length === 1 && !answerThinking && !riders && !isInboundPart(items[0].part) && !sends(items[0].part)) { show(items[0]); return; }
+    if (items.length === 1 && !answerThinking && !riders && !carry && !isInboundPart(items[0].part) && !sends(items[0].part)) { show(items[0]); return; }
     // A compaction and the summary it left are said as themselves, one fold deep at most: under a
     // fold they read "2 notices" and hid that the session was compacted (2026-11-04 review).
     const compactRow = (m: SessionHistoryMessage) => m.role === 'system' && ((m.systemVariant === 'compact' && m.text !== COMPACTING_MESSAGE) || isIdleCompactLine(m.text) || isWalnutCommandNotice(m.text));
     const isCompact = (x: Item) => rowsOf(x.part).length > 0 && rowsOf(x.part).every(compactRow);
     if (!answerThinking && !riders && items.some((x) => rowsOf(x.part).some(compactRow))
       && items.every((x) => isContextPart(x.part) || rowsOf(x.part).every(compactRow))) {
+      if (carry) emitCarried(carry);
       for (const x of items) show(x);
       return;
     }
@@ -5198,6 +5231,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const last = items.length - 1;
     // The reasoning or riders of the answer after them join the last fold, so that one stays a fold.
     if (items.some((_, k) => lifted(k)) && (!lifted(last) || (!answerThinking && !riders))) {
+      // The notes go with the first run (or their own fold when a lifted row comes first).
+      if (carry && lifted(0)) emitCarried(carry);
+      else carried = carry;
       let run: Item[] = [];
       for (let k = 0; k <= last; k++) {
         if (!lifted(k)) { run.push(items[k]!); continue; }
@@ -5208,7 +5244,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       emitQuiet(answerThinking, riders, next);
       return;
     }
-    const id = idOf(items[0].part);
+    // A fold the notes after a person's words open keeps their key, live and saved alike.
+    const id = carry ? `${carry.id}:after` : idOf(items[0].part);
     // The session's words on the way to its answer: one row each, the text a click away.
     const body = items.map((x) => {
       if (!isWordsPart(x.part)) return renderHistoryPart(x.part);
@@ -5218,6 +5255,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (rowId) markFolded(rowId, key);
       return <FoldedWordsRow key={`words-${idOf(x.part)}`} foldKey={key} text={m.text ?? ''}>{renderHistoryPart(x.part)}</FoldedWordsRow>;
     });
+    if (carry) body.unshift(carriedRow(carry));
     if (answerThinking) body.push(<SessionThinking key={`fold-thinking-${id}`} text={answerThinking} />);
     if (riders) {
       body.push(
@@ -5229,7 +5267,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     markAll(items, turnFoldKey(id));
     meetReader(turnFoldKey(id), items);
     const failed = failedOf(items.map((x) => x.part));
-    const steps = items.flatMap((x) => foldStepsOf(x.part));
+    const steps = [...(carry ? envelopeSteps(carry.riders) : []), ...items.flatMap((x) => foldStepsOf(x.part))];
     if (answerThinking) steps.push({ kind: 'thought' });
     if (riders) steps.push(...envelopeSteps(riders));
     const head = headOf(items[0].part);
@@ -5268,6 +5306,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const pushQuiet = (item: Item) => {
     const key = groupKeyOf(item.part);
     if (quiet.length > 0 && key !== quietKey) emitQuiet();
+    // Notes after words in another thread fold under those words, never into this one.
+    if (quiet.length === 0 && carried && carried.key !== key) emitQuiet();
     quietKey = key;
     quiet.push(item);
   };
@@ -5277,7 +5317,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const { part } = item;
     let thinking: string | undefined;
     if (part.kind === 'msg' && part.m.role === 'assistant' && (part.m.tools?.length ?? 0) === 0 && (part.m.thinking ?? '').trim()
-      && quiet.length > 0 && quietKey === groupKeyOf(part) && !askedAfter.has(item.i)) {
+      && (quiet.length > 0 ? quietKey === groupKeyOf(part) : carried?.key === groupKeyOf(part)) && !askedAfter.has(item.i)) {
       thinking = part.m.thinking;
       thinkingFolded.add(part.globalIndex);
     }
@@ -5294,8 +5334,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
     }
     emitQuiet(thinking, riders, item);
+    let after: EnvelopeSegment[] | undefined;
+    if (alwaysShowAdded && part.kind === 'msg' && part.m.role === 'user') {
+      const trailing = splitRiders(part.m.text ?? '')?.trailing ?? [];
+      if (trailing.length > 0) {
+        after = trailing.map((envelope) => ({ kind: 'envelope' as const, envelope }));
+        trailingFolded.add(part.globalIndex);
+      }
+    }
     renderOne(item);
     lastVisible = { g: headOf(part).globalIndex, at: lastAt(part) };
+    if (after) carried = { id: idOf(part), g: headOf(part).globalIndex, key: groupKeyOf(part), riders: after };
   };
   /** A step of the work (fold-rows.ts) that no Asked-from list hangs off. */
   const rowRoleOf = ({ part, i }: Item): RowRole => {
@@ -5362,14 +5411,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // the walk back stops at) open its row, as they will once the turn ends: the
     // row keeps its key, and so its open state, across the turn's end.
     const lead = liveTailStart >= 0 && leadingGroup ? quiet.splice(0) : [];
+    // The notes after the person's words open the live turn's row too.
+    const tailCarry = liveTailStart >= 0 && leadingGroup ? takeCarried() : null;
     emitQuiet();
     if (liveTailStart >= 0 && leadingGroup) {
       const tailItems = [...lead, ...visibleHistoryParts.slice(tailFrom).map((part, k) => ({ part, i: tailFrom + k }))];
       const tail = tailItems.map((x) => x.part);
-      const id = idOf(tail[0]);
+      // An empty tail: the live turn starts right after the person's words (its notes open it).
+      const opener = tail[0] ?? visibleHistoryParts[tailFrom - 1]!;
+      const id = tailCarry ? `${tailCarry.id}:after` : tail[0] ? idOf(tail[0]) : `${idOf(opener)}:after`;
       markAll(tailItems, turnFoldKey(id));
       meetReader(turnFoldKey(id), tailItems);
-      const head = headOf(tail[0]);
+      const head = headOf(opener);
       const group = leadingGroup;
       // What the turn does now, under its closed line: its latest thought and the step it is
       // on (design 1: a running turn is one live line, nothing else grows).
@@ -5387,7 +5440,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         const tailFailed = failedOf(tail);
         const failed: FoldFailures = { calls: tailFailed.calls + streamFailedOf(members), errors: tailFailed.errors };
         const live = isThinkingTail(stepIdx[stepIdx.length - 1] ?? -1);
-        const phrase = foldStepsPhrase([...tail.flatMap(foldStepsOf), ...streamFoldStepsOf(group)], waitingTools);
+        const phrase = foldStepsPhrase([...(tailCarry ? envelopeSteps(tailCarry.riders) : []), ...tail.flatMap(foldStepsOf), ...streamFoldStepsOf(group)], waitingTools);
         // Keyed like the answered turn's fold, so the row and its open state carry
         // over when the turn ends and history takes the tools.
         return (
@@ -5396,6 +5449,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               running={isStreaming || live}
               peek={isStreaming ? livePeek(group) : undefined}
               lead={isStreaming ? WORKING_LEAD : undefined} phrase={phrase}>
+              {tailCarry && carriedRow(tailCarry)}
               {tail.map((part, k) => {
                 // The group's first steps continue history's last run: one run,
                 // as the saved turn will draw it.
@@ -5786,11 +5840,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const msgId = thinking.find((t) => t.msgId)?.msgId;
       const content = thinking.map((t) => t.content).filter((c) => c.trim()).join('\n\n');
       if (msgId) return renderHistoryPart({ kind: 'msg', m: streamThinkingMessage(msgId, content), globalIndex: -1, stream: { showCopy: false } });
+      // The one thinking row, never a "Thinking" run line around another one (the user,
+      // 2026-11-11: an old row and the new one stacked, "太混乱了").
       return (
         <div key={runRowKey(members, chunk.members[0])} className="session-msg-bare">
-          <ToolRunShell phrase="Thinking" failCount={0} running={thinkingLive} disclosureId={disclosureIds.thinking(undefined)}>
-            <div className="chat-thinking-content">{content}</div>
-          </ToolRunShell>
+          <SessionThinking text={content} live={thinkingLive} disclosureId={disclosureIds.thinking(undefined)} />
         </div>
       );
     }
@@ -5945,16 +5999,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         })
         .filter(s => s.trim())
         .join('\n\n');
-      // The same shell and key the stretch will have once a tool joins
-      // it, so a reader who opened the reasoning keeps it open through
-      // the fold.
+      // The one thinking row (SessionThinking), keyed by the stretch, so a
+      // reader who opened the reasoning keeps it open.
       const thinkingIds = thinkingIdx.map((k) => { const t = timeline[k]; return t.kind === 'block' && t.block.type === 'thinking' ? t.block.msgId : undefined; });
       return (
         <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeysAttr([], thinkingIds)}>
-          <ToolRunShell phrase="Thinking" failCount={0} running={isThinkingTail(thinkingIdx[thinkingIdx.length - 1])} disclosureId={disclosureIds.thinking(thinkingIds.find(Boolean))}
-            peek={isStreaming ? <LivePeek members={[{ type: 'thinking', content }]} /> : undefined}>
-            <div className="chat-thinking-content">{content}</div>
-          </ToolRunShell>
+          <SessionThinking text={content} live={isThinkingTail(thinkingIdx[thinkingIdx.length - 1])} disclosureId={disclosureIds.thinking(thinkingIds.find(Boolean))} />
         </div>
       );
     }

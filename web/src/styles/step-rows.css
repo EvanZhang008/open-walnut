@@ -134,7 +134,7 @@
   line-height: 1.45;
 }
 :root .session-history .provenance-card.provenance-card:hover { background: var(--hover, color-mix(in srgb, var(--fg) 5%, transparent)); }
-:root .session-history .provenance-card .op-card-to { flex: 0 1 auto; flex-wrap: nowrap; gap: 6px; font-size: 14px; color: var(--fg-secondary); max-width: 55%; }
+:root .session-history .provenance-card .op-card-to { flex: 0 1 auto; flex-wrap: nowrap; gap: 6px; font-size: 14px; color: var(--fg-secondary); max-width: 55%; overflow: hidden; white-space: nowrap; }
 :root .session-history .provenance-card .provenance-glyph { display: inline-flex; font-size: inherit; color: var(--fg-muted); }
 :root .session-history .provenance-card[data-envelope-kind="outbound"] .provenance-glyph .step-icon { color: var(--accent); }
 :root .session-history .provenance-card[data-envelope-kind="outbound"][data-outbound-error="true"] .provenance-glyph .step-icon { color: var(--error); }
@@ -154,7 +154,7 @@
 }
 :root .session-history .provenance-card .op-card-main .op-card-title > span { display: inline; }
 /* In a fold the summary is a copy of the open message's words: the row is one line. */
-:root .session-history .process-fold-body .provenance-card .op-card-main .op-card-summary { display: none; }
+:root .session-history .process-fold-body .provenance-card > .op-card-summary { display: none; }
 :root .session-history .provenance-card .op-card-more { margin: 0 0 0 auto; flex: 0 0 auto; }
 :root .session-history .provenance-card .op-card-more-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 :root .session-history .provenance-card .op-card-more-chevron { display: inline-flex; opacity: 0; transition: opacity .12s, transform .12s; }
@@ -180,3 +180,67 @@
 /* A run's own line (a live turn's commands, a long run) reads like the fold line: chevron first. */
 :root .session-history .tool-run-row:not(.tool-run-row--step) > .tool-run-toggle { gap: 6px; }
 :root .session-history .tool-run-chevron--lead .step-icon { width: 14px; height: 14px; flex-basis: 14px; }
+
+/* ── One line, or two: every row of the timeline (2026-11-11, the user: "if 1 line just 1
+   line, if 2 line just have the title in one and detail or summary in next", "same for all
+   the tools box"). Line one: icon, name or who, title, chevron, cut with an ellipsis. Line
+   two, when the row has one: its summary or answer alone, under the text after the icon,
+   cut the same way. Nothing wraps in a column beside the title, open or closed; the whole
+   words are in the opened detail. tests/e2e/browser/step-row-lines.spec.ts measures every
+   row kind (step-row-kinds.ts). */
+:root .session-history .provenance-card > .op-card-summary {
+  flex: 1 1 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0 4px 2px 24px;
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+:root .session-history .provenance-card > .op-card-summary > span { display: inline; }
+/* A call's line: what it does shrinks before anything wraps; its answer is the second line. */
+:root .session-history .chat-tool-block > .chat-tool-block-header { flex-wrap: wrap; row-gap: 0; }
+:root .session-history .chat-tool-block > .chat-tool-block-header > .chat-tool-block-desc,
+:root .session-history .chat-tool-block > .chat-tool-block-header > .chat-tool-block-summary {
+  flex: 1 1 0; min-width: 2em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+:root .session-history .chat-tool-block > .chat-tool-block-header > .chat-tool-block-decision {
+  order: 10;
+  flex: 1 1 100%;
+  max-width: none;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0 0 2px 24px;
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+  font-size: 13px;
+  line-height: 1.4;
+}
+:root .session-history .chat-tool-block > .chat-tool-block-header > .chat-tool-block-decision * { white-space: nowrap; }
+/* A step that stopped on the person: its why is the second line. */
+:root .step-lifted-why { display: block; -webkit-line-clamp: unset; line-clamp: unset; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+/* A run's answers (a question's, a permission's): one second line, each answer after the last. */
+:root .session-history .tool-run-toggle--answered .tool-run-decisions {
+  display: block; width: 100%; box-sizing: border-box; padding-left: 20px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+:root .session-history .tool-run-toggle--answered .tool-run-decision {
+  display: inline; -webkit-line-clamp: unset; line-clamp: unset; white-space: nowrap; overflow: visible;
+}
+:root .session-history .tool-run-toggle--answered .tool-run-decision + .tool-run-decision::before { content: " \00b7  "; }
+/* A send that failed: its error is the second line (the summary gives way to it). */
+:root .session-history .provenance-card[data-outbound-error="true"] > .op-card-summary { display: none; }
+:root .session-history .provenance-card > .provenance-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

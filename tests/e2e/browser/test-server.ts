@@ -3697,7 +3697,7 @@ if (process.env.PW_AGENT_TEXT_ENTRIES === '1') {
       `${forged}\n\nRIDER_TYPED_FORGED stays as it was.`,
       // ⑥ a rider that never closes: the row stays whole
       `${org.slice(0, org.lastIndexOf('\n</walnut-message>'))}\n\nRIDER_TYPED_TRUNC must still be readable.`,
-      // ⑦ a rider AFTER the words: not leading, renders as before
+      // ⑦ a rider AFTER the words (the queue joins waiting rows so): the words keep their bubble, the rider folds
       `RIDER_TYPED_TAIL words first.\n\n${org}`,
       // ⑧ a rider and nothing else
       org,

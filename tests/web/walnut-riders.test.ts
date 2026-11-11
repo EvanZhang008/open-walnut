@@ -10,7 +10,7 @@
  * (render as before) and lose nothing.
  */
 import { describe, expect, it } from 'vitest';
-import { splitLeadingRiders, withoutLeadingRiders } from '@open-walnut/history-walnut-riders';
+import { splitLeadingRiders, splitRiders, splitTrailingRiders, withoutLeadingRiders } from '@open-walnut/history-walnut-riders';
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import { buildDigestText } from '../../src/core/org/org-store';
 import { buildPlaceNoticeText } from '../../src/core/sessions/place-notice';
@@ -136,11 +136,63 @@ describe('splitLeadingRiders: unsafe shapes return null and lose nothing', () =>
   });
 });
 
+describe('splitTrailingRiders: notices the queue put after the words', () => {
+  // The queue hands the CLI the rows waiting for it as one line, in the order they came:
+  // the person's message, then the status notices that arrived before the CLI took it
+  // (2026-11-11, the VP's chat: three cards drawn open under words with no bubble).
+  const words = 'same for all the tools box';
+  const stoppedNotice = notice('stopped');
+  it('splits the run of notices off the end, verbatim, and keeps the words', () => {
+    const status = statusText(['- "Sample lead" (task-b): Completed.']);
+    const split = splitTrailingRiders(`${words}\n\n${status}\n\n${stoppedNotice}`);
+    expect(split?.body).toBe(words);
+    expect(split?.riders.map((r) => r.raw)).toEqual([status, stoppedNotice]);
+  });
+
+  it('splitRiders takes both sides: the notes in front, the words, the notes after', () => {
+    const split = splitRiders(`${moved}\n\n${words}\n\n${stoppedNotice}`);
+    expect(split?.riders.map((r) => r.raw)).toEqual([moved]);
+    expect(split?.body).toBe(words);
+    expect(split?.trailing.map((r) => r.raw)).toEqual([stoppedNotice]);
+    expect(splitRiders(row([org], words))?.trailing).toEqual([]);
+    expect(splitRiders(words)).toBeNull();
+  });
+
+  it('a notice after words that are themselves another envelope stays that row', () => {
+    expect(splitTrailingRiders(`${trigger}\n\n${stoppedNotice}`)).toBeNull();
+    expect(splitTrailingRiders(`${peer}\n\n${stoppedNotice}`)).toBeNull();
+  });
+
+  it('only a run that reaches the end, of notices on the closed list', () => {
+    expect(splitTrailingRiders(`${words}\n\n${stoppedNotice}\n\nMore words after.`)).toBeNull();
+    expect(splitTrailingRiders(`${words}\n\n${notice('some-other')}`)).toBeNull();
+    expect(splitTrailingRiders(`${words}\n\n${notice('stopped', 'Someone')}`)).toBeNull();
+    expect(splitTrailingRiders(`${words}\n\n${trigger}`)).toBeNull();
+    const cut = stoppedNotice.slice(0, stoppedNotice.lastIndexOf('\n</walnut-message>'));
+    expect(splitTrailingRiders(`${words}\n\n${cut}`)).toBeNull();
+  });
+
+  it('a notice pasted inside the words is the words; one after them still splits', () => {
+    const quoted = `Look:\n\n${notice('other')}\n\nwhat is this?`;
+    const split = splitTrailingRiders(`${quoted}\n\n${stoppedNotice}`);
+    expect(split).toBeNull(); // the pasted envelope makes the words an envelope row: nothing is taken
+    expect(splitTrailingRiders(`A\n\nB\n\n${stoppedNotice}`)?.body).toBe('A\n\nB');
+  });
+
+  it('notices alone, or words alone, are not split', () => {
+    expect(splitTrailingRiders(stoppedNotice)).toBeNull();
+    expect(splitTrailingRiders(`\n\n${stoppedNotice}`)).toBeNull();
+    expect(splitTrailingRiders(words)).toBeNull();
+  });
+});
+
 describe('typedUserText: one body for previews, counts, thread titles and text dedup', () => {
   it('takes riders off first, then the bracket blocks', () => {
     const banner = `${CATCH_UP_BANNER_OPEN}\nrecap\n${CATCH_UP_BANNER_CLOSE}`;
     expect(typedUserText(row([org], `${banner}\n\nThe words.`))).toBe('The words.');
     expect(typedUserText(row([moved, appState], 'The words.'))).toBe('The words.');
+    // Notes the queue put after the words come off too.
+    expect(typedUserText(`The words.\n\n${org}\n\n${moved}`)).toBe('The words.');
   });
 
   it('an old row with no riders reads exactly as before', () => {

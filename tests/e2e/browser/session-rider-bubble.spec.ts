@@ -254,10 +254,12 @@ test('unsafe shapes render as before and lose nothing', async ({ page }) => {
   const trunc = rowsWith(panel, 'RIDER_TYPED_TRUNC')
   await expect(trunc).toHaveCount(1)
   expect(await trunc.innerText()).toContain('RIDER_ORG_MARKER')
-  // A notice after the words: not leading, drawn as before.
-  const tail = rowsWith(panel, 'RIDER_TYPED_TAIL')
+  // A notice after the words (the queue joined the rows waiting for the CLI): the
+  // words keep their bubble and the notice folds into the turn (2026-11-11, the user:
+  // "this system also need to be collapsed"), its words never in the bubble.
+  const tail = panel.locator('.session-history .session-msg-user', { hasText: 'RIDER_TYPED_TAIL' })
   await expect(tail).toHaveCount(1)
-  await expect(tail).not.toHaveClass(/session-msg-user/)
+  expect(await tail.innerText()).not.toContain('RIDER_ORG_MARKER')
   await expect(panel.locator('.session-history .session-msg-user', { hasText: 'RIDER_PLAIN_TYPED' })).toHaveCount(1)
 })
 
@@ -286,9 +288,9 @@ test('a notice alone, or ahead of a trigger delivery, is still no bubble', async
   // (Another project's live send below writes into the same fixture session.)
   const bubbles = panel.locator('.session-history .session-msg-user').filter({ hasNotText: /RIDER_LIVE_/ })
   // (plain, digest + words, digest + image, four notices, the cut-off notice
-  // drawn whole as before, status note + words; never the forged, the
-  // tail-notice or these two).
-  await expect(bubbles).toHaveCount(6)
+  // drawn whole as before, status note + words, words + a notice after them;
+  // never the forged or these two).
+  await expect(bubbles).toHaveCount(7)
 })
 
 test('a quote pinned in a bubble under a notice paints in the bubble, not the card', async ({ page }) => {

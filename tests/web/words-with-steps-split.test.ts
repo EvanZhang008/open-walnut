@@ -93,6 +93,6 @@ describe('words with calls: the calls fold after the words exactly when they are
     expect(src).toContain("if (part.kind === 'msg' && part.toolsAfter) return;\n      host = i;")
     expect(src).toContain('{...(part.toolsAfter ? { noActions: true } : {})}')
     // A lone send is always a fold, never its card on its own.
-    expect(src).toMatch(/items\.length === 1 && !answerThinking && !riders && !isInboundPart\(items\[0\]\.part\) && !sends\(items\[0\]\.part\)/)
+    expect(src).toMatch(/items\.length === 1 && !answerThinking && !riders && !carry && !isInboundPart\(items\[0\]\.part\) && !sends\(items\[0\]\.part\)/)
   })
 })

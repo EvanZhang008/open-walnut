@@ -76,7 +76,10 @@ describe('entry files render with their own writer', () => {
     // The bubble names the primary for a user row's plain runs; Walnut's riders name nobody.
     const bubble = src('components/sessions/SessionMessage.tsx')
     expect(bubble).toContain('<SessionEnvelopeSegments segments={envelopeSegments} plainSource={PERSON_TEXT} />')
-    expect(bubble).toContain('<SessionEnvelopeSegments segments={riderSegments} />')
+    // Riders, before the words or after them (the bubble's cards, the history's folds), name nobody.
+    expect(bubble).toContain('<SessionEnvelopeSegments segments={segments} />')
+    const history = src('components/sessions/SessionChatHistory.tsx')
+    expect(history.match(/<SessionEnvelopeSegments [^>]*\/>/g)).toEqual(['<SessionEnvelopeSegments segments={c.riders} />', '<SessionEnvelopeSegments segments={riders} />'])
     // The trigger's delivery and a notice's own text have no writer; a notice's quote is its peer's.
     expect(src(f)).toMatch(/kind === 'trigger'[\s\S]*?<EnvelopeBody body=\{envelope\.body\} source=\{NO_WRITER\} \/>/)
     expect(src(f)).toContain("source={kind === 'notification' ? NO_WRITER : writer}")

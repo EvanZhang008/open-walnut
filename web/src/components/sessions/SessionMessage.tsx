@@ -47,7 +47,7 @@ import { splitLeadingBanners } from '@open-walnut/history-injected-banner';
 import { attachmentParts } from '@/api/file-upload';
 import { MessageAttachments } from './MessageAttachments';
 import { injectedContextLabel } from '@open-walnut/walnut-added';
-import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
+import { splitRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
 import { CLI_ERROR_VARIANT, envelopeSteps, foldStepsPhrase, systemRowVariant, systemRunLabel, systemRunShows } from './fold-steps';
@@ -257,6 +257,8 @@ interface SessionMessageProps {
   /** The notes Walnut put in front of the person's words are drawn by the fold
    *  right above this row (SessionChatHistory), so this row draws the words alone. */
   ridersFolded?: boolean;
+  /** The notes after the person's words are drawn by the fold right below this row. */
+  trailingFolded?: boolean;
   /** Only the last assistant output renders copy actions, keeping middle rows compact. */
   showCopyActions?: boolean;
   /** The calls of a row whose words drew it already (SessionChatHistory's
@@ -1301,7 +1303,7 @@ export const SessionMessage = memo(function SessionMessage(props: SessionMessage
   return <SessionMessageBubble {...props} />;
 });
 
-function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, ridersFolded, showCopyActions = false, noActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
+function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, ridersFolded, trailingFolded, showCopyActions = false, noActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
   const { role, text: arrivingText, timestamp, tools: rawTools, thinking } = message;
   // A reply still arriving is this same row (SessionChatHistory draws a stream
   // block as the row its persisted twin will be): its words hold while the
@@ -1326,7 +1328,8 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   // the notices off first, so they render as their own card row above the bubble
   // and everything below works on the row without them. A row holding an envelope
   // used to lose its bubble entirely, which drew the person's words on the AI side.
-  const riderSplit = useMemo(() => (isUser && text ? splitLeadingRiders(text) : null), [isUser, text]);
+  // Notes the queue put AFTER the words (they came while the line waited) split off the same way.
+  const riderSplit = useMemo(() => (isUser && text ? splitRiders(text) : null), [isUser, text]);
   const ownText = riderSplit ? riderSplit.body : text;
 
   // Walnut sometimes PREPENDS a machine block ("[Conversation context]…") to the
@@ -1403,7 +1406,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   const [addedOpen, setAddedOpen] = useRowDisclosure(disclosureIds.added(message.walnutMessageId ?? message.msgId), false);
   const showAdded = alwaysShowAdded || addedOpen;
   const addedCount = !isUser ? 0
-    : (personWords ? (riderSplit?.riders.length ?? 0) + (bannerSplit && bodyText ? bannerSplit.banners.length : 0) : 0);
+    : (personWords ? (riderSplit?.riders.length ?? 0) + (riderSplit?.trailing.length ?? 0) + (bannerSplit && bodyText ? bannerSplit.banners.length : 0) : 0);
   const toggleAdded = useCallback(() => setAddedOpen((o) => !o), []);
   const walnutAdded = useMemo(
     () => (!alwaysShowAdded && addedCount > 0 ? { count: addedCount, open: addedOpen, onToggle: toggleAdded } : undefined),
@@ -1484,7 +1487,11 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   };
 
   const riderSegments = useMemo(
-    () => riderSplit?.riders.map((envelope) => ({ kind: 'envelope' as const, envelope })) ?? null,
+    () => (riderSplit?.riders.length ? riderSplit.riders.map((envelope) => ({ kind: 'envelope' as const, envelope })) : null),
+    [riderSplit],
+  );
+  const trailSegments = useMemo(
+    () => (riderSplit?.trailing.length ? riderSplit.trailing.map((envelope) => ({ kind: 'envelope' as const, envelope })) : null),
     [riderSplit],
   );
   // A host's line under the bubble (user-row-attachments.ts): none outside the browser side panel.
@@ -1609,26 +1616,41 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
       )}
     </div>
   );
-  if (!riderSegments || (personWords && (!showAdded || ridersFolded))) return row;
+  const leadShown = !!riderSegments && !(personWords && (!showAdded || ridersFolded));
+  // The notes after the words: the history places them in the fold of the turn they start
+  // (SessionChatHistory `trailingFolded`); drawn here only when it did not.
+  // A row with no words of the person shows them as they are: they are the message.
+  const trailShown = !!trailSegments && !trailingFolded && (!personWords || showAdded);
+  if (!leadShown && !trailShown) return row;
   // Not `.session-msg-content`: that class marks THE message body, which quote
   // pins and passage selection find as the row's first match.
-  const cards = (
+  const cardsOf = (segments: EnvelopeSegment[]) => (
     <div className="session-msg-rider-content" onClick={handleContentClick}>
-      <SessionEnvelopeSegments segments={riderSegments} />
+      <SessionEnvelopeSegments segments={segments} />
     </div>
   );
-  // Above a person's words the notices are not for the reader: one muted
+  // Beside a person's words the notices are not for the reader: one muted
   // "Received a message ›" line, the cards one click away, never a card row of
   // their own (2026-10-25, the user: "the user doesn't care"). Ahead of another
   // envelope the row already sits in a turn's fold, so the cards show as they are.
+  const id = msgId ?? timestamp ?? 'rider';
   return (
     <>
-      <div className="session-msg session-msg-envelope session-msg-riders" data-testid="session-rider-row">
-        {personWords ? (
-          <RiderFold foldId={msgId ?? timestamp ?? 'rider'} segments={riderSegments}>{cards}</RiderFold>
-        ) : cards}
-      </div>
+      {leadShown && (
+        <div className="session-msg session-msg-envelope session-msg-riders" data-testid="session-rider-row">
+          {personWords ? (
+            <RiderFold foldId={id} segments={riderSegments!}>{cardsOf(riderSegments!)}</RiderFold>
+          ) : cardsOf(riderSegments!)}
+        </div>
+      )}
       {row}
+      {trailShown && (
+        <div className="session-msg session-msg-envelope session-msg-riders" data-testid="session-rider-row">
+          {personWords ? (
+            <RiderFold foldId={`${id}:after`} segments={trailSegments!}>{cardsOf(trailSegments!)}</RiderFold>
+          ) : cardsOf(trailSegments!)}
+        </div>
+      )}
     </>
   );
 }

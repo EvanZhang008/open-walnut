@@ -51,7 +51,15 @@ export function CardWho({ glyph, icon, direction, taskIds, fallback, label, tool
   );
 }
 
-/** Title, summary and the Details toggle: the part a click opens. */
+/**
+ * Title, summary and the Details toggle: the part a click opens. A card is one
+ * line, or two: the who and the title on the first, the summary alone on the
+ * second, each cut with an ellipsis, open or not (2026-11-11, the user: "if 1 line
+ * just 1 line, if 2 line just have the title in one and detail or summary in
+ * next", "same for all the tools box"). So the summary is the card's own row, not
+ * a column beside the title: it is drawn after the button, as the card's second
+ * line (step-rows.css, the one-or-two-lines rule), and clicks the same toggle.
+ */
 export function CardMain({ title, titleCopy, summary, open, onToggle }: {
   title?: string;
   /** The title repeats words the open card shows anyway (a first sentence of
@@ -63,20 +71,27 @@ export function CardMain({ title, titleCopy, summary, open, onToggle }: {
   onToggle: () => void;
 }) {
   return (
-    <button
-      type="button"
-      className="op-card-main"
-      aria-expanded={open}
-      onClick={(e) => { e.stopPropagation(); onToggle(); }}
-    >
-      {/* The inner spans: WebKit paints no find highlight on text directly in a
-          line-clamped box (utils/page-find.ts unpaintedHost). */}
-      {title && <span className="op-card-title" {...(titleCopy ? { 'data-find-skip': '' } : {})}><span>{title}</span></span>}
-      {summary && <span className="op-card-summary" data-find-skip=""><span>{summary}</span></span>}
-      <span className="op-card-more">
-        <span className="op-card-more-chevron" aria-hidden="true"><StepIcon name="chevron" /></span>
-        <span className="op-card-more-text">{open ? 'Hide details' : 'Details'}</span>
-      </span>
-    </button>
+    <>
+      <button
+        type="button"
+        className="op-card-main"
+        aria-expanded={open}
+        onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      >
+        {/* The inner spans: WebKit paints no find highlight on text directly in a
+            line-clamped box (utils/page-find.ts unpaintedHost). */}
+        {title && <span className="op-card-title" {...(titleCopy ? { 'data-find-skip': '' } : {})}><span>{title}</span></span>}
+        <span className="op-card-more">
+          <span className="op-card-more-chevron" aria-hidden="true"><StepIcon name="chevron" /></span>
+          <span className="op-card-more-text">{open ? 'Hide details' : 'Details'}</span>
+        </span>
+      </button>
+      {/* The card's second line: what it says, the open card's words in short (find
+          counts them there). Read by a screen reader after the button. */}
+      {summary && (
+        <span className="op-card-summary" data-find-skip=""
+          onClick={(e) => { e.stopPropagation(); onToggle(); }}><span>{summary}</span></span>
+      )}
+    </>
   );
 }
