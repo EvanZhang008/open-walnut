@@ -2219,6 +2219,10 @@ export interface Config {
      *  false leaves the companion on the build it has.
      *  See docs/plan/walnut-companion-unified-replica.md, stage 1. */
     auto_update?: boolean;
+    /** A later pipeline stage for those updates: the companion takes this Mac's build only once
+     *  this file (a path, `~` allowed) names its commit on a line of its own, as a test run that
+     *  passed that commit writes it. Unset: the companion follows every build of this Mac. */
+    update_gate_file?: string;
     /** What the cloud companion keeps a copy of: the same switches and defaults as a
      *  host's (hosts.<key>.keep), every one on unless set false. What it does not keep
      *  is answered by this Mac (docs/plan/walnut-companion-unified-replica.md, 4f). */

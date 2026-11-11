@@ -17,6 +17,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 const h = vi.hoisted(() => ({
   endpoint: null as { url: string; token: string } | null,
   autoUpdate: true as boolean | undefined,
+  gateFile: undefined as string | undefined,
   mine: '0.6.14-5408d5875',
   mineWhy: 'This server runs from source, not from a build, so it has no build to send to a host.',
   pkgThrows: null as string | null,
@@ -47,7 +48,7 @@ vi.mock('../../src/core/companion-build/package.js', async (importOriginal) => (
 }))
 vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getConfig: async () => ({ cloud_bridge: h.autoUpdate === undefined ? {} : { auto_update: h.autoUpdate } }),
+  getConfig: async () => ({ cloud_bridge: { ...(h.autoUpdate === undefined ? {} : { auto_update: h.autoUpdate }), ...(h.gateFile ? { update_gate_file: h.gateFile } : {}) } }),
   updateConfig: async (partial: { cloud_bridge?: { auto_update?: boolean } }) => { h.autoUpdate = partial.cloud_bridge?.auto_update },
 }))
 
@@ -232,6 +233,7 @@ beforeEach(async () => {
   box = freshBox()
   h.endpoint = { url: `http://127.0.0.1:${port}/bridge`, token: TOKEN }
   h.autoUpdate = undefined
+  h.gateFile = undefined
   h.mine = '0.6.14-5408d5875'
   h.pkgThrows = null
   h.builds = 0
@@ -246,6 +248,28 @@ afterEach(() => {
 })
 
 describe('tickCompanionBuild', () => {
+  it('holds the update until the gate file names this build\'s commit, then sends it', async () => {
+    const file = path.join(WALNUT_HOME, 'deep-green-builds')
+    h.gateFile = file
+    fs.rmSync(file, { force: true })
+    await tickCompanionBuild('probe')
+    expect(companionBuildView()).toMatchObject({ state: 'off', mine: h.mine })
+    expect(companionBuildView().message).toMatch(/once .*deep-green-builds names its commit; that file is not there yet/)
+    expect(box.puts).toEqual([])
+    expect(h.builds).toBe(0)
+    // Another commit passed, not this one: still held.
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, 'aaaaaaa1111111111111111111111111111111\n# a comment line\n')
+    await tickCompanionBuild('probe')
+    expect(companionBuildView().state).toBe('off')
+    expect(h.builds).toBe(0)
+    // The full sha of this build's commit is written: the update goes.
+    fs.appendFileSync(file, '5408d5875' + 'f'.repeat(31) + '\n')
+    await tickCompanionBuild('probe')
+    expect(companionBuildView()).toMatchObject({ state: 'current', mine: h.mine, theirs: h.mine })
+    expect(h.builds).toBe(1)
+  })
+
   it('does nothing when the companion runs this build', async () => {
     box.running = { id: h.mine, version: '0.6.14', commit: '5408d5875', base: false, trial: false }
     box.current = h.mine

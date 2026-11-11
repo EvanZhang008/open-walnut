@@ -1052,7 +1052,10 @@ After 5a the ratchet lists 313 raw reads in 116 files (348 in 133 before): 213 i
   token, checked before a body is read).
 - The box decides whether it accepts builds (`WALNUT_COMPANION_MAC_BUILDS`, set by
   root in the unit); the Mac's user decides whether to send them
-  (`cloud_bridge.auto_update`).
+  (`cloud_bridge.auto_update`), and may hold them for a later stage of its own pipeline:
+  with `cloud_bridge.update_gate_file` set, the Mac sends its build only once that file
+  names the build's commit on a line of its own (a test run that passed the commit writes
+  it; a missing file holds the update, and Settings shows why).
 - A build is checked by size and sha256 before it is unpacked, its id is plain
   characters, and it runs as the service user only. Root's tree and the launcher are
   never written by the service user.

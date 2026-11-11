@@ -16,6 +16,8 @@
  * Mac's own record is WALNUT_HOME/cache/companion-build.json.
  */
 
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
@@ -192,6 +194,38 @@ function companionBuildChanged(was: string | null, now: string): void {
 
 type Gate = { open: true; ep: Endpoint; mine: string; autoUpdate: true } | { open: false; state: CompanionBuildState; message?: string; mine: string | null; autoUpdate: boolean }
 
+/**
+ * A later pipeline stage (cloud_bridge.update_gate_file): the sentence that holds this Mac's build
+ * back from the companion, or null when nothing holds it. The file lists the commits a test run
+ * passed, one per line (a full sha or a prefix of 7 or more); the build id ends in its commit
+ * (`<version>-<commit>`). A missing or unreadable file holds it: the gate never opens on a guess.
+ */
+export async function updateGateHold(mine: string, file: string | undefined): Promise<string | null> {
+  if (!file?.trim()) return null
+  const where = file.trim()
+  const commit = /-([0-9a-f]{7,40})$/.exec(mine)?.[1]
+  if (!commit) return `Held: updates wait for ${where} to name this build's commit, and this build (${mine}) names none.`
+  let text: string
+  try {
+    const full = where.startsWith('~/') ? path.join(os.homedir(), where.slice(2)) : where
+    text = await fs.promises.readFile(full, 'utf8')
+  } catch {
+    return `Held: the companion takes this Mac's build (${commit}) once ${where} names its commit; that file is not there yet.`
+  }
+  const passed = text.split(/\r?\n/).map((l) => l.trim().toLowerCase()).filter((l) => /^[0-9a-f]{7,40}$/.test(l))
+  if (passed.some((l) => l.startsWith(commit) || commit.startsWith(l))) return null
+  return `Held: the companion takes this Mac's build (${commit}) once ${where} names its commit (a later stage of the pipeline writes it).`
+}
+
+async function updateGateFile(): Promise<string | undefined> {
+  try {
+    const { getConfig } = await import('../config-manager.js')
+    return (await getConfig()).cloud_bridge?.update_gate_file
+  } catch {
+    return undefined
+  }
+}
+
 async function autoUpdateOn(): Promise<boolean> {
   try {
     const { getConfig } = await import('../config-manager.js')
@@ -233,6 +267,8 @@ async function gate(): Promise<Gate> {
     // From source, or a build of uncommitted changes: no walnut file of this build exists (host-file.ts).
     return { open: false, state: 'off', message: myIdWhy ?? 'This Mac has no build to send.', mine, autoUpdate }
   }
+  const held = await updateGateHold(mine, await updateGateFile())
+  if (held) return { open: false, state: 'off', message: held, mine, autoUpdate }
   return { open: true, ep, mine, autoUpdate: true }
 }
 
