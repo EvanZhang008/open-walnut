@@ -892,7 +892,7 @@ describe('host_exec', () => {
     const before = runs()
     for (const command of ['cliclick c:640,400', `osascript -e 'tell application "System Events" to keystroke "v" using command down'`, 'peekaboo click --on B1']) {
       const r = await api('POST', '/api/v1/hosts/macbox/exec', { command, allow_prompts: true }, OWN_SID)
-      expect(r).toMatchObject({ status: 409, body: { code: 'foreground_input', error: expect.stringContaining('send real input to the front window') } })
+      expect(r).toMatchObject({ status: 409, body: { code: 'foreground_input', error: expect.stringMatching(/send real input( \([^)]+\))? to the front window/) } })
     }
     expect(runs()).toBe(before)
     for (const command of [`WALNUT_INPUT_REASON='drives its own test window' cliclick c:1,1; true`, 'peekaboo see --app Safari; true']) {
