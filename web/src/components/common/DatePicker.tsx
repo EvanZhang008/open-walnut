@@ -6,10 +6,13 @@
  *   inline=false → popover triggered by a pill button (for detail panes)
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { MonthGrid } from './MonthGrid';
+import { dateTimeWords, hourPickerMin, localDateTimeIso, parseClock, timeTarget, tomorrowTimePills } from './date-time-pick';
+
+export { tomorrowTimePills } from './date-time-pick';
 
 /**
  * Parse an ISO date string as local time.
@@ -31,23 +34,6 @@ const TIME_PILLS: { label: string; ms: number }[] = [
   { label: '4h',  ms: 4 * 3_600_000 },
   { label: '8h',  ms: 8 * 3_600_000 },
 ];
-
-/** Tomorrow's quick times (2026-11-11, the user: "snooze until should have more options, like
- *  tomorrow 8am, 12pm, 6pm"): local wall-clock hours, so a DST change tonight still lands on 8:00. */
-const TOMORROW_HOURS: { label: string; hour: number }[] = [
-  { label: '8 AM', hour: 8 },
-  { label: '12 PM', hour: 12 },
-  { label: '6 PM', hour: 18 },
-];
-
-/** Tomorrow at 8:00, 12:00 and 18:00 local time, as ISO instants. */
-export function tomorrowTimePills(nowMs = Date.now()): { label: string; date: string }[] {
-  const now = new Date(nowMs);
-  return TOMORROW_HOURS.map(({ label, hour }) => ({
-    label,
-    date: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, hour).toISOString(),
-  }));
-}
 
 // Day-of-week abbreviations (0=Sun … 6=Sat)
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -158,12 +144,13 @@ interface DatePickerProps {
   bare?: boolean;
   /** The first day the month offers (YYYY-MM-DD): a snooze cannot start in the past. */
   minDate?: string;
-  /** Offer a "Tomorrow 8 AM / 12 PM / 6 PM" row (the snooze pickers). */
-  tomorrowTimes?: boolean;
+  /** The snooze pickers: a "Tomorrow 8 AM / 12 PM / 6 PM" row, and an hour field so a day
+   *  can be picked with its own time ("At [3:30 PM] Set …"). */
+  withTime?: boolean;
 }
 
 /** Inner content shared by popover and inline modes. */
-function DatePickerContent({ date, onChange, minDate, tomorrowTimes }: Pick<DatePickerProps, 'date' | 'onChange' | 'minDate' | 'tomorrowTimes'>) {
+function DatePickerContent({ date, onChange, minDate, withTime }: Pick<DatePickerProps, 'date' | 'onChange' | 'minDate' | 'withTime'>) {
   // The current date as YYYY-MM-DD, the day the month marks
   const inputValue = date ? (() => {
     const d = parseDateLocal(date);
@@ -173,6 +160,37 @@ function DatePickerContent({ date, onChange, minDate, tomorrowTimes }: Pick<Date
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
   })() : '';
+
+  // The hour field (withTime), empty on every open: empty = a day pick stays a date, as before;
+  // set = every day pick (weekday chips, the month) snoozes to that day at this time, and Set
+  // snoozes the selected day (else today, or tomorrow once that time has gone by). A time that has
+  // already gone by is refused with a line, never written, judged at the click, not at the render.
+  const [typed, setTyped] = useState('');
+  const [timeNote, setTimeNote] = useState('');
+  const time = parseClock(typed) ?? '';
+  const withHour = !!(withTime && time);
+  const PAST_NOTE = 'That time has already gone by: pick a later time or day.';
+  const UNREAD_NOTE = 'Type a time like 3:30 PM, or clear the box.';
+  const pickDay = (ymd: string) => {
+    if (withTime && typed.trim() && !time) { setTimeNote(UNREAD_NOTE); return; }
+    const iso = withHour ? localDateTimeIso(ymd, time) : null;
+    if (!iso) { onChange(ymd); return; }
+    if (Date.parse(iso) <= Date.now()) { setTimeNote(PAST_NOTE); return; }
+    onChange(iso);
+  };
+  const monthMin = withHour ? hourPickerMin(minDate) : minDate;
+  const target = withHour ? timeTarget(inputValue, time, monthMin) : null;
+  const applyTime = () => {
+    const now = time ? timeTarget(inputValue, time, monthMin, Date.now()) : null;
+    if (!now) { if (typed.trim()) setTimeNote(UNREAD_NOTE); return; }
+    if (now.past) { setTimeNote(PAST_NOTE); return; }
+    onChange(now.iso);
+  };
+  const onTimeKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    // The field's own keys (typing, arrows move the caret) are not the menu's; Escape still closes it.
+    if (e.key !== 'Escape') e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); applyTime(); }
+  };
 
   const handleTimePick = (ms: number) => {
     onChange(new Date(Date.now() + ms).toISOString());
@@ -203,7 +221,7 @@ function DatePickerContent({ date, onChange, minDate, tomorrowTimes }: Pick<Date
           </button>
         ))}
       </div>
-      {tomorrowTimes && (
+      {withTime && (
         <div className="dp-pills dp-pills-tomorrow" role="group" aria-label="Tomorrow at">
           <span className="dp-pills-label">Tomorrow</span>
           {tomorrowTimePills().map((p) => (
@@ -225,20 +243,52 @@ function DatePickerContent({ date, onChange, minDate, tomorrowTimes }: Pick<Date
           <button
             key={p.date}
             className="dp-pill"
-            onClick={(e) => { e.stopPropagation(); onChange(p.date); }}
+            onClick={(e) => { e.stopPropagation(); pickDay(p.date); }}
             data-date={p.date}
           >
             {p.label}
           </button>
         ))}
       </div>
+      {withTime && (
+        <div className="dp-time-row" role="group" aria-label="At a time">
+          <label className="dp-pills-label dp-time-label">
+            At
+            <input
+              type="text"
+              className="dp-time-input"
+              aria-label="Snooze time"
+              data-no-draft="picker"
+              placeholder="3:30 PM"
+              autoComplete="off"
+              spellCheck={false}
+              value={typed}
+              onChange={(e) => { setTyped(e.target.value); setTimeNote(''); }}
+              onKeyDown={onTimeKey}
+              onClick={(e) => e.stopPropagation()}
+            />
+          </label>
+          {target ? (
+            <button
+              type="button"
+              className="dp-pill dp-time-set"
+              disabled={target.past}
+              title={target.past ? PAST_NOTE : undefined}
+              onClick={(e) => { e.stopPropagation(); applyTime(); }}
+            >
+              Set {dateTimeWords(target.iso)}
+            </button>
+          ) : null}
+          {timeNote && <span className="dp-time-note" role="alert">{timeNote}</span>}
+        </div>
+      )}
       {/* Walnut's own month, never the browser's date field (MonthGrid). None above clears. */}
-      <MonthGrid selected={inputValue} onPick={onChange} {...(minDate ? { min: minDate } : {})} />
+      <MonthGrid selected={inputValue} onPick={pickDay} {...(monthMin ? { min: monthMin } : {})} />
     </div>
   );
 }
 
-export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare, minDate, tomorrowTimes }: DatePickerProps) {
+export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare, minDate, withTime }: DatePickerProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -288,7 +338,7 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare
 
   // Inline mode: render content directly
   if (inline) {
-    return <DatePickerContent date={date} onChange={onChange} minDate={minDate} tomorrowTimes={tomorrowTimes} />;
+    return <DatePickerContent date={date} onChange={onChange} minDate={minDate} withTime={withTime} />;
   }
 
   // Popover mode. Start pickers must never show red "Overdue" — a passed start
@@ -330,7 +380,7 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare
           className="dp-popover"
           style={menuPlacementStyle(menuPos)}
         >
-          <DatePickerContent date={date} onChange={handleChange} minDate={minDate} tomorrowTimes={tomorrowTimes} />
+          <DatePickerContent date={date} onChange={handleChange} minDate={minDate} withTime={withTime} />
         </div>,
         document.body,
       )}

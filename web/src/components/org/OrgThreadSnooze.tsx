@@ -75,7 +75,7 @@ export function OrgThreadSnooze({ title, current, onSnooze, label = 'Snooze' }: 
           onPointerDown={(e) => e.stopPropagation()}
         >
           <div className="org-answer-q">Snooze until</div>
-          <DatePicker date={current} onChange={pick} inline minDate={tomorrow()} tomorrowTimes />
+          <DatePicker date={current} onChange={pick} inline minDate={tomorrow()} withTime />
         </div>,
         document.body,
       )}

@@ -103,7 +103,7 @@ const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: string }[] =
  * is opened, pinned or moved. The menu re-measures itself when the calendar
  * appears (useMenuPlacement observes children), so expanding never clips.
  */
-export function KebabDateRow({ label, date, display, onChange, extra, testId, className, icon, tomorrowTimes }: {
+export function KebabDateRow({ label, date, display, onChange, extra, testId, className, icon, withTime }: {
   label: string;
   date: string | undefined | null;
   /** Human form of `date` for the collapsed row; empty when no date is set. */
@@ -115,8 +115,9 @@ export function KebabDateRow({ label, date, display, onChange, extra, testId, cl
   className?: string;
   /** Leading icon; the calendar by default. */
   icon?: ReactNode;
-  /** The calendar offers "Tomorrow 8 AM / 12 PM / 6 PM" (a start date: Snooze until). */
-  tomorrowTimes?: boolean;
+  /** The calendar offers the snooze times: "Tomorrow 8 AM / 12 PM / 6 PM" and an hour field
+   *  (a start date: Snooze until). */
+  withTime?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -134,7 +135,7 @@ export function KebabDateRow({ label, date, display, onChange, extra, testId, cl
         </span>
         <span className={`task-kebab-date-caret${open ? ' open' : ''}`}>{ICONS.CHEVRON_GLYPH}</span>
       </button>
-      {open && <DatePicker date={date} onChange={onChange} inline tomorrowTimes={tomorrowTimes} />}
+      {open && <DatePicker date={date} onChange={onChange} inline withTime={withTime} />}
       {open && extra}
     </div>
   );
@@ -170,7 +171,7 @@ export function TaskSnoozeRow({ task, onSetStartDate, afterAction }: {
       testId="task-snooze-row"
       className="task-snooze-row"
       icon={WAIT_UNTIL_ICON}
-      tomorrowTimes
+      withTime
       date={task.start_date}
       display={display}
       onChange={(date) => { onSetStartDate(date); afterAction(); }}
@@ -371,7 +372,7 @@ export function TaskActionMenuItems({
           label={startLabel ?? 'Start / Snooze until'}
           testId={startLabel ? 'task-start-row' : 'task-snooze-row'}
           className={startLabel ? undefined : 'task-snooze-row'}
-          tomorrowTimes
+          withTime
           date={task?.start_date}
           display={task?.start_date ? (formatDate ? formatDate(task.start_date, 'start') : formatStartDateDisplay(task.start_date)) : ''}
           onChange={(date) => { onSetStartDate(date); afterAction(); }}

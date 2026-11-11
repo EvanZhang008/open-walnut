@@ -82,6 +82,6 @@ export function SnoozeDateFlyout({ point, anchorRef, date, onPick, onClose }: {
 }) {
   return <PointFlyout point={point} anchorRef={anchorRef} label="Snooze until a date" className="snooze-date-flyout" onClose={onClose}>
     <div className="snooze-rows-head">Snooze until</div>
-    <DatePicker inline tomorrowTimes date={date} minDate={todayIso()} onChange={d => { onPick(d); onClose(); }} />
+    <DatePicker inline withTime date={date} minDate={todayIso()} onChange={d => { onPick(d); onClose(); }} />
   </PointFlyout>;
 }

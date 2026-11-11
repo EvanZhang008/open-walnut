@@ -246,6 +246,89 @@ test('Snooze until offers tomorrow 8 AM, 12 PM and 6 PM on one row', async ({ pa
   await expect.poll(async () => Date.parse((await taskOf(task.id)).start_date ?? ''), { timeout: 10_000 }).toBe(expected + 6 * 3_600_000)
 })
 
+test('Snooze until picks a day at an hour of your own', async ({ page, browserName }) => {
+  // 2026-11-11, the user: "可以加一个customized date和hours 啥的吗 ... 现在只有date 没有hours".
+  const task = await createTask('Custom hour')
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  const localAt = (ymd: string, h: number, m: number) => page.evaluate(([d, hh, mm]) => {
+    const [y, mo, da] = (d as string).split('-').map(Number)
+    return new Date(y, mo - 1, da, hh as number, mm as number).getTime()
+  }, [ymd, h, m] as const)
+
+  // With no hour typed, a day stays a date, as before.
+  let menu = await openRowKebab(page, task)
+  let row = await snoozeRow(menu)
+  await expect(row.getByLabel('Snooze time')).toBeVisible()
+  await expect(row.locator('.dp-time-set')).toHaveCount(0)
+  const day = await row.locator('.dp-pills > [data-date]').nth(2).getAttribute('data-date')
+  await row.locator(`.dp-pills > [data-date="${day}"]`).click()
+  await expect.poll(async () => (await taskOf(task.id)).start_date ?? '', { timeout: 10_000 }).toBe(day)
+
+  // Type an hour, then pick a day: that day at that hour.
+  menu = await openRowKebab(page, task)
+  row = await snoozeRow(menu)
+  await row.getByLabel('Snooze time').fill('15:30')
+  await expect(row.locator('.dp-time-set')).toHaveText(/^Set \w{3} \w{3} \d{1,2}, 3:30 PM$/)
+  await shot(menu, 'snooze-custom-hour', browserName)
+  const later = await row.locator('.dp-pills > [data-date]').nth(4).getAttribute('data-date')
+  await row.locator(`.dp-pills > [data-date="${later}"]`).click()
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  await expect.poll(async () => Date.parse((await taskOf(task.id)).start_date ?? ''), { timeout: 10_000 }).toBe(await localAt(later!, 15, 30))
+
+  // Set keeps the snoozed day and changes only its hour; Enter in the field does the same.
+  menu = await openRowKebab(page, task)
+  row = await snoozeRow(menu)
+  await row.getByLabel('Snooze time').fill('07:05')
+  await row.locator('.dp-time-set').click()
+  await expect.poll(async () => Date.parse((await taskOf(task.id)).start_date ?? ''), { timeout: 10_000 }).toBe(await localAt(later!, 7, 5))
+  menu = await openRowKebab(page, task)
+  row = await snoozeRow(menu)
+  const field = row.getByLabel('Snooze time')
+  await field.fill('18:45')
+  await field.press('Enter')
+  await expect.poll(async () => Date.parse((await taskOf(task.id)).start_date ?? ''), { timeout: 10_000 }).toBe(await localAt(later!, 18, 45))
+
+  // Reopened, the field starts empty again, so a plain day click stays a date.
+  menu = await openRowKebab(page, task)
+  row = await snoozeRow(menu)
+  await expect(row.getByLabel('Snooze time')).toHaveValue('')
+
+  // An hour already gone by today is refused with a line and writes nothing, from the month and from Set.
+  const before = (await taskOf(task.id)).start_date
+  await row.getByLabel('Snooze time').fill('00:00')
+  const today = await page.evaluate(() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}` })
+  await row.locator(`.dp-month [data-date="${today}"]`).click()
+  await expect(row.getByRole('alert')).toHaveText(/already gone by/)
+  await expect(menu).toBeVisible()
+  expect((await taskOf(task.id)).start_date).toBe(before)
+})
+
+test('the snooze hour takes real keystrokes, in words a person types', async ({ page, browserName }) => {
+  const task = await createTask('Typed hour')
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  const menu = await openRowKebab(page, task)
+  const row = await snoozeRow(menu)
+  const field = row.getByLabel('Snooze time')
+  await field.click()
+  await page.keyboard.type('3:30 pm', { delay: 60 })
+  await expect(field).toHaveValue('3:30 pm')
+  await expect(row.locator('.dp-time-set')).toHaveText(/3:30 PM$/)
+  // Not a time: a day click writes nothing and says how to type one.
+  await field.fill('soon')
+  await row.locator('.dp-pills > [data-date]').first().click()
+  await expect(row.getByRole('alert')).toHaveText(/like 3:30 PM/)
+  await field.fill('')
+  await field.click()
+  await page.keyboard.type('330p', { delay: 60 })
+  await shot(menu, 'snooze-typed-hour', browserName)
+  const day = await row.locator('.dp-pills > [data-date]').nth(1).getAttribute('data-date')
+  await row.locator(`.dp-pills > [data-date="${day}"]`).click()
+  const expected = await page.evaluate((d) => { const [y, m, dd] = d.split('-').map(Number); return new Date(y, m - 1, dd, 15, 30).getTime() }, day!)
+  await expect.poll(async () => Date.parse((await taskOf(task.id)).start_date ?? ''), { timeout: 10_000 }).toBe(expected)
+})
+
 test('the detail pane badge shows the status and changes it', async ({ page, browserName }) => {
   const task = await createTask('Status badge')
   await page.goto('/')

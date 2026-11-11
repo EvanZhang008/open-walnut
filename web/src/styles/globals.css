@@ -16051,7 +16051,7 @@ a.task-kebab-info:hover {
   transition: background 0.1s, border-color 0.1s;
 }
 .dp-trigger:hover { background: var(--bg-tertiary); }
-.dp-trigger-has-date { background: var(--bg-tertiary); color: var(--fg-primary); }
+.dp-trigger-has-date { background: var(--bg-tertiary); color: var(--fg); }
 /* Empty secondary date (calendar-style: due/end is usually unset) — borderless
    "+ Due" ghost that only firms up on hover, so an empty field reads as
    optional instead of missing. */
@@ -16070,7 +16070,7 @@ a.task-kebab-info:hover {
 }
 .dp-popover {
   min-width: 220px;
-  background: var(--bg-primary);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 8px);
   box-shadow: 0 4px 16px rgba(0,0,0,0.18);
@@ -16100,21 +16100,33 @@ a.task-kebab-info:hover {
   cursor: pointer;
   transition: background 0.1s;
 }
-.dp-pill:hover { background: var(--accent-subtle, var(--bg-tertiary)); color: var(--fg-primary); }
+.dp-pill:hover { background: var(--accent-subtle, var(--bg-tertiary)); color: var(--fg); }
 .dp-pill-none { border-style: dashed; color: var(--fg-muted); }
 /* "Tomorrow  8 AM  12 PM  6 PM": a quiet label leads the row, the chips stay the same size. */
 .dp-pills-tomorrow { align-items: center; }
 .dp-pills-label { font-size: 11px; color: var(--fg-muted); margin-right: 2px; }
+/* "At [3:30 PM]  Set Thu Nov 13, 3:30 PM": the snooze pickers' own hour, above the month. */
+.dp-time-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 26px; }
+.dp-time-label { display: inline-flex; align-items: center; gap: 6px; }
+.dp-time-input {
+  font: inherit; font-size: 12px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--fg); width: 84px;
+}
+.dp-time-input::placeholder { color: var(--fg-muted); }
+.dp-time-input:focus { outline: none; border-color: var(--accent); }
+.dp-time-set { color: var(--fg); }
+.dp-time-set:disabled { opacity: 0.5; cursor: not-allowed; }
+.dp-time-note { flex-basis: 100%; font-size: 11px; color: var(--error); }
 .dp-pill-none:hover { background: var(--error-subtle, rgba(255, 59, 48, 0.15)); color: var(--error); border-color: var(--error); }
 /* DatePicker's month (MonthGrid.tsx): Walnut's own, never the browser's date field. */
 .dp-month { display: flex; flex-direction: column; gap: 2px; min-width: 210px; }
 .dp-month-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 0; }
-.dp-month-name { font-size: 12px; font-weight: 600; color: var(--fg-primary); }
+.dp-month-name { font-size: 12px; font-weight: 600; color: var(--fg); }
 .dp-month-step {
   width: 24px; height: 24px; border: none; border-radius: 6px; background: none;
   color: var(--fg-secondary); font-size: 16px; line-height: 1; cursor: pointer;
 }
-.dp-month-step:hover { background: var(--bg-tertiary); color: var(--fg-primary); }
+.dp-month-step:hover { background: var(--bg-tertiary); color: var(--fg); }
 .dp-month-grid { display: flex; flex-direction: column; gap: 1px; }
 .dp-month-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
 .dp-month-dow { font-size: 10px; text-align: center; color: var(--fg-muted); padding: 2px 0; }
@@ -16123,10 +16135,10 @@ a.task-kebab-info:hover {
   font-size: 11px; color: var(--fg-secondary); cursor: pointer; font-variant-numeric: tabular-nums;
 }
 .dp-month-day.is-blank { display: block; height: 26px; }
-.dp-month-day:hover { background: var(--accent-subtle, var(--bg-tertiary)); color: var(--fg-primary); }
+.dp-month-day:hover { background: var(--accent-subtle, var(--bg-tertiary)); color: var(--fg); }
 .dp-month-day.is-past { color: var(--fg-muted); }
 .dp-month-day:disabled { opacity: 0.35; cursor: default; background: none; }
-.dp-month-day.is-today { border-color: var(--border); font-weight: 600; color: var(--fg-primary); }
+.dp-month-day.is-today { border-color: var(--border); font-weight: 600; color: var(--fg); }
 .dp-month-day.is-selected, .dp-month-day.is-selected:hover { background: var(--accent); border-color: var(--accent); color: var(--accent-fg, #fff); }
 
 /* Info badges in title row — keep compact */

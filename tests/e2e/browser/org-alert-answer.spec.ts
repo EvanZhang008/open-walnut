@@ -232,9 +232,11 @@ test('Snooze opens the date picker; a pick snoozes the task, which moves to Wait
   const vp = page.viewportSize()!
   expect(box.y + box.height).toBeLessThanOrEqual(vp.height)
   await expect(menu.locator('.dp-pill').first()).toBeVisible()
-  // Walnut's own month, never the browser's date field, and no title tooltip over the menu or the row.
+  // Walnut's own month and hour box, never the browser's date or time field, and no title tooltip
+  // over the menu or the row.
   await expect(menu.getByTestId('dp-month')).toBeVisible()
-  await expect(menu.locator('input')).toHaveCount(0)
+  await expect(menu.locator('input:not([type="text"])')).toHaveCount(0)
+  await expect(menu.getByLabel('Snooze time')).toHaveAttribute('type', 'text')
   await expect(menu.locator('[title]')).toHaveCount(0)
   await expect(row.locator('[title]')).toHaveCount(0)
   await menu.screenshot({ path: `test-results/org-snooze-menu-${test.info().project.name}.png` })
