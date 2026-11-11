@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+vi.mock('@/components/common/AgentText', () => ({ AgentText: () => null }))
 import { CORE_SETTINGS_CONTRIBUTIONS } from '../../web/src/components/settings/core-settings-registry.js'
 import { PHONES_CLOUD_TABS } from '../../web/src/components/settings/settings-way-panes'
 import { isSettingsGlyph, tileKey } from '../../web/src/components/settings/settings-icons.js'

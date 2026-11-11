@@ -9,6 +9,7 @@ import { MARKED_ASK, NEEDS_CATEGORY_LABELS, lastWordsOfStatus, needsLineOf, show
 import { taskUserState } from '@/utils/session-status';
 import { stateSectionNoNeeds } from '@/components/tasks/status-sections';
 import { keptWords } from './ext-ask-words';
+import { taskTextSource, type AgentTextSource, type TaskTextField } from '@/utils/agent-text-source';
 
 export const EXT_TASKS_MAX = 30;
 
@@ -137,11 +138,42 @@ export const KEPT_MAX_AGE_MS = 7 * 24 * 3600_000;
 type KeptStore = Pick<Storage, 'getItem' | 'setItem'>;
 const keptStore = (): KeptStore | null => { try { return window.localStorage; } catch { return null; } };
 
-/** A row cut to what the list draws and the reply needs. */
+/** Only the writer fields of a status that taskTextSource reads (no words beyond the row's own
+ *  line), so a kept row's words open where they were written. */
+function keptStatus(us: Task['user_status']): Task['user_status'] {
+  if (!us) return undefined;
+  const writer = (w: { by: string; sessionId?: string } | undefined) => (w ? { by: w.by, ...(w.sessionId ? { sessionId: w.sessionId } : {}) } : undefined);
+  const answered = writer(us.answeredFor);
+  const line = writer(us.line);
+  return {
+    state: us.state,
+    ...(us.source ? { source: us.source } : {}),
+    ...(us.toRead ? { toRead: us.toRead } : {}),
+    ...(us.waitingOn != null ? { waitingOn: us.waitingOn } : {}),
+    ...(us.reportBy ? { reportBy: us.reportBy } : {}),
+    ...(us.reportSessionId ? { reportSessionId: us.reportSessionId } : {}),
+    ...(us.askBy ? { askBy: us.askBy } : {}),
+    ...(us.askSessionId ? { askSessionId: us.askSessionId } : {}),
+    ...(us.waitingBy ? { waitingBy: us.waitingBy } : {}),
+    ...(us.waitingSessionId ? { waitingSessionId: us.waitingSessionId } : {}),
+    ...(answered ? { answeredFor: answered } : {}),
+    ...(line ? { line } : {}),
+  } as Task['user_status'];
+}
+
+/** A row cut to what the list draws and the reply needs, with the recorded writer of its words
+ *  (a row kept by an older panel has none, so its words read as from an unknown source). */
 function keptRow(r: ExtTaskRow): ExtTaskRow {
   const t = r.task;
   const session = t.session_id || t.exec_session_id || t.plan_session_id || (t.session_ids?.length ? t.session_ids[t.session_ids.length - 1] : undefined);
-  return { state: r.state, label: r.label, line: r.line, task: { id: t.id, title: t.title, ...(session ? { session_id: session } : {}) } as Task };
+  const status = keptStatus(t.user_status);
+  return { state: r.state, label: r.label, line: r.line, task: {
+    id: t.id, title: t.title,
+    ...(session ? { session_id: session } : {}),
+    ...(status ? { user_status: status } : {}),
+    ...(t.last_words?.session_id ? { last_words: { session_id: t.last_words.session_id } } : {}),
+    ...(t.summary_session_id ? { summary_session_id: t.summary_session_id } : {}),
+  } as Task };
 }
 
 export function keepTaskLists(lists: { needs: ExtTaskRow[]; focus: ExtTaskRow[] }, s: KeptStore | null = keptStore(), now = Date.now()): void {
@@ -163,14 +195,27 @@ export function lastWordsKnown(task: Task): boolean {
   return !!task.last_words?.text?.trim();
 }
 
+/** Which stored words a row's line is (rowOf): the needs line, else on whom it waits, else its ask. */
+export function rowLineField(task: Task, state: ExtTaskRow['state']): TaskTextField {
+  if (state === 'needs') return 'needs';
+  return task.user_status?.waitingOn != null ? 'waiting' : 'needs';
+}
+
+export interface AskedLine { text: string; source: AgentTextSource }
+
+/** askedOf with the recorded writer of each line: never the task's current session. */
+export function askedSourcedOf(task: Task, line: string, state: ExtTaskRow['state']): AskedLine[] {
+  const out: AskedLine[] = [];
+  const full = line.trim();
+  if (full) out.push({ text: full, source: taskTextSource(task, rowLineField(task, state)) });
+  const last = task.last_words?.text?.replace(/\s+/g, ' ').trim();
+  if (last && !full.includes(last.slice(0, 60))) out.push({ text: last, source: taskTextSource(task, 'lastWords') });
+  return out;
+}
+
 /** What the open row says the task asked: its status line in full, then its last words when they add to it. */
 export function askedOf(task: Task, line: string): string[] {
-  const out: string[] = [];
-  const full = line.trim();
-  if (full) out.push(full);
-  const last = task.last_words?.text?.replace(/\s+/g, ' ').trim();
-  if (last && !full.includes(last.slice(0, 60))) out.push(last);
-  return out;
+  return askedSourcedOf(task, line, 'needs').map((l) => l.text);
 }
 
 /**

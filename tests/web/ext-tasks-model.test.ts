@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Task } from '@open-walnut/core'
-import { askedOf, extTaskLists, inFocus, keepTaskLists, keptTaskLists, KEPT_MAX_AGE_MS, needsRowLine, pageTaskInput, rowLine } from '../../web/src/popout/ext-tasks-model'
+import { askedOf, askedSourcedOf, extTaskLists, inFocus, keepTaskLists, keptTaskLists, KEPT_MAX_AGE_MS, needsRowLine, pageTaskInput, rowLine } from '../../web/src/popout/ext-tasks-model'
 
 let n = 0
 const task = (over: Partial<Task>): Task => ({
@@ -69,7 +69,7 @@ describe('the lists kept for the next open', () => {
     keepTaskLists(extTaskLists([t]), s, 1000)
     const back = keptTaskLists(s, 2000)!
     expect(back.needs).toHaveLength(1)
-    expect(back.needs[0].task).toEqual({ id: t.id, title: 'Review the plan', session_id: 'sess-1' })
+    expect(back.needs[0].task).toEqual({ id: t.id, title: 'Review the plan', session_id: 'sess-1', user_status: { state: 'needs', source: 'session' } })
     expect(back.needs[0].line).toContain('Pick a design')
     expect(back.focus).toEqual([])
   })
@@ -147,5 +147,42 @@ describe('a Needs you row says what tells it apart', () => {
     const lines = rows.map((r) => rowLine(r, 'needs'))
     expect(new Set(lines).size).toBe(3)
     for (const l of lines) expect(l).not.toMatch(/turn ended without asking|set to need you by hand/)
+  })
+})
+
+describe('where the words of a row open', () => {
+  it('each line opens in its recorded writer, never the task\'s current session', () => {
+    const t = task({
+      session_id: 's-new', exec_session_id: 's-new',
+      last_words: { text: 'Shipped /srv/build.log, check it?', at: 'x', session_id: 's-turn' },
+      user_status: { state: 'needs', source: 'session', ask: 'Pick a design', category: 'decide', reportSessionId: 's-report', askSessionId: 's-old' },
+    } as never)
+    expect(askedSourcedOf(t, 'Decide: Pick a design', 'needs')).toEqual([
+      { text: 'Decide: Pick a design', source: { sessionId: 's-old' } },
+      { text: 'Shipped /srv/build.log, check it?', source: { sessionId: 's-turn' } },
+    ])
+    const waiting = task({ session_id: 's-new', user_status: { state: 'waiting', waitingOn: 'the review', waitingBy: 'human', reportBy: 'self', reportSessionId: 's-old' } } as never)
+    expect(askedSourcedOf(waiting, 'the review', 'waiting')).toEqual([{ text: 'the review', source: { host: '__local__' } }])
+  })
+
+  it('a kept row keeps its words\' writers and no more words; one kept by an older panel reads unknown', () => {
+    const s = memoryStore()
+    const t = task({
+      title: 'Review', phase: 'NEED_ACTION', exec_session_id: 's-new',
+      last_words: { text: 'private last words', at: 'x', session_id: 's-turn' },
+      user_status: { state: 'needs', source: 'session', ask: 'Pick a design', category: 'decide', reportBy: 'self', reportSessionId: 's-report', askBy: 'self', askSessionId: 's-old', line: { text: 'l', by: 'task:lead', byName: 'Lead', at: 'x', sessionId: 's-lead' } },
+    } as never)
+    keepTaskLists(extTaskLists([t]), s, 1000)
+    const kept = keptTaskLists(s, 2000)!.needs[0]!
+    expect(askedSourcedOf(kept.task, kept.line, kept.state)[0]!.source).toEqual({ sessionId: 's-old' })
+    expect(JSON.stringify(kept.task)).not.toContain('private last words')
+    expect(kept.task.user_status?.line).toEqual({ by: 'task:lead', sessionId: 's-lead' })
+    expect(kept.task.user_status).toMatchObject({ reportSessionId: 's-report', askBy: 'self', askSessionId: 's-old' })
+    expect(kept.task.last_words).toEqual({ session_id: 's-turn' })
+
+    // What an older panel kept: no writer at all, only the current session.
+    s.setItem('walnut.ext-tasks.lists', JSON.stringify({ at: 1000, focus: [], needs: [{ state: 'needs', label: 'Needs you', line: 'Decide: see /a.ts', task: { id: 'old', title: 'Old', session_id: 's-new' } }] }))
+    const old = keptTaskLists(s, 2000)!.needs[0]!
+    expect(askedSourcedOf(old.task, old.line, old.state)).toEqual([{ text: 'Decide: see /a.ts', source: { unknownSource: true } }])
   })
 })

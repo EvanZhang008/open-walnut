@@ -19,7 +19,7 @@ import {
 export const SHOTS = process.env.CHAT_EARLIER_SHOT_DIR ?? '/tmp/lane-ask/chat-earlier'
 
 const OLD_ASK = { id: 'pw-ask-earlier-old', title: 'Frozen dumplings (old phone chat)' }
-const CONT_ASK = { id: 'pw-ask-earlier-cont', title: 'Shade plants (continued chat)' }
+export const CONT_ASK = { id: 'pw-ask-earlier-cont', title: 'Shade plants (continued chat)' }
 
 function askTask(ask: { id: string; title: string }, sessionId: string, hoursAgo: number): Record<string, unknown> {
   const at = new Date(Date.now() - hoursAgo * 3_600_000).toISOString()
@@ -52,14 +52,14 @@ export async function addEarlierAsks(page: Page): Promise<void> {
 
 const slotSession = (page: Page): Locator => page.locator('[data-testid="ask-walnut-session"]')
 
-async function openAsk(page: Page, title: string, sessionId: string): Promise<Locator> {
+export async function openAsk(page: Page, title: string, sessionId: string, appBase?: string): Promise<Locator> {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()) })
   // The chat spot starts hidden on a browser that never chose: boot as a user
   // who opened it once.
   await openChatOnLoad(page)
-  const root = new URL('/', page.url() === 'about:blank' ? `http://localhost:${process.env.PW_TEST_PORT ?? 3457}` : page.url()).href
+  const root = new URL('/', appBase ?? (page.url() === 'about:blank' ? `http://localhost:${process.env.PW_TEST_PORT ?? 3457}` : page.url())).href
   await page.setContent(`<a href="${root}">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut' }).click()
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })

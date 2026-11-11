@@ -4,6 +4,7 @@
  * board author's page, so everything in it is checked and bounded.
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
 import {
   BOARD_VIEW_MAX_ITEMS, BOARD_VIEW_NAME_MAX, _clearBoardViews, boardView, keepBoardView, parseBoardView,
 } from '../../web/src/components/board/board-view-memory';
@@ -16,6 +17,29 @@ const full = {
 };
 
 afterEach(() => _clearBoardViews());
+
+describe('fold reports before a new document can replace the frame', () => {
+  it('keeps consecutive fold and unfold choices immediately, without the scroll debounce', () => {
+    const source = fs.readFileSync('web/src/components/board/board-runtime.frame.js', 'utf8');
+    const start = source.indexOf('  function setFold(id, open) {');
+    const end = source.indexOf('\n  }', start);
+    expect(start).toBeGreaterThan(0);
+    const setFold = source.slice(start, end + '\n  }'.length);
+    const folds: Record<string, true> = {};
+    const sent: Array<{ view: { folds: Record<string, true> } }> = [];
+    const fold = new Function('view', 'flags', 'send', 'captureView', `${setFold}; return setFold;`)(
+      { folds }, { hasData: true }, (message: { view: { folds: Record<string, true> } }) => sent.push(message),
+      () => ({ folds: { ...folds } }),
+    ) as (id: string, open: boolean) => void;
+    fold('choice:output', true);
+    fold('choice:output', false);
+    expect(sent).toEqual([
+      { t: 'wn-board:view', view: { folds: { 'choice:output': true } } },
+      { t: 'wn-board:view', view: { folds: {} } },
+    ]);
+    expect(setFold).not.toMatch(/reportView\(|setTimeout\(/);
+  });
+});
 
 describe('parseBoardView', () => {
   it('keeps a well-formed report, rounded', () => {

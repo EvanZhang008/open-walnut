@@ -10,8 +10,11 @@ export interface OrgThreadMessage {
   images?: string[];
   via: 'chat' | 'follow-up' | 'letter' | 'import' | 'split';
   about?: string;
-  /** The node's answer, read by Walnut from its chat (src/core/org/thread-answers.ts). */
-  answer?: { text: string; at: string; about?: string[]; clipped?: boolean };
+  /**
+   * The node's answer, read by Walnut from its chat (src/core/org/thread-answers.ts). `sid`/`host`:
+   * the session it was read from (absent on an answer kept before they were recorded: unknown).
+   */
+  answer?: { text: string; at: string; about?: string[]; clipped?: boolean; from?: 'letter'; sid?: string; host?: string };
 }
 
 export interface OrgThreadMove { task: string; title: string; at: string; by: string; why?: string; kind?: 'work' | 'hand' }
@@ -25,6 +28,10 @@ export interface OrgThread {
   reply?: string;
   /** When the node last wrote the summary (an older answer leaves the card: core/org/thread-view.ts supersededBySummary). */
   replyAt?: string;
+  /** Who wrote `reply` and from which session; none of them on an older summary (unknown). */
+  reply_by?: string;
+  reply_sid?: string;
+  reply_host?: string;
   tasks?: string[];
   messages: OrgThreadMessage[];
   follows?: string;
@@ -39,7 +46,7 @@ export interface OrgThread {
   /** He reacted to the answers through this message, as the node judged it. */
   known?: { through: string; by: string; at: string };
   /** The node opened the thread itself: its first post and where it came from. */
-  opener?: { text: string; at: string; from: string; ref?: string; by: string };
+  opener?: { text: string; at: string; from: string; ref?: string; by: string; sid?: string; host?: string };
   /** Put aside until `until` (core/org/thread-view.ts snoozedNow says whether it still is). */
   snoozed?: { until: string; at: string; by: string };
   /** Pinned to the top of his view, whatever its state (core/org/thread-view.ts pinnedNow). */

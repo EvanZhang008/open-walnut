@@ -194,6 +194,9 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   const [openLetterId, setOpenLetterId] = useState<string | null>(null);
   const location = useLocation();
   const returningLetter = useRef<string | undefined>(undefined);
+  // A letter a link opened onto a closed center: closing it takes the center with it, back to where the link was.
+  const linkOpened = useRef(false);
+  const linkPending = useRef(false);
   useEffect(() => {
     const restoreReturn = () => {
       const letterId = takeInboxReturn();
@@ -212,6 +215,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
       if (typeof letterId === 'string') {
         returningLetter.current = letterId;
         if (open) { setOpenLetterId(letterId); returningLetter.current = undefined; }
+        else linkPending.current = (event as CustomEvent).detail?.link === true;
       }
     };
     window.addEventListener('notification:open-center', restore);
@@ -219,6 +223,8 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   }, [open]);
   useEffect(() => {
     if (open && returningLetter.current) {
+      linkOpened.current = linkPending.current;
+      linkPending.current = false;
       setOpenLetterId(returningLetter.current);
       returningLetter.current = undefined;
     }
@@ -285,6 +291,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   }, []);
 
   const openLetter = useCallback((id: string) => {
+    linkOpened.current = false;
     setOpenLetterId(id);
     log.info('inbox', 'letter reader opened', { letterId: id });
   }, []);
@@ -292,7 +299,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   // Closing the panel closes the reader with it (the reader renders inside the
   // panel's portal): without this, the next panel open would silently pop the
   // letter the user had already walked away from.
-  useEffect(() => { if (!open) setOpenLetterId(null); }, [open]);
+  useEffect(() => { if (!open) { setOpenLetterId(null); linkOpened.current = false; } }, [open]);
 
   // The System zone's own health signal. `hasIssues` is useSystemHealth's own
   // derivation (git-sync unprotected or failing) — the same one the Sidebar's
@@ -760,7 +767,10 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
         <LetterReader
           letterId={openLetterId}
           {...(inbox.byId.get(openLetterId) ? { envelope: inbox.byId.get(openLetterId) } : {})}
-          onClose={() => setOpenLetterId(null)}
+          onClose={() => {
+            setOpenLetterId(null);
+            if (linkOpened.current) { linkOpened.current = false; onClose(); }
+          }}
           onLetterUpdated={inbox.mergeLetter}
           onMarkRead={markLetterRead}
           onTogglePin={toggleLetterPin}

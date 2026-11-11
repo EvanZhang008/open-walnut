@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
-import { stableHtml } from '@/hooks/useStableHtml';
+import { AgentText } from '@/components/common/AgentText';
 import type { ContextInspectorResponse } from '@/api/context';
-import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { ContextSection } from './ContextSection';
 
 interface ContextInspectorPanelProps {
@@ -15,13 +14,7 @@ interface ContextInspectorPanelProps {
 function ContextMarkdown({ content, fallback }: { content: string; fallback?: string }) {
   const text = content || fallback || '';
   // The context as the model sees it: task ids stay ids (clickable), no titles.
-  const html = useRenderedMarkdown(text, undefined, undefined, 'links');
-  return (
-    <div
-      className="context-markdown markdown-body"
-      dangerouslySetInnerHTML={stableHtml(html)}
-    />
-  );
+  return <AgentText className="context-markdown" unknownSource taskIds="links" text={text} />;
 }
 
 interface ParsedSkill {

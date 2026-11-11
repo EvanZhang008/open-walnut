@@ -34,7 +34,6 @@
  */
 import { matchIdRef } from '../../../../src/lib/id-ref';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { stableHtml } from '@/hooks/useStableHtml';
 import {
   envelopeDirectionGlyph,
   envelopeDirectionLabel,
@@ -51,7 +50,9 @@ import {
   subscribeSessionMentionIndex,
 } from '@/stores/session-mention-index';
 import { sessionStatusStore } from '@/stores/session-status-store';
-import { useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
+import { useTaskLabel } from '@/hooks/useEntityLabels';
+import { AgentText } from '@/components/common/AgentText';
+import type { AgentTextSource } from '@/utils/agent-text-source';
 import { copyTextRobust } from '@/utils/clipboard';
 import { log } from '@/utils/log';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
@@ -143,6 +144,17 @@ function useResolvedPeer(peer: SessionEnvelopePeer, source?: SessionEnvelopeSour
   }, [peer.shortId, resolved.fullId, resolved.ambiguous, candidates.length]);
 
   return taskId ? { ...resolved, taskId } : resolved;
+}
+
+/** Words with no writer of their own: never the receiving session's machine. */
+const NO_WRITER: AgentTextSource = { unknownSource: true };
+
+/** A card's writer: the envelope's saved author host, else its one resolved session, else unknown. */
+export function peerTextSource(peer: SessionEnvelopePeer, fullId: string | undefined): AgentTextSource {
+  const sid = fullId ? { sessionId: fullId } : {};
+  if (peer.host) return { host: peer.host, ...sid };
+  if (fullId) return { sessionId: fullId };
+  return NO_WRITER;
 }
 
 function CopyChip({ value, label, title }: { value: string; label: string; title: string }) {
@@ -247,7 +259,7 @@ function cardSummary(envelope: SessionEnvelope, title: string | undefined): stri
  * message (rendered like any other session's words) or the tool calls it made
  * after it (plain lines, never markdown: they are command summaries).
  */
-function NoticeQuote({ section, sessionCwd }: { section: NoticeQuoteSection; sessionCwd?: string }) {
+function NoticeQuote({ section, source }: { section: NoticeQuoteSection; source: AgentTextSource }) {
   return (
     <div className="provenance-quote" data-quote-kind={section.kind}>
       <div className="provenance-quote-label">
@@ -255,7 +267,7 @@ function NoticeQuote({ section, sessionCwd }: { section: NoticeQuoteSection; ses
         {section.clipped && <span className="provenance-quote-note"> (clipped; the rest is in its history)</span>}
       </div>
       {section.kind === 'message'
-        ? <EnvelopeBody body={section.text} sessionCwd={sessionCwd} />
+        ? <EnvelopeBody body={section.text} source={source} />
         : (
           <ul className="provenance-actions">
             {section.text.split('\n').filter((line) => line.trim()).map((line, i) => (
@@ -267,11 +279,12 @@ function NoticeQuote({ section, sessionCwd }: { section: NoticeQuoteSection; ses
   );
 }
 
-/** The other session's own words. Quoted, never presented as the user's. */
-function EnvelopeBody({ body, sessionCwd }: { body: string; sessionCwd?: string }) {
-  const html = useRenderedMarkdown(body, sessionCwd);
+/** The other session's own words. Quoted, never presented as the user's; AgentText with their writer. */
+function EnvelopeBody({ body, source }: { body: string; source: AgentTextSource }) {
   return (
-    <blockquote className="provenance-body markdown-body" dangerouslySetInnerHTML={stableHtml(html)} />
+    <blockquote className="provenance-body markdown-body">
+      <AgentText className="provenance-body-text" text={body} {...source} />
+    </blockquote>
   );
 }
 
@@ -312,8 +325,9 @@ function EnvelopeDetails({ envelope, sessionId }: { envelope: SessionEnvelope; s
   );
 }
 
-function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; sessionCwd?: string }) {
+function ProvenanceCard({ envelope }: { envelope: SessionEnvelope }) {
   const resolved = useResolvedPeer(envelope.peer, envelope.source);
+  const writer = peerTextSource(envelope.peer, resolved.fullId);
   const taskLabel = useTaskLabel(resolved.taskId);
   const [open, toggle] = useMessageFold(foldKey(envelope.raw));
   const { kind, peer, source } = envelope;
@@ -354,7 +368,7 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
         <CardMain title={title} titleCopy={titleCopy} summary={cardSummary(envelope, title)} open={open} onToggle={toggle} />
         {open && (
           <div className="op-card-detail">
-            {envelope.body !== undefined && <EnvelopeBody body={envelope.body} sessionCwd={sessionCwd} />}
+            {envelope.body !== undefined && <EnvelopeBody body={envelope.body} source={NO_WRITER} />}
             <EnvelopeDetails envelope={envelope} />
           </div>
         )}
@@ -424,10 +438,11 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
           )}
           {status && !statusIsTitle && <div className="provenance-status">{status}</div>}
           {envelope.quote?.map((section, i) => (
-            <NoticeQuote key={i} section={section} sessionCwd={sessionCwd} />
+            <NoticeQuote key={i} section={section} source={writer} />
           ))}
-          {envelope.detail !== undefined && <EnvelopeBody body={envelope.detail} sessionCwd={sessionCwd} />}
-          {envelope.body !== undefined && <EnvelopeBody body={envelope.body} sessionCwd={sessionCwd} />}
+          {/* A notice's own text (its lines, its body) is Walnut's, not the session it is about; every other body is the peer's. */}
+          {envelope.detail !== undefined && <EnvelopeBody body={envelope.detail} source={NO_WRITER} />}
+          {envelope.body !== undefined && <EnvelopeBody body={envelope.body} source={kind === 'notification' ? NO_WRITER : writer} />}
           {envelope.replyRequest && (
             <div className="provenance-reply-request">
               <span className="provenance-reply-request-label">Reply requested</span>
@@ -451,20 +466,21 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
  * Render a parsed message: ordinary text stays ordinary (a batched delivery can
  * put a human message and an envelope in one bubble), each envelope becomes a card.
  */
-export function SessionEnvelopeSegments({ segments, sessionCwd }: {
+export function SessionEnvelopeSegments({ segments, plainSource }: {
   segments: EnvelopeSegment[];
-  sessionCwd?: string;
+  /** The plain runs' writer when the row names one; never passed to a card. */
+  plainSource?: AgentTextSource;
 }) {
   return (
     <div className="provenance-segments">
       {segments.map((segment, i) => (segment.kind === 'text'
-        ? <PlainSegment key={`t-${i}`} text={segment.text} sessionCwd={sessionCwd} />
-        : <ProvenanceCard key={`e-${i}`} envelope={segment.envelope} sessionCwd={sessionCwd} />))}
+        ? <PlainSegment key={`t-${i}`} text={segment.text} source={plainSource ?? NO_WRITER} />
+        : <ProvenanceCard key={`e-${i}`} envelope={segment.envelope} />))}
     </div>
   );
 }
 
-function PlainSegment({ text, sessionCwd }: { text: string; sessionCwd?: string }) {
-  const html = useRenderedMarkdown(text, sessionCwd);
-  return <div className="markdown-body" dangerouslySetInnerHTML={stableHtml(html)} />;
+/** Text batched beside an envelope, with the writer the row names, else none. */
+function PlainSegment({ text, source }: { text: string; source: AgentTextSource }) {
+  return <AgentText text={text} {...source} />;
 }

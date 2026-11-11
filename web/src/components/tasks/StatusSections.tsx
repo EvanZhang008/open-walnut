@@ -21,6 +21,8 @@ import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import * as ICONS from '../common/Icons';
+import { AgentText } from '../common/AgentText';
+import { taskTextSource } from '@/utils/agent-text-source';
 import { NavigationChevron } from './NavigationSections';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
@@ -212,10 +214,11 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
     <span className={`status-card-reason status-card-needs-line${reasonBelow ? ' status-card-wait-line' : ''}${limitOwn ? ' is-limit' : ''}`} data-testid="status-card-needs-line" data-category={need.category} title={reasonText}>
       {limitOwn ? null : <span className={`needs-category needs-category-${need.category}`}>{need.label}{need.text || limitOwn ? ':' : ''}</span>}
       {/* A usage-limit wait that is the user's: a tag saying why, then when it resets, on one
-          line (status-sections.css). */}
+          line (status-sections.css). Else an agent's words (its ask, what it left to read): a path,
+          link, task or letter in it opens that thing alone; AgentText keeps the click and Enter off the row. */}
       {limitOwn ? (
         <span className="needs-line-text needs-line-limit">{limitOwn.tag ? <LimitTag tag={limitOwn.tag} tone={limitOwn.tone} /> : null}{limitOwn.text}</span>
-      ) : need.text ? <span className="needs-line-text">{need.text}</span> : null}
+      ) : need.text ? <AgentText compact inline className="needs-line-text" {...taskTextSource(task, 'needs')} text={need.text} /> : null}
       {need.category === 'close' && handlers.onSetPhase ? (
         <button
           type="button"
@@ -228,13 +231,15 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
       ) : null}
     </span>
   ) : reasonText ? (
-    <span className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-reason" title={sectionKey === 'waiting' ? waitingHover(task, formatWaitUntil) : reasonText}>
-      {/* "Limited" wears the session banner's tag, so a limit stop stands out among the waits. */}
-      {limitWaitOwn ? <><LimitTag tag={limitWaitOwn.tag!} tone={limitWaitOwn.tone} /> {limitWaitOwn.text}</>
-        : limitWaitLine && LIMIT_HEAD.test(reasonText)
-        ? <><span className="status-card-limit-tag">{reasonText.match(LIMIT_HEAD)![1]}</span>{limitRowWords(reasonText)}</>
-        : reasonText}
-    </span>
+    limitWaitOwn || (limitWaitLine && LIMIT_HEAD.test(reasonText)) ? (
+      <span className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-reason" title={sectionKey === 'waiting' ? waitingHover(task, formatWaitUntil) : reasonText}>
+        {/* "Limited" wears the session banner's tag, so a limit stop stands out among the waits. */}
+        {limitWaitOwn ? <><LimitTag tag={limitWaitOwn.tag!} tone={limitWaitOwn.tone} /> {limitWaitOwn.text}</>
+          : <><span className="status-card-limit-tag">{reasonText.match(LIMIT_HEAD)![1]}</span>{limitRowWords(reasonText)}</>}
+      </span>
+    ) : (
+      <AgentText compact inline {...taskTextSource(task, 'waiting')} className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} testId="status-card-reason" title={sectionKey === 'waiting' ? waitingHover(task, formatWaitUntil) : reasonText} text={reasonText} />
+    )
   ) : null;
   // The same rename as every task row: double-click the title (useInlineTitleEdit).
   const title = (

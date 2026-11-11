@@ -661,7 +661,10 @@
 
   /** A thread message as html: escaped text with light markdown. */
   kit.richText = function richText(text) {
-    var src = String(text == null ? '' : text).replace(/\r\n?/g, '\n').replace(/\u0000/g, '\uFFFD');
+    var raw = String(text == null ? '' : text);
+    var rendered = kit.state && kit.state.renderedText;
+    if (rendered && Object.prototype.hasOwnProperty.call(rendered, raw)) return rendered[raw];
+    var src = raw.replace(/\r\n?/g, '\n').replace(/\u0000/g, '\uFFFD');
     return render(src.split('\n'), 0);
   };
 })(window.__wnBoardKit);

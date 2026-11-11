@@ -37,9 +37,15 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import express from 'express'
 import { fixtureHome } from './fixture-home'
 
 const port = Number(process.env.PW_MAIL_PORT ?? 3463)
+const builtSpa = process.env.PW_BUILT_SPA === '1'
+const staticDir = process.env.WALNUT_WEB_STATIC_DIR
+if (builtSpa && (!staticDir || !fsSync.existsSync(path.join(staticDir, 'index.html')))) {
+  throw new Error('PW_BUILT_SPA requires a built WALNUT_WEB_STATIC_DIR')
+}
 // Its own home for real: Bun reads HOME only at startup (fixture-home.ts).
 const tmpBase = await fixtureHome(path.join(os.tmpdir(), `walnut-mail-app-${port}-${Date.now()}`))
 
@@ -318,6 +324,17 @@ function mailFixtureSeams() {
               res.setHeader('content-type', 'application/json')
               res.end(JSON.stringify({ error: String(error) }))
             })
+          })
+        })
+      }
+      if (builtSpa) {
+        const serve = express.static(staticDir!)
+        server.middlewares.use((req, res, next) => {
+          if (/^\/(?:api|ws|__fixture)(?:\/|\?|$)/.test(String(req.url ?? ''))) return next()
+          serve(req, res, () => {
+            if (req.method !== 'GET' || path.extname(String(req.url ?? '').split('?')[0]!)) return next()
+            res.setHeader('Content-Type', 'text/html; charset=utf-8')
+            fsSync.createReadStream(path.join(staticDir!, 'index.html')).pipe(res)
           })
         })
       }

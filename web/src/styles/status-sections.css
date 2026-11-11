@@ -136,6 +136,8 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .status-card-reason.status-card-needs-line { display: flex; align-items: center; gap: 6px; text-overflow: clip; }
 .status-card-needs-line .needs-category { flex: none; font-weight: 600; }
 .status-card-needs-line .needs-line-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Both lines are agent text (AgentText, whose base rule wraps): the row keeps its one line. */
+.status-card-reason[data-agent-text], .status-card-needs-line .needs-line-text[data-agent-text] { white-space: nowrap; overflow-wrap: normal; }
 .needs-category-decide { color: var(--error, #ff3b30); }
 .needs-category-review { color: var(--warning, #c77700); }
 .needs-category-look { color: var(--accent); }

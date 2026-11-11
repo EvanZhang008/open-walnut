@@ -28,6 +28,7 @@ import { SessionRawViewHost } from './components/sessions/SessionRawView';
 import { MainPage } from './pages/MainPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { OrgPage } from './pages/OrgPage';
+import { OpenAgentRefPage } from './pages/OpenAgentRefPage';
 import { ConnectExtensionPage } from './pages/ConnectExtensionPage';
 import { CommandsPage } from './pages/CommandsPage';
 import { MemoryPage } from './pages/MemoryPage';
@@ -138,9 +139,9 @@ export function App() {
   // Sidebar links return the user to where they last were in a section (Calendar's
   // ?view=&d=, Settings' #pane) — see utils/last-location.ts for which locations
   // are recorded.
-  useEffect(() => { rememberLocation(location); }, [location]);
+  useEffect(() => { if (location.pathname !== '/open-ref') rememberLocation(location); }, [location]);
   // Local page-use counts (Settings > Page use); Settings records its pane itself.
-  useEffect(() => { recordVisit(pageKeyForPath(location.pathname)); }, [location.pathname]);
+  useEffect(() => { if (location.pathname !== '/open-ref') recordVisit(pageKeyForPath(location.pathname)); }, [location.pathname]);
 
   // Warm the Notes page's tree + autocomplete corpora once the app has settled,
   // at low priority, so the first note the user opens is served from memory.
@@ -205,6 +206,7 @@ export function App() {
         <Route path="/cron" element={<Navigate to="/routines" replace />} />
         <Route path="/usage" element={<Navigate to="/settings#usage" replace />} />
         <Route path="/org" element={<OrgPage />} />
+        <Route path="/open-ref" element={<OpenAgentRefPage />} />
         <Route path="/connect-extension" element={<ConnectExtensionPage />} />
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/commands" element={<CommandsPage />} />

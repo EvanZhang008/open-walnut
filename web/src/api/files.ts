@@ -567,16 +567,24 @@ export interface LocateResponse {
  */
 export async function locatePath(
   ref: string,
-  ctx: { host?: string; cwd?: string; sessionId?: string } = {},
+  ctx: { host?: string; cwd?: string; sessionId?: string; sourceOnly?: boolean } = {},
 ): Promise<LocateResponse> {
-  const host = ctx.host && ctx.host !== '__local__' ? ctx.host : undefined;
+  const host = ctx.host && !['__local__', 'local'].includes(ctx.host) ? ctx.host : undefined;
   const params = new URLSearchParams({ ref });
   if (host) params.set('host', host);
   if (ctx.cwd) params.set('cwd', ctx.cwd);
   if (ctx.sessionId) params.set('sessionId', ctx.sessionId);
+  if (ctx.sourceOnly) params.set('sourceOnly', '1');
   try {
     const res = await fetch(`/api/files/locate?${params}`);
-    if (res.ok) return await res.json();
+    if (res.ok) {
+      const result: LocateResponse = await res.json();
+      const foundHost = result.host && !['__local__', 'local'].includes(result.host) ? result.host : undefined;
+      if (ctx.sourceOnly && (result.elsewhere || foundHost !== host)) {
+        return { path: ref, ...(host ? { host } : {}), found: false, missing: true, checked: [host ?? 'Local'] };
+      }
+      return result;
+    }
   } catch { /* the server is not answering: the path as given */ }
   return { path: ref, ...(host ? { host } : {}), found: false };
 }

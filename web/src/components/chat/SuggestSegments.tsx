@@ -62,10 +62,13 @@ export function useSuggestSegments(text: string, scope?: string): {
 }
 
 /** Ordered markdown runs + `<suggest>` action cards. */
-export function SuggestSegments({ segments, cwd, scope, onClick }: {
+export function SuggestSegments({ segments, cwd, host, inlineImages, scope, onClick }: {
   segments: SuggestSegment[];
   /** Session cwd, so relative file paths in the prose stay clickable. */
   cwd?: string;
+  /** As RichMarkdown's: the machine image paths load from, and `false` while it is unknown. */
+  host?: string;
+  inlineImages?: boolean;
   /** Stable per-message id — the same value the caller gave useSuggestSegments. */
   scope?: string;
   onClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
@@ -89,6 +92,8 @@ export function SuggestSegments({ segments, cwd, scope, onClick }: {
           key={i}
           text={seg.text}
           cwd={cwd}
+          host={host}
+          inlineImages={inlineImages}
           scope={scope === undefined ? undefined : `${scope}#${i}`}
           onClick={onClick}
         />

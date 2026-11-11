@@ -2073,6 +2073,8 @@ if (outputFormat === 'stream-json') {
     //                                       the Agent's tool_use_result with its counts
     //     "stream-partial-work"           → reasoning + a Bash call that runs, reasoning
     //                                       + a Read that runs, reasoning + the answer
+    //     "stream-partial-say:<base64url>" → the decoded words, streamed in pieces (the
+    //                                       sender's own words never hold them)
     //
     //   The full text streamed is 'Hello, world!' split into small deltas.
     if (effectiveMessage.startsWith('stream-partial-')) {
@@ -2351,6 +2353,30 @@ if (outputFormat === 'stream-json') {
       // growing: 'Hello, world!' is three words, so a mouse drag over it can't
       // tell "the pill survived the stream" from "the pill was never placed".
       // Honours chunk-delay: so the paragraph arrives over seconds.
+      if (mode.startsWith('say:')) {
+        (async () => {
+          const pause = () => new Promise((r) => setTimeout(r, chunkDelayMs > 0 ? chunkDelayMs : 150));
+          const words = Buffer.from(/^say:([A-Za-z0-9_-]+)/.exec(mode)?.[1] ?? '', 'base64url').toString('utf8') || 'Nothing to say.';
+          const id = `${msgId}_say_${process.pid.toString(36)}${Date.now().toString(36)}`;
+          emitStream(wrap({ type: 'message_start', message: { id, role: 'assistant', content: [], model: 'mock-model', usage: { input_tokens: 10, output_tokens: 1 } } }));
+          emitStream(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
+          // Whole words per delta, so a path is never half-drawn as a different path.
+          for (const piece of words.match(/\S+\s*/g) ?? [words]) {
+            emitStream(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } }));
+            await pause();
+          }
+          emitStream(wrap({ type: 'content_block_stop', index: 0 }));
+          emitStream({ type: 'assistant', message: { id, role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: words }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 20 } }, session_id: outputSessionId });
+          emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 20 } }));
+          emitStream(wrap({ type: 'message_stop' }));
+          process.stdout.write(JSON.stringify({
+            type: 'result', subtype: 'success', is_error: false, duration_ms: 50, num_turns: 1, result: words,
+            session_id: outputSessionId, total_cost_usd: 0.001, usage: { input_tokens: 10, output_tokens: 20 },
+          }) + '\n', () => process.exit(0));
+        })();
+        return;
+      }
+
       if (mode === 'long-text') {
         (async () => {
           const pause = () => chunkDelayMs > 0

@@ -42,7 +42,7 @@ import { usePointerHold } from './hold-order';
 import { writeBriefFolded, type OrgTopView } from './org-brief-model';
 import type { BriefFreshness } from '@open-walnut/brief-fresh';
 import { WithdrawAnswerButton } from '@/components/tasks/AnsweredForLine';
-import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, TAB_DOT, stateTab, taskTabNote, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, TAB_DOT, stateTab, taskTabNote, taskTabNoteField, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { useWatchToggle } from '@/components/tasks/WatchToggle';
 import * as ICONS from '@/components/common/Icons';
 import { snoozeTakesOff } from '@open-walnut/user-status';
@@ -53,6 +53,8 @@ import type { Approval } from '@/api/approvals';
 import { ApprovalRows } from '@/components/approvals/ApprovalRow';
 import type { ImageAttachment } from '@/api/chat';
 import { completeTask } from '@/api/tasks';
+import { AgentText } from '@/components/common/AgentText';
+import { taskTextSource } from '@/utils/agent-text-source';
 
 /** What the rows need from the page to answer in place. */
 export interface OrgAnswers {
@@ -153,23 +155,24 @@ function TaskTabList({ tasks, tab, onOpen, now }: { tasks: readonly Task[]; tab:
       {tasks.map((t) => {
         const own: OrgTaskTab = tab === 'watching' ? stateTab(t) : tab;
         const note = taskTabNote(t, own);
+        const noteField = taskTabNoteField(t, own);
         const setBy = own === 'done' ? null : lineSetBy(readStatusLine(t.user_status));
         const at = own === 'done' ? t.completed_at ?? t.updated_at : t.updated_at;
         return (
           <li key={t.id} className="org-task-item">
-            <button type="button" className="org-task-row" data-testid="org-task-row" data-task-id={t.id} data-state={own} onClick={() => onOpen(t.id)} title={note ? `${t.title}\n${note}` : t.title}>
+            <div role="button" tabIndex={0} className="org-task-row" data-testid="org-task-row" data-task-id={t.id} data-state={own} onClick={() => onOpen(t.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(t.id); } }} title={note ? `${t.title}\n${note}` : t.title}>
               {own === 'notstarted'
                 ? <span className="org-task-ring" aria-hidden="true">{ICONS.ICON_NOT_STARTED}</span>
                 : <i style={{ background: TAB_DOT[own] }} aria-hidden="true" />}
               <span className="org-task-text">
                 <span className="org-task-title">{orgDisplayTitle(t)}</span>
-                {note && <span className="org-task-note" data-testid="org-task-note">{note}</span>}
+                {note && <AgentText compact inline {...(noteField ? taskTextSource(t, noteField) : { unknownSource: true })} text={note} className="org-task-note" testId="org-task-note" />}
               </span>
               <span className="org-task-side">
                 {at && <span className="org-task-time">{timeAgo(at, { now })}</span>}
                 {setBy && <span className="org-set-by" data-testid="org-set-by">{setBy}</span>}
               </span>
-            </button>
+            </div>
             <OrgWatchToggle task={t} />
             {own === 'waiting' && t.user_status?.answeredFor && t.phase !== 'COMPLETE' && <WithdrawAnswerButton taskId={t.id} compact />}
           </li>
@@ -191,6 +194,8 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
   answers: OrgAnswers;
 }) {
   const { summary, more } = askSummary(a);
+  // The ask's words: their recorded writer (a letter's or a choice's is not on the task: unknown).
+  const askSource = taskTextSource(task, 'needs');
   const checked = cardChecked(a);
   const category = alertCategoryLabel(a);
   const [open, setOpen] = useState(false);
@@ -221,7 +226,7 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
       {/* One line: what to do with it, then what it asks or has to read (2026-11-03, the user: "in one line"). */}
       <div className="org-ask-summary" {...(a.category ? { 'data-category': a.category } : {})}>
         {category && <><span className={`org-ask-category org-ask-category-${a.category}`} data-testid="org-ask-category">{category}:</span>{' '}</>}
-        <span data-testid="org-ask-summary">{summary}</span>
+        <AgentText compact inline {...askSource} text={summary} testId="org-ask-summary" />
       </div>
       {checked && <div className={`org-alert-checked${checked.unverified ? ' is-unverified' : ''}`} data-testid="org-alert-checked" data-unverified={checked.unverified ? '1' : '0'}>{checked.text}</div>}
       <div className="org-ask-meta">
@@ -264,7 +269,7 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
           )}
         </span>
       </div>
-      {open && more && <div className="org-ask-more" data-testid="org-ask-more">{more}</div>}
+      {open && more && <AgentText compact {...askSource} text={more} className="org-ask-more" testId="org-ask-more" />}
       {/* A refused snooze says so on the row, whatever the answer form is (a task with no session has none). */}
       {failure?.of === 'snooze' && <div className="org-answer-error" role="alert" data-testid="org-answer-error">{failure.message}</div>}
       <OrgInlineAnswer alert={a} task={task} summary={summary} onAnswer={answers.start} {...(failure && failure.of !== 'snooze' ? { failure } : {})} />
@@ -403,7 +408,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, tab, on
         </div>
       ) : view === 'threads' ? (
         <div className="org-rail-body">
-          <OrgThreads name={title} state={threads} tasks={tasks} onOpenTask={onOpenTask} onFollowUp={onThreadFollowUp} now={now} />
+          <OrgThreads name={title} owner={contact} state={threads} tasks={tasks} onOpenTask={onOpenTask} onFollowUp={onThreadFollowUp} now={now} />
         </div>
       ) : (
         <div className="org-task-view" data-testid="org-task-view" data-tab={tab} data-mode={shownMode}>

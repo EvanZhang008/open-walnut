@@ -15,6 +15,7 @@ import { stripQuestionTag } from '@/utils/question-tag';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { useSessionTextRender } from '@/hooks/useAgentFileOpener';
 import { disclosureIds } from './row-disclosure';
 import { SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, SystemLineCollapsible, ReplyImageStrip } from './SessionMessage';
 import { CLI_ERROR_VARIANT } from './fold-steps';
@@ -43,6 +44,8 @@ function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId
   const { segments, useSegments } = useSuggestSegments(displayContent, msgId);
   const imagePaths = useMemo(() => findImagePaths(displayContent), [displayContent]);
   const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
+  // Same render source as the persisted row, so the handover draws the same pictures.
+  const { host: imageHost, images: imagesKnown } = useSessionTextRender({ sessionId, sessionHost, sessionCwd });
   return (
     <>
       {/* Distinct keys, so the mid-stream flip from "plain html" to "segments"
@@ -50,7 +53,7 @@ function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId
           dangerouslySetInnerHTML node into a children node in place. */}
       {useSegments ? (
         <div key="segments" ref={hostRef}>
-          <SuggestSegments segments={segments} cwd={sessionCwd} scope={msgId} onClick={handleClick} />
+          <SuggestSegments segments={segments} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} scope={msgId} onClick={handleClick} />
         </div>
       ) : (
         <RichMarkdown
@@ -58,11 +61,13 @@ function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId
           hostRef={hostRef}
           text={displayContent}
           cwd={sessionCwd}
+          host={imageHost}
+          inlineImages={imagesKnown}
           scope={msgId}
           onClick={handleClick}
         />
       )}
-      <ReplyImageStrip paths={imagePaths} cwd={sessionCwd} />
+      <ReplyImageStrip paths={imagePaths} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} onClick={handleClick} />
     </>
   );
 }
@@ -177,7 +182,7 @@ export const StreamingBlockView = memo(function StreamingBlockView({ block, sess
     const content = block.planContent
       ?? (typeof block.input?.plan === 'string' && block.input.plan ? block.input.plan : null);
     if (content) {
-      return <PlanCard content={content} disclosureId={disclosureIds.plan(block.toolUseId)} />;
+      return <PlanCard content={content} disclosureId={disclosureIds.plan(block.toolUseId)} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
     }
   }
 

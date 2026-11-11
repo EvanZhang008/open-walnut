@@ -18,6 +18,7 @@ import type { CardTurn } from '@/utils/thread-card';
 import { questionPartsOf } from '@/utils/thread-card';
 import { MessageAttachments } from './MessageAttachments';
 import { SessionMessage, StableMarkdownBody } from './SessionMessage';
+import { useSessionTextRender } from '@/hooks/useAgentFileOpener';
 import { StreamingBlockView, StreamingReplyMeta, useStreamReplyRows } from './StreamingBlockView';
 
 interface RowHandlers {
@@ -37,6 +38,8 @@ interface RowHandlers {
 const QuestionBubble = memo(function QuestionBubble({ message, h }: { message: SessionHistoryMessage; h: RowHandlers }) {
   const parts = useMemo(() => questionPartsOf(typedUserText(message.text ?? '')), [message.text]);
   const attached = parts.images.length + parts.files.length > 0;
+  // The same picture source as the chat's own bubble for these words (SessionMessageBubble).
+  const { host, images } = useSessionTextRender({ sessionId: h.sessionId, sessionHost: h.sessionHost, sessionCwd: h.sessionCwd });
   return (
     <div className="thread-card-q">
       <div className="session-msg session-msg-user">
@@ -44,7 +47,7 @@ const QuestionBubble = memo(function QuestionBubble({ message, h }: { message: S
           {attached && (
             <MessageAttachments images={parts.images} files={parts.files} host={h.sessionHost} {...(h.onFileOpen ? { onFileOpen: h.onFileOpen } : {})} />
           )}
-          {parts.body && <StableMarkdownBody text={parts.body} cwd={h.sessionCwd} />}
+          {parts.body && <StableMarkdownBody text={parts.body} cwd={h.sessionCwd} host={host} inlineImages={images} />}
         </div>
       </div>
     </div>

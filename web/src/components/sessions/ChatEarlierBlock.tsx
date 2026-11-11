@@ -13,7 +13,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { apiGet } from '@/api/client';
 import { log } from '@/utils/log';
-import { StableMarkdownBody } from './SessionMessage';
+import { AgentText } from '@/components/common/AgentText';
 import '@/styles/chat-earlier.css';
 import { earlierParts, type ChatEarlierMessage } from './chat-earlier-parts';
 import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, EARLIER_HISTORY_TURNS } from '@open-walnut/history-turn-window';
@@ -69,7 +69,7 @@ export function useChatEarlier(sessionId: string, enabled: boolean): ChatEarlier
   return state && fetched ? state.rows : NO_ROWS;
 }
 
-export function ChatEarlierBlock({ rows, sessionCwd }: { rows: readonly ChatEarlierMessage[]; sessionCwd?: string }) {
+export function ChatEarlierBlock({ rows }: { rows: readonly ChatEarlierMessage[] }) {
   const parts = useMemo(() => earlierParts(rows), [rows]);
   const windowRows = useMemo(() => parts.map(part => part.kind === 'steps' || part.row.kind === 'notification'
     ? { role: 'assistant', text: '' } : part.row), [parts]);
@@ -114,7 +114,8 @@ export function ChatEarlierBlock({ rows, sessionCwd }: { rows: readonly ChatEarl
           data-testid="chat-earlier-row"
         >
           <div className="session-msg-content">
-            <StableMarkdownBody text={part.row.text} cwd={sessionCwd} />
+            {/* Earlier rows carry no writer (id, role, text): never this session's machine. */}
+            <AgentText text={part.row.text} unknownSource />
           </div>
         </div>
       ))}

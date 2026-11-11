@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+vi.mock('@/components/common/AgentText', () => ({ AgentText: () => null }))
 import { log } from '../../web/src/utils/log.js'
 import {
   CORE_PANE_IDS,

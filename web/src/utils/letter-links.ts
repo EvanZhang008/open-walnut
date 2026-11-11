@@ -12,9 +12,10 @@
  * runs it in a bare node env.
  */
 import { anchorRanges, NO_LINK_ELEMENTS, splitHtml, TAG_NAME_RE } from './bare-task-ids';
+// The store's letter id shape, shared with the server's letter body linker.
+import { LETTER_ID_SRC } from '../../../src/lib/letter-id-shape';
 
-/** The store's letter id shape, bounded on both sides so a longer token never matches. */
-export const LETTER_ID_SRC = '(?<![\\w./-])lt-[0-9a-z]{1,12}-[0-9a-z]{4,12}(?![\\w-])';
+export { LETTER_ID_SRC };
 
 export function letterAnchor(id: string): string {
   return `<a class="letter-link" data-letter-id="${id}" href="#" title="Open this letter">${id}</a>`;

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+vi.mock('@/components/common/AgentText', () => ({ AgentText: () => null }))
 import {
   filterEntries,
   PAGE_LINK_KEYWORDS,

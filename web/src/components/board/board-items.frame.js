@@ -540,17 +540,19 @@
         + '<button type="button" class="wn-fold-btn" hidden>Fold</button>';
       // Answered, the choice folds to one row (what was asked, what the user said, the
       // leader's `summary` of the outcome); a click opens it, and the view keeps that.
-      this.wnFoldRow = document.createElement('button');
-      this.wnFoldRow.type = 'button';
+      this.wnFoldRow = document.createElement('div');
       this.wnFoldRow.className = 'wn-fold-row';
-      this.wnFoldRow.setAttribute('aria-expanded', 'false');
-      this.wnFoldRow.title = 'Answered. Click to open the whole choice.';
       this.wnFoldRow.hidden = true;
       [this.wnFoldRow, this.wnHead, this.wnOpts, this.wnWords, this.wnOwn, this.wnFoot].forEach(function (el) { el.setAttribute('data-wn-ui', ''); });
       this.insertBefore(this.wnHead, this.firstChild);
       this.insertBefore(this.wnFoldRow, this.wnHead);
       this.wnFoldBtn = this.wnFoot.querySelector('.wn-fold-btn');
-      this.wnFoldRow.addEventListener('click', function (e) { e.preventDefault(); self.wnFold(false); });
+      this.wnFoldRow.addEventListener('click', function (e) {
+        var link = e.target.closest && e.target.closest('a, walnut-task');
+        if (link && self.wnFoldRow.contains(link)) return;
+        e.preventDefault();
+        self.wnFold(false);
+      });
       this.wnFoldBtn.addEventListener('click', function (e) { e.preventDefault(); self.wnFold(true); });
       this.appendChild(this.wnOpts);
       this.appendChild(this.wnWords);
@@ -682,17 +684,17 @@
       if (this.hasAttribute('data-folded') !== folded) this.toggleAttribute('data-folded', folded);
       if (this.wnFoldRow.hidden !== !folded) this.wnFoldRow.hidden = !folded;
       if (folded) {
-        var summary = (this.getAttribute('summary') || '').trim();
+        var summary = this.getAttribute('summary') || '';
         var pick = chosen ? (listed ? listed.label : answer.label || chosen) : '';
-        var said = words.replace(/\s+/g, ' ').trim();
         var at = answer.text_at && (!answer.at || answer.text_at > answer.at) ? answer.text_at : answer.at;
         // Whose answer it is: the pick's writer, else the words' (none for the user's own).
         var foldBy = chosen ? pickBy : wordsBy;
-        kit.setHtml(this.wnFoldRow, '<span class="wn-fold-caret" aria-hidden="true">\u25b8</span>'
-          + '<span class="wn-fold-title">' + esc(title || id) + '</span>'
+        kit.setHtml(this.wnFoldRow, '<button type="button" class="wn-fold-toggle" aria-expanded="false" title="Answered. Click to open the whole choice.">'
+          + '<span class="wn-fold-caret" aria-hidden="true">\u25b8</span>'
+          + '<span class="wn-fold-title">' + esc(title || id) + '</span></button>'
           + (pick ? '<span class="wn-fold-pick">' + esc(pick) + '</span>' : '')
-          + (summary ? '<span class="wn-fold-sum">' + esc(summary) + '</span>'
-            : said ? '<span class="wn-fold-sum wn-fold-words">"' + esc(said.length > 140 ? said.slice(0, 139) + '\u2026' : said) + '"</span>' : '')
+          + (summary.trim() ? '<span class="wn-fold-sum">' + kit.richText(summary) + '</span>'
+            : words ? '<span class="wn-fold-sum wn-fold-words">' + kit.richText(words) + '</span>' : '')
           + (foldBy ? '<span class="wn-fold-by">by ' + esc(foldBy) + '</span>' : '')
           + (at ? '<span class="wn-fold-when">' + esc(kit.when(at)) + '</span>' : ''));
       }

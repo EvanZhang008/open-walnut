@@ -25,6 +25,9 @@ import { formatWaitUntil, WAIT_UNTIL_ICON } from './TaskStatusControl';
 import { taskUserState } from '@/utils/session-status';
 import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf } from '@open-walnut/user-status';
 import { ICON_PHASE_IN_PROGRESS, ICON_TO_READ } from '@/components/common/Icons';
+import { AgentText } from '@/components/common/AgentText';
+import { taskTextSource, type AgentTextSource } from '@/utils/agent-text-source';
+import { OPEN_CENTER_EVENT, OPEN_FILE_EVENT } from '@/utils/open-anywhere';
 import '@/styles/task-status.css';
 
 const OPEN_DELAY_MS = 250;
@@ -60,26 +63,35 @@ export function waitingChipLabel(task: ChipTask): string {
   return until ? `Wait until ${until}` : 'Waiting';
 }
 
-/** The card's lines, in reading order (also the chip's hover text). */
-export function waitingDetailLines(
-  task: Pick<Task, 'phase' | 'wait_until' | 'user_status'>,
-  triggersText = '',
-): string[] {
+type DetailTask = Pick<Task, 'phase' | 'wait_until' | 'user_status'>;
+export interface WaitingDetailLine { text: string; source: AgentTextSource }
+
+// Walnut's own sentences and a trigger's words have no recorded writer on the task.
+const NO_WRITER: AgentTextSource = { unknownSource: true };
+
+/** The card's lines with the recorded writer of each, so a path opens where its words were written. */
+export function waitingDetailSourcedLines(task: DetailTask, triggersText = ''): WaitingDetailLine[] {
   if (!isParked(task)) return [];
-  const lines: string[] = [];
+  const lines: WaitingDetailLine[] = [];
+  const own = (text: string) => lines.push({ text, source: NO_WRITER });
   const reads = parkReads(task);
-  if (reads === 'working') lines.push(`Its own work runs (a build, a test run or a deploy of its change), so it reads ${USER_STATE_LABELS.working}.`);
-  if (reads === 'read') lines.push('Nothing is asked: there is a result to read.');
-  lines.push(task.wait_until
+  if (reads === 'working') own(`Its own work runs (a build, a test run or a deploy of its change), so it reads ${USER_STATE_LABELS.working}.`);
+  if (reads === 'read') own('Nothing is asked: there is a result to read.');
+  own(task.wait_until
     ? `Wakes by itself ${new Date(task.wait_until).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}, or sooner when something happens.`
     : 'No clock: it waits until something happens (a trigger fires, a message arrives).');
   const on = task.user_status?.waitingOn?.trim();
-  if (on && reads === 'waiting') lines.push(`Waiting on ${on}.`);
+  if (on && reads === 'waiting') lines.push({ text: `Waiting on ${on}.`, source: taskTextSource(task as Task, 'waiting') });
   const next = task.user_status?.next?.trim();
-  if (next) lines.push(`Next: ${next}`);
-  for (const t of triggersText.split('\n').map((l) => l.trim()).filter(Boolean)) lines.push(`Trigger ${t}`);
-  lines.push('A message here moves it to Working.');
+  if (next) lines.push({ text: `Next: ${next}`, source: taskTextSource(task as Task, 'report') });
+  for (const t of triggersText.split('\n').map((l) => l.trim()).filter(Boolean)) own(`Trigger ${t}`);
+  own('A message here moves it to Working.');
   return lines;
+}
+
+/** The card's lines, in reading order (also the chip's hover text). */
+export function waitingDetailLines(task: DetailTask, triggersText = ''): string[] {
+  return waitingDetailSourcedLines(task, triggersText).map((l) => l.text);
 }
 
 /**
@@ -117,10 +129,21 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
       e.stopPropagation();
       setOpen(false);
     };
+    const onViewerOpen = () => {
+      if (timer.current !== null) { window.clearTimeout(timer.current); timer.current = null; }
+      setOpen(false);
+    };
+    // Close after the viewer takes over, not while its source lookup is still in flight.
+    window.addEventListener(OPEN_FILE_EVENT, onViewerOpen);
+    window.addEventListener(OPEN_CENTER_EVENT, onViewerOpen);
+    window.addEventListener('main:locate-task', onViewerOpen);
     // Capture phase: every pill on a row stops its own pointerdown (see LeaderPill.tsx).
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKey, true);
     return () => {
+      window.removeEventListener(OPEN_FILE_EVENT, onViewerOpen);
+      window.removeEventListener(OPEN_CENTER_EVENT, onViewerOpen);
+      window.removeEventListener('main:locate-task', onViewerOpen);
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKey, true);
     };
@@ -128,7 +151,8 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
 
   if (!task || !isParked(task)) return null;
   const label = waitingChipLabel(task);
-  const lines = waitingDetailLines(task, triggerPillTitle(triggers));
+  const rows = waitingDetailSourcedLines(task, triggerPillTitle(triggers));
+  const lines = rows.map((r) => r.text);
   const reads = parkReads(task);
   const icon = reads === 'working' ? ICON_PHASE_IN_PROGRESS : reads === 'read' ? ICON_TO_READ : WAIT_UNTIL_ICON;
   return (
@@ -144,7 +168,7 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
         onPointerDown={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.preventDefault()}
         onMouseEnter={() => later(true, OPEN_DELAY_MS)}
-        onMouseLeave={() => later(false, CLOSE_DELAY_MS)}
+        onMouseLeave={() => { if (!byClick.current) later(false, CLOSE_DELAY_MS); }}
         onFocus={() => setOpen(true)}
         onBlur={() => later(false, CLOSE_DELAY_MS)}
         onClick={(e) => {
@@ -169,12 +193,19 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
               data-testid="session-waiting-card"
               style={menuPlacementStyle(placement)}
               onPointerDown={(e) => e.stopPropagation()}
+              onClickCapture={(e) => {
+                if (!(e.target as Element).closest('a')) return;
+                if (timer.current !== null) { window.clearTimeout(timer.current); timer.current = null; }
+                byClick.current = true;
+              }}
               onClick={(e) => e.stopPropagation()}
               onMouseEnter={() => later(true, 0)}
-              onMouseLeave={() => later(false, CLOSE_DELAY_MS)}
+              onMouseLeave={() => { if (!byClick.current) later(false, CLOSE_DELAY_MS); }}
             >
               <div className="task-waiting-card-head">{label}</div>
-              {lines.map((l, i) => <div key={i} className="task-waiting-card-line">{l}</div>)}
+              {/* The lines carry the task's own words (what it waits on, its next step, a trigger's
+                  check): a path, link, task or letter in them opens. */}
+              {lines.map((l, i) => <AgentText key={i} compact className="task-waiting-card-line" {...rows[i]!.source} text={l} />)}
             </div>,
             document.body,
           )

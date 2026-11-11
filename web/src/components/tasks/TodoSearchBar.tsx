@@ -3,7 +3,7 @@
  * Renders between the project tabs and the filter toolbar.
  */
 
-import { useRef, useEffect, useCallback, useState, startTransition } from 'react';
+import { useRef, useEffect, useLayoutEffect, useCallback, useState, startTransition } from 'react';
 import { ICON_SEARCH } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 import type { Task } from '@open-walnut/core';
@@ -26,6 +26,7 @@ function describeElement(el: Element | null): string | null {
 
 interface TodoSearchBarProps {
   query: string;
+  resetVersion: number;
   onQueryChange: (q: string) => void;
   onClear: () => void;
   isSearching: boolean;
@@ -36,6 +37,7 @@ interface TodoSearchBarProps {
 
 export function TodoSearchBar({
   query,
+  resetVersion,
   onQueryChange,
   onClear,
   isSearching,
@@ -58,6 +60,12 @@ export function TodoSearchBar({
   }, []);
   // Keep keystrokes urgent while the parent list update runs as interruptible work.
   const [draftQuery, setDraftQuery] = useState(query);
+  const lastResetRef = useRef(resetVersion);
+  useLayoutEffect(() => {
+    if (lastResetRef.current === resetVersion) return;
+    lastResetRef.current = resetVersion;
+    setDraftQuery('');
+  }, [resetVersion]);
   // Typing guard (2026-09-23, "I lost the cursor soon after typing"): while the
   // user is typing here, focus taken by code elsewhere (a column mounting, an
   // autofocus) comes back. A pointer press, Tab, Escape or a modifier shortcut is

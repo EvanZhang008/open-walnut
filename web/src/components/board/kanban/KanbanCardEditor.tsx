@@ -29,7 +29,10 @@ export function conflictWriter(by: string, ownerId: string | undefined, titleOf:
 
 export function KanbanCardEditor({ field, card, openedAt, api, onClose }: KanbanCardEditorProps) {
   const isSummary = field === 'summary';
-  const original = isSummary ? card.summary?.text ?? '' : card.waiting?.text ?? '';
+  // The card's own summary edits as written (its links kept); a worker's summary seeds as plain text, as before.
+  const original = isSummary
+    ? (card.summary?.source === 'card' ? card.summary.text : card.summary?.plain ?? card.summary?.text) ?? ''
+    : card.waiting?.text ?? '';
   const max = isSummary ? MAX_SUMMARY : MAX_WAITING_ON;
   const [draft, setDraft] = useState(original);
   const [saving, setSaving] = useState(false);

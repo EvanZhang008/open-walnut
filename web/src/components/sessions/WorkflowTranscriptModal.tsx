@@ -23,7 +23,6 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { stableHtml } from '@/hooks/useStableHtml';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { fetchSubagentHistory } from '@/api/sessions';
@@ -35,7 +34,7 @@ import type { ReactNode } from 'react';
 import { ICON_CLOSE } from '../common/Icons';
 import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
-import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { AgentText } from '../common/AgentText';
 
 /** How often a still-running agent's transcript is re-read while the modal is
  *  open. Each poll is a full read + parse of the agent's JSONL on the server
@@ -203,7 +202,8 @@ export function TranscriptBody({ target, sessionId, liveLane }: {
       ) : target.fallbackResult ? (
         <div className="task-group-result">
           <div className="task-group-result-label">Result</div>
-          <div className="markdown-body" dangerouslySetInnerHTML={stableHtml(renderMarkdownWithRefs(target.fallbackResult.slice(0, 3000)))} />
+          {/* Whole result, on the parent session's machine (a subagent runs where its parent does). */}
+          <AgentText compact sessionId={sessionId} text={target.fallbackResult} />
         </div>
       ) : (
         <div className="wf-modal-loading">{live ? 'Waiting for the agent\u2019s first output…' : 'No transcript available'}</div>

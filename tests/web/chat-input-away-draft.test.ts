@@ -84,6 +84,7 @@ function harness() {
       await act(async () => { root!.render(createElement(ChatInput, { ...base, ...props } as Props)) })
     },
     async unmount() {
+      if (!root) return
       await act(async () => { root!.unmount() })
       root = null
     },
@@ -108,6 +109,57 @@ function harness() {
     last(): string | undefined { return seen[seen.length - 1] },
   }
 }
+
+describe('textarea width changes', () => {
+  it('fits outside observer delivery, coalesces widths, and cancels a detached textarea', async () => {
+    const observers: Array<{ callback: () => void; target?: Element; disconnected: boolean }> = []
+    const frames = new Map<number, FrameRequestCallback>()
+    let nextFrame = 0
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++nextFrame, callback); return nextFrame })
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id) })
+    vi.stubGlobal('ResizeObserver', class {
+      own: typeof observers[number]
+      constructor(callback: () => void) { this.own = { callback, disconnected: false }; observers.push(this.own) }
+      observe(target: Element) { this.own.target = target }
+      unobserve() {}
+      disconnect() { this.own.disconnected = true }
+    })
+    const h = harness()
+    try {
+      await h.render({ draftKey: 'draft:session:width-change' })
+      await h.type('Keep these unsent words')
+      frames.clear()
+      const ta = h.textarea()
+      const own = observers.find((observer) => observer.target === ta)!
+      expect(own).toBeDefined()
+      let width = 240
+      Object.defineProperty(ta, 'clientWidth', { configurable: true, get: () => width })
+      Object.defineProperty(ta, 'scrollHeight', { configurable: true, get: () => 64 })
+      ta.style.height = '40px'
+      own.callback()
+      expect(ta.style.height).toBe('40px')
+      expect(frames.size).toBe(1)
+      width = 200
+      own.callback()
+      expect(ta.style.height).toBe('40px')
+      expect(frames.size).toBe(1)
+      const [id, callback] = [...frames][0]!
+      frames.delete(id)
+      await act(async () => { callback(0) })
+      expect(ta.style.height).toBe('64px')
+      expect(h.last()).toBe('Keep these unsent words')
+      own.callback()
+      expect(frames.size).toBe(0)
+      width = 300
+      own.callback()
+      expect(frames.size).toBe(1)
+      await h.unmount()
+      expect(own.disconnected).toBe(true)
+      expect(frames.size).toBe(0)
+      expect(storage.getItem('draft:session:width-change')).toBe('Keep these unsent words')
+    } finally { await h.unmount() }
+  })
+})
 
 describe('the draft survives the composer going away', () => {
   it('unmount persists the last keystrokes still inside the debounce', async () => {

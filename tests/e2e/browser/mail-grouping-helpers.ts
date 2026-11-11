@@ -102,8 +102,8 @@ export async function allGroupMessages(
  * New unread mail (newest of all), `people` of them from a person writing to Robin directly;
  * `kind: 'list'` makes the rest a newsletter whose only way out is a mailto:.
  */
-export function deliver(fixture: MailFixture, count = 1, options: { people?: number; account?: 'marina' | 'ferry'; kind?: 'list' } = {}): Promise<{ delivered: Array<{ accountId: string; messageId: string; subject: string }> }> {
-  const query = `count=${count}&people=${options.people ?? 0}&account=${options.account ?? 'marina'}${options.kind ? `&kind=${options.kind}` : ''}`
+export function deliver(fixture: MailFixture, count = 1, options: { people?: number; account?: 'marina' | 'ferry'; kind?: 'list'; subject?: string } = {}): Promise<{ delivered: Array<{ accountId: string; messageId: string; subject: string }> }> {
+  const query = `count=${count}&people=${options.people ?? 0}&account=${options.account ?? 'marina'}${options.kind ? `&kind=${options.kind}` : ''}${options.subject ? `&subject=${encodeURIComponent(options.subject)}` : ''}`
   return fixtureCall(fixture, `deliver?${query}`, 'POST')
 }
 

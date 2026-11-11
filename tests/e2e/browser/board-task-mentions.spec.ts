@@ -15,8 +15,7 @@
  * so each engine writes the Board of its own fixture task.
  */
 import fs from 'node:fs/promises'
-import { expect, test, type Page } from '@playwright/test'
-import { showCustomBoard } from './board-view-helpers'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -53,20 +52,35 @@ async function api(method: string, path: string, body?: unknown, headers: Record
   return res
 }
 
+async function pointer(page: Page, target: Locator) {
+  await target.scrollIntoViewIfNeeded()
+  const bounds = await target.boundingBox()
+  const rect = await target.evaluate(el => {
+    const first = el.getClientRects()[0], whole = el.getBoundingClientRect()
+    return first ? { dx: first.x - whole.x, dy: first.y - whole.y, width: first.width, height: first.height } : null
+  })
+  expect(bounds).not.toBeNull()
+  expect(rect).not.toBeNull()
+  await page.mouse.move(bounds!.x + rect!.dx + Math.min(25, rect!.width / 2), bounds!.y + rect!.dy + rect!.height / 2, { steps: 12 })
+  await page.mouse.down()
+  await page.mouse.up()
+}
+
 async function openBoard(page: Page, host: { task: string; session: string; search: string }) {
   await page.setContent(`<a href="${API}/">Open Walnut</a>`)
-  await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
-  await page.locator('.todo-search-input').fill(host.search)
+  await pointer(page, page.getByRole('link', { name: 'Open Walnut', exact: true }))
+  await pointer(page, page.locator('.todo-search-input'))
+  await page.keyboard.type(host.search, { delay: 20 })
   const row = page.locator(`.todo-panel-item[data-task-id="${host.task}"]`)
   await expect(row).toBeVisible({ timeout: 30_000 })
-  await row.locator('.todo-item-title').click()
+  await pointer(page, row.locator('.todo-item-title'))
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${host.session}"]`)
   await expect(panel).toBeVisible({ timeout: 20_000 })
   const chip = panel.getByTestId('session-board-chip')
   await expect(chip).toBeVisible({ timeout: 20_000 })
-  await chip.click()
+  await pointer(page, chip)
   const pane = page.getByTestId('task-board-pane')
-  await showCustomBoard(pane)
+  await pointer(page, pane.getByTestId('board-view-custom'))
   return page.frameLocator('.task-board-frame')
 }
 
@@ -102,17 +116,17 @@ test('task ids in the Board text and its messages become live chips', async ({ p
 
   // The message: a bare id, a backticked id and a task-ref by a UUID segment.
   const msg = frame.locator('walnut-thread .wn-msg .wn-text').last()
-  await expect(msg.locator(`walnut-task[id="${OPEN_ID}"] .wn-title`)).toHaveText('Quarterly invoice reconciliation', { timeout: 20_000 })
-  await expect(msg.locator(`walnut-task[id="${DONE_ID}"] .wn-title`)).toHaveText('Rotate the staging API keys')
-  await expect(msg.locator('walnut-task[id="9c1d4e2a"] .wn-title')).toHaveText('Chat order fixture')
-  await expect(msg.locator('walnut-task')).toHaveCount(3)
+  await expect(msg.locator(`a.task-link:not(.task-link-code)[data-task-id="${OPEN_ID}"]`)).toHaveText('Quarterly invoice reconciliation', { timeout: 20_000 })
+  await expect(msg.locator(`a.task-link[data-task-id="${DONE_ID}"]`)).toHaveText('Rotate the staging API keys')
+  await expect(msg.locator(`a.task-link[data-task-id="${UUID_ID}"]`)).toHaveText('Chat order fixture')
+  await expect(msg.locator('a.task-link')).toHaveCount(4)
   await expect(msg).toContainText('hash 2ac8891 and')
   await expect(msg.locator('code')).toHaveText(`git log ${OPEN_ID}`)
   await msg.scrollIntoViewIfNeeded()
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-board.png` })
 
   // A chip opens its task beside the board.
-  await msg.locator(`walnut-task[id="9c1d4e2a"] .wn-task`).click()
+  await pointer(page, msg.locator(`a.task-link[data-task-id="${UUID_ID}"]`))
   await expect(page.getByTestId('board-task-peek').or(page.locator(`[data-task-id="${UUID_ID}"]`)).first()).toBeVisible({ timeout: 15_000 })
   expect(pageErrors).toEqual([])
 })

@@ -7,6 +7,7 @@
  * opens the reader, and a pin click must never also open it.
  */
 import { memo } from 'react';
+import { AgentText } from '@/components/common/AgentText';
 import { formatRelative } from '@/contexts/notifications';
 import { LETTER_TYPE_LABEL, answeredByName, letterOriginOf, type LetterEnvelope } from '@/api/human-inbox';
 import { LetterOriginBadge } from './LetterOriginBadge';
@@ -97,7 +98,7 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
         )}
       </div>
 
-      {letter.textPreview && <div className="hib-preview">{letter.textPreview}</div>}
+      {letter.textPreview && <AgentText text={letter.textPreview} compact className="hib-preview" host={letter.sender?.host} sessionId={letter.sender?.sessionId} unknownSource={!letter.sender?.sessionId} />}
 
       {answered && (
         <div className="hib-answered-chip">

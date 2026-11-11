@@ -37,7 +37,7 @@ const RENDERS_HTML = /dangerouslySetInnerHTML=|\.innerHTML\s*=|from 'marked'|fro
 /** The shared pipeline: every call names tasks (renderMarkdownWithRefs, the tool result path,
  *  linkTaskMentions for a renderer of its own, ChatMessage's helpers built on it, the Board's
  *  message renderer). */
-const PIPELINE = /\b(?:renderMarkdownWithRefs|useRenderedMarkdown|renderToolResultWithRefs|linkTaskMentions|renderUserMessage|renderInlineMarkdown|renderMarkdown|kit\.richText)\(|<RichMarkdown\b/;
+const PIPELINE = /\b(?:renderMarkdownWithRefs|useRenderedMarkdown|renderToolResultWithRefs|linkTaskMentions|renderUserMessage|renderInlineMarkdown|renderMarkdown|kit\.richText)\(|<(?:RichMarkdown|AgentText)\b/;
 
 /** Chat surfaces: each must render through the pipeline. */
 const CHAT: Record<string, string> = {
@@ -45,19 +45,12 @@ const CHAT: Record<string, string> = {
   'web/src/components/chat/RichBlocks.tsx': 'rich (HTML) replies, block by block',
   'web/src/components/chat/SuggestCard.tsx': 'a suggestion card in a reply',
   'web/src/components/chat/SuggestSegments.tsx': 'suggestion segments in a reply',
-  'web/src/components/common/ClaudeStreamView.tsx': 'a streamed Claude reply',
-  'web/src/components/context/ContextInspectorPanel.tsx': 'the context inspector (data: ids keep their text, still linked)',
+  'web/src/components/common/AgentText.tsx': 'agent text in cards, previews and letter turns',
   'web/src/components/inbox/LetterBody.tsx': 'a letter in the inbox',
   'web/src/components/org/OrgBrief.tsx': 'the Brief of Main or a lead',
-  'web/src/components/org/OrgThreads.tsx': "the user's own requests to Main or a lead, and their answers",
-  'web/src/components/sessions/InjectedBannerRow.tsx': 'an injected banner in a session',
   'web/src/components/sessions/SessionMessage.tsx': 'the session timeline: the session columns, Ask here, the Org chat',
-  'web/src/components/sessions/SessionOutboundCard.tsx': 'a message a session sent to another task',
   'web/src/components/sessions/SessionPanel.tsx': 'the session panel plan and summary text',
-  'web/src/components/sessions/SessionProvenanceCard.tsx': 'a message another task sent into the session',
-  'web/src/components/sessions/SideQuestionDrawer.tsx': 'a side question thread',
   'web/src/components/sessions/StreamingBlockView.tsx': 'a streaming block of a session reply',
-  'web/src/components/sessions/WorkflowTranscriptModal.tsx': 'a workflow transcript',
   'web/src/components/triage/TriagePanel.tsx': 'the triage summary',
   'web/src/components/board/board-elements.frame.js': 'Board threads (kit.richText) and the Board text (linkBodyMentions)',
   'web/src/components/board/board-items.frame.js': 'Board choice answers (kit.richText)',
@@ -66,6 +59,7 @@ const CHAT: Record<string, string> = {
 /** Not chat: what they render, and why task names do not belong there. */
 const NOT_CHAT: Record<string, string> = {
   'web/src/utils/markdown.ts': 'the pipeline itself',
+  'web/src/components/org/org-brief-sources.ts': 'uses the official lexer and shared rendered links to map writers, not an independent renderer',
   'web/src/api/mail.ts': 'mail bodies from outside senders',
   'web/src/apps/mail/mail-sanitize.ts': 'the mail app sanitizer for outside senders',
   'web/src/components/board/board-runtime.frame.js': 'the Board frame core: fixed control markup only',
@@ -76,7 +70,6 @@ const NOT_CHAT: Record<string, string> = {
   'web/src/components/notes/notes-markdown.ts': 'the notes editor (its own Marked instance; notes are documents)',
   'web/src/components/sessions/SessionDiffView.tsx': 'a file diff: code stays raw',
   'web/src/components/sessions/diffMarkdownBlocks.ts': 'a markdown file diff (taskIds off)',
-  'web/src/components/tasks/AgentSearchPanel.tsx': 'mentions the API in a comment only',
   'web/src/components/tasks/AgentSearchResultRows.tsx': 'mentions the API in a comment only',
   'web/src/components/tasks/ProjectTrackingView.tsx': 'a plugin-provided sanitized tracking page',
   'web/src/hooks/useStableHtml.ts': 'the stable {__html} helper',
@@ -104,13 +97,10 @@ describe('every place that renders text as HTML is classified', () => {
     expect(off).toEqual([]);
   });
 
-  it('a renderer of its own runs linkTaskMentions on what marked made', () => {
+  it('chat helpers use the shared renderer instead of a partial marked pipeline', () => {
     const src = read('web/src/components/chat/ChatMessage.tsx');
-    const parses = src.split('\n').filter((l) => /marked\.parse(?:Inline)?\(/.test(l)).length;
-    const linked = (src.match(/DOMPurify\.sanitize\(linkTaskMentions\(raw\)/g) ?? []).length;
-    expect(parses).toBeGreaterThan(0);
-    expect(linked).toBe(parses);
-    // The user bubble's verbatim renderer (moved to markdown.ts so the markdown tier runs it).
+    expect(src).not.toMatch(/marked\.parse(?:Inline)?\(/);
+    expect(src).toMatch(/inlineImages: false, inline: true/);
     expect(read('web/src/utils/markdown.ts')).toMatch(/const withBreaks = linkTaskMentions\(/);
   });
 });
@@ -132,6 +122,7 @@ describe('chat surfaces show names, not ids', () => {
     'web/src/components/common/FileContentView.tsx': 'file preview',
     'web/src/components/sessions/diffMarkdownBlocks.ts': 'file diff',
     'web/src/components/sessions/SessionMessage.tsx': 'tool input/results and injected context (DATA_RENDER)',
+    'web/src/components/chat/ChatMessage.tsx': 'the Personal AI chat\'s tool results (DATA_RENDER, as renderToolResultWithRefs before)',
     'web/src/components/context/ContextInspectorPanel.tsx': 'the context inspector',
     'web/src/utils/markdown.ts': 'extractMarkdownFields and the tool result path',
   };
@@ -149,7 +140,8 @@ describe('the Board names tasks in its messages and its text', () => {
   const el = read('web/src/components/board/board-elements.frame.js');
   const sections = read('web/src/components/board/board-sections.frame.js');
   it('the message renderer uses the same token shapes as the web renderer', () => {
-    const shape = read('web/src/utils/task-id-shape.ts');
+    expect(read('web/src/utils/task-id-shape.ts')).toContain("export * from '../../../src/lib/task-id-shape'");
+    const shape = read('src/lib/task-id-shape.ts');
     const webAlts = /\(\?:(\[0-9a-f\]\{8\}[^']*)\)'/.exec(shape)?.[1];
     expect(webAlts).toBeTruthy();
     expect(md).toContain(`'((?:${webAlts}))'`);

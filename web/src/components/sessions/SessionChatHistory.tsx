@@ -29,6 +29,7 @@ import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { TimelineBottomPills, useFlagStore } from './PhoneTimelinePills';
 import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, runRowKey, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, isTextPlusStepTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { useSessionTextRender } from '@/hooks/useAgentFileOpener';
 import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars, streamReplyText, useStreamReplyRows } from './StreamingBlockView';
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
 import { CONTEXT_COMPACTING_TEXT, IDLE_COMPACTING_TEXT, useWalnutCompacting } from './CompactContext';
@@ -717,6 +718,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // The pinned Initial Prompt renders through the same markdown path as every
   // other user bubble, so its task pills and file links need the same delegate.
   const handleInitialPromptClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
+  // The initial prompt's pictures load from the session's machine, as its full bubble's do.
+  const initialPromptRender = useSessionTextRender({ sessionId, sessionHost, sessionCwd });
 
   // ── Message truncation — render only the tail to keep DOM count low ──
   const [truncationOffset, setTruncationOffset] = useState(0);
@@ -5219,7 +5222,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (riders) {
       body.push(
         <div key={`fold-riders-${id}`} className="session-msg session-msg-envelope session-msg-riders" data-testid="session-rider-row">
-          <div className="session-msg-rider-content"><SessionEnvelopeSegments segments={riders} sessionCwd={sessionCwd} /></div>
+          <div className="session-msg-rider-content"><SessionEnvelopeSegments segments={riders} /></div>
         </div>,
       );
     }
@@ -6431,10 +6434,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           </div>
         )}
         {!onQuestionPage && hiddenOnPage === 0 && chatEarlier.length > 0 && (
-          <ChatEarlierBlock rows={chatEarlier} sessionCwd={sessionCwd} />
+          <ChatEarlierBlock rows={chatEarlier} />
         )}
         {!onQuestionPage && hiddenOnPage === 0 && earlierSessionsTaskId && (
-          <TaskEarlierSessions taskId={earlierSessionsTaskId} sessionId={sessionId} sessionCwd={sessionCwd} onOpenSession={onOpenEarlierSession} />
+          <TaskEarlierSessions taskId={earlierSessionsTaskId} sessionId={sessionId} onOpenSession={onOpenEarlierSession} />
         )}
         {!onQuestionPage && earlierSessionsTaskId && !error && !hasContent && !loading && !phase2Pending && !loadingFrom && (
           <p className="text-muted session-switch-ready" role="status" data-testid="session-switch-ready">
@@ -6458,7 +6461,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   Walnut prepended, and this preview has no room to fold one.
                   Markdown, not raw text: a URL the user typed into their prompt
                   is a link here exactly as it is in the full bubble below. */}
-              <StableMarkdownBody text={typedUserText(initialPrompt)} cwd={sessionCwd} />
+              <StableMarkdownBody text={typedUserText(initialPrompt)} cwd={sessionCwd} host={initialPromptRender.host} inlineImages={initialPromptRender.images} />
             </div>
           </div>
         )}

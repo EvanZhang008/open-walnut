@@ -20,7 +20,7 @@ import DOMPurify from 'dompurify';
  * Hooks are added once at module init — no global mutations, no race conditions.
  */
 const notesPurify = DOMPurify();
-notesPurify.addHook('afterSanitizeAttributes', (node) => {
+if (notesPurify.isSupported) notesPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A') {
     node.setAttribute('target', '_blank');
     node.setAttribute('rel', 'noopener noreferrer');

@@ -45,7 +45,7 @@ export function LetterReader({
   // guards on the reader being open, so one Escape never closes three layers.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || fileViewRef.current) return;
+      if (e.key !== 'Escape' || fileViewRef.current || document.querySelector('.file-viewer-overlay')) return;
       e.stopPropagation();
       onClose();
     };
@@ -88,7 +88,9 @@ export function LetterReader({
         <FileViewer
           path={fileView.path}
           {...(fileView.line ? { line: fileView.line } : {})}
+          {...(fileView.endLine ? { endLine: fileView.endLine } : {})}
           {...(fileView.host ? { host: fileView.host } : {})}
+          {...(fileView.sourceOnly ? { sourceOnly: true } : {})}
           onClose={() => setFileView(null)}
         />
       )}

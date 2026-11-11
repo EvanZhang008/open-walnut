@@ -11,6 +11,7 @@ import { useState, useMemo, memo } from 'react';
 import type { ToolCallBlock } from '@/api/chat';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
 import { ClaudeStreamView } from '../common/ClaudeStreamView';
+import { AgentText } from '../common/AgentText';
 
 interface SubagentBlockProps {
   block: ToolCallBlock;
@@ -81,7 +82,7 @@ export const SubagentBlock = memo(function SubagentBlock({ block }: SubagentBloc
           ) : block.result ? (
             <div className="subagent-result">
               <div className="chat-tool-block-section-label">Result</div>
-              <pre className="chat-tool-block-pre">{block.result}</pre>
+              <AgentText unknownSource text={block.result} />
             </div>
           ) : null}
         </div>

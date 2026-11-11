@@ -15,28 +15,26 @@ import { createElement, act } from '../../web/node_modules/react/index.js'
 import { createRoot } from '../../web/node_modules/react-dom/client.js'
 
 vi.mock('@/utils/log', () => ({ log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } }))
-// The markdown renderer needs a real DOM for DOMPurify; the bug is the prop's
-// identity, not the markdown, so the "rendered" html is the text itself. Each
-// re-render hands the plain segment an equal string and a new props object.
-vi.mock('@/hooks/useEntityLabels', () => ({
-  useRenderedMarkdown: (text: string) => `${text}`,
-  useTaskLabel: () => undefined,
-  useEntityLabelsVersion: () => 0,
-}))
 
-const { SessionEnvelopeSegments } = await import('../../web/src/components/sessions/SessionProvenanceCard')
-const { stableHtml } = await import('../../web/src/hooks/useStableHtml')
+// The real renderer (the plain run is AgentText now): it needs the document before it is imported,
+// because the markdown sanitizer binds to it at import.
+let SessionEnvelopeSegments: typeof import('../../web/src/components/sessions/SessionProvenanceCard').SessionEnvelopeSegments
+let stableHtml: typeof import('../../web/src/hooks/useStableHtml').stableHtml
+let MemoryRouter: typeof import('../../web/node_modules/react-router-dom').MemoryRouter
 
 let doc: Document
 let root: { render: (n: unknown) => void; unmount: () => void } | null = null
 let el: HTMLElement
-beforeAll(() => {
+beforeAll(async () => {
   const dom = parseHTML('<!DOCTYPE html><html><head></head><body></body></html>')
   const g = globalThis as unknown as Record<string, unknown>
   g.window = dom.window
   g.document = dom.document
   g.IS_REACT_ACT_ENVIRONMENT = true
   doc = dom.document as unknown as Document
+  ;({ SessionEnvelopeSegments } = await import('../../web/src/components/sessions/SessionProvenanceCard'))
+  ;({ stableHtml } = await import('../../web/src/hooks/useStableHtml'))
+  ;({ MemoryRouter } = await import('../../web/node_modules/react-router-dom'))
 })
 beforeEach(() => {
   el = doc.createElement('div')
@@ -52,7 +50,9 @@ const TEXT = '<p>[Images attached]</p><p><img src="/api/local-image?path=%2Ftmp%
 const render = async (tick: number) => {
   // A fresh segments array each time, as a re-parse of the row gives.
   const segments = [{ kind: 'text' as const, text: TEXT }]
-  await act(async () => { root!.render(createElement('div', { 'data-tick': tick }, createElement(SessionEnvelopeSegments, { segments }))) })
+  // The person's own words beside a notice: the row names the primary as their writer.
+  const plainSource = { host: '__local__' }
+  await act(async () => { root!.render(createElement(MemoryRouter, null, createElement('div', { 'data-tick': tick }, createElement(SessionEnvelopeSegments, { segments, plainSource })))) })
 }
 
 describe('envelope segments keep their DOM across re-renders', () => {

@@ -106,11 +106,10 @@ describe('destination shapes that become a file-link', () => {
     expect(anchors(html)).toBe(3);
   });
 
-  it('a link to an inline-renderable image stays with marked: image + caption, not a file-link', () => {
+  it('a link to an inline-renderable image keeps its image and clickable caption', () => {
     const html = renderMarkdownWithRefs('[shot](/tmp/walnut-shots/01-panel.png)');
     expect(html).toContain('inline-image-block');
-    expect(html).toContain('<span class="inline-image-path">shot</span>');
-    expect(html).not.toContain('file-link');
+    expect(html).toContain('<a class="inline-image-path file-link" data-file-path="/tmp/walnut-shots/01-panel.png" href="#">shot</a>');
   });
 
   it('a link to an image marked does NOT render inline (svg) opens in the Files panel', () => {
@@ -215,12 +214,19 @@ describe('links that stay ordinary links', () => {
     ['in-app route (two segments, no extension)', '[task](/tasks/abc1234-def0)', 'href="/tasks/abc1234-def0"'],
     ['single root segment', '[board](/tasks)', 'href="/tasks"'],
     ['plugin app deep route (three segments, but ~ is not a path character)', '[Open Mail](/apps/walnut-mail~main/inbox)', 'href="/apps/walnut-mail~main/inbox"'],
-    ['API URL with a query string', '[dl](/api/files/download?path=/a/b.md)', 'href="/api/files/download?path=/a/b.md"'],
+    ['non-file API URL with a query string', '[config](/api/config?view=all)', 'href="/api/config?view=all"'],
   ])('%s', (_name, md, expectedHref) => {
     const html = renderMarkdownWithRefs(md, CWD);
     expect(anchors(html)).toBe(1);
     expect(html).toContain(expectedHref);
     expect(html).not.toContain('file-link');
+  });
+
+  it('a file API link uses the viewer source instead of navigating to its embedded host', () => {
+    const html = renderMarkdownWithRefs('[dl](/api/files/download?path=/a/b.md&host=local)', CWD);
+    expect(anchors(html)).toBe(1);
+    expect(html).toContain('<a class="file-link" data-file-path="/a/b.md" href="#">dl</a>');
+    expect(html).not.toContain('href="/api/files/download');
   });
 
   it('a traversal destination is never made clickable, and is not mangled either', () => {

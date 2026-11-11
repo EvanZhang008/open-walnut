@@ -7,7 +7,11 @@ import {
   extractContentBlockImages, findImagePaths, isImageFilePath, resolveImagePath,
 } from '@/utils/markdown';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { useEntityLabelsVersion, useRenderedMarkdown } from '@/hooks/useEntityLabels';
+import { useAgentFileOpener, useSessionTextRender } from '@/hooks/useAgentFileOpener';
+import { AgentText } from '@/components/common/AgentText';
+import { localImageSrc, sessionTextSource } from '@/utils/agent-text-source';
+import { peekSessionRecord } from '@/api/sessions';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useStableHtml, stableHtml } from '@/hooks/useStableHtml';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { BackgroundTasksChip, type KnownAgent } from './BackgroundTasksPanel';
@@ -153,6 +157,9 @@ function EditDiffView({ filePath, oldString, newString, replaceAll, status, resu
  *  clickable, never swapped for the task's title. */
 const DATA_RENDER = { taskIds: 'links' } as const;
 
+/** Unframed text in a user row is the person's (send-frame.ts frames every other sender), so it is the primary's. */
+const PERSON_TEXT = { host: '__local__' } as const;
+
 /** Hide the image's parent container on load error (broken remote images, etc.).
  *  Hides .tool-result-image-item if present (caption + img), else hides parent element. */
 const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -166,29 +173,44 @@ const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
  * for the persisted row and the streaming reply, so the strip is the same
  * before and after the handover (a broken image hides itself in both).
  */
-export function ReplyImageStrip({ paths, cwd }: { paths: readonly string[]; cwd?: string }) {
-  const host = useRef<HTMLDivElement | null>(null);
+export function ReplyImageStrip({ paths, cwd, host, inlineImages, onClick }: {
+  paths: readonly string[];
+  cwd?: string;
+  /** The machine the session runs on (absent = this one); see useSessionTextRender. */
+  host?: string;
+  /** False while that machine is unknown: each path shows as a link, no picture loads. */
+  inlineImages: boolean;
+  /** Opens a path's link; only where no handler around the strip does (a streaming reply). */
+  onClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
+}) {
+  const box = useRef<HTMLDivElement | null>(null);
   // Each image keeps its box while it decodes (utils/image-size-hold.ts).
-  useLayoutEffect(() => { holdImageBoxesIn(host.current); });
+  useLayoutEffect(() => { holdImageBoxesIn(box.current); });
   if (paths.length === 0) return null;
   const resolved = paths
     .map((p) => ({ p, abs: resolveImagePath(p, cwd) }))
     .filter((x): x is { p: string; abs: string } => x.abs !== null);
   if (resolved.length === 0) return null;
+  const render = { images: inlineImages, ...(host ? { host } : {}) };
   return (
-    <div ref={host} className="tool-result-images">
+    <div ref={box} className="tool-result-images" onClick={onClick}>
       {resolved.map(({ p, abs }, i) => {
-        const src = `/api/local-image?path=${encodeURIComponent(abs)}`;
+        const src = localImageSrc(abs, render);
+        // Keyed by host: a host change drops the old <img> and its load.
         return (
-          <div key={i} className="tool-result-image-item">
-            <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" onError={hideOnImgError} />
-            <span className="inline-image-path">{p}</span>
+          <div key={`${host ?? ''}|${i}`} className="tool-result-image-item">
+            {src
+              ? <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" onError={hideOnImgError} />
+              : <a className="file-link" data-file-path={abs} href="#" title={IMAGE_HOST_UNKNOWN}>{p}</a>}
+            {src && <span className="inline-image-path">{p}</span>}
           </div>
         );
       })}
     </div>
   );
 }
+
+const IMAGE_HOST_UNKNOWN = 'Picture not loaded: the machine this session runs on is not known yet';
 
 /**
  * Plain markdown prose: a person's own words, and a subagent group's result.
@@ -201,10 +223,21 @@ export function ReplyImageStrip({ paths, cwd }: { paths: readonly string[]; cwd?
  * messages" destroyed the selection. Subscribes the label store itself, the way
  * RichChunkView does, so memo() can block everything else without going stale.
  */
-export const StableMarkdownBody = memo(function StableMarkdownBody({ text, cwd }: { text: string; cwd?: string }) {
+export const StableMarkdownBody = memo(function StableMarkdownBody({ text, cwd, host, inlineImages }: {
+  text: string;
+  cwd?: string;
+  /** The session's machine, so an image path loads from it (absent = this one). */
+  host?: string;
+  /** False while that machine is unknown: image paths stay links. Absent = as before. */
+  inlineImages?: boolean;
+}) {
   const labelsVersion = useEntityLabelsVersion();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates the pill lookups inside
-  const html = useMemo(() => renderMarkdownWithRefs(text, cwd), [text, cwd, labelsVersion]);
+  const noImages = inlineImages === false;
+  const html = useMemo(
+    () => renderMarkdownWithRefs(text, cwd, host, noImages ? { inlineImages: false } : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates the pill lookups inside
+    [text, cwd, host, noImages, labelsVersion],
+  );
   const htmlProp = useStableHtml(html);
   return <div className="markdown-body" dangerouslySetInnerHTML={htmlProp} />;
 });
@@ -289,11 +322,43 @@ export function CollapsedPlanWrite({ filePath }: { filePath: string }) {
 /** Accent-bordered card rendering the plan markdown, collapsible.
  *  Consumes PlanContentContext to show live plan content (bypasses memo).
  *  Falls back to the snapshot `content` prop when context is null (initial load, non-plan session). */
-export function PlanCard({ content, disclosureId }: { content: string; disclosureId?: string }) {
+export function PlanCard({ content, disclosureId, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
+  content: string;
+  disclosureId?: string;
+  /** The plan's session: pictures load from its machine, clicks use the panel's onFileOpen. */
+  sessionId?: string;
+  sessionCwd?: string;
+  sessionHost?: string;
+  onTaskClick?: (taskId: string) => void;
+  onSessionClick?: (sessionId: string) => void;
+  onFileOpen?: (path: string, line?: number) => void;
+}) {
   const livePlan = useLivePlanContent();
-  const displayContent = livePlan ?? content;
+  const displayContent = livePlan?.content ?? content;
   const [open, setOpen] = useRowDisclosure(disclosureId, true);
-  const html = useRenderedMarkdown(displayContent);
+  // A from-plan live plan is another writer's: its machine, never this session's host or opener.
+  const foreign = livePlan && livePlan.writerSessionId !== sessionId ? livePlan.writerSessionId : undefined;
+  const own = useSessionTextRender({ sessionId, sessionHost, sessionCwd });
+  const writer = useAgentFileOpener(foreign ? { sessionId: foreign } : undefined);
+  const { cwd: planCwd, host: imageHost, images: imagesKnown } = foreign ? writer.render : own;
+  const labelsVersion = useEntityLabelsVersion();
+  const html = useMemo(
+    () => renderMarkdownWithRefs(displayContent, planCwd, imageHost, imagesKnown ? undefined : { inlineImages: false }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates the pill lookups inside
+    [displayContent, planCwd, imageHost, imagesKnown, labelsVersion],
+  );
+  const handleLinks = useEntityClickHandler(
+    onTaskClick, onSessionClick,
+    foreign ? writer.onFileOpen : onFileOpen,
+    foreign ? writer.fileHost : sessionHost,
+    foreign ? writer.fileSessionId : sessionId,
+    foreign ? writer.refusesAll : undefined,
+  );
+  // Opened once here: the row's handler must not open it again.
+  const handleBodyClick = useCallback((e: React.MouseEvent) => {
+    handleLinks(e);
+    if (e.defaultPrevented) e.stopPropagation();
+  }, [handleLinks]);
 
   const handleExpandClick = useCallback(() => {
     // Open the unified plan modal (listened by SessionPanel)
@@ -325,6 +390,7 @@ export function PlanCard({ content, disclosureId }: { content: string; disclosur
         <div className="session-plan-card-body">
           <div
             className="markdown-body"
+            onClick={handleBodyClick}
             dangerouslySetInnerHTML={stableHtml(html)}
           />
         </div>
@@ -342,12 +408,6 @@ function escapeHtml(s: string): string {
  *  one-line context row (Claude Code app style), click to expand the content. */
 function InjectedContextRow({ text }: { text: string }) {
   const [open, setOpen] = useRowDisclosure(disclosureIds.content('inject', text), false);
-  const labelsVersion = useEntityLabelsVersion();
-  const html = useMemo(
-    () => (open ? renderMarkdownWithRefs(text, undefined, undefined, DATA_RENDER) : ''),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-    [open, text, labelsVersion],
-  );
   return (
     <div className="tool-run-row">
       <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
@@ -356,8 +416,8 @@ function InjectedContextRow({ text }: { text: string }) {
       </button>
       {open && (
         <div className="tool-run-body">
-          <div className="chat-tool-block-result markdown-body"
-               dangerouslySetInnerHTML={stableHtml(html)} />
+          {/* No writer of its own: never the receiving session's machine. */}
+          <AgentText className="chat-tool-block-result" text={text} unknownSource taskIds={DATA_RENDER.taskIds} />
         </div>
       )}
     </div>
@@ -807,7 +867,7 @@ interface GenericToolCallProps {
   sessionId?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
-  onFileOpen?: (path: string) => void;
+  onFileOpen?: (path: string, line?: number, term?: undefined, endLine?: number) => void;
 }
 
 // memo: hundreds of these render inside a whale session's history; the
@@ -830,7 +890,7 @@ export const GenericToolCall = memo(function GenericToolCall(props: GenericToolC
   // instead of the JSON input dump. Dispatch BEFORE any hooks; single choke
   // point covering history, streaming, and ClaudeStreamView callers alike.
   if (props.tool.name === 'Bash' && typeof props.tool.input?.command === 'string') {
-    return <BashToolCall tool={props.tool} status={props.status} result={props.result} sessionCwd={props.sessionCwd} />;
+    return <BashToolCall tool={props.tool} status={props.status} result={props.result} sessionCwd={props.sessionCwd} sessionHost={props.sessionHost} sessionId={props.sessionId} onFileOpen={props.onFileOpen} />;
   }
   return <GenericToolCallInner {...props} />;
 });
@@ -841,6 +901,9 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
   // Pill titles resolve from the entity-label store — memo boundary is at
   // GenericToolCall, so this leaf must subscribe itself to see title changes.
   const labelsVersion = useEntityLabelsVersion();
+  // The tool output's writer (this session) for pictures and clicks; unknown with no host and no session.
+  const file = useAgentFileOpener(sessionTextSource({ sessionId, sessionHost, sessionCwd }, peekSessionRecord));
+  const { host: imageHost, images: imagesKnown } = file.render;
   // Merge result from explicit prop (streaming path) and tool.result (persisted history path)
   const result = resultProp ?? (tool as { result?: string }).result;
   const waitingTools = useWaitingTools();
@@ -879,9 +942,9 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
   const markdownFields = useMemo(() => {
     if (!open || !tool.input) return [];
     const input = (typeof tool.input === 'object') ? tool.input : {};
-    return extractMarkdownFields(input);
+    return extractMarkdownFields(input, { host: imageHost, inlineImages: imagesKnown });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-  }, [tool.input, open, labelsVersion]);
+  }, [tool.input, open, labelsVersion, imageHost, imagesKnown]);
 
   // Expanded JSON with pill links injected
   const expandedJsonHtml = useMemo(() => {
@@ -892,17 +955,20 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
 
   // Result rendering with image detection (base64 content blocks + file paths)
   const { resultImages, resultTextHtml } = useMemo<{
-    resultImages: { src: string; key: string; caption?: string }[] | null;
+    /** `src` null: a path on a machine not known yet, shown as a link to `path`. */
+    resultImages: { src: string | null; path?: string; key: string; caption?: string }[] | null;
     resultTextHtml: string;
   }>(() => {
     if (!open || !result) return { resultImages: null, resultTextHtml: '' };
+    const render = { images: imagesKnown, ...(imageHost ? { host: imageHost } : {}) };
+    const textOpts = imagesKnown ? DATA_RENDER : { ...DATA_RENDER, inlineImages: false };
 
-    // 1. Check for Anthropic content blocks with base64 images
+    // 1. Check for Anthropic content blocks with base64 images (data URIs: no machine to name)
     const extracted = extractContentBlockImages(result);
     if (extracted) {
       const images = extracted.imageSrcs.map((src, i) => ({ src, key: `b64-${i}` }));
       const text = extracted.textParts.length > 0
-        ? renderMarkdownWithRefs(extracted.textParts.join('\n').slice(0, 3000), undefined, undefined, DATA_RENDER)
+        ? renderMarkdownWithRefs(extracted.textParts.join('\n'), undefined, imageHost, textOpts)
         : '';
       return { resultImages: images, resultTextHtml: text };
     }
@@ -912,30 +978,37 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
     const resolved = paths
       .map((p, i) => {
         const abs = resolveImagePath(p, sessionCwd);
-        return abs ? { src: `/api/local-image?path=${encodeURIComponent(abs)}`, key: `path-${i}`, caption: p } : null;
+        return abs ? { src: localImageSrc(abs, render), path: abs, key: `path-${imageHost ?? ''}-${i}`, caption: p } : null;
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
     const images = resolved.length > 0 ? resolved : null;
 
-    // 3. Render remaining text as markdown (with truncation)
-    const text = renderMarkdownWithRefs(result.length > 3000 ? result.slice(0, 3000) : result, undefined, undefined, DATA_RENDER);
+    // 3. The whole text (a cut mid-path linked a wrong path); the box scrolls, rendered only while open.
+    const text = renderMarkdownWithRefs(result, undefined, imageHost, textOpts);
     return { resultImages: images, resultTextHtml: text };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-  }, [result, open, sessionCwd, labelsVersion]);
+  }, [result, open, sessionCwd, labelsVersion, imageHost, imagesKnown]);
 
   // Input image preview: if file_path/path/filename points to an image file, show thumbnail
-  const inputImageSrc = useMemo(() => {
+  const inputImage = useMemo<{ src: string | null; path: string } | null>(() => {
     if (!open) return null;
     const fp = safeInput.file_path ?? safeInput.path ?? safeInput.filename;
     if (typeof fp !== 'string' || !isImageFilePath(fp)) return null;
     // Skip if result already has images (avoids showing same image twice for Read tool)
     if (resultImages && resultImages.length > 0) return null;
     const resolved = resolveImagePath(fp, sessionCwd);
-    return resolved ? `/api/local-image?path=${encodeURIComponent(resolved)}` : null;
-  }, [safeInput, open, resultImages, sessionCwd]);
+    if (!resolved) return null;
+    return { src: localImageSrc(resolved, { images: imagesKnown, ...(imageHost ? { host: imageHost } : {}) }), path: resolved };
+  }, [safeInput, open, resultImages, sessionCwd, imageHost, imagesKnown]);
 
   // Unified click handler for entity ref links (.task-link, .session-link, .file-link) inside tool blocks
-  const handlePreClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen ? (p) => onFileOpen(p) : undefined, sessionHost, sessionId);
+  // The caller's opener (the panel's hand-off) first, else the writer's; one handler for the whole body.
+  const handleLinks = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen ?? file.onFileOpen, sessionHost, sessionId, file.refusesAll);
+  // The shared handler marks a link it took (preventDefault); the row's handler must not take it too.
+  const handleBodyClick = useCallback((e: React.MouseEvent) => {
+    handleLinks(e);
+    if (e.defaultPrevented) e.stopPropagation();
+  }, [handleLinks]);
 
   // [View File] button for tools that operate on files
   const toolFilePath = typeof safeInput.file_path === 'string' ? safeInput.file_path : null;
@@ -970,10 +1043,10 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
         )}
       </button>
       {open && (
-        <div className="chat-tool-block-body">
+        <div className="chat-tool-block-body" onClick={handleBodyClick}>
           <div className="chat-tool-block-section">
             <div className="chat-tool-block-section-label">Input</div>
-            <pre className="chat-tool-block-pre" onClick={handlePreClick} dangerouslySetInnerHTML={stableHtml(expandedJsonHtml)} />
+            <pre className="chat-tool-block-pre" dangerouslySetInnerHTML={stableHtml(expandedJsonHtml)} />
             {markdownFields.map(f => (
               <div key={f.key} className="chat-tool-block-field-markdown">
                 <div className="chat-tool-block-field-label">{f.key}</div>
@@ -981,9 +1054,11 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
                      dangerouslySetInnerHTML={stableHtml(f.html)} />
               </div>
             ))}
-            {inputImageSrc && (
+            {inputImage && (
               <div className="tool-result-images">
-                <img src={inputImageSrc} className="inline-image" data-lightbox-src={inputImageSrc} loading="lazy" onError={hideOnImgError} />
+                {inputImage.src
+                  ? <img key={inputImage.src} src={inputImage.src} className="inline-image" data-lightbox-src={inputImage.src} loading="lazy" onError={hideOnImgError} />
+                  : <a className="file-link" data-file-path={inputImage.path} href="#" title={IMAGE_HOST_UNKNOWN}>{inputImage.path}</a>}
               </div>
             )}
           </div>
@@ -1001,8 +1076,10 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
                 <div className="tool-result-images">
                   {resultImages.map(img => (
                     <div key={img.key} className="tool-result-image-item">
-                      <img src={img.src} className="inline-image" data-lightbox-src={img.src} loading="lazy" onError={hideOnImgError} />
-                      {img.caption && <span className="inline-image-path">{img.caption}</span>}
+                      {img.src
+                        ? <img src={img.src} className="inline-image" data-lightbox-src={img.src} loading="lazy" onError={hideOnImgError} />
+                        : <a className="file-link" data-file-path={img.path} href="#" title={IMAGE_HOST_UNKNOWN}>{img.caption ?? img.path}</a>}
+                      {img.src && img.caption && <span className="inline-image-path">{img.caption}</span>}
                     </div>
                   ))}
                 </div>
@@ -1127,7 +1204,7 @@ export function SessionToolCall({ tool, assistantLabel, status, sessionId, sessi
 
   // ExitPlanMode with plan content → render PlanCard
   if (kind === 'plan') {
-    return <PlanCard content={getExitPlanContent(tool) ?? ''} disclosureId={disclosureIds.plan(tool.toolUseId)} />;
+    return <PlanCard content={getExitPlanContent(tool) ?? ''} disclosureId={disclosureIds.plan(tool.toolUseId)} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }
 
   // Write to plans → collapsed row
@@ -1349,6 +1426,8 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
 
   // Unified click handler for entity ref links + file links in message content
   const handleContentClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
+  // Pictures load from the session's machine (links while unknown); clicks keep onFileOpen.
+  const { host: imageHost, images: imagesKnown } = useSessionTextRender({ sessionId, sessionHost, sessionCwd });
 
   // Subscribe pill titles for the inline renderMarkdownWithRefs below — this
   // component is memoized, so it must re-render itself on label changes.
@@ -1426,18 +1505,18 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
             drops the bubble chrome entirely (session-msg-envelope above): there is
             no human message there to attribute one to. */}
         {(showAdded || !bodyText) && bannerSplit?.banners.map((banner, i) => (
-          <InjectedBannerRow key={`${banner.name}-${i}`} banner={banner} sessionCwd={sessionCwd} disclosureId={disclosureIds.added(`${message.walnutMessageId ?? message.msgId ?? message.timestamp}-${banner.name}-${i}`)} />
+          <InjectedBannerRow key={`${banner.name}-${i}`} banner={banner} disclosureId={disclosureIds.added(`${message.walnutMessageId ?? message.msgId ?? message.timestamp}-${banner.name}-${i}`)} />
         ))}
         {bodyText && envelopeSegments ? (
-          <SessionEnvelopeSegments segments={envelopeSegments} sessionCwd={sessionCwd} />
+          <SessionEnvelopeSegments segments={envelopeSegments} plainSource={PERSON_TEXT} />
         ) : bodyText && searchAnswer ? (
           <>
-            {searchAnswer.before && <RichMarkdown text={searchAnswer.before} cwd={sessionCwd} scope={message.msgId} />}
+            {searchAnswer.before && <RichMarkdown text={searchAnswer.before} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} scope={message.msgId} />}
             <SearchAnswerCard answer={searchAnswer.answer} onOpenTask={onTaskClick} />
-            {searchAnswer.after && <RichMarkdown text={searchAnswer.after} cwd={sessionCwd} scope={`${message.msgId ?? ''}:after`} />}
+            {searchAnswer.after && <RichMarkdown text={searchAnswer.after} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} scope={`${message.msgId ?? ''}:after`} />}
           </>
         ) : bodyText && (useSegments ? (
-          <SuggestSegments segments={segments} cwd={sessionCwd} scope={message.msgId} />
+          <SuggestSegments segments={segments} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} scope={message.msgId} />
         ) : isUser ? (
           // The rich path is for MODEL output only. A person's own text goes
           // through plain markdown: pasting a reply back (or quoting an
@@ -1450,10 +1529,10 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
             {attachmentSplit && (
               <MessageAttachments images={attachmentSplit.images} files={attachmentSplit.files} host={sessionHost} {...(onFileOpen ? { onFileOpen } : {})} />
             )}
-            {shownUserText && <StableMarkdownBody text={showHintTagsAsTyped(shownUserText)} cwd={sessionCwd} />}
+            {shownUserText && <StableMarkdownBody text={showHintTagsAsTyped(shownUserText)} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} />}
           </>
         ) : (
-          <RichMarkdown text={bodyText} cwd={sessionCwd} scope={message.msgId} />
+          <RichMarkdown text={bodyText} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} scope={message.msgId} />
         ))}
         {bodyText && aboutIds.length > 0 && <MessageAbout ids={aboutIds} />}
         {tools && tools.length > 0 && (() => {
@@ -1491,7 +1570,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
           flush();
           return out;
         })()}
-        <ReplyImageStrip paths={textImagePaths} cwd={sessionCwd} />
+        <ReplyImageStrip paths={textImagePaths} cwd={sessionCwd} host={imageHost} inlineImages={imagesKnown} />
         {/* Hover strip: copy / pin / rewind / time. Every message gets one (the
             CSS keeps it invisible until the row is hovered); the live tail's last
             reply keeps its actions on screen, which is what showCopyActions has
@@ -1535,7 +1614,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   // pins and passage selection find as the row's first match.
   const cards = (
     <div className="session-msg-rider-content" onClick={handleContentClick}>
-      <SessionEnvelopeSegments segments={riderSegments} sessionCwd={sessionCwd} />
+      <SessionEnvelopeSegments segments={riderSegments} />
     </div>
   );
   // Above a person's words the notices are not for the reader: one muted

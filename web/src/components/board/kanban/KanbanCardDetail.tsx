@@ -15,6 +15,7 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ICON_CHAT, ICON_CHECK, ICON_NEW_TAB } from '@/components/common/Icons';
 import { TagChip } from '@/components/tasks/TagChip';
+import { AgentText } from '@/components/common/AgentText';
 import { useTagDisplay } from '@/stores/tag-display-store';
 import { READ_ONLY_TITLE } from './kanban-contract';
 import type { KanbanCardVM } from './kanban-card-model';
@@ -85,15 +86,15 @@ export function KanbanCardDetail({ card, laneName, readOnly, onBack, onOpenSessi
         </div>
       )}
       <div className={`kanban-card-status kanban-tone-${card.status.tone} kanban-detail-status`} data-tone={card.status.tone} title={card.status.tooltip}>
-        <span className="kanban-card-dot" aria-hidden="true" /><span className="kanban-card-status-text">{card.status.text}</span>
+        <span className="kanban-card-dot" aria-hidden="true" /><AgentText compact inline {...(card.status.textSource ?? { unknownSource: true })} className="kanban-card-status-text" text={card.status.text} />
       </div>
       {card.status.prompt && <div className="kanban-card-prompt"><KanbanCardPrompt request={card.status.prompt} onAnswered={() => onSeen(card.taskId)} /></div>}
       {editor ? (
         <div className="kanban-card-editor">
           <KanbanCardEditor field={editor.field} card={card} openedAt={editor.openedAt} api={ctx!.api} onClose={() => { setEditor(null); moreRef.current?.focus(); }} />
         </div>
-      ) : card.summary && <p className={`kanban-detail-summary${inline ? ' is-clamped' : ''}`} data-testid="kanban-detail-summary" title={card.summary.tooltip}>{card.summary.text}</p>}
-      {card.waiting?.kind === 'text' && <div className="kanban-card-waiting"><span className="kanban-card-waiting-label">Waiting on</span> {card.waiting.text}</div>}
+      ) : card.summary && <AgentText compact {...card.summary.textSource} className={`kanban-detail-summary${inline ? ' is-clamped' : ''}`} testId="kanban-detail-summary" text={card.summary.text} title={card.summary.tooltip} />}
+      {card.waiting?.kind === 'text' && <div className="kanban-card-waiting"><span className="kanban-card-waiting-label">Waiting on</span> <AgentText compact inline {...(card.waiting.textSource ?? { unknownSource: true })} text={card.waiting.text ?? ''} /></div>}
       <div className="kanban-card-foot"><span title={card.foot.activeTooltip}>{sent ? 'Sent' : card.foot.activeText}</span>{card.foot.stale && <span className="kanban-card-stale">{card.foot.stale}</span>}</div>
       <div className="kanban-detail-actions">
         <button type="button" className="btn btn-sm" data-testid="kanban-detail-open" onClick={() => onOpenSession(card.taskId, card.sessionId)}>

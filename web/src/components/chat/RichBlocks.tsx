@@ -81,10 +81,17 @@ const ISLAND_CSP = '<meta http-equiv="Content-Security-Policy" content="'
  * per-instance `useId` stands in, which is stable for as long as this component
  * instance lives.
  */
-export function RichMarkdown({ text, cwd, scope, onClick, hostRef }: {
+export function RichMarkdown({ text, cwd, host, inlineImages, scope, onClick, hostRef }: {
   text: string;
   /** Session cwd, so relative file paths in the prose stay clickable. */
   cwd?: string;
+  /**
+   * The machine the words came from (absent: this one), so a picture loads from there; and
+   * `inlineImages: false` while that machine is not known, so no picture loads from the wrong one
+   * (hooks/useAgentFileOpener.ts `render`). Both absent: rendered exactly as before.
+   */
+  host?: string;
+  inlineImages?: boolean;
   scope?: string;
   onClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
   /**
@@ -104,10 +111,11 @@ export function RichMarkdown({ text, cwd, scope, onClick, hostRef }: {
   // One pass per text change: the precheck and the split share a memo, and a
   // plain message never pays for the split at all.
   const split = useMemo(() => (hasRichContent(body) ? splitRichChunks(body) : null), [body]);
+  const noImages = inlineImages === false;
   const plainHtml = useMemo(
-    () => (split ? '' : renderMarkdownWithRefs(body, cwd)),
+    () => (split ? '' : renderMarkdownWithRefs(body, cwd, host, noImages ? { inlineImages: false } : undefined)),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-    [split, body, cwd, labelsVersion],
+    [split, body, cwd, host, noImages, labelsVersion],
   );
   const plainProp = useStableHtml(plainHtml);
   // The host for the image hold (utils/image-size-hold.ts) and the caller's
@@ -144,7 +152,7 @@ export function RichMarkdown({ text, cwd, scope, onClick, hostRef }: {
       {chunks.map((chunk, i) => {
         const key = richChunkKey(scopeId, i);
         if (chunk.kind === 'app') return <AppChunk key={key} chunk={chunk} messageScope={scope} />;
-        return <RichChunkView key={key} text={chunk.text} kind={chunk.kind} scopeId={scopeId} cwd={cwd} />;
+        return <RichChunkView key={key} text={chunk.text} kind={chunk.kind} scopeId={scopeId} cwd={cwd} host={host} noImages={noImages} />;
       })}
     </div>
   );
@@ -159,12 +167,15 @@ export function RichMarkdown({ text, cwd, scope, onClick, hostRef }: {
  * equality no longer buys anything (hooks/useStableHtml.ts). Only the entity-label
  * version can invalidate the html itself, because a pill's text lives in that store.
  */
-const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd }: {
+const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd, host, noImages = false }: {
   text: string;
   kind: RichChunk['kind'];
   /** The MESSAGE's scope id — used to confine this chunk's CSS, not as a key. */
   scopeId: string;
   cwd?: string;
+  /** As RichMarkdown's `host` / `inlineImages: false`. */
+  host?: string;
+  noImages?: boolean;
 }) {
   // This is the ONE render path allowed to keep a model `<style>` (allowStyle),
   // because it is the one that scopes it: everywhere else a `<style>` would be
@@ -180,9 +191,9 @@ const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd }: 
     // block. Collapsed HERE, not in renderMarkdownWithRefs: this is the only
     // surface that keeps model markup at all, and the chunker must keep seeing the
     // text byte-for-byte as it arrived.
-    () => renderMarkdownWithRefs(collapseHtmlBlankLines(text), cwd, undefined, { allowStyle: true }),
+    () => renderMarkdownWithRefs(collapseHtmlBlankLines(text), cwd, host, { allowStyle: true, ...(noImages ? { inlineImages: false } : {}) }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates the label lookups inside
-    [text, cwd, labelsVersion],
+    [text, cwd, host, noImages, labelsVersion],
   );
   const html = useMemo(() => scopeStyleHtml(rendered, scopeId), [rendered, scopeId]);
   const htmlProp = useStableHtml(html);

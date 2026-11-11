@@ -6,6 +6,7 @@
  *
  *   POST /__fixture/fail-mark-read?after=N&count=M   the Nth read-flag change from now, and the M-1 after it, fail
  *   POST /__fixture/deliver?count=N&people=K&account=marina|ferry&kind=list   new unread mail, K from a person
+ *        (&subject=S gives every one of them that subject, e.g. words naming a path or a letter)
  *   GET  /__fixture/mark-read-log                    every read-flag change asked for, in order
  *   GET  /__fixture/flags?account=<id>&message=<id>  the server's own \Seen for one message
  *   GET  /__fixture/header-fetch-log                 every late list-header fetch (messageId, peek)
@@ -31,7 +32,7 @@ import {
  * the account that cannot send, that is the "Copy address / open the mail app" case (an IMAP
  * account without outgoing mail has the same shape).
  */
-export function deliver({ count = 1, people = 0, accountId = MARINA, kind = '' } = {}) {
+export function deliver({ count = 1, people = 0, accountId = MARINA, kind = '', subject = '' } = {}) {
   const state = groupsState();
   const rows = groupsMessages().get(accountId);
   if (!rows) return [];
@@ -59,7 +60,7 @@ export function deliver({ count = 1, people = 0, accountId = MARINA, kind = '' }
       : accountId === MARINA
         ? { from: { name: 'Build Robot', address: 'noreply@builds.example.invalid' }, to: ME_A, subject: `Build 9${n} passed` }
         : { from: nameOnly('payroll'), subject: `Payroll notice ${n}` };
-    const one = row(accountId, messageId, { ...fields, sentAt: Date.now() + i });
+    const one = row(accountId, messageId, { ...fields, ...(subject ? { subject } : {}), sentAt: Date.now() + i });
     rows.push(one);
     made.push({ accountId, messageId, subject: one.subject });
   }
@@ -108,6 +109,7 @@ export function handleGroupsFixture(req, res) {
         people: intParam(url.searchParams, 'people', 0),
         accountId: accountParam(url.searchParams),
         kind: url.searchParams.get('kind') === 'list' ? 'list' : '',
+        subject: url.searchParams.get('subject') ?? '',
       });
       send(res, 200, { ok: true, delivered: made });
       return true;

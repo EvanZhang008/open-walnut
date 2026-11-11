@@ -34,6 +34,7 @@ import { BackgroundTaskStopButton } from './BackgroundTaskStopButton';
 import { agentModelLabel } from './SessionMessage';
 import { TranscriptBody } from './WorkflowTranscriptModal';
 import { ICON_CLOSE } from '../common/Icons';
+import { AgentText } from '../common/AgentText';
 import type { SessionHistoryMessage } from '@/types/session';
 import { commandOutput, commandView, type ToolSource } from '@/stream/command-view';
 import { useLiveAgentsForSession, useLiveTasksForSession, type LiveAgentStatus } from '@/stores/background-agents-store';
@@ -391,7 +392,7 @@ export function BackgroundTasksPanel({
                 <CommandDetail row={selected} source={source} />
               ) : selected ? (
                 <div className="wf-modal-loading">
-                  {selected.task?.summary || (selected.isAgent ? 'No transcript is available for this agent in this session.' : selected.title)}
+                  {selected.task?.summary ? <AgentText compact sessionId={sessionId} text={selected.task.summary} /> : (selected.isAgent ? 'No transcript is available for this agent in this session.' : selected.title)}
                 </div>
               ) : (
                 <div className="wf-modal-loading">Select a task to read its transcript</div>

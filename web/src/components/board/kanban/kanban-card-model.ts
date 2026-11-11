@@ -11,6 +11,7 @@ import {
   type BoardCard, type BoardCardWriter, type BoardKanbanSeenCard, type BoardLane, type BoardTeamEntry,
 } from '../../../../../src/core/boards/board-lanes';
 import { deriveDisplayStatus, resolveTaskSessionId } from '@/utils/session-status';
+import { taskTextSource, type AgentTextSource } from '@/utils/agent-text-source';
 import type { ProcessStatus } from '@/types/session';
 import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf, storedUserState } from '@open-walnut/user-status';
 import type { BoardSignal, LiveStatus } from '../board-overview-model';
@@ -42,11 +43,22 @@ export interface KanbanStatus {
   prompt?: KanbanPromptRequest;
   /** A red board signal: where its click goes on the Page. */
   signalTarget?: { kind: 'choice' | 'thread'; id: string };
+  /**
+   * Who wrote the words in `text`, only when it quotes a task's stored words (its ask, its report's
+   * now, its waiting on): read from the writer Walnut stored with them, never the task's current
+   * session. Absent: the line is Walnut's own words (a label, a time, a prompt), with no writer.
+   */
+  textSource?: AgentTextSource;
 }
 
 export interface KanbanCardSummary {
+  /** The words as written (Markdown, links and task refs kept): what the card renders. */
   text: string;
+  /** The same words as plain text (displayedSummary): the tooltip, the filter and the seen hash. */
+  plain: string;
   source: 'card' | 'task';
+  /** Who wrote these words, so a path in them opens on that machine (never the task's current session). */
+  textSource: AgentTextSource;
   at?: string;
   /** `From the leader, 15:02` / `From the worker, 14:10` under the full text. */
   tooltip: string;
@@ -55,6 +67,8 @@ export interface KanbanCardSummary {
 export interface KanbanCardWaiting {
   kind: 'text' | 'add-who' | 'parked';
   text?: string;
+  /** With `text`: who wrote it, as KanbanCardSummary.textSource. */
+  textSource?: AgentTextSource;
   /** formatWaitUntil of a WAITING task's wait_until. */
   until?: string;
 }
@@ -108,6 +122,8 @@ export interface KanbanCardVM {
   canStart: boolean;
   summary?: KanbanCardSummary;
   waiting?: KanbanCardWaiting;
+  /** The card's own stored words (not the task's summary), so an unchanged rewrite keeps their writer. */
+  cardWords?: { summary?: string; waiting_on?: string };
   foot: KanbanCardFoot;
   /** Changed since the user last looked (8.4): drives the `Changed` chip. */
   changed: boolean;
@@ -157,6 +173,16 @@ export interface KanbanCardInput {
 }
 
 const defaultWaitUntil = (iso: string) => new Date(iso).toLocaleString();
+
+/**
+ * Who wrote a card field, read only from what the server stored with it: the user's words open on
+ * this machine, a session's on that session's, and a writer Walnut did not record (an older
+ * server, an unverified caller) opens nowhere. Never the task's current session (2026-11-07).
+ */
+export function cardTextSource(by: BoardCardWriter | undefined, sessionId: string | undefined): AgentTextSource {
+  if (by === 'human') return { host: '__local__' };
+  return sessionId ? { sessionId } : { unknownSource: true };
+}
 
 export function tagValue(tags: readonly string[] | undefined, ...keys: string[]): { tag: string; value: string } | undefined {
   for (const tag of tags ?? []) {
@@ -241,7 +267,10 @@ export function redReasonOf(
     // the line is the derived one once the status sync names the choice, the signal's before
     // (2026-11-03, CI: "Decide: …" read as plain text and the click opened nothing).
     const onBoard = us.source === 'choice' && us.choice ? signals.some((s) => s.id === us.choice!.id) : false;
-    return { text, tone: 'red', kind, tooltip: text, ...(onBoard ? { signalTarget: { kind: 'choice' as const, id: us.choice!.id } } : {}) };
+    return {
+      text, tone: 'red', kind, tooltip: text, ...(line.text ? { textSource: taskTextSource(task, 'needs') } : {}),
+      ...(onBoard ? { signalTarget: { kind: 'choice' as const, id: us.choice!.id } } : {}),
+    };
   }
   const handedBack = card?.handed_back_at;
   // Without a derived status (an older server) a hand back still reads as needing the user.
@@ -291,18 +320,20 @@ function quietStatus(
     // Working with no turn running: its own build, test run or deploy goes on and wakes it.
     if (state === 'working' && us.carriesOn) {
       const text = us.now ? `Working: ${us.now}` : 'Working';
-      return { text, tone: 'amber', kind: 'carries-on', tooltip: text };
+      return { text, tone: 'amber', kind: 'carries-on', tooltip: text, ...(us.now ? { textSource: taskTextSource(task, 'report') } : {}) };
     }
     if (state === 'waiting') {
       const on = us.waitingOn || 'Waiting';
-      if (us.kind === 'stuck') return { text: `Stuck: ${on.charAt(0).toLowerCase()}${on.slice(1)}`, tone: 'amber', kind: 'stuck', tooltip: on };
+      // Only words stored as the wait carry its writer; 'Waiting' and a set time are Walnut's.
+      const src = us.waitingOn ? { textSource: taskTextSource(task, 'waiting') } : {};
+      if (us.kind === 'stuck') return { text: `Stuck: ${on.charAt(0).toLowerCase()}${on.slice(1)}`, tone: 'amber', kind: 'stuck', tooltip: on, ...src };
       if (us.kind === 'time' && us.until) {
         // The same kind as the phase row below, so the parked line does not say the time twice.
         const text = `Waiting until ${fmt(us.until)}`;
         return { text, tone: 'violet', kind: 'waiting-until', tooltip: text };
       }
       const text = us.kind === 'not-started' ? on : `Waiting on ${on.charAt(0).toLowerCase()}${on.slice(1)}`;
-      return { text, tone: 'violet', kind: 'waiting', tooltip: text };
+      return { text, tone: 'violet', kind: 'waiting', tooltip: text, ...src };
     }
   }
   if (!us && task.phase === 'NEED_ACTION' && hasSession && display !== 'running') {
@@ -392,13 +423,22 @@ export function buildCardVM(i: KanbanCardInput): KanbanCardVM {
   if (ds) {
     const who = ds.source === 'task' ? 'the worker' : writerText(ds.by, i.ownerId, i.titleOf, task.id) || 'the board';
     const clock = clockText(ds.at, now);
-    summary = { text: ds.text, source: ds.source, ...(ds.at ? { at: ds.at } : {}), tooltip: `${ds.text}\n\nFrom ${who}${clock ? `, ${clock}` : ''}` };
+    // displayedSummary picks which words show, in plain text; the card renders them as written.
+    const raw = (ds.source === 'card' ? card?.summary : task.summary) || ds.text;
+    const textSource = ds.source === 'card' ? cardTextSource(card?.summary_by, card?.summary_session_id) : taskTextSource(task, 'summary');
+    summary = {
+      text: raw, plain: ds.text, source: ds.source, textSource, ...(ds.at ? { at: ds.at } : {}),
+      tooltip: `${ds.text}\n\nFrom ${who}${clock ? `, ${clock}` : ''}`,
+    };
   }
   let waiting: KanbanCardWaiting | undefined;
   if (laneKind === 'wait') {
     const until = phase === 'WAITING' && task.wait_until ? fmt(task.wait_until) : undefined;
     const kind = card?.waiting_on ? 'text' : placed.source === 'explicit' ? 'add-who' : 'parked';
-    waiting = { kind, ...(card?.waiting_on ? { text: card.waiting_on } : {}), ...(until ? { until } : {}) };
+    waiting = {
+      kind, ...(card?.waiting_on ? { text: card.waiting_on, textSource: cardTextSource(card.waiting_on_by, card.waiting_on_session_id) } : {}),
+      ...(until ? { until } : {}),
+    };
   }
   // N11: the foot's time is the ticket's own progress; a board write (a lane move, a leader's
   // summary) is not activity, it shows as the change label in the same row instead.
@@ -445,6 +485,7 @@ export function buildCardVM(i: KanbanCardInput): KanbanCardVM {
     status, needsYou: status.tone === 'red', running, activity: running ? capitalize(live?.activity ?? '') : '',
     hasSession, canStart: !hasSession && !isComplete,
     ...(sessionId ? { sessionId } : {}), ...(summary ? { summary } : {}), ...(waiting ? { waiting } : {}),
+    ...(card && (card.summary || card.waiting_on) ? { cardWords: { ...(card.summary ? { summary: card.summary } : {}), ...(card.waiting_on ? { waiting_on: card.waiting_on } : {}) } } : {}),
     foot, changed: !!change, ...(change ? { change } : {}), ...(suggestion ? { suggestion } : {}), loading: false,
     snapshot: { lane: placed.lane, summaryHash: sumHash, ...(card?.output_at ? { outputAt: card.output_at } : {}), unread: !!task.unread },
   };

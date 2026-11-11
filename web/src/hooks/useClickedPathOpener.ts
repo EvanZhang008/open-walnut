@@ -9,7 +9,7 @@
  * through this hook; `tests/web/clicked-path-sinks.test.ts` fails on one that
  * does not.
  */
-import { useCallback, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 import { locatePath } from '@/api/files';
 import { log } from '@/utils/log';
 
@@ -31,6 +31,7 @@ export interface ClickedPathContext {
   host?: string;
   cwd?: string;
   sessionId?: string;
+  sourceOnly?: boolean;
 }
 
 /** The sentence a viewer shows for a path no host has. */
@@ -47,8 +48,8 @@ export async function locateClickedPath(
   ctx: ClickedPathContext,
   pos: { line?: number; endLine?: number; term?: string } = {},
 ): Promise<ClickedPathTarget> {
-  const fromHost = ctx.host && ctx.host !== '__local__' ? ctx.host : undefined;
-  const r = await locatePath(path, { host: fromHost, cwd: ctx.cwd, sessionId: ctx.sessionId });
+  const fromHost = ctx.host && !['__local__', 'local'].includes(ctx.host) ? ctx.host : undefined;
+  const r = await locatePath(path, { host: fromHost, cwd: ctx.cwd, sessionId: ctx.sessionId, sourceOnly: ctx.sourceOnly });
   const host = r.host && r.host !== '__local__' ? r.host : undefined;
   if (r.elsewhere) log.info('file-open', 'clicked path found on another host', { path: r.path, fromHost: fromHost ?? 'local', host: host ?? 'local' });
   // The click's own position wins; else whatever the reference carried.
@@ -76,11 +77,12 @@ export function useClickedPathOpener(
   const seq = useRef(0);
   const openRef = useRef(open);
   openRef.current = open;
-  const { host, cwd, sessionId } = ctx;
+  const { host, cwd, sessionId, sourceOnly } = ctx;
+  useLayoutEffect(() => () => { seq.current++; }, [host, cwd, sessionId, sourceOnly]);
   return useCallback((path: string, line?: number, term?: string, endLine?: number) => {
     const mine = ++seq.current;
-    void locateClickedPath(path, { host, cwd, sessionId }, { line, endLine, term }).then((target) => {
+    void locateClickedPath(path, { host, cwd, sessionId, sourceOnly }, { line, endLine, term }).then((target) => {
       if (mine === seq.current) openRef.current(target);
     });
-  }, [host, cwd, sessionId]);
+  }, [host, cwd, sessionId, sourceOnly]);
 }

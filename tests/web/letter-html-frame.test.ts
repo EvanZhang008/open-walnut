@@ -40,6 +40,7 @@ describe('letter frame security floor', () => {
   it('still allows no network subresource of any kind', () => {
     const directives = csp(wrapLetterHtml(AUDIO_BODY));
     expect(directives).toContain("default-src 'none'");
+    expect(directives).toContain("base-uri 'none'");
     // Every relaxation is data:/blob:/inline — nothing that can reach a host.
     expect(directives).not.toMatch(/https?:/);
     expect(directives).not.toContain('*');
@@ -68,6 +69,34 @@ describe('wrapLetterHtml', () => {
     // The CSP must land INSIDE the head, and first — a policy meta only governs
     // what follows it.
     expect(out.indexOf('default-src')).toBeLessThan(out.indexOf('<title>'));
+  });
+
+  it('puts the policy before comments or text that imitate a document head', () => {
+    for (const html of [
+      '<!-- <head> --><p>Body</p>',
+      '<!-- <header> --><html><head><title>T</title></head><body>Body</body></html>',
+      '<p title="<head>">Body</p>',
+      '<style>/* <head> */</style><p>Body</p>',
+      '<!-- unfinished <head>',
+      '<!DOCTYPE html PUBLIC "example"><!-- <head> --><p>Body</p>',
+    ]) {
+      const out = wrapLetterHtml(html);
+      expect(out).toContain(html);
+      expect(out.indexOf('default-src')).toBeLessThan(out.indexOf(html));
+    }
+  });
+
+  it('never inserts a policy inside a quoted opening-tag attribute', () => {
+    for (const html of [
+      '<html title="x > <head>"><head data-note="x > y"><title>T</title></head><body>Body</body></html>',
+      '<html title="unfinished > <head>',
+      '<head title="unfinished > <html>',
+    ]) {
+      const out = wrapLetterHtml(html);
+      expect(out).toContain('default-src');
+      expect(out).not.toContain('title="x > <meta');
+      expect(out).not.toContain('data-note="x > <meta');
+    }
   });
 
   it('gives a document with <html> but no <head> a head of its own', () => {

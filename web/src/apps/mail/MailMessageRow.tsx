@@ -22,11 +22,11 @@ import { MailRouteLine } from './MailRouteLine';
  * selecting a word to look it up would OPEN the message and mark it read, which is the one outcome
  * this whole menu exists to prevent.
  */
-function selectingInside(row: Element): boolean {
+export function selectingInside(row: Element): boolean {
   const selection = typeof window !== 'undefined' ? window.getSelection() : null;
   if (!selection || selection.isCollapsed || !selection.toString().trim()) return false;
-  const anchor = selection.anchorNode;
-  return !!anchor && row.contains(anchor);
+  return (!!selection.anchorNode && row.contains(selection.anchorNode))
+    || (!!selection.focusNode && row.contains(selection.focusNode));
 }
 
 /**

@@ -14,7 +14,10 @@ interface UseSessionPlanResult {
  * Only fetches when shouldFetch is true (e.g. plan session or from_plan execution session).
  */
 export function useSessionPlan(sessionId: string | undefined, shouldFetch: boolean): UseSessionPlanResult {
-  const [plan, setPlan] = useState<SessionPlanResponse | null>(null);
+  // Keyed by session, so a switch never shows the old plan as the new session's.
+  const [held, setHeld] = useState<{ sessionId: string; plan: SessionPlanResponse | null } | null>(null);
+  const setPlanFor = useCallback((id: string, plan: SessionPlanResponse | null) => setHeld({ sessionId: id, plan }), []);
+  const plan = held && held.sessionId === sessionId ? held.plan : null;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sessionIdRef = useRef(sessionId);
@@ -29,7 +32,7 @@ export function useSessionPlan(sessionId: string | undefined, shouldFetch: boole
       const result = await fetchSessionPlan(id);
       // Guard against stale response if sessionId changed during fetch
       if (sessionIdRef.current === id) {
-        setPlan(result);
+        setPlanFor(id, result);
       }
     } catch (err) {
       if (sessionIdRef.current === id) {
@@ -40,11 +43,11 @@ export function useSessionPlan(sessionId: string | undefined, shouldFetch: boole
         setLoading(false);
       }
     }
-  }, []);
+  }, [setPlanFor]);
 
   useEffect(() => {
     if (!sessionId || !shouldFetch) {
-      setPlan(null);
+      setHeld(null);
       setLoading(false);
       setError(null);
       return;
@@ -56,7 +59,7 @@ export function useSessionPlan(sessionId: string | undefined, shouldFetch: boole
 
     fetchSessionPlan(sessionId).then((result) => {
       if (cancelled) return;
-      setPlan(result);
+      setPlanFor(sessionId, result);
       setLoading(false);
     }).catch((err) => {
       if (cancelled) return;
@@ -65,7 +68,7 @@ export function useSessionPlan(sessionId: string | undefined, shouldFetch: boole
     });
 
     return () => { cancelled = true; };
-  }, [sessionId, shouldFetch]);
+  }, [sessionId, shouldFetch, setPlanFor]);
 
   return { plan, loading, error, refresh: doFetch };
 }

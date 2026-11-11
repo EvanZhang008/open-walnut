@@ -155,22 +155,29 @@ export function moveCardPatches(
   return out;
 }
 
-/** The fields a card write (`PUT cards/:task`) lays over: '' clears a field (lane '' = back to automatic). */
+/**
+ * The fields a card write (`PUT cards/:task`) lays over: '' clears a field (lane '' = back to automatic).
+ * `current`: the card's words now; rewriting the same words keeps their writer, as the server does.
+ */
 export function setCardPatch(
   patch: { lane?: string; summary?: string; waiting_on?: string }, nowIso: string,
+  current?: { summary?: string; waiting_on?: string },
 ): Partial<Record<keyof BoardCard, unknown>> {
   const out: Partial<Record<keyof BoardCard, unknown>> = {};
   if (patch.lane !== undefined) {
     if (patch.lane === '') Object.assign(out, { lane: undefined, lane_at: undefined, lane_by: undefined, rank: undefined, rank_lane: undefined });
     else Object.assign(out, { lane: patch.lane, lane_at: nowIso, lane_by: 'human', lane_suggested: undefined });
   }
-  if (patch.summary !== undefined) {
-    Object.assign(out, patch.summary === '' ? { summary: undefined, summary_at: undefined, summary_by: undefined }
-      : { summary: patch.summary, summary_at: nowIso, summary_by: 'human' });
+  if (patch.summary !== undefined && current && (current.summary ?? '') === patch.summary) out.summary_at = nowIso;
+  else if (patch.summary !== undefined) {
+    // The user's own words carry no session (they open on this machine); the server's answer replaces this.
+    Object.assign(out, patch.summary === '' ? { summary: undefined, summary_at: undefined, summary_by: undefined, summary_session_id: undefined }
+      : { summary: patch.summary, summary_at: nowIso, summary_by: 'human', summary_session_id: undefined });
   }
-  if (patch.waiting_on !== undefined) {
-    Object.assign(out, patch.waiting_on === '' ? { waiting_on: undefined, waiting_on_at: undefined, waiting_on_by: undefined }
-      : { waiting_on: patch.waiting_on, waiting_on_at: nowIso, waiting_on_by: 'human' });
+  if (patch.waiting_on !== undefined && current && (current.waiting_on ?? '') === patch.waiting_on) out.waiting_on_at = nowIso;
+  else if (patch.waiting_on !== undefined) {
+    Object.assign(out, patch.waiting_on === '' ? { waiting_on: undefined, waiting_on_at: undefined, waiting_on_by: undefined, waiting_on_session_id: undefined }
+      : { waiting_on: patch.waiting_on, waiting_on_at: nowIso, waiting_on_by: 'human', waiting_on_session_id: undefined });
   }
   return out;
 }

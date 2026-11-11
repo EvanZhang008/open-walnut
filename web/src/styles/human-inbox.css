@@ -158,7 +158,7 @@
 .hib-reader-overlay {
   position: fixed;
   inset: 0;
-  /* Above the notification panel (999) and the plan popup (9100); the file
+  /* Above the notification panel (9200) and the plan popup (9100); the file
      preview (9999) still layers on top of the reader, which is correct. */
   z-index: 9250;
   display: flex;

@@ -18,7 +18,16 @@ import { absorbWrittenTitles, pillNames, type WrittenMention } from './task-titl
 // HTTP edges so that "what position does `file.go#L58` name" and "is this a
 // traversal" each have exactly one definition; the module is dependency-free by
 // contract (no fs, no async, no imports) and is bundled into the browser here.
-import { hasTraversalSegment, parsePathDestination, parsePathRef, type ParsedRef } from '../../../src/providers/path-ref-parse';
+import { parsePathRef, type ParsedRef } from '../../../src/providers/path-ref-parse';
+import { absoluteDestinationPath, DEST_FORBIDDEN_RE, localDestination } from '../../../src/lib/path-destination';
+import {
+  ABS_FILE_CODE_RE_SRC,
+  ABS_FILE_RE_SRC,
+  ABS_START,
+  ABS_START_CODE,
+  POS_SUFFIX_SRC,
+} from '../../../src/lib/path-ref-patterns';
+import { LETTER_HREF_SRC } from '../../../src/lib/letter-id-shape';
 import { anchorRanges, escapedTagAttrRanges, linkBareTaskIds, splitHtml, type BareTaskIdMode, type BareTaskIdRenderer } from './bare-task-ids';
 import { linkLetterIds } from './letter-links';
 import { ensureReadableText, withReadableInk } from './html-contrast';
@@ -335,7 +344,8 @@ export function escapeHtmlText(s: string): string {
  */
 export function renderImageTag(imgPath: string): string {
   const isApiUrl = imgPath.startsWith('/api/');
-  const src = isApiUrl ? imgPath : `/api/local-image?path=${encodeURIComponent(imgPath)}`;
+  const hostParam = fileLinkRenderCtx?.host ? `&host=${encodeURIComponent(fileLinkRenderCtx.host)}` : '';
+  const src = isApiUrl ? imgPath : `/api/local-image?path=${encodeURIComponent(imgPath)}${hostParam}`;
   const escapedSrc = escapeHtmlText(src);
   const filename = imgPath.split('/').pop()?.split('?')[0] || imgPath;
   return `<img src="${escapedSrc}" alt="${escapeHtmlText(filename)}" class="inline-image" data-lightbox-src="${escapedSrc}" loading="lazy" />`;
@@ -343,7 +353,14 @@ export function renderImageTag(imgPath: string): string {
 
 /** Build image + caption block: image preview with the path text shown below */
 export function renderImageBlock(imgPath: string, captionText: string): string {
-  return `<span class="inline-image-block">${renderImageTag(imgPath)}<span class="inline-image-path">${escapeHtmlText(captionText)}</span></span>`;
+  const attrs = fileLinkRenderCtx && !imgPath.startsWith('/api/') ? fileLinkAttrsForDestination(imgPath, fileLinkRenderCtx.cwd) : null;
+  const label = escapeHtmlText(captionText).replace(/\//g, '&#47;');
+  const caption = attrs
+    ? `<a class="inline-image-path file-link" ${attrs} href="#">${label}</a>`
+    : imgPath.startsWith('/api/')
+      ? `<a class="inline-image-path" href="${escapeHtmlText(imgPath)}" target="_blank" rel="noopener noreferrer">${escapeHtmlText(captionText)}</a>`
+      : `<span class="inline-image-path">${escapeHtmlText(captionText)}</span>`;
+  return `<span class="inline-image-block">${renderImageTag(imgPath)}${caption}</span>`;
 }
 
 /**
@@ -355,10 +372,10 @@ export function renderImageBlock(imgPath: string, captionText: string): string {
  * shared singleton (copy-as-rich-text, tool results, note previews), which is
  * what keeps in-app anchors out of text that leaves the app.
  */
-let fileLinkRenderCtx: { cwd?: string } | null = null;
+let fileLinkRenderCtx: { cwd?: string; host?: string; inlineImages?: boolean } | null = null;
 
 /** `letter:<letter id>` as a markdown link destination. */
-const LETTER_HREF_RE = /^letter:(lt-[0-9a-z]{1,12}-[0-9a-z]{4,12})$/;
+const LETTER_HREF_RE = new RegExp(LETTER_HREF_SRC);
 
 marked.use({
   renderer: {
@@ -370,13 +387,20 @@ marked.use({
       if (!fileLinkRenderCtx) return false as unknown as string;
       return renderCodeBlockFrame(text, lang, escaped, raw);
     },
+    image({ href, text }) {
+      if (fileLinkRenderCtx?.inlineImages !== false) return false as unknown as string;
+      const attrs = href.startsWith('/api/') ? null : fileLinkAttrsForDestination(href, fileLinkRenderCtx.cwd);
+      const label = escapeHtmlText(text || href);
+      if (attrs) return `<a class="file-link" ${attrs} href="#">${label}</a>`;
+      return `<a href="${escapeHtmlText(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    },
     // Override codespan renderer: detect image paths inside backtick code spans.
     // Only matches when the entire code span is an image path (avoids false positives
     // on code like `convert /tmp/foo.png to jpg`).
     codespan({ text }) {
       const decoded = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
       const m = decoded.trim().match(IMAGE_PATH_RE);
-      if (m && m[0] === decoded.trim()) {
+      if (fileLinkRenderCtx?.inlineImages !== false && m && m[0] === decoded.trim()) {
         return renderImageBlock(m[1], decoded.trim());
       }
       return false as unknown as string;
@@ -386,15 +410,16 @@ marked.use({
     // fileLinkAttrsForDestination); everything else falls through to marked.
     link({ href, title, tokens }) {
       if (href) {
+        if (fileLinkRenderCtx?.inlineImages === false && href.startsWith('/api/')) return false as unknown as string;
         // Check local image paths
-        if (isImageHref(href)) {
+        if (fileLinkRenderCtx?.inlineImages !== false && isImageHref(href)) {
           const text = this.parser.parseInline(tokens).replace(/<[^>]*>/g, '');
           const caption = (text && text !== href) ? text : href;
           return renderImageBlock(href, caption);
         }
         // Check full URLs containing /api/images/ (e.g. http://localhost:3456/api/images/xxx.png)
         const apiPath = extractApiImagePath(href);
-        if (apiPath) {
+        if (fileLinkRenderCtx?.inlineImages !== false && apiPath) {
           const text = this.parser.parseInline(tokens).replace(/<[^>]*>/g, '');
           const caption = (text && text !== href) ? text : href;
           return renderImageBlock(apiPath, caption);
@@ -495,6 +520,7 @@ marked.use({
       tokenizer(src: string) {
         // Must match at start of src (marked slices to our start() index) —
         // anchored twin rejects non-matches without scanning the whole tail.
+        if (fileLinkRenderCtx?.inlineImages === false) return;
         const match = IMAGE_PATH_AT_START_RE.exec(src);
         if (!match) return;
         return {
@@ -850,11 +876,12 @@ export function markExternalAnchor(node: Element): void {
   node.setAttribute('target', '_blank');
   node.setAttribute('rel', 'noopener noreferrer');
 }
-DOMPurify.addHook('afterSanitizeAttributes', markExternalAnchor);
+// No DOM (a node-env test whose import graph reaches this file): DOMPurify has no hooks to add.
+if (DOMPurify.isSupported) DOMPurify.addHook('afterSanitizeAttributes', markExternalAnchor);
 // A model-painted background with no text colour inherits Walnut's (light text in
 // code blocks and in the dark theme): give it the colour that background needs.
 // Inert outside `withReadableInk` (model replies only).
-DOMPurify.addHook('afterSanitizeAttributes', ensureReadableText);
+if (DOMPurify.isSupported) DOMPurify.addHook('afterSanitizeAttributes', ensureReadableText);
 
 // ── JSON ID pill injection for tool call INPUT/RESULT areas ──
 
@@ -1107,58 +1134,9 @@ const CODE_EXTENSIONS = new Set([
   // Media — clickable so the FileViewer can play them inline (video/audio player)
   'mp4', 'm4v', 'webm', 'mov', 'mp3', 'wav', 'm4a', 'ogg',
 ]);
-
-// ── Path segments that may contain SPACES (e.g. notes: "H1 2026 Overview.md") ──
-// A segment is word-chunks joined by single spaces (CJK chars allowed — note
-// filenames are often Chinese). Space-joined chunks are only trusted when:
-//  - the whole match is anchored by a final `.ext`, AND
-//  - each chunk after a space is one of: uppercase/digit/CJK-started word (Title
-//    Case or year-prefixed note names), a dash separator (- – —), a parenthesized
-//    tag like "(draft)", or a lowercase TITLE CONNECTOR from a closed word list
-//    ("to", "with", "of", …) that must be followed by another chunk, so a
-//    connector can never end the filename. A closed list — not "any short
-//    lowercase word" — keeps prose after a path from being swallowed. Personal AI
-//    notes use sentence-style titles like "2026-08-08 – Status Ping to Acme
-//    (draft).md" and "Reply to X with Resume (draft).md" — all shapes occur.
-//  - the chunk quantifier is LAZY: the shortest match that still reaches `.ext`
-//    wins, so a real path followed by Title-Case prose ("see /a/b.md See
-//    Section 2.5") stops at `b.md` instead of swallowing the sentence.
-const PATH_CH = '[\\w@.+\\-\\u2013\\u2014\\u4e00-\\u9fff\\u3040-\\u30ff]';
-const PATH_SEG = `${PATH_CH}+`;
-// Chunk words after a space must be DOT-FREE. With dots allowed, backtracking
-// order bites: a chunk greedily eats "Overview.md", the terminal `\.ext` fails,
-// and the engine tries ADDING chunks before shrinking the current one — so the
-// match runs past the real filename to the next `.ext` in following prose
-// ("…Overview.md and Other Notes.md" became one link). Dot-free chunks stop at
-// the dot, so the terminal `.ext` is checked at every chunk boundary first.
-const CHUNK_CH = '[\\w@+\\-\\u2013\\u2014\\u4e00-\\u9fff\\u3040-\\u30ff]';
-const TITLE_CONNECTOR = '(?:to|of|in|on|at|for|and|or|the|an?|with|without|vs|via|from|by|as|per|re)';
-const PATH_SP_CHUNK = `(?:(?=[A-Z0-9\\u4e00-\\u9fff\\u3040-\\u30ff])${CHUNK_CH}+|[-\\u2013\\u2014]+|\\(${PATH_CH}+\\)|${TITLE_CONNECTOR}(?= ))`;
-// {0,9} bounds backtracking (a 10+-word segment is prose, not a filename); lazy
-// so the shortest expansion that reaches `.ext` wins.
-const PATH_SEG_SP = `${PATH_SEG}(?: ${PATH_SP_CHUNK}){0,9}?`;
-/**
- * Where an absolute path may START. Not after a word character or `/` (the middle
- * of `src/providers/foo.ts`, or a URL's path), and not after a `./` or `../`
- * token (`../lib/x.ts` is RELATIVE: read as `/lib/x.ts` it opened a file that has
- * nothing to do with the reference; `e.g./tmp/x.md` still links). Shared by the
- * file and directory passes, prose and code.
- */
-const ABS_START = '(?<![\\/\\w])(?<!(?:^|\\W)\\.{1,2})';
-/** In code, also not after `word:`: `host:/etc/x.conf`, `-v /src:/app/x.conf`,
- *  `C:/Users/x.ts` and the tail of a `PATH=a:b` list name another machine, a
- *  container or a search path, not a file on this host. Prose keeps `Output:/x`. */
-const ABS_START_CODE = `${ABS_START}(?<!\\w:)`;
-
-/**
- * The position a bare path may carry, linked WITH the path so a range is never
- * cut at its first number (`object.go:31-34` used to link up to `:31` and leave
- * `-34` outside). Exactly the suffixes parsePathRef reads, most specific first:
- * `#L10-L20`, `#L42`/`#42`, `:10-20`, `:42:7`, `:L42`, `:42`, `(42,7)`, `(42)`.
- * A `#` form must end there: `guide.md#2-setup` is a heading anchor, not line 2.
- * One capture group; positionAttrs turns it into anchor attributes.
- */
-const POS_SUFFIX_SRC = '(#L\\d+[-\\u2013]L?\\d+(?![\\w-])|#L?\\d+(?![\\w-])|:\\d+[-\\u2013]\\d+|:\\d+:\\d+|:L\\d+|:\\d+|\\(\\d+,[ \\t]*\\d+\\)|\\(\\d+\\))?';
+// The absolute path shape (PATH_SEG, ABS_START, POS_SUFFIX_SRC, ABS_FILE_RE_SRC,
+// …) lives in src/lib/path-ref-patterns.ts, shared with the server's letter
+// body linker; every rule and its reasons are documented there.
 
 /** `data-file-line` (+ `data-file-end-line` for a range) for a parsed position.
  *  A column (`:42:7`, `(42,7)`) lands on its line: the viewer has no column. */
@@ -1173,18 +1151,6 @@ function positionAttrs(suffix: string | undefined): string {
   return suffix ? lineAttrs(parsePathRef(`x${suffix}`)) : '';
 }
 
-/** Absolute FILE path source, spaces allowed: /dir/My Dir/H1 2026 File.md(:line).
- * The leaf is an ORDERED alternation `(?:PATH_SEG|PATH_SEG_SP)`: the space-free
- * alternative is exhausted (including greedy-shrink) BEFORE any space-chunk
- * expansion is tried, so "renamed /a/b/c.md to Other Steps.md" stops at `c.md`.
- * PATH_SEG_SP alone fails there: after its greedy first word eats "c.md" and the
- * terminal `\.ext` fails, backtracking expands the (more recent) chunk quantifier
- * before shrinking the first word — running the match into the following prose.
- * Build a fresh `new RegExp(ABS_FILE_RE_SRC, 'g')` per use — shared global regexes
- * carry lastIndex state across callers. */
-const ABS_FILE_BODY_SRC = `(~?\\/(?:${PATH_SEG_SP}\\/)+(?:${PATH_SEG}|${PATH_SEG_SP})\\.[\\w]+)${POS_SUFFIX_SRC}`;
-const ABS_FILE_RE_SRC = `${ABS_START}${ABS_FILE_BODY_SRC}`;
-const ABS_FILE_CODE_RE_SRC = `${ABS_START_CODE}${ABS_FILE_BODY_SRC}`;
 
 // ── Markdown links whose destination is a LOCAL path ──
 //
@@ -1249,11 +1215,6 @@ function markdownLinkSpans(text: string, skip: (idx: number) => boolean): [numbe
   return spans;
 }
 
-/** Characters no destination may carry into an attribute or a path lookup
- *  (quotes, angle brackets, backslashes, control characters). */
-// eslint-disable-next-line no-control-regex
-const DEST_FORBIDDEN_RE = /["<>\\\x00-\x1f]/;
-
 /**
  * The anchor attributes a markdown link DESTINATION maps to, or null when it is
  * not a local path: a URL, an in-page anchor, a query, a traversal, a relative
@@ -1271,25 +1232,14 @@ const DEST_FORBIDDEN_RE = /["<>\\\x00-\x1f]/;
  * any same-named file in the tree.
  */
 function fileLinkAttrsForDestination(rawDest: string, cwd?: string): string | null {
-  const dest = rawDest.trim();
-  if (!dest || dest.startsWith('#') || dest.startsWith('//')) return null;
-  const ref = parsePathDestination(dest);
-  // A heading fragment (`guide.md#tiers`) is not addressable in the viewer; the
-  // file is what the link is for. Numeric fragments were already taken as a line.
-  const p = ref.path.replace(/#[A-Za-z][\w-]*$/, '');
-  // Scheme test runs AFTER the position is split off: `README.md:12` is a file at
-  // line 12, not a `README.md:` scheme. `mailto:`/`https:`/`vscode:` still fail.
-  if (!p || p.includes('?') || p.includes('#') || DEST_FORBIDDEN_RE.test(p)) return null;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(p.split('/')[0] ?? '')) return null;
-  if (hasTraversalSegment(p)) return null;
-  const lineAttr = lineAttrs(ref);
-  const segs = p.replace(/^~?\//, '').replace(/\/+$/, '').split('/');
-  const leaf = segs[segs.length - 1] ?? '';
-  const hasExt = /^[^.].*\.\w+$|^\.\w+$/.test(leaf);
-  if (/^~?\//.test(p)) {
-    let path: string | null = null;
-    if (hasExt && segs.length >= 2) path = p;
-    else if (!hasExt && segs.length >= 3 && segs.every((s) => /^[\w@.+-]+$/.test(s))) path = p.replace(/\/+$/, '');
+  // Whether the destination is a local path at all, and the absolute floors, are
+  // shared with the server's letter body linker (src/lib/path-destination.ts).
+  const d = localDestination(rawDest);
+  if (!d) return null;
+  const { path: p, segs, leaf, hasExt } = d;
+  const lineAttr = lineAttrs(d);
+  if (d.absolute) {
+    const path = absoluteDestinationPath(d);
     if (!path) return null;
     return `data-file-path="${escapeHtmlText(path)}"${lineAttr}`;
   }
@@ -1305,6 +1255,26 @@ function fileLinkAttrsForDestination(rawDest: string, cwd?: string): string | nu
   return `data-rel-path="${escapeHtmlText(rel.replace(/^\.\//, ''))}" data-cwd="${escapeHtmlText(cwd)}"${lineAttr}`;
 }
 
+/** The rest of a text from an opener when that rest is a tag not closed yet: a name, then
+ *  attributes, the last value maybe still open, and nothing after them. */
+const UNFINISHED_TAG_RE = /<\/?[A-Za-z][\w-]*(?:\s+[A-Za-z:_][\w.:-]*(?:\s*=\s*(?:"[^"]*"?|'[^']*'?|[^\s"'=<>`]+))?)*\s*\/?$/y;
+
+/** Where a tag still arriving at the end of `text` starts, else -1. Only the last paragraph is
+ *  searched: a tag never spans a blank line. A comparison (`n<max then src/a.ts`) is no tag. */
+function unfinishedTagStart(text: string, isInCode: (idx: number) => boolean): number {
+  const from = text.lastIndexOf('\n\n') + 1;
+  for (let at = text.indexOf('<', from); at !== -1; at = text.indexOf('<', at + 1)) {
+    if (isInCode(at)) continue;
+    if (text.startsWith('<!--', at)) {
+      if (text.indexOf('-->', at + 4) < 0) return at;
+      continue;
+    }
+    UNFINISHED_TAG_RE.lastIndex = at;
+    if (UNFINISHED_TAG_RE.test(text)) return at;
+  }
+  return -1;
+}
+
 /**
  * Convert file paths in text to clickable <a class="file-link"> elements.
  * Runs as a preprocessing step before marked.parse().
@@ -1316,7 +1286,7 @@ function fileLinkAttrsForDestination(rawDest: string, cwd?: string): string | nu
  * Exclusions: URLs, image paths, code fences, already-linked text, and the
  * label and destination of every markdown link (see markdownLinkSpans).
  */
-export function filePathsToHtml(text: string, sessionCwd?: string): string {
+export function filePathsToHtml(text: string, sessionCwd?: string, inlineImages = true): string {
   // Code regions (fenced/indented blocks + inline spans) are off-limits: raw HTML
   // injected there gets escaped by marked and shows as literal tags. linkifyPathsInCode
   // handles those AFTER parsing, where escaping is no longer a hazard.
@@ -1363,7 +1333,10 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
     return linkRanges.some(([start, end]) => idx >= start && idx < end);
   }
 
-  // Also skip if inside a URL, a code fence, or a markdown link / image
+  // marked's grammar above matches only a finished tag; a reply still streaming can end inside
+  // an unfinished one (`<img src="/tmp/a.png`), whose attribute a link would break the same way.
+  const unfinishedTag = unfinishedTagStart(text, isInFence);
+
   function shouldSkip(matchIdx: number, matchStr: string): boolean {
     if (isInFence(matchIdx)) return true;
     if (isInUrl(matchIdx)) return true;
@@ -1372,6 +1345,7 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
     if (htmlRanges.some(([start, end]) => matchIdx < end && matchEnd > start)) return true;
     if (existingAnchors.some(([start, end]) => matchIdx < end && matchEnd > start)) return true;
     if (sourceRefs.some(([start, end]) => matchIdx < end && matchEnd > start)) return true;
+    if (unfinishedTag >= 0 && matchEnd > unfinishedTag) return true;
     return false;
   }
 
@@ -1391,9 +1365,15 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
     const filePath = m[1];
 
     if (shouldSkip(m.index, fullMatch)) continue;
+    if (filePath.startsWith('/api/')) {
+      if (!inlineImages) replacements.push({ start: m.index, end: m.index + fullMatch.length, replacement: `<a href="${escapeHtmlText(filePath)}" target="_blank" rel="noopener noreferrer">${escapeHtmlText(fullMatch).replace(/\//g, '&#47;')}</a>` });
+      continue;
+    }
 
-    const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
-    if (IMAGE_EXTENSIONS.has(ext)) continue;
+    if (inlineImages && IMAGE_PATH_RE.test(filePath)) {
+      replacements.push({ start: m.index, end: m.index + fullMatch.length, replacement: renderImageBlock(filePath, fullMatch) });
+      continue;
+    }
 
     const replacement = `<a class="file-link" data-file-path="${filePath}"${positionAttrs(m[2])} href="#">${fullMatch}</a>`;
     replacements.push({ start: m.index, end: m.index + fullMatch.length, replacement });
@@ -1524,8 +1504,6 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
     const absRe = new RegExp(ABS_FILE_CODE_RE_SRC, 'g');
     let out = inner.replace(absRe, (m, filePath: string, suffix: string | undefined, offset: number) => {
       if (inUrl(offset)) return m;
-      const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
-      if (IMAGE_EXTENSIONS.has(ext)) return m;
       changed = true;
       return `<a class="file-link" data-file-path="${filePath}"${positionAttrs(suffix)} href="#">${m}</a>`;
     });
@@ -1646,12 +1624,190 @@ export function stripLeakedToolCalls(text: string): string {
  * converts file paths to clickable links (including inside code blocks),
  * then runs marked.parse() + DOMPurify.sanitize().
  */
+/** The page the rendered HTML lives in: a relative URL in it resolves against this. */
+function pageBase(): URL {
+  try {
+    const href = (globalThis as { location?: { href?: string } }).location?.href;
+    if (href && /^https?:/i.test(href)) return new URL(href);
+  } catch { /* no page */ }
+  return new URL('http://walnut.invalid/');
+}
+
 /**
- * Post-process sanitized HTML: rewrite <img src="..."> to use the /api/local-image proxy.
- * Handles both absolute (/path/to/img.png) and relative (subdir/img.png) paths.
- * Relative paths are resolved against `cwd` (the directory containing the .md file).
+ * A URL one of the server's host-file routes answers, read the way
+ * that route reads it: `/api/local-image`, `/api/file-content` and
+ * `/api/v1/file-content` take `?path=&host=` (Express 5's simple query parser:
+ * a key given twice is an array, which those routes read as no host, i.e. this
+ * machine); `/api/v1/media` takes `?path=&session=`; `/api/file-raw/<host>/<path…>`
+ * names its host in the first segment (src/web/routes/file-raw.ts). Express
+ * routes ignore case and a trailing slash, and the browser normalises dots,
+ * backslashes, tabs and newlines before the request, so the check runs on the
+ * parsed URL. A written origin cannot pick another server or alias. File metadata
+ * routes may become click-to-open paths, never automatic resource loads.
+ * `path` is null when the route would refuse the request.
  */
-function proxyImageSrcs(html: string, cwd?: string, host?: string, imageVersion?: string | number): string {
+type HostFileRef = { url: URL; route: 'query' | 'media' | 'raw' | 'blocked'; path: string | null; host: string; hostSegment?: number };
+
+function hostFileRef(value: string, base: URL = pageBase()): HostFileRef | null {
+  const v = value.replace(/[\t\n\r]/g, '');
+  if (!/api/i.test(v)) return null;
+  let url: URL;
+  try { url = new URL(v.trim(), base); } catch { return null; }
+  const p = url.pathname.toLowerCase().replace(/\/+$/, '');
+  const one = (name: string) => { const all = url.searchParams.getAll(name); return all.length === 1 ? all[0]! : null; };
+  if (p === '/api/local-image' || p === '/api/file-content' || p === '/api/v1/file-content') {
+    return { url, route: 'query', path: one('path'), host: one('host') ?? '' };
+  }
+  if (p === '/api/v1/media') return { url, route: 'media', path: one('path'), host: '' };
+  if (/^\/api\/(?:v1\/)?(?:files|file-history)(?:\/|$)/.test(p)) {
+    return { url, route: 'blocked', path: one('path') ?? one('ref'), host: one('host') ?? '' };
+  }
+  const hostSegment = p.startsWith('/api/file-raw/') ? 3 : p.startsWith('/api/v1/file-raw/') ? 4 : null;
+  if (hostSegment === null) return null;
+  const segs = url.pathname.split('/').slice(hostSegment);
+  try {
+    const host = decodeURIComponent(segs[0] ?? '');
+    const rest = segs.slice(1).map(decodeURIComponent).join('/');
+    if (!rest.replace(/\/+/g, '')) return { url, route: 'raw', path: null, host, hostSegment };
+    return { url, route: 'raw', path: rest === '~' || rest.startsWith('~/') ? rest : '/' + rest.replace(/^\/+/, ''), host, hostSegment };
+  } catch {
+    return { url, route: 'raw', path: null, host: '', hostSegment };
+  }
+}
+
+const isLocalHostName = (h: string | undefined) => !h || h === 'local' || h === '__local__';
+
+/** The same request, asked of the writer's machine; the URL unchanged when it already is. */
+function pinnedHostFileUrl(ref: HostFileRef, value: string, host: string | undefined): string | null {
+  if (ref.route === 'blocked') return null;
+  const same = isLocalHostName(ref.host) ? isLocalHostName(host) : ref.host === host;
+  if (ref.route !== 'media' && same && ref.url.origin === pageBase().origin) return value;
+  const url = new URL(ref.url.href);
+  if (ref.route === 'raw') {
+    const segs = url.pathname.split('/');
+    segs[ref.hostSegment!] = encodeURIComponent(isLocalHostName(host) ? 'local' : host!);
+    url.pathname = segs.join('/');
+    return url.pathname + url.search + url.hash;
+  }
+  if (ref.route === 'media') {
+    // The phone's route picks its machine from a session; the console's twin takes a host.
+    if (!ref.path) return null;
+    url.pathname = '/api/local-image';
+    url.searchParams.delete('session');
+  }
+  if (isLocalHostName(host)) url.searchParams.delete('host');
+  else url.searchParams.set('host', host!);
+  return url.pathname + url.search + url.hash;
+}
+
+// A CSS value as the CSSOM serialises it: `url("…")` (WebKit, Blink, Gecko) or a
+// bare `url(…)`, and the strings of `image-set()`. Only the quoting is read here;
+// the value itself comes from the engine's own parser (escapes already decoded).
+const CSS_URL_RE = /url\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^)\s"']*))\s*\)|"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/gi;
+
+/**
+ * Whether a CSS value asks a host-file route. A custom property keeps its raw
+ * tokens (escapes included) until `var()` substitutes them, so one is treated
+ * as asking whenever it names the API or carries an escape.
+ */
+function cssReadsHostFile(name: string, value: string, base: URL): boolean {
+  const v = value.replace(/[\t\n\r]/g, '');
+  if (name.startsWith('--')) return /api|\\/i.test(v);
+  if (!/api/i.test(v)) return false;
+  const urls = Array.from(v.matchAll(CSS_URL_RE), (m) => (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? '').replace(/\\(.)/g, '$1'));
+  if (!urls.length) return /api[\/\\]/i.test(v);
+  return urls.some((u) => !!hostFileRef(u, base));
+}
+
+type StyleDecl = { length: number; [i: number]: string; getPropertyValue(n: string): string; removeProperty(n: string): string };
+
+/** Drop the declarations that would read a host file; every other declaration stays. */
+function dropHostFileDecls(style: StyleDecl, base: URL): boolean {
+  let changed = false;
+  for (let i = style.length - 1; i >= 0; i--) {
+    const name = style[i];
+    if (name && cssReadsHostFile(name, style.getPropertyValue(name), base)) {
+      style.removeProperty(name);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+type CssRuleish = { cssText: string; href?: unknown; style?: StyleDecl; cssRules?: ArrayLike<CssRuleish>; deleteRule?: (i: number) => void };
+type CssSheetish = { cssRules: ArrayLike<CssRuleish>; deleteRule(i: number): void };
+
+function dropHostFileRules(rules: ArrayLike<CssRuleish>, owner: { deleteRule?: (i: number) => void }, base: URL): boolean {
+  let changed = false;
+  for (let i = rules.length - 1; i >= 0; i--) {
+    const rule = rules[i]!;
+    if (typeof rule.href === 'string') {
+      // @import: the sheet it names is fetched like any other URL.
+      if (hostFileRef(rule.href, base)) { owner.deleteRule?.(i); changed = true; }
+      continue;
+    }
+    if (rule.style && dropHostFileDecls(rule.style, base)) changed = true;
+    if (rule.cssRules) {
+      if (dropHostFileRules(rule.cssRules, rule, base)) changed = true;
+    } else if (!rule.style && cssReadsHostFile('', rule.cssText, base)) {
+      owner.deleteRule?.(i);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/** A `<style>` block, read by the engine's own stylesheet parser in an inert document. */
+function pinStyleSheet(el: Element, base: URL): boolean {
+  const text = el.textContent ?? '';
+  let sheet: CssSheetish | null = null;
+  try {
+    const doc = document.implementation?.createHTMLDocument?.('');
+    if (doc) {
+      const probe = doc.createElement('style');
+      probe.textContent = text;
+      doc.head.append(probe);
+      sheet = probe.sheet as unknown as CssSheetish | null;
+    }
+  } catch { /* no inert document */ }
+  if (!sheet) sheet = ((el as HTMLStyleElement).sheet ?? null) as unknown as CssSheetish | null;
+  if (!sheet) {
+    // No stylesheet parser to read it with: a block naming the API, or carrying
+    // an escape that could spell it, does not render.
+    if (!/api|\\/i.test(text)) return false;
+    el.remove();
+    return true;
+  }
+  if (!dropHostFileRules(sheet.cssRules, sheet, base)) return false;
+  el.textContent = Array.from(sheet.cssRules, (r) => r.cssText).join('\n');
+  return true;
+}
+
+/** Attributes whose value is one URL the page fetches or opens. */
+const URL_ATTRS = new Set(['src', 'href', 'xlink:href', 'poster', 'background', 'data-lightbox-src']);
+/** SVG presentation attributes read as CSS, where `url(…)` loads a document. */
+const CSS_URL_ATTRS = new Set(['fill', 'stroke', 'filter', 'mask', 'clip-path', 'marker-start', 'marker-mid', 'marker-end', 'cursor']);
+
+/**
+ * Post-process sanitized HTML so every picture and file request goes to the
+ * machine that wrote the text (`host`; none = this machine), parsed as inert DOM:
+ *
+ * - A local path in `<img src>` or an SVG `<image>`/`<feImage>` `href` becomes
+ *   `/api/local-image` on the writer's host (relative ones only with a `cwd`).
+ * - A host-file API URL (see hostFileRef) in any URL attribute is asked of the
+ *   writer's host instead of the host it names. Links were already turned into
+ *   file links by linkHtmlDestinations; one that could not be is no link.
+ *   Without pictures (`inlineImages` false: the writer is unknown or the card is
+ *   compact) such a URL is removed.
+ * - `srcset` and CSS (style attributes, `<style>` blocks, SVG presentation
+ *   attributes) are not rewritten: an attribute or declaration that would read a
+ *   host file is removed, every other one stays.
+ *
+ * Uploads (`/api/images/`), other API routes, web and `data:` URLs are untouched.
+ * The input comes back byte for byte when nothing changes.
+ */
+function proxyImageSrcs(html: string, cwd?: string, host?: string, imageVersion?: string | number, inlineImages = true): string {
+  if (!/api|&|\\|<(?:img|image|feimage|style)\b|\sstyle\s*=/i.test(html.replace(/[\t\n\r]/g, ''))) return html;
   // `imageVersion` rides along as `&r=`: a byte-identical <img src> is served
   // from the browser's per-document memory cache with no request (WebKit never
   // re-asks for a URL it already loaded in this document), so a regenerated
@@ -1660,28 +1816,73 @@ function proxyImageSrcs(html: string, cwd?: string, host?: string, imageVersion?
   const versionParam = imageVersion != null && imageVersion !== '' && imageVersion !== 0
     ? `&r=${encodeURIComponent(String(imageVersion))}`
     : '';
-  return html.replace(/<img\s([^>]*)>/gi, (full, attrs: string) => {
-    const srcMatch = attrs.match(/src="([^"]*)"/);
-    if (!srcMatch) return full;
-    const src = srcMatch[1];
-    if (src.startsWith('/api/') || src.startsWith('http') || src.startsWith('data:')) return full;
-
+  const proxied = (src: string): string | null => {
+    const s = src.trim();
+    if (!s || s.startsWith('#') || /^[\/\\]{2}/.test(s) || /^[a-z][a-z0-9+.-]*:/i.test(s) || /^\/api\//i.test(s)) return null;
     let absPath: string;
-    if (src.startsWith('/')) {
-      absPath = src;
-    } else if (cwd) {
-      absPath = `${cwd.replace(/\/$/, '')}/${src.replace(/^\.\//, '')}`;
-    } else {
-      return full;
+    if (s.startsWith('/')) absPath = s;
+    else if (cwd) absPath = `${cwd.replace(/\/$/, '')}/${s.replace(/^\.\//, '')}`;
+    else return null;
+    return `/api/local-image?path=${encodeURIComponent(absPath)}${host ? `&host=${encodeURIComponent(host)}` : ''}${versionParam}`;
+  };
+  const base = pageBase();
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  let changed = false;
+  for (const el of Array.from(template.content.querySelectorAll('*'))) {
+    const tag = (el.localName || el.tagName).toLowerCase();
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase();
+      const value = attr.value;
+      if (name === 'style') {
+        const style = (el as HTMLElement).style as unknown as StyleDecl | undefined;
+        if (style && typeof style.getPropertyValue === 'function' && typeof style.length === 'number') {
+          if (!dropHostFileDecls(style, base)) continue;
+          if (!style.length) el.removeAttribute('style');
+        } else if (/api|\\/i.test(value)) {
+          el.removeAttribute('style');
+        } else continue;
+        changed = true;
+        continue;
+      }
+      if (name === 'srcset') {
+        if (!value.split(/[\s,]+/).some((part) => !!hostFileRef(part, base))) continue;
+        el.removeAttributeNode(attr);
+        changed = true;
+        continue;
+      }
+      if (CSS_URL_ATTRS.has(name)) {
+        if (!/\\/.test(value) && !cssReadsHostFile('', value, base)) continue;
+        el.removeAttributeNode(attr);
+        changed = true;
+        continue;
+      }
+      if (!URL_ATTRS.has(name)) continue;
+      const ref = hostFileRef(value, base);
+      if (ref) {
+        const next = inlineImages && tag !== 'a' && tag !== 'area' ? pinnedHostFileUrl(ref, value, host) : null;
+        if (next === value) continue;
+        if (next === null) el.removeAttributeNode(attr);
+        else attr.value = next;
+        changed = true;
+        continue;
+      }
+      const picture = (tag === 'img' && name === 'src') || ((tag === 'image' || tag === 'feimage') && (name === 'href' || name === 'xlink:href'));
+      const next = picture && inlineImages ? proxied(value) : null;
+      if (!next) continue;
+      attr.value = next;
+      if (tag === 'img') {
+        el.setAttribute('data-lightbox-src', next);
+        el.setAttribute('loading', 'lazy');
+      }
+      changed = true;
     }
-
-    const hostParam = host ? `&host=${encodeURIComponent(host)}` : '';
-    const proxied = `/api/local-image?path=${encodeURIComponent(absPath)}${hostParam}${versionParam}`;
-    const newAttrs = attrs
-      .replace(/src="[^"]*"/, `src="${proxied}"`)
-      + ` data-lightbox-src="${proxied}" loading="lazy"`;
-    return `<img ${newAttrs}>`;
-  });
+    if (tag === 'style' && pinStyleSheet(el, base)) changed = true;
+  }
+  if (!changed) return html;
+  const container = template.content.ownerDocument.createElement('div');
+  container.append(template.content);
+  return container.innerHTML;
 }
 
 const mdCache = new Map<string, string>();
@@ -1724,6 +1925,71 @@ export interface RenderMarkdownOptions {
    * user's document, not a reply to decorate.
    */
   taskIds?: BareTaskIdMode | 'off';
+  inlineImages?: boolean;
+  inline?: boolean;
+  boardText?: boolean;
+}
+
+function linkHtmlDestinations(html: string, cwd: string | undefined, inlineImages: boolean): string {
+  if (!/<a\b/i.test(html) && (inlineImages || !/<(?:img|image|feimage)\b/i.test(html))) return html;
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  let changed = false;
+  for (const anchor of template.content.querySelectorAll('a[href]')) {
+    const href = anchor.getAttribute('href') ?? '';
+    // A host-file API URL opens its file through the file handler, on the
+    // text's own source: the host the URL names is never asked.
+    const hostFile = hostFileRef(href);
+    let destination = href;
+    if (!hostFile) {
+      try { destination = decodeURI(href); } catch { continue; }
+    }
+    const attrs = hostFile
+      ? hostFile.path && !DEST_FORBIDDEN_RE.test(hostFile.path) ? fileLinkAttrsForDestination(hostFile.path) : null
+      : href.startsWith('/api/') || DEST_FORBIDDEN_RE.test(destination) ? null : fileLinkAttrsForDestination(href, cwd);
+    const letter = LETTER_HREF_RE.exec(href);
+    if (!attrs && !letter) continue;
+    if (attrs) {
+      const ref = document.createElement('template');
+      ref.innerHTML = `<a ${attrs}></a>`;
+      for (const attr of ref.content.firstElementChild!.attributes) anchor.setAttribute(attr.name, attr.value);
+      anchor.classList.add('file-link');
+    } else {
+      anchor.classList.add('letter-link');
+      anchor.setAttribute('data-letter-id', letter![1]!);
+    }
+    anchor.setAttribute('href', '#');
+    changed = true;
+  }
+  const after = new Map<Element, Element>();
+  for (const img of inlineImages ? [] : template.content.querySelectorAll('img, image, feImage, feimage')) {
+    changed = true;
+    const src = img.getAttribute('src') || img.getAttribute('href') || img.getAttribute('xlink:href') || '';
+    const hostFile = hostFileRef(src);
+    const dest = hostFile ? (hostFile.path && /^~?\//.test(hostFile.path) ? hostFile.path : '') : src;
+    const d = dest.startsWith('/api/') ? null : localDestination(dest);
+    const imagePath = d && /\.(?:png|jpe?g|gif|webp|heic|svg|ico|bmp|tiff?)$/i.test(d.path);
+    const attrs = !d ? null : fileLinkAttrsForDestination(dest, cwd)
+      ?? (imagePath ? d.absolute || !cwd
+        ? `data-file-path="${escapeHtmlText(d.path)}"${lineAttrs(d)}`
+        : `data-rel-path="${escapeHtmlText(d.path.replace(/^\.\//, ''))}" data-cwd="${escapeHtmlText(cwd)}"${lineAttrs(d)}` : null);
+    const label = img.getAttribute('alt') || dest;
+    const link = document.createElement('span');
+    if (attrs) link.innerHTML = `<a class="file-link" ${attrs} href="#">${escapeHtmlText(label)}</a>`;
+    else if (/^(?:https?:\/\/|\/api\/images\/)/i.test(dest)) link.innerHTML = `<a href="${escapeHtmlText(dest)}" target="_blank" rel="noopener noreferrer">${escapeHtmlText(label)}</a>`;
+    else link.textContent = img.getAttribute('alt') || (d ? dest : '');
+    const svg = img.closest('svg');
+    const outer = svg ? svg.closest('a') ?? svg : img.closest('a');
+    if (outer && (svg || link.querySelector('a'))) {
+      img.replaceWith(document.createTextNode(img.getAttribute('alt') ?? ''));
+      (after.get(outer) ?? outer).after(link);
+      after.set(outer, link);
+    } else img.replaceWith(link);
+  }
+  if (!changed) return html;
+  const container = template.content.ownerDocument.createElement('div');
+  container.append(template.content);
+  return container.innerHTML;
 }
 
 export function renderMarkdownWithRefs(
@@ -1742,7 +2008,8 @@ export function renderMarkdownWithRefs(
   // and without style, so it must not share a cache slot.
   const imageVersion = opts?.imageVersion;
   const taskIds = opts?.taskIds ?? 'pills';
-  const flags = (allowStyle ? 'S\0' : '') + (imageVersion != null ? `V${imageVersion}\0` : '') + (taskIds === 'pills' ? '' : `T${taskIds}\0`);
+  const inlineImages = opts?.inlineImages !== false;
+  const flags = (opts?.boardText ? 'B\0' : '') + (opts?.inline ? 'N\0' : '') + (inlineImages ? '' : 'I\0') + (allowStyle ? 'S\0' : '') + (imageVersion != null ? `V${imageVersion}\0` : '') + (taskIds === 'pills' ? '' : `T${taskIds}\0`);
   const key = host
     ? `${flags}${text}\0${sessionCwd ?? ''}\0${host}`
     : sessionCwd ? `${flags}${text}\0${sessionCwd}` : `${flags}${text}`;
@@ -1758,14 +2025,14 @@ export function renderMarkdownWithRefs(
     let preprocessed = stripLeakedToolCalls(text);
     if (taskIds === 'pills') preprocessed = absorbWrittenTaskTitles(preprocessed);
     preprocessed = entityRefsToHtml(preprocessed);
-    preprocessed = filePathsToHtml(preprocessed, sessionCwd);
     // In-app render: the `link` renderer may turn a local-path destination into
     // a file-link (see fileLinkRenderCtx). parse() is synchronous.
-    fileLinkRenderCtx = { cwd: sessionCwd };
+    fileLinkRenderCtx = { cwd: sessionCwd, host, inlineImages };
     beginCodeBlockRender();
     let raw: string | Promise<string>;
     try {
-      raw = marked.parse(preprocessed);
+      preprocessed = filePathsToHtml(preprocessed, sessionCwd, inlineImages);
+      raw = opts?.inline ? marked.parseInline(preprocessed) : marked.parse(preprocessed);
     } finally {
       fileLinkRenderCtx = null;
     }
@@ -1774,6 +2041,7 @@ export function renderMarkdownWithRefs(
     if (taskIds !== 'off') parsed = linkTaskMentions(parsed, taskIds);
     // A letter id opens its letter (utils/letter-links.ts); a file's own bytes stay as written.
     if (taskIds !== 'off') parsed = linkLetterIds(parsed);
+    parsed = linkHtmlDestinations(parsed, sessionCwd, inlineImages);
     // Models write raw HTML in replies now and we render it natively, so this
     // sanitize call is the boundary for model-authored markup. A `<form>` is the
     // one interactive element that can leave the page: submitting navigates the
@@ -1794,9 +2062,14 @@ export function renderMarkdownWithRefs(
     // shape, not the exotic one.
     html = withReadableInk(() => DOMPurify.sanitize(parsed, {
       ADD_ATTR: SANITIZE_ATTRS,
+      ...(opts?.boardText ? {
+        ALLOWED_TAGS: ['p', 'br', 'ul', 'ol', 'li', 'pre', 'code', 'blockquote', 'strong', 'em', 'del', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+        ALLOWED_ATTR: ['href', 'title', 'class', 'target', 'rel', 'data-task-id', 'data-session-id', 'data-file-path', 'data-file-line', 'data-file-end-line', 'data-letter-id'],
+        ALLOW_DATA_ATTR: false,
+      } : {}),
       FORCE_BODY: true,
-      FORBID_TAGS: allowStyle ? ['form'] : ['form', 'style'],
-      FORBID_ATTR: ['action', 'formaction'],
+      FORBID_TAGS: [...(allowStyle && inlineImages ? ['form'] : ['form', 'style']), ...(inlineImages ? [] : ['img', 'image', 'feimage'])],
+      FORBID_ATTR: ['action', 'formaction', ...(inlineImages ? [] : ['src', 'srcset', 'poster', 'background', 'style'])],
     }));
     // Syntax colors go on AFTER the sanitizer, which then only ever reads the
     // plain code: colored markup is ~5x the bytes, and sanitizing it again on
@@ -1807,10 +2080,14 @@ export function renderMarkdownWithRefs(
     // so it keeps the links the passes above put in code.
     html = highlightCodeBlocks(html);
   } catch {
-    html = DOMPurify.sanitize(text);
+    html = DOMPurify.sanitize(inlineImages ? text : escapeHtmlText(text));
   }
 
-  html = proxyImageSrcs(html, sessionCwd, host, imageVersion);
+  if (opts?.boardText) html = html.replace(/\bclass="([^"]*)"/g, (_match, value: string) => {
+    const classes = value.split(/\s+/).filter((name) => ['file-link', 'letter-link', 'task-link', 'task-link-code', 'session-link'].includes(name));
+    return classes.length ? `class="${classes.join(' ')}"` : '';
+  });
+  html = proxyImageSrcs(html, sessionCwd, host, imageVersion, inlineImages);
 
   if (text.length <= MD_CACHE_SKIP_LENGTH) {
     if (mdCache.size >= MD_CACHE_MAX) {
@@ -1860,7 +2137,10 @@ export const MARKDOWN_FIELD_MIN_LENGTH = 200;
  */
 export function extractMarkdownFields(
   input: Record<string, unknown>,
+  /** The machine the fields' image paths are on; `inlineImages: false` while it is unknown. */
+  source?: { host?: string; inlineImages?: boolean },
 ): { key: string; html: string }[] {
+  const opts: RenderMarkdownOptions = source?.inlineImages === false ? { taskIds: 'links', inlineImages: false } : { taskIds: 'links' };
   return Object.entries(input)
     .filter(([k, v]) =>
       typeof v === 'string' &&
@@ -1868,7 +2148,7 @@ export function extractMarkdownFields(
       (v as string).length > MARKDOWN_FIELD_MIN_LENGTH &&
       !MARKDOWN_EXCLUDED_INPUT_KEYS.has(k),
     )
-    .map(([k, v]) => ({ key: k, html: renderMarkdownWithRefs(v as string, undefined, undefined, { taskIds: 'links' }) }));
+    .map(([k, v]) => ({ key: k, html: renderMarkdownWithRefs(v as string, undefined, source?.host, opts) }));
 }
 
 // ── Tool result image detection & rendering ──
@@ -2013,7 +2293,7 @@ noteMarked.use({
  * Hooks are added once at module init — no global mutations, no race conditions.
  */
 const notePurify = DOMPurify();
-notePurify.addHook('afterSanitizeAttributes', (node) => {
+if (notePurify.isSupported) notePurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A') {
     node.setAttribute('target', '_blank');
     node.setAttribute('rel', 'noopener noreferrer');

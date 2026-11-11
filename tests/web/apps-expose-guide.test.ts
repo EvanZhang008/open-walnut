@@ -2,7 +2,8 @@
  * A plugin that registers a tunnel provider leads to the browser link page; one that does not
  * shows nothing, and the row says when the link already runs through it.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+vi.mock('@/components/common/AgentText', () => ({ AgentText: () => null }))
 import { BROWSER_LINK_PANE, exposeGuideFor, type ExposeOverview } from '../../web/src/components/apps-page/ExposeGuide'
 import { CORE_SETTINGS_CONTRIBUTIONS } from '../../web/src/components/settings/core-settings-registry'
 

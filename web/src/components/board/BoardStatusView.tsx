@@ -23,6 +23,8 @@ import { log } from '@/utils/log';
 import { apiPost } from '@/api/client';
 import { LiveActivityLine } from './LiveActivityLine';
 import { WithdrawAnswerButton } from '@/components/tasks/AnsweredForLine';
+import { AgentText } from '@/components/common/AgentText';
+import { taskTextSource } from '@/utils/agent-text-source';
 import { useLiveActivity } from '@/stores/live-activity-store';
 import {
   NOT_STARTED_LABEL, STATUS_CHIPS, briefCountsLine, buildStatusBoard, chipCount, chipLabel, filteredRows, isNotStartedStatus, isStatusFilter, needsRowLine,
@@ -78,10 +80,10 @@ function WhereCell({ row }: { row: StatusRow }) {
   const live = useLiveActivity(s.state === 'working' ? row.task.id : undefined);
   return (
     <>
-      {s.state === 'waiting' && <span className={`bs-on${s.kind === 'stuck' ? ' bs-on-stuck' : ''}`} title={sameAskLine(s) ? waitingSentence(s) : undefined}>{waitingLine(s, formatWaitUntil)}</span>}
+      {s.state === 'waiting' && <AgentText compact inline {...taskTextSource(row.task, 'waiting')} className={`bs-on${s.kind === 'stuck' ? ' bs-on-stuck' : ''}`} title={sameAskLine(s) ? waitingSentence(s) : undefined} text={waitingLine(s, formatWaitUntil)} />}
       {s.state === 'waiting' && s.answeredFor && row.task.phase !== 'COMPLETE' && <WithdrawAnswerButton taskId={row.task.id} compact />}
       {s.state === 'working' && <LiveActivityLine taskId={row.task.id} />}
-      {s.now && <span className="bs-now">{s.now}</span>}
+      {s.now && <AgentText compact inline {...taskTextSource(row.task, 'report')} className="bs-now" text={s.now} />}
       {!s.now && !live && s.state === 'working' && <span className="bs-muted">{s.carriesOn ? 'Its own work goes on.' : 'Running a turn now.'}</span>}
       {s.due && (
         <span className={`bs-due bs-due-${s.due.state}`} data-testid="board-due" data-due={s.due.state}>
@@ -89,7 +91,7 @@ function WhereCell({ row }: { row: StatusRow }) {
         </span>
       )}
       {resultIsPartial(row.task.result_report) && (
-        <span className="bs-partial" data-testid="board-partial">Not done: {row.task.result_report!.not_done!.join('; ')}</span>
+        <AgentText compact inline {...taskTextSource(row.task, 'partial')} className="bs-partial" testId="board-partial" text={`Not done: ${row.task.result_report!.not_done!.join('; ')}`} />
       )}
       {s.stale && <span className="bs-stale" title="Its session has not written an update for a day or more">No update in {compactDays(s.at)}</span>}
     </>
@@ -125,7 +127,7 @@ function NextCell({ row, onOpenPage }: { row: StatusRow; onOpenPage?: () => void
       <>
         <span className="bs-needs-line" data-testid="board-needs-line" data-category={line.category} title={line.text ? `${line.label}: ${line.text}` : line.label}>
           <b className={`bs-needs-category bs-needs-category-${line.category}`}>{line.text ? `${line.label}:` : line.label}</b>
-          {line.text && <> <span className="bs-needs-text">{line.text}</span></>}
+          {line.text && <> <AgentText compact inline {...taskTextSource(row.task, 'needs')} className="bs-needs-text" text={line.text} /></>}
         </span>
         {checked && (
           <span className={`bs-checked${checked.unverified ? ' is-unverified' : ''}`} data-testid="board-checked" data-unverified={checked.unverified ? '1' : '0'}>{checked.text}</span>
@@ -138,7 +140,7 @@ function NextCell({ row, onOpenPage }: { row: StatusRow; onOpenPage?: () => void
   }
   return (
     <>
-      {s.next && <span>{s.next}</span>}
+      {s.next && <AgentText compact inline {...taskTextSource(row.task, 'report')} text={s.next} />}
       {s.until && s.kind !== 'time' && <span className="bs-muted">Checks again {formatWaitUntil(s.until)}</span>}
     </>
   );
@@ -162,7 +164,7 @@ const Row = memo(function Row({ row, onOpenTask, onOpenPage }: { row: StatusRow;
       role="button"
       aria-label={`${title}: ${isNotStartedStatus(row.status) ? NOT_STARTED_LABEL : USER_STATE_LABELS[shown]}. Open the task`}
       onClick={() => onOpenTask(t.id)}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenTask(t.id); } }}
+      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpenTask(t.id); } }}
     >
       <td className="bs-c-status"><StatusPill row={row} /></td>
       <td className="bs-c-task">
@@ -272,7 +274,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
                 <span key={n.id}>
                   {i > 0 && '; '}
                   <button type="button" className="bs-link" onClick={() => onOpenTask(n.id)}>{n.title}</button>
-                  {n.line && <> ({n.line.replace(/\.$/, '')})</>}
+                  {n.line && <> (<AgentText compact inline {...taskTextSource(tasks.find((t) => t.id === n.id), 'needs')} text={n.line.replace(/\.$/, '')} />)</>}
                   {n.unverified && <span className="bs-unverified" data-testid="board-brief-unverified"> not verified</span>}
                 </span>
               ))}.

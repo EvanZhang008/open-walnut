@@ -320,6 +320,25 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        id: 'pw-task-remote-writer',
+        title: 'Remote writer fixture',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-limits-remote-session'],
+        active_session_ids: [],
+        session_id: 'pw-limits-remote-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         id: 'pw-task-question-recovery',
         title: 'Question recovery fixture',
         status: 'in_progress',
@@ -617,6 +636,24 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       },
+      // Opt-in so every other spec's task list and counts stay as they were.
+      ...(process.env.PW_AGENT_TEXT_ENTRIES === '1' ? [{
+        id: 'pw-task-triage',
+        title: 'Triage links fixture task',
+        status: 'todo',
+        phase: 'TODO',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: [],
+        active_session_ids: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      }] : []),
       {
         // Real id shape (`<base36>-<hex4>`), which only a real task id has: the
         // pill pass links an id only when the task store knows it.
@@ -1154,6 +1191,26 @@ await fs.writeFile(
         session_ids: ['pw-opcards-session'],
         active_session_ids: [],
         session_id: 'pw-opcards-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Writer-source fixture (agent-session-writer-source.spec.ts): its own task.
+        id: 'pw-task-writer-source',
+        title: 'Writer source fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-writer-source-session'],
+        active_session_ids: [],
+        session_id: 'pw-writer-source-session',
         session_status: { process_status: 'stopped', mode: 'bypass' },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -2664,6 +2721,30 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
   )
 }
 
+// No route stores a triage record any more, so agent-text-entries.spec.ts gets one through the store, before boot.
+if (process.env.PW_AGENT_TEXT_ENTRIES === '1') {
+  const triageFixtureRoot = path.join(tmpBase, 'projects', 'triage-fixture')
+  await fs.mkdir(triageFixtureRoot, { recursive: true })
+  const picture = path.join(triageFixtureRoot, 'triage-design.png')
+  const notes = path.join(triageFixtureRoot, 'triage-notes.txt')
+  await fs.copyFile(process.env.AGENT_TEXT_PATH || path.resolve(import.meta.dirname, '..', '..', '..', 'web', 'public', 'icon-192.png'), picture)
+  await fs.writeFile(notes, 'Triage notes\nLine two\nLine three\n')
+  const { sendLetter, setArchived } = await import('../../../src/core/human-inbox/store.js')
+  const letter = await sendLetter({ subject: 'Triage fixture letter', type: 'info', markdown: `Design: ${picture}`, text: 'Triage fixture letter' }, { quiet: true })
+  await setArchived(letter.id, true)
+  let analysis = '**Triage Analysis:**\n\nThe last run finished the review notes and left one design file to look at, '
+  while (analysis.length < 190) analysis += 'still '
+  analysis += `${picture} with ${notes}:2-3, the letter ${letter.id}, <task-ref id="pw-task-codepath" label="Code block paths"/> and https://example.com/triage-report for the rest.`
+  const { addNotification } = await import('../../../src/core/chat-history.js')
+  const { getActiveConversationId } = await import('../../../src/core/conversations.js')
+  await addNotification({
+    role: 'assistant', content: `**Triage** (pw-task-triage|Triage links fixture task):\n\n${analysis}`,
+    source: 'triage', notification: true, taskId: 'pw-task-triage',
+    timestamp: new Date(sessionFixtureNow - 60_000).toISOString(),
+    agentId: 'general', conversationId: await getActiveConversationId('general'),
+  })
+}
+
 // Real Claude Code JSONL for pw-vscode-session, so its chat renders an assistant
 // message containing that absolute path — the clickable `a.file-link` the
 // file-view-history spec needs. HOME is the fixture tmpBase (set at the top), so
@@ -3408,6 +3489,100 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
       { type: 'user', uuid: u(14), parentUuid: u(13), sessionId: sid, timestamp: at(38_000), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_pw_inb_get', content: '{"ok":true}' }] } },
       { type: 'assistant', uuid: u(15), parentUuid: u(14), sessionId: sid, timestamp: at(37_000), message: { role: 'assistant', content: [{ type: 'text', text: 'INBOUND_ANSWER_THREE: it was a status push.' }] } },
     ]
+    await fs.writeFile(path.join(jsonlDir, `${sid}.jsonl`), rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
+  }
+
+  // Writer-source fixture (agent-session-writer-source.spec.ts): a local session quoting other writers, paths with primary bytes.
+  {
+    const { buildPeerWrapper } = await import('../../../src/core/peers/peer-wrapper.js')
+    const { buildRequestNotification } = await import('../../../src/core/session-requests.js')
+    const dir = path.join(tmpBase, 'ss')
+    await fs.mkdir(dir, { recursive: true })
+    const doc = path.join(dir, 'notes.txt')
+    const shot = path.join(dir, 'shot.png')
+    await fs.writeFile(doc, 'Primary copy\nPrimary line two\nPrimary line three\n')
+    await fs.copyFile(path.join(path.dirname(new URL(import.meta.url).pathname), '../../../web/public/icon-192.png'), shot)
+    const sid = 'pw-writer-source-session'
+    const remoteSid = 'pw-limits-remote-session'
+    const rq = {
+      id: 'rq-ws0source0001',
+      fromSessionId: sid,
+      toSessionId: remoteSid,
+      toTaskId: 'pw-task-remote-writer',
+      preview: 'Check the notes',
+      status: 'replied' as const,
+      createdAt: new Date(sessionFixtureNow - 60_000).toISOString(),
+      deadlineAt: sessionFixtureNow + 3_600_000,
+    }
+    const notice = buildRequestNotification(rq, 'completed', {
+      title: 'Limits: a host with no readings',
+      sessionId: remoteSid,
+      taskId: 'pw-task-remote-writer',
+      phase: 'COMPLETE',
+      lastMessage: { text: `Quoted from the remote writer: ${doc}:2 WS_NOTICE_QUOTE`, actions: ['Read: notes'] },
+    })
+    const users: Array<{ text: string; injected?: boolean }> = [
+      // (1) a remote peer's note: the envelope saved its author's host
+      { text: buildPeerWrapper(`Remote notes at ${doc}:2 and the picture ${shot} WS_PEER_REMOTE`,
+        { title: 'Limits: a host with no readings', shortId: remoteSid.slice(0, 8), sessionId: remoteSid, taskId: 'pw-task-remote-writer', host: 'fixture-remote' },
+        { title: 'WS_PEER_REMOTE note' }) },
+      // (1) a sender Walnut cannot name: Claude Code's own delivery, no session, no host
+      { injected: true, text: 'Another Claude session sent a message:\n'
+        + '<cross-session-message from="uds:/tmp/cc-socks/9.sock" from-name="ghost-71" from-mode="bypass">\n'
+        + `Unknown notes at ${doc}:2 and ${shot} WS_PEER_UNKNOWN\n`
+        + '</cross-session-message>\n\nThis came from another Claude session.' },
+      // (7) a Walnut note naming the remote session but no host: the click reads the record
+      { text: buildPeerWrapper(`Pending notes at ${doc}:2 WS_PEER_PENDING`,
+        { title: 'Limits: a host with no readings', shortId: remoteSid.slice(0, 8), sessionId: remoteSid, taskId: 'pw-task-remote-writer' },
+        { title: 'WS_PEER_PENDING note' }) },
+      // (4) an injected skill dump: no writer of its own
+      { injected: true, text: 'Base directory for this skill: /tmp/skills/ws-source\n\n'
+        + `# Notes skill\n\nRead ${doc}:2 and look at ${shot} WS_INJECTED` },
+      // (6) the person's words with a picture, then a notice about the remote writer
+      { text: `WS_PERSON look at ${shot} please\n\n${notice}` },
+    ]
+    const outboundId = 'toolu_ws_outbound'
+    const outboundCommand = 'walnut tools call task_send '
+      + `'{"to":"${remoteSid}","title":"WS_OUTBOUND send","text":"My own notes at ${doc}:2 WS_OUTBOUND_BODY","expect_reply":false}'`
+    const outboundResult = JSON.stringify({ delivery: 'queued', targetSessionId: remoteSid, targetTaskId: 'pw-task-remote-writer', target: { sessionId: remoteSid, taskId: 'pw-task-remote-writer' }, messageId: 'qm-ws0out' })
+    const listId = 'toolu_ws_list'
+    const readId = 'toolu_ws_read'
+    const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+    const rows: unknown[] = []
+    let parent: string | null = null
+    const push = (row: Record<string, unknown>) => {
+      const uuid = `0199ee${String(rows.length).padStart(2, '0')}-0000-4aaa-8bbb-000000000000`
+      rows.push({ ...row, uuid, parentUuid: parent, sessionId: sid, timestamp: new Date(sessionFixtureNow - 50_000 + rows.length * 1_000).toISOString() })
+      parent = uuid
+    }
+    users.forEach(({ text, injected }, i) => {
+      push({ type: 'user', ...(injected ? { isMeta: true, userType: 'external' } : {}), message: { role: 'user', content: text } })
+      push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: `Noted ${i + 1}.` }] } })
+    })
+    // (5) the session's own words, tool output naming a picture, and a base64 picture
+    push({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'text', text: `Saved the screenshot: ${shot} WS_OWN_REPLY` },
+      { type: 'tool_use', id: outboundId, name: 'Bash', input: { command: outboundCommand, description: 'Tell the remote session' } },
+    ] } })
+    push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: outboundId, content: outboundResult }] } })
+    push({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: listId, name: 'Glob', input: { pattern: '*.png', path: dir } },
+    ] } })
+    push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: listId, content: `${shot}\n${doc}:2\nWS_TOOL_LIST` }] } })
+    push({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: readId, name: 'Read', input: { file_path: shot } },
+    ] } })
+    push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: readId, content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PIXEL } },
+      { type: 'text', text: 'WS_TOOL_BASE64' },
+    ] }] } })
+    // The session's own plan (a from-plan run shows its writer's plan here instead)
+    const planId = 'toolu_ws_plan'
+    push({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: planId, name: 'ExitPlanMode', input: { plan: `# Own plan\n\nRead ${doc}:2 and see ${shot} WS_OWN_PLAN` } },
+    ] } })
+    push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: planId, content: 'User approved the plan.' }] } })
+    push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'All done. WS_LAST' }] } })
     await fs.writeFile(path.join(jsonlDir, `${sid}.jsonl`), rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
   }
 
@@ -4273,7 +4448,7 @@ await fs.writeFile(
         // reported a limit reading (a Bedrock or API-key sign-in never does), so
         // its model popover and pill must show no limit at all.
         claudeSessionId: 'pw-limits-remote-session',
-        taskId: 'pw-task-001',
+        taskId: 'pw-task-remote-writer',
         project: 'Walnut',
         process_status: 'stopped',
         mode: 'bypass',
@@ -4574,6 +4749,20 @@ await fs.writeFile(
         messageCount: 4,
         cwd: vscodeFixtureRoot,
         title: 'Op cards: what a lead sent',
+      },
+      {
+        // Writer-source fixture: a local session quoting other writers.
+        claudeSessionId: 'pw-writer-source-session',
+        taskId: 'pw-task-writer-source',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(sessionFixtureNow - 10_000).toISOString(),
+        startedAt: new Date(sessionFixtureNow - 60_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 10_000).toISOString(),
+        messageCount: 8,
+        cwd: vscodeFixtureRoot,
+        title: 'Writer source: words of other writers',
       },
       {
         // Injected-banner fixture. Its transcript (written above) carries the

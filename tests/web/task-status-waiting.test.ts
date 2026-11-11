@@ -22,12 +22,13 @@ vi.mock('@/utils/session-status', async (importOriginal) => ({ ...(await importO
 vi.mock('@/components/tasks/PluginFieldPicker', () => ({ PluginFieldsSection: () => null }));
 vi.mock('@/components/tasks/QuoteInSessionItem', () => ({ QuoteInSessionItem: () => null }));
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: () => null }));
+vi.mock('@/components/common/AgentText', () => ({ AgentText: () => null }));
 
 const {
   STATUS_OPTIONS, formatWaitUntil, waitUntilFromPick,
   TaskStatusMenuSection,
 } = await import('../../web/src/components/tasks/TaskStatusControl');
-const { waitingChipLabel, waitingDetailLines } = await import('../../web/src/components/tasks/WaitingChip');
+const { waitingChipLabel, waitingDetailLines, waitingDetailSourcedLines } = await import('../../web/src/components/tasks/WaitingChip');
 
 let doc: Document;
 let win: Window & typeof globalThis;
@@ -211,5 +212,31 @@ describe('TaskStatusMenuSection and Waiting', () => {
   it('a Not started task never shows a time on the collapsed row', async () => {
     const host = await mount(TaskStatusMenuSection, { task: task({ wait_until: '2026-10-02T16:00:00.000Z' }), ...spies() });
     expect(host.querySelector('.task-kebab-status-value')!.textContent).toBe('Status: Not started');
+  });
+});
+
+describe('where each line of the wait card opens a path', () => {
+  it('the wait opens in its writer, the next step in the report\'s, a trigger and Walnut\'s own words nowhere', () => {
+    const task = {
+      phase: 'WAITING', session_id: 's-new',
+      user_status: {
+        state: 'waiting', waitingOn: 'the review of /srv/a.ts', next: 'merge /srv/a.ts', reportSessionId: 's-old',
+        waitingSessionId: 's-wait', answeredFor: { by: 'task:main', byTitle: 'Main', at: 'x', ask: 'a', sessionId: 's-main' },
+      },
+    } as never;
+    const rows = waitingDetailSourcedLines(task, 'review-watch: /srv/check.sh\n');
+    const of = (start: string) => rows.find((r) => r.text.startsWith(start))!.source;
+    expect(of('Waiting on')).toEqual({ sessionId: 's-main' });
+    expect(of('Next:')).toEqual({ sessionId: 's-old' });
+    expect(of('Trigger')).toEqual({ unknownSource: true });
+    expect(of('A message here')).toEqual({ unknownSource: true });
+    // The string API is the same lines, in the same order.
+    expect(waitingDetailLines(task, 'review-watch: /srv/check.sh\n')).toEqual(rows.map((r) => r.text));
+    expect(rows.some((r) => r.source.sessionId === 's-new')).toBe(false);
+    // With no answer above, the wait opens in the writer stored with it, never the report's.
+    const own = waitingDetailSourcedLines({ phase: 'WAITING', user_status: { state: 'waiting', waitingOn: 'the review', reportSessionId: 's-old', waitingSessionId: 's-wait' } } as never);
+    expect(own.find((r) => r.text.startsWith('Waiting on'))!.source).toEqual({ sessionId: 's-wait' });
+    const generated = waitingDetailSourcedLines({ phase: 'WAITING', user_status: { state: 'waiting', waitingOn: 'a set time', now: 'x', reportSessionId: 's-old' } } as never);
+    expect(generated.find((r) => r.text.startsWith('Waiting on'))!.source).toEqual({ unknownSource: true });
   });
 });

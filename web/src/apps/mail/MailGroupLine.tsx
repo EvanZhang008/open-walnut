@@ -21,6 +21,8 @@
  */
 import { memo, useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
+import { AgentText } from '@/components/common/AgentText';
+import '@/styles/agent-links.css';
 import type { MailAccountDto, MailMessageDto } from '@/api/mail';
 import type { MailGroupItem, MailGroupsScope } from '@/api/mail-groups';
 import { openMailMessage } from './mail-actions';
@@ -36,7 +38,7 @@ import {
 import { groupSampleRows, loadGroupPage, setGroupOpen, useGroupPage } from './mail-groups-store';
 import { RETRYING_LINE } from './mail-load-retry';
 import { CheckIcon, MoreIcon, TwistIcon } from './mail-icons';
-import { isOpenRow } from './MailMessageRow';
+import { isOpenRow, selectingInside } from './MailMessageRow';
 import { MailRouteLine } from './MailRouteLine';
 import { outgoingKind, showsRouteLine } from './mail-route-model';
 import { pairKey, type MailSnapshot } from './mail-store';
@@ -140,6 +142,7 @@ export function MailGroupLine({
   const page = useGroupPage(scope, group.id);
   const lineRef = useRef<HTMLDivElement | null>(null);
   const moreRef = useRef<HTMLButtonElement | null>(null);
+  const summaryPress = useRef(false);
   const [menuPoint, setMenuPoint] = useState<{ x: number; y: number } | null>(null);
   const summaryId = useId();
   const { unread, markable } = numbers;
@@ -215,7 +218,14 @@ export function MailGroupLine({
         aria-expanded={open}
         aria-label={groupRowAria(group.label, unread, open)}
         {...(summary ? { 'aria-describedby': summaryId } : {})}
-        onClick={toggle}
+        onMouseDown={(event) => { summaryPress.current = !!(event.target as Element).closest('.mail-group-summary'); }}
+        onClick={(event) => {
+          const fromSummary = summaryPress.current;
+          summaryPress.current = false;
+          const summary = event.currentTarget.querySelector('.mail-group-summary');
+          if (event.detail > 0 && fromSummary && summary && selectingInside(summary)) return;
+          toggle();
+        }}
         onKeyDown={(event) => {
           if (event.target !== event.currentTarget) return;
           if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); return; }
@@ -287,7 +297,7 @@ export function MailGroupLine({
             data-by={group.summary?.trim() ? group.summaryBy ?? 'subject' : 'senders'}
             title={group.summaryBy === 'ai' ? `${summary}\nSummary by Walnut` : summary}
           >
-            {summary}
+            <AgentText text={summary} compact inline unknownSource />
           </span>
         )}
       </div>

@@ -2251,6 +2251,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // A phone's host card follows the work that needs you, inside the list (N2-13, N2-15).
   const bannerInList = usePhoneLayout();
   const { query: searchQuery, setQuery: setSearchQuery, results: searchResults, isSearching, clearSearch } = useTaskSearch();
+  const [searchReset, setSearchReset] = useState(0);
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const isSearchMode = deferredSearchQuery.trim().length > 0;
   // Org conversations stay off the board, but an explicit search must find them.
@@ -2940,6 +2941,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (isUserLocate) {
       locateHoldRef.current = pendingHoldRef.current ? { id: focusedTaskId, sig: placeSigRef.current(task) } : null;
       pendingHoldRef.current = false;
+      // An external task link must reveal its row, not leave it behind the previous search.
+      if (searchQuery.trim() && focusScope === 'locate') {
+        clearSearch();
+        setSearchReset((version) => version + 1);
+      }
     }
     // 'pinned' scope (tier quick-adds): the new card is already visible in its tier —
     // scroll the Pinned region only. Switching the TASKS tab to the capture project
@@ -7964,6 +7970,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       <div className="todo-panel-toolbar">
         <TodoSearchBar
           query={searchQuery}
+          resetVersion={searchReset}
           onQueryChange={setSearchQuery}
           onClear={clearSearch}
           isSearching={isSearching}

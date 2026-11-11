@@ -42,7 +42,7 @@
  *   Closed     the ones closed this week (kept a week, then deleted) open from one quiet line at
  *              the bottom, Reopen on each
  */
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS, shownState } from '@open-walnut/user-status';
@@ -56,10 +56,14 @@ import type { ImageAttachment } from '@/api/chat';
 import type { BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
+import { AgentText } from '@/components/common/AgentText';
 import { MessageAbout, rowAbout } from '@/components/sessions/message-about';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
+import type { AgentTextSource } from '@/utils/agent-text-source';
+import { THREAD_LIST_SOURCE, THREAD_WORDS_SOURCE, threadAnswerSource, threadOpenerSource, threadStandInSource, threadSummarySource } from './thread-text-source';
 import { timeAgo } from '@/utils/time';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-threads';
@@ -100,20 +104,17 @@ const FROM_LABEL: Record<string, string> = { mail: 'Mail', task: 'A task', lette
 
 interface Props {
   name: string;
+  /**
+   * The node's own task. Not where its threads' paths open: each block opens on the machine of the
+   * session that wrote it (./thread-text-source.ts), never on the node's current one.
+   */
+  owner?: Task;
   state: OrgThreadsState;
   tasks: readonly Task[];
   onOpenTask: (id: string) => void;
   /** Send a message filed under this thread; null when the node has no chat yet. */
   onFollowUp: ((threadId: string, text: string, images?: ImageAttachment[]) => Promise<boolean>) | null;
   now: number;
-}
-
-function Markdown({ text, className, testId }: { text: string; className?: string; testId?: string }) {
-  // Read again when a task's label arrives (a bare id becomes its pill), as the chips below are.
-  const labels = useEntityLabelsVersion();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `labels` is the renderer's own input
-  const html = useMemo(() => ({ __html: renderMarkdownWithRefs(text) }), [text, labels]);
-  return <div className={`markdown-body ${className ?? ''}`} data-testid={testId} dangerouslySetInnerHTML={html} />;
 }
 
 function closedWords(t: OrgThread, now: number): string {
@@ -259,37 +260,66 @@ function Fold({ children, className, testId }: { children: React.ReactNode; clas
   );
 }
 
-/** The node's answer as its chat shows it, folded to a few lines with the rest one click away. */
-function Answer({ text, about, at, by, known, now, testId = 'org-thread-answer', re }: {
+/**
+ * The node's answer as its chat shows it, folded to a few lines with the rest one click away. A
+ * path or a picture in it is its writer's (`source`): this block opens and loads from that machine
+ * itself and keeps the click, so nothing around it opens the same link a second time.
+ */
+function Answer({ text, about, at, by, known, now, testId = 'org-thread-answer', re, source, onOpenTask }: {
   text: string; about?: string[]; at: string; by: string; known: boolean; now: number; testId?: string;
   /** His words it answers, one line, on a card (the conversation shows them in full instead). */
   re?: string;
+  /** Who wrote these words (./thread-text-source.ts); unknownSource when Walnut did not record it. */
+  source: AgentTextSource;
+  onOpenTask: (id: string) => void;
 }) {
   const body = useMemo(() => stripTurnMarker(stripQuestionTag(text)), [text]);
   const ids = useMemo(() => rowAbout(about, text), [about, text]);
+  // Its own opener: the session record is read on a click, never on mount; a lookup still in
+  // flight is dropped when the source changes or the block unmounts (useAgentFileOpener).
+  const file = useAgentFileOpener(source);
+  // An unknown writer refuses a relative path too, as AgentText does (never a search of every host).
+  const onEntityClick = useEntityClickHandler(onOpenTask, undefined, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
+  const onClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    onEntityClick(e);
+    // Handled here: the list around it must not handle the same link again.
+    if ((e.target as HTMLElement).closest('a')) e.stopPropagation();
+  }, [onEntityClick]);
   return (
-    <div className={`org-thread-answer${known ? '' : ' is-news'}`} data-testid={testId} data-known={known ? 'true' : 'false'}>
+    <div className={`org-thread-answer${known ? '' : ' is-news'}`} data-testid={testId} data-known={known ? 'true' : 'false'} data-text-source={sourceAttr(source)}>
       <div className="org-thread-answer-by">{by} · {clock(at, now)}</div>
       {re && <div className="org-thread-re" data-testid="org-thread-re">{re}</div>}
-      <Fold className="org-thread-answer-body" testId="org-thread-answer-body"><RichMarkdown text={body} /></Fold>
+      <Fold className="org-thread-answer-body" testId="org-thread-answer-body">
+        <RichMarkdown text={body} cwd={file.render.cwd} host={file.render.host} inlineImages={file.render.images} onClick={onClick} />
+      </Fold>
       {ids.length > 0 && <MessageAbout ids={ids} />}
     </div>
   );
 }
 
-function Words({ m }: { m: OrgThreadMessage }) {
-  // Pictures render as the chat renders them: a path on its own line becomes the image.
-  const text = [m.text, ...(m.images ?? [])].filter(Boolean).join('\n\n');
-  return <Fold className="org-thread-words-fold" testId="org-thread-words"><Markdown text={text} className="org-thread-words" /></Fold>;
+/** For tests and logs: which kind of writer a block names ('host', 'session' or 'unknown'). */
+function sourceAttr(s: AgentTextSource): string {
+  return s.unknownSource ? 'unknown' : s.host !== undefined ? 'host' : 'session';
 }
 
-function Exchange({ x, t, name, state, now, shared }: { x: ThreadExchange<OrgThreadMessage>; t: OrgThread; name: string; state: OrgThreadsState; now: number; shared: boolean }) {
+function Words({ m, onOpenTask }: { m: OrgThreadMessage; onOpenTask: (id: string) => void }) {
+  // Pictures render as the chat renders them: a path on its own line becomes the image. His words
+  // and pictures are his own, on this machine (the primary), whatever host the node runs on.
+  const text = [m.text, ...(m.images ?? [])].filter(Boolean).join('\n\n');
+  return (
+    <Fold className="org-thread-words-fold" testId="org-thread-words">
+      <AgentText text={text} className="org-thread-words" onTaskClick={onOpenTask} {...THREAD_WORDS_SOURCE} />
+    </Fold>
+  );
+}
+
+function Exchange({ x, t, name, state, now, shared, onOpenTask }: { x: ThreadExchange<OrgThreadMessage>; t: OrgThread; name: string; state: OrgThreadsState; now: number; shared: boolean; onOpenTask: (id: string) => void }) {
   const closed = !!t.closed;
-  if (x.opener) {
+  if (x.opener && t.opener) {
     const from = `${FROM_LABEL[x.opener.from] ?? FROM_LABEL.node}${x.opener.ref ? `: ${x.opener.ref}` : ''}`;
     return (
       <li className="org-thread-exchange is-opener" data-testid="org-thread-exchange" data-n={0} data-known={x.known ? 'true' : 'false'}>
-        <Answer text={x.opener.text} at={x.opener.at} by={`${name} opened this · ${from}`} known={x.known} now={now} testId="org-thread-opener" />
+        <Answer text={x.opener.text} at={x.opener.at} by={`${name} opened this · ${from}`} known={x.known} now={now} testId="org-thread-opener" source={threadOpenerSource(t.opener)} onOpenTask={onOpenTask} />
       </li>
     );
   }
@@ -302,7 +332,7 @@ function Exchange({ x, t, name, state, now, shared }: { x: ThreadExchange<OrgThr
             {(m.via === 'follow-up' || m.via === 'letter') && (
               <div className="org-thread-via">{m.via === 'follow-up' ? 'Follow up' : `Answering “${m.about ?? 'a letter'}”`}</div>
             )}
-            <Words m={m} />
+            <Words m={m} onOpenTask={onOpenTask} />
           </div>
           {(t.messages.length > 1 || !!t.opener) && !closed && (
             <button type="button" className="org-thread-link org-thread-split" data-testid="org-thread-split" title="This message is about something else: make it its own thread" onClick={() => void state.split(t.id, m.id)}>
@@ -312,7 +342,7 @@ function Exchange({ x, t, name, state, now, shared }: { x: ThreadExchange<OrgThr
         </div>
       ))}
       {x.answer ? (
-        <Answer text={x.answer.text} about={x.answer.about} at={x.answer.at} by={shared ? `${name} \u00b7 one reply to this and another thread` : name} known={x.known} now={now} />
+        <Answer text={x.answer.text} about={x.answer.about} at={x.answer.at} by={shared ? `${name} \u00b7 one reply to this and another thread` : name} known={x.known} now={now} source={threadAnswerSource(x.answer)} onOpenTask={onOpenTask} />
       ) : (
         <div className="org-thread-answer is-waiting" data-testid="org-thread-unanswered">
           {closed ? 'No answer' : `${name} has not answered yet`}
@@ -380,14 +410,17 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
       {overdue && <p className="org-thread-overdue" data-testid="org-thread-overdue">{overdue}</p>}
       {card.summary.by === 'node'
         ? (<>
-          <Markdown text={card.summary.text} className="org-thread-summary" testId="org-thread-reply" />
+          {/* The summary opens on the machine of the session that last wrote it, never the node's current one. */}
+          <AgentText text={card.summary.text} compact className="org-thread-summary" testId="org-thread-reply" onTaskClick={onOpenTask} {...threadSummarySource(t)} />
           {/* His message came after it: it says so until the node rewrites it (core/org/thread-view.ts summaryBehindHim). */}
           {card.summary.stale && <span className="org-thread-stand-in-note" data-testid="org-thread-summary-stale">Written before your latest message; {name} has not updated it yet</span>}
         </>)
         : (
           // No summary from the node yet: Walnut's own line, so the card never needs the conversation opened (2026-11-08).
           <div className="org-thread-summary is-stand-in" data-testid="org-thread-reply" data-by="walnut">
-            <p>{card.summary.from === 'none' ? `${name} has not answered yet` : card.summary.text}</p>
+            {card.summary.from === 'none'
+              ? <p>{name} has not answered yet</p>
+              : <AgentText text={card.summary.text} compact onTaskClick={onOpenTask} {...threadStandInSource(t, card.summary)} />}
             {card.summary.from !== 'none' && <span className="org-thread-stand-in-note" data-testid="org-thread-stand-in">{STAND_IN_NOTE[card.summary.from ?? 'answer'](name)}</span>}
           </div>
         )}
@@ -404,9 +437,9 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
         <ol className="org-thread-unread" data-testid="org-thread-unread">
           {card.unread.map((x) => (
             <li key={x.messages[0]?.id ?? 'opener'} className="org-thread-exchange" data-testid="org-thread-exchange" data-n={x.n} data-known="false">
-              {x.opener
-                ? <Answer text={x.opener.text} at={x.opener.at} by={`${name} opened this \u00b7 ${from(x.opener)}`} known={false} now={now} testId="org-thread-opener" />
-                : <Answer text={x.answer!.text} about={x.answer!.about} at={x.answer!.at} by={name} known={false} now={now} re={quote(x)} />}
+              {x.opener && t.opener
+                ? <Answer text={x.opener.text} at={x.opener.at} by={`${name} opened this \u00b7 ${from(x.opener)}`} known={false} now={now} testId="org-thread-opener" source={threadOpenerSource(t.opener)} onOpenTask={onOpenTask} />
+                : <Answer text={x.answer!.text} about={x.answer!.about} at={x.answer!.at} by={name} known={false} now={now} re={quote(x)} source={threadAnswerSource(x.answer!)} onOpenTask={onOpenTask} />}
             </li>
           ))}
         </ol>
@@ -419,7 +452,7 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
       )}
       {open && (
         <ol id={`${t.id}-conversation`} className="org-thread-conversation" data-testid="org-thread-messages">
-          {exchanges.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} shared={x.messages.some((m) => shared.has(m.id))} />)}
+          {exchanges.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} shared={x.messages.some((m) => shared.has(m.id))} onOpenTask={onOpenTask} />)}
         </ol>
       )}
       {following && onFollowUp ? (
@@ -474,8 +507,11 @@ export function OrgThreads({ name, state, tasks, onOpenTask, onFollowUp, now }: 
     };
   }, [all, shared, now]);
   const closed = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);
-  // Task pills in an answer open the task, as they do in the chat.
-  const onEntityClick = useEntityClickHandler(onOpenTask);
+  // Task pills outside the text blocks (an answer's About line) open the task, as they do in the
+  // chat. Every block of text opens its own paths from its own writer and keeps the click; a path
+  // that still reached the list has no writer to name, so it is refused, never opened on a guess.
+  const listFile = useAgentFileOpener(THREAD_LIST_SOURCE);
+  const onEntityClick = useEntityClickHandler(onOpenTask, undefined, listFile.onFileOpen, listFile.fileHost, listFile.fileSessionId, listFile.refusesAll);
   const snoozedIds = useMemo(() => new Set(snoozed.map((t) => t.id)), [snoozed]);
   const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} onOpenTask={onOpenTask} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} />;
   return (

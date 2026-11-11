@@ -4,10 +4,12 @@ import { fetchTriageHistory, type ChatEntry } from '@/api/chat';
 import { fetchSessionHistory, type SessionHistoryMessage } from '@/api/sessions';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { timeAgo } from '@/utils/time';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { SessionMessage } from '@/components/sessions/SessionMessage';
+import { AgentText } from '@/components/common/AgentText';
 
 interface TriagePanelProps {
   onClose: () => void;
@@ -72,7 +74,6 @@ function TriageSessionSection({
   // Subscribe pill titles for the inline renders below (taskRefHtml + summary).
   useEntityLabelsVersion();
   const taskRefHtml = taskRef ? renderMarkdownWithRefs(`[${taskRef}]`) : '';
-  const preview = summary.length > 200 ? summary.slice(0, 200) + '...' : summary;
   const hasSessionId = !!entry.sessionId;
 
   // Lazy-load session history on first expand (only if entry has a linked session)
@@ -89,7 +90,10 @@ function TriageSessionSection({
       .finally(() => setLoadingHistory(false));
   }, [expanded, loaded, hasSessionId, entry.sessionId]);
 
-  const handleEntityClick = useEntityClickHandler(onTaskClick, onSessionClick);
+  // The summary is the triage session's words: its paths open on that session's host.
+  const source = entry.sessionId ? { sessionId: entry.sessionId } : { unknownSource: true };
+  const file = useAgentFileOpener(source);
+  const handleEntityClick = useEntityClickHandler(onTaskClick, onSessionClick, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
   // stopPropagation needed because these links sit inside the collapsible section
   // header button — without it, clicking a task ref would also toggle section expand/collapse.
   const handleTaskRefClick = useCallback((e: React.MouseEvent<HTMLSpanElement>) => {
@@ -124,7 +128,7 @@ function TriageSessionSection({
       {/* Summary preview (always visible when collapsed) */}
       {!expanded && (
         <div className="triage-session-summary" onClick={() => setExpanded(true)}>
-          {preview || 'Triage completed'}
+          <AgentText text={summary || 'Triage completed'} compact {...source} onClick={handleEntityClick} />
         </div>
       )}
 
@@ -143,6 +147,9 @@ function TriageSessionSection({
             <SessionMessage
               key={mi}
               message={msg}
+              sessionId={entry.sessionId}
+              sessionHost={file.render.host}
+              onFileOpen={file.onFileOpen}
               onTaskClick={onTaskClick}
               onSessionClick={onSessionClick}
             />
@@ -150,8 +157,7 @@ function TriageSessionSection({
 
           {/* Fallback: render summary as markdown when no session history available */}
           {!loadingHistory && !historyError && !hasHistory && (loaded || !hasSessionId) && (
-            <div className="triage-session-summary-full markdown-body"
-                 dangerouslySetInnerHTML={stableHtml(renderMarkdownWithRefs(summary))} />
+            <AgentText text={summary} className="triage-session-summary-full" {...source} onClick={handleEntityClick} />
           )}
         </div>
       )}

@@ -71,10 +71,38 @@ export async function openProjectDetails(page: Page, project: string): Promise<L
     if (tries++ > 0) await page.keyboard.press('Escape') // a menu left half-open
 
     const menu = await openListProjectMenu(page, project)
-    await menu.getByRole('menuitem', { name: 'View project details' }).click({ timeout: 3_000 })
+    await clickMenuItem(menu, 'View project details')
     await expect(pane).toBeVisible({ timeout: 3_000 })
   }).toPass({ timeout: 30_000 })
   return pane
+}
+
+/**
+ * Click a row of an open menu as a person does, with the mouse on the row. A menu taller than
+ * the room beside its trigger is capped and scrolls inside. In WebKit a press focuses the row,
+ * and focusing a row that touches the edge of that box scrolls the box: the row moves between
+ * mousedown and mouseup (measured: down on "View project details", up on "Delete project", the
+ * click on neither and nothing opened). Playwright's own click scrolls a row cut by the cap the
+ * same way. So the box is scrolled first to hold the row as near its middle as it can, the way
+ * the menu scrolls its own highlight (ContextMenu.tsx), and the mouse presses the row's center.
+ */
+export async function clickMenuItem(menu: Locator, name: string): Promise<void> {
+  const item = menu.getByRole('menuitem', { name })
+  await expect(item).toBeVisible()
+  await item.evaluate((row) => {
+    const box = row.closest<HTMLElement>('[role="menu"]')
+    if (!box) return
+    const top = row.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop
+    const middle = top + row.getBoundingClientRect().height / 2 - box.clientHeight / 2
+    box.scrollTop = Math.max(0, Math.min(middle, box.scrollHeight - box.clientHeight))
+  })
+  // The row is what sits under its own center now, not the backdrop or the divider.
+  await expect.poll(() => item.evaluate((row) => {
+    const r = row.getBoundingClientRect()
+    return row.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))
+  }), { timeout: 3_000 }).toBe(true)
+  const at = (await item.boundingBox())!
+  await item.page().mouse.click(at.x + at.width / 2, at.y + at.height / 2)
 }
 
 /** A long list draws in batches: click `scope`'s "Show more" until `target` is drawn. */

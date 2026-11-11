@@ -25,6 +25,7 @@ import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { log } from '@/utils/log';
+import { AgentText } from '@/components/common/AgentText';
 import '@/styles/search-ask.css';
 
 /** Resolved rows by id-list. A windowed timeline mounts and unmounts the same
@@ -163,7 +164,7 @@ export function SearchAnswerCard({ answer, onOpenTask }: {
         <span className="agent-search-label">AI search</span>
         <span className="session-search-answer-count">{countLabel(rows.length, answer.extraRows)}</span>
       </header>
-      {answer.summary && <p className="agent-search-summary">{answer.summary}</p>}
+      {answer.summary && <AgentText compact unknownSource className="agent-search-summary" text={answer.summary} />}
       {rows.length > 0 && (
         <AgentSearchResultRows
           rows={rows}

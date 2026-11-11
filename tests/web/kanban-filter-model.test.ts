@@ -59,9 +59,9 @@ describe('chips', () => {
 
 describe('search', () => {
   it('matches title, ticket value, the shown summary and the shown waiting on, ignoring case', () => {
-    const c = card({ ticket: { tag: 'ticket:V1000000107', value: 'V1000000107' }, summary: { text: 'Retry storm in checkout', source: 'task', tooltip: '' },
+    const c = card({ ticket: { tag: 'ticket:ISSUE-107', value: 'ISSUE-107' }, summary: { text: 'Retry storm in checkout', plain: 'Retry storm in checkout', source: 'task', textSource: { unknownSource: true }, tooltip: '' },
       waiting: { kind: 'text', text: 'CR-48213' } });
-    expect(matchesSearch(c, 'v1000000107')).toBe(true);
+    expect(matchesSearch(c, 'issue-107')).toBe(true);
     expect(matchesSearch(c, 'STORM')).toBe(true);
     expect(matchesSearch(c, 'cr-48213')).toBe(true);
     expect(matchesSearch(c, 'latency')).toBe(true);

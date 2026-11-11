@@ -4,8 +4,9 @@ import { EmailItem } from './EmailItem';
 import { ambiguousAccounts } from './item-receipt-model';
 import '@/styles/human-inbox-items.css';
 
-export function EmailItems({ letterId, items, onNavigate }: {
+export function EmailItems({ letterId, items, onNavigate, sender }: {
   letterId: string; items?: InboxLetterItem[]; onNavigate: (to: string) => void;
+  sender?: { host?: string; sessionId?: string; unknownSource?: boolean };
 }) {
   const catalog = useAppCatalog();
   if (!items?.length) return null;
@@ -14,6 +15,6 @@ export function EmailItems({ letterId, items, onNavigate }: {
   return <section className="hii-items" aria-label="Email items">
     <h2>Email items ({items.length})</h2>
     <p className="hii-snapshot">Mailbox counts in this summary are a snapshot, not live status.</p>
-    {items.map(item => <EmailItem key={item.id} letterId={letterId} item={item} duplicateLabels={duplicates} canOpenMail={canOpenMail} onNavigate={onNavigate} />)}
+    {items.map(item => <EmailItem key={item.id} letterId={letterId} item={item} duplicateLabels={duplicates} canOpenMail={canOpenMail} onNavigate={onNavigate} sender={sender} />)}
   </section>;
 }

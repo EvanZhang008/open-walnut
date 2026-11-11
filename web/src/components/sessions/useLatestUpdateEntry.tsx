@@ -67,6 +67,7 @@ export function useLatestUpdateEntry(input: {
   const popover = open && has ? (
     <LatestUpdatePopover
       key={sessionId}
+      sessionId={sessionId}
       overview={overview}
       recap={recap}
       at={newer(tip.overviewAt, tip.recapAt)}

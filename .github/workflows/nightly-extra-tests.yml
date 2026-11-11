@@ -100,6 +100,10 @@ jobs:
       - name: Warm session (the built server and SPA)
         if: ${{ !cancelled() }}
         run: bun x playwright test -c tests/e2e/browser/warm-session.config.ts --project=chromium
+      - name: References in agent text (the built SPA and its own triage record)
+        if: ${{ !cancelled() }}
+        env: { PW_WORKERS: '1' }
+        run: bun x playwright test -c tests/e2e/browser/agent-text.config.ts --project=chromium
       - name: Changed tab compare (PW_COMPARE_FIXTURE)
         if: ${{ !cancelled() }}
         env: { PW_COMPARE_FIXTURE: '1', PW_TEST_PORT: '3531' }

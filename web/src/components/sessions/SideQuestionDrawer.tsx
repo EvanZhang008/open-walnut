@@ -30,12 +30,11 @@
  *    the heaviest subtree in the app.
  */
 import { ArrowUpRightIcon } from '@/components/common/PhoneIcons';
-import { stableHtml } from '@/hooks/useStableHtml';
+import { AgentText } from '@/components/common/AgentText';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import type { SessionEffort, SessionOutputMode } from '@open-walnut/core';
 import { ChatInput } from '@/components/chat/ChatInput';
-import { renderMarkdown } from '@/components/chat/ChatMessage';
 import { ComposerModelPill } from '@/components/sessions/ComposerModelPill';
 import { OutputModePill } from '@/components/sessions/OutputModePill';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
@@ -1046,10 +1045,7 @@ export function SideQuestionDrawer({
                   {state.legacy.map((q) => (
                     <div key={q.id} className="side-question-card">
                       <div className="side-question-card-q">{q.question}</div>
-                      <div
-                        className="markdown-body side-question-card-a"
-                        dangerouslySetInnerHTML={stableHtml(renderMarkdown(q.answer ?? ''))}
-                      />
+                      <AgentText className="side-question-card-a" sessionId={q.sessionId} unknownSource={!q.sessionId} text={q.answer ?? ''} />
                       <div className="side-question-card-actions">
                         {q.promotedTaskId === PENDING_PROMOTE ? (
                           <span className="side-question-promoted">{'✓'} creating…</span>

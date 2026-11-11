@@ -13,19 +13,26 @@
  * (renderMarkdownWithRefs), so task/session refs become pills and file paths
  * linkify exactly like they do in chat; the caller supplies the click handler.
  */
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { AGENT_REF_CHANNEL, claimAgentRef, openAgentRef, parseAgentRef, registerAgentRef, type AgentRef } from '@/utils/agent-ref-open';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { linkAgentHtml } from '../../../../src/lib/agent-html-refs';
+import { secureAgentHtml } from '../../../../src/lib/agent-html-security';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
+import { randomId } from '@/utils/random-id';
+import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
+import type { AgentTextSource } from '@/utils/agent-text-source';
 import type { LetterBodyFormat } from '@/api/human-inbox';
-import { LETTER_IFRAME_SANDBOX, wrapLetterHtml } from './letter-html-frame';
+import { LETTER_IFRAME_SANDBOX, planLetterFrame, wrapLetterHtml } from './letter-html-frame';
 
 export { LETTER_IFRAME_SANDBOX, wrapLetterHtml };
 
-export function LetterBody({ body, format, subject, onClick, bodyUrl }: {
+export function LetterBody({ body, format, subject, onClick, bodyUrl, onRefOpen, source }: {
   body: string;
   format: LetterBodyFormat;
   subject: string;
-  /** Delegated markdown link clicks (task pills, file paths). HTML: unused. */
+  /** Delegated markdown link clicks. */
   onClick?: (e: React.MouseEvent) => void;
   /**
    * Set when the server DEFERRED the document (over LETTER_INLINE_BODY_MAX_BYTES,
@@ -35,16 +42,43 @@ export function LetterBody({ body, format, subject, onClick, bodyUrl }: {
    * the JSON it arrived in, and the document all resident at once.
    */
   bodyUrl?: string;
+  onRefOpen?: (ref: AgentRef) => void;
+  source?: AgentTextSource;
 }) {
   const labelsVersion = useEntityLabelsVersion();
+  const navigate = useNavigate();
+  const file = useAgentFileOpener(source);
+  const { cwd, host, images } = file.render;
+  const token = useMemo(() => randomId().replace(/-/g, ''), [body, bodyUrl, format]);
+  useEffect(() => {
+    const unregister = registerAgentRef(token, (ref) => {
+      if (onRefOpen) onRefOpen(ref);
+      else if (ref.kind === 'file' && file.onFileOpen) file.onFileOpen(ref.path, ref.line, undefined, ref.endLine);
+      else openAgentRef(ref, navigate);
+    });
+    if (typeof BroadcastChannel === 'undefined') return unregister;
+    const channel = new BroadcastChannel(AGENT_REF_CHANNEL);
+    channel.onmessage = (event) => {
+      const { ask, href } = event.data ?? {};
+      if (typeof ask !== 'string' || typeof href !== 'string' || parseAgentRef(href)?.token !== token) return;
+      if (claimAgentRef(href)) channel.postMessage({ answer: ask });
+    };
+    return () => { unregister(); channel.close(); };
+  }, [token, navigate, onRefOpen, file.onFileOpen]);
   const deferredSrc = useMemo(() => {
     if (!bodyUrl) return undefined;
-    return bodyUrl + (bodyUrl.includes('?') ? '&' : '?') + 'frame=1';
-  }, [bodyUrl]);
+    return bodyUrl + (bodyUrl.includes('?') ? '&' : '?') + `frame=1&ref_token=${token}`;
+  }, [bodyUrl, token]);
   const html = useMemo(
-    () => (deferredSrc ? '' : format === 'html' ? wrapLetterHtml(body) : renderMarkdownWithRefs(body)),
+    () => {
+      if (deferredSrc) return '';
+      if (format !== 'html') return renderMarkdownWithRefs(body, cwd, host, { inlineImages: images });
+      const plan = planLetterFrame(body);
+      const linked = linkAgentHtml(plan.head + body.slice(plan.consumed) + plan.tail, { token, refBase: `${window.location.origin}/open-ref`, scriptingEnabled: false });
+      return secureAgentHtml(linked, { scriptingEnabled: false, trustedPrefix: plan.head });
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-    [body, format, labelsVersion, deferredSrc],
+    [body, format, labelsVersion, deferredSrc, token, cwd, host, images],
   );
   // One object per html string: React 19 re-sets innerHTML whenever this prop's
   // OBJECT changes, so a fresh `{ __html }` on every render rebuilt the body each
@@ -52,9 +86,6 @@ export function LetterBody({ body, format, subject, onClick, bodyUrl }: {
   // pushing the thread the reader was in (2026-10-25).
   const inner = useMemo(() => ({ __html: html }), [html]);
 
-  // A deferred body always renders in the frame, markdown included: the reader's
-  // ref-pill rendering needs the text in JS, and a document that big is media,
-  // not prose worth linkifying.
   if (deferredSrc) {
     return (
       <iframe

@@ -583,7 +583,7 @@ select {
 .notification-panel-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 998;
+  z-index: 9199;
   background: transparent;
 }
 
@@ -596,7 +596,7 @@ select {
   left: 200px;
   bottom: 0;
   width: 320px;
-  z-index: 999;
+  z-index: 9200;
   /* Same surface as the sidebar so panel + sidebar read as one column. */
   background: var(--bg);
   border-right: 1px solid var(--border);
@@ -3213,6 +3213,9 @@ select {
 
 .provenance-body.markdown-body > *:first-child { margin-top: 0; }
 .provenance-body.markdown-body > *:last-child { margin-bottom: 0; }
+/* AgentText inside the quote: the same edge margins. */
+.provenance-body.markdown-body > .provenance-body-text > *:first-child { margin-top: 0; }
+.provenance-body.markdown-body > .provenance-body-text > *:last-child { margin-bottom: 0; }
 
 .provenance-reply-request {
   display: flex;

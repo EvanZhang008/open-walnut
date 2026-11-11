@@ -9,9 +9,12 @@ import { ItemConfirmation } from './ItemConfirmation';
 import { ItemTaskSelector } from './ItemTaskSelector';
 import { clearItemDraft, rememberInboxReturn, useItemDraft } from './item-drafts';
 import { taskPath } from '@/utils/task-path';
+import { AgentText } from '@/components/common/AgentText';
 
-export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false, onNavigate }: {
+export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false, onNavigate, sender }: {
   letterId: string; item: InboxLetterItem; duplicateLabels: ReadonlySet<string>; canOpenMail?: boolean; onNavigate: (to: string) => void;
+  /** Whose words these are (the letter's sender, or a thread turn's own writer): a path in the summary opens on its host. */
+  sender?: { host?: string; sessionId?: string; unknownSource?: boolean };
 }) {
   const { state, prepare, execute, direct, check } = useItemExecution(letterId, item);
   const [expanded, setExpanded] = useState(false);
@@ -67,7 +70,7 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
   }
   return <article className="hii-item" data-item-id={item.id} aria-label={item.subject}>
     <h3 className="hii-subject">{item.subject}</h3>
-    <div ref={summary} className={`hii-summary${expanded ? ' hii-summary-expanded' : ''}`}>{item.summary || 'Email summary unavailable'}</div>
+    <div ref={summary} className={`hii-summary${expanded ? ' hii-summary-expanded' : ''}`}><AgentText compact host={sender?.host} sessionId={sender?.sessionId} unknownSource={sender?.unknownSource ?? (!sender?.sessionId && sender?.host === undefined)} text={item.summary || 'Email summary unavailable'} /></div>
     {(truncated || expanded) && <button type="button" className="hib-row-btn hii-summary-toggle" aria-expanded={expanded}
       aria-label={`${expanded ? 'Show less' : 'Show more'} for ${item.subject}`} onClick={() => setExpanded(v => !v)}>{expanded ? 'Show less' : 'Show more'}</button>}
     <div className="hii-source"><span>Mail</span><span>{accountText(item, duplicateLabels)}</span>

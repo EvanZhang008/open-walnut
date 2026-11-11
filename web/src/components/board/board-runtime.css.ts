@@ -100,7 +100,10 @@ walnut-thread, walnut-mark, walnut-strip, walnut-check, walnut-choice { display:
 .wn-del.wn-armed { opacity: 1; color: #fff; background: var(--wn-need, #d93025); font-weight: 600; }
 .wn-del.wn-deleting { cursor: default; }
 .wn-link { color: var(--wn-link, #2f6feb); }
-.wn-file, .wn-letter { color: var(--wn-link, #2f6feb); cursor: pointer; border-bottom: 1px dashed currentColor; text-decoration: none; }
+.wn-file, .wn-letter, .wn-text a.file-link, .wn-text a.letter-link, .wn-text a.task-link, .wn-text a.session-link { color: var(--wn-link, #2f6feb); cursor: pointer; border-bottom: 1px dashed currentColor; text-decoration: none; }
+.wn-text a { overflow-wrap: anywhere; }
+.wn-text h1, .wn-text h2, .wn-text h3, .wn-text h4, .wn-text h5, .wn-text h6 { font-size: inherit; margin: 6px 0 2px; }
+.wn-msg[data-author="user"] .wn-text a { color: inherit; }
 .wn-msg[data-author="user"] .wn-text .wn-file, .wn-msg[data-author="user"] .wn-text .wn-letter { color: inherit; }
 .wn-msg.wn-pending .wn-text { opacity: .6; }
 .wn-msg.wn-failed .wn-text { box-shadow: 0 0 0 1.5px var(--wn-need, #d93025); }
@@ -263,13 +266,19 @@ walnut-choice[data-answered] { border-color: rgba(128,128,128,.18); }
 walnut-choice[data-folded] { padding: 0; }
 walnut-choice[data-folded] > :not(.wn-fold-row) { display: none !important; }
 .wn-fold-row[hidden], .wn-fold-btn[hidden], .wn-fold-more[hidden] { display: none; }
-/* One row: what does not fit ends in an ellipsis (opening the choice shows it all). */
+/* Prose stays one row; sideways scrolling keeps every rendered reference reachable. */
 .wn-fold-row {
   display: flex; align-items: baseline; gap: 10px; width: 100%; box-sizing: border-box; white-space: nowrap;
   padding: 7px 10px; border: 0; border-radius: 12px; background: transparent; color: inherit; font: inherit;
   text-align: left; cursor: pointer;
 }
-.wn-fold-row:hover, .wn-fold-row:focus-visible { background: rgba(128,128,128,.08); outline: none; }
+.wn-fold-row:hover { background: rgba(128,128,128,.08); }
+.wn-fold-toggle {
+  display: inline-flex; align-items: baseline; gap: 10px; flex: 0 1 auto; min-width: 3em;
+  padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.wn-fold-toggle:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.wn-fold-sum > * { display: inline; margin: 0; }
 .wn-fold-caret { flex: none; opacity: .55; font-size: .85em; }
 .wn-fold-title { flex: 0 1 auto; min-width: 3em; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .wn-fold-pick {
@@ -277,7 +286,8 @@ walnut-choice[data-folded] > :not(.wn-fold-row) { display: none !important; }
   padding: 0 8px; border-radius: 999px; font-size: .85em; font-weight: 600; line-height: 1.6;
   background: rgba(21,128,61,.12); color: var(--wn-done, #15803d);
 }
-.wn-fold-sum { flex: 1 1 0; min-width: 4em; overflow: hidden; text-overflow: ellipsis; opacity: .8; }
+/* Leave room for WebKit's overlay scrollbar so it cannot cover the links. */
+.wn-fold-sum { flex: 1 1 0; min-width: 4em; padding-bottom: 12px; overflow-x: auto; overscroll-behavior-x: contain; opacity: .8; }
 .wn-fold-words { font-style: italic; }
 .wn-fold-when { flex: none; font-size: .82em; opacity: .6; }
 .wn-fold-by { flex: none; font-size: .82em; opacity: .6; }

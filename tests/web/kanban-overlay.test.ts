@@ -93,10 +93,24 @@ describe('move and card patches', () => {
     expect(p.b).toMatchObject({ lane: 'resolved', rank: undefined });
   });
 
+  it('same words keep the saved writer in the optimistic overlay', () => {
+    const current: BoardCard = {
+      summary: 'Open /home/me/n.txt', summary_by: 'task:worker', summary_session_id: 'writer-a',
+      waiting_on: 'Read /home/me/review.txt', waiting_on_by: 'task:lead', waiting_on_session_id: 'writer-b',
+    };
+    const patch = setCardPatch({ summary: current.summary, waiting_on: current.waiting_on }, now, current);
+    expect(patch).toEqual({ summary_at: now, waiting_on_at: now });
+    const out = applyOverlays({ ...base, cards: { a: current } }, putOverlay(new Map(), ov('a', 1, { cards: { a: patch } })));
+    expect(out.cards.a.summary_session_id).toBe('writer-a');
+    expect(out.cards.a.waiting_on_session_id).toBe('writer-b');
+    expect(setCardPatch({ summary: 'A new path /tmp/mine.txt' }, now, current)).toMatchObject({ summary_by: 'human', summary_session_id: undefined });
+  });
+
   it("'' clears a field; lane '' goes back to automatic", () => {
     expect(setCardPatch({ lane: '' }, now)).toEqual({ lane: undefined, lane_at: undefined, lane_by: undefined, rank: undefined, rank_lane: undefined });
     expect(setCardPatch({ summary: 'Short', waiting_on: '' }, now)).toEqual({
-      summary: 'Short', summary_at: now, summary_by: 'human', waiting_on: undefined, waiting_on_at: undefined, waiting_on_by: undefined,
+      summary: 'Short', summary_at: now, summary_by: 'human', summary_session_id: undefined,
+      waiting_on: undefined, waiting_on_at: undefined, waiting_on_by: undefined, waiting_on_session_id: undefined,
     });
     const out = applyOverlays(base, putOverlay(new Map(), ov('a', 1, { cards: { a: setCardPatch({ lane: '' }, now) } })));
     expect(out.cards.a).toEqual({});

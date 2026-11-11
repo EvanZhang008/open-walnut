@@ -1,4 +1,5 @@
 import { useRecapTip, type RecapTipFields } from '@/stores/recap-tip-store';
+import { AgentText } from '@/components/common/AgentText';
 
 /*
  * The session recap, two short paragraphs the turn-complete self-report writes
@@ -23,7 +24,7 @@ export function SessionRecapLine({ sessionId, session, className, style }: {
   if (!recap) return null;
   return (
     <div className={className} style={style} title={recap} data-testid="session-recap-line">
-      {recap}
+      <AgentText compact inline sessionId={sessionId} text={recap} />
     </div>
   );
 }

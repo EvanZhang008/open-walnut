@@ -8,7 +8,7 @@
  * Opened again, the tab shows the lists it showed last time while the tasks load (kept in this
  * browser, ext-tasks-model.ts), and never an empty list it does not know to be empty.
  */
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { Approval } from '@/api/approvals';
 import { apiPatch } from '@/api/client';
@@ -17,6 +17,7 @@ import { createTask } from '@/api/tasks';
 import { wsClient } from '@/api/ws';
 import { ApprovalButtons, requesterText } from '@/components/approvals/ApprovalPrompts';
 import { useApprovals } from '@/components/approvals/approvals-store';
+import { AgentText } from '@/components/common/AgentText';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { useImageAttachments } from '@/components/common/image-attachments';
@@ -32,10 +33,11 @@ import { AlikeLine, ApprovalLines, alikeLines, useExtApprovals } from './ExtAppr
 import { useVaultChangedRelay } from './vault-changed-relay';
 import { useFrameTheme } from './ext-theme';
 import { hostOf, panelAskTitle, type PanelPage } from './ext-panel-model';
-import { EXT_TASKS_MAX, askedOf, extTaskLists, lastWordsKnown, inFocus, keepTaskLists, keptTaskLists, pageTaskInput, rowLine, type ExtTaskRow } from './ext-tasks-model';
+import { EXT_TASKS_MAX, askedSourcedOf, extTaskLists, lastWordsKnown, inFocus, keepTaskLists, keptTaskLists, pageTaskInput, rowLine, type ExtTaskRow } from './ext-tasks-model';
 import { SHOWN_AFTER_PAINT_MAX_MS, SNAP_ROWS, type TasksSnap } from './ext-snapshot';
 import { latestReplies } from './ask-words-read';
 import { useAskWords } from './useExtAsks';
+import type { AgentTextSource } from '@/utils/agent-text-source';
 import './ext-panel.css';
 
 export function PopoutExtTasks() {
@@ -219,38 +221,47 @@ function TaskRow({ section, row, open, onToggle, replies, setReplies }: { sectio
       {/* Under Focus the section says it; elsewhere the row offers Add to Focus. */}
       {section !== 'focus' && <FocusButton task={task} inRow />}
     </div>
-    {open && <TaskReply task={task} line={row.line} reply={reply ?? { state: '' }} onChange={(r) => setReplies((all) => ({ ...all, [task.id]: { ...(all[task.id] ?? { state: '' }), ...r } }))} />}
+    {open && <TaskReply task={task} line={row.line} rowState={row.state} reply={reply ?? { state: '' }} onChange={(r) => setReplies((all) => ({ ...all, [task.id]: { ...(all[task.id] ?? { state: '' }), ...r } }))} />}
   </div>;
 }
 
-/** How much of the task's last message the open row shows: its end, where a turn puts its question. */
-const LAST_MESSAGE_MAX = 400;
-
-/** The task's own last message, read when its row opens and its status carries none. */
-function useLastMessage(sessionId: string | null, known: boolean): string {
-  const [text, setText] = useState('');
+/** The task's own last message, read when its row opens and its status carries none, with the
+ *  session it was read from (its writer), so a later session change never relabels it. */
+export function useLastMessage(sessionId: string | null, known: boolean): { text: string; sessionId: string } {
+  const [said, setSaid] = useState({ text: '', sessionId: '' });
   useEffect(() => {
     if (!sessionId || known) return;
     const controller = new AbortController();
+    let cancelled = false;
     latestReplies(sessionId, { tail: 8, signal: controller.signal })
       .then((r) => {
+        if (cancelled) return;
         const last = [...(r ?? [])].reverse().find((m) => m.role === 'assistant' && (m.text ?? '').trim());
-        const words = (last?.text ?? '').replace(/\s+/g, ' ').trim();
-        setText(words.length > LAST_MESSAGE_MAX ? `…${words.slice(-LAST_MESSAGE_MAX)}` : words);
+        // The whole message as written (a cut there split paths and links in half); the box
+        // scrolls, and opens on its end, where a turn puts its question.
+        setSaid({ text: (last?.text ?? '').trim(), sessionId });
       })
       .catch(() => { /* the status line is still there */ });
-    return () => controller.abort();
+    return () => { cancelled = true; controller.abort(); };
   }, [sessionId, known]);
-  return text;
+  return !known && said.sessionId === sessionId ? said : { text: '', sessionId: '' };
 }
 
-function TaskReply({ task, line, reply, onChange }: { task: Task; line: string; reply: ReplyState; onChange: (r: Partial<ReplyState>) => void }) {
+function TaskReply({ task, line, rowState, reply, onChange }: { task: Task; line: string; rowState: ExtTaskRow['state']; reply: ReplyState; onChange: (r: Partial<ReplyState>) => void }) {
   const sessionId = resolveTaskSessionId(task);
   const { state } = reply;
-  const asked = askedOf(task, line);
+  const askedLines = askedSourcedOf(task, line, rowState);
+  const asked = askedLines.map((l) => l.text);
   // Its last words are known already when the status line or the list carries them.
-  const lastMessage = useLastMessage(sessionId, asked.length > 1 || lastWordsKnown(task));
-  const said = lastMessage && !asked.some((a) => a.includes(lastMessage.slice(0, 60))) ? [...asked, lastMessage] : asked;
+  const last = useLastMessage(sessionId, asked.length > 1 || lastWordsKnown(task));
+  const lastMessage = last.text;
+  const flat = (t: string) => t.replace(/\s+/g, ' ').trim();
+  const withLast = !!lastMessage && !asked.some((a) => flat(a).includes(flat(lastMessage).slice(0, 60)));
+  const said = withLast ? [...asked, lastMessage] : asked;
+  // Each line's recorded writer; the fetched message's is the session it was read from.
+  const saidSources: AgentTextSource[] = withLast ? [...askedLines.map((l) => l.source), { sessionId: last.sessionId }] : askedLines.map((l) => l.source);
+  const saidRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { if (saidRef.current) saidRef.current.scrollTop = saidRef.current.scrollHeight; }, [lastMessage]);
   // The words wait in the draft store and pictures go with them, as in the chat.
   const draft = useDraft(sessionId ? draftKey('ext-task-reply', task.id) : null);
   const pictures = useImageAttachments();
@@ -271,8 +282,10 @@ function TaskReply({ task, line, reply, onChange }: { task: Task; line: string; 
   };
   return <div className="ext-task-reply">
     {said.length > 0 && (
-      <div className="ext-task-asked" data-testid="ext-task-asked">
-        {said.map((s, i) => <p key={i} className={i === said.length - 1 && s === lastMessage ? 'ext-task-last' : ''}>{s}</p>)}
+      <div className="ext-task-asked" data-testid="ext-task-asked" ref={saidRef}>
+        {/* The task's ask and last message, agent text: a path, link, task or letter in it opens
+            (a task in a new tab, as Open in Walnut does). */}
+        {said.map((s, i) => <AgentText key={i} compact className={i === said.length - 1 && s === lastMessage ? 'ext-task-said ext-task-last' : 'ext-task-said'} onTaskClick={openTask} {...(saidSources[i] ?? { unknownSource: true })} text={s} />)}
       </div>
     )}
     {sessionId

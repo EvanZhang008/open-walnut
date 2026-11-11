@@ -99,7 +99,7 @@ describe('kanban filter: frozen membership (G13)', () => {
 describe('kanban filter: search and the other chips', () => {
   const cards = [
     card('a', `${T(7)} payout mismatch`, { ticket: { tag: `ticket:${T(7)}`, value: T(7) }, needsYou: true }),
-    card('b', `${T(8)} ledger export lag`, { summary: { text: 'Rolled the retry budget back', source: 'task', tooltip: '' } }),
+    card('b', `${T(8)} ledger export lag`, { summary: { text: 'Rolled the retry budget back', plain: 'Rolled the retry budget back', source: 'task', textSource: { unknownSource: true }, tooltip: '' } }),
     card('w', `${T(9)} card auth declines`, { laneKind: 'wait', waiting: { kind: 'text', text: 'CR-48213' }, stale: true }),
     card('d', `${T(10)} settled`, { laneKind: 'done', isComplete: false }),
   ];

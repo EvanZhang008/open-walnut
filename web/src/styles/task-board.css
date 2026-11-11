@@ -13,6 +13,10 @@
   overflow: hidden;
 }
 
+.board-file-source-path { overflow-wrap: anywhere; }
+.board-file-source-choices { display: flex; flex-direction: column; gap: 8px; }
+.board-file-source-choices button { white-space: normal; overflow-wrap: anywhere; text-align: left; }
+
 .task-board-bar {
   display: flex;
   align-items: center;

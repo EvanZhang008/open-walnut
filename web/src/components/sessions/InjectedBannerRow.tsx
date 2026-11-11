@@ -1,7 +1,6 @@
 import { StepIcon } from './StepIcon';
 import { useRowDisclosure } from './row-disclosure';
-import { stableHtml } from '@/hooks/useStableHtml';
-import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
+import { AgentText } from '@/components/common/AgentText';
 import type { InjectedBanner } from '@open-walnut/history-injected-banner';
 import '@/styles/injected-banner.css';
 
@@ -14,16 +13,14 @@ import '@/styles/injected-banner.css';
  * Closed by default — the human's own words are the point of the bubble.
  *
  * Markdown renders lazily, only once opened: a catch-up block is a whole
- * conversation recap, and a session's history can hold many of them.
+ * conversation recap, and a session's history can hold many of them. No writer of its own.
  */
-export function InjectedBannerRow({ banner, sessionCwd, disclosureId }: {
+export function InjectedBannerRow({ banner, disclosureId }: {
   banner: InjectedBanner;
-  sessionCwd?: string;
   /** Its message's id and place (the same banner rides many messages). */
   disclosureId?: string;
 }) {
   const [open, setOpen] = useRowDisclosure(disclosureId, false);
-  const html = useRenderedMarkdown(open ? banner.body : '', sessionCwd);
   return (
     <div
       className="tool-run-row injected-banner-row"
@@ -40,10 +37,7 @@ export function InjectedBannerRow({ banner, sessionCwd, disclosureId }: {
       </button>
       {open && (
         <div className="tool-run-body" data-testid="injected-banner-body">
-          <div
-            className="chat-tool-block-result markdown-body"
-            dangerouslySetInnerHTML={stableHtml(html)}
-          />
+          <AgentText className="chat-tool-block-result" text={banner.body} unknownSource />
         </div>
       )}
     </div>

@@ -26,6 +26,10 @@ const MODELS: Record<string, string> = {
   'web/src/components/board/board-status-model.ts': 'web/src/components/board/BoardStatusView.tsx',
 }
 
+/** Files that read answeredFor only for who wrote the answer (so a path in it opens on that
+ *  machine), never its words: they show nothing of it. */
+const WRITER_ONLY = ['web/src/utils/agent-text-source.ts', 'web/src/popout/ext-tasks-model.ts']
+
 describe('an answer given for the user can be taken back wherever it shows', () => {
   const readers = files('web/src').filter((f) => /\banswered[Ff]or\b|answeredForWords\(/.test(code(f)))
 
@@ -33,8 +37,16 @@ describe('an answer given for the user can be taken back wherever it shows', () 
     for (const f of readers) {
       if (f === 'web/src/components/tasks/AnsweredForLine.tsx') continue
       if (MODELS[f]) continue
+      if (WRITER_ONLY.includes(f)) {
+        expect(code(f), `${f} reads the words of an answer given for the user: show them with Withdraw, or keep to its writer`).not.toMatch(/answeredFor\??\.(ask|byTitle|at)\b/)
+        continue
+      }
       expect(code(f), `${f} shows an answer given for the user: offer WithdrawAnswerButton there, or list it in MODELS with the view that does`).toMatch(/<(WithdrawAnswerButton|AnsweredForLine)\b/)
     }
+  })
+
+  it('each writer-only reader still reads it', () => {
+    for (const f of WRITER_ONLY) expect(readers, `${f} no longer reads answeredFor: drop it from WRITER_ONLY`).toContain(f)
   })
 
   it('each model feeds a view that offers it', () => {

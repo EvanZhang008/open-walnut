@@ -50,6 +50,7 @@ const SESSION_FILES: Record<string, string> = {
   'utils/crash-recovery.ts': 'the crash log must reset with the tab; it clears the layout record too',
   'utils/crash-report.ts': 'reads storage to report a crash',
   'utils/layout-record.ts': 'adopts the pre-record sessionStorage keys once',
+  'utils/path-machine-memory.ts': "the machine this tab's user named for a path whose writer Walnut did not record: a per-tab answer to a question, not Home or Org layout",
   'utils/scroll-debug.ts': 'a debug timer',
   'utils/stale-assets.ts': 'reload bookkeeping of one tab',
   'utils/thread-stack-persist.ts': 'the question stack inside one panel, per tab by spec C69; the panel is in the layout record',
@@ -72,6 +73,7 @@ const SESSION_KEYS: Record<string, string> = {
   'open-walnut-crash-log': 'crash log',
   'open_walnut_scroll_debug_t0': 'debug timer',
   'open-walnut-skip-prefs-merge': 'one-boot skip flag',
+  'walnut.pathMachine.v1': "the machines this tab's user named for paths with no recorded writer",
 };
 
 /** Files that draw Home or Org. */

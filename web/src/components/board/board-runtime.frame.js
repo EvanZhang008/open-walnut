@@ -27,10 +27,12 @@
   // message, set a mark). Author code may still render, style and filter freely.
   var NONCE = '__WN_BOARD_NONCE__';
   var post = window.parent.postMessage.bind(window.parent);
+  var defineProperty = Object.defineProperty;
+  var createObject = Object.create;
   if (document.currentScript) document.currentScript.remove();
 
   var state = {
-    boardTaskId: '', refs: {}, threads: {}, marks: {}, seen: {},
+    boardTaskId: '', refs: {}, threads: {}, marks: {}, seen: {}, renderedText: Object.create(null),
     projects: {}, checks: {}, choices: {}, reminders: {}, section_seen: {},
     // Notes the user typed and Walnut has not saved yet, kept by the host across a new document.
     note_drafts: {},
@@ -43,6 +45,7 @@
   // Other host messages (the docked composer's sending / sent / send-failed), by type.
   var onHost = {};
   var live = new Set();
+  var messageSources = new WeakMap();
   var deferred = new Set();
   var acks = {};
   var counter = { n: 0 };
@@ -54,7 +57,13 @@
   // setTimeout's own ceiling is ~24.8 days; a farther reminder is re-armed on the way.
   var MAX_TIMER_MS = 6 * 3600 * 1000;
 
-  function send(msg) { msg.nonce = NONCE; post(msg, '*'); }
+  function send(msg) {
+    var descriptor = createObject(null);
+    descriptor.value = NONCE;
+    descriptor.enumerable = true;
+    defineProperty(msg, 'nonce', descriptor);
+    post(msg, '*');
+  }
   /** A real user gesture, never a synthetic event an author script dispatched. */
   function trusted(e) { return !!(e && e.isTrusted); }
   function nextId() { counter.n += 1; return counter.n; }
@@ -479,7 +488,7 @@
   function setFold(id, open) {
     if (!id) return;
     if (open) view.folds[id] = true; else delete view.folds[id];
-    reportView();
+    if (flags.hasData) send({ t: 'wn-board:view', view: captureView() });
   }
 
   // ── The composer's slot: Walnut's composer (voice included) cannot live in this
@@ -523,7 +532,7 @@
     state: state, flags: flags, live: live, Base: Base, DEFAULT_LABELS: DEFAULT_LABELS,
     send: send, request: request, trusted: trusted, nextId: nextId, esc: esc, hhmm: hhmm, when: when,
     parsePairs: parsePairs, whoOf: whoOf, unreadIn: unreadIn, markSeen: markSeen, addMessage: addMessage,
-    removeMessage: removeMessage, renderAll: renderAll, setHtml: setHtml, openAncestors: openAncestors, topSections: topSections,
+    removeMessage: removeMessage, renderAll: renderAll, setHtml: setHtml, registerMessageRows: registerMessageRows, openAncestors: openAncestors, topSections: topSections,
     threadEls: threadEls, applyFilter: applyFilter, applyProjects: applyProjects, projectStatus: projectStatus,
     sectionStatus: sectionStatus,
     countedStatuses: countedStatuses,
@@ -544,6 +553,7 @@
       state.boardTaskId = String(d.boardTaskId || '');
       state.refs = obj(d.refs);
       state.threads = obj(d.threads);
+      state.renderedText = obj(d.renderedText);
       state.marks = obj(d.marks);
       state.seen = obj(d.seen);
       state.projects = obj(d.projects);
@@ -579,12 +589,32 @@
   });
 
   // ── A path or a letter in a message (board-markdown.frame.js) opens in the app, a real click only. ──
+  // Author HTML can copy row attributes; only generated nodes carry a message source.
+  function registerMessageRows(list, thread) {
+    for (var i = 0; i < list.children.length; i++) {
+      var row = list.children[i];
+      var msg = row.getAttribute('data-id') || '';
+      messageSources.set(row, { thread: thread, msg: msg });
+    }
+  }
+  function messageOf(a) {
+    for (var node = a; node; node = node.parentElement) {
+      var source = messageSources.get(node);
+      if (source) return source;
+    }
+    return { thread: '', msg: '' };
+  }
   function openInApp(e) {
-    var a = e.target && e.target.closest ? e.target.closest('a.wn-file[data-wn-path], a.wn-letter[data-wn-letter]') : null;
+    var a = e.target && e.target.closest ? e.target.closest('a.wn-file[data-wn-path], a.wn-letter[data-wn-letter], a.file-link, a.letter-link, a.task-link, a.session-link, a[data-walnut-ref]') : null;
     if (!a) return;
+    if (a.getAttribute('data-walnut-ref') === 'url') return;
     e.preventDefault();
-    if (a.classList.contains('wn-file')) send({ t: 'wn-board:open-file', path: a.getAttribute('data-wn-path') });
-    else send({ t: 'wn-board:open-letter', id: a.getAttribute('data-wn-letter') });
+    var from = messageOf(a);
+    if (a.hasAttribute('data-walnut-ref')) { send({ t: 'wn-board:open-ref', href: a.getAttribute('href'), thread: from.thread, msg: from.msg }); return; }
+    if (a.classList.contains('wn-file') || a.classList.contains('file-link')) send({ t: 'wn-board:open-file', path: a.getAttribute('data-wn-path') || a.getAttribute('data-file-path'), line: a.getAttribute('data-file-line'), endLine: a.getAttribute('data-file-end-line'), thread: from.thread, msg: from.msg });
+    else if (a.classList.contains('task-link')) send({ t: 'wn-board:open-task', id: a.getAttribute('data-task-id') });
+    else if (a.classList.contains('session-link')) send({ t: 'wn-board:open-session', id: a.getAttribute('data-session-id') });
+    else send({ t: 'wn-board:open-letter', id: a.getAttribute('data-wn-letter') || a.getAttribute('data-letter-id') });
   }
   document.addEventListener('click', function (e) {
     if (e.defaultPrevented || e.button !== 0 || !trusted(e)) return;

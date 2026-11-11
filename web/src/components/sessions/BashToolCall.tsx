@@ -9,6 +9,9 @@ import { useRunLive } from './fold-body-context';
 import { AnswerText } from './RuleDetail';
 import { answeredCallState, callAnswerText, callDecisionLabel, useDeniedNow, useSoleCall, useToolDecisions, useWaitingTools } from './waiting-tools';
 import { bashCommandSummary, toolDescription } from '@open-walnut/tool-header-text';
+import { useSessionTextRender } from '@/hooks/useAgentFileOpener';
+import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { localImageSrc } from '@/utils/agent-text-source';
 
 // ── Bash tool call — terminal-style rendering ──
 // Bash commands/output are shell text, not JSON: the command renders with real
@@ -23,6 +26,10 @@ interface BashToolCallProps {
   status?: 'calling' | 'done' | 'error';
   result?: string;
   sessionCwd?: string;
+  /** The session's machine and id: an output's image path loads from there, a link while unknown. */
+  sessionHost?: string;
+  sessionId?: string;
+  onFileOpen?: (path: string) => void;
 }
 
 /** Large-popup view of the full command + output (PlanPopup shell, terminal body). */
@@ -62,7 +69,7 @@ const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
   (e.target as HTMLImageElement).style.display = 'none';
 };
 
-export function BashToolCall({ tool, status: statusProp = 'done', result: resultProp, sessionCwd }: BashToolCallProps) {
+export function BashToolCall({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, sessionId, onFileOpen }: BashToolCallProps) {
   const runLive = useRunLive();
   const [open, setOpen] = useRowDisclosure(disclosureIds.tool(tool.toolUseId), useSoleCall());
   const [popupOpen, setPopupOpen] = useState(false);
@@ -86,17 +93,25 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
   // Collapsed summary: first line of the command (terminal one-liner, not JSON)
   const commandSummary = useMemo(() => bashCommandSummary(command), [command]);
 
-  // Screenshot-style image paths in output still get inline previews
+  // Image paths in output preview from the session's machine; a link (src null) while unknown.
+  const { host: imageHost, images: imagesKnown } = useSessionTextRender({ sessionId, sessionHost, sessionCwd });
   const resultImages = useMemo(() => {
     if (!open || !result) return null;
+    const render = { images: imagesKnown, ...(imageHost ? { host: imageHost } : {}) };
     const resolved = findImagePaths(result)
       .map((p, i) => {
         const abs = resolveImagePath(p, sessionCwd);
-        return abs ? { src: `/api/local-image?path=${encodeURIComponent(abs)}`, key: `path-${i}`, caption: p } : null;
+        return abs ? { src: localImageSrc(abs, render), path: abs, key: `path-${imageHost ?? ''}-${i}`, caption: p } : null;
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
     return resolved.length > 0 ? resolved : null;
-  }, [result, open, sessionCwd]);
+  }, [result, open, sessionCwd, imageHost, imagesKnown]);
+  const onLinkClick = useEntityClickHandler(undefined, undefined, onFileOpen ? (p) => onFileOpen(p) : undefined, sessionHost, sessionId);
+  // The shared handler marks a link it took (preventDefault); no handler around the card takes it again.
+  const handleImageLinkClick = (e: React.MouseEvent) => {
+    onLinkClick(e);
+    if (e.defaultPrevented) e.stopPropagation();
+  };
 
   const inlineResult = result && result.length > INLINE_RESULT_LIMIT
     ? result.slice(0, INLINE_RESULT_LIMIT) + `\n… (${result.length - INLINE_RESULT_LIMIT} more chars — expand ⤢ for full output)`
@@ -157,11 +172,13 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
             <div className="chat-tool-block-section">
               <div className="chat-tool-block-section-label">Output</div>
               {resultImages && (
-                <div className="tool-result-images">
+                <div className="tool-result-images" onClick={handleImageLinkClick}>
                   {resultImages.map(img => (
                     <div key={img.key} className="tool-result-image-item">
-                      <img src={img.src} className="inline-image" data-lightbox-src={img.src} loading="lazy" onError={hideOnImgError} />
-                      {img.caption && <span className="inline-image-path">{img.caption}</span>}
+                      {img.src
+                        ? <img src={img.src} className="inline-image" data-lightbox-src={img.src} loading="lazy" onError={hideOnImgError} />
+                        : <a className="file-link" data-file-path={img.path} href="#" title="Picture not loaded: the machine this session runs on is not known yet">{img.caption}</a>}
+                      {img.src && img.caption && <span className="inline-image-path">{img.caption}</span>}
                     </div>
                   ))}
                 </div>

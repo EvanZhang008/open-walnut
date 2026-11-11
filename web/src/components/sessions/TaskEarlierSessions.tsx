@@ -12,7 +12,7 @@ import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineEntry } from '@/utils/engines';
 import { formatModelName } from '@/hooks/useSessionUsage';
 import { log } from '@/utils/log';
-import { StableMarkdownBody } from './SessionMessage';
+import { AgentText } from '@/components/common/AgentText';
 import { earlierParts, type ChatEarlierMessage } from './chat-earlier-parts';
 import { markOpenedOnPurpose } from './EngineSwitch';
 import '@/styles/chat-earlier.css';
@@ -43,7 +43,7 @@ export function useTaskSessions(taskId: string | undefined, sessionId: string, e
   return rows?.key === key ? rows.rows : [];
 }
 
-function EarlierSessionBlock({ row, sessionCwd, onOpen }: { row: TaskSessionRow; sessionCwd?: string; onOpen?: (sid: string) => void }) {
+function EarlierSessionBlock({ row, onOpen }: { row: TaskSessionRow; onOpen?: (sid: string) => void }) {
   const catalog = useEngineCatalog();
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<ChatEarlierMessage[] | null>(null);
@@ -87,7 +87,8 @@ function EarlierSessionBlock({ row, sessionCwd, onOpen }: { row: TaskSessionRow;
               className={`session-msg ${part.row.role === 'user' ? 'session-msg-user' : 'session-msg-assistant'} chat-earlier-row`}
             >
               <div className="session-msg-content">
-                <StableMarkdownBody text={part.row.text} cwd={sessionCwd} />
+                {/* That earlier session's words: its own id, machine and folder, never the current one's. */}
+                <AgentText text={part.row.text} sessionId={row.session_id} host={row.host ?? undefined} cwd={row.cwd ?? undefined} />
               </div>
             </div>
           ))}
@@ -127,10 +128,9 @@ function SwitchDivider({ row }: { row: TaskSessionRow }) {
   );
 }
 
-export function TaskEarlierSessions({ taskId, sessionId, sessionCwd, onOpenSession }: {
+export function TaskEarlierSessions({ taskId, sessionId, onOpenSession }: {
   taskId: string;
   sessionId: string;
-  sessionCwd?: string;
   onOpenSession?: (sid: string) => void;
 }) {
   const rows = useTaskSessions(taskId, sessionId, true);
@@ -143,7 +143,7 @@ export function TaskEarlierSessions({ taskId, sessionId, sessionCwd, onOpenSessi
       {others.map((row, i) => (
         <div key={row.session_id}>
           {i > 0 && <SwitchDivider row={row} />}
-          <EarlierSessionBlock row={row} sessionCwd={sessionCwd} onOpen={onOpenSession} />
+          <EarlierSessionBlock row={row} onOpen={onOpenSession} />
         </div>
       ))}
       {current.resumed ? <ResumeDivider row={current} /> : <SwitchDivider row={current} />}

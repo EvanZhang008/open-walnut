@@ -34,7 +34,7 @@ export function matchesChip(c: ChipCard, chip: KanbanFilterKey): boolean {
 export function matchesSearch(c: Pick<KanbanCardVM, 'title' | 'ticket' | 'summary' | 'waiting'>, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  const hay = [c.title, c.ticket?.value, c.summary?.text, c.waiting?.kind === 'text' ? c.waiting.text : undefined];
+  const hay = [c.title, c.ticket?.value, c.summary?.plain ?? c.summary?.text, c.waiting?.kind === 'text' ? c.waiting.text : undefined];
   return hay.some((h) => !!h && h.toLowerCase().includes(q));
 }
 

@@ -183,7 +183,8 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
 
   const setCard = useCallback(async (taskId: string, patch: KanbanCardPatch, ifUnchangedSince?: string): Promise<SetCardResult> => {
     const body = { ...patch, ...(ifUnchangedSince !== undefined ? { if_unchanged_since: ifUnchangedSince } : {}) };
-    const r = await run(taskId, { cards: { [taskId]: setCardPatch(patch, new Date().toISOString()) } },
+    const shown = d.current.getVM()?.cards[taskId];
+    const r = await run(taskId, { cards: { [taskId]: setCardPatch(patch, new Date().toISOString(), shown && !shown.loading ? shown.cardWords ?? {} : undefined) } },
       () => apiPut(`${base}/cards/${encodeURIComponent(taskId)}`, body));
     if (r.ok) {
       log.info('board', 'kanban card saved', { taskId: ownerId, cardTaskId: taskId, fields: Object.keys(patch).join(',') });

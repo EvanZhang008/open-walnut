@@ -10,3 +10,38 @@ a.letter-link:hover {
   border-bottom-style: solid;
   border-bottom-color: var(--accent);
 }
+[data-agent-text] { overflow-wrap: anywhere; white-space: normal; }
+[data-agent-text] > :first-child { margin-top: 0; }
+[data-agent-text] > :last-child { margin-bottom: 0; }
+.triage-session-summary [data-agent-text] { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+
+.open-agent-ref { color: var(--fg); background: var(--bg); overflow-wrap: anywhere; }
+.open-agent-ref button {
+  padding: 8px 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--bg);
+  font: inherit;
+  cursor: pointer;
+}
+.file-viewer-panel .sfe-notice[role="alert"] {
+  padding: 16px;
+  color: var(--fg);
+  background: var(--bg-secondary);
+  border-left: 3px solid var(--accent);
+}
+.file-viewer-source-failure { display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow: auto; }
+.file-viewer-source-choices { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--fg); }
+.file-viewer-source-choices-title { font-weight: 600; }
+.file-viewer-source-choices-hint { color: var(--fg-muted); }
+.file-viewer-source-choices-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.file-viewer-remembered { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px; color: var(--fg-muted); border-bottom: 1px solid var(--border); }
+.file-viewer-source-choices-row .file-viewer-btn { font-size: 12px; padding: 5px 12px; overflow-wrap: anywhere; }
+.file-viewer-source-choices-row .file-viewer-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--fg); }
+.file-viewer-panel .fv-html-toolbar { flex-wrap: wrap; }
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .file-viewer-panel .session-file-explorer-tree { min-width: 0; max-width: 28%; }
+  .file-viewer-panel .session-file-explorer-toolbar { flex-wrap: wrap; }
+  .file-viewer-panel .sfe-root-path { min-width: 60px; }
+}

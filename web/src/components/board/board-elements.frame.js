@@ -95,11 +95,15 @@
     });
   }
   kit.onHost['wn-board:sending'] = function (d) {
+    if (typeof d.rendered === 'string') state.renderedText[String(d.text || '')] = d.rendered;
     threadsWithId(String(d.thread || '')).forEach(function (t) { t.wnSending(String(d.key || ''), String(d.text || ''), Number(d.pictures) || 0); });
   };
   kit.onHost['wn-board:sent'] = function (d) {
     var thread = String(d.thread || '');
-    if (d.message && typeof d.message === 'object' && d.message.id) kit.addMessage(thread, d.message);
+    if (d.message && typeof d.message === 'object' && d.message.id) {
+      if (typeof d.rendered === 'string') state.renderedText[d.message.text] = d.rendered;
+      kit.addMessage(thread, d.message);
+    }
     // Posting answers a due reminder on this thread (the server clears it in the same write).
     if (kit.reminderDue(kit.reminderOf(thread))) delete state.reminders[thread];
     threadsWithId(thread).forEach(function (t) { t.wnDropLocal(String(d.key || '')); });
@@ -373,6 +377,7 @@
       if (this.wnFoldBtn.hidden !== !foldable) this.wnFoldBtn.hidden = !foldable;
       var before = this.wnList.wnHtml;
       kit.setHtml(this.wnList, rows.map(function (r) { return r.html; }).join(''));
+      if (this.wnList.wnHtml !== before) kit.registerMessageRows(this.wnList, id);
       if (this.wnWrap.hidden !== (rows.length === 0)) this.wnWrap.hidden = rows.length === 0;
       if (this.wnList.wnHtml !== before && this.wnPinned) this.wnToBottom();
       this.wnPaintJump();

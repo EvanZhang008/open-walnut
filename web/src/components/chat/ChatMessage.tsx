@@ -1,16 +1,18 @@
 import { matchIdRef } from '../../../../src/lib/id-ref';
 import { useMemo, useState, useCallback, memo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
 import type { Task, TaskPhase } from '@open-walnut/core';
 import { PHASE_LABELS } from '@/utils/session-status';
 import type { MessageBlock, ThinkingBlock, ToolCallBlock, ImageBlock, TaskContext, ImageAttachment } from '@/hooks/useChat';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { Lightbox } from '@/components/common/Lightbox';
-import { LazyFileViewer as FileViewer } from '@/components/common/LazyFileViewer';
-import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, renderMarkdownWithRefs, linkTaskMentions, renderUserMessage, absorbWrittenTaskTitles } from '@/utils/markdown';
+import { AgentText } from '@/components/common/AgentText';
+import { extractMarkdownFields, renderMarkdownWithRefs, renderUserMessage, type RenderMarkdownOptions } from '@/utils/markdown';
+import { useAgentFileOpener, type AgentFileOpener } from '@/hooks/useAgentFileOpener';
+import type { AgentTextSource, RenderContext } from '@/utils/agent-text-source';
+import { openFileAnywhere } from '@/utils/open-anywhere';
+import { taskPath } from '@/utils/task-path';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
@@ -60,6 +62,18 @@ interface ChatMessageProps {
    * the older text-derived key. See splitSuggestSegments.
    */
   cardScope?: string;
+  /** The recorded writer of these words; absent is unknown (routeInfo.sessionId is the target, not the writer). */
+  textSource?: AgentTextSource;
+}
+
+/** A chat row records no writer; a constant so the opener's input stays stable. */
+const UNKNOWN_WRITER: AgentTextSource = { unknownSource: true };
+
+/** Same writer by value, so a caller's fresh object per render keeps the memo. */
+function sameTextSource(a: AgentTextSource | undefined, b: AgentTextSource | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.host === b.host && a.sessionId === b.sessionId && a.cwd === b.cwd && a.unknownSource === b.unknownSource && a.task === b.task;
 }
 
 // NOTE: the global marked config (setOptions + taskLink/imagePath inline
@@ -75,18 +89,10 @@ function formatTimestamp(ts: string | undefined): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-export function renderMarkdown(text: string): string {
-  const preprocessed = entityRefsToHtml(absorbWrittenTaskTitles(text));
-  const raw = marked.parse(preprocessed);
-  return typeof raw === 'string' ? DOMPurify.sanitize(linkTaskMentions(raw), { ADD_ATTR: ['data-task-id', 'data-session-id', 'data-lightbox-src', 'loading'] }) : '';
-}
-
 /** Inline-only markdown: renders bold, links, task pills — no <p> wrapper.
  *  Used for single-line contexts like collapsed summaries. */
 export function renderInlineMarkdown(text: string): string {
-  const preprocessed = entityRefsToHtml(absorbWrittenTaskTitles(text));
-  const raw = marked.parseInline(preprocessed);
-  return typeof raw === 'string' ? DOMPurify.sanitize(linkTaskMentions(raw), { ADD_ATTR: ['data-task-id', 'data-session-id', 'data-lightbox-src', 'loading'] }) : '';
+  return renderMarkdownWithRefs(text, undefined, undefined, { inlineImages: false, inline: true });
 }
 
 // renderUserMessage lives in '@/utils/markdown' (the markdown test tier runs it); re-exported here.
@@ -103,11 +109,9 @@ function CompactionDetails({ details }: { details: string }) {
           {open ? 'Hide compaction details' : 'Show compaction details'}
         </span>
       </button>
+      {/* Many writers' turns: no single machine to open on. */}
       {open && (
-        <div
-          className="chat-compaction-details-content markdown-body"
-          dangerouslySetInnerHTML={stableHtml(renderMarkdown(details))}
-        />
+        <AgentText unknownSource className="chat-compaction-details-content" text={details} />
       )}
     </div>
   );
@@ -118,22 +122,6 @@ const PHASE_SYMBOLS: Record<string, string> = {
   TODO: '\u25CB', WAITING: '\u29D6', IN_PROGRESS: '\u25D0', NEED_ACTION: '\u2713',
   WAIT: '\u229A', COMPLETE: '\u2713\u2713',
 };
-
-// Truncation limits matching buildTaskContextPrefix in src/web/routes/chat.ts:128-188
-const TRUNC = { description: 300, summary: 200, note: 500, conversationLog: 400 } as const;
-
-function truncText(text: string, limit: number): string {
-  return text.length > limit ? text.slice(0, limit) + ' [truncated]' : text;
-}
-
-/** Tail-truncate conversation log, snapping to nearest ### heading (matches backend logic) */
-function truncConversationLog(log: string): string {
-  if (log.length <= TRUNC.conversationLog) return log;
-  const raw = log.slice(log.length - TRUNC.conversationLog);
-  const headingIdx = raw.indexOf('### ');
-  const tail = headingIdx >= 0 ? raw.slice(headingIdx) : raw;
-  return '[older entries omitted]\n' + tail.trim();
-}
 
 interface TaskContextSectionProps {
   ctx: TaskContext;
@@ -195,29 +183,29 @@ function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
             {ctx.created_at && <span><strong>Created:</strong> {ctx.created_at.slice(0, 10)}</span>}
           </div>
 
-          {/* Text sections — truncation matches backend buildTaskContextPrefix */}
+          {/* Mixed writers' words, shown whole: a cut could split a path. */}
           {hasDescription && (
             <div className="chat-task-context-section">
               <div className="chat-task-context-section-label">Description</div>
-              <div className="chat-task-context-text">{truncText(ctx.description, TRUNC.description)}</div>
+              <AgentText compact unknownSource className="chat-task-context-text" text={ctx.description} />
             </div>
           )}
           {hasSummary && (
             <div className="chat-task-context-section">
               <div className="chat-task-context-section-label">Summary</div>
-              <div className="chat-task-context-text">{truncText(ctx.summary, TRUNC.summary)}</div>
+              <AgentText compact unknownSource className="chat-task-context-text" text={ctx.summary} />
             </div>
           )}
           {hasNote && (
             <div className="chat-task-context-section">
               <div className="chat-task-context-section-label">Note</div>
-              <div className="chat-task-context-text">{truncText(ctx.note, TRUNC.note)}</div>
+              <AgentText compact unknownSource className="chat-task-context-text" text={ctx.note} />
             </div>
           )}
           {hasConvLog && (
             <div className="chat-task-context-section">
               <div className="chat-task-context-section-label">Conversation Log (recent)</div>
-              <div className="chat-task-context-text">{truncConversationLog(ctx.conversation_log!)}</div>
+              <AgentText compact unknownSource className="chat-task-context-text" text={ctx.conversation_log ?? ''} />
             </div>
           )}
 
@@ -610,16 +598,88 @@ function buildInputSummary(
   return parts.length > 0 ? <>{parts}</> : null;
 }
 
+const JSON_ID_SRC = '("(?:task_id|taskId|parent_task_id|id)":\\s*")([a-z0-9]{7,10}-[a-f0-9]{4})"|("(?:session_id|sessionId|from_plan|plan_session|exec_session|plan_session_id|exec_session_id)":\\s*")([A-Za-z0-9_.:-]{1,200})"';
+const JSON_ID_ANY = new RegExp(JSON_ID_SRC);
+/** Text in these is not prose (or is already a link), so it keeps its characters. */
+const NO_JSON_LINKS_IN = new Set(['A', 'TEXTAREA', 'SCRIPT', 'STYLE', 'TITLE', 'SVG', 'MATH', 'NOSCRIPT', 'TEMPLATE', 'IFRAME', 'SELECT', 'OPTION', 'BUTTON']);
+
+function inNonProse(node: Node): boolean {
+  for (let p = node.parentNode; p && p.nodeType === 1; p = p.parentNode) {
+    if (NO_JSON_LINKS_IN.has((p as Element).tagName.toUpperCase())) return true;
+  }
+  return false;
+}
+
+function jsonIdFragment(text: string): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  let last = 0;
+  for (const m of text.matchAll(new RegExp(JSON_ID_SRC, 'g'))) {
+    const at = m.index ?? last;
+    const a = document.createElement('a');
+    if (m[2]) {
+      a.className = 'task-link';
+      a.setAttribute('data-task-id', m[2]);
+      a.setAttribute('href', taskPath(m[2]));
+      a.textContent = m[2];
+    } else {
+      const id = m[4]!;
+      a.className = 'session-link';
+      a.setAttribute('data-session-id', id);
+      a.setAttribute('href', `/sessions?id=${encodeURIComponent(id)}`);
+      a.setAttribute('title', id);
+      a.textContent = id.length > 12 ? `${id.slice(0, 12)}\u2026` : id;
+    }
+    frag.append(document.createTextNode(text.slice(last, at) + (m[1] ?? m[3])), a, document.createTextNode('"'));
+    last = at + m[0].length;
+  }
+  frag.append(document.createTextNode(text.slice(last)));
+  return frag;
+}
+
+/** Tool results kept their JSON id pills; added on the parsed DOM's prose text nodes only, never by string surgery. */
+export function linkJsonIdValues(html: string): string {
+  if (!html.includes('id')) return html;
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  // One text run per node: a parser may split text at each entity, and a key must match whole.
+  tpl.content.normalize();
+  const walker = document.createTreeWalker(tpl.content, 4 /* NodeFilter.SHOW_TEXT */);
+  const hits: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (JSON_ID_ANY.test((n as Text).data) && !inNonProse(n)) hits.push(n as Text);
+  }
+  if (hits.length === 0) return html;
+  for (const t of hits) t.parentNode!.replaceChild(jsonIdFragment(t.data), t);
+  // A div of the template's inert document: native serialization, and nothing in it loads.
+  const container = tpl.content.ownerDocument.createElement('div');
+  container.append(tpl.content);
+  return container.innerHTML;
+}
+
+/** Tool input and output are data: task ids keep their text. */
+const DATA_RENDER: RenderMarkdownOptions = { taskIds: 'links' };
+const DATA_RENDER_NO_IMAGES: RenderMarkdownOptions = { taskIds: 'links', inlineImages: false };
+
 interface ToolCallSectionProps {
   block: ToolCallBlock;
   taskLookup?: Map<string, Task>;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
-  onFileOpen?: (path: string, line?: number) => void;
+  /** The message's opener over its writer; absent is unknown. */
+  file?: AgentFileOpener;
 }
 
-export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick, onFileOpen }: ToolCallSectionProps) {
+export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick, file: fileProp }: ToolCallSectionProps) {
   const navigate = useNavigate();
+  // Unconditional for hook order; used only without the message's opener.
+  const ownFile = useAgentFileOpener(UNKNOWN_WRITER);
+  const file = fileProp ?? ownFile;
+  const { cwd: renderCwd, host: renderHost, images } = file.render;
+  // Input JSON path links; a surface that named no source opens as the app does.
+  const onFileOpen = useMemo(
+    () => file.onFileOpen ?? ((path: string, line?: number) => openFileAnywhere({ path, ...(line ? { line } : {}) })),
+    [file.onFileOpen],
+  );
   // Auto-expand get_session_history with plan_only: true so plan content is immediately visible
   const defaultOpen = block.name === 'session_history' && block.input?.plan_only === true;
   const [open, setOpen] = useState(defaultOpen);
@@ -632,8 +692,12 @@ export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick
     }
   }, [navigate, onSessionClick]);
 
-  // Unified click handler for entity ref links (.task-link, .session-link, .file-link) in tool results
-  const handleResultClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen);
+  const handleEntityClick = useEntityClickHandler(onTaskClick, onSessionClick, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
+  // A link the shared handler took must not reach the bubble's handler and open twice.
+  const handleResultClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    handleEntityClick(e);
+    if (e.defaultPrevented) e.stopPropagation();
+  }, [handleEntityClick]);
 
   // Collapsed summary: resolve task IDs and session IDs as pills
   const inputSummaryNode = block.input
@@ -650,20 +714,22 @@ export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick
   // observed title changes or the store loads after this message (boot race).
   const labelsVersion = useEntityLabelsVersion();
 
-  // Render tool result as markdown with entity refs as clickable pills
+  // The shared renderer (letter links included) from the writer's machine, plus the JSON id pills.
   const resultHtml = useMemo(
-    () => block.result ? renderToolResultWithRefs(block.result) : null,
+    () => block.result
+      ? linkJsonIdValues(renderMarkdownWithRefs(block.result, renderCwd, renderHost, images ? DATA_RENDER : DATA_RENDER_NO_IMAGES))
+      : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-    [block.result, labelsVersion],
+    [block.result, labelsVersion, renderCwd, renderHost, images],
   );
 
   // Phase 2: Detect long multiline string values in input and render as markdown
   // Only computed when expanded (open) to avoid eager parsing cost
   const markdownFields = useMemo(() => {
     if (!open || !block.input) return [];
-    return extractMarkdownFields(block.input);
+    return extractMarkdownFields(block.input, { ...(renderHost ? { host: renderHost } : {}), inlineImages: images });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-  }, [block.input, open, labelsVersion]);
+  }, [block.input, open, labelsVersion, renderHost, images]);
 
   return (
     <div className={`chat-tool-block chat-tool-block-${block.status}`}>
@@ -727,14 +793,15 @@ function extractMessageToUser(blocks: MessageBlock[]): string | null {
  * ALL content (tool calls, thinking, text, images) collapses by default.
  * Only <MESSAGE-TO-USER> content is shown above the collapsed group.
  */
-function SystemMessageGroup({ blocks, sourceLabel, taskLookup, cardScope, onTaskClick, onSessionClick, onFileOpen, onContentClick }: {
+function SystemMessageGroup({ blocks, sourceLabel, taskLookup, cardScope, onTaskClick, onSessionClick, file, onContentClick }: {
   blocks: MessageBlock[];
   sourceLabel: string;
   taskLookup?: Map<string, Task>;
   cardScope?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
-  onFileOpen?: (path: string, line?: number) => void;
+  /** The message's opener over its writer. */
+  file: AgentFileOpener;
   onContentClick: (e: React.MouseEvent<HTMLDivElement>) => void;
 }) {
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
@@ -768,7 +835,7 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, cardScope, onTask
   return (
     <>
       {messageToUser && (
-        <MemoizedTextBlock content={messageToUser} cardScope={cardScope} onClick={onContentClick} />
+        <MemoizedTextBlock content={messageToUser} cardScope={cardScope} render={file.render} onClick={onContentClick} />
       )}
       <div className={`chat-tool-group${isStreaming ? ' chat-tool-group-streaming' : errorCount > 0 ? ' chat-tool-group-error' : ''}`}>
         <button className="chat-tool-group-toggle" onClick={handleToggle}>
@@ -786,9 +853,9 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, cardScope, onTask
                   return <ThinkingSection key={i} block={block} />;
                 case 'tool_call':
                   if (block.name === 'subagent_create') return <SubagentBlock key={i} block={block} />;
-                  return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+                  return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} file={file} />;
                 case 'text':
-                  return <MemoizedTextBlock key={i} content={block.content} cardScope={cardScope} onClick={onContentClick} />;
+                  return <MemoizedTextBlock key={i} content={block.content} cardScope={cardScope} render={file.render} onClick={onContentClick} />;
                 case 'image': {
                   const imgBlock = block as ImageBlock;
                   if (imgBlock.url) {
@@ -815,7 +882,13 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, cardScope, onTask
  *  Content freezes while a selection lives inside the block (streaming deltas
  *  otherwise swap innerHTML and destroy the selection); catches up on clear.
  *  The split runs on the FROZEN value so the freeze covers the whole message. */
-function MemoizedTextBlock({ content, cardScope, onClick }: { content: string; cardScope?: string; onClick: (e: React.MouseEvent<HTMLDivElement>) => void }) {
+function MemoizedTextBlock({ content, cardScope, render, onClick }: {
+  content: string;
+  cardScope?: string;
+  /** The writer's render context: pictures and relative paths only on a known machine. */
+  render: RenderContext;
+  onClick: (e: React.MouseEvent<HTMLDivElement>) => void;
+}) {
   const { value: displayContent, hostRef } = useSelectionFrozen(content);
   // `cards` covers a mounted card AND a half-arrived one being hidden: the raw
   // string path would leak the hidden body as prose (see useSuggestSegments).
@@ -826,27 +899,21 @@ function MemoizedTextBlock({ content, cardScope, onClick }: { content: string; c
   if (cards) {
     return (
       <div key="segments" ref={hostRef}>
-        <SuggestSegments segments={segments} scope={cardScope} onClick={onClick} />
+        <SuggestSegments segments={segments} cwd={render.cwd} host={render.host} inlineImages={render.images} scope={cardScope} onClick={onClick} />
       </div>
     );
   }
   return (
-    <RichMarkdown key="html" hostRef={hostRef} text={displayContent} scope={cardScope} onClick={onClick} />
+    <RichMarkdown key="html" hostRef={hostRef} text={displayContent} cwd={render.cwd} host={render.host} inlineImages={render.images} scope={cardScope} onClick={onClick} />
   );
 }
 
-function ChatMessageBubble({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onTaskClick, onSessionClick, cardScope }: ChatMessageProps) {
+function ChatMessageBubble({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onTaskClick, onSessionClick, cardScope, textSource }: ChatMessageProps) {
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
-  // File path click → open the shared FileViewer overlay. Self-contained so every
-  // page that renders ChatMessage (MainPage chat + session columns) gets
-  // clickable file paths without threading a callback through the props chain.
-  // EVERY file type (vault notes included) opens here — see FileContentView's
-  // "Open in Notes" button for the opt-in jump to /notes.
-  const [fileViewerState, setFileViewerState] = useState<{ path: string; line?: number } | null>(null);
-  const handleFileOpen = useCallback((path: string, line?: number) => {
-    setFileViewerState({ path, line });
-  }, []);
+  // Paths open on the writer's machine; unknown reads nothing and loads no picture until one is chosen.
+  const file = useAgentFileOpener(textSource ?? UNKNOWN_WRITER);
+  const render = file.render;
 
   const isCron = source === 'cron';
   const isHeartbeat = source === 'heartbeat';
@@ -855,7 +922,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
   const time = formatTimestamp(timestamp);
 
   // Unified entity click handler for .task-link, .session-link, and .file-link anchors
-  const handleEntityClick = useEntityClickHandler(onTaskClick, onSessionClick, handleFileOpen);
+  const handleEntityClick = useEntityClickHandler(onTaskClick, onSessionClick, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
 
   // Pill titles resolve from the entity-label store — the version dep below
   // re-renders refs when an observed title changes or the store loads late.
@@ -891,11 +958,14 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
       // Single Source of Truth: render full content as-is. Console never strips content.
       // Triage messages now contain all sections (notification + analysis); collapsing
       // is handled by the collapsed summary above, not by filtering content here.
-      return (role === 'user' && source !== 'triage') ? renderUserMessage(content) : renderMarkdownWithRefs(content);
+      // Typed user text has no pictures or paths; the rest is agent text from the writer's machine.
+      return (role === 'user' && source !== 'triage')
+        ? renderUserMessage(content)
+        : renderMarkdownWithRefs(content, render.cwd, render.host, render.images ? undefined : { inlineImages: false });
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-  }, [content, blocks, source, notification, role, labelsVersion]);
+  }, [content, blocks, source, notification, role, labelsVersion, render.cwd, render.host, render.images]);
 
   // Cards on the legacy path: only assistant text without blocks can carry one
   // (user text renders verbatim, and the blocks path goes through
@@ -1018,7 +1088,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
       // Show only the header line (no excerpt of the pasted body).
       const headerLine = content.split('\n')[0] ?? content;
       const cleaned = headerLine.replace(/`/g, '').replace(/:\s*$/, '');
-      return `⚡ ${cleaned}`.slice(0, 160);
+      return `⚡ ${cleaned}`;
     }
     if (isTriage) {
       // Task label for the lane header: current title from the entity-label
@@ -1036,13 +1106,13 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
       if (notifyLabelIdx !== -1) {
         const afterLabel = content.slice(notifyLabelIdx + '**Main AI Notification:**'.length);
         const msg = afterLabel.split(/\n\n+/).find(p => p.trim())?.trim() ?? '';
-        if (msg) return taskLabel ? `${taskLabel} — ${msg}`.slice(0, 200) : msg.slice(0, 200);
+        if (msg) return taskLabel ? `${taskLabel}: ${msg}` : msg;
       }
       // Legacy compat: old → AI: format
       const notifyMatch = content.match(/>\s*\*\*→ AI:\*\*\s*(.+)/);
       if (notifyMatch) {
         const msg = notifyMatch[1].trim();
-        return taskLabel ? `${taskLabel} — ${msg}`.slice(0, 200) : msg.slice(0, 200);
+        return taskLabel ? `${taskLabel}: ${msg}` : msg;
       }
 
       // UI-only triage: extract first line of analysis as summary
@@ -1050,7 +1120,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
       if (analysisIdx !== -1) {
         const afterAnalysis = content.slice(analysisIdx + '**Triage Analysis:**'.length);
         const snippet = afterAnalysis.split(/\n\n+/).find(p => p.trim())?.trim().split('\n')[0] ?? '';
-        if (snippet) return taskLabel ? `${taskLabel} — ${snippet}`.slice(0, 200) : snippet.slice(0, 200);
+        if (snippet) return taskLabel ? `${taskLabel}: ${snippet}` : snippet;
       }
 
       // Fallback: phase/outcome or just task label
@@ -1058,12 +1128,12 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
       const rawPhase = phaseMatch ? phaseMatch[1].trim() : '';
       // An agent writes the phase value (NEED_ACTION); the user reads its status words.
       const phase = PHASE_LABELS[rawPhase as TaskPhase] ?? rawPhase;
-      if (taskLabel && phase) return `${taskLabel} — ${phase}`.slice(0, 200);
-      if (taskLabel) return taskLabel.slice(0, 150);
+      if (taskLabel && phase) return `${taskLabel}: ${phase}`;
+      if (taskLabel) return taskLabel;
     }
     // Default: first line, stripped of bold markers
     const firstLine = content.split('\n').find(l => l.trim()) ?? '';
-    return firstLine.replace(/\*\*/g, '').slice(0, 120);
+    return firstLine.replace(/\*\*/g, '');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates the store lookups inside
   }, [content, shouldAutoCollapse, isTriage, isQuickStartEcho, labelsVersion]);
 
@@ -1113,7 +1183,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
                   cardScope={cardScope}
                   onTaskClick={onTaskClick}
                   onSessionClick={onSessionClick}
-                  onFileOpen={handleFileOpen}
+                  file={file}
                   onContentClick={handleContentClick}
                 />
               ) : (
@@ -1125,10 +1195,10 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
                     case 'tool_call': {
                       // Render create_subagent as SubagentBlock
                       if (block.name === 'subagent_create') return <SubagentBlock key={i} block={block} />;
-                      return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={handleFileOpen} />;
+                      return <ToolCallSection key={i} block={block} taskLookup={taskLookup} onTaskClick={onTaskClick} onSessionClick={onSessionClick} file={file} />;
                     }
                     case 'text':
-                      return <MemoizedTextBlock key={i} content={block.content} cardScope={cardScope} onClick={handleContentClick} />;
+                      return <MemoizedTextBlock key={i} content={block.content} cardScope={cardScope} render={render} onClick={handleContentClick} />;
                     case 'image': {
                       const imgBlock = block as ImageBlock;
                       if (imgBlock.url) {
@@ -1164,13 +1234,6 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
           />
         )}
         {lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}
-        {fileViewerState && (
-          <FileViewer
-            path={fileViewerState.path}
-            line={fileViewerState.line}
-            onClose={() => setFileViewerState(null)}
-          />
-        )}
       </>
     );
   }
@@ -1242,13 +1305,16 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
               {/* History replay arrives without blocks, so cards have to work on
                   this path too — otherwise a reloaded card degrades to prose. */}
               {legacyCards ? (
-                <SuggestSegments segments={legacySegments} scope={cardScope} onClick={handleContentClick} />
+                <SuggestSegments segments={legacySegments} cwd={render.cwd} host={render.host} inlineImages={render.images} scope={cardScope} onClick={handleContentClick} />
               ) : (
                 // `html === null` means this message type renders nothing here
                 // (blocks path / compaction rows), so feed the renderer '' —
                 // same empty markdown div the `html ?? ''` above produced.
                 <RichMarkdown
                   text={html !== null ? content : ''}
+                  cwd={render.cwd}
+                  host={render.host}
+                  inlineImages={render.images}
                   scope={cardScope}
                   onClick={handleContentClick}
                 />
@@ -1270,13 +1336,6 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
           onClose={msgMenu.close}
           ariaLabel="Message actions"
           testId="chat-msg-ctx-menu"
-        />
-      )}
-      {fileViewerState && (
-        <FileViewer
-          path={fileViewerState.path}
-          line={fileViewerState.line}
-          onClose={() => setFileViewerState(null)}
         />
       )}
     </>
@@ -1302,7 +1361,8 @@ function arePropsEqual(prev: ChatMessageProps, next: ChatMessageProps): boolean 
     prev.taskLookup === next.taskLookup &&
     prev.onTaskClick === next.onTaskClick &&
     prev.onSessionClick === next.onSessionClick &&
-    prev.cardScope === next.cardScope
+    prev.cardScope === next.cardScope &&
+    sameTextSource(prev.textSource, next.textSource)
   );
 }
 
@@ -1341,9 +1401,10 @@ function specialChatRow({ role, content, timestamp, source, notification }: Chat
       <div className="chat-compaction-divider">
         <div className="chat-compaction-divider-header">
           <span className="chat-compaction-divider-line" />
+          {/* The model's first line may name an image: never loaded from a guessed machine. */}
           <span
             className="chat-compaction-divider-text"
-            dangerouslySetInnerHTML={stableHtml(renderMarkdown(header))}
+            dangerouslySetInnerHTML={stableHtml(renderMarkdownWithRefs(header, undefined, undefined, { inlineImages: false }))}
           />
           <span className="chat-compaction-divider-line" />
         </div>

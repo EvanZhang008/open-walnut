@@ -14,14 +14,19 @@ export type {
   LaneTemplateId,
 } from '../../../../src/core/boards/board-lanes';
 
+import { htmlSourceAt, validHtmlSources, type BoardHtmlSource } from '../../../../src/core/boards/board-html-source';
 import { taskTokensIn } from '../../utils/task-id-shape';
 import { AUTOMATION_SILENCE_JS } from '../../utils/automation-silence';
+import { boardSummaryTexts } from '../../../../src/lib/board-summary-text';
+
+export type { BoardHtmlSource } from '../../../../src/core/boards/board-html-source';
 
 export type BoardAuthor = 'user' | 'agent' | `task:${string}`;
 
 export interface BoardMessage {
   id: string;
   author: BoardAuthor;
+  sessionId?: string;
   text: string;
   ts: string;
   /** Pictures sent with it, as names under /api/images/. */
@@ -43,6 +48,10 @@ export interface BoardDoc {
   updated_at: string;
   /** 'human' or `task:<id>`. */
   updated_by: string;
+  /** The session that wrote this version, set by the server from the caller (absent: a person, or an older write). */
+  updated_session_id?: string;
+  /** Who wrote each part of `html` (UTF-16 spans covering it; absent from an older server). */
+  html_sources?: BoardHtmlSource[];
 }
 
 /** One task the html names, as the server resolved it. `ref` is the id as written (may be a prefix). */
@@ -107,6 +116,7 @@ export interface BoardChoice {
   /** An agent wrote the words (absent = the user). */
   text_by?: string;
   text_by_name?: string;
+  text_session_id?: string;
 }
 
 /** A "remind me" on a choice or a thread; `fired_at` once Walnut told the leader. */
@@ -196,9 +206,9 @@ const FRAGMENT_BASE_CSS = 'body{margin:0;padding:16px 20px;'
   + 'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:14px;line-height:1.5}';
 
 /** `<head>` or `<head attr…>`, never `<header>`. */
-const HEAD_OPEN = /<head(?:\s[^>]*)?>/i;
-const HTML_OPEN = /<html(?:\s[^>]*)?>/i;
-const DOCTYPE = /^\s*<!doctype[^>]*>/i;
+const HEAD_OPEN = /^\s*<head(?=[\s>])(?:[^<>"']|"[^"]*"|'[^']*')*>/i;
+const HTML_OPEN = /^\s*<html(?=[\s>])(?:[^<>"']|"[^"]*"|'[^']*')*>/i;
+const DOCTYPE = /^\s*<!doctype\s+html>\s*/i;
 
 /**
  * The board html as the frame's document: CSP first, then the runtime's css,
@@ -228,12 +238,18 @@ export function wrapBoardHtml(html: string, runtimeSrc: string, runtimeCss: stri
   // The silencer first: the board's own scripts must not reach a test machine's speakers.
   const js = (AUTOMATION_SILENCE_JS + runtimeSrc.replace('__WN_BOARD_NONCE__', nonce)).replace(/<\/script/gi, '<\\/script');
   const block = `${BOARD_FRAME_CSP}<style id="wn-board-runtime-css">${css}</style><script>${js}</script>`;
-  if (HEAD_OPEN.test(html)) return html.replace(HEAD_OPEN, (m) => `${m}${block}`);
-  if (HTML_OPEN.test(html)) return html.replace(HTML_OPEN, (m) => `${m}<head>${block}</head>`);
   const doctype = DOCTYPE.exec(html);
-  if (doctype) {
-    return `${doctype[0]}<head>${block}</head>${html.slice(doctype[0].length)}`;
+  const prefix = doctype?.[0] ?? '';
+  const rest = html.slice(prefix.length);
+  const root = HTML_OPEN.exec(rest);
+  const start = prefix.length + (root?.[0].length ?? 0);
+  const head = HEAD_OPEN.exec(html.slice(start));
+  if (head) {
+    const at = start + head[0].length;
+    return html.slice(0, at) + block + html.slice(at);
   }
+  if (root) return html.slice(0, start) + `<head>${block}</head>` + html.slice(start);
+  if (doctype) return prefix + `<head>${block}</head>` + rest;
   return `<!doctype html><html><head>${block}<style>${FRAGMENT_BASE_CSS}</style></head><body>${html}</body></html>`;
 }
 
@@ -294,6 +310,7 @@ export function boardMentionTokens(
   add(html.replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, ' '));
   for (const list of Object.values(threads)) for (const m of list) add(m.text);
   for (const c of Object.values(choices)) if (c.text) add(c.text);
+  for (const summary of boardSummaryTexts(html)) add(summary.text);
   return [...out];
 }
 
@@ -335,6 +352,154 @@ export function threadAuthorIds(threads: Record<string, BoardMessage[]>): string
     for (const m of list) if (m.author.startsWith('task:')) ids.add(m.author.slice(5));
   }
   return [...ids];
+}
+
+export interface BoardFileSource {
+  taskId: string;
+  primary?: boolean;
+  sessionId?: string;
+  sourceFailure?: boolean;
+}
+
+const SOURCE_TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SOURCE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+
+// Only the session saved with the text names its machine. A task author with no saved session
+// keeps its id (for the row's name) but is unknown: the task's session now may run elsewhere.
+function writerSource(ownerId: string, by: unknown, sid: unknown): BoardFileSource {
+  if (by === 'human' || by === 'user') return { taskId: ownerId, primary: true };
+  const authorId = typeof by === 'string' && by.startsWith('task:') ? by.slice(5) : '';
+  const taskId = SOURCE_TASK_ID.test(authorId) ? authorId : ownerId;
+  const sessionId = typeof sid === 'string' && sid !== 'external' && SOURCE_SESSION_ID.test(sid) ? sid : undefined;
+  return sessionId ? { taskId, sessionId } : { taskId, sourceFailure: true };
+}
+
+export type BoardPageSource = Pick<BoardDoc, 'updated_by' | 'updated_session_id'> & Partial<Pick<BoardDoc, 'html' | 'html_sources'>>;
+
+/** One key per writer: a person's (primary) copy never merges with the owner's agent copy that has no session. */
+function sourceKeyOf(source: BoardFileSource): string {
+  return source.primary ? 'primary' : `${source.taskId}|${source.sessionId ?? ''}`;
+}
+
+/**
+ * Every writer of the page text from `start` to `end` (one reference the parser found in the
+ * stored html), once each, in page order. A reference typed in parts by several writers (A, then
+ * B, then A again) names each of them, so the click can ask which machine. Null when the range is
+ * not inside the page, the stored spans are not an exact cover, or any writer cannot name a machine.
+ * An older server sends no spans: the page's last writer.
+ */
+export function boardReferenceSources(
+  ownerId: string,
+  page: BoardPageSource | null | undefined,
+  start: number,
+  end: number,
+): BoardFileSource[] | null {
+  if (!page || typeof page.html !== 'string') return null;
+  const length = page.html.length;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > length) return null;
+  if (page.html_sources === undefined) {
+    const only = writerSource(ownerId, page.updated_by, page.updated_session_id);
+    return only.sourceFailure ? null : [only];
+  }
+  const spans = validHtmlSources(page.html_sources, length);
+  if (!spans) return null;
+  const out = new Map<string, BoardFileSource>();
+  for (const span of spans) {
+    if (span.end <= start || span.start >= end) continue;
+    const source = writerSource(ownerId, span.by, span.sessionId);
+    if (source.sourceFailure) return null;
+    if (!out.has(sourceKeyOf(source))) out.set(sourceKeyOf(source), source);
+  }
+  return out.size ? [...out.values()] : null;
+}
+
+// Author scripts can copy or move anchors, so DOM offsets cannot choose a writer.
+// The one writer of every stored reference to `path`, else unknown.
+export function boardPathSource(
+  ownerId: string,
+  paths: Iterable<[number, { path: string; end: number }]>,
+  path: string,
+  page: BoardPageSource | null | undefined,
+): BoardFileSource {
+  const unknown: BoardFileSource = { taskId: ownerId, sourceFailure: true };
+  let source: BoardFileSource | undefined;
+  for (const [offset, reference] of paths) {
+    if (reference.path !== path) continue;
+    const found = boardReferenceSources(ownerId, page, offset, reference.end);
+    if (!found || found.length !== 1 || (source && sourceKeyOf(found[0]!) !== sourceKeyOf(source))) return unknown;
+    source = found[0];
+  }
+  return source ?? unknown;
+}
+
+/** A path's copy once the click read its machine: `host` as the session record has it, '' for this machine. */
+export interface BoardResolvedSource {
+  host?: string;
+  /** Where the copy is: "Board page", "Reply by … in …", "Answer in …". */
+  label: string;
+  /** The writing session's title, else its task's (never a session id). */
+  title?: string;
+}
+
+/** One button of the source chooser: a machine ('' = this one) and every copy written there. */
+export interface BoardHostChoice {
+  host: string;
+  details: string[];
+}
+
+const LOCAL_HOST_NAMES = new Set(['', 'local', '__local__']);
+
+/** Copies on the same machine are one choice; a single result opens at once. */
+export function boardHostChoices(resolved: readonly BoardResolvedSource[]): BoardHostChoice[] {
+  const byHost = new Map<string, string[]>();
+  for (const r of resolved) {
+    const host = r.host && !LOCAL_HOST_NAMES.has(r.host) ? r.host : '';
+    const detail = r.title ? `${r.label} (${r.title})` : r.label;
+    const details = byHost.get(host) ?? [];
+    if (!details.includes(detail)) details.push(detail);
+    byHost.set(host, details);
+  }
+  return [...byHost].map(([host, details]) => ({ host, details }));
+}
+
+export function boardChoiceFileSource(ownerId: string, choice: BoardChoice): BoardFileSource {
+  return writerSource(ownerId, choice.text_by ?? 'human', choice.text_session_id);
+}
+
+// A frame's row hint can select a stored source, never supply a machine.
+// `sourceOffset` (a link's UTF-16 offset in the page html) picks the writer of the span holding it;
+// one that is not inside an exact span is the owner. Without it the page's last writer stands.
+export function boardFileSource(
+  ownerId: string,
+  threads: Record<string, BoardMessage[]> | null | undefined,
+  thread: unknown,
+  msg: unknown,
+  page?: BoardPageSource | null,
+  sourceOffset?: unknown,
+  sourceEnd?: number,
+): BoardFileSource {
+  const owner: BoardFileSource = { taskId: ownerId };
+  const named = typeof thread === 'string' && typeof msg === 'string' && !!thread && !!msg;
+  if (!named) {
+    // Anything but two strings (an object, an array) is not a row: the owner, as a forged one.
+    if ((thread !== undefined && thread !== '') || (msg !== undefined && msg !== '')) return owner;
+    if (!page) return owner;
+    if (sourceOffset === undefined) return writerSource(ownerId, page.updated_by, page.updated_session_id);
+    const html = typeof page.html === 'string' ? page.html : null;
+    if (html === null || !Number.isInteger(sourceOffset) || (sourceOffset as number) < 0 || (sourceOffset as number) >= html.length) return owner;
+    // An older server sends no spans: the page's last writer, as before.
+    if (page.html_sources === undefined) return writerSource(ownerId, page.updated_by, page.updated_session_id);
+    const span = htmlSourceAt(page.html_sources, html.length, sourceOffset);
+    if (span && sourceEnd !== undefined && (!Number.isInteger(sourceEnd) || sourceEnd <= (sourceOffset as number) || sourceEnd > span.end)) {
+      return { ...owner, sourceFailure: true };
+    }
+    return span ? writerSource(ownerId, span.by, span.sessionId) : owner;
+  }
+  if (!threads || !Object.prototype.hasOwnProperty.call(threads, thread)) return owner;
+  const list = threads[thread];
+  if (!Array.isArray(list)) return owner;
+  const message = list.find((m) => m && m.id === msg);
+  return message ? writerSource(ownerId, message.author, message.sessionId) : owner;
 }
 
 /** A message merged into its thread (deduped by id, kept in ts order). */

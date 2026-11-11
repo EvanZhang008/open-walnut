@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+vi.mock('@/components/common/AgentText', () => ({ AgentText: () => null }))
 import { log } from '../../web/src/utils/log.js'
 import { resolvePane } from '../../web/src/components/settings/settings-routing.js'
 

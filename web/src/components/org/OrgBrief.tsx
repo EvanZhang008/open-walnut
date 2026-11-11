@@ -10,17 +10,24 @@
  * Between rewrites its head says when it was written and how many of its lines moved since, each
  * such line marked with its task's live words, and "Updating" while the refresh turn Walnut asked
  * because the user opened a stale Brief runs (src/core/sessions/brief-fresh.ts, brief-refresh.ts).
+ *
+ * A path in it opens on the machine of whoever wrote the words it sits in (TaskBrief.text_sources,
+ * org-brief-sources.ts), never on the owner's current session: another session, the user, or a
+ * task whose ask Walnut added may have written them. An unrecorded writer opens nothing; two
+ * machines for one path ask which.
  */
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { checkedLine } from '@open-walnut/user-status';
-import { briefSectionOf, structureBrief } from '@open-walnut/brief-structure';
+import { briefSectionOf, briefSourcesOf, structureBrief } from '@open-walnut/brief-structure';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
+import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { timeAgo } from '@/utils/time';
 import { freshnessWords, type BriefFreshness } from '@open-walnut/brief-fresh';
 import { applyBriefDecorations, applyBriefMoves, type BriefMoveView } from './org-brief-model';
+import { BRIEF_RENDER, useBriefFileOpener } from './useBriefFileOpener';
 import '@/styles/org-brief.css';
 
 interface Props {
@@ -49,24 +56,31 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded, fresh, u
     const byId = new Map(tasks.map((t) => [t.id, t] as const));
     const named = ids.map((id) => { const t = byId.get(id); return `${id}:${t ? briefSectionOf(t) ?? '-' : '?'}`; }).join('|');
     // And every task that asks the user now with its ask: Walnut adds the ones the letter misses.
-    const asks = tasks.filter((t) => briefSectionOf(t) === 'needs').map((t) => `${t.id}:${t.user_status?.ask ?? ''}`).join('|');
+    // With who wrote each ask's words: a new writer of the same words must reshape the added line's source.
+    const asks = tasks.filter((t) => briefSectionOf(t) === 'needs').map((t) => JSON.stringify([
+      t.id, t.user_status?.ask ?? '', t.user_status?.waitingOn ?? '', t.user_status?.reportBy ?? '', t.user_status?.reportSessionId ?? '', t.last_words?.session_id ?? '',
+      t.user_status?.waitingBy ?? '', t.user_status?.waitingSessionId ?? '', t.user_status?.askBy ?? '', t.user_status?.askSessionId ?? '',
+    ])).join('|');
     return `${named}#${asks}`;
   }, [brief?.text, tasks]);
   // Held to the live state (brief-structure.ts `live`): each line in its task's section, a finished
   // task's line gone, and every task asking the user in Needs you, in its own words when missing.
+  // Each part keeps its writer through the reshaping; an added ask carries its own task's writer.
   const shaped = useMemo(
     // Walnut's earlier lines are written again from the live state, in the letter's language.
     () => (brief?.text && owner ? structureBrief(brief.text, owner.id, tasks, {
       live: owner, ...(brief.added?.length ? { walnut: brief.added } : {}), ...(brief.lang ? { lang: brief.lang } : {}),
+      sources: briefSourcesOf({ text: brief.text, text_sources: brief.text_sources }),
     }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [brief?.text, owner?.id, sectionKey],
+    [brief?.text, brief?.text_sources, owner?.id, sectionKey],
   );
   const text = shaped?.text ?? brief?.text ?? '';
+  const textSources = shaped?.text_sources;
   // The letter's markup comes from its text alone; each pill's live status is set on it in place
   // below, so a task changing state rebuilds the letter only when it moves to another section.
   const markup = useMemo(
-    () => (text ? renderMarkdownWithRefs(text) : ''),
+    () => (text ? renderMarkdownWithRefs(text, undefined, undefined, BRIEF_RENDER) : ''),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [text, labels],
   );
@@ -91,12 +105,8 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded, fresh, u
   useLayoutEffect(() => {
     if (bodyRef.current) applyBriefMoves(bodyRef.current, moves, added);
   }, [html, moves, added]);
-  const onClick = (e: React.MouseEvent) => {
-    const a = (e.target as HTMLElement).closest('[data-task-id]');
-    if (!a) return;
-    e.preventDefault();
-    onOpenTask(a.getAttribute('data-task-id')!);
-  };
+  const onFileOpen = useBriefFileOpener(owner?.id, text, textSources, tasks);
+  const onClick = useEntityClickHandler(onOpenTask, undefined, onFileOpen.open, undefined, undefined, true);
 
   if (!brief?.text || !html) {
     return (
@@ -114,7 +124,7 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded, fresh, u
         {updating && <span className="org-brief-updating" data-testid="org-brief-updating"> · Updating…</span>}
       </div>
       <div ref={bodyRef} className="org-brief-body markdown-body" data-testid="org-brief-body" onClick={onClick} dangerouslySetInnerHTML={html} />
+      {onFileOpen.dialog}
     </div>
   );
 }
-

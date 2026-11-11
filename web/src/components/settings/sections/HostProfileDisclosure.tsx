@@ -15,6 +15,7 @@ import { ApiError } from '@/api/client';
 import { OptionPickerFlyout, type CursorPoint } from '@/components/tasks/CursorFlyout';
 import { hostKindLabel, HOST_KIND_OPTIONS } from '@/components/transfer/transfer-model';
 import { timeAgo } from '@/utils/time';
+import { AgentText } from '@/components/common/AgentText';
 import { log } from '@/utils/log';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsRow } from '../SettingsSection';
@@ -232,7 +233,7 @@ export function HostProfileDisclosure({ hp, alias, name }: { hp: HostProfileStat
               <SettingsRow indent label="Used for" help={profile.learned ? undefined : 'Walnut has not learned this yet: it writes this once sessions have run here.'}>
                 {profile.learned && (
                   <>
-                    <p className="settings-row-help" data-testid="host-profile-learned">{profile.learned.summary}</p>
+                    <AgentText compact host={alias} className="settings-row-help" testId="host-profile-learned" text={profile.learned.summary} />
                     <p className="settings-row-help settings-addons-muted">From {profile.learned.sessionCount} session{profile.learned.sessionCount === 1 ? '' : 's'}, {timeAgo(profile.learned.at)}</p>
                   </>
                 )}

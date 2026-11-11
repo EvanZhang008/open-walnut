@@ -33,7 +33,8 @@ export interface LetterSender {
   taskId?: string;
   taskTitle?: string;
   project?: string;
-  host: string;
+  /** Absent when the writing session's host could not be read. */
+  host?: string;
   pluginId?: string;
   pluginName?: string;
   agentId?: string;
@@ -120,6 +121,11 @@ export interface LetterThreadEntry {
   by?: LetterAnsweredBy;
   /** Human turns only: the pictures sent with it, as names under /api/images/. */
   images?: string[];
+  /**
+   * Agent turns only: who wrote the turn (server-stamped). Absent on older turns: unknown,
+   * and never the letter's sender, because another session may have written it.
+   */
+  sender?: LetterSender;
 }
 
 /** Index record — what the envelope rows render. No body content. */
@@ -243,6 +249,8 @@ function normalizeDetail(raw: unknown): LetterDetail {
       ...(str(entry.bodyUrl) ? { bodyUrl: str(entry.bodyUrl) } : {}),
       ...(Array.isArray(entry.items) ? { items: entry.items as InboxLetterItem[] } : {}),
       ...(entry.by && typeof (entry.by as Json).sessionId === 'string' ? { by: entry.by as unknown as LetterAnsweredBy } : {}),
+      ...(entry.from !== 'human' && entry.sender && typeof (entry.sender as Json).sessionId === 'string' && (entry.sender as Json).sessionId
+        ? { sender: entry.sender as unknown as LetterSender } : {}),
       ...(Array.isArray(entry.images) && entry.images.length
         ? { images: (entry.images as unknown[]).filter((n): n is string => typeof n === 'string' && /^[\w.-]+$/.test(n)) } : {}),
     };

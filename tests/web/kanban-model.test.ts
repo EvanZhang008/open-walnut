@@ -8,36 +8,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '@open-walnut/core';
 import { templateLanes, type BoardCard } from '../../src/core/boards/board-lanes';
-import { buildCardVM, type KanbanCardInput, type KanbanLive } from '../../web/src/components/board/kanban/kanban-card-model';
+import type { KanbanLive } from '../../web/src/components/board/kanban/kanban-card-model';
 import { buildBoardVM, orderLane, teamAttention } from '../../web/src/components/board/kanban/kanban-model';
 import { deriveUserStatus, shownState, storedUserState, type UserStatusInput } from '../../src/core/user-status';
 import { KANBAN_TIME_RE, absoluteText, agoText, clockText, durationText, waitText } from '../../web/src/components/board/kanban/kanban-time';
-
-const NOW = Date.parse('2026-10-03T15:30:00Z');
-const ago = (ms: number) => new Date(NOW - ms).toISOString();
-const MIN = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
-const LANES = templateLanes('triage');
-
-let seq = 0;
-function mkTask(p: Partial<Task> = {}): Task {
-  seq++;
-  return {
-    id: p.id ?? `t${String(seq).padStart(4, '0')}-0000-4000-8000-000000000000`,
-    title: `Ticket ${seq}`, status: 'in_progress', priority: 'none', category: '', session_ids: [], description: '',
-    summary: '', note: '', phase: 'IN_PROGRESS', source: 'local', created_at: ago(5 * DAY), updated_at: ago(HOUR),
-    phase_changed_at: ago(HOUR), ...p,
-  } as Task;
-}
-
-const withSession = (p: Partial<Task> = {}) => mkTask({ session_id: `s-${seq + 1}-full-session-id`, session_ids: [`s-${seq + 1}-full-session-id`], ...p });
-
-function vm(task: Task | null, live: KanbanLive | null = null, extra: Partial<KanbanCardInput> = {}) {
-  return buildCardVM({
-    taskId: task?.id ?? 'missing-task-id', task, lanes: LANES, live, ownerId: 'owner-task-id',
-    titleOf: (id) => (id === 'owner-task-id' ? 'Payments queue triage' : `Task ${id.slice(0, 4)}`),
-    hasBaseline: false, now: NOW, formatWaitUntil: () => 'Fri 9:00', ...extra,
-  });
-}
+import { DAY, HOUR, MIN, NOW, ago, mkTask, vm, withSession } from './kanban-card-fixtures';
 
 describe('status line (C15, C57)', () => {
   it('prompts: question, plan, a tool with its command in the tooltip', () => {
@@ -226,8 +201,10 @@ describe('summary, plain text, waiting on (C70, C94, C35, C77)', () => {
     const card: BoardCard = { summary: 'Leader: mitigated', summary_at: '2026-10-03T09:00:00Z', summary_by: 'task:owner-task-id',
       worker_summary_at: '2026-10-03T14:00:00Z' };
     const w = vm(t, null, { card });
-    expect(w.summary?.text).toBe('Worker: root cause is the retry storm');
-    expect(w.summary?.tooltip).toMatch(/\n\nFrom the worker, \d{2}:\d{2}$/);
+    // The card renders the words as written; plain text (C94) is the tooltip, the filter and the hash.
+    expect(w.summary?.text).toBe('Worker: **root cause** is the `retry` storm');
+    expect(w.summary?.plain).toBe('Worker: root cause is the retry storm');
+    expect(w.summary?.tooltip).toMatch(/^Worker: root cause is the retry storm\n\nFrom the worker, \d{2}:\d{2}$/);
     const l = vm(t, null, { card: { ...card, summary_at: '2026-10-03T15:00:00Z' } });
     expect(l.summary?.text).toBe('Leader: mitigated');
     expect(l.summary?.tooltip).toMatch(/From the leader, \d{2}:\d{2}$/);
@@ -240,7 +217,8 @@ describe('summary, plain text, waiting on (C70, C94, C35, C77)', () => {
     const placed = vm(withSession(), null, { card: { lane: 'waiting-cr', lane_at: ago(MIN), lane_by: 'human' } });
     expect(placed.waiting).toEqual({ kind: 'add-who' });
     const text = vm(withSession(), null, { card: { lane: 'waiting-cr', lane_at: ago(MIN), lane_by: 'human', waiting_on: 'CR-48213' } });
-    expect(text.waiting).toEqual({ kind: 'text', text: 'CR-48213' });
+    // No writer stored with it (an older server): its paths open nowhere, not in the task's session.
+    expect(text.waiting).toEqual({ kind: 'text', text: 'CR-48213', textSource: { unknownSource: true } });
     const moved = vm(withSession(), null, { card: { lane: 'mitigating', lane_at: ago(MIN), lane_by: 'human', waiting_on: 'CR-48213' } });
     expect(moved.waiting).toBeUndefined();
   });

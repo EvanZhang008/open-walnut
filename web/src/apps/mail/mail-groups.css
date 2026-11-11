@@ -125,10 +125,13 @@
 }
 
 /* Under the name (twist 10px + gap 7px), one line, the words that say what the mail is about. */
+.mail-group-summary [data-agent-text] { white-space: nowrap; overflow-wrap: normal; }
 .mail-group-summary {
   display: block;
   min-width: 0;
   padding: 0 0 1px 17px;
+  user-select: text;
+  -webkit-user-select: text;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

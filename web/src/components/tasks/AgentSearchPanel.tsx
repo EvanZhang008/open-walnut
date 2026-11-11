@@ -3,9 +3,7 @@
  * A one-shot claude -p run searches tasks AND session transcripts server-side,
  * so a task whose own title/note say nothing (placeholder "Session: …" tasks)
  * is still findable through its transcript evidence.
- *
- * All model-derived strings render as React text children (auto-escaped) —
- * no markdown, no dangerouslySetInnerHTML, no injection surface.
+
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -14,6 +12,7 @@ import { isAgentSearchEligible } from '@/hooks/agentSearchTrigger';
 import { useAgentTaskSearch } from '@/hooks/useAgentTaskSearch';
 import { useEvent } from '@/hooks/useWebSocket';
 import { ICON_CHAT } from '@/components/common/Icons';
+import { AgentText } from '@/components/common/AgentText';
 import { AgentSearchFollowUp } from './AgentSearchFollowUp';
 import { AgentSearchResultRows } from './AgentSearchResultRows';
 import { buildSearchSessionMessage } from './agent-search-session';
@@ -256,7 +255,7 @@ export function AgentSearchPanel({ query, onOpenTask, onOpenSession }: {
       )}
       {state === 'done' && data && !noMatches && !followUpSessionId && (
         <>
-          {data.summary && <p className="agent-search-summary">{data.summary}</p>}
+          {data.summary && <AgentText compact unknownSource className="agent-search-summary" text={data.summary} onTaskClick={onOpenTask} />}
           {/* Shared with the transcript card (AgentSearchResultRows): the same
               answer renders identically wherever it is read back. */}
           <AgentSearchResultRows rows={data.results} onOpenTask={onOpenTask} />

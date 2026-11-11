@@ -14,12 +14,17 @@
  *  - Fallback: the task on Home (openTaskOnHome) or /sessions?id=:id when callbacks are absent;
  *    a file with no onFileOpen opens in the app's own FileViewer (utils/open-anywhere.ts)
  *  - letter-link anchors are the app's (useAgentLinkClickFallback opens them)
+ *  - a relative lookup opens only for the newest click on the mounted surface and its source (a late answer popped a viewer elsewhere)
  */
-import { useCallback } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { locatePath } from '@/api/files';
+import { log } from '@/utils/log';
 import { openTaskOnHome } from '@/utils/open-session';
 import { claimAgentLinkClick, openFileAnywhere } from '@/utils/open-anywhere';
+
+type FileOpen = (path: string, line?: number, term?: undefined, endLine?: number) => void;
+interface FileSource { fileHost?: string; fileSessionId?: string }
 
 export function useEntityClickHandler(
   onTaskClick?: (taskId: string) => void,
@@ -33,8 +38,27 @@ export function useEntityClickHandler(
    *  it lets the backend match against paths this session actually opened, which
    *  is the cheapest and most accurate way to resolve what the model wrote. */
   fileSessionId?: string,
+  /** The words' writer is unknown: a relative path goes to onFileOpen as written (which refuses
+   *  it), never to a lookup with no host or session, which would search every host. */
+  relativeToOpener?: boolean,
 ) {
   const navigate = useNavigate();
+  // The newest click; a relative lookup answers into nothing once this moved past it.
+  const seq = useRef(0);
+  // The latest opener: a handler, not a source, so a new identity each render cancels nothing.
+  const fileOpenRef = useRef<FileOpen | undefined>(onFileOpen);
+  useLayoutEffect(() => { fileOpenRef.current = onFileOpen; }, [onFileOpen]);
+  // The source of the surface as mounted now; null once it unmounted. Only host and session
+  // decide where a file opens, so only they (and the unmount) void a lookup in flight.
+  const alive = useRef<FileSource | null>(null);
+  useLayoutEffect(() => {
+    const now: FileSource = { fileHost, fileSessionId };
+    alive.current = now;
+    return () => {
+      if (alive.current === now) alive.current = null;
+      seq.current++;
+    };
+  }, [fileHost, fileSessionId]);
 
   // .task-link and .session-link anchors are created by entityRefsToHtml()
   // and injectJsonIdLinks() in utils/markdown.ts, with data-task-id / data-session-id attributes.
@@ -42,7 +66,13 @@ export function useEntityClickHandler(
   // preventDefault() is called but NOT stopPropagation() — callers that need
   // stopPropagation (e.g. TriagePanel inside a toggle button) wrap this handler.
   return useCallback((e: React.MouseEvent) => {
+    const mine = ++seq.current;
     const target = e.target as HTMLElement;
+    // This handler's source is still the mounted surface's.
+    const current = () => {
+      const now = alive.current;
+      return !!now && now.fileHost === fileHost && now.fileSessionId === fileSessionId;
+    };
 
     const taskAnchor = target.closest('a.task-link') as HTMLAnchorElement | null;
     if (taskAnchor) {
@@ -79,9 +109,20 @@ export function useEntityClickHandler(
       e.preventDefault();
       // This surface opens it; the app-level fallback must not open it twice.
       claimAgentLinkClick(e.nativeEvent);
-      // No opener of its own: the app's viewer, still resolved from this surface's host.
-      const open = onFileOpen ?? ((path: string, line?: number, _term?: undefined, endLine?: number) =>
-        openFileAnywhere({ path, ...(line ? { line } : {}), ...(endLine ? { endLine } : {}), ...(fileHost ? { host: fileHost } : {}) }));
+      if (!current()) {
+        log.info('file-open', 'file link pressed on a surface no longer shown; not opened', {
+          path: fileAnchor.dataset.filePath ?? fileAnchor.dataset.relPath, sessionId: fileSessionId, host: fileHost,
+        });
+        return;
+      }
+      // The opener as it is when the path is known (latest, never the click's old one); none of its
+      // own: the app's viewer, still resolved from this surface's host.
+      const open: FileOpen = (path, line, _term, endLine) => {
+        const onFileOpen = fileOpenRef.current;
+        const sink = onFileOpen ?? ((p: string, l?: number, _t?: undefined, el?: number) =>
+          openFileAnywhere({ path: p, ...(l ? { line: l } : {}), ...(el ? { endLine: el } : {}), ...(fileHost ? { host: fileHost } : {}) }));
+        sink(path, line, undefined, endLine);
+      };
       const fileLine = fileAnchor.dataset.fileLine;
       const line = fileLine ? parseInt(fileLine, 10) : undefined;
       const fileEndLine = fileAnchor.dataset.fileEndLine;
@@ -97,16 +138,28 @@ export function useEntityClickHandler(
       // than cwd still opens.
       const rel = fileAnchor.dataset.relPath;
       const cwd = fileAnchor.dataset.cwd;
+      if (rel && relativeToOpener) { open(rel, line, undefined, endLine); return; }
       if (rel && cwd) {
         // A miss answers the path joined to cwd (never a stand-in folder), which
         // the sink then reports as not found.
-        locatePath(rel, { host: fileHost, cwd, sessionId: fileSessionId })
+        locatePath(rel, { host: fileHost, cwd, sessionId: fileSessionId, sourceOnly: fileHost !== undefined || !!fileSessionId })
           // The anchor's own line wins when present (the markdown layer already
           // parsed it); otherwise take whatever position the reference carried,
           // which the resolver reports even for shapes markdown doesn't linkify
           // (`#L42`, `(42,7)`, `, line 42`).
-          .then((r) => open(r.found || r.missing ? r.path : `${cwd.replace(/\/$/, '')}/${rel.replace(/^\.\//, '')}`, line ?? r.line, undefined, line ? endLine : r.endLine));
+          .then((r) => {
+            if (mine !== seq.current || !current()) {
+              log.info('file-open', 'relative path answered after its click was replaced; not opened', { path: rel, cwd, sessionId: fileSessionId, host: fileHost });
+              return;
+            }
+            open(r.found || r.missing ? r.path : `${cwd.replace(/\/$/, '')}/${rel.replace(/^\.\//, '')}`, line ?? r.line, undefined, line ? endLine : r.endLine);
+          })
+          .catch((err: unknown) => {
+            log.warn('file-open', 'relative path not opened', {
+              path: rel, cwd, sessionId: fileSessionId, host: fileHost, error: err instanceof Error ? err.message : String(err),
+            });
+          });
       }
     }
-  }, [onTaskClick, onSessionClick, onFileOpen, fileHost, fileSessionId, navigate]);
+  }, [onTaskClick, onSessionClick, fileHost, fileSessionId, relativeToOpener, navigate]);
 }

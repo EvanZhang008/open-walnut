@@ -13,6 +13,7 @@ import { readStatusLine } from './org-ask-form';
 import { flattenNodes, needsRowText, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
 import type { LayoutSlot } from '@/utils/layout-record';
+import type { TaskTextField } from '@/utils/agent-text-source';
 
 // A task with only a result or an answer to look at (To read) is under Needs you, a card with
 // its line (2026-11-03, the user: "I dont wnat serpeate to read"): no tab of its own. A task nobody
@@ -181,6 +182,16 @@ export function taskTabNote(task: Task, tab: OrgTaskTab): string {
   // The tab says it was never started; a failed start says why.
   if (tab === 'notstarted') return notStartedReason(task);
   return '';
+}
+
+/** Which stored words taskTabNote showed, so a path in them opens where those words were written. */
+export function taskTabNoteField(task: Task, tab: OrgTaskTab): TaskTextField | null {
+  const s = task.user_status;
+  if (readStatusLine(s) && tab !== 'done') return 'line';
+  if (tab === 'needs') return 'needs';
+  if (tab === 'working') return 'report';
+  if (tab === 'waiting') return s?.waitingOn != null ? 'waiting' : 'report';
+  return null;
 }
 
 /** The node's own ask first, the rest in their order: every ask the Needs you tab counts is a card. */

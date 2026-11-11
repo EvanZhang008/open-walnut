@@ -33,17 +33,27 @@ export function readAskForm(status: unknown): AskForm | undefined {
   return { summary, ...more, kind: f.kind as AskKind, ...(options.length ? { options } : {}) };
 }
 
+/** The stored line as this page can show it, with its writer kept: an `unknown` writer stays
+ *  unknown (never the task itself), and the session that wrote it rides along for its paths. */
 export function readStatusLine(status: unknown): StatusLine | undefined {
   const l = (status as { line?: unknown } | null | undefined)?.line as Partial<StatusLine> | undefined;
   if (!l || typeof l.text !== 'string' || !l.text.trim()) return undefined;
-  const by = typeof l.by === 'string' && (l.by === 'self' || l.by === 'human' || l.by.startsWith('task:')) ? l.by : 'self';
-  return { text: l.text.trim(), by: by as StatusLine['by'], ...(l.byName ? { byName: l.byName } : {}), at: typeof l.at === 'string' ? l.at : '' };
+  const known = typeof l.by === 'string' && (l.by === 'self' || l.by === 'human' || l.by === 'unknown' || l.by.startsWith('task:'));
+  // A writer this page cannot read is not the task's own word.
+  const by = known ? l.by! : 'unknown';
+  return {
+    text: l.text.trim(), by: by as StatusLine['by'], ...(l.byName ? { byName: l.byName } : {}), at: typeof l.at === 'string' ? l.at : '',
+    ...(typeof l.sessionId === 'string' && l.sessionId ? { sessionId: l.sessionId } : {}),
+  };
 }
 
 /** Who set a row's line, when it was not the task itself: "set by Walnut VP", "set by you". */
 export function lineSetBy(line: StatusLine | undefined): string | null {
   if (!line || line.by === 'self') return null;
-  return line.by === 'human' ? 'set by you' : `set by ${line.byName || 'its lead'}`;
+  if (line.by === 'human') return 'set by you';
+  // Walnut did not record who wrote it: say so, never name its lead.
+  if (line.by === 'unknown') return 'set by an untracked agent';
+  return `set by ${line.byName || 'its lead'}`;
 }
 
 /** The words of an ask with none of its own: what kind of ask it is. */

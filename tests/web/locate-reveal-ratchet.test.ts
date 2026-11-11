@@ -91,6 +91,13 @@ describe('locate reveal ratchet', () => {
     expect(stale).toEqual([]);
   });
 
+  it('an external locate clears the temporary search without changing filter choices', () => {
+    expect(LOCATE_CODE).toContain("if (searchQuery.trim() && focusScope === 'locate') {");
+    expect(LOCATE_CODE).toContain('clearSearch();');
+    expect(LOCATE_CODE).toContain('setSearchReset((version) => version + 1);');
+    expect(SRC).toContain('resetVersion={searchReset}');
+  });
+
   it('a locate holds its task while it moves, and a person\'s gesture in the panel lets go', () => {
     expect(LOCATE_CODE).toContain('locateHoldRef.current = pendingHoldRef.current ?');
     expect(SRC).toMatch(/onPointerDownCapture=\{endLocateHold\}/);

@@ -23,6 +23,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import { useTaskLabel } from '@/hooks/useEntityLabels';
 import { formatRelative } from '@/contexts/notifications';
 import { log } from '@/utils/log';
@@ -49,13 +50,16 @@ import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import '@/styles/human-inbox.css';
 import { taskPath } from '@/utils/task-path';
+import { openAgentRef, type AgentRef } from '@/utils/agent-ref-open';
 
 /** Where a file reference in a letter body should open. */
 export interface LetterFileTarget {
   path: string;
   line?: number;
+  endLine?: number;
   /** The sender's host — a letter from a remote session cites remote paths. */
   host?: string;
+  sourceOnly?: boolean;
 }
 
 export interface LetterViewProps {
@@ -143,15 +147,22 @@ export function LetterView({
   const senderSid = shown?.sender?.sessionId && shown.sender.sessionId !== 'external'
     ? shown.sender.sessionId : undefined;
 
+  const sourceFile = useAgentFileOpener(shown?.sender ?? { unknownSource: true });
+  const openBodyFile = useCallback((path: string, line?: number, _term?: undefined, endLine?: number) => {
+    if (sourceFile.onFileOpen && shown?.sender?.host === undefined) sourceFile.onFileOpen(path, line, undefined, endLine);
+    else onOpenFile({ path, ...(line ? { line } : {}), ...(endLine ? { endLine } : {}), ...(host ? { host } : {}), ...(shown?.sender?.host !== undefined ? { sourceOnly: true } : {}) });
+  }, [sourceFile.onFileOpen, shown?.sender?.host, onOpenFile, host]);
+  const onRefOpen = useCallback((ref: AgentRef) => {
+    if (ref.kind === 'file') openBodyFile(ref.path, ref.line, undefined, ref.endLine);
+    else openAgentRef(ref, onNavigate);
+  }, [onNavigate, openBodyFile]);
   const onBodyClick = useEntityClickHandler(
     useCallback((taskId: string) => onNavigate(taskPath(taskId)), [onNavigate]),
     useCallback((sid: string) => onNavigate(`/sessions?id=${sid}`), [onNavigate]),
-    useCallback(
-      (path: string, line?: number) => onOpenFile({ path, ...(line ? { line } : {}), ...(host ? { host } : {}) }),
-      [onOpenFile, host],
-    ),
+    openBodyFile,
     host,
     senderSid,
+    sourceFile.refusesAll,
   );
 
   // Load the document (+ thread bodies). A response for a letter the user has
@@ -441,10 +452,12 @@ export function LetterView({
                 format={letter.bodyFormat}
                 subject={letter.subject}
                 onClick={onBodyClick}
+                onRefOpen={onRefOpen}
+                source={shown?.sender}
                 {...(letter.bodyDeferred && letter.bodyUrl ? { bodyUrl: letter.bodyUrl } : {})}
               />
             )}
-            <EmailItems letterId={letterId} items={letter.items} onNavigate={onNavigate} />
+            <EmailItems letterId={letterId} items={letter.items} onNavigate={onNavigate} sender={shown?.sender} />
             {(letter.taskRefs?.length ?? 0) > 0 && (
               <div className="hib-taskrefs" onClick={onBodyClick}>
                 <span className="hib-taskrefs-label">Tasks</span>
@@ -479,6 +492,8 @@ export function LetterView({
                 onNavigate={onNavigate}
                 subject={letter.subject}
                 onBodyClick={onBodyClick}
+                onRefOpen={onRefOpen}
+                sender={shown?.sender}
               />
             </div>
           </div>

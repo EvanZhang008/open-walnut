@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, type CSSProperties, type KeyboardEvent 
 import { createPortal } from 'react-dom';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { timeAgo } from '@/utils/time';
+import { AgentText } from '@/components/common/AgentText';
 import '@/styles/session-recap.css';
 
 export type LatestUpdateCloseReason = 'escape' | 'close' | 'outside' | 'anchor-lost';
@@ -25,8 +26,10 @@ export function LatestUpdatePopover(props: {
   anchorRef: RefObject<HTMLElement | null>;
   composerRef?: RefObject<HTMLElement | null>;
   onClose: (reason: LatestUpdateCloseReason) => void;
+  /** The session the texts are about: a path in them opens on its host. */
+  sessionId?: string;
 }) {
-  const { overview, recap, at, anchorRef, composerRef, onClose } = props;
+  const { overview, recap, at, anchorRef, composerRef, onClose, sessionId } = props;
   const rootRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -96,13 +99,13 @@ export function LatestUpdatePopover(props: {
         {overview && (
           <p className="latest-update-row" data-testid="session-recap-overview">
             <span className="latest-update-label">Overall</span>
-            <span className="latest-update-text">{overview}</span>
+            <AgentText compact inline sessionId={sessionId} className="latest-update-text" text={overview} />
           </p>
         )}
         {recap && (
           <p className="latest-update-row" data-testid="session-recap-latest">
             <span className="latest-update-label">Latest</span>
-            <span className="latest-update-text">{recap}</span>
+            <AgentText compact inline sessionId={sessionId} className="latest-update-text" text={recap} />
           </p>
         )}
       </div>

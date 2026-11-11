@@ -147,12 +147,16 @@ export async function leaveFullscreen(page: Page): Promise<void> {
  */
 export async function openAskWalnutDrawer(page: Page): Promise<Locator> {
   const drawer = page.locator('[data-testid="ask-walnut-drawer"]')
-  if ((await drawer.count()) === 0) {
-    const menu = page.locator('[data-testid="ask-walnut-menu"]')
-    await expect(menu).toBeVisible({ timeout: 30_000 })
-    await menu.click()
-  }
-  await expect(drawer).toBeVisible({ timeout: 10_000 })
+  const menu = page.locator('[data-testid="ask-walnut-menu"]')
+  // The slot swaps its loading panel for the CEO draft once the asks load; a press in that
+  // moment is lost with the old panel, so the press is made again until the drawer stays.
+  await expect(async () => {
+    if ((await drawer.count()) === 0) {
+      await expect(menu).toBeVisible({ timeout: 5_000 })
+      await menu.click()
+    }
+    await expect(drawer).toBeVisible({ timeout: 3_000 })
+  }).toPass({ timeout: 40_000 })
   return drawer
 }
 

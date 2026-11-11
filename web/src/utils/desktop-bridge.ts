@@ -16,6 +16,7 @@
 import { hasUnsavedWork } from '@/utils/stale-assets';
 import { listUnsavedWork, revealUnsavedWork } from '@/utils/unsaved-work';
 import { openLink } from '@/utils/open-link';
+import { claimAgentRef } from '@/utils/agent-ref-open';
 
 /** One thing a restart would lose in this window, for the restart notice in another one. */
 export interface DesktopUnsavedItem {
@@ -34,6 +35,7 @@ export interface DesktopBridge {
   /** An `open-walnut://` link the app was asked to open (desktop/AppLink.swift).
    *  Handled in place, never by a reload: the page may hold unsaved text. */
   openLink(link: string): boolean;
+  openAgentRef(link: string): boolean;
 }
 
 declare global {
@@ -59,6 +61,7 @@ export function installDesktopBridge(target: Window = window): DesktopBridge {
       } catch { return false; }
     },
     openLink: (link) => openLink(String(link)),
+    openAgentRef: (link) => claimAgentRef(String(link)),
   };
   target.__walnutDesktop = bridge;
   return bridge;

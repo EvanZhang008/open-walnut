@@ -157,6 +157,18 @@ test('two sibling tasks asking the same show one row; their leader answering it 
   await expect(aCard.getByTestId('status-card-reason')).toHaveText(`Answered by Orchard lead ${stamp}: Wait up to ten minutes, roll back on timeout.`)
   await expect(aCard.getByTestId('status-card-reason')).toHaveAttribute('title', new RegExp(`its next step, answered by Orchard lead ${stamp} for you: Wait up to ten minutes`))
   await expect(needsRows.locator(`[data-task-id="${a}"]`)).toHaveCount(0)
+  // Its details say who answered what for the user, the ask and the answer each as agent text.
+  await aCard.hover()
+  await aCard.getByRole('button', { name: 'More actions' }).click()
+  await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+  const answered = page.locator('.task-detail-modal').getByTestId('task-detail-answered-for')
+  await expect(answered).toContainText(`Orchard lead ${stamp} answered for you "Should the deploy handler wait for the plugin rollout?": Wait up to ten minutes, roll back on timeout.`, { timeout: 15_000 })
+  await expect(answered.getByTestId('answered-for-ask')).toHaveText('Should the deploy handler wait for the plugin rollout?')
+  await expect(answered.getByTestId('answered-for-answer')).toHaveText('Wait up to ten minutes, roll back on timeout.')
+  await page.waitForTimeout(800)
+  await answered.screenshot({ path: `${SHOTS}/${info.project.name}-5a-answered-line.png` }).catch(() => {})
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0)
   // Its teammate folded under it reads answered there, by name.
   await expect.poll(async () => (await statusOf(b))?.sameAsk?.answered, { timeout: 30_000 }).toBe(true)
   await expect((await showSectionCard(panel, 'waiting', b)).getByTestId('status-card-reason')).toHaveText(`Answered in "Plugin rollout ${stamp}"`)

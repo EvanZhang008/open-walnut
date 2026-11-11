@@ -25,11 +25,19 @@ import path from 'node:path';
  * (collapsed plan cards, tool-result bodies, compaction details) that only mount
  * on a click and are not part of this fix; what is pinned there is the MESSAGE
  * BODY, the one a reader selects while a turn streams.
+ *
+ * `via` = the file sets no innerHTML itself: it imports that component and draws its body
+ * with it, and the component is a host here too, so its own prop is the one checked.
  */
-const HOSTS: Array<{ rel: string; whole?: boolean; sites?: RegExp[] }> = [
+const HOSTS: Array<{ rel: string; whole?: boolean; sites?: RegExp[]; via?: { name: string; rel: string } }> = [
   { rel: 'web/src/components/chat/RichBlocks.tsx', whole: true },
   { rel: 'web/src/components/chat/SuggestCard.tsx', whole: true },
-  { rel: 'web/src/components/common/ClaudeStreamView.tsx', whole: true },
+  { rel: 'web/src/components/common/AgentText.tsx', whole: true },
+  {
+    rel: 'web/src/components/common/ClaudeStreamView.tsx',
+    whole: true,
+    via: { name: 'AgentText', rel: 'web/src/components/common/AgentText.tsx' },
+  },
   {
     rel: 'web/src/components/sessions/SessionMessage.tsx',
     // The user's own bubble. Rendering markdown INSIDE the attribute is the
@@ -58,9 +66,26 @@ describe('message bodies use a stable innerHTML prop', () => {
       for (const site of host.sites ?? []) {
         expect(src, `${host.rel} must take the message body prop from useStableHtml`).not.toMatch(site);
       }
-      expect(src).toContain('useStableHtml');
+      if (host.via) {
+        const { name, rel } = host.via;
+        const from = `@/${rel.replace(/^web\/src\//, '').replace(/\.tsx$/, '')}`;
+        expect(src, `${host.rel} imports ${name} from ${from}`).toMatch(new RegExp(`import \\{[^}]*\\b${name}\\b[^}]*\\} from '${from}'`));
+        expect(src, `${host.rel} draws its body with <${name}>`).toMatch(new RegExp(`<${name}\\b[^>]*\\btext=\\{`));
+        expect(src, `${host.rel} sets no innerHTML of its own`).not.toMatch(/dangerouslySetInnerHTML=/);
+        expect(HOSTS.some((h) => h.rel === rel && !h.via), `${rel} is checked as a host itself`).toBe(true);
+      } else {
+        expect(src).toContain('useStableHtml');
+      }
     });
   }
+
+  it('AgentText passes the prop it got from useStableHtml', () => {
+    const src = readFileSync(path.join(root, 'web/src/components/common/AgentText.tsx'), 'utf8');
+    expect(src).toMatch(/import \{ useStableHtml \} from '@\/hooks\/useStableHtml'/);
+    const name = /const (\w+) = useStableHtml\(/.exec(src)?.[1];
+    expect(name, 'AgentText takes its innerHTML prop from useStableHtml').toBeTruthy();
+    expect(src.match(/dangerouslySetInnerHTML=\{[^}]*\}/g)).toEqual([`dangerouslySetInnerHTML={${name}}`]);
+  });
 
   // 2026-10-29: the list above missed the provenance card, whose plain segment
   // rewrote the user's message (and reloaded its screenshot) on every status

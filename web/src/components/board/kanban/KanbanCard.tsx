@@ -14,6 +14,7 @@ import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, us
 import { useDraggable } from '@dnd-kit/core';
 import { ICON_CHAT, ICON_CHECK, ICON_NEW_TAB } from '@/components/common/Icons';
 import { TagChip } from '@/components/tasks/TagChip';
+import { AgentText } from '@/components/common/AgentText';
 import { useTagDisplay } from '@/stores/tag-display-store';
 import type { BoardCard, BoardLane } from '../../../../../src/core/boards/board-lanes';
 import type { ProjectOf } from '../board-view-projects';
@@ -310,7 +311,9 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
           ><span className="kanban-card-dot" aria-hidden="true" /><span className="kanban-card-status-text">{statusLine}</span></button>
         ) : (
           <div className={statusClass} data-testid="kanban-card-status" data-tone={tone} title={status.tooltip}>
-            <span className="kanban-card-dot" aria-hidden="true" /><span className="kanban-card-status-text">{statusLine}</span>
+            {/* A quoted ask, report or wait opens its paths where its writer wrote it; Walnut's own line has no writer.
+                The prompt and signal branches above stay plain text: a link inside their button would nest controls. */}
+            <span className="kanban-card-dot" aria-hidden="true" /><AgentText compact inline {...(status.textSource ?? { unknownSource: true })} className="kanban-card-status-text" text={statusLine} />
           </div>
         )}
         {status.kind === 'still-open' && !overlay && (
@@ -336,7 +339,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
           className="kanban-card-summary" data-testid="kanban-card-summary" data-kanban-zone
           title={vm.summary.tooltip} data-expanded={expanded ? 'true' : undefined}
           onClick={(e) => { e.stopPropagation(); if (overlay) return; setExpanded((v) => !v); ctx.markSeen(vm.taskId); }}
-        >{vm.summary.text}</div>
+        ><AgentText text={vm.summary.text} compact {...vm.summary.textSource} /></div>
       ) : null}
       {editor?.field === 'waiting_on' ? (
         <div className="kanban-card-editor" data-kanban-zone onPointerDown={(e) => e.stopPropagation()}>
@@ -345,7 +348,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
       ) : vm.waiting ? (
         vm.waiting.kind === 'text' ? (
           <div className="kanban-card-waiting" data-testid="kanban-card-waiting">
-            <span className="kanban-card-waiting-label">Waiting on</span> <span className="kanban-card-waiting-value">{vm.waiting.text}</span>
+            <span className="kanban-card-waiting-label">Waiting on</span> <AgentText compact inline {...(vm.waiting.textSource ?? { unknownSource: true })} className="kanban-card-waiting-value" text={vm.waiting.text ?? ''} />
             {vm.waiting.until && status.kind !== 'waiting-until' ? <span className="kanban-card-waiting-until"> · until {vm.waiting.until}</span> : null}
           </div>
         ) : vm.waiting.kind === 'add-who' ? (

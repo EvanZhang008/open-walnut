@@ -121,4 +121,14 @@ describe('reading the stored status', () => {
     expect(lineSetBy(readStatusLine({ line: { text: 'x', by: 'human', at: '' } }))).toBe('set by you')
     expect(readStatusLine({ line: { text: '  ', by: 'self' } })).toBeUndefined()
   })
+
+  it('keeps an unrecorded writer unknown and the writing session, never crediting its lead', () => {
+    const unknown = readStatusLine({ line: { text: 'see /srv/plan.md', by: 'unknown', at: '' } })
+    expect(unknown?.by).toBe('unknown')
+    expect(lineSetBy(unknown)).toBe('set by an untracked agent')
+    // A writer this page cannot read is not the task's own word either.
+    expect(readStatusLine({ line: { text: 'x', by: 'robot', at: '' } })?.by).toBe('unknown')
+    expect(readStatusLine({ line: { text: 'x', by: 'self', at: '', sessionId: 's-old' } })?.sessionId).toBe('s-old')
+    expect(readStatusLine({ line: { text: 'x', by: 'self', at: '' } })).not.toHaveProperty('sessionId')
+  })
 })

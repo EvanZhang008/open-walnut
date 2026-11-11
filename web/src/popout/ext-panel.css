@@ -142,8 +142,10 @@
 .ext-tasks-loading { display: flex; align-items: center; gap: 8px; margin: 18px 12px; font-size: 13px; color: var(--fg-muted); }
 .ext-tasks-updating { margin: 4px 12px 0; font-size: 12px; color: var(--fg-muted); }
 .ext-task-asked { font-size: 12.5px; line-height: 1.45; color: var(--fg-secondary, var(--fg)); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; max-height: 160px; overflow: auto; }
-.ext-task-asked p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.ext-task-asked p + p { margin-top: 4px; }
+.ext-task-asked p { margin: 0; overflow-wrap: anywhere; }
+.ext-task-asked p + p, .ext-task-said + .ext-task-said { margin-top: 4px; }
+.ext-task-said :is(ul, ol) { margin: 2px 0; padding-left: 18px; }
+.ext-task-said pre { margin: 2px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ext-task-asked .ext-task-last { color: var(--fg); }
 
 /* ── the page's selection in a conversation already going (Ask) ── */

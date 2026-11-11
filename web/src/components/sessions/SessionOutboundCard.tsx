@@ -21,14 +21,14 @@
  */
 import { matchIdRef } from '../../../../src/lib/id-ref';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { stableHtml } from '@/hooks/useStableHtml';
 import {
   outboundDirectionGlyph,
   replyRequestToLookUp,
   splitOutboundHandle,
   type OutboundSend,
 } from './session-outbound';
-import { fetchRequestAsker } from '@/api/sessions';
+import { fetchRequestAsker, peekSessionRecord } from '@/api/sessions';
+import { sessionTextSource } from '@/utils/agent-text-source';
 import { candidateTaskId, resolveRefInIndex } from '@/components/chat/session-mention';
 import {
   ensureSessionMentionIndex,
@@ -37,7 +37,8 @@ import {
 } from '@/stores/session-mention-index';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { useEntityLabelsVersion, useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
+import { useEntityLabelsVersion, useTaskLabel } from '@/hooks/useEntityLabels';
+import { AgentText } from '@/components/common/AgentText';
 import { lookupTaskByRef } from '@/stores/entity-label-store';
 import { copyTextRobust } from '@/utils/clipboard';
 import { fallbackTitle, foldKey, useMessageFold } from './message-fold';
@@ -182,11 +183,23 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
   );
 }
 
-/** What this session said. Same quoted block the inbound card gives the peer. */
-function OutboundBody({ body, sessionCwd }: { body: string; sessionCwd?: string }) {
-  const html = useRenderedMarkdown(body, sessionCwd);
+/** What this session said, on this session's machine (never the target's); AgentText keeps its own clicks. */
+function OutboundBody({ body, sessionCwd, sessionHost, sessionId, onTaskClick }: {
+  body: string;
+  sessionCwd?: string;
+  sessionHost?: string;
+  sessionId?: string;
+  onTaskClick?: (taskId: string) => void;
+}) {
   return (
-    <blockquote className="provenance-body markdown-body" dangerouslySetInnerHTML={stableHtml(html)} />
+    <blockquote className="provenance-body markdown-body">
+      <AgentText
+        className="provenance-body-text"
+        text={body}
+        {...sessionTextSource({ sessionId, sessionHost, sessionCwd }, peekSessionRecord)}
+        onTaskClick={onTaskClick}
+      />
+    </blockquote>
   );
 }
 
@@ -323,7 +336,7 @@ export function SessionOutboundCard({
       {open && (
         <div className="op-card-detail">
           {!send.error && status && <div className="provenance-status">{status}</div>}
-          {hasDetail && <OutboundBody body={send.body!} sessionCwd={sessionCwd} />}
+          {hasDetail && <OutboundBody body={send.body!} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} />}
           {note && <div className="provenance-outbound-payload">{note}</div>}
           <OutboundDetails send={send} result={result} sessionId={resolved.fullId} />
         </div>

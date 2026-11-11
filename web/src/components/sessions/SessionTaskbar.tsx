@@ -26,7 +26,6 @@ import { useCallback, useEffect, useRef, useState, type DragEvent, type Keyboard
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { needsLineText } from '@open-walnut/user-status';
-import { stripMarkdown } from '@open-walnut/board-summary-text';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
@@ -36,8 +35,11 @@ import { fetchSessionHistory } from '@/api/sessions';
 import { taskOfSession, taskStatusLabel } from '@/utils/session-status';
 import { ICON_CLOSE } from '@/components/common/Icons';
 import { AnswerBox } from '@/components/common/AnswerBox';
-import { useImageAttachments } from '@/components/common/image-attachments';
+import { AgentText } from '@/components/common/AgentText';
+import { taskTextSource } from '@/utils/agent-text-source';
+import { useImageAttachments, type ImageAttachments } from '@/components/common/image-attachments';
 import { log } from '@/utils/log';
+import { OPEN_CENTER_EVENT, OPEN_FILE_EVENT } from '@/utils/open-anywhere';
 
 export interface SessionTaskbarProps {
   chips: readonly string[];
@@ -243,11 +245,24 @@ function TaskbarChip({ sessionId, task, dragging, onRestore, onClose, onDragStar
   // A card the pointer opened closes when the pointer leaves; one opened with ^ stays
   // until ^ again, Escape or a click outside.
   const [peek, setPeek] = useState<'none' | 'hover' | 'pinned'>('none');
+  const [draft, setDraft] = useState('');
+  const [sent, setSent] = useState<'idle' | 'sending' | 'sent' | 'failed'>('idle');
+  const pictures = useImageAttachments();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearTimer = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null; } };
   const hoverOpen = () => { clearTimer(); timer.current = setTimeout(() => setPeek((p) => (p === 'none' ? 'hover' : p)), PEEK_OPEN_MS); };
   const hoverClose = () => { clearTimer(); timer.current = setTimeout(() => setPeek((p) => (p === 'hover' ? 'none' : p)), PEEK_CLOSE_MS); };
   useEffect(() => clearTimer, []);
+  useEffect(() => {
+    if (peek === 'none') return;
+    const onViewerOpen = () => { clearTimer(); setPeek('none'); };
+    window.addEventListener(OPEN_FILE_EVENT, onViewerOpen);
+    window.addEventListener(OPEN_CENTER_EVENT, onViewerOpen);
+    return () => {
+      window.removeEventListener(OPEN_FILE_EVENT, onViewerOpen);
+      window.removeEventListener(OPEN_CENTER_EVENT, onViewerOpen);
+    };
+  }, [peek]);
 
   return (
     <div
@@ -257,7 +272,9 @@ function TaskbarChip({ sessionId, task, dragging, onRestore, onClose, onDragStar
       data-state={state}
       data-running={running || undefined}
       draggable
-      onDragStart={onDragStart}
+      // The peek card is portalled but still this chip's child in React: a link dragged in it
+      // (its reply's paths and URLs) must not start a chip move.
+      onDragStart={(e) => { if (chipRef.current?.contains(e.target as Node)) onDragStart(e); }}
       onDragEnd={onDragEnd}
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
@@ -299,8 +316,14 @@ function TaskbarChip({ sessionId, task, dragging, onRestore, onClose, onDragStar
           running={running}
           anchorRef={chipRef}
           processStatus={status?.process_status ?? null}
+          draft={draft}
+          setDraft={setDraft}
+          sent={sent}
+          setSent={setSent}
+          pictures={pictures}
           onOpen={() => { setPeek('none'); onRestore(sessionId); }}
           onDismiss={() => setPeek('none')}
+          onLinkPress={() => { clearTimer(); setPeek('pinned'); }}
           onPointerEnter={clearTimer}
           onPointerLeave={hoverClose}
         />
@@ -317,21 +340,28 @@ interface PeekCardProps {
   running: boolean;
   anchorRef: React.RefObject<HTMLDivElement | null>;
   processStatus: string | null;
+  draft: string;
+  setDraft: (text: string) => void;
+  sent: 'idle' | 'sending' | 'sent' | 'failed';
+  setSent: (state: 'idle' | 'sending' | 'sent' | 'failed') => void;
+  pictures: ImageAttachments;
   onOpen: () => void;
   onDismiss: () => void;
+  onLinkPress: () => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
 }
 
 /** The watch-size card: what the session needs or where it stands, its last reply, a composer. */
-function PeekCard({ sessionId, task, title, state, running, anchorRef, processStatus, onOpen, onDismiss, onPointerEnter, onPointerLeave }: PeekCardProps) {
+function PeekCard({ sessionId, task, title, state, running, anchorRef, processStatus, draft, setDraft, sent, setSent, pictures, onOpen, onDismiss, onLinkPress, onPointerEnter, onPointerLeave }: PeekCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(true, anchorRef, cardRef, { align: 'start', preferSide: 'up', minHeight: 160, onAnchorLost: onDismiss });
   const lastReply = useLastReply(sessionId, processStatus);
   const { send } = useSessionSend(sessionId);
-  const [draft, setDraft] = useState('');
-  const [sent, setSent] = useState<'idle' | 'sending' | 'sent' | 'failed'>('idle');
-  const line = task?.user_status ? (needsLineText(task.user_status) || task.user_status.now || '') : '';
+  const needsText = task?.user_status ? needsLineText(task.user_status) : '';
+  const line = needsText || task?.user_status?.now || '';
+  // The status line is the task's stored words: their recorded writer, never this card's session.
+  const lineSource = taskTextSource(task, needsText ? 'needs' : 'report');
 
   useEffect(() => {
     // Capture phase: the page's own Escape handlers (panel router, beep guard) run in bubble
@@ -346,8 +376,6 @@ function PeekCard({ sessionId, task, title, state, running, anchorRef, processSt
     return () => { window.removeEventListener('keydown', onKey, true); window.removeEventListener('pointerdown', onDown, true); };
   }, [onDismiss, anchorRef]);
 
-  // A reply here goes to the session's AI, so it takes pictures as the chat does.
-  const pictures = useImageAttachments();
   const submit = useCallback(async (raw: string) => {
     const text = raw.trim();
     const images = pictures.images;
@@ -357,7 +385,7 @@ function PeekCard({ sessionId, task, title, state, running, anchorRef, processSt
     log.info('taskbar', 'card message sent', { sessionId, ok, images: images.length });
     if (ok) { setDraft(''); pictures.clear(); }
     setSent(ok ? 'sent' : 'failed');
-  }, [send, sent, sessionId, pictures]);
+  }, [send, sent, sessionId, pictures, setDraft, setSent]);
 
   return createPortal(
     <div
@@ -368,6 +396,7 @@ function PeekCard({ sessionId, task, title, state, running, anchorRef, processSt
       data-testid="session-taskbar-card"
       style={menuPlacementStyle(placement)}
       onPointerDown={(e) => e.stopPropagation()}
+      onClickCapture={(e) => { if ((e.target as Element).closest('a')) onLinkPress(); }}
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
     >
@@ -376,10 +405,12 @@ function PeekCard({ sessionId, task, title, state, running, anchorRef, processSt
         <span className="session-taskbar-card-title">{title}</span>
         <button type="button" className="session-taskbar-card-open" onClick={onOpen}>Open</button>
       </div>
-      {line && <div className="session-taskbar-card-line" data-testid="session-taskbar-card-line">{line}</div>}
+      {/* The status line and the last reply are the agent's words, source as written: a path, link,
+          task or letter in them opens; the card's CSS keeps the reply to a few lines. */}
+      {line && <div className="session-taskbar-card-line" data-testid="session-taskbar-card-line"><AgentText compact inline {...lineSource} text={line} /></div>}
       <div className="session-taskbar-card-reply" data-testid="session-taskbar-card-reply">
         {lastReply === null ? <span className="session-taskbar-card-muted">Loading…</span>
-          : lastReply ? lastReply : <span className="session-taskbar-card-muted">No reply yet.</span>}
+          : lastReply ? <AgentText compact inline sessionId={sessionId} text={lastReply} /> : <span className="session-taskbar-card-muted">No reply yet.</span>}
       </div>
       <AnswerBox
         className="session-taskbar-card-composer"
@@ -412,8 +443,8 @@ function useLastReply(sessionId: string, processStatus: string | null): string |
     fetchSessionHistory(sessionId, { tail: 12, signal: ac.signal })
       .then((res) => {
         const last = [...res.messages].reverse().find((m) => m.role === 'assistant' && m.text.trim());
-        // One plain line of text: a watch-size card has no room for Markdown's links and code.
-        setReply(last ? stripMarkdown(last.text) : '');
+        // The source as written: stripping Markdown first rewrote paths (underscores, asterisks).
+        setReply(last ? last.text.trim() : '');
       })
       .catch((err: unknown) => {
         if (ac.signal.aborted) return;

@@ -1,5 +1,5 @@
 import { apiPost } from '@/api/client';
-import { useState, useEffect, useCallback, useRef, useMemo, Component, lazy, Suspense, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, Component, lazy, Suspense, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, type MutableRefObject, type CSSProperties, memo } from 'react';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
 import { ContextFullBanner } from './ContextFullBanner';
@@ -37,7 +37,7 @@ import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionR
 import { SessionRewindDialog } from './SessionRewindDialog';
 import { SessionBudgetStatus, SessionUsageDialog } from './SessionUsageDialog';
 import { SessionUsageOpenContext, useSessionBudgetUsage } from '@/hooks/useSessionBudgetUsage';
-import { useClickedPathOpener, missingPathLine, type ClickedPathTarget } from '@/hooks/useClickedPathOpener';
+import { useClickedPathOpener, locateClickedPath, missingPathLine, type ClickedPathTarget } from '@/hooks/useClickedPathOpener';
 import { sessionScope } from '@/utils/file-view-state';
 import { SessionCodeView } from './SessionCodeView';
 import { SessionWebView, activeLocalPort, type WebViewRequest } from './SessionWebView';
@@ -83,7 +83,10 @@ import { ChatInput } from '@/components/chat/ChatInput';
 import { keepCommandFirst } from '@/components/chat/leading-command';
 import type { PrefillMode } from '@/components/chat/prefill-place';
 import { SideQuestionDrawer } from '@/components/sessions/SideQuestionDrawer';
-import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
+import { useAgentFileOpener, useSessionTextRender } from '@/hooks/useAgentFileOpener';
+import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
+import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { stripSendPrefixes, useSessionSend } from '@/hooks/useSessionSend';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
@@ -285,12 +288,39 @@ class SessionPanelErrorBoundary extends Component<SessionPanelErrorBoundaryProps
   }
 }
 
-/** Renders plan markdown content inside the plan popover with scrollable area */
-function PlanPopoverContent({ content, cwd }: { content: string; cwd?: string }) {
-  const html = useRenderedMarkdown(content, cwd);
+/** Plan markdown in the popover, rendered and opened as its writer's (the panel's own, or the from-plan source). */
+function PlanPopoverContent({ content, writerSessionId, cwd, sessionId, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
+  content: string;
+  writerSessionId: string;
+  cwd?: string;
+  sessionId: string;
+  sessionHost?: string;
+  onTaskClick?: (taskId: string) => void;
+  onSessionClick?: (sessionId: string) => void;
+  onFileOpen?: (path: string, line?: number) => void;
+}) {
+  const foreign = writerSessionId !== sessionId;
+  const own = useSessionTextRender({ sessionId, sessionHost, sessionCwd: cwd });
+  const writer = useAgentFileOpener(foreign ? { sessionId: writerSessionId } : undefined);
+  const render = foreign ? writer.render : own;
+  const labelsVersion = useEntityLabelsVersion();
+  const html = useMemo(
+    () => renderMarkdownWithRefs(content, render.cwd, render.host, render.images ? undefined : { inlineImages: false }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates the pill lookups inside
+    [content, render.cwd, render.host, render.images, labelsVersion],
+  );
+  // Own plan: the panel's opener; another writer's: strictly that writer's machine.
+  const onClick = useEntityClickHandler(
+    onTaskClick, onSessionClick,
+    foreign ? writer.onFileOpen : onFileOpen,
+    foreign ? writer.fileHost : sessionHost,
+    foreign ? writer.fileSessionId : sessionId,
+    foreign ? writer.refusesAll : undefined,
+  );
   return (
     <div
       className="markdown-body"
+      onClick={onClick}
       dangerouslySetInnerHTML={stableHtml(html)}
     />
   );
@@ -1876,10 +1906,16 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
 
   // A path inside a letter opens where every other path in a session opens: the
   // panel's Files split. A letter must not be the one surface that pops a modal.
-  const handleLetterFileOpen = useCallback(
-    (target: { path: string; line?: number }) => handleFileOpen(target.path, target.line),
-    [handleFileOpen],
-  );
+  const letterFileSeq = useRef(0);
+  useLayoutEffect(() => () => { letterFileSeq.current++; }, [sessionId, session?.host, inboxLetterId, activeView]);
+  const handleLetterFileOpen = useCallback((target: { path: string; line?: number; endLine?: number; host?: string; sourceOnly?: boolean }) => {
+    const mine = ++letterFileSeq.current;
+    void locateClickedPath(target.path, { host: target.host, sourceOnly: target.sourceOnly }, target).then((located) => {
+      if (mine !== letterFileSeq.current) return;
+      const panelHost = session?.host && !['local', '__local__'].includes(session.host) ? session.host : undefined;
+      openLocatedFile({ ...located, elsewhere: located.host !== panelHost });
+    });
+  }, [session?.host, openLocatedFile]);
   // planPopoverRef removed — modal uses backdrop click
 
   // Auto-refresh plan content when modal opens
@@ -2490,7 +2526,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const activityAge = isFullscreen && session?.lastActiveAt ? timeAgo(session.lastActiveAt).replace(/ ago$/, '') : '';
   const activityTimeTitle = activityAge ? `Last active: ${new Date(session!.lastActiveAt!).toLocaleString()}` : '';
 
-  const planContentValue = plan?.content ?? null;
+  // With its writer: a from-plan session shows another session's plan.
+  const planContentValue = useMemo(
+    () => (plan?.content ? { content: plan.content, writerSessionId: plan.sourceSessionId || sessionId } : null),
+    [plan?.content, plan?.sourceSessionId, sessionId],
+  );
 
   // A session whose record is gone (404) still opened from a task row: the bar
   // names that task, not "Untitled session" (N29).
@@ -3123,7 +3163,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                           <div style={{ fontSize: '12px', color: 'var(--fg-muted)', padding: '20px 0', textAlign: 'center' }}>Loading plan...</div>
                         )}
                         {plan?.content && (
-                          <PlanPopoverContent content={plan.content} cwd={session?.cwd} />
+                          <PlanPopoverContent content={plan.content} writerSessionId={plan.sourceSessionId || sessionId} cwd={session?.cwd} sessionId={sessionId} sessionHost={session?.host} onTaskClick={chatTaskClick} onSessionClick={onSessionClick} onFileOpen={handleFileOpen} />
                         )}
                       </div>
                       <div className="plan-popup-input">

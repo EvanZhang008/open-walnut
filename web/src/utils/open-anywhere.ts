@@ -20,6 +20,7 @@
  * `onClick={e => e.stopPropagation()}`) cannot swallow the click, and decides
  * after the dispatch, when every surface has had its turn.
  */
+import type { SourceFailReason } from '@/utils/agent-text-source';
 import { useEffect } from 'react';
 import { locatePath } from '@/api/files';
 import { isPopoutPath } from '@/popout/openPopout';
@@ -35,6 +36,12 @@ export interface OpenFileRequest {
   line?: number;
   endLine?: number;
   host?: string;
+  sourceOnly?: boolean;
+  sourceFailure?: string;
+  /** Why the machine is unknown (`sourceFailure` is its words): a pick answers all but a failed lookup. */
+  sourceReason?: SourceFailReason;
+  /** A failed lookup only: opens the same path again, so the viewer can offer a retry. */
+  retry?: () => void;
 }
 
 export function openFileAnywhere(req: OpenFileRequest): void {
@@ -48,7 +55,7 @@ export function openLetterAnywhere(letterId: string): void {
     channel.close();
     return;
   }
-  window.dispatchEvent(new CustomEvent(OPEN_CENTER_EVENT, { detail: { letterId } }));
+  window.dispatchEvent(new CustomEvent(OPEN_CENTER_EVENT, { detail: { letterId, link: true } }));
 }
 
 const claimed = new WeakSet<Event>();

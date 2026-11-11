@@ -207,7 +207,7 @@ describe('every component that renders code blocks gets the base code-block rule
     .map((f) => relative(ROOT, f));
 
   it('finds the known hosts, so the scan cannot silently go empty', () => {
-    for (const known of ['web/src/components/sessions/SessionMessage.tsx', 'web/src/components/inbox/LetterBody.tsx', 'web/src/components/org/OrgThreads.tsx', 'web/src/components/common/FileContentView.tsx']) {
+    for (const known of ['web/src/components/sessions/SessionMessage.tsx', 'web/src/components/inbox/LetterBody.tsx', 'web/src/components/common/AgentText.tsx', 'web/src/components/common/FileContentView.tsx']) {
       expect(hosts).toContain(known);
     }
     expect(hosts.length).toBeGreaterThan(15);

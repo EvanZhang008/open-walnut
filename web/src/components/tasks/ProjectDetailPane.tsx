@@ -33,6 +33,7 @@ import { ProjectTrackingBlock } from './ProjectTrackingBlock';
 import { projectDisplayName } from '@/utils/project-display';
 import { ProjectScriptsDialog, scriptRoles } from '@/components/workspaces/ProjectScriptsDialog';
 import type { ProjectScript } from '@/api/workspaces';
+import { AgentText } from '@/components/common/AgentText';
 
 interface ProjectDetailPaneProps {
   /** Never '' — Inbox has no registry row. */
@@ -344,7 +345,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
           </button>
         </div>
         {metadata.summary
-          ? <p className="detail-memory-text">{metadata.summary}</p>
+          ? <AgentText compact unknownSource className="detail-memory-text" text={metadata.summary} />
           : <p className="detail-memory-text text-muted">No summary yet — generated automatically as tasks accumulate, or click ↻.</p>}
       </div>
 
