@@ -210,19 +210,36 @@ extension View {
 
 /// A fenced block in a letter, note or sheet: the same header (language, Wrap,
 /// Copy) and colors as a chat code block (`TimelineCodeCell`). Wrap is the
-/// block's own, as there.
+/// block's own, as there, and kept the same way (`CodeWrapMemory`): a block
+/// scrolled away and back, or a letter opened again, is as it was left.
 struct MarkdownCodeBlockView: View {
+    /// The `CodeWrapMemory` scope of blocks outside a timeline.
+    static let wrapScope = "markdown"
+
     let language: String?
     let text: String
     /// Who wrote the code: its paths, URLs and ids are linked, and open from this source.
     var source: LinkSource? = nil
-    @State private var wrap = false
+    @State private var wrap: Bool
     @State private var copied = false
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    init(language: String?, text: String, source: LinkSource? = nil) {
+        self.language = language
+        self.text = text
+        self.source = source
+        _wrap = State(initialValue: CodeWrapMemory.shared.isWrapped(
+            CodeHighlighter.blockKey(code: text, language: language), scope: Self.wrapScope))
+    }
 
     private var fence: CodeHighlighter.Fence { CodeHighlighter.fence(language) }
+    private var wrapKey: String { CodeHighlighter.blockKey(code: text, language: language) }
 
     private var colored: AttributedString {
-        let font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
+        // The chat's code size: it stops growing at `CodeHighlighter.largestType`.
+        let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(min(typeSize, CodeHighlighter.largestType)))
+        let font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: traits).pointSize,
+                                               weight: .regular)
         let ns = CodeHighlighter.attributed(text, grammar: fence.grammar, font: font)
         var colored = (try? AttributedString(ns, including: \.uiKit)) ?? AttributedString(text)
         // The code as written with its references linked, laid over the colors (links only add attributes).
@@ -250,7 +267,7 @@ struct MarkdownCodeBlockView: View {
                     .truncationMode(.middle)
                 Spacer(minLength: 8)
                 Button {
-                    wrap.toggle()
+                    wrap = CodeWrapMemory.shared.toggle(wrapKey, scope: Self.wrapScope)
                 } label: {
                     Label("Wrap", systemImage: "arrow.turn.down.left")
                         .font(.system(size: 13, weight: .medium))
@@ -296,5 +313,7 @@ struct MarkdownCodeBlockView: View {
             }
         }
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        // The same view handed another block keeps that block's own state.
+        .onChange(of: wrapKey) { _, key in wrap = CodeWrapMemory.shared.isWrapped(key, scope: Self.wrapScope) }
     }
 }

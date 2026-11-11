@@ -1,3 +1,4 @@
+import SwiftUI
 import UIKit
 
 /// Fenced code blocks: the header's language label, syntax colors, and the one
@@ -310,6 +311,13 @@ enum CodeHighlighter {
 }
 
 extension CodeHighlighter {
+    /// Past this text size code grows no more, on every surface that shows it (a chat
+    /// block, a letter's or note's block, a diff): one line of it would no longer
+    /// hold a phone's worth of characters. The chrome around it keeps growing.
+    static let largestType = DynamicTypeSize.accessibility1
+    /// `largestType` for UIKit text (CodeBlockTests pins that the two agree).
+    static let largestCategory = UIContentSizeCategory.accessibilityMedium
+
     /// Which block this is for its Wrap state: its fence word and first line.
     /// Row ids do not do: a streaming reply's rows move between the live head,
     /// tail and the received message, each with its own id prefix, and the

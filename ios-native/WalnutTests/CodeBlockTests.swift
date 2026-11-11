@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 import UIKit
 @testable import Walnut
 
@@ -257,6 +258,151 @@ final class CodeBlockTests: XCTestCase {
             XCTAssertEqual(block.key, key)
             XCTAssertTrue(block.wrapped, "tick \(i)")
         }
+    }
+}
+
+/// Code stops growing at `CodeHighlighter.largestType`: at the largest text sizes a line
+/// still holds a phone's worth of characters, and the heights still match the drawing.
+@MainActor
+final class CodeTypeCapTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        MarkdownParser.resetCacheForTesting()
+        MainWork.resetForTesting()
+    }
+
+    override func tearDown() {
+        TimelineTextStyler.adopt(.unspecified)
+        super.tearDown()
+    }
+
+    private let json = "```json\n{ \"region\": \"us-west-2\", \"healthy\": 112, \"drained\": 3, \"ok\": true }\n```"
+
+    private func block(_ text: String, size: UIContentSizeCategory, wrapped: Bool = false) async -> (TimelineRow, TimelineCodeBlock) {
+        var input = TimelineInput(
+            messages: [ChatMessage(id: "m-1", role: "assistant", text: text, createdAt: "2026-08-08T06:00:00Z", kind: nil)],
+            streaming: false, liveText: "", liveTextTruncated: false, activity: nil,
+            showLoadEarlier: false, width: 402, expandedRowIDs: [])
+        input.sizeCategory = size
+        let snapshot = await TimelineLayoutActor().buildSnapshot(input)
+        var found = snapshot.rows.compactMap { row -> (TimelineRow, TimelineCodeBlock)? in
+            if case .code(let block) = row.content { return (row, block) }
+            return nil
+        }[0]
+        if wrapped {
+            input.wrappedCodeKeys = [found.1.key]
+            found = await TimelineLayoutActor().buildSnapshot(input).rows.compactMap { row -> (TimelineRow, TimelineCodeBlock)? in
+                if case .code(let block) = row.content { return (row, block) }
+                return nil
+            }[0]
+        }
+        return found
+    }
+
+    private func pointSize(_ block: TimelineCodeBlock) -> CGFloat {
+        (block.attributed.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)?.pointSize ?? 0
+    }
+
+    func testTheUIKitCapIsTheSwiftUICap() {
+        XCTAssertEqual(UIContentSizeCategory(CodeHighlighter.largestType), CodeHighlighter.largestCategory)
+        XCTAssertEqual(SessionFileDiffView.largestCodeType, CodeHighlighter.largestType, "a diff and a chat block share one cap")
+    }
+
+    func testCodeStopsGrowingAtTheCap() async {
+        let normal = await block(json, size: .large)
+        let xxxl = await block(json, size: .extraExtraExtraLarge)
+        let cap = await block(json, size: .accessibilityMedium)
+        let ax5 = await block(json, size: .accessibilityExtraExtraExtraLarge)
+        XCTAssertGreaterThan(pointSize(xxxl.1), pointSize(normal.1), "below the cap code follows the text size")
+        XCTAssertGreaterThan(pointSize(cap.1), pointSize(xxxl.1))
+        XCTAssertEqual(pointSize(ax5.1), pointSize(cap.1), "past the cap code grows no more")
+        XCTAssertEqual(ax5.0.height, cap.0.height, accuracy: 0.5)
+        XCTAssertEqual(ax5.1.contentSize.width, cap.1.contentSize.width, accuracy: 0.5)
+        // A screen's width of text at the largest size holds at least 24 characters.
+        let characters = CGFloat("{ \"region\": \"us-west-2\", \"healthy\": 112, \"drained\": 3, \"ok\": true }".count)
+        XCTAssertGreaterThanOrEqual(TimelineMetrics.codeTextWidth(402) / (ax5.1.contentSize.width / characters), 24)
+    }
+
+    /// Wrapped at the largest size: inside the card, and measured as the cell draws it.
+    func testWrappedHeightMatchesRenderedHeightAtTheLargestSize() async {
+        let (row, wrapped) = await block(json, size: .accessibilityExtraExtraExtraLarge, wrapped: true)
+        XCTAssertTrue(wrapped.wrapped)
+        XCTAssertLessThanOrEqual(wrapped.contentSize.width, TimelineMetrics.codeTextWidth(402))
+        let tv = TimelineTextView()
+        tv.attributedText = wrapped.attributed
+        let rendered = tv.sizeThatFits(CGSize(width: wrapped.contentSize.width, height: .greatestFiniteMagnitude)).height
+        XCTAssertEqual(wrapped.contentSize.height, ceil(rendered), accuracy: 2.0)
+        XCTAssertEqual(row.height, TimelineMetrics.codeHeaderHeight + wrapped.contentSize.height
+                       + TimelineMetrics.codePadding * 2 + TimelineMetrics.codeVMargin * 2, accuracy: 0.5)
+    }
+}
+
+/// Each block's Wrap is kept while the app runs (`CodeWrapMemory`), as the web keeps
+/// it for the tab: per conversation and block, the oldest past the limit going first.
+@MainActor
+final class CodeWrapMemoryTests: XCTestCase {
+    func testWrapIsPerConversationAndBlock() {
+        let memory = CodeWrapMemory()
+        XCTAssertTrue(memory.toggle("bash\ncurl", scope: "s-1"))
+        XCTAssertEqual(memory.keys(scope: "s-1"), ["bash\ncurl"])
+        XCTAssertEqual(memory.keys(scope: "s-2"), [], "another conversation's block of the same first line keeps its own")
+        XCTAssertFalse(memory.toggle("bash\ncurl", scope: "s-1"))
+        XCTAssertEqual(memory.keys(scope: "s-1"), [])
+    }
+
+    func testTheOldestWrapGoesPastTheLimit() {
+        let memory = CodeWrapMemory()
+        for i in 0..<(CodeWrapMemory.limit + 5) { memory.set("k\(i)", scope: "s", wrapped: true) }
+        let kept = memory.keys(scope: "s")
+        XCTAssertEqual(kept.count, CodeWrapMemory.limit)
+        XCTAssertFalse(kept.contains("k0"))
+        XCTAssertTrue(kept.contains("k\(CodeWrapMemory.limit + 4)"))
+        // Wrapping one again makes it the newest.
+        memory.set("k5", scope: "s", wrapped: true)
+        memory.set("new", scope: "s", wrapped: true)
+        XCTAssertTrue(memory.isWrapped("k5", scope: "s"))
+        XCTAssertFalse(memory.isWrapped("k6", scope: "s"))
+    }
+
+    /// The timeline's Wrap writes to the memory by its conversation, so a timeline
+    /// built again for that conversation (the reader left and came back) gets it.
+    func testATimelinesWrapOutlivesTheTimeline() {
+        let memory = CodeWrapMemory()
+        let first = TimelineHost.Coordinator()
+        first.codeWrap = memory
+        var input = TimelineInput(messages: [], streaming: false, liveText: "", liveTextTruncated: false,
+                                  activity: nil, showLoadEarlier: false, width: 393, expandedRowIDs: [])
+        input.scope = "session-a"
+        first.latestInput = input
+        first.handle(.toggleCodeWrap(key: "swift\nimport Foundation"))
+        XCTAssertEqual(memory.keys(scope: "session-a"), ["swift\nimport Foundation"])
+        let again = TimelineHost.Coordinator()
+        again.codeWrap = memory
+        again.latestInput = input
+        again.handle(.toggleCodeWrap(key: "swift\nimport Foundation"))
+        XCTAssertEqual(memory.keys(scope: "session-a"), [], "the reopened timeline sees the block wrapped and unwraps it")
+    }
+
+    /// Every New chat shares the draft scope: its Wrap stays with its own timeline and
+    /// moves to the conversation it becomes.
+    func testADraftsWrapMovesToTheConversationItBecomes() {
+        let memory = CodeWrapMemory()
+        let draft = TimelineHost.Coordinator()
+        draft.codeWrap = memory
+        var input = TimelineInput(messages: [], streaming: false, liveText: "", liveTextTruncated: false,
+                                  activity: nil, showLoadEarlier: false, width: 393, expandedRowIDs: [])
+        input.scope = TimelineScope.draft
+        draft.latestInput = input
+        XCTAssertEqual(draft.wrappedCodeKeys(scope: TimelineScope.draft), [])
+        draft.handle(.toggleCodeWrap(key: "bash\nmake"))
+        XCTAssertEqual(draft.wrappedCodeKeys(scope: TimelineScope.draft), ["bash\nmake"])
+        XCTAssertEqual(memory.keys(scope: TimelineScope.draft), [], "another New chat does not see it")
+        let other = TimelineHost.Coordinator()
+        other.codeWrap = memory
+        XCTAssertEqual(other.wrappedCodeKeys(scope: TimelineScope.draft), [])
+        // The draft is sent and becomes a session.
+        XCTAssertEqual(draft.wrappedCodeKeys(scope: "session-new"), ["bash\nmake"])
+        XCTAssertEqual(memory.keys(scope: "session-new"), ["bash\nmake"])
     }
 }
 

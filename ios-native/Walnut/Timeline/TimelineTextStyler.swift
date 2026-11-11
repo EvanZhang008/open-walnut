@@ -39,7 +39,10 @@ enum TimelineTextStyler {
     static var caption2Font: UIFont { fonts.resolve(.caption2) }
     static var footnoteFont: UIFont { fonts.resolve(.footnote) }
     static var subheadlineFont: UIFont { fonts.resolve(.subheadline) }
-    static var codeFont: UIFont { fonts.resolveMonospaced(.footnote) }
+    /// A code block's text: grows with the text size up to `CodeHighlighter.largestType`
+    /// and no further (past it a line holds a dozen characters, and every one of them
+    /// scrolls sideways or wraps a word per line).
+    static var codeFont: UIFont { fonts.resolveCode(.footnote) }
     static var codePreviewFont: UIFont { fonts.resolveMonospaced(.caption2) }
 
     /// A fixed point size, scaled by whatever the ADOPTED text size did to
@@ -75,6 +78,7 @@ enum TimelineTextStyler {
         private var category: UIContentSizeCategory = .unspecified
         private var resolved: [UIFont.TextStyle: UIFont] = [:]
         private var monospaced: [UIFont.TextStyle: UIFont] = [:]
+        private var code: [UIFont.TextStyle: UIFont] = [:]
 
         /// Deliberately NOT resolved against the system when `.unspecified`: this is
         /// read from the layout actor, and every API that knows the device's setting
@@ -95,6 +99,7 @@ enum TimelineTextStyler {
             category = next
             resolved.removeAll(keepingCapacity: true)
             monospaced.removeAll(keepingCapacity: true)
+            code.removeAll(keepingCapacity: true)
         }
 
         func resolve(_ style: UIFont.TextStyle) -> UIFont {
@@ -113,6 +118,19 @@ enum TimelineTextStyler {
             let font = UIFont.monospacedSystemFont(ofSize: locked(style).pointSize,
                                                    weight: .regular)
             monospaced[style] = font
+            return font
+        }
+
+        /// `resolveMonospaced`, never larger than at `CodeHighlighter.largestCategory`.
+        func resolveCode(_ style: UIFont.TextStyle) -> UIFont {
+            lock.lock()
+            defer { lock.unlock() }
+            if let font = code[style] { return font }
+            let capTraits = UITraitCollection { $0.preferredContentSizeCategory = CodeHighlighter.largestCategory }
+            let size = min(locked(style).pointSize,
+                           UIFont.preferredFont(forTextStyle: style, compatibleWith: capTraits).pointSize)
+            let font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+            code[style] = font
             return font
         }
 

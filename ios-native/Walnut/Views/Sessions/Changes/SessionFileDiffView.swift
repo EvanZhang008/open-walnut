@@ -58,7 +58,7 @@ struct SessionFileDiffView: View {
 
     /// Past these the code grows no more (one line of it would no longer fit
     /// a phone's width), and the header and bars stay a few lines tall.
-    static let largestCodeType = DynamicTypeSize.accessibility1
+    static let largestCodeType = CodeHighlighter.largestType
     static let largestChromeType = DynamicTypeSize.accessibility2
 
     var body: some View {

@@ -133,9 +133,25 @@ struct TimelineHost: UIViewControllerRepresentable {
         private let actor = TimelineLayoutActor()
         private var islandObserver: NSObjectProtocol?
         private var mentionsObserver: NSObjectProtocol?
-        /// Code blocks wrapped in this timeline (`TimelineCodeBlock.key`): each
-        /// block's own Wrap, for as long as the timeline is open.
-        var wrappedCodeKeys: Set<String> = []
+        /// Each code block's own Wrap lives in `CodeWrapMemory`, by this timeline's
+        /// scope: it outlives the timeline, so a conversation opened again shows
+        /// every block as it was left.
+        var codeWrap: CodeWrapMemory = .shared
+        /// A New chat's Wrap (`TimelineScope.draft`, one scope every draft shares) stays
+        /// with this timeline, and moves to the conversation's own scope when the draft
+        /// becomes one (`wrappedCodeKeys(scope:)`).
+        private var draftWrapped: Set<String> = []
+        private var lastScope: String?
+
+        /// The keys wrapped in `scope`, carrying a draft's over when it became a conversation.
+        func wrappedCodeKeys(scope: String) -> Set<String> {
+            if let lastScope, lastScope == TimelineScope.draft, scope != lastScope {
+                for key in draftWrapped { codeWrap.set(key, scope: scope, wrapped: true) }
+                draftWrapped = []
+            }
+            lastScope = scope
+            return scope == TimelineScope.draft ? draftWrapped : codeWrap.keys(scope: scope)
+        }
 
         init() {
             // An island's result strip is part of its row's height, and it comes and
@@ -177,7 +193,7 @@ struct TimelineHost: UIViewControllerRepresentable {
                 expandedRowIDs, liveTools: input.liveTools, scope: input.scope)
             input.expandedRowIDs = expandedRowIDs
             input.sizeCategory = controller.traitCollection.preferredContentSizeCategory
-            input.wrappedCodeKeys = wrappedCodeKeys
+            input.wrappedCodeKeys = wrappedCodeKeys(scope: input.scope)
             Task { [actor] in
                 await actor.submit(input) { snapshot in
                     Task { @MainActor [weak self] in
@@ -197,10 +213,11 @@ struct TimelineHost: UIViewControllerRepresentable {
                 }
                 resubmit() // heights change; rebuild off-main
             case .toggleCodeWrap(let key):
-                if wrappedCodeKeys.contains(key) {
-                    wrappedCodeKeys.remove(key)
+                guard let scope = latestInput?.scope else { return }
+                if scope == TimelineScope.draft {
+                    if draftWrapped.remove(key) == nil { draftWrapped.insert(key) }
                 } else {
-                    wrappedCodeKeys.insert(key)
+                    codeWrap.toggle(key, scope: scope)
                 }
                 resubmit() // its height changes; rebuild off-main
             case .richHeight(let rowID, let key, let width, let height):
