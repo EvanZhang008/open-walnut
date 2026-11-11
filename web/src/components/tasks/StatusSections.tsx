@@ -56,6 +56,8 @@ import { limitedLine, limitTimeWords } from '@open-walnut/user-status';
 import { LimitTag, TaskLimitPill, useLimitNow } from './limit-row';
 import { LIMIT_HEAD, limitOwnWords, limitRowWords, type LimitRowLine } from './limit-row-words';
 import { TaskFallbackTag } from './fallback-row';
+import { FoldBackButton, FoldSummaryLine, FoldTree, type WorkerFoldCtl } from './WorkerFoldTree';
+import { stateSectionKey } from './worker-fold';
 import '@/styles/status-sections.css';
 
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
@@ -146,6 +148,8 @@ export interface SectionRowHandlers {
   onLoadMore?: () => void;
   /** Watching's drag: the `watched_at` writes that put a row where it was dropped (watchReorder). */
   onReorderWatching?: (writes: { id: string; watched_at: string }[]) => void;
+  /** Flat's worker fold (worker-fold.ts): the teams leaders carry, and the words that move them. */
+  fold?: WorkerFoldCtl;
 }
 
 /** A Watching row's drag: the sortable's node, its moving style and its pointer listeners. */
@@ -157,7 +161,13 @@ interface RowDrag {
   isDragging: boolean;
 }
 
-const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoLine, drag }: { task: Task; sectionKey: StatusSectionKey; handlers: SectionRowHandlers; twoLine: boolean; drag?: RowDrag }) {
+const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handlers, twoLine, drag }: { task: Task; sectionKey: StatusSectionKey; handlers: SectionRowHandlers; twoLine: boolean; drag?: RowDrag }) {
+  // A leader drawn for its team outside its own section reads as its own state, not the section's.
+  const fold = handlers.fold;
+  const team = fold?.trees.get(task.id);
+  const quiet = !!fold?.quiet.has(task.id);
+  const movedFrom = fold?.movedFrom.get(task.id) as StatusSectionKey | undefined;
+  const sectionKey: StatusSectionKey = movedFrom ?? (quiet ? stateSectionKey(task) : drawnIn);
   const circleClass = useTaskCircle(task);
   const [showStatusLines] = useTaskStatusLines();
   // On a phone a title tap opens the row, as on a list row (phone-row-behavior.ts).
@@ -239,7 +249,8 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
     <>
       <TaskFallbackTag task={task} />
       <SubtaskPill task={task} />
-      <LeaderPill task={task} />
+      {/* A leader carrying its team says it on the line below: no Leader pill beside it. */}
+      {team ? null : <LeaderPill task={task} />}
       <PrPill task={task} />
       <AwaySyncMark item={task} />
     </>
@@ -266,7 +277,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
   const agoEl = ago ? (
     <span className="todo-recent-ago" title={isDone && task.completed_at ? `Completed ${new Date(task.completed_at).toLocaleString()}` : recentActivityTitle(activity)}>{ago}</span>
   ) : null;
-  return (
+  const card = (
     <div
       ref={drag?.setNodeRef}
       style={drag?.style}
@@ -275,7 +286,8 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
       aria-roledescription={drag ? drag.attributes['aria-roledescription'] : undefined}
       data-task-id={task.id}
       data-dragging={drag?.isDragging ? '1' : undefined}
-      className={`todo-pinned-card status-section-card${drag ? ' status-card-draggable' : ''}${drag?.isDragging ? ' is-dragging' : ''}${handlers.limitFlash?.has(task.id) ? ' is-limit-flash' : ''}${twoLine ? ' status-card-two-line' : inlineReason ? ' status-card-reason-inline' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}
+      data-fold-quiet={quiet ? '1' : undefined}
+      className={`todo-pinned-card status-section-card${quiet ? ' status-card-fold-quiet' : ''}${team ? ' status-card-fold-host' : ''}${drag ? ' status-card-draggable' : ''}${drag?.isDragging ? ' is-dragging' : ''}${handlers.limitFlash?.has(task.id) ? ' is-limit-flash' : ''}${twoLine ? ' status-card-two-line' : inlineReason ? ' status-card-reason-inline' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (edit.isEditing) return;
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
@@ -334,6 +346,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
           </span>
           {title}
           {reasonBelow ? reason : null}
+          {team && fold ? <FoldSummaryLine host={task} entries={team} ctl={fold} /> : null}
         </span>
       ) : (
         // One line (a project's folds): with a wake time beside it, the sentence of what it waits
@@ -341,10 +354,12 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
         <>
           {title}
           {pills}
+          {team && fold ? <FoldSummaryLine host={task} entries={team} ctl={fold} /> : null}
           {inlineReason}
           {wake ?? agoEl}
         </>
       )}
+      {fold && task.parent_task_id ? <FoldBackButton task={task} ctl={fold} /> : null}
       <TaskStartButton task={task} isDone={isDone} onStartSession={handlers.onStartSession} />
       <TaskKebabMenu
         task={task}
@@ -369,7 +384,26 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
       />
     </div>
   );
+  if (!team || !fold || !fold.isOpen(task.id)) return card;
+  return (
+    <>
+      {card}
+      <FoldTree host={task} entries={team} ctl={fold} focusedTaskId={handlers.focusedTaskId} onOpen={(t) => handlers.onClick(t)} twoLine={twoLine} />
+    </>
+  );
 });
+
+/** Where the focused task is drawn in these rows: its own row, or the leader's row whose tree holds it. */
+function focusRowAt(tasks: readonly Task[], handlers: SectionRowHandlers): number {
+  const id = handlers.focusedTaskId;
+  if (!id) return -1;
+  const own = tasks.findIndex((t) => t.id === id);
+  if (own >= 0 || !handlers.fold) return own;
+  for (const [hostId, entries] of handlers.fold.trees) {
+    if (entries.some((e) => e.task.id === id)) return tasks.findIndex((t) => t.id === hostId);
+  }
+  return -1;
+}
 
 /**
  * One section's rows, then a "Show more" row. Flat (the panel's sections) draws each
@@ -391,7 +425,7 @@ export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft, i
   const [shown, setShown] = useState(STATUS_SECTION_BATCH);
   // A located (focused) row past the batch grows the batch to it, so Locate can scroll
   // there; the rows stay when the focus moves on (set during render: React redraws at once).
-  const focusAt = handlers.focusedTaskId ? tasks.findIndex((t) => t.id === handlers.focusedTaskId) : -1;
+  const focusAt = focusRowAt(tasks, handlers);
   if (focusAt >= shown) setShown(Math.ceil((focusAt + 1) / STATUS_SECTION_BATCH) * STATUS_SECTION_BATCH);
   const head = tasks.slice(0, shown);
   const more = Math.max(0, total - head.length);

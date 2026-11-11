@@ -1,5 +1,6 @@
+import { resolveTaskToken, subscribeEntityLabels, getEntityLabelsVersion } from '@/stores/entity-label-store';
 import { matchParentRef } from '../../../../src/lib/id-ref';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
@@ -42,6 +43,7 @@ export function subtaskPillTitle(parentTitle: string | undefined): string {
 export function SubtaskPill({ task, className }: { task: { id?: string; parent_task_id?: string }; className?: string }) {
   const navigate = useNavigate();
   const store = useTasksContextSafe();
+  useSyncExternalStore(subscribeEntityLabels, getEntityLabelsVersion, getEntityLabelsVersion);
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -85,7 +87,9 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
   if (!parentId) return null;
   // parent_task_id may be a short prefix (legacy data): the store's rule everywhere.
   const parent = (store ? matchParentRef(store.tasks, { id: task.id ?? '', parent_task_id: parentId }) : undefined) ?? null;
-  const leaderId = parent?.id ?? parentId;
+  const resolved = !parent ? resolveTaskToken(parentId) : undefined;
+  const parentTitle = parent ? orgDisplayTitle(parent) : resolved?.label.title;
+  const leaderId = parent?.id ?? resolved?.id ?? parentId;
   // The team is read only while the list is open: a board draws this pill on every worker row.
   const workers = open && store ? openSubtasksOf(store.tasks, leaderId) : [];
   const self = open && task.id ? store?.tasks.find((t) => t.id === task.id) : undefined;
@@ -129,7 +133,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
         ref={triggerRef}
         type="button"
         className={`task-team-pill task-row-pill todo-item-subtask-pill${className ? ` ${className}` : ''}`}
-        title={subtaskPillTitle(parent ? orgDisplayTitle(parent) : undefined)}
+        title={subtaskPillTitle(parentTitle)}
         aria-label="Worker"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -152,6 +156,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
         }}
       >
         <span className="task-pill-long">Worker</span>
+        {parentTitle && <span className="task-worker-parent" data-testid="worker-parent-title">{parentTitle}</span>}
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(
@@ -170,7 +175,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
                 <li className="leader-sub-item">
                   {parent ? row(parent, 'leader') : (
                     <button type="button" className="leader-sub-row" data-testid="worker-team-leader" data-task-id={leaderId} onClick={() => goTo(leaderId, null)}>
-                      <span className="leader-sub-title">The leader task</span>
+                      <span className="leader-sub-title">{parentTitle ?? 'The leader task'}</span>
                       <span className="leader-sub-phase-label">Leader</span>
                     </button>
                   )}

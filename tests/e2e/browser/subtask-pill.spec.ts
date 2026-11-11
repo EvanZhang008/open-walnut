@@ -98,7 +98,7 @@ test('a subtask shows Worker on its pinned card and its list row; a top-level ta
   await expect(card(pinnedChild)).toBeVisible({ timeout: 90_000 })
   const pill = card(pinnedChild).locator('[data-testid="subtask-pill"]')
   await expect(pill).toBeVisible()
-  await expect(pill).toHaveText('Worker')
+  await expect(pill).toContainText('Worker')
   await expect(pill).toHaveAttribute('data-parent-task-id', parent)
   await expect(card(parent).locator('[data-testid="subtask-pill"]')).toHaveCount(0)
   await expect(card(loose).locator('[data-testid="subtask-pill"]')).toHaveCount(0)
@@ -133,7 +133,7 @@ test('a subtask shows Worker on its pinned card and its list row; a top-level ta
   // load) and carries the same pill.
   const row = page.locator(`.todo-panel-item[data-task-id="${listChild}"]`)
   await expect(row).toBeVisible({ timeout: 15_000 })
-  await expect(row.locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
+  await expect(row.locator('[data-testid="subtask-pill"]')).toContainText('Worker')
   await row.screenshot({ path: `${SHOT_DIR}/${browserName}-list-row.png` })
 })
 
@@ -165,10 +165,10 @@ test('a subtask in another project is a top-level row there, and its Worker pill
 
   // Both carry the pill, and the pill names the parent.
   const farPill = row(far).locator('[data-testid="subtask-pill"]')
-  await expect(farPill).toHaveText('Worker')
+  await expect(farPill).toContainText('Worker')
   await expect(farPill).toHaveAttribute('data-parent-task-id', parent)
   await expect(farPill).toHaveAttribute('title', new RegExp(`^Worker of "GitLab token expiry ${stamp}"`))
-  await expect(row(near).locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
+  await expect(row(near).locator('[data-testid="subtask-pill"]')).toContainText('Worker')
   // The parent leads both, across projects.
   const leaderPill = row(parent).locator('[data-testid="leader-pill"]')
   await expect(leaderPill).toHaveText('Leader · 2')
@@ -399,7 +399,7 @@ test('a subtask a Focus task\'s session files is born in Focus, not Satellite', 
     // A tier tab draws flat cards; the All view draws list rows.
     const inList = (id: string) => page.locator(`.todo-focus-card[data-task-id="${id}"], .todo-pinned-card[data-task-id="${id}"], .todo-panel-item[data-task-id="${id}"]`).first()
     await expect(inList(created.task.id)).toBeVisible({ timeout: 30_000 })
-    await expect(inList(created.task.id).locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
+    await expect(inList(created.task.id).locator('[data-testid="subtask-pill"]')).toContainText('Worker')
     await expect(inList(parent)).toBeVisible()
     await expect(inList(parent).locator('[data-testid="leader-pill"]')).toBeVisible()
     await fs.mkdir(SHOT_DIR, { recursive: true })

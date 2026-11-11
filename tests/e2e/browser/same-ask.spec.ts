@@ -123,6 +123,9 @@ test('two sibling tasks asking the same show one row; their leader answering it 
   await isolateUiPrefs(page)
   await presetPanelDesign(page, 'status')
   await page.addInitScript(() => localStorage.setItem('open-walnut-view:tasks.statusLines', 'true'))
+  // Both askers are the lead's workers, which Flat folds into the lead's row (worker-fold.ts):
+  // this test reads their own rows, so it lists every worker as a row.
+  await page.addInitScript(() => localStorage.setItem('open-walnut-view:home.workerFold', JSON.stringify({ fold: false, teams: [], separate: [], open: [] })))
   await page.goto('/')
   await selectSection(page, 'All')
   const panel = page.locator('.todo-panel').first()

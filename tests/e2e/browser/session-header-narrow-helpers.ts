@@ -368,7 +368,7 @@ export function headerNarrowTests(): void {
 
     // At 180px the pills, on their own line, read in full, and each one opens what it
     // opens: the Trigger flyout anchors to a real box inside the window.
-    await expect(meta.locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
+    await expect(meta.locator('[data-testid="subtask-pill"]')).toContainText('Worker')
     await expect(meta.locator('[data-testid="leader-pill"]')).toHaveText('Leader · 1')
     await expect(meta.locator('[data-testid="task-trigger-pill"]')).toHaveText('Trigger')
     await expect(headerLabelsButton(panel)).toHaveCount(0)

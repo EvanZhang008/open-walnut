@@ -297,7 +297,7 @@ test('only a Worker: no tags control, and the Worker pill opens its team', async
   await api('PATCH', `/api/tasks/${self}`, { parent_task_id: leader })
   restoreParent.push(self)
   const worker = panel.locator('.session-panel-title-meta [data-testid="subtask-pill"]')
-  await expect(worker).toHaveText('Worker', { timeout: 20_000 })
+  await expect(worker).toContainText('Worker', { timeout: 20_000 })
   expect(await titleRowParts(panel)).toEqual(['worker', 'kebab'])
   await expectNoStatus(panel)
   await expectTitleRoom(panel, 0.6)

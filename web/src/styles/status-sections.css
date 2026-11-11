@@ -207,3 +207,11 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
   cursor: grabbing;
 }
+
+html .home-navigation-scroll .status-card-meta .todo-item-subtask-pill.task-row-pill,
+html .home-navigation-scroll .status-card-meta .todo-item-subtask-pill.task-row-pill:hover,
+html .home-navigation-scroll .status-card-meta .todo-item-subtask-pill.task-row-pill:focus-visible,
+html .home-navigation-scroll .status-card-meta .todo-item-subtask-pill.task-row-pill[aria-expanded="true"] {
+  flex: 0 1 auto;
+  min-width: 64px;
+}

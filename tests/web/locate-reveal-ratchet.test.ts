@@ -52,6 +52,7 @@ const KNOWN: Record<string, Entry> = {
   sectionFolds: { opens: 'openStatusSection(' },                 // a status section
   jumpFolds: { opens: 'openStatusSection(' },                    // the same, inside a project jump
   openProjectFolds: { opens: 'toggleProjectFold(' },             // a project's Waiting / Completed fold
+  workerFold: { opens: 'setWorkerFold(' },                       // a worker folded into its leader's tree
   listBatch: { hidesNoRow: 'cutRows always draws the focused row past the batch' },
   folderTargetId: { hidesNoRow: 'the folder a drag hovers, not a fold' },
   newProjectOpen: { hidesNoRow: 'the new-project name row' },

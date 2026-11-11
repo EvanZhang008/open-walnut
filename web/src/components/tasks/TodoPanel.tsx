@@ -140,6 +140,8 @@ import { useFoldStore } from './useFoldStore';
 import {
   LS_JUMP_SECTIONS_KEY, LS_STATUS_SECTIONS_KEY, STATUS_SECTION_ORDER, buildStatusSections, drawnSectionOf, isWatched, stateSectionNoNeeds, stateSectionOf, type DrawnSectionKey, type StatusSectionKey,
 } from './status-sections';
+import { WORKER_FOLD_KEEP, foldHostOf, foldLeaderOf, foldSections, useWorkerFold, withId } from './worker-fold';
+import type { WorkerFoldCtl } from './WorkerFoldTree';
 import { isProjectJump, projectJumpHolds, projectJumpSection, startProjectJump, type ProjectJump } from './project-jump';
 import { usePageView } from '@/utils/view-memory';
 import { TodoProjectsMiniBar } from './TodoProjectsMiniBar';
@@ -607,7 +609,9 @@ function readSection(): TodoSection {
 
 /** The task's row is drawn in the panel's current view (not folded away): opening it needs no tab switch. */
 function rowShownInPanel(taskId: string): boolean {
-  const el = document.querySelector(`.todo-panel [data-task-id="${window.CSS.escape(taskId)}"]`);
+  const id = window.CSS.escape(taskId);
+  // A folded worker's line in its leader's tree counts as drawn (WorkerFoldTree.tsx).
+  const el = document.querySelector(`.todo-panel [data-task-id="${id}"]`) ?? document.querySelector(`.todo-panel [data-fold-task-id="${id}"]`);
   return !!el && el.getClientRects().length > 0;
 }
 
@@ -2771,7 +2775,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         scrollLog('focus-scroll-MISS', { reason: 'no-list-container' });
         return;
       }
-      const el = listContainer.querySelector(`[data-task-id="${window.CSS.escape(taskId)}"]`);
+      const el = listContainer.querySelector(`[data-task-id="${window.CSS.escape(taskId)}"]`)
+        ?? listContainer.querySelector(`[data-fold-task-id="${window.CSS.escape(taskId)}"]`);
       if (!el) {
         scrollLog('focus-scroll-MISS', { reason: 'element-not-found', taskId: taskId.substring(0, 12) });
         return;
@@ -2838,7 +2843,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // The pinned tiers, or a status section's card (Watching, Needs you, Waiting, Completed).
       const sel = `[data-task-id="${window.CSS.escape(taskId)}"]`;
       const el = document.querySelector('.todo-pinned-wrapper')?.querySelector(sel)
-        ?? document.querySelector(`.status-section-list ${sel}`);
+        ?? document.querySelector(`.status-section-list ${sel}`)
+        // A worker folded into its leader: its line in the leader's tree (WorkerFoldTree.tsx).
+        ?? document.querySelector(`.status-section-list [data-fold-task-id="${window.CSS.escape(taskId)}"]`);
       // A card hidden by a folded project run (.tier-project-collapsed) or a collapsed
       // folder is still IN the DOM, so the query finds it while scrollIntoView and the
       // flash are both no-ops. getClientRects() is empty for display:none, so treat
@@ -7627,7 +7634,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if ([m.watching, m.needs, m.working, m.waiting, m.notstarted, m.done].some((rows) => rows.some((x) => x.id === t.id))) return null;
     return drawnSectionOf(t, regionRules.snoozed);
   }, [baseSectionModel, flatSections, filterOverrideReasons, regionRules]);
-  const sectionModel = useMemo(() => {
+  const shownSectionModel = useMemo(() => {
     const t = filterOverrideReasons?.task;
     if (!t || !overrideSection) return baseSectionModel;
     const m = baseSectionModel;
@@ -7635,6 +7642,75 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return overrideSection === 'working' ? { ...next, workingCount: m.workingCount + 1 } : next;
   }, [baseSectionModel, overrideSection, filterOverrideReasons]);
   const overrideId = overrideSection ? filterOverrideReasons?.task.id : undefined;
+  // Workers fold into their leaders (worker-fold.ts; 2026-11-11, the user picked design 2), in
+  // Flat's own sections only: Recent and Projects draw a list beside them the fold cannot place.
+  // A task shown past the chips stays a row of its own.
+  const [workerFold, setWorkerFold] = useWorkerFold();
+  const foldView = useMemo(
+    () => (overrideId ? { ...workerFold, separate: withId(workerFold.separate, overrideId, true) } : workerFold),
+    [workerFold, overrideId],
+  );
+  const workerFolds = useMemo(() => {
+    if (!flatSections || !foldView.fold) return null;
+    const m = shownSectionModel;
+    return foldSections<StatusSectionKey>(tasks, STATUS_SECTION_ORDER.map((k) => [k, sectionRowsOf(m, k).tasks] as const), foldView, WORKER_FOLD_KEEP);
+  }, [flatSections, foldView, shownSectionModel, tasks]);
+  const sectionModel = useMemo(() => {
+    const m = shownSectionModel;
+    if (!workerFolds) return m;
+    const r = workerFolds.rows;
+    return { ...m, ...r, workingCount: Math.max(0, m.workingCount + r.working.length - m.working.length) };
+  }, [shownSectionModel, workerFolds]);
+  const workerFoldCtl = useMemo<WorkerFoldCtl | undefined>(() => {
+    if (!workerFolds) return undefined;
+    // A team down to its last level: a worker shown as a row carries its own workers in a tree of its own.
+    const teamOf = (hostId: string): string[] => {
+      const out: string[] = [];
+      const seen = new Set<string>([hostId]);
+      const walk = (id: string) => {
+        for (const e of workerFolds.trees.get(id) ?? []) {
+          if (seen.has(e.task.id)) continue;
+          seen.add(e.task.id);
+          out.push(e.task.id);
+          walk(e.task.id);
+        }
+      };
+      walk(hostId);
+      return out;
+    };
+    // A worker shown as a row is drawn in its own section, which may be folded: open it, so the
+    // row the user asked for is on screen.
+    const openSectionsOf = (ids: readonly string[]) => {
+      const want = new Set(ids);
+      for (const k of STATUS_SECTION_ORDER) {
+        if (sectionRowsOf(shownSectionModel, k).tasks.some((t) => want.has(t.id))) openStatusSection(k);
+      }
+    };
+    return {
+      trees: workerFolds.trees,
+      quiet: workerFolds.quiet,
+      movedFrom: workerFolds.movedFrom,
+      isOpen: (id) => workerFold.open.includes(id),
+      toggleOpen: (id) => setWorkerFold((v) => ({ ...v, open: withId(v.open, id, !v.open.includes(id)) })),
+      separate: (id, on) => {
+        setWorkerFold((v) => ({ ...v, separate: withId(v.separate, id, on) }));
+        if (on) openSectionsOf([id]);
+      },
+      // The whole team, every level: each leader in it shows (or folds) its own workers too.
+      showTeam: (id, on) => { if (on) openSectionsOf(teamOf(id)); setWorkerFold((v) => {
+        const team = teamOf(id);
+        const all = new Set([id, ...team]);
+        const teams = on ? [...all].reduce((l, x) => withId(l, x, true), v.teams) : v.teams.filter((x) => !all.has(x));
+        return { ...v, teams, separate: on ? v.separate : v.separate.filter((x) => !all.has(x)) };
+      }); },
+      foldBackOf: (t) => {
+        const leader = foldLeaderOf(tasks, t);
+        if (!leader) return null;
+        const team = workerFold.teams.includes(leader.id);
+        return team || workerFold.separate.includes(t.id) ? { leader, team } : null;
+      },
+    };
+  }, [workerFolds, workerFold, setWorkerFold, tasks, shownSectionModel, openStatusSection]);
   useEffect(() => {
     // Only for a locate: a page-load restore never opens (and saves) a section the user folded.
     const asked = focusLocateRef.current?.id === overrideId && focusLocateRef.current?.locate;
@@ -7646,9 +7722,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Waiting / snoozed and Completed fold at the bottom (By project: Completed only).
   const sectionsBottom: readonly StatusSectionKey[] = !sectionsActive ? [] : bottomStatusSections(panelDesign, effectiveSection);
   // Out of its project's run, a By project Completed row names its project, as Flat's do.
+  const flatRowHandlers = useMemo(
+    () => (workerFoldCtl ? { ...sectionRowHandlers, fold: workerFoldCtl } : sectionRowHandlers),
+    [sectionRowHandlers, workerFoldCtl],
+  );
   const bottomRowHandlers = useMemo(
-    () => (projectFoldsOn && effectiveSection !== 'recent' ? { ...sectionRowHandlers, twoLine: true } : sectionRowHandlers),
-    [projectFoldsOn, effectiveSection, sectionRowHandlers],
+    () => (projectFoldsOn && effectiveSection !== 'recent' ? { ...flatRowHandlers, twoLine: true } : flatRowHandlers),
+    [projectFoldsOn, effectiveSection, flatRowHandlers],
   );
   // Publish where each task is drawn, after the commit that drew it.
   useLayoutEffect(() => {
@@ -7671,6 +7751,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         if (locate) openStatusSection(key);
         return true;
       }
+      // A folded worker is drawn in its leader's tree: a locate opens that section and the tree.
+      const host = workerFolds && foldHostOf(tasks, t, foldView);
+      const hostKey = host && workerFolds.trees.get(host.id)?.some((e) => e.task.id === t.id) ? place.get(host.id) : undefined;
+      if (host && hostKey) {
+        if (locate) {
+          openStatusSection(hostKey);
+          if (!workerFold.open.includes(host.id)) setWorkerFold((v) => ({ ...v, open: withId(v.open, host.id, true) }));
+        }
+        return true;
+      }
       // By project: a waiting task sits in its project's fold.
       if (projectFoldsOn && !isWatched(t)) {
         const region = pinnedTaskIds?.has(t.id) && effectiveSection !== 'tasks' ? (getTier(t.id) ?? 'satellite') : 'list';
@@ -7682,7 +7772,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       return false;
     };
-  }, [sectionModel, overrideId, sectionsTop.join(), sectionsBottom.join(), projectFoldsOn, regionRules, pinnedTaskIds, effectiveSection, getTier, foldRegions, openProjectFolds, toggleProjectFold, setSectionOpenTo]);
+  }, [sectionModel, workerFolds, foldView, workerFold.open, setWorkerFold, tasks, overrideId, sectionsTop.join(), sectionsBottom.join(), projectFoldsOn, regionRules, pinnedTaskIds, effectiveSection, getTier, foldRegions, openProjectFolds, toggleProjectFold, setSectionOpenTo]);
   // Where a held locate's task is drawn, as a string (locate-hold.ts): from the task and the
   // board's own predicate, never from the drawn rows, which the locate itself changes.
   placeSigRef.current = (t: Task) => locatePlaceSig(t, {
@@ -7966,7 +8056,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         <LimitedSummary model={sectionModel} onShow={showLimitedSection} />
       )}
       {!isSearchMode && !phoneFirstLoad && !isRecentView && (
-        <StatusSectionGroup keys={sectionsTop} model={sectionModel} open={shownSectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} approvals={needsSection ? 'with-needs' : 'alone'} />
+        <StatusSectionGroup keys={sectionsTop} model={sectionModel} open={shownSectionOpen} onToggle={toggleStatusSection} handlers={flatRowHandlers} approvals={needsSection ? 'with-needs' : 'alone'} />
       )}
       {!flatSections && (
       <NavigationSections storageKey="walnut-todo-navigation-order">

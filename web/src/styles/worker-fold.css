@@ -1,0 +1,146 @@
+/* A leader's folded team (WorkerFoldTree.tsx): the line under its title, the tree below its row,
+   and the Fold back word on a worker shown separately. The team colour is the Worker and Leader
+   pills' (subtask-pill.css), light and dark. */
+:root {
+  --worker-fold-ink: #6a4fd8;
+  --worker-fold-bg: rgba(124, 92, 255, 0.1);
+  --worker-fold-bg-strong: rgba(124, 92, 255, 0.18);
+  --worker-fold-rule: rgba(124, 92, 255, 0.35);
+}
+:root[data-theme="dark"] {
+  --worker-fold-ink: #b9a8ff;
+  --worker-fold-bg: rgba(160, 140, 255, 0.14);
+  --worker-fold-bg-strong: rgba(160, 140, 255, 0.26);
+  --worker-fold-rule: rgba(160, 140, 255, 0.4);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --worker-fold-ink: #b9a8ff;
+    --worker-fold-bg: rgba(160, 140, 255, 0.14);
+    --worker-fold-bg-strong: rgba(160, 140, 255, 0.26);
+    --worker-fold-rule: rgba(160, 140, 255, 0.4);
+  }
+}
+
+.worker-fold-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 16px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+/* One-line rows (a project's folds): the line sits after the pills. */
+.status-section-card:not(.status-card-two-line) > .worker-fold-line { flex: 0 1 auto; }
+.worker-fold-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  margin: 0;
+  padding: 0 4px 0 1px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--worker-fold-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.worker-fold-toggle:hover,
+.worker-fold-toggle:focus-visible { background: var(--worker-fold-bg); outline: none; }
+.worker-fold-chevron { display: inline-grid; place-items: center; width: 12px; height: 12px; }
+.worker-fold-chevron svg { width: 10px; height: 10px; }
+.worker-fold-toggle.is-open .worker-fold-chevron { transform: rotate(90deg); }
+.worker-fold-mix { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* A leader the view does not hold, drawn for its workers: quieter than the rows around it. */
+.status-section-card.status-card-fold-quiet .todo-pinned-title { color: var(--fg-muted); }
+.status-section-card.status-card-fold-quiet .status-card-meta { opacity: 0.8; }
+
+.worker-fold-tree {
+  margin: 0 8px 6px 30px;
+  padding: 2px 0 2px 10px;
+  border-left: 1.5px solid var(--worker-fold-rule);
+}
+.worker-fold-tree.is-one-line { margin-left: 24px; }
+.worker-fold-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 2px 0 4px;
+  border-radius: 7px;
+}
+.worker-fold-item:hover,
+.worker-fold-item:focus-within { background: var(--bg-hover); }
+.worker-fold-item.is-focused { background: var(--worker-fold-bg); }
+.worker-fold-item.is-out .worker-fold-open { opacity: 0.6; }
+.worker-fold-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.worker-fold-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
+.worker-fold-icon { display: inline-grid; place-items: center; flex: none; width: 16px; height: 16px; }
+.worker-fold-icon svg { width: 14px; height: 14px; }
+.worker-fold-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worker-fold-state { flex: none; font-size: 11px; color: var(--fg-muted); }
+/* The action is a word, shown on the line's hover or focus (always on a touch screen). */
+.worker-fold-action,
+.worker-fold-all,
+.worker-fold-row-back {
+  flex: none;
+  margin: 0;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--worker-fold-ink);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.worker-fold-action:hover,
+.worker-fold-action:focus-visible,
+.worker-fold-all:hover,
+.worker-fold-all:focus-visible,
+.worker-fold-row-back:hover,
+.worker-fold-row-back:focus-visible { background: var(--worker-fold-bg-strong); outline: none; }
+.worker-fold-action { visibility: hidden; }
+.worker-fold-item:hover .worker-fold-action,
+.worker-fold-item:focus-within .worker-fold-action,
+.worker-fold-item.is-out .worker-fold-action { visibility: visible; }
+.worker-fold-foot { padding: 2px 0 0 26px; }
+.worker-fold-all { padding-left: 4px; }
+
+/* A worker shown separately: Fold back on the row's hover, beside its start button. */
+.status-section-card .worker-fold-row-back { display: none; }
+.status-section-card:hover .worker-fold-row-back,
+.status-section-card:focus-within .worker-fold-row-back { display: inline-block; }
+
+/* A touch screen has no hover: the words always show, after the hover rules above so they win.
+   The phone row puts every extra child of a card in a strip that takes no taps
+   (phone-fixes-r4.css); Fold back is a control, so it takes them again. */
+@media (hover: none) {
+  .worker-fold-action { visibility: visible; }
+  .status-section-card .worker-fold-row-back { display: inline-block; }
+  html .app-shell-navigation .todo-panel .todo-pinned-card.status-section-card > .worker-fold-row-back { pointer-events: auto; }
+}
