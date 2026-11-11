@@ -87,8 +87,39 @@ export function planRetry(jobs, patterns, attempt, { gated = true } = {}) {
     : { action: 'failed', names, why: 'required legs never got a runner' }
 }
 
+/** GitHub's own trouble (2026-11-11, run 43089327630: a 502 during an Actions outage ended the job). */
+export const RETRYABLE = /HTTP (5\d\d|429)|Server Error|timed out|ECONNRESET|ETIMEDOUT/i
+
+/**
+ * Runs one gh call, again after GitHub's own errors (5xx, 429, a dropped connection), up to `tries`
+ * times with a growing wait. Any other error is thrown at once. A rerun POST whose first answer was
+ * lost may have worked, so its later refusal is taken as done.
+ */
+export function ghRetry(run, args, { tries = 4, waitMs = 5000, sleep = sleepSync } = {}) {
+  let lost = false
+  for (let i = 1; ; i++) {
+    try {
+      return run(args)
+    } catch (err) {
+      const text = `${err?.message ?? ''} ${err?.stdout ?? ''} ${err?.stderr ?? ''}`
+      if (lost && args.includes('POST') && !RETRYABLE.test(text)) {
+        console.log(`The rerun's first answer was lost and GitHub now refuses it (${text.trim().slice(0, 200)}): taking it as done.`)
+        return ''
+      }
+      if (!RETRYABLE.test(text) || i >= tries) throw err
+      lost = true
+      console.log(`gh ${args.join(' ')}: GitHub answered an error of its own (try ${i} of ${tries}); trying again in ${(waitMs * i) / 1000} s`)
+      sleep(waitMs * i)
+    }
+  }
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
 function gh(args) {
-  return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })
+  return ghRetry((a) => execFileSync('gh', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), args)
 }
 
 function main() {

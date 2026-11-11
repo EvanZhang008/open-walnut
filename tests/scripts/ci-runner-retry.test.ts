@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { MAX_ATTEMPT, WORKFLOWS, neverRan, planRetry, requiredLegPatterns } from '../../scripts/ci-runner-retry.mjs'
+import { MAX_ATTEMPT, WORKFLOWS, ghRetry, neverRan, planRetry, requiredLegPatterns } from '../../scripts/ci-runner-retry.mjs'
 
 const ROOT = path.resolve(__dirname, '../..')
 const ciYml = fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')
@@ -104,5 +104,45 @@ describe('the workflow', () => {
     expect(sparse).toContain('scripts/ci-runner-retry.mjs')
     expect(sparse).toContain('.github/workflows/ci.yml')
     expect(wf.jobs.retry.steps.some((s) => s.run?.includes('bun scripts/ci-runner-retry.mjs') && s.run.includes('run_attempt') && s.run.includes('"$WORKFLOW"'))).toBe(true)
+  })
+})
+
+describe('gh calls ride out GitHub\'s own errors', () => {
+  // 2026-11-11, run 43089327630: `gh: Server Error (HTTP 502)` during an Actions outage ended the job.
+  const fail = (text: string) => Object.assign(new Error(`Command failed: gh api\n${text}`), { stderr: text })
+  const noSleep = () => {}
+
+  it('a 502, a 429 or a dropped connection is tried again, then the answer is returned', () => {
+    for (const text of ['gh: Server Error (HTTP 502)', 'gh: HTTP 429: rate limited', 'read ECONNRESET']) {
+      let calls = 0
+      const out = ghRetry(() => { if (++calls < 3) throw fail(text); return '{"jobs":[]}' }, ['api', 'x'], { sleep: noSleep })
+      expect(out).toBe('{"jobs":[]}')
+      expect(calls).toBe(3)
+    }
+  })
+
+  it('stops after its tries and throws the last error', () => {
+    let calls = 0
+    expect(() => ghRetry(() => { calls++; throw fail('gh: Server Error (HTTP 503)') }, ['api', 'x'], { tries: 4, sleep: noSleep })).toThrow(/503/)
+    expect(calls).toBe(4)
+  })
+
+  it('any other error is thrown at once', () => {
+    let calls = 0
+    expect(() => ghRetry(() => { calls++; throw fail('gh: Not Found (HTTP 404)') }, ['api', 'x'], { sleep: noSleep })).toThrow(/404/)
+    expect(calls).toBe(1)
+  })
+
+  it('a rerun whose first answer was lost and is then refused counts as done', () => {
+    let calls = 0
+    const run = () => { if (++calls === 1) throw fail('gh: Server Error (HTTP 502)'); throw fail('gh: This job is already running (HTTP 403)') }
+    expect(ghRetry(run, ['api', '-X', 'POST', 'jobs/1/rerun'], { sleep: noSleep })).toBe('')
+    expect(calls).toBe(2)
+  })
+
+  it('every gh call of the script goes through it', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts/ci-runner-retry.mjs'), 'utf8')
+    expect(src.match(/execFileSync\('gh'/g)?.length).toBe(1)
+    expect(src).toMatch(/return ghRetry\(\(a\) => execFileSync\('gh'/)
   })
 })
