@@ -121,9 +121,9 @@ describe('the source: config:changed carries a config only through the helper', 
     // A scanner that found nothing would pass the check above.
     expect(emits.filter((e) => e.keyOnly).length).toBeGreaterThan(20)
     expect(emits.filter((e) => e.file === HELPER).map((e) => e.viaHelperView)).toEqual([true])
-    // The writers that carry a config call the helper.
+    // The writers that carry a config call the helper (or its Settings wrapper, which calls it).
     const callers = sourceFiles(path.join(ROOT, 'src'))
-      .filter((f) => /\bemitConfigChanged\(/.test(fs.readFileSync(f, 'utf8')))
+      .filter((f) => /\b(emitConfigChanged|emitSettingsConfigChanged)\(/.test(fs.readFileSync(f, 'utf8')))
       .map((f) => path.relative(ROOT, f)).sort()
     expect(callers).toEqual([
       'src/core/config-broadcast.ts',
@@ -131,6 +131,7 @@ describe('the source: config:changed carries a config only through the helper', 
       'src/core/stt/auto-setup.ts',
       'src/web/routes/config.ts',
       'src/web/routes/expose.ts',
+      'src/web/routes/first-run.ts',
       'src/web/routes/hooks.ts',
       'src/web/routes/host-servers.ts',
       'src/web/routes/hosts.ts',

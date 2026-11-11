@@ -12,6 +12,7 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { realSshReachAllowed } from '../../lib/real-ssh-guard.js'
 
 export interface SshKeyOf {
   /** The key file as ssh names it, `~/` for the home directory. */
@@ -39,6 +40,8 @@ function expand(file: string, home = os.homedir()): string {
 /** The first key ssh would offer that exists, else the first one it names (to be made). */
 export async function sshKeyOf(alias: string): Promise<SshKeyOf | null> {
   if (!/^[A-Za-z0-9._@-]+$/.test(alias)) return null
+  // Under a test runner only with the throwaway ssh home in place: never the real ~/.ssh.
+  if (!realSshReachAllowed()) return null
   const out = await new Promise<string | null>((resolve) => {
     execFile('ssh', ['-G', alias], { encoding: 'utf-8', timeout: TIMEOUT_MS, maxBuffer: 256 * 1024 }, (err, stdout) => resolve(err ? null : stdout))
   })

@@ -3,7 +3,7 @@
  * so the first-run walkthrough names the host's own IdentityFile in its commands.
  */
 import { describe, expect, it } from 'vitest'
-import { identityFilesOf, tildePath } from '../../../src/core/hosts/ssh-key-of'
+import { identityFilesOf, sshKeyOf, tildePath } from '../../../src/core/hosts/ssh-key-of'
 
 describe('identityFilesOf', () => {
   it('reads every identityfile line of ssh -G, in order', () => {
@@ -18,5 +18,11 @@ describe('tildePath', () => {
     expect(tildePath('/home/sam/.ssh/lab', '/home/sam')).toBe('~/.ssh/lab')
     expect(tildePath('~/.ssh/lab', '/home/sam')).toBe('~/.ssh/lab')
     expect(tildePath('/etc/keys/lab', '/home/sam')).toBe('/etc/keys/lab')
+  })
+})
+
+describe('sshKeyOf under a test runner', () => {
+  it('never runs ssh -G against the real ~/.ssh: no throwaway ssh home, no answer', async () => {
+    expect(await sshKeyOf('lab-mac')).toBeNull()
   })
 })
