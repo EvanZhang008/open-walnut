@@ -18,6 +18,7 @@ import { walnutCoordinationAllowRules } from './claude-walnut-allow.js'
 
 import type { AgentTools, EffortRules, SpawnTemplate } from './host-start-core.js'
 import { sessionSettingsHooks } from './session-settings-hooks.js'
+import { hookArgsFor } from './hook-files.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import {
   DEFAULT_SESSION_MODE, MODEL_EFFORT_FAMILY_DEFAULTS, MODEL_EFFORT_OVERRIDES, SESSION_EFFORT_IDS, SESSION_MODELS,
@@ -178,6 +179,8 @@ export async function pushRoutineSpawnTemplate(
     defaultMode, implicitModeCli: choice.cli ?? null, home: o.home, hostKey: o.hostKey,
     streamPartialMessages: config.session?.stream_partial_messages, permissionPrompt: config.session?.permission_prompt,
   })
+  // Long hook scripts ride files on a daemon that reads them (hook-files.ts); the hash covers that form.
+  template.argv = hookArgsFor(host, template.argv)
   const { builtAt: _at, ...content } = template
   const hash = createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16)
   if (hash === o.unlessHash) return hash
@@ -209,6 +212,8 @@ export async function pushHostSpawnTemplate(
     streamPartialMessages: config.session?.stream_partial_messages, permissionPrompt: config.session?.permission_prompt,
     agents: await hostAgentTools(),
   })
+  // Long hook scripts ride files on a daemon that reads them (hook-files.ts); the hash covers that form.
+  template.argv = hookArgsFor(host, template.argv)
   const { builtAt: _at, ...content } = template
   const hash = createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16)
   if (hash === o.unlessHash) return { hash, sent: false }

@@ -6613,6 +6613,9 @@ async function gateClaudeLaunch(args: string[]): Promise<{ args: string[]; nodeD
 }
 
 async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () => boolean, canStart?: () => boolean) {
+  // A template's hook texts (hook-files-v1) go back into its settings: the registry keeps the inline
+  // form an older daemon re-spawns after a rollback (cli-argv-files-core.ts inlineArgs). Mirror daemon-source.ts.
+  if (Array.isArray(cmd.args)) cmd = { ...cmd, args: cliArgvFiles.inlineArgs(cmd.args.map(String)) }
   const { sid, args, cwd, message, resume, mode, uuid } = cmd as {
     sid: string; args: string[]; cwd: string; message?: string; resume?: boolean
     mode?: string

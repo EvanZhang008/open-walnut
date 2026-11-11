@@ -593,8 +593,8 @@ export const SOUND_AWK_PROGRAM = SOUND_AWK.replace(/^[ \t]*#.*\n/gm, '').replace
 
 /**
  * The program travels gzipped and in base64 (about 7 KB instead of 18 KB of escaped JSON): every
- * hook script rides each session's settings, which must stay under 100 KB in all
- * (cli-argv-content-ratchet.test.ts). macOS before 13 decodes with -D, every other base64 with -d.
+ * hook script rides one argv string to the host (its own file there, hook-files.ts), which must
+ * stay under 100 KB (cli-argv-content-ratchet.test.ts). macOS before 13 decodes with -D, every other base64 with -d.
  */
 const PACKED = gzipSync(Buffer.from(SOUND_AWK_PROGRAM), { level: 9 }).toString('base64')
 

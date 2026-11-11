@@ -269,8 +269,18 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     return { ok: false, code, message, ...(detail ? { detail } : {}), ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) }
   }
 
-  function fileOf(home: string, use: TemplateUse): string {
-    return path.join(deps.dir, 'spawn-template-' + (use === 'routine' ? 'routine-' : '') + deps.keyOf(home) + '.json')
+  /**
+   * A template whose hook texts ride beside its settings (hook-files-v1, `--walnut-hook-file`) is kept
+   * under a name of its own: a daemon from before hook files would read it back and hand the CLI a
+   * flag it does not know (a rollback while the Mac is away), so it must find none and refuse the
+   * start (needs_leader) instead. Each save removes the other name.
+   */
+  function fileOf(home: string, use: TemplateUse, hookFiles = false): string {
+    return path.join(deps.dir, 'spawn-template-' + (hookFiles ? 'hf-' : '') + (use === 'routine' ? 'routine-' : '') + deps.keyOf(home) + '.json')
+  }
+
+  function carriesHookFiles(t: SpawnTemplate): boolean {
+    return t.argv.some((a) => typeof a === 'string' && (a === '--walnut-hook-file' || a.indexOf('--walnut-hook-file=') === 0))
   }
 
   /** The two templates of a home never share a slot. */
@@ -374,7 +384,11 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     const t = checkTemplate(home, raw, use)
     templates.set(slotOf(home, use), t)
     // Kept on disk too: a daemon restarted while the Mac sleeps still starts asks.
-    try { writeAtomic(fileOf(home, use), JSON.stringify(t)) } catch (err) {
+    const hookFiles = carriesHookFiles(t)
+    try {
+      writeAtomic(fileOf(home, use, hookFiles), JSON.stringify(t))
+      try { fs.unlinkSync(fileOf(home, use, !hookFiles)) } catch { /* none */ }
+    } catch (err) {
       deps.log('warn', 'host start: the spawn template was not saved', { home, use, error: (err as Error).message })
     }
     deps.log('info', 'host start: spawn template set', { home, use, argv: t.argv.length, modes: Object.keys(t.modes).join(','), persona: t.persona })
@@ -385,7 +399,9 @@ export function createHostStart(deps: HostStartDeps): HostStart {
     const known = templates.get(slotOf(home, use))
     if (known) return known
     let text: string
-    try { text = fs.readFileSync(fileOf(home, use), 'utf8') } catch { return null }
+    try { text = fs.readFileSync(fileOf(home, use, true), 'utf8') } catch {
+      try { text = fs.readFileSync(fileOf(home, use), 'utf8') } catch { return null }
+    }
     try {
       const t = checkTemplate(home, JSON.parse(text), use)
       templates.set(slotOf(home, use), t)

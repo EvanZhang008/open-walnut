@@ -462,6 +462,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'replica-reads-v1',
   'session.message',
   'hooks-v1',
+  // 'hook-files-v1' — a spawn template's --settings may name long hook commands by hash
+  // (`@walnut-hook-file:<hash>`) with their texts beside it as `--walnut-hook-file <text>`, one
+  // template string each: a start puts them back before it records its args, and every start
+  // runs long hooks from `<streams>/argv/hooks/<hash>.sh` (cli-argv-files-core.ts, hook-files.ts).
+  // Both twins (the core is text-injected). Optional: without it the server pushes the inline
+  // template.
+  'hook-files-v1',
   'changes-v1',
   'rewind-probe-v1',
   'external-scan-v1',

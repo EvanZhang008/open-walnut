@@ -27,6 +27,10 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js'
 import { createHostStart } from '../../src/providers/host-start-core.js'
 import { buildHostSpawnTemplate, buildRoutineSpawnTemplate, hostEffortRules } from '../../src/providers/spawn-template.js'
+import { hookArgsFor } from '../../src/providers/hook-files.js'
+import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
+import crypto from 'node:crypto'
+import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { START_TASK_TOKEN } from '../../src/providers/trigger-clock-core.js'
 import { modelSupportsEffort } from '../../src/core/types.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
@@ -90,6 +94,14 @@ const CASES: Case[] = [
   { name: 'the agent\'s tool lists', sid: '11111111-2222-4333-8444-555555555559', env: {}, allowedTools: ['Bash(walnut:*)', 'Read'] },
 ]
 
+/** A filled template's args as the daemon's start records and runs them (its hook texts put back). */
+const asStarted = (args: string[]) => createCliArgvFiles({ fs, path, crypto, dir: '/nonexistent/argv' }).inlineArgs(args)
+
+/** A template as the push sends it to this daemon (spawn-template.ts push*SpawnTemplate): its hook scripts as files when it reads them. */
+function pushed<T extends { argv: unknown[] }>(t: T): T {
+  return { ...t, argv: hookArgsFor({ hasCapability: (c: string) => (ADVERTISED_DAEMON_CAPABILITIES as readonly string[]).includes(c) }, t.argv) }
+}
+
 async function startPayload(sid: string): Promise<Record<string, unknown>> {
   const deadline = Date.now() + 15_000
   while (Date.now() < deadline) {
@@ -115,11 +127,11 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
       if (!('WALNUT_CODEX_PROVIDER_GUARD' in c.env)) delete process.env.WALNUT_CODEX_PROVIDER_GUARD
       if (!('WALNUT_STOP_UNANSWERED' in c.env)) delete process.env.WALNUT_STOP_UNANSWERED
       const hs = createHostStart({ fs, path, dir, keyOf: () => 'k', now: () => 1, log: () => {}, busy: () => 0 })
-      hs.setTemplate(HOME, buildHostSpawnTemplate({
+      hs.setTemplate(HOME, pushed(buildHostSpawnTemplate({
         home: HOME, hostKey: 'marina', cwd: dir, env: { ...process.env },
         streamPartialMessages: c.streamPartial, permissionPrompt: c.permissionPrompt, bypassAllowed: c.bypassAllowed,
         ...(c.allowedTools ? { agents: { general: { allowedTools: c.allowedTools } } } : {}),
-      }))
+      })))
       const filled = hs.plan(HOME, {
         sid: c.sid, taskId: 'task-ask-9', agentId: 'general', title: 'Plan the week',
         ...(c.mode ? { mode: c.mode } : {}), ...(c.model ? { model: c.model } : {}), ...(c.effort ? { effort: c.effort } : {}),
@@ -138,7 +150,9 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
       )
       const payload = await startPayload(c.sid)
       const built = payload.args as string[]
-      expect(filled.plan.args).toEqual(built)
+      expect(asStarted(filled.plan.args)).toEqual(built)
+      // The template went as hook files (hook-files-v1) whenever it carries a long hook.
+      if (built.some((x) => x.length > 60_000)) expect(filled.plan.args).toContain('--walnut-hook-file')
       // The start sends no env: the daemon builds the CLI's env itself, the same for both.
       expect(payload).not.toHaveProperty('env')
       expect(payload.cwd).toBe(filled.plan.cwd)
@@ -232,7 +246,7 @@ describe('a filled routine template equals what claude-code-session.ts builds fo
       delete process.env.WALNUT_CLAUDE_DEBUG
       delete process.env.WALNUT_COMPACT_OPEN_ITEMS
       const hs = createHostStart({ fs, path, dir, keyOf: () => 'k', now: () => 1, log: () => {}, busy: () => 0 })
-      hs.setTemplate(HOME, buildRoutineSpawnTemplate({ home: HOME, hostKey: 'marina', env: { ...process.env } }), 'routine')
+      hs.setTemplate(HOME, pushed(buildRoutineSpawnTemplate({ home: HOME, hostKey: 'marina', env: { ...process.env } })), 'routine')
       const filled = hs.planRoutine(HOME, {
         sid: c.sid, taskId: ROUTINE_TASK, title: 'Routine: Nightly build', cwd: dir, mode: 'bypass',
         ...(c.model ? { model: c.model } : {}), ...(c.effort ? { effort: c.effort } : {}),
@@ -246,7 +260,7 @@ describe('a filled routine template equals what claude-code-session.ts builds fo
         undefined, undefined, undefined, c.effort, undefined, { preassignedSessionId: c.sid },
       )
       const payload = await startPayload(c.sid)
-      expect(filled.plan.args).toEqual(payload.args)
+      expect(asStarted(filled.plan.args)).toEqual(payload.args)
       expect(payload).not.toHaveProperty('env')
       expect(payload.cwd).toBe(filled.plan.cwd)
       expect(payload.mode).toBe(filled.plan.mode)

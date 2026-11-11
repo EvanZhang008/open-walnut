@@ -30,6 +30,21 @@
  * day (a spawn that reuses a file touches it).
  * A write that fails keeps the inline value: the CLI starts as it always did.
  *
+ * Hook scripts ride files of their own (2026-11-11): the settings JSON had grown
+ * to 100 KB of hook scripts. Each hook command of 512 characters or more goes to
+ * `<dir>/hooks/<sha256-32>.sh`, and the settings file runs it from there with a
+ * line that sources it in the hook's own shell (`. '<file>'`, so it runs exactly
+ * as the inline command did). A file that is gone fails the hook loudly: a
+ * PreToolUse hook refuses the call (exit 2), any other reports an error. The
+ * sweep keeps every hook file a kept settings file or a live session names, and
+ * writes back a live session's file a cleaner took; hooks/ is a directory so an
+ * older daemon's sweep (after a rollback) never removes one. A spawn template
+ * carries the same scripts as `@walnut-hook-file:<hash>` tokens with their texts
+ * beside the settings as `--walnut-hook-file <text>` (hook-files.ts, for a daemon
+ * with hook-files-v1), because one template string holds at most 120 KB:
+ * `inlineArgs` puts them back before a start records its args, so the registry
+ * always holds the inline form an older daemon re-spawns.
+ *
  * How each twin gets it: daemon-standalone.ts imports createCliArgvFiles;
  * daemon-source.ts inlines `createCliArgvFiles.toString()` through
  * `__CREATE_CLI_ARGV_FILES__`. So the factory body references NOTHING at module
@@ -44,7 +59,8 @@ export interface CliArgvFilesDeps {
     writeFileSync(p: string, data: string, o?: { mode?: number; encoding?: 'utf8' }): void
     renameSync(a: string, b: string): void
     readdirSync(p: string): string[]
-    statSync(p: string): { mtimeMs: number }
+    readFileSync(p: string, enc: 'utf8'): string
+    statSync(p: string): { mtimeMs: number; isDirectory?(): boolean }
     unlinkSync(p: string): void
     utimesSync(p: string, atime: Date, mtime: Date): void
   }
@@ -69,11 +85,89 @@ export function createCliArgvFiles(deps: CliArgvFilesDeps) {
     // A path is read only with --print, which every Walnut claude run is.
     '--agents': ['--agents', '.json', true],
   }
+  // A long hook command's text rides a file of its own: hook-files.ts sends them with these
+  // (HOOK_FILE_FLAG / HOOK_FILE_TOKEN there; a test pins both), and this split reads its own.
+  var HOOK_FLAG = '--walnut-hook-file'
+  var HOOK_TOKEN = '@walnut-hook-file:'
+  var HOOK_MIN_CHARS = 512
+  // A subdir: an older daemon's sweep never removes a directory, so after a rollback the hook
+  // files a live CLI runs stay (its sweep knows only top-level names).
+  var HOOK_DIR = path.join(deps.dir, 'hooks')
   var SWEEP_MIN_AGE_MS = 24 * 60 * 60 * 1000
   var TMP_MIN_AGE_MS = 60 * 60 * 1000
 
-  type Item = { flagAt: number; valueAt: number; joined: boolean; to: string; value: string; file: string }
-  /** Each content value in args: where its flag and value are, and its file. */
+  // hook: a hook command's file (its hash); else a content value's file in deps.dir.
+  type Item = { flagAt: number; valueAt: number; joined: boolean; to: string; value: string; file: string; hook?: string }
+
+  function hashOf(value: string): string {
+    return deps.crypto.createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 32)
+  }
+
+  /** settings JSON with each hook command fn maps (null: leave it); null when nothing changed or it is no settings. */
+  function mapHookCommands(json: string, fn: (command: string, event: string) => string | null): string | null {
+    var s: { hooks?: Record<string, unknown> }
+    try { s = JSON.parse(json) } catch (e) { return null }
+    var hooks = s && typeof s === 'object' ? s.hooks : null
+    if (!hooks || typeof hooks !== 'object') return null
+    var changed = false
+    for (var ev in hooks) {
+      var groups = hooks[ev]
+      if (!Array.isArray(groups)) continue
+      for (var g = 0; g < groups.length; g++) {
+        var list = groups[g] && (groups[g] as { hooks?: unknown }).hooks
+        if (!Array.isArray(list)) continue
+        for (var h = 0; h < list.length; h++) {
+          var c = list[h] && (list[h] as { command?: unknown }).command
+          if (typeof c !== 'string') continue
+          var r = fn(c, ev)
+          if (r !== null) { (list[h] as { command: string }).command = r; changed = true }
+        }
+      }
+    }
+    return changed ? JSON.stringify(s) : null
+  }
+
+  /**
+   * args as the CLI took them inline: a hook text sent beside the settings (hook-files-v1) is put
+   * back into the command its token stands for, and the pseudo flag goes. What a start records,
+   * so an older daemon that takes this registry over (a rollback) re-spawns what it knows.
+   */
+  function inlineArgs(args: readonly string[]): string[] {
+    var texts: Record<string, string> = {}
+    var drop: Record<number, true> = {}
+    var any = false
+    for (var i = 0; i < args.length; i++) {
+      var a = String(args[i])
+      if (a === HOOK_FLAG && i + 1 < args.length) { texts[hashOf(String(args[i + 1]))] = String(args[i + 1]); drop[i] = true; drop[++i] = true; any = true }
+      else if (a.indexOf(HOOK_FLAG + '=') === 0) { var t = a.slice(HOOK_FLAG.length + 1); texts[hashOf(t)] = t; drop[i] = true; any = true }
+    }
+    if (!any) return args.map(String)
+    var out: string[] = []
+    for (var j = 0; j < args.length; j++) {
+      if (drop[j]) continue
+      var v = String(args[j])
+      var joined = v.indexOf('--settings=') === 0
+      var value = joined ? v.slice(11) : j > 0 && String(args[j - 1]) === '--settings' ? v : null
+      if (value !== null && value.indexOf(HOOK_TOKEN) >= 0) {
+        var back = mapHookCommands(value, function (cmd) {
+          var hash = cmd.indexOf(HOOK_TOKEN) === 0 ? cmd.slice(HOOK_TOKEN.length) : ''
+          return hash && Object.prototype.hasOwnProperty.call(texts, hash) ? texts[hash] : null
+        })
+        if (back !== null) v = joined ? '--settings=' + back : back
+      }
+      out.push(v)
+    }
+    return out
+  }
+
+  /** The command that runs a hook file in the hook's own shell, as its inline text ran. */
+  function hookLoader(file: string, event: string): string {
+    var q = "'" + file.split("'").join("'\\''") + "'"
+    return '[ -r ' + q + " ] || { echo 'Walnut: a hook file of this session is gone: restart the session' >&2; exit "
+      + (event === 'PreToolUse' ? '2' : '1') + '; }; . ' + q
+  }
+
+  /** Each content value in (inline) args: where its flag and value are, and its file; a settings value's long hooks too. */
   function plan(args: readonly string[]): Item[] {
     var out: Item[] = []
     // With or without the command in front: a path or a script never reads as a flag.
@@ -96,8 +190,18 @@ export function createCliArgvFiles(deps: CliArgvFilesDeps) {
         var value = values[k][1]
         // A JSON flag whose value is already a path is left as it is; an empty prompt too.
         if (value === '' || (spec[2] && value.trim().charAt(0) !== '{')) continue
-        var hash = deps.crypto.createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 32)
-        out.push({ flagAt: flagAt, valueAt: values[k][0], joined: joined, to: spec[0], value: value, file: path.join(deps.dir, hash + spec[1]) })
+        if (name === '--settings') {
+          // Each long hook command to a file of its own; the settings run it from there.
+          var split = mapHookCommands(value, function (cmd, event) {
+            if (cmd.length < HOOK_MIN_CHARS) return null
+            var h = hashOf(cmd)
+            var file = path.join(HOOK_DIR, h + '.sh')
+            out.push({ flagAt: -1, valueAt: -1, joined: false, to: '', value: cmd, file: file, hook: h })
+            return hookLoader(file, event)
+          })
+          if (split !== null) value = split
+        }
+        out.push({ flagAt: flagAt, valueAt: values[k][0], joined: joined, to: spec[0], value: value, file: path.join(deps.dir, hashOf(value) + spec[1]) })
       }
     }
     return out
@@ -106,6 +210,11 @@ export function createCliArgvFiles(deps: CliArgvFilesDeps) {
   function ensureDir(): void {
     fs.mkdirSync(deps.dir, { recursive: true, mode: 0o700 })
     try { fs.chmodSync(deps.dir, 0o700) } catch (e) { /* not ours to fix */ }
+  }
+
+  function ensureHookDir(): void {
+    fs.mkdirSync(HOOK_DIR, { recursive: true, mode: 0o700 })
+    try { fs.chmodSync(HOOK_DIR, 0o700) } catch (e) { /* not ours to fix */ }
   }
 
   function writeOnce(file: string, value: string): void {
@@ -118,45 +227,62 @@ export function createCliArgvFiles(deps: CliArgvFilesDeps) {
 
   /** args with every content value moved to its file (the inline value kept when a write fails). */
   function toFiles(args: readonly string[]): string[] {
-    var items = plan(args)
-    if (items.length === 0) return args.slice()
+    var inline = inlineArgs(args)
+    var items = plan(inline)
+    if (items.length === 0) return inline
     try {
       ensureDir()
-      for (var k = 0; k < items.length; k++) writeOnce(items[k].file, items[k].value)
+      // Hook files first: a settings file never names one that is not there yet.
+      for (var k = 0; k < items.length; k++) if (items[k].hook) { ensureHookDir(); writeOnce(items[k].file, items[k].value) }
+      for (var m = 0; m < items.length; m++) if (!items[m].hook) writeOnce(items[m].file, items[m].value)
     } catch (err) {
       if (deps.log) deps.log('warn', 'cli argv files: could not write; the CLI gets its arguments inline', { error: (err as Error).message, dir: deps.dir })
-      return args.slice()
+      return inline
     }
-    var out = args.slice()
+    var out = inline.slice()
     for (var j = 0; j < items.length; j++) {
       var it = items[j]
+      if (it.hook) continue
       if (it.joined) out[it.flagAt] = it.to + '=' + it.file
       else { out[it.flagAt] = it.to; out[it.valueAt] = it.file }
     }
     return out
   }
 
-  /** The file names args would use (no writes): what a live session keeps. */
+  /** The file names args would use (no writes): what a live session keeps on its command line. */
   function namesIn(args: readonly string[]): string[] {
-    return plan(args).map(function (p) { return p.file.slice(p.file.lastIndexOf('/') + 1) })
+    return plan(inlineArgs(args)).filter(function (p) { return !p.hook }).map(function (p) { return p.file.slice(p.file.lastIndexOf('/') + 1) })
   }
 
   /**
    * Remove files that neither a registry session's args nor a live process's
    * command line (lines of `ps -A -ww -o args=`) name, untouched for a day, and
-   * half-written temp files after an hour. Null command lines (ps did not
-   * answer) sweep nothing: a CLI's file is never proven unused without them.
+   * half-written temp files after an hour; a hook file stays while a kept settings
+   * file or a registry session names it. Null command lines (ps did not answer)
+   * sweep nothing: a CLI's file is never proven unused without them.
    */
   function sweep(liveArgs: Array<readonly string[] | undefined | null>, commandLines: readonly string[] | null): number {
     if (!commandLines) return 0
     var names: string[]
-    try { names = fs.readdirSync(deps.dir) } catch (e) { return 0 }
+    var hookNames: string[]
+    // A dir a cleaner took still gets its live sessions' files back below.
+    try { names = fs.readdirSync(deps.dir) } catch (e) { names = [] }
+    try { hookNames = fs.readdirSync(HOOK_DIR) } catch (e) { hookNames = [] }
     var keep: Record<string, true> = {}
+    var keepHook: Record<string, true> = {}
     for (var i = 0; i < liveArgs.length; i++) {
       var a = liveArgs[i]
       if (!a) continue
-      var n = namesIn(a)
-      for (var j = 0; j < n.length; j++) keep[n[j]] = true
+      var items = plan(inlineArgs(a))
+      for (var j = 0; j < items.length; j++) {
+        var base = items[j].file.slice(items[j].file.lastIndexOf('/') + 1)
+        if (items[j].hook) keepHook[base] = true
+        else keep[base] = true
+        // A live session's file a cleaner took is written back (its hooks read theirs on every call).
+        try {
+          if (!fs.existsSync(items[j].file)) { ensureDir(); if (items[j].hook) ensureHookDir(); writeOnce(items[j].file, items[j].value) }
+        } catch (e) { /* the next sweep tries again */ }
+      }
     }
     var prefix = deps.dir + '/'
     for (var c = 0; c < commandLines.length; c++) {
@@ -169,17 +295,30 @@ export function createCliArgvFiles(deps: CliArgvFilesDeps) {
         at = line.indexOf(prefix, end)
       }
     }
+    // A kept settings file keeps the hook files it names (a live CLI's command line names only the
+    // settings). By the file's own name, which no escaping of the dir changes.
+    var named = /([0-9a-f]{32}\.sh)/g
+    for (var s = 0; s < names.length; s++) {
+      if (!keep[names[s]] || names[s].slice(-5) !== '.json') continue
+      var body: string
+      try { body = fs.readFileSync(path.join(deps.dir, names[s]), 'utf8') } catch (e) { continue }
+      var hit: RegExpExecArray | null
+      named.lastIndex = 0
+      while ((hit = named.exec(body)) !== null) keepHook[hit[1]] = true
+    }
     var t = now()
     var removed = 0
-    for (var k = 0; k < names.length; k++) {
-      var f = names[k]
-      if (keep[f]) continue
-      var full = path.join(deps.dir, f)
-      var age: number
-      try { age = t - fs.statSync(full).mtimeMs } catch (e) { continue }
-      if (age < (f.indexOf('.tmp-') >= 0 ? TMP_MIN_AGE_MS : SWEEP_MIN_AGE_MS)) continue
+    function drop(dir: string, f: string, kept: Record<string, true>): void {
+      if (kept[f]) return
+      var full = path.join(dir, f)
+      var st: { mtimeMs: number; isDirectory?: () => boolean }
+      try { st = fs.statSync(full) } catch (e) { return }
+      if (st.isDirectory && st.isDirectory()) return
+      if (t - st.mtimeMs < (f.indexOf('.tmp-') >= 0 ? TMP_MIN_AGE_MS : SWEEP_MIN_AGE_MS)) return
       try { fs.unlinkSync(full); removed++ } catch (e) { /* gone already */ }
     }
+    for (var k = 0; k < names.length; k++) drop(deps.dir, names[k], keep)
+    for (var n = 0; n < hookNames.length; n++) drop(HOOK_DIR, hookNames[n], keepHook)
     return removed
   }
 
@@ -189,7 +328,7 @@ export function createCliArgvFiles(deps: CliArgvFilesDeps) {
     return /claude/i.test(base) || /claude/i.test(String(args[0] || ''))
   }
 
-  return { toFiles: toFiles, namesIn: namesIn, sweep: sweep, isClaude: isClaude, dir: deps.dir }
+  return { toFiles: toFiles, inlineArgs: inlineArgs, namesIn: namesIn, sweep: sweep, isClaude: isClaude, dir: deps.dir }
 }
 
 export type CliArgvFiles = ReturnType<typeof createCliArgvFiles>

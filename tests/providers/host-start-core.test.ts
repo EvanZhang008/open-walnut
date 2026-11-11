@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHostStart, type HostStart } from '../../src/providers/host-start-core.js'
+import { compactHookArgs } from '../../src/providers/hook-files.js'
 import { buildHostSpawnTemplate, buildRoutineSpawnTemplate, hostRoutineModes, hostAskModes } from '../../src/providers/spawn-template.js'
 import { START_TASK_TOKEN } from '../../src/providers/trigger-clock-core.js'
 
@@ -536,5 +537,32 @@ describe('a routine run (planRoutine, clock-host-start-v1)', () => {
     // A task-create for another task is not this start's: it is dropped, the start kept.
     hs.holdPending(HOME, { sid: RSID, record: r.plan.record, opId: 'routine-abc-session', task: { ...task, record: { ...task.record, taskId: 'other' } } })
     expect(make().pendingStarts()[0].task).toBeUndefined()
+  })
+})
+
+describe('a template with hook texts (hook-files-v1) is never read by a daemon from before hook files', () => {
+  // A daemon from before hook files reads spawn-template-<key>.json and spawn-template-routine-<key>.json only,
+  // and would hand the CLI --walnut-hook-file (a rollback while the Mac is away): it must find nothing and refuse.
+  const compact = <T extends { argv: unknown[] }>(t: T): T => ({ ...t, argv: compactHookArgs(t.argv) })
+  const names = () => fs.readdirSync(dir).filter((f) => f.startsWith('spawn-template')).sort()
+
+  it('is kept under its own name, read back after a restart, and each save removes the other name', () => {
+    for (const f of names()) fs.rmSync(path.join(dir, f))
+    const hs = make()
+    hs.setTemplate(HOME, template())
+    expect(names()).toEqual(['spawn-template-k1.json'])
+    const t = compact(template())
+    expect(t.argv).toContain('--walnut-hook-file')
+    hs.setTemplate(HOME, t)
+    hs.setTemplate(HOME, compact(buildRoutineSpawnTemplate({ home: HOME, hostKey: 'marina', env: {}, now })), 'routine')
+    expect(names()).toEqual(['spawn-template-hf-k1.json', 'spawn-template-hf-routine-k1.json'])
+    // A restarted daemon of this build reads both back, and plans with the hook texts in.
+    const again = make()
+    const r = again.plan(HOME, fields(), 'marina')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.plan.args).toContain('--walnut-hook-file')
+    // An inline template again (a Mac that pushes the older form) takes the old name back.
+    again.setTemplate(HOME, template())
+    expect(names()).toEqual(['spawn-template-hf-routine-k1.json', 'spawn-template-k1.json'])
   })
 })

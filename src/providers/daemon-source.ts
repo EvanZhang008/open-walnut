@@ -596,7 +596,9 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     const createArgvFiles = reconstructed['__CREATE_CLI_ARGV_FILES__'] as typeof createCliArgvFiles | undefined
     if (createArgvFiles) {
       const af = createArgvFiles({ fs: fs as never, path, crypto, dir: '/nonexistent/argv' })
-      if (af.namesIn(['claude', '--settings', '{"a":1}']).length !== 1 || af.namesIn(['claude', '--settings', '/x.json']).length !== 0 || !af.isClaude('/bin/claude', []) || af.sweep([], null) !== 0) {
+      // A template's hook text (hook-files-v1) goes back into its settings, and the pseudo flag goes.
+      if (af.inlineArgs(['claude', '--walnut-hook-file', 'x']).join(' ') !== 'claude' ||
+        af.namesIn(['claude', '--settings', '{"a":1}']).length !== 1 || af.namesIn(['claude', '--settings', '/x.json']).length !== 0 || !af.isClaude('/bin/claude', []) || af.sweep([], null) !== 0) {
         throw new Error('cli argv files did not build')
       }
     }
@@ -7516,6 +7518,9 @@ async function gateClaudeLaunch(args) {
 // makes this an ENSURE — a live process is adopted, never replaced, and identity
 // must be provable. Keep in sync with daemon-standalone.ts.
 async function startSessionProcess(cmd, isCurrent, canStart) {
+  // A template's hook texts (hook-files-v1) go back into its settings: the registry keeps the inline
+  // form an older daemon re-spawns after a rollback (cli-argv-files-core.ts inlineArgs). Mirror daemon-standalone.ts.
+  if (Array.isArray(cmd.args)) cmd = Object.assign({}, cmd, { args: cliArgvFiles.inlineArgs(cmd.args.map(String)) });
   const { sid, args, cwd, message, resume, mode, uuid } = cmd;
   // uuid (optional): pre-assigned v4 uuid for the INITIAL message's user line.
   // Absent on every older client, and then the envelope is unchanged.

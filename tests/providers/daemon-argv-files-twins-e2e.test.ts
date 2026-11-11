@@ -27,6 +27,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { sessionSettingsHooks } from '../../src/providers/session-settings-hooks.js'
+import { compactHookArgs, HOOK_FILE_FLAG, HOOK_FILES_CAPABILITY } from '../../src/providers/hook-files.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
@@ -133,6 +134,21 @@ const valueOf = (argv: string[], flag: string) => { const i = argv.indexOf(flag)
 // What the server sends: the real session hooks, a prompt that names a clone, an MCP config.
 const SETTINGS = JSON.stringify({ env: { OPEN_WALNUT_API_URL: 'http://127.0.0.1:1' }, hooks: sessionSettingsHooks({}) })
 const PROMPT = 'You are a Walnut task. Clone with git clone --shared into your task directory; playwright-report stays in /tmp.'
+/** A settings file read back as the CLI got it inline: each hook it runs from a file is that file's text. */
+function asInline(settingsFile: string, argvDir: string): unknown {
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
+  let fromFiles = 0
+  for (const groups of Object.values(settings.hooks)) for (const g of groups) for (const h of g.hooks) {
+    const m = /\. '([^']+)'$/.exec(h.command)
+    if (!m) continue
+    expect(path.dirname(m[1])).toBe(path.join(argvDir, 'hooks'))
+    expect(fs.statSync(m[1]).mode & 0o777).toBe(0o600)
+    h.command = fs.readFileSync(m[1], 'utf8')
+    fromFiles++
+  }
+  expect(fromFiles, 'the long hooks run from files').toBeGreaterThan(5)
+  return settings
+}
 const MCP = JSON.stringify({ mcpServers: { walnut: { command: 'walnut', args: ['mcp'] } } })
 
 beforeAll(() => {
@@ -185,7 +201,8 @@ describe.each(TWINS)('cli argv files: $name', (twin) => {
       expect(fs.statSync(f).mode & 0o777).toBe(0o600)
     }
     expect(fs.statSync(argvDir).mode & 0o777).toBe(0o700)
-    expect(fs.readFileSync(settingsFile, 'utf8')).toBe(SETTINGS)
+    expect(fs.statSync(settingsFile).size).toBeLessThan(8 * 1024)
+    expect(asInline(settingsFile, argvDir)).toEqual(JSON.parse(SETTINGS))
     expect(fs.readFileSync(promptFile, 'utf8')).toBe(PROMPT)
     expect(fs.readFileSync(mcpFile, 'utf8')).toBe(MCP)
 
@@ -213,7 +230,47 @@ describe.each(TWINS)('cli argv files: $name', (twin) => {
     expect(valueOf(again, '--settings')).toBe(settingsFile)
     expect(valueOf(again, '--append-system-prompt-file')).toBe(promptFile)
     expect(valueOf(again, '--mcp-config')).toBe('/etc/walnut-mcp.json')
-    expect(fs.readdirSync(argvDir).sort()).toEqual([settingsFile, promptFile, mcpFile].map((f) => path.basename(f)).sort())
+    expect(fs.readdirSync(argvDir).sort()).toEqual([settingsFile, promptFile, mcpFile].map((f) => path.basename(f)).concat('hooks').sort())
+  }, 180_000)
+
+  it('a template start (hook-files-v1 texts beside the settings) runs the hooks from files and records the inline args', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-argv-files-')))
+    fs.mkdirSync(path.join(root, 'home'), { recursive: true })
+    const d = await boot(twin)
+    expect((await rpc(d, { cmd: 'hello' })).capabilities as string[]).toContain(HOOK_FILES_CAPABILITY)
+    const sid = 'cccccccc-0000-4000-8000-00000000000c'
+    const out = path.join(root, 'argv.jsonl')
+    const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(cliPath)} ${JSON.stringify(out)} "$@"`
+    const inline = ['/bin/sh', '-c', sh, 'sh', '--output-format', 'stream-json', '--settings', SETTINGS, '--input-format', 'stream-json', '--resume', sid]
+    const args = compactHookArgs(inline) as string[]
+    const texts = args.filter((_a, i) => args[i - 1] === HOOK_FILE_FLAG)
+    expect(texts.length).toBeGreaterThan(5)
+    const first = await rpc(d, { cmd: 'start', sid, cwd: root, message: '', resume: true, mode: 'default', args })
+    expect(first).toMatchObject({ ok: true })
+    spawnedPids.add(first.pid as number)
+    expect(await waitFor(() => recorded().length === 1)).toBe(true)
+
+    const [{ argv, pid }] = recorded()
+    const settingsFile = valueOf(argv, '--settings')!
+    expect(argv).toEqual(['--output-format', 'stream-json', '--settings', settingsFile, '--input-format', 'stream-json', '--resume', sid])
+    const argvDir = path.join(d.streams, 'argv')
+    const scripts = fs.readdirSync(path.join(argvDir, 'hooks'))
+    expect(scripts).toHaveLength(texts.length)
+    for (const f of scripts) expect(texts).toContain(fs.readFileSync(path.join(argvDir, 'hooks', f), 'utf8'))
+    expect(asInline(settingsFile, argvDir)).toEqual(JSON.parse(SETTINGS))
+    // The sound guard, run from its file the way the CLI runs a hook, still refuses speech.
+    const hooks = JSON.parse(fs.readFileSync(settingsFile, 'utf8')).hooks as Record<string, Array<{ hooks: Array<{ command: string }> }>>
+    const pre = hooks.PreToolUse.flatMap((g) => g.hooks.map((h) => h.command)).filter((c) => c.includes(argvDir))
+    expect(pre.length).toBeGreaterThan(3)
+    const input = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'say hi' }, cwd: root })
+    const answers = pre.map((c) => spawnSync('/bin/sh', ['-c', c], { input, cwd: root, encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: path.join(root, 'home'), TMPDIR: root } }))
+    expect(answers.some((a) => /would make sound/.test(a.stdout + a.stderr))).toBe(true)
+
+    const live = commandLine(pid)
+    expect(live).toContain(settingsFile)
+    expect(live).not.toMatch(/walnut-hook-file|PreToolUse|clone/)
+    // The registry keeps the inline args: an older daemon that takes it over (a rollback) re-spawns those.
+    expect((await rpc(d, { cmd: 'status', sid, includeArgs: true })).args).toEqual(inline)
   }, 180_000)
 
   it('a one-shot claude run passes file paths too', async () => {
@@ -230,7 +287,7 @@ describe.each(TWINS)('cli argv files: $name', (twin) => {
     const { argv } = recorded()[0]
     expect(argv).toEqual(['-p', '--system-prompt-file', valueOf(argv, '--system-prompt-file'), '--settings', valueOf(argv, '--settings')])
     expect(fs.readFileSync(valueOf(argv, '--system-prompt-file')!, 'utf8')).toBe(PROMPT)
-    expect(fs.readFileSync(valueOf(argv, '--settings')!, 'utf8')).toBe(SETTINGS)
+    expect(asInline(valueOf(argv, '--settings')!, path.join(d.streams, 'argv'))).toEqual(JSON.parse(SETTINGS))
     expect(await waitFor(() => d.events.some((e) => e.ev === 'oneshot.exit' || e.event === 'oneshot.exit' || JSON.stringify(e).includes('oneshot.exit')))).toBe(true)
   }, 120_000)
 })

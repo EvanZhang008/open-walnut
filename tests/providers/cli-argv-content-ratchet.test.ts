@@ -16,6 +16,7 @@ import crypto from 'node:crypto'
 import os from 'node:os'
 import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
 import { sessionSettingsHooks } from '../../src/providers/session-settings-hooks.js'
+import { compactHookArgs, HOOK_FILE_FLAG } from '../../src/providers/hook-files.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -53,6 +54,7 @@ const READERS: Record<string, string> = {
   'src/core/sessions/spawn-prefix.ts': 'reads the inline prompt back from the registry args',
   'src/providers/daemon-source.ts': 'the smoke check of the rewrite it inlines',
   'src/providers/daemon-standalone.ts': 'reads the inline --settings env to pick the session PATH (walnutThroughGateway)',
+  'src/providers/hook-files.ts': 'moves long hook commands out of the --settings value a start sends (hook-files-v1); the daemon writes them to files',
   'src/core/sessions/request-tag.ts': "adds the tag to a one-shot's inline --settings env inside startOneShot; that argv's spawn (oneshot-core) rewrites it to a file",
 }
 
@@ -96,10 +98,19 @@ describe('every content flag in an argv reaches the CLI as a file', () => {
     expect(js.match(/spawn\(launch\.command,/g)?.length).toBe(1)
   })
 
-  it('the session settings fit a host spawn template string, with room to grow', () => {
-    // host-start-core.ts MAX_TEMPLATE_STRING (120 KB): an older daemon still passes it inline.
-    const settings = JSON.stringify({ env: { OPEN_WALNUT_API_URL: 'http://127.0.0.1:3456' }, hooks: sessionSettingsHooks({}) })
-    expect(settings.length, 'the hook scripts grew: shorten one, or move hook scripts into files').toBeLessThan(100 * 1024)
+  it('the session settings and every hook script fit a host spawn template string, with room to grow', () => {
+    // host-start-core.ts MAX_TEMPLATE_STRING (120 KB) caps each argv string. A daemon with
+    // hook-files-v1 gets each long hook script as its own string (hook-files.ts), so the
+    // settings stay small and the budget is per script.
+    for (const role of [undefined, 'lead', 'main'] as const) {
+      const settings = JSON.stringify({ env: { OPEN_WALNUT_API_URL: 'http://127.0.0.1:3456' }, hooks: sessionSettingsHooks({}, { orgRole: role, prompt: '' }) })
+      const argv = compactHookArgs(['claude', '--settings', settings]) as string[]
+      expect(argv[2].length, 'the settings carry a long hook inline: hook-files.ts moves commands from HOOK_FILE_MIN_CHARS on').toBeLessThan(16 * 1024)
+      for (let i = 3; i < argv.length; i += 2) {
+        expect(argv[i]).toBe(HOOK_FILE_FLAG)
+        expect(argv[i + 1].length, `one hook script outgrew an argv string: ${argv[i + 1].slice(0, 60)}`).toBeLessThan(100 * 1024)
+      }
+    }
     expect(read('src/providers/host-start-core.ts')).toContain('const MAX_TEMPLATE_STRING = 120 * 1024')
   })
 
