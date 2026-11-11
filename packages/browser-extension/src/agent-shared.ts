@@ -253,6 +253,9 @@ export const where = async (tabId: number) => {
   return { tab: tabId, url: t.url, title: t.title, ...(await windowOf(ext, t.windowId)) }
 }
 
+/** Page ops that only look before a step acts (where to click, the drag's ends, a capture): no answer means nothing ran. */
+const BEFORE_STEP = new Set(['locate', 'drag_points', 'find', 'has_text', 'capture', 'annotate', 'watch_mark'])
+
 type PageReply = { ok: boolean; result?: Record<string, unknown>; error?: { message: string; code: string; extra?: Record<string, unknown> } }
 
 /**
@@ -263,7 +266,9 @@ export async function frameOp(tabId: number, frameId: number, op: string, args: 
   const msg = { type: 'agent', op, args: { ...args, frame: frameId ? `f${frameId}` : undefined }, allow }
   let r = await toPage<PageReply>(tabId, msg, ms, frameId)
   if (!r && frameId && await injectContent(tabId)) { await sleep(200); r = await toPage<PageReply>(tabId, msg, ms, frameId) }
-  if (!r) throw new AgentError('The page did not answer in time (it may be busy or frozen): try again.', 'page_not_ready')
+  // `unanswered`: the step (or a read after it) was sent and no answer came, so it may have run
+  // (agent-change.ts lostAnswer); a look before the step that went unanswered did nothing.
+  if (!r) throw new AgentError('The page did not answer in time (it may be busy or frozen): try again.', 'page_not_ready', BEFORE_STEP.has(op) ? {} : { unanswered: true })
   if (!r.ok) throw new AgentError(r.error?.message ?? 'The page could not do that.', r.error?.code ?? 'page_error', r.error?.extra ?? {})
   return r.result ?? {}
 }

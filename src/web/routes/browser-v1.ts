@@ -610,7 +610,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     // answers nothing until it is handled, so it is not read.
     if (b.read_text === true && READ_AFTER.has(action) && !(r as Record<string, unknown>).dialog) {
       const readTab = typeof r.opened?.tab === 'number' ? r.opened.tab : used
-      if (typeof readTab === 'number') extra.page_text = await readAfter(c.device, readTab, typeof args.max === 'number' ? args.max : undefined, { ...s.allowOf(f), walnut: own }, left())
+      if (typeof readTab === 'number') extra.page_text = await readAfter(c.device, readTab, owner, typeof args.max === 'number' ? args.max : undefined, { ...s.allowOf(f), walnut: own }, left())
     }
     if (action === 'tabs') {
       const all = Array.isArray(r.tabs) ? r.tabs : []
@@ -665,14 +665,19 @@ async function signInAct(res: Response, b: Record<string, unknown>, at: { device
 const READ_AFTER = new Set<Action>(['open', 'navigate', 'back', 'take', 'click', 'press', 'type', 'select', 'fill_form', 'scroll', 'hover'])
 
 /** The page's main text after a step, or why it could not be read (the step itself went through). */
-async function readAfter(device: string, tab: number, max: number | undefined, allow: import('../../core/browser-control/hub.js').WireCommand['allow'], left: number): Promise<Record<string, unknown>> {
+async function readAfter(device: string, tab: number, owner: string, max: number | undefined, allow: import('../../core/browser-control/hub.js').WireCommand['allow'], left: number): Promise<Record<string, unknown>> {
   const h = await hub()
   if (left < 8000) return { tab, error: 'No time was left in this call to read the page: call text.', code: 'browser_timeout' }
   try {
     const t = await h.send(device, 'text', { tab, ...(max !== undefined ? { max } : {}) }, allow, Math.min(20_000, left - 3000)) as Record<string, unknown>
     return { tab, text: t.text, ...(t.scope ? { scope: t.scope } : {}), ...(typeof t.chars === 'number' ? { chars: t.chars } : {}), ...(t.cut ? { cut: true } : {}) }
   } catch (err) {
-    return { tab, error: err instanceof Error ? err.message : String(err), code: err instanceof h.BrowserError ? err.code : 'browser_error' }
+    const code = err instanceof h.BrowserError ? err.code : 'browser_error'
+    // A tab gone meanwhile: what happened to it (tab-words.ts), as a command naming it is told.
+    const message = code === 'not_your_tab' && h.tabOwner(device, tab) !== owner
+      ? (await import('../../core/browser-control/tab-words.js')).notYourTabWords(tab, h.tabEndOf(device, tab), owner)
+      : err instanceof Error ? err.message : String(err)
+    return { tab, error: message, code }
   }
 }
 

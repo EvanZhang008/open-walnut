@@ -49,7 +49,7 @@ export class PageError extends Error {
 
 export function byRef(ref: unknown): Element {
   const el = typeof ref === 'string' ? refs.get(ref.replace(/^f\d+:/, ''))?.deref() : undefined
-  if (!el || !el.isConnected) throw new PageError(`No element ${String(ref)} on the page now: snapshot again.`, 'stale_ref')
+  if (!el || !el.isConnected) throw new PageError(`No element ${String(ref)} on the page now: find <words> gives its new ref (snapshot lists all on screen).`, 'stale_ref')
   return el
 }
 

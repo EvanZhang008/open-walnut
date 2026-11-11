@@ -38,7 +38,8 @@ export const BROWSER_USAGE = [
   '  events (the answer says trusted false and why). --json prints the whole result.',
   'Exit: 0 done; 1 refused or a choice to make (the person said no, not your tab, which tab or login: the message',
   '  lists them); 2 Walnut or the browser did not answer in time (run it again); 3 an error, a wait whose text or',
-  '  address did not come included (look at the page: text or snapshot).',
+  '  address did not come included (look at the page: text or snapshot). A --read whose read failed exits with the',
+  '  read\'s code, though the step itself was done (its output says so).',
 ].join('\n')
 
 export const BROWSER_EXIT = { ok: 0, refused: 1, timeout: 2, error: 3 } as const
@@ -309,7 +310,7 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
     const r = await io.call(p.op, { ...p.args, ...upload, ...(told ? { wait_ms: 25_000 } : {}), ...(request ? { request } : {}) })
     if (!r.ok) {
       io.say(`walnut browser: ${r.message ?? 'failed'}`)
-      return r.code && REFUSED.has(r.code) ? BROWSER_EXIT.refused : r.code === 'browser_timeout' || r.code === 'outward_expired' ? BROWSER_EXIT.timeout : BROWSER_EXIT.error
+      return exitOf(r.code)
     }
     const body = (r.result ?? {}) as Record<string, unknown>
     if (p.guide) {
@@ -350,10 +351,19 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
       else io.out(`${file}\n${labelLines(body)}`)
       return BROWSER_EXIT.ok
     }
-    if (p.json) { io.out(JSON.stringify(body, null, 2) + '\n'); return BROWSER_EXIT.ok }
+    // A step done whose --read failed is not all done: the read's own code (2026-11-11, a review:
+    // `open --read` on a tab closed meanwhile read nothing and exited 0, so a cheap model took it as read).
+    const read = body.page_text as { error?: unknown; code?: string } | undefined
+    const code = read && typeof read.error === 'string' ? exitOf(read.code) : BROWSER_EXIT.ok
+    if (p.json) { io.out(JSON.stringify(body, null, 2) + '\n'); return code }
     io.out(render(p.args.action as string | undefined, body) + '\n')
-    return BROWSER_EXIT.ok
+    return code
   }
+}
+
+/** The exit code of a failure's code (BROWSER_USAGE says what each means). */
+function exitOf(code: string | undefined): number {
+  return code && REFUSED.has(code) ? BROWSER_EXIT.refused : code === 'browser_timeout' || code === 'outward_expired' ? BROWSER_EXIT.timeout : BROWSER_EXIT.error
 }
 
 /** The numbered elements of an annotated screenshot, one a line (click-label N clicks one). */
@@ -481,6 +491,6 @@ function actLine(action: string, b: Record<string, unknown>): string {
 function readLines(b: Record<string, unknown>): string {
   const t = b.page_text as { text?: string; scope?: string; error?: string; tab?: number } | undefined
   if (!t) return ''
-  if (typeof t.error === 'string') return `\n(could not read the page: ${t.error})`
+  if (typeof t.error === 'string') return `\nThe step was done, but its page was not read: ${t.error}`
   return `\n\n${t.scope ? `== ${t.scope} ==\n` : ''}${t.text ?? ''}`
 }

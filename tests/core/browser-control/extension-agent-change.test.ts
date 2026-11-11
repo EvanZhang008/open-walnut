@@ -5,7 +5,10 @@
  * fake browser. A new tab beats an address beats a reload beats a mutation beats a field beats a
  * scroll; a page that could not be watched gets no line (never a guess); a step in a frame never
  * reads "nothing changed"; a click that changed nothing looks again for a page that answers late,
- * a hover or scroll does not; a dialog or a new tab needs no look after the step.
+ * a hover or scroll does not; a dialog or a new tab needs no look after the step. A step whose
+ * answer the page never sent (2026-11-11, a review: `type --submit` ran GitHub's search and answered
+ * page_not_ready "try again") is judged by the tab: another address means it ran, else the words say
+ * it may have run and to look first; every acting step is covered.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 
@@ -27,7 +30,8 @@ const ev = () => ({ addListener() {}, removeListener() {} })
     },
   },
 }
-const { changedLine, withChange, NOTHING, IN_FRAME, ENTER_NOTHING } = await import('../../../packages/browser-extension/src/agent-change')
+const { changedLine, withChange, NOTHING, IN_FRAME, ENTER_NOTHING, CHANGE_ACTS, MAYBE_RAN } = await import('../../../packages/browser-extension/src/agent-change')
+const { AgentError } = await import('../../../packages/browser-extension/src/agent-shared')
 
 const before = { url: 'https://x.test/a', doc: 'd1', values: 1, scroll: 0 }
 const after = { ...before, watching: true, mutations: 0, scrolls: 0 }
@@ -138,5 +142,54 @@ describe('withChange', () => {
     // A plain type with no submit that only moved the field.
     fake.later = null; fake.url = 'https://x.test/a'; fake.enter = undefined
     expect((await withChange(7, 'type', { ref: 'e3', text: 'x' }, async () => { fake.values = 5; return { tab: 7 } })).changed).toBe('a field\'s value changed')
+  })
+})
+
+describe('a step whose answer the page never sent', () => {
+  const unanswered = () => new AgentError('The page did not answer in time (it may be busy or frozen): try again.', 'page_not_ready', { unanswered: true })
+
+  it('went to another page before answering: the step ran, and the answer says where', async () => {
+    const r = await withChange(7, 'type', { ref: 'e17', text: 'walnut personal ai', submit: true }, async () => { fake.url = 'https://x.test/search?q=walnut'; throw unanswered() })
+    expect(r).toMatchObject({ tab: 7, url: 'https://x.test/search?q=walnut', typed: '18 characters into e17', changed: 'Enter: went to https://x.test/search?q=walnut' })
+    expect(String(r.note)).toMatch(/the step ran/)
+  })
+
+  it('the page loaded again: the step ran', async () => {
+    const r = await withChange(7, 'click', { ref: 'e3' }, async () => { fake.doc = 'd2'; throw unanswered() })
+    expect(r).toMatchObject({ clicked: 'e3', changed: 'the page loaded again' })
+  })
+
+  it('no change the tab shows: it may have run, look before acting again (never a bare "try again")', async () => {
+    const err = await withChange(7, 'press', { key: 'Enter' }, async () => { throw unanswered() }).catch((e) => e)
+    expect(err).toBeInstanceOf(AgentError)
+    expect(err.code).toBe('page_not_ready')
+    expect(err.message).toBe(MAYBE_RAN)
+    expect(err.message).not.toMatch(/try again/)
+    expect(err.extra.unanswered).toBeUndefined()
+  })
+
+  it('a refusal before the step was sent, or another failure, is thrown as it is', async () => {
+    const early = new AgentError('No time was left for the step: call it again.', 'page_not_ready')
+    fake.url = 'https://x.test/a'
+    expect(await withChange(7, 'click', {}, async () => { fake.url = 'https://x.test/b'; throw early }).catch((e) => e)).toBe(early)
+    const other = new AgentError('No element e9 on the page now', 'stale_ref', { unanswered: true })
+    expect(await withChange(7, 'click', {}, async () => { throw other }).catch((e) => e)).toBe(other)
+  })
+
+  it('the tab closed meanwhile: the step may have closed it, never "try again"', async () => {
+    const get = (globalThis as any).chrome.tabs.get
+    try {
+      const err = await withChange(7, 'click', { ref: 'e3' }, async () => { (globalThis as any).chrome.tabs.get = async () => { throw new Error('No tab') }; throw unanswered() }).catch((e) => e)
+      expect(err.code).toBe('not_your_tab')
+      expect(err.message).toMatch(/may have closed it/)
+    } finally { (globalThis as any).chrome.tabs.get = get }
+  })
+
+  it('every acting step is judged the same way (a new one is covered by being one)', async () => {
+    for (const action of CHANGE_ACTS) {
+      fake.url = 'https://x.test/a'
+      const r = await withChange(7, action, {}, async () => { fake.url = `https://x.test/${action}`; throw unanswered() })
+      expect(String(r.changed), action).toContain(`went to https://x.test/${action}`)
+    }
   })
 })

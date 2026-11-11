@@ -14,8 +14,15 @@
  * apart from the typing (the page marks its watch right before the Enter): `Enter: went to <url>`,
  * or that Enter changed nothing, with what to do instead (2026-11-10: a search typed with --submit
  * read "the page content changed" while nothing was searched).
+ *
+ * A step whose answer the page never sent (it left for the page the step opened, or it stopped
+ * answering) is judged by the tab itself (`lostAnswer`): another address or document means the step
+ * ran, and the answer says where it went; else the step may have run, and the words say to look
+ * before acting again, never a bare "try again" (2026-11-11, a review: `type --submit` on GitHub's
+ * search ran the search and answered page_not_ready "try again").
  */
 import { ext } from './ext'
+import { AgentError } from './agent-shared'
 import { sleep, toPage } from './page-reach'
 
 /** The steps whose answer says what changed. */
@@ -109,7 +116,9 @@ export async function withChange(tabId: number, action: string, args: Record<str
     r = await step()
   } catch (err) {
     void markOf(tabId, { read: id, done: true }).catch(() => undefined)
-    throw err
+    const lost = await lostAnswer(tabId, action, args, before, err)
+    if ('answer' in lost) return lost.answer
+    throw lost.error
   }
   // A dialog holds the page's script: nothing more to look at (the watch ends by itself).
   if (r.dialog) return { ...r, changed: 'it opened a dialog' }
@@ -138,4 +147,42 @@ export async function withChange(tabId: number, action: string, args: Record<str
     void markOf(tab, { read: id, done: true }).catch(() => undefined)
   }
   return line ? { ...r, changed: line } : r
+}
+
+/** What the answer of a step names it by, when the page never answered (the CLI's line reads them). */
+function didOf(action: string, args: Record<string, unknown>): Record<string, unknown> {
+  const what = typeof args.ref === 'string' ? args.ref : typeof args.text === 'string' && action !== 'type' ? `"${args.text}"` : 'it'
+  switch (action) {
+    case 'click': return { clicked: what }
+    case 'hover': return { hovered: what }
+    case 'type': return { typed: `${typeof args.text === 'string' ? args.text.length : 0} characters${typeof args.ref === 'string' ? ` into ${args.ref}` : ''}` }
+    case 'press': return { pressed: String(args.key ?? '') }
+    case 'select': return { selected: String(args.value ?? '') }
+    default: return {}
+  }
+}
+
+/** The words of a step whose answer was lost and whose tab shows no change: it may have run. */
+export const MAYBE_RAN = 'The page did not answer this step in time, so Walnut cannot tell whether it ran: '
+  + 'text or snapshot shows the page now; act again only if it did not.'
+
+/**
+ * A step that failed because the page never answered: its answer, when the tab shows it ran (another
+ * address or document: it went there before it could answer), or the error to throw. Any other
+ * failure is thrown as it is.
+ */
+export async function lostAnswer(tabId: number, action: string, args: Record<string, unknown>, before: PageMark, err: unknown): Promise<{ answer: Record<string, unknown> } | { error: unknown }> {
+  if (!(err instanceof AgentError) || err.code !== 'page_not_ready' || err.extra.unanswered !== true || !CHANGE_ACTS.has(action)) return { error: err }
+  const t = await ext.tabs.get(tabId).catch(() => null)
+  // The tab is gone: the step may have closed it (a page that closes itself), so never "try again".
+  if (!t) return { error: new AgentError('The tab closed before it answered the step (the step may have closed it): tabs lists yours.', 'not_your_tab') }
+  const after = await markOf(tabId).catch((): PageMark => ({}))
+  const url = after.url ?? t.url
+  const submits = (action === 'type' && args.submit === true) || (action === 'press' && args.key === 'Enter')
+  const lead = submits ? 'Enter: ' : ''
+  const ran = { tab: tabId, ...(url ? { url } : {}), ...didOf(action, args), note: '(the page left before it answered; its address shows the step ran)' }
+  if (before.url && url && before.url !== url) return { answer: { ...ran, changed: `${lead}went to ${url}${t.title ? ` "${t.title}"` : ''}` } }
+  if (before.doc && after.doc && before.doc !== after.doc) return { answer: { ...ran, changed: `${lead}the page loaded again`, note: '(the page loaded again before it answered: the step ran)' } }
+  const { unanswered: _u, ...extra } = err.extra
+  return { error: new AgentError(MAYBE_RAN, 'page_not_ready', extra) }
 }

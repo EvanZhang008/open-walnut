@@ -128,7 +128,21 @@ describe('what an acting step prints', () => {
     expect(await out(['open', 'https://x.test', '--read'], { tab: 7, where: 'In Walnut\'s agent window, tab 7', page_text: { tab: 7, text: 'First paragraph.', scope: 'main content' } }))
       .toBe('ok  In Walnut\'s agent window, tab 7\n\n== main content ==\nFirst paragraph.\n')
     expect(await out(['click', 'e1', '--read'], { tab: 7, clicked: 'x', changed: 'the page content changed', page_text: { tab: 7, error: 'no time', code: 'browser_timeout' } }))
-      .toContain('(could not read the page: no time)')
+      .toContain('The step was done, but its page was not read: no time')
+  })
+
+  it('a step done whose --read failed exits with the read\'s code, not 0 (2026-11-11: a cheap model took it as read)', async () => {
+    const code = async (result: Record<string, unknown>) => {
+      const p = parseBrowserArgv(['open', 'https://x.test', '--read'])
+      if (!p.ok) throw new Error(p.error)
+      return runBrowser(p, { call: async () => ({ ok: true, result }), say: () => undefined, out: () => undefined, cwd: os.tmpdir() })
+    }
+    const opened = { tab: 7, where: 'In Walnut\'s agent window, tab 7' }
+    expect(await code({ ...opened, page_text: { tab: 7, text: 'Hi' } })).toBe(BROWSER_EXIT.ok)
+    expect(await code({ ...opened, page_text: { tab: 7, error: 'Tab 7 was closed in the browser', code: 'not_your_tab' } })).toBe(BROWSER_EXIT.refused)
+    expect(await code({ ...opened, page_text: { tab: 7, error: 'no time', code: 'browser_timeout' } })).toBe(BROWSER_EXIT.timeout)
+    expect(await code({ ...opened, page_text: { tab: 7, error: 'broke', code: 'page_error' } })).toBe(BROWSER_EXIT.error)
+    expect(BROWSER_USAGE).toMatch(/A --read whose read failed exits with the\s+read's code/)
   })
 })
 

@@ -73,6 +73,7 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
       return {
         outcome: `${where}${theirs}${rec}`,
         next: theirs ? 'Ask the person for their tab (or take it) before you sign in anywhere; else snapshot to see the page.'
+          : readFailed(body) ? `The step was done, but page_text was not read: ${readFailed(body)}`
           : body.page_text ? `${args.action === 'open' ? 'Tell the person in your first line which window and tab you are working in; then r' : 'R'}ead page_text (the main content); snapshot for the element refs to act on.`
           : args.action === 'open' ? 'Tell the person in your first line which window and tab you are working in; then snapshot to see the page and its element refs.'
             : 'snapshot to see what is on the page and its element refs.',
@@ -119,6 +120,7 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
         outcome: `Done${tab}${where}.${changed?.startsWith('opened') ? '' : also}${matched}${why}`,
         next: changed === 'nothing changed on the page' ? 'Nothing to wait for (no change in its text, fields, scroll or address): snapshot to check before acting again.'
           : changed?.startsWith('Enter changed nothing on the page') ? 'Nothing was submitted: click the search or submit button beside the field (find search), or open the results address.'
+          : readFailed(body) ? `The step was done, but page_text was not read: ${readFailed(body)}`
           : body.page_text ? 'Read page_text; act again by ref (snapshot lists them).' : 'snapshot to act on what is there now, or text to read it.',
       }
     }
@@ -296,3 +298,9 @@ defineOp({
   },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 });
+
+/** Why the page's text read with the step (`read_text`) failed, if it did. */
+function readFailed(body: Record<string, unknown>): string | undefined {
+  const t = body.page_text as { error?: unknown } | undefined
+  return t && typeof t.error === 'string' ? t.error : undefined
+}
