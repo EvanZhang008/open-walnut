@@ -52,7 +52,11 @@ const runnerDirs: string[] = []
 const GOOD_PREVIOUS = '/opt/walnut/versions/good-previous/open-walnut-daemon'
 const GOOD_NEW = '/opt/walnut/versions/good-new/open-walnut-daemon'
 const BUILD = 'walnut-daemon-new00001'
-const WATCH: Omit<UpdateTailOptions, 'scope'> = { waitSeconds: 4, goneSeconds: 2, staySeconds: 1, lockWaitSeconds: 10, probationSeconds: 30, probationEverySeconds: 1 }
+// A probation that outlasts every case (it ends at its verdict, and afterEach ends it otherwise), so
+// what a case does to it comes inside it however slow the runner: 2026-11-11, on a loaded runner the
+// tail, the detach and two looks took longer than a 30 s probation, which ended keeping the build
+// before the case's second restart came. A case about the end passes its own.
+const WATCH: Omit<UpdateTailOptions, 'scope'> = { waitSeconds: 4, goneSeconds: 2, staySeconds: 1, lockWaitSeconds: 10, probationSeconds: 600, probationEverySeconds: 1 }
 
 function sh(script: string): string {
   const out = spawnSync('/bin/sh', ['-c', script], { env: { HOME: home, ...stubs.env }, encoding: 'utf8', timeout: 60_000 })
@@ -149,16 +153,16 @@ describe('the probation of a service update that came to serve', () => {
     // second came only because that one did not end the watch (a verdict is written before anything
     // else). A second restart before the first look reads as one (2026-11-10: on a loaded runner 3 s
     // was not enough, and the build was never put back).
-    await vi.waitFor(() => expect(looks(first)).toBeGreaterThanOrEqual(2), { timeout: 20_000, interval: 100 })
+    await vi.waitFor(() => expect(looks(first)).toBeGreaterThanOrEqual(2), { timeout: 45_000, interval: 100 })
     expect(fs.readFileSync(unit(), 'utf8')).toBe(newUnit)
     expect(fs.existsSync(failedFile())).toBe(false)
     restart()
     await vi.waitFor(() => {
       expect(fs.readFileSync(unit(), 'utf8')).toBe(previousUnit)
       expect(fs.existsSync(failedFile())).toBe(true)
-    }, { timeout: 30_000, interval: 250 })
+    }, { timeout: 45_000, interval: 250 })
     expect(fs.readFileSync(failedFile(), 'utf8').split('\n')[2]).toMatch(/^the new daemon stopped and was started again 2 times within \d+ s of its probation/)
-  }, 120_000)
+  }, 180_000)
 
   it('a daemon that stays through it is kept: the copies go, nothing is written down', async () => {
     const { newUnit } = updated()
@@ -219,8 +223,8 @@ describe('a later update while the probation runs', () => {
     updated()
     await probationRuns()
     const left = parseProbing(sh(probingCheckScript('user')))
-    expect(left).toBeGreaterThan(20)
-    expect(left).toBeLessThanOrEqual(30)
+    expect(left).toBeGreaterThan(300)
+    expect(left).toBeLessThanOrEqual(600)
     const { dir, ran } = laterUpdate()
     const said = sh(launcherScript(dir, latest()))
     expect(said).toContain(`${RUNNER_BUSY} probation pid=${probationPid()}`)
