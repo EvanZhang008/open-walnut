@@ -25,7 +25,8 @@ import { startServer, stopServer } from '../../../src/web/server.js'
 import { addTask, getTask, listTasks, updateTaskRaw } from '../../../src/core/task-manager.js'
 import { createSessionRecord } from '../../../src/core/session-tracker.js'
 import { startSessionForTask } from '../../../src/core/sessions/task-start.js'
-import { clearStartQueue, drainStartQueue } from '../../../src/core/sessions/start-queue.js'
+import { clearStartQueue, drainStartQueue, startQueuedNow } from '../../../src/core/sessions/start-queue.js'
+import * as startPlacement from '../../../src/core/sessions/start-placement.js'
 import { __resetHostAdmissionForTesting, slotHoldersOn, startsAdmittedOn } from '../../../src/core/sessions/host-admission.js'
 import { __setHostLoadProberForTesting } from '../../../src/core/hosts/placement.js'
 import { sessionRunner } from '../../../src/providers/claude-code-session.js'
@@ -228,6 +229,158 @@ describe('a worker\'s start on each host\'s slots', () => {
   })
 })
 
+describe('an unpinned automatic start waits for capacity', () => {
+  it('explicit host and request folder constraints still refuse without a wait entry', async () => {
+    const { parent, sid } = await worker('Pinned lead');
+    const [host, folder] = await children(parent.id, ['TODO', 'TODO']);
+    await updateTaskRaw(folder, { cwd: os.tmpdir() });
+    for (const [id, body] of [[host, { cwd: undefined, host: '__local__' }], [folder, { cwd: os.tmpdir() }]] as const) {
+      const res = await startAs(sid, id, body);
+      expect(res.status).toBe(409);
+      expect(res.json.error.code).toBe('hosts_full');
+      expect((await getTask(id)).start_queue).toBeUndefined();
+    }
+  });
+
+  it('keeps a stored wait, pauses with the team, cancels without spawning, and drops completed work', async () => {
+    const { parent, sid } = await worker('Paused lead');
+    const [held, cancel, done] = await children(parent.id, ['TODO', 'TODO', 'TODO']);
+    for (const id of [held, cancel, done]) expect((await startAs(sid, id, { cwd: undefined })).status).toBe(202);
+    await updateTaskRaw(parent.id, { team_stop: { at: new Date().toISOString(), by: 'human', when: 'now', members: [] } as never });
+    mac(false);
+    expect((await drainStartQueue()).held).toEqual(expect.arrayContaining([held, cancel, done]));
+    const cancelled = await fetch(api(`/api/v1/tasks/${cancel}/start-queue`), { method: 'DELETE' });
+    expect(cancelled.ok).toBe(true);
+    await updateTaskRaw(done, { phase: 'COMPLETE' });
+    await updateTaskRaw(parent.id, { team_stop: null });
+    const out = await drainStartQueue();
+    expect(out.started).toContain(held);
+    expect(out.dropped).toContain(done);
+    expect(spawned).not.toContain(cancel);
+    expect(spawned).not.toContain(done);
+  });
+
+  it('concurrent automatic retries keep one persistent wait and one eventual start', async () => {
+    const { parent, sid } = await worker('Concurrent lead');
+    const [next] = await children(parent.id, ['TODO']);
+    const results = await Promise.all(Array.from({ length: 5 }, () => startAs(sid, next, { cwd: undefined, message: 'One original ask.' })));
+    expect(results.map((r) => r.status)).toEqual([202, 202, 202, 202, 202]);
+    for (const r of results) expect(r.json).toMatchObject({ started: false, queued: { host: '__local__' } });
+    expect((await getTask(next)).start_queue?.params.message).toBe('One original ask.');
+    mac(false);
+    await Promise.all([drainStartQueue(), drainStartQueue(), drainStartQueue()]);
+    expect(spawned.filter((id) => id === next)).toHaveLength(1);
+  });
+
+  it('a saved capacity wait survives stopping and starting the queue loop', async () => {
+    const { parent, sid } = await worker('Restarted queue lead');
+    const [next] = await children(parent.id, ['TODO']);
+    expect((await startAs(sid, next, { cwd: undefined })).status).toBe(202);
+    const saved = (await getTask(next)).start_queue;
+    const { stopStartQueue, startStartQueue } = await import('../../../src/core/sessions/start-queue.js');
+    stopStartQueue();
+    expect((await getTask(next)).start_queue).toEqual(saved);
+    await startStartQueue({ ephemeral: true });
+    expect((await drainStartQueue()).held).toContain(next);
+    mac(false);
+    expect((await drainStartQueue()).started).toContain(next);
+    expect(spawned.filter((id) => id === next)).toHaveLength(1);
+  });
+
+  it('a failed spawn after a capacity wait is recorded and reported, not claimed still waiting', async () => {
+    const { parent, sid } = await worker('Failed wait lead');
+    const [next] = await children(parent.id, ['TODO']);
+    expect((await startAs(sid, next, { cwd: undefined })).status).toBe(202);
+    failFor.add(next);
+    mac(false);
+    expect((await drainStartQueue()).failed).toContain(next);
+    expect((await getTask(next)).start_queue).toBeUndefined();
+    expect((await getTask(next)).last_start?.state).toBe('failed');
+    expect(toldTo(sid)).toContain('Its capacity wait ended with this failure');
+    expect(toldTo(sid)).not.toContain('Walnut no longer queues');
+  });
+
+  it('a drain racing Start now leaves its claim intact and the task starts exactly once', async () => {
+    const { parent, sid } = await worker('Start now race');
+    const [next] = await children(parent.id, ['TODO']);
+    expect((await startAs(sid, next, { cwd: undefined })).status).toBe(202);
+    let release!: () => void;
+    let entered!: () => void;
+    const inPlacement = new Promise<void>((r) => { entered = r; });
+    const blocked = new Promise<void>((r) => { release = r; });
+    const original = startPlacement.placeStartByLoad;
+    const spy = vi.spyOn(startPlacement, 'placeStartByLoad').mockImplementation(async (...args) => {
+      entered(); await blocked; return original(...args);
+    });
+    try {
+      const now = startQueuedNow(next);
+      await inPlacement;
+      expect((await drainStartQueue()).held).toContain(next);
+      expect((await getTask(next)).start_queue).toBeDefined();
+      release();
+      expect((await now)?.started).toBe(true);
+      expect(spawned.filter((id) => id === next)).toHaveLength(1);
+    } finally { release(); spy.mockRestore(); }
+  });
+
+  it('an automatic org start without a caller is not held by another task\'s waiting list', async () => {
+    const { parent, sid } = await worker('Org start lead');
+    const [waiting, org] = await children(parent.id, ['TODO', 'TODO']);
+    expect((await startAs(sid, waiting, { cwd: undefined })).status).toBe(202);
+    mac(false);
+    const { ORG_START_SOURCE } = await import('../../../src/core/org/org-autostart.js');
+    expect((await startSessionForTask({ taskIdPrefix: org, source: ORG_START_SOURCE, expectReply: false })).started).toBe(true);
+  });
+
+  it('a new automatic start does not take a freed slot ahead of the waiting starts', async () => {
+    const { parent, sid } = await worker('Ordered lead');
+    const [first, second] = await children(parent.id, ['TODO', 'TODO']);
+    expect((await startAs(sid, first, { cwd: undefined })).status).toBe(202);
+    mac(false);
+    const later = await startAs(sid, second, { cwd: undefined });
+    expect(later.json).toMatchObject({ started: false, queued: {} });
+    expect(spawned).not.toContain(second);
+    const out = await drainStartQueue();
+    expect(out.started).toEqual([first, second]);
+  });
+
+  it('a wait created from the real task_create route keeps its inherited folder and waits without a retry', async () => {
+    const { sid } = await worker('Create route lead');
+    const created = await fetch(api('/api/v1/tasks'), {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': sid },
+      body: JSON.stringify({ title: 'Review the garden release package', confirm_new: true, new_reason: 'Independent release validation work' }),
+    });
+    expect(created.status).toBe(201);
+    const body = await created.json() as { task: { id: string; cwd?: string } };
+    expect((await getTask(body.task.id)).cwd).toBe('/repo/queue');
+    const started = await startAs(sid, body.task.id, { cwd: undefined });
+    expect(started.status).toBe(202);
+    expect(started.json).toMatchObject({ started: false, queued: {} });
+    expect((await getTask(body.task.id)).start_queue?.wait_for_slot).toBe(true);
+  });
+
+  it('keeps the original start through full passes, then starts once without a retry', async () => {
+    const { parent, sid } = await worker('Waiting lead');
+    const [next] = await children(parent.id, ['TODO']);
+    const res = await startAs(sid, next, { cwd: undefined, message: 'Read the release notes.' });
+    expect(res.status, JSON.stringify(res.json)).toBe(202);
+    expect(res.json).toMatchObject({ started: false, queued: { host: '__local__' } });
+    const entry = (await getTask(next)).start_queue!;
+    expect(entry).toMatchObject({ wait_for_slot: true, params: { message: 'Read the release notes.' } });
+    expect(spawned).not.toContain(next);
+    const again = await startAs(sid, next, { cwd: undefined, message: 'Different retry text.' });
+    expect(again.status).toBe(202);
+    expect((await getTask(next)).start_queue).toEqual(entry);
+    expect((await drainStartQueue()).held).toContain(next);
+    expect((await getTask(next)).start_queue).toEqual(entry);
+    mac(false);
+    expect((await drainStartQueue()).started).toContain(next);
+    expect((await getTask(next)).start_queue ?? null).toBeNull();
+    expect(spawned.filter((id) => id === next)).toHaveLength(1);
+    expect((await drainStartQueue()).started).not.toContain(next);
+  });
+});
+
 describe('the starts an older Walnut queued', () => {
   it('start for real once there is room, highest priority first', async () => {
     const { parent, sid } = await worker('Lead with old entries')
@@ -256,7 +409,7 @@ describe('the starts an older Walnut queued', () => {
     expect(taskExecution(after as never)).toMatchObject({ state: 'error', error: expect.stringMatching(/did not start: this Mac has no room/i) })
     const told = toldTo(sid)
     expect(told).toContain(`(${stuck}), which you started and Walnut had queued since`)
-    expect(told).toContain('Walnut no longer queues starts')
+    expect(told).toContain('This older queued start was tried once and failed')
     expect(spawned).not.toContain(stuck)
   })
 

@@ -4,8 +4,8 @@
  * limit the auto start, not the one start by human manually ... make limit per host, and auto
  * able to assign based on each host"). It replaces the per-lead cap of 8 running subtasks,
  * which held starts in the queue for 80 minutes while four hosts sat idle. A start no host has
- * room for is an error to its caller, never queued (2026-11-06, the user: "if it did not start,
- * it must be an error"; task-start.ts).
+ * room for throws here; task-start.ts records an explicit capacity wait for an unpinned
+ * agent start, while a named host or folder keeps the hosts_full refusal (2026-11-11).
  *
  * A start is admitted on the host it will run on once placement chose it and before anything is
  * set up there (start-placement.ts), while that host has room: a free slot (hosts/placement.ts
@@ -91,7 +91,7 @@ export interface HostsFullDetail {
   placement?: string;
 }
 
-/** An automatic start found its host full: its caller gets an error, never a queued start. */
+/** Admission refused; the start layer either records a capacity wait or returns this refusal. */
 export class HostsFullError extends Error {
   readonly statusCode = 409;
   readonly code = 'hosts_full';
@@ -184,7 +184,7 @@ export function waitWords(ms: number): string {
 }
 
 /** `automatic`: held to the host's room. */
-interface AdmitOpts { automatic: boolean }
+interface AdmitOpts { automatic: boolean; respectWaiting?: boolean }
 let waitStepMs = WAIT_STEP_MS;
 export function __setWaitStepForTesting(ms: number | null): void { waitStepMs = ms ?? WAIT_STEP_MS; }
 
@@ -198,6 +198,19 @@ async function admitOnce(taskId: string, host: string | undefined | null, opts: 
   await previous;
   try {
     if (opts.automatic) {
+      if (opts.respectWaiting) {
+        const { listTasks } = await import('../task-manager.js');
+        const all = await listTasks();
+        const byId = new Map(all.map((t) => [t.id, t]));
+        const { heldByTeamStop } = await import('./start-queue.js');
+        const waiting = all.some((t) => t.id !== taskId && t.phase !== 'COMPLETE'
+          && t.start_queue?.wait_for_slot && (t.start_queue.host ?? LOCAL_HOST) === key
+          && byId.get(t.start_queue.parent_id)?.phase !== 'COMPLETE' && byId.has(t.start_queue.parent_id)
+          && !heldByTeamStop(t, byId));
+        if (waiting) throw new HostsFullError(`Not started: earlier automatic starts are waiting on ${key}.`, {
+          taskId, host: key, reason: 'earlier automatic starts are waiting for a free slot',
+        });
+      }
       const v = await view(key);
       // Its slots count even when its load cannot be read (review round 3, Sol).
       if (v?.full) {

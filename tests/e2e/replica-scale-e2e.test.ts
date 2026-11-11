@@ -206,7 +206,11 @@ describe(`R17: a host replica at real density (${TWIN} twin)`, () => {
       }
       const wokeAt = new Date().toISOString()
       const copies = () => fs.readdirSync(path.join(vault, 'Acme big')).filter((n) => /^Big \d+ \(conflict .+\)\.md$/.test(n))
-      await waitFor(() => (copies().length >= BIG_NOTES ? true : null), 240_000, 'a conflict copy of each big note', 2_000)
+      // Copies are written before the winning note. Wait for the apply receipt, not that intermediate file.
+      const applied = () => new Set(macLines(c, 'offline handover: note record applied')
+        .filter((l) => /^Acme big\/Big \d+\.md$/.test(String(l.path)))
+        .map((l) => l.path))
+      await waitFor(() => (applied().size >= BIG_NOTES && copies().length >= BIG_NOTES ? true : null), 240_000, 'each big note applied with its conflict copy', 2_000)
       for (let i = 0; i < BIG_NOTES; i++) {
         const note = fs.readFileSync(path.join(vault, bigPath(i)), 'utf8')
         const copy = copies().find((n) => n.startsWith(`Big ${i} (conflict `))
@@ -219,7 +223,11 @@ describe(`R17: a host replica at real density (${TWIN} twin)`, () => {
         expect(note).toContain(`Big ${i} line ${BIG_LINES - 1} of the drill.`)
       }
       // The Mac drained 5 MB of notes with its event loop answering throughout.
-      const stalls = macLines(c, 'event-loop stall flight record').filter((l) => String(l.time) >= wokeAt)
+      // The recorder reports the intentional SIGSTOP only after waking. A real CPU/GC
+      // hold, or any hold starting after wake, still fails this drain check.
+      const stalls = macLines(c, 'event-loop stall flight record').filter((l) => String(l.time) >= wokeAt
+        && !(Date.parse(String(l.holdStart)) < Date.parse(wokeAt)
+          && l.hold?.verdict === 'off-cpu' && l.hold?.holdCpuMs < 250))
       expect(stalls, JSON.stringify(stalls.slice(0, 2))).toHaveLength(0)
     }, 600_000)
   })

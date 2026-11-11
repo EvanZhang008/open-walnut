@@ -16,8 +16,8 @@ describe('queued start words', () => {
     expect(startQueueWords(q)).toBe(queuedWaitingOn(q))
   })
 
-  it('says it is tried once more, never that it waits for room (2026-11-06: nothing is queued any more)', () => {
+  it('says what it waits for and that Walnut starts it without another retry', () => {
     expect(queuedWaitingOn({ host: 'clouddev', reason: 'all 24 slots taken' }))
-      .toBe('Queued by an older Walnut for room on clouddev (all 24 slots taken): Walnut tries it once more, then says why if it does not start')
+      .toBe('Waiting for a free slot on clouddev (all 24 slots taken): Walnut starts it automatically when there is room')
   })
 })

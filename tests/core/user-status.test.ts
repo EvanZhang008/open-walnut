@@ -333,13 +333,13 @@ describe('a start queued for a free host slot', () => {
     for (const phase of ['TODO', 'IN_PROGRESS'] as const) {
       expect(deriveUserStatus({ phase, hasSession: false, startQueue }, NOW)).toMatchObject({
         state: 'waiting', kind: 'machine',
-        waitingOn: 'Queued by an older Walnut for room on clouddev (all 24 slots taken): Walnut tries it once more, then says why if it does not start',
+        waitingOn: 'Waiting for a free slot on clouddev (all 24 slots taken): Walnut starts it automatically when there is room',
       })
     }
     expect(deriveUserStatus({ phase: 'TODO', hasSession: false, startQueue: { host: '__local__' } }, NOW).waitingOn)
-      .toBe('Queued by an older Walnut for room on this Mac: Walnut tries it once more, then says why if it does not start')
+      .toBe('Waiting for a free slot on this Mac: Walnut starts it automatically when there is room')
     // An entry from before the host and reason were kept.
-    expect(deriveUserStatus({ phase: 'TODO', hasSession: false, startQueue: {} }, NOW).waitingOn).toBe('Queued by an older Walnut for room on a host: Walnut tries it once more, then says why if it does not start')
+    expect(deriveUserStatus({ phase: 'TODO', hasSession: false, startQueue: {} }, NOW).waitingOn).toBe('Waiting for a free slot on a host: Walnut starts it automatically when there is room')
     // Started (a session runs it) or completed: the queue says nothing any more.
     expect(deriveUserStatus({ phase: 'TODO', hasSession: true, processStatus: 'running', startQueue }, NOW).kind).not.toBe('machine')
     expect(deriveUserStatus({ phase: 'COMPLETE', hasSession: false, startQueue }, NOW).state).toBe('done')

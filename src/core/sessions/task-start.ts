@@ -286,12 +286,26 @@ async function splitPick(task: Task, params: SessionStartParams) {
 }
 
 /**
- * Start a session for a task. An automatic start that no host has room for is an error to its
- * caller, never a start left waiting (2026-11-06, the user: "if it did not start, it must be an
- * error ... if it fails, it fails, and the VP gets the message directly and can fix it"). A start
- * still in the old start queue (start-queue.ts) is dropped once the task started.
+ * Start or explicitly wait for capacity. Unpinned automatic starts keep their original request
+ * when no host can admit them; named host/folder starts return hosts_full. A person's start
+ * remains immediate. The queue is cleared only once a start actually takes over.
  */
+const automaticStartFlights = new Map<string, Promise<SessionStartResult>>();
+
 export async function startSessionForTask(params: SessionStartParams): Promise<SessionStartResult> {
+  const { isAutomaticStart } = await import('./host-admission.js');
+  if (params.host !== undefined || params.cwd !== undefined || params.queuedAt || !await isAutomaticStart(params)) return startOrWait(params);
+  const task = await getTask(params.taskIdPrefix);
+  if (task.session_id || task.exec_session_id || task.session_ids?.length) return startOrWait(params);
+  const id = task.id;
+  const current = automaticStartFlights.get(id);
+  if (current) return current;
+  const run = startOrWait({ ...params, taskIdPrefix: id }).finally(() => { if (automaticStartFlights.get(id) === run) automaticStartFlights.delete(id); });
+  automaticStartFlights.set(id, run);
+  return run;
+}
+
+async function startOrWait(params: SessionStartParams): Promise<SessionStartResult> {
   if (params.callerSid) {
     const { resolveCaller } = await import('./session-send-core.js');
     const caller = await resolveCaller(params.callerSid);
@@ -313,6 +327,16 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     const { HostsFullError } = await import('./host-admission.js');
     if (err instanceof HostsFullError) {
       const d = err.detail;
+      // Only an unpinned agent start waits. A replay keeps the original entry when still full.
+      const waitingTask = await getTask(d.taskId);
+      if (params.callerSid && params.host === undefined && params.cwd === undefined && !waitingTask.workspace && !params.workspace && !params.startAttemptId && !params.queuedAt) {
+        const { isAutomaticStart } = await import('./host-admission.js');
+        if (await isAutomaticStart(params)) {
+          const { waitForHostSlot } = await import('./start-queue.js');
+          return waitForHostSlot(params, d);
+        }
+      }
+      if (params.queuedAt && waitingTask.start_queue?.wait_for_slot) throw err;
       const why = `${d.label ?? d.host} has no room (${d.reason})`;
       // On the task, where task_get, the Board and its lead read it (review round 6: the reason
       // reached only the caller, and the task sat in To do saying nothing).
@@ -325,7 +349,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     throw err;
   }
   const { clearStartQueue } = await import('./start-queue.js');
-  await clearStartQueue(result.taskId, 'started');
+  if (!result.queued) await clearStartQueue(result.taskId, 'started');
   if (!params.callerSid?.trim()) await (await import('../recent-task-touch.js')).recordRecentTaskTouch(result.taskId, params.source, params.requestedAt);
   return result;
 }
@@ -423,6 +447,13 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
   const fallback = inherited?.fallback;
   const pending = pendingStarts.get(task.id);
   if (pending !== undefined) throw alreadyStarted(task, pending);
+  if (task.start_queue?.wait_for_slot && !params.queuedAt && params.host === undefined && params.cwd === undefined) {
+    const { isAutomaticStart } = await import('./host-admission.js');
+    if (await isAutomaticStart(params)) {
+      const { queuedStartResult } = await import('./start-queue.js');
+      return queuedStartResult(task);
+    }
+  }
   // A frozen human plan cannot authorize a later workspace launch with different settings.
   if (params.startAttemptId) requireFrozenWorkspaceReady(task, params);
   // A start that waits for a workspace replays these later; a bad one fails now.
@@ -485,7 +516,8 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
       let resumeSlot: ((holdMs?: number) => void) | undefined;
       if (!LIVE_STATUSES.has(conversation.process_status)) {
         const { admitHostStart, isAutomaticStart } = await import('./host-admission.js');
-        if (await isAutomaticStart(params)) resumeSlot = await admitHostStart(task.id, conversation.host, { automatic: true });
+        if (await isAutomaticStart(params)) resumeSlot = await admitHostStart(task.id, conversation.host, { automatic: true,
+          respectWaiting: !!params.callerSid && !params.queuedAt && params.host === undefined && params.cwd === undefined });
       }
       const sent = await continueTaskConversation(conversation, {
         text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
@@ -533,7 +565,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
     // nothing holds the task while a person's own start goes at once (review round 5).
     const { admitHostStart, isAutomaticStart, HostsFullError } = await import('./host-admission.js');
     const automatic = await isAutomaticStart(params);
-    const slotOpts = { automatic };
+    const slotOpts = { automatic, respectWaiting: automatic && !!params.callerSid && !params.queuedAt && params.host === undefined && params.cwd === undefined && !params.workspace && !task.workspace && !params.startAttemptId };
     let moveSlot: ((holdMs?: number) => void) | undefined;
     const { placeStartByLoad } = await import('./start-placement.js');
     const placement = area || fallback ? undefined : await placeStartByLoad(task, params, launch, engine, {

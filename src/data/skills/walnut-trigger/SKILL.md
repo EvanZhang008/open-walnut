@@ -58,8 +58,9 @@ walnut tools call trigger_create '{"template":"slack:channel-message","params":{
 
 ## A start refused because every suitable host is full
 
-`409 hosts_full` means not started, never queued. Keep the task id. A lead can
-watch admission room with the existing `host_load` op, then retry `task_start`.
+An unpinned automatic start already waits for a slot inside Walnut: do not add a
+trigger or retry it. An explicit host or folder start returning `409 hosts_full`
+was not started and is not queued. Keep its id. A lead can watch admission room with the existing `host_load` op, then retry `task_start`.
 Run the check on `host: "__local__"` so it reads the primary's fleet view. Filter
 for the hosts that can run this task (a Mac-only task must not fire for Linux).
 A first check only records a cursor; a later check with room fires once. Example

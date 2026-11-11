@@ -406,6 +406,17 @@ describe('task_move', () => {
         expect(stays, why).toEqual({ host: '', cwd: shared, message: 'x' });
       }
       cloudClaude({});
+      // General work needs neither an inherited non-repository folder nor the Mac mentioned
+      // only as its eventual deploy destination. Its own remote directory is enough.
+      const researchId = (await addTask({ title: 'Read release mail', project: task.project })).task.id;
+      const research = { ...task, id: researchId, cwd: undefined, title: 'Read release mail', description: 'Research the release. It deploys on the Mac later.' };
+      const notesDir = `${W.homes.__local__}/notes`;
+      fs.mkdirSync(notesDir, { recursive: true });
+      const generic = { host: '', cwd: notesDir, message: 'Read the release mail.' };
+      expect(await placeStartByLoad(research, {}, generic, 'claude')).toMatchObject({ host: 'cloud', moved: true, setUp: true });
+      expect(generic.cwd).toBe(`${W.homes.cloud}/tasks/${researchId}`);
+      const namedFolder = { ...research, cwd: notesDir };
+      expect(await placeStartByLoad(namedFolder, {}, { host: '', cwd: notesDir, message: 'Read the release mail.' }, 'claude')).toMatchObject({ host: '', moved: false });
       // Review round 3: the slot on the target is taken before anything is set up there, so a
       // full target leaves nothing behind (each refused try once made a new clone). Moved for
       // load, the start then stays where it was, over a cap but with room (review round 4).

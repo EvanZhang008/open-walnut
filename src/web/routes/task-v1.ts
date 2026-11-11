@@ -584,7 +584,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
       // An agent's start is a sync call (2026-11-06, the user: "if it did not start, it must be an
       // error"): one whose session did not confirm in time answers an error, never a 202 the caller
       // reads as started. The start itself goes on: it may still come up.
-      if (callerSid && started.started !== true && !started.continued && !started.preparing) {
+      if (callerSid && started.started !== true && !started.continued && !started.preparing && !started.queued) {
         sendError(res, 504, 'start_unconfirmed', `Task ${started.taskId} did not confirm it started within `
           + `${Math.round(AGENT_START_ANSWER_MS / 1000)} seconds. Do not start it again: task_get shows it running once it is up`
           + (started.requestId ? `, and Walnut tells you when it shows nothing for 10 minutes (${started.requestId}).` : '.'), {

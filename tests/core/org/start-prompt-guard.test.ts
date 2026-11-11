@@ -27,24 +27,28 @@ function agentTexts(): Array<{ where: string; text: string }> {
   return out
 }
 
-function queuedClaims(text: string): string[] {
+function falseClaims(text: string): string[] {
   return text.split(/(?<=[.!?])\s+|\n+/).filter((s) => {
-    if (!/\b(start|starts|slot|slots|subtasks)\b/i.test(s) || !/\b(queued?|queues|queueing)\b/i.test(s)) return false
-    // Older servers and previously stored queues still need truthful compatibility text.
-    return !/\b(older|legacy|previously)\b|\b(?:never|not|no) (?:a )?queued?\b|\b(?:does not|never) queue\b/i.test(s)
+    if (!/\b(start|starts|slot|slots)\b/i.test(s)) return false
+    if (/\b(older|legacy|previously|explicit|named|names|naming|constraint)\b/i.test(s)) return false
+    return /automatic starts fail[^.]*hosts_full|no host[^.]*room[^.]*409 hosts_full|never queued/i.test(s)
   })
 }
 
-describe('a full host refuses an automatic start, never promises a queued start', () => {
-  it('every prompt, hint, op parameter and built-in skill says what the current server does', () => {
-    expect(agentTexts().flatMap(({ where, text }) => queuedClaims(text).map((s) => `${where}: ${s}`))).toEqual([])
+describe('automatic starts tell the truth about waiting and explicit constraints', () => {
+  it('every prompt, hint, op parameter and built-in skill avoids a blanket full-host refusal', () => {
+    expect(agentTexts().flatMap(({ where, text }) => falseClaims(text).map((s) => `${where}: ${s}`))).toEqual([])
   })
 
-  it('catches both old claims and new wording, but allows older-server compatibility', () => {
-    for (const text of ['a full slot queues a start', 'the start is queued and Walnut starts it when a slot frees', 'a start past that is queued, not refused']) {
-      expect(queuedClaims(text)).toHaveLength(1)
+  it('catches an old blanket rule while allowing explicit-host failures and older compatibility', () => {
+    expect(falseClaims('Automatic starts fail with 409 hosts_full, never queued.')).toHaveLength(1)
+    expect(falseClaims('No host with room means 409 hosts_full, not a queued start.')).toHaveLength(1)
+    expect(falseClaims('An explicit host or folder start fails with 409 hosts_full.')).toEqual([])
+    expect(falseClaims('An older server queued this start.')).toEqual([])
+    for (const role of ['main', 'lead'] as const) {
+      const prompt = defaultInstructions({ org_role: role, project: 'Example' } as never)
+      expect(prompt).toContain('waits for a free slot')
+      expect(prompt).toContain('Explicit host or folder constraints still fail with 409 hosts_full')
     }
-    expect(queuedClaims('An older server queued this start.')).toEqual([])
-    expect(queuedClaims('The start fails with 409 hosts_full and is never queued.')).toEqual([])
   })
 })

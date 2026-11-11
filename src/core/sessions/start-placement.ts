@@ -90,13 +90,16 @@ export async function placeStartByLoad(
   if (task.workspace) return null;
   if (params.source && KEEP_SOURCES.has(params.source)) return null;
   const { WALNUT_HOME } = await import('../../constants.js');
-  if (!launch.cwd || launch.cwd === WALNUT_HOME || launch.cwd.startsWith(`${WALNUT_HOME.replace(/\/+$/, '')}/`)) return null;
+  if (!launch.cwd) return null;
+  const defaultDataFolder = launch.cwd === WALNUT_HOME || launch.cwd.startsWith(`${WALNUT_HOME.replace(/\/+$/, '')}/`);
+  if (defaultDataFolder) return null;
   const sourceHost = launch.host || '__local__';
   const deadline = Date.now() + setupBudgetMs();
-  const { choosePlacement } = await import('../hosts/placement.js');
+  const { choosePlacement, needsMacTools } = await import('../hosts/placement.js');
   let probe: PackReply | null | undefined;
   const moveId = `xf-place-${task.id.slice(0, 8)}-${Date.now().toString(36)}`;
   const text = [task.title, task.description ?? '', params.message ?? ''].join('\n');
+  if (needsMacTools(text, launch.cwd, task.tags ?? [])) return { host: launch.host ?? '', from: sourceHost, moved: false, reason: 'it needs this Mac\'s tools' };
   const { namedPaths, namesTooManyPaths, isUnder, pathsOnHost, dirEntries } = await import('../hosts/named-paths.js');
   let ownDirEntries: Promise<string[] | null> | undefined;
   const { isFallbackFolder } = await import('./task-dir-place.js');
@@ -104,6 +107,7 @@ export async function placeStartByLoad(
   // it with a new one of its own there, nothing carried.
   let ownDirAsked: Promise<boolean> | undefined;
   const isOwnDir = () => (ownDirAsked ??= isFallbackFolder(launch.cwd, sourceHost).catch(() => false));
+  let genericFolder = false;
   // The files the task names inside the repository it works in ride with its committed
   // state (as they are now, committed or not); every other file must already be on the
   // host that takes it. A task directory carries nothing, so all of its are checked.
@@ -134,7 +138,7 @@ export async function placeStartByLoad(
   };
   // Every check shares the placement budget: past it the start stays where it was.
   const decision = await within(choosePlacement({
-    defaultHost: launch.host ?? '', cwd: launch.cwd, tags: task.tags ?? [], text, paths,
+    defaultHost: launch.host ?? '', cwd: launch.cwd, tags: task.tags ?? [], text, paths, toolsOnly: true,
     eligible: async (host, { forFiles }) => {
       const { switchHostBlocker } = await import('./engine-switch.js');
       const blocked = await switchHostBlocker(host, engine ?? 'claude');
@@ -157,7 +161,13 @@ export async function placeStartByLoad(
       }
       const p = await probeSource();
       if (!p) return 'its folder could not be read on its host';
-      if (p.meta.kind !== 'git') return `${launch.cwd} is not a git repository another host can set up`;
+      if (p.meta.kind !== 'git') {
+        // An inherited folder is not a requirement for research or mail reading. A task's own
+        // folder, or any named file, still binds the work to what is there.
+        if (!forFiles && !task.cwd && inside.length === 0 && paths.length === 0
+          && /\b(research|read (?:the )?mail|reading mail|read release mail|mail triage)\b/i.test(text)) { genericFolder = true; return null; }
+        return `${launch.cwd} is not a git repository another host can set up`;
+      }
       const { cloneUrlOf } = await import('../transfer/task-work.js');
       if (!cloneUrlOf(p.meta)) return `${launch.cwd} has no remote another host can clone`;
       const lost = await (left ??= within(notCarried(p, inside, sourceHost, launch.cwd), deadline, 'checking the files it names'));
@@ -193,7 +203,7 @@ export async function placeStartByLoad(
   }
   const { hostDisplayName } = await import('../hosts/host-display-name.js');
   const name = (h: string) => (h === '__local__' ? 'this Mac' : hostDisplayName(h));
-  if (await isOwnDir()) {
+  if (genericFolder || await isOwnDir()) {
     dropProbe();
     const { ensureTaskDirOnHost } = await import('./task-dir-place.js');
     const made = await within(ensureTaskDirOnHost(task.id, target), deadline, 'making the task directory').catch((err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }));

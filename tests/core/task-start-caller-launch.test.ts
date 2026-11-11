@@ -25,6 +25,7 @@ vi.mock('../../src/core/sessions/task-dir-place.js', async (orig) => ({
 vi.mock('../../src/core/task-manager.js', () => ({
   getTask: mocks.getTask, getProjectMetadata: mocks.getProjectMetadata, linkSession: mocks.linkSession,
   updateTaskRaw: mocks.updateTaskRaw, listFolderLabels: async () => new Map(),
+  listTasks: async () => Object.values(tasks),
 }))
 vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionsForTask: mocks.getSessionsForTask,

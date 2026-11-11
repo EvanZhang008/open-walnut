@@ -425,7 +425,7 @@ defineOp({
       execution.state === 'not_started'
         ? dispatchHint(id)
         : execution.state === 'queued'
-        ? `An older server queued this start until a host that can run it has a free slot (execution.waiting_for says why, waits_for_host where); Walnut handles that stored queue. New automatic starts fail with 409 hosts_full instead. Do not duplicate this queued start or do its work yourself.`
+        ? `This task is waiting for a free slot, not started yet (execution.waiting_for says why, waits_for_host where). Walnut starts it automatically when a suitable host has room. Do not retry, duplicate it or do its work yourself.`
         : `Read task_history for its result. Continue the same deliverable with task_send '${JSON.stringify({ to: id, text: '...', ...(phase === 'COMPLETE' ? { force: true, reason: 'What changed in this deliverable' } : {}) })}'; an independent goal needs task_create.`,
     )
   },

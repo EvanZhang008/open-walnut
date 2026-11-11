@@ -807,8 +807,7 @@ function clipped(text: string, max: number): string {
 
 export function queuedWaitingOn(q: { host?: string; reason?: string }): string {
   const host = !q.host ? 'a host' : q.host === '__local__' ? 'this Mac' : q.host;
-  // An older Walnut queued it; it is tried once more, then fails saying why (start-queue.ts).
-  return `Queued by an older Walnut for room on ${host}${q.reason ? ` (${q.reason})` : ''}: Walnut tries it once more, then says why if it does not start`;
+  return `Waiting for a free slot on ${host}${q.reason ? ` (${q.reason})` : ''}: Walnut starts it automatically when there is room`;
 }
 
 export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.now()): UserStatus {

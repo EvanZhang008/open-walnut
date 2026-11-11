@@ -5,5 +5,5 @@
  */
 export function startQueueWords(q: { host?: string; reason?: string }): string {
   const host = !q.host ? 'a host' : q.host === '__local__' ? 'this Mac' : q.host;
-  return `Queued by an older Walnut for room on ${host}${q.reason ? ` (${q.reason})` : ''}: Walnut tries it once more, then says why if it does not start`;
+  return `Waiting for a free slot on ${host}${q.reason ? ` (${q.reason})` : ''}: Walnut starts it automatically when there is room`;
 }

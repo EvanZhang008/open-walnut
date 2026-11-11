@@ -52,7 +52,8 @@ export function taskExecution(task: Record<string, unknown>): Record<string, unk
       && engineCaps(status.engine as typeof SESSION_ENGINE_IDS[number]).idProvisioning === 'provider-issued'))
   // A start waiting for a free slot on its host (core/sessions/start-queue.ts), with no session yet.
   const queue = task.start_queue as { at?: string; host?: string; reason?: string } | null | undefined
-  if (queue && !sessionId && !confirmed && !(attempt?.at && queue.at && attempt.at > queue.at)) {
+  const liveSession = status && ['running', 'idle'].includes(String(status.process_status));
+  if (queue && !liveSession && !(attempt?.at && queue.at && attempt.at > queue.at && attempt.state !== 'failed')) {
     return {
       state: 'queued', ...(queue.at ? { queued_at: queue.at } : {}),
       waiting_for: `room on ${!queue.host ? 'a host' : queue.host === '__local__' ? 'this Mac' : queue.host}${queue.reason ? ` (${queue.reason})` : ''}`,
@@ -143,15 +144,14 @@ function enginePickNote(started: Record<string, unknown>): string {
  * your own tools" in an old refusal and did the work (2026-11-03).
  */
 export function queuedOutcome(taskId: string, queued: { position?: number; host?: string; reason?: string; running?: unknown[]; cap?: number }): [string, string] {
-  const place = typeof queued.position === 'number' && queued.position > 1 ? ` (number ${queued.position} in its host's queue)` : ''
+  const place = typeof queued.position === 'number' && queued.position > 1 ? ` (number ${queued.position} in the waiting list)` : ''
   // An older server's queue said how many of the caller's subtasks ran, against its cap.
   const host = typeof queued.host === 'string' && queued.host ? queued.host === '__local__' ? 'this Mac' : queued.host : ''
   const why = host ? `${host} has no room${typeof queued.reason === 'string' && queued.reason ? ` (${queued.reason})` : ''}`
     : Array.isArray(queued.running) ? `${queued.running.length} subtasks of your task are running${typeof queued.cap === 'number' ? ` (at most ${queued.cap} run at once)` : ''}`
     : 'no host has room'
   return [
-    `An older server queued task ${taskId}${place}: ${why}. Walnut handles that stored queue when a host that can run it has room, `
-      + 'highest priority first. New automatic starts fail with 409 hosts_full instead.',
+    `Task ${taskId} is waiting for a free slot${place}: ${why}. It has not started. Walnut starts it automatically when a host that can run it has room, highest priority first.`,
     'Do not retry the start, and do not do its work yourself: it runs as its own task. task_get shows execution.state '
       + '"queued", with waiting_for and waits_for_host, until it starts. When the user asked for it to start now, task_start '
       + 'with user_request quoting their words starts it at once.',

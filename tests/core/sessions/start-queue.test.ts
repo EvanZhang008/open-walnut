@@ -62,12 +62,11 @@ describe('words: a full slot never says "do it yourself"', () => {
       { position: 1, running: ['a', 'b'], cap: 8 }, {},
     ]) {
       const [outcome, next] = queuedOutcome('t1', q)
-      expect(outcome).toContain('queued')
+      expect(outcome).toContain('waiting for a free slot')
       expect(`${outcome} ${next}`).not.toMatch(DO_IT_YOURSELF)
     }
     const [outcome, next] = queuedOutcome('t1', { position: 2, host: '__local__', reason: 'all 7 slots taken', running: [], cap: 7 })
-    expect(outcome).toBe('An older server queued task t1 (number 2 in its host\'s queue): this Mac has no room (all 7 slots taken). Walnut handles that stored queue when a host that can run it has room, '
-      + 'highest priority first. New automatic starts fail with 409 hosts_full instead.')
+    expect(outcome).toBe('Task t1 is waiting for a free slot (number 2 in the waiting list): this Mac has no room (all 7 slots taken). It has not started. Walnut starts it automatically when a host that can run it has room, highest priority first.')
     expect(next).toMatch(/waiting_for and waits_for_host/)
   })
 

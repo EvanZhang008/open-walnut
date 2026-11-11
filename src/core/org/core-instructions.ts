@@ -55,7 +55,7 @@ export function orgSelfWorkRule(role: CoreInstructionRole): string {
   const handOn = orgHandOn(role);
   return `Never do the work yourself: run at most ${ORG_SELF_COMMAND_LIMIT} commands of your own in a turn, and only to look. `
     + `Past that, hand it to your team: ${handOn}, with what you saw so far in the hand-over. A full slot is no reason to do it `
-    + `yourself: no host with room means 409 hosts_full, not a queued start. Check host_load and retry task_start when a host has room, or arm a trigger on host_load (full=false) to retry. Walnut reminds you at your ${ordinal(ORG_SELF_COMMAND_LIMIT)} command `
+    + `yourself: a start with no named host or folder waits for a free slot, and Walnut starts it automatically. Do not retry it. Explicit host or folder constraints still fail with 409 hosts_full when full. Walnut reminds you at your ${ordinal(ORG_SELF_COMMAND_LIMIT)} command `
     + '(Walnut\'s own ops do not count; host_exec does).';
 }
 

@@ -745,6 +745,8 @@ export interface StartQueueEntry {
   host?: string;
   /** Why that host has no room, in words that stay the same while it waits ("all 24 slots taken"). */
   reason?: string;
+  /** A new automatic wait for capacity; older entries retain their one-shot replay. */
+  wait_for_slot?: true;
   /** The start as asked (SessionStartParams fields, minus the task and the caller). */
   params: {
     message?: string;

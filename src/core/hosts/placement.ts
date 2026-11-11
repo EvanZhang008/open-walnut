@@ -334,7 +334,7 @@ export async function hostLoads(opts: { hosts?: string[] } = {}): Promise<HostLo
 const MAC_ONLY = /\b(ios|ipados|iphone|ipad|xcode|xcodebuild|xcrun|simulators?|testflight|swiftui|app store connect|mac app|macos|wkwebview|webkit|safari|peekaboo|osascript|browser[- ]relay|keychain|launchctl|launchd|touch id|(?:on|this|the|my|his|her|their) mac|mac's|my screen|his screen|her screen|their screen|the user's screen|screen recording)\b/i;
 
 /** The Mac's own tools by name: work that needs them runs on a Mac whatever else it says. */
-const MAC_TOOLS = /\b(ios|ipados|iphone|ipad|xcode|xcodebuild|xcrun|simulators?|testflight|swiftui|app store connect|mac app|wkwebview|peekaboo|osascript)\b/i;
+const MAC_TOOLS = /\b(ios|ipados|iphone|ipad|xcode|xcodebuild|xcrun|simulators?|testflight|swiftui|app store connect|mac app|macos|safari|wkwebview|peekaboo|osascript|keychain|launchctl|launchd|touch id|browser[- ]relay|my screen|his screen|her screen|their screen|the user's screen|screen recording)\b/i;
 
 /**
  * Narrower than macOnlyReason: a tag, an iOS or Xcode folder, or a Mac tool by name.
@@ -344,7 +344,7 @@ const MAC_TOOLS = /\b(ios|ipados|iphone|ipad|xcode|xcodebuild|xcrun|simulators?|
 export function needsMacTools(text: string, cwd: string | undefined, tags: readonly string[] = []): boolean {
   if (tags.some((t) => /^(mac-only|host:mac|host:local)$/i.test(t))) return true;
   if (cwd && /(^|\/)(ios-native|[^/]+\.xcodeproj|[^/]+\.xcworkspace)(\/|$)/.test(cwd)) return true;
-  return MAC_TOOLS.test(text);
+  return MAC_TOOLS.test(text) || /\b(?:on this|on my|this) mac\b/i.test(text);
 }
 
 /** Why a task's work must stay on the Mac, or null. */
@@ -427,13 +427,17 @@ function pathList(paths: string[]): string {
  */
 export async function choosePlacement(input: {
   defaultHost: string; text: string; cwd?: string; tags?: readonly string[];
+  /** Briefs mentioning a later Mac deploy are not Mac-only work; actual tools still pin them. */
+  toolsOnly?: boolean;
   eligible?: (host: string, why: { forFiles: boolean }) => Promise<string | null>;
   paths?: readonly string[];
   checkPaths?: (host: string, paths: string[]) => Promise<PathsOnHost | null>;
 }): Promise<PlacementDecision | null> {
   if (process.env.WALNUT_PLACE_BY_LOAD === '0') return null;
   const from = input.defaultHost || LOCAL;
-  const pinned = macOnlyReason(input.text, input.cwd, input.tags);
+  const pinned = input.toolsOnly
+    ? (needsMacTools(input.text, input.cwd, input.tags) ? 'it needs this Mac\'s tools' : null)
+    : macOnlyReason(input.text, input.cwd, input.tags);
   const { getConfig } = await import('../config-manager.js');
   const config = await getConfig();
   const { pickableHosts } = await import('./joined-twins.js');

@@ -1,11 +1,8 @@
 /**
- * What is left of the start queue (2026-11-06, the user: "if it did not start, it must be an
- * error ... it is a sync call: did it start or not? ... if it fails it fails, and the VP gets the
- * message directly and can fix it"). A start no host has room for is an error to its caller now
- * (task-start.ts), so nothing is queued any more. The starts an older Walnut queued
- * (`Task.start_queue`) are each started once for real, as their asker asked them, or failed
- * loudly: the entry goes, the failure is the task's `last_start` (task_get's execution reads it),
- * and the asking session is told at once.
+ * Automatic starts with no named host or folder wait explicitly for capacity (2026-11-11).
+ * Task.start_queue keeps the original request until a suitable host admits it. A full replay
+ * stays waiting; another failure is recorded on the task and told to its asker. Older entries
+ * without wait_for_slot keep their one-shot replay for compatibility.
  *
  * Kept: an entry's task completed, its asking task completed or is gone, or it started some other
  * way since (a person's start, a newer `last_start`, a session that began after it): it is dropped
@@ -13,7 +10,7 @@
  * task's page Start now runs an entry as the user's own start and Cancel drops it, saying so on
  * the task (src/web/routes/task-v1.ts).
  *
- * Primary only: a pass soon after boot and every few minutes (for a team resumed later). A cloud
+ * Primary only: one coalesced pass soon after boot and every 15 seconds. A cloud
  * companion never runs one, and an ephemeral server only touches what was queued after it booted,
  * so neither starts work it copied from the user's real data. `WALNUT_START_QUEUE=0` turns it
  * off, `=1` lets an ephemeral server run every entry.
@@ -22,12 +19,13 @@
 import { randomUUID } from 'node:crypto';
 import type { StartQueueEntry, Task, TaskPriority } from '../types.js';
 import { log } from '../../logging/index.js';
-import type { SessionStartResult } from './task-start.js';
+import type { SessionStartParams, SessionStartResult } from './task-start.js';
+import type { HostsFullDetail } from './host-admission.js';
 
 export const START_QUEUE_SOURCE = 'start-queue';
 /** The first pass after boot, then one every so often for a team resumed since. */
 export const START_QUEUE_FIRST_MS = 30_000;
-export const START_QUEUE_INTERVAL_MS = 5 * 60_000;
+export const START_QUEUE_INTERVAL_MS = 15_000;
 
 const PRIORITY_RANK: Record<TaskPriority, number> = { immediate: 0, important: 1, none: 2, backlog: 3 };
 
@@ -39,6 +37,44 @@ export function queueOrder(a: Queued, b: Queued): number {
   return rank(a) - rank(b)
     || (a.start_queue?.at ?? '').localeCompare(b.start_queue?.at ?? '')
     || a.id.localeCompare(b.id);
+}
+
+export async function queuedStartResult(task: Task, detail?: HostsFullDetail): Promise<SessionStartResult> {
+  const { listTasks } = await import('../task-manager.js');
+  const entry = task.start_queue!;
+  const line = (await listTasks()).filter((t) => t.start_queue).sort(queueOrder);
+  return { taskId: task.id, title: task.title, started: false, queued: {
+    position: Math.max(1, line.findIndex((t) => t.id === task.id) + 1),
+    host: entry.host ?? '__local__', reason: entry.reason ?? 'waiting for a free slot',
+    running: detail?.running ?? [], ...(detail?.cap !== undefined ? { cap: detail.cap } : {}),
+  } };
+}
+
+/** Store the original start once. Retries never replace its message or make another waiting task. */
+export async function waitForHostSlot(params: SessionStartParams, detail: HostsFullDetail): Promise<SessionStartResult> {
+  const { getTask, updateTaskRaw } = await import('../task-manager.js');
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const caller = params.callerSid ? await getSessionByClaudeId(params.callerSid).catch(() => null) : null;
+  if (!caller?.taskId) throw new Error('An automatic slot wait needs its asking task');
+  const entry: StartQueueEntry = {
+    at: new Date().toISOString(), parent_id: caller.taskId, caller_sid: caller.claudeSessionId,
+    host: detail.host, reason: detail.reason, wait_for_slot: true,
+    params: {
+      ...(params.message !== undefined ? { message: params.message } : {}),
+      ...(params.model !== undefined ? { model: params.model } : {}),
+      ...(params.mode !== undefined ? { mode: params.mode } : {}),
+      ...(params.effort !== undefined ? { effort: params.effort } : {}),
+      ...(params.engine !== undefined ? { engine: params.engine } : {}),
+      ...(params.expectReply !== undefined ? { expectReply: params.expectReply } : {}),
+      ...(params.replyTimeoutSecs !== undefined ? { replyTimeoutSecs: params.replyTimeoutSecs } : {}),
+      ...(params.handsOn !== undefined ? { handsOn: params.handsOn } : {}),
+    },
+  };
+  await updateTaskRaw(detail.taskId, (cur) => cur.phase === 'COMPLETE' || cur.start_queue || cur.last_start?.state === 'starting'
+    ? null : { start_queue: entry }, { emitEvent: true, push: false, source: START_QUEUE_SOURCE });
+  const task = await getTask(detail.taskId);
+  if (!task.start_queue) throw new Error(`Task ${task.id} changed before its slot wait could be recorded`);
+  return queuedStartResult(task, detail);
 }
 
 /** True when a team stop is in force on the task or one of its ancestors. Cycle-safe. */
@@ -118,7 +154,9 @@ async function failLoudly(task: Task, entry: StartQueueEntry, error: string): Pr
       kind: 'notification',
       attrs: { from: 'Walnut', 'about-task': task.id, outcome: 'error', note: 'automated Walnut status notice' },
       body: `"${task.title}" (${task.id}), which you started and Walnut had queued since ${entry.at}, did not start: ${error}\n`
-        + 'Walnut no longer queues starts: a start either starts or fails. Read task_get for it, then retry task_start with its id, or tell the user.',
+        + (entry.wait_for_slot
+          ? 'Its capacity wait ended with this failure. Read task_get for the cause before retrying the same id.'
+          : 'This older queued start was tried once and failed. Read task_get for it before retrying the same id.'),
     });
     const { deliverToSession } = await import('./session-send-core.js');
     await deliverToSession(destination.session, { busText: text, enqueueText: text, source: 'walnut-notify', ...(destination.session.taskId ? { taskId: destination.session.taskId } : {}) });
@@ -136,12 +174,13 @@ export interface DrainResult {
   failed: string[];
 }
 
-let chain: Promise<unknown> = Promise.resolve();
+let draining: Promise<DrainResult> | null = null;
 
-/** Start or fail every queued start, one pass at a time. `notBefore` (ms) leaves older entries untouched. */
+/** One pass at a time; ticks during a slow start share its pass instead of piling up. */
 export function drainStartQueue(opts: { notBefore?: number } = {}): Promise<DrainResult> {
-  const run = chain.then(() => drainNow(opts));
-  chain = run.catch(() => {});
+  if (draining) return draining;
+  const run = drainNow(opts).finally(() => { if (draining === run) draining = null; });
+  draining = run;
   return run;
 }
 
@@ -186,13 +225,18 @@ async function drainNow(opts: { notBefore?: number }): Promise<DrainResult> {
     if (heldByTeamStop(t, byId)) { out.held.push(t.id); continue; }
     try {
       // Placed again: it goes to the host with room that has its files (start-placement.ts).
-      await startSessionForTask({ ...entry.params, taskIdPrefix: t.id, callerSid: entry.caller_sid, source: START_QUEUE_SOURCE, queuedAt: entry.at, answerWithinMs: 110_000 });
+      const result = await startSessionForTask({ ...entry.params, taskIdPrefix: t.id, callerSid: entry.caller_sid, source: START_QUEUE_SOURCE, queuedAt: entry.at, answerWithinMs: 110_000 });
+      if (result.queued) { out.held.push(t.id); continue; }
       out.started.push(t.id);
       log.session.info('queued start started', { taskId: t.id, askerId: entry.parent_id, host: entry.host, queuedAt: entry.at });
     } catch (err) {
+      const { HostsFullError } = await import('./host-admission.js');
+      if (entry.wait_for_slot && err instanceof HostsFullError) { out.held.push(t.id); continue; }
       // The user cancelled it while it was placed: nothing started, the cancel is on the task.
       if (err instanceof QueuedStartGoneError) { out.dropped.push(t.id); continue; }
       if (err instanceof SessionExistsError) {
+        const { isTaskStarting } = await import('./task-start.js');
+        if (isTaskStarting(t.id)) { out.held.push(t.id); continue; }
         await clearStartQueue(t.id, 'already started');
         out.dropped.push(t.id);
         continue;

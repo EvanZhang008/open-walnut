@@ -34,7 +34,7 @@ export function StartQueueLine({ task, onError }: { task: Task; onError?: (messa
   };
   return (
     <div className="tdp-start-queue" data-testid="task-detail-start-queue" role="status">
-      <span className="tdp-start-queue-label">{refused ? 'Did not start' : 'Queued to start'}</span>
+      <span className="tdp-start-queue-label">{refused ? 'Did not start' : 'Waiting for a free slot'}</span>
       <span className="tdp-start-queue-text">{refused ? words.replace(/^Did not start:\s*/, '') : words}</span>
       <span className="tdp-start-queue-actions">
         {refused ? (
