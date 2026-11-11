@@ -14,7 +14,7 @@ import { log } from '../../logging/index.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import type { Task } from '../types.js';
 import {
-  addAsk, applyOwed, asksToJudge, closeAll, MAX_ASK_STOP_NUDGES, normalizeUserAsks, openAsks, OWED_WAKE_MS, owedQuestionBlock,
+  addAsk, applyOwed, asksToJudge, closeAll, dueToWake, MAX_ASK_STOP_NUDGES, normalizeUserAsks, openAsks, owedQuestionBlock,
   owedReadback, owedStopReason, owedWakeBody, prune, readOwedLine, recentWordsReadback, staleOwed, type UserAsk, type UserAsksFile,
 } from './user-asks-model.js';
 
@@ -150,7 +150,7 @@ export async function recentWordsReadbackFor(task: Pick<Task, 'id' | 'org_role' 
 }
 
 /** Stale owed asks of these tasks, for a lead's team note. Never throws. */
-export async function staleOwedOf(tasks: readonly Pick<Task, 'id' | 'org_role' | 'plugin_only' | 'phase'>[], nowMs = Date.now()): Promise<Map<string, UserAsk[]>> {
+export async function staleOwedOf(tasks: readonly Pick<Task, 'id' | 'org_role' | 'plugin_only' | 'phase' | 'user_status'>[], nowMs = Date.now()): Promise<Map<string, UserAsk[]>> {
   const out = new Map<string, UserAsk[]>();
   let names: Set<string>;
   try {
@@ -160,15 +160,10 @@ export async function staleOwedOf(tasks: readonly Pick<Task, 'id' | 'org_role' |
   }
   for (const t of tasks) {
     if (!filesUserAsks(t) || t.phase === 'COMPLETE' || !names.has(`${t.id}.json`)) continue;
-    const stale = staleOwed(await readUserAsks(t.id).catch(() => normalizeUserAsks(null, t.id)), nowMs);
+    const stale = staleOwed(await readUserAsks(t.id).catch(() => normalizeUserAsks(null, t.id)), t.user_status, nowMs);
     if (stale.length) out.set(t.id, stale);
   }
   return out;
-}
-
-/** The task waits on the user's answer to its own question: an ask of his it owes is his move now. */
-function waitsOnUser(task: Pick<Task, 'user_status'>): boolean {
-  return task.user_status?.state === 'needs' && !!task.user_status.ask;
 }
 
 /** Owed this long, the Stop hook names it even with no compaction since. */
@@ -178,7 +173,7 @@ const STOP_NAMES_OLD_MS = 2 * 3600_000;
  * The Stop hook's words for asks this session's task has owed a while, or null. Only an ask the
  * session may have lost (a compaction since he wrote, or owed for hours): a turn that is just now
  * giving the answer is not held for it. Each ask is named at most MAX_ASK_STOP_NUDGES times;
- * never while its own work runs on, it parked, or it waits on his answer to its own question.
+ * never while its own work runs on or it parked, nor once its status handed him the move (owedAsks).
  * Never throws.
  */
 export async function owedAtStop(callerSid: string | undefined, nowMs = Date.now()): Promise<{ reason: string; asks: string[] } | null> {
@@ -191,9 +186,9 @@ export async function owedAtStop(callerSid: string | undefined, nowMs = Date.now
     if (!taskId) return null;
     const { listTasksByIds } = await import('../task-manager.js');
     const task = (await listTasksByIds([taskId]).catch(() => []))[0];
-    if (!task || !filesUserAsks(task) || task.phase === 'COMPLETE' || waitsOnUser(task)) return null;
+    if (!task || !filesUserAsks(task) || task.phase === 'COMPLETE') return null;
     const compactedAt = Date.parse(record?.lastCompactAt ?? '');
-    const named = staleOwed(await readUserAsks(taskId), nowMs)
+    const named = staleOwed(await readUserAsks(taskId), task.user_status, nowMs)
       .filter((a) => (a.nudges ?? 0) < MAX_ASK_STOP_NUDGES)
       .filter((a) => compactedAt > Date.parse(a.at) || nowMs - Date.parse(a.at) >= STOP_NAMES_OLD_MS)
       .slice(-5);
@@ -212,7 +207,7 @@ export async function owedAtStop(callerSid: string | undefined, nowMs = Date.now
  * One pass: a session with no turn running whose task still owes the user an answer for
  * OWED_WAKE_MS is woken once about it, a stopped one too (the user waits; a reaped session is how
  * the 2026-11-03 question went unanswered for seven hours). Not a task that parked itself, a
- * snoozed one, one waiting on his answer to its own question, or a session in error. Returns the
+ * snoozed one, an ask its status handed back to him (owedAsks), or a session in error. Returns the
  * woken task ids.
  */
 export async function wakeIdleOwed(nowMs = Date.now()): Promise<string[]> {
@@ -227,8 +222,8 @@ export async function wakeIdleOwed(nowMs = Date.now()): Promise<string[]> {
   const tasks = await listTasksByIds(names.map((n) => n.slice(0, -5))).catch(() => [] as Task[]);
   for (const task of tasks) {
     try {
-      if (!filesUserAsks(task) || task.phase === 'COMPLETE' || task.phase === 'WAITING' || task.user_status?.snoozed || waitsOnUser(task)) continue;
-      const due = openAsks(await readUserAsks(task.id)).filter((a) => a.owedAt && !a.wokenAt && nowMs - Date.parse(a.owedAt) >= OWED_WAKE_MS);
+      if (!filesUserAsks(task) || task.phase === 'COMPLETE' || task.phase === 'WAITING' || task.user_status?.snoozed) continue;
+      const due = dueToWake(await readUserAsks(task.id), task.user_status, nowMs);
       if (!due.length) continue;
       const { getSessionsForTask } = await import('../session-tracker.js');
       const { pickDeliverySession } = await import('../routines/session-target.js');

@@ -12,15 +12,18 @@
  *   filed      every message a person typed into a task's chat (or the note of a letter answer)
  *   judged     at each turn end the status question lists the open ones and asks which are still
  *              owed (FOR_USER_OWED): the session's own judgement, recorded by Walnut, so a
- *              compaction cannot lose it; "on it" is still owed, an answer or a delivered result
- *              is not
+ *              compaction cannot lose it; "on it" is still owed, an answer, a delivered result or
+ *              what he needs to decide (a plan, a question back to him) is not, even while work
+ *              it started goes on
  *   closed     reported answered, the task completed, or a week old; kept CLOSED_KEEP_MS more,
  *              because the readback after a compaction quotes his recent words, answered ones too
  *
  * Read back first after a compaction (open-items.ts), named at a turn's end when owed across a
  * compaction or for hours (the Stop hook), told to the lead in its team note, and a session that sits on one an hour
- * with no turn running is woken once.
+ * with no turn running is woken once. Those three read one value, owedAsks: an ask the task's status
+ * handed back to him since he wrote it (handedToUser) is not owed to any of them.
  */
+import type { UserStatus } from '../user-status.js';
 
 export type UserAskVia = 'chat' | 'letter';
 export type UserAskClosedBy = 'report' | 'complete' | 'expired';
@@ -193,9 +196,11 @@ export function owedQuestionBlock(asks: readonly UserAsk[], nowMs: number): stri
     '',
     'Walnut keeps the user\'s messages in this task that may still wait for your answer:',
     ...lines,
-    'FOR_USER_OWED: the ids of those you still owe him, separated by commas: his question not answered yet, or what he asked '
-      + 'for not done and reported back to him yet ("I will check" and "on it" are still owed). none when you answered every one '
-      + '(an answer in your chat, or the result he asked for, already given to him).',
+    'FOR_USER_OWED: the ids of those he still waits on you to answer, separated by commas: you have not replied to it yet, or '
+      + 'replied only that you will look into it ("I will check" and "on it" are still owed) and gave him neither the answer nor the result since. '
+      + 'An ask is answered once you gave him the answer, the result, or what he needs to decide (a plan, a dry run, a question '
+      + 'back to him), in your chat, a thread or a letter to him; his go-ahead is answered once you act on it and say so. Work that '
+      + 'still goes on after that answer belongs in your status (NOW, NEXT), not here. none when every one is answered.',
   ].join('\n');
 }
 
@@ -234,9 +239,44 @@ export function owedReadback(asks: readonly UserAsk[], nowMs: number, max = 4_00
   return out.join('\n');
 }
 
-/** Owed long enough that the lead hears of it. */
-export function staleOwed(file: UserAsksFile, nowMs: number): UserAsk[] {
-  return openAsks(file).filter((a) => a.owedAt && nowMs - Date.parse(a.at) >= OWED_STALE_MS);
+/** What of a task's status the owed readers look at. */
+export type OwedStatus = Pick<UserStatus, 'state' | 'ask' | 'source' | 'toRead' | 'at' | 'checkedAt' | 'stoppedBy' | 'limit'> | null | undefined;
+
+/**
+ * The task handed the move back to him since he wrote `a`: Walnut's live record of something it
+ * waits on him for (a prompt, a letter, a Board choice: current whenever he wrote), or a status of
+ * its own reported after his message that needs him or gives him its answer or result to read.
+ * Never a failed, machine-stopped or usage-limited session: that one did not answer him.
+ *
+ * 2026-11-10 (a VP's reflection): a worker answered a cleanup request with a dry run and "start
+ * with this plan?" (status needs), and another delivered the test run he asked for (status
+ * needs); both sessions still judged the asks owed, because some of the work was not done yet,
+ * and the lead's note listed them for 6 to 13 hours.
+ */
+export function handedToUser(status: OwedStatus, a: Pick<UserAsk, 'at'>): boolean {
+  if (!status || status.source === 'error' || status.stoppedBy || status.limit) return false;
+  if (status.state === 'needs' && status.ask && status.source !== 'session') return true;
+  const since = Math.max(Date.parse(status.at ?? '') || 0, Date.parse(status.checkedAt ?? '') || 0);
+  if (!(since > Date.parse(a.at))) return false;
+  return status.state === 'needs' || (status.state === 'read' && (status.toRead === 'answer' || status.toRead === 'result'));
+}
+
+/**
+ * The asks the task still owes him: open, its last verdict named them owed, and its status has not
+ * handed the move back to him since. The one value the lead's note, the Stop hook and the wake read.
+ */
+export function owedAsks(file: UserAsksFile, status: OwedStatus): UserAsk[] {
+  return openAsks(file).filter((a) => !!a.owedAt && !handedToUser(status, a));
+}
+
+/** Owed long enough that the lead hears of it and the Stop hook may name it. */
+export function staleOwed(file: UserAsksFile, status: OwedStatus, nowMs: number): UserAsk[] {
+  return owedAsks(file, status).filter((a) => nowMs - Date.parse(a.at) >= OWED_STALE_MS);
+}
+
+/** Owed OWED_WAKE_MS since its verdict and never woken about: the idle session is woken once. */
+export function dueToWake(file: UserAsksFile, status: OwedStatus, nowMs: number): UserAsk[] {
+  return owedAsks(file, status).filter((a) => !a.wokenAt && nowMs - Date.parse(a.owedAt!) >= OWED_WAKE_MS);
 }
 
 /** What the Stop hook says about the asks it names. */

@@ -88,8 +88,8 @@ describe('the user asks a task owes', () => {
   it('stale means owed and older than OWED_STALE_MS; an ask never judged is not stale', () => {
     let f = withAsks(2)
     f = applyOwed(f, [f.asks[0].id], new Set([f.asks[0].id]), iso(T0 + 1000)).file
-    expect(staleOwed(f, T0 + OWED_STALE_MS - 1)).toHaveLength(0)
-    expect(staleOwed(f, T0 + OWED_STALE_MS + 1).map((a) => a.id)).toEqual([f.asks[0].id])
+    expect(staleOwed(f, null, T0 + OWED_STALE_MS - 1)).toHaveLength(0)
+    expect(staleOwed(f, null, T0 + OWED_STALE_MS + 1).map((a) => a.id)).toEqual([f.asks[0].id])
   })
 
   it('a week-old ask expires, the open cap expires the oldest, and closed asks are kept a few days only', () => {
