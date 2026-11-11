@@ -5402,8 +5402,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // The sort settings the current order was computed with (computeSortOrder is rebuilt
   // exactly when sortBy, groupBy or a project's own order changes). The ref is the effect's;
   // the state is the render's, which draws the new order before the effect takes it.
-  const sortSettingsRef = useRef(computeSortOrder);
-  const [sortedWith, setSortedWith] = useState(() => computeSortOrder);
+  // Both hold a plain token per computeSortOrder, never the function itself: a function kept
+  // in state captures the render that made it, and that render's own `sortedWith` held the
+  // function before it, so every rebuild (each task update rebuilds it) kept every earlier
+  // render alive with its whole task list (2026-11-11: about 0.8 MB per task update, the
+  // Mac app's page grew from 0.7 to 2.4 GB in 20 minutes). tests/web/no-closure-in-state.test.ts
+  const sortSettings = useMemo(() => ({}), [computeSortOrder]);
+  const sortSettingsRef = useRef(sortSettings);
+  const [sortedWith, setSortedWith] = useState(sortSettings);
   const prevFilteredIdsRef = useRef<Set<string>>(new Set(filtered.map((t) => t.id)));
   // Equality check for sort order — prevents no-op re-renders when task data changes
   // but the sorted order is identical (e.g. focus_tier change doesn't affect sort position).
@@ -5431,9 +5437,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const currIds = new Set(filtered.map((t) => t.id));
     const prevIds = prevFilteredIdsRef.current;
     const structural = currIds.size !== prevIds.size || !filtered.every((t) => prevIds.has(t.id));
-    if (sortSettingsRef.current !== computeSortOrder || structural) {
-      sortSettingsRef.current = computeSortOrder;
-      setSortedWith(() => computeSortOrder);
+    if (sortSettingsRef.current !== sortSettings || structural) {
+      sortSettingsRef.current = sortSettings;
+      setSortedWith(sortSettings);
       prevFilteredIdsRef.current = currIds;
       stableSortUpdate(newOrder);
       return;
@@ -5446,7 +5452,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Same set of tasks, just reordered (e.g. priority change): debounce 3s
     const timer = setTimeout(() => stableSortUpdate(newOrder), 3000);
     return () => clearTimeout(timer);
-  }, [filtered, liveOrder, computeSortOrder, manualIds, stableSortUpdate]);
+  }, [filtered, liveOrder, sortSettings, manualIds, stableSortUpdate]);
 
   // --- Combine: latest task data arranged in deferred sort order ---
   // This ensures badges/fields update INSTANTLY while position delays.
@@ -5457,7 +5463,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Emit tasks in deferred sort order (stale position), using fresh task objects, or in the live
     // order for a change the list takes at once: new sort settings, a task that arrived or left,
     // a manual reorder (see orderToDraw).
-    const order = orderToDraw(sortOrder, liveOrder, { settingsChanged: sortedWith !== computeSortOrder, manual: manualIds });
+    const order = orderToDraw(sortOrder, liveOrder, { settingsChanged: sortedWith !== sortSettings, manual: manualIds });
     for (const id of order) {
       const task = taskById.get(id);
       if (task) { result.push(task); emitted.add(id); }
@@ -5467,7 +5473,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (!emitted.has(task.id)) result.push(task);
     }
     return result;
-  }, [filtered, sortOrder, liveOrder, sortedWith, computeSortOrder, manualIds]);
+  }, [filtered, sortOrder, liveOrder, sortedWith, sortSettings, manualIds]);
   const sorted = usePhoneHomeList(sortedLive, tasks);
 
   // Projects created THIS session via the bottom "New Project" row. They have
