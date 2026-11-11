@@ -115,7 +115,7 @@ import { SessionForkButton } from './SessionForkButton';
 import { headerPlanFacts, headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER } from './header-record-gate';
 import { useTaskControlSlot } from './useTaskControlSlot';
 import { useBoardTab } from './useBoardTab';
-import { panelTaskCopy } from './panel-task-copy';
+import { noteShownTask, panelTaskCopy } from './panel-task-copy';
 import { SessionKebabSection, type SessionViewItemsProps } from './SessionKebabSection';
 import { SessionMenuOpen } from './SessionMenuOpen';
 import { PinnedSessionFacts } from './SessionMetaFacts';
@@ -772,6 +772,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     () => panelTaskCopy(storeTask, fetchedTask, linkedTaskId),
     [storeTask, fetchedTask, linkedTaskId],
   );
+  // The keys acting on this column read it while the board's first list is still on the way.
+  useEffect(() => noteShownTask(sessionId, sessionTask), [sessionId, sessionTask]);
   // The session ran in its task's workspace and that was removed: the terminal's folder is gone.
   const terminalFolderGone = useMemo(() => {
     const ws = workspaceOf(sessionTask as never);

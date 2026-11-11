@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Task } from '@open-walnut/core'
-import { panelTaskCopy } from '../../web/src/components/sessions/panel-task-copy'
+import { noteShownTask, panelTaskCopy, shownTaskOf } from '../../web/src/components/sessions/panel-task-copy'
 
 const task = (id: string, extra: Partial<Task> = {}) => ({ id, title: `Task ${id}`, ...extra }) as Task
 
@@ -42,5 +42,25 @@ describe('panelTaskCopy', () => {
     const stored = task('t1', { title: 'Store title' })
     const ext = { k: 1 } as Task['ext']
     expect(panelTaskCopy(stored, task('t1', { title: 'REST title', ext }), 't1')).toEqual({ ...stored, ext })
+  })
+})
+
+describe('noteShownTask / shownTaskOf: the column copy the keys read before the first list', () => {
+  it('holds the latest copy a panel shows, and its cleanup forgets only that copy', () => {
+    const first = task('t1', { title: 'First' })
+    const forgetFirst = noteShownTask('s1', first)
+    expect(shownTaskOf('s1')).toBe(first)
+    const second = task('t1', { title: 'Renamed' })
+    const forgetSecond = noteShownTask('s1', second)
+    // The effect of the earlier render cleans up after the later one noted its copy: it stays.
+    forgetFirst()
+    expect(shownTaskOf('s1')).toBe(second)
+    forgetSecond()
+    expect(shownTaskOf('s1')).toBeUndefined()
+  })
+
+  it('a panel with no task notes nothing', () => {
+    noteShownTask('s2', null)()
+    expect(shownTaskOf('s2')).toBeUndefined()
   })
 })

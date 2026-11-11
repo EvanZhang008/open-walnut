@@ -33,6 +33,7 @@ import { HomeCompanionPanel } from '@/components/layout/HomeCompanionPanel';
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
 import { OutsideTaskDetail } from '@/components/tasks/OutsideTaskDetail';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
+import { shownTaskOf } from '@/components/sessions/panel-task-copy';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
@@ -2725,20 +2726,28 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return { task: next, cancel: cancelAll, ...(sid && !wasOpen ? { openedSessionId: sid } : {}), ...(sid ? { ...(passedOver ? { passedOver } : {}) } : { noSession: true }) };
   };
 
+  /** The task a column shows: the list's row, else, before the board's first list has come (a
+   *  slow load), the column's own copy (`unlisted`), as its header's Complete reads it. */
+  const columnTaskOf = useCallback((columnId: string): { task: Task; unlisted?: true } | undefined => {
+    const listed = taskOfSession(taskMapRef.current.values(), columnId);
+    if (listed) return { task: listed };
+    const shown = loadingRef.current ? shownTaskOf(columnId) : undefined;
+    return shown ? { task: shown, unlisted: true } : undefined;
+  }, []);
+
   // mod+shift+D in a column: what its header's Complete does (close it, Undo, go on).
   // `given`: the task, when the caller knows it (the list's selection), not read off the column.
   const completeColumnTask = useCallback((columnId: string, given?: Task): boolean => {
-    const task = given ?? [...taskMapRef.current.values()].find((candidate) =>
-      candidate.session_id === columnId
-      || candidate.exec_session_id === columnId
-      || candidate.plan_session_id === columnId
-      || candidate.session_ids?.includes(columnId));
+    const found = given ? { task: given } : columnTaskOf(columnId);
+    const task = found?.task;
     if (!task || task.status === 'done' || task.phase === 'COMPLETE') return false;
     if (focusedTaskRef.current?.id === task.id) setFocusedTask(null);
-    columnComplete.onTaskCompleted(columnId, { taskId: task.id, from: task.phase });
-    setPhase(task.id, 'COMPLETE');
+    // A row the list does not hold yet: the store holds the new phase over it when the list
+    // brings it, and the toast takes the column's title (useColumnCompleteClose).
+    columnComplete.onTaskCompleted(columnId, { taskId: task.id, from: task.phase, ...(found?.unlisted ? { title: task.title } : {}) });
+    setPhase(task.id, 'COMPLETE', found?.unlisted ? { row: task } : undefined);
     return true;
-  }, [columnComplete.onTaskCompleted, setPhase]);
+  }, [columnComplete.onTaskCompleted, setPhase, columnTaskOf]);
 
   /** How long after a list completion a refusal still takes its advance back. */
   const REFUSAL_TAKES_BACK_MS = 8000;
@@ -2786,8 +2795,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [setPhase, taskUndo, handleCloseSession, handleLocateTaskById, completeColumnTask]);
 
   followColumnInListRef.current = (columnId) => {
-    const task = [...taskMapRef.current.values()].find((t) => t.session_id === columnId || t.exec_session_id === columnId
-      || t.plan_session_id === columnId || t.session_ids?.includes(columnId));
+    const task = taskOfSession(taskMapRef.current.values(), columnId);
     if (!task || focusedTaskRef.current?.id === task.id) return;
     setSuppressDetail(true);
     setFocusedTask(task); // the list follows a column already open: no new open for Recent
@@ -2797,8 +2805,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     columnsRef: sessionColumnsRef,
     completeColumn: completeColumnTask,
     completeSelected: completeSelectedTask,
-    columnTaskDone: (columnId) => [...taskMapRef.current.values()].some((t) => (t.session_id === columnId || t.exec_session_id === columnId
-      || t.plan_session_id === columnId || t.session_ids?.includes(columnId)) && (t.status === 'done' || t.phase === 'COMPLETE')),
+    columnTaskDone: (columnId) => { const t = columnTaskOf(columnId)?.task; return !!t && (t.status === 'done' || t.phase === 'COMPLETE'); },
     hint: (message, ms = 3000) => notify({ kind: 'hint', severity: 'info', title: message, dedupKey: `keyboard-hint:${message}`, persistent: false, durationMs: ms }),
     // One current task: the list follows the column the keys went to. Quietly: no detail, no
     // column moved, and no locate (focusNonce unchanged), so a fold the person closed stays

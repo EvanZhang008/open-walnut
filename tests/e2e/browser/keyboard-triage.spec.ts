@@ -1507,3 +1507,46 @@ test('a delete the server refuses seconds later puts the column back but leaves 
   }
   expect((await page.request.get(`/api/tasks/${TID('b')}`)).ok()).toBe(true)
 })
+
+test('Cmd+Shift+D before the board has its list completes the column task, as its header Complete does', async ({ page }) => {
+  // A slow load (2026-11-10, CI and a loaded dev host): the columns are up and take the caret
+  // before the board's first task list has come. The key read only that list and said "This
+  // column has no task to complete" under a column showing its task; it now reads the column's
+  // own copy until the list comes, as the header's Complete does.
+  await asMacApp(page)
+  await resetTasks(page)
+  await setPanelMode(page, '3')
+  await seedColumns(page, ['a', 'b', 'c'].map((k) => SID(k as Key)))
+  let releaseList!: () => void
+  const listHeld = new Promise<void>((resolve) => { releaseList = resolve })
+  await page.route(/\/api\/tasks\?/, async (route) => {
+    if (new URL(route.request().url()).searchParams.get('fields') === 'list') await listHeld
+    await route.fallback()
+  })
+  try {
+    await page.goto('/')
+    await expect(homeColumns(page)).toHaveCount(3, { timeout: 30_000 })
+    // The column knows its task (its header shows it) while the list is still held.
+    await expect(col(page, 'b').getByText(TITLE('b')).first()).toBeVisible({ timeout: 30_000 })
+    await page.keyboard.press('Meta+2')
+    await expect.poll(() => caretColumn(page)).toBe(SID('b'))
+    await page.keyboard.press('Meta+Shift+D')
+    await expect(col(page, 'b')).toHaveCount(0, { timeout: 15_000 })
+    const done = toast(page, 'Task completed').filter({ hasText: TITLE('b') })
+    await expect(done).toBeVisible()
+    await expect(toast(page, 'This column has no task to complete.')).toHaveCount(0)
+    await expect.poll(() => phase(page, 'b'), { timeout: 10_000 }).toBe('COMPLETE')
+    // The list the board asked for before the key lands now: the column stays closed.
+    releaseList()
+    await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
+    await page.waitForTimeout(1_500)
+    await expect(col(page, 'b')).toHaveCount(0)
+    // And its Undo brings it back.
+    await done.locator('.notification-toast-action', { hasText: 'Undo' }).click({ timeout: 10_000 })
+    await expect(col(page, 'b')).toHaveCount(1, { timeout: 15_000 })
+    await expect.poll(() => phase(page, 'b')).toBe('IN_PROGRESS')
+  } finally {
+    releaseList()
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  }
+})
