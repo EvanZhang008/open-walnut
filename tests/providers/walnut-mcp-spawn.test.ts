@@ -193,6 +193,27 @@ describe('a RUNNING process without the mount gets it before its next turn, with
     }
   }, 60_000)
 
+  // 2026-11-11: three of them were fed only by their daemon's same-host delivery,
+  // which never passes writeMessage, so the mount must also go out at a turn end.
+  it('a turn end gives the mount, with no message from the server, so a turn the host delivers has it', async () => {
+    let results = 0
+    bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
+    process.env.MOCK_CLAUDE_MCP_ABSENT = 'walnut'
+    try {
+      const profile: SessionProfile = { mcpServers: { walnut: hostWalnutMcpServer() } }
+      const { session } = await spawnMcpConfig('t-turn-end', { profile, message: 'snapshot-clean-turn:one' })
+      await waitUntil(() => results >= 1, 15000, 'first result')
+      const setServers = () => daemon.getCommandHistory().filter((e) => e.cmd === 'sendRaw' && JSON.stringify(e.payload).includes('mcp_set_servers'))
+      // The turn's own init said blocked, so its end sends the mount: no writeMessage here.
+      await waitUntil(() => setServers().length >= 1, 8000, 'mcp_set_servers at turn end')
+      expect(setServers()).toHaveLength(1)
+      expect(session.requestedMcpServers).toContain('walnut')
+      await session.gracefulStop(true).catch(() => {})
+    } finally {
+      delete process.env.MOCK_CLAUDE_MCP_ABSENT
+    }
+  }, 60_000)
+
   it('a process that lists walnut in its init is never asked again', async () => {
     let results = 0
     bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })

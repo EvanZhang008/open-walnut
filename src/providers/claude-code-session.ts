@@ -1907,7 +1907,7 @@ export class ClaudeCodeSession {
       this.finalizeTurnSpeed({})
       this.emitStatusChanged(detachedBgActive || wakeupPending ? 'IN_PROGRESS' : 'NEED_ACTION', this._localCommandErrorText.slice(0, 500) || undefined)
       if (!detachedBgActive && !wakeupPending) this._handBackFollowupPhase()
-      void this.refreshAppliedSettings('turn-end')
+      this.atTurnEnd()
       return
     }
     // A stop that lands after a failed command's own result ends only the work after it, as in daemon-fold.
@@ -1960,7 +1960,7 @@ export class ClaudeCodeSession {
     // Read back the CLI's true settings (effort + model) at turn-end (fire-and-forget
     // — never blocks completion). Keeps the badge honest across turns: settings can
     // drift if a hook or env changed them mid-turn, and the CLI never pushes that to us.
-    void this.refreshAppliedSettings('turn-end')
+    this.atTurnEnd()
   }
 
   /** Hand the task back once a followup cycle closes an already-settled turn: its own
@@ -8726,7 +8726,7 @@ export class ClaudeCodeSession {
           // forget). Same rationale as _completeTurnOnIdle: keep the badge in sync with
           // what the model actually used, which the CLI never pushes to us. Skipped for
           // team (intermediate) results above — only fires on real turn-over.
-          void this.refreshAppliedSettings('turn-end')
+          this.atTurnEnd()
         }
 
         break
@@ -9719,6 +9719,16 @@ export class ClaudeCodeSession {
    * asked again at the next turn, a request that failed at most twice. A CLI that does
    * not know the request answers an error and keeps running as it was.
    */
+  /** Control requests a real turn-over sends, fire-and-forget: the settings read-back,
+   *  and the Walnut mount for a process without it. A turn that the session's own
+   *  daemon delivered on its host never passes writeMessage (2026-11-11: three
+   *  clouddev sessions fed only that way stayed without the tools after the fix for
+   *  them went live), so the mount also goes out here, between turns. */
+  private atTurnEnd(): void {
+    void this.refreshAppliedSettings('turn-end')
+    void this.ensureLiveWalnutMount()
+  }
+
   private ensureLiveWalnutMount(): Promise<void> {
     const pid = this.pid
     // Requested is not had: a process whose init did not list walnut ('blocked') has none,
