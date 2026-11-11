@@ -49,11 +49,12 @@ describe('listSummary and summaryWords: one line, from the rows, adding up to th
       row({ key: 'ssh:4', host: 'draft', counted: false, online: false }),
     ]
     const s = listSummary(rows)
-    expect(s).toEqual({ hosts: 5, online: 2, down: 1, off: 1, found: 1, sessions: 4, spendUsd: 242, needs: 1 })
+    // The off host's session and its $1 are left out.
+    expect(s).toEqual({ hosts: 5, online: 2, down: 1, off: 1, found: 1, sessions: 4, spendUsd: 241, needs: 1 })
     // 2026-11-05 review: "2 of 4 online, 1 off" sat above 6 rows. The counts now add up to the hosts.
     expect(s.online + s.down + s.off + s.found).toBe(s.hosts)
     expect(summaryWords(s)).toEqual({
-      hosts: '5 hosts', online: '2 online', down: '1 not connected', off: '1 off', found: '1 found in ~/.ssh/config', sessions: '4 sessions open', spend: '$242 in 30 days',
+      hosts: '5 hosts', online: '2 online', down: '1 not connected', off: '1 off', found: '1 found in ~/.ssh/config', sessions: '4 sessions open', spend: '$241 in 30 days',
     })
   })
 

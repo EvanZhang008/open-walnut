@@ -48,8 +48,9 @@ const FOLDS: Array<[RegExp, string]> = [[/^(.*)\/switch#host-server-copy-<host>-
  * Every visible button and link on the Remote Hosts pane (and its header's buttons in the sticky
  * bar once the pane scrolled, its build line, and a menu it opened), as stable keys
  * `<group>/<role><id>`: the group is the heading of the settings group it sits in (or Header,
- * Footer, a menu's name, Pane), the id its data-testid, else a known class, else its accessible
- * name, with each host's name written `<host>`.
+ * Footer, a menu's name, the Overview's "Not connected" list, Pane), the id its data-testid, else a
+ * known class, else its accessible name, with each host's name written `<host>`. The Overview's
+ * head, numbers, diagram and cards sit in no group: Pane.
  */
 export async function paneKeys(page: Page): Promise<string[]> {
   const raw = await page.evaluate(({ names, classes }) => {
@@ -74,6 +75,8 @@ export async function paneKeys(page: Page): Promise<string[]> {
       if (menu) return MENUS[menu.dataset.testid!]
       if (el.closest('[data-testid="settings-build-line"]')) return 'Footer'
       if (!root.contains(el) || el.closest('.settings-pane-header, .settings-card-head')) return 'Header'
+      // The Overview's hosts not connected sit under their own heading, "Not connected (N)".
+      if (el.closest('[data-testid="host-fleet-offline-list"]')) return 'Not connected'
       const title = el.closest('.settings-group-block')?.querySelector(':scope > .settings-group-heading .settings-group-title, :scope > .settings-fold-group-heading .settings-fold-group-title')?.textContent?.trim()
       return title ?? 'Pane'
     }
@@ -501,9 +504,9 @@ export async function openFixturePane(page: Page, request: APIRequestContext): P
 export async function openPane(page: Page): Promise<void> {
   await openRemoteHosts(page)
   await expect(page.locator('#rh-host-devbox')).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByTestId('rh-summary-hosts')).toHaveText('6 hosts', { timeout: 20_000 })
-  await expect(page.getByTestId('rh-summary-online')).toHaveText('2 online')
-  await expect(page.getByTestId('rh-summary-off')).toHaveText('1 off')
+  // The Overview's numbers are the list's rows: 2 of the 4 machines Walnut reaches are online (Big
+  // remote host is switched off and lab-mac only found in ~/.ssh/config, so neither is counted).
+  await expect(page.getByTestId('host-fleet-stat-online')).toContainText('2/4', { timeout: 20_000 })
   await expect(page.locator('[data-host-alias="gpu-box"]')).toBeVisible({ timeout: 20_000 })
   for (const id of ['remote-hosts-list', 'replica-removals-host', 'remote-hosts-more']) {
     await expect(page.getByTestId(id)).toBeVisible({ timeout: 20_000 })
@@ -528,6 +531,27 @@ export async function openGroup(page: Page, id: string): Promise<void> {
   await expect(page.getByTestId(`${id}-toggle`)).toHaveCount(0)
   await expect(page.getByTestId(id)).toBeVisible({ timeout: 20_000 })
 }
+
+/** One of the Overview's four numbers as it reads ("2/4", "4", "$241", "None"). */
+export const fleetStat = (page: Page, id: 'online' | 'sessions' | 'spend' | 'problems') => page.getByTestId(`host-fleet-stat-${id}`).locator('.hf-stat-value')
+
+/**
+ * The Overview's "Hosts online" beside the list it counts: every saved row is in it (online of the
+ * machines Walnut reaches), switched off, or only found in ~/.ssh/config.
+ */
+export async function fleetNow(page: Page): Promise<{ online: number; reachable: number; off: number; found: number; rows: number }> {
+  const [online, reachable] = ((await fleetStat(page, 'online').textContent()) ?? '').split('/').map(Number)
+  const rows = page.locator('[data-testid="remote-hosts-list"] .rh-host-row:not([data-unsaved="true"])')
+  return {
+    online, reachable,
+    off: await rows.and(page.locator('[data-host-off="true"]')).count(),
+    found: await rows.filter({ has: page.getByTestId('rh-found-question') }).count(),
+    rows: await rows.count(),
+  }
+}
+
+/** Every row in one count: the numbers add up to the rows the list shows (2026-11-05 review: "2 of 4 online, 1 off" over 6 rows). */
+export const fleetAddsUp = (f: Awaited<ReturnType<typeof fleetNow>>) => f.reachable + f.off + f.found === f.rows
 
 /** A row of the list by its alias (`net:`/`fleet:` rows too). */
 export const row = (page: Page, alias: string) => page.locator(`[data-testid="remote-hosts-list"] .rh-host-row[data-host-alias="${alias}"]`)

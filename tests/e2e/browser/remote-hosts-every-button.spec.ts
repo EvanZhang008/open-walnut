@@ -22,7 +22,7 @@
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { fixtureCounters, hostFixture, openHostParts, resetServerHostFixture } from './host-problems-fixture-helpers'
-import { askThenCancel, expectFocusKept, flip, isChromium, openFixturePane, paneKeys, pick, row, shot } from './remote-hosts-every-button-helpers'
+import { askThenCancel, expectFocusKept, fleetAddsUp, fleetNow, fleetStat, flip, isChromium, openFixturePane, paneKeys, pick, row, shot } from './remote-hosts-every-button-helpers'
 import {
   checkAddHost, checkJoinLink, checkMoreSettings, checkSecrets, expectRing, joinPress, type StepCtx,
 } from './remote-hosts-every-button-steps'
@@ -76,17 +76,30 @@ test.describe('Settings > Remote Hosts: every button', () => {
     page.on('pageerror', (e) => errors.push(e.message))
     const ctx = await setUp(page, request)
     const { routes, sweep, ran } = ctx
-    // The fleet's counts, as the summary line says them: every row in one of them.
-    const counts = page.locator('[data-testid="rh-summary"] .rh-summary-line')
+    // The Overview's cards (live hosts) and its Not connected rows.
+    const dash = page.getByTestId('host-fleet')
+    const card = (host: string) => dash.locator(`[data-testid="hf-dash-card"][data-host="${host}"]`)
+    const away = (host: string) => dash.locator(`[data-testid="hf-dash-offline"][data-host="${host}"]`)
     await sweep()
 
-    await test.step('the list: one line for the fleet, one row per machine, one action each', async () => {
-      // One fleet: the summary counts the rows the list shows, each row once, so the counts add up
-      // to the rows (2026-11-04 review: two fixtures; 2026-11-05: "2 of 4 online, 1 off" over 6 rows).
-      await expect(counts).toContainText('6 hosts: 2 online, 2 not connected, 1 off, 1 found in ~/.ssh/config, ')
+    await test.step('the list and the Overview\'s numbers: one row per machine, one action each, every row counted once', async () => {
+      // One fleet: the Overview counts the rows the list shows, each row once, so the counts add up
+      // to the rows (2026-11-04 review: two fixtures; 2026-11-05: "2 of 4 online, 1 off" over 6
+      // rows): 2 of the 4 machines Walnut reaches are online, beside the one switched off and the
+      // one only found in ~/.ssh/config.
+      await expect(fleetStat(page, 'online')).toHaveText('2/4')
       await expect(page.locator('[data-testid="remote-hosts-list"] .rh-host-row')).toHaveCount(6)
-      await expect(page.getByTestId('rh-summary-sessions')).toHaveText('4 sessions open')
-      await expect(page.getByTestId('rh-summary-spend')).toHaveText('$241 in 30 days')
+      expect(await fleetNow(page)).toEqual({ online: 2, reachable: 4, off: 1, found: 1, rows: 6 })
+      await expect(fleetStat(page, 'sessions')).toHaveText('4')
+      await expect(fleetStat(page, 'spend')).toHaveText('$241')
+      await expect(page.getByTestId('host-fleet-stat-spend')).toHaveAttribute('title', 'At list price, not a bill')
+      // A card per live host, a Not connected row for the others; the one switched off is left out.
+      await expect(dash.getByTestId('hf-dash-card')).toHaveCount(2)
+      for (const host of ['__local__', 'devbox']) await expect(card(host)).toHaveCount(1)
+      await expect(dash.getByTestId('hf-dash-offline')).toHaveCount(2)
+      for (const host of ['downbox', 'gpu-box']) await expect(away(host)).toHaveCount(1)
+      await expect(card('fixture-remote').or(away('fixture-remote'))).toHaveCount(0)
+      await expect(card('__local__').locator('.hf-card-name')).toHaveText('This Mac')
       for (const alias of ['__local__', 'devbox', 'downbox', 'gpu-box', 'lab-mac', 'fixture-remote']) await expect(row(page, alias)).toHaveCount(1)
       await expect(row(page, '__local__').locator('.rh-host-name')).toHaveText('This Mac')
       // At most one action per row, every one in one column beside its name line.
@@ -111,7 +124,9 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await expect(page.locator('[data-testid="remote-hosts-list"] [data-testid="rh-look-tag"]').first()).toHaveText('Needs a look')
       const needs = page.getByTestId('rh-needs-look')
       await expect(needs).toHaveText(`${n} need a look`)
-      await expect(page.getByTestId('rh-summary-needs')).toHaveCount(0)
+      // The Overview's tile says the same number, and is no second count to press.
+      await expect(fleetStat(page, 'problems')).toHaveText(String(n))
+      await expect(page.getByTestId('host-fleet-stat-problems').locator('button, [role="button"]')).toHaveCount(0)
       await expect(page.getByTestId('remote-hosts-more-needs')).toHaveCount(0)
       for (let i = 0; i <= n; i++) {
         const at = i % n
@@ -147,19 +162,40 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await checkAddHost(ctx)
     })
 
-    await test.step('the network map: every machine of the list, as its row says it', async () => {
-      const map = page.getByTestId('remote-hosts-map')
-      const toggle = page.getByTestId('remote-hosts-map-toggle')
+    await test.step('the Overview: its toggle, the diagram (each node lands on its card), each card\'s and each Not connected row\'s Details, Connect', async () => {
+      const toggle = page.getByTestId('host-fleet-toggle')
+      const refresh = page.getByTestId('host-fleet-refresh')
+      const readsOf = () => routes.callsTo('POST', '/api/v1/hosts/refresh').length
+      // Open by default. Closed (from the keyboard: the focus stays on it), only its head stays,
+      // with Read and Refresh, and nothing is read; opened again, every host is read.
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      await expect(refresh).toHaveText('Refresh', { timeout: 10_000 })
+      const reads = readsOf()
+      await toggle.focus()
+      await page.keyboard.press('Enter')
       await expect(toggle).toHaveAttribute('aria-expanded', 'false')
-      await expect(toggle).toContainText('How this Mac reaches each host.')
+      await expect(dash).toHaveAttribute('data-open', 'false')
+      for (const id of ['host-fleet-summary', 'host-fleet-topology', 'hf-dash-card', 'host-fleet-offline-list']) await expect(dash.getByTestId(id)).toHaveCount(0)
+      await expect(refresh).toBeVisible()
+      await expect(page.getByTestId('host-fleet-read')).toBeVisible()
+      await expect(toggle).toBeFocused()
+      await sweep()
+      expect(readsOf()).toBe(reads)
       await toggle.click()
       await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-      // One box: the heading and the drawing inside the same card.
-      expect(await map.evaluate((el) => !!el.querySelector('.settings-fold-group-heading') && !!el.querySelector('[data-testid="host-fleet-topology"]'))).toBe(true)
+      expect((await routes.nth('POST', '/api/v1/hosts/refresh', reads + 1)).body).toEqual({})
+      await expect(dash.getByTestId('hf-dash-card')).toHaveCount(2)
+      await expect(dash.getByTestId('hf-dash-offline')).toHaveCount(2)
+      await expect(refresh).toHaveText('Refresh', { timeout: 10_000 })
+      await expectFocusKept(page)
+      ran('Pane/button#host-fleet-toggle')
+
+      // The diagram, in the Overview (no fold of its own): every machine of the list, as its row
+      // says it (2026-11-04 review: the map drew 3 of the 6 hosts).
       const nodes = page.getByTestId('host-fleet-topo-node')
       const hosts = await nodes.evaluateAll((els) => els.map((el) => el.getAttribute('data-host')!))
-      // 2026-11-04 review: the map drew 3 of the 6 hosts.
       expect([...hosts].sort()).toEqual(['__local__', 'devbox', 'downbox', 'fixture-remote', 'gpu-box'])
+      expect(await dash.evaluate((el) => !!el.querySelector('.hf-topo-panel [data-testid="host-fleet-topology"]'))).toBe(true)
       const node = (h: string) => page.locator(`[data-testid="host-fleet-topo-node"][data-host="${h}"]`)
       const link = (h: string) => page.locator(`[data-testid="host-fleet-topo-link"][data-host="${h}"]`)
       await expect(node('__local__').locator('.hf-topo-name')).toHaveText('This Mac')
@@ -170,15 +206,20 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await expect(link('downbox')).toHaveText('Not connected')
       await expect(link('devbox')).toHaveText('SSH tunnel, 38 ms')
       await sweep()
+      // Each node lands on its host in the Overview, in view, focused and ringed: a card, a Not
+      // connected row, or (a host switched off, which the Overview leaves out) its row in the list.
+      const landing = (h: string) => (h === 'fixture-remote' ? page.locator(`[id="rh-host-${h}"]`) : page.locator(`[id="hf-card-${h}"]`))
       for (const host of hosts) {
         await node(host).click()
-        const target = page.locator(`[id="rh-host-${host}"]`)
+        const target = landing(host)
         await expectRing(page, target)
         await expect(target).toBeInViewport()
+        const where = host === 'fixture-remote' ? 'remote-hosts-list' : ['__local__', 'devbox'].includes(host) ? 'hf-dash-card' : 'hf-dash-offline'
+        expect(await target.evaluate((el, w) => !!el.closest(`[data-testid="${w}"]`), where), `${host} lands in ${where}`).toBe(true)
       }
       // Acting on another row takes the mark away: only the row whose menu is open is marked
       // (2026-11-04 review: the map's row kept its ring while Alpha box's menu was open).
-      const landed = page.locator(`[id="rh-host-${hosts.at(-1)}"]`)
+      const landed = landing(hosts.at(-1)!)
       await row(page, 'devbox').getByTestId('rh-row-more').click()
       await expect(page.locator('[data-menu-open="true"]')).toHaveCount(1)
       await expect(row(page, 'devbox')).toHaveAttribute('data-menu-open', 'true')
@@ -186,14 +227,97 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await expect(landed).not.toBeFocused()
       await page.keyboard.press('Escape')
       await expect(page.locator('[data-menu-open="true"]')).toHaveCount(0)
-      await toggle.click()
-      await expect(nodes.first()).toBeHidden()
-      ran('Network map/button#remote-hosts-map-toggle', 'Network map/button#host-fleet-topo-node')
+      ran('Pane/button#host-fleet-topo-node')
+
+      // A card's Details: the facts table in the card, that host read again; closing reads nothing.
+      const macDetails = card('__local__').getByTestId('hf-dash-details-toggle')
+      await expect(macDetails).toHaveText('Details')
+      let n = readsOf()
+      await macDetails.click()
+      await expect(macDetails).toHaveAttribute('aria-expanded', 'true')
+      await expect(macDetails).toHaveText('Hide details')
+      await expect(card('__local__').getByTestId('host-fleet-details')).toBeVisible()
+      expect((await routes.nth('POST', '/api/v1/hosts/refresh', n + 1)).body).toEqual({ hosts: ['__local__'] })
+      await sweep()
+      await expect(refresh).toHaveText('Refresh', { timeout: 10_000 })
+      await macDetails.click()
+      await expect(macDetails).toHaveAttribute('aria-expanded', 'false')
+      await expect(card('__local__').getByTestId('host-fleet-details')).toHaveCount(0)
+      expect(readsOf()).toBe(n + 1)
+      ran('Pane/button#hf-dash-details-toggle')
+
+      // A Not connected row: why, its Details in place (read again), and Connect.
+      const beta = away('downbox')
+      await expect(beta.locator('.hf-off-why')).toHaveText('Connecting to Beta box timed out')
+      const betaDetails = beta.getByTestId('hf-dash-details-toggle')
+      n = readsOf()
+      await betaDetails.click()
+      await expect(betaDetails).toHaveAttribute('aria-expanded', 'true')
+      await expect(beta.getByTestId('host-fleet-details')).toBeVisible()
+      expect((await routes.nth('POST', '/api/v1/hosts/refresh', n + 1)).body).toEqual({ hosts: ['downbox'] })
+      await sweep()
+      await expect(refresh).toHaveText('Refresh', { timeout: 10_000 })
+      await betaDetails.click()
+      await expect(beta.getByTestId('host-fleet-details')).toHaveCount(0)
+      expect(readsOf()).toBe(n + 1)
+      ran('Not connected/button#hf-dash-details-toggle')
+      // Connect is the list's own Retry: one attempt for the host, whichever surface asked, so its
+      // row says Retrying... while the Overview says Connecting...; it fails the same way again.
+      const connect = beta.getByTestId('hf-dash-connect')
+      await expect(connect).toHaveText('Connect')
+      const tries = (await fixtureCounters(request)).connect.downbox ?? 0
+      let release = () => {}
+      const held = new Promise<void>((r) => { release = r })
+      await page.route('**/api/hosts/downbox/connect', async (route) => { await held; await route.fallback() })
+      await connect.click()
+      await expect(connect).toHaveText('Connecting...')
+      await expect(row(page, 'downbox').getByTestId('rh-row-connect')).toHaveText('Retrying...')
+      release()
+      await expect.poll(async () => (await fixtureCounters(request)).connect.downbox).toBe(tries + 1)
+      await expect(connect).toHaveText('Connect', { timeout: 15_000 })
+      await expect(row(page, 'downbox').getByTestId('rh-row-connect')).toHaveText('Retry SSH')
+      await expect(beta.locator('.hf-off-why')).toHaveText('Connecting to Beta box timed out')
+      await expectFocusKept(page)
+      await page.unroute('**/api/hosts/downbox/connect')
+      ran('Not connected/button#hf-dash-connect')
     })
 
     await test.step('Alpha box: its menu, Details with This host, Install, Set up', async () => { await checkAlphaRow(ctx) })
 
-    await test.step('Alpha box: Edit (Escape closes), keep switches, Turn off and on (the summary and the map move at once), Remove asks', async () => {
+    await test.step('Alpha box\'s Overview card: its Details read it again; Set up from the card', async () => {
+      // Its daemon stopped starting at boot again (its service went): the read its Details start
+      // shows it on the card, with Set up.
+      const alpha = card('devbox')
+      routes.alphaFixed = false
+      const details = alpha.getByTestId('hf-dash-details-toggle')
+      await details.click()
+      await expect(alpha.getByTestId('host-fleet-details')).toBeVisible()
+      const problem = alpha.getByTestId('hf-dash-problem')
+      await expect(problem).toHaveAttribute('data-problem', 'reboot', { timeout: 15_000 })
+      await expect(problem.locator('.hf-problem-text')).toHaveText("Walnut won't restart on Alpha box after it reboots")
+      const fix = problem.getByTestId('hf-dash-fix')
+      await expect(fix).toHaveText('Set up')
+      await sweep()
+      const boots = routes.callsTo('POST', '/api/v1/hosts/devbox/boot-start').length
+      const release = routes.gate('boot')
+      await fix.click()
+      await expect(fix).toHaveText('Setting up...')
+      await expect(fix).toBeDisabled()
+      // Only this host's Set up is busy: no other card's, no other row's.
+      await expect(page.locator('[data-testid="hf-dash-card"]:not([data-host="devbox"])').getByText('Setting up...', { exact: true })).toHaveCount(0)
+      await expect(page.locator('[data-testid="remote-hosts-list"] .rh-host-row:not([data-host-alias="devbox"])').getByText('Setting up...', { exact: true })).toHaveCount(0)
+      release()
+      await expect(alpha.getByTestId('hf-dash-action-note')).toHaveText('Set up: starts by itself after a reboot (as a systemd user service).')
+      await expect(alpha.getByTestId('hf-dash-problem')).toHaveCount(0)
+      await expect(alpha.getByTestId('hf-dash-action-error')).toHaveCount(0)
+      expect(routes.callsTo('POST', '/api/v1/hosts/devbox/boot-start')).toHaveLength(boots + 1)
+      await expectFocusKept(page)
+      await details.click()
+      await expect(alpha.getByTestId('host-fleet-details')).toHaveCount(0)
+      ran('Pane/button#hf-dash-fix')
+    })
+
+    await test.step('Alpha box: Edit (Escape closes), keep switches, Turn off and on (the Overview\'s numbers, cards and diagram move at once), Remove asks', async () => {
       const alpha = row(page, 'devbox')
       const more = alpha.getByTestId('rh-row-more')
       await pick(page, alpha, 'Edit')
@@ -231,13 +355,16 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await expectRing(page, more)
       ran('Row menu/menuitem[edit]', 'Hosts/button#rh-edit-done')
 
-      // Turn off saves it off, and the summary and the map say so at once (2026-11-04 review:
-      // "2 of 4 online" through Turn off, Add and Remove); Turn on, its one action now, saves it on.
+      // Turn off saves it off, and the Overview says so at once (2026-11-04 review: "2 of 4
+      // online" through Turn off, Add and Remove): out of its numbers and its cards, drawn off in
+      // the diagram. Turn on, its one action now, saves it on, and all of it comes back.
       const puts = routes.callsTo('PUT', '/api/config').length
       await pick(page, alpha, 'Turn off')
       expect(((await routes.nth('PUT', '/api/config', puts + 1)).body as { hosts: Record<string, { enabled: boolean }> }).hosts.devbox.enabled).toBe(false)
       await expect(alpha.getByTestId('rh-row-state')).toHaveText('Off: Walnut does not connect to it.')
-      await expect(counts).toContainText('6 hosts: 1 online, 2 not connected, 2 off, 1 found in ~/.ssh/config, ')
+      await expect(fleetStat(page, 'online')).toHaveText('1/3')
+      expect(await fleetNow(page)).toEqual({ online: 1, reachable: 3, off: 2, found: 1, rows: 6 })
+      await expect(card('devbox')).toHaveCount(0)
       // An Off host is off on purpose: no Needs a look, no look line, not in the header's count
       // (2026-11-05 review: a host turned off still read "Needs a look").
       await expect(alpha.getByTestId('rh-look-tag')).toHaveCount(0)
@@ -253,7 +380,10 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await alpha.getByTestId('rh-turn-on').click()
       expect(((await routes.nth('PUT', '/api/config', puts + 2)).body as { hosts: Record<string, { enabled: boolean }> }).hosts.devbox.enabled).toBe(true)
       await expect(alpha.getByTestId('rh-turn-on')).toHaveCount(0)
-      await expect(counts).toContainText('6 hosts: 2 online, 2 not connected, 1 off, 1 found in ~/.ssh/config, ')
+      await expect(fleetStat(page, 'online')).toHaveText('2/4')
+      expect(fleetAddsUp(await fleetNow(page))).toBe(true)
+      await expect(card('devbox')).toHaveCount(1)
+      await expect(page.locator('[data-testid="host-fleet-topo-node"][data-host="devbox"]')).not.toHaveAttribute('data-kind', 'off')
       await expectFocusKept(page)
       ran('Row menu/menuitem[turn-off]')
 
@@ -366,19 +496,20 @@ test.describe('Settings > Remote Hosts: every button', () => {
       await expect(beta.getByTestId('host-fleet-action-note')).toHaveCount(0)
       await expectFocusKept(page)
 
-      // Turn on dials it: Retrying... while its save lands, then Connected. The summary moves at
-      // once each way, every row in one count (lab-mac's fixture status may flip back from the
-      // Connected its routed answer seeded: read the off count and the sum, not fixed numbers).
-      const num = async (id: string) => { const el = page.getByTestId(id); return (await el.count()) ? Number((await el.textContent())!.match(/^(\d+)/)![1]) : 0 }
-      const fleetNow = async () => ({ online: await num('rh-summary-online'), down: await num('rh-summary-down'), off: await num('rh-summary-off'), found: await num('rh-summary-found'), hosts: await num('rh-summary-hosts') })
-      const adds = (f: Awaited<ReturnType<typeof fleetNow>>) => f.online + f.down + f.off + f.found === f.hosts
-      const before = await fleetNow()
-      expect(adds(before)).toBe(true)
+      // Turn on dials it: Retrying... while its save lands, then Connected. The Overview's numbers
+      // move at once each way, every row in one count (lab-mac's fixture status may flip back from
+      // the Connected its routed answer seeded: read the machines Walnut reaches, the off count
+      // and the sum, not who is online).
+      const before = await fleetNow(page)
+      expect(fleetAddsUp(before)).toBe(true)
       const puts = routes.callsTo('PUT', '/api/config').length
       await pick(page, beta, 'Turn off')
       await routes.nth('PUT', '/api/config', puts + 1)
-      await expect.poll(async () => (await fleetNow()).off).toBe(before.off + 1)
-      expect(adds(await fleetNow())).toBe(true)
+      await expect.poll(async () => (await fleetNow(page)).off).toBe(before.off + 1)
+      expect((await fleetNow(page)).reachable).toBe(before.reachable - 1)
+      expect(fleetAddsUp(await fleetNow(page))).toBe(true)
+      // Out of the Overview too: no Not connected row for a host switched off.
+      await expect(away('downbox')).toHaveCount(0)
       await hostFixture(request, { action: 'set-next-connect', host: 'downbox', result: 'ok' })
       const saving = routes.gate('config-put')
       await beta.getByTestId('rh-turn-on').click()
@@ -386,8 +517,9 @@ test.describe('Settings > Remote Hosts: every button', () => {
       saving()
       await expect(beta.getByTestId('host-fleet-action-note')).toHaveText('Connected.', { timeout: 15_000 })
       expect((await fixtureCounters(request)).connect.downbox).toBe(tries + 2)
-      await expect.poll(async () => (await fleetNow()).off).toBe(before.off)
-      expect(adds(await fleetNow())).toBe(true)
+      await expect.poll(async () => (await fleetNow(page)).off).toBe(before.off)
+      expect((await fleetNow(page)).reachable).toBe(before.reachable)
+      expect(fleetAddsUp(await fleetNow(page))).toBe(true)
       await expectFocusKept(page)
       ran('Hosts/button#rh-turn-on')
     })

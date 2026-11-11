@@ -1,5 +1,5 @@
 /**
- * The fleet as a diagram (Settings > Remote Hosts > Network map): this Mac in the centre, a line
+ * The fleet as a diagram (Settings > Remote Hosts > Overview): this Mac in the centre, a line
  * to every other host labelled with how Walnut reaches it, each node coloured by its state. It
  * draws the list's own rows (host-list-store.ts), so it never disagrees with them (2026-11-04
  * review: the map drew 3 of 6 hosts, and drew a host green that its row said was off): every row

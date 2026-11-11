@@ -154,3 +154,197 @@
 /* Beside a big number the reason may be a sentence: it wraps in its own half of the card. */
 .hf-numbers .hf-why { white-space: normal; overflow-wrap: anywhere; }
 .hf-gauge-value[data-text="true"] { font-size: 10.5px; }
+
+/*
+ * Settings › Remote Hosts › Overview (HostFleetOverview.tsx, HostFleetCard.tsx,
+ * HostFleetTopology.tsx): a summary strip, the diagram, a grid of host cards and
+ * the hosts not connected. It sits in the section beside the groups, never in
+ * one, and each surface wears the group's own look (fill, border, radius), so
+ * nothing is a card inside a card. Theme variables only; colour is never the
+ * only signal (every gauge, segment and node says it in words or a title).
+ */
+.hf-dash { margin: 0 0 22px; min-width: 0; }
+
+.hf-dash-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 6px;
+  padding: 0 calc(var(--settings-row-pad-x) + 1px);
+}
+
+.hf-dash-title { margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--fg-secondary); }
+
+.hf-dash-updated { font-size: 12px; color: var(--settings-help-fg); font-variant-numeric: tabular-nums; }
+
+/* The title opens and closes the Overview (opening it reads the hosts again). */
+.hf-dash-toggle {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.hf-dash-toggle:hover { color: var(--fg); }
+
+.hf-dash-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+.hf-dash-toggle[aria-expanded='true'] .settings-disclosure-chevron { transform: rotate(90deg); }
+
+.hf-dash-read { display: inline-flex; align-items: baseline; gap: 10px; min-width: 0; white-space: nowrap; }
+
+.hf-dash .hf-refreshing { font-size: 12px; color: var(--accent-text); }
+
+.hf-dash[data-open='false'] { margin-bottom: 14px; }
+
+/* The surfaces: the group's look. */
+.hf-dash .hf-stat, .hf-dash .hf-panel, .hf-dash .hf-card {
+  box-sizing: border-box;
+  background: var(--settings-group-bg);
+  border: 1px solid var(--settings-group-border);
+  border-radius: 10px;
+  color: var(--fg);
+  min-width: 0;
+}
+
+.hf-dash .hf-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 10px;
+}
+
+.hf-dash .hf-stat { padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; }
+
+.hf-dash .hf-stat-value { font-size: 22px; line-height: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.hf-dash .hf-stat-label { font-size: 12px; color: var(--settings-help-fg); display: flex; align-items: center; gap: 6px; }
+
+.hf-dash .hf-stat[data-tone] .hf-stat-label::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.hf-dash .hf-stat[data-tone="good"] .hf-stat-label::before { background: var(--success); }
+
+.hf-dash .hf-stat[data-tone="warn"] .hf-stat-label::before { background: var(--warning); }
+
+/* The host cards. */
+.hf-dash .hf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(264px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.hf-dash .hf-card {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  outline: none;
+}
+
+.hf-dash .hf-card:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+
+.hf-dash .hf-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+.hf-dash .hf-card-head .sps-host-dot { width: 8px; height: 8px; flex: none; }
+
+.hf-dash .hf-card-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+.hf-dash .hf-card-sys { margin: -6px 0 0; font-size: 12px; color: var(--settings-help-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.hf-dash .hf-problem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 4px 4px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  --hf-c: var(--warning);
+  background: color-mix(in srgb, var(--hf-c) 12%, var(--settings-group-bg));
+}
+
+.hf-dash .hf-problem[data-tone="bad"] { --hf-c: var(--error); }
+
+.hf-dash .hf-problem[data-tone="muted"] { --hf-c: var(--fg-muted); }
+
+.hf-dash .hf-problem-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 17px;
+}
+
+.hf-dash .hf-problem .settings-button { flex: none; }
+
+.hf-dash .hf-action-error { margin: -4px 0 0; font-size: 12px; color: var(--settings-error-text); }
+
+.hf-dash .hf-action-note { margin: -4px 0 0; font-size: 12px; color: var(--settings-help-fg); }
+
+.hf-dash .hf-card-foot { display: flex; align-items: baseline; gap: 10px; margin-top: -4px; }
+
+.hf-dash .hf-off-line .hf-read { margin-left: 0; flex: none; }
+
+.hf-dash .hf-off .hf-read-error { margin: 2px 0 0 18px; }
+
+.hf-dash .hf-loading-more { margin: 8px 0 0; }
+
+.hf-dash .hf-link {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.hf-dash .hf-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+/* The hosts not connected: one line each. */
+.hf-dash .hf-off-list { padding: 4px 14px; }
+
+.hf-dash .hf-off-head { margin: 6px 0 2px; font-size: 12px; font-weight: 600; color: var(--settings-help-fg); }
+
+.hf-dash .hf-off { padding: 6px 0; outline: none; }
+
+.hf-dash .hf-off + .hf-off { border-top: 1px solid var(--settings-hairline); }
+
+.hf-dash .hf-off:focus-visible { box-shadow: 0 0 0 2px var(--accent); border-radius: 6px; }
+
+.hf-dash .hf-off-line { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 28px; }
+
+.hf-dash .hf-off-line .sps-host-dot { width: 8px; height: 8px; flex: none; }
+
+.hf-dash .hf-off-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; max-width: 45%; }
+
+.hf-dash .hf-off-why { font-size: 12px; color: var(--settings-help-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 0; }
+
+.hf-dash .hf-off .hf-details { margin: 6px 0 2px 18px; }
+
+.hf-dash .hf-error, .hf-dash .hf-loading { margin: 0 0 8px; padding: 0 calc(var(--settings-row-pad-x) + 1px); color: var(--settings-help-fg); }
+
+.hf-dash .hf-error { color: var(--settings-error-text); }
+
+/* Beside a big number the reason may be a sentence: it wraps in its own half of the card. */
+.hf-dash .hf-numbers .hf-why, .hf-dash .hf-stat .hf-why { white-space: normal; overflow-wrap: anywhere; }
+
+/* Refresh in the Overview's head is a text button (holds the focus while it reads, WebKit too). */
+.hf-dash .hf-dash-refresh { font-size: 12px; }

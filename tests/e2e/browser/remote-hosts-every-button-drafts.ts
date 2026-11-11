@@ -5,7 +5,7 @@
  * row saves only on Add and connect (or Enter in a field), never on leaving a field or on another
  * way in; its alias follows the hostname, a taken alias is refused, an alias typed away is said
  * once it is left; then Saving..., Connecting... (not counted as needing a look while it tries),
- * and a failure that says why in the words of Add; the summary counts it at once. A row not saved
+ * and a failure that says why in the words of Add; the Overview counts it at once. A row not saved
  * yet outlives leaving the pane (it is kept for the browser session), while the other hosts'
  * changes still save. The wide window's page is checked here too: it grows past today's 680 px
  * column, with the sticky bar's actions on its edge.
@@ -13,7 +13,7 @@
  */
 import { expect } from '@playwright/test'
 import { openRemoteHosts } from './host-problems-fixture-helpers'
-import { netCommand, openGroup, openMore, pick, row, shot } from './remote-hosts-every-button-helpers'
+import { fleetAddsUp, fleetNow, fleetStat, netCommand, openGroup, openMore, pick, row, shot } from './remote-hosts-every-button-helpers'
 import { ADD_ITEMS, addButton, callBack, joinPress, type StepCtx } from './remote-hosts-every-button-steps'
 
 const addSsh = async (ctx: StepCtx) => {
@@ -21,12 +21,11 @@ const addSsh = async (ctx: StepCtx) => {
   await ctx.page.getByTestId('remote-hosts-add-menu').getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
 }
 
-const FLEET = '2 online, 2 not connected, 1 off, 1 found in ~/.ssh/config, '
-
 export async function checkNewHost(ctx: StepCtx): Promise<void> {
   const { page, routes } = ctx
   const pane = page.locator('#remote-hosts')
-  const counts = page.locator('[data-testid="rh-summary"] .rh-summary-line')
+  // The Overview's "Hosts online": 2 of the 4 machines Walnut reaches (a row not saved is none of them).
+  const online = fleetStat(page, 'online')
   const needs = page.getByTestId('rh-needs-look')
   const needsBefore = (await needs.textContent())!
   const puts = routes.callsTo('PUT', '/api/config').length
@@ -83,7 +82,8 @@ export async function checkNewHost(ctx: StepCtx): Promise<void> {
   await expect(addButton(page)).toBeFocused()
   await page.waitForTimeout(1_800)
   expect(routes.callsTo('PUT', '/api/config').length).toBe(puts)
-  await expect(counts).toContainText(`6 hosts: ${FLEET}`)
+  await expect(online).toHaveText('2/4')
+  expect(fleetAddsUp(await fleetNow(page))).toBe(true)
   await expect(draft.getByTestId('rh-look-tag')).toHaveCount(0)
   await expect(needs).toHaveText(needsBefore)
   await callBack(ctx, `ni-${n}`)
@@ -137,8 +137,9 @@ export async function checkNewHost(ctx: StepCtx): Promise<void> {
   // One receipt for the save: the header's Saved, none on the row (2026-11-05 review: two at once).
   await expect(lab.getByTestId('rh-row-saved')).toHaveCount(0)
   await expect(page.getByTestId('settings-saved-indicator')).toBeVisible()
-  // Counted at once: a seventh host, not connected yet.
-  await expect(counts).toContainText('7 hosts: 2 online, 3 not connected, 1 off, 1 found in ~/.ssh/config, ')
+  // Counted at once: a seventh host, not connected yet, so a fifth machine Walnut reaches.
+  await expect(online).toHaveText('2/5')
+  expect(await fleetNow(page)).toEqual({ online: 2, reachable: 5, off: 1, found: 1, rows: 7 })
   const saved = routes.callsTo('PUT', '/api/config')[puts].body as { hosts: Record<string, Record<string, unknown>> }
   expect(saved.hosts.devbox).toMatchObject({ hostname: 'alpha.example.com', label: 'Alpha box' })
   expect(saved.hosts.labbox).toMatchObject({ hostname: 'dup.example.com', user: 'sam', port: 2222 })
@@ -152,7 +153,7 @@ export async function checkNewHost(ctx: StepCtx): Promise<void> {
   await shot(page, 'new-host-dial-failed')
   await page.unroute(/\/api\/hosts\/labbox\/connect$/)
 
-  // Remove asks, then takes it away; the focus goes to the next row; the summary moves back.
+  // Remove asks, then takes it away; the focus goes to the next row; the Overview moves back.
   await pick(page, lab, 'Done editing')
   await pick(page, lab, 'Remove')
   await page.getByTestId('rh-row-confirm').getByTestId('rh-row-confirm-remove').click()
@@ -161,7 +162,8 @@ export async function checkNewHost(ctx: StepCtx): Promise<void> {
   expect(Object.keys(after.hosts)).not.toContain('labbox')
   expect(after.hosts.devbox).toMatchObject({ hostname: 'alpha.example.com', label: 'Alpha box' })
   await expect(page.locator(':focus')).toHaveAttribute('data-row-key', /^(ssh|fleet|net):/)
-  await expect(counts).toContainText(`6 hosts: ${FLEET}`)
+  await expect(online).toHaveText('2/4')
+  expect(fleetAddsUp(await fleetNow(page))).toBe(true)
   ctx.ran('Hosts/button#rh-row-confirm-remove', 'Hosts/button#rh-add-connect')
 }
 

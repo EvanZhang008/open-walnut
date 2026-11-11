@@ -1,16 +1,16 @@
 /**
- * Settings > Remote Hosts: ONE list of every machine Walnut runs work on (2026-11-04 review: the
- * same host showed in five groups and the list started below the fold). From the top: the
- * header's "need a look" count and Add host (the one way to add a host), one summary line for
- * the whole fleet (HostSummaryLine), Hosts (whatever Add host is making first, then This Mac, the
+ * Settings > Remote Hosts. From the top: the header's "need a look" count and Add host (the one
+ * way to add a host), the Overview (HostFleetOverview: the fleet as a dashboard, open by default:
+ * its numbers, the diagram and a card per host; 2026-11-11, the user wanted the dashboard back
+ * after the 11-07 list replaced it), Hosts (whatever Add host is making first, then This Mac, the
  * SSH hosts this editor saves to config.yaml, the machines that joined with a link, and the
- * companion's box), the network map, folded, the copies waiting for a decision, and More
- * settings, folded (RemoteHostsMore: what belongs to the whole page). Each row is a HostRow: its
+ * companion's box), the copies waiting for a decision, and More settings, folded
+ * (RemoteHostsMore: what belongs to the whole page). Each row is a HostRow: its
  * state in one line, at most one action, the rest in its More menu, Details in place (with the
  * host's own settings under "This host").
  *
- * Every row tells one store what it shows (host-list-store.ts); the summary, the count and the
- * map read it, so none of them disagrees with the list. The host settings every Details reads
+ * Every row tells one store what it shows (host-list-store.ts); the Overview's numbers and
+ * diagram and the header's count read it, so none of them disagrees with the list. The host settings every Details reads
  * are read once here (host-settings-data.tsx). Add host has one draft per way in: a second "An
  * SSH host" goes to the open draft's first empty field, and opening one way closes an untouched
  * draft of the other.
@@ -19,7 +19,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
-import { SettingsFoldGroup } from '../SettingsFoldGroup';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
@@ -28,16 +27,15 @@ import { RemoteHostSshRow } from './RemoteHostSshRow';
 import { HostJoinClosed, HostJoinError, HostJoinLink, HostJoinMaking } from './HostJoinLink';
 import { NetMachineRow } from './NetMachineRow';
 import { FleetHostRow } from './FleetHostRow';
-import { HostSummaryLine } from './HostSummaryLine';
+import { HostFleetOverview } from './HostFleetOverview';
 import { HostNeedsLook, type LookAt } from './HostNeedsLook';
-import { HostFleetTopology } from './HostFleetTopology';
 import { RemoteHostsMore } from './RemoteHostsMore';
 import { liveInvite, useHostNetwork } from './useHostNetwork';
 import { useHostFleet } from './useHostFleet';
 import { useSshHostEditor } from './useSshHostEditor';
 import { useHostRowLanding } from './useHostRowLanding';
 import { useFocusKeeper } from './useFocusKeeper';
-import { createRowStore, RowStoreProvider, useRowReports } from './host-list-store';
+import { createRowStore, RowStoreProvider } from './host-list-store';
 import { HostSettingsProvider } from './host-settings-data';
 import { aliasPlaceholder, firstEmptyField, untouchedDraft } from './host-row-model';
 import { hiddenAsTwin, refusalBlocks, type HostEntry } from './remote-hosts-model';
@@ -58,19 +56,6 @@ export function RemoteHostsSection(props: Props) {
     <RowStoreProvider value={store}>
       <RemoteHostsBody {...props} store={store} />
     </RowStoreProvider>
-  );
-}
-
-/** The map, from the list's own rows. */
-function NetworkMap({ onPick }: { onPick: (host: string) => void }) {
-  const rows = useRowReports().filter((r) => r.counted);
-  if (rows.length < 2) return null;
-  return (
-    <SettingsFoldGroup id="remote-hosts-map" heading="Network map" summary="How this Mac reaches each host." data-testid="remote-hosts-map">
-      <div className="hf-topo-panel">
-        <HostFleetTopology rows={rows} onPick={onPick} />
-      </div>
-    </SettingsFoldGroup>
   );
 }
 
@@ -261,7 +246,7 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
         }
       >
         <div ref={root} className="rh-page" data-testid="remote-hosts-page">
-          <HostSummaryLine fleet={fleet} />
+          <HostFleetOverview fleet={fleet} onPickRow={land.showHostRow} />
           <SettingsGroup heading="Hosts" data-testid="remote-hosts-list">
             {join}
             {drafts.map(sshRow)}
@@ -287,7 +272,6 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
             {network.loadError && !network.net && <SettingsRow state="warning" label="Could not read the machines that joined with a link" help={network.loadError} />}
             {network.net?.error && <SettingsRow state="warning" data-testid="host-network-sync-error" label="Machines that joined with a link" help={network.net.error} />}
           </SettingsGroup>
-          <NetworkMap onPick={land.showHostRow} />
           <ReplicaRemovalGroup only="host" labels={Object.fromEntries(Object.entries(hostLabels).map(([key, label]) => [`host:${key}`, label]))} />
           <RemoteHostsMore hostLabels={hostLabels} net={network.net} onNetChanged={() => void network.load()} />
         </div>

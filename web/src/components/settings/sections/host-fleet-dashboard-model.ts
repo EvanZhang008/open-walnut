@@ -1,5 +1,5 @@
 /**
- * What Remote Hosts draws from the fleet's readings (HostSummaryLine.tsx, the rows'
+ * What Remote Hosts draws from the fleet's readings (HostFleetOverview.tsx, HostFleetCard.tsx, the rows'
  * HostFleetVitals.tsx, HostFleetTopology.tsx): the summary, each host's one problem line,
  * its 12 hour timeline, gauges and chips, and where each node sits in the network map. Pure, so
  * each rule has a unit test (tests/web/host-fleet-dashboard-model.test.ts).

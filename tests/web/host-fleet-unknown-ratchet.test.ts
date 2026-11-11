@@ -16,7 +16,7 @@ const dir = path.resolve(__dirname, '../../web/src/components/settings/sections'
 const OWNER = 'FleetNumber.tsx'
 
 function overviewFiles(): string[] {
-  return fs.readdirSync(dir).filter((f) => /^(HostFleet|host-fleet-|Fleet|HostRow|host-row-|HostDetails|HostSummaryLine|useLinkedHostRow|useHostFleet)[\w-]*\.tsx?$/.test(f)).sort()
+  return fs.readdirSync(dir).filter((f) => /^(HostFleet|host-fleet-|Fleet|HostRow|host-row-|HostDetails|useLinkedHostRow|useHostFleet)[\w-]*\.tsx?$/.test(f)).sort()
 }
 
 function bareMarks(file: string): string[] {
@@ -35,7 +35,7 @@ function bareMarks(file: string): string[] {
 describe('the fleet Overview draws no bare "?"', () => {
   it('finds the Overview files', () => {
     const files = overviewFiles()
-    for (const f of ['HostFleetVitals.tsx', 'HostFleetTopology.tsx', 'FleetHostRow.tsx', 'HostRow.tsx', 'HostSummaryLine.tsx', 'host-row-model.ts', 'host-fleet-dashboard-model.ts', OWNER]) expect(files).toContain(f)
+    for (const f of ['HostFleetVitals.tsx', 'HostFleetTopology.tsx', 'FleetHostRow.tsx', 'HostRow.tsx', 'HostFleetOverview.tsx', 'HostFleetCard.tsx', 'host-row-model.ts', 'host-fleet-dashboard-model.ts', OWNER]) expect(files).toContain(f)
   })
   it('only FleetNumber.tsx holds the mark, and it always says why', () => {
     const hits = overviewFiles().filter((f) => f !== OWNER).flatMap(bareMarks)

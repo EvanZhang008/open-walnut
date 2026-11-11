@@ -1,5 +1,5 @@
 /**
- * How old each host's reading is, in words (useHostFleet.ts, HostSummaryLine.tsx, HostFleetVitals.tsx).
+ * How old each host's reading is, in words (useHostFleet.ts, HostFleetOverview.tsx, HostFleetCard.tsx, HostFleetVitals.tsx).
  * The page opens on what each host answered last (GET /api/v1/hosts?cached=1, server:
  * src/core/hosts/fleet-refresh.ts) and reads the hosts again only on a press, so every
  * card says when it was read, a read in flight says so on its own card, and a read that

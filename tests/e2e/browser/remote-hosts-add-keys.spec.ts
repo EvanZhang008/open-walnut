@@ -64,10 +64,21 @@ async function clickAt(page: Page, el: ReturnType<Page['locator']>): Promise<voi
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2)
 }
 
-/** A point on the pane that holds nothing (right of the summary line). */
+/**
+ * A point on the pane that holds nothing: the middle of the Overview's head, between its toggle
+ * and when the hosts were read (the head spreads them to its two ends). Checked to hold no control
+ * and no part of the open menu, so the click is on blank page.
+ */
 async function blankPoint(page: Page): Promise<{ x: number; y: number }> {
-  const box = (await page.getByTestId('rh-summary').boundingBox())!
-  return { x: box.x + box.width / 2, y: box.y + box.height + 6 }
+  const box = (await page.locator('[data-testid="host-fleet"] .hf-dash-head').boundingBox())!
+  const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  const hit = await page.evaluate(({ x, y }) => {
+    const el = document.elementFromPoint(x, y)
+    const what = el?.closest('button, a[href], input, select, textarea, [role="button"], [role="menu"], [role="menuitem"]')
+    return what ? what.outerHTML.slice(0, 120) : null
+  }, at)
+  expect(hit, 'the blank point holds no control').toBeNull()
+  return at
 }
 
 test.describe('Settings > Remote Hosts: Add host from the mouse and the keyboard', () => {

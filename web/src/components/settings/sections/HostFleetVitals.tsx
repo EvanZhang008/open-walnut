@@ -17,11 +17,11 @@ import { readFailure, readLabel } from './host-fleet-read-model';
 import { FleetNumber, UNKNOWN_MARK } from './FleetNumber';
 
 /** A reason names a command in backticks (the same text an agent reads): shown as code. */
-function withCode(text: string) {
+export function withCode(text: string) {
   return text.split('`').map((part, i) => (i % 2 === 1 ? <code key={i}>{part}</code> : part));
 }
 
-function Ring({ g }: { g: Gauge }) {
+export function Ring({ g }: { g: Gauge }) {
   const r = 21;
   const c = 2 * Math.PI * r;
   const share = g.share === null ? 0 : Math.min(1, Math.max(0, g.share));
@@ -45,7 +45,7 @@ function Ring({ g }: { g: Gauge }) {
 
 const SPARK_H = 20;
 
-function SparkRow({ s }: { s: Spark }) {
+export function SparkRow({ s }: { s: Spark }) {
   const { line, area } = sparkPaths(s.values, s.max, SPARK_H);
   return (
     <div className="hf-lane" data-testid="host-fleet-spark" data-spark={s.key} title={s.title}>
@@ -59,7 +59,7 @@ function SparkRow({ s }: { s: Spark }) {
   );
 }
 
-function Chips({ list, className, testId }: { list: Chip[]; className: string; testId: string }) {
+export function Chips({ list, className, testId }: { list: Chip[]; className: string; testId: string }) {
   if (!list.length) return null;
   return (
     <span className={className} data-testid={testId}>

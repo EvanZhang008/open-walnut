@@ -72,7 +72,11 @@ export function useHostRowLanding({ hostsRef, rowKeys, network, rowCount }: {
     flashOnce(row);
     const active = document.activeElement;
     const own = landing.kind === 'ssh' && !!active?.closest(`[data-row-key="ssh:${landing.key}"] [data-testid="rh-row-more"]`);
-    const free = lost(active) || own || !!active!.closest(PRESSED);
+    // The focus keeper's own fallback inside the join card that just changed (WebKit under load:
+    // its tick ran before this landing and put the focus on the new card's system picker). Only a
+    // program's landing carries the mark, so a person's own focus is never taken.
+    const placed = landing.kind === 'join' && !!active?.closest(JOIN_ROWS) && active.getAttribute('data-landed') === 'true';
+    const free = lost(active) || own || placed || !!active!.closest(PRESSED);
     if (!free) return;
     if (landing.kind === 'ssh') {
       const idx = hostsRef.current.findIndex((h) => h._key === landing.key);

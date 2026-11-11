@@ -1,13 +1,14 @@
 /**
- * Settings > Remote Hosts at 700 px (the phone layout): one column, every row's one action
- * inside its row and in one column with the others, the row buttons as tall as on a wide window
- * when a mouse drives them (2026-11-05 review: every one grew to a 44 px box, and Refresh sat on
- * its own line), the pinned bar one row, the join card's system picker inset and its Copy as tall
- * as the command, More settings' groups inside the window, a host's own settings (This host, in
- * its Details) inside the window, and a secret's form, new or edited, in view at 700x800 (second-model
- * review: only its Name showed, at the window's foot; 2026-11-05 review: Edit opened it at the
- * window's foot with the pinned Save across its first row). The same fixture fleet as
- * remote-hosts-every-button.spec.ts.
+ * Settings > Remote Hosts at 700 px (the phone layout): the Overview's head on one line (or Read
+ * and Refresh wrapped together at its left edge), its four numbers and its cards inside the pane,
+ * one column, every row's one action inside its row and in one column with the others, the row
+ * buttons as tall as on a wide window when a mouse drives them (2026-11-05 review: every one grew
+ * to a 44 px box, and Refresh sat on its own line), the pinned bar one row, the join card's
+ * system picker inset and its Copy as tall as the command, More settings' groups inside the
+ * window, a host's own settings (This host, in its Details) inside the window, and a secret's
+ * form, new or edited, in view at 700x800 (second-model review: only its Name showed, at the
+ * window's foot; 2026-11-05 review: Edit opened it at the window's foot with the pinned Save
+ * across its first row). The same fixture fleet as remote-hosts-every-button.spec.ts.
  * Navigation by clicks; the window narrows once the pane is open (the phone layout opens the
  * list of panes first).
  * WebKit: `PW_WEBKIT=1 ... --project=webkit`.
@@ -38,21 +39,50 @@ test.describe('Settings > Remote Hosts at 700 px', () => {
     expect(listBox.width).toBeGreaterThan(640)
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(700)
 
-    // The counts, then when it was read and Refresh right after them: no line of its own with a
-    // wide gap, and Refresh no taller than on a wide window.
-    const line = await box(page.locator('[data-testid="rh-summary"] .rh-summary-line'))
+    // The Overview's head: its toggle, then when the hosts were read and Refresh right after it,
+    // on one line, or Read and Refresh wrapped together at the head's left edge (no line of its
+    // own with a wide gap); Refresh no taller than on a wide window, and read as a link.
+    const dash = page.getByTestId('host-fleet')
+    const pane = await box(dash)
+    expect(pane.x).toBeGreaterThanOrEqual(0)
+    expect(pane.x + pane.width).toBeLessThanOrEqual(700)
+    const head = await box(dash.locator('.hf-dash-head'))
+    const toggle = await box(page.getByTestId('host-fleet-toggle'))
     const refresh = await box(page.getByTestId('host-fleet-refresh'))
-    const spend = await box(page.getByTestId('rh-summary-spend'))
-    const counts = await box(page.locator('[data-testid="rh-summary"] .rh-summary-counts'))
-    const read = await box(page.locator('[data-testid="rh-summary"] .rh-summary-read'))
-    expect(refresh.height).toBeLessThanOrEqual(30)
-    expect(read.y, 'no blank line before Read and Refresh').toBeLessThanOrEqual(spend.y + spend.height + 8)
-    // Wrapped, they start the next line at the counts' left edge; else they follow on the line.
-    if (read.y > spend.y + spend.height - 2) expect(Math.abs(read.x - counts.x)).toBeLessThanOrEqual(2)
-    expect(line.height).toBeLessThanOrEqual(3 * 24)
-    // Refresh reads as a link: its words sit next to "Read ..." (no box padding around them).
     const readAt = await box(page.getByTestId('host-fleet-read'))
+    expect(refresh.height).toBeLessThanOrEqual(30)
+    expect(Math.abs((refresh.y + refresh.height / 2) - (readAt.y + readAt.height / 2)), 'Read and Refresh on one line').toBeLessThanOrEqual(6)
     expect(refresh.x - (readAt.x + readAt.width)).toBeLessThanOrEqual(24)
+    if (readAt.y >= toggle.y + toggle.height - 2) expect(Math.abs(readAt.x - toggle.x), 'wrapped, Read starts at the head\'s left edge').toBeLessThanOrEqual(2)
+    else expect(readAt.x, 'Read follows the toggle on its line').toBeGreaterThan(toggle.x + toggle.width)
+    expect(head.height).toBeLessThanOrEqual(2 * 30)
+    for (const [name, b] of [['the toggle', toggle], ['Read', readAt], ['Refresh', refresh]] as const) {
+      expect(b.x, `${name} inside the head`).toBeGreaterThanOrEqual(head.x - 0.5)
+      expect(b.x + b.width, `${name} inside the head`).toBeLessThanOrEqual(head.x + head.width + 0.5)
+    }
+    // Its four numbers inside the pane, each whole in its tile; its cards and its Not connected
+    // rows inside the pane too, nothing in them wider than its box.
+    const tiles = dash.getByTestId('host-fleet-summary').locator('.hf-stat')
+    await expect(tiles).toHaveCount(4)
+    expect(await dash.evaluate((root) => {
+      const out: string[] = []
+      const r = root.getBoundingClientRect()
+      for (const el of root.querySelectorAll<HTMLElement>('.hf-stats, .hf-stat, .hf-panel, .hf-grid, .hf-card, .hf-off, .hf-card .hf-vitals, .hf-card .hf-history, .hf-card .hf-numbers, .hf-card .hf-problem')) {
+        const b = el.getBoundingClientRect()
+        const name = `${el.className} ${el.closest('[data-host]')?.getAttribute('data-host') ?? ''}`.trim()
+        if (el.scrollWidth - el.clientWidth > 1) out.push(`scrolls: ${name}`)
+        if (b.left < r.left - 1 || b.right > r.right + 1) out.push(`outside the pane: ${name}`)
+        const card = el.parentElement?.closest<HTMLElement>('.hf-card')
+        if (card) { const c = card.getBoundingClientRect(); if (b.left < c.left - 1 || b.right > c.right + 1) out.push(`outside its card: ${name}`) }
+      }
+      return out
+    })).toEqual([])
+    await expect(dash.getByTestId('hf-dash-card')).toHaveCount(2)
+    await expect(dash.getByTestId('hf-dash-offline')).toHaveCount(2)
+    // Its buttons as tall as the rows' with a mouse (a card's Set up, a Not connected row's Connect).
+    const dashButtons = await dash.locator('.settings-button').all()
+    expect(dashButtons.length).toBeGreaterThanOrEqual(3)
+    for (const b of dashButtons) expect((await box(b)).height, `${await b.textContent()} as tall as on a wide window`).toBeLessThanOrEqual(30)
     // The header's Add host is no taller than the row buttons with a mouse.
     expect((await box(page.locator('#remote-hosts .settings-pane-header [data-testid="remote-hosts-add"]'))).height).toBeLessThanOrEqual(30)
 

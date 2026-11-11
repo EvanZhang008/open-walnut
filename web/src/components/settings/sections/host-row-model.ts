@@ -67,7 +67,8 @@ export function listSummary(rows: RowReport[]): ListSummary {
   const fleet = rows.filter((r) => r.counted);
   for (const r of fleet) {
     if (r.sessions !== null && !r.off) sessions = (sessions ?? 0) + r.sessions;
-    if (r.spendUsd !== null) spendUsd = (spendUsd ?? 0) + r.spendUsd;
+    // A host switched off here is left out of the money too, as it is of the sessions and the Overview.
+    if (r.spendUsd !== null && !r.off) spendUsd = (spendUsd ?? 0) + r.spendUsd;
   }
   const found = rows.filter((r) => !r.counted && r.found).length;
   return {
