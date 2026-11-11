@@ -5197,7 +5197,9 @@ function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
       : cmd.slice) as HostSlice
     if (refuseForeignHome(ws, id, { home: slice?.home }, 'host.slice')) return
     const r = offlineHost.configure(slice)
-    bindGatewayClientHome(ws, slice.home)
+    // host-slice-unbound-v1: a copy sent on the bulk channel names no socket (that
+    // socket drops stream frames); the session socket is bound by the probe or leader.configure.
+    if (cmd.bind !== false) bindGatewayClientHome(ws, slice.home)
     sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(slice.home) })
   } catch (err) {
     sendError(ws, id, 'host.slice: ' + (err as Error).message)

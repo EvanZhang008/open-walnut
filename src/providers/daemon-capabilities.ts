@@ -329,6 +329,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // master (2026-10-30/31): a relay on the SSH path drops the link on an upload burst, and
   // every session's link with it. Both twins. Optional: without it the copy goes as JSON.
   'host-slice-gz-v1',
+  // 'host-slice-unbound-v1': `host.slice {sliceGz, bind: false}` takes the copy without
+  // binding the socket it came on (the bulk channel on its own SSH connection). The
+  // primary's session socket is bound by the probe or `leader.configure`, and the
+  // copy, about 0.9 MB every few minutes, stays off the connection every session on
+  // the host shares (2026-11-11: it was the largest upload left there, and a relay on
+  // the path ends a connection every few MB carried up). Both twins. Optional: without
+  // it the copy rides the session socket.
+  'host-slice-unbound-v1',
   // 'leader-epoch-v1' (leader-core.ts, docs/plan/walnut-control-plane.md): the
   // primary describes its Walnut with `leader.configure` ({home, walnutId,
   // backup}) and takes the lead back with `leader.claim` (trusted socket). The

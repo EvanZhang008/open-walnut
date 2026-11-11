@@ -8,9 +8,9 @@
  * the session's own error, and a test server's host says it is off.
  * Sentences come from @open-walnut/host-problem (or the server) only.
  */
-import { useEffect, useState } from 'react';
-import { REMOTE_OFF_NOTE, hostProblemOf } from '@open-walnut/host-problem';
-import { useHostStatus } from '@/hooks/useHostStatus';
+import { useEffect, useRef, useState } from 'react';
+import { REMOTE_OFF_NOTE, hostProblemOf, type HostProblem } from '@open-walnut/host-problem';
+import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
 import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT } from '@/hooks/useHostActions';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
@@ -105,25 +105,60 @@ export function SessionHostErrorText({ host, label, reconnecting, fallback }: {
 export const HOST_DOWN_MESSAGES_NOTE = 'Messages you send wait and go out by themselves once the connection is back; replies written meanwhile show then.';
 
 /**
- * A live session whose host nothing reaches now, said the moment the link is down (2026-11-06:
- * a host's sign-in expired and its tasks' panels said nothing; the record turns 'error' only
- * after five minutes down, and the main banner waits two). Nothing for a host that is fine or
- * only not ready: the error banner speaks for a session in error.
+ * How long a re-dial runs before the panel says the host cannot be reached (2026-11-11: a
+ * link a relay kept ending came back in 3 to 5 s each time, and the notice blinked on and
+ * off with every drop). A failed or switched-off host is said at once.
+ */
+export const HOST_DOWN_GRACE_MS = 10_000;
+
+/**
+ * When the host-down notice may show for `p` (server clock), or null for no notice: at once
+ * for a failed or switched-off host, for a reconnect once it has lasted HOST_DOWN_GRACE_MS
+ * from its start or from when this panel first saw it, whichever is earlier.
+ */
+export function hostDownShowsAt(p: HostProblem | null, firstSeenAt: number): number | null {
+  if (!p) return null;
+  if (p.type === 'connect' || p.type === 'off') return 0;
+  if (p.type !== 'reconnecting') return null;
+  const start = p.since > 0 ? Math.min(p.since, firstSeenAt) : firstSeenAt;
+  return start + HOST_DOWN_GRACE_MS;
+}
+
+/**
+ * A live session whose host nothing reaches now, said once the link has been down a few
+ * seconds (2026-11-06: a host's sign-in expired and its tasks' panels said nothing; the
+ * record turns 'error' only after five minutes down, and the main banner waits two). Nothing
+ * for a host that is fine or only not ready: the error banner speaks for a session in error.
  */
 export function SessionHostDownBanner({ host, label }: { host: string; label: string }) {
   const status = useHostStatus(host);
   const replica = useIsCloudReplica();
   const p = hostProblemOf(status, { replica });
   const down = !!p && (p.type === 'connect' || p.type === 'reconnecting' || p.type === 'off');
+  const connected = status?.connected === true;
+  // The first moment this panel saw the link down, kept until it is connected again.
+  const firstSeen = useRef<number | null>(null);
+  if (connected || !status) firstSeen.current = null;
+  else if (down && firstSeen.current === null) firstSeen.current = serverNow();
+  const showAt = down ? hostDownShowsAt(p, firstSeen.current ?? serverNow()) : null;
+  const [tick, rerender] = useState(0);
+  // Armed again after each fire (`tick`): a fire a moment early (the server clock's skew moved) waits on.
+  useEffect(() => {
+    if (showAt === null) return;
+    const wait = showAt - serverNow();
+    if (wait <= 0) return;
+    const t = setTimeout(() => rerender((n) => n + 1), wait + 50);
+    return () => clearTimeout(t);
+  }, [showAt, tick]);
+  const showNow = showAt !== null && serverNow() >= showAt;
   // Held until the host is connected again: a re-dial in flight reads as no problem for its
   // first half minute (no failure recorded yet), and the notice must not blink off meanwhile.
   const [held, setHeld] = useState(false);
-  const connected = status?.connected === true;
   useEffect(() => {
-    if (down) setHeld(true);
+    if (showNow) setHeld(true);
     else if (connected || !status) setHeld(false);
-  }, [down, connected, status]);
-  if (!down && !held) return null;
+  }, [showNow, connected, status]);
+  if (!showNow && !held) return null;
   const l = status?.label || label || host;
   return (
     <PanelNotice className="session-error-banner session-error-banner--reconnecting" icon={'\u21BB'} testId="session-host-down" role="status">

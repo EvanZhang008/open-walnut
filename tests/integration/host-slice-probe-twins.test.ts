@@ -151,9 +151,10 @@ function slice(overrides: Partial<HostSlice> = {}): HostSlice {
 
 const twins: Array<'source' | 'standalone'> = bunPath ? ['source', 'standalone'] : ['source']
 
-it('advertises host-slice-probe-v1 and host-slice-gz-v1', () => {
+it('advertises host-slice-probe-v1, host-slice-gz-v1 and host-slice-unbound-v1', () => {
   expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('host-slice-probe-v1')
   expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('host-slice-gz-v1')
+  expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('host-slice-unbound-v1')
 })
 
 describe.each(twins)('host.slice probe on the real %s daemon', (twin) => {
@@ -197,6 +198,31 @@ describe.each(twins)('host.slice probe on the real %s daemon', (twin) => {
       if (g.ok) expect(JSON.stringify(g.result)).toContain('Gzipped work')
     }, { timeout: 15_000, interval: 50 })
     // Back to the copy the other cases read.
+    const ws2 = await connectWs(d.port)
+    try { expect((await cmd(ws2, { cmd: 'host.slice', slice: slice() })).ok).toBe(true) } finally { ws2.close() }
+    await new Promise((r) => setTimeout(r, 300))
+  }, 30_000)
+
+  it('takes a copy sent with bind:false (host-slice-unbound-v1) and binds nothing', async () => {
+    // 2026-11-11: the whole copy on the session link was what a relay dropped it on; the
+    // server sends it on the bulk channel's own connection, which must name no Walnut.
+    const ws = await connectWs(d.port)
+    const seen: string[] = []
+    ws.on('message', (raw) => seen.push(raw.toString()))
+    try {
+      const gz = zlib.gzipSync(Buffer.from(JSON.stringify(slice({ hash: 'h-unbound-1', tasks: [{ id: TASK_A, title: 'Unbound work', phase: 'IN_PROGRESS', project: 'Acme' }] })))).toString('base64')
+      const r = await cmd(ws, { cmd: 'host.slice', sliceGz: gz, bind: false })
+      expect(r.ok, JSON.stringify(r)).toBe(true)
+      expect(data(r).changed).toBe(true)
+      // Held, and unbound: the gateway answers from the new copy while this socket is open.
+      await vi.waitFor(async () => {
+        const g = await gateway(d.sock, A, 'task_get', { id: TASK_A })
+        expect(g.ok, JSON.stringify(g)).toBe(true)
+        if (g.ok) expect(JSON.stringify(g.result)).toContain('Unbound work')
+        if (g.ok) expect(g.result).toMatchObject({ offline: true })
+      }, { timeout: 15_000, interval: 50 })
+      expect(seen.some((m) => m.includes('task_get'))).toBe(false)
+    } finally { ws.close() }
     const ws2 = await connectWs(d.port)
     try { expect((await cmd(ws2, { cmd: 'host.slice', slice: slice() })).ok).toBe(true) } finally { ws2.close() }
     await new Promise((r) => setTimeout(r, 300))

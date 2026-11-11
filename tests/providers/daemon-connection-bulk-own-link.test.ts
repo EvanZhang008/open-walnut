@@ -8,13 +8,18 @@
  *   - O2: the forward's connection ending drops only the bulk channel (the session
  *     link stays up), and an upload sent meanwhile waits for the new bulk socket
  *     instead of taking the session link;
- *   - O3: an upload whose bulk channel does not come back in time rides the session link;
+ *   - O3: a background upload whose bulk channel does not come back in time fails with
+ *     nothing sent, never the session link (2026-11-11: uploads fell back there and took it
+ *     down); a person's own upload still rides the session link after the wait;
  *   - O4: a forward that cannot open leaves the bulk channel on the session link, and
  *     uploads go at once;
  *   - O5: bytes heard on that bulk socket never count as the session link's (its pongs
  *     would otherwise keep a dead session link reading alive);
  *   - O6: fs.write rides the bulk channel only when big;
- *   - O7: own connections that keep ending soon back off before they dial again.
+ *   - O7: own connections that keep ending soon back off before they dial again;
+ *   - O8: the host's whole read copy rides the bulk channel unbound (host-slice-unbound-v1),
+ *     after leader.configure bound the session socket; its probe stays on the session link;
+ *   - O9: a daemon that refuses leader.configure takes the copy bound, on the session link.
  * The mock forward is a TCP proxy to the mock daemon (no SSH in tests).
  */
 
@@ -25,6 +30,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { _setBulkForwardForTesting, type LaneForward } from '../../src/providers/stream-lane.js'
+import { linkFailureKind } from '../../src/providers/link-failure.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 const TARGET = { hostname: '127.0.0.1', user: undefined, port: undefined }
@@ -134,7 +140,7 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     expect(daemon.getCommandHistoryFor('fs.ls')[0].connIndex).toBe(0)
   })
 
-  it('O3: an upload whose bulk channel does not come back in time rides the session link', async () => {
+  it('O3: a background upload whose bulk channel does not come back in time fails with nothing sent', async () => {
     await connectWithForward()
     statics.BULK_REDIAL_DELAY_MS = 60_000
     statics.BULK_UPLOAD_WAIT_MS = 300
@@ -142,9 +148,51 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     await waitFor(() => !conn.bulkChannelActive, 5_000, 'bulk channel down')
     daemon.clearCommandHistory()
     const startedAt = Date.now()
-    await conn.send('fs.writePart', { path: '/tmp/x', offset: 0, data: 'AAAA' })
+    for (const [cmd, params] of [
+      ['fs.writePart', { path: '/tmp/x', offset: 0, data: 'AAAA' }],
+      ['replica.put', { home: '/h', kind: 'notes', files: [{ path: 'a.md', data: 'AAAA' }] }],
+      ['host.slice', { sliceGz: 'AAAA', bind: false }],
+    ] as const) {
+      const err = await conn.send(cmd, params as Record<string, unknown>).then(() => null, (e: Error) => e)
+      expect(err?.message, cmd).toMatch(/nothing was sent/)
+      expect(linkFailureKind(err), cmd).toBe('no-link')
+    }
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(250)
-    expect(daemon.getCommandHistoryFor('fs.writePart')[0].connIndex).toBe(0)
+    // None reached the daemon, and the session link is still up.
+    for (const cmd of ['fs.writePart', 'replica.put']) expect(daemon.getCommandHistoryFor(cmd), cmd).toEqual([])
+    expect(daemon.getCommandHistoryFor('host.slice').filter((c) => c.payload.bind === false)).toEqual([])
+    expect(conn.connected).toBe(true)
+    // A person's own upload (a picture pasted into a session, a file saved) is not lost: after
+    // the wait it rides the session link.
+    await conn.send('fs.write', { path: '/tmp/big', data: 'A'.repeat(300 * 1024), encoding: 'base64' })
+    expect(daemon.getCommandHistoryFor('fs.write')[0].connIndex).toBe(0)
+    // A small command still goes on the session link at once.
+    await conn.send('fs.ls', { path: '/tmp' })
+    expect(daemon.getCommandHistoryFor('fs.ls')[0].connIndex).toBe(0)
+  })
+
+  it('O8: the whole host copy rides the bulk channel unbound, after leader.configure on the session link', async () => {
+    daemon.answerWith('leader.configure', { epoch: 1, holder: 'primary' })
+    await connectWithForward()
+    await waitFor(() => daemon.getCommandHistoryFor('host.slice').some((c) => typeof c.payload.sliceGz === 'string'), 10_000, 'the host copy')
+    const slices = daemon.getCommandHistoryFor('host.slice')
+    const copy = slices.find((c) => typeof c.payload.sliceGz === 'string')!
+    expect(copy.payload.bind).toBe(false)
+    expect(copy.connIndex).toBe(1)
+    // The probe (names the copy, carries no bytes) binds the session socket and stays there.
+    for (const probe of slices.filter((c) => c.payload.sliceGz === undefined)) expect(probe.connIndex).toBe(0)
+    const leader = daemon.getCommandHistoryFor('leader.configure')
+    expect(leader.length).toBeGreaterThanOrEqual(1)
+    expect(leader[0].connIndex).toBe(0)
+    expect(leader[0].timestamp).toBeLessThanOrEqual(copy.timestamp)
+  })
+
+  it('O9: a daemon that refuses leader.configure takes the copy bound, on the session link', async () => {
+    await connectWithForward()
+    await waitFor(() => daemon.getCommandHistoryFor('host.slice').some((c) => typeof c.payload.sliceGz === 'string'), 10_000, 'the host copy')
+    const copy = daemon.getCommandHistoryFor('host.slice').find((c) => typeof c.payload.sliceGz === 'string')!
+    expect(copy.payload.bind).toBeUndefined()
+    expect(copy.connIndex).toBe(0)
   })
 
   it('O5: bytes and replies on the own-connection bulk socket are not the session link\'s', async () => {

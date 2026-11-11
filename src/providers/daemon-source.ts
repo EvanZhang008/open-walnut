@@ -6497,7 +6497,8 @@ function cmdHostSlice(ws, id, cmd) {
       : cmd.slice;
     if (refuseForeignHome(ws, id, { home: slice && slice.home }, 'host.slice')) return;
     var r = offlineHost.configure(slice);
-    bindGatewayClientHome(ws, slice.home);
+    // host-slice-unbound-v1: a copy sent on the bulk channel names no socket. Mirror daemon-standalone.ts.
+    if (cmd.bind !== false) bindGatewayClientHome(ws, slice.home);
     sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(slice.home) });
   } catch (err) {
     sendError(ws, id, 'host.slice: ' + err.message);

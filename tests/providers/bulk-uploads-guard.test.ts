@@ -34,9 +34,20 @@ const DOWNLOADS = new Set([
   'history.readyView', 'history.readyKeys',
 ])
 
+/**
+ * Uploads by a flag of the request (DaemonConnection.isUpload): the host's whole read copy
+ * sent with `bind: false` (host-slice-unbound-v1) rides the bulk channel; its probe, and the
+ * copy an older daemon takes, bind the socket they arrive on and stay on the session link.
+ * 2026-11-11: the copy (about 0.9 MB, again after every reconnect) on the session link was
+ * 14 drops in 30 minutes.
+ */
+const UPLOAD_BY_FLAG: Record<string, string> = {
+  'host.slice': "cmd === 'host.slice' && params.bind === false",
+}
+
 /** Byte-carrying commands that stay on the session link, and why. */
 const ON_SESSION_LINK: Record<string, string> = {
-  'host.slice': 'binds the socket it arrives on to its Walnut for gateway calls; gzipped and paced (host-slice-pace.ts)',
+  'host.slice': 'without bind:false (an older daemon, a refused leader.configure) the copy binds the socket it arrives on for gateway calls; gzipped and paced (host-slice-pace.ts). Its probe carries no bytes',
   'http.request': "host_http's request body, a person's API call: small; ordered with the call that asked for it",
   'oneshot.run': 'a one-shot prompt, a few KB',
   'turns.guard': 'its files are paths a rewind would touch, not their bytes',
@@ -104,6 +115,24 @@ describe('bytes carried up to a host ride the bulk channel', () => {
       .filter((s) => !uploads.has(s.cmd) && !whenBig.has(s.cmd) && !DOWNLOADS.has(s.cmd) && !(s.cmd in ON_SESSION_LINK))
       .map((s) => `${s.at} sends ${s.cmd} with bytes: add it to BULK_UPLOADS (and BULK_COMMANDS) or BULK_WHEN_BIG, or to ON_SESSION_LINK with why`)
     expect(bad).toEqual([])
+  })
+
+  it('an upload by flag is read as an upload, and its sender sets the flag', () => {
+    const isUpload = CONN.slice(CONN.indexOf('static isBackgroundUpload('), CONN.indexOf('static isBackgroundUpload(') + 900)
+    for (const [cmd, rule] of Object.entries(UPLOAD_BY_FLAG)) {
+      expect(isUpload, cmd).toContain(rule)
+      expect(CONN, cmd).toMatch(new RegExp(`send\\('${cmd.replace('.', '\\.')}'[^\n]*bind: false`))
+    }
+  })
+
+  it('a background upload never falls back to the session link while its own channel is meant to be up', () => {
+    const once = CONN.slice(CONN.indexOf('private async sendOnce('), CONN.indexOf('private async sendOnce(') + 6_000)
+    expect(once).toMatch(/const upload = DaemonConnection\.isUpload\(cmd, params\)/)
+    expect(once).toMatch(/if \(background && this\.bulkOwnLink && !bulkSocket\) \{\s*throw markLinkFailure\(/)
+    // Every upload no person waits on is in the background set.
+    const background = setOf('BACKGROUND_UPLOADS')
+    for (const c of ['fs.writePart', 'replica.put', 'replica.sync', 'attachments.put', 'attachments.sync']) expect(background, c).toContain(c)
+    expect([...background].filter((c) => !uploads.has(c) && !whenBig.has(c))).toEqual([])
   })
 
   it('the listed exceptions are still sent somewhere', () => {

@@ -634,6 +634,17 @@ function requestBytesEstimate(params: Record<string, unknown>): number {
   return n
 }
 
+/**
+ * What a session link sent before it dropped: its age, the request bytes on its
+ * connection, and the commands that sent the most (for the "connection lost" line).
+ */
+export function mainUploadSummary(sent: ReadonlyMap<string, number>, upAt: number, now: number): Record<string, unknown> {
+  let total = 0
+  for (const n of sent.values()) total += n
+  const top = [...sent].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([cmd, n]) => `${cmd}=${Math.round(n / 1024)}KB`)
+  return { upForMs: upAt > 0 ? Math.max(0, now - upAt) : null, sentKB: Math.round(total / 1024), topSent: top.join(' ') }
+}
+
 export class DaemonConnection {
   private ws: WebSocket | null = null
   /** Byte streams to the host's server (core/host-server/), through the daemon. */
@@ -879,6 +890,11 @@ export class DaemonConnection {
   private bulkOwnLink = false
   /** The open bulk socket rides its own connection: its bytes say nothing about the session link's. */
   private bulkSocketOwn = false
+  /**
+   * Request bytes this link's session socket carried per command since it came up. A relay
+   * ends the SSH connection a few MB in, so the "connection lost" line names what sent them.
+   */
+  private mainSentByCmd = new Map<string, number>()
   /** Bytes heard on a bulk socket of its own connection (kept out of _heardBytes). */
   private _ownBulkHeardBytes = 0
   /** Own connections in a row that ended within BULK_OWN_MIN_LIFE_MS: the redial backs off. */
@@ -943,6 +959,14 @@ export class DaemonConnection {
    */
   static readonly BULK_UPLOADS = new Set(['fs.writePart', 'replica.put', 'attachments.put', 'upload.part'])
   /**
+   * Uploads no person waits on (a copy's chunk that its relay retries, the replicas, the
+   * notes' pictures, the host's read copy): while the bulk channel is meant to have a
+   * connection of its own they never ride the session link, whose connection their
+   * megabytes would end (2026-11-11). A person's own (a picture pasted into a session, a
+   * file saved, an upload) still goes there after the wait rather than being lost.
+   */
+  static readonly BACKGROUND_UPLOADS = new Set(['fs.writePart', 'replica.put', 'replica.sync', 'attachments.put', 'attachments.sync'])
+  /**
    * Commands whose request is big only sometimes: a picture pasted into a session on the
    * host or a large file saved (fs.write), a replica's manifest of thousands of rows. At
    * BULK_WHEN_BIG_BYTES or more they ride the bulk channel as uploads; small, they stay on
@@ -950,7 +974,23 @@ export class DaemonConnection {
    */
   static readonly BULK_WHEN_BIG = new Set(['fs.write', 'replica.sync', 'attachments.sync'])
   static BULK_WHEN_BIG_BYTES = 256 * 1024
-  /** The longest an upload waits for the bulk channel before it rides the session link. */
+  /**
+   * The request is an upload: one of BULK_UPLOADS, a BULK_WHEN_BIG command at its size, or
+   * the host's whole read copy sent unbound (host-slice-unbound-v1, pushHostSlice).
+   */
+  static isBackgroundUpload(cmd: string, params: Record<string, unknown>): boolean {
+    return DaemonConnection.BACKGROUND_UPLOADS.has(cmd) || (cmd === 'host.slice' && params.bind === false)
+  }
+  static isUpload(cmd: string, params: Record<string, unknown>): boolean {
+    return DaemonConnection.BULK_UPLOADS.has(cmd)
+      || (cmd === 'host.slice' && params.bind === false)
+      || (DaemonConnection.BULK_WHEN_BIG.has(cmd) && requestBytesEstimate(params) >= DaemonConnection.BULK_WHEN_BIG_BYTES)
+  }
+  /**
+   * The longest an upload waits for the bulk channel on its own connection. A background
+   * upload then fails with nothing sent (its caller tries again); a person's rides the
+   * session link.
+   */
   private static BULK_UPLOAD_WAIT_MS = 20_000
   /** An own connection that lived less than this counts as short: the next redial waits longer. */
   private static BULK_OWN_MIN_LIFE_MS = 60_000
@@ -1579,6 +1619,7 @@ export class DaemonConnection {
     }
     if (changed && value) {
       this.linkUpAt = Date.now()
+      this.mainSentByCmd = new Map()
       // What a daemon process was sent it still holds when the link comes back to
       // it: the skills (228 KB), the routine template (60 KB) and the host-replica
       // manifests (about 630 KB) went again on every reconnect, in the link's first
@@ -2002,7 +2043,17 @@ export class DaemonConnection {
           const sliceGz = (this.hostKey !== '__local__' || json.length * 3 > DAEMON_FRAME_MAX_BYTES) && this.hasCapability('host-slice-gz-v1')
             ? (await gzipAsync(Buffer.from(json))).toString('base64') : null
           const bytes = sliceGz ? sliceGz.length : json.length
-          const reply = await this.send('host.slice', sliceGz ? { sliceGz } : { slice: slice as unknown as Record<string, unknown> })
+          // The whole copy is the biggest thing the link uploads (about 0.9 MB, again after
+          // every reconnect), and a relay ends an SSH connection a few MB in (2026-11-11:
+          // 14 drops in 30 min, each push and re-push on the session link). With a bulk
+          // channel on its own connection it rides that one, naming no socket there
+          // (host-slice-unbound-v1); leader.configure binds the session socket first.
+          // A daemon that refuses leader.configure takes the copy bound, on the session link, as before.
+          const unbound = !!sliceGz && this.sliceRidesOwnBulk() && await this.configureLeaderOnce().catch((err) => {
+            log.session.warn('DaemonConnection: leader.configure failed; the copy goes bound', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
+            return false
+          })
+          const reply = await this.send('host.slice', sliceGz ? { sliceGz, ...(unbound ? { bind: false } : {}) } : { slice: slice as unknown as Record<string, unknown> })
           this.hostSliceSentAt = Date.now()
           this.hostSliceSentBytes = bytes
           if (reply.ok !== true) {
@@ -2024,26 +2075,7 @@ export class DaemonConnection {
         } while (this.hostSlicePushRerun)
         // Once per connection, after the handover: describe the Walnut and take
         // the lead back if the cloud companion held it (core/leader/).
-        if (!this.leaderConfigured && this.hasCapability('leader-epoch-v1')) {
-          const { configureHostLeader } = await import('../core/leader/primary-leader.js')
-          if (await configureHostLeader({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) })) {
-            this.leaderConfigured = true
-            // A routine run may start on this host now (clock-host-start-v1): the set
-            // goes again with its `start` fields (a no-op push when no routine has one).
-            if (this.hostKey !== '__local__' && this.hasCapability('clock-host-start-v1')) this.pushTriggers()
-            // The daemon now knows which Walnut speaks: the server this Mac keeps
-            // on the host may be set up (core/host-server/; off unless enabled).
-            // A test server runs one only for the replica check's host, in its own root.
-            const iso = this.isolation
-            if (iso.mode === 'shared' || (iso.mode === 'isolated' && iso.replica)) void import('../core/host-server/index.js').then((m) => m.hostServerConnected(this.hostServerHandle())).catch((err) => {
-              log.session.warn('DaemonConnection: host server setup failed to start', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
-            })
-            // And which plugin jobs run on this machine (core/plugin-jobs/; nothing is sent to an older daemon).
-            void import('../core/plugin-jobs/index.js').then((m) => m.pluginJobsConnected(this.hostServerHandle())).catch((err) => {
-              log.session.warn('DaemonConnection: plugin jobs setup failed to start', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
-            })
-          }
-        }
+        await this.configureLeaderOnce()
         // Then, once per connection, the host's read copy of the notes, memory and
         // skills (their own changes push it from then on: core/host-replica-sync.ts):
         // after this link's first copy, and, back at a daemon process that held ours,
@@ -2075,6 +2107,45 @@ export class DaemonConnection {
         this.hostSlicePushInFlight = false
       }
     })()
+  }
+
+  /**
+   * Once per connection, after the handover: describe the Walnut and take the lead back
+   * if the cloud companion held it (core/leader/). Binds the session socket to this
+   * Walnut on the daemon. True once it has run on this connection.
+   */
+  private async configureLeaderOnce(): Promise<boolean> {
+    if (this.leaderConfigured) return true
+    if (!this.hasCapability('leader-epoch-v1')) return false
+    const { configureHostLeader } = await import('../core/leader/primary-leader.js')
+    if (await configureHostLeader({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) })) {
+      this.leaderConfigured = true
+      // A routine run may start on this host now (clock-host-start-v1): the set
+      // goes again with its `start` fields (a no-op push when no routine has one).
+      if (this.hostKey !== '__local__' && this.hasCapability('clock-host-start-v1')) this.pushTriggers()
+      // The daemon now knows which Walnut speaks: the server this Mac keeps
+      // on the host may be set up (core/host-server/; off unless enabled).
+      // A test server runs one only for the replica check's host, in its own root.
+      const iso = this.isolation
+      if (iso.mode === 'shared' || (iso.mode === 'isolated' && iso.replica)) void import('../core/host-server/index.js').then((m) => m.hostServerConnected(this.hostServerHandle())).catch((err) => {
+        log.session.warn('DaemonConnection: host server setup failed to start', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
+      })
+      // And which plugin jobs run on this machine (core/plugin-jobs/; nothing is sent to an older daemon).
+      void import('../core/plugin-jobs/index.js').then((m) => m.pluginJobsConnected(this.hostServerHandle())).catch((err) => {
+        log.session.warn('DaemonConnection: plugin jobs setup failed to start', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
+      })
+    }
+    return this.leaderConfigured
+  }
+
+  /**
+   * The whole host copy goes on the bulk channel's own SSH connection, unbound: a
+   * remote host whose daemon takes it there (host-slice-unbound-v1) and can be bound
+   * by leader.configure, with that channel set up as a connection of its own.
+   */
+  private sliceRidesOwnBulk(): boolean {
+    return this.hostKey !== '__local__' && this.bulkOwnLink
+      && this.hasCapability('host-slice-unbound-v1') && this.hasCapability('leader-epoch-v1')
   }
 
   /** Whether the copy last pushed to this daemon names the session. */
@@ -2451,13 +2522,14 @@ export class DaemonConnection {
   ): Promise<DaemonCommandResult> {
     // An overdue swap may end with the old daemon restarted unprepared, and an older daemon's
     // shutdown does not wait for a file write: a file change waits for the swap (bounded).
-    const upload = DaemonConnection.BULK_UPLOADS.has(cmd)
-      || (DaemonConnection.BULK_WHEN_BIG.has(cmd) && requestBytesEstimate(params) >= DaemonConnection.BULK_WHEN_BIG_BYTES)
+    const upload = DaemonConnection.isUpload(cmd, params)
+    const background = upload && DaemonConnection.isBackgroundUpload(cmd, params)
+    let waited = 0
     // An upload waits for the bulk channel's own connection before the swap fence is read,
     // so a fence raised meanwhile still holds it.
     if (upload && this.bulkOwnLink && !this.bulkChannelActive && this._connected) {
       this.dialBulkSoon()
-      const waited = await this.waitBulkChannel(Math.min(DaemonConnection.BULK_UPLOAD_WAIT_MS, Math.floor(timeoutMs / 2)))
+      waited = await this.waitBulkChannel(Math.min(DaemonConnection.BULK_UPLOAD_WAIT_MS, Math.floor(timeoutMs / 2)))
       timeoutMs = Math.max(1_000, timeoutMs - waited)
     }
     if (((this._swapOverBusy && this._swapInFlight) || this._fileFence) && SWAP_HELD_FILE_COMMANDS.has(cmd)) await this.waitOverBusySwap()
@@ -2499,6 +2571,15 @@ export class DaemonConnection {
     const bulkSocket = routedBulk && this.bulkWs?.readyState === WebSocket.OPEN
       ? this.bulkWs
       : null
+
+    // A background upload never takes the session link instead: a relay ends that connection
+    // a few MB in, and with it every session on the host (2026-11-11: uploads fell back there
+    // each time their own channel dropped, and took the session link down after it). Read
+    // here, after every wait, so a channel that dropped meanwhile counts. Nothing was sent;
+    // the caller's retry finds the channel back.
+    if (background && this.bulkOwnLink && !bulkSocket) {
+      throw markLinkFailure(new Error(`${cmd}: the upload channel to ${this.hostKey} is not up (waited ${Math.round(waited / 1000)}s); nothing was sent, try again`), 'no-link')
+    }
 
     const startedAt = Date.now()
     const sentOn = bulkSocket ?? this.ws
@@ -2570,6 +2651,7 @@ export class DaemonConnection {
       const timer = setTimeout(onTimeout, timeoutMs)
 
       this.pendingCommands.set(id, { resolve, reject, timer, cmd, startedAt, traceId, socket: sentOn, bulk: !!bulkSocket })
+      if (!this.ownBulkSocket(sentOn)) this.mainSentByCmd.set(cmd, (this.mainSentByCmd.get(cmd) ?? 0) + message.length)
       sentOn.send(message)
     })
   }
@@ -3308,6 +3390,7 @@ export class DaemonConnection {
           if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error(`not connected to ${this.hostKey}`)
           const message = JSON.stringify(frame)
           assertFrameFits(message, 'a stream frame', this.hostKey)
+          this.mainSentByCmd.set('stream', (this.mainSentByCmd.get('stream') ?? 0) + message.length)
           ws.send(message)
         },
         // A host server's browser reaching this Mac: into the tunnel port, which
@@ -7537,6 +7620,7 @@ export class DaemonConnection {
 
     log.session.info('DaemonConnection: connection lost, scheduling reconnect', {
       host: this.hostKey, delayMs: DaemonConnection.RECONNECT_DELAY_MS,
+      ...mainUploadSummary(this.mainSentByCmd, this.linkUpAt, Date.now()),
     })
     // The health monitor's "host link keeps dropping" alarm (core/health-monitor/alarms.ts).
     metricsCount('host.link.lost', 1, { host: this.hostKey })

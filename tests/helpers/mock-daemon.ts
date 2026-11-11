@@ -314,8 +314,14 @@ export class MockDaemon {
       return // no reply — client's per-command timer fires
     }
 
+    const canned = typeof cmd.cmd === 'string' ? this._answers.get(cmd.cmd) : undefined
+    if (canned) return this.sendOk(ws, id, canned)
     this.dispatchCommand(ws, id, cmd)
   }
+
+  private _answers = new Map<string, Record<string, unknown>>()
+  /** Answer `cmd` with `reply` (ok), whatever the switch below does with it. */
+  answerWith(cmd: string, reply: Record<string, unknown>): void { this._answers.set(cmd, reply) }
 
   /** The command switch, split out so the unified `agent.*` family can
    *  re-dispatch onto a routed command exactly like daemon-standalone does
