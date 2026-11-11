@@ -149,6 +149,9 @@ export interface PageLanding {
    *  box can change height meanwhile (a status row that goes away after the
    *  first send): the landing keeps the passage at its SCREEN y (C4). */
   boxTop?: number;
+  /** When the page was left with that passage on screen (the stack's capture):
+   *  a pop to it lands on the passage unless the reader kept a place since. */
+  seenAt?: number;
 }
 
 /** Where the passage must sit in the box now, for it to be at its old screen y. */

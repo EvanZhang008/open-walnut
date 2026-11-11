@@ -17,7 +17,8 @@
  * folded. Closing the card with words leaves them for the next Ask on that
  * passage, and a reload keeps Conversation Mode. Asked inline on a passage
  * inside a question's answer (from its page), that question stays open. "Ask in
- * Tree" from Conversation Mode switches to Tree Mode and pushes the page.
+ * Tree" from Conversation Mode switches to Tree Mode and pushes the page; with
+ * room for two pages, the left half shows Main at the passage asked about.
  *
  * Chromium and WebKit. The tagged fixture session (it has questions, so Tree
  * Mode is a real stack: a session without any renders Conversation Mode); the
@@ -304,5 +305,43 @@ test.describe('Ask here asks in the view on screen; Ask inline and Ask in Tree p
     await expect(card(panel)).toHaveCount(0)
     await expect(mainPage(panel).locator('.thread-quote-head')).toContainText(PHRASE)
     await shot(page, '9-ask-in-tree')
+  })
+
+  test('Ask in Tree from Conversation Mode with room for two pages: the left half shows Main at the passage asked about, not at its end', async ({ page }) => {
+    // 2026-11-05 review: the split's left half opened at the end of the main
+    // conversation, the passage out of view. The whole page fit the wider box,
+    // so the reader's kept place read "at the end", and the narrow half went
+    // there; its first-load bottom pin then took any landing back.
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    await page.addStyleTag({ content: '.notification-toaster { display: none !important; }' })
+    const panel = await openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'linear', map: 'default' })
+    await switchView(panel, 'linear')
+    await centreInHistory(page, mainPage(panel), PHRASE, { tolerance: 20 })
+    await selectPassage(page, mainPage(panel), PHRASE)
+    await pill(page).locator('[data-testid="quote-ask-mode-btn"]').click()
+    await page.locator('[data-testid="quote-pin-menu"] [data-testid="quote-ask-tree"]').click()
+    const left = panel.locator('.tree-split-left[data-tree-half="L"] .session-history')
+    await expect(left).toBeVisible({ timeout: 15_000 })
+    const inView = () => left.evaluate((box, needle) => {
+      const r = box.getBoundingClientRect()
+      const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT)
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const at = (n as Text).data.indexOf(needle)
+        if (at < 0) continue
+        const range = document.createRange()
+        range.setStart(n, at)
+        range.setEnd(n, at + needle.length)
+        const top = range.getClientRects()[0]?.top
+        return top !== undefined && top >= r.top && top <= r.bottom - 20 ? 'in view' : `off at ${Math.round(top ?? NaN)} (box ${Math.round(r.top)}..${Math.round(r.bottom)}, scrollTop ${box.scrollTop})`
+      }
+      return 'not drawn'
+    }, PHRASE.slice(0, 20))
+    await expect.poll(inView, { timeout: 10_000 }).toBe('in view')
+    // It stays there: nothing pins the new box to its end afterwards.
+    await page.waitForTimeout(1_500)
+    expect(await inView()).toBe('in view')
+    await shot(page, '10-ask-in-tree-left-half')
   })
 })

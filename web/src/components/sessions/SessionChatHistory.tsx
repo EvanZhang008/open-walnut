@@ -2867,6 +2867,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }, 250);
   }, [scrollLog, selectionActive, noteSuppressedScroll]);
 
+  /** The session a stack landing put this box at a passage for (useThreadLanding's ownsPlace). */
+  const landingOwnedFor = useRef<string | null>(null);
   // Path A-3: LOAD-WINDOW BOTTOM PIN (inc-1786654438334 — "opens normal, jumps
   // up, then jumps back down while loading"). During initial load, content
   // keeps growing AFTER the pre-paint forced scroll (Phase 2 replace, images,
@@ -2917,6 +2919,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (stopped) return;
       // A question page owns its landing (a reload restores it): never pin it.
       if (onQuestionPageRef.current) { stop(); return; }
+      // A stack landing put the box at a passage (it can run before this effect
+      // subscribes to anything, in the mount's layout effects): the reader's place.
+      if (landingOwnedFor.current === sessionId) { stop(); return; }
       // A kept place owns it while it holds: skip the frame (a place that turns
       // out not to be drawn any more lets the pin take the bottom again).
       if (readingPlace.held.current) { raf = requestAnimationFrame(pin); return; }
@@ -4658,8 +4663,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     onDerived: (marks) => review.onMarks(marks.filter((m) => !m.draft)),
     live: { keys: liveMarkKeys, layerRef: liveLayerRef },
   });
+  const landingOwnsPlace = useCallback(() => { landingOwnedFor.current = sessionId; }, [sessionId]);
   useThreadLanding({
-    sessionId, enabled: stackMode, targetOnly: threadsApi.viewMode === 'linear', containerRef, stack, tree: threadTree,
+    sessionId, enabled: stackMode, targetOnly: threadsApi.viewMode === 'linear', rowsReady: messages.length > 0, ownsPlace: landingOwnsPlace, containerRef, stack, tree: threadTree,
     locatePassage, jumpToPlace, toast, isAtBottom, settleLayout: threadMap.settle, placeAt: readingPlace.placeAt, keepPlace: readingPlace.keep, adoptPlace: readingPlace.adopt, placeHeld: placeHeldFn,
   });
 

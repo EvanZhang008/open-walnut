@@ -37,6 +37,10 @@ export interface UseThreadLandingArgs {
    * top" and the whole conversation jumped to its first message (2026-09-30).
    */
   targetOnly: boolean;
+  /** The timeline holds rows to land on (false while a box waits for its first ones). */
+  rowsReady?: boolean;
+  /** A landing put the box at a passage: the box's own first-load pin to the bottom stops. */
+  ownsPlace?: () => void;
   containerRef: RefObject<HTMLDivElement | null>;
   stack: ThreadStackApi;
   tree: ThreadTree;
@@ -142,9 +146,12 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
   const passages = useRef(new Map<string, Passage>());
 
   const passageOf = useCallback((childKey: string, pending?: ThreadPendingPage): Passage | undefined => {
-    if (pending && pending.pageKey === childKey) {
-      return { msgId: pending.parentMsgId, ...(pending.quote ? { quote: pending.quote } : {}) };
-    }
+    // A page not in the tree yet (an Ask not sent: the stack's pending page or a
+    // draft) still knows its passage. Tree Mode's split left half mounts with a
+    // pop from such a page, and without it landed nowhere: at the bottom.
+    const s = argsRef.current.stack;
+    const page = [pending, s.pending, ...s.draftPages].find((p) => p?.pageKey === childKey);
+    if (page) return { msgId: page.parentMsgId, ...(page.quote ? { quote: page.quote } : {}) };
     const node = argsRef.current.tree.byKey.get(childKey);
     if (node?.parent) return { msgId: node.parent, ...(node.quote ? { quote: node.quote } : {}) };
     return undefined;
@@ -170,7 +177,7 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
         passages.current.set(from, passage);
       }
       // A pop back lands on the passage only where the reader left with it on screen.
-      if (seen) leftAt.current.set(from, Date.now());
+      if (seen) { const at = Date.now(); leftAt.current.set(from, at); rec.seenAt = at; }
       else leftAt.current.delete(from);
       argsRef.current.stack.landings.set(from, rec);
     });
@@ -192,6 +199,7 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
     let top = rangeTop(el, range);
     if (top === undefined && passage.quote) {
       // Passage gone (a rewrite): the answer it came from, flashed, and a word why.
+      a.ownsPlace?.();
       el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - visibleTopOf(el);
       row.classList.add('user-messages-highlight');
       setTimeout(() => row.classList.remove('user-messages-highlight'), 1500);
@@ -200,6 +208,9 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
       return;
     }
     if (top === undefined) return;
+    // The passage is the reader's place now: a box still pinning its first load
+    // to the bottom (a left half that just mounted) stands down.
+    a.ownsPlace?.();
     const target = (rec ? landingTarget(rec, el.getBoundingClientRect().top, el.clientHeight) : undefined) ?? Math.max(0, el.clientHeight / 3);
     const want = { scrollTop: el.scrollTop, sentenceTop: target };
     const delta = landingCorrection(want, top) ?? 0;
@@ -226,12 +237,17 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
   const wasEnabled = useRef(enabled);
   const handledSeq = useRef<number | undefined>(enabled ? undefined : stack.nav?.seq);
   const targetOnly = args.targetOnly;
+  const rowsReady = args.rowsReady !== false;
   useLayoutEffect(() => {
     const nav = stack.nav;
     const el = containerRef.current;
     const reenabled = enabled && !wasEnabled.current;
     wasEnabled.current = enabled;
     if (!el) return;
+    // Tree Mode's split left half lands on a passage in rows it reads from the
+    // panel's history, which come a commit after it mounts: it lands when they
+    // come, not on an empty box.
+    if (nav?.via === 'split-left' && !rowsReady && !targetOnly) return;
     const fresh = !!nav && nav.seq !== handledSeq.current;
     if (nav) handledSeq.current = nav.seq;
     // A target change is not a page change: consumed (so a later switch to Tree
@@ -254,7 +270,12 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
     }
     settle();
     const keptAt = placeAt?.(nav.to);
-    const left = leftAt.current.get(nav.to);
+    // This box's own leaving, else another box's (the stack's landing record):
+    // Tree Mode's split puts the page the reader asked from into a new box, the
+    // left half, which lands on the passage the same way (it showed the page
+    // whole, or at its end in a wider box, and went to that end in the narrow
+    // half: the passage out of view).
+    const left = leftAt.current.get(nav.to) ?? stack.landings.get(nav.to)?.seenAt;
     // A pop to the place this box left with its passage on screen (kept then,
     // untouched since) lands as a pop: the passage where it was, flashed.
     const ownPop = nav.direction === 'pop' && left !== undefined && (keptAt === undefined || keptAt <= left);
@@ -292,7 +313,7 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
     // into the render window): hold the position until the box is tall enough.
     if (Math.abs(el.scrollTop - rec.scrollTop) > 1) return holdScroll(el, rec.scrollTop);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per navigation
-  }, [stack.nav?.seq, enabled, targetOnly]);
+  }, [stack.nav?.seq, enabled, targetOnly, rowsReady]);
 
   // Scroll memory: 300ms after scrolling stops, this page's scrollTop is saved
   // (and the stack persisted, so a reload lands here).
