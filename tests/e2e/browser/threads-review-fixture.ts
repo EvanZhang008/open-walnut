@@ -152,3 +152,53 @@ export function buildReviewMixedSession(nowMs: number): ThreadsFixtureSession {
     rows, threadAnchors: anchors, threadMeta: meta, pinnedMessages: [], parked: [],
   }
 }
+
+export const REVIEW_FOLLOW_SESSION = 'pw-threads-askfollow-session'
+export const REVIEW_FOLLOW_TASK = 'pw-task-threads-askfollow'
+export const REVIEW_FOLLOW_PASSAGE = 'The follow worker drains the queue in order.'
+export const REVIEW_FOLLOW_MAIN = 12
+export const REVIEW_FOLLOW_ASKS = 12
+export const REVIEW_FOLLOW_OLD_SESSION = 'pw-threads-askfollowold-session'
+export const REVIEW_FOLLOW_OLD_TASK = 'pw-task-threads-askfollowold'
+/** Main turns after the asked answer in the old variant: 2 rows each, past the 400-row first page. */
+export const REVIEW_FOLLOW_OLD_MAIN = 210
+
+/**
+ * A dozen main turns, then one question on the last answer followed up a
+ * dozen times from its card (2026-11-11 review: the reopened session showed
+ * no main message, only "Load earlier turns" and the folded question).
+ */
+export function buildReviewFollowSession(nowMs: number, old = false): ThreadsFixtureSession {
+  const P = old ? '0199d3' : '0199e7'
+  const at = (k: number) => new Date(nowMs - 1_400_000 + k * 1000).toISOString()
+  const rows: FixtureRow[] = []
+  let n = 0
+  const turn = (q: string, a: string) => {
+    n += 1
+    const u = fxUuid(P, n, 'u')
+    const aId = fxUuid(P, n, 'a')
+    rows.push({ role: 'user', uuid: u, text: q }, { role: 'assistant', uuid: aId, text: a })
+    return { u, a: aId }
+  }
+  let last = { u: '', a: '' }
+  // The old variant asks on the FIRST answer, hundreds of rows back: past the
+  // first page, so the page holds the follow-ups but not the reply they hang off.
+  const first = old ? turn('Where does the follow worker start?', `${REVIEW_FOLLOW_PASSAGE} ${filler(899, 30).replace(/\n\n/g, ' ')}`) : null
+  const steps = old ? REVIEW_FOLLOW_OLD_MAIN : REVIEW_FOLLOW_MAIN
+  for (let k = 0; k < steps - 1; k++) last = turn(`Follow step ${k + 1}?`, filler(900 + (k % 40), old ? 4 : 20))
+  last = turn(`Follow step ${steps}?`, `${REVIEW_FOLLOW_PASSAGE} ${filler(930, 30).replace(/\n\n/g, ' ')}`)
+  if (first) last = first
+  const anchors: FixtureAnchor[] = []
+  let head = ''
+  for (let k = 0; k < REVIEW_FOLLOW_ASKS; k++) {
+    const t = turn(k === 0 ? `> ${REVIEW_FOLLOW_PASSAGE}\n\nWhy in order?` : `Card follow-up ${k}?`, `${k === 0 ? '[Q1]\n' : ''}Card answer ${k}. ${filler(940 + k, 6)}`)
+    if (k === 0) head = t.u
+    anchors.push({ msgId: t.u, parent: last.a, quote: { exact: REVIEW_FOLLOW_PASSAGE }, source: k === 0 ? 'selection' : 'sticky', at: at(n) })
+  }
+  const meta: FixtureMeta[] = [{ headId: head, status: 'open', title: 'Follow point 1', titleSource: 'ai', titleState: 'done', seq: 1, updatedAt: at(100) }]
+  return {
+    sessionId: old ? REVIEW_FOLLOW_OLD_SESSION : REVIEW_FOLLOW_SESSION, taskId: old ? REVIEW_FOLLOW_OLD_TASK : REVIEW_FOLLOW_TASK,
+    title: old ? 'Threads review old follow-ups fixture session' : 'Threads review follow-ups fixture session',
+    rows, threadAnchors: anchors, threadMeta: meta, pinnedMessages: [], parked: [],
+  }
+}

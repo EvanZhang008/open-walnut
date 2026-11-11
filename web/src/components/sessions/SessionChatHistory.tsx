@@ -43,7 +43,7 @@ import { HistoryGapDivider } from './HistoryGapDivider';
 import { gapIndex, type HistoryGap } from '@/hooks/history-gap';
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import { computeRenderWindow, type RenderWindowAnchor } from './render-window';
-import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, EARLIER_HISTORY_TURNS, isHistorySentRow, isHistoryUserTurn } from '@open-walnut/history-turn-window';
+import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, EARLIER_HISTORY_TURNS, isHistorySentRow, isHistoryUserTurn, isQuestionTurnRow, questionTurnIds, type HistoryRowIds } from '@open-walnut/history-turn-window';
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
 import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence, withFirstCheckHold, turnQuestionShown, firstCheckHeldBelow } from '@/stream/render-filter';
@@ -234,6 +234,13 @@ function outboundCallsOf(t: SessionHistoryTool): OutboundSend[] {
 
 /** A pin jump lands on a page that shows the pin within this long of the ask (a page's rows may load a moment later). */
 const PIN_JUMP_FRESH_MS = 4000;
+
+
+/** A row of the main conversation, for a window that counts its turns: on the
+ *  tree's root, and no question's turn by its anchor (history-turn-window.ts). */
+function onMainLine(keyOf: (id: string | undefined) => string, m: HistoryRowIds & { walnutMessageId?: string }, questionIds: ReadonlySet<string>): boolean {
+  return keyOf(m.msgId ?? m.walnutMessageId) === ROOT_THREAD_KEY && !isQuestionTurnRow(m, questionIds);
+}
 
 export interface OptimisticMessage extends SessionHistoryMessage {
   queueId: string;
@@ -1576,7 +1583,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const start = olderRenderStart.current ?? renderWindowStart.current ?? messages.length;
     olderRenderStart.current = null;
     const added = historyTurnWindowLimit(messages, EARLIER_HISTORY_TURNS,
-      rootPageWindow ? (i) => rowThreadKey(messages[i].msgId ?? messages[i].walnutMessageId) === ROOT_THREAD_KEY : undefined, start);
+      mainLineWindow ? (i) => onMainLine(rowThreadKey, messages[i], questionIds) : undefined, start);
     setTruncationOffset(messages.length - start + added);
   }, [olderPageSeq]);
 
@@ -3299,9 +3306,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // re-running this memo rebuilds every part (see above). A persisted row's key
   // depends only on the rows and the anchors, which the deps carry.
   const rootPageWindow = stackMode && currentKey === ROOT_THREAD_KEY;
+  // Every view of the main conversation counts its own turns: in the linear
+  // view a question's turns fold under one row each, so a dozen follow-ups in
+  // the cards pushed every main message out of the first screen (2026-11-11
+  // review). The server's first page counts the same way (history-turn-window.ts).
+  // A question's turns are known by their anchors too: one on a reply not
+  // loaded yet makes no node of the tree, yet its follow-ups are no main turns.
+  const questionIds = useMemo(() => questionTurnIds(tagAnchors), [tagAnchors]);
+  const mainLineWindow = currentKey === ROOT_THREAD_KEY && (hasQuestions || questionIds.size > 0);
   const rowThreadKeyRef = useRef(rowThreadKey);
   rowThreadKeyRef.current = rowThreadKey;
-  const windowAnchors = rootPageWindow ? threadsApi.anchors : null;
+  // The tree is built from these (tag anchors included), so they stand for it.
+  const windowAnchors = mainLineWindow ? tagAnchors : null;
   // What the pass mints keeps its identity from pass to pass (part-identity.ts),
   // so a page of older rows re-renders the new rows only.
   const partIdentity = useMemo(() => new PartIdentity(), [sessionId]);
@@ -3310,7 +3326,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const keyOf = rowThreadKeyRef.current;
     const rawLimit = truncationOffset;
     const turnLimit = historyTurnWindowLimit(messages, INITIAL_HISTORY_TURNS,
-      rootPageWindow ? (i) => keyOf(messages[i].msgId ?? messages[i].walnutMessageId) === ROOT_THREAD_KEY : undefined);
+      mainLineWindow ? (i) => onMainLine(keyOf, messages[i], questionIds) : undefined);
     const limit = Math.max(rawLimit, turnLimit);
     // A reader following the live end sees none of the rows above the default
     // tail, so the window may drop them (a column left open on a busy session kept
@@ -3334,7 +3350,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const at = messages.findIndex(m => m.msgId === renderWindowAnchor.current!.msgId);
       if (at >= 0) olderRenderStart.current = Math.max(0, at - renderWindowAnchor.current.offset);
     }
-    renderWindowStart.current = visibleStart;
+    // An empty list pins no start: the ratchet only ever widens, so a pass
+    // before the rows came (the question anchors arriving first) left start 0
+    // and the whole session rendered, the turn window ignored.
+    renderWindowStart.current = messages.length > 0 ? visibleStart : null;
     renderWindowAnchor.current = window.anchor;
     const visibleMessages = messages.slice(visibleStart);
     const parts: HistoryPart[] = [];
@@ -3456,7 +3475,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     for (const part of parts) if (part.kind === 'run') part.memberMsgs = ids.list('run', part.memberMsgs);
     return { historyParts: parts, hiddenCount: visibleStart };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rowThreadKeyRef: see above; windowAnchors stands for it
-  }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, resolvedSkips, rootPageWindow, windowAnchors, partIdentity]);
+  }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, resolvedSkips, mainLineWindow, windowAnchors, questionIds, partIdentity]);
   // A cut window forgets how far "Load earlier turns" or a jump had widened it,
   // else the next pass after the reader scrolls up would grow it straight back.
   useLayoutEffect(() => {
@@ -6525,7 +6544,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               const el = containerRef.current;
               if (el) pendingBottomDistance.current = el.scrollHeight - el.scrollTop;
               const added = historyTurnWindowLimit(messages, EARLIER_HISTORY_TURNS,
-                rootPageWindow ? (i) => rowThreadKey(messages[i].msgId ?? messages[i].walnutMessageId) === ROOT_THREAD_KEY : undefined, hiddenCount);
+                mainLineWindow ? (i) => onMainLine(rowThreadKey, messages[i], questionIds) : undefined, hiddenCount);
               setTruncationOffset(messages.length - hiddenCount + added);
             }}
           >

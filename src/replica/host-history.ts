@@ -16,7 +16,7 @@
  */
 import { parseSessionMessages, type SessionHistoryMessage } from '../core/session-history.js'
 import { transcriptFromJsonl, TRANSCRIPT_TAIL_BYTES } from '../core/sessions/transcript-from-jsonl.js'
-import { historyTurnWindowLimit } from '../lib/history-turn-window.js'
+import { historyTurnWindowLimit, mainLineRows, type HistoryQuestionAnchor } from '../lib/history-turn-window.js'
 
 /** One read of the console's history: the newest 1 MB of the stream file. */
 export const HOST_HISTORY_TAIL_BYTES = 1024 * 1024
@@ -61,7 +61,12 @@ export function hostHistoryMessages(prepared: string): SessionHistoryMessage[] {
   return parseSessionMessages(prepared)
 }
 
-export interface HostHistoryQuery { tail?: number; turns?: number }
+export interface HostHistoryQuery {
+  tail?: number
+  turns?: number
+  /** The session's question anchors: `turns` counts the main conversation's turns, as the leader's answer does. */
+  anchors?: ReadonlyArray<HistoryQuestionAnchor>
+}
 
 export interface HostHistoryAnswer {
   messages: SessionHistoryMessage[]
@@ -81,7 +86,7 @@ export interface HostHistoryAnswer {
  */
 export function hostHistoryAnswer(messages: SessionHistoryMessage[], q: HostHistoryQuery): HostHistoryAnswer {
   const tail = q.tail && q.tail > 0 ? q.tail : 0
-  const turns = q.turns && q.turns > 0 ? historyTurnWindowLimit(messages, q.turns) : 0
+  const turns = q.turns && q.turns > 0 ? historyTurnWindowLimit(messages, q.turns, mainLineRows(messages, q.anchors)) : 0
   const limit = Math.max(tail, turns)
   const sliced = limit > 0 ? messages.slice(-limit) : messages
   return { messages: sliced, total: messages.length, cursor: messages.length, delta: false, windowed: true }

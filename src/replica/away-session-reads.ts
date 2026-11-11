@@ -66,6 +66,8 @@ export interface AwaySessionReadsDeps {
    * (owner scoped). Absent: this host's session reads pass to their routes.
    */
   readHostHistory?(sid: string, tailBytes: number): Promise<Record<string, unknown>>
+  /** The session's question anchors from the sessions copy: a `turns` window counts the main conversation's turns. */
+  questionAnchorsOf?(sid: string): Promise<ReadonlyArray<{ msgId?: string; parent?: string }> | undefined>
   log?(level: 'info' | 'warn', msg: string, data: Record<string, unknown>): void
 }
 
@@ -175,7 +177,10 @@ export function awaySessionReads(deps: AwaySessionReadsDeps) {
     deps.log?.('info', 'replica: a host session read answered from its stream file', { sessionId: sid, path: req.path, rows: r.messages.length })
     const tail = positiveInt(req.query.tail)
     const turns = answer === 'history' ? positiveInt(req.query.turns) : undefined
-    res.json(hh.hostHistoryAnswer(r.messages, { ...(tail ? { tail } : {}), ...(turns ? { turns } : {}) }))
+    // Unread anchors cost only the count: every user row is then a turn.
+    const anchors = turns ? await deps.questionAnchorsOf?.(sid)?.catch(() => undefined) : undefined
+    if (res.headersSent || res.destroyed) return
+    res.json(hh.hostHistoryAnswer(r.messages, { ...(tail ? { tail } : {}), ...(turns ? { turns } : {}), ...(anchors ? { anchors } : {}) }))
   }
 
   return (req: Request, res: Response, next: NextFunction): void => {

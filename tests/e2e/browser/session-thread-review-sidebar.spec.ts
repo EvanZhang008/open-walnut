@@ -17,7 +17,7 @@ import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { leaveFullscreen } from './draft-helpers'
 import { centreInHistory, clickInPlace, openThreadsSession, settledScrollTop, passageRects, readRecord, resetThreadsFixture, test } from './threads-helpers'
-import { REVIEW_COUNT, REVIEW_MIXED_PASSAGES, REVIEW_MIXED_READY, REVIEW_MIXED_SESSION, REVIEW_MIXED_TASK, REVIEW_OLD_PASSAGES, REVIEW_OLD_READY, REVIEW_OLD_SESSION, REVIEW_OLD_TASK, REVIEW_READY, REVIEW_ROUNDS, REVIEW_ROUND_CODE, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
+import { REVIEW_COUNT, REVIEW_FOLLOW_MAIN, REVIEW_FOLLOW_OLD_MAIN, REVIEW_FOLLOW_OLD_SESSION, REVIEW_FOLLOW_OLD_TASK, REVIEW_FOLLOW_SESSION, REVIEW_FOLLOW_TASK, REVIEW_MIXED_PASSAGES, REVIEW_MIXED_READY, REVIEW_MIXED_SESSION, REVIEW_MIXED_TASK, REVIEW_OLD_PASSAGES, REVIEW_OLD_READY, REVIEW_OLD_SESSION, REVIEW_OLD_TASK, REVIEW_READY, REVIEW_ROUNDS, REVIEW_ROUND_CODE, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
 
 const SHOTS = () => `/tmp/ask-review/e2e/${test.info().project.name}`
 async function shot(page: Page, name: string): Promise<void> {
@@ -1014,3 +1014,45 @@ test.describe('asks on turns that are not loaded', () => {
   })
 })
 
+test.describe('a question followed up many times from its card', () => {
+  test.setTimeout(120_000)
+  test.beforeEach(async ({ request }) => {
+    await resetThreadsFixture(request, REVIEW_FOLLOW_SESSION)
+    await resetThreadsFixture(request, REVIEW_FOLLOW_OLD_SESSION)
+  })
+
+  test('the first screen keeps the main conversation\'s last ten turns; the question is one folded row', async ({ page }) => {
+    // 2026-11-11 review: after about 12 follow-ups sent from a card, a reopened
+    // session showed only the initial prompt, "Load earlier turns" and the
+    // folded question: the first screen counted each follow-up as a turn.
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openThreadsSession(page, REVIEW_FOLLOW_SESSION, REVIEW_FOLLOW_TASK, undefined, { view: 'linear' })
+    const history = panel.locator('.session-history')
+    const step = (k: number) => history.locator('[data-message-id]').getByText(`Follow step ${k}?`, { exact: true })
+    for (let k = REVIEW_FOLLOW_MAIN - 9; k <= REVIEW_FOLLOW_MAIN; k++) {
+      await expect(step(k), `main turn ${k} is on the first screen`).toHaveCount(1, { timeout: 20_000 })
+    }
+    // Still a window: the turns before those ten wait behind "Load earlier turns".
+    await expect(step(REVIEW_FOLLOW_MAIN - 10)).toHaveCount(0)
+    await expect(panel.getByRole('button', { name: 'Load earlier turns' })).toHaveCount(1)
+    // The question's dozen turns are there too, folded under its one row.
+    await expect(history.getByText('Follow point 1').first()).toBeVisible()
+  })
+
+  test('a question on an answer the first page does not hold: its follow-ups still are no main turns', async ({ page }) => {
+    // The page holds the dozen follow-ups but not the reply they hang off, so
+    // the thread tree has no node for them: the window reads their anchors.
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openThreadsSession(page, REVIEW_FOLLOW_OLD_SESSION, REVIEW_FOLLOW_OLD_TASK, undefined, { view: 'linear' })
+    const history = panel.locator('.session-history')
+    const step = (k: number) => history.locator('[data-message-id]').getByText(`Follow step ${k}?`, { exact: true })
+    for (let k = REVIEW_FOLLOW_OLD_MAIN - 9; k <= REVIEW_FOLLOW_OLD_MAIN; k++) {
+      await expect(step(k), `main turn ${k} is on the first screen`).toHaveCount(1, { timeout: 20_000 })
+    }
+    await expect(step(REVIEW_FOLLOW_OLD_MAIN - 10)).toHaveCount(0)
+  })
+})

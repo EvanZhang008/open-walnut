@@ -175,6 +175,8 @@ describe('this host\'s session, an older daemon: read from its stream file', () 
   const asked: Array<{ sid: string; tailBytes: number }> = []
   const logs: Array<{ level: string; msg: string }> = []
   const daemon = { mode: 'ok' as 'ok' | 'not_found' | 'down', delayMs: 0, text: STREAM }
+  /** The sessions copy's question anchors for HERE ('throw': the read fails). */
+  const copy: { anchors: Array<{ msgId: string; parent: string }> | 'throw' | undefined } = { anchors: undefined }
   let port2 = 0
   let server2: http.Server
 
@@ -198,6 +200,11 @@ describe('this host\'s session, an older daemon: read from its stream file', () 
         if (start > 0) text = text.slice(text.indexOf('\n') + 1)
         return { ok: true, main: text, subagents: {} }
       },
+      questionAnchorsOf: async (sid) => {
+        if (sid !== HERE) return undefined
+        if (copy.anchors === 'throw') throw new Error('sessions copy unreadable')
+        return copy.anchors
+      },
       log: (level, msg) => { logs.push({ level, msg }) },
     }
     app.use('/api', awaySessionReads(deps))
@@ -207,7 +214,7 @@ describe('this host\'s session, an older daemon: read from its stream file', () 
     port2 = (server2.address() as net.AddressInfo).port
   })
   afterAll(async () => { await new Promise((r) => server2.close(r)) })
-  beforeEach(() => { daemon.mode = 'ok'; daemon.delayMs = 0; daemon.text = STREAM; asked.length = 0; logs.length = 0 })
+  beforeEach(() => { daemon.mode = 'ok'; daemon.delayMs = 0; daemon.text = STREAM; asked.length = 0; logs.length = 0; copy.anchors = undefined })
 
   const get = (p: string) => request(port2, 'GET', p)
 
@@ -234,6 +241,20 @@ describe('this host\'s session, an older daemon: read from its stream file', () 
     expect(before.status).toBe(200)
     expect(before.json).toEqual({ messages: [], reachedStart: false, unavailable: 'history_pages_need_mac' })
     expect(asked).toHaveLength(3)
+  })
+
+  it('turns counts the main conversation: a turn of an Ask here question (its anchor in the sessions copy) is not one; an unreadable copy counts every turn', async () => {
+    // 2026-11-11 review: card follow-ups pushed the main conversation out of the first screen.
+    const all = await get(`/api/sessions/${HERE}/history`)
+    const rows = all.json.messages as Array<{ msgId?: string; sourceUuid?: string; text: string }>
+    const second = rows.find((m) => m.text === 'second turn')!
+    copy.anchors = [{ msgId: (second.sourceUuid ?? second.msgId)!, parent: 'msg_a1' }]
+    const turns = await get(`/api/sessions/${HERE}/history?turns=1`)
+    expect((turns.json.messages as Array<{ text: string }>).map((m) => m.text)).toEqual([WORDS, `echo: ${WORDS}`, 'second turn', 'echo: second turn'])
+    copy.anchors = 'throw'
+    const plain = await get(`/api/sessions/${HERE}/history?turns=1`)
+    expect(plain.status).toBe(200)
+    expect((plain.json.messages as Array<{ text: string }>).map((m) => m.text)).toEqual(['second turn', 'echo: second turn'])
   })
 
   it('the phone: the rich history and the slim transcript (its 512 KB tail) from the same file', async () => {

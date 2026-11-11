@@ -63,6 +63,21 @@ describe('the stream file as the parser reads it', () => {
     expect(JSON.stringify(hostTranscriptAnswer('s1', main))).toContain(words)
   })
 
+  it('a turns window counts the main conversation: the turns of an Ask here question do not use it up', () => {
+    // 2026-11-11 review: a dozen follow-ups from a card pushed every main message
+    // out of the first screen. The leader counts main turns; so does this answer.
+    const msgs = [
+      { role: 'user', text: 'main 1', msgId: 'u1' }, { role: 'assistant', text: 'a1', msgId: 'a1' },
+      { role: 'user', text: 'main 2', msgId: 'u2' }, { role: 'assistant', text: 'a2', msgId: 'a2' },
+      { role: 'user', text: 'card 1', msgId: 'q1' }, { role: 'assistant', text: 'c1', msgId: 'c1' },
+      { role: 'user', text: 'card 2', msgId: 'q2' }, { role: 'assistant', text: 'c2', msgId: 'c2' },
+    ] as Parameters<typeof hostHistoryAnswer>[0]
+    const anchors = [{ msgId: 'q1', parent: 'a2' }, { msgId: 'q2', parent: 'a2' }]
+    expect(hostHistoryAnswer(msgs, { turns: 1, anchors }).messages.map((m) => m.text)).toEqual(['main 2', 'a2', 'card 1', 'c1', 'card 2', 'c2'])
+    // No anchors: every user row is a turn, as before.
+    expect(hostHistoryAnswer(msgs, { turns: 1 }).messages.map((m) => m.text)).toEqual(['card 2', 'c2'])
+  })
+
   it('a short file is still a window: the daemon without cut reports cannot prove the start, so older rows need the Mac', () => {
     const main = [marker('qm-1', 'only', '2026-10-15T10:00:00.000Z'), reply('msg_1', 'echo: only', '2026-10-15T10:00:01.000Z')].join('\n')
     expect(hostHistoryAnswer(rows(main), {}).windowed).toBe(true)

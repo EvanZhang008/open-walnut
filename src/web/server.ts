@@ -1787,6 +1787,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       selfHost: (h) => isSelfHost(h) && front.link.state() === 'up',
       // A session on this host, an older daemon: its stream file through the follower link (owner scoped).
       readHostHistory: (sid, tailBytes) => front.link.request('read-history', { sid, tailBytes }, 20_000),
+      questionAnchorsOf: async (sid) => (await getSessionByClaudeId(sid))?.threadAnchors,
       log: (level, msg, data) => log.web[level](msg, data),
     }))
     // The sessions turned off for this host (Settings): the Mac's need the Mac (4f); this

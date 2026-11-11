@@ -5,7 +5,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { role } from '../../core/server-role.js'
-import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, isHistoryUserTurn } from '../../lib/history-turn-window.js'
+import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, isHistoryUserTurn, isQuestionTurnRow, mainLineRows, questionTurnIds, type HistoryQuestionAnchor, type HistoryRowIds, type HistoryTurnRow } from '../../lib/history-turn-window.js'
 import {
   emitSessionStatusChanged,
   getRecentSessions,
@@ -906,8 +906,11 @@ const HISTORY_VIEW_MIN_TAIL = 400
 function historyViewSliceOf<T extends { role: string; text: string; injected?: boolean }>(
   messages: T[],
   forkBoundaryIndex: number | undefined,
+  anchors: ReadonlyArray<HistoryQuestionAnchor> | undefined,
 ): { messages: T[]; forkBoundaryIndex?: number } {
-  const limit = Math.max(HISTORY_VIEW_MIN_TAIL, historyTurnWindowLimit(messages, INITIAL_HISTORY_TURNS))
+  // Its turns are the main conversation's, as the first paint counts them (mainLineRows).
+  const limit = Math.max(HISTORY_VIEW_MIN_TAIL,
+    historyTurnWindowLimit(messages, INITIAL_HISTORY_TURNS, mainLineRows(messages, anchors)))
   const kept = messages.length > limit ? messages.slice(messages.length - limit) : messages
   const dropped = messages.length - kept.length
   return {
@@ -1463,13 +1466,17 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       res.status(400).json({ error: 'turns must be an integer between 0 and 100' })
       return
     }
-    const sliceHistory = <T extends { role: string; text: string; injected?: boolean }>(rows: T[]): T[] => {
-      const limit = Math.max(tail && tail > 0 ? tail : 0, turnCount > 0 ? historyTurnWindowLimit(rows, turnCount) : 0)
-      return limit > 0 ? rows.slice(-limit) : rows
-    }
-
     // Look up session record to get cwd
     const record = await getSessionByClaudeId(sessionId)
+    // The turns a window counts are the main conversation's: an Ask here
+    // question's turns fold under one row each (history-turn-window.ts).
+    const questionIds = questionTurnIds(record?.threadAnchors)
+    const isMainTurn = (m: HistoryTurnRow & HistoryRowIds): boolean => isHistoryUserTurn(m) && !isQuestionTurnRow(m, questionIds)
+    const sliceHistory = <T extends { role: string; text: string; injected?: boolean }>(rows: T[]): T[] => {
+      const limit = Math.max(tail && tail > 0 ? tail : 0,
+        turnCount > 0 ? historyTurnWindowLimit(rows, turnCount, mainLineRows(rows, record?.threadAnchors)) : 0)
+      return limit > 0 ? rows.slice(-limit) : rows
+    }
     // Taken before any read: a rewind meanwhile makes that read's view one not to keep, and its
     // start time keeps an older host answer that arrives later from replacing it.
     // Local sessions keep one too (2026-11-11): after a restart the parse cache is empty and a
@@ -1649,7 +1656,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         const { readSessionHistoryBefore } = await import('../../core/session-history-pages.js')
         const page = await boundHostRead(record.host, () => readSessionHistoryBefore(
           sessionId, record.cwd, record.host, beforeRaw,
-          turnCount > 0 ? { minMessages: 0, minText: turnCount, isText: isHistoryUserTurn }
+          turnCount > 0 ? { minMessages: 0, minText: turnCount, isText: isMainTurn }
             : { minMessages: HISTORY_PAGE_MIN_MESSAGES, minText: HISTORY_PAGE_MIN_TEXT, isText: isProseRow },
         ))
         if (!page) {
@@ -1696,12 +1703,12 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
         if (req.query.since === undefined && turnCount > 0 && history.windowed && record && !record.forkedFromSessionId
           && engineCaps(record.engine).historySource !== 'acp-journal'
-          && history.messages.filter(isHistoryUserTurn).length < turnCount) {
+          && history.messages.filter(isMainTurn).length < turnCount) {
           const before = history.messages[0]?.timestamp
           if (before) {
             const { readSessionHistoryBefore } = await import('../../core/session-history-pages.js')
             const page = await readSessionHistoryBefore(sessionId, record.cwd, record.host, before,
-              { minMessages: 0, minText: turnCount, isText: isHistoryUserTurn })
+              { minMessages: 0, minText: turnCount, isText: isMainTurn })
             if (page?.messages.length) {
               const keyOf = (m: SessionHistoryMessage) => m.msgId ? `${m.msgId}|${m.timestamp}|${m.role}` : undefined
               const tailKeys = new Set(history.messages.map(keyOf).filter(Boolean))
@@ -2095,7 +2102,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
             // The turn this delta brings is the next open's first paint too: keep the view from the
             // parse already in hand (a reached run is a different window, so it keeps none).
             if (deltaSource === messages && record && viewRead !== undefined) {
-              const kept = historyViewSliceOf(messages, forkBoundaryIndex)
+              const kept = historyViewSliceOf(messages, forkBoundaryIndex, record.threadAnchors)
               const { saveHistoryView } = await import('../../core/history-view-snapshot.js')
               saveHistoryView(sessionId, {
                 messages: markUnsettled(kept.messages), total, windowed: historyWindowed, forkedFromSessionId,

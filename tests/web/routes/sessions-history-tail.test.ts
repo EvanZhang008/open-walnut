@@ -43,7 +43,7 @@ import express from 'express';
 import request from 'supertest';
 import { sessionsRouter } from '../../../src/web/routes/sessions.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { createSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
+import { createSessionRecord, updateSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
 function createApp() {
@@ -104,6 +104,37 @@ describe('GET /:sessionId/history?tail=N', () => {
       expect(res.body.messages).toHaveLength(1020);
       expect(res.body.messages[0].msgId).toBe('question-5');
       expect(res.body.total).toBe(rows.length);
+    }
+  });
+
+  it('counts the main conversation\'s turns: a dozen follow-ups in an Ask here question do not push it out', async () => {
+    // 2026-11-11 review: after about 12 follow-ups sent from a card, a reopened
+    // session showed no message of the main conversation.
+    const sid = 'tail-turns-questions';
+    await createSessionRecord(sid, '', 'p');
+    const main = Array.from({ length: 12 }, (_, turn) => [
+      { role: 'user', text: `Question ${turn}`, msgId: `question-${turn}`, timestamp: '' },
+      ...Array.from({ length: 20 }, (_, step) => ({ role: 'assistant', text: '', msgId: `step-${turn}-${step}`, timestamp: '' })),
+      { role: 'assistant', text: `Answer ${turn}`, msgId: `answer-${turn}`, timestamp: '' },
+    ]).flat();
+    // One question on the last answer, then its follow-ups; one row knows its
+    // question by the uuid it was sent under (a queued send).
+    const asks = Array.from({ length: 12 }, (_, k) => [
+      { role: 'user', text: `Follow-up ${k}`, msgId: k === 3 ? 'queue-3' : `ask-${k}`, ...(k === 3 ? { sourceUuid: 'ask-3' } : {}), timestamp: '' },
+      ...Array.from({ length: 20 }, (_, step) => ({ role: 'assistant', text: '', msgId: `ask-step-${k}-${step}`, timestamp: '' })),
+      { role: 'assistant', text: `Card answer ${k}`, msgId: `ask-answer-${k}`, timestamp: '' },
+    ]).flat();
+    const rows = [...main, ...asks];
+    historyBySid.set(sid, rows);
+    await updateSessionRecord(sid, { threadAnchors: Array.from({ length: 12 }, (_, k) => ({
+      msgId: `ask-${k}`, parent: 'answer-11', quote: { exact: 'Answer' }, source: k ? 'sticky' : 'selection',
+    })) } as never);
+    for (const source of ['', '&source=streams']) {
+      const res = await request(createApp()).get(`/api/sessions/${sid}/history?tail=100&turns=10${source}`);
+      expect(res.status).toBe(200);
+      // Ten main turns back (2..11), every follow-up after them.
+      expect(res.body.messages[0].msgId, source).toBe('question-2');
+      expect(res.body.messages).toHaveLength(rows.length - 2 * 22);
     }
   });
 

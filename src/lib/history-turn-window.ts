@@ -45,3 +45,58 @@ export function historyTurnWindowLimit(
   }
   return seenTurns > 0 ? end : end - fallbackStart;
 }
+
+/** The two fields of a question's anchor the window reads (SessionThreadAnchor fits). */
+export interface HistoryQuestionAnchor {
+  msgId?: string;
+  parent?: string;
+}
+
+/** A row's ids, as the thread tree reads them (web/src/utils/thread-tree.ts). */
+export interface HistoryRowIds {
+  role: string;
+  msgId?: string;
+  userUuid?: string;
+  walnutMessageId?: string;
+  sourceUuid?: string;
+}
+
+/**
+ * The ids the session's Ask here questions know their turns by: every turn of a
+ * question (its first message and each follow-up, from the composer or a card's
+ * box) is written with an anchor under its user row's id. The web also files a
+ * turn by its `[Qn]` tag when no anchor was written (question-tag.ts
+ * withTagAnchors); the server does not see those, so its window may hold a few
+ * main turns fewer than the web counts, never more rows than it needs to drop.
+ */
+export function questionTurnIds(anchors: ReadonlyArray<HistoryQuestionAnchor> | undefined): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const a of anchors ?? []) if (a?.msgId && a.parent) ids.add(a.msgId);
+  return ids;
+}
+
+/**
+ * Is this a user row of an Ask here question, not of the main conversation? Read
+ * by the id the thread tree files it under (`threadIdOf`: the uuid it was sent
+ * under, else its row id).
+ */
+export function isQuestionTurnRow(message: HistoryRowIds, ids: ReadonlySet<string>): boolean {
+  if (message.role !== 'user' || ids.size === 0) return false;
+  const id = message.sourceUuid ?? message.msgId ?? message.userUuid ?? message.walnutMessageId;
+  return !!id && ids.has(id);
+}
+
+/**
+ * The window's `includes` for the main conversation: a question's rows show
+ * folded under one row each, so its turns are not turns of the window
+ * (2026-11-11 review: after a dozen follow-ups in the cards, a reopened session
+ * showed no message of the main conversation, only "Load earlier turns").
+ */
+export function mainLineRows(
+  messages: ReadonlyArray<HistoryRowIds>,
+  anchors: ReadonlyArray<HistoryQuestionAnchor> | undefined,
+): ((index: number) => boolean) | undefined {
+  const ids = questionTurnIds(anchors);
+  if (ids.size === 0) return undefined;
+  return (i) => !isQuestionTurnRow(messages[i], ids);
+}

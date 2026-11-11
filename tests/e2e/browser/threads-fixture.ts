@@ -28,7 +28,7 @@
  * All text is invented, neutral filler.
  */
 
-import { buildReviewMixedSession, buildReviewOldSession, buildReviewSession } from './threads-review-fixture';
+import { buildReviewFollowSession, buildReviewMixedSession, buildReviewOldSession, buildReviewSession } from './threads-review-fixture';
 import { renderHintBlock } from '../../../src/core/hints/hint-format';
 import { askHintText } from '../../../src/core/sessions/ask-thread';
 
@@ -884,7 +884,7 @@ export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
     buildDenseSession(nowMs), buildAiSession(), buildCommentsSession(), buildDocCommentsSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
     buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(), buildMidTurnSession(), buildStrictSession(), buildSplitSession(), buildPlaceSession(),
-    buildReviewSession(nowMs), buildReviewOldSession(nowMs), buildReviewMixedSession(nowMs),
+    buildReviewSession(nowMs), buildReviewOldSession(nowMs), buildReviewMixedSession(nowMs), buildReviewFollowSession(nowMs), buildReviewFollowSession(nowMs, true),
   ];
 }
 
