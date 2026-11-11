@@ -21,11 +21,12 @@ import { questionLabels } from '@/utils/question-tag';
 import { widthTier } from '@/utils/thread-stack-state';
 import { modeBesideCorner, movedSheet } from '@/components/common/corner-sheet-inset';
 import {
-  MAX_PANES, PATH_BAR_NARROW, SPLIT_MIN_WIDTH, barShown as barShownOf, closePaneMove, isPrefix, levelPickMoves,
+  LEFT_SHARE_DEFAULT, MAX_PANES, PATH_BAR_NARROW, SPLIT_MIN_WIDTH, barShown as barShownOf, closePaneMove, isPrefix, levelPickMoves,
   paneCap, paneCount, pairMoveTarget, retargetNav, roomFor, segmentRoles, segmentTarget, trailFor, trailHeadsOf, trailKeysOf,
-  withPaneCap, type NavRetarget, type SegmentRole, type TreeSplitRecord,
+  clampLeftShare, isLeftShare, withPaneCap, type NavRetarget, type SegmentRole, type TreeSplitRecord,
 } from '@/utils/tree-split-state';
 import { log } from '@/utils/log';
+import { usePageView } from '@/utils/view-memory';
 import { SIBLING_MIN_PANEL_HEIGHT, SIBLING_SHARE_DEFAULT, clampSiblingShare, siblingPartner, type SiblingPartner } from '@/utils/tree-sibling';
 
 /** The panel's own composer (the one that stays when the split closes). */
@@ -96,6 +97,10 @@ export interface TreeSplit {
   showSibling: () => void;
   /** The divider moved (`commit`: the drag ended, keep it with the panel's view). */
   setSiblingShare: (share: number, commit: boolean) => void;
+  /** The left page's share of the two pages' width (half by default; one choice for the user, every panel). */
+  leftShare: number;
+  /** The divider between the pages moved (`commit`: the drag ended, keep it). */
+  setLeftShare: (share: number, commit: boolean) => void;
 }
 
 export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
@@ -311,9 +316,21 @@ export function useTreeSplit(a: UseTreeSplitArgs): TreeSplit {
     setRecord((prev) => (prev.siblingShare === s ? prev : { ...prev, siblingShare: s }));
   }, [setRecord]);
 
+  // The two pages' widths: one choice for the user (synced like the layout), not per panel.
+  const [keptLeft, setKeptLeft] = usePageView('session', 'treeLeftShare', LEFT_SHARE_DEFAULT, isLeftShare);
+  const [dragLeft, setDragLeft] = useState<number | null>(null);
+  const leftShare = clampLeftShare(dragLeft ?? keptLeft);
+  const setLeftShare = useCallback((share: number, commit: boolean) => {
+    const s = clampLeftShare(share);
+    if (!commit) { setDragLeft(s); return; }
+    setDragLeft(null);
+    setKeptLeft(s);
+  }, [setKeptLeft]);
+
   return {
     barShown: bar, splitShown: split, paneKeys, wide, narrowBar, trail, shownIndex, roles, leftKey,
     rightKey, labels, moveBy, goToSegment, pickAtLevel, closePane, openSplit, retarget,
     sibling, siblingClosed, siblingShare, swapSibling, closeSibling, showSibling, setSiblingShare,
+    leftShare, setLeftShare,
   };
 }

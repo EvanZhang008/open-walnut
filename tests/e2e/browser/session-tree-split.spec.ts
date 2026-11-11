@@ -5,9 +5,8 @@
  * 1440x900, with real clicks and keys:
  *
  *  The split shows two pages side by side: the question on screen on the right
- *  (two thirds) and the level before it on the path on the left (a third;
- *  2026-11-10, the user: "we always show current one and previous one (1/3
- *  size)").
+ *  and the level before it on the path on the left (equal width by default;
+ *  2026-11-11, the user: "parent and child are equal").
  *  A. Asking a new question: the level it was asked from beside it, the new
  *     question on the right with its own composer; each page's composer sends
  *     into its own question (the record's anchor and the send's `question` hint).

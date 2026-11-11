@@ -196,6 +196,7 @@ import { dropSavedColumn } from '@/utils/layout-record';
 import { useTreeSplit } from '@/hooks/useTreeSplit';
 import { answeringPages, paneColumns, type NavRetarget } from '@/utils/tree-split-state';
 import { siblingRows } from '@/utils/tree-sibling';
+import { TreeSplitDivider } from './TreeSplitDivider';
 import { TreeSiblingDivider } from './TreeSiblingDivider';
 import { ThreadPathBar } from './ThreadPathBar';
 import { TreeSplitLeft } from './TreeSplitLeft';
@@ -2529,10 +2530,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     if (chatColWidth === undefined && !treePanes) return undefined;
     return {
       ...(chatColWidth !== undefined ? { width: chatColWidth, flex: `0 0 ${chatColWidth}` } : {}),
-      ...(treePanes ? { ['--tree-panes' as string]: String(treePanes), ['--tree-cols' as string]: paneColumns(treePanes) } : {}),
+      ...(treePanes ? { ['--tree-panes' as string]: String(treePanes), ['--tree-cols' as string]: paneColumns(treePanes, treeSplit.leftShare) } : {}),
       ...(siblingTop ? { ['--tree-sibling-top' as string]: siblingTop } : {}),
     } as CSSProperties;
-  }, [chatColWidth, treePanes, siblingTop]);
+  }, [chatColWidth, treePanes, siblingTop, treeSplit.leftShare]);
   // A move to the panel's own page while pages sit side by side: it flashes.
   useEffect(() => {
     if (!paneFocus?.flash || paneFocus.key !== threads.stack.api.currentKey || !treeGrid) return;
@@ -3935,6 +3936,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               ))}
               </MessageAboutContext.Provider>
               </IslandHostContext.Provider>
+            )}
+            {treePanes >= 2 && (
+              <TreeSplitDivider share={treeSplit.leftShare} onShare={treeSplit.setLeftShare} />
             )}
             {treeSibling && (
               <IslandHostContext.Provider value={islandHost}>

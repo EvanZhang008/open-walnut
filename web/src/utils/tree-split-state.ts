@@ -9,9 +9,9 @@
  * (Cmd+[ or a segment click), so moving back right (Cmd+]) needs no search.
  * Split, the page left of it is the level right above it on the path (its
  * parent, `Main` for a question on the main conversation): always two pages,
- * the previous at a third of the width and the current at two thirds
- * (2026-11-10, the user: "we always show current one and previous one (1/3
- * size)"); single, the page alone.
+ * the previous and the current (2026-11-10, the user: "we always show current
+ * one and previous one"), side by side at equal width with a divider that drags
+ * (2026-11-11: "parent and child are equal"); single, the page alone.
  *
  *   Main conversation  >  6 title  >  [L] 6.1 title  >  [R] 6.1.2 title
  *
@@ -23,7 +23,7 @@ import { ROOT_THREAD_KEY, type ThreadTree } from '@/utils/thread-tree';
 import type { PageLandings } from '@/utils/thread-stack-state';
 
 /** Narrower than this (the chat area, not the window), Tree Mode shows one page:
- *  from here the previous page gets at least 200px (a third) and the current 400px.
+ *  from here each page gets at least 300px at the default (equal) split.
  *  A Home column (about 700 to 900px) shows both pages (2026-11-10: under the old
  *  900px it showed the current page alone). */
 export const SPLIT_MIN_WIDTH = 600;
@@ -34,9 +34,37 @@ export const MAX_PANES = 2;
 /** The most a stored record may name: builds from 2026-11-05 to 2026-11-10 kept up to three. */
 const STORED_PANES_MAX = 3;
 
-/** The split's grid columns: the previous page a third, the current page two thirds. */
-export function paneColumns(panes: number): string {
-  return panes >= 2 ? 'minmax(0, 1fr) minmax(0, 2fr)' : 'minmax(0, 1fr)';
+/** The left page's share of the two pages' width: half by default (2026-11-11, the
+ *  user: "parent and child are equal ... also can adjustable"; only the up/down
+ *  sibling box keeps a third), the divider between them moves it within the bounds. */
+export const LEFT_SHARE_DEFAULT = 0.5;
+export const LEFT_SHARE_MIN = 0.25;
+export const LEFT_SHARE_MAX = 0.75;
+/** The narrowest either page gets from a drag, when the column has room for it. */
+export const PAGE_MIN_PX = 240;
+
+/** A stored or dragged share, inside the bounds; with the column's width, each
+ *  page keeps at least PAGE_MIN_PX (a column under twice that splits evenly). */
+export function clampLeftShare(share: number, width?: number): number {
+  if (!Number.isFinite(share)) return LEFT_SHARE_DEFAULT;
+  let lo = LEFT_SHARE_MIN;
+  let hi = LEFT_SHARE_MAX;
+  if (width !== undefined && width > 0) {
+    const px = Math.min(0.5, PAGE_MIN_PX / width);
+    lo = Math.max(lo, px);
+    hi = Math.min(hi, 1 - px);
+  }
+  return Math.min(hi, Math.max(lo, share));
+}
+
+export const isLeftShare = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isFinite(v) && v >= LEFT_SHARE_MIN && v <= LEFT_SHARE_MAX;
+
+/** The split's grid columns: the previous page `share` of the width (half by default), the current page the rest. */
+export function paneColumns(panes: number, share: number = LEFT_SHARE_DEFAULT): string {
+  if (panes < 2) return 'minmax(0, 1fr)';
+  const s = clampLeftShare(share);
+  return `minmax(0, ${s.toFixed(4)}fr) minmax(0, ${(1 - s).toFixed(4)}fr)`;
 }
 
 /**

@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   answeringPages,
-  CUTTING_VIAS, MAX_PANES, NO_TREE_SPLIT, SPLIT_MIN_WIDTH, askPlacement, paneColumns, barShown, closePaneMove, isPrefix,
+  CUTTING_VIAS, LEFT_SHARE_DEFAULT, MAX_PANES, PAGE_MIN_PX, clampLeftShare, isLeftShare, NO_TREE_SPLIT, SPLIT_MIN_WIDTH, askPlacement, paneColumns, barShown, closePaneMove, isPrefix,
   isTreeSplitRecord, levelHeading, levelKeys, levelPickMoves, pairChordDir, pairMoveTarget, paneCap, paneCount, readOnlyLandings, retargetNav,
   roomFor, sameTreeSplit, segmentRoles, segmentTarget, splitShown, trailFor, trailHeadsOf, trailKeysOf, withPaneCap,
 } from '@/utils/tree-split-state';
@@ -95,9 +95,22 @@ describe('how many pages sit side by side', () => {
     expect(splitShown({ cap: 2, width: 1400, depth: 0 })).toBe(false);
     expect(splitShown({ cap: 1, width: 1400, depth: 2 })).toBe(false);
   });
-  it('the previous page takes a third of the width, the current page two thirds', () => {
-    expect(paneColumns(2)).toBe('minmax(0, 1fr) minmax(0, 2fr)');
+  it('the parent and child pages are equal by default, the divider moves them within the bounds', () => {
+    expect(paneColumns(2)).toBe('minmax(0, 0.5000fr) minmax(0, 0.5000fr)');
+    expect(paneColumns(2, 0.4)).toBe('minmax(0, 0.4000fr) minmax(0, 0.6000fr)');
+    expect(paneColumns(2, 0.1)).toBe('minmax(0, 0.2500fr) minmax(0, 0.7500fr)');
+    expect(paneColumns(2, 0.9)).toBe('minmax(0, 0.7500fr) minmax(0, 0.2500fr)');
     expect(paneColumns(1)).toBe('minmax(0, 1fr)');
+    expect(paneColumns(1, 0.3)).toBe('minmax(0, 1fr)');
+    expect(clampLeftShare(Number.NaN)).toBe(LEFT_SHARE_DEFAULT);
+    // Each page keeps PAGE_MIN_PX when the column has room for it.
+    expect(clampLeftShare(0.25, 800)).toBeCloseTo(PAGE_MIN_PX / 800);
+    expect(clampLeftShare(0.75, 800)).toBeCloseTo(1 - PAGE_MIN_PX / 800);
+    expect(clampLeftShare(0.25, 400)).toBe(0.5);
+    expect(clampLeftShare(0.3, 2000)).toBe(0.3);
+    expect(isLeftShare(0.5)).toBe(true);
+    expect(isLeftShare(0.1)).toBe(false);
+    expect(isLeftShare('0.5')).toBe(false);
   });
   it('a record from before the cap reads as the most pages (its split:false was the old default, not a choice)', () => {
     expect(paneCap({ split: false, trail: [] })).toBe(MAX_PANES);

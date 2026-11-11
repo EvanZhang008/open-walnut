@@ -7,7 +7,7 @@
  * scrolls under the header: the bodies below take no header room
  * (--sp-header-h: 0 for them). Split, the chat column is a grid of
  * --tree-panes columns (2, or 1 with the sibling page alone; set by the panel,
- * with --tree-cols: the previous page a third, the current two thirds):
+ * with --tree-cols: the previous page and the current, equal by default):
  *
  *   [ chat bar (a view open beside the chat)       ]
  *   [ path bar                                     ]
@@ -386,3 +386,32 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* The divider between the two pages (TreeSplitDivider): a thin grab strip on the
+   left page's right edge, over its border; it shows on hover, focus and drag. */
+.session-panel-chat-col.is-tree-split > .tree-split-divider {
+  grid-row: 3 / 6;
+  grid-column: 1;
+  justify-self: end;
+  position: relative;
+  width: 9px;
+  margin-right: -5px;
+  z-index: 3;
+  cursor: col-resize;
+  touch-action: none;
+}
+.tree-split-divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 3px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+.tree-split-divider:hover::after,
+.tree-split-divider:focus-visible::after,
+.tree-split-divider[data-dragging]::after { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.tree-split-divider:focus-visible { outline: none; }

@@ -1,7 +1,7 @@
 /**
  * A recorded walk through Tree Mode's pages on macOS WebKit (the Mac app's
- * engine): two pages side by side (the current one two thirds, the one before
- * it a third), a comment that stays on its page, a turn
+ * engine): two pages side by side (the current one and the one before it, equal
+ * by default), a comment that stays on its page, a turn
  * that scrolls only its own page, the sibling above the right page and its swap,
  * and the light composers. It asserts what it shows, so it is a check too; it
  * runs only on macOS WebKit (`walnut-dev webkit`), where its video is the demo.
