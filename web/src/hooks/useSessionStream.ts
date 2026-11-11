@@ -16,6 +16,7 @@ import {
   writeMainText,
   flushMainTextForInterrupt,
   appendMainThinking,
+  foldCarriedThinking,
   appendLaneText,
   appendLaneThinking,
   appendToolCall,
@@ -304,9 +305,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         const snapCompletedLen = snapshot.completedLen
           ?? (snapshot.isStreaming ? 0 : snapshot.blocks.length);
         let appliedBlocks = false;
-        // Reasoning still buffered arrived before this answer, so the snapshot
-        // already holds it: dropped when the snapshot is adopted, folded into
-        // the local blocks when it is not (never appended onto the snapshot).
+        // Reasoning still buffered: folded into the local blocks when the snapshot
+        // is not adopted, and onto the snapshot only when it does not already end
+        // with it (a delta broadcast after the server took the snapshot).
         const carried = takePendingThinking();
         setBlocks((prev) => {
           // Adoption rules live in shouldAdoptSnapshot (pure, unit-tested) —
@@ -327,7 +328,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           // Server-authoritative boundary when present (see StreamSnapshot doc);
           // legacy fallback: finished turn → all completed, live turn → none.
           completedLen.current = snapCompletedLen;
-          return snapshot.blocks;
+          return foldCarriedThinking(snapshot.blocks, carried, snapCompletedLen) as StreamingBlock[];
         });
         setIsStreaming((prev) => (snapshot.isStreaming && !prev) ? true : prev);
         if (appliedBlocks) {
@@ -372,14 +373,14 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           // Only apply snapshot if we don't already have streaming data
           // (avoid clobbering blocks from incremental events that arrived in between)
           let adopted = false;
-          // Same rule as the subscribe effect: buffered reasoning is in the snapshot.
+          // Same rule as the subscribe effect (foldCarriedThinking).
           const carried = takePendingThinking();
           setBlocks((prev) => {
             if (prev.length > 0) return carried ? appendMainThinking(prev, carried.text, carried.msgId, completedLen.current) : prev;
             adopted = true;
             completedLen.current = snapCompletedLen;
             if (snapshot.seq != null) lastAdoptedSeq.current = snapshot.seq;
-            return snapshot.blocks;
+            return foldCarriedThinking(snapshot.blocks, carried, snapCompletedLen) as StreamingBlock[];
           });
           // Non-regressive sync: snapshot only allowed to promote isStreaming false→true.
           // Rationale: a stale server-side buffer (cleared 2s after previous session:result)

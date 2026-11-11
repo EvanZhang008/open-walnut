@@ -315,6 +315,24 @@ export function appendMainThinking(
   return [...blocks, { type: 'thinking', content: incoming, ...(msgId ? { msgId } : {}) }];
 }
 
+/** Reasoning a client held back for its next flush, put onto a snapshot it adopts: the
+ *  snapshot was taken on the server, and a delta broadcast just after it reaches the client
+ *  before the snapshot's answer. Already at the end of the snapshot's open reasoning block, it
+ *  is there; otherwise it is appended, so it is neither lost nor shown twice. */
+export function foldCarriedThinking(
+  blocks: readonly StreamingBlock[],
+  carried: { text: string; msgId: string | undefined } | null,
+  completedLen: number,
+): readonly StreamingBlock[] {
+  if (!carried) return blocks;
+  const idx = lastMainLaneIndex(blocks);
+  const last = idx >= 0 ? blocks[idx] : undefined;
+  if (last && last.type === 'thinking' && idx >= completedLen
+    && (!carried.msgId || !last.msgId || last.msgId === carried.msgId)
+    && last.content.endsWith(carried.text)) return blocks;
+  return appendMainThinking(blocks, carried.text, carried.msgId, completedLen);
+}
+
 // ── Subagent lanes ──────────────────────────────────────────────────────────
 
 export interface LaneTextEvent {
