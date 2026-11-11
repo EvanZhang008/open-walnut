@@ -149,7 +149,6 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
   const pending = new Map<EventTarget, PendingKey[]>();
   const typedAt = new WeakMap<EventTarget, number>();
   let lastTypedAt = -Infinity;
-  let currentKey: KeyboardEvent | null = null;
   const preventers = new WeakMap<Event, string>();
 
   const flush = (t: number) => {
@@ -177,7 +176,12 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
   const realPrevent = EventProto?.preventDefault;
   if (EventProto && realPrevent) {
     EventProto.preventDefault = function preventDefault(this: Event) {
-      if (this === currentKey && !preventers.has(this)) preventers.set(this, callerOf(new Error().stack));
+      // Known by the event itself, not by which listener saw it first: a page listener on the
+      // window's capture phase runs before any of this module's own (2026-11-11: the gate's
+      // eater on window capture was named only "a listener before the page's own").
+      if (this.type === 'keydown' && !preventers.has(this) && isTypedKey(this as KeyboardEvent)) {
+        preventers.set(this, callerOf(new Error().stack));
+      }
       return realPrevent.call(this);
     };
   }
@@ -193,7 +197,6 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
     }
     lastTypedAt = t;
     tick(t);
-    currentKey = k;
     w.keys++;
     const box = k.target as EventTarget;
     const list = pending.get(box) ?? [];
@@ -202,7 +205,6 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
   };
   /** A key's end, once its dispatch is over (its input event came, or it never will). */
   const settle = (p: PendingKey, inserted: boolean) => {
-    if (currentKey === p.ev) currentKey = null;
     if (p.ev.defaultPrevented) { w.prevented++; note(w.preventedBy, preventers.get(p.ev) ?? 'a listener before the page\'s own'); }
     else if (inserted) w.inserted++;
     else w.dropped++;
