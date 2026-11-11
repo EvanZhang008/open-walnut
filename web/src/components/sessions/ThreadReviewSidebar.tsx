@@ -26,7 +26,7 @@ import type { ThreadMarkState } from '@/utils/thread-mark-state';
 import { hasWords, questionBodyOf } from '@/utils/thread-card';
 import { displayTitleOf, type ThreadMetaIndex } from '@/utils/thread-meta';
 import { isTurnHead, type ThreadTree } from '@/utils/thread-tree';
-import { plainExcerpt, REVIEW_BODY_MAX, REVIEW_BODY_MIN, REVIEW_GAP, stackReviewCards } from '@/utils/review-sidebar';
+import { liftReviewCard, plainExcerpt, REVIEW_BODY_MAX, REVIEW_BODY_MIN, REVIEW_GAP, REVIEW_TYPING_BODY, stackReviewCards } from '@/utils/review-sidebar';
 import { stripQuestionTag } from '@/utils/question-tag';
 import type { ImageAttachment } from '@/api/chat';
 import { cardFollowUpPlaceholder } from './ThreadCommentCard';
@@ -222,13 +222,23 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
       const bodyH = Math.min(body.scrollHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0), cssCap) + extra;
       return { key: e.key, anchor: cur.anchors.get(e.key)!, head: el.offsetHeight - body.offsetHeight, bodyH, body, extra };
     });
+    // The card whose box holds the keyboard keeps a readable piece of its
+    // conversation even when the cards are crowded (2026-11-11 review: near the
+    // view's foot it was squeezed to one clipped line of the answer).
+    // Only the box counts: a click on the card's head focuses the head, and
+    // moving the card under that click would lose it.
+    const box = document.activeElement?.closest('.thread-card-composer');
+    const typing = box ? parts.find((x) => !!x.body && !!cards.current.get(x.key)?.contains(box))?.key : undefined;
+    const bodyOf = (x: (typeof parts)[number], cap: number) => (x.key === typing
+      ? Math.min(x.bodyH, Math.max(cap, REVIEW_TYPING_BODY))
+      : cap >= REVIEW_BODY_MIN ? Math.min(x.bodyH, cap) : 0);
     const stackWith = (cap: number) => stackReviewCards(
-      parts.map((x) => ({ key: x.key, anchor: x.anchor, height: x.head + (cap >= REVIEW_BODY_MIN ? Math.min(x.bodyH, cap) : 0) })),
+      parts.map((x) => ({ key: x.key, anchor: x.anchor, height: x.head + bodyOf(x, cap) })),
       REVIEW_GAP, cur.selected,
     );
     const bottomOf = (tops: Map<string, number>, cap: number) => {
       let bottom = 0;
-      for (const x of parts) bottom = Math.max(bottom, (tops.get(x.key) ?? 0) + x.head + (cap >= REVIEW_BODY_MIN ? Math.min(x.bodyH, cap) : 0));
+      for (const x of parts) bottom = Math.max(bottom, (tops.get(x.key) ?? 0) + x.head + bodyOf(x, cap));
       return bottom;
     };
     // Crowded (more conversation than room beside it): every card gets the same
@@ -247,24 +257,33 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
       cap = lo;
       tops = stackWith(cap);
     }
-    // The card whose box holds the keyboard keeps that box on screen: its
-    // conversation scrolls inside it rather than growing the box past the
-    // view's foot, where the next key typed made the browser scroll the
-    // timeline to the caret (2026-11-10 review: 633px on a second follow-up).
-    const active = document.activeElement;
+    // The card being typed in keeps its box on screen: past the view's foot the
+    // next key typed made the browser scroll the timeline to the caret
+    // (2026-11-10 review: 633px on a second follow-up). It rises (the cards
+    // above it with it) until its box and that piece of conversation fit above
+    // the foot; only what still does not fit scrolls inside it.
     const scroller = layer.closest<HTMLElement>('.session-history');
-    const foot = scroller ? scroller.getBoundingClientRect().bottom - origin - REVIEW_GAP : Number.POSITIVE_INFINITY;
+    const view = scroller?.getBoundingClientRect();
+    const foot = view ? view.bottom - origin - REVIEW_GAP : Number.POSITIVE_INFINITY;
+    const ceiling = view ? Math.max(0, view.top - origin + REVIEW_GAP) : 0;
+    const typed = typing ? parts.find((x) => x.key === typing) : undefined;
+    let typedBody = typed ? bodyOf(typed, cap) : 0;
+    if (typed) {
+      const top = tops.get(typed.key) ?? 0;
+      // A card wholly past the foot (read elsewhere, focus left in it) stays put.
+      if (top < foot) {
+        const over = top + typed.head + typedBody - foot;
+        if (over > 0) {
+          tops = liftReviewCard(tops, new Map(parts.map((x) => [x.key, x.head + bodyOf(x, cap)])), typed.key, Math.max(ceiling, top - over), REVIEW_GAP);
+          const now = tops.get(typed.key) ?? top;
+          typedBody = Math.min(typedBody, Math.max(REVIEW_BODY_MIN, foot - now - typed.head));
+        }
+      }
+    }
     for (const x of parts) {
       if (!x.body) continue;
-      const hide = cap < REVIEW_BODY_MIN;
-      let own = cap;
-      const el = cards.current.get(x.key);
-      if (el && active && el.contains(active) && !x.body.contains(active)) {
-        const top = tops.get(x.key) ?? 0;
-        // Never below the floor; a card already past the foot keeps its size.
-        const room = foot - top - x.head;
-        if (top + x.head < foot) own = Math.min(own, Math.max(REVIEW_BODY_MIN, room));
-      }
+      const own = x.key === typing ? typedBody : cap;
+      const hide = x.key === typing ? false : cap < REVIEW_BODY_MIN;
       const max = !hide && x.bodyH > own ? `${Math.max(0, own - x.extra)}px` : '';
       if (x.body.style.maxHeight !== max) x.body.style.maxHeight = max;
       const display = hide ? 'none' : '';

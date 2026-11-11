@@ -707,6 +707,70 @@ test.describe('the fullscreen review sidebar', () => {
     expect(await body.evaluate((el) => el.scrollHeight - el.clientHeight), 'its conversation scrolls inside the card').toBeGreaterThan(40)
   })
 
+  test('crowded cards: the one typed in at the view\'s foot keeps a readable piece of its conversation and its box on screen; one-line placeholder', async ({ page }) => {
+    // 2026-11-11 review (macOS WebKit, 6 cards): a card whose box sat at the
+    // view's foot squeezed its conversation to one clipped line (37px) to keep
+    // the box on screen, and the box still sat partly past the foot: the
+    // timeline moved 6px on the first send.
+    await page.setViewportSize({ width: 1440, height: 640 })
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openThreadsSession(page, REVIEW_SESSION, REVIEW_TASK, REVIEW_READY, { view: 'linear' })
+    await goFullscreen(panel)
+    await expect(sidebarCards(panel)).toHaveCount(REVIEW_COUNT, { timeout: 15_000 })
+    const history = panel.locator('.session-history')
+    const card = sidebarCards(panel).filter({ hasText: REVIEW_TITLES[9] })
+    const box = card.locator('textarea.thread-card-input')
+    const body = card.locator('.thread-review-body')
+    // A long question name: its placeholder stays one line in the 300px card
+    // (the review saw a long one take two lines).
+    const tall = await box.evaluate((el) => {
+      const t = el as HTMLTextAreaElement
+      const was = t.placeholder
+      t.placeholder = 'Reply in \u201cthe slow flush worker and the index wr\u2026\u201d\u2026'
+      const h = t.scrollHeight
+      t.placeholder = was
+      return h
+    })
+    expect.soft(tall, 'a long placeholder takes one line').toBeLessThanOrEqual(30)
+    await wheelIntoView(page, history, box)
+    const hb = (await history.boundingBox())!
+    // Wheel until the box's middle is just above the view's foot (its buttons past it).
+    const goal = hb.y + hb.height - 6
+    await page.mouse.move(hb.x + hb.width * 0.3, hb.y + hb.height / 2)
+    await expect.poll(async () => {
+      const b = (await box.boundingBox())!
+      const d = goal - (b.y + b.height / 2)
+      if (d > 2 || d < -4) { await page.mouse.wheel(0, d > 0 ? -Math.min(40, Math.max(4, d)) : Math.min(40, Math.max(4, -d))); await page.waitForTimeout(80) }
+      const n = (await box.boundingBox())!
+      const e = goal - (n.y + n.height / 2)
+      return e <= 2 && e >= -4
+    }, { timeout: 20_000 }).toBe(true)
+    await page.waitForTimeout(300)
+    await clickInPlace(page, box)
+    for (const q of ['A follow-up from the foot of the view, long enough to need a few lines?', 'And one more?']) {
+      await page.evaluate(() => {
+        const h = document.querySelector('.session-history') as HTMLElement
+        const w = window as unknown as { __st: { on: boolean; v: number[] } }
+        w.__st = { on: true, v: [] }
+        const tick = () => { if (!w.__st.on) return; w.__st.v.push(h.scrollTop); requestAnimationFrame(tick) }
+        requestAnimationFrame(tick)
+      })
+      await expect(box, 'the keyboard is in the box').toBeFocused()
+      await page.keyboard.type(q)
+      await page.keyboard.press('Enter')
+      await expect(body).toContainText(`processed your message: ${q}`, { timeout: 30_000 })
+      await page.waitForTimeout(600)
+      const v = await page.evaluate(() => { const w = window as unknown as { __st: { on: boolean; v: number[] } }; w.__st.on = false; return w.__st.v })
+      expect(Math.max(...v) - Math.min(...v), `the timeline stayed while "${q}" was typed, sent and answered`).toBeLessThan(3)
+      const b = (await box.boundingBox())!
+      expect(b.y + b.height, 'the box stays above the view\'s foot').toBeLessThanOrEqual(hb.y + hb.height)
+      await expect.poll(() => body.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 3_000 }).toBeLessThan(2)
+      const seen = await body.evaluate((el) => ({ shown: el.clientHeight, all: el.scrollHeight }))
+      expect(seen.shown, 'the card keeps a readable piece of its conversation, not one line').toBeGreaterThanOrEqual(Math.min(seen.all, 130))
+    }
+  })
+
   test('scrolling a long reply with 22 cards stays smooth', async ({ page, browserName }) => {
     const panel = await openFullscreen(page)
     await goFullscreen(panel)
@@ -829,3 +893,4 @@ test.describe('asks on turns that are not loaded', () => {
     await expect(panel.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1)
   })
 })
+

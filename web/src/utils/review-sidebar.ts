@@ -15,6 +15,9 @@ export const REVIEW_GAP = 8;
 /** The least room a card's conversation keeps when the cards are crowded
  *  (a couple of lines, scrolling inside); below it a card shows its head alone. */
 export const REVIEW_BODY_MIN = 48;
+/** The conversation the card being typed in keeps at least (when it has that
+ *  much): the last answer or two, not one clipped line. */
+export const REVIEW_TYPING_BODY = 160;
 /** A card's conversation at most (with 55vh, the `.thread-review-body` cap in thread-review.css). */
 export const REVIEW_BODY_MAX = 420;
 
@@ -63,6 +66,33 @@ export function stackReviewCards(items: readonly ReviewStackItem[], gap: number,
     for (let i = s + 1; i < order.length; i++) tops[i] = Math.max(Math.max(0, order[i].anchor), tops[i - 1] + order[i - 1].height + gap);
   }
   return new Map(order.map((it, i) => [it.key, Math.round(tops[i])]));
+}
+
+/**
+ * Moves one card up to `to` (never down) and the cards above it as far as they
+ * must so none overlap, never above 0; when the ones above run out of room, the
+ * card stops lower. Cards below it keep their place.
+ */
+export function liftReviewCard(
+  tops: ReadonlyMap<string, number>, heights: ReadonlyMap<string, number>, key: string, to: number, gap: number,
+): Map<string, number> {
+  const out = new Map(tops);
+  const at = tops.get(key);
+  if (at === undefined || to >= at) return out;
+  const above = [...tops].filter(([k, t]) => k !== key && t < at).sort((a, b) => b[1] - a[1]);
+  // How high it can go: each card above packed onto the next, the first at 0.
+  let room = 0;
+  for (const [k] of above) room += (heights.get(k) ?? 0) + gap;
+  const top = Math.round(Math.max(to, room));
+  out.set(key, top);
+  let next = top;
+  for (const [k, t] of above) {
+    const h = heights.get(k) ?? 0;
+    const moved = Math.min(t, next - gap - h);
+    out.set(k, Math.round(moved));
+    next = moved;
+  }
+  return out;
 }
 
 /** Markdown to a short plain line: code blocks become `[code]`, marks go, white

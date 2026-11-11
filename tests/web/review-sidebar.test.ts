@@ -4,7 +4,7 @@
  * a card shows.
  */
 import { describe, expect, it } from 'vitest';
-import { plainExcerpt, REVIEW_MIN_BOX, reviewGutterOf, reviewSidebarOn, stackReviewCards } from '@/utils/review-sidebar';
+import { liftReviewCard, plainExcerpt, REVIEW_MIN_BOX, reviewGutterOf, reviewSidebarOn, stackReviewCards } from '@/utils/review-sidebar';
 
 const tops = (m: Map<string, number>) => Object.fromEntries(m);
 
@@ -84,5 +84,22 @@ describe('plainExcerpt', () => {
   });
   it('keeps non-ASCII text', () => {
     expect(plainExcerpt('你好 **世界**', 20)).toBe('你好 世界');
+  });
+});
+
+describe('liftReviewCard', () => {
+  const h = new Map([['a', 100], ['b', 100], ['c', 100]]);
+  const t = new Map([['a', 0], ['b', 300], ['c', 500]]);
+  it('moves the card up to the place asked, and the cards below stay', () => {
+    expect(tops(liftReviewCard(t, h, 'c', 420, 8))).toEqual({ a: 0, b: 300, c: 420 });
+  });
+  it('pushes the cards above up so none overlap', () => {
+    expect(tops(liftReviewCard(t, h, 'c', 250, 8))).toEqual({ a: 0, b: 142, c: 250 });
+  });
+  it('stops where the cards above run out of room, never above 0', () => {
+    expect(tops(liftReviewCard(t, h, 'c', 0, 8))).toEqual({ a: 0, b: 108, c: 216 });
+  });
+  it('never moves a card down', () => {
+    expect(tops(liftReviewCard(t, h, 'b', 400, 8))).toEqual(tops(t));
   });
 });
