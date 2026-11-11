@@ -1331,10 +1331,10 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
     () => (!alwaysShowAdded && addedCount > 0 ? { count: addedCount, open: addedOpen, onToggle: toggleAdded } : undefined),
     [alwaysShowAdded, addedCount, addedOpen, toggleAdded],
   );
-  // A step row inside an opened fold (a call, a card, no words of its own) is a row, not a
-  // message: no copy, pin or time line under it.
+  // A step row inside an opened fold (a call, a card sent or received, no words of the
+  // person's or its own) is a row, not a message: no copy, pin or time line under it.
   const inFold = useInFoldBody();
-  const stepInFold = inFold && !bodyText?.trim() && !walnutAdded;
+  const stepInFold = inFold && !walnutAdded && (isUser ? !personWords : !bodyText?.trim());
 
   // `<suggest>` action cards in a session's own answer: a session's prose can
   // carry a card just like the Personal AI's — same parser, same invoke endpoint,

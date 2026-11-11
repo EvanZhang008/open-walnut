@@ -139,6 +139,8 @@ for (const theme of ['light', 'dark'] as const) {
       .map((row) => row.querySelector('svg.step-icon')?.getAttribute('data-step-icon') ?? 'none'))
     expect(icons).toEqual(expect.arrayContaining(['eye', 'terminal', 'send', 'received', 'message', 'alert', 'thought']))
     expect(icons).not.toContain('none')
+    // A step is a row, not a message: no copy, pin or time line under a card or a call.
+    expect(await body.evaluate((b) => Array.from(b.querySelectorAll('.session-msg-actions')).filter((x) => !x.closest('[data-testid="folded-words"]')).length)).toBe(0)
     // The sent and the received message are rows of the same height as a command's.
     const heights = await body.evaluate((b) => ({
       sent: (b.querySelector('.provenance-card[data-envelope-kind="outbound"]') as HTMLElement).getBoundingClientRect().height,
