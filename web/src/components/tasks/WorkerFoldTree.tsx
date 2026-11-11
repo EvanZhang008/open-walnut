@@ -9,8 +9,7 @@ import type { Task } from '@open-walnut/core';
 import * as ICONS from '../common/Icons';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { taskUserState } from '@/utils/session-status';
-import { foldMixLine, stateSectionKey, type FoldEntry } from './worker-fold';
-import { STATUS_SECTION_LABELS } from './status-sections';
+import { foldMixLine, stateSectionKey, type FoldEntry, foldStateWords } from './worker-fold';
 import '@/styles/worker-fold.css';
 
 /** What a section row needs to draw its folded team: TodoPanel's fold state and its writers. */
@@ -90,7 +89,7 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
                 {ICONS.sectionRowIcon(key, key === 'done', task.phase, false, taskUserState(task))}
               </span>
               <span className="worker-fold-title">{orgDisplayTitle(task)}</span>
-              <span className="worker-fold-state">{back ? 'Shown separately' : out ? `${STATUS_SECTION_LABELS[key]} · in the list` : STATUS_SECTION_LABELS[key]}</span>
+              <span className="worker-fold-state">{back ? 'Shown separately' : out ? `${foldStateWords(key)} · in the list` : foldStateWords(key)}</span>
             </button>
             {!out || back ? (
               <button

@@ -18,7 +18,7 @@ import type { Task } from '@open-walnut/core';
 import { usePageView } from '@/utils/view-memory';
 import { subtasksOf } from './subtask-index';
 import { taskUserState } from '../../utils/session-status';
-import { drawnSectionOf, type DrawnSectionKey } from './status-sections';
+import { STATUS_SECTION_LABELS, drawnSectionOf, type DrawnSectionKey } from './status-sections';
 
 export interface WorkerFoldView {
   /** Workers fold into their leader (the default). Off: every worker is a row, as before. */
@@ -236,6 +236,13 @@ function treeOf(tasks: readonly Task[], hostId: string, workers: readonly Task[]
 /** The user state's section, for a line that has none of its own (a tree line, a quiet leader). */
 export function stateSectionKey(t: Task): DrawnSectionKey {
   return drawnSectionOf(t);
+}
+
+/** A tree line's state: the words of the section the worker is drawn in (Waiting / snoozed, Not
+ *  started), so the tree and the list say the same. Here, not in the tree's component: that one's
+ *  disclosure is no status fold (tests/web/section-fold-rule-guard.test.ts). */
+export function foldStateWords(key: DrawnSectionKey): string {
+  return STATUS_SECTION_LABELS[key];
 }
 
 /** "1 needs you · 5 working · 3 waiting · 2 in the list": the host's workers by the state the user sees. */
