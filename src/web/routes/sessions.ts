@@ -1416,8 +1416,10 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       if (record && engineCaps(record.engine).historySource === 'acp-journal') {
         // Tail-bounded P1: bound a COLD fold to the journal's last few MB so a
         // whale journal paints instantly; the fold cache serves the follow-ups.
-        const { messages, windowed } = await readProviderSessionHistory(sessionId, record, record.host, true,
-          tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
+        const { boundHistoryPreview } = await import('../../core/history-open-preview.js')
+        const preview = await boundHistoryPreview(sessionId, () => readProviderSessionHistory(sessionId, record, record.host, true,
+          tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined))
+        const { messages, windowed } = preview ?? { messages: [], windowed: false }
         logMessageOrdering('P1:streams', sessionId, messages, record.host)
         const sliced = sliceHistory(messages)
         const initialUserText = windowed ? undefined : initialUserTextOf(messages)
@@ -1463,7 +1465,19 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           })
           return
         }
-        res.json({ messages: [], total: 0 })
+        // No saved view yet: first paint must not wait for the full cold read and
+        // its older-turn backfill. A small, deadline-bound tail gives it live rows.
+        const { boundHistoryPreview, HISTORY_OPEN_PREVIEW_BYTES } = await import('../../core/history-open-preview.js')
+        const { readSessionHistoryTailWindow, hasInPlaceRewinds } = await import('../../core/session-history.js')
+        const preview = await boundHistoryPreview(sessionId, async () => {
+          // Cut anchors can lie outside a preview window. Leave rewound sessions
+          // to the existing filtered full read instead of exposing an abandoned branch.
+          if (await hasInPlaceRewinds(sessionId)) return null
+          const rows = await readSessionHistoryTailWindow(sessionId, record.cwd, record.host, HISTORY_OPEN_PREVIEW_BYTES)
+          return rows ? rewriteHistoryRemoteImages(rows, record.host!, sessionId, record.cwd) : null
+        })
+        const messages = preview ?? []
+        res.json({ messages: markUnsettled(messages), total: messages.length, ...(messages.length ? { windowed: true } : {}) })
         return
       }
       // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand.
@@ -1473,8 +1487,9 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // throw most of it away.
       let p1: Awaited<ReturnType<typeof readProviderSessionHistory>>
       try {
-        p1 = await readProviderSessionHistory(sessionId, record, undefined, true,
-          tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
+        const { boundHistoryPreview, HISTORY_OPEN_PREVIEW_BYTES } = await import('../../core/history-open-preview.js')
+        p1 = await boundHistoryPreview(sessionId, () => readProviderSessionHistory(sessionId, record, undefined, true,
+          { maxColdReadBytes: HISTORY_OPEN_PREVIEW_BYTES })) ?? { messages: [], sourceAvailable: false, windowed: false }
       } catch (err) {
         // The local read failed (daemon not answering). Phase 1 is only a fast
         // preview: answer empty and let the full fetch run its degraded path.

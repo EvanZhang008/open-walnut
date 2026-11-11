@@ -26,12 +26,27 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
-vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
+const delayedRanges = vi.hoisted(() => ({ small: false, entered: undefined as (() => void) | undefined, release: undefined as Promise<void> | undefined }));
+vi.mock('../../src/core/daemon-file-reader.js', () => {
+  const actual = mockLocalDaemonReader();
+  class Reader extends actual.DaemonFileReader {
+    async readFileRange(remotePath: string, start: number) {
+      const result = await super.readFileRange(remotePath, start);
+      if (delayedRanges.small && result && result.fileSize - start <= 2048) {
+        delayedRanges.entered?.();
+        await delayedRanges.release;
+      }
+      return result;
+    }
+  }
+  return { ...actual, DaemonFileReader: Reader };
+});
 
 import { CLAUDE_HOME } from '../../src/constants.js';
 import {
   encodeProjectPath,
   readSessionHistory,
+  readSessionHistoryTail,
   isWindowedHistory,
   _resetHistoryCacheForTesting,
 } from '../../src/core/session-history.js';
@@ -46,6 +61,9 @@ beforeEach(async () => {
   await fsp.mkdir(tmpBase, { recursive: true });
   _resetHistoryCacheForTesting();
   _resetEchoClaimsForTest();
+  delayedRanges.small = false;
+  delayedRanges.entered = undefined;
+  delayedRanges.release = undefined;
 });
 
 afterEach(async () => {
@@ -217,6 +235,52 @@ describe('cold tail-bounded read (maxColdReadBytes)', () => {
     expect(isWindowedHistory(full)).toBe(false);
     expect(full.length).toBe(121); // 60 padding pairs + the newest line
     expect(full.length).toBeGreaterThan(windowed.length);
+  });
+
+  it('a small first-paint window cannot satisfy the larger refresh window', async () => {
+    const sid = 'preview-then-refresh';
+    await writeLines(sid, padding(100));
+    // Above the full-read ceiling prevents the background warmer from masking the cache bug.
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '16384';
+    const preview = await readSessionHistory(sid, CWD, undefined, undefined,
+      { skipSubagents: true, maxColdReadBytes: 2048 });
+    const refreshed = await readSessionHistory(sid, CWD, undefined, undefined,
+      { skipSubagents: true, maxColdReadBytes: 16384 });
+    expect(isWindowedHistory(preview)).toBe(true);
+    expect(isWindowedHistory(refreshed)).toBe(true);
+    expect(refreshed.length).toBeGreaterThan(preview.length);
+    expect(refreshed.at(-1)?.msgId).toBe(preview.at(-1)?.msgId);
+    _resetHistoryCacheForTesting();
+    const small = await readSessionHistory(sid, CWD, undefined, undefined,
+      { skipSubagents: true, maxColdReadBytes: 2048 });
+    const sweep = await readSessionHistoryTail(sid, CWD, undefined, undefined, 16384);
+    expect(sweep!.length).toBeGreaterThan(small.length);
+  });
+
+  it('a late smaller preview cannot replace the fresh larger refresh cache', async () => {
+    const sid = 'late-preview-cache';
+    await writeLines(sid, padding(100));
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '16384';
+    delayedRanges.small = true;
+    let release!: () => void;
+    delayedRanges.release = new Promise<void>(r => { release = r; });
+    const entered = new Promise<void>(r => { delayedRanges.entered = r; });
+    const preview = readSessionHistory(sid, CWD, undefined, undefined,
+      { skipSubagents: true, maxColdReadBytes: 2048 });
+    try {
+      await entered;
+      const full = await readSessionHistory(sid, CWD, undefined, undefined,
+        { skipSubagents: true, maxColdReadBytes: 16384 });
+      release();
+      await preview;
+      // A small caller now gets the more complete, current entry, not the late preview.
+      const kept = await readSessionHistory(sid, CWD, undefined, undefined,
+        { skipSubagents: true, maxColdReadBytes: 2048 });
+      expect(kept.length).toBe(full.length);
+    } finally {
+      release();
+      await preview;
+    }
   });
 
   it('a file under the bound takes the normal full read (not windowed)', async () => {

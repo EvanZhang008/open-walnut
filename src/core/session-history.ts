@@ -2782,7 +2782,7 @@ export async function parseHistoryWindowText(
  * one caller that passes it has a PRECOMPUTED dead set for the whole file (the
  * daemon's rewind probe), which is exactly the missing piece.
  */
-async function readSessionHistoryTailWindow(
+export async function readSessionHistoryTailWindow(
   sessionId: string,
   cwd?: string,
   host?: string,
@@ -2933,7 +2933,8 @@ export async function readSessionHistoryTail(
       if (st && st.size > maxTailBytes) {
         // Serve from the shared cache when fresh — same data, zero I/O.
         const cached = cacheGet(sessionId, host);
-        if (cached && isFresh(cached, st.mtimeMs, st.size)) return cached.messages;
+        if (cached && isFresh(cached, st.mtimeMs, st.size)
+            && (!cached.windowed || cached.approxChars >= Math.min(maxTailBytes, DaemonFileReader.maxReadBytes()))) return cached.messages;
         // A session with recorded in-place rewinds can't use the window: the
         // cut anchors resolve against the FULL file, and the cut/anchor lines
         // may precede the window's start — an unfilterable window would serve
@@ -3041,7 +3042,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
             // are themselves tail-bounded — a full-read caller (Load earlier,
             // fork ancestor read) falls through to the real full read below,
             // which overwrites this entry with the full parse.
-            if (!cached.windowed || options?.maxColdReadBytes) {
+            if (!cached.windowed || (options?.maxColdReadBytes && cached.approxChars >= options.maxColdReadBytes)) {
               // Cache hit — return cached messages (skipSubagents is the common path
               // now, so cached messages don't include childMessages; no mutation concern).
               return handOff(cached.messages);
@@ -3147,11 +3148,17 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
         windowBytes: options.maxColdReadBytes, messages: win.length,
       });
       if (mtimeMs !== undefined) {
-        cacheSet(sessionId, {
-          mtimeMs, size: statSize, messages: win, approxChars: options.maxColdReadBytes, windowed: true,
-          ...(getOrphanFinishedAgentIds(win)?.size
-            ? { orphanFinishedIds: [...getOrphanFinishedAgentIds(win)!] } : {}),
-        }, host);
+        // A timed-out preview may finish after the larger refresh. Never replace
+        // that fresh, more complete parse with its smaller window.
+        const current = cacheGet(sessionId, host);
+        if (!current || !isFresh(current, mtimeMs, statSize)
+            || (current.windowed && current.approxChars < options.maxColdReadBytes)) {
+          cacheSet(sessionId, {
+            mtimeMs, size: statSize, messages: win, approxChars: options.maxColdReadBytes, windowed: true,
+            ...(getOrphanFinishedAgentIds(win)?.size
+              ? { orphanFinishedIds: [...getOrphanFinishedAgentIds(win)!] } : {}),
+          }, host);
+        }
       }
       // NOT written to the disk cache: that store feeds full-read fallbacks
       // (SSH-down stale serving), which must never adopt a partial parse.

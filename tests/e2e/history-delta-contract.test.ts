@@ -55,6 +55,7 @@ interface HistoryResponse {
   total?: number
   cursor?: number
   delta?: boolean
+  windowed?: boolean
   initialUserText?: string
 }
 
@@ -130,7 +131,7 @@ function padding(count: number): unknown[] {
   return out
 }
 
-const SIDS = ['e2e-whale', 'e2e-whale-anchored', 'e2e-small', 'e2e-agent-late', 'e2e-agent-settled', 'e2e-agent-empty-delta', 'e2e-initial-tail', 'e2e-initial-whale']
+const SIDS = ['e2e-whale', 'e2e-whale-anchored', 'e2e-small', 'e2e-agent-late', 'e2e-agent-settled', 'e2e-agent-empty-delta', 'e2e-initial-tail', 'e2e-initial-whale', 'e2e-cold-preview']
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -148,6 +149,19 @@ afterAll(async () => {
 })
 
 describe('history delta contract — sliding window (inc-1785993576822)', () => {
+  it('a real server serves a small cold preview, then widens it for the normal refresh', async () => {
+    const sid = 'e2e-cold-preview';
+    await writeJsonl(sid, [...padding(1000), user('latest preview question', 1100), asst('latest preview answer', 1101)]);
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '262144';
+    const preview = await history(sid, '?source=streams&tail=400&turns=10');
+    expect(preview.messages.map(m => m.text)).toContain('latest preview answer');
+    expect(preview.windowed).toBe(true);
+    expect(preview.cursor).toBeUndefined();
+    const full = await history(sid, '?tail=400&turns=10');
+    expect(full.messages.map(m => m.text)).toContain('latest preview answer');
+    expect(full.messages.length).toBeGreaterThanOrEqual(preview.messages.length);
+  });
+
   it('refuses an anchorless delta on a windowed read, and the full payload keeps the newest messages', async () => {
     const sid = 'e2e-whale'
     await writeJsonl(sid, [...padding(60), user('the newest question', 90), asst('the newest answer', 91)])
