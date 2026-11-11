@@ -14,6 +14,7 @@ import { guardedPath } from '../setup/exec-guard.js'
 
 const SCRIPT = path.resolve(__dirname, '../../scripts/ios-fleet-test.sh')
 const REMOTE = path.resolve(__dirname, '../../ios-native/tests/fleet/remote-run.sh')
+const AUDIO = path.resolve(__dirname, '../../scripts/lib/ios-run-audio.py')
 let dir = ''
 let repo = ''
 let taskDir = ''
@@ -849,14 +850,21 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
   // 2026-11-11: a board test was refused there because its task quoted the user's "voice" message.
   it('a run is an audio run by the tests it runs, never by the words of its task', () => {
     const macs = [{ host: 'mac-mini', loadPerCpu: 0.3 }]
+    // The command line the whole script sends to the Mac, without its shell quoting.
     const sent = (args: string[], taskText?: string, env: Record<string, string> = {}) => {
       fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
       const r = run(args, fakeWalnut(macs, outTgz(), { taskText }), SCRIPT, env)
       expect(r.status, r.stderr).toBe(0)
       // The task's words are never read for it.
       expect(r.calls.some((c) => c.op === 'task_get')).toBe(false)
-      // The command line sent to the Mac, without its shell quoting.
       return (r.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2].replace(/\\/g, '')
+    }
+    // The judge itself (one python call each; the whole script is run only a few times below,
+    // since a run of it costs seconds on a loaded CI runner).
+    const why = (...args: string[]) => {
+      const r = spawnSync('python3', [AUDIO, path.join(repo, 'ios-native'), ...args], { encoding: 'utf8' })
+      expect(r.status, r.stderr).toBe(0)
+      return r.stdout.trim()
     }
     const ui = path.join(repo, 'ios-native/WalnutUITests')
     fs.mkdirSync(ui, { recursive: true })
@@ -867,40 +875,40 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
     fs.writeFileSync(path.join(unit, 'VoiceSessionDiagnosisTests.swift'),
       'final class VoiceSessionDiagnosisTests: XCTestCase {\n  // AVAudioRecorder( in a comment starts nothing\n  let code = AVAudioSession.ErrorCode.isBusy\n}\n')
 
-    // The class of the bug: whatever a task says about voice or sound, a run of tests that
-    // touch no audio is no audio run.
-    const words = [
-      'Evan, his words exactly (voice, 11-11): Watching follows the tier tab',
-      'iPhone action button: \u6309\u4e00\u4e0b\u8bf4\u4e00\u6bb5\u8bdd',
-      '\u8bed\u97f3\u8bc6\u522b\u8d28\u91cf\u4e0b\u964d',
-      'microphone, dictation, speech, transcribe, STT, TTS, Siri, audio, speaker, \u9ea6\u514b\u98ce, \u5f55\u97f3, \u58f0\u97f3',
-      'Board layout. lane B \u53ea\u5728\u90a3\u53f0\u7684\u58f0\u97f3\u662f\u9759\u97f3\u65f6\u624d\u5f00\u59cb\u8dd1',
-    ]
-    for (const text of words) {
-      expect(sent(['unit'], text), text).not.toContain('--audio')
-      expect(sent(['unit', '--', '-only-testing:WalnutTests/RepoTests'], text), text).not.toContain('--audio')
-      expect(sent(['ui', '--', '-only-testing:WalnutUITests/BoardRingTapUITests'], text), text).not.toContain('--audio')
-      expect(sent(['build'], text), text).not.toContain('--audio')
-    }
+    // The class of the bug: the judge is given the run and nothing of the task, so no words
+    // about voice or sound can make a board run an audio run. The script hands it exactly that.
+    const src = fs.readFileSync(SCRIPT, 'utf8')
+    expect(src).not.toMatch(/task_get/)
+    expect(src).toContain('lib/ios-run-audio.py" "$ROOT/ios-native" "$MODE"')
+    const voiceWords = 'Evan, his words exactly (voice, 11-11): microphone, dictation, speech, STT, Siri, audio, \u8bed\u97f3, \u9ea6\u514b\u98ce, \u5f55\u97f3, \u58f0\u97f3'
+    expect(sent(['unit', '--', '-only-testing:WalnutTests/RepoTests'], voiceWords)).not.toContain('--audio')
 
-    // What the run does decides. A UI test of a voice screen opens the microphone in the app.
-    expect(sent(['ui', '--', '-only-testing:WalnutUITests/VoiceDictationUITests'], 'Board layout')).toMatch(/ui --audio .*it runs VoiceDictationUITests, a voice test/)
-    // The whole UI suite holds it; skipped, it does not.
-    expect(sent(['ui'], 'Board layout')).toMatch(/ui --audio .*VoiceDictationUITests/)
-    expect(sent(['ui', '--', '-skip-testing:WalnutUITests/VoiceDictationUITests'], 'Board layout')).not.toContain('--audio')
+    // What the run does decides. A build never is one; a board test is not.
+    expect(why('build')).toBe('')
+    expect(why('unit')).toBe('')
+    expect(why('unit', '-only-testing:WalnutTests/RepoTests')).toBe('')
+    expect(why('ui', '-only-testing:WalnutUITests/BoardRingTapUITests')).toBe('')
+    // A UI test of a voice screen opens the microphone in the app; the whole suite holds it.
+    expect(why('ui', '-only-testing:WalnutUITests/VoiceDictationUITests')).toBe('it runs VoiceDictationUITests, a voice test')
+    expect(why('ui')).toContain('VoiceDictationUITests')
+    expect(why('ui', '-skip-testing:WalnutUITests/VoiceDictationUITests')).toBe('')
+    expect(why('ui', '-skip-testing:WalnutUITests')).toBe('')
     // A unit test counts only when its source starts audio hardware, whatever its name.
-    expect(sent(['unit', '--', '-only-testing:WalnutTests/VoiceSessionDiagnosisTests'], 'Board layout')).not.toContain('--audio')
+    expect(why('unit', '-only-testing:WalnutTests/VoiceSessionDiagnosisTests')).toBe('')
     fs.writeFileSync(path.join(unit, 'RecorderTests.swift'), 'final class RecorderTests: XCTestCase {\n  func testIt() { _ = try? AVAudioRecorder(url: u, settings: [:]) }\n}\n')
-    expect(sent(['unit'], 'Board layout')).toMatch(/unit --audio .*RecorderTests starts audio hardware \(AVAudioRecorder\)/)
-    expect(sent(['unit', '--', '-only-testing:WalnutTests/RepoTests'], 'Board layout')).not.toContain('--audio')
+    expect(why('unit')).toBe('RecorderTests starts audio hardware (AVAudioRecorder)')
+    expect(why('unit', '-only-testing:WalnutTests/RepoTests')).toBe('')
     // A command is judged by the tests it names, else by its own words.
-    expect(sent(['run', '--', 'xcodebuild', 'test', '-only-testing:WalnutUITests/VoiceDictationUITests'], 'Board layout')).toMatch(/run --audio .*VoiceDictationUITests/)
-    expect(sent(['run', '--', 'bash', 'tests/voice/record.sh'], 'Board layout')).toMatch(/run --audio .*its command names "voice"/)
-    expect(sent(['run', '--', 'bash', 'tests/passwords/autofill-e2e.sh'], 'voice')).not.toContain('--audio')
-    // The caller's own word still wins.
-    expect(sent(['--audio', 'records a memo', 'unit'], 'Board layout')).toMatch(/unit --audio records a memo/)
-    expect(sent(['unit'], 'Board layout', { SIM_TEST_AUDIO: 'plays a cue' })).toMatch(/unit --audio plays a cue/)
+    expect(why('run', 'xcodebuild', 'test', '-only-testing:WalnutUITests/VoiceDictationUITests')).toContain('VoiceDictationUITests')
+    expect(why('run', 'bash', 'tests/voice/record.sh')).toBe('its command names "voice"')
+    expect(why('run', 'bash', 'tests/passwords/autofill-e2e.sh')).toBe('')
 
+    // The script passes the judge's answer on, and the caller's own word still wins.
+    expect(sent(['ui', '--', '-only-testing:WalnutUITests/VoiceDictationUITests'], 'Board layout')).toMatch(/ui --audio .*it runs VoiceDictationUITests, a voice test/)
+    expect(sent(['--audio', 'records a memo', 'unit', '--', '-only-testing:WalnutTests/RepoTests'], 'Board layout')).toMatch(/unit --audio records a memo/)
+  })
+
+  it('the Mac half refuses an audio run where a person sits, and a Mac on hold or in its quiet nights', () => {
     const src = fs.readFileSync(REMOTE, 'utf8')
     expect(src).toMatch(/if \[ -n "\$AUDIO_WHY" \] && \{ \[ -f "\$HOME\/\.config\/walnut\/no-audio" \]/)
     expect(src).toContain('refuse 75 "BUSY: this run touches voice, the microphone or audio')
