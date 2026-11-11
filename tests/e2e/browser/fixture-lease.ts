@@ -9,13 +9,16 @@
  *
  * A lease is a file made with O_EXCL in the run's temp dir, naming the worker that holds it; one
  * whose worker is gone, or older than a test can run, is broken. Waiting for it adds to the test's
- * time limit, so a queue of tests on one session never times one of them out.
+ * time limit, so a queue of tests on one session never times one of them out. A test that holds
+ * leases takes one more in key order (fixture-lease-order.ts), so two tests never wait on each
+ * other.
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test as base } from '@playwright/test'
 import { waitOutsideBudget } from './wait-budget'
+import { takeInOrder, type HeldLease, type LeaseOps } from './fixture-lease-order'
 
 const DIR = path.join(os.tmpdir(), 'walnut-pw-fixture-leases')
 /** Longer than any test may run (the longest set timeout is 300 s, plus retries of hooks). */
@@ -23,7 +26,7 @@ const STALE_MS = 15 * 60_000
 const WAIT_LIMIT_MS = 10 * 60_000
 
 interface Held { file: string; key: string }
-let held: Held[] | null = null
+let held: HeldLease[] | null = null
 
 const fileOf = (key: string) => path.join(DIR, `${encodeURIComponent(key)}.lease`)
 
@@ -49,11 +52,13 @@ function tryTake(file: string, owner: string): boolean {
   return false
 }
 
+const ownerNow = (): string => JSON.stringify({ pid: process.pid, at: Date.now(), test: base.info().titlePath.join(' > ') })
+
 async function take(key: string): Promise<Held> {
   fs.mkdirSync(DIR, { recursive: true })
   const file = fileOf(key)
   const info = base.info()
-  const owner = JSON.stringify({ pid: process.pid, at: Date.now(), test: info.titlePath.join(' > ') })
+  const owner = ownerNow()
   const start = Date.now()
   // Room to wait first, the budget plus the wait after, kept across a later test.setTimeout of the
   // test (wait-budget.ts).
@@ -69,6 +74,14 @@ async function take(key: string): Promise<Held> {
   return { file, key }
 }
 
+/** One more lease for a test that holds some: in key order, so two tests never wait on each other. */
+const inTest: LeaseOps = {
+  // Twice: a first try that found a dead holder's lease breaks it and says no.
+  tryTake: (key) => { fs.mkdirSync(DIR, { recursive: true }); return tryTake(fileOf(key), ownerNow()) || tryTake(fileOf(key), ownerNow()) },
+  take: async (key) => { await take(key) },
+  release: (key) => { fs.rmSync(fileOf(key), { force: true }) },
+}
+
 /**
  * Run `write` under the lease on `key`. Inside a test (its hooks included) the lease stays until
  * the test ends, so nobody resets the record under it; in a beforeAll / afterAll it is held for the
@@ -77,7 +90,7 @@ async function take(key: string): Promise<Held> {
  */
 export async function withFixtureLease<T>(key: string, write: () => Promise<T>): Promise<T> {
   if (held) {
-    if (!held.some((one) => one.key === key)) held.push(await take(key))
+    if (!held.some((one) => one.key === key)) await takeInOrder(held, key, write, inTest)
     return write()
   }
   const lease = await take(key)
@@ -91,7 +104,7 @@ export const test = base.extend<{ fixtureLeases: void }>({
     try {
       await use()
     } finally {
-      for (const one of held ?? []) fs.rmSync(one.file, { force: true })
+      for (const one of held ?? []) fs.rmSync(fileOf(one.key), { force: true })
       held = null
     }
   }, { auto: true }],
