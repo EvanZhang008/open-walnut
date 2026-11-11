@@ -36,6 +36,7 @@ import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { CLOUD_BOX_HOST_ALIAS, TUNNEL_REFUSAL_HEADER } from '../../src/core/hosts/cloud-box-host.js'
 import { refreshCloudBoxHost } from '../../src/core/hosts/cloud-box-probe.js'
+import { STAY_MS } from '../../src/providers/local-daemon-stay.js'
 
 let base = ''
 let isolation: SshIsolation | null = null
@@ -103,6 +104,20 @@ function cliPidOf(sessionId: string): number | undefined {
   const reg = JSON.parse(fs.readFileSync(path.join(replica.box.tunnelDir, 'sessions.json'), 'utf-8')) as Record<string, unknown>
   const entry = (reg.sessions as Record<string, { pid?: number }> | undefined)?.[sessionId] ?? (reg as Record<string, { pid?: number }>)[sessionId]
   return entry?.pid
+}
+
+/**
+ * The box's daemon served through its probation (src/providers/local-daemon-stay.ts): its watch on
+ * disk is moved back a whole window, as if the box had run that build for a quarter of an hour.
+ * The next server judges it from there, through the real settle (pid alive, its build answering).
+ */
+function endProbation(daemonPid: number): void {
+  const file = path.join(replica.box.data, 'local', 'daemon-update-stay.json')
+  const all = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, { at: number; pid: number | null; expected: string }>
+  const mine = Object.entries(all).filter(([key]) => key.endsWith(`|local:${replica.box.tunnelDir}`))
+  expect(mine.map(([, w]) => w.pid)).toEqual([daemonPid])
+  for (const [, w] of mine) w.at = Date.now() - STAY_MS - 60_000
+  fs.writeFileSync(file, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 })
 }
 
 function alive(pid: number): boolean {
@@ -287,9 +302,19 @@ describe('the cloud box as a host of the Mac', () => {
     const next = 'walnut-daemon-e2e-release-2'
     const binary = await stageDaemonRelease(daemonBuild!, path.join(base, 'release-2'), next)
 
+    // The box daemon runs a build that never served here before (the box's first boot), so it is
+    // on its probation, and no other build replaces it until it stayed serving (LocalDaemon
+    // untriedStart and deferForProbation): a deploy inside that window keeps it and says why.
     await replica.restart({ binary, version: next })
-    // The Mac's redial reaches the new server, which finds the daemon on the old
-    // build, stops it, and starts the new one. The old one leaves its CLI behind.
+    await waitFor(async () => /upgrade DEFERRED \(the running build is on its probation\)[^\n]*walnut-daemon-e2e-release-2/.test(replica.log()), 120_000, 'the new build held while the running one is on its probation')
+    expect(replica.tunnelDaemon()).toEqual(before)
+    expect(alive(cliPid)).toBe(true)
+
+    // Its probation over, the next server replaces it: the Mac's redial reaches it, it
+    // finds the daemon on the old build, stops it, and starts the new one. The old one
+    // leaves its CLI behind.
+    endProbation(before.pid!)
+    await replica.restart({ binary, version: next })
     const after = await waitFor(async () => {
       const d = replica.tunnelDaemon()
       return d.pid && d.pid !== before.pid && d.instanceId && d.instanceId !== before.instanceId ? d : null
