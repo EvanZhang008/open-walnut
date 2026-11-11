@@ -13,8 +13,8 @@
  * (whatever the dir's name) and writes back what a cleaner took; an older daemon after
  * a rollback never removes a live CLI's hook file and re-spawns what it knows.
  *
- * MACHINE SAFETY: every hook runs in a temp HOME and cwd with a PATH of /usr/bin:/bin
- * (no walnut, no claude), on made-up inputs; nothing is played, killed or cloned.
+ * MACHINE SAFETY: every hook runs in a temp HOME and cwd with a PATH of the exec guard's
+ * fakes then /usr/bin:/bin (no walnut, no claude, no real ssh), on made-up inputs; nothing is played, killed or cloned.
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import fs from 'node:fs'
@@ -27,6 +27,7 @@ import { sessionSettingsHooks } from '../../src/providers/session-settings-hooks
 import { compactHookArgs, hookArgsFor, HOOK_FILE_FLAG, HOOK_FILE_TOKEN, HOOK_FILE_MIN_CHARS, HOOK_FILES_CAPABILITY } from '../../src/providers/hook-files.js'
 import { createCliArgvFiles as createBeforeHookFiles } from '../fixtures/argv-files/cli-argv-files-core-before-hooks.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 type Hook = { type: string; command: string; timeout?: number }
 type Groups = Array<{ matcher?: string; hooks: Hook[] }>
@@ -47,7 +48,7 @@ function runHook(command: string, input: string, cwd: string) {
   fs.mkdirSync(path.join(home, 'task'))
   const r = spawnSync('/bin/sh', ['-c', command], {
     input, cwd, encoding: 'utf8', timeout: 20_000,
-    env: { PATH: '/usr/bin:/bin', HOME: home, TMPDIR: home, WALNUT_TASK_DIR: path.join(home, 'task'), WALNUT_SESSION_ID: 'test-session' },
+    env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: home, TMPDIR: home, WALNUT_TASK_DIR: path.join(home, 'task'), WALNUT_SESSION_ID: 'test-session' },
   })
   const plain = (t: string) => t.split(home).join('<home>')
   return { status: r.status, stdout: plain(r.stdout), stderr: plain(r.stderr) }

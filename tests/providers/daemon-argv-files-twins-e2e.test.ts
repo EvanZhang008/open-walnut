@@ -263,7 +263,7 @@ describe.each(TWINS)('cli argv files: $name', (twin) => {
     const pre = hooks.PreToolUse.flatMap((g) => g.hooks.map((h) => h.command)).filter((c) => c.includes(argvDir))
     expect(pre.length).toBeGreaterThan(3)
     const input = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'say hi' }, cwd: root })
-    const answers = pre.map((c) => spawnSync('/bin/sh', ['-c', c], { input, cwd: root, encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: path.join(root, 'home'), TMPDIR: root } }))
+    const answers = pre.map((c) => spawnSync('/bin/sh', ['-c', c], { input, cwd: root, encoding: 'utf8', env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: path.join(root, 'home'), TMPDIR: root } }))
     expect(answers.some((a) => /would make sound/.test(a.stdout + a.stderr))).toBe(true)
 
     const live = commandLine(pid)
