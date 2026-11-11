@@ -8,6 +8,11 @@ final class TimelineLayout: UICollectionViewLayout {
     /// Row heights, set by the controller before invalidation.
     var rowHeights: [CGFloat] = []
     var rowSpacing: CGFloat = 10
+    /// Which rows are steps of a turn (`TimelineRowContent.isStepRow`): two steps in a
+    /// row sit `stepSpacing` apart, the web's density (rows about 26pt apart), every
+    /// other pair `rowSpacing`. Empty (or shorter than the rows): `rowSpacing` throughout.
+    var rowIsStep: [Bool] = []
+    var stepSpacing: CGFloat = TimelineMetrics.stepRowGap
     var topInset: CGFloat = 12
     var bottomInset: CGFloat = 12
 
@@ -21,11 +26,18 @@ final class TimelineLayout: UICollectionViewLayout {
         yOffsets.removeAll(keepingCapacity: true)
         yOffsets.reserveCapacity(rowHeights.count)
         var y = topInset
-        for h in rowHeights {
+        for (i, h) in rowHeights.enumerated() {
             yOffsets.append(y)
-            y += h + rowSpacing
+            y += h
+            if i + 1 < rowHeights.count { y += gap(after: i) }
         }
-        contentHeight = (rowHeights.isEmpty ? topInset : y - rowSpacing) + bottomInset
+        contentHeight = y + bottomInset
+    }
+
+    /// The space between row `i` and the next.
+    func gap(after i: Int) -> CGFloat {
+        let steps = i + 1 < rowIsStep.count && rowIsStep[i] && rowIsStep[i + 1]
+        return steps ? stepSpacing : rowSpacing
     }
 
     override var collectionViewContentSize: CGSize {

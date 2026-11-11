@@ -240,10 +240,16 @@ enum TimelineRowContent {
     /// `failures` is the red badge ("2 failed · 3 errors", `TimelineFoldFailures`); `running` pulses the line while a
     /// member is still receiving tokens. The phrase is the web console's, word for
     /// word (`TimelineToolRunPhrase`), so a turn reads the same on both.
-    /// `badgeStacked`: the badge takes its own line under the phrase (an
-    /// accessibility text size), decided with the height and carried here so the
-    /// cell draws the shape that was measured.
-    case toolRun(phrase: String, failures: TimelineFoldFailures, running: Bool, expanded: Bool, badgeStacked: Bool)
+    /// Every such line reads the same way, chevron first (the web's run line and its
+    /// `ProcessFoldRow`), the failures inline after the words; `lead` is a turn fold's
+    /// "Worked for 2m 16s" / "Working" before the steps, nil for a run, a labelled fold
+    /// or a fold with no time known.
+    case toolRun(phrase: String, failures: TimelineFoldFailures, running: Bool, expanded: Bool, lead: String?)
+    /// A call that stopped on the person (a permission rule refused it), above the
+    /// fold its turn folded into: one red line naming the call, and the first line
+    /// of why under it (the web's `LiftedStep`). A tap opens the step in the drawer
+    /// (`step`), where the whole reason is.
+    case liftedStep(label: String, why: String?, step: TimelineActivityDetail)
     /// Small grey capsule (generic one-line status capsules).
     case chip(icon: String, text: String)
     /// Notification card (session error / cron / …). Collapse mirrors the
@@ -319,6 +325,7 @@ extension TimelineRowContent {
         case .toolChip: return "toolChip"
         case .thinking: return "thinking"
         case .toolRun: return "toolRun"
+        case .liftedStep: return "liftedStep"
         case .chip: return "chip"
         case .notification: return "notification"
         case .richHTML: return "richHTML"
@@ -408,17 +415,22 @@ extension TimelineRowContent {
             hasher.combine(maxLines)
             hasher.combine(detailRef)
             hasher.combine(stacked)
-        case .toolRun(let phrase, let failures, let running, let expanded, let badgeStacked):
+        case .toolRun(let phrase, let failures, let running, let expanded, let lead):
             hasher.combine(phrase)
             hasher.combine(failures)
             hasher.combine(running)
-            hasher.combine(badgeStacked)
+            hasher.combine(lead)
             // Drawn (the chevron turns) under a stable id and an unchanged height:
             // without it the toggle would never reach the cell.
             hasher.combine(expanded)
         case .chip(let icon, let text):
             hasher.combine(icon)
             hasher.combine(text)
+        case .liftedStep(let label, let why, let step):
+            hasher.combine(label)
+            hasher.combine(why)
+            hasher.combine(step.id)
+            hasher.combine(step.body)
         case .notification(let badge, let icon, let tone, let body,
                            let collapsedLine, let collapsedLimit, let collapsible, let expanded):
             hasher.combine(badge)
@@ -470,7 +482,17 @@ extension TimelineRowContent {
     /// between two chips used to hit nothing at all.
     var isTappableChip: Bool {
         switch self {
-        case .toolChip, .thinking, .toolRun: return true
+        case .toolChip, .thinking, .toolRun, .liftedStep: return true
+        default: return false
+        }
+    }
+
+    /// Is this row a step of a turn (`TimelineChipRow`'s quiet line): two of them in a
+    /// row sit `TimelineMetrics.stepRowGap` apart, the web's density, not `rowSpacing`.
+    var isStepRow: Bool {
+        switch self {
+        case .toolChip, .toolRun, .liftedStep, .peerMessage: return true
+        case .thinking(_, let preview, _, _, _, _): return preview == nil
         default: return false
         }
     }
@@ -837,3 +859,4 @@ enum TimelineRowAction {
     case sendIslandResult(text: String, reply: IslandSendReply)
     case loadEarlier
 }
+

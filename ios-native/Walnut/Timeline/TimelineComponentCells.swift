@@ -109,12 +109,14 @@ enum TimelineHostedCell {
                         .thinking(id: row.id, text: fullText, detailRef: detailRef)))
                 }
             )
-        case .toolRun(let phrase, let failures, let running, let expanded, let badgeStacked):
+        case .toolRun(let phrase, let failures, let running, let expanded, let lead):
             TimelineToolRunView(
-                phrase: phrase, failures: failures, running: running, expanded: expanded,
-                badgeStacked: badgeStacked,
+                phrase: phrase, failures: failures, running: running, expanded: expanded, lead: lead,
                 onToggle: { delegate?.timelineCell(didRequest: .toggleExpanded(rowID: row.id)) }
             )
+        case .liftedStep(let label, let why, let step):
+            TimelineLiftedStepView(label: label, why: why,
+                                   onOpen: { delegate?.timelineCell(didRequest: .openActivity(step)) })
         case .peerMessage(let description):
             PeerMessageDescriptionView(description: description)
         case .chip(let icon, let text):
@@ -349,8 +351,17 @@ final class TimelineHostedRowCell: UICollectionViewCell {
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         if super.point(inside: point, with: event) { return true }
-        guard verticalHitOutset > 0 else { return false }
-        return bounds.insetBy(dx: 0, dy: -verticalHitOutset).contains(point)
+        guard verticalHitOutset > 0, bounds.insetBy(dx: 0, dy: -verticalHitOutset).contains(point) else {
+            return false
+        }
+        // The outset claims only the GAP: two step rows sit 2pt apart (the web's
+        // density), so an outset reaching into the next row's own bounds would steal
+        // its taps. A point inside another cell is that cell's.
+        guard let container = superview else { return true }
+        let there = convert(point, to: container)
+        return !container.subviews.contains {
+            $0 !== self && $0 is UICollectionViewCell && !$0.isHidden && $0.frame.contains(there)
+        }
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
@@ -685,8 +696,10 @@ struct TimelineChipChevron: View {
     }
 }
 
-/// Everything a drawer-opening chip row shares: the capsule's ink and padding, the
-/// row margins, the tap target, and the ONE accessibility element.
+/// Everything a drawer-opening step row shares: its padding, the row margins, the
+/// tap target, and the ONE accessibility element. Every step of a turn is the same
+/// quiet row, with no capsule and no fill (2026-11-11, the web's design 1: "no box,
+/// no fill"); the padding a capsule had stays, so every height formula holds.
 ///
 /// It is a shared container and not two copies because the two rows must not be
 /// able to drift — the whole point of the 2026-09-11 unification. Three rules it
@@ -709,42 +722,46 @@ struct TimelineChipChevron: View {
 ///    this row OPENS and the detail is the only thing telling eight stacked `Bash`
 ///    rows apart, so neither can be paid for in contrast; subordinate is carried
 ///    by SIZE and WEIGHT instead. See `ReadableText`, `ReadableTextContrastTests`.
-private struct TimelineChipRow<Content: View>: View {
+struct TimelineChipRow<Icon: View, Content: View>: View {
     let identifier: String
     let label: String
-    /// A row whose text may wrap: its ink is a rounded rectangle that is a capsule
-    /// on one line, never a pill whose round ends cut into a second line.
-    var wraps = false
-    let onOpen: () -> Void
+    /// nil: a row that reads, with nothing to open (a received message).
+    var onOpen: (() -> Void)?
+    /// A row that must be seen (a lifted refusal): its ink in this colour, on a faint
+    /// fill of it.
+    var tint: Color?
+    @ViewBuilder let icon: () -> Icon
     @ViewBuilder let content: () -> Content
 
+    /// The icon column (`TimelineMetrics.stepIconBox`, scaled as the icon's font is):
+    /// every step's name, a fold line's words and a lifted row's text start at one x.
+    @ScaledMetric(relativeTo: .caption2) private var iconBox: CGFloat = TimelineMetrics.stepIconBox
+
     var body: some View {
-        HStack(spacing: 5) { content() }
-            .foregroundStyle(ReadableText.secondary)
-            .padding(.horizontal, TimelineMetrics.chipHPad)
-            .padding(.vertical, TimelineMetrics.chipVPad)
-            .background(Color(.tertiarySystemFill), in: TimelineChipShape(roundCap: wraps ? 16 : .infinity))
-            // The row's own vertical margin sits INSIDE the tap shape: it is
-            // otherwise dead space in the middle of a 37pt pitch.
-            .padding(.vertical, TimelineMetrics.chipRowVMargin)
-            .padding(.horizontal, TimelineMetrics.hMargin)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture { onOpen() }
-            .accessibilityElement(children: .ignore)
-            .accessibilityIdentifier(identifier)
-            .accessibilityLabel(label)
-            .accessibilityAddTraits(.isButton)
-    }
-}
-
-/// The chip's ink: a capsule, or for a wrapping row a rounded rectangle whose radius
-/// stops at `roundCap`, which on a one-line row is the same capsule.
-private struct TimelineChipShape: Shape {
-    let roundCap: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        RoundedRectangle(cornerRadius: min(rect.height / 2, roundCap), style: .circular).path(in: rect)
+        // First-text-baseline: the icon (a fold line's chevron too) sits on the first
+        // line, never in the middle of a wrapped one.
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            icon()
+                .frame(width: iconBox)
+                .padding(.trailing, TimelineMetrics.stepIconSpacing)
+            HStack(alignment: .firstTextBaseline, spacing: 5) { content() }
+        }
+        .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(ReadableText.secondary))
+        .padding(.horizontal, TimelineMetrics.chipHPad)
+        .padding(.vertical, TimelineMetrics.stepVPad)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            if let tint {
+                RoundedRectangle(cornerRadius: 8, style: .continuous).fill(tint.opacity(0.08))
+            }
+        }
+        .padding(.horizontal, TimelineMetrics.hMargin)
+        .contentShape(Rectangle())
+        .onTapGesture { onOpen?() }
+        .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier(identifier)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(onOpen == nil ? .isStaticText : .isButton)
     }
 }
 
@@ -790,6 +807,20 @@ private struct TimelineToolChipView: View {
                                                   agent: agent, running: running, failed: failed),
             onOpen: onOpen
         ) {
+            Image(systemName: failed ? "exclamationmark.triangle.fill"
+                  : agent == nil ? TimelineTurnFold.stepSymbol(name) : "arrow.triangle.branch")
+                .font(.caption2)
+                .foregroundStyle(failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(ReadableText.secondary))
+                .opacity(breathing ? ReadableText.shimmerFloor : 1)
+                .animation(
+                    animates
+                        ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                        : nil,
+                    value: breathing
+                )
+                .onAppear { breathing = animates }
+                .onChange(of: animates) { _, on in breathing = on }
+        } content: {
             if let agent, !agent.isEmpty {
                 HStack(spacing: 3) {
                     Image(systemName: "person.2.fill")
@@ -803,19 +834,6 @@ private struct TimelineToolChipView: View {
                 .padding(.vertical, TimelineMetrics.badgeVPad)
                 .background(Color.indigo.opacity(0.14), in: Capsule())
             }
-            Image(systemName: failed ? "exclamationmark.triangle.fill"
-                  : agent == nil ? "wrench.and.screwdriver" : "arrow.triangle.branch")
-                .font(.caption2)
-                .foregroundStyle(failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(ReadableText.secondary))
-                .opacity(breathing ? ReadableText.shimmerFloor : 1)
-                .animation(
-                    animates
-                        ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
-                        : nil,
-                    value: breathing
-                )
-                .onAppear { breathing = animates }
-                .onChange(of: animates) { _, on in breathing = on }
             // The NAME wins the squeeze, and truncates in the MIDDLE when it must.
             // At XXXL an `mcp__walnut__task_create` came back as `mcp__walnu…`,
             // which is every MCP tool on the server; the distinguishing half of
@@ -990,6 +1008,7 @@ private struct TimelineThinkingChipView: View {
                 onOpen: onOpen
             ) {
                 Image(systemName: "sparkles").font(.caption2)
+            } content: {
                 // The row's CONTENT sits exactly where a tool row prints its detail,
                 // and behaves the same way at every text size. Without it a column of
                 // reasoning rows was five identical `Thinking ›` capsules and finding
@@ -1050,23 +1069,64 @@ private struct TimelineThinkingChipView: View {
     }
 }
 
-/// The folded tool run: one muted capsule reading the phrase ("Ran 3 commands, read a
-/// file"), the failure count when there is one, and a chevron that points RIGHT while
-/// the run is folded and DOWN once it is open, because this row, unlike the two chips
-/// above, promises that rows will appear under it rather than a sheet over it.
+/// A call that stopped on the person (a permission rule refused it), above the fold
+/// its turn folded into: red, on a faint red fill, the call and what it touched on one
+/// line, the first line of why under it (the web's `LiftedStep`, `.step-lifted-why`).
+/// Each line is one line, cut with an ellipsis, so the row is the stacked step row's
+/// height (`TimelineRowBuilder.liftedStepRow`); a tap opens the step, the whole reason
+/// in it. Its text starts where every other step's does (`TimelineChipRow`).
+private struct TimelineLiftedStepView: View {
+    let label: String
+    let why: String?
+    let onOpen: () -> Void
+
+    var body: some View {
+        TimelineChipRow(
+            identifier: "step.lifted",
+            label: why.map { "\(label), \($0)" } ?? label,
+            onOpen: onOpen, tint: Theme.danger
+        ) {
+            Image(systemName: "exclamationmark.triangle.fill").font(.caption2)
+        } content: {
+            VStack(alignment: .leading, spacing: TimelineMetrics.chipStackSpacing) {
+                Text(label)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let why {
+                    Text(why)
+                        .font(.caption)
+                        .foregroundStyle(ReadableText.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            TimelineChipChevron()
+        }
+    }
+}
+
+/// A run or fold line: "Ran 3 commands, read a file", or a turn's "Worked for 2m 16s ·
+/// Received 1 message · Ran 5 tools", with its failures inline in red after the words
+/// and the chevron FIRST, in the icon column every step row has (the web's run line and
+/// `ProcessFoldRow`, 2026-11-11: one timeline never shows two styles). The chevron
+/// points RIGHT while the line is folded and DOWN once it is open: rows will appear
+/// under it rather than a sheet over it.
 ///
-/// Same shell as the tool and thinking chips (`TimelineChipRow`): the same ink, the
+/// Same shell as the tool and thinking rows (`TimelineChipRow`): the same ink, the
 /// same padding, the same whole-row tap target and the same single accessibility
-/// element, so the three rows cannot drift apart. What differs is the ACTION: a tap
-/// toggles `expanded` through the controller (`toggleExpanded`), and the layout actor
-/// then lays the member rows out under this one; the row itself never changes height.
+/// element, so the rows cannot drift apart. What differs is the ACTION: a tap toggles
+/// `expanded` through the controller (`toggleExpanded`), and the layout actor then lays
+/// the member rows out under this one; the row itself never changes height. The words
+/// WRAP (the builder measured every line, `TimelineRowBuilder.runLineText`), so an
+/// accessibility size never cuts them to "Show 2 hidden…".
 private struct TimelineToolRunView: View {
     let phrase: String
     let failures: TimelineFoldFailures
     let running: Bool
     let expanded: Bool
-    /// The shape the row's height was measured for (`TimelineRowBuilder.runRowHeight`).
-    let badgeStacked: Bool
+    /// A turn fold's "Worked for 2m 16s" / "Working", before the steps.
+    let lead: String?
     let onToggle: () -> Void
 
     @Environment(\.scenePhase) private var scenePhase
@@ -1074,55 +1134,39 @@ private struct TimelineToolRunView: View {
     @State private var breathing = false
 
     private var animates: Bool { running && scenePhase == .active && !reduceMotion }
+    private var line: String { TimelineFoldSteps.line(lead: lead, phrase: phrase) }
 
     var body: some View {
         TimelineChipRow(
             identifier: "tool.run",
-            label: TimelineChipAccessibility.toolRun(phrase: phrase, failures: failures,
-                                                    expanded: expanded),
-            wraps: true,
+            label: TimelineChipAccessibility.toolRun(phrase: line, failures: failures, expanded: expanded),
             onOpen: onToggle
         ) {
-            // The phrase is the row's whole content; the badge is short and keeps
-            // its width, and the phrase WRAPS beside it (the builder measured every
-            // line), so an accessibility size never cuts it to "Show 2 hidden…".
-            // At an accessibility size the badge takes its own line under the
-            // phrase, the shape the builder measured and put in the row.
-            if badgeStacked {
-                VStack(alignment: .leading, spacing: TimelineMetrics.chipStackSpacing) {
-                    phraseText
-                    badgeText
-                }
-                .layoutPriority(1)
-            } else {
-                phraseText
-                if !failures.isEmpty { badgeText.layoutPriority(2) }
-            }
             TimelineChipChevron()
                 .rotationEffect(.degrees(expanded ? 90 : 0))
+        } content: {
+            lineText
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .opacity(breathing ? ReadableText.shimmerFloor : 1)
+                .animation(
+                    animates
+                        ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                        : nil,
+                    value: breathing
+                )
+                .onAppear { breathing = animates }
+                .onChange(of: animates) { _, on in breathing = on }
         }
     }
 
-    private var phraseText: some View {
-        Text(TimelineFoldSteps.wrapping(phrase))
-            .font(.caption.weight(.medium))
-            .fixedSize(horizontal: false, vertical: true)
-            .layoutPriority(1)
-            .opacity(breathing ? ReadableText.shimmerFloor : 1)
-            .animation(
-                animates
-                    ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
-                    : nil,
-                value: breathing
-            )
-            .onAppear { breathing = animates }
-            .onChange(of: animates) { _, on in breathing = on }
-    }
-
-    private var badgeText: some View {
-        Text(TimelineChipAccessibility.failedBadge(failures))
+    /// The two runs `TimelineRowBuilder.runLineText` measures: the words, then the
+    /// failures inline after a space.
+    private var lineText: Text {
+        let words = Text(TimelineFoldSteps.wrapping(line)).font(.caption.weight(.medium))
+        guard !failures.isEmpty else { return words }
+        return words + Text(" " + TimelineFoldSteps.wrapping(TimelineChipAccessibility.failedBadge(failures)))
             .font(.caption.weight(.semibold))
-            .lineLimit(1)
             .foregroundStyle(Theme.danger)
     }
 }

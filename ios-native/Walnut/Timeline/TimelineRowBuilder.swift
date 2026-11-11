@@ -33,6 +33,15 @@ enum TimelineMetrics {
     static let chipRowVMargin: CGFloat = 1
     /// Gap between a stacked chip's name line and its detail line.
     static let chipStackSpacing: CGFloat = 1
+    /// A step row of a turn (a call, reasoning, a run or fold line, a message received,
+    /// a lifted refusal): no capsule, the web's density (rows about 26pt apart). Its
+    /// vertical padding, its icon column's width (scaled with `.caption2`, the icon's
+    /// font), the gap from that column to the text, and the gap between two step rows
+    /// (`TimelineLayout`; any other pair keeps `rowSpacing`).
+    static let stepVPad: CGFloat = 3
+    static let stepIconBox: CGFloat = 16
+    static let stepIconSpacing: CGFloat = 6
+    static let stepRowGap: CGFloat = 2
     /// Vertical padding inside a tool chip's subagent badge (its own capsule,
     /// nested in the chip's) — the term the chip's height formula used to omit.
     static let badgeVPad: CGFloat = 2
@@ -430,17 +439,11 @@ final class TimelineRowBuilder {
                     height: peerMessageHeight(description, width: width))
     }
 
+    /// A received message is a step row like every other step (the web's design 1):
+    /// who sent it and its title on one line, or, at an accessibility size, the title
+    /// on a line of its own under the sender (`PeerMessageDescriptionView`).
     private func peerMessageHeight(_ description: PeerMessageDescription, width: CGFloat) -> CGFloat {
-        let contentWidth = max(40, width - TimelineMetrics.hMargin * 2 - TimelineMetrics.chipHPad * 2)
-        let wrappedLines = wrappedLineCount(description.title, font: TimelineTextStyler.subheadlineFont,
-                                             width: contentWidth)
-        let accessible = TimelineTextStyler.adoptedCategory.isAccessibilityCategory
-        let titleLines = accessible ? wrappedLines : min(2, wrappedLines)
-        let senderLines = accessible
-            ? wrappedLineCount(description.sender, font: TimelineTextStyler.caption2Font, width: contentWidth) : 1
-        return TimelineMetrics.hostedTextHeight(lines: senderLines, font: TimelineTextStyler.caption2Font)
-            + 2 + TimelineMetrics.hostedTextHeight(lines: titleLines, font: TimelineTextStyler.subheadlineFont)
-            + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
+        Self.stepRowHeight(stacked: TimelineChipLayout.stacksDetail(TimelineTextStyler.adoptedCategory))
     }
 
     // MARK: - Assistant markdown
@@ -944,6 +947,27 @@ final class TimelineRowBuilder {
             + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
     }
 
+    /// Height of a step row (`TimelineChipRow`): one caption line (or the subagent
+    /// badge, when taller), the second line when `stacked`, the step padding. No row
+    /// margin: two steps sit `stepRowGap` apart in the layout.
+    static func stepRowHeight(badged: Bool = false, stacked: Bool = false) -> CGFloat {
+        let line = TimelineMetrics.hostedLineHeight(TimelineTextStyler.captionFont)
+        let badge = TimelineMetrics.hostedLineHeight(TimelineTextStyler.caption2Font)
+            + TimelineMetrics.badgeVPad * 2
+        let second = stacked
+            ? TimelineMetrics.hostedTightLine(TimelineTextStyler.captionFont)
+                + TimelineMetrics.chipStackSpacing
+            : 0
+        return max(line, badged ? badge : 0) + second + TimelineMetrics.stepVPad * 2
+    }
+
+    /// The icon column's width at the adopted text size, as the cell's
+    /// `@ScaledMetric(relativeTo: .caption2)` resolves it.
+    static var stepIconColumn: CGFloat {
+        ceil(TimelineTextStyler.scaled(TimelineMetrics.stepIconBox, relativeTo: .caption2))
+            + TimelineMetrics.stepIconSpacing
+    }
+
     /// Badge + withdraw row under a banked bubble.
     ///
     /// DERIVED FROM THE FONTS, not a constant, for the reason `capsuleRowHeight` is:
@@ -1020,7 +1044,7 @@ final class TimelineRowBuilder {
             content: .thinking(line: line.isEmpty ? nil : line, preview: nil,
                                fullText: full, maxLines: 0,
                                detailRef: message.activityDetailRef, stacked: stacked),
-            height: Self.capsuleRowHeight(badged: false, stacked: stacked)
+            height: Self.stepRowHeight(stacked: stacked)
         )
     }
 
@@ -1057,7 +1081,7 @@ final class TimelineRowBuilder {
             // everything there is.
             content: .thinking(line: nil, preview: nil, fullText: full, maxLines: 0,
                                detailRef: nil, stacked: false),
-            height: Self.capsuleRowHeight(badged: false)
+            height: Self.stepRowHeight()
         )
     }
 
@@ -1084,93 +1108,95 @@ final class TimelineRowBuilder {
                                phase: TimelineFoldFailures.isFailedCall(message) ? .failed : .transcript,
                                detailRef: message.activityDetailRef, stacked: stacked,
                                sentTo: TimelineTurnFold.isOutbound(message) ? (message.sentTo ?? []) : []),
-            height: Self.capsuleRowHeight(badged: message.agent?.isEmpty == false,
-                                          stacked: stacked)
+            height: Self.stepRowHeight(badged: message.agent?.isEmpty == false, stacked: stacked)
         )
     }
 
-    /// The folded run's own row: a capsule (see `TimelineToolRunFold`).
+    /// The folded run's own row (see `TimelineToolRunFold`): the same line as a turn
+    /// fold's, chevron first, so one timeline never shows two styles (the web's run
+    /// line, 2026-11-11).
     ///
-    /// Its height is the plain capsule's while the phrase fits one line, in both
-    /// states: opening a run does not grow THIS row, it makes the actor lay the
-    /// member rows out after it. The revision is content-derived because the id is
-    /// stable while the run grows (a live turn folds each finished call into the
-    /// same first-member id). `width` 0 (a caller that has none) is one line.
+    /// Its height is one step row while the phrase fits one line, in both states:
+    /// opening a run does not grow THIS row, it makes the actor lay the member rows
+    /// out after it. The revision is content-derived because the id is stable while
+    /// the run grows (a live turn folds each finished call into the same first-member
+    /// id). `width` 0 (a caller that has none) is one line.
     func toolRunRow(id: String, members: [TimelineToolRunPhrase.Member], failures: TimelineFoldFailures,
                     running: Bool, expanded: Bool, width: CGFloat = 0) -> TimelineRow {
-        let phrase = TimelineToolRunPhrase.phrase(members)
+        foldRow(id: id, phrase: TimelineToolRunPhrase.phrase(members), failures: failures,
+                expanded: expanded, running: running, width: width)
+    }
+
+    /// A run or fold line's height: one step row, or every line the words wrap into
+    /// (the row wraps rather than truncating, so a fold's line stays readable at
+    /// accessibility sizes; it read "Show 2 hidden… ›"). The words are the line
+    /// (`runLineText`: its lead, the steps, the failures inline after them), beside the
+    /// icon column the chevron stands in.
+    private func runRowHeight(line: String, failures: TimelineFoldFailures, width: CGFloat) -> CGFloat {
+        let oneLine = Self.stepRowHeight()
+        guard width > 0, !line.isEmpty else { return oneLine }
+        let caption = TimelineTextStyler.captionFont
+        let textWidth = width - TimelineMetrics.hMargin * 2 - TimelineMetrics.chipHPad * 2 - Self.stepIconColumn
+        let lines = measurer.lineCount(Self.runLineText(line, failures: failures, pointSize: caption.pointSize),
+                                       width: max(40, textWidth))
+        guard lines > 1 else { return oneLine }
+        // The one-line row's cushion (`hostedLineHeight` over a tight line) kept.
+        let cushion = TimelineMetrics.hostedLineHeight(caption) - TimelineMetrics.hostedTextHeight(lines: 1, font: caption)
+        return TimelineMetrics.hostedTextHeight(lines: lines, font: caption) + cushion + TimelineMetrics.stepVPad * 2
+    }
+
+    /// The words a run or fold line draws and is measured by: the line in the medium
+    /// caption, then its red failures inline after a space, in the semibold caption
+    /// (`TimelineToolRunView` concatenates the same two runs).
+    static func runLineText(_ line: String, failures: TimelineFoldFailures, pointSize: CGFloat) -> NSAttributedString {
+        let out = NSMutableAttributedString(string: TimelineFoldSteps.wrapping(line), attributes: [
+            .font: UIFont.systemFont(ofSize: pointSize, weight: .medium),
+        ])
+        if !failures.isEmpty {
+            out.append(NSAttributedString(string: " " + TimelineFoldSteps.wrapping(TimelineChipAccessibility.failedBadge(failures)),
+                                          attributes: [.font: UIFont.systemFont(ofSize: pointSize, weight: .semibold)]))
+        }
+        return out
+    }
+
+    /// A fold's own row: a run's, a labelled fold's ("Walnut added", a loaded skill)
+    /// or a turn fold's (`TimelineTurnFold`), all one line style, chevron first; a turn
+    /// fold's `lead` says how long it worked, "Worked for 2m 16s · Ran 3 tools" (the
+    /// web's `ProcessFoldRow`). Opening it lays the members out after it. `running`
+    /// breathes the row while a live call inside it runs.
+    func foldRow(id: String, phrase: String, failures: TimelineFoldFailures, expanded: Bool,
+                 running: Bool = false, width: CGFloat = 0, lead: String? = nil) -> TimelineRow {
         var hasher = Hasher()
         hasher.combine(phrase)
         hasher.combine(failures)
-        hasher.combine(running)
         hasher.combine(expanded)
+        hasher.combine(running)
+        hasher.combine(lead)
         return TimelineRow(
             id: id, revision: hasher.finalize(),
-            content: .toolRun(phrase: phrase, failures: failures, running: running,
-                              expanded: expanded, badgeStacked: Self.stacksRunBadge(failures: failures)),
-            height: runRowHeight(phrase: phrase, failures: failures, width: width)
+            content: .toolRun(phrase: phrase, failures: failures, running: running, expanded: expanded, lead: lead),
+            height: runRowHeight(line: TimelineFoldSteps.line(lead: lead, phrase: phrase), failures: failures, width: width)
         )
     }
 
-    /// A run or fold row's height: the one-line capsule, or every line the phrase
-    /// wraps into beside its failure badge and chevron. The row wraps rather than
-    /// truncating, so a fold's line stays readable at accessibility sizes (it read
-    /// "Show 2 hidden… ›"). The text's width is what the cell's `HStack`
-    /// leaves it: the badge and the chevron keep their own widths (spacing 5).
-    private func runRowHeight(phrase: String, failures: TimelineFoldFailures, width: CGFloat) -> CGFloat {
-        let oneLine = Self.capsuleRowHeight(badged: false)
-        guard width > 0, !phrase.isEmpty else { return oneLine }
-        let caption = TimelineTextStyler.captionFont
-        let chevronSize = TimelineTextStyler.scaled(8, relativeTo: .caption2)
-        let chevron = UIImage(systemName: "chevron.right",
-                              withConfiguration: UIImage.SymbolConfiguration(pointSize: chevronSize, weight: .semibold))?
-            .size.width ?? chevronSize * 0.7
-        var textWidth = width - TimelineMetrics.hMargin * 2 - TimelineMetrics.chipHPad * 2 - 5 - ceil(chevron)
-        // At an accessibility size the failure badge takes its own line under the
-        // phrase (`TimelineToolRunView`), as a chip's detail does: beside it, it left
-        // the phrase ~170pt, where TextKit and SwiftUI wrapped a line apart and the
-        // row clipped (573.81pt reserved, 623pt drawn).
-        let badgeStacked = Self.stacksRunBadge(failures: failures)
-        if !failures.isEmpty, !badgeStacked {
-            let badgeFont = UIFont.systemFont(ofSize: caption.pointSize, weight: .semibold)
-            let badge = (TimelineChipAccessibility.failedBadge(failures) as NSString)
-                .size(withAttributes: [.font: badgeFont]).width
-            textWidth -= 5 + ceil(badge)
-        }
-        let font = UIFont.systemFont(ofSize: caption.pointSize, weight: .medium)
-        let lines = measurer.lineCount(NSAttributedString(string: TimelineFoldSteps.wrapping(phrase), attributes: [.font: font]),
-                                       width: max(40, textWidth))
-        guard lines > 1 || badgeStacked else { return oneLine }
-        // The one-line capsule's cushion (`hostedLineHeight` over a tight line) kept.
-        let cushion = TimelineMetrics.hostedLineHeight(caption) - TimelineMetrics.hostedTextHeight(lines: 1, font: caption)
-        let badgeLine = badgeStacked
-            ? TimelineMetrics.hostedTextHeight(lines: 1, font: caption) + TimelineMetrics.chipStackSpacing : 0
-        return TimelineMetrics.hostedTextHeight(lines: lines, font: caption) + cushion + badgeLine
-            + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
-    }
-
-    /// Does a run or fold row's failure badge take its own line? Asked of the
-    /// category the actor adopted for this build, and carried in the row's content
-    /// so the cell draws that shape even after the next build adopts another.
-    static func stacksRunBadge(failures: TimelineFoldFailures) -> Bool {
-        !failures.isEmpty && TimelineChipLayout.stacksDetail(TimelineTextStyler.adoptedCategory)
-    }
-
-    /// A turn fold's own row (`TimelineTurnFold`): the run row's capsule, reading
-    /// the fold's words. Opening it lays the members out after it, as a run does.
-    /// `running` breathes the row while a live call inside it runs.
-    func foldRow(id: String, phrase: String, failures: TimelineFoldFailures, expanded: Bool,
-                 running: Bool = false, width: CGFloat = 0) -> TimelineRow {
-        var hasher = Hasher()
-        hasher.combine(phrase)
-        hasher.combine(failures)
-        hasher.combine(expanded)
-        hasher.combine(running)
+    /// A call a permission rule refused, above its turn's fold (`TimelineTurnFold.Part.lifted`):
+    /// one red line, the call and what it touched, and the first line of why under it,
+    /// each one line (the web's `.step-lifted-why`, cut with an ellipsis), so the row is
+    /// the stacked step row's height. A tap opens the step, the whole reason in it.
+    func liftedStepRow(id: String, message: ChatMessage) -> TimelineRow {
+        let name = TimelineTurnFold.toolLabel(message.text)
+        let target = (message.detail ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = target.isEmpty ? name : "\(name) \(target)"
+        let why = (message.resultPreview ?? "").split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty }
+        let step = TimelineActivityDetail.tool(
+            id: id, name: name, detail: message.detail,
+            input: message.inputPreview?.isEmpty == false ? message.inputPreview : nil,
+            result: message.resultPreview?.isEmpty == false ? message.resultPreview : nil,
+            agent: message.agent, phase: .failed, detailRef: message.activityDetailRef)
         return TimelineRow(
-            id: id, revision: hasher.finalize(),
-            content: .toolRun(phrase: phrase, failures: failures, running: running, expanded: expanded,
-                              badgeStacked: Self.stacksRunBadge(failures: failures)),
-            height: runRowHeight(phrase: phrase, failures: failures, width: width)
+            id: id, revision: 0, content: .liftedStep(label: label, why: why, step: step),
+            height: Self.stepRowHeight(stacked: why != nil)
         )
     }
 
@@ -1399,7 +1425,7 @@ final class TimelineRowBuilder {
                                agent: nil,
                                phase: call.finished ? .liveFinished : .running,
                                detailRef: nil, stacked: stacked),
-            height: Self.capsuleRowHeight(badged: false, stacked: stacked)
+            height: Self.stepRowHeight(stacked: stacked)
         )
     }
 

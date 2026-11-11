@@ -90,7 +90,7 @@ final class TimelineHostedHeightParityTests: XCTestCase {
     /// Which row kinds this gate is responsible for (everything hosted).
     private static let hostedKinds: Set<String> = [
         "toolChip", "thinking", "toolRun", "chip", "notification", "image", "localImages", "table",
-        "truncationChip", "activity", "failedNotice", "queuedNotice", "loadEarlier",
+        "truncationChip", "activity", "failedNotice", "queuedNotice", "loadEarlier", "liftedStep", "peerMessage",
     ]
 
     /// Kinds whose height is pure arithmetic over one or two lines, so the row may
@@ -107,7 +107,7 @@ final class TimelineHostedHeightParityTests: XCTestCase {
     /// tight in their own tests below (an expanded long card, a folded received
     /// card at one line and wrapping). Neither can shave ink.
     private static let tightKinds: Set<String> = [
-        "chip", "toolChip", "thinking", "toolRun", "table", "queuedNotice",
+        "chip", "toolChip", "thinking", "toolRun", "table", "queuedNotice", "liftedStep", "peerMessage",
     ]
 
     /// Extra round-up allowance for a row that models SEVERAL independent text
@@ -489,6 +489,49 @@ final class TimelineHostedHeightParityTests: XCTestCase {
         }
         TimelineTextStyler.adopt(.unspecified)
         XCTAssertGreaterThanOrEqual(checked, 6, "gate checked nothing (n=\(checked))")
+    }
+
+    /// A turn's fold line (chevron first, "Worked for 2m 16s · …") and a lifted refusal
+    /// above it: each measured row fits what SwiftUI draws, at both ends of the range,
+    /// with and without a failure badge, the lead included in the measured line.
+    func testFoldLinesAndLiftedStepsFitAtEveryTextSize() async {
+        var checked = 0
+        for category in [UIContentSizeCategory.extraSmall, .large, .accessibilityExtraExtraExtraLarge] {
+            TimelineTextStyler.adopt(category)
+            let builder = TimelineRowBuilder()
+            for failing in [false, true] {
+                let lines = [
+                    builder.foldRow(id: "w-1", phrase: "Ran 1 tool", failures: failing ? 1 : .none, expanded: false,
+                                    width: pageWidth, lead: "Worked for 45s"),
+                    builder.foldRow(id: "w-2", phrase: "Received 12 messages \u{00B7} Sent 3 \u{00B7} Ran 8 tools",
+                                    failures: failing ? TimelineFoldFailures(calls: 2, errors: 3) : .none, expanded: true, width: pageWidth,
+                                    lead: "Worked for 1h 05m"),
+                    builder.foldRow(id: "w-3", phrase: "Ran 3 tools", failures: .none, expanded: false, running: true,
+                                    width: pageWidth, lead: TimelineFoldSteps.workingLead),
+                    builder.foldRow(id: "w-4", phrase: "Sent 1", failures: .none, expanded: false,
+                                    width: pageWidth, lead: nil),
+                ]
+                checked += assertFits(lines, "fold lines at \(category.rawValue)", category: category)
+            }
+            let refused = ChatMessage(id: "x-1", role: "assistant", text: "Bash", createdAt: "2026-10-03T06:00:00Z",
+                                      kind: .tool, detail: "rm -rf build and the whole cache under the home folder",
+                                      resultPreview: "Permission for this action was denied by the auto mode classifier.\nMore.",
+                                      isError: true)
+            let bare = ChatMessage(id: "x-2", role: "assistant", text: "Read", createdAt: "2026-10-03T06:00:00Z",
+                                   kind: .tool, isError: true)
+            checked += assertFits([builder.liftedStepRow(id: "l-1", message: refused),
+                                   builder.liftedStepRow(id: "l-2", message: bare)],
+                                  "lifted steps at \(category.rawValue)", category: category)
+            // A message received is the same step row (who, its title, one line).
+            let received = [
+                PeerMessageDescription(sender: "Docs lead", title: "Release notes review"),
+                PeerMessageDescription(sender: "Walnut",
+                                       title: "Release notes task moved to Working, and its lead was told about the change at once"),
+            ].enumerated().map { builder.peerMessageRow(id: "p-\($0.offset)", description: $0.element, width: pageWidth) }
+            checked += assertFits(received, "received rows at \(category.rawValue)", category: category)
+        }
+        TimelineTextStyler.adopt(.unspecified)
+        XCTAssertGreaterThanOrEqual(checked, 30, "gate checked nothing (n=\(checked))")
     }
 
     /// The COLLAPSED rows at an accessibility text size, which is where a chip's

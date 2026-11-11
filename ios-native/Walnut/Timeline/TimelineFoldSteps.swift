@@ -102,6 +102,41 @@ enum TimelineFoldSteps {
         return acks > 0 ? "Acknowledged" : "Thinking"
     }
 
+    /// A turn's work time as the fold line says it: "45s", "2m 16s", "1h 05m"
+    /// (the web's `workDuration`).
+    static func workDuration(_ seconds: Double) -> String {
+        let s = max(0, Int(seconds.rounded()))
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m " + String(format: "%02d", s % 60) + "s" }
+        return "\(s / 3600)h " + String(format: "%02d", (s % 3600) / 60) + "m"
+    }
+
+    /// What leads a finished turn's fold line (2026-11-11, the web's design 1): how
+    /// long it worked, "Worked for 2m 16s", before what the steps were. With no time
+    /// known (a row with no timestamp, under a second) there is none, and the line is
+    /// the steps alone (the web's `workedForLead`).
+    static func workedForLead(_ seconds: Double?) -> String? {
+        guard let seconds, seconds.isFinite, seconds >= 1 else { return nil }
+        return "Worked for \(workDuration(seconds))"
+    }
+
+    /// What leads the live turn's fold line (the web's `WORKING_LEAD`).
+    static let workingLead = "Working"
+
+    /// Seconds between two ISO timestamps, or nil when either is missing or they run
+    /// backwards (the web's `secondsBetween`).
+    static func secondsBetween(_ from: String?, _ to: String?) -> Double? {
+        guard let a = WalnutTask.parseISO(from), let b = WalnutTask.parseISO(to), b >= a else { return nil }
+        return b.timeIntervalSince(a)
+    }
+
+    /// The whole fold line: its lead, then what the steps were ("Worked for 2m 16s ·
+    /// Ran 3 tools"), the web's title for the row.
+    static func line(lead: String?, phrase: String) -> String {
+        guard let lead, !lead.isEmpty else { return phrase }
+        return phrase.isEmpty ? lead : lead + " \u{00B7} " + phrase
+    }
+
     /// The line as drawn and measured: a count never parts from its noun at a
     /// large text size ("Sent / 1" read as two things at AX-XXXL); the line may
     /// still wrap between "Received" and its count, and after each " · ", never
@@ -109,7 +144,10 @@ enum TimelineFoldSteps {
     static func wrapping(_ phrase: String) -> String {
         phrase
             .replacingOccurrences(of: " \u{00B7} ", with: "\u{00A0}\u{00B7} ")
-            .replacingOccurrences(of: #"(\d+) (messages?|tools?)\b"#, with: "$1\u{00A0}$2", options: .regularExpression)
+            .replacingOccurrences(of: #"(\d+) (messages?|tools?|failed|errors?)\b"#, with: "$1\u{00A0}$2", options: .regularExpression)
             .replacingOccurrences(of: #"\b(Sent|Ran) (\d+)"#, with: "$1\u{00A0}$2", options: .regularExpression)
+            // A duration is one piece ("2m 16s"); the lead's words may wrap like any
+            // other (glued whole, "Worked for 2m 16s" broke inside the time at AX-XXXL).
+            .replacingOccurrences(of: #"\b(\d+[hm]) (\d+[ms])\b"#, with: "$1\u{00A0}$2", options: .regularExpression)
     }
 }

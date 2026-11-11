@@ -43,6 +43,9 @@ enum TimelineTurnFold {
         /// The red count: failed calls and error lines apart (`TimelineFoldFailures`).
         let failures: TimelineFoldFailures
         let members: [Part]
+        /// What leads the line: how long the turn worked ("Worked for 2m 16s",
+        /// `TimelineFoldSteps.workedForLead`), nil when no time is known.
+        var lead: String? = nil
     }
 
     indirect enum Part: Equatable {
@@ -59,6 +62,20 @@ enum TimelineTurnFold {
         /// hints only from an older server), shown: one "Walnut added: …" row that opens to each item.
         /// `key` names the message's place (`addedKey`), never its payload.
         case added(key: String, items: [WalnutAddedItem])
+        /// A call a permission rule refused, lifted out above the fold it folded
+        /// into, in red, where the person sees it (the web's `LiftedStep`). The call
+        /// stays in the fold too.
+        case lifted(ChatMessage)
+    }
+
+    /// A call that stopped on the person: a permission rule refused it (the CLI's
+    /// auto mode classifier, a deny rule). The person's own no, or an interrupt,
+    /// they already know of (the web's `needsPerson` / `isRuleDenied`).
+    static func needsPerson(_ m: ChatMessage) -> Bool {
+        guard TimelineFoldFailures.isFailedCall(m), let result = m.resultPreview else { return false }
+        return result.drop(while: \.isWhitespace)
+            .range(of: #"^(Permission for this action was denied|Permission to use \S+ (has been|was) denied)"#,
+                   options: .regularExpression) != nil
     }
 
     /// Whether what Walnut added to a person's message shows. `showAll` is the
@@ -166,6 +183,29 @@ enum TimelineTurnFold {
         }
     }
 
+    /// A step row's line icon, by the tool its chip names (`toolLabel` / `sendLabel`):
+    /// the web's `toolStepIcon`, in SF Symbols.
+    static func stepSymbol(_ label: String) -> String {
+        switch label {
+        case "Bash", "BashOutput", "KillShell", "KillBash": return "terminal"
+        case "Read", "NotebookRead", "LS": return "eye"
+        case "Edit", "Write", "MultiEdit", "NotebookEdit": return "pencil"
+        case "Grep", "Glob", "ToolSearch": return "magnifyingglass"
+        case "Agent", "Task": return "arrow.triangle.branch"
+        case "WebFetch", "WebSearch": return "globe"
+        case "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList": return "checklist"
+        case "ScheduleWakeup", "CronCreate", "CronDelete", "CronList": return "clock"
+        case "AskUserQuestion": return "questionmark.circle"
+        case "Skill": return "book"
+        case "Sent a message", "Wrote to your inbox", "Replied in your inbox", "Posted on the Board": return "paperplane"
+        default:
+            if label.hasPrefix("Sent to ") { return "paperplane" }
+            if label.hasPrefix("mcp__walnut__host_exec") || label.hasPrefix("mcp__walnut__host_copy") { return "desktopcomputer" }
+            if label.hasPrefix("mcp__walnut__") { return "leaf" }
+            return "wrench.and.screwdriver"
+        }
+    }
+
     /// A send's chip names the task it went to ("Sent to Brief task", "Sent to Brief
     /// task +2" for a loop over three) when the server resolved it (`sentTo`); nil for
     /// any other row. The chip is one line: a second name would be cut in its middle
@@ -196,11 +236,27 @@ enum TimelineTurnFold {
 /// their keys stay exactly what `TimelineToolRunFold` gives them everywhere else.
 private final class Planner {
     typealias Part = TimelineTurnFold.Part
+    /// A part of the list and the index of its first row; nil for a note Walnut put
+    /// beside a person's words (a rider), which is no row of the list.
+    struct Item {
+        let start: Int?
+        let part: TimelineToolRunFold.Part
+        init(_ start: Int?, _ part: TimelineToolRunFold.Part) { self.start = start; self.part = part }
+    }
     let messages: [ChatMessage]
     let additions: TimelineTurnFold.Additions
     /// The list's parts with the index of their first row.
     private var parts: [(start: Int, part: TimelineToolRunFold.Part)] = []
     private var keyCounts: [String: Int] = [:]
+    /// Each row's turn (its index in `turns`), for how long a fold's turn worked.
+    private var turnOfRow: [Int] = []
+    /// The last row the reader reads that was placed: a fold after it, in the same
+    /// turn, worked from there (the person's message to the fold's last step).
+    private var lastVisible: (start: Int, at: String?)?
+    /// The notes Walnut put after a person's words in their line, received while the
+    /// line waited: they open the work that answers it, the first rows of the next
+    /// fold (the web's `carried`).
+    private var carried: [ChatMessage] = []
 
     init(messages: [ChatMessage], additions: TimelineTurnFold.Additions) {
         self.messages = messages
@@ -213,6 +269,10 @@ private final class Planner {
     }
 
     func run(_ turns: [TimelineTurnShape.Turn], liveTail: Bool) -> (parts: [Part], tail: TimelineTurnFold.LiveTail?) {
+        turnOfRow = Array(repeating: -1, count: messages.count)
+        for (k, turn) in turns.enumerated() {
+            for i in max(0, turn.start)..<min(turn.end, messages.count) { turnOfRow[i] = k }
+        }
         // Where the live tail starts: back over quiet rows, at least one received.
         var end = parts.count
         // A stretch that ends on an ack is a turn already answered: the live turn
@@ -235,47 +295,57 @@ private final class Planner {
         // The quiet steps since the last row the person reads: ONE row whatever
         // turns they span (2026-10-27, the user: "if it is collapsed near collapsed,
         // need to combine").
-        var quiet: [TimelineToolRunFold.Part] = []
-        func flushQuiet() {
+        var quiet: [Item] = []
+        func flushQuiet(next: Item? = nil) {
+            // The notes after a person's words open the stretch that answers them.
+            let riders = carried.map { Item(nil, .message($0)) }
+            carried = []
+            quiet = riders + quiet
             defer { quiet = [] }
             guard let first = quiet.first else { return }
             // Received messages with nothing beside them are not steps to count:
             // each reads as its one-line description, with nothing to open.
-            if Self.onlyReceived(quiet) {
-                out += quiet.map { member($0) }
+            if riders.isEmpty, Self.onlyReceived(quiet.map(\.part)) {
+                out += quiet.map { member($0.part) }
+                quiet.forEach(markShown)
                 return
             }
-            if quiet.count == 1 {
+            if quiet.count == 1, riders.isEmpty {
                 // One run or one reasoning row already is one row; a message received
                 // or sent folds, also a send inside a run (the web's `sends(part)`).
-                let folds = Self.rows(first).contains { TimelineTurnShape.isInbound($0) || TimelineTurnFold.isOutbound($0) }
+                let folds = Self.rows(first.part).contains { TimelineTurnShape.isInbound($0) || TimelineTurnFold.isOutbound($0) }
                 if !folds {
-                    out.append(member(first))
+                    out.append(member(first.part))
+                    markShown(first)
                     return
                 }
             }
-            let rows = quiet.flatMap(Self.rows)
-            out.append(.fold(fold(.turn, first: first, phrase: TimelineFoldSteps.phrase(rows.flatMap(TimelineFoldSteps.steps)),
-                                  members: quiet.map { member($0, acks: true) },
-                                  failures: TimelineFoldFailures.count(rows))))
+            let rows = quiet.flatMap { Self.rows($0.part) }
+            // A step that stopped on the person stands above the fold, red, where it is seen.
+            out += rows.filter(TimelineTurnFold.needsPerson).map { Part.lifted($0) }
+            var made = fold(.turn, first: first.part, phrase: TimelineFoldSteps.phrase(rows.flatMap(TimelineFoldSteps.steps)),
+                            members: quiet.map { member($0.part, acks: true) },
+                            failures: TimelineFoldFailures.count(rows))
+            made.lead = TimelineFoldSteps.workedForLead(workedSeconds(quiet, next: next))
+            out.append(.fold(made))
         }
         // A person's message right after quiet steps: the notes Walnut put in front
         // of it are messages received too, so they join that row instead of drawing
         // a second one above the bubble (the web's `ridersFolded`; 2026-10-31, Main's
         // chat read "Received 13 messages" right above "Received 2 messages").
-        func person(_ item: TimelineToolRunFold.Part) {
+        func person(_ item: Item) {
             // A Stop's marker right before a row the person reads (their interrupting message, the
             // agent's next words) ends the stretch it closes: it stays in view, not counted among the
             // steps, so the one sign that the tap worked is not hidden in a folded count.
-            var stop: TimelineToolRunFold.Part?
-            if case .message(let m)? = quiet.last, TimelineTurnShape.isStopMarker(m) { stop = quiet.removeLast() }
+            var stop: Item?
+            if case .message(let m)? = quiet.last?.part, TimelineTurnShape.isStopMarker(m) { stop = quiet.removeLast() }
             var folded = false
-            if additions.showAll, !quiet.isEmpty, case .message(let m) = item, TimelineTurnShape.isPerson(m),
+            if additions.showAll, !quiet.isEmpty, case .message(let m) = item.part, TimelineTurnShape.isPerson(m),
                m.sentBy != nil, let split = TimelineInboundMessage.splitRiders(TimelineTurnFold.ownText(m)) {
-                quiet += split.riders.enumerated().map { .message(Self.rider($1, of: m, at: $0)) }
+                quiet += split.riders.enumerated().map { Item(nil, .message(Self.rider($1, of: m, at: $0))) }
                 folded = true
             }
-            flushQuiet()
+            flushQuiet(next: item)
             if let stop { out += defaultParts([stop]) }
             out += defaultParts([item], ridersFolded: folded)
         }
@@ -285,9 +355,9 @@ private final class Planner {
             if case .message(let m)? = parts.last?.part { return TimelineTurnShape.isStopMarker(m) }
             return false
         }()
-        func place(_ item: TimelineToolRunFold.Part) {
-            if Self.isQuiet(item) {
-                if endsOnStop, case .message(let m) = item, m.id == messages.last?.id {
+        func place(_ item: Item) {
+            if Self.isQuiet(item.part) {
+                if endsOnStop, case .message(let m) = item.part, m.id == messages.last?.id {
                     person(item)
                     return
                 }
@@ -301,17 +371,18 @@ private final class Planner {
             var mine: [(start: Int, part: TimelineToolRunFold.Part)] = []
             while p < end, parts[p].start < turn.end { mine.append(parts[p]); p += 1 }
             guard !mine.isEmpty else { continue }
-            if turn.kind == .hidden { mine.forEach { place($0.part) }; continue }
+            if turn.kind == .hidden { mine.forEach { place(Item($0.start, $0.part)) }; continue }
             let answer = turn.kind == .answered ? mine.firstIndex(where: { $0.start == turn.answer }) : nil
-            guard let answerAt = answer else { mine.forEach { place($0.part) }; continue }
+            guard let answerAt = answer else { mine.forEach { place(Item($0.start, $0.part)) }; continue }
             var ans = answerAt
             // The person's own message always shows.
             let lead = turn.byPerson && mine[0].start == turn.start ? 1 : 0
-            if lead == 1 { person(mine[0].part) }
+            if lead == 1 { person(Item(mine[0].start, mine[0].part)) }
             // The answer's own reasoning (the same message, split into its own row on
             // the phone) stays with the answer when nothing quiet comes before it;
-            // after quiet steps it is their last one.
-            if ans - 1 == lead, quiet.isEmpty, case .message(let prev) = mine[ans - 1].part, prev.kind == .thinking,
+            // after quiet steps, or the notes after the person's words, it is their last
+            // one (the web's emitCarried with the answer's thinking).
+            if ans - 1 == lead, quiet.isEmpty, carried.isEmpty, case .message(let prev) = mine[ans - 1].part, prev.kind == .thinking,
                prev.createdAt == messages[turn.answer].createdAt { ans -= 1 }
             // Before the person's own message (a turn something else started), everything
             // folds; from it on, each row by the one rule, so the session's words answering
@@ -319,26 +390,55 @@ private final class Planner {
             // fold-rows.ts; 2026-11-09, a whole answer folded under "Sent 1 · Ran 2 tools").
             let personAt = mine.firstIndex { if case .message(let m) = $0.part { return TimelineTurnShape.isPerson(m) }; return false }
             let foldTo = max(lead, min(personAt ?? ans, ans))
-            quiet += mine[lead..<foldTo].map(\.part)
-            mine[foldTo..<ans].forEach { place($0.part) }
-            flushQuiet()
-            out += defaultParts(mine[ans...answerAt].map(\.part))
+            quiet += mine[lead..<foldTo].map { Item($0.start, $0.part) }
+            mine[foldTo..<ans].forEach { place(Item($0.start, $0.part)) }
+            flushQuiet(next: Item(mine[ans].start, mine[ans].part))
+            out += defaultParts(mine[ans...answerAt].map { Item($0.start, $0.part) })
             // After the answer: each row by the one rule (a line the CLI put in, a
             // notice, a call joins the quiet steps that follow; words show).
-            mine[(answerAt + 1)...].forEach { place($0.part) }
+            mine[(answerAt + 1)...].forEach { place(Item($0.start, $0.part)) }
         }
-        if p < end { parts[p..<end].forEach { place($0.part) } }
+        if p < end { parts[p..<end].forEach { place(Item($0.start, $0.part)) } }
         // Quiet steps right before the live turn (a hidden turn's narration, which
         // the walk back stops at) open its row, as they will once the turn ends, so
-        // the row keeps its key and open state across the turn's end.
-        let lead = end < parts.count ? quiet : []
-        if !lead.isEmpty { quiet = [] }
+        // the row keeps its key and open state across the turn's end. So do the
+        // notes after the person's words that started it.
+        let live = end < parts.count
+        let lead = live ? carried.map { Item(nil, .message($0)) } + quiet : []
+        if live { quiet = []; carried = [] }
         flushQuiet()
-        guard end < parts.count else { return (out, nil) }
-        let tail = lead + parts[end...].map(\.part)
+        guard live else { return (out, nil) }
+        let tail = lead.map(\.part) + parts[end...].map(\.part)
         let key = fold(.turn, first: tail[0], phrase: "", members: [], failures: .none).key
         return (out, TimelineTurnFold.LiveTail(key: key, rows: tail.flatMap(Self.rows),
                                                members: tail.map { member($0, acks: true) }))
+    }
+
+    /// A placed row the reader reads: a fold after it, in the same turn, worked from there.
+    private func markShown(_ item: Item) {
+        guard let start = item.start else { return }
+        lastVisible = (start, Self.rows(item.part).last?.createdAt)
+    }
+
+    /// How long a fold's turn worked: from the row the reader read before it, when that
+    /// row is of the same turn (the person's message), else its first step, to the row
+    /// after it of the same turn (the answer), else its last step (the web's emitQuiet).
+    private func workedSeconds(_ items: [Item], next: Item?) -> Double? {
+        guard let head = items.first(where: { $0.start != nil }), let headStart = head.start,
+              let last = items.last(where: { $0.start != nil }) else { return nil }
+        let turn = turnOf(headStart)
+        let startAt: String?
+        if let seen = lastVisible, turn != nil, turnOf(seen.start) == turn { startAt = seen.at }
+        else { startAt = Self.rows(head.part).first?.createdAt }
+        let endAt: String?
+        if let next, let at = next.start, turn != nil, turnOf(at) == turn { endAt = Self.rows(next.part).first?.createdAt }
+        else { endAt = Self.rows(last.part).last?.createdAt }
+        return TimelineFoldSteps.secondsBetween(startAt, endAt)
+    }
+
+    private func turnOf(_ row: Int) -> Int? {
+        guard row >= 0, row < turnOfRow.count, turnOfRow[row] >= 0 else { return nil }
+        return turnOfRow[row]
     }
 
     /// A quiet row, the web's one rule (`fold-rows.ts`): every step of the work
@@ -385,24 +485,28 @@ private final class Planner {
     /// above the bubble, the rest as one row under it. Hidden, the bubble carries
     /// the long-press item that shows them (`walnutAddedToggle`).
     /// `ridersFolded`: its notes already went into the fold before it.
-    private func defaultParts(_ items: [TimelineToolRunFold.Part], ridersFolded: Bool = false) -> [Part] {
+    private func defaultParts(_ items: [Item], ridersFolded: Bool = false) -> [Part] {
         var out: [Part] = []
         for item in items {
-            guard case .message(let m) = item, TimelineTurnShape.isPerson(m), m.sentBy != nil else {
-                out.append(member(item))
+            defer { markShown(item) }
+            guard case .message(let m) = item.part, TimelineTurnShape.isPerson(m), m.sentBy != nil else {
+                out.append(member(item.part))
                 continue
             }
             let own = TimelineTurnFold.ownText(m)
             let split = TimelineInboundMessage.splitRiders(own)
+            // The notes after the person's words in the same line (splitTrailingRiders).
+            let trail = TimelineInboundMessage.splitTrailingRiders(split?.body ?? own)
             let added = m.added ?? []
-            let count = (split?.riders.count ?? 0) + added.count
+            let trailing = trail?.riders ?? []
+            let count = (split?.riders.count ?? 0) + trailing.count + added.count
             guard count > 0 else {
                 out.append(.message(own == m.text ? m : m.replacingText(own)))
                 continue
             }
             let key = addedKey(m)
             let shown = additions.showAll || additions.isRevealed(key)
-            var bubble = m.replacingText(split?.body ?? own)
+            var bubble = m.replacingText(trail?.body ?? split?.body ?? own)
             if !additions.showAll {
                 bubble.walnutAddedToggle = WalnutAddedToggle(count: count, shown: shown, key: key)
             }
@@ -411,14 +515,19 @@ private final class Planner {
             }
             out.append(.message(bubble))
             if shown, !added.isEmpty { out.append(.added(key: key, items: added)) }
+            guard shown, !trailing.isEmpty else { continue }
+            let after = trailing.enumerated().map { Self.rider($1, of: m, at: $0, after: true) }
+            // Always shown, they open the next fold, the work that answers the words;
+            // revealed for this message alone, they read under it.
+            if additions.showAll { carried = after } else { out += after.map { .inbound($0) } }
         }
         return out
     }
 
     /// One of Walnut's notes in front of a person's message, as the message it is.
     /// Named by place: the row's own id hashes its text, which a rich read replaces.
-    private static func rider(_ text: String, of m: ChatMessage, at n: Int) -> ChatMessage {
-        var rider = ChatMessage(id: "rider|\(m.createdAt)|\(n)", role: "user", text: text,
+    private static func rider(_ text: String, of m: ChatMessage, at n: Int, after: Bool = false) -> ChatMessage {
+        var rider = ChatMessage(id: "rider\(after ? "-after" : "")|\(m.createdAt)|\(n)", role: "user", text: text,
                                 createdAt: m.createdAt, kind: nil)
         rider.sentBy = "agent"
         return rider

@@ -217,6 +217,7 @@ final class TimelineCollectionController: UIViewController {
                 }
                 if slice.startIndex == 0 && slice.isEmpty { self.rows = [] }
                 self.layout.rowHeights = self.rows.map(\.height)
+                self.layout.rowIsStep = self.rows.map(\.content.isStepRow)
                 TimelineRichHTMLCell.offerDocuments(of: self.collectionView.visibleCells)
                 self.collectionView.reloadData()
                 self.layout.invalidateLayout()
@@ -231,6 +232,7 @@ final class TimelineCollectionController: UIViewController {
             MainWork.track("timeline.diff", count: diff.changeCount) {
                 rows = snapshot.rows
                 layout.rowHeights = rows.map(\.height)
+                layout.rowIsStep = rows.map(\.content.isStepRow)
                 if diff.deletes.isEmpty && diff.inserts.isEmpty {
                     // Reload-only tick (the streaming steady state): update
                     // touched visible cells in place — no reloadData, so text

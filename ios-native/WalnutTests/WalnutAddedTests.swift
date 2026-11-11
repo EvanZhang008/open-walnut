@@ -62,6 +62,7 @@ final class WalnutAddedTests: XCTestCase {
             case .ack: return "ack"
             case .fold(let f): return "fold:\(f.phrase)"
             case .added(_, let items): return "added:" + items.map(\.label).joined(separator: ",")
+            case .lifted(let m): return "lifted:\(m.text)"
             }
         }
     }

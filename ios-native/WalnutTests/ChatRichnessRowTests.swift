@@ -136,12 +136,11 @@ final class ChatRichnessRowTests: XCTestCase {
                     inputPreview: input)
     }
 
-    /// One line of the reasoning capsule, at the height the row reserves for it —
-    /// i.e. what the row measured BEFORE this feature existed. Computed from the
-    /// public metrics so the old-server guard below is a number, not a vibe.
+    /// One line of the reasoning row, at the height the row reserves for it: the
+    /// flat one-line step row every step of a turn shares. Computed from the public
+    /// metrics so the old-server guard below is a number, not a vibe.
     private var capsuleHeight: CGFloat {
-        TimelineMetrics.hostedLineHeight(TimelineTextStyler.captionFont)
-            + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
+        TimelineRowBuilder.stepRowHeight()
     }
 
     private func thinkingRow(_ rows: [TimelineRow]) -> TimelineRow? {

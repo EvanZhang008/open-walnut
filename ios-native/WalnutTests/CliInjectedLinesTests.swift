@@ -74,6 +74,7 @@ final class CliInjectedLinesTests: XCTestCase {
             case .ack: return "ack"
             case .fold(let f): return "fold:\(f.phrase)\(outline(f.members))"
             case .added(_, let items): return "added:" + items.map(\.label).joined(separator: ",")
+            case .lifted(let m): return "lifted:\(m.text)"
             }
         }
     }
@@ -310,10 +311,11 @@ final class CliInjectedLinesTests: XCTestCase {
         let on = await rows(messages, showAll: true)
         XCTAssertEqual(off.map(\.id), on.map(\.id))
         XCTAssertEqual(phrases(off), ["Ran 1 tool"])
-        // Opened, the fold holds the run and the line's own closed row.
+        // Opened, every step is one row of its own: the call, then the line's own closed row.
         let foldID = off.first { row in if case .toolRun = row.content { return true }; return false }?.id ?? ""
         let opened = await rows(messages, expanded: [foldID])
-        XCTAssertEqual(phrases(opened), ["Ran 1 tool", "Launched a skill", skill.label])
+        XCTAssertEqual(phrases(opened), ["Ran 1 tool", skill.label])
+        XCTAssertEqual(opened.filter { $0.content.reuseKind == "toolChip" }.count, 1)
         XCTAssertEqual(bubbleTexts(opened), ["Draft the release notes."])
     }
 

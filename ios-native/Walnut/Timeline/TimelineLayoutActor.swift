@@ -224,14 +224,21 @@ actor TimelineLayoutActor {
         // work folded before its answer, received messages never drawn as the
         // user's bubble. A list without that fact (an older server, the Personal AI
         // chat) is drawn exactly as before.
-        func appendPlan(_ parts: [TimelineTurnFold.Part]) {
+        /// `inFold`: the parts of an opened turn fold, where every step is one row of
+        /// its own (the web's design 1): a run inside it lays its calls out flat, with
+        /// no second line to open.
+        func appendPlan(_ parts: [TimelineTurnFold.Part], inFold: Bool = false) {
             for part in parts {
                 switch part {
                 case .message(let message):
                     rows.append(contentsOf: memoizedRows(for: message,
                                                          queued: input.queuedMessageStates[message.id]))
                 case .run(let key, let members):
-                    appendRun(key: key, members: members)
+                    if inFold {
+                        for member in members { rows.append(contentsOf: memoizedRows(for: member, queued: nil)) }
+                    } else {
+                        appendRun(key: key, members: members)
+                    }
                 case .inbound(let message):
                     // A received message shows only who sent it and its title: no card to
                     // open, no body (the stored row and its payload stay as they are).
@@ -249,8 +256,11 @@ actor TimelineLayoutActor {
                     let expanded = input.expandedRowIDs.contains(id)
                     rows.append(builder.foldRow(id: id, phrase: fold.phrase,
                                                 failures: fold.failures, expanded: expanded,
-                                                width: input.width))
-                    if expanded { appendPlan(fold.members) }
+                                                width: input.width, lead: fold.lead))
+                    if expanded { appendPlan(fold.members, inFold: true) }
+                case .lifted(let message):
+                    rows.append(builder.liftedStepRow(
+                        id: "\(TimelineScope.namespace(input.scope, message.id))#lifted", message: message))
                 case .added(let key, let items):
                     let id = TimelineTurnFold.rowID(scope: input.scope, key: key)
                     rows.append(contentsOf: builder.addedRows(id: id, items: items,
@@ -295,9 +305,11 @@ actor TimelineLayoutActor {
                 // settled fold counts them.
                 failures: TimelineFoldFailures.count(tail.rows),
                 expanded: expanded, running: input.streaming && liveCalls.contains { !$0.finished },
-                width: input.width))
+                width: input.width,
+                // While the turn runs, its line says so: "Working · Ran 3 tools".
+                lead: input.streaming ? TimelineFoldSteps.workingLead : nil))
             if expanded {
-                appendPlan(tail.members)
+                appendPlan(tail.members, inFold: true)
                 rows.append(contentsOf: builder.liveRunMembers(
                     input.liveTools, liveThinking: input.liveThinking, width: input.width, scope: input.scope,
                     skipping: drawnFromHistory))

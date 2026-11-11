@@ -68,6 +68,7 @@ final class TurnFoldTests: XCTestCase {
             case .ack: return "ack"
             case .fold(let f): return "fold:\(f.kind):\(f.phrase)\(outline(f.members))"
             case .added(_, let items): return "added:" + items.map(\.label).joined(separator: ",")
+            case .lifted(let m): return "lifted:\(m.text)"
             }
         }
     }
@@ -553,9 +554,14 @@ final class TurnFoldTests: XCTestCase {
         let live = runRows(await rows(history, streaming: true, liveTools: calls, actor: actor))
         XCTAssertEqual(live.map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools"])
         let opened = await rows(history, expanded: [live[0].id], streaming: true, liveTools: calls, actor: actor)
-        // The history call is its own folded run; only the call history lacks is a live chip.
-        XCTAssertEqual(runRows(opened).map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools", "Ran a command"])
-        XCTAssertEqual(opened.filter { if case .toolChip = $0.content { return true }; return false }.count, 1)
+        // Opened, every step is one row: the history call from its row, and only the call
+        // history lacks as a live chip, so each call is drawn once.
+        XCTAssertEqual(runRows(opened).map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools"])
+        let chips = opened.compactMap { r -> String? in
+            if case .toolChip(let name, let detail, _, _, _, _, _, _, _) = r.content { return "\(name) \(detail ?? "")" }
+            return nil
+        }
+        XCTAssertEqual(chips.sorted(), ["Bash status", "Read a.md"])
     }
 
     func testAReceivedMessageInsideAnOpenedFoldShowsOnlyItsDescription() async {
@@ -659,6 +665,162 @@ final class TurnFoldTests: XCTestCase {
         // A trigger behind a place note stays the body.
         let trigger = "<walnut-message kind=\"trigger\">\nFired.\n</walnut-message>"
         XCTAssertEqual(TimelineInboundMessage.splitRiders("\(moved)\n\n\(trigger)")?.body, trigger)
+    }
+
+    // MARK: - Worked for, riders after the words, lifted refusals
+
+    private func row(_ id: String, _ role: String, _ text: String, _ at: String, kind: ChatMessage.Kind? = nil,
+                     sentBy: String? = nil, result: String? = nil, isError: Bool? = nil) -> ChatMessage {
+        var m = ChatMessage(id: id, role: role, text: text, createdAt: at, kind: kind,
+                            resultPreview: result, isError: isError)
+        m.sentBy = sentBy
+        return m
+    }
+
+    private func folds(_ parts: [TimelineTurnFold.Part]) -> [TimelineTurnFold.Fold] {
+        parts.compactMap { if case .fold(let f) = $0 { return f }; return nil }
+    }
+
+    func testAFinishedTurnsFoldLeadsWithHowLongItWorkedFromThePersonsMessageToTheAnswer() async {
+        // The web's design 1: from the person's message (the row read before the fold,
+        // same turn) to the answer (the row after it, same turn): 2m 16s.
+        let rows = [
+            row("p", "user", "Ship it.", "2026-11-11T10:00:00Z", sentBy: "person"),
+            row("t1", "assistant", "Bash", "2026-11-11T10:00:10Z", kind: .tool, result: "ok"),
+            row("t2", "assistant", "mcp__walnut__task_send", "2026-11-11T10:01:00Z", kind: .tool, result: "ok"),
+            row("a", "assistant", "Shipped.", "2026-11-11T10:02:16Z"),
+        ]
+        let parts = plan(rows)
+        XCTAssertEqual(outline(parts), ["bubble:Ship it.",
+                                        "fold:turn:Sent 1 \u{00B7} Ran 1 tool[\"run:1\", \"tool:mcp__walnut__task_send\"]",
+                                        "text"])
+        XCTAssertEqual(folds(parts).first?.lead, "Worked for 2m 16s")
+        // The row reads it, chevron first, its counts unchanged.
+        let built = await self.rows(rows)
+        let line = built.compactMap { r -> (String, String?)? in
+            if case .toolRun(let phrase, _, _, _, let lead) = r.content { return (phrase, lead) }
+            return nil
+        }
+        XCTAssertEqual(line.first?.0, "Sent 1 \u{00B7} Ran 1 tool")
+        XCTAssertEqual(line.first?.1, "Worked for 2m 16s")
+    }
+
+    func testATurnSomethingElseStartedWorksFromItsFirstStepAndAnUntimedFoldHasNoLead() {
+        // A peer's note opens the turn: no row was read before it, so from the note itself.
+        let note = "<walnut-message kind=\"peer-note\" from=\"Docs lead [1a2b3c4d]\" title=\"Review\">\nDone.\n</walnut-message>"
+        let rows = [
+            row("n", "user", note, "2026-11-11T10:00:00Z", sentBy: "agent"),
+            row("t1", "assistant", "Read", "2026-11-11T10:00:30Z", kind: .tool, result: "ok"),
+            row("a", "assistant", "Read it.", "2026-11-11T10:00:45Z"),
+        ]
+        XCTAssertEqual(folds(plan(rows)).first?.lead, "Worked for 45s")
+        // Rows with no time: the line is the steps alone.
+        let untimed = rows.map { row($0.id, $0.role, $0.text, "", kind: $0.kind, sentBy: $0.sentBy, result: $0.resultPreview) }
+        XCTAssertEqual(folds(plan(untimed)).count, 1)
+        XCTAssertNil(folds(plan(untimed)).first?.lead)
+    }
+
+    func testRidersAfterAPersonsWordsSplitOnlyWhenTheyReachTheEnd() {
+        let status = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"status\">\nA task moved.\n</walnut-message>"
+        let done = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"completed\">\nA task finished.\n</walnut-message>"
+        let split = TimelineInboundMessage.splitTrailingRiders("Ship it.\n\n\(status)\n\n\(done)")
+        XCTAssertEqual(split?.body, "Ship it.")
+        XCTAssertEqual(split?.riders, [status, done])
+        XCTAssertEqual(TimelineInboundMessage.splitTrailingRiders("Ship it.\n\n\(status)\n")?.riders, [status])
+        // Words after them, no words before them, or a note off the closed list: no split.
+        XCTAssertNil(TimelineInboundMessage.splitTrailingRiders("Ship it.\n\n\(status)\n\nAnd more."))
+        XCTAssertNil(TimelineInboundMessage.splitTrailingRiders("\n\n\(status)"))
+        let peerNote = "<walnut-message kind=\"peer-note\" from=\"Lead\">\nHi.\n</walnut-message>"
+        XCTAssertNil(TimelineInboundMessage.splitTrailingRiders("Ship it.\n\n\(peerNote)"))
+        // Behind another envelope (a delivery's own), they stay its row.
+        XCTAssertNil(TimelineInboundMessage.splitTrailingRiders("\(peerNote)\n\n\(status)"))
+        // A rider at the very end may now close a leading run too; words must still follow.
+        XCTAssertNil(TimelineInboundMessage.splitRiders(status))
+    }
+
+    func testRidersAfterThePersonsWordsFoldIntoTheTurnAndTheWordsKeepTheirBubble() {
+        let status = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"status\">\nA task moved.\n</walnut-message>"
+        let rows = [
+            row("p", "user", "Ship it.\n\n\(status)\n\n\(status)", "2026-11-11T10:00:00Z", sentBy: "person"),
+            row("t1", "assistant", "Read", "2026-11-11T10:00:30Z", kind: .tool, result: "ok"),
+            row("a", "assistant", "Done.", "2026-11-11T10:01:00Z"),
+        ]
+        // Always shown: the notes open the fold of the work that answers the words.
+        XCTAssertEqual(outline(plan(rows, additions: showAll)), [
+            "bubble:Ship it.",
+            "fold:turn:Received 2 messages \u{00B7} Ran 1 tool[\"inbound\", \"inbound\", \"run:1\"]",
+            "text",
+        ])
+        // Hidden (the default): the bubble holds only the words and offers to show them.
+        let hidden = plan(rows)
+        XCTAssertEqual(outline(hidden), ["bubble:Ship it.", "run:1", "text"])
+        guard case .message(let bubble) = hidden[0] else { return XCTFail("no bubble") }
+        XCTAssertEqual(bubble.walnutAddedToggle?.count, 2)
+        // With no step after them, the notes are a fold of their own under the words.
+        let alone = [row("p", "user", "Thanks.\n\n\(status)", "2026-11-11T10:00:00Z", sentBy: "person"),
+                     row("a", "assistant", "You are welcome.", "2026-11-11T10:00:05Z")]
+        XCTAssertEqual(outline(plan(alone, additions: showAll)),
+                       ["bubble:Thanks.", "fold:turn:Received 1 message[\"inbound\"]", "text"])
+        // The answer's reasoning joins those notes' fold: one row, never a second one.
+        var thought = row("k", "assistant", "Short answer is enough.", "2026-11-11T10:00:05Z", kind: .thinking)
+        thought = ChatMessage(id: thought.id, role: "assistant", text: thought.text, createdAt: thought.createdAt,
+                              kind: .thinking, thinkingText: thought.text)
+        let reasoned = [alone[0], thought, alone[1]]
+        XCTAssertEqual(outline(plan(reasoned, additions: showAll)),
+                       ["bubble:Thanks.", "fold:turn:Received 1 message[\"inbound\", \"text\"]", "text"])
+    }
+
+    func testARuleRefusalStandsAboveTheFoldInRedAndStaysInIt() async {
+        let rows = [
+            row("p", "user", "Clean the build.", "2026-11-11T10:00:00Z", sentBy: "person"),
+            row("s", "assistant", "mcp__walnut__task_send", "2026-11-11T10:00:02Z", kind: .tool, result: "ok"),
+            row("t1", "assistant", "Bash", "2026-11-11T10:00:05Z", kind: .tool,
+                result: "Permission for this action was denied by the auto mode classifier.", isError: true),
+            row("t2", "assistant", "Read", "2026-11-11T10:00:06Z", kind: .tool,
+                result: "The user doesn't want to proceed with this tool use.", isError: true),
+            row("a", "assistant", "I could not.", "2026-11-11T10:00:09Z"),
+        ]
+        let parts = plan(rows)
+        // Only the rule's refusal is lifted: the person's own no they already know of.
+        XCTAssertEqual(outline(parts).filter { $0.hasPrefix("lifted") }, ["lifted:Bash"])
+        XCTAssertEqual(outline(parts).first, "bubble:Clean the build.")
+        XCTAssertEqual(outline(parts)[1], "lifted:Bash")
+        XCTAssertTrue(outline(parts)[2].hasPrefix("fold:turn:"))
+        let built = await self.rows(rows)
+        XCTAssertEqual(built.filter { $0.content.reuseKind == "liftedStep" }.count, 1)
+    }
+
+    func testTwoStepRowsSitAtTheWebsDensityAndEveryOtherPairKeepsItsSpacing() {
+        // Steps a turn's opened fold lays out sit 2pt apart (rows about 26pt apart, the
+        // web's density); prose and anything else keep the 10pt row spacing.
+        let layout = TimelineLayout()
+        layout.rowHeights = [40, 23, 23, 23, 40]
+        layout.rowIsStep = [false, true, true, true, false]
+        layout.prepare()
+        let tops = (0..<5).compactMap { layout.rowMinY($0) }
+        XCTAssertEqual(tops, [12, 62, 87, 112, 145])
+        XCTAssertEqual(layout.collectionViewContentSize.height, 145 + 40 + 12)
+        // A step row is about 26pt apart from the next at the default size.
+        TimelineTextStyler.adopt(.large)
+        let pitch = TimelineRowBuilder.stepRowHeight() + TimelineMetrics.stepRowGap
+        XCTAssertLessThan(pitch, 28)
+        XCTAssertGreaterThan(pitch, 22)
+        XCTAssertTrue(TimelineRowContent.peerMessage(PeerMessagePresentation.unreadableReceived).isStepRow)
+    }
+
+    func testAnOpenedFoldLaysEveryStepOutFlat() async {
+        let rows = [
+            row("p", "user", "Look around.", "2026-11-11T10:00:00Z", sentBy: "person"),
+            row("t1", "assistant", "Read", "2026-11-11T10:00:01Z", kind: .tool, result: "ok"),
+            row("t2", "assistant", "Grep", "2026-11-11T10:00:02Z", kind: .tool, result: "ok"),
+            row("t3", "assistant", "mcp__walnut__task_send", "2026-11-11T10:00:03Z", kind: .tool, result: "ok"),
+            row("a", "assistant", "Found it.", "2026-11-11T10:00:09Z"),
+        ]
+        let closed = await self.rows(rows)
+        guard let fold = closed.first(where: { $0.content.reuseKind == "toolRun" }) else { return XCTFail("no fold") }
+        let open = await self.rows(rows, expanded: [fold.id])
+        // The fold line, then one row per call: no run line to open a second time.
+        XCTAssertEqual(open.map(\.content.reuseKind), ["bubble", "toolRun", "toolChip", "toolChip", "toolChip", "text"])
     }
 
     // MARK: - Wire

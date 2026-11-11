@@ -99,17 +99,49 @@ enum TimelineInboundMessage {
     /// body after them, or no split at all.
     static func splitRiders(_ text: String) -> (riders: [String], body: String)? {
         guard text.hasPrefix(head) else { return nil }
+        let run = readRiders(text, from: text.startIndex)
+        let body = String(text[run.end...])
+        guard !run.riders.isEmpty, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return (run.riders, body)
+    }
+
+    /// Walnut's notes that came AFTER the person's words in one stored line: the
+    /// queue hands the CLI the rows waiting for it as one line, in the order they
+    /// came, so a person's message followed by status notices before the session
+    /// took it reads `words\n\n<notice>\n\n<notice>` (2026-11-11, the VP's chat:
+    /// three notices stood open under the person's words). Port of
+    /// `splitTrailingRiders`: the same closed list, the run must reach the end of the
+    /// text, and words must stay in front; else nil.
+    static func splitTrailingRiders(_ text: String) -> (body: String, riders: [String])? {
+        let sep = "\n\n" + head
+        var from = text.startIndex
+        while let hit = text.range(of: sep, range: from..<text.endIndex) {
+            let body = String(text[..<hit.lowerBound])
+            let words = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Only after words: notes behind another envelope (a delivery's own) stay its row.
+            if words.isEmpty || parse(words) != nil { return nil }
+            let run = readRiders(text, from: text.index(hit.lowerBound, offsetBy: 2))
+            if !run.riders.isEmpty, run.end == text.endIndex { return (body, run.riders) }
+            from = text.index(after: hit.lowerBound)
+        }
+        return nil
+    }
+
+    /// The riders that start at `pos`, one after another, each a complete tag on the
+    /// closed list followed by a blank line or the end of the text; `end` is where the
+    /// run stops (after its last rider's blank line, or the text's end).
+    private static func readRiders(_ text: String, from start: String.Index) -> (riders: [String], end: String.Index) {
         var riders: [String] = []
-        var pos = text.startIndex
+        var pos = start
         while text[pos...].hasPrefix(head) {
-            guard let one = envelope(in: text, at: pos), isRider(one.envelope.attributes),
-                  text[one.end...].hasPrefix("\n\n") else { break }
+            guard let one = envelope(in: text, at: pos), isRider(one.envelope.attributes) else { break }
+            let atEnd = text[one.end...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            guard atEnd || text[one.end...].hasPrefix("\n\n") else { break }
             riders.append(String(text[pos..<one.end]))
+            if atEnd { return (riders, text.endIndex) }
             pos = text.index(one.end, offsetBy: 2)
         }
-        let body = String(text[pos...])
-        guard !riders.isEmpty, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return (riders, body)
+        return (riders, pos)
     }
 
     /// The web's `RIDER_NOTICE_OUTCOMES`, kept equal by tests/web/walnut-riders-producers.test.ts.

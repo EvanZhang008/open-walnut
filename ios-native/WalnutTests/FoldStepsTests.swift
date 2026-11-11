@@ -123,4 +123,44 @@ final class FoldStepsTests: XCTestCase {
                                detail: "Run the unit tests", inputPreview: "command: bun test")
         XCTAssertEqual(TimelineFoldSteps.steps(bash), [.calls(1)])
     }
+
+    // MARK: - Worked for (the web's fold-steps.ts workDuration / workedForLead)
+
+    func testWorkDurationReadsAsTheWebDoes() {
+        XCTAssertEqual(TimelineFoldSteps.workDuration(0), "0s")
+        XCTAssertEqual(TimelineFoldSteps.workDuration(45), "45s")
+        XCTAssertEqual(TimelineFoldSteps.workDuration(59.6), "1m 00s")
+        XCTAssertEqual(TimelineFoldSteps.workDuration(136), "2m 16s")
+        XCTAssertEqual(TimelineFoldSteps.workDuration(3599), "59m 59s")
+        XCTAssertEqual(TimelineFoldSteps.workDuration(3900), "1h 05m")
+        XCTAssertEqual(TimelineFoldSteps.workDuration(-5), "0s")
+    }
+
+    func testTheLeadNeedsAKnownTimeOfASecondOrMore() {
+        XCTAssertNil(TimelineFoldSteps.workedForLead(nil))
+        XCTAssertNil(TimelineFoldSteps.workedForLead(0.4))
+        XCTAssertNil(TimelineFoldSteps.workedForLead(.infinity))
+        XCTAssertEqual(TimelineFoldSteps.workedForLead(1), "Worked for 1s")
+        XCTAssertEqual(TimelineFoldSteps.workedForLead(136), "Worked for 2m 16s")
+        XCTAssertEqual(TimelineFoldSteps.workingLead, "Working")
+    }
+
+    func testSecondsBetweenTwoStampsOrNone() {
+        XCTAssertEqual(TimelineFoldSteps.secondsBetween("2026-11-11T10:00:00Z", "2026-11-11T10:02:16Z"), 136)
+        XCTAssertEqual(TimelineFoldSteps.secondsBetween("2026-11-11T10:00:00.250Z", "2026-11-11T10:00:01.750Z"), 1.5)
+        XCTAssertNil(TimelineFoldSteps.secondsBetween("2026-11-11T10:02:16Z", "2026-11-11T10:00:00Z"), "backwards")
+        XCTAssertNil(TimelineFoldSteps.secondsBetween(nil, "2026-11-11T10:00:00Z"))
+        XCTAssertNil(TimelineFoldSteps.secondsBetween("", "2026-11-11T10:00:00Z"))
+    }
+
+    func testTheLineIsTheLeadThenTheStepsAndOnlyTheDurationNeverBreaks() {
+        XCTAssertEqual(TimelineFoldSteps.line(lead: "Worked for 2m 16s", phrase: "Ran 3 tools"),
+                       "Worked for 2m 16s \u{00B7} Ran 3 tools")
+        XCTAssertEqual(TimelineFoldSteps.line(lead: nil, phrase: "Ran 3 tools"), "Ran 3 tools")
+        XCTAssertEqual(TimelineFoldSteps.line(lead: "Working", phrase: "Sent 1"), "Working \u{00B7} Sent 1")
+        // Only the duration stays together; the lead's words wrap like any other.
+        XCTAssertEqual(TimelineFoldSteps.wrapping("Worked for 2m 16s \u{00B7} Ran 3 tools"),
+                       "Worked for 2m\u{00A0}16s\u{00A0}\u{00B7} Ran\u{00A0}3\u{00A0}tools")
+        XCTAssertEqual(TimelineFoldSteps.wrapping("1 failed \u{00B7} 3 errors"), "1\u{00A0}failed\u{00A0}\u{00B7} 3\u{00A0}errors")
+    }
 }
