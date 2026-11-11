@@ -104,7 +104,7 @@ struct PopoutWindowTests {
         try await wait { third.url?.absoluteString == secondURL && !third.isLoading }
         _ = try await js(third, "document.querySelectorAll('textarea').forEach(t=>t.value=''); true")
         try pressCloseKey(thirdWindow)
-        try await wait { delegate.popoutWindows.count == 2 }
+        try await wait { delegate.popoutWindows.count == 2 && !thirdWindow.isVisible }
         precondition(delegate.popoutWindows.values.contains { $0 === firstWindow })
         print("Command-W closed only the key window")
         parent.configuration.userContentController.removeAllScriptMessageHandlers()
@@ -139,7 +139,7 @@ struct PopoutWindowTests {
         let clean = try await js(recycled, "!window.__walnutUnsavedSnapshot?.().dirtyEditor && Array.from(document.querySelectorAll('textarea')).every(e=>!e.value)")
         print("Command-W clean view: \(String(describing: clean))")
         try pressCloseKey(firstWindow)
-        try await wait { delegate.popoutWindows.count == 1 }
+        try await wait { delegate.popoutWindows.count == 1 && !firstWindow.isVisible }
         print("Command-W closed clean session after cancellation")
         _ = try await js(parent, "document.querySelector('.main-page-session-column [data-session-id=\"\(sid)\"] .session-panel-popout').click(); true")
         try await wait { delegate.popoutWindows.count == 2 }
@@ -148,6 +148,7 @@ struct PopoutWindowTests {
         let final = reopened ?? delegate.popoutWindows.values.first { ($0.contentView as? WKWebView)?.url?.absoluteString.contains("view=session") == true }!
         try await wait { (try? await js(final.contentView as! WKWebView, "!!document.querySelector('.popout-session .session-panel-input textarea')")) as? Bool == true }
         try pressCloseKey(delegate.window)
+        try await wait { !delegate.window.isVisible }
         precondition(delegate.popoutWindows.count == 2)
         print("Command-W closed parent without closing children")
         precondition(!final.isVisible)
@@ -194,7 +195,10 @@ struct PopoutWindowTests {
         let target = NSApp.target(forAction: #selector(NSWindow.performClose(_:)))
         print("Command-W target matches: \((target as? NSWindow) === window), sheet: \(window.attachedSheet != nil)")
         precondition(NSApp.mainMenu!.performKeyEquivalent(with: event))
-        precondition(!window.isVisible)
+        // No window state here: a pop-out closes only after its page answers whether it holds
+        // unsaved work (windowShouldClose in desktop/main.swift), so each caller waits for what
+        // the key should do. 2026-11-11, nightly-extra-tests run 43021612722: a window the
+        // discard sheet had shown was still visible right after a clean Command-W.
     }
 
     @MainActor
