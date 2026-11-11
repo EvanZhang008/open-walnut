@@ -11,6 +11,8 @@
  *   the window's own record                    web/src/utils/typing-integrity.ts counts no key
  *                                              prevented, dropped, overwritten or typed after
  *                                              the box lost the caret
+ *   a slow machine                             Chromium with its CPU throttled 6x (what an
+ *                                              overloaded Mac does to the page), the same keys
  *   the record itself                          a handler that eats every 10th key and code that
  *                                              cuts what was just typed are both caught, with
  *                                              the code that did it named, so the record a
@@ -83,6 +85,22 @@ test('the draft composer keeps every key typed fast, busy page or not', async ({
   const box = draftComposer(page)
   await expect(box).toBeVisible()
   await expectEveryKey(page, box)
+})
+
+test('a session column composer keeps every key with the CPU throttled 6x (Chromium)', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'CPU throttling is a Chromium DevTools control; WebKit runs the busy-thread cases above')
+  test.setTimeout(240_000)
+  await seedColumns(page, ['pw-normal-session'])
+  await loadHome(page)
+  const box = page.locator(`${REAL_PANEL} textarea.chat-input-textarea`).first()
+  await expect(box).toBeVisible({ timeout: 30_000 })
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 })
+  try {
+    await expectEveryKey(page, box)
+  } finally {
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+  }
 })
 
 test('the typing record names a handler that eats keys and code that cuts typed text', async ({ page }) => {

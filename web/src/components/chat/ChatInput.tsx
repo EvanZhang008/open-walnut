@@ -453,6 +453,24 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   /** The same, for the hint in the controls row: which one of how many. */
   const [recallShown, setRecallShown] = useState<{ index: number; total: number; text: string } | null>(null);
   valueRef.current = value;
+  // What the box holds NOW. Every handler that rebuilds the text reads this, never the
+  // `value` of the render it was made in: a render lags the keys under load, and a
+  // text built from an older render puts back what was typed since (2026-11-11).
+  const liveText = useCallback((): string => textareaRef.current?.value ?? valueRef.current, []);
+  // The text the box was last fitted to. A typed key only adds text, which can only make the
+  // box taller: that reads its height once and writes nothing unless it grew, where a full fit
+  // collapses it to auto and forces two layouts of the page per key (and ran twice per key,
+  // from the input handler and the render). Anything else (a delete, a paste over a
+  // selection, a whole new text) fits in full.
+  const fittedTextRef = useRef<string | null>(null);
+  const fitForText = useCallback((el: HTMLTextAreaElement) => {
+    const text = el.value;
+    const prev = fittedTextRef.current;
+    if (prev === text) return;
+    fittedTextRef.current = text;
+    if (prev !== null && prev !== '' && text.startsWith(prev)) growTextarea(el);
+    else fitTextarea(el);
+  }, []);
 
   /**
    * The ONE normalizer every text-mutating path goes through: any ref tag in the
@@ -798,8 +816,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    fitTextarea(el);
-  }, [value]);
+    fitForText(el);
+  }, [value, fitForText]);
 
   // Report the composed text upward (read-only mirror — see onValueChange). ONE
   // effect on `value` instead of calls inside the handlers: the value also changes
@@ -886,8 +904,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   useEffect(() => {
     setRefreshing(false);
     if (!isSessionMode) return;
-    const caret = textareaRef.current?.selectionStart ?? value.length;
-    const s = detectSlashCommand(value, caret);
+    const cur = liveText();
+    const caret = textareaRef.current?.selectionStart ?? cur.length;
+    const s = detectSlashCommand(cur, caret);
     if (!s || s.slashIndex === slashDismissedAtRef.current) return;
     slashIndexRef.current = s.slashIndex;
     slashEndRef.current = caret;
@@ -1118,10 +1137,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const sendNow = () => {
+    const cur = liveText();
     // The message = the prose with each `@[label]` token swapped for its tag. A
     // reference with no words is a complete message ("look at this task").
-    const body = value.trim();
-    const text = composeRefs(value, tableRef.current);
+    const body = cur.trim();
+    const text = composeRefs(cur, tableRef.current);
     // A token the table knows was swapped, so the message carries a reference.
     const hasRefs = text !== body;
     if ((!text && !hasAttachments && !allowEmptySend) || disabled || sendBlocked || queueFull) return;
@@ -1174,6 +1194,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   }, []);
 
   const handleSelectCommand = useCallback((cmd: PaletteItem) => {
+    const cur = liveText();
     // Control commands: trigger UI action, don't insert text
     if (cmd.source === 'control' && onControlCommand) {
       onControlCommand(cmd.name);
@@ -1190,9 +1211,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const at = slashIndexRef.current;
     const end = slashEndRef.current;
     const inserted = `/${cmd.name} `;
-    const spanValid = at >= 0 && end >= at && end <= value.length;
+    const spanValid = at >= 0 && end >= at && end <= cur.length;
     const newValue = spanValid
-      ? value.slice(0, at) + inserted + value.slice(end)
+      ? cur.slice(0, at) + inserted + cur.slice(end)
       : inserted;
     const newCaret = spanValid ? at + inserted.length : inserted.length;
     applyText(newValue);
@@ -1203,19 +1224,20 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       el.focus();
       el.setSelectionRange(newCaret, newCaret);
     }
-  }, [onCommand, onControlCommand, closePalette, value, saveComposed, applyText]);
+  }, [onCommand, onControlCommand, closePalette, saveComposed, applyText]);
 
   // Replace the active "@query" span with the selected path, then close the popup.
   // The popup hands back an absolute path (avoids ambiguity about what a relative
   // ref resolves against). Splice between the stored "@" index and query-end index
   // rather than the live caret — mouse picks don't reliably keep the caret in place.
   const handleMentionSelect = useCallback((absPath: string) => {
+    const cur = liveText();
     const at = mentionAtIndexRef.current;
     const end = mentionEndRef.current;
     if (at < 0 || end < at) { closeMention(); return; }
     const ref = formatMentionPath(absPath) + ' ';
     pickedFilesRef.current.add(ref.trimEnd());
-    const newValue = value.slice(0, at) + ref + value.slice(end);
+    const newValue = cur.slice(0, at) + ref + cur.slice(end);
     applyText(newValue);
     saveComposed(newValue);
     closeMention();
@@ -1225,17 +1247,18 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       ta.focus();
       ta.setSelectionRange(newCaret, newCaret);
     }
-  }, [value, saveComposed, closeMention, applyText]);
+  }, [saveComposed, closeMention, applyText]);
 
   // Rewrite the "@query" text in place and keep the palette open: a source
   // keyword's tab left drops the keyword ("@slack memory" becomes "@memory"), and
   // directory navigation (below) writes its browse path the same way.
   const handleMentionSetQuery = useCallback((query: string) => {
+    const cur = liveText();
     const at = mentionAtIndexRef.current;
     const end = mentionEndRef.current;
     if (at < 0 || end < at) return;
     const inserted = `@${query}`;
-    const newValue = value.slice(0, at) + inserted + value.slice(end);
+    const newValue = cur.slice(0, at) + inserted + cur.slice(end);
     applyText(newValue);
     saveComposed(newValue);
     const newCaret = at + inserted.length;
@@ -1243,7 +1266,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     setMentionQuery(query);
     const ta = textareaRef.current;
     if (ta) { ta.focus(); ta.setSelectionRange(newCaret, newCaret); }
-  }, [value, saveComposed, applyText]);
+  }, [saveComposed, applyText]);
 
   // Rewrite the "@query" span so the palette browses `absDir` (descend into a
   // dir / go to the parent / jump to a recent folder). The query text IS the
@@ -1275,15 +1298,16 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // the bubble renders it as a pill and the server appends a reference card).
   // The caret lands after the token, ready for the rest of the sentence.
   const handlePickRef = useCallback((tag: string) => {
+    const cur = liveText();
     const at = mentionAtIndexRef.current;
     const end = mentionEndRef.current;
     if (!tag || at < 0 || end < at) { closeMention(); return; }
-    const tail = value.slice(end);
+    const tail = cur.slice(end);
     // The tag rides the candidate text so the ONE normalizer turns it into the
     // token and teaches the table what it stands for. Head and tail hold no tag
     // (they are already in box form), so only the tag changes length.
     const sep = /^\s/.test(tail) ? '' : ' ';
-    const split = applyText(value.slice(0, at) + tag + sep + tail);
+    const split = applyText(cur.slice(0, at) + tag + sep + tail);
     saveComposed(split.body, split.table);
     closeMention();
     const newCaret = split.body.length - tail.length;
@@ -1292,7 +1316,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       ta.focus();
       ta.setSelectionRange(newCaret, newCaret);
     }
-  }, [value, applyText, saveComposed, closeMention]);
+  }, [applyText, saveComposed, closeMention]);
 
   // The references the box draws as pills, one unit each for the keys and the
   // caret (useComposerPills). `value` changes whenever the table does, so this
@@ -1522,7 +1546,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const handleInput = () => {
     const el = textareaRef.current;
     if (!el) return;
-    fitTextarea(el);
+    fitForText(el);
   };
 
   const handleChange = (newValue: string) => {
@@ -1652,6 +1676,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
    * place it after.
    */
   const writeDictation = (text: string, isDraft: boolean) => {
+    const cur = liveText();
     const el = textareaRef.current;
     const span = dictationSpanRef.current;
     let start: number;
@@ -1660,9 +1685,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       // Fresh dictation: anchor at the caret, adding separators only once so the
       // span we later replace never includes surrounding text. On an unfocused
       // box `selectionStart` is the caret it last had, which is the right spot.
-      const pos = el?.selectionStart ?? value.length;
-      const before = value.slice(0, pos);
-      const after = value.slice(pos);
+      const pos = el?.selectionStart ?? cur.length;
+      const before = cur.slice(0, pos);
+      const after = cur.slice(pos);
       const pre = before.length > 0 && !/[\s]$/.test(before) ? ' ' : '';
       const post = after.length > 0 && !/^[\s]/.test(after) ? ' ' : '';
       start = pos + pre.length;
@@ -1670,7 +1695,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     } else {
       // Subsequent draft (or the final result): swap the remembered span.
       start = span.start;
-      next = value.slice(0, span.start) + text + value.slice(span.start + span.length);
+      next = cur.slice(0, span.start) + text + cur.slice(span.start + span.length);
     }
     if (isDraft) {
       handleChange(next);
@@ -1700,15 +1725,16 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
    * Retry after a partial failure inserts the complete words when it is false.
    */
   const refineDictation = (finalText: string, provisional: string): boolean => {
+    const cur = liveText();
     const at = lastDictationRef.current;
     if (!at || at.text !== provisional) return false;
-    if (value.slice(at.start, at.start + provisional.length) !== provisional) return false;
+    if (cur.slice(at.start, at.start + provisional.length) !== provisional) return false;
     // A dictation started since then owns the box now.
     if (dictationSpanRef.current) return false;
     if (finalText === provisional) return true;
     const el = textareaRef.current;
     const caretWasAtEnd = el?.selectionStart === at.start + provisional.length;
-    handleChange(value.slice(0, at.start) + finalText + value.slice(at.start + provisional.length));
+    handleChange(cur.slice(0, at.start) + finalText + cur.slice(at.start + provisional.length));
     lastDictationRef.current = { start: at.start, text: finalText };
     if (!caretWasAtEnd) return true;
     const caret = at.start + finalText.length;
@@ -1826,8 +1852,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const interruptNow = () => {
+    const cur = liveText();
     setSendMenuOpen(false);
-    const text = composeRefs(value, tableRef.current);
+    const text = composeRefs(cur, tableRef.current);
     if ((!text && !hasAttachments) || disabled || sendBlocked || !onInterruptSend || attachments.failed > 0) return;
     if (attachments.pending > 0) { setSendWhenReady('interrupt'); return; }
     setSendWhenReady(false);
