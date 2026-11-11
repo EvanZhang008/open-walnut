@@ -4250,6 +4250,9 @@ export interface UpdateTaskInput {
   /** Watch the task (Task.watched_at): an ISO datetime starts watching, '' stops.
    *  Touches no phase, tier, pin or read marker. */
   watched_at?: string;
+  /** Background (Task.background_at): an ISO datetime puts the task in the home list's
+   *  Background group (and ends its watch), '' takes it out. Touches no phase, tier or pin. */
+  background_at?: string;
 }
 
 // ── Cross-source migration ──
@@ -4719,6 +4722,13 @@ export async function updateTask(
   // carried over from goes with it (org-pins.ts), or the next boot would watch the task again.
   if (updates.watched_at) task.watched_at = updates.watched_at;
   else if (updates.watched_at !== undefined) { delete task.watched_at; delete task.org_pins; }
+  // Background and Watching are the two ends of the list: a task is in one of them at most.
+  // Watching takes it out of Background; Background ends its watch (and the Org pins with it).
+  if (updates.watched_at && updates.background_at === undefined) delete task.background_at;
+  if (updates.background_at) {
+    task.background_at = updates.background_at;
+    if (!updates.watched_at) { delete task.watched_at; delete task.org_pins; }
+  } else if (updates.background_at !== undefined) delete task.background_at;
   // Stored as presence-only (true or absent), mirroring addTask.
   if (updates.walnut_agent !== undefined) task.walnut_agent = updates.walnut_agent || undefined;
   if (updates.pr_auto_complete !== undefined) {
@@ -8607,6 +8617,14 @@ function prepareRawUpdate(
   if ('watched_at' in safeUpdates && !safeUpdates.watched_at && task.org_pins?.length) {
     (safeUpdates as Record<string, unknown>).org_pins = null;
   }
+  // Watching and Background hold a task one at a time on the raw paths too (a replica's outbox
+  // carries only the field it touched): the mark written ends the other, as updateTask does.
+  const raw = safeUpdates as Record<string, unknown>;
+  if (raw.background_at && !('watched_at' in raw) && task.watched_at) {
+    raw.watched_at = null;
+    if (task.org_pins?.length) raw.org_pins = null;
+  }
+  if (raw.watched_at && !('background_at' in raw) && task.background_at) raw.background_at = null;
   // Day-precision echo guard: sync pull must not downgrade a time-level
   // due_date/start_date to its own truncated day (a genuinely different day
   // still applies). Human edits go through updateTask() and are unaffected.

@@ -105,7 +105,7 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
         id: String, status: String?, priority: String?, dueDate: String?,
         startDate: String?, endDate: String?,
         project: String?, title: String?, description: String?, unread: Bool?,
-        watchedAt: String?
+        watchedAt: String?, backgroundAt: String?
     ) async throws -> WalnutTask {
         // The calendar dates join the recorded args so a test can assert WHAT a
         // reschedule sent, not just that a PATCH happened. Same for the read marker
@@ -116,6 +116,7 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
         ]
         args.append(unread.map { "unread=\($0)" } ?? "-")
         if let watchedAt { args.append("watched_at=\(watchedAt)") }
+        if let backgroundAt { args.append("background_at=\(backgroundAt)") }
         try await checkpoint("updateTask", args)
         if let updateTaskResult { return updateTaskResult(id) }
         return WalnutTask(
@@ -126,7 +127,8 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
             starred: nil, pinned: nil, tags: nil, summary: nil,
             startDate: (startDate?.isEmpty ?? true) ? nil : startDate,
             endDate: (endDate?.isEmpty ?? true) ? nil : endDate,
-            watchedAt: (watchedAt?.isEmpty ?? true) ? nil : watchedAt
+            watchedAt: (watchedAt?.isEmpty ?? true) ? nil : watchedAt,
+            backgroundAt: (backgroundAt?.isEmpty ?? true) ? nil : backgroundAt
         )
     }
 

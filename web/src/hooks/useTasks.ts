@@ -179,7 +179,7 @@ function waitClockPatch(t: Task, phase: string | undefined, named: unknown): { w
 const OPTIMISTIC_FIELDS = new Set([
   'title', 'status', 'phase', 'priority', 'project',
   'due_date', 'start_date', 'end_date', 'unread', 'parent_task_id',
-  'wait_until', 'watched_at',
+  'wait_until', 'watched_at', 'background_at',
 ]);
 
 /** Tag INSTRUCTION fields: they carry no value to spread, so the resulting
@@ -291,6 +291,12 @@ function applyFieldUpdate(tasks: Task[], id: string, updates: Record<string, unk
     const next = { ...t, ...filtered, ...tagPatch };
     // Mirrors task-manager: '' stops watching and the row holds no watched_at at all.
     if ('watched_at' in filtered && !filtered.watched_at) delete next.watched_at;
+    // Mirrors task-manager: Background and Watching hold a task one at a time, '' takes it out.
+    if (filtered.watched_at && !('background_at' in filtered)) delete next.background_at;
+    if ('background_at' in filtered) {
+      if (!filtered.background_at) delete next.background_at;
+      else if (!filtered.watched_at) delete next.watched_at;
+    }
     // Mirrors task-manager: only a WAITING task keeps a wait_until, a move into
     // WAITING with none named gets the default, '' names "no clock".
     if ('wait_until' in filtered || 'phase' in filtered) {

@@ -88,6 +88,8 @@ struct TaskBoardList: View {
     let onOpenDetail: (BoardRow) -> Void
     /// Watch or stop watching a row's task (the long-press menu). nil = no Watch item.
     var onToggleWatch: ((BoardRow) -> Void)? = nil
+    /// Move a row's task to Background or take it out (the long-press menu). nil = no item.
+    var onToggleBackground: ((BoardRow) -> Void)? = nil
 
     /// The heading dot's diameter, SCALED with the heading's own text style.
     ///
@@ -200,7 +202,8 @@ struct TaskBoardList: View {
                         onPickTier: { onPickTier(row, $0) },
                         onOpenSession: { onOpenSession(row) },
                         onOpenDetail: { onOpenDetail(row) },
-                        onToggleWatch: onToggleWatch.map { toggle in { toggle(row) } }
+                        onToggleWatch: onToggleWatch.map { toggle in { toggle(row) } },
+                        onToggleBackground: onToggleBackground.map { toggle in { toggle(row) } }
                     ))
                 }
             } header: {
@@ -732,6 +735,8 @@ struct BoardRowGestures: ViewModifier {
     let onOpenDetail: () -> Void
     /// Watch or stop watching (the board's Watching section). nil = no item.
     var onToggleWatch: (() -> Void)? = nil
+    /// Move to Background or take out (the board's Background section). nil = no item.
+    var onToggleBackground: (() -> Void)? = nil
 
     func body(content: Content) -> some View {
         content
@@ -768,6 +773,14 @@ struct BoardRowGestures: ViewModifier {
                     Button(action: onToggleWatch) {
                         Label(BoardWatchItem.label(watched: watched),
                               systemImage: BoardWatchItem.systemImage(watched: watched))
+                    }
+                }
+                // Background holds long-running work out of the way, whatever its state.
+                if let onToggleBackground, row.task != nil {
+                    let inBackground = BoardBackgroundItem.inBackground(row.task)
+                    Button(action: onToggleBackground) {
+                        Label(BoardBackgroundItem.label(inBackground: inBackground),
+                              systemImage: BoardBackgroundItem.systemImage)
                     }
                 }
                 // Tier move — this is where the wrapping token row went. A menu

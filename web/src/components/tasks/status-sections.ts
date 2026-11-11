@@ -22,6 +22,12 @@
  *                      "a new category not started, to put the not stared one not mix in to
  *                      wait and snooze they are completeli differnet"); its rows wear the
  *                      dashed ring, never the hourglass
+ *   Background folded  open tasks the user put out of the way (Task.background_at): long-running
+ *                      work such as a CR review or a recurring job (2026-11-11, the user: "无论
+ *                      task 是什么 status，它不会出来"). Not a status: such a task is drawn here
+ *                      only, whatever its user status, and its heading carries a dot when one of
+ *                      them asks the user something. Placed by hand (the task menu), never by a
+ *                      rule ("我不想 be smart"); a completed one goes under Completed
  *   Completed  folded  done
  *
  * The state sections are the one user status (src/core/user-status.ts) as is, the same as
@@ -39,14 +45,15 @@ import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, USER_STATE_MEANINGS, limitedL
 import { sameAskLine, waitingLine, waitingSentence } from '../board/board-status-model';
 import { recentActivityTime } from './recent-activity-time';
 
-export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'notstarted' | 'done';
+export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'notstarted' | 'background' | 'done';
 /** The sections a task falls into by its one user status (Watching is the user's own pick,
  *  Not started is a part of Waiting that Flat draws on its own). */
 export type StateSectionKey = 'needs' | 'working' | 'waiting' | 'done';
-/** A section a task is drawn in by its state: a user status section, or Not started. */
+/** A section a task is drawn in by its state (a user status section, or Not started), or
+ *  Background, where a row in its exit grace stays too. */
 export type DrawnSectionKey = Exclude<StatusSectionKey, 'watching'>;
 
-export const STATUS_SECTION_ORDER: readonly StatusSectionKey[] = ['watching', 'needs', 'working', 'waiting', 'notstarted', 'done'];
+export const STATUS_SECTION_ORDER: readonly StatusSectionKey[] = ['watching', 'needs', 'working', 'waiting', 'notstarted', 'background', 'done'];
 
 const { read: _readLabel, ...SHOWN_LABELS } = USER_STATE_LABELS;
 const { read: _readMeaning, ...SHOWN_MEANINGS } = USER_STATE_MEANINGS;
@@ -55,6 +62,7 @@ export const STATUS_SECTION_LABELS: Record<StatusSectionKey, string> = {
   watching: 'Watching',
   ...SHOWN_LABELS,
   notstarted: 'Not started',
+  background: 'Background',
 };
 
 export const STATUS_SECTION_TITLES: Record<StatusSectionKey, string> = {
@@ -63,6 +71,7 @@ export const STATUS_SECTION_TITLES: Record<StatusSectionKey, string> = {
   needs: 'It asks you something, or has a result or an answer for you to look at',
   waiting: 'It waits on something: stopped, a watch, a time, another task, or you snoozed it',
   notstarted: 'Nobody started it yet: no session has run it, or its start failed',
+  background: 'Long-running work you put out of the way: kept here whatever its state',
 };
 
 /** A fold's tooltip: what the section holds, then what a click does (one period, whichever
@@ -83,6 +92,20 @@ type Watchable = Pick<Task, 'id'> & { watched_at?: string | null };
 
 export function isWatched(task: Watchable): boolean {
   return !!task.watched_at;
+}
+
+type Backgroundable = Pick<Task, 'phase' | 'status'> & { background_at?: string | null };
+
+/** In Background: the user put it there (`background_at`) and it is still open. A completed task
+ *  keeps its mark (a reopen brings it back to Background) but is drawn under Completed. */
+export function isBackground(task: Backgroundable): boolean {
+  return !!task.background_at && task.phase !== 'COMPLETE' && task.status !== 'done';
+}
+
+/** Background's heading dot: how many of its tasks ask the user something (Needs you, To read
+ *  left out: a long-running task's finished run is no ask). They stay in Background; the dot says so. */
+export function backgroundNeedsCount(rows: readonly Task[]): number {
+  return rows.filter((t) => taskUserState(t) === 'needs').length;
 }
 
 /** A watched row's place in Watching: its `watched_at` (when watched, or where the user dragged it). */
@@ -209,9 +232,10 @@ export function wakeAt(task: Pick<Task, 'phase' | 'wait_until' | 'start_date'>):
   return (task.phase === 'WAITING' && task.wait_until) || task.start_date || '';
 }
 
-/** The section a task is DRAWN in: a watched task stays on top whatever its state. */
+/** The section a task is DRAWN in: a watched task stays on top whatever its state, an open one
+ *  in Background stays in Background. */
 export function statusSectionOf(task: Task): StatusSectionKey {
-  return isWatched(task) ? 'watching' : stateSectionOf(task);
+  return isWatched(task) ? 'watching' : isBackground(task) ? 'background' : stateSectionOf(task);
 }
 
 const byDesc = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
@@ -246,6 +270,9 @@ export function sortSectionTasks(key: StatusSectionKey, tasks: readonly Task[]):
       });
     case 'done':
       return rows.sort((a, b) => byDesc(a.completed_at ?? a.updated_at ?? '', b.completed_at ?? b.updated_at ?? ''));
+    case 'background':
+      // The ones that ask the user first (the heading's dot leads to them), then latest activity.
+      return rows.sort((a, b) => (Number(taskUserState(b) === 'needs') - Number(taskUserState(a) === 'needs')) || byDesc(activity(a), activity(b)));
     default:
       return rows.sort((a, b) => byDesc(activity(a), activity(b)));
   }
@@ -277,6 +304,8 @@ export interface StatusSectionsModel {
   waiting: Task[];
   /** Flat's Not started: drawn by Flat only; elsewhere these rows stay in the list or under Waiting. */
   notstarted: Task[];
+  /** Open tasks the user put in Background (isBackground), whatever their state. */
+  background: Task[];
   done: Task[];
   /** Open tasks under Working: Flat draws them as rows, By project's list draws them itself. */
   working: Task[];
@@ -318,6 +347,7 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
   const needs: Task[] = [];
   const waiting: Task[] = [];
   const notstarted: Task[] = [];
+  const background: Task[] = [];
   const done: Task[] = [];
   const working: Task[] = [];
   const seen = new Set<string>();
@@ -327,11 +357,15 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
     if (!input.passes(t)) continue;
     if (isWatched(t)) { watching.push(t); continue; }
     if (input.statesActive === false) continue;
+    // Background is no state: its open tasks are drawn there whatever theirs (a grace hold included).
+    if (isBackground(t)) { background.push(t); continue; }
     const place = input.placeOf?.(t) ?? (input.splitNotStarted ? drawnSectionOf(t, input.snoozed) : stateSectionOf(t, input.snoozed));
     switch (place) {
       case 'needs': needs.push(t); break;
       case 'waiting': waiting.push(t); break;
       case 'notstarted': notstarted.push(t); break;
+      // A Background task completed a moment ago fades out where it was drawn.
+      case 'background': background.push(t); break;
       case 'done': done.push(t); break;
       default: working.push(t);
     }
@@ -341,6 +375,7 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
     needs: sortSectionTasks('needs', needs),
     waiting: sortSectionTasks('waiting', waiting),
     notstarted: sortSectionTasks('notstarted', notstarted),
+    background: sortSectionTasks('background', background),
     done: sortSectionTasks('done', done),
     working: sortSectionTasks('working', working),
     workingCount: working.length,

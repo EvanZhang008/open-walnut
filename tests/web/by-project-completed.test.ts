@@ -59,7 +59,7 @@ describe('By project: completed tasks fold once, at the bottom', () => {
     for (const view of VIEWS) {
       expect(bottomStatusSections('project', view).includes('waiting'), view).toBe(view === 'recent');
       // Flat folds Not started on its own (2026-11-09); Recent draws no sections.
-      expect(bottomStatusSections('status', view)).toEqual(view === 'recent' ? ['waiting', 'done'] : ['waiting', 'notstarted', 'done']);
+      expect(bottomStatusSections('status', view)).toEqual(view === 'recent' ? ['waiting', 'background', 'done'] : ['waiting', 'notstarted', 'background', 'done']);
     }
   });
 });

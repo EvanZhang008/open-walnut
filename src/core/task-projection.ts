@@ -96,6 +96,10 @@ export interface ProjectedTask {
    *  which keeps it in the Watching section on top of the task list whatever its phase.
    *  Omitted when not watched; older clients ignore it. */
   watched_at?: string
+  /** Background (Task.background_at, additive, 2026-11): when the task was put in the Background
+   *  group of the task list, which holds an open task there whatever its status. Omitted when
+   *  not set; older clients ignore it. */
+  background_at?: string
   tags?: string[]
   /** First 500 chars — enough for a detail preview without the full blob. */
   summary?: string
@@ -214,6 +218,7 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.pinned && t.focus_tier ? { focus_tier: t.focus_tier } : {}),
     ...(t.unread ? { unread: true } : {}),
     ...(t.watched_at ? { watched_at: t.watched_at } : {}),
+    ...(t.background_at ? { background_at: t.background_at } : {}),
     ...(t.tags && t.tags.length > 0 ? { tags: t.tags } : {}),
     ...(summary ? { summary: summary.length > SUMMARY_MAX ? summary.slice(0, SUMMARY_MAX) + '…' : summary } : {}),
     ...(summary && t.summary_session_id ? { summary_session_id: t.summary_session_id } : {}),

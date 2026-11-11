@@ -8,6 +8,8 @@ struct BoardRowActions {
     let onOpenDetail: (BoardRow) -> Void
     /// Watch or stop watching the row's task. nil = the menu offers no Watch item.
     var onToggleWatch: ((BoardRow) -> Void)? = nil
+    /// Move the row's task to Background or take it out. nil = no Background item.
+    var onToggleBackground: ((BoardRow) -> Void)? = nil
 }
 
 /// A status section's heading: icon, label, count and chevron, the whole line one tap that
@@ -18,6 +20,9 @@ struct BoardStatusHeading: View {
     let count: Int
     let open: Bool
     let onToggle: () -> Void
+    /// Background: how many of its rows ask the user something. They stay in Background; a red
+    /// dot after the count says so (2026-11-11: never pulled out into Needs you).
+    var asks: Int = 0
     @Environment(\.leadingDrawer) private var drawer
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -40,6 +45,12 @@ struct BoardStatusHeading: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .foregroundStyle(BoardHeadingType.countInk)
                 .accessibilityIdentifier("board.section.\(section.rawValue).count")
+            if asks > 0 {
+                Circle()
+                    .fill(Theme.danger)
+                    .frame(width: 7, height: 7)
+                    .accessibilityIdentifier("board.section.\(section.rawValue).asks")
+            }
             Spacer(minLength: 6)
             Image(systemName: "chevron.down")
                 .font(.system(BoardHeadingType.count, weight: .semibold))
@@ -58,7 +69,9 @@ struct BoardStatusHeading: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel("\(section.label), \(count)")
+        .accessibilityLabel(asks > 0
+            ? "\(section.label), \(count), \(asks) \(asks == 1 ? "needs" : "need") you"
+            : "\(section.label), \(count)")
         .accessibilityValue(open ? "Expanded" : "Collapsed")
         .accessibilityHint(open ? "Hides \(section.label)" : "Shows \(section.label)")
         .accessibilityAction { onToggle() }
@@ -72,13 +85,14 @@ struct BoardStatusHeading: View {
         case .needs: return Theme.danger
         case .working: return BoardHeadingType.ink
         case .waiting: return Theme.warning
+        case .background: return BoardHeadingType.ink
         case .done: return Theme.success
         }
     }
 }
 
 /// One status section that draws its own rows (Watching, Needs you, Waiting / snoozed,
-/// Completed): the heading, then the rows run by project, a small project label above each
+/// Background, Completed): the heading, then the rows run by project, a small project label above each
 /// run when the section spans two or more projects, then a "Show N more" row past 30.
 ///
 /// Emits List `Section`s, like `TaskBoardList`: one per project run, the status heading in the
@@ -144,7 +158,10 @@ struct BoardStatusSectionList: View {
     }
 
     private var heading: some View {
-        BoardStatusHeading(section: section, count: rows.count, open: open, onToggle: onToggle)
+        BoardStatusHeading(
+            section: section, count: rows.count, open: open, onToggle: onToggle,
+            asks: section == .background ? BoardStatusSectionModel.backgroundNeedsCount(rows) : 0
+        )
             .textCase(nil)
             .padding(.horizontal, BoardBandCard.headingContentInset)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -188,7 +205,8 @@ struct BoardStatusSectionList: View {
             onPickTier: { actions.onPickTier(row, $0) },
             onOpenSession: { actions.onOpenSession(row) },
             onOpenDetail: { actions.onOpenDetail(row) },
-            onToggleWatch: actions.onToggleWatch.map { toggle in { toggle(row) } }
+            onToggleWatch: actions.onToggleWatch.map { toggle in { toggle(row) } },
+            onToggleBackground: actions.onToggleBackground.map { toggle in { toggle(row) } }
         ))
     }
 }
@@ -218,4 +236,16 @@ struct BoardWorkingHeading: View {
 enum BoardWatchItem {
     static func label(watched: Bool) -> String { watched ? "Stop watching" : "Watch" }
     static func systemImage(watched: Bool) -> String { watched ? "eye.slash" : "eye" }
+}
+
+/// The long-press menu's Background item (2026-11-11), the web's `BackgroundMenuItem` words.
+/// `inBackground` reads the mark alone: a completed task keeps it, so the menu can take it out.
+enum BoardBackgroundItem {
+    static func inBackground(_ task: WalnutTask?) -> Bool {
+        !(task?.backgroundAt ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+    }
+    static func label(inBackground: Bool) -> String {
+        inBackground ? "Take out of Background" : "Move to Background"
+    }
+    static let systemImage = BoardStatusSection.background.systemImage
 }

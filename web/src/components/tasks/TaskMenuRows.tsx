@@ -27,7 +27,7 @@ import { KebabGroup } from '@/components/sessions/KebabGroup';
 import { datesHint } from '@/components/sessions/kebab-dates-hint';
 import { MoveToProjectSection, TaskActionMenuItems, TaskSnoozeRow } from './TaskKebabMenu';
 import { TaskStatusMenuSection } from './TaskStatusControl';
-import { WatchMenuItem } from './WatchToggle';
+import { BackgroundMenuItem, WatchMenuItem } from './WatchToggle';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
 import { TeamMenuItems } from './TeamMenuItems';
 import { TaskSyncMenuRows } from './TaskSyncMenuRows';
@@ -106,6 +106,8 @@ export function TaskMenuRows(p: TaskMenuRowsProps) {
     <>
       {p.onSetStartDate && <TaskSnoozeRow task={task} onSetStartDate={p.onSetStartDate} afterAction={close} />}
       <WatchMenuItem task={task} afterAction={close} />
+      {/* Background: long-running work held at the foot of the list whatever its state. */}
+      <BackgroundMenuItem task={task} afterAction={close} />
       {/* A session menu's task already has its session: the row would launch a second one. */}
       {p.onStartSession && !isDone && !ownSession && (
         <Item icon="▶︎" onClick={act(p.onStartSession)}>Start Session</Item>

@@ -721,6 +721,13 @@ struct TasksView: View {
                 Label(BoardWatchItem.label(watched: watched),
                       systemImage: BoardWatchItem.systemImage(watched: watched))
             }
+            Button {
+                toggleBackground(task)
+            } label: {
+                let inBackground = BoardBackgroundItem.inBackground(task)
+                Label(BoardBackgroundItem.label(inBackground: inBackground),
+                      systemImage: BoardBackgroundItem.systemImage)
+            }
             // Tier mover (pinned rows only): mirrors the desktop focus bar's tier set —
             // built-ins + custom tiers, optimistic.
             if task.pinned == true {
@@ -782,6 +789,20 @@ struct TasksView: View {
         }
         Task {
             if let error = await tasks.setWatched(task, watched: !watched) {
+                toggleError = error
+            }
+        }
+    }
+
+    /// Move to Background / Take out of Background from a row's menu. Optimistic via the store:
+    /// the row moves into (or out of) the Background section at once (its watch ends, as on the
+    /// server), and goes back with an alert when the write fails. Background stays folded: the
+    /// row is put out of the way, and the heading's count says where it went.
+    private func toggleBackground(_ task: WalnutTask) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let inBackground = BoardBackgroundItem.inBackground(task)
+        Task {
+            if let error = await tasks.setBackground(task, inBackground: !inBackground) {
                 toggleError = error
             }
         }
@@ -993,7 +1014,7 @@ struct TasksView: View {
     }
 
     /// The board under its status sections: Watching and Needs you, the Working heading over
-    /// the bands, then Waiting / snoozed and Completed (`BoardStatusSections`).
+    /// the bands, then Waiting / snoozed, Background and Completed (`BoardStatusSections`).
     @ViewBuilder
     private func statusBoard(
         _ sections: BoardStatusSections, entries: [BoardCollapse.Entry], isEmpty: Bool
@@ -1009,7 +1030,7 @@ struct TasksView: View {
         if open[.working] ?? BoardStatusSection.working.defaultOpen {
             boardSections(entries, isEmpty: isEmpty, drawsRows: sections.drawsRows)
         }
-        ForEach([BoardStatusSection.waiting, .done].filter { sections.isShown($0) }) { key in
+        ForEach([BoardStatusSection.waiting, .background, .done].filter { sections.isShown($0) }) { key in
             statusSection(key, sections: sections, open: open[key] ?? key.defaultOpen)
         }
     }
@@ -1066,6 +1087,9 @@ struct TasksView: View {
             },
             onToggleWatch: { row in
                 if let task = row.task { toggleWatch(task) }
+            },
+            onToggleBackground: { row in
+                if let task = row.task { toggleBackground(task) }
             }
         )
     }
@@ -1111,7 +1135,8 @@ struct TasksView: View {
                 onPickTier: actions.onPickTier,
                 onOpenSession: actions.onOpenSession,
                 onOpenDetail: actions.onOpenDetail,
-                onToggleWatch: actions.onToggleWatch
+                onToggleWatch: actions.onToggleWatch,
+                onToggleBackground: actions.onToggleBackground
             )
         }
     }

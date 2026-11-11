@@ -51,6 +51,7 @@ import {
   watchReorder,
   waitingReason,
   waitingHover,
+  backgroundNeedsCount,
 } from './status-sections';
 import { ApprovalRows, usePendingApprovals } from '../approvals/ApprovalRow';
 import { FOLD_KEY_ATTR } from './section-fold-rule';
@@ -69,12 +70,16 @@ export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
   working: ICONS.ICON_PHASE_IN_PROGRESS,
   waiting: ICONS.ICON_PHASE_WAITING,
   notstarted: ICONS.ICON_NOT_STARTED,
+  background: ICONS.ICON_BACKGROUND,
   done: ICONS.ICON_PHASE_COMPLETE,
 };
 
-export function StatusSectionHeading({ sectionKey, count, open, onToggle, more, limited = 0 }: {
+export function StatusSectionHeading({ sectionKey, count, open, onToggle, more, limited = 0, asks = 0 }: {
   sectionKey: StatusSectionKey;
   count: number;
+  /** Background: its tasks that ask the user something. They stay in Background, a dot on the
+   *  heading says so (2026-11-11: never pulled out into Needs you). */
+  asks?: number;
   /** Rows a usage limit stopped (Walnut continues them at the reset): named on the heading, so a
    *  folded Waiting still says a limit stopped work. */
   limited?: number;
@@ -98,6 +103,11 @@ export function StatusSectionHeading({ sectionKey, count, open, onToggle, more, 
         <span className="status-section-heading-icon" aria-hidden="true">{SECTION_ICONS[sectionKey]}</span>
         <span className="navigation-label">{label}</span>
         <span className="navigation-heading-count status-section-count" data-testid={`status-section-${sectionKey}-count`}>{count}{more ? '+' : ''}</span>
+        {asks > 0 && (
+          <span className="status-section-asks-dot" data-testid={`status-section-${sectionKey}-asks`} role="img"
+            aria-label={`${asks} need${asks === 1 ? 's' : ''} you`}
+            title={`${asks} ${asks === 1 ? 'task here asks' : 'tasks here ask'} you something. ${asks === 1 ? 'It stays' : 'They stay'} in Background.`} />
+        )}
         {limited > 0 && (
           <span className="status-section-limited" data-testid={`status-section-${sectionKey}-limited`}
             title={`${limited} ${limited === 1 ? 'task' : 'tasks'} a usage limit stopped; Walnut continues ${limited === 1 ? 'it' : 'them'} at the reset`}>
@@ -194,7 +204,8 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
   // Under Waiting / snoozed: why it waits (not started, stopped, a watch, ...). Under Needs you:
   // what to do with it, then what it asks or has to read (2026-11-03, the user: "thridline cna
   // show what need u", "in one line").
-  const need = isDone || sectionKey !== 'needs' ? null : needsLine(task);
+  // Background holds every state: a row there that asks the user says what, as under Needs you.
+  const need = isDone || (sectionKey !== 'needs' && sectionKey !== 'background') ? null : needsLine(task);
   const limitNow = useLimitNow(task.user_status?.limit);
   // Its continue went in (or the wait closed) and the stored status has not caught up yet.
   const liveState = handlers.limitLive?.get(task.id);
@@ -558,6 +569,7 @@ export function sectionRowsOf(model: StatusSectionsModel, key: StatusSectionKey)
     case 'needs': return { tasks: model.needs, count: model.needs.length };
     case 'waiting': return { tasks: model.waiting, count: model.waiting.length };
     case 'notstarted': return { tasks: model.notstarted, count: model.notstarted.length };
+    case 'background': return { tasks: model.background, count: model.background.length };
     case 'done': return { tasks: model.done, count: model.done.length + model.doneUnloaded };
     default: return { tasks: model.working, count: model.workingCount };
   }
@@ -603,7 +615,8 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers, appr
         return (
           <section key={key} className={`status-section status-section-block-${key}`} aria-label={STATUS_SECTION_LABELS[key]} {...{ [FOLD_KEY_ATTR]: key }}>
             <StatusSectionHeading sectionKey={key} count={count} open={open[key]} onToggle={onToggle} more={archiveLeft}
-              limited={key === 'waiting' ? tasks.filter((t) => limitedLine(t.user_status)).length : 0} />
+              limited={key === 'waiting' ? tasks.filter((t) => limitedLine(t.user_status)).length : 0}
+              asks={key === 'background' ? backgroundNeedsCount(tasks) : 0} />
             {/* A folded Needs you still shows its approvals: a script is blocked on each, for minutes. */}
             {extra && <ApprovalRows list={waiting} variant="home" />}
             {open[key] && (taskCount > 0 || archiveLeft) && <SectionRows sectionKey={key} tasks={tasks} total={taskCount} handlers={handlers} archiveLeft={archiveLeft} />}

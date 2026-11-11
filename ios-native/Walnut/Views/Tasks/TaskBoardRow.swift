@@ -427,10 +427,15 @@ struct TaskBoardRow: View {
     // MARK: - Row parts
 
     /// Under Needs you, the third line: what the row needs from the user, its ask or what there
-    /// is to read (`TeamStatusModel.needLine`). Absent when it has no words, and in any other
-    /// section or band.
+    /// is to read (`TeamStatusModel.needLine`). Background holds every state, so a row there
+    /// whose state is Needs you carries the line too (the web's `needsLine`). Absent when it has
+    /// no words, and in any other section or band.
     private var need: TeamStatusModel.NeedLine? {
-        guard section == .needs else { return nil }
+        switch section {
+        case .some(.needs): break
+        case .some(.background) where BoardModel.needsHuman(row.task): break
+        default: return nil
+        }
         return TeamStatusModel.needLine(row.task?.userStatus)
     }
 

@@ -41,6 +41,8 @@ struct TaskPropertiesList: View {
             TaskPropertyDivider()
             boardRow
             TaskPropertyDivider()
+            backgroundRow
+            TaskPropertyDivider()
             priorityRow
             TaskPropertyDivider()
             projectRow
@@ -177,6 +179,31 @@ struct TaskPropertiesList: View {
                 }
             }
         }
+    }
+
+    // MARK: - Background
+
+    /// Background (2026-11-11): long-running work kept in the board's Background section
+    /// whatever its state. One menu item, the board menu's words; the sheet's optimistic
+    /// `apply`, so the eye above goes off at once when it ends a watch (the server's rule).
+    private var backgroundRow: some View {
+        let inBackground = BoardBackgroundItem.inBackground(task)
+        return Menu {
+            Button {
+                apply(.init(backgroundAt: inBackground ? "" : ISO8601DateFormatter().string(from: AppClock.now())))
+            } label: {
+                Label(BoardBackgroundItem.label(inBackground: inBackground),
+                      systemImage: BoardBackgroundItem.systemImage)
+            }
+        } label: {
+            TaskPropertyRowLabel(
+                label: "Background",
+                value: inBackground ? "On" : "Off",
+                icon: inBackground ? BoardBackgroundItem.systemImage : nil
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("task.prop.background")
     }
 
     // MARK: - Priority

@@ -768,13 +768,14 @@ enum BoardModel {
 
     /// The mark of a row drawn under a status section: the row's group decides, never its phase.
     /// Under Waiting / snoozed or Completed a row never wears the needs mark (a snoozed
-    /// or parked task is not asking the user now); unread still shows.
+    /// or parked task is not asking the user now); unread still shows. Background holds every
+    /// state, so a row there that asks the user keeps the mark (its heading's dot leads to it).
     static func dot(_ task: WalnutTask?, in section: BoardStatusSection?) -> BoardRowDot? {
         let mark = dot(task)
         guard mark == .needsAction, let section else { return mark }
         switch section {
         case .waiting, .done: return nil
-        case .watching, .needs, .working: return mark
+        case .watching, .needs, .working, .background: return mark
         }
     }
 
@@ -1197,19 +1198,19 @@ enum BoardModel {
             scopedRowById = rowById.filter { tierById[$0.key] == honoured }
         }
 
-        // The sections: every row of the view (WAITING ones included) goes to its state's
-        // section, and only the Working rows stay in the map the bands are built from.
+        // The sections: every row of the view (WAITING ones included) goes to its section
+        // (Watching, Background, else its state's), and only the Working rows stay in the map
+        // the bands are built from. A Background row leaves the bands whatever its state.
         var sections = BoardStatusSections.none
         if sectioned {
             var scoped: [BoardRow] = []
             scoped.reserveCapacity(scopedRowById.count + heldWaiting.count)
             for id in order {
                 guard let row = scopedRowById[id] else { continue }
-                let watched = BoardStatusSectionModel.isWatched(row.task)
-                let state = BoardStatusSectionModel.stateSection(row, dateFilter: dateFilter, now: now)
-                if watched || state != .working {
+                let section = BoardStatusSectionModel.section(row, dateFilter: dateFilter, now: now)
+                if section != .working {
                     scopedRowById[id] = nil
-                    if !watched { scoped.append(row) }
+                    if section != .watching { scoped.append(row) }
                 }
             }
             for held in heldWaiting where honoured == nil || held.tier == honoured {

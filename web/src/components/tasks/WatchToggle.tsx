@@ -4,6 +4,12 @@
  * someone wants to keep looking at a task ... how can we keep it on top"). Not called
  * "pin": Focus and the pinned board already are pins. One field, `watched_at`, the
  * time the watch began; clearing it ends the watch. Nothing else about the task moves.
+ *
+ * Background is the other end of the same list (2026-11-11, the user: long-running work such as
+ * a CR review or a cron job, "无论 task 是什么 status，它不会出来"): one field, `background_at`,
+ * holds an open task in the Background group at the foot of the panel whatever its state. Both
+ * marks are written the same way, so they share one toggle (useListMark); the server keeps a
+ * task in one of the two at most.
  */
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import type { Task } from '@open-walnut/core';
@@ -14,8 +20,12 @@ import * as ICONS from '../common/Icons';
 import { isWatched } from './status-sections';
 import '@/styles/task-watch.css';
 
+/** The list marks a toggle writes: Watching's and Background's. */
+type ListMarkField = 'watched_at' | 'background_at';
+const markKey = (field: ListMarkField, id: string) => `${field}:${id}`;
+
 /**
- * A plain PATCH's value, per task, until its echo (or a failure) arrives, so the eye and the menu
+ * A plain PATCH's value, per task and mark, until its echo (or a failure) arrives, so the eye and the menu
  * row answer the click. Kept outside any component: the kebab's row unmounts with the menu, and a
  * menu opened again before the echo still reads the click (2026-11-09 review).
  */
@@ -38,55 +48,80 @@ function subscribePending(l: () => void): () => void {
  */
 const watchWriting = new Set<string>();
 const watchNext = new Map<string, string>();
-function queueWatchWrite(id: string, value: string, showError?: (msg: string) => void): void {
-  watchNext.set(id, value);
-  if (watchWriting.has(id)) return;
-  watchWriting.add(id);
+const MARK_WORDS: Record<ListMarkField, { on: string; off: string }> = {
+  watched_at: { on: 'watch', off: 'stop watching' },
+  background_at: { on: 'move to Background', off: 'take out of Background' },
+};
+
+function queueWatchWrite(id: string, field: ListMarkField, value: string, showError?: (msg: string) => void): void {
+  const key = markKey(field, id);
+  watchNext.set(key, value);
+  if (watchWriting.has(key)) return;
+  watchWriting.add(key);
   void (async () => {
-    while (watchNext.has(id)) {
-      const v = watchNext.get(id)!;
-      watchNext.delete(id);
+    while (watchNext.has(key)) {
+      const v = watchNext.get(key)!;
+      watchNext.delete(key);
       try {
-        await updateTask(id, { watched_at: v });
+        await updateTask(id, { [field]: v });
       } catch (err) {
-        log.warn('task-watch', 'watch write failed', { taskId: id, error: String(err) });
+        log.warn('task-watch', 'list mark write failed', { taskId: id, field, error: String(err) });
         // A newer click still goes out; with none, the click is undone and said so.
-        if (!watchNext.has(id) && pendingWatch.get(id)?.value === v) setPendingWatch(id, null);
-        showError?.(`Could not ${v ? 'watch' : 'stop watching'} the task: ${err instanceof Error ? err.message : String(err)}`);
+        if (!watchNext.has(key) && pendingWatch.get(key)?.value === v) setPendingWatch(key, null);
+        showError?.(`Could not ${v ? MARK_WORDS[field].on : MARK_WORDS[field].off} the task: ${err instanceof Error ? err.message : String(err)}`);
         continue;
       }
       // The latest click is written: its echo (or one that came already) retires the held value.
-      const p = pendingWatch.get(id);
-      if (!watchNext.has(id) && p?.value === v) setPendingWatch(id, { ...p, settled: true });
+      const p = pendingWatch.get(key);
+      if (!watchNext.has(key) && p?.value === v) setPendingWatch(key, { ...p, settled: true });
     }
-    watchWriting.delete(id);
+    watchWriting.delete(key);
   })();
 }
 
-export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | null }) {
+type MarkTask = Pick<Task, 'id'> & { watched_at?: string | null; background_at?: string | null };
+
+/** One list mark's state and its toggle: applied through the board's store when it holds the
+ *  task, else a plain PATCH held until its echo. */
+function useListMark(task: MarkTask, field: ListMarkField, isOn: (t: MarkTask) => boolean) {
   const store = useTasksContextSafe();
-  const pending = useSyncExternalStore(subscribePending, () => pendingWatch.get(task.id), () => pendingWatch.get(task.id));
-  const base = task.watched_at ?? null;
+  const key = markKey(field, task.id);
+  const pending = useSyncExternalStore(subscribePending, () => pendingWatch.get(key), () => pendingWatch.get(key));
+  const base = task[field] ?? null;
   // The task moved after the latest click's write came back (its echo, or anyone's later write):
   // that is the truth now. A move while that write is still out is an older click's echo, and the
   // latest click stays (2026-11-09 review: Watch, then Stop watching, the first echo first).
   useEffect(() => {
-    const p = pendingWatch.get(task.id);
-    if (p?.settled) setPendingWatch(task.id, null);
-  }, [task.id, base]);
-  const watched = pending ? pending.value !== '' : isWatched(task);
+    const p = pendingWatch.get(key);
+    if (p?.settled) setPendingWatch(key, null);
+  }, [key, base]);
+  const on = pending ? pending.value !== '' : isOn(task);
   // Off the board's store (a session menu on the Org page), a plain PATCH; the
   // task:updated it broadcasts refreshes whoever shows the task.
   // A task the board's store does not hold (an archived one a session panel opened) is a plain
   // PATCH too: the store's optimistic update only patches rows it has and swallows the echo,
   // which is the one thing that would bring the task onto the Watching list.
   const toggle = () => {
-    const watched_at = watched ? '' : new Date().toISOString();
-    if (store && store.tasks.some((t) => t.id === task.id)) { store.update(task.id, { watched_at }); return; }
-    setPendingWatch(task.id, { value: watched_at, settled: false });
-    queueWatchWrite(task.id, watched_at, store?.showOperationError);
+    const value = on ? '' : new Date().toISOString();
+    log.info('task-watch', 'list mark toggled', { taskId: task.id, field, on: !on });
+    if (store && store.tasks.some((t) => t.id === task.id)) { store.update(task.id, { [field]: value }); return; }
+    setPendingWatch(key, { value, settled: false });
+    queueWatchWrite(task.id, field, value, store?.showOperationError);
   };
-  return { watched, toggle };
+  return { on, toggle };
+}
+
+export function useWatchToggle(task: MarkTask) {
+  const { on, toggle } = useListMark(task, 'watched_at', isWatched);
+  return { watched: on, toggle };
+}
+
+/** In Background or not: the mark only (a completed task keeps it, so the menu can take it out). */
+const hasBackgroundMark = (t: MarkTask) => !!t.background_at;
+
+export function useBackgroundToggle(task: MarkTask) {
+  const { on, toggle } = useListMark(task, 'background_at', hasBackgroundMark);
+  return { inBackground: on, toggle };
 }
 
 /** Watching's drag (watchReorder): each write goes through the board's store, applied at once, the
@@ -117,6 +152,25 @@ export function WatchMenuItem({ task, afterAction }: { task: Task; afterAction?:
     >
       <span className="task-kebab-icon">{watched ? ICONS.ICON_EYE_OFF : ICONS.ICON_EYE}</span>
       <span>{watched ? 'Stop watching' : 'Watch'}</span>
+    </button>
+  );
+}
+
+/** The row menu's Move to Background / Take out of Background item (2026-11-11). */
+export function BackgroundMenuItem({ task, afterAction }: { task: Task; afterAction?: () => void }) {
+  const { inBackground, toggle } = useBackgroundToggle(task);
+  return (
+    <button
+      type="button"
+      className="task-kebab-item"
+      data-testid="task-kebab-background"
+      title={inBackground
+        ? 'Back to the list: it shows where its state puts it again'
+        : 'Long-running work: keep it in the Background group at the foot of the list, whatever its state'}
+      onClick={(e) => { e.stopPropagation(); toggle(); afterAction?.(); }}
+    >
+      <span className="task-kebab-icon">{ICONS.ICON_BACKGROUND}</span>
+      <span>{inBackground ? 'Take out of Background' : 'Move to Background'}</span>
     </button>
   );
 }

@@ -136,7 +136,7 @@ const DEFAULT_TASK_LIST_LIMIT = 50
 const TASK_LIST_ALWAYS = ['id', 'title', 'phase', 'project', 'updated_at'] as const
 const TASK_LIST_WHEN_SET = [
   'due_date', 'start_date', 'completed_at', 'focus_tier', 'pin_order',
-  'parent_task_id', 'group_id', 'sprint', 'tags', 'is_blocked', 'watched_at',
+  'parent_task_id', 'group_id', 'sprint', 'tags', 'is_blocked', 'watched_at', 'background_at',
 ] as const
 
 /** Project ONE REST row onto the lean agent-facing shape. Exported for tests. */
@@ -747,6 +747,11 @@ function leaderSentence(task: unknown, id: string, p: LeaderPlacement | undefine
 const WATCHED_AT_DESCRIPTION = 'ISO time to keep the task on the user\'s Watching list at the top of the task panel, "" to stop watching. '
   + 'Changes nothing else (phase, board tier, pin)'
 
+/** The Background field, as the user sets it from the task menu (Task.background_at). */
+const BACKGROUND_AT_DESCRIPTION = 'ISO time to put the task in the Background group at the foot of the user\'s task list, "" to take it out. '
+  + 'An open task there shows in that group only, whatever its status (never under Needs you or Working): for long-running work '
+  + 'such as a CR review or a recurring job. Set it only when the user asked; ends a watch. Changes nothing else (phase, board tier, pin)'
+
 // A task's own line, set from outside its turn (src/core/sessions/report-set.ts; 2026-10-31, the user:
 // "each task shoud be giving the what is waiting next other like vp can chaneg it but each task mange it self").
 const REPORT_CHANGE = z.object({
@@ -823,6 +828,7 @@ defineOp({
     reason: z.string().min(10).max(500).optional().describe('With force: who asked for the close and why it is right'),
     parent_task_id: z.string().optional().describe('Adopt or release: set to your own task id to make an existing task a worker of yours (it keeps its project and folder; its stops, completions, errors and waits then reach you), or "" to release it.'),
     watched_at: z.string().nullable().optional().describe(WATCHED_AT_DESCRIPTION),
+    background_at: z.string().nullable().optional().describe(BACKGROUND_AT_DESCRIPTION),
     report: REPORT_CHANGE.optional().describe(`What it waits on next (task_report_set): ${REPORT_SET_TEXT}`),
   },
   // The old park receipt's text (removed 2026-10-05). A session started before
@@ -1353,6 +1359,7 @@ defineOp({
       tags: z.array(z.string()).optional(),
       parent_task_id: z.string().optional(),
       watched_at: z.string().nullable().optional().describe(WATCHED_AT_DESCRIPTION),
+      background_at: z.string().nullable().optional().describe(BACKGROUND_AT_DESCRIPTION),
       user_words: z.string().optional().describe('With project, moving your worker out of your project: what the user said, naming that project'),
     }).strict()).min(1).max(MAX_BULK_WRITE)
       .describe(`1 to ${MAX_BULK_WRITE} patches, each { id, ...fields } with at least one field besides id`),

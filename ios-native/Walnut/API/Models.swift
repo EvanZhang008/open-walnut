@@ -506,6 +506,11 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// the board's Watching section, on top, whatever its state. nil = not watched, and from
     /// a server that predates it. Every copy of a row (`applyEdit`, `withPinned`) carries it.
     var watchedAt: String? = nil
+    /// When the user moved the task to Background (additive, 2026-11-11; server
+    /// `Task.background_at`): an open task with it is drawn in the board's Background section
+    /// only, whatever its state. nil = not there, and from a server that predates it. The server
+    /// keeps it and `watchedAt` apart. Every copy of a row (`applyEdit`, `withPinned`) carries it.
+    var backgroundAt: String? = nil
     /// The outside service it syncs to (a plugin id), sent only when it is not local (additive,
     /// 2026-11-01; server `src/core/private-tasks/`). Every copy of a row carries it.
     var source: String? = nil
@@ -540,6 +545,7 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case teamStop = "team_stop"
         case waitUntil = "wait_until"
         case watchedAt = "watched_at"
+        case backgroundAt = "background_at"
         case source
         case syncHold = "sync_hold"
     }

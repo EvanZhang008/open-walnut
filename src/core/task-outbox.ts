@@ -130,6 +130,9 @@ const UPDATE_WHITELIST: (keyof Task)[] = [
   // Watch (2026-10): the user keeps the task on the Watching list; an older primary
   // drops the key (not in its list), so the watch stays on the replica alone.
   'watched_at',
+  // Background (2026-11): the user keeps the task in the Home list's Background group;
+  // an older primary drops the key, so the mark stays on the replica alone.
+  'background_at',
 ];
 
 /**
@@ -791,6 +794,7 @@ export async function importProjectionOnCloud(): Promise<number> {
         ...(p.focus_tier ? { focus_tier: p.focus_tier } : {}),
         ...(p.unread ? { unread: true } : {}),
         ...(p.watched_at ? { watched_at: p.watched_at } : {}),
+        ...(p.background_at ? { background_at: p.background_at } : {}),
         ...(p.tags?.length ? { tags: p.tags } : {}),
       } as Task);
     } else if (Date.parse(p.updated_at) > Date.parse(row.updated_at)) {
@@ -819,6 +823,7 @@ export async function importProjectionOnCloud(): Promise<number> {
           focus_tier: (p.focus_tier ?? null) as Task['focus_tier'],
           unread: !!p.unread,
           watched_at: (p.watched_at ?? null) as Task['watched_at'],
+          background_at: (p.background_at ?? null) as Task['background_at'],
           tags: p.tags,
           summary: p.summary,
           // Explicit clear: the replica never keeps a writer the primary no longer names.

@@ -198,6 +198,7 @@ extension WalnutTask {
             parentTaskId: detail.parentTaskId, userStatus: detail.userStatus,
             orgRole: detail.orgRole, resultReport: detail.resultReport,
             waitUntil: detail.waitUntil, watchedAt: detail.watchedAt,
+            backgroundAt: detail.backgroundAt,
             summarySessionID: detail.summarySessionID, lastWords: detail.lastWords
         )
     }

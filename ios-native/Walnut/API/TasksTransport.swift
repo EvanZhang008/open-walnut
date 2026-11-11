@@ -25,7 +25,7 @@ protocol WalnutTaskTransport {
         id: String, status: String?, priority: String?, dueDate: String?,
         startDate: String?, endDate: String?,
         project: String?, title: String?, description: String?, unread: Bool?,
-        watchedAt: String?
+        watchedAt: String?, backgroundAt: String?
     ) async throws -> WalnutTask
     func batchSetPhase(taskIds: [String], phase: String) async throws -> BatchPhaseResult
     func batchDeleteTasks(taskIds: [String], force: Bool) async throws -> BatchDeleteResult

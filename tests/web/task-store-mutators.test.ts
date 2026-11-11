@@ -438,3 +438,20 @@ describe('the optimistic Watch', () => {
     expect(rows()[0].phase).toBe('COMPLETE')
   })
 })
+
+// Background (Task.background_at) mirrors task-manager.updateTask: '' takes the task out with no
+// key left, and Background and Watching hold a task one at a time.
+describe('the optimistic Background', () => {
+  it('update({background_at}) shows it at once, ends a watch, and "" removes the key', () => {
+    const store = mount([task({ phase: 'NEED_ACTION', watched_at: '2026-10-29T08:30:00.000Z' } as Partial<Task>)])
+    store.update('task-1', { background_at: '2026-11-11T19:10:00.000Z' })
+    expect(rows()[0]).toMatchObject({ background_at: '2026-11-11T19:10:00.000Z', phase: 'NEED_ACTION' })
+    expect('watched_at' in rows()[0]).toBe(false)
+    store.update('task-1', { watched_at: '2026-11-11T19:20:00.000Z' })
+    expect(rows()[0].watched_at).toBe('2026-11-11T19:20:00.000Z')
+    expect('background_at' in rows()[0]).toBe(false)
+    store.update('task-1', { background_at: '2026-11-11T19:30:00.000Z' })
+    store.update('task-1', { background_at: '' })
+    expect('background_at' in rows()[0]).toBe(false)
+  })
+})

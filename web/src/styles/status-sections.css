@@ -171,6 +171,8 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .status-card-limit-tag.is-refused { color: var(--warning, #b45309); background: color-mix(in srgb, var(--warning, #f59e0b) 18%, transparent); }
 /* A count in words beside the heading's own count, not a pill: it filters nothing. */
 .status-section-limited { flex: none; margin-left: 4px; font-size: 12px; font-weight: 500; color: var(--accent, #0a84ff); }
+/* Background: a dot after the count while one of its tasks asks the user something (the task stays in Background). */
+.status-section-asks-dot { flex: none; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--red, #e5484d); }
 /* While a usage limit holds sessions: one line over the sections, a way to their rows. */
 .status-limit-summary {
   display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 6px 8px 2px; padding: 6px 10px;

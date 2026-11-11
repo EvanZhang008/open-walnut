@@ -18,7 +18,7 @@ import type { Task } from '@open-walnut/core';
 import { usePageView } from '@/utils/view-memory';
 import { subtasksOf } from './subtask-index';
 import { taskUserState } from '../../utils/session-status';
-import { STATUS_SECTION_LABELS, drawnSectionOf, type DrawnSectionKey } from './status-sections';
+import { STATUS_SECTION_LABELS, drawnSectionOf, isBackground, type DrawnSectionKey } from './status-sections';
 
 export interface WorkerFoldView {
   /** Workers fold into their leader (the default). Off: every worker is a row, as before. */
@@ -54,9 +54,10 @@ function isDone(t: Task): boolean {
   return t.phase === 'COMPLETE' || t.status === 'done';
 }
 
-/** A task that can lead a folded team: open, and no VP or Main (org nodes). */
+/** A task that can lead a folded team: open, no VP or Main (org nodes), and not in Background,
+ *  which holds its tasks whatever their team does (a host can be moved up or drawn quiet elsewhere). */
 export function countsAsLeader(t: Task): boolean {
-  return !t.org_role && !isDone(t);
+  return !t.org_role && !isDone(t) && !t.background_at;
 }
 
 const PARENTS = new WeakMap<readonly Task[], Map<string, Task>>();
@@ -115,8 +116,8 @@ export interface FoldedSections<K extends string> {
   movedFrom: Map<string, K>;
 }
 
-/** Sections that never fold: Watching was picked by hand, Needs you is the user's to act on, Completed is history. */
-export const WORKER_FOLD_KEEP: ReadonlySet<string> = new Set(['watching', 'needs', 'done']);
+/** Sections that never fold: Watching and Background were picked by hand, Needs you is the user's to act on, Completed is history. */
+export const WORKER_FOLD_KEEP: ReadonlySet<string> = new Set(['watching', 'needs', 'background', 'done']);
 
 const STATE_ORDER: Record<string, number> = { needs: 0, read: 0, working: 1, waiting: 2, done: 3 };
 
@@ -235,7 +236,7 @@ function treeOf(tasks: readonly Task[], hostId: string, workers: readonly Task[]
 
 /** The user state's section, for a line that has none of its own (a tree line, a quiet leader). */
 export function stateSectionKey(t: Task): DrawnSectionKey {
-  return drawnSectionOf(t);
+  return isBackground(t) ? 'background' : drawnSectionOf(t);
 }
 
 /** A tree line's state: the words of the section the worker is drawn in (Waiting / snoozed, Not

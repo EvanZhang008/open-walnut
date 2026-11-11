@@ -15,17 +15,23 @@ import Foundation
 //                              line saying what it needs (`TeamStatusModel.needLine`)
 //   Working            open    everything else that is open: the board's own bands
 //   Waiting / snoozed  folded  phase WAITING, or a start date still to come under "Now"
+//   Background         folded  open tasks the user put out of the way (`backgroundAt`, 2026-11-11:
+//                              long-running work such as a review or a cron job), whatever their
+//                              state; the ones asking the user first, and a red dot on the heading
+//                              while one does (Needs you only, never To read)
 //   Completed          folded  done
 //
-// Waiting / snoozed and Completed fold again 15 minutes after they were opened
+// Waiting / snoozed, Background and Completed fold again 15 minutes after they were opened
 // (`BoardStatusSectionPrefs`), as on the web (`autoFolds` says why Working does not here).
 //
-// A watched task is drawn in Watching only. Every rule here is a static function over plain
-// values, so WalnutTests drives the same logic the screen runs.
+// A watched task is drawn in Watching only; an open task in Background in Background only (a
+// watch wins when a row holds both; the server keeps them apart). Background is no state: a
+// completed task keeps its mark but is drawn under Completed. Every rule here is a static
+// function over plain values, so WalnutTests drives the same logic the screen runs.
 
 /// One status section of the board.
 enum BoardStatusSection: String, CaseIterable, Identifiable {
-    case watching, needs, working, waiting, done
+    case watching, needs, working, waiting, background, done
 
     var id: String { rawValue }
 
@@ -36,6 +42,7 @@ enum BoardStatusSection: String, CaseIterable, Identifiable {
         case .needs: return "Needs you"
         case .working: return "Working"
         case .waiting: return "Waiting / snoozed"
+        case .background: return "Background"
         case .done: return "Completed"
         }
     }
@@ -47,11 +54,12 @@ enum BoardStatusSection: String, CaseIterable, Identifiable {
         case .needs: return "exclamationmark.circle"
         case .working: return "circle.lefthalf.filled"
         case .waiting: return "clock"
+        case .background: return "square.2.layers.3d"
         case .done: return "checkmark.circle"
         }
     }
 
-    /// Open on a first visit: Watching, Needs you and Working; Waiting and Completed fold.
+    /// Open on a first visit: Watching, Needs you and Working; Waiting, Background and Completed fold.
     var defaultOpen: Bool { !autoFolds }
 
     /// Folds by default and again `BoardStatusSectionPrefs.autoCloseAfter` after it was opened,
@@ -62,7 +70,7 @@ enum BoardStatusSection: String, CaseIterable, Identifiable {
     var autoFolds: Bool {
         switch self {
         case .watching, .needs, .working: return false
-        case .waiting, .done: return true
+        case .waiting, .background, .done: return true
         }
     }
 }
@@ -73,6 +81,8 @@ struct BoardStatusSections: Equatable {
     var watching: [BoardRow] = []
     var needs: [BoardRow] = []
     var waiting: [BoardRow] = []
+    /// Open rows the user moved to Background, whatever their state.
+    var background: [BoardRow] = []
     var done: [BoardRow] = []
     /// Rows the bands draw under Working.
     var workingCount = 0
@@ -88,9 +98,13 @@ struct BoardStatusSections: Equatable {
         case .needs: return needs
         case .working: return []
         case .waiting: return waiting
+        case .background: return background
         case .done: return done
         }
     }
+
+    /// The red dot on Background's heading: how many of its rows ask the user something.
+    var backgroundAsks: Int { BoardStatusSectionModel.backgroundNeedsCount(background) }
 
     func count(_ section: BoardStatusSection) -> Int {
         section == .working ? workingCount : rows(section).count
@@ -104,7 +118,7 @@ struct BoardStatusSections: Equatable {
 
     /// Some section other than Working holds rows, so an empty Working is no empty board.
     var drawsRows: Bool {
-        !(watching.isEmpty && needs.isEmpty && waiting.isEmpty && done.isEmpty)
+        !(watching.isEmpty && needs.isEmpty && waiting.isEmpty && background.isEmpty && done.isEmpty)
     }
 }
 
@@ -127,6 +141,40 @@ enum BoardStatusSectionModel {
     static func isWatched(_ task: WalnutTask?) -> Bool {
         guard let at = task?.watchedAt else { return false }
         return !at.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// In Background: the user moved it there (`background_at`, an older server never sends it, so
+    /// nothing is) and it is still open, the web's `isBackground`. A completed task keeps the mark
+    /// (a reopen brings it back here) but is drawn under Completed.
+    static func isBackground(_ task: WalnutTask?) -> Bool {
+        guard let task, let at = task.backgroundAt,
+              !at.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        return !(task.isDone || task.phase == "COMPLETE")
+    }
+
+    /// Asks the user something now: its user status is Needs you (To read left out: a
+    /// long-running task's finished run is no ask), else, with no status this build reads, the
+    /// phase NEED_ACTION. The web's `taskUserState(t) === 'needs'`.
+    static func asksUser(_ task: WalnutTask?) -> Bool {
+        guard let task, !(task.isDone || task.phase == "COMPLETE") else { return false }
+        if task.userStatus != nil, let state = TeamStatusModel.userState(task.userStatus) { return state == .needs }
+        return task.phase == "NEED_ACTION"
+    }
+
+    /// Background's heading dot, the web's `backgroundNeedsCount`: its rows that ask the user.
+    /// They stay in Background; the dot says so.
+    static func backgroundNeedsCount(_ rows: [BoardRow]) -> Int {
+        rows.filter { asksUser($0.task) }.count
+    }
+
+    /// The section a row is drawn in, the web's `sectionOf`: Watching wins, then Background
+    /// (an open task there whatever its state), else its state section.
+    static func section(
+        _ row: BoardRow, dateFilter: BoardDateFilter, now: Date
+    ) -> BoardStatusSection {
+        if isWatched(row.task) { return .watching }
+        if isBackground(row.task) { return .background }
+        return stateSection(row, dateFilter: dateFilter, now: now)
     }
 
     /// The state section a row belongs to, the web's `stateSectionOf`: done wins, then the
@@ -169,7 +217,8 @@ enum BoardStatusSectionModel {
     /// Order inside a section, the web's `sortSectionTasks`: Watching in the order the user
     /// added them (a new watch lands at the foot, nothing reshuffles); Needs you (To read rows
     /// among them) latest activity first; Waiting the soonest wake first, then the ones with no clock by latest
-    /// activity; Completed the latest completion first. Ties keep the id order, so the same
+    /// activity; Background the rows asking the user first, then latest activity; Completed the
+    /// latest completion first. Ties keep the id order, so the same
     /// input always draws the same list.
     static func sorted(_ section: BoardStatusSection, _ rows: [BoardRow]) -> [BoardRow] {
         switch section {
@@ -201,6 +250,16 @@ enum BoardStatusSectionModel {
                 return (row, at)
             }
             return latestFirst(dated)
+        case .background:
+            let ranked: [(BoardRow, Bool, Date)] = rows.map { (row: BoardRow) -> (BoardRow, Bool, Date) in
+                (row, asksUser(row.task), activity(row))
+            }
+            return ranked.sorted { (a: (BoardRow, Bool, Date), b: (BoardRow, Bool, Date)) -> Bool in
+                if a.1 != b.1 { return a.1 }
+                if a.2 != b.2 { return a.2 > b.2 }
+                return a.0.id < b.0.id
+            }
+            .map { (entry: (BoardRow, Bool, Date)) -> BoardRow in entry.0 }
         case .needs, .working:
             let dated: [(BoardRow, Date)] = rows.map { (row: BoardRow) -> (BoardRow, Date) in (row, activity(row)) }
             return latestFirst(dated)
@@ -255,7 +314,7 @@ enum BoardStatusSectionModel {
     ///
     /// - Parameters:
     ///   - scoped: the board rows of the view (the honoured tier, or the whole pinned
-    ///     board), WAITING rows included, in board order.
+    ///     board), WAITING and Background rows included, in board order.
     ///   - watched: watched rows of the honoured tier; All includes unpinned watches too.
     ///   - workingCount: the rows the bands then draw.
     static func make(
@@ -264,13 +323,14 @@ enum BoardStatusSectionModel {
     ) -> BoardStatusSections {
         var needs: [BoardRow] = []
         var waiting: [BoardRow] = []
+        var background: [BoardRow] = []
         var done: [BoardRow] = []
         var seen = Set<String>()
         for row in scoped where seen.insert(row.id).inserted {
-            if isWatched(row.task) { continue }
-            switch stateSection(row, dateFilter: dateFilter, now: now) {
+            switch section(row, dateFilter: dateFilter, now: now) {
             case .needs: needs.append(row)
             case .waiting: waiting.append(row)
+            case .background: background.append(row)
             case .done: done.append(row)
             case .working, .watching: continue
             }
@@ -281,6 +341,7 @@ enum BoardStatusSectionModel {
             watching: sorted(.watching, watching),
             needs: sorted(.needs, needs),
             waiting: sorted(.waiting, waiting),
+            background: sorted(.background, background),
             done: sorted(.done, done),
             workingCount: workingCount,
             active: true
@@ -298,8 +359,8 @@ enum BoardStatusSectionModel {
 /// The sections' open state in one defaults string, the shape of the web's
 /// `walnut-todo-status-sections` (`section-fold-rule.ts`): a JSON object where Watching, Needs
 /// you and Working hold the user's boolean (only when it differs from the default, so a later
-/// change of a default reaches everyone who never touched them), and an open Waiting / snoozed
-/// or Completed holds the time it was opened (seconds since 1970; the web stores milliseconds, in
+/// change of a default reaches everyone who never touched them), and an open Waiting / snoozed,
+/// Background or Completed holds the time it was opened (seconds since 1970; the web stores milliseconds, in
 /// its own key: the two never share one value). That one folds again
 /// `autoCloseAfter` later: `pruned` drops it when the board appears or the app comes back to the
 /// foreground, never while the board is in the user's hand.
@@ -372,7 +433,7 @@ enum BoardStatusSectionPrefs {
     }
 
     /// The stored string without the auto folds whose time ran out, nor values a section cannot
-    /// hold (an older build's boolean for Working, Waiting or Completed reads as folded).
+    /// hold (an older build's boolean for Working, Waiting, Background or Completed reads as folded).
     static func pruned(_ raw: String, now: Date = AppClock.now()) -> String {
         let stored = values(raw)
         var kept: [String: Any] = [:]

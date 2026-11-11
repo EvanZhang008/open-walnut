@@ -26,8 +26,8 @@ const T0 = Date.parse('2026-11-04T05:00:00Z');
 
 describe('the fold rule', () => {
   it('first visit: Watching and Needs you open, everything else folded', () => {
-    expect(statusSectionsOpen({})).toEqual({ watching: true, needs: true, working: false, waiting: false, notstarted: false, done: false });
-    expect(STATUS_SECTION_FOLD).toEqual({ watching: 'sticky', needs: 'sticky', working: 'auto', waiting: 'auto', notstarted: 'auto', done: 'auto' });
+    expect(statusSectionsOpen({})).toEqual({ watching: true, needs: true, working: false, waiting: false, notstarted: false, background: false, done: false });
+    expect(STATUS_SECTION_FOLD).toEqual({ watching: 'sticky', needs: 'sticky', working: 'auto', waiting: 'auto', notstarted: 'auto', background: 'auto', done: 'auto' });
   });
 
   it('a sticky fold keeps the user choice with no clock', () => {
@@ -61,7 +61,7 @@ describe('the fold rule', () => {
 
   it('an older build value reads safely: a boolean on an auto fold is folded, a number on a sticky one is the default', () => {
     const s = parseFoldStore('{"waiting":true,"working":false,"needs":12,"watching":false}');
-    expect(statusSectionsOpen(s)).toEqual({ watching: false, needs: true, working: false, waiting: false, notstarted: false, done: false });
+    expect(statusSectionsOpen(s)).toEqual({ watching: false, needs: true, working: false, waiting: false, notstarted: false, background: false, done: false });
     expect(pruneFolds(s, kind, T0)).toEqual({ watching: false });
   });
 

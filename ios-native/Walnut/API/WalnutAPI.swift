@@ -196,7 +196,7 @@ struct WalnutAPI {
         dueDate: String? = nil, startDate: String? = nil, endDate: String? = nil,
         project: String? = nil, title: String? = nil,
         description: String? = nil, unread: Bool? = nil,
-        watchedAt: String? = nil
+        watchedAt: String? = nil, backgroundAt: String? = nil
     ) async throws -> WalnutTask {
         struct Body: Encodable {
             let status: String?
@@ -210,6 +210,9 @@ struct WalnutAPI {
             let unread: Bool?
             /// Watch (additive, 2026-10): an ISO time starts watching, "" stops.
             let watched_at: String?
+            /// Background (additive, 2026-11-11): an ISO time moves it there, "" takes it out.
+            /// An older server ignores it (the row comes back without `background_at`).
+            let background_at: String?
         }
         let updated: TaskCreated = try await send(
             "PATCH", "/tasks/\(escape(id))",
@@ -217,7 +220,7 @@ struct WalnutAPI {
                 status: status, priority: priority, due_date: dueDate,
                 start_date: startDate, end_date: endDate,
                 project: project, title: title, description: description,
-                unread: unread, watched_at: watchedAt
+                unread: unread, watched_at: watchedAt, background_at: backgroundAt
             )
         )
         return updated.task

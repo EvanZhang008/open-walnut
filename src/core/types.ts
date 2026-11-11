@@ -1077,6 +1077,16 @@ export interface Task {
    *  Set by the user or an agent (`task_update`), '' clears it. Local-only, payload blob,
    *  never pushed to sync backends; an older Walnut keeps it in the payload and ignores it. */
   watched_at?: string;
+  /** BACKGROUND: when the task was put in the Background group of the home task list (ISO
+   *  datetime); absent = not in it (2026-11-11, the user: long-running work such as a CR review
+   *  or a cron job "无论 task 是什么 status，它不会出来"). An open task in Background is drawn in
+   *  that group only, whatever its user status: never under Needs you, Working or Waiting; a
+   *  completed one goes under Completed like any other. It is not a status and changes nothing
+   *  else (phase, tier, pin, user_status). Placed by a person or an agent (`task_update`), never
+   *  by a rule; '' takes it out. Putting a task in Background ends its watch, and watching it
+   *  takes it out. Local-only, payload blob, never pushed to sync backends; an older Walnut
+   *  keeps it in the payload and ignores it. */
+  background_at?: string;
   /** The session's own plain-words report of its last turn for the user (the self-report's
    *  FOR_USER_* lines): state, ask, what it waits on, now, next, when. Local-only, payload blob. */
   status_report?: StatusReport;

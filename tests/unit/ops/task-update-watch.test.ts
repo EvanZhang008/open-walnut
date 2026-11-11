@@ -54,3 +54,26 @@ describe('task_update_bulk watched_at', () => {
     expect(updates.safeParse([{ id: 't_ab12cd', watched_at: '' }]).success).toBe(true)
   })
 })
+
+// Background (2026-11-11): the same path for `background_at`, so an agent can put a task in the
+// Background group or take it out the way the user does from the task menu.
+describe('task_update and task_update_bulk background_at', () => {
+  it('declares the field, accepts an ISO time, "" and null, and forwards it on the PATCH', async () => {
+    const field = inputOf('task_update').background_at
+    expect(field?.description).toContain('Background group')
+    expect(field.safeParse('2026-11-11T19:10:00.000Z').success).toBe(true)
+    expect(field.safeParse('').success).toBe(true)
+    expect(field.safeParse(null).success).toBe(true)
+    expect(field.safeParse(42).success).toBe(false)
+    const op = getOp('task_update')!
+    const seen: Array<{ method: Method; path: string; body?: unknown }> = []
+    const call = async (method: Method, path: string, body?: unknown) => {
+      seen.push({ method, path, body })
+      return { task: { id: 't_ab12cd', title: 'CR review', phase: 'IN_PROGRESS', background_at: '2026-11-11T19:10:00.000Z' } }
+    }
+    await op.handler!({ id: 't_ab12cd', background_at: '2026-11-11T19:10:00.000Z' }, call as never)
+    expect(seen).toEqual([{ method: 'PATCH', path: '/tasks/t_ab12cd', body: { background_at: '2026-11-11T19:10:00.000Z' } }])
+    const updates = inputOf('task_update_bulk').updates
+    expect(updates.safeParse([{ id: 't_ab12cd', background_at: '' }]).success).toBe(true)
+  })
+})

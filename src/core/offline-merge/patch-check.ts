@@ -99,6 +99,7 @@ export function checkResolvedPatch(current: Readonly<Task>, patch: Record<string
   for (const f of DATE_FIELDS) if (has(f) && !isClear(patch[f]) && !isIsoDate(patch[f])) refuse(`${f} must be an ISO-8601 date string, or "" to clear`);
   if (has('wait_until') && !isClear(patch.wait_until) && !isIsoDate(patch.wait_until)) refuse('wait_until must be an ISO-8601 datetime, or "" to clear');
   if (has('watched_at') && !isClear(patch.watched_at) && !isIsoDate(patch.watched_at)) refuse('watched_at must be an ISO-8601 datetime, or "" to stop watching');
+  if (has('background_at') && !isClear(patch.background_at) && !isIsoDate(patch.background_at)) refuse('background_at must be an ISO-8601 datetime, or "" to take it out of Background');
   // wait_until belongs to WAITING alone: a clock the merge kept onto a task that is not
   // (the Mac moved it on later) is dropped, never written as a stray clock.
   const phase = has('phase') ? patch.phase : current.phase;

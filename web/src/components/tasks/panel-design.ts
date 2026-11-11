@@ -16,7 +16,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { Task } from '@open-walnut/core';
-import { isWatched, projectRuns, sortSectionTasks, stateSectionNoNeeds, type StatusSectionKey } from './status-sections';
+import { isBackground, isWatched, projectRuns, sortSectionTasks, stateSectionNoNeeds, type StatusSectionKey } from './status-sections';
 
 export type PanelDesign = 'status' | 'project';
 
@@ -70,13 +70,15 @@ export function projectFoldKey(region: string, project: string, kind: 'waiting')
  * from wait and snooze); By project keeps those tasks in its list, its to-do list.
  */
 export function bottomStatusSections(design: PanelDesign, view: string): readonly StatusSectionKey[] {
-  if (design === 'status' && view !== 'recent') return ['waiting', 'notstarted', 'done'];
-  return design !== 'project' || view === 'recent' ? ['waiting', 'done'] : ['done'];
+  // Background (the user's long-running work, whatever its state) folds above Completed in every design.
+  if (design === 'status' && view !== 'recent') return ['waiting', 'notstarted', 'background', 'done'];
+  return design !== 'project' || view === 'recent' ? ['waiting', 'background', 'done'] : ['background', 'done'];
 }
 
 export interface ProjectFoldTasks { waiting: Task[] }
 
-/** A region's waiting tasks by project (watched ones stay under Watching, completed ones under Completed). */
+/** A region's waiting tasks by project (watched ones stay under Watching, Background ones under
+ *  Background, completed ones under Completed). */
 export function foldTasksByProject(
   scope: readonly Task[],
   passes: (t: Task) => boolean,
@@ -85,7 +87,7 @@ export function foldTasksByProject(
   const out = new Map<string, ProjectFoldTasks>();
   const seen = new Set<string>();
   for (const t of scope) {
-    if (seen.has(t.id) || isWatched(t) || !passes(t)) continue;
+    if (seen.has(t.id) || isWatched(t) || isBackground(t) || !passes(t)) continue;
     seen.add(t.id);
     // Needs you stays in the list in this design: only a parked or snoozed one folds.
     if (stateSectionNoNeeds(t, snoozed) !== 'waiting') continue;

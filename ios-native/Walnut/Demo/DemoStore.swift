@@ -36,6 +36,8 @@ struct DemoTask {
     var pinOrder: Int? = nil
     /// When the visitor started watching it (PATCH `watched_at`); nil = not watched.
     var watchedAt: String? = nil
+    /// When the visitor moved it to Background (PATCH `background_at`); nil = not there.
+    var backgroundAt: String? = nil
 
     /// The coarse status the projection derives from the phase.
     var status: String {
@@ -52,7 +54,7 @@ struct DemoTask {
             project: project, dueDate: dueDate, createdAt: createdAt, updatedAt: updatedAt,
             completedAt: completedAt, starred: starred, pinned: pinned, tags: tags,
             summary: summary, startDate: startDate, endDate: endDate,
-            watchedAt: watchedAt
+            watchedAt: watchedAt, backgroundAt: backgroundAt
         )
     }
 }

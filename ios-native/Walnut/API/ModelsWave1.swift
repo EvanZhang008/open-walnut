@@ -537,9 +537,11 @@ struct TaskDetail: Codable {
     var planSessionId: String? = nil
     /// The latest result as stored (additive, 2026-10; may carry `settled`).
     var resultReport: WalnutResultReport? = nil
-    /// The WAITING clock and the watch (additive; see `WalnutTask.waitUntil` / `watchedAt`).
+    /// The WAITING clock, the watch and the Background mark (additive; see `WalnutTask.waitUntil`
+    /// / `watchedAt` / `backgroundAt`).
     var waitUntil: String? = nil
     var watchedAt: String? = nil
+    var backgroundAt: String? = nil
     /// Who wrote `summary`, and Walnut's read of its last turn (additive; see `WalnutTask`).
     var summarySessionID: String? = nil
     var lastWords: WalnutLastWords? = nil
@@ -576,6 +578,7 @@ struct TaskDetail: Codable {
         case resultReport = "result_report"
         case waitUntil = "wait_until"
         case watchedAt = "watched_at"
+        case backgroundAt = "background_at"
         case summarySessionID = "summary_session_id"
         case lastWords = "last_words"
     }

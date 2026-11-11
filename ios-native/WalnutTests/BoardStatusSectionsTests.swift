@@ -2,7 +2,8 @@ import XCTest
 import SwiftUI
 @testable import Walnut
 
-/// The board's status sections (Watching, Needs you, Working, Waiting / snoozed, Completed):
+/// The board's status sections (Watching, Needs you, Working, Waiting / snoozed, Background,
+/// Completed):
 /// which row goes where, in what order, what is open by default and how that is stored, and
 /// the Watch write. The model is `BoardStatusSections.swift`; `BoardModel.assemble` is where
 /// the bands give their rows up to it.
@@ -14,7 +15,8 @@ final class BoardStatusSectionsTests: XCTestCase {
         _ id: String, project: String = "", status: String = "todo", phase: String = "TODO",
         pinned: Bool? = true, updated: String = "2026-08-27T00:00:00Z",
         completed: String? = nil, start: String? = nil, waitUntil: String? = nil,
-        watched: String? = nil, userState: String? = nil, user: WalnutUserStatus? = nil
+        watched: String? = nil, background: String? = nil,
+        userState: String? = nil, user: WalnutUserStatus? = nil
     ) -> WalnutTask {
         WalnutTask(
             id: id, title: "task \(id)", status: status, phase: phase,
@@ -24,7 +26,7 @@ final class BoardStatusSectionsTests: XCTestCase {
             starred: nil, pinned: pinned, tags: nil, summary: nil,
             startDate: start,
             userStatus: user ?? userState.map { WalnutUserStatus(state: $0) },
-            waitUntil: waitUntil, watchedAt: watched
+            waitUntil: waitUntil, watchedAt: watched, backgroundAt: background
         )
     }
 
@@ -108,7 +110,7 @@ final class BoardStatusSectionsTests: XCTestCase {
         XCTAssertEqual(s.waiting.map(\.id), ["snoozed"])
         XCTAssertEqual(BoardStatusSection.allCases.filter { s.isShown($0) }, [.needs, .working, .waiting])
         // No To read section exists at all.
-        XCTAssertEqual(BoardStatusSection.allCases, [.watching, .needs, .working, .waiting, .done])
+        XCTAssertEqual(BoardStatusSection.allCases, [.watching, .needs, .working, .waiting, .background, .done])
         XCTAssertNil(BoardStatusSection(rawValue: "read"))
         XCTAssertFalse(BoardStatusSection.allCases.map(\.label).contains("To read"))
         // A stored "read: true" open preference from the build that had the section is ignored.
@@ -295,12 +297,15 @@ final class BoardStatusSectionsTests: XCTestCase {
 
     func testDefaultsAndWords() {
         XCTAssertEqual(BoardStatusSection.allCases.map(\.label),
-            ["Watching", "Needs you", "Working", "Waiting / snoozed", "Completed"])
+            ["Watching", "Needs you", "Working", "Waiting / snoozed", "Background", "Completed"])
         XCTAssertEqual(BoardStatusSection.allCases.filter(\.defaultOpen), [.watching, .needs, .working])
         XCTAssertEqual(BoardWatchItem.label(watched: false), "Watch")
         XCTAssertEqual(BoardWatchItem.label(watched: true), "Stop watching")
         XCTAssertEqual(BoardWatchItem.systemImage(watched: false), "eye")
         XCTAssertEqual(BoardWatchItem.systemImage(watched: true), "eye.slash")
+        XCTAssertEqual(BoardBackgroundItem.label(inBackground: false), "Move to Background")
+        XCTAssertEqual(BoardBackgroundItem.label(inBackground: true), "Take out of Background")
+        XCTAssertEqual(BoardStatusSection.allCases.filter(\.autoFolds), [.waiting, .background, .done])
     }
 
     /// Working always has its heading; every other section only when it holds a row.
@@ -336,8 +341,24 @@ final class BoardStatusSectionsTests: XCTestCase {
         XCTAssertEqual(open[.needs], true)
         XCTAssertEqual(open[.working], true, "Working is the board itself on the phone")
         XCTAssertEqual(open[.waiting], false)
+        XCTAssertEqual(open[.background], false, "Background folds on a first visit")
         XCTAssertEqual(open[.done], false)
         XCTAssertEqual(BoardStatusSectionPrefs.autoCloseAfter, 15 * 60)
+    }
+
+    /// Background folds again 15 minutes after it was opened, like Waiting and Completed, and
+    /// an older build's boolean for it (none ever wrote one, but a hand edit may) reads folded.
+    func testBackgroundIsAnAutoFold() {
+        var raw = BoardStatusSectionPrefs.toggling(.background, raw: "", now: t0)
+        XCTAssertTrue(BoardStatusSectionPrefs.isOpen(.background, raw: raw))
+        XCTAssertTrue(raw.hasPrefix(#"{"background":"#), raw)
+        XCTAssertEqual(BoardStatusSectionPrefs.pruned(raw, now: t0.addingTimeInterval(15 * 60 - 1)), raw)
+        XCTAssertEqual(BoardStatusSectionPrefs.pruned(raw, now: t0.addingTimeInterval(15 * 60)), "")
+        raw = BoardStatusSectionPrefs.toggling(.background, raw: raw, now: t0)
+        XCTAssertFalse(BoardStatusSectionPrefs.isOpen(.background, raw: raw))
+        XCTAssertEqual(raw, "")
+        XCTAssertEqual(BoardStatusSectionPrefs.decode(#"{"background":true}"#)[.background], false)
+        XCTAssertEqual(BoardStatusSectionPrefs.pruned(#"{"background":true}"#, now: t0), "")
     }
 
     func testWatchingAndNeedsYouKeepTheUserChoiceWithNoClock() {
@@ -410,6 +431,161 @@ final class BoardStatusSectionsTests: XCTestCase {
         XCTAssertFalse(BoardStatusSectionPrefs.isOpen(.needs, raw: stored().wrappedValue), "a new reader sees it")
     }
 
+    // MARK: - Background
+
+    /// Every state a row can be in: Needs you, To read (stored and an older server's), Working,
+    /// Waiting, snoozed, a later start under Now, no status derived (each phase), a state this
+    /// build does not know. Built per id so a test can name the row it means.
+    private func everyState(background: String?) -> [WalnutTask] {
+        [
+            task("needs", phase: "NEED_ACTION", background: background,
+                 user: .init(state: "needs", ask: "Pick one")),
+            task("read", phase: "NEED_ACTION", background: background,
+                 user: .init(state: "read", waitingOn: "The result is ready", toRead: "result")),
+            task("legacyRead", phase: "NEED_ACTION", background: background,
+                 user: .init(state: "waiting", waitingOn: "It answered", toRead: "answer")),
+            task("working", phase: "IN_PROGRESS", background: background, userState: "working"),
+            task("waiting", phase: "WAITING", background: background, userState: "waiting"),
+            task("snoozed", start: "2026-09-01", background: background,
+                 user: .init(state: "waiting", snoozed: .init(until: "2026-09-01", ask: "Approve"))),
+            task("later", start: "2026-09-01", background: background),
+            task("rawTodo", background: background),
+            task("rawNeeds", phase: "NEED_ACTION", background: background),
+            task("rawProgress", phase: "IN_PROGRESS", background: background),
+            task("rawWaiting", phase: "WAITING", background: background),
+            task("unknown", phase: "IN_PROGRESS", background: background, userState: "mystery"),
+        ]
+    }
+
+    /// The class guard (2026-11-11, the user: in Background "whatever its status, it does not
+    /// come out"): an open task with `background_at` is drawn in Background and nowhere else,
+    /// whatever its state, under both groupings and in a tier scope. Every other section is read
+    /// through `allCases`, so a section added later is checked too, and the bands (Working's
+    /// rows) never hold it.
+    func testAnOpenBackgroundTaskIsDrawnInBackgroundOnlyWhateverItsState() {
+        let marked = everyState(background: "2026-08-26T00:00:00Z")
+        let ids = Set(marked.map(\.id))
+        for grouping in [BoardGrouping.tier, .project] {
+            for scope in [nil, "focus"] as [String?] {
+                let b = board(marked, grouping: grouping, scope: scope)
+                let s = b.sections
+                let label = "\(grouping) scope \(scope ?? "all")"
+                XCTAssertEqual(Set(s.background.map(\.id)), ids, label)
+                XCTAssertEqual(s.background.count, ids.count, "each row once (\(label))")
+                XCTAssertTrue(bandIds(b).isEmpty, "no Background row in the Working bands (\(label))")
+                XCTAssertEqual(s.workingCount, 0, label)
+                for section in BoardStatusSection.allCases where section != .background {
+                    XCTAssertTrue(Set(s.rows(section).map(\.id)).isDisjoint(with: ids),
+                                  "\(section) draws a Background row (\(label))")
+                }
+                XCTAssertTrue(s.isShown(.background), label)
+                XCTAssertTrue(s.drawsRows, "an empty Working is no empty board (\(label))")
+            }
+        }
+        // The same rows with no mark go where their states put them: the mark alone moves them.
+        let plain = board(everyState(background: nil)).sections
+        XCTAssertTrue(plain.background.isEmpty)
+        XCTAssertFalse(plain.needs.isEmpty)
+        XCTAssertFalse(plain.waiting.isEmpty)
+        // The pure model agrees with the assembly, row by row.
+        for t in marked {
+            let row = BoardRow(task: t, session: nil, knownSessionIds: nil)
+            XCTAssertEqual(BoardStatusSectionModel.section(row, dateFilter: .now, now: Self.now), .background, t.id)
+            XCTAssertTrue(BoardStatusSectionModel.isBackground(t), t.id)
+        }
+        // A blank mark is no mark (an older server never sends one at all).
+        XCTAssertFalse(BoardStatusSectionModel.isBackground(task("blank", background: " ")))
+        XCTAssertFalse(BoardStatusSectionModel.isBackground(task("none")))
+        XCTAssertFalse(BoardStatusSectionModel.isBackground(nil))
+    }
+
+    /// A WAITING row the board holds out of its bands (the Parked shelf) goes to Background
+    /// too when it is marked, never to Waiting / snoozed.
+    func testAHeldWaitingRowInBackgroundIsDrawnInBackground() {
+        let tasks = [task("parked", phase: "WAITING", background: "2026-08-26T00:00:00Z"), task("open")]
+        let s = board(tasks).sections
+        XCTAssertEqual(s.background.map(\.id), ["parked"])
+        XCTAssertTrue(s.waiting.isEmpty)
+    }
+
+    /// Background is no state: a completed task keeps its mark but is drawn under Completed,
+    /// and the menu still offers to take it out. A watch wins over Background.
+    func testCompletedGoesToCompletedAndAWatchWins() {
+        let done = task("done", status: "done", phase: "COMPLETE", background: "2026-08-26T00:00:00Z")
+        let both = task("both", phase: "NEED_ACTION", watched: "2026-08-26T00:00:00Z",
+                        background: "2026-08-26T00:00:00Z", userState: "needs")
+        let b = board([done, both, task("open")])
+        let s = b.sections
+        XCTAssertEqual(s.done.map(\.id), ["done"])
+        XCTAssertEqual(s.watching.map(\.id), ["both"])
+        XCTAssertTrue(s.background.isEmpty)
+        XCTAssertTrue(s.needs.isEmpty)
+        XCTAssertEqual(bandIds(b), ["open"])
+        XCTAssertFalse(BoardStatusSectionModel.isBackground(done))
+        XCTAssertTrue(BoardBackgroundItem.inBackground(done), "the menu can take a completed task out")
+        XCTAssertFalse(BoardBackgroundItem.inBackground(task("plain")))
+    }
+
+    /// Background's heading dot counts the rows that ask the user something (Needs you, or a
+    /// NEED_ACTION phase with no status derived), never To read or any other state; they come
+    /// first, then latest activity, and keep the needs mark in Background.
+    func testBackgroundAsksComeFirstAndOnlyNeedsLightTheDot() {
+        let rows = everyState(background: "2026-08-26T00:00:00Z")
+        let s = board(rows).sections
+        XCTAssertEqual(s.backgroundAsks, 2, "needs and rawNeeds")
+        XCTAssertEqual(Set(s.background.prefix(2).map(\.id)), ["needs", "rawNeeds"])
+        XCTAssertEqual(BoardStatusSectionModel.backgroundNeedsCount(s.background), 2)
+        let onlyRead = board([task("r", phase: "NEED_ACTION", background: "2026-08-26T00:00:00Z",
+                                   user: .init(state: "read", toRead: "result"))]).sections
+        XCTAssertEqual(onlyRead.backgroundAsks, 0, "To read lights no dot")
+        XCTAssertEqual(board([task("w", phase: "IN_PROGRESS", background: "2026-08-26T00:00:00Z",
+                                   userState: "working")]).sections.backgroundAsks, 0)
+        // The order: asking rows first, then the latest activity.
+        let ordered = board([
+            task("old-ask", phase: "NEED_ACTION", updated: "2026-08-20T00:00:00Z",
+                 background: "2026-08-26T00:00:00Z", userState: "needs"),
+            task("new-quiet", phase: "IN_PROGRESS", updated: "2026-08-27T00:00:00Z",
+                 background: "2026-08-26T00:00:00Z", userState: "working"),
+            task("new-ask", phase: "NEED_ACTION", updated: "2026-08-26T00:00:00Z",
+                 background: "2026-08-26T00:00:00Z", userState: "needs"),
+            task("old-quiet", phase: "WAITING", updated: "2026-08-21T00:00:00Z",
+                 background: "2026-08-26T00:00:00Z", userState: "waiting"),
+        ]).sections
+        XCTAssertEqual(ordered.background.map(\.id), ["new-ask", "old-ask", "new-quiet", "old-quiet"])
+        // A row there that asks keeps the needs mark.
+        XCTAssertEqual(BoardModel.dot(rows[0], in: .background), .needsAction)
+    }
+
+    /// `background_at` decodes, an older server sends none, every copy of a row keeps it, and an
+    /// edit keeps it and the watch apart the way the server does.
+    @MainActor
+    func testBackgroundFieldDecodesAndEditsKeepItApartFromTheWatch() throws {
+        func decode(_ extra: String) throws -> WalnutTask {
+            let json = #"{"id":"t","title":"t","status":"todo","phase":"TODO","priority":"none","project":"""# + extra + "}"
+            return try JSONDecoder().decode(WalnutTask.self, from: Data(json.utf8))
+        }
+        let t = try decode(#","background_at":"2026-08-26T00:00:00Z""#)
+        XCTAssertEqual(t.backgroundAt, "2026-08-26T00:00:00Z")
+        XCTAssertTrue(BoardStatusSectionModel.isBackground(t))
+        let old = try decode("")
+        XCTAssertNil(old.backgroundAt)
+        XCTAssertFalse(BoardStatusSectionModel.isBackground(old))
+        XCTAssertEqual(TasksStore.withPinned(t, true).backgroundAt, t.backgroundAt)
+        XCTAssertEqual(TasksStore.applyEdit(.init(title: "x"), to: t).backgroundAt, t.backgroundAt)
+        XCTAssertNil(TasksStore.applyEdit(.init(backgroundAt: ""), to: t).backgroundAt, "\"\" takes it out")
+        XCTAssertFalse(TasksStore.TaskEdit(backgroundAt: "").isEmpty, "taking it out is an edit")
+        // Background ends a watch; a watch takes it out of Background; "" on one leaves the other.
+        let watched = try decode(#","watched_at":"2026-08-25T00:00:00Z""#)
+        let moved = TasksStore.applyEdit(.init(backgroundAt: "2026-08-27T00:00:00Z"), to: watched)
+        XCTAssertEqual(moved.backgroundAt, "2026-08-27T00:00:00Z")
+        XCTAssertNil(moved.watchedAt)
+        let rewatched = TasksStore.applyEdit(.init(watchedAt: "2026-08-28T00:00:00Z"), to: moved)
+        XCTAssertEqual(rewatched.watchedAt, "2026-08-28T00:00:00Z")
+        XCTAssertNil(rewatched.backgroundAt)
+        XCTAssertEqual(TasksStore.applyEdit(.init(watchedAt: ""), to: t).backgroundAt, t.backgroundAt)
+        XCTAssertEqual(TasksStore.applyEdit(.init(backgroundAt: ""), to: watched).watchedAt, watched.watchedAt)
+    }
+
     // MARK: - The wire fields
 
     /// `watched_at` and `wait_until` decode, an older server sends neither, and every copy of
@@ -478,6 +654,56 @@ final class BoardWatchWriteTests: XCTestCase {
         XCTAssertNil(error)
         XCTAssertNil(store.tasks[0].watchedAt)
         XCTAssertEqual(mock.calls.last?.args.last, "watched_at=")
+    }
+
+    func testMoveToBackgroundAppliesAtOnceSendsTheTimeAndEndsTheWatch() async {
+        let mock = MockTaskTransport()
+        let gate = CheckedContinuationGate()
+        mock.gate = gate
+        let store = TasksStore(transport: mock)
+        store.tasks = [row("t1", watched: "2026-08-26T00:00:00Z")]
+        let now = WalnutTask.parseISO("2026-08-27T12:00:00Z")!
+        let write = Task { await store.setBackground(store.tasks[0], inBackground: true, now: now) }
+        await waitFor { store.tasks[0].backgroundAt != nil }
+        XCTAssertEqual(store.tasks[0].backgroundAt, "2026-08-27T12:00:00Z", "the row moves before the PATCH answers")
+        XCTAssertNil(store.tasks[0].watchedAt, "and leaves Watching, as the server's write does")
+        gate.open()
+        let error = await write.value
+        XCTAssertNil(error)
+        XCTAssertEqual(store.tasks[0].backgroundAt, "2026-08-27T12:00:00Z")
+        XCTAssertEqual(mock.calls.last?.args.last, "background_at=2026-08-27T12:00:00Z")
+    }
+
+    func testTakeOutOfBackgroundSendsAnEmptyValue() async {
+        let mock = MockTaskTransport()
+        let store = TasksStore(transport: mock)
+        var t = row("t1")
+        t.backgroundAt = "2026-08-26T00:00:00Z"
+        store.tasks = [t]
+        let error = await store.setBackground(store.tasks[0], inBackground: false)
+        XCTAssertNil(error)
+        XCTAssertNil(store.tasks[0].backgroundAt)
+        XCTAssertEqual(mock.calls.last?.args.last, "background_at=")
+    }
+
+    func testAFailedMoveToBackgroundRollsBackWithItsWatch() async {
+        let mock = MockTaskTransport()
+        let gate = CheckedContinuationGate()
+        mock.gate = gate
+        mock.errorsByEndpoint["updateTask"] = APIError.server(
+            status: 400, code: "bad_request", message: "background_at must be an ISO-8601 datetime",
+            serverHash: nil, serverContent: nil
+        )
+        let store = TasksStore(transport: mock)
+        store.tasks = [row("t1", watched: "2026-08-26T00:00:00Z")]
+        let write = Task { await store.setBackground(store.tasks[0], inBackground: true) }
+        await waitFor { store.tasks[0].backgroundAt != nil }
+        XCTAssertNotNil(store.tasks[0].backgroundAt, "optimistic first")
+        gate.open()
+        let error = await write.value
+        XCTAssertNotNil(error, "the failure is reported")
+        XCTAssertNil(store.tasks[0].backgroundAt, "the row goes back where it was")
+        XCTAssertEqual(store.tasks[0].watchedAt, "2026-08-26T00:00:00Z", "its watch with it")
     }
 
     func testAFailedWatchRollsBack() async {

@@ -35,6 +35,7 @@ export const STATUS_SECTION_FOLD: Record<StatusSectionKey, FoldKind> = {
   working: 'auto',
   waiting: 'auto',
   notstarted: 'auto',
+  background: 'auto',
   done: 'auto',
 };
 

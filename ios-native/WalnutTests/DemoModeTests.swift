@@ -97,6 +97,17 @@ final class DemoModeTests: XCTestCase {
         XCTAssertTrue(landed.satelliteTasks?.contains(created.id) ?? false,
                       "as on a real server, a new task with no pin choice lands in Satellite")
         _ = try await api.updateTask(id: created.id, priority: "important")
+        // Watching and Background are kept apart, as on a real server (`task-manager.ts`).
+        let watchedRow = try await api.updateTask(id: created.id, watchedAt: "2026-08-27T00:00:00Z")
+        XCTAssertEqual(watchedRow.watchedAt, "2026-08-27T00:00:00Z")
+        let backgroundRow = try await api.updateTask(id: created.id, backgroundAt: "2026-08-27T01:00:00Z")
+        XCTAssertEqual(backgroundRow.backgroundAt, "2026-08-27T01:00:00Z")
+        XCTAssertNil(backgroundRow.watchedAt, "Background ends the watch")
+        let rewatched = try await api.updateTask(id: created.id, watchedAt: "2026-08-27T02:00:00Z")
+        XCTAssertNil(rewatched.backgroundAt, "a watch takes it out of Background")
+        let unwatched = try await api.updateTask(id: created.id, watchedAt: "")
+        XCTAssertNil(unwatched.watchedAt)
+        XCTAssertNil(unwatched.backgroundAt)
         let sources = try await api.projectSources()
         XCTAssertTrue(sources.contains(WalnutProjectSource(name: "Home", source: "local")),
                       "every demo project is local, so nothing offers Local or a service")

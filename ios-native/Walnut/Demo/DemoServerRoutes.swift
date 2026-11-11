@@ -290,7 +290,15 @@ extension DemoServer {
                 if start == nil { state.tasks[i].endDate = nil }
             }
             if let end = optional("end_date") { state.tasks[i].endDate = end }
-            if let watched = optional("watched_at") { state.tasks[i].watchedAt = watched }
+            // The server's rule: a task is in Watching or Background at most, never both.
+            let watched = optional("watched_at"), background = optional("background_at")
+            let watchesNow: Bool = { if case .some(.some) = watched { return true }; return false }()
+            if let watched { state.tasks[i].watchedAt = watched }
+            if watchesNow, background == nil { state.tasks[i].backgroundAt = nil }
+            if let background {
+                state.tasks[i].backgroundAt = background
+                if background != nil, !watchesNow { state.tasks[i].watchedAt = nil }
+            }
             state.tasks[i].updatedAt = nowISO
             return state.tasks[i].wire
         }

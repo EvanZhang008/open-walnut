@@ -1583,6 +1583,11 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       res.status(400).json({ error: 'watched_at must be an ISO-8601 datetime (when the user started watching), or "" to stop watching' })
       return
     }
+    if (req.body.background_at !== undefined
+        && !(typeof req.body.background_at === 'string' && (req.body.background_at === '' || Number.isFinite(Date.parse(req.body.background_at))))) {
+      res.status(400).json({ error: 'background_at must be an ISO-8601 datetime (when the task was put in Background), or "" to take it out' })
+      return
+    }
     if (req.body.parent_task_id !== undefined && typeof req.body.parent_task_id !== 'string') {
       res.status(400).json({ error: 'parent_task_id must be a string (task ID or empty string to remove)' })
       return

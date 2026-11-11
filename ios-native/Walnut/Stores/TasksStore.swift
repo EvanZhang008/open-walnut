@@ -828,12 +828,26 @@ final class TasksStore {
         var unread: Bool? = nil
         /// Watch: an ISO time starts watching, "" stops (`setWatched`).
         var watchedAt: String? = nil
+        /// Background (2026-11-11): an ISO time moves it there, "" takes it out (`setBackground`).
+        var backgroundAt: String? = nil
 
         var isEmpty: Bool {
             status == nil && priority == nil && dueDate == nil && startDate == nil
                 && endDate == nil && project == nil && title == nil && unread == nil
-                && watchedAt == nil
+                && watchedAt == nil && backgroundAt == nil
         }
+    }
+
+    /// The watch and the Background mark after an edit, the server's rule (`task-manager.ts`):
+    /// a task is in one of the two at most, so a watch takes it out of Background and Background
+    /// ends its watch. "" clears either one.
+    static func listMarks(_ edit: TaskEdit, on task: WalnutTask) -> (watchedAt: String?, backgroundAt: String?) {
+        var watched = edit.watchedAt.map { $0.isEmpty ? nil : $0 } ?? task.watchedAt
+        var background = edit.backgroundAt.map { $0.isEmpty ? nil : $0 } ?? task.backgroundAt
+        let watchesNow = edit.watchedAt?.isEmpty == false
+        if watchesNow && edit.backgroundAt == nil { background = nil }
+        if edit.backgroundAt?.isEmpty == false && !watchesNow { watched = nil }
+        return (watched, background)
     }
 
     /// Pure optimistic projection of an edit onto a task row — what the list
@@ -843,7 +857,8 @@ final class TasksStore {
     /// a second produce UNEQUAL rows, which is exactly why the rollback guard
     /// must compare against the stored optimistic instance, never a recompute.
     static func applyEdit(_ edit: TaskEdit, to task: WalnutTask, now: Date = AppClock.now()) -> WalnutTask {
-        WalnutTask(
+        let marks = listMarks(edit, on: task)
+        return WalnutTask(
             id: task.id,
             title: edit.title ?? task.title,
             status: edit.status ?? task.status,
@@ -876,8 +891,9 @@ final class TasksStore {
             resultReport: task.resultReport,
             teamStop: task.teamStop,
             waitUntil: task.waitUntil,
-            // "" = stop watching, the same clear convention as the dates.
-            watchedAt: edit.watchedAt.map { $0.isEmpty ? nil : $0 } ?? task.watchedAt,
+            // "" = stop watching / take out of Background, the same clear convention as the dates.
+            watchedAt: marks.watchedAt,
+            backgroundAt: marks.backgroundAt,
             source: task.source,
             syncHold: task.syncHold,
             // Who wrote its words: an edit never makes them unknown (LinkSource.forTaskText).
@@ -955,7 +971,8 @@ final class TasksStore {
             id: id, status: edit.status, priority: edit.priority,
             dueDate: edit.dueDate, startDate: edit.startDate, endDate: edit.endDate,
             project: edit.project, title: edit.title,
-            description: nil, unread: edit.unread, watchedAt: edit.watchedAt
+            description: nil, unread: edit.unread, watchedAt: edit.watchedAt,
+            backgroundAt: edit.backgroundAt
         )
     }
 
@@ -978,6 +995,7 @@ final class TasksStore {
             teamStop: t.teamStop,
             waitUntil: t.waitUntil,
             watchedAt: t.watchedAt,
+            backgroundAt: t.backgroundAt,
             source: t.source,
             syncHold: t.syncHold,
             summarySessionID: t.summarySessionID,
@@ -1118,6 +1136,21 @@ final class TasksStore {
         let at = watched ? ISO8601DateFormatter().string(from: now) : ""
         do {
             _ = try await updateTask(id: task.id, edit: TaskEdit(watchedAt: at))
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Move to Background or take out (PATCH `background_at`): an ISO time moves it there, ""
+    /// takes it out. Optimistic through `updateTask`, the same as `setWatched`: the row moves
+    /// into (or out of) the board's Background section at once, its watch ends (the server keeps
+    /// the two apart), and it goes back where it was when the write fails. Returns the failure's
+    /// words.
+    func setBackground(_ task: WalnutTask, inBackground: Bool, now: Date = AppClock.now()) async -> String? {
+        let at = inBackground ? ISO8601DateFormatter().string(from: now) : ""
+        do {
+            _ = try await updateTask(id: task.id, edit: TaskEdit(backgroundAt: at))
             return nil
         } catch {
             return error.localizedDescription
