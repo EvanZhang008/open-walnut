@@ -116,6 +116,57 @@ final class OrgLargeTypeUITests: XCTestCase {
         attach(app, "org-page-ax5-brief")
     }
 
+    /// An Org node's chat with no conversation yet says what to do, every word of it above the
+    /// composer, at the largest accessibility size (2026-11-10 QA: at AX5 the line "Send a message
+    /// to pick up where this session left off." sat under the composer of Main's empty chat).
+    /// The fixture serves no transcript, so Main's chat is the empty one.
+    func testTheEmptyOrgChatSaysWhatToDoAboveTheComposerAtTheLargestAccessibilitySize() throws {
+        let app = try launchPaired(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
+        openMainChat(app)
+        let line = app.staticTexts["Send a message to pick up where this session left off."]
+        XCTAssertTrue(line.waitForExistence(timeout: 20), "the empty chat has no empty-state line")
+        Thread.sleep(forTimeInterval: 1.5)
+        attach(app, "org-empty-chat-ax5")
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "org-empty-chat-ax5-tree"
+        tree.lifetime = .keepAlways
+        add(tree)
+
+        let top = composerTop(app)
+        let headline = app.staticTexts["No transcript yet"]
+        let bar = element(app, "org.bar.threads").frame
+        print("[evidence] ax5 empty chat: headline \(headline.frame) line \(line.frame) bar \(bar) composer top \(top)")
+        XCTAssertTrue(headline.exists, "the empty state lost its headline")
+        // Every word on screen at once: below the Org bar, above the composer's top edge.
+        XCTAssertGreaterThanOrEqual(headline.frame.minY, bar.maxY - 1, "the headline is under the Org bar")
+        // The card's edge sits above its first control (measured at AX5: card 556, field 569),
+        // and the composer's band above the card (from 549) is opaque too.
+        let edge = top - Self.composerCardAboveItsControls
+        XCTAssertLessThanOrEqual(line.frame.maxY, edge, "the line ends at \(line.frame.maxY), under the composer at \(edge)")
+        // Below its headline and inside the screen: not squeezed to nothing, not scrolled away.
+        // (Not `isHittable`: a placeholder that fits is gesture-transparent on purpose, so the
+        // transcript under it keeps pull-to-refresh, and a tap on it lands on the transcript.)
+        XCTAssertGreaterThanOrEqual(line.frame.minY, headline.frame.maxY - 1, "the line overlaps its headline")
+        XCTAssertGreaterThan(line.frame.height, 20, "the line has no height: \(line.frame)")
+    }
+
+    /// How far the composer's opaque band starts above its highest control.
+    private static let composerCardAboveItsControls: CGFloat = 20
+
+    /// The top of the composer's controls on screen: the highest one a finger can reach (the
+    /// chat's own composer under this page is covered, so it does not count).
+    private func composerTop(_ app: XCUIApplication) -> CGFloat {
+        let field = element(app, "chat.composer")
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "no composer")
+        let ids = ["chat.composer", "chat.plus", "chat.mic", "chat.voiceMode", "chat.send", "chat.stop"]
+        let tops = ids.flatMap { id in
+            app.descendants(matching: .any).matching(identifier: id).allElementsBoundByIndex
+                .filter { $0.exists && $0.isHittable }
+                .map(\.frame.minY)
+        }
+        return tops.min() ?? field.frame.minY
+    }
+
     /// At the default size the bar keeps its words and the page its segments.
     func testTheOrgBarKeepsItsWordsAtTheDefaultSize() throws {
         let app = try launchPaired([])

@@ -211,13 +211,34 @@ struct TimelinePlaceholderInset: ViewModifier {
                 keyboardTop: keyboardTop,
                 composerHeight: composerHeight
             )
+            // Round 4 (2026-11-10, an Org node's empty chat at AX5): the scroll was the
+            // FIRST answer whenever the copy did not fit, and it is not a visible one. The
+            // scroll starts at the top, so the copy's last lines sit below the slot, which
+            // is the composer's top edge: "Send a message to pick up where this session
+            // left off." read as hidden under the composer, and nothing on screen said to
+            // scroll. So the reader's own size is tried first, then the same copy at each
+            // smaller cap of `typeSizeCaps` (still accessibility sizes until the last), and
+            // only when even the smallest cap does not fit does it scroll, at that cap.
+            //
+            // The scroll is CLIPPED to the slot. A SwiftUI scroll view draws into the safe
+            // area next to it, and the composer is a bottom `safeAreaInset`: the measured
+            // scroll ran from the Org bar (y=172) to the screen's bottom (y=874) while the
+            // slot ended at y=549, so its overflowing lines were painted behind the
+            // composer's backdrop instead of being cut at the slot's edge.
+            let caps = Self.typeSizeCaps
             ViewThatFits(in: .vertical) {
-                laidOut(content, availableHeight: slot)
-                    .allowsHitTesting(interactive)
+                fitting(content, availableHeight: slot)
+                fitting(content, availableHeight: slot).dynamicTypeSize(...caps[0])
+                fitting(content, availableHeight: slot).dynamicTypeSize(...caps[1])
+                fitting(content, availableHeight: slot).dynamicTypeSize(...caps[2])
+                fitting(content, availableHeight: slot).dynamicTypeSize(...caps[3])
+                fitting(content, availableHeight: slot).dynamicTypeSize(...caps[4])
                 ScrollView(.vertical) {
                     laidOut(content, availableHeight: slot)
                 }
                 .scrollIndicators(.hidden)
+                .dynamicTypeSize(...caps[caps.count - 1])
+                .clipped()
             }
             // The slot is what `ViewThatFits` gets PROPOSED, and that is the whole point
             // of computing it. `ViewThatFits` picks a candidate by comparing each one's
@@ -244,6 +265,25 @@ struct TimelinePlaceholderInset: ViewModifier {
             for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardTop = nil
         }
+    }
+
+    /// The type sizes a placeholder steps down to, largest first, when its copy does not
+    /// fit the slot at the reader's own size (round 4, see `body`). A cap only ever LOWERS
+    /// a size: a reader at the default size is untouched by all of them. One step at a time
+    /// through the accessibility sizes, then the largest standard one, so a reader who chose
+    /// large text keeps the largest text that shows every word without scrolling (measured at
+    /// AX5 on an Org node's empty chat: the copy wanted about 420pt of a 377pt slot, AX4 still
+    /// did not fit, and AX3 does, with room to spare). The body
+    /// names exactly five candidates; `TimelinePlaceholderInsetTests` pins the count and order.
+    static let typeSizeCaps: [DynamicTypeSize] = [
+        .accessibility4, .accessibility3, .accessibility2, .accessibility1, .xxxLarge,
+    ]
+
+    /// A candidate that shows every word in the slot as it is: no scroll, so it takes
+    /// touches only when the placeholder holds a control.
+    private func fitting(_ content: Content, availableHeight: CGFloat) -> some View {
+        laidOut(content, availableHeight: availableHeight)
+            .allowsHitTesting(interactive)
     }
 
     /// The placeholder at a given page height: capped padding, centred, and (the part

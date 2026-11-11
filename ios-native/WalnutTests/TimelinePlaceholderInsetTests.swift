@@ -309,4 +309,28 @@ final class TimelinePlaceholderInsetTests: XCTestCase {
             previous = slot
         }
     }
+
+    // MARK: - Round 4: every word on screen before any scroll
+
+    /// At AX5 an Org node's empty chat had less room than the Personal AI chat (the Org bar
+    /// sits above it), so the copy did not fit, the placeholder went straight to its scroll,
+    /// and the scroll's last lines were under the composer (2026-11-10). The steps between
+    /// the reader's size and the scroll are smaller caps, largest first, and the body draws
+    /// exactly five of them (`caps[0]` to `caps[4]`), one accessibility size at a time.
+    func testThePlaceholderStepsDownThroughSmallerTypeSizesBeforeItScrolls() {
+        let caps = Inset.typeSizeCaps
+        XCTAssertEqual(caps.count, 5, "the body names five capped candidates; keep them in step")
+        XCTAssertEqual(caps, caps.sorted(by: >), "largest cap first, so the copy shrinks only as far as it must")
+        XCTAssertEqual(Set(caps).count, caps.count, "a repeated cap is a candidate that can never win")
+        XCTAssertEqual(caps[0], .accessibility4, "the first step is one size below the largest")
+        // No accessibility size skipped: each step down is the next size, so the copy keeps the
+        // largest size that fits.
+        let accessibility = DynamicTypeSize.allCases.filter(\.isAccessibilitySize).filter { $0 < .accessibility5 }
+        XCTAssertEqual(Array(caps.dropLast()), accessibility.sorted(by: >), "an accessibility size was skipped")
+        XCTAssertTrue(caps[0].isAccessibilitySize, "a reader at AX5 keeps an accessibility size first")
+        XCTAssertFalse(caps[caps.count - 1].isAccessibilitySize,
+                       "the last cap is a standard size, the one most likely to fit a short slot")
+        // A cap never raises a size: the default reader is drawn the same by every candidate.
+        for cap in caps { XCTAssertGreaterThanOrEqual(cap, DynamicTypeSize.large) }
+    }
 }
