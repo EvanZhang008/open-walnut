@@ -19,7 +19,6 @@ const BROWSER_DIR = path.join(REPO, 'tests/e2e/browser')
 const NOT_GATED: Record<string, string> = {
   'cloud-host-server.ts': 'a side fixture its own spec starts, with its own boot budget; its first load not measured yet',
   'link-capture-server.ts': 'a side fixture its own spec starts, with its own boot budget; its first load not measured yet',
-  'mail-app-server.ts': 'a side fixture its own spec starts, with its own boot budget; its first load not measured yet',
   'plugin-connection-server.ts': 'a side fixture its own spec starts, with its own boot budget; its first load not measured yet',
   'plugin-mic-server.ts': 'a side fixture its own spec starts, with its own boot budget; its first load not measured yet',
   'plugin-restart-server.ts': 'a side fixture its own spec starts, with its own boot budget; its first load not measured yet',

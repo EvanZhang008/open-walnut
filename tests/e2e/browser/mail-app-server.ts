@@ -387,11 +387,16 @@ const { createServer: createViteServer } = await import('vite')
 // The page's own Origin restated as the API's, as test-server.ts does: without it the server refuses
 // every browser write and the WebSocket upgrade as cross-site (403 "came from another site").
 const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
+// Ready only once the SPA is compiled (fixture-warm.ts): the first page load after a boot compiled
+// it on demand, and on a loaded runner the first phone Mail case in each worker spent its whole
+// 60 s on the boot splash, both tries (2026-11-11, CI: phone-pages "Mail on a phone").
+const { holdUntilWarm } = await import('./fixture-warm.js')
+const warm = holdUntilWarm()
 const viteServer = await createViteServer({
   root: path.join(repoRoot, 'web'),
   // Its own dependency cache, as test-server.ts: a shared one is re-optimized under it.
   cacheDir: path.join(tmpBase, 'vite-cache'),
-  plugins: [mailFixtureSeams()],
+  plugins: [warm.plugin, mailFixtureSeams()],
   server: {
     host: '127.0.0.1',
     port,
@@ -404,6 +409,7 @@ const viteServer = await createViteServer({
   logLevel: 'warn',
 })
 await viteServer.listen()
+await warm.warm(viteServer)
 
 /**
  * One row that already carries a task, as an older Walnut left it, before the browser opens.
