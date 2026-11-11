@@ -12,6 +12,8 @@ test.beforeAll(async ({ request }) => {
   const item = view.groups.flatMap((g: { items: Array<{ key: string; value: unknown; source: string }> }) => g.items).find((i: { key: string }) => i.key === 'permissions.defaultMode')
   originalMode = item.source === 'default' ? undefined : item.value
 })
+// The status poll keeps firing; a route handler still fetching when the page closes would fail the test.
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
 test.afterAll(async ({ request }) => {
   await request.patch('/api/engines/claude/settings', { data: originalMode === undefined ? { unset: ['permissions.defaultMode'] } : { set: { 'permissions.defaultMode': originalMode } } })
   await release?.()
