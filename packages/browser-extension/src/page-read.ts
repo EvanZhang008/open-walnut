@@ -15,6 +15,11 @@
  * there), and a date element's full date (its title, else its datetime) beside the words it shows
  * ("37 minutes ago (Nov 10, 2026, 4:11 AM PST)"). 2026-11-10:
  * a release page's date sat in a `relative-time` element and `text` had none.
+ *
+ * A footer that main holds directly (no article or section of its own around it) is the page's
+ * footer an app shell put inside main, not content; a page with little or no main text says so and
+ * lists the fields and buttons on screen with their snapshot refs, so an agent types with no
+ * snapshot call. 2026-11-10: an empty search page's "main content" was its legal links.
  */
 import { INTERACTIVE, PageError, all, byRef, clip, nameOf, refFor, roleOf, stateOf, visible } from './page-agent'
 
@@ -108,8 +113,19 @@ function cookieNotice(el: Element): boolean {
   return COOKIE.test(tag) && overlay(el) && innerOf(el).length < 4000
 }
 
-function furniture(el: Element, inContent: boolean): boolean {
+/** A part of the content with a footer of its own (an article's byline, a dialog's buttons). */
+const PIECE = 'article, section, form, dialog, [role=dialog], [role=alertdialog], [role=article], [role=region]'
+
+/** A footer the content root holds directly: the page's own footer inside main. */
+function pageFooterIn(el: Element, root: Element): boolean {
+  if (el.tagName !== 'FOOTER' || root.matches(PIECE)) return false
+  for (let p = el.parentElement; p && p !== root; p = p.parentElement) if (p.matches(PIECE)) return false
+  return true
+}
+
+function furniture(el: Element, inContent: boolean, root?: Element): boolean {
   if (el.matches(CHROME)) return true
+  if (inContent && root && pageFooterIn(el, root)) return true
   // The page's own header or footer; a header holding the page's title (its h1) is content.
   if (!inContent && el.matches(PAGE_EDGE) && !el.closest('article, main, [role=main]') && !(el.tagName === 'HEADER' && el.querySelector('h1'))) return true
   return cookieNotice(el)
@@ -145,7 +161,7 @@ const CANDIDATES = `${CHROME}, ${PAGE_EDGE}, walnut-ext, [id*=cookie], [class*=c
 function readable(root: Element, inContent: boolean, keepFurniture = false): string {
   const skip = new Set<Element>()
   for (const el of Array.from(root.querySelectorAll(keepFurniture ? 'walnut-ext' : CANDIDATES))) {
-    if (el.tagName === 'WALNUT-EXT' || furniture(el, inContent)) skip.add(el)
+    if (el.tagName === 'WALNUT-EXT' || furniture(el, inContent, root)) skip.add(el)
   }
   if (root.shadowRoot || root.matches(DATES)) return deepOf(root)
   return wordsOf(root, 0, skip).join('\n')
@@ -160,6 +176,7 @@ export function text(args: TextArgs = {}): { text: string; url: string; title: s
   let t: string
   let scope: string
   let part = false
+  let main: Element | undefined
   if (args.ref !== undefined) {
     const el = byRef(args.ref)
     t = readable(el, true, true); scope = `${roleOf(el)} ${String(args.ref)}`; part = true
@@ -172,17 +189,59 @@ export function text(args: TextArgs = {}): { text: string; url: string; title: s
     t = document.body ? readable(document.body, false, true) : ''; scope = 'the whole page'
   } else {
     const m = mainOf()
+    main = m?.el ?? document.body
     t = m ? readable(m.el, true) : readable(document.body, false)
     scope = m ? m.scope : 'the page without its menus, header and footer'
-    // A page whose content is all furniture (a link list, a menu page): the whole of it.
-    if (!t.trim()) { t = readable(document.body, false, true); scope = 'the whole page' }
+    // Main read nothing (an app shell's empty main): the page without its furniture, never its footer.
+    if (!tidy(t) && m) t = readable(document.body, false)
   }
   t = tidy(t)
   const chars = t.length
-  if (chars <= max) return { text: t, url: location.href, title: document.title, scope, chars }
+  if (chars <= max) return { text: main && chars < LITTLE_TEXT ? thinPage(t, main) : t, url: location.href, title: document.title, scope, chars }
   const more = chars - max
   const how = part ? '--max N (max) reads more' : '--max N (max) reads more, --ref e12 or --selector css (ref, selector) reads one part'
   return { text: `${t.slice(0, max)}\n… (${more} more characters: ${how})`, url: location.href, title: document.title, scope, chars, cut: true }
+}
+
+/** Main text shorter than this comes with what is on screen to act on. */
+export const LITTLE_TEXT = 200
+/** How many fields and buttons a page with little text lists. */
+const ACT_ON_MAX = 5
+const FIELDS = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton', 'slider'])
+
+/**
+ * A main read with little or no text (an empty search page): no text says so in one line; with
+ * the fields, then the buttons, on screen to act on, each as snapshot lists it (the same ref). A
+ * short page with no field on screen (an issue list, a note) is its text alone; links are listed
+ * only for a page with no text.
+ */
+function thinPage(t: string, root: Element): string {
+  const acts = toActOn(root, !t)
+  if (t && !acts.some((a) => a.field)) return t
+  const lines = t ? [t] : ['No main text on this page (text --all reads its menus, header and footer).']
+  if (acts.length) lines.push('', 'On screen to act on:', ...acts.map((a) => a.line))
+  return lines.join('\n')
+}
+
+/** The fields, then the buttons, on screen (the content's own first), then links when asked for. */
+function toActOn(root: Element, links: boolean): Array<{ line: string; field: boolean }> {
+  const picks: Array<{ el: Element; rank: number; at: number }> = []
+  const seen = new Set<Element>()
+  all(document, INTERACTIVE).forEach((el, at) => {
+    if (seen.has(el) || !visible(el) || !nearView(el)) return
+    seen.add(el)
+    const role = roleOf(el)
+    const kind = FIELDS.has(role) ? 0 : ['button', 'checkbox', 'radio', 'switch', 'tab'].includes(role) ? 1 : role === 'link' && links ? 2 : -1
+    if (kind < 0 || (kind > 0 && !nameOf(el).trim())) return
+    picks.push({ el, rank: kind * 2 + (root.contains(el) ? 0 : 1), at })
+  })
+  return picks.sort((a, b) => a.rank - b.rank || a.at - b.at).slice(0, ACT_ON_MAX).map((p) => ({ line: elementLine(p.el), field: p.rank < 2 }))
+}
+
+/** An element as snapshot lists it: its ref, role, name and state. */
+function elementLine(el: Element, state = stateOf(el)): string {
+  const name = clip(nameOf(el), 100)
+  return `[${refFor(el)}] ${roleOf(el)}${name ? ` "${name}"` : ''}${state ? ` ${state}` : ''}`
 }
 
 /** On screen now, or nearly (a quarter of a screen around it). */
@@ -217,15 +276,12 @@ export function snapshot(args: SnapshotArgs = {}): { snapshot: string; url: stri
   for (const el of all(document, INTERACTIVE)) {
     if (seen.has(el) || !visible(el)) continue
     seen.add(el)
-    const name = clip(nameOf(el), 100)
-    const role = roleOf(el)
-    if (role === 'generic' && !name) continue
+    if (roleOf(el) === 'generic' && !clip(nameOf(el), 100)) continue
     if (!whole && !nearView(el)) { elsewhere++; continue }
     if (count >= max) { full = true; elsewhere++; continue }
     const state = stateOf(el)
     const off = !whole && / ?\boffscreen$/.test(state)
-    const words = off ? state.replace(/ ?\boffscreen$/, '') : state
-    const line = `  [${refFor(el)}] ${role}${name ? ` "${name}"` : ''}${words ? ` ${words}` : ''}`
+    const line = `  ${elementLine(el, off ? state.replace(/ ?\boffscreen$/, '') : state)}`
     if (off) near.push(line); else lines.push(line)
     count++
   }

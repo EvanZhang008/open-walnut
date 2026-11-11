@@ -41,7 +41,7 @@ describe('text', () => {
     expect(r.cut).toBeUndefined()
   })
 
-  it('no main: the page without its furniture; furniture-only page: the whole of it', async () => {
+  it('no main: the page without its furniture; furniture-only page: says it has no main text, never reads the furniture', async () => {
     page.load(`${chrome}<div><p>Order a test sandwich</p><div style="display:none">Hidden menu words</div><section class="cookie-recipes">Chocolate chip cookies</section><footer>Footer words</footer></div>`)
     const r = await op('text')
     expect(r.scope).toMatch(/without its menus/)
@@ -49,8 +49,56 @@ describe('text', () => {
     // A box named "cookie" that is not laid over the page is content (a recipe), not a notice.
     expect(r.text).toContain('Chocolate chip cookies')
     for (const w of ['Site menu words', 'Footer words', 'Hidden menu words', 'We use cookies']) expect(r.text).not.toContain(w)
-    page.load('<nav><a href="/x">Only links here</a></nav>')
-    expect((await op('text')).text).toContain('Only links here')
+    page.load('<nav><a id="l" href="/x">Only links here</a></nav><footer>Footer words</footer>')
+    page.place('#l', { x: 0, y: 0, w: 200, h: 20 })
+    const none = await op('text')
+    expect(none.text).toMatch(/^No main text on this page \(text --all reads its menus, header and footer\)\./)
+    expect(none.text).not.toContain('Footer words')
+    // A page with no text lists what is on screen, links too when nothing else is there.
+    expect(none.text).toMatch(/On screen to act on:\n\[e\d+\] link "Only links here"/)
+    expect((await op('text', { all: true })).text).toContain('Only links here')
+  })
+
+  it('a footer main holds directly is the page\'s footer, not content; an article\'s own footer is (2026-11-10: a search page read as its legal links)', async () => {
+    page.load('<header><input id="q" type="search" aria-label="Search the site"><button id="menu">Open menu</button><a id="home" href="/">Home</a></header>'
+      + '<main id="m"><div><span>Tip</span>For an advanced search, use our prefixes</div>'
+      + '<footer><a href="/terms">Terms</a> <a href="/privacy">Privacy</a> Example, Inc. 2026</footer></main>')
+    page.place('#m', { x: 0, y: 60, w: 800, h: 400 })
+    for (const [sel, y] of [['#q', 10], ['#menu', 10], ['#home', 10]] as const) page.place(sel, { x: 0, y, w: 100, h: 20 })
+    const r = await op('text')
+    expect(r.scope).toBe('main content')
+    for (const w of ['Terms', 'Privacy', 'Example, Inc.']) expect(r.text).not.toContain(w)
+    // Little text and a field on screen: the text, then the fields and buttons with the refs snapshot gives (no links).
+    const [text, list] = String(r.text).split('\n\nOn screen to act on:\n')
+    expect(text).toContain('For an advanced search, use our prefixes')
+    const lines = list.split('\n')
+    expect(lines[0]).toMatch(/^\[e\d+\] searchbox "Search the site"/)
+    expect(lines[1]).toMatch(/^\[e\d+\] button "Open menu"/)
+    expect(list).not.toContain('Home')
+    const snap = String((await op('snapshot')).snapshot)
+    for (const l of lines) expect(snap).toContain(l)
+    expect(r.chars).toBe(text.length)
+
+    page.load('<main id="m"><article><p>A post.</p><footer>Posted by a test author</footer></article><section><p>Notes</p><footer>Section words</footer></section></main>')
+    page.place('#m', { x: 0, y: 0, w: 800, h: 400 })
+    const kept = await op('text')
+    expect(kept.text).toContain('Posted by a test author')
+    expect(kept.text).toContain('Section words')
+  })
+
+  it('an empty main: no main text, and the fields and buttons on screen; a short page with no field is its text alone', async () => {
+    page.load('<header><input id="q" aria-label="Find a product"></header><main id="m"></main><footer>Footer words</footer>')
+    page.place('#m', { x: 0, y: 60, w: 800, h: 400 })
+    page.place('#q', { x: 0, y: 10, w: 200, h: 20 })
+    const r = await op('text')
+    expect(r.text).toMatch(/^No main text on this page[^\n]*\n\nOn screen to act on:\n\[e\d+\] textbox "Find a product"$/)
+    expect(r.chars).toBe(0)
+    page.load('<header><a id="h" href="/">Home</a></header><main id="m"><h1>Issues</h1><p>12 Open</p><a id="i" href="/issues/1">Login fails</a></main>')
+    page.place('#m', { x: 0, y: 60, w: 800, h: 400 })
+    page.place('#h', { x: 0, y: 10, w: 100, h: 20 })
+    page.place('#i', { x: 0, y: 100, w: 100, h: 20 })
+    const short = await op('text')
+    expect(short.text).toBe('Issues\n12 Open\nLogin fails')
   })
 
   it('a page header holding the page\'s title is read; an open modal dialog is what the page shows, read first', async () => {

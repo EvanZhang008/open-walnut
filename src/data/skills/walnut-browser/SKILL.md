@@ -21,7 +21,8 @@ walnut browser close                                     # when you are done wit
 ```
 
 `--read --max 800` (on `open` and `click` alike) reads only the first 800 characters of the main
-text, for a page you need one fact from.
+text, for a page you need one fact from. A page with little or no main text says so and lists the
+fields and buttons on screen with their refs, so you can type or click without a snapshot.
 
 What a step changed: `went to <url> "<title>"`, `opened a new tab N`, `the page content changed`,
 `a field's value changed` (only the field you typed in), or `nothing changed on the page`.
