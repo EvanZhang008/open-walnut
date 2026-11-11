@@ -41,6 +41,8 @@ export interface IntegrityWindow {
   overwrites: number;
   /** Characters the overwrites took away. */
   overwrittenChars: number;
+  /** An "@" or "/" query replaced by what was picked from its menu: not lost. */
+  picks: number;
   offBox: number;
   preventedBy: string[];
   overwrittenBy: string[];
@@ -49,7 +51,7 @@ export interface IntegrityWindow {
 }
 
 export function emptyWindow(): IntegrityWindow {
-  return { keys: 0, inserted: 0, prevented: 0, dropped: 0, overwrites: 0, overwrittenChars: 0, offBox: 0, preventedBy: [], overwrittenBy: [], offBoxAt: [] };
+  return { keys: 0, inserted: 0, prevented: 0, dropped: 0, overwrites: 0, overwrittenChars: 0, picks: 0, offBox: 0, preventedBy: [], overwrittenBy: [], offBoxAt: [] };
 }
 
 export function lostAny(w: IntegrityWindow): boolean {
@@ -90,10 +92,28 @@ export function callerOf(stack: string | undefined): string {
 
 /** Text the set takes away from what the box held: a cut at the end, or a whole replace. */
 export function charsTaken(before: string, after: string): number {
-  if (after.startsWith(before)) return 0;
-  let common = 0;
-  while (common < before.length && common < after.length && before[common] === after[common]) common++;
-  return before.length - common;
+  return removedSpan(before, after).taken;
+}
+
+/**
+ * What a set of the box's value took away, between the part both texts start with and the part
+ * both end with. `pick` says the span was an "@" or "/" query the person was typing, replaced by
+ * what they picked from its menu (2026-11-11: the first real window counted two "@" mention
+ * picks as lost text).
+ */
+export function removedSpan(before: string, after: string): { taken: number; pick: boolean } {
+  if (after.startsWith(before)) return { taken: 0, pick: false };
+  let head = 0;
+  while (head < before.length && head < after.length && before[head] === after[head]) head++;
+  let tail = 0;
+  while (tail < before.length - head && tail < after.length - head
+    && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail++;
+  const taken = before.length - head - tail;
+  if (taken <= 0) return { taken: 0, pick: false };
+  // The word the removed part sits in, from its start up to the end of what was removed.
+  const wordStart = Math.max(before.lastIndexOf(' ', head - 1), before.lastIndexOf('\n', head - 1)) + 1;
+  const word = before.slice(wordStart, before.length - tail);
+  return { taken, pick: /^[@/]/.test(word) };
 }
 
 export interface TypingIntegrityDeps {
@@ -210,8 +230,9 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
       set(this: HTMLTextAreaElement, next: string) {
         const at = typedAt.get(this);
         if (at !== undefined && next !== '' && deps.now() - at < TYPED_RECENT_MS) {
-          const taken = charsTaken(get.call(this) as string, String(next));
-          if (taken > 0) { w.overwrites++; w.overwrittenChars += taken; note(w.overwrittenBy, callerOf(new Error().stack)); }
+          const { taken, pick } = removedSpan(get.call(this) as string, String(next));
+          if (taken > 0 && pick) w.picks++;
+          else if (taken > 0) { w.overwrites++; w.overwrittenChars += taken; note(w.overwrittenBy, callerOf(new Error().stack)); }
         }
         set.call(this, next);
       },
