@@ -17,6 +17,11 @@ enum DemoFixtures {
     static let buildBoxAlias = "build-box"
     /// The hand-arranged project order the board follows (`GET /ordering`).
     static let projectOrder = ["Pebble", "Acme Website", "Home", "Travel", "Learning"]
+    /// A project's launch defaults (its settings, `GET /projects`): a new task in Learning starts
+    /// on Sonnet in Accept Edits unless the draft picks its own.
+    static let launchDefaults: [String: WalnutProjectSource.LaunchDefaults] = [
+        "Learning": .init(defaultEngine: "claude", defaultModel: "sonnet", defaultMode: "accept"),
+    ]
     /// The build box's display name, the one label for it everywhere the demo
     /// names a host: `/config` hosts (Settings), the launch options and the
     /// directory list. A header that resolves a host alias to its label reads

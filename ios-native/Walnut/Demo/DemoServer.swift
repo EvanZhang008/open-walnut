@@ -255,7 +255,7 @@ final class DemoServer: @unchecked Sendable {
         // Every demo project is local: no outside service, so no task offers Local or a service.
         if match(r, "GET", s, "projects") != nil {
             let names = withState { state in Set(state.tasks.map(\.project).filter { !$0.isEmpty }) }
-            return .encoded(DemoProjects(projects: names.sorted().map { WalnutProjectSource(name: $0, source: "local") }))
+            return .encoded(DemoProjects(projects: names.sorted().map { WalnutProjectSource(name: $0, source: "local", metadata: DemoFixtures.launchDefaults[$0]) }))
         }
         if match(r, "GET", s, "events") != nil { return DemoReply(status: 200, body: .stream(.events, lastEventID: r.lastEventID)) }
         if match(r, "GET", s, "agents") != nil { return .encoded(DemoFixtures.agents) }
