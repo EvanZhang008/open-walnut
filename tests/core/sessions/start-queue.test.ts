@@ -21,6 +21,14 @@ const row = (id: string, at: string, priority?: Row['priority']): Row => ({
 })
 
 describe('queue order', () => {
+  it('an accepted routine fire takes the next slot before new automatic task work', () => {
+    const routine = { ...row('routine', '2026-11-03T00:10:00Z', 'backlog'), start_queue: {
+      ...row('routine', '2026-11-03T00:10:00Z').start_queue!, routine: { message: 'Original round.', cwd: '/work', source: 'routine' },
+    } }
+    const tasks = [row('urgent-task', '2026-11-03T00:00:00Z', 'immediate'), routine]
+    expect(tasks.sort(queueOrder as never).map(t => t.id)).toEqual(['routine', 'urgent-task'])
+  })
+
   it('takes priority first (immediate, important, unset, backlog), then the oldest queued', () => {
     const rows = [
       row('backlog-old', '2026-11-03T00:00:00Z', 'backlog'),

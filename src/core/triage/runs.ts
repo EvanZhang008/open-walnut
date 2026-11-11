@@ -8,6 +8,14 @@
  *   task:created    the batch reached a session → ACKNOWLEDGE the claim, so the
  *                   items it carried are finally dropped from the buffer. Before
  *                   this point a crash re-delivers them (at-least-once).
+ *                   A run filed while every host was full (`deferredStart` on the
+ *                   event) has NOT reached a session: its claim is bound to its
+ *                   task instead, and the routine's verdict that its session came
+ *                   up (`routine_start` started, on task:updated or session:started)
+ *                   acknowledges it, keyed by that task. A cancelled, deleted or
+ *                   failed wait never starts, so the claim's items stay for the
+ *                   next run; the batch action settles a bound claim whose events
+ *                   were missed from the task itself (state.ts triageRunHold).
  *   session:result  the run finished → mark its task COMPLETE, append the run's
  *                   line to the journal note, record the outcome on the routine's
  *                   card, and CHECK that State.md was rewritten.
@@ -41,7 +49,7 @@ import { generateNoteId, parseFrontmatter, readId, stampId } from '../parse-fron
 import type { Task } from '../types.js';
 import { TRIAGE_RUNS_NOTE_DIR, TRIAGE_STATE_NOTE } from './batch.js';
 import { TRIAGE_PROJECT } from './bootstrap.js';
-import { ackTriageClaim, loadTriageState, markTriageStateStale, recordTriageJournalLine } from './state.js';
+import { ackTriageClaimForTask, bindTriageClaim, loadTriageState, markTriageStateStale, recordTriageJournalLine, triageRunHold, type TriageClaim } from './state.js';
 import { TRIAGE_AGENT_ID } from './types.js';
 import { isQuietTurn } from '../sessions/quiet-turn.js';
 import { addContextRecoveryFailListener, contextFullRecovery, contextRecoveryHoldsTurn } from '../sessions/context-full-recovery.js';
@@ -304,34 +312,78 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
   }
 
   /**
-   * The batch reached a session. Acknowledging here rather than on session:result
-   * is deliberate: the task existing IS the delivery, and waiting minutes for a
-   * result would let the next fire re-deliver a batch that was never lost.
+   * The batch reached a session. Acknowledging when the session is asked to start
+   * rather than on session:result is deliberate: that start IS the delivery, and
+   * waiting minutes for a result would let the next fire re-deliver a batch that
+   * was never lost. A run started at once acknowledges on its task:created (its
+   * session:start follows in the same call); a run that waits for a slot binds the
+   * claim there and acknowledges only on the routine's own verdict that its session
+   * came up (`routine_start.state === 'started'`, seen on task:updated or
+   * session:started). Neither the dispatch nor session:started alone is that proof
+   * (the provider emits session:started before its spawn is confirmed); until the
+   * verdict the run holds its batch, and a failed start gives the items back.
    */
-  async function onRunTaskCreated(task: Task): Promise<void> {
-    const state = await loadTriageState(home);
-    if (!state.claim) return;
-    const { acked: ok } = await ackTriageClaim(state.claim.atMs, home);
+  async function onRunTaskCreated(task: Task, deferred: boolean): Promise<void> {
+    if (deferred) {
+      const bound = await bindTriageClaim(task.id, Date.now(), home);
+      if (bound) {
+        log.cron.info('triage: batch waits with its run for a free slot', {
+          taskId: task.id, claimedAtMs: bound.atMs, mail: bound.mail, slack: bound.slack,
+        });
+      }
+      return;
+    }
+    await acknowledge(task.id, { bindIfUnbound: true });
+  }
+
+  /**
+   * Evidence the bound run's session came up: acknowledge the claim it carries, once,
+   * and only on the routine's verdict (`triageRunHold` 'delivered'), never on an event alone.
+   */
+  async function onRunStartEvidence(taskId: string, seen?: Task): Promise<void> {
+    const claim = (await loadTriageState(home)).claim;
+    if (claim?.taskId !== taskId) return;
+    const task = seen ?? await getTask(taskId);
+    if (!isTriageRunTask(task) || triageRunHold(task, claim, Date.now()) !== 'delivered') return;
+    await acknowledge(taskId, {});
+  }
+
+  async function acknowledge(taskId: string, opts: { bindIfUnbound?: boolean }): Promise<void> {
+    const { acked: ok, claim } = await ackTriageClaimForTask(taskId, opts, home);
     if (!ok) return;
     acked += 1;
-    log.cron.info('triage: batch acknowledged — the run has a session', {
-      taskId: task.id, claimedAtMs: state.claim.atMs,
-      mail: state.claim.mail, slack: state.claim.slack,
-    });
+    logAck(taskId, claim!);
     // Last, and never allowed to undo the ack: a letter this fails to take back is one stale question in
     // an inbox, while a lost ack is a batch delivered twice.
     try {
       const taken = await withdrawSuperseded();
       if (taken.withdrawn.length || taken.failed) {
         log.cron.info('triage: took back the decisions an earlier run left open', {
-          taskId: task.id, withdrawn: taken.withdrawn.length, kept: taken.kept, failed: taken.failed,
+          taskId, withdrawn: taken.withdrawn.length, kept: taken.kept, failed: taken.failed,
         });
       }
     } catch (err) {
       log.cron.warn('triage: could not take back an earlier run\'s decisions', {
-        taskId: task.id, error: err instanceof Error ? err.message : String(err),
+        taskId, error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  function logAck(taskId: string, claim: TriageClaim): void {
+    log.cron.info('triage: batch acknowledged — the run has a session', {
+      taskId, claimedAtMs: claim.atMs, mail: claim.mail, slack: claim.slack,
+    });
+  }
+
+  /**
+   * Claim bookkeeping in the order the events came: a waiting run's bind must be
+   * written before its own session:started reads it.
+   */
+  let claimOps: Promise<void> = Promise.resolve();
+  function serialClaimOp(op: () => Promise<void>): Promise<void> {
+    const next = claimOps.then(op);
+    claimOps = next.catch(() => undefined);
+    return next;
   }
 
   /** The run ended. Everything a human or a later run needs, recorded once. */
@@ -401,13 +453,38 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
     // Read at the event, before anything awaits: the recovery lets go of a session on this same event.
     const eventSid = (event.data as { sessionId?: string } | undefined)?.sessionId;
     const recoveryHeld = event.name !== EventNames.TASK_CREATED && !!contextFullRecovery()?.holds(eventSid ?? '');
+    // The interest is a prefix list: `session:started` must not stand for another name.
+    if (event.name !== EventNames.TASK_CREATED && event.name !== EventNames.SESSION_STARTED
+      && event.name !== EventNames.TASK_UPDATED
+      && event.name !== EventNames.SESSION_RESULT && event.name !== EventNames.SESSION_ERROR) return;
+    // Taken in emit order, before anything awaits (serialClaimOp).
+    const claimOp = event.name === EventNames.TASK_CREATED
+      ? (() => {
+        const data = event.data as { task?: Task; deferredStart?: boolean } | undefined;
+        const task = data?.task;
+        if (!isTriageRunTask(task)) return null;
+        rememberRunTask(task!.id);
+        return serialClaimOp(() => onRunTaskCreated(task!, data?.deferredStart === true));
+      })()
+      : event.name === EventNames.SESSION_STARTED
+        ? (() => {
+          const taskId = (event.data as { taskId?: string } | undefined)?.taskId;
+          return taskId ? serialClaimOp(() => onRunStartEvidence(taskId)) : null;
+        })()
+        : event.name === EventNames.TASK_UPDATED
+          ? (() => {
+            // Cheap in-memory test first: task:updated is frequent, and only a triage run
+            // whose routine says started can settle a claim.
+            const task = (event.data as { task?: Task | null } | undefined)?.task;
+            if (!task || !isTriageRunTask(task) || task.routine_start?.state !== 'started') return null;
+            return serialClaimOp(() => onRunStartEvidence(task.id, task));
+          })()
+          : undefined;
+    if (claimOp === null) return;
     void (async () => {
       try {
-        if (event.name === EventNames.TASK_CREATED) {
-          const task = (event.data as { task?: Task } | undefined)?.task;
-          if (!isTriageRunTask(task)) return;
-          rememberRunTask(task!.id);
-          await onRunTaskCreated(task!);
+        if (claimOp !== undefined) {
+          await claimOp;
           return;
         }
         const data = event.data as {
@@ -447,7 +524,7 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
 
   bus.subscribe(TRIAGE_RUNS_SUBSCRIBER, handler, {
     global: true,
-    interest: [EventNames.TASK_CREATED, EventNames.SESSION_RESULT, EventNames.SESSION_ERROR],
+    interest: [EventNames.TASK_CREATED, EventNames.TASK_UPDATED, EventNames.SESSION_STARTED, EventNames.SESSION_RESULT, EventNames.SESSION_ERROR],
   });
   // A run held for the context recovery (above) whose recovery failed: it settles as that error.
   const removeRecoveryFail = addContextRecoveryFailListener(({ taskId, reason }) => {

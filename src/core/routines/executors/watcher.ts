@@ -131,7 +131,7 @@ function defaultToolDeps(): WatcherToolDeps {
       });
     },
     async sendToSingleton(input) {
-      const { quickStartSession } = await import('../../sessions/quick-start.js');
+      const { defaultRunStartDeps } = await import('../run-start-deps.js');
       // A recorded task is the singleton's durable home: its session can die and
       // be restarted without the conversation losing its place on the board.
       if (input.taskId) {
@@ -151,31 +151,24 @@ function defaultToolDeps(): WatcherToolDeps {
         const { getTask } = await import('../../task-manager.js');
         const existing = await getTask(input.taskId).catch(() => null);
         if (existing) {
-          await quickStartSession({
-            message: input.message,
-            existingTaskId: input.taskId,
-            cwd: input.cwd ?? WALNUT_HOME,
+          const { queued } = await defaultRunStartDeps().launch({
+            message: input.message, cwd: input.cwd ?? WALNUT_HOME, ...(input.jobId ? { jobId: input.jobId } : {}),
             ...(input.cwd ? {} : { walnutAgent: true }),
             ...(input.host ? { host: input.host } : {}),
             ...(input.model ? { model: input.model } : {}),
             source: 'routine-watcher',
-          });
-          return { taskId: input.taskId, startedSession: true };
+          }, { existingTaskId: input.taskId });
+          return { taskId: input.taskId, startedSession: !queued, ...(queued ? { queued } : {}) };
         }
       }
-      const task = await quickStartSession({
-        message: input.message,
-        cwd: input.cwd ?? WALNUT_HOME,
+      const { task, queued } = await defaultRunStartDeps().launch({
+        message: input.message, cwd: input.cwd ?? WALNUT_HOME, ...(input.jobId ? { jobId: input.jobId } : {}),
         ...(input.cwd ? {} : { walnutAgent: true }),
         ...(input.host ? { host: input.host } : {}),
         ...(input.model ? { model: input.model } : {}),
-        taskTitle: input.title,
-        // Background automation never grabs the pinned board.
-        taskMeta: { pinTier: null },
-        project: 'Routines',
-        source: 'routine-watcher',
-      });
-      return { taskId: task.id, startedSession: true };
+        taskTitle: input.title, project: 'Routines', source: 'routine-watcher',
+      }, {});
+      return { taskId: task.id, startedSession: !queued, ...(queued ? { queued } : {}) };
     },
   };
 }

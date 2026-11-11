@@ -340,7 +340,7 @@ async function startOrWait(params: SessionStartParams): Promise<SessionStartResu
       const d = err.detail;
       // Only an unpinned agent start waits. A replay keeps the original entry when still full.
       const waitingTask = await getTask(d.taskId);
-      if (params.callerSid && params.host === undefined && params.cwd === undefined && !waitingTask.workspace && !params.workspace && !params.startAttemptId && !params.queuedAt) {
+      if (params.host === undefined && params.cwd === undefined && !waitingTask.workspace && !params.workspace && !params.startAttemptId && !params.queuedAt) {
         const { isAutomaticStart } = await import('./host-admission.js');
         if (await isAutomaticStart(params)) {
           const { waitForHostSlot } = await import('./start-queue.js');
@@ -545,7 +545,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
       if (!LIVE_STATUSES.has(conversation.process_status)) {
         const { admitHostStart, isAutomaticStart } = await import('./host-admission.js');
         if (await isAutomaticStart(params)) resumeSlot = await admitHostStart(task.id, conversation.host, { automatic: true,
-          respectWaiting: !!params.callerSid && !params.queuedAt && params.host === undefined && params.cwd === undefined });
+          respectWaiting: !params.queuedAt && params.host === undefined && params.cwd === undefined });
       }
       const sent = await continueTaskConversation(conversation, {
         text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
@@ -598,7 +598,7 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
     // nothing holds the task while a person's own start goes at once (review round 5).
     const { admitHostStart, isAutomaticStart, HostsFullError } = await import('./host-admission.js');
     const automatic = await isAutomaticStart(params);
-    const slotOpts = { automatic, respectWaiting: automatic && !!params.callerSid && !params.queuedAt && params.host === undefined && params.cwd === undefined && !params.workspace && !task.workspace && !params.startAttemptId };
+    const slotOpts = { automatic, respectWaiting: automatic && !params.queuedAt && params.host === undefined && params.cwd === undefined && !params.workspace && !task.workspace && !params.startAttemptId };
     let moveSlot: ((holdMs?: number) => void) | undefined;
     const { placeStartByLoad } = await import('./start-placement.js');
     const placement = area || fallback ? undefined : await placeStartByLoad(task, params, launch, engine, {

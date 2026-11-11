@@ -698,7 +698,9 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   await (await import('../recent-task-touch.js')).recordRecentTaskTouch(updatedTask.id, source, new Date(requestTs).toISOString());
 
   if (!existingTaskId) {
-    bus.emit(EventNames.TASK_CREATED, { task: updatedTask }, ['web-ui'], { source });
+    // A deferred start says so: no SESSION_START follows this create yet, so a listener that
+    // treats a new task as a delivered launch (triage/runs.ts) waits for the real start.
+    bus.emit(EventNames.TASK_CREATED, { task: updatedTask, ...(params.deferStart ? { deferredStart: true as const } : {}) }, ['web-ui'], { source });
   }
 
   // A start targeting a remote host is deliberate (human click or a routine the

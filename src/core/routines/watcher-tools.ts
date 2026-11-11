@@ -54,8 +54,8 @@ export interface WatcherToolDeps {
    *  start a session (which is what the per-day cap counts). */
   sendToSingleton: (input: {
     taskId?: string; title: string; message: string;
-    cwd?: string; host?: string; model?: string;
-  }) => Promise<{ taskId: string; startedSession: boolean }>;
+    cwd?: string; host?: string; model?: string; jobId?: string;
+  }) => Promise<{ taskId: string; startedSession: boolean; queued?: true }>;
 }
 
 export interface WatcherToolBelt {
@@ -250,12 +250,12 @@ export function createWatcherTools(ctx: WatcherToolContext, deps: WatcherToolDep
           + 'Create a task or send a notification instead.';
       }
 
-      let res: { taskId: string; startedSession: boolean };
+      let res: { taskId: string; startedSession: boolean; queued?: true };
       try {
         res = await deps.sendToSingleton({
           ...(existingTaskId ? { taskId: existingTaskId } : {}),
-          title: `${ctx.jobName} — ${name}`,
-          message,
+          title: `${ctx.jobName}: ${name}`,
+          message, jobId: ctx.jobId,
           ...(ctx.sessionCwd ? { cwd: ctx.sessionCwd } : {}),
           ...(ctx.sessionHost ? { host: ctx.sessionHost } : {}),
           ...(ctx.sessionModel ? { model: ctx.sessionModel } : {}),
@@ -274,16 +274,17 @@ export function createWatcherTools(ctx: WatcherToolContext, deps: WatcherToolDep
 
       const now = ctx.nowMs();
       ctx.state.singletons[name] = res.taskId;
-      if (res.startedSession) ctx.state.day.sessions += 1;
+      if (res.startedSession || res.queued) ctx.state.day.sessions += 1;
       await updateTriggerState(ctx.jobId, (s) => {
         s.singletons[name] = res.taskId;
-        if (res.startedSession) s.day.sessions += 1;
+        if (res.startedSession || res.queued) s.day.sessions += 1;
       }, now);
       await record('trigger_session', key, name);
 
       log.cron.info('watcher sent to singleton session', {
         jobId: ctx.jobId, name, taskId: res.taskId, started: res.startedSession,
       });
+      if (res.queued) return `Task ${res.taskId} is waiting for a free slot; its original prompt starts automatically when there is room.`;
       return res.startedSession
         ? `Started session "${name}" (task ${res.taskId}) and sent the prompt.`
         : `Sent the prompt into session "${name}" (task ${res.taskId}).`;

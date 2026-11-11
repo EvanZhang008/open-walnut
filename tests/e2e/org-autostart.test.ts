@@ -175,7 +175,7 @@ describe('a VP starts by itself', () => {
     expect((await getTask(id)).org_start).toBeUndefined()
   }, 60_000)
 
-  it('a full host: the VP\'s start fails saying so, and the user\'s Retry starts it at once on the full host (2026-11-06)', async () => {
+  it('a full host: the VP waits durably, and the person can start it immediately', async () => {
     // This Mac full: load 100 on 14 CPUs is past twice the cap of 3 per CPU.
     __setHostLoadProberForTesting(async () => ({
       cpus: 14, load: [100, 1, 1], cpuBusy: 0.1, memTotalBytes: 36 * 1024 ** 3, memAvailBytes: 20 * 1024 ** 3,
@@ -185,8 +185,10 @@ describe('a VP starts by itself', () => {
       const made = await req('POST', '/api/v1/org/projects', { name: 'Full Fields' })
       expect(made.status, JSON.stringify(made.json)).toBe(201)
       const id = made.json.task.id as string
-      const failed = await until('the start failed', () => getTask(id), (t) => t.org_start?.state === 'failed')
-      expect(failed.org_start?.error).toBe('this Mac has no room (load past 6 per CPU). Retry starts it now.')
+      const waiting = await until('the start waits for capacity', () => getTask(id), (t) => !!t.start_queue?.wait_for_slot)
+      expect(waiting.start_queue?.source).toBe('org-autostart')
+      expect(waiting.start_queue?.reason).toBe('load past 6 per CPU')
+      expect(waiting.org_start?.state).not.toBe('failed')
       expect(await hasSession(id)).toBe(false)
       const retry = await req('POST', `/api/v1/org/nodes/${id}/start`, {})
       expect(retry.status).toBe(202)

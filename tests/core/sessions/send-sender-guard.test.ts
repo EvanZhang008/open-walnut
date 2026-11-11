@@ -99,12 +99,12 @@ const CALL_SITES: Record<string, number> = {
   'src/core/human-inbox/letter-ops.ts': 2,         // the user's letter answer; a task's answer is framed
   'src/core/offline-handover.ts': 2,
   'src/core/org/lead-waits.ts': 1,
-  'src/core/org/org-autostart.ts': 2,
+  'src/core/org/org-autostart.ts': 1,             // Main uses the shared routine launch gate
   'src/core/org/org-store.ts': 2,
   'src/core/org/thread-recheck.ts': 1,
-  'src/core/routines/executors/session.ts': 2,
-  'src/core/routines/executors/watcher.ts': 3,
-  'src/core/routines/run-start-deps.ts': 1,
+  'src/core/routines/executors/session.ts': 1,    // Sends to a conversation; new starts use the shared gate
+  'src/core/routines/executors/watcher.ts': 1,    // Singleton sends; new starts use the shared gate
+  'src/core/routines/run-start-deps.ts': 2,       // Deferred create and admitted replay keep their original source
   'src/core/routines/trigger-health.ts': 1,
   'src/core/router/cross-route.ts': 1,             // one exact approved item, sent as peer under its delivery grant
   'src/core/router/service.ts': 2,                // a confirmed item or its approval, sent as peer under its grant
@@ -189,7 +189,7 @@ const PERSON_SOURCES_PINNED = [
  */
 const SOURCE_SENDER: Record<string, 'person' | 'agent'> = {
   ...Object.fromEntries(PERSON_SOURCES_PINNED.map((s) => [s, 'person' as const])),
-  peer: 'agent', 'walnut-notify': 'agent', transfer: 'agent', 'engine-switch': 'agent',
+  peer: 'agent', 'walnut-notify': 'agent', transfer: 'agent', 'engine-switch': 'agent', 'start-queue': 'agent',
   'routine-trigger': 'agent', 'routine-watcher': 'agent', 'router-runtime': 'agent', 'brief-refresh': 'agent', 'side-thread-digest': 'agent',
   'app-state': 'agent', subagent: 'agent', 'notification-fix': 'agent', 'session-start': 'agent',
   'api-agent': 'agent', 'board-reminder': 'agent', 'auto-continue': 'agent', 'hook:abc': 'agent',

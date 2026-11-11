@@ -11,7 +11,7 @@ import Database from '../../src/lib/sqlite.js'
 import { WALNUT_HOME, TASKS_DIR } from '../../src/constants.js'
 import { closeDb, getDb, MAX_SUPPORTED_SCHEMA_VERSION, SCHEMA_VERSION, TASK_DB_PATH } from '../../src/core/task-db.js'
 import { _resetForTesting, addTask, getTask } from '../../src/core/task-manager.js'
-import { TASK_DB_ROUTER_VERSION, TASK_DB_SCHEMA_VERSION } from '../../src/core/task-db-version.js'
+import { TASK_DB_ROUTER_VERSION, TASK_DB_SCHEMA_VERSION, TASK_DB_MAX_SUPPORTED_VERSION } from '../../src/core/task-db-version.js'
 import { ensureRouterDataVersion, routerTaskDbPath } from '../../src/core/router/data-version.js'
 import { ensureRouterNewWork, routerNewWorkId } from '../../src/core/router/service.js'
 import { PluginDatabaseClient } from '../../src/core/plugins/plugin-storage.js'
@@ -61,7 +61,7 @@ describe('task store version for isolated areas', () => {
     expect(SCHEMA_VERSION).toBe(TASK_DB_SCHEMA_VERSION)
     expect(TASK_DB_SCHEMA_VERSION).toBe(13)
     expect(TASK_DB_ROUTER_VERSION).toBe(14)
-    expect(MAX_SUPPORTED_SCHEMA_VERSION).toBe(14)
+    expect(MAX_SUPPORTED_SCHEMA_VERSION).toBe(TASK_DB_MAX_SUPPORTED_VERSION)
     expect(routerTaskDbPath(WALNUT_HOME)).toBe(TASK_DB_PATH)
   })
 
@@ -121,21 +121,21 @@ describe('task store version for isolated areas', () => {
     expect(integrity(TASK_DB_PATH)).toBe('ok')
   })
 
-  it('a newer store (15) is refused by the stamp and by the task store, untouched', async () => {
+  it('a store newer than the supported version is refused by the stamp and by the task store, untouched', async () => {
     getDb()
     await updateRouterAreas(WALNUT_HOME, () => EMPTY)
     const before = areasRaw()
     closeDb()
     const raw = new Database(TASK_DB_PATH)
-    raw.pragma('user_version = 15')
+    raw.pragma(`user_version = ${TASK_DB_MAX_SUPPORTED_VERSION + 1}`)
     raw.close()
     const error = await refusal(() => updateRouterAreas(WALNUT_HOME, () => oneArea()))
     expect(error.code).toBe('router_data_version')
     expect(error.message).toContain('newer')
-    expect(taskStoreVersion(TASK_DB_PATH)).toBe(15)
+    expect(taskStoreVersion(TASK_DB_PATH)).toBe(TASK_DB_MAX_SUPPORTED_VERSION + 1)
     expect(integrity(TASK_DB_PATH)).toBe('ok')
     expect(areasRaw()).toBe(before)
-    expect(() => getDb()).toThrow(/schema 15 is newer than supported schema 14/)
+    expect(() => getDb()).toThrow(new RegExp(`schema ${TASK_DB_MAX_SUPPORTED_VERSION + 1} is newer than supported schema ${TASK_DB_MAX_SUPPORTED_VERSION}`))
   })
 
   it('a missing store is refused and never created', async () => {
@@ -152,7 +152,7 @@ describe('task store version for isolated areas', () => {
       ['empty', () => fs.writeFileSync(file, ''), /not yet upgraded/],
       ['short text', () => fs.writeFileSync(file, 'not a task store\n'), /could not be checked/],
       ['long text', () => fs.writeFileSync(file, 'x'.repeat(4096)), /could not be checked/],
-      ['newer', () => seedTaskStore(WALNUT_HOME, 15), /newer/],
+      ['newer', () => seedTaskStore(WALNUT_HOME, TASK_DB_MAX_SUPPORTED_VERSION + 1), /newer/],
     ]
     for (const [name, make, message] of cases) {
       // A fresh file each time, so no earlier connection holds its inode.
@@ -200,7 +200,7 @@ describe('task store version for isolated areas', () => {
     })
     const error = await refusal(() => ensureRouterDataVersion(WALNUT_HOME, failing as never))
     expect(error.message).toContain('disk I/O error')
-    expect(calls).toEqual(['ensure:13,14,14', 'dispose'])
+    expect(calls).toEqual([`ensure:${TASK_DB_SCHEMA_VERSION},${TASK_DB_ROUTER_VERSION},${TASK_DB_MAX_SUPPORTED_VERSION}`, 'dispose'])
     expect(taskStoreVersion(routerTaskDbPath(WALNUT_HOME))).toBe(13)
     expect(await ensureRouterDataVersion(WALNUT_HOME)).toBe(14)
   })
@@ -226,11 +226,11 @@ describe('task store version for isolated areas', () => {
     expect(taskStoreVersion(file)).toBe(14)
   })
 
-  it('a 15 committed by another writer while the stamp waits is refused and kept', async () => {
+  it('a newer version committed by another writer while the stamp waits is refused and kept', async () => {
     const file = seedTaskStore(WALNUT_HOME, 13)
     const writer = new Database(file)
     writer.exec('BEGIN IMMEDIATE')
-    writer.pragma('user_version = 15')
+    writer.pragma(`user_version = ${TASK_DB_MAX_SUPPORTED_VERSION + 1}`)
     setTimeout(() => writer.exec('COMMIT'), 300)
     try {
       expect((await refusal(() => ensureRouterDataVersion(WALNUT_HOME))).message).toContain('newer')
@@ -238,7 +238,7 @@ describe('task store version for isolated areas', () => {
       if (writer.inTransaction) writer.exec('ROLLBACK')
       writer.close()
     }
-    expect(taskStoreVersion(file)).toBe(15)
+    expect(taskStoreVersion(file)).toBe(TASK_DB_MAX_SUPPORTED_VERSION + 1)
     expect(integrity(file)).toBe('ok')
   })
 

@@ -254,9 +254,11 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify; sta
       const where = `${config.cwd}${config.host ? ` @ ${config.host}` : ''}`;
       return {
         status: 'ok',
-        summary: started.confirmed
-          ? `Started Claude Code session for task ${started.task.id} (${where})`
-          : `Starting Claude Code session for task ${started.task.id} (${where}); not confirmed yet, a start that never comes up is retried once and then recorded failed`,
+        summary: started.queued
+          ? `Task ${started.task.id} is waiting for a free slot (${where}); not started yet, Walnut starts this run automatically when there is room`
+          : started.confirmed
+            ? `Started Claude Code session for task ${started.task.id} (${where})`
+            : `Starting Claude Code session for task ${started.task.id} (${where}); not confirmed yet, a start that never comes up is retried once and then recorded failed`,
         ...(started.sessionId ? { delivered: { sessionId: started.sessionId, text: sessionMessage } } : {}),
       };
     },

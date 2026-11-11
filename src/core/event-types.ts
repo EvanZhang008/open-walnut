@@ -25,6 +25,8 @@ export interface TaskCreatedEvent {
    *  so an optimistic client can match this broadcast to its own in-flight
    *  create even when it arrives before the HTTP response. Never stored. */
   clientRequestId?: string;
+  /** quickStartSession({deferStart}) filed the task without starting it: no SESSION_START follows yet. */
+  deferredStart?: true;
 }
 export interface TaskUpdatedEvent {
   /** Null denotes a bulk mutation that requires consumers to refetch. */

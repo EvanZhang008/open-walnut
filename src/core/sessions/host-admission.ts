@@ -202,11 +202,15 @@ async function admitOnce(taskId: string, host: string | undefined | null, opts: 
         const { listTasks } = await import('../task-manager.js');
         const all = await listTasks();
         const byId = new Map(all.map((t) => [t.id, t]));
-        const { heldByTeamStop } = await import('./start-queue.js');
+        const { heldByTeamStop, queuedRoutineSwitches, routineQueueEnabled } = await import('./start-queue.js');
+        const switches = await queuedRoutineSwitches();
+        const { isOrgEnabled } = await import('../org/org-enabled.js');
+        const orgOn = await isOrgEnabled();
         const waiting = all.some((t) => t.id !== taskId && t.phase !== 'COMPLETE'
           && t.start_queue?.wait_for_slot && (t.start_queue.host ?? LOCAL_HOST) === key
           && byId.get(t.start_queue.parent_id)?.phase !== 'COMPLETE' && byId.has(t.start_queue.parent_id)
-          && !heldByTeamStop(t, byId));
+          && !heldByTeamStop(t, byId) && routineQueueEnabled(t, switches)
+          && (orgOn || (t.org_role !== 'main' && t.org_role !== 'lead')));
         if (waiting) throw new HostsFullError(`Not started: earlier automatic starts are waiting on ${key}.`, {
           taskId, host: key, reason: 'earlier automatic starts are waiting for a free slot',
         });

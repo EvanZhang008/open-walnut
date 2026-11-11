@@ -31,7 +31,7 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import type { ActionDescriptor, ActionContext, ActionResult } from './types.js';
 import { readTriageConfig, isTriageWithinActiveHours } from '../core/triage/config.js';
-import { claimTriageBatch } from '../core/triage/state.js';
+import { ackTriageClaimForTask, claimTriageBatch, loadTriageState, releaseTriageClaimHeldBy, triageRunHold, type TriageRunTaskView } from '../core/triage/state.js';
 import { buildTriageBatch, TRIAGE_STATE_NOTE } from '../core/triage/batch.js';
 import { keepTriageMailOutsideAreas } from '../core/triage/router-mail.js';
 import { TRIAGE_ACTION_ID } from '../core/triage/types.js';
@@ -69,6 +69,27 @@ export async function liveRules(rules: TriageRoutingRule[]): Promise<TriageRouti
   return rules.filter((_, i) => open[i]);
 }
 
+/**
+ * The run the open batch waits in, while it still waits: a run filed when every host was full
+ * starts later and takes its batch with it, so a fire meanwhile builds no second batch of the same
+ * items. A run whose session came up without its acknowledgement reaching the buffer is
+ * acknowledged here (its items are not offered again); one that no longer carries the batch
+ * (cancelled, deleted, its start failed) lets the claim go, and this fire's batch holds its items.
+ */
+async function waitingRun(home: string, nowMs: number): Promise<{ waiting?: string; released: boolean }> {
+  const claim = (await loadTriageState(home)).claim;
+  if (!claim?.taskId) return { released: false };
+  const { getTask } = await import('../core/task-manager.js');
+  const task = await getTask(claim.taskId).catch(() => null) as TriageRunTaskView | null;
+  const hold = triageRunHold(task, claim, nowMs);
+  if (hold === 'waiting') return { waiting: claim.taskId, released: false };
+  if (hold === 'delivered') {
+    await ackTriageClaimForTask(claim.taskId, {}, home);
+    return { released: false };
+  }
+  return { released: await releaseTriageClaimHeldBy(claim.taskId, home) };
+}
+
 export async function run(ctx: ActionContext): Promise<ActionResult> {
   const home = ctx.WALNUT_HOME;
   const { getConfig } = await import('../core/config-manager.js');
@@ -97,6 +118,14 @@ export async function run(ctx: ActionContext): Promise<ActionResult> {
     };
   }
   const nowMs = Date.now();
+  const held = await waitingRun(home, nowMs);
+  if (held.waiting) {
+    return {
+      invoke: false,
+      status: 'skipped',
+      content: `The previous Inbox Triage run (task ${held.waiting}) has not started yet (it waits for a free slot or for its session to come up) and carries the open batch; no new batch this run.`,
+    };
+  }
   const claimed = await claimTriageBatch(nowMs, home);
   const mail = await keepTriageMailOutsideAreas(claimed.mail, home);
   const stateDoc = await readStateNote(home);
@@ -115,7 +144,7 @@ export async function run(ctx: ActionContext): Promise<ActionResult> {
     ...(stateDoc ? { stateDoc } : {}),
     ...(claimed.lastJournalLine ? { previousJournalLine: claimed.lastJournalLine } : {}),
     ...(claimed.stateStale ? { stateStale: true } : {}),
-    ...(claimed.redelivered ? { redelivered: true } : {}),
+    ...(claimed.redelivered || held.released ? { redelivered: true } : {}),
     ...(rules.length ? { rules } : {}),
   });
 

@@ -747,6 +747,11 @@ export interface StartQueueEntry {
   reason?: string;
   /** A new automatic wait for capacity; older entries retain their one-shot replay. */
   wait_for_slot?: true;
+  /** A system-owned start with no asking session keeps its original source on replay. */
+  source?: string;
+  /** A routine run keeps its persona and original launch while waiting for capacity. */
+  routine?: RoutineLaunch;
+  routine_session_id?: string;
   /** The start as asked (SessionStartParams fields, minus the task and the caller). */
   params: {
     message?: string;
@@ -2724,6 +2729,8 @@ export interface RoutineLaunch {
   host?: string;
   model?: string;
   taskTitle?: string;
+  sessionTitle?: string;
+  jobId?: string;
   project?: string;
   walnutAgent?: boolean;
   agentId?: string;
@@ -2744,6 +2751,8 @@ export interface RoutineStart {
   /** The attempt's session id (absent for an engine that issues its own). */
   session_id?: string;
   state: 'starting' | 'started' | 'failed';
+  /** Capacity waiting is not a stale missed run and never consumes its spawn retry. */
+  waited_for_slot?: true;
   error?: string;
   launch?: RoutineLaunch;
 }

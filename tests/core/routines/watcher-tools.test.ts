@@ -214,6 +214,16 @@ describe('trigger_session', () => {
     expect(res).toMatch(/already started 1 session\(s\) today/);
   });
 
+  it('reserves the daily start budget for a singleton accepted into the capacity queue', async () => {
+    const { jobId, deps, tool } = setup({ maxOutcomesPerRun: 9, maxSessionsPerDay: 1 });
+    deps.sendToSingleton.mockResolvedValueOnce({ taskId: 'task-queued', startedSession: false, queued: true } as never);
+    expect(await tool('trigger_session').execute({ key: 'a', name: 'triage', message: '1' })).toContain('waiting for a free slot');
+    expect((await loadTriggerState(jobId, T0)).day.sessions).toBe(1);
+    const result = await tool('trigger_session').execute({ key: 'b', name: 'reviews', message: '2' });
+    expect(result).toMatch(/already started 1 session\(s\) today/);
+    expect(deps.sendToSingleton).toHaveBeenCalledTimes(1);
+  });
+
   it('honours a session count carried in from earlier runs today', async () => {
     const { deps, tool } = setup({
       maxSessionsPerDay: 2,

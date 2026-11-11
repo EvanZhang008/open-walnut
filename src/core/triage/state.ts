@@ -18,8 +18,11 @@
  *   claimTriageBatch()  — hand out the batch and REMEMBER what was handed out.
  *                         Nothing is deleted. A second claim while one is open
  *                         returns the SAME batch (a retried run re-delivers).
- *   ackTriageClaim()    — the run's task exists, so the batch reached a session:
- *                         now drop exactly what was claimed.
+ *   ackTriageClaim()    — the run's session was asked to start, so the batch
+ *                         reached a session: now drop exactly what was claimed.
+ *                         A run that has to wait for a free slot first is BOUND to
+ *                         the claim (`taskId`) and acknowledges it only when it
+ *                         really starts (runs.ts); meanwhile no new batch is built.
  *   releaseTriageClaim()— the delivery failed: forget the claim, keep the items,
  *                         let the next run claim them again.
  *
@@ -118,6 +121,14 @@ export interface TriageClaim {
   slack: number;
   droppedMail: number;
   droppedSlack: number;
+  /**
+   * The run task this batch waits in: a run filed while every host was full is
+   * started later, and only its start acknowledges the batch. Keyed by task, so a
+   * late start of an older run can never acknowledge a newer claim.
+   */
+  taskId?: string;
+  /** When the claim was bound to `taskId`. */
+  boundAtMs?: number;
 }
 
 export interface TriageState {
@@ -235,6 +246,8 @@ export async function loadTriageState(home?: string): Promise<TriageState> {
         slack: Math.max(0, Math.floor(num(claimRaw.slack))),
         droppedMail: Math.max(0, Math.floor(num(claimRaw.droppedMail))),
         droppedSlack: Math.max(0, Math.floor(num(claimRaw.droppedSlack))),
+        ...(typeof claimRaw.taskId === 'string' && claimRaw.taskId ? { taskId: claimRaw.taskId.slice(0, 200) } : {}),
+        ...(num(claimRaw.boundAtMs) > 0 ? { boundAtMs: num(claimRaw.boundAtMs) } : {}),
       }
       : undefined;
     return {
@@ -357,6 +370,11 @@ export interface TriageClaimResult {
  *    delivered anywhere that mattered);
  *  - no claim → a fresh claim over the whole buffer.
  *
+ * A claim still bound to a waiting run (`taskId`) never reaches here: the batch
+ * action skips the fire while that run waits, and releases the claim first when it
+ * no longer does. One that does anyway is replaced by a fresh claim with no
+ * binding, so the old run's late start cannot acknowledge it.
+ *
  * `sinceMs` is the floor for "what is new": the last acknowledged run's start,
  * or — on the very first run — `nowMs`, recorded so the first batch never asks a
  * session to read a mailbox from the beginning of time.
@@ -365,8 +383,9 @@ export async function claimTriageBatch(nowMs: number, home?: string): Promise<Tr
   let out!: TriageClaimResult;
   await updateTriageState((state) => {
     const open = state.claim;
-    const live = !!open && nowMs - open.atMs < CLAIM_TTL_MS;
-    if (open && !live) {
+    const bound = !!open?.taskId;
+    const live = !!open && !bound && nowMs - open.atMs < CLAIM_TTL_MS;
+    if (open && !live && !bound) {
       log.cron.warn('triage: a previous batch was never acknowledged — re-claiming its items', {
         claimedAtMs: open.atMs, mail: open.mail, slack: open.slack, ageMs: nowMs - open.atMs,
       });
@@ -386,7 +405,7 @@ export async function claimTriageBatch(nowMs: number, home?: string): Promise<Tr
       claim,
       mail: state.pending.mail.slice(0, claim.mail),
       slack: state.pending.slack.slice(0, claim.slack),
-      redelivered: live,
+      redelivered: live || bound,
       sinceMs: state.lastRunAtMs ?? state.sinceMs ?? nowMs,
       ...(state.lastJournalLine ? { lastJournalLine: state.lastJournalLine } : {}),
       stateStale: state.stateStale === true,
@@ -394,6 +413,24 @@ export async function claimTriageBatch(nowMs: number, home?: string): Promise<Tr
     };
   }, home);
   return out;
+}
+
+/** Drop exactly what the open claim covered. Runs under the state lock. */
+function dropClaimed(s: TriageState): void {
+  const claim = s.claim!;
+  // min(): the caps may have dropped some of the claimed prefix while the run
+  // was in flight. Those rows were already delivered, so dropping fewer here
+  // is correct — slicing by the claimed COUNT against a shorter list would
+  // eat rows that arrived after the claim.
+  s.pending.mail = s.pending.mail.slice(Math.min(claim.mail, s.pending.mail.length));
+  s.pending.slack = s.pending.slack.slice(Math.min(claim.slack, s.pending.slack.length));
+  s.pending.droppedMail = Math.max(0, s.pending.droppedMail - claim.droppedMail);
+  s.pending.droppedSlack = Math.max(0, s.pending.droppedSlack - claim.droppedSlack);
+  s.claim = undefined;
+  s.lastRunAtMs = claim.atMs;
+  s.runs += 1;
+  // The warning was carried into THIS run's envelope; it has been said.
+  s.stateStale = undefined;
 }
 
 /**
@@ -410,23 +447,92 @@ export async function ackTriageClaim(
   let acked = false;
   const state = await updateTriageState((s) => {
     if (!s.claim || s.claim.atMs !== claimAtMs) return;
-    const claim = s.claim;
-    // min(): the caps may have dropped some of the claimed prefix while the run
-    // was in flight. Those rows were already delivered, so dropping fewer here
-    // is correct — slicing by the claimed COUNT against a shorter list would
-    // eat rows that arrived after the claim.
-    s.pending.mail = s.pending.mail.slice(Math.min(claim.mail, s.pending.mail.length));
-    s.pending.slack = s.pending.slack.slice(Math.min(claim.slack, s.pending.slack.length));
-    s.pending.droppedMail = Math.max(0, s.pending.droppedMail - claim.droppedMail);
-    s.pending.droppedSlack = Math.max(0, s.pending.droppedSlack - claim.droppedSlack);
-    s.claim = undefined;
-    s.lastRunAtMs = claim.atMs;
-    s.runs += 1;
-    // The warning was carried into THIS run's envelope; it has been said.
-    s.stateStale = undefined;
+    dropClaimed(s);
     acked = true;
   }, home);
   return { acked, state };
+}
+
+/**
+ * The run task `taskId` started its session: acknowledge the claim it carries.
+ *
+ * Only a claim bound to this task, or (`bindIfUnbound`, a run started at once) one
+ * nobody holds yet. A claim bound to another run is never touched, so a late start
+ * of an older run cannot acknowledge the batch a newer run holds.
+ */
+export async function ackTriageClaimForTask(
+  taskId: string,
+  opts: { bindIfUnbound?: boolean } = {},
+  home?: string,
+): Promise<{ acked: boolean; claim?: TriageClaim }> {
+  let acked: TriageClaim | undefined;
+  await updateTriageState((s) => {
+    const claim = s.claim;
+    if (!claim) return;
+    if (claim.taskId ? claim.taskId !== taskId : !opts.bindIfUnbound) return;
+    acked = { ...claim };
+    dropClaimed(s);
+  }, home);
+  return acked ? { acked: true, claim: acked } : { acked: false };
+}
+
+/**
+ * A run was filed but waits to start (every host full): the open claim now waits
+ * in it. Binds only a claim nobody holds; returns it, or undefined.
+ */
+export async function bindTriageClaim(taskId: string, nowMs: number, home?: string): Promise<TriageClaim | undefined> {
+  let bound: TriageClaim | undefined;
+  await updateTriageState((s) => {
+    if (!s.claim || s.claim.taskId) return;
+    s.claim.taskId = taskId;
+    s.claim.boundAtMs = nowMs;
+    bound = { ...s.claim };
+  }, home);
+  return bound;
+}
+
+/** How long a just-bound claim counts as held before its task shows the wait (the queue write follows the create). */
+export const CLAIM_BIND_GRACE_MS = 2 * 60_000;
+
+/** The task fields `triageRunHold` reads (no import of the whole Task type into the action bundle). */
+export interface TriageRunTaskView {
+  phase?: string;
+  start_queue?: unknown;
+  routine_start?: { state?: string } | null;
+}
+
+/**
+ * What the run a claim is bound to did with it, read off the task:
+ *  - `waiting`: it waits for a slot (`start_queue`), or its start was dispatched and is not
+ *    confirmed yet (`routine_start` starting: a spawn that fails is retried with the same batch);
+ *  - `delivered`: its session came up (`routine_start` started), the batch reached it;
+ *  - `gone`: deleted, complete, cancelled or failed, so the batch never reached a session.
+ * A claim bound a moment ago reads `waiting` until its task shows the wait (the queue write
+ * follows the create).
+ */
+export function triageRunHold(
+  task: TriageRunTaskView | null | undefined,
+  claim: Pick<TriageClaim, 'boundAtMs'>,
+  nowMs: number,
+): 'waiting' | 'delivered' | 'gone' {
+  if (!task) return 'gone';
+  if (task.start_queue && task.phase !== 'COMPLETE') return 'waiting';
+  const state = task.routine_start?.state;
+  if (state === 'started') return 'delivered';
+  if (task.phase === 'COMPLETE' || state === 'failed') return 'gone';
+  if (state === 'starting') return 'waiting';
+  return claim.boundAtMs && nowMs - claim.boundAtMs < CLAIM_BIND_GRACE_MS ? 'waiting' : 'gone';
+}
+
+/** The run `taskId` will not deliver its batch: forget the claim, keep the items. */
+export async function releaseTriageClaimHeldBy(taskId: string, home?: string): Promise<boolean> {
+  let released = false;
+  await updateTriageState((s) => {
+    if (!s.claim || s.claim.taskId !== taskId) return;
+    s.claim = undefined;
+    released = true;
+  }, home);
+  return released;
 }
 
 /**

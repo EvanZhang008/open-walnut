@@ -12,6 +12,7 @@ import { _resetForTesting, addTask, getTask } from '../../src/core/task-manager.
 import { routerAreasPath, type RouterAreasFile } from '../../src/core/router/areas.js'
 import { routerTaskDbPath } from '../../src/core/router/data-version.js'
 import { localDaemon } from '../../src/providers/local-daemon.js'
+import { TASK_DB_MAX_SUPPORTED_VERSION } from '../../src/core/task-db-version.js'
 import { seedTaskStore, taskStoreVersion } from '../helpers/router-task-store.js'
 
 // Fixture account only: no mailbox is read.
@@ -113,9 +114,9 @@ describe('boot confirms the task store version for isolated areas', () => {
 
   it('refuses to boot on a store from a newer build, before the daemon or the port, and changes nothing', async () => {
     await seedHistoricalInstall()
-    // A fresh 15 file, not the seeded one rewritten: a seeding connection still open here checkpoints into its own inode only.
+    // A fresh newer file, not the seeded one rewritten: a seeding connection still open here checkpoints into its own inode only.
     for (const suffix of ['-wal', '-shm', '']) await fsp.rm(storeFile() + suffix, { force: true })
-    seedTaskStore(WALNUT_HOME, 15)
+    seedTaskStore(WALNUT_HOME, TASK_DB_MAX_SUPPORTED_VERSION + 1)
     const areasBefore = areasRaw()
 
     await expect(boot()).rejects.toMatchObject({ code: 'router_data_version' })
@@ -123,7 +124,7 @@ describe('boot confirms the task store version for isolated areas', () => {
     await expect(boot()).rejects.toMatchObject({ code: 'router_data_version' })
 
     expect(daemonStarts).not.toHaveBeenCalled()
-    expect(taskStoreVersion(storeFile())).toBe(15)
+    expect(taskStoreVersion(storeFile())).toBe(TASK_DB_MAX_SUPPORTED_VERSION + 1)
     expect(areasRaw()).toBe(areasBefore)
   }, BOOT_MS)
 

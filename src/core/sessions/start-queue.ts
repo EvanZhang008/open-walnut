@@ -31,10 +31,11 @@ const PRIORITY_RANK: Record<TaskPriority, number> = { immediate: 0, important: 1
 
 type Queued = Pick<Task, 'id' | 'priority'> & { start_queue?: StartQueueEntry | null };
 
-/** Order: priority first, then the oldest queued, then the id (a stable tie-break). */
+/** Accepted routine fires first, then task priority, age and a stable id tie-break. */
 export function queueOrder(a: Queued, b: Queued): number {
   const rank = (t: Queued) => PRIORITY_RANK[t.priority ?? 'none'] ?? PRIORITY_RANK.none;
-  return rank(a) - rank(b)
+  return Number(!a.start_queue?.routine) - Number(!b.start_queue?.routine)
+    || rank(a) - rank(b)
     || (a.start_queue?.at ?? '').localeCompare(b.start_queue?.at ?? '')
     || a.id.localeCompare(b.id);
 }
@@ -55,9 +56,10 @@ export async function waitForHostSlot(params: SessionStartParams, detail: HostsF
   const { getTask, updateTaskRaw } = await import('../task-manager.js');
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const caller = params.callerSid ? await getSessionByClaudeId(params.callerSid).catch(() => null) : null;
-  if (!caller?.taskId) throw new Error('An automatic slot wait needs its asking task');
+  if (params.callerSid && !caller?.taskId) throw new Error('An automatic slot wait needs its asking task');
   const entry: StartQueueEntry = {
-    at: new Date().toISOString(), parent_id: caller.taskId, caller_sid: caller.claudeSessionId,
+    at: new Date().toISOString(), parent_id: caller?.taskId ?? detail.taskId, caller_sid: caller?.claudeSessionId ?? '',
+    ...(!caller ? { source: params.source } : {}),
     host: detail.host, reason: detail.reason, wait_for_slot: true,
     params: {
       ...(params.message !== undefined ? { message: params.message } : {}),
@@ -89,13 +91,49 @@ export function heldByTeamStop(task: Pick<Task, 'id' | 'parent_task_id' | 'team_
   return false;
 }
 
+/** Read the routine switch once per queue pass, not once per waiting task. */
+export async function queuedRoutineSwitches(): Promise<ReadonlyMap<string, boolean> | undefined> {
+  const { getCronService } = await import('../../web/routes/cron.js');
+  const service = getCronService();
+  return service ? new Map((await service.list({ includeDisabled: true })).map((job) => [job.id, job.enabled])) : undefined;
+}
+
+export function routineQueueEnabled(task: Task, switches: ReadonlyMap<string, boolean> | undefined): boolean {
+  const jobId = task.routine_start?.job_id ?? task.start_queue?.routine?.jobId;
+  return !task.start_queue?.routine || !jobId || !switches || switches.get(jobId) === true;
+}
+
+/** Routine entries that cannot run must not come back through the boot retry. */
+function droppedRoutine(task: Task, error: string): Partial<Task> {
+  return task.start_queue?.routine && task.routine_start ? { routine_start: {
+    ...task.routine_start, state: 'failed', launch: undefined, error,
+  } } : {};
+}
+
+async function recordDroppedRoutine(taskId: string, record: Task['routine_start']): Promise<void> {
+  if (!record?.error) return;
+  const { defaultRunStartDeps } = await import('../routines/run-start-deps.js');
+  await defaultRunStartDeps().recordFailure(record, taskId, record.error);
+}
+
 /** Drop a task's queued start (it started, it completed, it was stopped). Never throws. */
-export async function clearStartQueue(taskId: string, why: string): Promise<boolean> {
+export async function clearStartQueue(taskId: string, why: string, queuedAt?: string): Promise<boolean> {
   const { updateTaskRaw } = await import('../task-manager.js');
+  let record: Task['routine_start'];
   try {
-    const res = await updateTaskRaw(taskId, (cur) => (cur.start_queue ? { start_queue: null } : null),
-      { emitEvent: true, push: false, source: START_QUEUE_SOURCE });
-    if (res.changed) log.session.info('queued start cleared', { taskId, why });
+    const res = await updateTaskRaw(taskId, (cur) => {
+      if (!cur.start_queue || (queuedAt && cur.start_queue.at !== queuedAt)) return null;
+      const error = `This queued run did not run: ${why}.`;
+      const patch = droppedRoutine(cur, error);
+      const launch = cur.start_queue.routine;
+      record = patch.routine_start ?? (launch?.jobId ? { job_id: launch.jobId, job_name: launch.sessionTitle ?? launch.taskTitle ?? 'Trigger',
+        run_at: cur.start_queue.at, attempt_at: cur.start_queue.at, attempt: 1, state: 'failed', error } : undefined);
+      return { start_queue: null, ...patch };
+    }, { emitEvent: true, push: false, source: START_QUEUE_SOURCE });
+    if (res.changed) {
+      log.session.info('queued start cleared', { taskId, why });
+      await recordDroppedRoutine(taskId, record);
+    }
     return res.changed;
   } catch {
     return false;
@@ -111,6 +149,14 @@ export async function startQueuedNow(taskId: string): Promise<SessionStartResult
   const { getTask } = await import('../task-manager.js');
   const entry = (await getTask(taskId)).start_queue;
   if (!entry) return null;
+  if (entry.routine) {
+    const { defaultRunStartDeps } = await import('../routines/run-start-deps.js');
+    const result = await defaultRunStartDeps().launch(entry.routine, { existingTaskId: taskId,
+      queuedAt: entry.at, byPerson: true,
+      ...(entry.routine_session_id ? { preassignedSessionId: entry.routine_session_id } : {}),
+    });
+    return { taskId, title: result.task.title, started: true, ...(entry.routine_session_id ? { sessionId: entry.routine_session_id } : {}) };
+  }
   const { startSessionForTask } = await import('./task-start.js');
   return await startSessionForTask({ ...entry.params, taskIdPrefix: taskId, callerSid: entry.caller_sid, source: START_QUEUE_SOURCE, byPerson: true, queuedAt: entry.at });
 }
@@ -122,11 +168,22 @@ export async function startQueuedNow(taskId: string): Promise<SessionStartResult
  */
 export async function cancelQueuedStartByPerson(taskId: string): Promise<boolean> {
   const { updateTaskRaw } = await import('../task-manager.js');
-  const res = await updateTaskRaw(taskId, (cur) => (cur.start_queue ? {
-    start_queue: null,
-    last_start: { id: randomUUID(), at: new Date().toISOString(), state: 'failed' as const, error: 'The user cancelled this queued start; it did not run.' },
-  } : null), { emitEvent: true, push: false, source: START_QUEUE_SOURCE }).catch(() => ({ changed: false }));
-  if (res.changed) log.session.info('queued start cancelled by the user', { taskId });
+  let record: Task['routine_start'];
+  const res = await updateTaskRaw(taskId, (cur) => {
+    if (!cur.start_queue) return null;
+    const error = 'The user cancelled this queued run; it did not run.';
+    const patch = droppedRoutine(cur, error);
+    const launch = cur.start_queue.routine;
+    record = patch.routine_start ?? (launch?.jobId ? { job_id: launch.jobId, job_name: launch.sessionTitle ?? launch.taskTitle ?? 'Trigger',
+      run_at: cur.start_queue.at, attempt_at: cur.start_queue.at, attempt: 1, state: 'failed', error } : undefined);
+    return { start_queue: null, ...patch,
+      last_start: { id: randomUUID(), at: new Date().toISOString(), state: 'failed' as const, error: 'The user cancelled this queued start; it did not run.' },
+    };
+  }, { emitEvent: true, push: false, source: START_QUEUE_SOURCE }).catch(() => ({ changed: false }));
+  if (res.changed) {
+    log.session.info('queued start cancelled by the user', { taskId });
+    await recordDroppedRoutine(taskId, record);
+  }
   return res.changed;
 }
 
@@ -137,10 +194,11 @@ export async function cancelQueuedStartByPerson(taskId: string): Promise<boolean
 async function failLoudly(task: Task, entry: StartQueueEntry, error: string): Promise<void> {
   const { updateTaskRaw } = await import('../task-manager.js');
   await updateTaskRaw(task.id, (cur) => {
-    if (!cur.start_queue) return null;
+    if (cur.start_queue?.at !== entry.at) return null;
     const recorded = !!cur.last_start && cur.last_start.at >= entry.at;
     return {
       start_queue: null,
+      ...droppedRoutine(cur, error),
       ...(recorded ? {} : { last_start: { id: randomUUID(), at: new Date().toISOString(), state: 'failed' as const, error } }),
     };
   }, { emitEvent: true, push: false, source: START_QUEUE_SOURCE }).catch(() => null);
@@ -196,13 +254,13 @@ async function drainNow(opts: { notBefore?: number }): Promise<DrainResult> {
   for (const t of line) {
     const entry = t.start_queue!;
     if (t.phase === 'COMPLETE') {
-      await clearStartQueue(t.id, 'task complete');
+      await clearStartQueue(t.id, 'task complete', entry.at);
       out.dropped.push(t.id);
       continue;
     }
     // Started some other way since it was queued (a person's start, a message that resumed it).
     if (t.last_start && t.last_start.at > entry.at && t.last_start.state !== 'failed') {
-      await clearStartQueue(t.id, 'started since queued');
+      await clearStartQueue(t.id, 'started since queued', entry.at);
       out.dropped.push(t.id);
       continue;
     }
@@ -210,7 +268,7 @@ async function drainNow(opts: { notBefore?: number }): Promise<DrainResult> {
     const askerTaskId = (await getSessionByClaudeId(entry.caller_sid).catch(() => null))?.taskId ?? entry.parent_id;
     const asker = byId.get(askerTaskId);
     if (!asker || asker.phase === 'COMPLETE') {
-      await clearStartQueue(t.id, asker ? 'caller complete' : 'caller gone');
+      await clearStartQueue(t.id, asker ? 'caller complete' : 'caller gone', entry.at);
       out.dropped.push(t.id);
       continue;
     }
@@ -218,14 +276,35 @@ async function drainNow(opts: { notBefore?: number }): Promise<DrainResult> {
     // the phone, a quick start): a replay now would send the queued message into it again.
     const records = await getSessionsForTask(t.id).catch(() => []);
     if (records.some((r) => (r.startedAt ?? '') > entry.at)) {
-      await clearStartQueue(t.id, 'session since queued');
+      await clearStartQueue(t.id, 'session since queued', entry.at);
       out.dropped.push(t.id);
       continue;
     }
     if (heldByTeamStop(t, byId)) { out.held.push(t.id); continue; }
+    if (t.org_role === 'main' || t.org_role === 'lead') {
+      const { isOrgEnabled } = await import('../org/org-enabled.js');
+      if (!await isOrgEnabled()) { out.held.push(t.id); continue; }
+    }
     try {
+      if (entry.routine) {
+        const { getCronService } = await import('../../web/routes/cron.js');
+        const service = getCronService();
+        const jobId = t.routine_start?.job_id ?? entry.routine.jobId;
+        if (service && jobId) {
+          const job = (await service.list({ includeDisabled: true })).find((j) => j.id === jobId);
+          if (!job) { await clearStartQueue(t.id, 'routine removed', entry.at); out.dropped.push(t.id); continue; }
+          if (!job.enabled) { out.held.push(t.id); continue; }
+        }
+        const { defaultRunStartDeps } = await import('../routines/run-start-deps.js');
+        await defaultRunStartDeps().launch(entry.routine, {
+          existingTaskId: t.id, queuedAt: entry.at,
+          ...(entry.routine_session_id ? { preassignedSessionId: entry.routine_session_id } : {}),
+        });
+        out.started.push(t.id);
+        continue;
+      }
       // Placed again: it goes to the host with room that has its files (start-placement.ts).
-      const result = await startSessionForTask({ ...entry.params, taskIdPrefix: t.id, callerSid: entry.caller_sid, source: START_QUEUE_SOURCE, queuedAt: entry.at, answerWithinMs: 110_000 });
+      const result = await startSessionForTask({ ...entry.params, taskIdPrefix: t.id, callerSid: entry.caller_sid, source: entry.source ?? START_QUEUE_SOURCE, queuedAt: entry.at, answerWithinMs: 110_000 });
       if (result.queued) { out.held.push(t.id); continue; }
       out.started.push(t.id);
       log.session.info('queued start started', { taskId: t.id, askerId: entry.parent_id, host: entry.host, queuedAt: entry.at });
@@ -237,7 +316,7 @@ async function drainNow(opts: { notBefore?: number }): Promise<DrainResult> {
       if (err instanceof SessionExistsError) {
         const { isTaskStarting } = await import('./task-start.js');
         if (isTaskStarting(t.id)) { out.held.push(t.id); continue; }
-        await clearStartQueue(t.id, 'already started');
+        await clearStartQueue(t.id, 'already started', entry.at);
         out.dropped.push(t.id);
         continue;
       }

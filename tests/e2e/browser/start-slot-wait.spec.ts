@@ -4,8 +4,8 @@ import { test, expect } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { isolateUiPrefs, selectSection } from './todo-panel-helpers'
 
-test('a slot wait is explicit in task details and Cancel removes only its waiting start', async ({ page, request, baseURL }) => {
-  const title = `Slot wait ${Date.now()}`
+for (const kind of ['task', 'routine'] as const) test(`${kind} slot wait is explicit and keeps its launch through Cancel and Start now`, async ({ page, request, baseURL }) => {
+  const title = `${kind} slot wait ${Date.now()}`
   const made = await request.post('/api/tasks', { data: { title, source: 'local', project: 'Garden' } })
   expect(made.ok()).toBe(true)
   const id = (await made.json()).task.id as string
@@ -14,8 +14,12 @@ test('a slot wait is explicit in task details and Cancel removes only its waitin
   const row = db.prepare('SELECT payload FROM tasks WHERE id = ?').get(id) as { payload: string | null }
   const payload = JSON.parse(row.payload ?? '{}')
   const reason = 'all 7 slots taken'
-  const entry = { at: new Date().toISOString(), parent_id: id, caller_sid: 'fixture-slot-wait', host: '__local__', reason, wait_for_slot: true, params: {} }
-  db.prepare('UPDATE tasks SET payload = ? WHERE id = ?').run(JSON.stringify({ ...payload, start_queue: entry, team_stop: { at: entry.at, by: 'human', when: 'now', members: [] }, user_status: { state: 'waiting', kind: 'machine', waitingOn: `Waiting for a free slot on this Mac (${reason}): Walnut starts it automatically when there is room` } }), id)
+  const at = new Date().toISOString()
+  const launch = { message: 'Read the original routine batch.', cwd: '/tmp', source: 'routine', taskTitle: title }
+  const record = { job_id: `browser-${id}`, job_name: 'Garden routine', run_at: at, attempt: 1, attempt_at: at, state: 'starting', waited_for_slot: true, launch }
+  const entry = { at, parent_id: id, caller_sid: 'fixture-slot-wait', host: '__local__', reason, wait_for_slot: true, params: {},
+    ...(kind === 'routine' ? { routine: launch } : {}) }
+  db.prepare('UPDATE tasks SET payload = ? WHERE id = ?').run(JSON.stringify({ ...payload, ...(kind === 'routine' ? { routine_start: record } : {}), start_queue: entry, team_stop: { at: entry.at, by: 'human', when: 'now', members: [] }, user_status: { state: 'waiting', kind: 'machine', waitingOn: `Waiting for a free slot on this Mac (${reason}): Walnut starts it automatically when there is room` } }), id)
   db.close()
   const errors: string[] = []
   page.on('pageerror', e => errors.push(e.message))
@@ -37,17 +41,20 @@ test('a slot wait is explicit in task details and Cancel removes only its waitin
     await expect(page.getByTestId('task-detail-start-queue-now')).toBeVisible()
     const shots = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots`
     fs.mkdirSync(shots, { recursive: true })
-    await page.locator('.task-detail-modal').screenshot({ path: `${shots}/start-slot-wait.png` })
+    await page.locator('.task-detail-modal').screenshot({ path: `${shots}/${kind}-start-slot-wait.png`, scale: 'css' })
     await page.getByTestId('task-detail-start-queue-cancel').click()
     await expect(line).toHaveCount(0)
     const after = await request.get(`/api/tasks/${id}`)
     const body = await after.json()
     expect((body.task ?? body).start_queue).toBeFalsy()
+    if (kind === 'routine') expect((body.task ?? body).routine_start?.state).toBe('failed')
 
     await page.getByRole('button', { name: 'Close detail panel' }).click()
     const again = new DatabaseSync(`${walnutHome}/tasks/tasks.sqlite`)
     const current = again.prepare('SELECT payload FROM tasks WHERE id = ?').get(id) as { payload: string }
-    again.prepare('UPDATE tasks SET payload = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(current.payload), start_queue: { ...entry, params: { expectReply: false, message: 'Read the garden release.' } } }), id)
+    again.prepare('UPDATE tasks SET payload = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(current.payload),
+      ...(kind === 'routine' ? { routine_start: record } : {}),
+      start_queue: { ...entry, params: { expectReply: false, message: 'Read the garden release.' } } }), id)
     again.close()
     await page.setViewportSize({ width: 900, height: 700 })
     // Open a fresh page by a real link so the direct fixture write is read again.
@@ -64,6 +71,9 @@ test('a slot wait is explicit in task details and Cancel removes only its waitin
     const started = await startedResponse
     expect(started.ok(), await started.text()).toBe(true)
     await expect(line).toHaveCount(0)
+    await page.locator('.task-detail-modal').screenshot({ path: `${shots}/${kind}-start-slot-wait-started.png`, scale: 'css' })
+    // Leave the final state in the recording, rather than cutting it at the response.
+    await page.waitForTimeout(750)
     expect(errors).toEqual([])
   } finally { await request.delete(`/api/tasks/${id}?force=true`) }
 })

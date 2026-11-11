@@ -141,12 +141,14 @@ export interface RoutineRunStarted {
   sessionId?: string;
   /** 'started': confirmed inline. 'pending': the watch decides after the executor returns. */
   confirmed: boolean;
+  queued?: true;
 }
 
 interface ErrorTap { text?: string; stop: () => void }
 
 /** Watches still running in this process, by task id (tests and the boot pickup). */
 const watches = new Map<string, Promise<void>>();
+const starts = new Map<string, Promise<RoutineRunStarted>>();
 
 export function _runStartWatchesForTesting(): Map<string, Promise<void>> {
   return watches;
@@ -160,18 +162,26 @@ export class RoutineRunStarter {
    * A launch that throws (the host gate, an unknown agent) throws to the caller,
    * which reports it as the run's error the way it always did.
    */
-  async start(input: RoutineRunInput): Promise<RoutineRunStarted> {
+  start(input: RoutineRunInput): Promise<RoutineRunStarted> {
+    const key = `${input.job.id}|${input.runAtMs}`;
+    const flight = starts.get(key);
+    if (flight) return flight;
+    const run = this.startOnce(input).finally(() => { if (starts.get(key) === run) starts.delete(key); });
+    starts.set(key, run);
+    return run;
+  }
+
+  private async startOnce(input: RoutineRunInput): Promise<RoutineRunStarted> {
+    const prior = await this.deps.findRun?.(input.job.id, new Date(input.runAtMs).toISOString());
+    if (prior?.routine_start?.state === 'failed') throw new Error(prior.routine_start.error || 'This dispatched run did not start');
+    if (prior?.routine_start) return { task: prior, confirmed: prior.routine_start.state === 'started',
+      ...(prior.start_queue?.routine ? { queued: true as const } : {}),
+      ...(prior.routine_start.session_id && !prior.start_queue ? { sessionId: prior.routine_start.session_id } : {}),
+    };
     const sid = await this.deps.mintSessionId(input.launch.host, input.launch.model, input.launch.walnutAgent ? undefined : input.launch.project);
     const attemptAt = this.deps.now();
     // Listening before the launch: a spawn can fail before the launch returns.
     const tap = this.tap(sid);
-    let task: Task;
-    try {
-      ({ task } = await this.deps.launch(input.launch, { preassignedSessionId: sid }));
-    } catch (err) {
-      tap.stop();
-      throw err;
-    }
     const record: RoutineStart = {
       job_id: input.job.id,
       job_name: input.job.name,
@@ -182,7 +192,19 @@ export class RoutineRunStarter {
       state: 'starting',
       launch: input.launch,
     };
-    await this.deps.writeStart(task.id, record);
+    let task: Task;
+    let queued: true | undefined;
+    try {
+      ({ task, queued } = await this.deps.launch(input.launch, { preassignedSessionId: sid, record }));
+    } catch (err) {
+      tap.stop();
+      throw err;
+    }
+    if (!queued) await this.deps.writeStart(task.id, record);
+    if (queued) {
+      tap.stop();
+      return { task, confirmed: false, queued: true };
+    }
     const inline = await this.observe(task.id, sid, record.attempt_at, tap, attemptAt + Math.min(this.t.inlineWaitMs, this.t.attemptDeadlineMs));
     if (inline.kind === 'started') {
       tap.stop();
@@ -191,6 +213,23 @@ export class RoutineRunStarter {
     }
     this.follow(task.id, record, tap);
     return { task, ...(sid ? { sessionId: sid } : {}), confirmed: false };
+  }
+
+  /** A queued launch failed for a reason other than capacity. */
+  async failCapacity(taskId: string, error: string, record: RoutineStart): Promise<void> {
+    if (!await this.deps.failClaimedStart?.(taskId, record, error)) return;
+    await this.deps.recordFailure(record, taskId, error);
+    await this.deps.handBack(taskId, record, error);
+  }
+
+  /** A retry can leave its old watch just as the queue admits its next attempt. */
+  resumeFromCapacity(taskId: string, record: RoutineStart): void {
+    const previous = watches.get(taskId);
+    if (!previous) return this.resume(taskId, record);
+    void previous.then(async () => {
+      const current = (await this.deps.getTask(taskId))?.routine_start;
+      if (current?.state === 'starting' && current.attempt_at === record.attempt_at && current.session_id === record.session_id) this.resume(taskId, record);
+    }).catch((error) => log.cron.warn('routine capacity watch not resumed', { taskId, error: String(error) }));
   }
 
   /** Continue a start a previous server process left unsettled. */
@@ -242,6 +281,7 @@ export class RoutineRunStarter {
           await this.settle(taskId, { ...current, session_id: retried.continued }, { state: 'started' });
           return;
         }
+        if ('queued' in retried) return;
         if ('error' in retried) {
           reason = `${reason}; the retry could not be launched: ${retried.error}`;
         } else {
@@ -270,7 +310,7 @@ export class RoutineRunStarter {
 
   private async started(taskId: string, rs: RoutineStart): Promise<void> {
     await this.settle(taskId, rs, { state: 'started' });
-    if (rs.attempt === 2) await this.deps.recordStartedOnRetry(rs, taskId);
+    if (rs.attempt === 2 || rs.waited_for_slot) await this.deps.recordStartedOnRetry(rs, taskId);
   }
 
   /**
@@ -291,14 +331,14 @@ export class RoutineRunStarter {
       return 'its host did not confirm the first try was stopped, so it was not retried (a second start could run it twice)';
     }
     const late = this.deps.now() - Date.parse(current.run_at);
-    if (late > this.t.staleAfterMs) {
+    if (!current.waited_for_slot && late > this.t.staleAfterMs) {
       return `the run is ${Math.round(late / 3_600_000)}h past its time, too late to start it now`;
     }
     if (!current.launch) return 'the retry had nothing to start from';
     return null;
   }
 
-  private async retry(taskId: string, prev: RoutineStart): Promise<{ record: RoutineStart; tap: ErrorTap } | { continued: string } | { error: string }> {
+  private async retry(taskId: string, prev: RoutineStart): Promise<{ record: RoutineStart; tap: ErrorTap } | { continued: string } | { queued: true } | { error: string }> {
     const launch = prev.launch!;
     const sid = await this.deps.mintSessionId(launch.host, launch.model, launch.walnutAgent ? undefined : launch.project);
     const next: RoutineStart = {
@@ -310,7 +350,8 @@ export class RoutineRunStarter {
     await this.deps.writeStart(taskId, next);
     const tap = this.tap(sid);
     try {
-      const { continued } = await this.deps.launch(launch, { preassignedSessionId: sid, existingTaskId: taskId });
+      const { continued, queued } = await this.deps.launch(launch, { preassignedSessionId: sid, existingTaskId: taskId, record: next });
+      if (queued) { tap.stop(); return { queued: true }; }
       // The task had a conversation after all (one session per task): the run went there.
       if (continued && continued !== sid) {
         tap.stop();

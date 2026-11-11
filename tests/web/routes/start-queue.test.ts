@@ -323,13 +323,14 @@ describe('an unpinned automatic start waits for capacity', () => {
     } finally { release(); spy.mockRestore(); }
   });
 
-  it('an automatic org start without a caller is not held by another task\'s waiting list', async () => {
+  it('an automatic org start without a caller joins the same waiting list instead of taking an earlier slot', async () => {
     const { parent, sid } = await worker('Org start lead');
     const [waiting, org] = await children(parent.id, ['TODO', 'TODO']);
     expect((await startAs(sid, waiting, { cwd: undefined })).status).toBe(202);
     mac(false);
     const { ORG_START_SOURCE } = await import('../../../src/core/org/org-autostart.js');
-    expect((await startSessionForTask({ taskIdPrefix: org, source: ORG_START_SOURCE, expectReply: false })).started).toBe(true);
+    expect(await startSessionForTask({ taskIdPrefix: org, source: ORG_START_SOURCE, expectReply: false })).toMatchObject({ started: false, queued: {} });
+    expect((await getTask(org)).start_queue?.source).toBe(ORG_START_SOURCE);
   });
 
   it('a new automatic start does not take a freed slot ahead of the waiting starts', async () => {

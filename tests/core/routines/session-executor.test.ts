@@ -63,6 +63,18 @@ function job(over: Partial<CronJob> = {}): CronJob {
 const REF = { type: 'session', config: { target: 'task-1', prompt: 'read them', instructions: 'read them' } };
 const FIRE = buildTriggerMessage({ name: 'PR comments' }, { atMs: 1, items: [{ id: 'c1' }] }, 'read them');
 
+describe('session executor: accepted capacity wait', () => {
+  it('reports the original message queued without a fake session delivery or record wait', async () => {
+    const f = fakeDelivery({ getTask: async () => ({ id: 'task-1', phase: 'TODO', cwd: '/repo' }),
+      startSession: vi.fn(async () => ({ queued: true as const })) });
+    const result = await createSessionExecutor(f).run(job(), REF, FIRE);
+    expect(result.status).toBe('ok');
+    expect(result.summary).toContain('waiting for a free slot');
+    expect(result.delivered).toBeUndefined();
+    expect(f.delivery.startSession).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1', jobId: 'job-1' }));
+  });
+});
+
 describe('session executor: validate', () => {
   const exec = createSessionExecutor(fakeDelivery());
 
@@ -222,7 +234,7 @@ describe('session executor: delivery', () => {
       delivered: { text: FIRE },
     });
     expect(calls.started).toEqual([{
-      message: FIRE, taskId: 'task-1', cwd: '/repo/checkout', title: 'Trigger: PR comments',
+      message: FIRE, taskId: 'task-1', cwd: '/repo/checkout', title: 'Trigger: PR comments', jobId: 'job-1',
     }]);
   });
 

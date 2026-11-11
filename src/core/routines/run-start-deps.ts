@@ -18,11 +18,13 @@ export interface RunStartDeps {
    *  defaults may name the engine (project-launch-defaults.ts). */
   mintSessionId(host: string | undefined, model?: string, project?: string): Promise<string | undefined>;
   /** `continued`: the task already held a conversation, and the message continued it there. */
-  launch(launch: RoutineLaunch, opts: { preassignedSessionId?: string; existingTaskId?: string }): Promise<{ task: Task; continued?: string }>;
+  launch(launch: RoutineLaunch, opts: { preassignedSessionId?: string; existingTaskId?: string; queuedAt?: string; byPerson?: boolean; record?: RoutineStart }): Promise<{ task: Task; continued?: string; queued?: true }>;
   getSession(sessionId: string): Promise<SessionRecord | null>;
   sessionsForTask(taskId: string): Promise<SessionRecord[]>;
   getTask(taskId: string): Promise<Task | null>;
+  findRun?(jobId: string, runAt: string): Promise<Task | null>;
   writeStart(taskId: string, start: RoutineStart): Promise<void>;
+  failClaimedStart?(taskId: string, expected: RoutineStart, error: string): Promise<boolean>;
   /** Mark an attempt's never-spawned record failed, so the task is free for the retry. */
   failSession(sessionId: string, reason: string): Promise<void>;
   /** The host's daemon is connected (undefined = this machine). */
@@ -42,10 +44,8 @@ export interface RunStartDeps {
 }
 
 const LOCAL = '__local__';
-/** Routine runs waiting for room on their host, by routine (its task, or its source, folder and instructions: a title may carry the time). */
-const waitingRuns = new Set<string>();
-/** How long a run waits for room on its host: well inside a trigger's delivery (2 minutes). */
-export const ROUTINE_WAIT_MS = 60_000;
+/** Capacity is persisted on the run's task; no inline wait holds a trigger's delivery. */
+export const ROUTINE_WAIT_MS = 0;
 /** How long a started run's slot stays counted, as a task start's (task-start.ts). */
 const SLOT_HOLD_MS = 60_000;
 
@@ -77,47 +77,96 @@ export function defaultRunStartDeps(): RunStartDeps {
     },
     async launch(launch, opts) {
       const { quickStartSession, continuedSessionOf } = await import('../sessions/quick-start.js');
-      // A routine's run is an automatic start: it waits for a free slot on its host
-      // (sessions/host-admission.ts), asking again every 15 s for up to ROUTINE_WAIT_MS, inside
-      // a trigger's 2-minute delivery (cron/trigger-apply.ts), so no wait outlives its delivery:
-      // a fire that found no room fails retryable and the daemon delivers it again later (review
-      // round 5, Sol). One run of a routine waits at a time: a fire meanwhile is refused the same way.
-      const { admitHostStart, holdSlotFor } = await import('../sessions/host-admission.js');
+      const { admitHostStart, holdSlotFor, HostsFullError } = await import('../sessions/host-admission.js');
       const host = launch.host && launch.host !== LOCAL ? launch.host : LOCAL;
-      const key = opts.existingTaskId ?? `${launch.source ?? ''}|${launch.cwd ?? ''}|${launch.message.slice(0, 200)}`;
-      if (waitingRuns.has(key)) {
-        throw new Error(`Skipped: the routine's previous run still waits for room on ${host === LOCAL ? 'this Mac' : host}.`);
+      if (opts.existingTaskId && !opts.queuedAt) {
+        const { getTask } = await import('../task-manager.js');
+        const waiting = await getTask(opts.existingTaskId);
+        if (waiting.start_queue?.routine) {
+          if (waiting.start_queue.routine.message === launch.message) return { task: waiting, queued: true };
+          throw new Error(`Task ${waiting.id} has an earlier accepted capacity wait; this trigger message has not been accepted yet`);
+        }
       }
-      waitingRuns.add(key);
+      const quick = {
+        message: launch.message, cwd: launch.cwd, host: launch.host, model: launch.model,
+        ...(launch.taskTitle ? { taskTitle: launch.taskTitle } : {}),
+        ...(launch.sessionTitle ? { sessionTitle: launch.sessionTitle } : {}),
+        taskMeta: { pinTier: null }, ...(launch.project ? { project: launch.project } : {}),
+        source: launch.source, ...(launch.walnutAgent ? { walnutAgent: true } : {}),
+        ...(launch.agentId ? { agentId: launch.agentId } : {}),
+      };
       let slot: (holdMs?: number) => void;
       try {
-        slot = await admitHostStart(opts.existingTaskId ?? `routine-run:${opts.preassignedSessionId ?? randomUUID()}`, host, { automatic: true, waitMs: ROUTINE_WAIT_MS });
-      } finally {
-        waitingRuns.delete(key);
+        slot = await admitHostStart(opts.existingTaskId ?? `routine-run:${opts.preassignedSessionId ?? randomUUID()}`, host, {
+          automatic: !opts.byPerson, respectWaiting: !opts.queuedAt && !opts.byPerson,
+        });
+      } catch (error) {
+        if (!(error instanceof HostsFullError) || opts.queuedAt) throw error;
+        const { ensureRoutineQueueDataVersion } = await import('./capacity-data-version.js');
+        await ensureRoutineQueueDataVersion();
+        const task = await quickStartSession({ ...quick, deferStart: true,
+          ...(opts.existingTaskId ? { existingTaskId: opts.existingTaskId } : {}),
+        });
+        const { updateTaskRaw, getTask } = await import('../task-manager.js');
+        // Bind before publishing the durable queue, so boot cannot replay an unbound batch twice.
+        const { isTriageRunTask } = await import('../triage/runs.js');
+        if (isTriageRunTask(task)) {
+          const { bindTriageClaim } = await import('../triage/state.js');
+          await bindTriageClaim(task.id, Date.now());
+        }
+        await updateTaskRaw(task.id, (cur) => cur.phase === 'COMPLETE' || cur.start_queue ? null : {
+          start_queue: { at: new Date().toISOString(), parent_id: task.id, caller_sid: '',
+            host, reason: error.detail.reason, wait_for_slot: true, routine: launch,
+            ...(opts.preassignedSessionId ? { routine_session_id: opts.preassignedSessionId } : {}),
+            params: { message: launch.message, cwd: launch.cwd, ...(launch.host ? { host: launch.host } : {}), ...(launch.model ? { model: launch.model } : {}), expectReply: false } },
+          ...(opts.record ? { routine_start: { ...opts.record, waited_for_slot: true as const } } : {}),
+        }, { source: 'start-queue', emitEvent: true, push: false });
+        const waiting = await getTask(task.id);
+        if (!waiting.start_queue) throw new Error('The routine run was closed before its capacity wait was recorded');
+        // A second fire on one target is still owed, not silently replaced by the first wait.
+        // Its caller retains the fire and retries after the accepted entry has started.
+        if (waiting.start_queue.routine?.message !== launch.message) throw error;
+        return { task: waiting, queued: true };
+      }
+      let claimedRecord: RoutineStart | undefined;
+      if (opts.queuedAt) {
+        const { updateTaskRaw } = await import('../task-manager.js');
+        const claimed = await updateTaskRaw(opts.existingTaskId!, (cur) => {
+          if (cur.phase === 'COMPLETE' || cur.start_queue?.at !== opts.queuedAt) return null;
+          claimedRecord = cur.routine_start ? { ...cur.routine_start, attempt_at: new Date().toISOString() } : undefined;
+          return { start_queue: null, ...(claimedRecord ? { routine_start: claimedRecord } : {}) };
+        }, { source: 'start-queue', emitEvent: true, push: false });
+        if (!claimed.changed) {
+          slot();
+          const { QueuedStartGoneError } = await import('../sessions/task-start.js');
+          throw new QueuedStartGoneError(opts.existingTaskId!);
+        }
       }
       let started = false;
       try {
-        const task = await quickStartSession({
-          message: launch.message,
-          cwd: launch.cwd,
-          host: launch.host,
-          model: launch.model,
-          ...(launch.taskTitle ? { taskTitle: launch.taskTitle } : {}),
-          // Background automation: an explicit null keeps every run off the pinned board.
-          taskMeta: { pinTier: null },
-          ...(launch.project ? { project: launch.project } : {}),
-          source: launch.source,
-          ...(launch.walnutAgent ? { walnutAgent: true } : {}),
-          ...(launch.agentId ? { agentId: launch.agentId } : {}),
+        const task = await quickStartSession({ ...quick,
           ...(opts.preassignedSessionId ? { preassignedSessionId: opts.preassignedSessionId } : {}),
           ...(opts.existingTaskId ? { existingTaskId: opts.existingTaskId } : {}),
         });
+        if (claimedRecord) (await routineRunStarter()).resumeFromCapacity(task.id, claimedRecord);
         const continued = continuedSessionOf(task);
         started = true;
         // Its session has its record now, counted by its task; the hold covers one not yet
         // marked running, under the task it made (review round 5, Sol: a new run's slot was let go).
         if (!opts.existingTaskId && task?.id) holdSlotFor(host, task.id, SLOT_HOLD_MS);
         return { task, ...(continued ? { continued } : {}) };
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        if (claimedRecord) await (await routineRunStarter()).failCapacity(opts.existingTaskId!, text, claimedRecord);
+        else if (opts.queuedAt && opts.existingTaskId) {
+          const { updateTaskRaw } = await import('../task-manager.js');
+          await updateTaskRaw(opts.existingTaskId, (cur) => cur.start_queue || cur.phase === 'COMPLETE' ? null : {
+            last_start: { id: randomUUID(), at: new Date().toISOString(), state: 'failed', error: text },
+          }, { source: 'start-queue', emitEvent: true, push: false });
+          if (launch.jobId) await this.recordFailure({ job_id: launch.jobId, job_name: launch.sessionTitle ?? launch.taskTitle ?? 'Trigger',
+            run_at: opts.queuedAt, attempt_at: opts.queuedAt, attempt: 1, state: 'failed' }, opts.existingTaskId, text);
+        }
+        throw error;
       } finally {
         slot(started && opts.existingTaskId ? SLOT_HOLD_MS : 0);
       }
@@ -134,12 +183,26 @@ export function defaultRunStartDeps(): RunStartDeps {
       const { getTask } = await import('../task-manager.js');
       return await getTask(taskId).catch(() => null);
     },
+    async findRun(jobId, runAt) {
+      const { listTasks } = await import('../task-manager.js');
+      return (await listTasks()).find((t) => t.routine_start?.job_id === jobId && t.routine_start.run_at === runAt) ?? null;
+    },
     async writeStart(taskId, start) {
       const { updateTaskRaw } = await import('../task-manager.js');
-      await updateTaskRaw(taskId, { routine_start: start }, { source: 'routine', push: false })
+      await updateTaskRaw(taskId, { routine_start: start }, { source: 'routine', push: false, emitEvent: true })
         .catch((err) => log.cron.warn('routine start: task write failed', {
           taskId, error: err instanceof Error ? err.message : String(err),
         }));
+    },
+    async failClaimedStart(taskId, expected, error) {
+      const { updateTaskRaw } = await import('../task-manager.js');
+      const result = await updateTaskRaw(taskId, (cur) => {
+        const rs = cur.routine_start;
+        if (cur.phase === 'COMPLETE' || cur.start_queue || !rs || rs.state !== 'starting'
+          || rs.run_at !== expected.run_at || rs.attempt_at !== expected.attempt_at || rs.session_id !== expected.session_id) return null;
+        return { routine_start: { ...rs, state: 'failed' as const, launch: undefined, error } };
+      }, { source: 'routine', emitEvent: true, push: false });
+      return result.changed;
     },
     async failSession(sessionId, reason) {
       const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js');
@@ -204,7 +267,7 @@ export function defaultRunStartDeps(): RunStartDeps {
         outcome: 'fired',
         delivery: auditDelivery({
           status: 'ok', retry: false,
-          summary: `task ${taskId}: its session started on the second try`,
+          summary: `task ${taskId}: its session started ${start.waited_for_slot ? 'after waiting for a free slot' : 'on the second try'}`,
           ...(start.session_id ? { sessionId: start.session_id } : {}),
         }),
       }, taskId);
@@ -274,7 +337,7 @@ export async function resumeRoutineStarts(): Promise<number> {
   const { IS_EPHEMERAL } = await import('../../constants.js');
   if (IS_EPHEMERAL) return 0;
   const { listTasks } = await import('../task-manager.js');
-  const open = (await listTasks()).filter((t) => t.routine_start?.state === 'starting' && t.phase !== 'COMPLETE');
+  const open = (await listTasks()).filter((t) => t.routine_start?.state === 'starting' && t.phase !== 'COMPLETE' && !t.start_queue?.routine);
   if (open.length === 0) return 0;
   const starter = await routineRunStarter();
   for (const t of open) starter.resume(t.id, t.routine_start!);

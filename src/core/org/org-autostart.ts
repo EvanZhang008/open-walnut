@@ -19,7 +19,6 @@
  * the node has a session. Starts run one at a time. The org switch (org-enabled.ts) stops all of it.
  */
 
-import { randomUUID } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { isOrgEnabled, isOrgNode } from './org-enabled.js';
@@ -34,6 +33,7 @@ export interface OrgStartOutcome {
   /** Why nothing started: the org is off, the node has a session already, a start runs, it failed before (no retry). */
   skipped?: 'org_off' | 'not_org_node' | 'complete' | 'has_session' | 'starting' | 'failed_before' | 'test_run' | 'missing' | 'autostart_off';
   sessionId?: string;
+  queued?: true;
   error?: string;
 }
 
@@ -138,18 +138,18 @@ export async function startOrgNode(taskId: string, why: OrgStartWhy): Promise<Or
     if (task.org_role === 'main') {
       // Main is a Personal AI ask: it runs where every ask runs, with the ask's persona. Its id is
       // minted here, so its record exists before the spawn and a second start sees it.
-      const { quickStartSession, continuedSessionOf } = await import('../sessions/quick-start.js');
+      const { defaultRunStartDeps } = await import('../routines/run-start-deps.js');
       const { ASK_LAUNCH_CWD } = await import('../sessions/ask-launch-plan.js');
-      const { getConfig } = await import('../config-manager.js');
-      const { resolveDefaultEngine } = await import('../agents/default-engine.js');
-      const { isAcpEngine, normalizeEngine } = await import('../agents/engine-registry.js');
-      const engine = normalizeEngine(resolveDefaultEngine(await getConfig()));
-      const minted = isAcpEngine(engine) ? undefined : randomUUID();
-      const started = await quickStartSession({
-        message, existingTaskId: task.id, cwd: ASK_LAUNCH_CWD, walnutAgent: true, source: ORG_START_SOURCE, engine,
-        ...(minted ? { preassignedSessionId: minted } : {}),
+      const deps = defaultRunStartDeps();
+      const minted = await deps.mintSessionId(undefined);
+      const started = await deps.launch({ message, cwd: ASK_LAUNCH_CWD, walnutAgent: true, source: ORG_START_SOURCE }, {
+        existingTaskId: task.id, byPerson: why === 'retry', ...(minted ? { preassignedSessionId: minted } : {}),
       });
-      sessionId = continuedSessionOf(started) ?? minted ?? started.session_id ?? undefined;
+      if (started.queued) {
+        await writeStart(task.id, null);
+        return { started: false, queued: true };
+      }
+      sessionId = started.continued ?? minted ?? started.task.session_id ?? undefined;
     } else {
       // A lead starts where its project's tasks start, as org_send starts it.
       const { startSessionForTask } = await import('../sessions/task-start.js');
@@ -159,6 +159,10 @@ export async function startOrgNode(taskId: string, why: OrgStartWhy): Promise<Or
         // Retry is the user's own click: it starts at once wherever the node runs (review round 5).
         ...(why === 'retry' ? { byPerson: true } : {}),
       });
+      if (started.queued) {
+        await writeStart(task.id, null);
+        return { started: false, queued: true };
+      }
       sessionId = started.sessionId;
     }
     await writeStart(task.id, null);

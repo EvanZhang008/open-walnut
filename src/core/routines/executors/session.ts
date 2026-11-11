@@ -62,7 +62,7 @@ export interface SessionDelivery {
    * for the launch, whose record exists before this returns). An engine that
    * issues its own ids reports nothing, and the executor waits for the record.
    */
-  startSession(params: { message: string; taskId: string; cwd: string; host?: string; title?: string }): Promise<{ sessionId?: string } | void>;
+  startSession(params: { message: string; taskId: string; cwd: string; host?: string; title?: string; jobId?: string }): Promise<{ sessionId?: string; queued?: true } | void>;
   /**
    * A problem the run met. A trigger's (a routine with a check) goes to its task, or that task's
    * lead, never to the user; a routine the user made himself (no check) is his to hear about.
@@ -114,7 +114,7 @@ function defaultDelivery(): SessionDelivery {
       return rec ? rec.taskId || rec.legacyTaskId || '' : undefined;
     },
     async startSession(params) {
-      const { quickStartSession } = await import('../../sessions/quick-start.js');
+      const { defaultRunStartDeps } = await import('../run-start-deps.js');
       const { getConfig } = await import('../../config-manager.js');
       const { resolveDefaultEngine } = await import('../../agents/default-engine.js');
       const { isAcpEngine, normalizeEngine } = await import('../../agents/engine-registry.js');
@@ -124,22 +124,14 @@ function defaultDelivery(): SessionDelivery {
       // this session: its record is written before the launch returns.
       const engine = normalizeEngine(resolveDefaultEngine(await getConfig(), { host }));
       const sessionId = isAcpEngine(engine) ? undefined : randomUUID();
-      const task = await quickStartSession({
-        message: params.message,
-        existingTaskId: params.taskId,
-        cwd: params.cwd,
-        engine,
-        ...(sessionId ? { preassignedSessionId: sessionId } : {}),
-        // A session at WALNUT_HOME is the Personal AI, not a coding agent in the
-        // data dir — same rule the watcher's singleton restart follows.
+      const { task, queued } = await defaultRunStartDeps().launch({
+        message: params.message, cwd: params.cwd, ...(params.jobId ? { jobId: params.jobId } : {}),
         ...(params.cwd === WALNUT_HOME ? { walnutAgent: true } : {}),
         ...(host ? { host } : {}),
-        // Name the session after the trigger, not after its launch message: the
-        // message is an envelope, and a session titled `<walnut-message kind=…`
-        // is what prod actually showed in the pill and the audit row.
         ...(params.title ? { sessionTitle: params.title } : {}),
         source: 'routine-trigger',
-      });
+      }, { existingTaskId: params.taskId, ...(sessionId ? { preassignedSessionId: sessionId } : {}) });
+      if (queued) return { queued: true };
       // Never the task's slot: the task was read before the launch, so its slot
       // still named the session this launch replaced.
       // A task that already had its conversation continued it (one session per task).
@@ -357,13 +349,14 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
       ? job.check.host
       : sessions.find((s) => s.host)?.host;
     const cwd = task?.cwd || job.check?.cwd || WALNUT_HOME;
-    let started: { sessionId?: string } | void;
+    let started: { sessionId?: string; queued?: true } | void;
     try {
       started = await delivery.startSession({
         message: envelope,
         taskId,
         cwd,
         title: `Trigger: ${job.name}`,
+        jobId: job.id,
         ...(host ? { host } : {}),
       });
     } catch (err) {
@@ -378,6 +371,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
       return { status: 'error', error: refused };
     }
     clearHostGateNotices(job.id);
+    if (started?.queued) return { status: 'ok', summary: `Task ${taskId} is waiting for a free slot; Walnut starts the original trigger message automatically when there is room` };
     // Held until the new session is visible on the task, so the delivery queued
     // behind this one sends to it instead of starting another.
     const sessionId = (started && started.sessionId) || await awaitLaunchedSession(taskId, pickOpts);
