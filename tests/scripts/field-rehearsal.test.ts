@@ -16,7 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { fieldDistBin, fieldVersions, packVersion, readFieldJson, writeFieldJson } from '../../scripts/release-rehearsal/field-packs.mjs'
-import { FIELD_SCENARIOS, REHEARSAL_ROUTER, ROUTER_AREAS, ROUTER_FIRST_VERSION, ROUTER_STORE_VERSION, TASK_STORE, judgeDaemon, judgeRouterRefusal, judgeRouterServedBack, knowsRouterStore, nodeForm, pruneToLogs, releaseArchive, startFrom, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
+import { FIELD_SCENARIOS, REHEARSAL_ROUTER, ROUTER_AREAS, ROUTER_STORE_VERSION, TASK_STORE, judgeDaemon, judgeRouterRefusal, judgeRouterServedBack, nodeForm, pruneToLogs, releaseArchive, startFrom, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
 import { TASK_DB_MAX_SUPPORTED_VERSION, TASK_DB_ROUTER_VERSION, TASK_DB_SCHEMA_VERSION } from '../../src/core/task-db-version.js'
 import { normalizeRouterAreas, routerAreasPath } from '../../src/core/router/areas.js'
 import { routerTaskDbPath } from '../../src/core/router/data-version.js'
@@ -187,23 +187,28 @@ describe('field-router-back: going back from a task store a router stamped', () 
   })
 
   // CI run 42901261828 (2026-11-10): the nightly 0.6.31-nightly.20261110.795 has router areas and
-  // served the store, which the scenario still took for a failure.
-  it('expects a refusal from a start point before the first build with router areas, and the router served from it on', () => {
-    for (const v of ['0.6.19', '0.6.30-nightly.20261109.779', '0.6.30']) expect(knowsRouterStore(v), v).toBe(false)
-    for (const v of [ROUTER_FIRST_VERSION, '0.6.31-nightly.20261111.801', '0.6.31', '0.7.0']) expect(knowsRouterStore(v), v).toBe(true)
-    // By version, never by what the start point did: an old build that serves fails, a new one that does not start fails.
-    expect(goneBack).toContain('if (served && !knowsRouterStore(from.version))')
-    expect(goneBack).toContain('if (knowsRouterStore(from.version)) throw new Error(')
+  // served the store, which the scenario took for a failure. CI run 43012967547 (2026-11-11): the
+  // stable 0.6.31, promoted from an older nightly, has none and refused it, which a rule by version
+  // took for a failure. So the start point's own answer decides, and each answer is judged whole.
+  it('takes either answer of the start point, the refusal by its own guard or the router served whole, never a rule by version', () => {
+    const router = goneBack.slice(goneBack.indexOf('if (router) {'), goneBack.indexOf('} else try {'))
+    expect(router).not.toMatch(/compareVersions|knowsRouterStore|ROUTER_FIRST_VERSION/)
+    // A start that fails goes only through the strict refusal judge; one that serves only through the served judge.
+    const failed = router.slice(router.indexOf('} catch (err) {'), router.indexOf('if (served) {'))
+    expect(failed).toContain('judgeRouterRefusal({ version: from.version, message, tail })')
+    expect(failed).not.toMatch(/outcome = `/)
+    expect(router.slice(router.indexOf('if (served) {'))).toContain('judgeRouterServedBack(')
     expect(goneBack).not.toContain('Published start points predate router areas')
     // The areas file is held to its bytes only when the start point refused (one that serves may write it).
     expect(goneBack).toContain('if (refusedRouter && !fs.readFileSync(path.join(w.walnutHome, ROUTER_AREAS)).equals(areasBytes))')
   })
 
+  const NIGHTLY = '0.6.31-nightly.20261110.795'
   it('takes a served way back only when the start point serves as itself and reads the router as the release made it', () => {
     const made = { areas: [{ id: 'personal', taskIds: ['r-1'] }], routers: [{ taskId: 'r-1', areaId: 'personal', paused: true }] }
-    expect(judgeRouterServedBack({ version: ROUTER_FIRST_VERSION, served: ROUTER_FIRST_VERSION, id: 'r-1', made, back: structuredClone(made) })).toContain(`serves router r-1 and its area on the task store at version ${ROUTER_STORE_VERSION}`)
-    expect(() => judgeRouterServedBack({ version: ROUTER_FIRST_VERSION, served: '0.6.32-rehearsal.1', id: 'r-1', made, back: made })).toThrow(/serving 0.6.32-rehearsal.1/)
-    expect(() => judgeRouterServedBack({ version: ROUTER_FIRST_VERSION, served: ROUTER_FIRST_VERSION, id: 'r-1', made, back: { ...made, routers: [] } })).toThrow(/the release made/)
+    expect(judgeRouterServedBack({ version: NIGHTLY, served: NIGHTLY, id: 'r-1', made, back: structuredClone(made) })).toContain(`serves router r-1 and its area on the task store at version ${ROUTER_STORE_VERSION}`)
+    expect(() => judgeRouterServedBack({ version: NIGHTLY, served: '0.6.32-rehearsal.1', id: 'r-1', made, back: made })).toThrow(/serving 0.6.32-rehearsal.1/)
+    expect(() => judgeRouterServedBack({ version: NIGHTLY, served: NIGHTLY, id: 'r-1', made, back: { ...made, routers: [] } })).toThrow(/the release made/)
     expect(goneBack).toContain('back: await readRouter(w, made.id, from.version)')
   })
 })
