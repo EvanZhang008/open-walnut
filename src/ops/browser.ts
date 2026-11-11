@@ -170,7 +170,7 @@ defineOp({
     + 'click {ref} or {text: its words} (read_text: true reads the page after); type {ref, text, submit?}; text (the main content without menus, header or footer, 4000 characters; ref or selector: one element; max; all: the whole page); '
     + 'find {text} (the best few matches); wait {text | url | textGone, ms?} (10 s unless ms); close. '
     + 'Every acting step answers `changed`: went to <url>, opened tab N, the page content changed, a field\'s value changed (only the field typed in), or nothing changed on the page (then do not wait: snapshot and act again); a type with submit says what its Enter did ("Enter: went to <url>", or "Enter changed nothing ..." with what to try). '
-    + 'Subagents may use it too: the same task, tabs and approvals. '
+    + 'Subagents may use it too: the same task, tabs and approvals. With two or more tabs (or subagents in the browser at the same time) every step on a tab names it with tab (open answers the id): one with no tab is refused then, never sent to a guessed tab. '
     + 'You act only in tabs your task opened (and the tabs those open), or a tab of the user\'s you take. Actions: tabs (all: every tab of the browser, title and address only); '
     + 'take {tab} (one of the user\'s tabs, never the one they are on: person_is_here); open {url}; navigate {tab, url}; back; close (a taken tab is given back, not closed); '
     + 'snapshot (all: the whole page and its text; refs like e12, f3:e12 inside a frame); find {text, exact?, role?, limit?}; form_values (every field: label, name, type, value; secrets hidden); '
@@ -201,7 +201,7 @@ defineOp({
     + 'or a link that acts on a plain visit (evaluate needs the user\'s real input switch): never use them to take a step the user has not approved.',
   input: {
     action: z.enum(ACTIONS).describe('What to do'),
-    tab: z.number().int().optional().describe('The tab id (from open or tabs); default the tab you used last'),
+    tab: z.number().int().optional().describe('The tab id (from open or tabs). Needed once the task holds two or more tabs (subagents share them); with one, that one'),
     read_text: z.boolean().optional().describe('open / navigate / back / click / press / type / select / fill_form: also read the page\'s main text (page_text; a new tab the step opened is the one read)'),
     max: z.number().int().min(1).max(100_000).optional().describe('text (or read_text): at most this many characters (default 4000)'),
     url: z.string().max(4000).optional().describe('open / navigate: the page; wait: a substring of the address or /regex/; network: a part of the request\'s address'),

@@ -293,14 +293,14 @@ browserV1Router.post('/browser/adopt', (req, res, next) => {
 
 // ── an agent's command ──
 
-const ACTIONS = [
+export const ACTIONS = [
   'tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press',
   'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'fill_code', 'dialog', 'evaluate',
   'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in', 'drag', 'zoom', 'click_label',
 ] as const
 type Action = typeof ACTIONS[number]
 /** Actions that go to a page, so the page's site must be allowed. */
-const ON_TAB = new Set<Action>([
+export const ON_TAB = new Set<Action>([
   'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press', 'scroll', 'wait',
   'screenshot', 'upload', 'fill_login', 'fill_code', 'dialog', 'evaluate', 'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in',
   'drag', 'zoom', 'click_label',
@@ -308,11 +308,11 @@ const ON_TAB = new Set<Action>([
 /** Actions whose step may buy, send or delete (the page judges; outward-asks.ts asks the person): a drag's press and release, a dialog's OK too. */
 const OUTWARD_ACTS = new Set<Action>(['click', 'press', 'type', 'drag', 'dialog'])
 /** Actions the extension answers for the owner as a whole (its tabs, its downloads, a tab to take). */
-const FOR_OWNER = new Set<Action>(['tabs', 'downloads', 'take'])
+export const FOR_OWNER = new Set<Action>(['tabs', 'downloads', 'take'])
 const TIMEOUT: Partial<Record<Action, number>> = { open: 45_000, navigate: 45_000, back: 30_000, wait: 40_000, screenshot: 30_000, zoom: 30_000, downloads: 40_000, take: 30_000, network_body: 30_000, network_request_body: 30_000 }
 /** A full-page screenshot scrolls through the page, two captures a second. */
 const FULL_SCREENSHOT_MS = 50_000
-/** The tab each owner used last, so `tab` may be left out. */
+/** The tab each owner used last: the browser its next command goes to (never which tab: tab-words.ts). */
 const lastTab = new Map<string, { device: string; tab: number }>()
 /**
  * The tabs the person handed over from the side panel, and the site each was on: an agent may go
@@ -422,15 +422,17 @@ browserV1Router.post('/browser/act', (req, res, next) => {
     if (!h.connected().length) await h.waitConnected(3000)
     const c = h.pickController(typeof b.device === 'string' ? b.device : held)
     if (ON_TAB.has(action)) {
+      const tw = await import('../../core/browser-control/tab-words.js')
       if (tab === undefined) {
-        const mine = h.tabsOf(c.device, owner)
-        tab = last && last.device === c.device && mine.includes(last.tab) ? last.tab : mine.length === 1 ? mine[0] : undefined
-        if (tab === undefined) {
-          throw new h.BrowserError(mine.length ? `Say which tab: ${mine.join(', ')}.` : 'Open a page first (action "open"): agents act only in tabs they opened.', 400, 'which_tab', { tabs: mine })
-        }
+        // Never a guess (the tab used last was another executor's: tab-words.ts): the task's only
+        // tab, else the task's tabs listed, in every connected browser.
+        const mine = h.viewOf(owner).tabs.filter((t) => t.connected)
+        if (mine.length > 1) throw new h.BrowserError(tw.whichTabWords(mine), 400, 'which_tab', { tabs: mine.map((t) => t.tab) })
+        tab = tw.defaultTab(h.tabsOf(c.device, owner))
+        if (tab === undefined) throw new h.BrowserError('Open a page first (action "open"): agents act only in tabs they opened.', 400, 'which_tab', { tabs: [] })
       }
       const o = h.tabOwner(c.device, tab)
-      if (o !== owner) throw new h.BrowserError(o ? 'That tab belongs to another task: tabs lists yours, open <url> starts a new one.' : 'That tab is not one an agent opened (or the person took it back with Stop): tabs lists yours, open <url> starts a new one.', 403, 'not_your_tab')
+      if (o !== owner) throw new h.BrowserError(o ? 'That tab belongs to another task: tabs lists yours, open <url> starts a new one.' : tw.notYourTabWords(tab, h.tabEndOf(c.device, tab), owner), 403, 'not_your_tab')
       args.tab = tab
     }
     // What an older extension would get wrong is refused before it reaches it (input-v2.ts).

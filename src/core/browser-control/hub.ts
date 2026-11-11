@@ -136,6 +136,8 @@ const tabFacts = new Map<string, TabFacts>()
 /** An owner whose last tab went, and why, for half an hour. */
 const ended = new Map<string, { at: number; why: TabEndWhy }>()
 const ENDED_MS = 30 * 60_000
+/** Each agent tab that ended, whose it was and why, for half an hour: a command naming it later is told what happened (tab-words.ts). */
+const tabEnds = new Map<string, { owner: string; at: number; why: TabEndWhy }>()
 /** Told when an owner's set of tabs changes (a tab came, went, or moved to it): the route announces it to the web. */
 const tabListeners = new Set<(owner: string) => void>()
 
@@ -427,6 +429,9 @@ function forgetTab(k: string, fallback: TabEndWhy = 'gone'): void {
   tabFacts.delete(k)
   if (held) holdingEnded(k)
   if (!owner) return
+  const now = Date.now()
+  for (const [x, e] of tabEnds) if (now - e.at > ENDED_MS) tabEnds.delete(x)
+  tabEnds.set(k, { owner, at: now, why })
   if (![...tabOwners.values()].includes(owner)) ended.set(owner, { at: Date.now(), why })
   tabsChanged(owner)
 }
@@ -502,6 +507,14 @@ export function tabOwner(device: string, tabId: number): string | undefined {
   return tabOwners.get(`${device}:${tabId}`)
 }
 
+/** How the tab ended and whose it was, within the last half hour (undefined: held now, or not known). */
+export function tabEndOf(device: string, tabId: number, now = Date.now()): { owner: string; why: TabEndWhy } | undefined {
+  const k = `${device}:${tabId}`
+  const e = tabEnds.get(k)
+  if (!e || tabOwners.has(k) || now - e.at > ENDED_MS) return undefined
+  return { owner: e.owner, why: e.why }
+}
+
 export function tabsOf(device: string, owner: string): number[] {
   const out: number[] = []
   for (const [k, o] of tabOwners) if (o === owner && k.startsWith(`${device}:`)) out.push(Number(k.slice(device.length + 1)))
@@ -521,6 +534,7 @@ export function _resetBrowserHubForTesting(): void {
   tabReported.clear()
   tabFacts.clear()
   ended.clear()
+  tabEnds.clear()
   ending.clear()
   gone.clear()
 }
