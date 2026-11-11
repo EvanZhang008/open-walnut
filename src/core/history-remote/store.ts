@@ -31,7 +31,7 @@ export const remoteTimeouts = { networkMs: 60_000, connectMs: 15_000, minRate: 1
  * destroyed and the operation fails, so nothing holds a session's lock or a pass forever.
  * `extend` moves it once the size is known (a download's length).
  */
-export function opDeadline(bytes = 0): { signal: AbortSignal; extend(bytes: number): void; done(): void } {
+export function opDeadline(bytes = 0): { signal: AbortSignal; extend(bytes: number): void; done(): void; race<T>(p: Promise<T>): Promise<T> } {
   const ac = new AbortController()
   let t: ReturnType<typeof setTimeout> | undefined
   const arm = (n: number) => {
@@ -41,7 +41,18 @@ export function opDeadline(bytes = 0): { signal: AbortSignal; extend(bytes: numb
     t.unref?.()
   }
   arm(bytes)
-  return { signal: ac.signal, extend: arm, done: () => { if (t) clearTimeout(t) } }
+  // Not every step reads the signal (a credential_process the SDK waits on before any request
+  // does not): the deadline also ends the wait itself, whatever it is waiting on.
+  const race = <T,>(p: Promise<T>): Promise<T> => {
+    p.catch(() => {})
+    if (ac.signal.aborted) return Promise.reject(ac.signal.reason)
+    return new Promise<T>((resolve, reject) => {
+      const stop = () => reject(ac.signal.reason)
+      ac.signal.addEventListener('abort', stop, { once: true })
+      p.then((v) => { ac.signal.removeEventListener('abort', stop); resolve(v) }, (e) => { ac.signal.removeEventListener('abort', stop); reject(e) })
+    })
+  }
+  return { signal: ac.signal, extend: arm, done: () => { if (t) clearTimeout(t) }, race }
 }
 
 const opMs = (bytes: number) => remoteTimeouts.networkMs + Math.ceil((bytes / remoteTimeouts.minRate) * 1000)
@@ -49,7 +60,7 @@ const opMs = (bytes: number) => remoteTimeouts.networkMs + Math.ceil((bytes / re
 /** Run one SDK call under its own deadline. */
 async function within<T>(bytes: number, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const d = opDeadline(bytes)
-  try { return await fn(d.signal) } finally { d.done() }
+  try { return await d.race(fn(d.signal)) } finally { d.done() }
 }
 
 export interface ResolvedRemote {
@@ -91,7 +102,24 @@ export function hostKeyPrefix(r: ResolvedRemote, host = os.hostname()): string {
 
 type S3Mod = typeof import('@aws-sdk/client-s3')
 
-async function client(r: Pick<ResolvedRemote, 'region' | 'endpoint' | 'forcePathStyle' | 'auth'>) {
+/**
+ * One client per setting, kept: its credentials are memoized, so a credential source that never
+ * answers is waited on once (each call ends at its deadline), never started again per pass.
+ */
+const clients = new Map<string, Promise<{ s3: S3Mod; c: InstanceType<S3Mod['S3Client']> }>>()
+function client(r: Pick<ResolvedRemote, 'region' | 'endpoint' | 'forcePathStyle' | 'auth'>) {
+  const key = JSON.stringify([r.region, r.endpoint ?? '', r.forcePathStyle, r.auth.method, r.auth.profile ?? '', remoteTimeouts])
+  let c = clients.get(key)
+  if (!c) {
+    if (clients.size >= 8) clients.delete(clients.keys().next().value!)
+    c = makeClient(r)
+    c.catch(() => clients.delete(key))
+    clients.set(key, c)
+  }
+  return c
+}
+
+async function makeClient(r: Pick<ResolvedRemote, 'region' | 'endpoint' | 'forcePathStyle' | 'auth'>) {
   const s3: S3Mod = await import('@aws-sdk/client-s3')
   const { fromIni, fromNodeProviderChain } = await import('@aws-sdk/credential-providers')
   const credentials = r.auth.method === 'profile' ? fromIni({ profile: r.auth.profile }) : fromNodeProviderChain()
@@ -119,10 +147,12 @@ export async function remoteStore(r: ResolvedRemote): Promise<OffloadStore & Fet
   const read = async (use: typeof c, bucket: string, key: string, sink: () => NodeJS.WritableStream) => {
     const d = opDeadline()
     try {
-      const out = await use.send(new s3.GetObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: d.signal })
-      if (!out.Body) throw new Error('empty answer')
-      d.extend(Number(out.ContentLength ?? 0))
-      await pipeline(out.Body as Readable, sink(), { signal: d.signal })
+      await d.race((async () => {
+        const out = await use.send(new s3.GetObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: d.signal })
+        if (!out.Body) throw new Error('empty answer')
+        d.extend(Number(out.ContentLength ?? 0))
+        await pipeline(out.Body as Readable, sink(), { signal: d.signal })
+      })())
     } finally { d.done() }
   }
   const getVia = async (remote: { bucket: string; endpoint?: string; region?: string }, key: string, dst: string) => {

@@ -143,7 +143,12 @@ describe('remote history tier (fake S3)', () => {
   it('an object that does not check out after its upload is not recorded', async () => {
     await archived('s-etag')
     const real = await store()
-    const lying: OffloadStore = { ...real, head: async (key) => { const h = await real.head(key); return h ? { ...h, etag: '"' + '0'.repeat(32) + '"' } : h } }
+    // An ETag that is not the md5 has the object read back; what it reads back is other bytes.
+    const lying: OffloadStore = {
+      ...real,
+      head: async (key) => { const h = await real.head(key); return h ? { ...h, etag: '"' + '0'.repeat(32) + '"' } : h },
+      readHash: async (key) => { const h = await real.readHash(key); return h ? { ...h, sha256: '0'.repeat(64) } : h },
+    }
     const r = await offloadArchived([projects], { ...TIER, store: lying })
     expect(r.failed).toBe(1)
     expect(r.errors[0]).toMatch(/did not check out/)
@@ -249,13 +254,14 @@ describe('review round 1 (2026-11-11): integrity, conflicts, deadlines, setup, f
   }
   const flip = (key: string) => { const b = Buffer.from(s3.objects.get(key)!); b[b.length >> 1] ^= 0xff; s3.objects.set(key, b) }
 
-  it('an ETag that is no md5 has the object read back: one changed in storage, same size, keeps the local files', async () => {
+  it('an ETag that looks like an md5 but is not the content\'s (SSE-KMS) has the object read back: it uploads once, and one changed in storage keeps the local files', async () => {
     s3.faults.opaqueEtag = true
     await archived('s-kms')
     const up = await offloadArchived([projects], { ...TIER, store: await store() })
     expect(up).toMatchObject({ uploaded: 1, failed: 0 })
-    // The upload's check read the objects back (no md5 to compare).
+    // The upload's check read the objects back (the ETag is not their md5), and uploaded each once.
     expect(s3.requests.filter((r) => r.method === 'GET').length).toBe(2)
+    expect(s3.requests.filter((r) => r.method === 'PUT').length).toBe(2)
     const key = manifest('s-kms').remote.files.find((f: { rel: string }) => f.rel === 's-kms.jsonl').key
     flip(key)
     const r = await offloadArchived([projects], { ...TIER, now: LATER + OFFLOAD_KEEP_MS, store: await store() })
@@ -334,6 +340,33 @@ describe('review round 1 (2026-11-11): integrity, conflicts, deadlines, setup, f
       const p = await offloadArchived([projects], { ...TIER, store: await store() })
       expect(p).toMatchObject({ uploaded: 0, failed: 1 })
       expect(Date.now() - t1).toBeLessThan(10_000)
+    })
+
+    it('a credential source that never answers ends at the deadline too, and is not started again per call', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-cred-'))
+      const count = path.join(dir, 'count')
+      const script = path.join(dir, 'slow-creds.sh')
+      fs.writeFileSync(script, `#!/bin/sh\necho x >> ${count}\nsleep 30\n`, { mode: 0o755 })
+      fs.writeFileSync(path.join(dir, 'config'), `[profile slow]\ncredential_process = ${script}\n`)
+      fs.writeFileSync(path.join(dir, 'credentials'), '')
+      const env = { cfg: process.env.AWS_CONFIG_FILE, cred: process.env.AWS_SHARED_CREDENTIALS_FILE }
+      process.env.AWS_CONFIG_FILE = path.join(dir, 'config')
+      process.env.AWS_SHARED_CREDENTIALS_FILE = path.join(dir, 'credentials')
+      try {
+        const r = resolveRemote({ enabled: true, bucket: s3.bucket, endpoint: s3.url, region: 'us-east-1', auth: { method: 'profile', profile: 'slow' } })
+        for (let i = 0; i < 3; i++) {
+          const t0 = Date.now()
+          await expect((await remoteStore(r)).head('walnut-history/x')).rejects.toThrow(/did not finish/)
+          expect(Date.now() - t0).toBeLessThan(3_000)
+        }
+        expect(s3.requests).toEqual([])
+        // One credential process for every call: the waits share it.
+        expect(fs.readFileSync(count, 'utf8').trim().split('\n')).toHaveLength(1)
+      } finally {
+        if (env.cfg === undefined) delete process.env.AWS_CONFIG_FILE; else process.env.AWS_CONFIG_FILE = env.cfg
+        if (env.cred === undefined) delete process.env.AWS_SHARED_CREDENTIALS_FILE; else process.env.AWS_SHARED_CREDENTIALS_FILE = env.cred
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
     })
 
     it('a download whose body stops is ended and leaves nothing behind', async () => {

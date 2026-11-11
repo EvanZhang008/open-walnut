@@ -29,7 +29,7 @@ export async function startFakeS3(bucket = 'test-bucket'): Promise<FakeS3> {
   const requests: FakeS3['requests'] = []
   const faults = { dropNextPut: 0, corruptNextGet: 0, failAll: false, getDelayMs: 0, opaqueEtag: false, hang: false, stallBody: false }
   const bucketConfig = new Map<string, string>()
-  const etagOf = (b: Buffer) => faults.opaqueEtag ? `"kms-${createHash('sha1').update(b).digest('hex').slice(0, 20)}"` : `"${createHash('md5').update(b).digest('hex')}"`
+  const etagOf = (b: Buffer) => faults.opaqueEtag ? `"${createHash('md5').update(b).update('kms').digest('hex')}"` : `"${createHash('md5').update(b).digest('hex')}"`
   const MISSING: Record<string, string> = {
     publicAccessBlock: 'NoSuchPublicAccessBlockConfiguration', encryption: 'ServerSideEncryptionConfigurationNotFoundError', lifecycle: 'NoSuchLifecycleConfiguration',
   }

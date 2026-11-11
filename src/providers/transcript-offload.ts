@@ -9,8 +9,8 @@
  * Nothing is lost, in two steps, as with the archive itself. First each archive file is
  * hashed (sha256 and md5), uploaded under a name holding its hash (so an object is never
  * replaced by other bytes), and the upload is checked: the store verifies the md5 it was
- * sent, and a HEAD must answer its size and that md5 as the ETag (an ETag that is no plain
- * md5 has the object read back and its sha256 compared). Only then does the manifest record the objects (`remote`). Second, a pass at least
+ * sent, and a HEAD must answer its size and that md5 as the ETag (any other ETag has the
+ * object read back and its sha256 compared). Only then does the manifest record the objects (`remote`). Second, a pass at least
  * OFFLOAD_KEEP_MS later checks every local file still hashes as recorded and every object is
  * still holds those bytes (the same check), records `offloadedAt`, and removes the local files. A crash at
  * any point leaves files the manifest names: a restore fetches only what is missing, and
@@ -86,22 +86,16 @@ async function hashFile(p: string): Promise<{ size: number; sha256: string; md5:
   return { size, sha256: sha.digest('hex'), md5: md5.digest('hex') }
 }
 
-/** The md5 an ETag carries: only a single-part upload's ETag without KMS is one. */
-function plainMd5(etag: string | undefined): string | null {
-  const e = (etag ?? '').replace(/"/g, '').toLowerCase()
-  return /^[0-9a-f]{32}$/.test(e) ? e : null
-}
-
 /**
- * Does the object hold exactly these bytes? Its size first; then an ETag that is a plain md5
- * answers it, and any other ETag (KMS, multipart, a store's own) means reading it back, since
- * only its content proves it (metadata can be written by anyone who can write the object).
+ * Does the object hold exactly these bytes? Its size first; then an ETag equal to their md5
+ * answers it (a single-part upload with SSE-S3 or none). Any other ETag means reading it back,
+ * since only its content proves it: an SSE-KMS or multipart ETag may look like an md5 and not
+ * be one, and metadata can be written by anyone who can write the object.
  */
 async function holds(store: OffloadStore, key: string, h: { size: number; md5: string; sha256: string }): Promise<boolean> {
   const there = await store.head(key)
   if (!there || there.size !== h.size) return false
-  const md5 = plainMd5(there.etag)
-  if (md5) return md5 === h.md5
+  if ((there.etag ?? '').replace(/"/g, '').toLowerCase() === h.md5) return true
   const back = await store.readHash(key)
   return !!back && back.size === h.size && back.sha256 === h.sha256
 }
