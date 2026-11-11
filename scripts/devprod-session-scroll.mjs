@@ -49,20 +49,95 @@ async function mockSession(page) {
   }, SESSION_ID);
 }
 
-/** Wheel until the scroller reaches the top (-1) or the bottom (+1). */
+/** Pixels toward the end that count as the transcript moving (a snap back to where it was does not). */
+const PROGRESS_PX = 40;
+
+/**
+ * Wheel until the scroller reaches the top (-1) or the bottom (+1). Returns done, or what the leg
+ * saw when its time ran out: how far it got toward the end (the best sample, so a transcript that
+ * is pulled back each time reads as not moving), whether it still moved in the second half of the
+ * leg, how many wheel turns the page answered, and what sat over the scroller's middle: on every
+ * turn or only some, and whether that cover is part of the session panel itself.
+ */
 async function wheelTo(page, scroller, direction, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
+  const begun = Date.now();
+  const deadline = begun + timeoutMs;
+  const start = await scroller.evaluate((el) => el.scrollTop);
+  let tries = 0;
+  let best = 0;
+  let bestAtHalf = null;
+  let secondHalfTries = 0;
+  let coveredTurns = 0;
+  let panelCoveredTurns = 0;
+  let cover = null;
   while (Date.now() < deadline) {
     const box = await scroller.boundingBox();
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
     await page.mouse.wheel(0, direction * 800);
     await page.waitForTimeout(100);
-    const done = await scroller.evaluate((el, step) => (step < 0
-      ? el.scrollTop <= 1
-      : el.scrollTop > 0 && el.scrollHeight - el.scrollTop - el.clientHeight <= 1), direction);
-    if (done) return true;
+    const seen = await scroller.evaluate((el, [step, px, py]) => {
+      const hit = document.elementFromPoint(px, py);
+      // Named by the nearest element with a class, so a plain inner box reads as what holds it.
+      const over = hit && !el.contains(hit) ? (hit.closest('[class]') ?? hit) : null;
+      const name = over
+        ? over.tagName.toLowerCase() + (typeof over.className === 'string' && over.className ? `.${over.className.split(' ')[0]}` : '')
+        : null;
+      return {
+        top: el.scrollTop,
+        done: step < 0 ? el.scrollTop <= 1 : el.scrollTop > 0 && el.scrollHeight - el.scrollTop - el.clientHeight <= 1,
+        covered: name,
+        inPanel: Boolean(over && el.closest('.session-panel')?.contains(over)),
+      };
+    }, [direction, x, y]);
+    tries += 1;
+    if (seen.done) return { done: true };
+    best = Math.max(best, (seen.top - start) * direction);
+    if (Date.now() - begun >= timeoutMs / 2) {
+      if (bestAtHalf === null) bestAtHalf = best;
+      else secondHalfTries += 1;
+    }
+    if (seen.covered) { coveredTurns += 1; cover = seen.covered; if (seen.inPanel) panelCoveredTurns += 1; }
   }
-  return false;
+  return {
+    done: false,
+    tries,
+    moved: best >= PROGRESS_PX,
+    stalled: bestAtHalf !== null && secondHalfTries >= STUCK_AFTER_TRIES && best - bestAtHalf < PROGRESS_PX,
+    cover,
+    coveredAlways: tries > 0 && coveredTurns === tries,
+    // Most turns under something outside the panel (a toast in the last second does not count).
+    outsideCovered: (coveredTurns - panelCoveredTurns) * 2 >= tries,
+  };
+}
+
+/** Wheel turns a leg must see answered, the transcript not moving, before it calls the scroller stuck. */
+export const STUCK_AFTER_TRIES = 5;
+
+/**
+ * A scroll leg that ran out of time. Definitive (code 1, a rollback) only on evidence the scroller
+ * does not scroll, on a page that answered the wheel again and again: the transcript never got
+ * toward its end, or stopped getting there for the whole second half of the leg, with nothing
+ * outside the session panel over it on most turns (a layer of the panel itself over it is the
+ * 2026-09-26 class, a wrapper that eats the wheel, and counts as the panel's). Anything else is a page that never settled, undetermined (code 2),
+ * which keeps the new server: a transcript still moving when time ran out, a page too slow to
+ * answer, or something outside the panel over it (a dialog or a toast of the live data). 2026-11-11:
+ * a deploy's live check at load 117, right after the restart, read "could not scroll down within
+ * 60000ms" and rolled production back from a build that passes the same check on the same data at
+ * load 80.
+ */
+export function scrollLegVerdict(phase, leg, timeoutMs) {
+  const answered = leg.tries >= STUCK_AFTER_TRIES;
+  if (answered && !leg.outsideCovered && (!leg.moved || leg.stalled)) {
+    const what = leg.cover && leg.coveredAlways ? `${leg.cover}, part of the session panel, covers it`
+      : leg.moved ? 'it stopped moving for the second half of the leg' : 'it never moved toward its end';
+    return { code: 1, message: `session scroll FAILED: the transcript did not move under the wheel (${phase}, ${leg.tries} turns in ${timeoutMs}ms: ${what})` };
+  }
+  const why = leg.outsideCovered ? `${leg.cover} covers the transcript${leg.coveredAlways ? '' : ' on most turns'}`
+    : leg.moved ? 'it moved but did not reach its end'
+      : `the page answered ${leg.tries} wheel turn(s)`;
+  return { code: 2, message: `session scroll UNDETERMINED (${phase}): could not ${phase} within ${timeoutMs}ms; ${why}` };
 }
 
 export async function checkSessionScroll(browser, url, timeoutMs, strict = false) {
@@ -109,9 +184,8 @@ export async function checkSessionScroll(browser, url, timeoutMs, strict = false
     // Down, up, down: whichever end the panel opens at, the last two legs must move.
     for (const direction of [1, -1, 1]) {
       phase = direction < 0 ? 'scroll up' : 'scroll down';
-      if (!await wheelTo(page, scroller, direction, timeoutMs)) {
-        return { code: 1, message: `session scroll FAILED: could not ${phase} within ${timeoutMs}ms` };
-      }
+      const leg = await wheelTo(page, scroller, direction, timeoutMs);
+      if (!leg.done) return (await crashed()) ? crashResult() : scrollLegVerdict(phase, leg, timeoutMs);
     }
     if (await crashed()) return crashResult();
     if (strict && pageErrors.length) return { code: 1, message: `session scroll FAILED (--strict): ${pageErrors.slice(0, 3).join('; ')}` };
