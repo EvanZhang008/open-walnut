@@ -1,4 +1,5 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, memo, isValidElement, type ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, useContext, memo, isValidElement, type ReactNode } from 'react';
+import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { pageOfStreamBlock } from '@/utils/stream-block-page';
 import { useDraft } from '@/hooks/useDraft';
 import { useHostStatus } from '@/hooks/useHostStatus';
@@ -882,6 +883,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }, [textlessReplyIds, blocks]);
   const foregroundActive = useForegroundActive(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Off Home, the home page stays mounted but hidden: its columns read no layout (2026-11-11:
+  // four hidden columns' polls read scrollHeight 16 times a second while the person was on Org).
+  const routeShown = useContext(RouteShownContext) !== false;
+  const routeShownRef = useRef(routeShown);
+  routeShownRef.current = routeShown;
 
   const messagesRef = useRef(loadedMessages);
   messagesRef.current = loadedMessages;
@@ -2572,7 +2578,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // any shift through the same aggregator. Only while scrolled up (at
     // bottom, growth is expected follow-bottom churn).
     let pollSh = el.scrollHeight;
+    let resync = false;
     const pollTimer = setInterval(() => {
+      // Hidden off Home: no layout read; the first look back takes a fresh baseline.
+      if (!routeShownRef.current) { resync = true; return; }
+      if (resync) { resync = false; pollSh = el.scrollHeight; prevSh = pollSh; syncArrow(); return; }
       const sh = el.scrollHeight;
       const dSh = sh - pollSh;
       pollSh = sh;
@@ -2651,7 +2661,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const followLook = useRef<{ el: HTMLElement | null; sh: number; top: number; owed: boolean }>({ el: null, sh: 0, top: 0, owed: false });
   useEffect(() => {
     const el = containerRef.current;
-    if (!el) return;
+    // Hidden off Home: no follow ticks. The last look is kept, so growth while away is
+    // followed on the first tick back.
+    if (!el || !routeShown) return;
     const look = followLook.current;
     if (look.el !== el) { look.el = el; look.sh = el.scrollHeight; look.top = el.scrollTop; look.owed = false; }
     let prevSh = look.sh;
@@ -2714,7 +2726,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       clearInterval(timer);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [sid8, isStreaming, selectionActive, noteSuppressedScroll]);
+  }, [sid8, isStreaming, selectionActive, noteSuppressedScroll, routeShown]);
 
   // Mark initial load done once Phase 2 completes for the first time.
   // This prevents force-scroll from firing on batch-refresh re-fetches
