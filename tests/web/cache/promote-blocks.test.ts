@@ -5,7 +5,7 @@
  * removed ONLY when a twin is proven present in the just-arrived delta. Missing twin
  * → keep. This guarantees the failure mode is "shown twice briefly", never "vanishes".
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   promoteCompletedBlocks,
   buildDeltaEvidence,
@@ -289,6 +289,32 @@ describe('promoteCompletedBlocks — join-run matching', () => {
     const r = promoteCompletedBlocks(blocks, delta, 1);
     expect(r.removed).toBe(0);
     expect(r.kept).toEqual(blocks);
+  });
+
+  it('builds no joined string when no persisted text has the run\'s length', () => {
+    // The render filter runs this pass on every render of a streaming column:
+    // joining each unmatched block with its followers every time was the page's
+    // largest allocation while a turn streamed (2026-11-11). A run is joined
+    // only when some persisted text has exactly its length.
+    const blocks = Array.from({ length: 40 }, (_, i) => text(`streamed paragraph ${i} `.repeat(20)));
+    const delta = [asstText('something persisted earlier')];
+    const join = vi.spyOn(Array.prototype, 'join');
+    try {
+      const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+      expect(r.removed).toBe(0);
+      expect(join).not.toHaveBeenCalled();
+    } finally {
+      join.mockRestore();
+    }
+  });
+
+  it('a join-run of non-ASCII text (lengths in UTF-16 units) still matches', () => {
+    const a = '\u4e2d\u6587\u6bb5\u843d';
+    const b = 'emoji \ud83c\udf30 end';
+    const blocks = [text(a), tool('toolu_u'), text(b)];
+    const delta = [asstText(`${a}\n${b}`), asstTool('toolu_u')];
+    const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+    expect(r.removed).toBe(3);
   });
 
   it('partial join (only prefix present) keeps unmatched blocks', () => {

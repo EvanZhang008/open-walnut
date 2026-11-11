@@ -113,6 +113,20 @@ export interface StreamState {
    *  finished turns — the next turn's deltas must open new blocks, never
    *  rewrite these (stream-reducer liveness rule). */
   completedLen: number;
+  /** Main-lane deltas of ONE kind and ONE message not folded into `blocks` yet
+   *  (see bufferMainDelta). Never read it directly: every reader goes through
+   *  settled(), which folds it in first. */
+  pending?: PendingDelta;
+}
+
+/** A run of consecutive main-lane deltas of one kind and one msgId. Folding the
+ *  run in one step gives the same blocks as folding each delta (the reducer only
+ *  ever merges a same-kind, same-message delta into the block the previous one
+ *  wrote), so the cache does that once per run instead of once per delta. */
+interface PendingDelta {
+  kind: 'text' | 'thinking';
+  msgId: string | undefined;
+  text: string;
 }
 
 /** Server snapshot returned by the `session:stream-subscribe` RPC — the single
@@ -150,7 +164,9 @@ export function trackSession(sid: string): void {
 }
 
 export function getStreamState(sid: string): StreamState | undefined {
-  return streamStates.get(sid);
+  const state = streamStates.get(sid);
+  if (state) settle(state);
+  return state;
 }
 
 export function clearStreamState(sid: string): void {
@@ -195,6 +211,7 @@ export function initStreamState(
  */
 function gcAbsorbedBlocks(sid: string, delta: SessionHistoryMessage[], fullEvidence?: DeltaEvidence): void {
   const state = streamStates.get(sid);
+  if (state) settle(state);
   if (!state || state.blocks.length === 0) return;
   // Live-tail guard (mirrors render-filter): while streaming, the last
   // main-lane block is still accumulating — a partial-content/known-msgId
@@ -247,6 +264,47 @@ function ensureState(sid: string): StreamState {
   return s;
 }
 
+/** Fold the pending delta run into blocks (reducer semantics, one step). */
+function settle(state: StreamState): void {
+  const p = state.pending;
+  if (!p) return;
+  state.pending = undefined;
+  if (p.kind === 'text') {
+    const next = applyMainTextDelta(state.blocks, state.textBuffer, p.text, p.msgId, state.completedLen);
+    state.blocks = next.blocks;
+    state.textBuffer = next.textBuffer;
+  } else {
+    state.blocks = appendMainThinking(state.blocks, p.text, p.msgId, state.completedLen);
+  }
+}
+
+/** The session's state with every earlier delta folded in: what every handler
+ *  other than a main-lane delta starts from, so events keep their order. */
+function settledState(sid: string): StreamState {
+  const state = ensureState(sid);
+  settle(state);
+  return state;
+}
+
+/**
+ * Buffer a main-lane text or thinking delta. A stream sends 10 to 40 characters
+ * per delta, about 20 a second; folding each one copied the whole blocks array
+ * and built a new block, and that garbage is what grew a WebKit page's memory
+ * while a session streamed (WebKit's allocator keeps the pages a collection
+ * frees). Consecutive deltas of the same kind and message only extend one
+ * string here; the run is folded once, when anything else happens to the
+ * session or anyone reads its state.
+ */
+function bufferMainDelta(state: StreamState, kind: PendingDelta['kind'], delta: string, msgId: string | undefined): void {
+  const p = state.pending;
+  if (p && p.kind === kind && p.msgId === msgId) {
+    p.text += delta;
+    return;
+  }
+  settle(state);
+  state.pending = { kind, msgId, text: delta };
+}
+
 /** Tracks in-flight background fetches to avoid duplicate HTTP requests. */
 const inflightBgFetches = new Set<string>();
 
@@ -279,15 +337,14 @@ function registerGlobalListeners(): void {
     // Subagent lane: merge into this lane's own block; never touches the main
     // textBuffer (interleaved subagent lines must not split main text).
     if (parentToolUseId) {
+      settle(state);
       state.blocks = appendLaneText(state.blocks, { delta, msgId, parentToolUseId, subagentType, taskDescription });
       return;
     }
 
-    // Main lane: blocks + textBuffer advance in lockstep (reducer semantics —
-    // merge grows the buffer, a new block restarts it at this delta).
-    const next = applyMainTextDelta(state.blocks, state.textBuffer, delta, msgId, state.completedLen);
-    state.blocks = next.blocks;
-    state.textBuffer = next.textBuffer;
+    // Main lane: buffered; settle() advances blocks + textBuffer in lockstep
+    // (reducer semantics: merge grows the buffer, a new block restarts it).
+    bufferMainDelta(state, 'text', delta, msgId);
   });
 
   // ── tool-use ──
@@ -304,7 +361,7 @@ function registerGlobalListeners(): void {
         taskDescription?: string;
       };
     if (!sid || !trackedSessions.has(sid)) return;
-    const state = ensureState(sid);
+    const state = settledState(sid);
     state.isStreaming = true;
     // Main-lane tool call interrupts main text flow; a subagent tool call
     // (parentToolUseId set) lives in its own lane and must not cut main text.
@@ -324,7 +381,7 @@ function registerGlobalListeners(): void {
       result: string;
     };
     if (!sid || !trackedSessions.has(sid)) return;
-    const state = ensureState(sid);
+    const state = settledState(sid);
     state.blocks = backfillToolResult(state.blocks, toolUseId, result, isToolResultError(result));
   });
 
@@ -332,7 +389,7 @@ function registerGlobalListeners(): void {
   onSessionEvent('session:user-line', (data: unknown) => {
     const { sessionId: sid, uuid, rowIds } = data as { sessionId: string; uuid: string; rowIds?: string[] };
     if (!sid || !uuid || !trackedSessions.has(sid)) return;
-    const state = ensureState(sid);
+    const state = settledState(sid);
     interruptText(state);
     state.blocks = appendUserLineBlock(state.blocks, uuid, rowIds);
   });
@@ -350,7 +407,7 @@ function registerGlobalListeners(): void {
       cliError?: true;
     };
     if (!sid || !trackedSessions.has(sid)) return;
-    const state = ensureState(sid);
+    const state = settledState(sid);
     if (replacesMsgId) {
       flushText(state);
       state.textBuffer = '';
@@ -372,7 +429,7 @@ function registerGlobalListeners(): void {
       toolUseId?: string;
     };
     if (!sid || !requestId || !toolName || !trackedSessions.has(sid)) return;
-    const state = ensureState(sid);
+    const state = settledState(sid);
     interruptText(state);
     state.blocks = appendPermissionBlock(state.blocks, {
       requestId, toolName, input, reason, acpOptions, toolUseId,
@@ -386,7 +443,7 @@ function registerGlobalListeners(): void {
       allowed: boolean;
     };
     if (!sid || !requestId || !trackedSessions.has(sid)) return;
-    const state = ensureState(sid);
+    const state = settledState(sid);
     state.blocks = resolvePermissionBlock(state.blocks, requestId, allowed);
   });
 
@@ -401,11 +458,12 @@ function registerGlobalListeners(): void {
 
     // Subagent lane — same isolation rule as text-delta above.
     if (parentToolUseId) {
+      settle(state);
       state.blocks = appendLaneThinking(state.blocks, { delta, msgId, parentToolUseId });
       return;
     }
 
-    state.blocks = appendMainThinking(state.blocks, delta, msgId, state.completedLen);
+    bufferMainDelta(state, 'thinking', delta, msgId);
   });
 
   // ── unknown-event (surface as info system block so no event is silently lost) ──
@@ -414,7 +472,7 @@ function registerGlobalListeners(): void {
       sessionId: string; scope: string; eventType: string; snippet: string;
     };
     if (!sid || !trackedSessions.has(sid)) return;
-    const state = ensureState(sid);
+    const state = settledState(sid);
     state.blocks = appendSystemBlock(state.blocks, {
       variant: 'info', message: `Unknown Claude event: ${scope}:${eventType}`, detail: snippet,
     });
@@ -424,7 +482,7 @@ function registerGlobalListeners(): void {
   onSessionEvent('session:result', (data: unknown) => {
     const { sessionId: sid } = data as { sessionId: string };
     if (!sid || !trackedSessions.has(sid)) return;
-    const state = ensureState(sid);
+    const state = settledState(sid);
     flushText(state);
     // Mark streaming done but preserve blocks — hidden/GC'd only once history
     // absorbs them (non-destructive single-timeline model).
@@ -444,7 +502,7 @@ function registerGlobalListeners(): void {
     if (!sid || !trackedSessions.has(sid)) return;
     // Waiting on a clock (the host did not answer in time): no turn ran, no error row.
     if (retryAt) return;
-    const state = ensureState(sid);
+    const state = settledState(sid);
     flushText(state);
     state.isStreaming = false;
     state.textBuffer = '';

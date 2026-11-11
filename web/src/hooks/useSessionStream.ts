@@ -92,7 +92,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   const sessionStatus = useSessionStatus(sessionId);
   const streamBuffer = useRef('');
   // pendingThinking holds only deltas not yet flushed to setBlocks; it is the
-  // raf-coalescing buffer, NOT the source of truth for any thinking block. The
+  // timer-coalescing buffer, NOT the source of truth for any thinking block. The
   // committed text lives inside the last thinking block in setBlocks. Cleared
   // every flush, so a later thinking segment (after text/tool interrupts) can
   // never carry forward text from an earlier segment.
@@ -100,17 +100,28 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   const thinkingDeltaRaf = useRef<number | null>(null);
   // msgId of the thinking segment currently accumulating (see currentTextMsgId).
   const currentThinkingMsgId = useRef<string | undefined>(undefined);
-  /** Forget reasoning still waiting for its frame — a session switch must not
+  /** Forget reasoning still waiting for its flush — a session switch must not
    *  land the old session's tail in the new session's blocks. */
   const dropPendingThinking = useCallback(() => {
     if (thinkingDeltaRaf.current !== null) {
-      cancelAnimationFrame(thinkingDeltaRaf.current);
+      clearTimeout(thinkingDeltaRaf.current);
       thinkingDeltaRaf.current = null;
     }
     pendingThinking.current = '';
     currentThinkingMsgId.current = undefined;
   }, []);
-  /** Apply buffered thinking synchronously and cancel the frame. Called at every
+  /** Take the buffered reasoning out of the buffer (and cancel its timer). */
+  const takePendingThinking = useCallback((): { text: string; msgId: string | undefined } | null => {
+    if (thinkingDeltaRaf.current !== null) {
+      clearTimeout(thinkingDeltaRaf.current);
+      thinkingDeltaRaf.current = null;
+    }
+    const text = pendingThinking.current;
+    if (!text) return null;
+    pendingThinking.current = '';
+    return { text, msgId: currentThinkingMsgId.current };
+  }, []);
+  /** Apply buffered thinking synchronously and cancel the timer. Called at every
    *  boundary that appends a block after the reasoning (a main-lane tool call,
    *  prose, a card) and at turn end — always AFTER the pending text flush, since
    *  text still buffered is older than reasoning still buffered (the thinking
@@ -120,16 +131,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
    *  became a fragment block AFTER its own call — or, at turn end, after the
    *  completed-turn boundary, where it read as the next turn's thinking. */
   const flushPendingThinking = useCallback(() => {
-    if (thinkingDeltaRaf.current !== null) {
-      cancelAnimationFrame(thinkingDeltaRaf.current);
-      thinkingDeltaRaf.current = null;
-    }
-    const incoming = pendingThinking.current;
-    if (!incoming) return;
-    pendingThinking.current = '';
-    const msgId = currentThinkingMsgId.current;
-    setBlocks((prev) => appendMainThinking(prev, incoming, msgId, completedLen.current));
-  }, []);
+    const taken = takePendingThinking();
+    if (!taken) return;
+    setBlocks((prev) => appendMainThinking(prev, taken.text, taken.msgId, completedLen.current));
+  }, [takePendingThinking]);
   const activeSessionId = useRef<string | null>(null);
   const resubscribePending = useRef(false);
   const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -299,6 +304,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         const snapCompletedLen = snapshot.completedLen
           ?? (snapshot.isStreaming ? 0 : snapshot.blocks.length);
         let appliedBlocks = false;
+        // Reasoning still buffered arrived before this answer, so the snapshot
+        // already holds it: dropped when the snapshot is adopted, folded into
+        // the local blocks when it is not (never appended onto the snapshot).
+        const carried = takePendingThinking();
         setBlocks((prev) => {
           // Adoption rules live in shouldAdoptSnapshot (pure, unit-tested) —
           // both failure directions have shipped as production bugs: adopting
@@ -312,7 +321,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
             localIsStreaming: isStreamingRef.current,
             snapshotSeq: snapshot.seq,
             lastAdoptedSeq: lastAdoptedSeq.current ?? undefined,
-          })) return prev;
+          })) return carried ? appendMainThinking(prev, carried.text, carried.msgId, completedLen.current) : prev;
           appliedBlocks = true;
           if (snapshot.seq != null) lastAdoptedSeq.current = snapshot.seq;
           // Server-authoritative boundary when present (see StreamSnapshot doc);
@@ -363,8 +372,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           // Only apply snapshot if we don't already have streaming data
           // (avoid clobbering blocks from incremental events that arrived in between)
           let adopted = false;
+          // Same rule as the subscribe effect: buffered reasoning is in the snapshot.
+          const carried = takePendingThinking();
           setBlocks((prev) => {
-            if (prev.length > 0) return prev;
+            if (prev.length > 0) return carried ? appendMainThinking(prev, carried.text, carried.msgId, completedLen.current) : prev;
             adopted = true;
             completedLen.current = snapCompletedLen;
             if (snapshot.seq != null) lastAdoptedSeq.current = snapshot.seq;
@@ -678,15 +689,19 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     if (msgId) currentThinkingMsgId.current = msgId;
     pendingThinking.current += delta;
 
+    // Coalesced on the text timer, not per frame: a stream sends a thinking
+    // delta about every 50 ms, so a frame-rate flush re-rendered the column for
+    // nearly every delta (reasoning is folded by default; nothing on screen
+    // needs it sooner). Boundaries still land it synchronously (flushPendingThinking).
     if (thinkingDeltaRaf.current === null) {
-      thinkingDeltaRaf.current = requestAnimationFrame(() => {
+      thinkingDeltaRaf.current = window.setTimeout(() => {
         thinkingDeltaRaf.current = null;
         const incoming = pendingThinking.current;
         const accMsgId = currentThinkingMsgId.current;
         pendingThinking.current = '';
         if (!incoming) return;
         setBlocks((prev) => appendMainThinking(prev, incoming, accMsgId, completedLen.current));
-      });
+      }, TEXT_FLUSH_INTERVAL_MS);
     }
   });
 

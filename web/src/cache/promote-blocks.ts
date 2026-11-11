@@ -167,6 +167,14 @@ function claimText(ev: DeltaEvidence, content: string): boolean {
   return false;
 }
 
+/** The lengths of the evidence texts still claimable: a join-run can only
+ *  claim a text of its own length. */
+function textLengthsOf(ev: DeltaEvidence): Set<number> {
+  const lengths = new Set<number>();
+  for (const [text, n] of ev.texts) if (n > 0) lengths.add(text.length);
+  return lengths;
+}
+
 export interface AbsorbedResult {
   /** Indices of blocks proven absorbed by persisted history (safe to hide/remove). */
   absorbed: Set<number>;
@@ -219,6 +227,7 @@ export function computeAbsorbedIndices(
   // pure-UI blocks are only GC'd when their turn's real content fully promoted.
   let allMatchableMatched = true;
   const pureUiIndices: number[] = [];
+  let textLengths: Set<number> | undefined;
 
   // NESTED lanes (a subagent spawned its own Agent — inc-1786138083302): a
   // grandchild block's parentToolUseId is the nested Agent's tool_use id, but
@@ -313,15 +322,23 @@ export function computeAbsorbedIndices(
       // claiming the '\n'-join of this block with the FOLLOWING text blocks in
       // the window (skipping non-text blocks, which match by their own keys —
       // and lane text, which belongs to a different conversation entirely).
+      // The join is built only when some persisted text has its exact length:
+      // this pass runs on every render of a streaming column, and joining every
+      // unmatched block with up to 7 followers each time was the page's largest
+      // allocation while a turn streamed (about 30% of all bytes, measured
+      // 2026-11-11), all of it garbage.
+      const lengths = (textLengths ??= textLengthsOf(ev));
       const run = [b.content];
       const runIdx = [i];
+      let runLen = b.content.length;
       let joined = false;
       for (let j = i + 1; j < bound && run.length < 8; j++) {
         const nb = blocks[j];
         if (nb.type !== 'text' || nb.parentToolUseId) continue;
         run.push(nb.content);
         runIdx.push(j);
-        if (claimText(ev, run.join('\n'))) {
+        runLen += 1 + nb.content.length;
+        if (lengths.has(runLen) && claimText(ev, run.join('\n'))) {
           joined = true;
           break;
         }
