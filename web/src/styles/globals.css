@@ -16080,6 +16080,9 @@ a.task-kebab-info:hover {
 }
 .dp-pill:hover { background: var(--accent-subtle, var(--bg-tertiary)); color: var(--fg-primary); }
 .dp-pill-none { border-style: dashed; color: var(--fg-muted); }
+/* "Tomorrow  8 AM  12 PM  6 PM": a quiet label leads the row, the chips stay the same size. */
+.dp-pills-tomorrow { align-items: center; }
+.dp-pills-label { font-size: 11px; color: var(--fg-muted); margin-right: 2px; }
 .dp-pill-none:hover { background: var(--error-subtle, rgba(255, 59, 48, 0.15)); color: var(--error); border-color: var(--error); }
 /* DatePicker's month (MonthGrid.tsx): Walnut's own, never the browser's date field. */
 .dp-month { display: flex; flex-direction: column; gap: 2px; min-width: 210px; }

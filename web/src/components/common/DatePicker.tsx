@@ -32,6 +32,23 @@ const TIME_PILLS: { label: string; ms: number }[] = [
   { label: '8h',  ms: 8 * 3_600_000 },
 ];
 
+/** Tomorrow's quick times (2026-11-11, the user: "snooze until should have more options, like
+ *  tomorrow 8am, 12pm, 6pm"): local wall-clock hours, so a DST change tonight still lands on 8:00. */
+const TOMORROW_HOURS: { label: string; hour: number }[] = [
+  { label: '8 AM', hour: 8 },
+  { label: '12 PM', hour: 12 },
+  { label: '6 PM', hour: 18 },
+];
+
+/** Tomorrow at 8:00, 12:00 and 18:00 local time, as ISO instants. */
+export function tomorrowTimePills(nowMs = Date.now()): { label: string; date: string }[] {
+  const now = new Date(nowMs);
+  return TOMORROW_HOURS.map(({ label, hour }) => ({
+    label,
+    date: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, hour).toISOString(),
+  }));
+}
+
 // Day-of-week abbreviations (0=Sun … 6=Sat)
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -141,10 +158,12 @@ interface DatePickerProps {
   bare?: boolean;
   /** The first day the month offers (YYYY-MM-DD): a snooze cannot start in the past. */
   minDate?: string;
+  /** Offer a "Tomorrow 8 AM / 12 PM / 6 PM" row (the snooze pickers). */
+  tomorrowTimes?: boolean;
 }
 
 /** Inner content shared by popover and inline modes. */
-function DatePickerContent({ date, onChange, minDate }: Pick<DatePickerProps, 'date' | 'onChange' | 'minDate'>) {
+function DatePickerContent({ date, onChange, minDate, tomorrowTimes }: Pick<DatePickerProps, 'date' | 'onChange' | 'minDate' | 'tomorrowTimes'>) {
   // The current date as YYYY-MM-DD, the day the month marks
   const inputValue = date ? (() => {
     const d = parseDateLocal(date);
@@ -184,6 +203,22 @@ function DatePickerContent({ date, onChange, minDate }: Pick<DatePickerProps, 'd
           </button>
         ))}
       </div>
+      {tomorrowTimes && (
+        <div className="dp-pills dp-pills-tomorrow" role="group" aria-label="Tomorrow at">
+          <span className="dp-pills-label">Tomorrow</span>
+          {tomorrowTimePills().map((p) => (
+            <button
+              key={p.label}
+              className="dp-pill"
+              onClick={(e) => { e.stopPropagation(); onChange(p.date); }}
+              aria-label={`Tomorrow ${p.label}`}
+              data-tomorrow={p.label}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
       {/* Day-of-week pills: Mon … Sun (tomorrow → +7d) */}
       <div className="dp-pills">
         {dayPills.map((p) => (
@@ -203,7 +238,7 @@ function DatePickerContent({ date, onChange, minDate }: Pick<DatePickerProps, 'd
   );
 }
 
-export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare, minDate }: DatePickerProps) {
+export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare, minDate, tomorrowTimes }: DatePickerProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -253,7 +288,7 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare
 
   // Inline mode: render content directly
   if (inline) {
-    return <DatePickerContent date={date} onChange={onChange} minDate={minDate} />;
+    return <DatePickerContent date={date} onChange={onChange} minDate={minDate} tomorrowTimes={tomorrowTimes} />;
   }
 
   // Popover mode. Start pickers must never show red "Overdue" — a passed start
@@ -295,7 +330,7 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare
           className="dp-popover"
           style={menuPlacementStyle(menuPos)}
         >
-          <DatePickerContent date={date} onChange={handleChange} minDate={minDate} />
+          <DatePickerContent date={date} onChange={handleChange} minDate={minDate} tomorrowTimes={tomorrowTimes} />
         </div>,
         document.body,
       )}

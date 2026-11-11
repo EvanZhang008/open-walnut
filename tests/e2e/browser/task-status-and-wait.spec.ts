@@ -206,6 +206,46 @@ test('the task menu shows and sets the status; Snooze until is its first row', a
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('TODO')
 })
 
+test('Snooze until offers tomorrow 8 AM, 12 PM and 6 PM on one row', async ({ page, browserName }) => {
+  // 2026-11-11, the user: "snooze until should have more options, like tomorrow 8am, 12pm, 6pm".
+  const task = await createTask('Tomorrow times')
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+
+  let menu = await openRowKebab(page, task)
+  let row = await snoozeRow(menu)
+  const tomorrow = row.getByRole('group', { name: 'Tomorrow at' })
+  await expect(tomorrow).toHaveText(/^Tomorrow\s*8 AM\s*12 PM\s*6 PM$/)
+  // The existing chips stay.
+  for (const name of ['30m', '2h', '4h', '8h']) await expect(row.getByRole('button', { name, exact: true })).toBeVisible()
+  // One row inside the panel: the label and the three chips share a line, none past the menu's edge.
+  const menuBox = (await menu.boundingBox())!
+  const tops = new Set<number>()
+  for (const el of await tomorrow.locator('.dp-pills-label, .dp-pill').all()) {
+    const b = (await el.boundingBox())!
+    tops.add(Math.round(b.y + b.height / 2))
+    expect(b.x + b.width).toBeLessThanOrEqual(menuBox.x + menuBox.width)
+  }
+  expect(tops.size).toBe(1)
+  await shot(menu, 'snooze-tomorrow-times', browserName)
+
+  // 12 PM writes tomorrow at 12:00 local time as the start date, and the row says it.
+  await tomorrow.getByRole('button', { name: 'Tomorrow 12 PM' }).click()
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  const expected = await page.evaluate(() => {
+    const n = new Date()
+    return new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1, 12).getTime()
+  })
+  await expect.poll(async () => Date.parse((await taskOf(task.id)).start_date ?? ''), { timeout: 10_000 }).toBe(expected)
+  menu = await openRowKebab(page, task)
+  await expect(toggleOf(menu, 'task-snooze-row')).toHaveText(/^Snoozed until: \S/)
+
+  // A second pick replaces it: 6 PM.
+  row = await snoozeRow(menu)
+  await row.getByRole('button', { name: 'Tomorrow 6 PM' }).click()
+  await expect.poll(async () => Date.parse((await taskOf(task.id)).start_date ?? ''), { timeout: 10_000 }).toBe(expected + 6 * 3_600_000)
+})
+
 test('the detail pane badge shows the status and changes it', async ({ page, browserName }) => {
   const task = await createTask('Status badge')
   await page.goto('/')
