@@ -1,9 +1,11 @@
 /**
  * The folded team on a leader's row (worker-fold.ts; design 2 of ten, 2026-11-11): one quiet line
  * under the title ("9 workers  1 needs you": only who needs the user is counted), which opens a short tree
- * below the row. Each tree line opens its task; its text action shows that worker as a row of its
- * own ("Show separately"), or folds it back. Plain words, no icon: the user found the icon of the
- * first draft unclear ("这个 icon 不对 ... 能不能有别的更好的一个 icon").
+ * below the row. Each tree line opens its task; its action at the line's end takes that worker out
+ * as a row of its own (an up arrow off a line), or puts it back (the arrow down). Icons, not words:
+ * the user found the words too wordy and picked design 7 of ten, with the control at the END of the
+ * line and a hint the moment the pointer is on it (2026-11-11: "一定要放到后面 ... 立马就显示一个
+ * hover over"), so the hint is data-fold-tip drawn by worker-fold.css, never a native title with its delay.
  */
 import type { Task } from '@open-walnut/core';
 import * as ICONS from '../common/Icons';
@@ -27,6 +29,11 @@ export interface WorkerFoldCtl {
   showTeam(hostId: string, on: boolean): void;
   /** A row shown separately that could fold back: its leader, and whether its whole team is out. */
   foldBackOf(task: Task): { leader: Task; team: boolean } | null;
+}
+
+/** One control's words: its accessible name and the hint shown at once on hover or focus. */
+function tipProps(words: string) {
+  return { 'aria-label': words, 'data-fold-tip': words };
 }
 
 export function workerWord(n: number): string {
@@ -90,14 +97,14 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
                 {ICONS.sectionRowIcon(key, key === 'done', task.phase, false, taskUserState(task))}
               </span>
               <span className="worker-fold-title">{orgDisplayTitle(task)}</span>
-              <span className="worker-fold-state">{back ? 'Shown separately' : out ? `${foldStateWords(key)} · in the list` : foldStateWords(key)}</span>
+              {back ? null : <span className="worker-fold-state">{out ? `${foldStateWords(key)} · in the list` : foldStateWords(key)}</span>}
             </button>
             {!out || back ? (
               <button
                 type="button"
                 className="worker-fold-action"
                 data-testid={back ? 'worker-fold-back' : 'worker-fold-separate'}
-                title={back ? `Fold back into ${orgDisplayTitle(back.leader)}` : 'Show this worker as its own row in the list'}
+                {...tipProps(back ? `Put back into ${orgDisplayTitle(back.leader)}` : 'Take out: show as its own row in the list')}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (!back) ctl.separate(task.id, true);
@@ -105,7 +112,7 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
                   else ctl.separate(task.id, false);
                 }}
                 onKeyDown={(e) => e.stopPropagation()}
-              >{back ? 'Fold back' : 'Show separately'}</button>
+              >{back ? ICONS.ICON_FOLD_PUT_BACK : ICONS.ICON_FOLD_TAKE_OUT}</button>
             ) : null}
           </div>
         );
@@ -116,15 +123,17 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
             type="button"
             className="worker-fold-all"
             data-testid={folded > 0 ? 'worker-fold-show-all' : 'worker-fold-all-back'}
+            {...tipProps(folded > 0 ? `Take out all ${entries.length}: each its own row in the list` : 'Put all back into the team')}
             onClick={(e) => { e.stopPropagation(); ctl.showTeam(host.id, folded > 0); }}
-          >{folded > 0 ? `Show all ${entries.length} separately` : 'Fold all back'}</button>
+            onKeyDown={(e) => e.stopPropagation()}
+          >{folded > 0 ? ICONS.ICON_FOLD_TAKE_OUT : ICONS.ICON_FOLD_PUT_BACK}<span>All</span></button>
         </div>
       ) : null}
     </div>
   );
 }
 
-/** A worker row shown separately: one word to fold it back into its leader. */
+/** A worker row shown separately: the put-back arrow at the row's end, beside its start button. */
 export function FoldBackButton({ task, ctl }: { task: Task; ctl: WorkerFoldCtl }) {
   const back = ctl.foldBackOf(task);
   if (!back) return null;
@@ -133,9 +142,9 @@ export function FoldBackButton({ task, ctl }: { task: Task; ctl: WorkerFoldCtl }
       type="button"
       className="worker-fold-row-back"
       data-testid="worker-fold-row-back"
-      title={back.team ? `Fold the whole team back into ${orgDisplayTitle(back.leader)}` : `Fold back into ${orgDisplayTitle(back.leader)}`}
+      {...tipProps(back.team ? `Put the whole team back into ${orgDisplayTitle(back.leader)}` : `Put back into ${orgDisplayTitle(back.leader)}`)}
       onClick={(e) => { e.stopPropagation(); if (back.team) ctl.showTeam(back.leader.id, false); else ctl.separate(task.id, false); }}
       onKeyDown={(e) => e.stopPropagation()}
-    >Fold back</button>
+    >{ICONS.ICON_FOLD_PUT_BACK}</button>
   );
 }

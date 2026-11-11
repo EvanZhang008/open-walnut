@@ -1,5 +1,5 @@
 /* A leader's folded team (WorkerFoldTree.tsx): the line under its title, the tree below its row,
-   and the Fold back word on a worker shown separately. The team colour is the Worker and Leader
+   and the put-back arrow on a worker shown separately. The team colour is the Worker and Leader
    pills' (subtask-pill.css), light and dark. */
 :root {
   --worker-fold-ink: #6a4fd8;
@@ -101,13 +101,36 @@
 .worker-fold-icon svg { width: 14px; height: 14px; }
 .worker-fold-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .worker-fold-state { flex: none; font-size: 11px; color: var(--fg-muted); }
-/* The action is a word, shown on the line's hover or focus (always on a touch screen). */
+/* The actions are icons at the end of a line, the size and colours of the row's start button
+   (globals.css .task-start-btn): the take-out arrow on the line's hover or focus, the put-back arrow
+   always on a worker that is out, and the same arrow on that worker's own row. */
 .worker-fold-action,
-.worker-fold-all,
 .worker-fold-row-back {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: none;
+  width: 20px;
+  height: 20px;
   margin: 0;
-  padding: 2px 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.worker-fold-action svg,
+.worker-fold-row-back svg { width: 14px; height: 14px; }
+.worker-fold-action[data-testid="worker-fold-back"] { color: var(--worker-fold-ink); background: var(--worker-fold-bg); }
+.worker-fold-all {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 2px 7px 2px 4px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -118,29 +141,57 @@
   white-space: nowrap;
   cursor: pointer;
 }
+.worker-fold-all svg { width: 13px; height: 13px; }
 .worker-fold-action:hover,
 .worker-fold-action:focus-visible,
-.worker-fold-all:hover,
-.worker-fold-all:focus-visible,
 .worker-fold-row-back:hover,
-.worker-fold-row-back:focus-visible { background: var(--worker-fold-bg-strong); outline: none; }
+.worker-fold-row-back:focus-visible,
+.worker-fold-all:hover,
+.worker-fold-all:focus-visible { background: var(--worker-fold-bg-strong); color: var(--worker-fold-ink); outline: none; }
 .worker-fold-action { visibility: hidden; }
 .worker-fold-item:hover .worker-fold-action,
 .worker-fold-item:focus-within .worker-fold-action,
 .worker-fold-item.is-out .worker-fold-action { visibility: visible; }
 .worker-fold-foot { padding: 2px 0 0 26px; }
-.worker-fold-all { padding-left: 4px; }
 
-/* A worker shown separately: Fold back on the row's hover, beside its start button. */
+/* What a control does, shown the moment the pointer is on it (a native title waits about a second).
+   Beside the control, inside the row, so no scroller clips it: left of an end control, right of the
+   foot's. Not drawn until hovered: a hidden box would still count as overflow. */
+:is(.worker-fold-action, .worker-fold-row-back, .worker-fold-all)[data-fold-tip]::after {
+  content: attr(data-fold-tip);
+  display: none;
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 6px);
+  transform: translateY(-50%);
+  padding: 4px 8px;
+  border-radius: 7px;
+  background: rgba(28, 28, 30, 0.95);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 16px;
+  white-space: nowrap;
+  /* A leader's long title ends in an ellipsis; the hint stays inside the panel. */
+  max-width: min(260px, 70vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  z-index: 30;
+}
+.worker-fold-all[data-fold-tip]::after { right: auto; left: calc(100% + 6px); }
+:is(.worker-fold-action, .worker-fold-row-back, .worker-fold-all)[data-fold-tip]:is(:hover, :focus-visible)::after { display: block; }
+
+/* A worker shown separately: the put-back arrow on the row's hover, beside its start button. */
 .status-section-card .worker-fold-row-back { display: none; }
 .status-section-card:hover .worker-fold-row-back,
-.status-section-card:focus-within .worker-fold-row-back { display: inline-block; }
+.status-section-card:focus-within .worker-fold-row-back { display: inline-flex; }
 
-/* A touch screen has no hover: the words always show, after the hover rules above so they win.
+/* A touch screen has no hover: the arrows always show, after the hover rules above so they win.
    The phone row puts every extra child of a card in a strip that takes no taps
-   (phone-fixes-r4.css); Fold back is a control, so it takes them again. */
+   (phone-fixes-r4.css); the put-back arrow is a control, so it takes them again. */
 @media (hover: none) {
   .worker-fold-action { visibility: visible; }
-  .status-section-card .worker-fold-row-back { display: inline-block; }
+  .status-section-card .worker-fold-row-back { display: inline-flex; }
   html .app-shell-navigation .todo-panel .todo-pinned-card.status-section-card > .worker-fold-row-back { pointer-events: auto; }
 }

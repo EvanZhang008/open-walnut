@@ -2,8 +2,9 @@
  * Workers fold into their leader on Home's Flat sections (worker-fold.ts, WorkerFoldTree.tsx;
  * 2026-11-11, the user picked design 2, "inline tree", of ten). A worker of a real leader is no
  * row of its own: the leader's row says "N workers" (and how many need the user) and opens a tree below
- * it. "Show separately" makes one worker a row again, "Fold back" puts it back, "Show all N
- * separately" does the whole team, and Display's "Fold workers into leaders" turns it off; each
+ * it. The take-out arrow at a line's end makes one worker a row again, the put-back arrow puts it
+ * back (each says what it does the moment the pointer is on it), "All" does the whole team, and
+ * Display's "Fold workers into leaders" turns it off; each
  * choice outlives a reload. A worker whose leader is not in the view (Focus) still folds: the
  * leader is drawn as a quiet row in its place.
  */
@@ -74,12 +75,18 @@ test.describe('worker fold', () => {
     await expect(item1).toContainText('Fold worker one')
     await expect(item1).toContainText('Waiting')
 
-    // Show one separately: it is a row again, and the tree says so.
+    // Take one out: it is a row again, and its line wears the put-back arrow. The arrow says what
+    // it does as soon as the pointer is on it (no native title delay).
     await item1.hover()
-    await item1.getByTestId('worker-fold-separate').click()
+    const takeOut = item1.getByTestId('worker-fold-separate')
+    await expect(takeOut).toHaveAttribute('data-fold-tip', /Take out/)
+    await expect(takeOut).not.toHaveAttribute('title', /./)
+    await takeOut.hover()
+    expect(await takeOut.evaluate((e) => getComputedStyle(e, '::after').display)).toBe('block')
+    await takeOut.click()
     const row1 = statusSectionCard(panel, 'waiting', w1)
     await expect(row1).toBeVisible()
-    await expect(item1).toContainText('Shown separately')
+    await expect(item1.getByTestId('worker-fold-back')).toHaveAttribute('data-fold-tip', /^Put back into /)
     await page.reload()
     await selectSection(page, 'All')
     await setStatusSectionOpen(panel, 'waiting', true)

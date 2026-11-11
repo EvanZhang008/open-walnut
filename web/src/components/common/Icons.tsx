@@ -74,6 +74,10 @@ export const ICON_CHEVRON_LEFT = <svg width="12" height="12" viewBox="0 0 16 16"
 export const ICON_CHEVRON_RIGHT = <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 3 10.5 8 6 13"/></svg>;
 /** Small down chevron (filter chips, menus); same box and stroke as ICON_CHEVRON_RIGHT. */
 export const ICON_CHEVRON_DOWN = <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 8 10.5 13 6"/></svg>;
+/** A worker leaves its leader's folded tree for a row of its own (WorkerFoldTree.tsx; the user picked design 7, 2026-11-11). */
+export const ICON_FOLD_TAKE_OUT = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M8 12.5V3.5"/><polyline points="4.5 7 8 3.5 11.5 7"/><path d="M3 13.5h10"/></svg>;
+/** Its pair: the row goes back into the leader's tree. */
+export const ICON_FOLD_PUT_BACK = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3.5v9"/><polyline points="4.5 9 8 12.5 11.5 9"/><path d="M3 2.5h10"/></svg>;
 /** Plain tick for a selected value. Deliberately one stroke, no circle: it must never read as ICON_PHASE_COMPLETE. */
 export const ICON_CHECK = <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 8.5 6.5 12 13 4.5"/></svg>;
 // VS Code-style layout toggles: a window outline whose side compartment is

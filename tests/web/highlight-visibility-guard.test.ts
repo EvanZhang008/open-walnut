@@ -156,7 +156,7 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   // The strip Stop's other label ("Stop :port" or "Stopping…"), kept to hold the button's width.
   'web/src/styles/session-servers.css :: .session-servers-strip-stop-off': CONTROL,
   'web/src/styles/tasks-page.css :: .tp-group-kebab-wrap': CONTROL,
-  // A tree line's "Show separately" word, shown on the line's hover (WorkerFoldTree.tsx).
+  // A tree line's take-out arrow, shown on the line's hover (WorkerFoldTree.tsx).
   'web/src/styles/worker-fold.css :: .worker-fold-action': CONTROL,
   'web/src/styles/human-inbox-items.css :: .hii-inert-slot': SLOT,
   'web/src/styles/launch-source.css :: .launch-source-tag.is-placeholder': SLOT,
