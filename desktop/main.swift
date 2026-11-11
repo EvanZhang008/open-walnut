@@ -1634,6 +1634,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func loadWebUI(url initialURL: URL? = nil) {
         guard let port = serverPort else { return }
         let url = initialURL ?? URL(string: "http://localhost:\(port)")!
+        // A page already in the window (a recycle, a server found again after a restart) is
+        // torn down here and ended once the new one has loaded: it did not always exit on its own.
+        let replaced = webView
+        if let old = replaced {
+            old.stopLoading()
+            old.navigationDelegate = nil
+            old.uiDelegate = nil
+            old.configuration.userContentController.removeAllScriptMessageHandlers()
+            webView = nil
+            consolePageLoaded = false
+        }
 
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
@@ -1733,11 +1744,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let request = URLRequest(url: url)
         webView.load(request)
+        if let old = replaced { WebContentWatchdog.retireReplacedPage(old) { [weak self] in self?.webView } }
     }
 
     /// Replaces the WKWebView (and with it the WebContent process) at the page
     /// the user is on. `reload()` would keep the same process, and the whole
-    /// point is a fresh compositor: the old process exits once its view is gone.
+    /// point is a fresh compositor. The old page is unloaded and its process ended
+    /// (`WebContentWatchdog.retireReplacedPage`): it did not always exit on its own.
     func recycleWebContent(reason: String) {
         guard let old = webView, let port = serverPort else { return }
         let current = old.url ?? URL(string: "http://localhost:\(port)")!
@@ -1745,12 +1758,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             "reason": reason,
             "path": current.path + (current.query.map { "?\($0)" } ?? ""),
         ])
-        old.stopLoading()
-        old.navigationDelegate = nil
-        old.uiDelegate = nil
-        old.configuration.userContentController.removeAllScriptMessageHandlers()
-        webView = nil
-        consolePageLoaded = false
         loadWebUI(url: current)
     }
 
@@ -2456,6 +2463,7 @@ extension AppDelegate: WKNavigationDelegate {
         target.contentView = child
         watchdog?.attach(webView: child, window: target)
         child.load(URLRequest(url: url))
+        WebContentWatchdog.retireReplacedPage(old) { [weak child] in child }
     }
 
     func webViewDidClose(_ webView: WKWebView) {

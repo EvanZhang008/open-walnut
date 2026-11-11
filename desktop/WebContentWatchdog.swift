@@ -539,6 +539,39 @@ final class WebContentWatchdog {
         URLSession.shared.dataTask(with: request).resume()
     }
 
+    // MARK: The replaced page
+
+    /// The page a recycle replaced ends with it. WebKit closes a page once its view is gone, but on
+    /// 2026-11-11 the old page process of a recycle was still running its page (its timers, its
+    /// socket to the server, 1.7 GB) 17 minutes after the swap, so the app held two pages. The old
+    /// view unloads its page at once (its drafts are written on the way out, like a reload), and
+    /// once the new page has had time to load, a process still serving the old view is ended
+    /// through WebKit's own call. Never the new page's process.
+    static func retireReplacedPage(_ old: WKWebView, replacement: @escaping () -> WKWebView?) {
+        let oldPid = webContentPid(old)
+        let footprintMB = oldPid.flatMap(physFootprint).map { String($0 >> 20) } ?? "?"
+        old.stopLoading()
+        old.loadHTMLString("", baseURL: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            let newPid = replacement().flatMap(webContentPid)
+            var end = "exited"
+            if let pid = oldPid, kill(pid, 0) == 0 {
+                let killer = NSSelectorFromString("_killWebContentProcess")
+                if pid != newPid, webContentPid(old) == pid, old.responds(to: killer) {
+                    old.perform(killer)
+                    end = "ended"
+                } else {
+                    end = "kept"
+                }
+            }
+            DesktopLogger.shared.log("webcontent_replaced_page", fields: [
+                "pid": oldPid.map { String($0) } ?? "?",
+                "footprintMB": footprintMB,
+                "end": end,
+            ])
+        }
+    }
+
     // MARK: Probes
 
     /// The WebContent pid is only exposed through WebKit's private KVC key.
