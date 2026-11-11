@@ -91,14 +91,16 @@ test('every incoming message folds into the turn, and reads Who, Title, Summary,
   const stopped = cards.filter({ hasText: 'Stopped without completing' })
   await expect(stopped.locator('.op-card-dir')).toHaveText('System, about')
   await expect(stopped.locator('.op-card-to a.task-link[data-task-id="pw-task-001"]')).toBeVisible()
-  // Summary: the task's own last words, two lines at most.
+  // Summary: the task's own last words (kept for find and the open card).
   await expect(stopped.locator('.op-card-summary')).toContainText('I decided one thing for you')
   const digest = cards.filter({ hasText: 'Org update since 2 h ago' })
   // A digest's own lines are its summary, never lost.
   await expect(digest.locator('.op-card-summary')).toContainText('Walnut: 2 done, 3 new')
   const done = cards.filter({ hasText: 'Completed its task' })
-  const lh = await done.locator('.op-card-summary').evaluate((el) => parseFloat(getComputedStyle(el).lineHeight) || 18)
-  expect((await done.locator('.op-card-summary').boundingBox())!.height).toBeLessThanOrEqual(lh * 2 + 2)
+  // In a fold a card is one row like every step (design 1, 2026-11-11): the summary is in
+  // the words it opens to, never a second line under the title.
+  await expect(done.locator('.op-card-summary')).toBeHidden()
+  expect((await done.boundingBox())!.height).toBeLessThanOrEqual(30)
   const tlh = await done.locator('.op-card-title').evaluate((el) => parseFloat(getComputedStyle(el).lineHeight) || 20)
   expect((await done.locator('.op-card-title').boundingBox())!.height).toBeLessThanOrEqual(tlh + 2)
   await reveal(page, panel, cards.first())

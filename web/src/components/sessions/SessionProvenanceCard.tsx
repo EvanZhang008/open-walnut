@@ -57,6 +57,7 @@ import { log } from '@/utils/log';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { fallbackTitle, foldKey, foldSummary, noticeText, noticeTitle, useMessageFold } from './message-fold';
 import { CardMain, CardWho } from './MessageCard';
+import { StepIcon, envelopeStepIcon } from './StepIcon';
 import { disclosureIds, useDetailsDisclosure } from './row-disclosure';
 import '@/styles/provenance-quote.css';
 import '@/styles/provenance-fold.css';
@@ -185,6 +186,7 @@ function InboundWho({ envelope, resolved, sender, senderTitle }: {
   return (
     <CardWho
       glyph={envelopeDirectionGlyph(envelope.kind)}
+      icon={envelopeStepIcon(envelope.kind)}
       direction={foldDirection(envelope)}
       taskIds={resolved.taskId ? [resolved.taskId] : []}
       fallback={fallback}
@@ -321,7 +323,7 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
   if (kind === 'reply-request') {
     return (
       <div className="provenance-card provenance-card-slim" data-envelope-kind={kind}>
-        <span className="provenance-glyph">{envelopeDirectionGlyph(kind)}</span>
+        <span className="provenance-glyph" aria-hidden="true"><StepIcon name={envelopeStepIcon(kind)} /></span>
         <span className="provenance-label">{envelopeDirectionLabel(kind, source)}</span>
         <EnvelopeDetails envelope={envelope} />
       </div>
@@ -344,6 +346,7 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
       <div className="provenance-card" data-envelope-kind={kind} data-folded={open ? 'false' : 'true'}>
         <CardWho
           glyph={envelopeDirectionGlyph(kind)}
+          icon={envelopeStepIcon(kind)}
           direction={scheduled ? 'Routine ran on schedule' : foldDirection(envelope)}
           taskIds={[]}
           fallback={<span className="op-card-to-text">{name}</span>}
@@ -367,6 +370,7 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
       <div className="provenance-card" data-envelope-kind={kind} data-folded={open ? 'false' : 'true'}>
         <CardWho
           glyph={envelopeDirectionGlyph(kind)}
+          icon={envelopeStepIcon(kind)}
           direction={foldDirection(envelope)}
           // The App is who sent it; its about-task is the task receiving the state, not a sender.
           taskIds={[]}

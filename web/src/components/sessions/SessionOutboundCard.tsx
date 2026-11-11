@@ -268,7 +268,7 @@ function ToLine({ send, resolved, direction }: { send: OutboundSend; resolved: R
       : <span className="op-card-to-text">{resolved.title || send.to || (send.kind === 'reply' ? 'The session that asked' : 'another session')}</span>)
     : (send.fields.to[0] && !send.fields.toLabel ? <span className="op-card-to-text">{send.fields.to[0]}</span> : null);
   return (
-    <CardWho glyph={outboundDirectionGlyph(send.kind)} direction={direction} taskIds={taskIds} fallback={fallback} label={send.fields.toLabel} tooltip={isSend ? resolved.title : undefined} />
+    <CardWho glyph={outboundDirectionGlyph(send.kind)} icon={send.kind === 'reply' ? 'reply-out' : 'send'} direction={direction} taskIds={taskIds} fallback={fallback} label={send.fields.toLabel} tooltip={isSend ? resolved.title : undefined} />
   );
 }
 

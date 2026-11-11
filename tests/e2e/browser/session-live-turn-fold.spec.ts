@@ -112,28 +112,28 @@ test('a received message and the tools the live turn runs for it are one fold ro
   const folds = history.locator('[data-testid="turn-fold"]');
   await expect(folds).toHaveCount(1, { timeout: 10000 });
   const fold = folds.first();
-  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^Received 1 message \u00b7 Ran 2 tools/);
+  await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Received 1 message \u00b7 Ran 2 tools/);
   // No second row for the same turn: no tool run, no card outside the fold.
   await expect(history.locator('.tool-run-toggle')).toHaveCount(1);
   await expect(history.locator('.provenance-card')).toHaveCount(0);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-live-folded.png`, clip: (await fold.boundingBox())! }).catch(() => {});
 
-  // Opened: the message, then both calls as one run, the row the saved turn's
+  // Opened: the message, then both calls as one run laid out as rows, the run the saved turn's
   // fold will hold (so the body keeps its form when the turn is saved).
   await fold.locator('.tool-run-toggle').first().click();
   await expect(fold.locator('.provenance-card')).toHaveCount(1);
   await expect(fold.locator('.provenance-card')).toContainText('LIVE_PEER_TITLE check the build');
   const innerRun = fold.locator('.process-fold-body > .session-msg-bare > .tool-run-row');
   await expect(innerRun).toHaveCount(1);
-  await expect(innerRun.locator(':scope > .tool-run-toggle')).toContainText('Ran a command, read a file');
-  await innerRun.locator(':scope > .tool-run-toggle').click();
+  // Opened, the run is its calls, one row each (design 1, 2026-11-11): nothing to open twice.
+  await expect(innerRun).toHaveAttribute('data-flat', 'true');
   await expect(fold).toContainText('make check');
   await expect(fold).toContainText('/tmp/live/a.ts');
 
   // A third call joins the same row.
   await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: 'Bash', toolUseId: 'tool-live-3', input: { command: 'make test' } });
   await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: 'tool-live-3', result: 'ok' });
-  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Received 1 message(?: from [^·›]+?)? \u00b7 Ran 3 tools/);
+  await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Received 1 message(?: from [^·›]+?)? \u00b7 Ran 3 tools/);
   // The third call joined the same run inside it.
   await expect(fold.locator('.process-fold-body > .session-msg-bare > .tool-run-row')).toHaveCount(1);
   await expect(history.locator('[data-testid="turn-fold"]')).toHaveCount(1);
@@ -171,8 +171,7 @@ test('the fold stays one open row when a history read saves every call the live 
   const folds = history.locator('[data-testid="turn-fold"]');
   await expect(folds).toHaveCount(1, { timeout: 10000 });
   await folds.first().locator('.tool-run-toggle').first().click();
-  // The calls are one run inside the fold; the reader opens it too.
-  await folds.first().locator('.process-fold-body .tool-run-toggle').first().click();
+  // Opened, the calls are rows of the fold's one list (design 1, session-worked-for.spec.ts).
   await expect(folds.first()).toContainText('make check');
 
   await page.evaluate((dump) => {
@@ -279,9 +278,10 @@ test('a call still out when the turn ends stops the fold breathing', async ({ pa
   await expect(fold).toHaveCount(1, { timeout: 10000 });
   await expect(fold.locator(':scope > .tool-run-toggle .tool-run-live-dot')).toHaveCount(1);
   await fold.locator(':scope > .tool-run-toggle').click();
-  await expect(fold.locator('.process-fold-body .tool-run-live-dot')).toHaveCount(1);
+  // Opened, the call still out is its own row, breathing (its calling dot).
+  await expect(fold.locator('.process-fold-body .tool-run-live-dot, .process-fold-body .chat-tool-block-calling-dot')).toHaveCount(1);
   // The turn is cut with the call still out: nothing returns it.
   await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'interrupted', isError: false });
-  await expect(history.locator('.tool-run-live-dot')).toHaveCount(0, { timeout: 5000 });
+  await expect(history.locator('.tool-run-live-dot, .chat-tool-block-calling-dot')).toHaveCount(0, { timeout: 5000 });
   await expect(fold).toHaveCount(1);
 });

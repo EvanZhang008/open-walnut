@@ -90,7 +90,9 @@ async function rowsBetween(hist: Locator, from: string, to: string): Promise<str
     const text = (n: Element) => (n.textContent ?? '').replace(/\s+/g, ' ').trim();
     const i = rows.findIndex((n) => text(n).includes(a));
     const j = rows.findIndex((n) => text(n).includes(b));
-    return rows.slice(i + 1, j < 0 ? rows.length : j).map(text);
+    // A fold's line read without how long the turn worked (session-worked-for.spec.ts pins that).
+    const steps = (n: Element) => { const c = n.cloneNode(true) as Element; c.querySelectorAll('[data-testid="turn-fold-lead"]').forEach((x) => x.remove()); return text(c); };
+    return rows.slice(i + 1, j < 0 ? rows.length : j).map(steps);
   }, [from, to] as const);
 }
 
@@ -110,11 +112,12 @@ for (const [name, history, a, b, phrase] of [
     await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-${name.replace(/\s+/g, '-')}.png`, clip: (await hist.boundingBox())! }).catch(() => {});
 
     // Opened, every step is inside, the failed ones and the error lines included.
-    const fold = hist.locator('[data-testid="turn-fold"]', { has: page.locator('.tool-run-toggle', { hasText: phrase }) });
+    const fold = hist.locator('[data-testid="turn-fold"]', { has: page.locator('.tool-run-toggle .tool-run-label', { hasText: phrase.source.match(/^\^([^\\]+?)\\s/)![1] }) });
     await fold.locator(':scope > .tool-run-toggle').click();
     await expect(fold).toHaveAttribute('data-open', 'true');
-    await expect(fold).toContainText(name === 'every step kind' ? 'Ran 2 commands' : 'Ran 4 commands');
-    await expect(fold.locator('.tool-run-fail').nth(1)).toHaveText('1 failed');
+    // The commands are rows of the one list (design 1, 2026-11-11), the failed one red.
+    await expect(fold.locator('.process-fold-body .chat-tool-block-bash')).toHaveCount(name === 'every step kind' ? 3 : 5);
+    await expect(fold.locator('.process-fold-body .chat-tool-block-bash.chat-tool-block-error')).toHaveCount(name === 'every step kind' ? 2 : 1);
     // A run of runtime rows with a compaction in it is named by it (fold-steps.ts systemRunLabel).
     await expect(fold).toContainText(name === 'every step kind' ? 'Context compacted \u00b7 2 more' : '20 errors');
   });
@@ -136,7 +139,8 @@ async function foldHeadersAround(hist: Locator, from: string, to: string): Promi
     return [...el.querySelectorAll('.tool-run-toggle')]
       .filter((t) => follows(start, t) && follows(t, end))
       .filter((t) => !t.parentElement?.closest('[data-open="true"]'))
-      .map((t) => (t.textContent ?? '').replace(/\s+/g, ' ').trim());
+      // The line's steps, without how long the turn worked (session-worked-for.spec.ts pins that).
+      .map((t) => { const c = t.cloneNode(true) as Element; c.querySelector('[data-testid="turn-fold-lead"]')?.remove(); return (c.textContent ?? '').replace(/\s+/g, ' ').trim(); });
   }, [from, to] as const);
 }
 

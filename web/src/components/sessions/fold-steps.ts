@@ -17,7 +17,7 @@ import { noticeTitle } from './message-fold';
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, COMPACTION_FAILED_MESSAGE, COMPACTION_STOPPED_MESSAGE } from '@open-walnut/compaction-notice';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
 import { walnutNoticeKind } from '../../../../src/core/sessions/walnut-commands';
-import { isUserDenied, type ToolRunMember } from './tool-run-phrase';
+import { isRuleDenied, isUserDenied, type ToolRunMember } from './tool-run-phrase';
 
 /** The variant a row of Claude Code's own error reply ("Prompt is too long") draws with: an error line in the notice grey. */
 export const CLI_ERROR_VARIANT = 'cli-error';
@@ -116,7 +116,7 @@ export function foldStepsPhrase(steps: readonly FoldStep[], waiting: ReadonlySet
     else if (s.kind === 'sent' || s.kind === 'inbox') sent++;
     else if (s.kind === 'calls') {
       for (const t of s.tools) {
-        if (t.isError && isUserDenied(t.result)) denied++;
+        if (t.isError && (isUserDenied(t.result) || isRuleDenied(t.result))) denied++;
         else if (t.result === undefined && t.toolUseId !== undefined && waiting.size > 0) held++;
         else tools++;
       }
@@ -186,4 +186,34 @@ export function systemRunLabel(members: readonly { variant: string; message: str
   const errors = members.filter((m) => m.variant === 'error' || m.variant === CLI_ERROR_VARIANT).length;
   if (lines.size > 0 && errors > 0) return `Compaction failed${more(errors)}`;
   return `${members.length} system messages`;
+}
+
+/** A turn's work time as the fold line says it: "45s", "2m 16s", "1h 05m". */
+export function workDuration(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
+}
+
+/**
+ * What leads a finished turn's fold line (2026-11-11, design 1, learned from T3 Code):
+ * how long it worked, "Worked for 2m 16s", before what the steps were ("· Sent 4 ·
+ * Ran 3 tools"). With no time known (an older row with no timestamps, under a
+ * second) there is none, and the line is the steps alone.
+ */
+export function workedForLead(seconds: number | undefined): string | undefined {
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds < 1) return undefined;
+  return `Worked for ${workDuration(seconds)}`;
+}
+
+/** What leads the live turn's fold line. */
+export const WORKING_LEAD = 'Working';
+
+/** Seconds between two ISO timestamps, or undefined when either is missing or they run backwards. */
+export function secondsBetween(from: string | undefined, to: string | undefined): number | undefined {
+  if (!from || !to) return undefined;
+  const a = Date.parse(from);
+  const b = Date.parse(to);
+  return Number.isFinite(a) && Number.isFinite(b) && b >= a ? (b - a) / 1000 : undefined;
 }

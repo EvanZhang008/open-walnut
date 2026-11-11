@@ -91,9 +91,9 @@ test('everything before a turn\'s answer is one row; the answer shows', async ({
   // Counts only: two reads and two edits are four tools, the task_send one sent.
   await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Sent 1(?: to [^·›]+?)? \u00b7 Ran 4 tools$/)
   await expect(fold).toHaveAttribute('data-open', 'false')
-  // Folded, the steps and the sent card are off screen; the words answering the person are not.
-  await expect(history).toContainText('FOLD_NARRATION_A first result is in.')
-  expect(await fold.innerText()).not.toContain('FOLD_NARRATION_A')
+  // Folded, the steps, the sent card and the short words on the way are off screen
+  // (design 1, 2026-11-11: the person's question, one line, the answer).
+  expect(await history.innerText()).not.toContain('FOLD_NARRATION_A')
   expect(await history.innerText()).not.toContain('FOLD_SENT_TITLE')
   // The person's own message shows.
   await expect(history.locator('.session-msg-user', { hasText: 'FOLD_ASK_ONE' })).toHaveCount(1)
@@ -103,6 +103,8 @@ test('everything before a turn\'s answer is one row; the answer shows', async ({
   await fold.locator('.tool-run-toggle').first().click()
   await expect(fold).toHaveAttribute('data-open', 'true')
   await expect(fold).toContainText('FOLD_SENT_TITLE')
+  // The words on the way are one row of the list, their first line.
+  await expect(fold.locator('[data-testid="folded-words"]', { hasText: 'FOLD_NARRATION_A first result is in.' })).toHaveCount(1)
   await shot(page, fold, 'turn-open')
 })
 
@@ -124,20 +126,21 @@ test('sends, replies and messaging ops fold with the steps, reasoning included; 
   await shot(page, fold, 'sends-open')
 })
 
-test('a send in the same message as the words folds to one closed line between them', async ({ page }) => {
-  // 2026-11-09, the user: "the message should also be auto collapsed ... like send message 1".
+test('a send in the same message as the words folds to one closed line before the answer', async ({ page }) => {
+  // 2026-11-09, the user: "the message should also be auto collapsed ... like send message 1";
+  // 2026-11-11, design 1: the short words on the way fold with it.
   test.setTimeout(90_000)
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
   await expect(history).toContainText('FOLD_FINAL_TEN the decision is yours.')
-  await expect(history).toContainText('FOLD_WORDS_TEN my pick is C.')
-  const fold = history.locator('[data-testid="turn-fold"]').filter({ hasText: /^Sent 1/ }).last()
+  const fold = history.locator('[data-testid="turn-fold"]').filter({ has: page.locator('.tool-run-label', { hasText: /^Sent 1/ }) }).last()
   await expect(fold).toHaveAttribute('data-open', 'false')
   expect(await history.innerText()).not.toContain('FOLD_SENT_TEN')
-  // In place: after the words, before the words that follow.
-  const words = history.locator('.session-msg-assistant', { hasText: 'FOLD_WORDS_TEN' })
+  expect(await history.innerText()).not.toContain('FOLD_WORDS_TEN')
+  // In place: after the person's message, before the answer.
+  const ask = history.locator('.session-msg-user', { hasText: 'FOLD_ASK_TEN' })
   const after = history.locator('.session-msg-assistant', { hasText: 'FOLD_FINAL_TEN' })
-  const [w, f, a] = await Promise.all([words.boundingBox(), fold.boundingBox(), after.boundingBox()])
+  const [w, f, a] = await Promise.all([ask.boundingBox(), fold.boundingBox(), after.boundingBox()])
   expect(w!.y).toBeLessThan(f!.y)
   expect(f!.y).toBeLessThan(a!.y)
   await reveal(page, panel, fold)
@@ -145,7 +148,7 @@ test('a send in the same message as the words folds to one closed line between t
   await fold.locator('.tool-run-toggle').first().click()
   await expect(fold).toHaveAttribute('data-open', 'true')
   await expect(fold).toContainText('FOLD_SENT_TEN')
-  await expect(history.getByText('FOLD_WORDS_TEN my pick is C.')).toHaveCount(1)
+  await expect(fold.locator('[data-testid="folded-words"]', { hasText: 'FOLD_WORDS_TEN my pick is C.' })).toHaveCount(1)
 })
 
 test('a failure folded before an answer says so in the header', async ({ page }) => {
@@ -157,11 +160,12 @@ test('a failure folded before an answer says so in the header', async ({ page })
   await expect(fold).toHaveCount(1)
   await expect(fold.locator('.tool-run-toggle .tool-run-fail')).toHaveText('2 failed')
   await reveal(page, panel, fold)
-  // The words after the person's message stand outside it.
-  await expect(history).toContainText('FOLD_NARRATION_E starting.')
-  expect(await fold.innerText()).not.toContain('FOLD_NARRATION_E')
+  // The short words after the person's message fold with the steps.
+  expect(await history.innerText()).not.toContain('FOLD_NARRATION_E')
   await fold.locator('.tool-run-toggle').first().click()
-  await expect(fold.locator('.tool-run-fail').filter({ hasText: '2 failed' })).toHaveCount(2)
+  await expect(fold.locator('[data-testid="folded-words"]', { hasText: 'FOLD_NARRATION_E starting.' })).toHaveCount(1)
+  // Opened, the two failed calls are red rows of the list.
+  await expect(fold.locator('.process-fold-body .chat-tool-block-error')).toHaveCount(2)
 })
 
 test('an answer to the person shows in full even with the line under it; nothing reads "No action needed"', async ({ page }) => {

@@ -12,7 +12,9 @@
 import type { ReactNode } from 'react';
 import { useTaskLabel } from '@/hooks/useEntityLabels';
 import { taskPath } from '@/utils/task-path';
+import { StepIcon, type StepIconName } from './StepIcon';
 import '@/styles/provenance-fold.css';
+import '@/styles/step-rows.css';
 
 /** A task the message is to, from or about, as a pill (a click opens it). */
 export function TaskPill({ taskId, tooltip }: { taskId: string; tooltip?: string }) {
@@ -28,8 +30,10 @@ export function TaskPill({ taskId, tooltip }: { taskId: string; tooltip?: string
 }
 
 /** The who line: glyph, "To" / "From" / "About", the pills (else `fallback`), a place label. */
-export function CardWho({ glyph, direction, taskIds, fallback, label, tooltip }: {
+export function CardWho({ glyph, icon, direction, taskIds, fallback, label, tooltip }: {
   glyph: string;
+  /** The step row's icon (StepIcon.tsx); the glyph is the text twin it replaces on screen. */
+  icon?: StepIconName;
   direction: string;
   taskIds: readonly string[];
   fallback?: ReactNode;
@@ -39,7 +43,7 @@ export function CardWho({ glyph, direction, taskIds, fallback, label, tooltip }:
 }) {
   return (
     <div className="op-card-to">
-      <span className="provenance-glyph" aria-hidden="true">{glyph}</span>
+      <span className="provenance-glyph" aria-hidden="true">{icon ? <StepIcon name={icon} /> : glyph}</span>
       <span className="op-card-dir">{direction}</span>
       {taskIds.length > 0 ? taskIds.map((id) => <TaskPill key={id} taskId={id} tooltip={taskIds.length === 1 ? tooltip : undefined} />) : fallback}
       {label && <span className="op-card-to-label">{label}</span>}
@@ -70,8 +74,8 @@ export function CardMain({ title, titleCopy, summary, open, onToggle }: {
       {title && <span className="op-card-title" {...(titleCopy ? { 'data-find-skip': '' } : {})}><span>{title}</span></span>}
       {summary && <span className="op-card-summary" data-find-skip=""><span>{summary}</span></span>}
       <span className="op-card-more">
-        <span className="op-card-more-chevron" aria-hidden="true">›</span>
-        {open ? 'Hide details' : 'Details'}
+        <span className="op-card-more-chevron" aria-hidden="true"><StepIcon name="chevron" /></span>
+        <span className="op-card-more-text">{open ? 'Hide details' : 'Details'}</span>
       </span>
     </button>
   );

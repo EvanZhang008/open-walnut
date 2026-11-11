@@ -1,10 +1,11 @@
 import { useState, useMemo } from 'react';
 import { disclosureIds, useRowDisclosure } from './row-disclosure';
-import { ChevronRightIcon, PlayGlyphIcon } from '@/components/common/PhoneIcons';
+import { StepIcon } from './StepIcon';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { findImagePaths, resolveImagePath } from '@/utils/markdown';
 import { isUserDenied } from './tool-run-phrase';
+import { useRunLive } from './fold-body-context';
 import { AnswerText } from './RuleDetail';
 import { answeredCallState, callAnswerText, callDecisionLabel, useDeniedNow, useSoleCall, useToolDecisions, useWaitingTools } from './waiting-tools';
 import { bashCommandSummary, toolDescription } from '@open-walnut/tool-header-text';
@@ -62,6 +63,7 @@ const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
 };
 
 export function BashToolCall({ tool, status: statusProp = 'done', result: resultProp, sessionCwd }: BashToolCallProps) {
+  const runLive = useRunLive();
   const [open, setOpen] = useRowDisclosure(disclosureIds.tool(tool.toolUseId), useSoleCall());
   const [popupOpen, setPopupOpen] = useState(false);
 
@@ -100,24 +102,27 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
     ? result.slice(0, INLINE_RESULT_LIMIT) + `\n… (${result.length - INLINE_RESULT_LIMIT} more chars — expand ⤢ for full output)`
     : result;
 
-  const statusIcon = status === 'waiting' ? '\u23F8\uFE0E' : status === 'denied' ? '\u2298' : status === 'error' ? '✗' : status === 'done' ? '✓' : <PlayGlyphIcon size={10} />;
+  const statusIcon = <StepIcon name={status === 'denied' ? 'ban' : status === 'error' ? 'alert' : 'terminal'} />;
   const statusClass = status === 'waiting' ? 'chat-tool-block-waiting' : status === 'denied' ? 'chat-tool-block-denied'
     : status === 'error' ? 'chat-tool-block-error'
     : status === 'done' ? 'chat-tool-block-done' : 'chat-tool-block-calling';
 
   return (
-    <div className={`chat-tool-block ${statusClass}`}>
-      <button className="chat-tool-block-header" onClick={() => setOpen((p) => !p)}>
+    <div className={`chat-tool-block chat-tool-block-bash ${statusClass}${open ? ' chat-tool-block--open' : ''}`}>
+      <button className="chat-tool-block-header" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
         <span className="chat-tool-block-icon">{statusIcon}</span>
+        {/* The row reads the command itself, as a terminal does; the tool's name stays for
+            screen readers and the run's own counts. */}
         <span className="chat-tool-block-name">Bash</span>
-        {description && <span className="chat-tool-block-desc">· {description}</span>}
-        {!open && !description && commandSummary && (
-          <span className="chat-tool-block-summary">{commandSummary}</span>
-        )}
-        {status === 'calling' && <span className="chat-tool-block-calling-dot" />}
+        {description
+          ? <span className="chat-tool-block-desc">{description}</span>
+          // Opened, the body shows the whole command: the row keeps its line, which find
+          // skips then, so its words count once (the server's count, tool-header-text.ts).
+          : commandSummary && <span className="chat-tool-block-summary chat-tool-block-command" {...(open ? { 'data-find-skip': '' } : {})}>{commandSummary}</span>}
+        {status === 'calling' && runLive && <span className="chat-tool-block-calling-dot" />}
         {status === 'waiting' && <span className="chat-tool-block-waiting-label">{queued ? 'Queued' : 'Waiting for approval'}</span>}
         {status !== 'waiting' && decision && <span className="chat-tool-block-decision" title={decision}><AnswerText text={callDecisionLabel(decision)} /></span>}
-        <span className="chat-tool-block-arrow">{open ? '▼' : <ChevronRightIcon size={10} />}</span>
+        <span className="chat-tool-block-arrow"><StepIcon name="chevron" /></span>
         <span
           className="bash-tool-expand-btn"
           role="button"

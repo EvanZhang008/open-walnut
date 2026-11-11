@@ -75,20 +75,20 @@ import { placeKeyOf } from './reading-place';
 import { useReadingPlace } from './useReadingPlace';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
-import { envelopeSteps, foldStepsPhrase, walnutCompactLine, type FoldStep } from './fold-steps';
+import { WORKING_LEAD, envelopeSteps, foldStepsPhrase, secondsBetween, walnutCompactLine, workedForLead, type FoldStep } from './fold-steps';
+import { FoldedWordsRow, LiftedStep, LivePeek, needsPerson } from './StepRows';
 import { lookupTaskByRef } from '@/stores/entity-label-store';
-import { countFoldFailures, joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type FoldFailures, type MsgKind, type RowRole } from './fold-rows';
+import { countFoldFailures, isNarration, joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type FoldFailures, type MsgKind, type RowRole } from './fold-rows';
 import { chunkByKind, foldsAsOne, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
 import { isOutboundSendCall } from '@/stream/tool-merge';
 import { isEnvelopeOnly, parseSessionEnvelopes, type EnvelopeSegment } from '@open-walnut/history-session-envelope';
-import { NoActionMark, ProcessFoldRow, ReaderOpenedFolds, openTurnFold, turnFoldKey } from './TurnFolds';
+import { NoActionMark, ProcessFoldRow, ReaderOpenedFolds, openTurnFold, turnFoldKey, wordsFoldKey } from './TurnFolds';
 import { RowDisclosureScope, disclosureIds } from './row-disclosure';
 import { foldPlace, joinedRows, readReaderView, restoreReaderRow, rowKeysAttr, rowsAsDrawn, type HeldBefore, type ReaderView } from './fold-reader-hold';
 import { shapeTurns, type PagedTurnShape as TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
-import { detectOutboundCalls, type OutboundSend } from './session-outbound';
-import { detectOutboundSend, walnutToolView } from './session-outbound';
-import { isRoutedQuestion, isUserDenied } from './tool-run-phrase';
+import { detectOutboundCalls, detectOutboundSend, walnutToolView, type OutboundSend } from './session-outbound';
+import { isRoutedQuestion, isRuleDenied, isUserDenied } from './tool-run-phrase';
 import { DeniedNowContext, ToolDecisionsContext, useSessionToolDecisions, WaitingToolsContext } from './waiting-tools';
 import { permissionRequestStore } from '@/stores/permission-request-store';
 import { isMergeableHistoryTool } from './SessionMessage';
@@ -4894,12 +4894,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
     }
   };
+  /** The session's own words between its steps (no call, no reasoning alone): folded, one row. */
+  const isWordsPart = (part: HistoryPart): boolean => part.kind === 'msg' && !part.stream && part.m.role === 'assistant'
+    && msgKindOf(part) === 'other' && !!(part.m.text ?? '').trim()
+    // Words that carry a card of their own (an Agent, a plan, a question) keep it in sight.
+    && (part.suppressTools || !(part.m.tools?.length));
   /** The failures a stretch of rows holds, for its fold's red count: the runtime's
    *  error lines and the failed calls (a routed question is an answer; a call the
    *  person denied did not fail, the line counts it as denied). */
   const failedOf = (parts: readonly HistoryPart[]): FoldFailures => countFoldFailures(
     parts.flatMap((part) => rowsOf(part).map((row) => ({ row, toolsShown: !(part.kind === 'msg' && part.suppressTools) }))),
-    (t: SessionHistoryTool) => !!t.isError && !isRoutedQuestion(t.name, t.result) && !isUserDenied(t.result),
+    (t: SessionHistoryTool) =>  !!t.isError && !isRoutedQuestion(t.name, t.result) && !isUserDenied(t.result) && !isRuleDenied(t.result),
   );
   // A message to someone: a send card, or Walnut's other messaging ops (to a
   // lead, to the inbox, an answer in it), which render as plain tool rows.
@@ -5148,21 +5153,26 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   };
   let quiet: Item[] = [];
   let quietKey = '';
-  const emitQuiet = (answerThinking?: string, riders?: EnvelopeSegment[]) => {
+  // The last row the reader reads that was placed, for the time a fold after it worked.
+  let lastVisible: { g: number; at?: string } | null = null;
+  const lastAt = (part: HistoryPart) => { const r = rowsOf(part); return r[r.length - 1]?.timestamp; };
+  const emitQuiet = (answerThinking?: string, riders?: EnvelopeSegment[], next?: Item) => {
     const items = quiet;
     quiet = [];
     if (items.length === 0) return;
+    // A row drawn as itself is a row the reader reads: a fold after it worked from there.
+    const show = (x: Item) => { renderOne(x); lastVisible = { g: headOf(x.part).globalIndex, at: lastAt(x.part) }; };
     // One step alone renders as itself, except a message received or sent: that
     // is always a folded row, never its whole card between two answers.
     const sends = (part: HistoryPart) => rowsOf(part).some((m) => (m.tools ?? []).some(isOutboundTool));
-    if (items.length === 1 && !answerThinking && !riders && !isInboundPart(items[0].part) && !sends(items[0].part)) { renderOne(items[0]); return; }
+    if (items.length === 1 && !answerThinking && !riders && !isInboundPart(items[0].part) && !sends(items[0].part)) { show(items[0]); return; }
     // A compaction and the summary it left are said as themselves, one fold deep at most: under a
     // fold they read "2 notices" and hid that the session was compacted (2026-11-04 review).
     const compactRow = (m: SessionHistoryMessage) => m.role === 'system' && ((m.systemVariant === 'compact' && m.text !== COMPACTING_MESSAGE) || isIdleCompactLine(m.text) || isWalnutCommandNotice(m.text));
     const isCompact = (x: Item) => rowsOf(x.part).length > 0 && rowsOf(x.part).every(compactRow);
     if (!answerThinking && !riders && items.some((x) => rowsOf(x.part).some(compactRow))
       && items.every((x) => isContextPart(x.part) || rowsOf(x.part).every(compactRow))) {
-      for (const x of items) renderOne(x);
+      for (const x of items) show(x);
       return;
     }
     // Among other steps (Walnut's recovery: the refused reply, the compaction, its summary, the
@@ -5176,15 +5186,23 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       let run: Item[] = [];
       for (let k = 0; k <= last; k++) {
         if (!lifted(k)) { run.push(items[k]!); continue; }
-        if (run.length > 0) { quiet = run; emitQuiet(); run = []; }
-        renderOne(items[k]!);
+        if (run.length > 0) { quiet = run; emitQuiet(undefined, undefined, items[k]); run = []; }
+        show(items[k]!);
       }
       quiet = run;
-      emitQuiet(answerThinking, riders);
+      emitQuiet(answerThinking, riders, next);
       return;
     }
     const id = idOf(items[0].part);
-    const body = items.map((x) => renderHistoryPart(x.part));
+    // The session's words on the way to its answer: one row each, the text a click away.
+    const body = items.map((x) => {
+      if (!isWordsPart(x.part)) return renderHistoryPart(x.part);
+      const m = (x.part as Extract<HistoryPart, { kind: 'msg' }>).m;
+      const rowId = m.msgId ?? m.walnutMessageId;
+      const key = wordsFoldKey(rowId ?? idOf(x.part));
+      if (rowId) markFolded(rowId, key);
+      return <FoldedWordsRow key={`words-${idOf(x.part)}`} foldKey={key} text={m.text ?? ''}>{renderHistoryPart(x.part)}</FoldedWordsRow>;
+    });
     if (answerThinking) body.push(<SessionThinking key={`fold-thinking-${id}`} text={answerThinking} />);
     if (riders) {
       body.push(
@@ -5203,9 +5221,29 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // A call with no result yet folds with the rest (fold-rows.ts); the row breathes
     // for it only while the session runs a turn (a dead session's leftover never does).
     const running = isStreaming && items.some((x) => rowsOf(x.part).some((m) => (m.tools ?? []).some((t) => toolRole(t, isFoldableCall) === 'running')));
+    // How long the turn worked: from the row the reader read before it, when that row is of
+    // the same turn (the person's message), else its first step, to the row after it of the
+    // same turn (the answer), else its last step.
+    const turnOf = (g: number) => turnOfIndex.get(g);
+    const startAt = lastVisible && turnOf(lastVisible.g) && turnOf(lastVisible.g) === turnOf(head.globalIndex) ? lastVisible.at : head.m.timestamp;
+    const endAt = next && turnOf(headOf(next.part).globalIndex) === turnOf(head.globalIndex) ? headOf(next.part).m.timestamp : lastAt(items[items.length - 1]!.part);
+    // A step that stopped on the person stands above the fold, red, where it is seen.
+    // A text part split from its calls still carries them (suppressTools): lift each call once.
+    const liftedIds = new Set<string>();
+    items.forEach((x, k) => {
+      if (x.part.kind === 'msg' && x.part.suppressTools) return;
+      rowsOf(x.part).forEach((m, r) => (m.tools ?? []).forEach((t, c) => {
+        if (!t.isError || !needsPerson(t.result)) return;
+        const key = t.toolUseId ?? `${id}-${k}-${r}-${c}`;
+        if (liftedIds.has(key)) return;
+        liftedIds.add(key);
+        pageRows.push(<LiftedStep key={`lift-${key}`} name={t.name} input={t.input as Record<string, unknown> | undefined} result={t.result} />);
+      }));
+    });
     pageRows.push(
       <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
-        <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed} running={running} phrase={foldStepsPhrase(steps, waitingTools)}>
+        <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed} running={running}
+          lead={running ? WORKING_LEAD : workedForLead(secondsBetween(startAt, endAt))} phrase={foldStepsPhrase(steps, waitingTools)}>
           {body}
         </ProcessFoldRow>
       </div>,
@@ -5240,8 +5278,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         ridersFolded.add(part.globalIndex);
       }
     }
-    emitQuiet(thinking, riders);
+    emitQuiet(thinking, riders, item);
     renderOne(item);
+    lastVisible = { g: headOf(part).globalIndex, at: lastAt(part) };
   };
   /** A step of the work (fold-rows.ts) that no Asked-from list hangs off. */
   const rowRoleOf = ({ part, i }: Item): RowRole => {
@@ -5285,6 +5324,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       labelled: isLabelledRow(item.part),
       beforeAnswer: !!t && t.kind === 'answered' && g < t.answer,
       afterPerson: !!t && personAt.has(t) && g >= personAt.get(t)!,
+      narration: isWordsPart(item.part) && isNarration((item.part as Extract<HistoryPart, { kind: 'msg' }>).m.text ?? ''),
     });
     if (quietRow) pushQuiet(item);
     else pushVisible(item);
@@ -5316,6 +5356,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       meetReader(turnFoldKey(id), tailItems);
       const head = headOf(tail[0]);
       const group = leadingGroup;
+      // What the turn does now, under its closed line: its latest thought and the step it is
+      // on (design 1: a running turn is one live line, nothing else grows).
+      const livePeek = (g: StepGroup): React.ReactNode => (
+        <LivePeek members={g.members.map((k) => timeline[k]).flatMap((t) => (t && t.kind === 'block' ? [t.block] : []))} />
+      );
       // Built once renderQueuedRow exists (the group's cards render with it).
       liveTailRow = () => {
         const firstChunk = chunkByKind(group.members, (k) => stepKinds[k])[0];
@@ -5327,13 +5372,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         const tailFailed = failedOf(tail);
         const failed: FoldFailures = { calls: tailFailed.calls + streamFailedOf(members), errors: tailFailed.errors };
         const live = isThinkingTail(stepIdx[stepIdx.length - 1] ?? -1);
+        const phrase = foldStepsPhrase([...tail.flatMap(foldStepsOf), ...streamFoldStepsOf(group)], waitingTools);
         // Keyed like the answered turn's fold, so the row and its open state carry
         // over when the turn ends and history takes the tools.
         return (
           <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
             <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
-              running={live || (isStreaming && streamRunHasCallingTool(members))}
-              phrase={foldStepsPhrase([...tail.flatMap(foldStepsOf), ...streamFoldStepsOf(group)], waitingTools)}>
+              running={isStreaming || live}
+              peek={isStreaming ? livePeek(group) : undefined}
+              lead={isStreaming ? WORKING_LEAD : undefined} phrase={phrase}>
               {tail.map((part, k) => {
                 // The group's first steps continue history's last run: one run,
                 // as the saved turn will draw it.
@@ -5734,6 +5781,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return (
       <div key={runRowKey(members, chunk.members[0])} className="session-msg-bare">
         <ToolRunShell phrase={phrase} calls={calls} failCount={failCount} running={thinkingLive || (isStreaming && streamRunHasCallingTool(members))}
+          peek={isStreaming ? <LivePeek members={members} /> : undefined}
           count={members.filter((m) => m.type === 'tool_call').length}
           disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
           <StreamRunMembers members={members} live={thinkingLive}
@@ -5886,7 +5934,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const thinkingIds = thinkingIdx.map((k) => { const t = timeline[k]; return t.kind === 'block' && t.block.type === 'thinking' ? t.block.msgId : undefined; });
       return (
         <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeysAttr([], thinkingIds)}>
-          <ToolRunShell phrase="Thinking" failCount={0} running={isThinkingTail(thinkingIdx[thinkingIdx.length - 1])} disclosureId={disclosureIds.thinking(thinkingIds.find(Boolean))}>
+          <ToolRunShell phrase="Thinking" failCount={0} running={isThinkingTail(thinkingIdx[thinkingIdx.length - 1])} disclosureId={disclosureIds.thinking(thinkingIds.find(Boolean))}
+            peek={isStreaming ? <LivePeek members={[{ type: 'thinking', content }]} /> : undefined}>
             <div className="chat-thinking-content">{content}</div>
           </ToolRunShell>
         </div>
@@ -5905,7 +5954,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const rowKeys = rowKeysAttr(members.map((m) => (m.type === 'tool_call' ? m.toolUseId : undefined)));
       return (
         <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeys}>
-          <ToolRunShell phrase={phrase} calls={calls} failCount={failCount} running={running} count={members.filter((m) => m.type === 'tool_call').length} disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
+          <ToolRunShell phrase={phrase} calls={calls} failCount={failCount} running={running} peek={isStreaming ? <LivePeek members={members} /> : undefined} count={members.filter((m) => m.type === 'tool_call').length} disclosureId={disclosureIds.run(members[0]?.type === 'tool_call' ? { toolUseId: members[0].toolUseId } : { msgId: members[0]?.msgId })}>
             <StreamRunMembers
               members={members}
               live={thinkingLive}

@@ -9,8 +9,11 @@
  * history is fetched again, after a reconnect.
  */
 import { createContext, useCallback, useContext, useSyncExternalStore, type ReactNode } from 'react';
+import { InFoldBody } from './fold-body-context';
+import { StepIcon } from './StepIcon';
 import '@/styles/turn-folds.css';
 import { foldFailureWords, type FoldFailures } from './fold-rows';
+import '@/styles/step-rows.css';
 
 // Open folds, for the page (a remount keeps a fold the reader opened open), and
 // openable from outside: a jump to a pinned row inside a closed fold opens it
@@ -44,10 +47,13 @@ export function _clearTurnFolds(): void {
 /** The fold keys the timeline uses, so it can name the fold a row sits in. */
 export const processFoldKey = (foldId: string) => `process:${foldId}`;
 export const turnFoldKey = (foldId: string) => `turn:${foldId}`;
+/** A row of the session's words inside a fold (StepRows.tsx FoldedWordsRow), by its row id. */
+export const wordsFoldKey = (rowId: string) => `words:${rowId}`;
 
-function useTurnFold(key: string): [boolean, () => void] {
+export function useTurnFold(key: string): [boolean, () => void] {
   const forReader = useContext(ReaderOpenedFolds);
-  const open = useSyncExternalStore(subscribe, () => opened.has(key) || !!forReader?.has(key));
+  const snapshot = () => opened.has(key) || !!forReader?.has(key);
+  const open = useSyncExternalStore(subscribe, snapshot, snapshot);
   const toggle = useCallback(() => {
     if (opened.has(key) || forReader?.has(key)) { opened.delete(key); forReader?.delete(key); } else opened.add(key);
     notify();
@@ -60,22 +66,29 @@ function useTurnFold(key: string): [boolean, () => void] {
  * answer use the same row under turnFoldKey. `failed` puts the count of failed calls (and,
  * apart, of the runtime's error lines) in the header, so a folded failure is never silent.
  */
-export function ProcessFoldRow({ foldId, phrase, children, foldKey, failed = 0, testId = 'process-fold', running = false }: {
-  foldId: string; phrase: string; children: ReactNode; foldKey?: string; failed?: number | FoldFailures; testId?: string;
+export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed = 0, testId = 'process-fold', running = false, peek }: {
+  foldId: string; phrase: string;
+  /** Before the steps: how long the turn worked ("Worked for 2m 16s"), or "Working" while it runs. */
+  lead?: string; children: ReactNode; foldKey?: string; failed?: number | FoldFailures; testId?: string;
   /** A step inside is still running (the live turn): the row breathes like a running tool run. */
   running?: boolean;
+  /** What the turn is doing now, drawn under the closed line while it runs (the latest
+   *  thought, the current step), so a running turn shows one live line and nothing grows. */
+  peek?: ReactNode;
 }) {
   const [open, toggle] = useTurnFold(foldKey ?? processFoldKey(foldId));
   const failedWords = foldFailureWords(failed);
   return (
-    <div className="tool-run-row process-fold" data-testid={testId} data-open={open ? 'true' : 'false'}>
+    <div className="tool-run-row process-fold" data-testid={testId} data-open={open ? 'true' : 'false'} {...(running ? { 'data-running': 'true' } : {})}>
       <button type="button" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
-        <span className="tool-run-label" title={phrase}>{phrase}</span>
+        <span className={`tool-run-chevron process-fold-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
+        {lead && <span className="tool-run-lead" data-testid="turn-fold-lead">{lead}<span className="tool-run-sep" aria-hidden="true"> · </span></span>}
+        <span className="tool-run-label" title={lead ? `${lead} · ${phrase}` : phrase}>{phrase}</span>
         {failedWords && <span className="tool-run-fail">{failedWords}</span>}
         {running && <span className="tool-run-live-dot" />}
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
       </button>
-      {open && <div className="process-fold-body">{children}</div>}
+      {!open && running && peek && <div className="process-fold-peek" data-testid="turn-fold-peek">{peek}</div>}
+      {open && <div className="process-fold-body"><InFoldBody.Provider value>{children}</InFoldBody.Provider></div>}
     </div>
   );
 }

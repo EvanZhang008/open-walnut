@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
-  joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type PlaceRead,
+  isNarration, joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type PlaceRead,
 } from '../../web/src/components/sessions/fold-rows'
 import { foldStepsPhrase } from '../../web/src/components/sessions/fold-steps'
 
@@ -151,6 +151,24 @@ describe('the rule', () => {
         expect(joinsQuiet({ ...base, role: 'step', turn, beforeAnswer, afterPerson: true }), `${turn} ${beforeAnswer}`).toBe(true)
       }
     }
+  })
+  it('narration before the answer folds; narration that is the answer, or in an open turn, does not', () => {
+    // 2026-11-11, the user: "I only want to know the question I asked and last message AI had".
+    expect(joinsQuiet({ ...base, role: 'reads', turn: 'answered', beforeAnswer: true, afterPerson: true, narration: true })).toBe(true)
+    expect(joinsQuiet({ ...base, role: 'reads', turn: 'answered', beforeAnswer: false, afterPerson: true, narration: true })).toBe(false)
+    expect(joinsQuiet({ ...base, role: 'reads', turn: 'open', beforeAnswer: false, afterPerson: true, narration: true })).toBe(false)
+  })
+  it('narration is short words with no table, heading, code or list', () => {
+    expect(isNarration('Screenshot: /tmp/shots/a.png')).toBe(false)
+    expect(isNarration('Here it is ![shot](/api/images/a.png)')).toBe(false)
+    expect(isNarration('It is the same deliverable, so I reopen it with force.')).toBe(true)
+    expect(isNarration('Checking the build.\nThen the tests.')).toBe(true)
+    expect(isNarration('| a | b |\n|---|---|\n| 1 | 2 |')).toBe(false)
+    expect(isNarration('## Result\nDone.')).toBe(false)
+    expect(isNarration('- one\n- two')).toBe(false)
+    expect(isNarration('```\ncode\n```')).toBe(false)
+    expect(isNarration('x'.repeat(401))).toBe(false)
+    expect(isNarration('')).toBe(false)
   })
 
   it('the reported stretch reads as one line', () => {

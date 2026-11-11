@@ -44,6 +44,15 @@ export function isUserDenied(result: unknown): boolean {
   return typeof result === 'string' && /^(User denied permission|The user denied this tool call|The user doesn't want to proceed with this tool use|User sent a new message \u2014 permission auto-denied|User dismissed the questions)/.test(result.trimStart());
 }
 
+/**
+ * A call a permission rule refused (the CLI's auto mode classifier, a deny rule in the
+ * settings), not the person: nothing failed and the person never saw it, so its row
+ * stands above the turn's fold (StepRows.tsx LiftedStep) and the line counts it as denied.
+ */
+export function isRuleDenied(result: unknown): boolean {
+  return typeof result === 'string' && /^(Permission for this action was denied|Permission to use \S+ (?:has been|was) denied)/.test(result.trimStart());
+}
+
 export interface ToolRunMember {
   name: string;
   input?: Record<string, unknown>;

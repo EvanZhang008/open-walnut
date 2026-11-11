@@ -23,6 +23,13 @@ import { markdownToRichHtml } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { disclosureIds, useRowDisclosure } from './row-disclosure';
+import { StepIcon, toolDisplayName, toolStepIcon } from './StepIcon';
+import { RunLive, useInFoldBody, useRunLive } from './fold-body-context';
+
+/** The most calls a run lays out as rows of an opened fold (ToolRunShell `flat`). */
+const FLAT_RUN_MAX = 40;
+import { toolTarget } from './step-target';
+import '@/styles/step-rows.css';
 import { toolMergesIntoRun } from '@/stream/tool-merge';
 import { useSelectionFrozenWith } from '@/utils/selection-guard';
 import { BashToolCall } from './BashToolCall';
@@ -76,6 +83,7 @@ interface EditDiffViewProps {
 }
 
 function EditDiffView({ filePath, oldString, newString, replaceAll, status, result, onViewFile, toolUseId }: EditDiffViewProps) {
+  const runLive = useRunLive();
   const [collapsed, setCollapsed] = useRowDisclosure(disclosureIds.diff(toolUseId), false);
   const totalLines = oldString.split('\n').length + newString.split('\n').length;
   const isLarge = editDiffIsLarge(oldString, newString);
@@ -86,21 +94,21 @@ function EditDiffView({ filePath, oldString, newString, replaceAll, status, resu
     [oldString, newString],
   );
 
-  const statusIcon = status === 'error' ? '\u2717' : status === 'done' ? '\u2713' : '\u25B6\uFE0E';
+  const statusIcon = <StepIcon name={status === 'error' ? 'alert' : 'pen'} />;
   const statusClass = status === 'error' ? 'chat-tool-block-error'
     : status === 'done' ? 'chat-tool-block-done' : 'chat-tool-block-calling';
 
   const filename = filePath.split('/').pop() ?? filePath;
 
   return (
-    <div className={`chat-tool-block ${statusClass}`}>
-      <button className="chat-tool-block-header" onClick={() => setCollapsed(p => !p)}>
+    <div className={`chat-tool-block ${statusClass}${collapsed ? '' : ' chat-tool-block--open'}`}>
+      <button className="chat-tool-block-header" aria-expanded={!collapsed} onClick={() => setCollapsed(p => !p)}>
         <span className="chat-tool-block-icon">{statusIcon}</span>
         <span className="chat-tool-block-name">Edit</span>
         <span className="edit-diff-filename" title={filePath}>{filename}</span>
         {replaceAll && <span className="edit-diff-replace-all">(replace all)</span>}
-        {status === 'calling' && <span className="chat-tool-block-calling-dot" />}
-        <span className="chat-tool-block-arrow">{collapsed ? '\u25B6\uFE0E' : '\u25BC'}</span>
+        {status === 'calling' && runLive && <span className="chat-tool-block-calling-dot" />}
+        <span className="chat-tool-block-arrow"><StepIcon name="chevron" /></span>
         {onViewFile && (
           <span
             className="edit-diff-view-file"
@@ -239,12 +247,17 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
   // Signature-only thinking has no displayable text — render nothing rather
   // than an expandable-but-blank row.
   if (!text.trim()) return null;
+  // A step row like every other (step-rows.css): the icon, the word, and the thought's
+  // first line, muted, so a reader scanning an opened turn reads what it was thinking.
+  const firstLine = open ? '' : thinkingFirstLine(text);
   return (
-    <div className="tool-run-row">
-      <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
+    <div className="tool-run-row tool-run-row--step">
+      <button className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
+        <StepIcon name="thought" className="tool-run-icon" />
         <span className="tool-run-label">Thinking</span>
+        {firstLine && <span className="tool-run-detail" data-find-skip="">{firstLine}</span>}
         {live && <span className="tool-run-live-dot" />}
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'\u203A'}</span>
+        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
       </button>
       {open && (
         <div className="tool-run-body">
@@ -255,12 +268,19 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
   );
 }
 
+/** A thought's first words, one line (bold marks, code ticks and blank lines dropped; an
+ *  identifier's underscores stay). */
+export function thinkingFirstLine(text: string, max = 160): string {
+  const line = text.split('\n').map((l) => l.replace(/^[#>*\-\s]+/, '').replace(/\*\*|`/g, '').trim()).find((l) => l.length > 0) ?? '';
+  return line.length > max ? `${line.slice(0, max - 1)}\u2026` : line;
+}
+
 /** Collapsed single-line row for Write to plans/ */
 export function CollapsedPlanWrite({ filePath }: { filePath: string }) {
   const filename = filePath.split('/').pop() ?? filePath;
   return (
     <div className="session-plan-write-muted">
-      <span className="chat-tool-block-icon">{'\u2713'}</span>
+      <span className="chat-tool-block-icon"><StepIcon name="pen" /></span>
       <span>Wrote plan to <code>{filename}</code></span>
     </div>
   );
@@ -332,7 +352,7 @@ function InjectedContextRow({ text }: { text: string }) {
     <div className="tool-run-row">
       <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
         <span className="tool-run-label">{injectedContextLabel(text)}</span>
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
+        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
       </button>
       {open && (
         <div className="tool-run-body">
@@ -352,8 +372,10 @@ function InjectedContextRow({ text }: { text: string }) {
 export { toolRunPhrase };
 
 /** Shared merged-row shell: muted phrase line + expandable children. */
-export function ToolRunShell({ phrase, calls, failCount, running, count, disclosureId, children }: {
+export function ToolRunShell({ phrase, calls, failCount, running, count, disclosureId, peek, children }: {
   phrase: string;
+  /** What the run does now (StepRows LivePeek), under the closed line while it runs. */
+  peek?: React.ReactNode;
   /** The run's tool calls: the line then counts them by outcome (ran, denied, waiting for
    *  an open prompt) and names the person's answers to the prompts they passed through
    *  (waiting-tools.ts). Without them the line is `phrase`. */
@@ -373,6 +395,11 @@ export function ToolRunShell({ phrase, calls, failCount, running, count, disclos
   const waiting = useWaitingTools();
   const decisions = useToolDecisions();
   const deniedNow = useDeniedNow();
+  // Inside an opened fold a run of calls is no second line to open: its calls are
+  // rows of the fold's one list, each with its own answer (design 1, 2026-11-11).
+  // A run past FLAT_RUN_MAX calls stays one row to open, so opening a whale turn's fold
+  // never mounts hundreds of cards at once.
+  const flat = useInFoldBody() && (calls?.length ?? 0) > 0 && (calls?.length ?? 0) <= FLAT_RUN_MAX;
   // A call answered "no" reads as denied before its result is in (answeredCallState).
   const segments = calls ? runSegments(calls.map((c) => (!c.denied && answeredCallState(c.toolUseId, c.toolUseId ? decisions.get(c.toolUseId) : undefined, deniedNow) === 'denied' ? { ...c, denied: true } : c)), waiting) : [];
   // Every answer, in the order the calls were made.
@@ -395,9 +422,10 @@ export function ToolRunShell({ phrase, calls, failCount, running, count, disclos
       {count !== undefined && count > 0 && <span className="tool-run-count">{toolCallsLabel(count)}</span>}
       {failCount > 0 && <span className="tool-run-fail">{failCount} failed</span>}
       {running && <span className="tool-run-live-dot" />}
-      <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
+      <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
     </>
   );
+  if (flat) return <div className="tool-run-row tool-run-flat" data-flat="true"><RunLive.Provider value={!!running}><SoleCallContext.Provider value={false}>{children}</SoleCallContext.Provider></RunLive.Provider></div>;
   // Opened, each call's own row says its answer.
   const showAnswers = answers.length > 0 && !open;
   return (
@@ -414,6 +442,7 @@ export function ToolRunShell({ phrase, calls, failCount, running, count, disclos
           </>
         ) : line}
       </button>
+      {!open && running && peek && <div className="process-fold-peek" data-testid="run-peek">{peek}</div>}
       {open && <div className="tool-run-body"><SoleCallContext.Provider value={calls?.length === 1}>{children}</SoleCallContext.Provider></div>}
     </div>
   );
@@ -450,7 +479,7 @@ export function SystemLineCollapsible({ variant, message, detail, time, noticeId
           <span className={`tool-run-label${variant === 'error' ? ' tool-run-label--error' : ''}`}>
             {icon ? `${icon} ${message}` : message}
           </span>
-          <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
+          <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
         </button>
         {open && (
           <div className="tool-run-body">
@@ -511,7 +540,7 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
     <div className="tool-run-row">
       <button className="tool-run-toggle" onClick={toggle}>
         <span className={`tool-run-label${allErrors ? ' tool-run-label--error' : ''}`}>{label}</span>
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
+        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
       </button>
       {open && (
         <div className="tool-run-body">
@@ -806,6 +835,7 @@ export const GenericToolCall = memo(function GenericToolCall(props: GenericToolC
 });
 
 function GenericToolCallInner({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick, onFileOpen }: GenericToolCallProps) {
+  const runLive = useRunLive();
   const [open, setOpen] = useRowDisclosure(disclosureIds.tool(tool.toolUseId), useSoleCall());
   // Pill titles resolve from the entity-label store — memo boundary is at
   // GenericToolCall, so this leaf must subscribe itself to see title changes.
@@ -833,11 +863,12 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
   const description = toolDescription(safeInput);
   // Memoized: JSON.stringify over a large Write/Edit input on EVERY render was
   // the measured hot spot behind whale-session slow commits (5-32s).
-  const inputSummary = useMemo(() => toolInputSummary(tool.name, safeInput), [safeInput, tool.name]);
+  const inputSummary = useMemo(() => toolTarget(tool.name, safeInput), [safeInput, tool.name]);
 
   // Dynamic icon and class based on status
   // A denied call: the person's no, not a failure (isUserDenied).
-  const statusIcon = status === 'waiting' ? '\u23F8\uFE0E' : status === 'denied' ? '\u2298' : status === 'error' ? '\u2717' : status === 'done' ? '\u2713' : '\u25B6\uFE0E';
+  // One icon per kind of tool (StepIcon.tsx); a failure or the person's no colours it instead.
+  const statusIcon = <StepIcon name={status === 'denied' ? 'ban' : status === 'error' ? 'alert' : toolStepIcon(tool.name)} />;
   const statusClass = status === 'waiting' ? 'chat-tool-block-waiting' : status === 'denied' ? 'chat-tool-block-denied' : status === 'error' ? 'chat-tool-block-error'
     : status === 'done' ? 'chat-tool-block-done' : 'chat-tool-block-calling';
 
@@ -910,10 +941,10 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
   const showViewFile = onFileOpen && toolFilePath && ['Edit', 'Read', 'Write', 'NotebookEdit'].includes(tool.name);
 
   return (
-    <div className={`chat-tool-block ${statusClass}`}>
-      <button className="chat-tool-block-header" onClick={() => setOpen((p) => !p)}>
+    <div className={`chat-tool-block ${statusClass}${open ? ' chat-tool-block--open' : ''}`}>
+      <button className="chat-tool-block-header" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
         <span className="chat-tool-block-icon">{statusIcon}</span>
-        <span className="chat-tool-block-name">{tool.name}</span>
+        <span className="chat-tool-block-name" title={tool.name}>{toolDisplayName(tool.name)}</span>
         {description && (
           <span className="chat-tool-block-desc">· {description}</span>
         )}
@@ -922,8 +953,8 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
         {!open && inputSummary && (
           <span className="chat-tool-block-summary">{inputSummary}</span>
         )}
-        {status === 'calling' && <span className="chat-tool-block-calling-dot" />}
-        <span className="chat-tool-block-arrow">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
+        {status === 'calling' && runLive && <span className="chat-tool-block-calling-dot" />}
+        <span className="chat-tool-block-arrow"><StepIcon name="chevron" /></span>
         {showViewFile && (
           <span
             className="edit-diff-view-file"
@@ -1300,6 +1331,10 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
     () => (!alwaysShowAdded && addedCount > 0 ? { count: addedCount, open: addedOpen, onToggle: toggleAdded } : undefined),
     [alwaysShowAdded, addedCount, addedOpen, toggleAdded],
   );
+  // A step row inside an opened fold (a call, a card, no words of its own) is a row, not a
+  // message: no copy, pin or time line under it.
+  const inFold = useInFoldBody();
+  const stepInFold = inFold && !bodyText?.trim() && !walnutAdded;
 
   // `<suggest>` action cards in a session's own answer: a session's prose can
   // carry a card just like the Personal AI's — same parser, same invoke endpoint,
@@ -1460,7 +1495,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
             CSS keeps it invisible until the row is hovered); the live tail's last
             reply keeps its actions on screen, which is what showCopyActions has
             always meant. */}
-        {noActions ? null : phone ? ((!!bodyText?.trim() || !!msgId) && (
+        {noActions || stepInFold ? null : phone ? ((!!bodyText?.trim() || !!msgId) && (
           <button
             type="button"
             className="msg-more-btn"

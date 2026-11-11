@@ -1,3 +1,4 @@
+import { StepIcon } from './StepIcon';
 import { useRowDisclosure } from './row-disclosure';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
@@ -35,7 +36,7 @@ export function InjectedBannerRow({ banner, sessionCwd, disclosureId }: {
         aria-expanded={open}
       >
         <span className="tool-run-label">{banner.label}</span>
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
+        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
       </button>
       {open && (
         <div className="tool-run-body" data-testid="injected-banner-body">

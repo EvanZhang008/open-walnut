@@ -73,9 +73,10 @@ test('every op card reads To, Title and Summary, and opens its words with the ca
   await expect(send.locator('.op-card-to a.task-link[data-task-id="pw-task-001"]')).toBeVisible()
   await expect(send.locator('.op-card-title')).toHaveText('Tab list out of step with Chrome')
   await expect(send.locator('.op-card-summary')).toContainText('The card lists two tabs while the agent window holds nine.')
-  // Folded: the summary is two lines at most, and the full words and the raw command are not drawn.
-  const lineHeight = await send.locator('.op-card-summary').evaluate((el) => parseFloat(getComputedStyle(el).lineHeight) || 20)
-  expect((await send.locator('.op-card-summary').boundingBox())!.height).toBeLessThanOrEqual(lineHeight * 2 + 2)
+  // Folded: in a turn's fold the card is one row like every step (design 1, 2026-11-11), the
+  // summary in the words it opens to; the full words and the raw command are not drawn.
+  await expect(send.locator('.op-card-summary')).toBeHidden()
+  expect((await send.boundingBox())!.height).toBeLessThanOrEqual(30)
   await expect(send.locator('.op-card-detail')).toHaveCount(0)
   await expect(send.locator('.provenance-details')).toHaveCount(0)
 

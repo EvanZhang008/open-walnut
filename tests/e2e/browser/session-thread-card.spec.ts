@@ -156,20 +156,22 @@ test.describe('The comment card in Conversation Mode', () => {
     await expect(card(panel).locator('.thread-card-body')).not.toContainText(T.tool2)
     await expect(card(panel).locator('.thread-card-body .tool-run-row')).toHaveCount(0)
     expect(await card(panel).locator('.thread-card-body').innerText()).not.toMatch(/Thinking/)
-    // The timeline still has the step. Its words answer the person, so they stand in
-    // the timeline (2026-11-09, fold-rows.ts joinsQuiet); its call is one closed step
-    // that opens to it.
-    await expect(history(panel)).toContainText(T.step2)
-    const step = history(panel).locator('.tool-run-toggle', { hasText: 'Read a file' })
-    await expect(step).toHaveCount(1)
-    await expect(history(panel)).not.toContainText(T.tool2)
-    await step.click()
-    await expect(history(panel)).toContainText(T.tool2)
-    await step.click()
     // A click on plain text, away from the card (and from any turn label,
     // which would open another card), closes it.
     await row(panel, IDS.R1.a).click({ position: { x: 12, y: 10 } })
     await expect(card(panel)).toHaveCount(0)
+    // The timeline still has the step: its short words and its call fold to the turn's one
+    // line before the answer (design 1, 2026-11-11, fold-rows.ts isNarration), which opens
+    // to them. Checked with the card closed (a click in the timeline closes it).
+    const step = history(panel).locator('[data-testid="turn-fold"]', { has: page.locator('.tool-run-label', { hasText: 'Ran 1 tool' }) })
+    await expect(step).toHaveCount(1)
+    await expect(history(panel)).not.toContainText(T.step2)
+    await expect(history(panel)).not.toContainText(T.tool2)
+    await step.locator(':scope > .tool-run-toggle').click()
+    await step.locator('[data-testid="folded-words"] > .tool-run-toggle').click()
+    await expect(step.locator('[data-testid="folded-words"]')).toContainText(T.step2)
+    await expect(step).toContainText(T.tool2)
+    await step.locator(':scope > .tool-run-toggle').click()
   })
 
   test('the asked passage is marked and a click on it opens the card; the card scrolls with its passage', async ({ page }) => {

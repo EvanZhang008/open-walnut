@@ -147,16 +147,16 @@ test('a task\'s answer to a letter folds with the steps around it', async ({ pag
   await open(page);
   const hist = page.locator(`.session-panel[data-session-id="${MOCK_SESSION_ID}"] .session-history`);
   await expect(hist).toContainText('QF_ANSWER_TWO', { timeout: 20_000 });
-  // The person's ask, the words answering it (they never fold: 2026-11-09, fold-rows.ts
-  // joinsQuiet), then ONE row (the tool, the delivery and the send are one stretch of the
-  // same turn), then the answer.
+  // The person's ask, then ONE row (the short words on the way, the tool, the delivery and
+  // the send are one stretch of the same turn: design 1, 2026-11-11, fold-rows.ts
+  // isNarration), then the answer.
   const between = async () => {
     const top = await topRows(page);
     const one = top.findIndex((r) => r.text.includes('QF_ASK'));
     const two = top.findIndex((r) => r.text.includes('QF_ANSWER_TWO'));
     return one < 0 || two < 0 ? top : top.slice(one + 1, two).map((r) => (r.fold ? 'fold' : r.text.includes('QF_ANSWER_ONE') ? 'words' : r.text));
   };
-  await expect.poll(between, { timeout: 10_000 }).toEqual(['words', 'fold']);
+  await expect.poll(between, { timeout: 10_000 }).toEqual(['fold']);
   const fold = hist.locator('[data-testid="turn-fold"]');
   await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Received 2 messages(?: from [^·›]+?)? \u00b7 Sent 1(?: to [^·›]+?)? \u00b7 Ran 1 tool$/);
   // No person bubble for it, closed or open.
@@ -164,6 +164,7 @@ test('a task\'s answer to a letter folds with the steps around it', async ({ pag
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-letter-closed.png`, clip: (await hist.boundingBox())! }).catch(() => {});
   await fold.locator(':scope > .tool-run-toggle').click();
   await expect(fold.locator('.process-fold-body')).toContainText('Answered your letter');
+  await expect(fold.locator('.process-fold-body [data-testid="folded-words"]')).toContainText('QF_ANSWER_ONE on it.');
   await expect(hist.locator('.session-msg-user', { hasText: 'Letter reply' })).toHaveCount(0);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-letter-open.png`, clip: (await hist.boundingBox())! }).catch(() => {});
 });

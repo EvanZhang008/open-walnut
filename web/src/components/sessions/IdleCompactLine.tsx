@@ -4,6 +4,7 @@
  * came from: the session's auto-compaction window or the model's window), and
  * the setting that decides it, the same value Settings -> Sessions edits.
  */
+import { StepIcon } from './StepIcon';
 import { useCallback, useContext, useEffect, useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchConfig, fetchFreshConfig, updateConfig } from '@/api/config';
@@ -166,7 +167,7 @@ export function IdleCompactLine({ message, time, noticeId, inOpenedRun }: {
       >
         <span className="session-system-text">{message}</span>
         {time && <span className="session-system-detail session-system-time">{time}</span>}
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`} aria-hidden="true">{'›'}</span>
+        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`} aria-hidden="true"><StepIcon name="chevron" /></span>
       </button>
       {open && (
         <div className="idle-compact-body">

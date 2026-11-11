@@ -98,18 +98,39 @@ export interface PlaceRead {
   /** A person's own message is at or before this row in its turn: what the session wrote from
    *  there on answers the person. */
   afterPerson: boolean;
+  /** Short words on the way (narration: a line or two, no table, heading, code or list). */
+  narration?: boolean;
+}
+
+/**
+ * Words that only narrate the way to an answer ("It is the same deliverable, so I
+ * reopen it"): short, no table, heading, code block or list. Before the answer they
+ * fold with the steps (2026-11-11, the user: "I only want to know the question I asked
+ * and last message AI had"); words with any of those stay on screen, so a real answer
+ * with its table never folds under a short last line (2026-11-09).
+ */
+export function isNarration(text: string): boolean {
+  const t = text.trim();
+  if (!t || t.length > 400) return false;
+  const lines = t.split('\n').filter((l) => l.trim());
+  if (lines.length > 4) return false;
+  if (lines.some((l) => /^\s*(#|\||```|~~~|>)/.test(l))) return false;
+  // A picture it points to renders inline (an image path, a screenshot): that is shown, not narration.
+  if (/\.(png|jpe?g|gif|webp|svg|heic)\b/i.test(t) || /!\[[^\]]*\]\(/.test(t)) return false;
+  return lines.filter((l) => /^\s*([-*+]|\d+[.)])\s/.test(l)).length < 2;
 }
 
 /** Does the row join the stretch of quiet steps? The same answer in every turn
  *  kind, plus what a turn's shape folds on top: a whole hidden turn, and
  *  everything before an answer (narration included), except that a row the person
- *  reads after the person's own message never folds: the session's words answering
- *  them stay on screen wherever the turn's last line is (2026-11-09, the user, of a
- *  whole answer with its table folded under "Sent 1 · Ran 2 tools" because one short
- *  line came after it: "why this get auto collpes this si nto right"). */
+ *  reads after the person's own message folds only when it is narration before the
+ *  answer (isNarration): the session's words answering them stay on screen wherever
+ *  the turn's last line is (2026-11-09, the user, of a whole answer with its table
+ *  folded under "Sent 1 · Ran 2 tools" because one short line came after it: "why
+ *  this get auto collpes this si nto right"). */
 export function joinsQuiet(r: PlaceRead): boolean {
   if (r.personStart || r.labelled) return false;
-  if (r.afterPerson && r.role === 'reads') return false;
+  if (r.afterPerson && r.role === 'reads' && !(r.narration && r.turn === 'answered' && r.beforeAnswer)) return false;
   if (r.turn === 'hidden' || (r.turn === 'answered' && r.beforeAnswer)) return true;
   return r.role === 'step';
 }

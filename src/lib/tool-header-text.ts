@@ -140,6 +140,29 @@ export function toolCardKind(tool: HeaderTool): ToolCardKind {
   return 'generic';
 }
 
+/** The one thing a call touched, as its row shows it: the file, the pattern, the address,
+ *  the question; a call with none reads its input as `key: value` pairs. */
+const TARGET_KEYS = ['file_path', 'notebook_path', 'pattern', 'url', 'query', 'skill', 'path', 'prompt', 'command', 'subject', 'title'] as const;
+export function toolTarget(name: string, input: Record<string, unknown> | undefined): string {
+  const inp = input ?? {};
+  if (name !== 'AskUserQuestion') {
+    for (const k of TARGET_KEYS) {
+      const v = inp[k];
+      if (typeof v === 'string' && v.trim()) {
+        const line = v.trim().split('\n')[0]!;
+        return line.length > 160 ? `${line.slice(0, 159)}\u2026` : line;
+      }
+    }
+  }
+  return toolInputSummary(name, inp);
+}
+
+/** A Walnut or other MCP tool's name as a reader reads it on its row: `host_exec` (the server in the hover). */
+export function toolDisplayName(name: string): string {
+  const m = /^mcp__[^_]+(?:_[^_]+)*?__(.+)$/.exec(name);
+  return m ? m[1]! : name;
+}
+
 /** `mcp__<server>__<op>`, as session-outbound.ts reads it. */
 const MCP_OP = /^mcp__[^_].*?__([a-z][a-z0-9_]*)$/;
 
@@ -179,8 +202,10 @@ export function toolHeaderText(tool: HeaderTool): string {
       return [...head, ...diff].filter(Boolean).join(' ');
     }
     case 'bash':
-      return ['Bash', desc ? `· ${desc}` : bashCommandSummary(input.command as string)].filter(Boolean).join(' ');
+      return ['Bash', desc || bashCommandSummary(input.command as string)].filter(Boolean).join(' ');
     default:
-      return [tool.name, desc ? `· ${desc}` : '', toolInputSummary(tool.name, input)].filter(Boolean).join(' ');
+      // The row's own words (SessionMessage.tsx GenericToolCallInner): the short name, what it
+      // is for, and what it touched.
+      return [toolDisplayName(tool.name), desc ? `· ${desc}` : '', toolTarget(tool.name, input)].filter(Boolean).join(' ');
   }
 }

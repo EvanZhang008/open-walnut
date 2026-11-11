@@ -55,7 +55,7 @@ test('a tool run and the injected context after it are one fold row', async ({ p
   const ask1 = hist.locator('.session-msg', { hasText: 'NB_ASK1' });
   await ask1.scrollIntoViewIfNeeded();
   const fold1 = hist.locator('[data-testid="turn-fold"]').first();
-  await expect(fold1.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 5 tools/);
+  await expect(fold1.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Ran 5 tools/);
   // No context row of its own anywhere outside a fold before the person's next message.
   const looseContext = await hist.evaluate((el) => [...el.querySelectorAll('.tool-run-label')]
     .filter((n) => /^(Injected context|Loaded skill)/.test(n.textContent ?? '') && !n.closest('[data-testid="process-fold"],[data-testid="turn-fold"]'))
@@ -96,7 +96,7 @@ test('a skill loaded in a live turn joins the turn fold with its stream tools, a
   // (the line counts the two calls; the loaded skill is context, not counted).
   await expect(hist.locator('.session-msg', { hasText: 'NB_LIVE_ASK' })).toBeVisible();
   const last = hist.locator('[data-testid="turn-fold"]').last();
-  await expect(last.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 2 tools/, { timeout: 10000 });
+  await expect(last.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Ran 2 tools/, { timeout: 10000 });
   // Every row after the person's message (the fold is closed, so its steps are not drawn).
   const rowsAfterAsk = () => hist.evaluate((el) => {
     const ask = [...el.querySelectorAll('.session-msg')].find((n) => n.textContent?.includes('NB_LIVE_ASK'))!;
@@ -110,8 +110,8 @@ test('a skill loaded in a live turn joins the turn fold with its stream tools, a
   await expect(last).toContainText('Loaded skill sample-plan');
   // The calls are one run in it, the row the saved turn's fold holds.
   const innerRun = last.locator('.process-fold-body > .session-msg-bare > .tool-run-row');
-  await expect(innerRun.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 2 commands/);
-  await innerRun.locator(':scope > .tool-run-toggle').click();
+  // Opened, the run is its calls, one row each (design 1, 2026-11-11).
+  await expect(innerRun).toHaveAttribute('data-flat', 'true');
   await expect(last).toContainText('make check');
   await expect(last).toContainText('make test');
   await page.waitForTimeout(600);
@@ -125,7 +125,7 @@ test('a skill loaded in a live turn joins the turn fold with its stream tools, a
   await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'done', isError: false });
   await expect(hist).toContainText('NB_LIVE_ANSWER all green.', { timeout: 10000 });
   const after = hist.locator('[data-testid="turn-fold"]').last();
-  await expect(after.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 2 tools/);
+  await expect(after.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Ran 2 tools/);
   await expect(after).toHaveAttribute('data-open', 'true');
   await expect(after).toContainText('Loaded skill sample-plan');
   // Its run still open, as the reader left it.
@@ -148,7 +148,7 @@ test('a failed command in history that the live fold takes in is counted in its 
   await streamTools(page, [['f3', 'make test']]);
   const fold = hist.locator('[data-testid="turn-fold"]').last();
   // Two commands (one from history, one streamed) and a skill.
-  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 3 tools/, { timeout: 10000 });
+  await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Ran 3 tools/, { timeout: 10000 });
   await expect(fold.locator('.tool-run-fail')).toHaveText('1 failed');
 });
 

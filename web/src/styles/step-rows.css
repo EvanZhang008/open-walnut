@@ -1,0 +1,179 @@
+/* ── One row for every step of a turn (2026-11-11, the user picked design 1 of
+   session-chat-designs.html, learned from T3 Code) ──────────────────────────────
+   A tool call, a command, a message sent or received, reasoning, a runtime line:
+   each is the same quiet row. A 16px line icon (StepIcon.tsx), the verb or name,
+   what it touched in muted grey, and a chevron that shows on hover. 26px tall, no
+   box, no fill, no coloured bar. Opened, a row's detail sits under it in one grey
+   block. A finished turn folds behind one line, "Worked for 2m 16s · …", with no
+   rule under it (the user, 2026-11-11: "no line needed"). */
+
+:root .step-icon { width: 16px; height: 16px; flex: 0 0 16px; color: var(--fg-muted); }
+
+/* ── The fold line: chevron first, the words, nothing under it ── */
+:root .process-fold > .tool-run-toggle {
+  gap: 6px;
+  min-height: 26px;
+  padding: 2px 4px 2px 0;
+  font-size: 14px;
+  border-radius: 6px;
+}
+:root .process-fold > .tool-run-toggle .process-fold-chevron { display: inline-flex; }
+:root .process-fold > .tool-run-toggle .process-fold-chevron .step-icon { width: 14px; height: 14px; flex-basis: 14px; }
+:root .process-fold-body {
+  margin-top: 2px;
+  padding-left: 0;
+  border-left: none;
+}
+/* While it runs, the closed line shows what it does now: one row, pulsing. */
+:root .process-fold-peek { margin: 0 0 2px; pointer-events: none; }
+:root .process-fold-peek .step-peek-row { display: flex; align-items: center; gap: 8px; min-height: 24px; padding: 0 4px; font-size: 13.5px; color: var(--fg-muted); min-width: 0; }
+:root .process-fold-peek .step-peek-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* Opacity only: an infinite animation of anything else repaints every frame
+     (tests/web/infinite-animation-composited.test.ts). */
+  animation: step-peek-pulse 1.8s ease-in-out infinite;
+}
+:root .process-fold-peek .step-peek-text.mono { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 12.5px; }
+@keyframes step-peek-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { :root .process-fold-peek .step-peek-text { animation: none; } }
+
+/* A step that needs the person (a refused permission) stands above the fold, red. */
+:root .step-lifted { margin: 2px 0 4px; padding: 4px 6px; border-radius: 8px; background: color-mix(in srgb, var(--error) 8%, transparent); }
+:root .step-lifted-head { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--error); font-size: 14px; min-width: 0; }
+:root .step-lifted-head .step-icon { color: var(--error); }
+:root .step-lifted-head > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root .step-lifted-why { margin: 0 0 2px 24px; font-size: 13px; line-height: 1.45; color: var(--fg-secondary); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+
+/* ── Tool calls ── */
+:root .session-history .chat-tool-block {
+  margin: 0;
+  border: none;
+  border-radius: 6px;
+  overflow: visible;
+}
+:root .session-history .chat-tool-block.chat-tool-block-calling,
+:root .session-history .chat-tool-block.chat-tool-block-error,
+:root .session-history .chat-tool-block.chat-tool-block-done { border: none; }
+:root .session-history .chat-tool-block > .chat-tool-block-header {
+  gap: 8px;
+  min-height: 26px;
+  padding: 1px 4px;
+  font-size: 14px;
+  background: none;
+  border-radius: 6px;
+  color: var(--fg-secondary);
+}
+:root .session-history .chat-tool-block > .chat-tool-block-header:hover { background: var(--hover, color-mix(in srgb, var(--fg) 5%, transparent)); }
+:root .session-history .chat-tool-block .chat-tool-block-icon { display: inline-flex; width: 16px; font-size: inherit; color: var(--fg-muted); }
+:root .session-history .chat-tool-block-error .chat-tool-block-icon .step-icon { color: var(--error); }
+:root .session-history .chat-tool-block-waiting .chat-tool-block-icon .step-icon { color: var(--warning); }
+:root .session-history .chat-tool-block .chat-tool-block-name {
+  font-family: inherit;
+  font-weight: 400;
+  color: var(--fg-secondary);
+}
+:root .session-history .chat-tool-block-error .chat-tool-block-name { color: var(--error); }
+/* A command reads as itself: the tool's name is only for screen readers. */
+:root .session-history .chat-tool-block-bash .chat-tool-block-name {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+:root .session-history .chat-tool-block .chat-tool-block-desc,
+:root .session-history .chat-tool-block .chat-tool-block-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--fg-muted);
+}
+:root .session-history .chat-tool-block-bash .chat-tool-block-desc { color: var(--fg-secondary); }
+:root .session-history .chat-tool-block .chat-tool-block-command {
+  font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+}
+:root .session-history .chat-tool-block .chat-tool-block-arrow { display: inline-flex; margin-left: auto; opacity: 0; transition: opacity .12s, transform .12s; }
+:root .session-history .chat-tool-block .chat-tool-block-arrow .step-icon { width: 12px; height: 12px; flex-basis: 12px; }
+:root .session-history .chat-tool-block > .chat-tool-block-header:hover .chat-tool-block-arrow { opacity: .7; }
+:root .session-history .chat-tool-block--open .chat-tool-block-arrow { opacity: .7; transform: rotate(90deg); }
+:root .session-history .chat-tool-block > .chat-tool-block-body {
+  margin: 2px 0 8px 28px;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  font-size: 12.5px;
+}
+:root .session-history .chat-tool-block > .chat-tool-block-body .chat-tool-block-section + .chat-tool-block-section { border-top: 1px solid var(--border); }
+
+/* ── Runs, reasoning, runtime lines: the tool-run row family ── */
+:root .session-history .tool-run-row { margin: 0; }
+:root .session-history .tool-run-row > .tool-run-toggle { min-height: 26px; padding: 1px 4px 1px 0; font-size: 14px; border-radius: 6px; max-width: 100%; min-width: 0; }
+:root .session-history .tool-run-row--step > .tool-run-toggle { padding-left: 4px; gap: 8px; width: 100%; }
+:root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-label { color: var(--fg-secondary); flex-shrink: 0; }
+:root .session-history .tool-run-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+:root .session-history .tool-run-chevron { display: inline-flex; align-items: center; }
+:root .session-history .tool-run-chevron .step-icon { width: 12px; height: 12px; flex-basis: 12px; }
+:root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-chevron { margin-left: auto; opacity: 0; }
+:root .session-history .tool-run-row--step > .tool-run-toggle:hover .tool-run-chevron,
+:root .session-history .tool-run-row--step > .tool-run-toggle .tool-run-chevron--open { opacity: .7; }
+:root .session-history .tool-run-row--step > .tool-run-body { margin: 2px 0 8px 28px; padding: 8px 10px; border-left: none; border-radius: 8px; background: var(--bg-secondary); }
+/* A run inside an opened fold is its calls, one row each. */
+:root .session-history .tool-run-flat { display: flex; flex-direction: column; }
+
+/* ── Messages sent and received: the same row (MessageCard.tsx) ── */
+:root .session-history .provenance-card.provenance-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  padding: 1px 4px;
+  min-height: 26px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+:root .session-history .provenance-card.provenance-card:hover { background: var(--hover, color-mix(in srgb, var(--fg) 5%, transparent)); }
+:root .session-history .provenance-card .op-card-to { flex: 0 1 auto; flex-wrap: nowrap; gap: 6px; font-size: 14px; color: var(--fg-secondary); max-width: 55%; }
+:root .session-history .provenance-card .provenance-glyph { display: inline-flex; font-size: inherit; color: var(--fg-muted); }
+:root .session-history .provenance-card[data-envelope-kind="outbound"] .provenance-glyph .step-icon { color: var(--accent); }
+:root .session-history .provenance-card[data-envelope-kind="outbound"][data-outbound-error="true"] .provenance-glyph .step-icon { color: var(--error); }
+:root .session-history .provenance-card .op-card-dir { color: var(--fg-secondary); white-space: nowrap; }
+:root .session-history .provenance-card .op-card-to .op-card-to-pill {
+  background: none; border: none; padding: 0; border-radius: 0;
+  font-size: 14px; font-weight: 400; color: var(--fg-secondary);
+}
+:root .session-history .provenance-card .op-card-to .op-card-to-pill:hover { text-decoration: underline; color: var(--fg); }
+:root .session-history .provenance-card .op-card-to-text { font-weight: 400; }
+:root .session-history .provenance-card .op-card-to-label { white-space: nowrap; }
+:root .session-history .provenance-card .op-card-main { flex: 1 1 0; flex-direction: row; align-items: center; gap: 8px; margin: 0; min-height: 24px; min-width: 6em; }
+:root .session-history .provenance-card .op-card-main .op-card-title {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 14px; font-weight: 400; color: var(--fg-muted);
+  display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+:root .session-history .provenance-card .op-card-main .op-card-title > span { display: inline; }
+/* In a fold the summary is a copy of the open message's words: the row is one line. */
+:root .session-history .process-fold-body .provenance-card .op-card-main .op-card-summary { display: none; }
+:root .session-history .provenance-card .op-card-more { margin: 0 0 0 auto; flex: 0 0 auto; }
+:root .session-history .provenance-card .op-card-more-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+:root .session-history .provenance-card .op-card-more-chevron { display: inline-flex; opacity: 0; transition: opacity .12s, transform .12s; }
+:root .session-history .provenance-card .op-card-more-chevron .step-icon { width: 12px; height: 12px; flex-basis: 12px; }
+:root .session-history .provenance-card:hover .op-card-more-chevron,
+:root .session-history .provenance-card .op-card-main[aria-expanded="true"] .op-card-more-chevron { opacity: .7; }
+:root .session-history .provenance-card > .op-card-detail,
+:root .session-history .provenance-card > .provenance-status {
+  /* The full width under the row, less its indent; never wider (a long line wraps or ellipses inside). */
+  flex: 1 1 100%;
+  min-width: 0;
+  max-width: calc(100% - 24px);
+  box-sizing: border-box;
+  margin: 2px 0 8px 24px;
+  border-top: none;
+  font-size: 13px;
+}
+:root .session-history .provenance-card > .op-card-detail { padding: 8px 10px; border-radius: 8px; background: var(--bg-secondary); }
+:root .session-history .provenance-card > .provenance-status { color: var(--error); margin-top: 0; }
+:root .session-history .op-card-stack { gap: 0; }
+:root .session-history .provenance-card.provenance-card-slim { gap: 8px; }
+:root .process-fold > .tool-run-toggle .tool-run-lead { flex-shrink: 0; white-space: nowrap; }
