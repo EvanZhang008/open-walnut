@@ -131,7 +131,7 @@ describe('a change keeps the context it needs', () => {
     expect(due.blocks[0].added).toEqual([{ word: '- use npm', section: '## Home' }])
     expect(due.blocks[0].removed).toEqual([{ word: '- use pnpm', section: '## Home' }])
     const text = renderDue(due)
-    expect(text).toMatch(/New or reworded:\n\[v[0-9a-f]{8}\] ## Home\n\[v[0-9a-f]{8}\] - use npm/)
+    expect(text).toMatch(/New:\n\[v[0-9a-f]{8}\] ## Home\n\[v[0-9a-f]{8}\] - use npm/)
     expect(text).toContain('- use pnpm (under "## Home")')
     expect(text).not.toContain('Water the plants')
   })
@@ -184,19 +184,20 @@ describe('review cases (2026-10-30)', () => {
     const base = `Check CI first.\n${FILLER.join('\n')}\n# Rules\nOne.`
     const before = defaultInstructions(agentLead(base))
     const text = renderDue(dueChanges(parseInstructions(defaultInstructions(agentLead(`${base}\nTwo.`))), parseInstructions(before), new Set(), {})!)
-    expect(text).toMatch(/New or reworded:\n\[v[0-9a-f]{8}\] Added by an agent:\n\[v[0-9a-f]{8}\] # Rules\n\[v[0-9a-f]{8}\] Two\./)
+    expect(text).toMatch(/New:\n\[v[0-9a-f]{8}\] Added by an agent:\n\[v[0-9a-f]{8}\] # Rules\n\[v[0-9a-f]{8}\] Two\./)
   })
 
-  it('a long rule reworded at its end is listed removed in full, never as a cut that reads like the new one', async () => {
+  it('a long rule reworded at its end is told once, as its new wording, never also as removed (2026-11-11)', async () => {
     const task: InstructionTask = { id: 'w', project: 'marina' }
     const long = `Always ${'keep the release notes short and plain, '.repeat(5)}and send them on Friday.`
     await writeUser(USER([long, 'Another rule.', ...FILLER]))
     const before = defaultInstructions(task)
     await writeUser(USER([long.replace('Friday', 'Monday'), 'Another rule.', ...FILLER]))
     const text = renderDue(dueChanges(parseInstructions(defaultInstructions(task)), parseInstructions(before), new Set(), {})!)
-    // Named by its start, and said to be the rule reworded above: never a cut that reads like the new one.
-    expect(text).toContain(`${`- ${long}`.slice(0, 77)}... (its new wording is above)`)
-    expect(text).not.toContain(`- ${long}`)
+    expect(text).toMatch(/Reworded:\n\[v[0-9a-f]{8}\] ## Standing rules\n\[v[0-9a-f]{8}\] - Always keep[^\n]+Monday\./)
+    expect(text).toContain('A reworded line takes the place of your line in the same part')
+    expect(text).not.toContain('Removed, no longer in force')
+    expect(text).not.toContain('Friday')
   })
 
   it('a reworded rule whose start a kept rule shares is named in full, so the kept one is never read as gone', async () => {
@@ -343,6 +344,133 @@ describe('a one-line change is told in about one line (2026-11-03)', () => {
     const text = notice(before, own(lines.map((l, i) => (i === 7 ? 'Instruction 8 for the lead, changed today.' : l)).join('\n'), '2026-11-03T01:00:00.000Z'))
     expect(text).toContain('Instruction 8 for the lead, changed today.')
     expect(text.length).toBeLessThanOrEqual('Instruction 8 for the lead, changed today.'.length + lines[7].length + FIXED)
+  })
+})
+
+describe('a reworded line is told once, as its new wording (2026-11-11)', () => {
+  // Three USER.md saves that each added at most one rule reworded 8 to 10 others to stay under the
+  // budget; each reworded line went out twice (new wording, and again under "Removed"), and a renamed
+  // sub-heading sent every unchanged line under it again: 84 notices, 2.6 to 9 KB, to 70 sessions.
+  const task: InstructionTask = { id: 'w', project: 'marina' }
+  const profile = (p: { standing: string; lines: string[]; extra?: string[] }) => `---\nname: User Profile\n---\n\n# USER.md\n\n`
+    + `## Identity\nAlex, a designer who builds a personal planning app in the evenings and on weekends.\n\n`
+    + `## ${p.standing}\n${[...p.lines, ...(p.extra ?? [])].map((l) => `- ${l}`).join('\n')}\n\n`
+    + `## Replies\n- Answer the exact question first, then the details, in plain words with one real example.\n`
+  const LINES = [
+    'Never play a sound on any of the machines at home: no speech, no music, no volume change at all.',
+    'Run every command on his own machines yourself, and ask only for what needs his hand, like a phone code.',
+    'Bring him only his own decisions, one sentence on what and why, plus your pick and the reason for it.',
+    'Free disk space only from caches and build output that can be rebuilt, never from his own files.',
+    'A bug he reports again goes to the one task that owns the shared cause, and gets fixed at the root.',
+    'Tell him a cause or a number only once it was checked at the source, never a guess fixed a minute later.',
+  ]
+  /** The same rules said shorter, as a save that makes room under the budget writes them. */
+  const SHORTER = [
+    'Never play a sound on the machines at home: no speech, no music, no volume change.',
+    'Run every command on his machines yourself; ask only for what needs his hand, like a phone code.',
+    LINES[2],
+    'Free disk only from rebuildable caches and build output, never his own files.',
+    'A bug reported again goes to the one task owning the shared cause, fixed at the root.',
+    LINES[5],
+  ]
+  const ADDED = 'Tasks run on the default engine; another one only when he names it.'
+
+  it('rewordings and a renamed sub-heading: no line listed as removed, unchanged lines not told, about the new words in size', async () => {
+    await writeUser(profile({ standing: 'Standing rules (agents keep asking these)', lines: LINES }))
+    const before = defaultInstructions(task)
+    await writeUser(profile({ standing: 'Standing rules', lines: SHORTER, extra: [ADDED] }))
+    const due = dueChanges(parseInstructions(defaultInstructions(task)), parseInstructions(before), new Set(), {})!
+    const block = due.blocks[0]
+    expect(block.whole).toBe(false)
+    expect(block.removed).toEqual([])
+    const reworded = block.added.filter((l) => l.reworded).map((l) => l.word)
+    expect(reworded).toEqual(['## Standing rules', ...[0, 1, 3, 4].map((i) => `- ${SHORTER[i]}`)])
+    expect(block.added.filter((l) => !l.reworded).map((l) => l.word)).toEqual([`- ${ADDED}`])
+    const text = renderDue(due)
+    expect(text).not.toContain('Removed, no longer in force')
+    expect(text).not.toContain('its new wording is above')
+    // Lines that kept their words under the renamed heading are not told again.
+    expect(text).not.toContain(LINES[2])
+    expect(text).not.toContain(LINES[5])
+    // Each new or reworded line once, and the fixed words of the head: nothing more.
+    for (const l of block.added) expect(text.split(l.word).length - 1).toBeGreaterThanOrEqual(1)
+    const words = block.added.reduce((n, l) => n + Buffer.byteLength(l.word) + 13, 0)
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(words + 700)
+  })
+
+  // The class: every kind of rewording a budget trim makes. A reworded line is never also removed.
+  const REWORDINGS: Array<[string, (l: string) => string]> = [
+    ['a word dropped', (l) => l.replace(/ own\b| all\b| any of\b/, '')],
+    // Each keeps the rule's never, always and negations: a rewording that drops one is another rule (tested below).
+    ['a clause cut', (l) => l.replace(/, (?![^,]*\b(?:never|no|not)\b)[^,]+\.$/, '.')],
+    ['a date added', (l) => l.replace(/\.$/, ' (11-11).')],
+    ['comma to semicolon', (l) => l.replace(', ', '; ')],
+    ['a word swapped', (l) => l.replace(/\bonly\b/, 'just').replace(/\bmachines\b/, 'computers').replace(/\bnumber\b/, 'figure')],
+    ['said shorter', (l) => l.split(' ').filter((w, i) => i % 7 !== 6 || /^(never|no|not)$/i.test(w)).join(' ')],
+  ]
+  it.each(REWORDINGS)('%s in every rule: each is told as reworded, none as removed', async (_kind, reword) => {
+    await writeUser(profile({ standing: 'Standing rules', lines: LINES }))
+    const before = defaultInstructions(task)
+    const now = LINES.map(reword)
+    await writeUser(profile({ standing: 'Standing rules', lines: now }))
+    const due = dueChanges(parseInstructions(defaultInstructions(task)), parseInstructions(before), new Set(), {})
+    const changed = now.filter((l, i) => l !== LINES[i])
+    expect(changed.length).toBeGreaterThan(0)
+    const block = due!.blocks[0]
+    expect(block.removed).toEqual([])
+    expect(block.added.map((l) => [l.word, l.reworded])).toEqual(changed.map((l) => [`- ${l}`, true]))
+  })
+
+  it('another rule is never taken for a rewording: a removed rule and a new one stay removed and new', async () => {
+    await writeUser(profile({ standing: 'Standing rules', lines: LINES }))
+    const before = defaultInstructions(task)
+    await writeUser(profile({ standing: 'Standing rules', lines: [...LINES.slice(0, 3), ...LINES.slice(4)], extra: [ADDED] }))
+    const block = dueChanges(parseInstructions(defaultInstructions(task)), parseInstructions(before), new Set(), {})!.blocks[0]
+    expect(block.added).toEqual([{ word: `- ${ADDED}`, section: '## Standing rules' }])
+    expect(block.removed.map((l) => l.word)).toEqual([`- ${LINES[3]}`])
+  })
+
+  it.each([
+    ['other words for the same subject', 'Reply in Chinese to the owner, in every line you write.', 'Reply in English to the reviewers, in every line you write.'],
+    ['never made always', 'Never push to the public repository before the scan has passed.', 'Always push to the public repository before the scan has passed.'],
+    ['a negation dropped', 'Do not restart the production server while a deploy is running.', 'Do restart the production server while a deploy is running.'],
+  ])('%s is never taken for a rewording: the old rule is listed as removed', async (_kind, old, now) => {
+    await writeUser(profile({ standing: 'Standing rules', lines: [...LINES, old] }))
+    const before = defaultInstructions(task)
+    await writeUser(profile({ standing: 'Standing rules', lines: [...LINES, now] }))
+    const block = dueChanges(parseInstructions(defaultInstructions(task)), parseInstructions(before), new Set(), {})!.blocks[0]
+    expect(block.added).toEqual([{ word: `- ${now}`, section: '## Standing rules' }])
+    expect(block.removed.map((l) => l.word)).toEqual([`- ${old}`])
+  })
+
+  it('Chinese rules, written without spaces, are compared character by character', async () => {
+    const old = '\u6bcf\u6b21\u56de\u590d\u90fd\u7528\u4e2d\u6587\u5199\u6e05\u695a\u7ed3\u8bba\u548c\u4e0b\u4e00\u6b65'
+    const now = '\u6bcf\u6b21\u56de\u590d\u90fd\u7528\u4e2d\u6587\u5199\u6e05\u7ed3\u8bba\u4e0e\u4e0b\u4e00\u6b65'
+    await writeUser(profile({ standing: 'Standing rules', lines: [...LINES, old] }))
+    const before = defaultInstructions(task)
+    await writeUser(profile({ standing: 'Standing rules', lines: [...LINES, now] }))
+    const block = dueChanges(parseInstructions(defaultInstructions(task)), parseInstructions(before), new Set(), {})!.blocks[0]
+    expect(block.removed).toEqual([])
+    expect(block.added).toEqual([{ word: `- ${now}`, section: '## Standing rules', reworded: true }])
+  })
+
+  it('a session that missed several saves gets one net change against the version it holds', async () => {
+    await writeUser(profile({ standing: 'Standing rules (agents keep asking these)', lines: LINES }))
+    const before = defaultInstructions(task)
+    // Three saves while the session took no message: an in-between wording it never held, then the last.
+    await writeUser(profile({ standing: 'Standing rules (agents keep asking these)', lines: LINES.map((l, i) => (i === 0 ? `${l.slice(0, -1)}, ever.` : l)) }))
+    await writeUser(profile({ standing: 'Standing rules', lines: SHORTER }))
+    await writeUser(profile({ standing: 'Standing rules', lines: SHORTER, extra: [ADDED] }))
+    const notice = instructionNoticeFor({ appliedAppendSystemPrompt: before }, task)!
+    expect(notice.match(/<walnut-message /g)).toHaveLength(1)
+    expect(notice).not.toContain(', ever.')
+    expect(notice).not.toContain('Removed, no longer in force')
+    expect(notice).toContain(ADDED)
+    expect(notice).toContain(SHORTER[0])
+    // Told once: what it holds now is the last version, and nothing more is due.
+    const current = parseInstructions(defaultInstructions(task))
+    const due = dueChanges(current, parseInstructions(before), new Set(), {})!
+    expect(dueChanges(current, parseInstructions(before), new Set(), viewsAfter({}, due))).toBeNull()
   })
 })
 

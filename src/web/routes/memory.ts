@@ -296,6 +296,8 @@ export interface MemoryWriteResult {
   size: number
   previousSize: number
   warning?: string
+  /** USER.md lines this save reworded: each reaches every live session again (rewordNote). */
+  note?: string
 }
 
 /**
@@ -332,6 +334,7 @@ export async function writeMemoryDoc(
   return {
     ok: true as const, updatedAt: stat.mtime.toISOString(), contentHash: computeContentHash(content),
     changed, size: content.length, previousSize: previous.length, ...(await overBudget(target, content)),
+    ...(await rewordNote(target, previous, content)),
   }
 }
 
@@ -349,6 +352,28 @@ async function overBudget(target: 'memory' | 'user', content: string): Promise<{
     warning: `Saved, but USER.md is ${fit.size} characters and sessions read only the first ${USER_CHAR_BUDGET}: `
       + `${fit.cut.length} line(s) from "${fit.cut[0].slice(0, 80)}" on are left out of every session's prompt `
       + `(they are not lost, and memory_read still has them). Trim it under ${USER_CHAR_BUDGET} characters.`,
+  }
+}
+
+/**
+ * USER.md lines a save reworded. Every live session is told each one again, as its new wording
+ * (2026-11-11: three saves that each added at most one rule reworded 8 to 10 others to stay under
+ * the budget, and 84 notices of 2.6 to 9 KB reached 70 sessions overnight). The writer hears how
+ * many and how to make room more cheaply. Two or more: one rewording is usually meant.
+ */
+export const REWORD_NOTE_MIN = 2
+
+async function rewordNote(target: 'memory' | 'user', previous: string, content: string): Promise<{ note?: string }> {
+  if (target !== 'user' || previous === content) return {}
+  const { userProfileFit } = await import('../../core/sessions/user-profile-context.js')
+  const { rewordedLines } = await import('../../core/sessions/instruction-diff.js')
+  const lines = (text: string) => userProfileFit(text).text.split('\n').map((l) => l.trim()).filter(Boolean)
+  const reworded = rewordedLines(lines(previous), lines(content))
+  if (reworded.length < REWORD_NOTE_MIN) return {}
+  return {
+    note: `${reworded.length} lines of USER.md were reworded (the first: "${reworded[0].slice(0, 60)}"). Every live session `
+      + 'is told each reworded line again, as its new wording. Reword a line only when its meaning changed; to make room '
+      + 'under the budget, delete one obsolete line instead of shortening many.',
   }
 }
 

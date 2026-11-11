@@ -132,6 +132,29 @@ describe('memory_write against the live server', () => {
     expect(String(res.outcome)).toMatch(/^USER\.md saved: \d+ characters \(was \d+\)/)
   })
 
+  it('a save that rewords lines says each reaches every live session, and how to make room instead (2026-11-11)', async () => {
+    // Three saves that each added at most one rule reworded 8 to 10 others to stay under the budget.
+    const rules = ['Run the tests on the machine the task runs on, never on another one.',
+      'Keep every report short and plain, with the answer to the question first.',
+      'Never send anything outside without asking the user first, in one sentence.']
+    await fs.writeFile(USER_FILE, `---\nname: User Profile\n---\n\n## Rules\n${rules.map((r) => `- ${r}`).join('\n')}\n`)
+    const r = await call('memory_write', { doc: 'user', edits: [
+      { old: 'never on another one.', new: 'never elsewhere.' },
+      { old: 'short and plain, with', new: 'short and plain:' },
+    ] })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const res = r.result as Record<string, unknown>
+    expect(String(res.note)).toMatch(/^2 lines of USER\.md were reworded \(the first: "- Run the tests/)
+    expect(String(res.outcome)).toContain('Every live session is told each reworded line again')
+    expect(String(res.outcome)).toContain('delete one obsolete line instead of shortening many')
+    // One rewording, or a rule added, is no note.
+    const one = await call('memory_write', { doc: 'user', edits: [{ old: 'in one sentence.', new: 'in a sentence.' }] })
+    expect(one.ok && (one.result as Record<string, unknown>).note).toBeFalsy()
+    const added = await call('memory_write', { doc: 'user', edits: [{ old: '## Rules\n', new: '## Rules\n- A rule the user just gave.\n' }] })
+    expect(added.ok && (added.result as Record<string, unknown>).note).toBeFalsy()
+  })
+
   it('an edit whose old text is not there refuses the whole save and writes nothing', async () => {
     const r = await call('memory_write', {
       doc: 'user',

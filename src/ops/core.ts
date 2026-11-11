@@ -298,7 +298,8 @@ defineOp({
     'from memory_read) to refuse the save when the file changed since. The answer says whether the file ' +
     'changed (`changed`, `size`): a save is done only when that answer says so. Every session reads only ' +
     'the first 4000 characters of USER.md: a save past that is kept, and answers with a `warning` naming ' +
-    'what is left out; trim it then.',
+    'what is left out; trim it then. A save that rewords two or more lines says so (`note`): each reworded line reaches ' +
+    'every live session again, so make room by deleting an obsolete line rather than shortening many.',
   input: {
     doc: z.enum(['global', 'user']).describe('Which memory document'),
     content: z.string().optional().describe('The complete new document (whole-file replace); or pass edits'),
@@ -360,9 +361,10 @@ function memoryWriteResult(body: unknown, args: Record<string, unknown>): unknow
   }
   const size = typeof b.size === 'number'
     ? `: ${b.size} characters${typeof b.previousSize === 'number' ? ` (was ${b.previousSize})` : ''}` : ''
+  const note = typeof b.note === 'string' ? ` ${b.note}` : ''
   return withOutcome(
     b,
-    `${file} saved${size}, contentHash ${String(b.contentHash ?? '')}.${typeof b.warning === 'string' ? ` ${b.warning}` : ''}`,
+    `${file} saved${size}, contentHash ${String(b.contentHash ?? '')}.${typeof b.warning === 'string' ? ` ${b.warning}` : ''}${note}`,
     typeof b.warning === 'string' ? `Trim ${file} with memory_write edits.` : 'No further action is required.',
   )
 }

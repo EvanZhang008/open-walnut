@@ -13,8 +13,12 @@
  * version the session holds: only the new or reworded lines are told, with the
  * lines that were removed; a session that never had the block gets it whole.
  * A change is never sent as the whole block (2026-11-03: a save that reworded 10
- * of 27 lines went whole, 5 to 6 KB, to every live session): a reworded line is
- * its new wording plus a short name of the old one.
+ * of 27 lines went whole, 5 to 6 KB, to every live session). A reworded line is
+ * told once, as its new wording, never also as removed (2026-11-11: three saves
+ * that each reworded 8 to 10 lines to stay under the USER.md budget sent every one
+ * twice, its new wording and again under "Removed"), and a renamed sub-heading
+ * leaves the lines under it unchanged (the same night, "## Standing rules (agents
+ * keep asking these)" became "## Standing rules" and all its lines went out again).
  */
 
 import { createHash } from 'node:crypto';
@@ -112,8 +116,11 @@ export function parseInstructions(text: string): Parsed {
   return parsed;
 }
 
-/** A line of a block, with the "Added by X:" (`author`) and the sub-heading (`section`) it sits under. */
-export interface Line { word: string; author?: string; section?: string }
+/**
+ * A line of a block, with the "Added by X:" (`author`) and the sub-heading (`section`) it sits
+ * under. `reworded`: a new line that takes the place of a line of the same meaning in older words.
+ */
+export interface Line { word: string; author?: string; section?: string; reworded?: true }
 
 /** One block's change for a session: whole (it never had it, or it changed form), or the new and removed lines. */
 export interface BlockChange { block: Block; whole: boolean; from?: string; added: Line[]; removed: Line[] }
@@ -169,33 +176,164 @@ export function dueChanges(
 }
 
 /** Each word of a block with the parts it sits in, so the same words in two parts are two lines. */
-function keyed(words: string[]): Array<Line & { key: string }> {
+function keyed(words: string[]): Keyed[] {
   let author: string | undefined;
   let section: string | undefined;
   return words.map((word) => {
     if (opensAuthor(word)) { author = word; section = undefined; return { word, key: `${word}\u0000\u0000${word}` }; }
     if (opensSection(word)) section = word;
     const line: Line = { word, ...(author ? { author } : {}), ...(section && section !== word ? { section } : {}) };
-    return { ...line, key: `${author ?? ''}\u0000${section ?? ''}\u0000${word}` };
+    return { ...line, key: keyOf(line) };
   });
 }
 
-/** Lines added and removed between two versions, counted per part (a repeated line counts each time). */
+/** Words that say nothing of what a rule is about: two different rules share them freely. */
+const FILLER_WORDS = new Set(('a an the and or but of to in on at for from by with as is are be it its this that these those '
+  + 'he she his her him they their them you your we our i me my so if then than when while do does every each any all').split(' '));
+/**
+ * A rule that forbids and one that asks are never the same rule, however close their words
+ * ("Never X", "Always X"): a pair must agree on whether it says "never", "always" and any negation.
+ * One that does not is listed as removed, the safe way.
+ */
+const NEGATIONS = new Set(['never', 'not', 'no', 'nothing', 'none', 'nobody', 'don', 'doesn', 'isn', 'won', 'cannot']);
+const polarity = (word: string) => {
+  const words: string[] = word.toLowerCase().match(/[\p{L}]+/gu) ?? [];
+  return `${words.includes('never')}${words.includes('always')}${words.some((t) => NEGATIONS.has(t))}`;
+};
+/**
+ * The content words of a line as a set, for telling a rewording from another rule: filler left
+ * out, and Chinese, written without spaces, one character a word.
+ */
+const tokens = (word: string) => new Set((word.toLowerCase().match(/\p{Script=Han}|[\p{L}\p{N}]+/gu) ?? [])
+  .flatMap((t) => (/\p{Script=Han}/u.test(t) ? [...t] : [t])).filter((t) => !FILLER_WORDS.has(t)));
+/** How much two lines share: twice the common words over all words (1 the same words, 0 none). */
+function overlap(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let common = 0;
+  for (const t of a) if (b.has(t)) common++;
+  return (2 * common) / (a.size + b.size);
+}
+/**
+ * A line shares at least this much of its content words with the line it rewords. Measured on the
+ * 2026-11-11 saves: rewordings 0.69 to 1.00, different rules at most 0.09.
+ */
+export const REWORD_MIN_OVERLAP = 0.65;
+/** Shorter lines are cheap to name as removed, and a word or two is no evidence of the same rule. */
+const REWORD_MIN_WORDS = 3;
+/**
+ * How close two sub-headings are, or null when one is not the other renamed: the same level, and
+ * one's words hold the other's ("## Standing rules (agents keep asking these)", "## Standing rules")
+ * or they share as much as a reworded line does.
+ */
+function headingScore(a: string, b: string): number | null {
+  const level = (w: string) => /^#+/.exec(w)?.[0].length;
+  if (!opensSection(a) || !opensSection(b) || level(a) !== level(b)) return null;
+  const ta = tokens(a.replace(/^#+/, ''));
+  const tb = tokens(b.replace(/^#+/, ''));
+  const [small, big] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
+  const holds = small.size > 0 && [...small].every((t) => big.has(t));
+  const score = overlap(ta, tb);
+  return holds || score >= REWORD_MIN_OVERLAP ? score : null;
+}
+
+type Pair = { from: number; to: number; score: number };
+/** One-to-one pairs, the closest first, of the candidates `score` accepts (null: no pair). */
+function pairUp<T>(from: T[], to: T[], score: (a: T, b: T) => number | null): Pair[] {
+  const all: Pair[] = [];
+  from.forEach((a, i) => to.forEach((b, j) => {
+    const s = score(a, b);
+    if (s !== null) all.push({ from: i, to: j, score: s });
+  }));
+  all.sort((x, y) => y.score - x.score);
+  const usedFrom = new Set<number>();
+  const usedTo = new Set<number>();
+  const out: Pair[] = [];
+  for (const p of all) {
+    if (usedFrom.has(p.from) || usedTo.has(p.to)) continue;
+    usedFrom.add(p.from);
+    usedTo.add(p.to);
+    out.push(p);
+  }
+  return out;
+}
+
+type Keyed = Line & { key: string };
+const keyOf = (l: Line) => `${l.author ?? ''}\u0000${l.section ?? ''}\u0000${l.word}`;
+
+/**
+ * The older lines read under the sub-headings they were renamed to, so an unchanged line under a
+ * renamed heading counts as unchanged. The heading line itself stays a change (it is reworded).
+ */
+function underRenamedHeadings(had: Keyed[], now: Keyed[]): Keyed[] {
+  const nowHeads = new Set(now.filter((l) => opensSection(l.word)).map((l) => `${l.author ?? ''}\u0000${l.word}`));
+  const hadHeads = new Set(had.filter((l) => opensSection(l.word)).map((l) => `${l.author ?? ''}\u0000${l.word}`));
+  const gone = had.filter((l) => opensSection(l.word) && !nowHeads.has(`${l.author ?? ''}\u0000${l.word}`));
+  const fresh = now.filter((l) => opensSection(l.word) && !hadHeads.has(`${l.author ?? ''}\u0000${l.word}`));
+  if (!gone.length || !fresh.length) return had;
+  const pairs = pairUp(gone, fresh, (a, b) => (a.author === b.author ? headingScore(a.word, b.word) : null));
+  if (!pairs.length) return had;
+  const renamed = new Map(pairs.map((p) => [`${gone[p.from].author ?? ''}\u0000${gone[p.from].word}`, fresh[p.to].word]));
+  return had.map((l) => {
+    const to = l.section ? renamed.get(`${l.author ?? ''}\u0000${l.section}`) : undefined;
+    if (!to) return l;
+    const line: Line = { word: l.word, ...(l.author ? { author: l.author } : {}), section: to };
+    return { ...line, key: keyOf(line) };
+  });
+}
+
+/**
+ * Lines added and removed between two versions, counted per part (a repeated line counts each
+ * time). A removed line whose rewording was added is not removed: the new line says `reworded`.
+ * Only when the pair is clear: no line kept in the same part reads as close to the new one, else
+ * the old line is named as removed, so a kept one is never taken for the one replaced.
+ */
 function wordChanges(had: string[], now: string[]): { added: Line[]; removed: Line[] } {
-  const take = (from: ReturnType<typeof keyed>, against: ReturnType<typeof keyed>): Line[] => {
+  const take = (from: Keyed[], against: Keyed[]): { lines: Line[]; kept: Line[] } => {
     const left = new Map<string, number>();
     for (const w of against) left.set(w.key, (left.get(w.key) ?? 0) + 1);
-    const out: Line[] = [];
+    const lines: Line[] = [];
+    const kept: Line[] = [];
     for (const { key, ...line } of from) {
       const n = left.get(key) ?? 0;
-      if (n > 0) left.set(key, n - 1);
-      else out.push(line);
+      if (n > 0) { left.set(key, n - 1); kept.push(line); } else lines.push(line);
     }
-    return out;
+    return { lines, kept };
   };
-  const a = keyed(had);
   const b = keyed(now);
-  return { added: take(b, a), removed: take(a, b) };
+  const a = underRenamedHeadings(keyed(had), b);
+  const { lines: added, kept } = take(b, a);
+  const { lines: removed } = take(a, b);
+  const words = new Map<string, Set<string>>();
+  const tok = (w: string) => words.get(w) ?? words.set(w, tokens(w)).get(w)!;
+  const samePart = (x: Line, y: Line) => x.author === y.author && x.section === y.section;
+  const pairs = pairUp(removed, added, (r, x) => {
+    if (!samePart(r, x) || opensAuthor(r.word) || opensAuthor(x.word)) return null;
+    // A sub-heading renamed (underRenamedHeadings matched it the same way).
+    if (opensSection(r.word) || opensSection(x.word)) return headingScore(r.word, x.word);
+    if (polarity(r.word) !== polarity(x.word)) return null;
+    const tr = tok(r.word);
+    const tx = tok(x.word);
+    if (tr.size < REWORD_MIN_WORDS || tx.size < REWORD_MIN_WORDS) return null;
+    const score = overlap(tr, tx);
+    if (score < REWORD_MIN_OVERLAP) return null;
+    // A kept line of the same part about as close to the new one: which line it replaces is unclear.
+    if (kept.some((k) => samePart(k, x) && overlap(tok(k.word), tx) >= REWORD_MIN_OVERLAP)) return null;
+    return score;
+  });
+  const paired = new Set(pairs.map((p) => p.from));
+  const rewords = new Set(pairs.map((p) => p.to));
+  return {
+    added: added.map((l, i) => (rewords.has(i) ? { ...l, reworded: true as const } : l)),
+    removed: removed.filter((_, i) => !paired.has(i)),
+  };
+}
+
+/**
+ * The lines of `now` that reword a line of `had` (whole lines, sub-headings included, as a
+ * versioned block holds them): every one reaches every live session again (memory_write's answer).
+ */
+export function rewordedLines(had: string[], now: string[]): string[] {
+  return wordChanges(had, now).added.filter((l) => l.reworded && !opensSection(l.word)).map((l) => l.word);
 }
 
 /** The block versions a session holds once `due` reached it. */
@@ -234,30 +372,37 @@ function deltaHead(c: BlockChange): string {
     .replace(/They replace every earlier version and/, 'They replace')
     .replace(/\s*They replace every earlier version\.?/, '');
   const cut = c.block.words.find((w) => TRUNCATED_RE.test(w));
+  const reworded = c.added.some((l) => l.reworded);
   return `${head} Only what changed since the version you hold (${c.from}) is below, tagged [${c.block.version}]; every other line you hold `
     + `for this part stays in force${c.removed.length ? ' unless listed as removed' : ''}.`
-    + (cut ? ` Not every line of it fits here: ${cut.slice(1, -1)}.` : '');
+    + (reworded ? ' A reworded line takes the place of your line in the same part that says the same thing in older words.' : '')
+    + (cut ? ` Not every line of it fits here: ${cut.slice(1, -1).replace(/\.$/, '')}.` : '');
 }
 
-/** One block as told: whole (its head and every line), or its head as changes, the new lines and the removed ones. */
+/** Lines of a block, each under the parts it belongs to, so its scope and, for a lead, whose words it is stay. */
+function withParts(tag: string, added: Line[]): string {
+  const lines: string[] = [];
+  let author: string | undefined;
+  let section: string | undefined;
+  for (const l of added) {
+    if (l.author && l.author !== author) { lines.push(tag + l.author); section = undefined; }
+    if (l.section && l.section !== section) lines.push(tag + l.section);
+    author = opensAuthor(l.word) ? l.word : l.author;
+    section = opensAuthor(l.word) ? undefined : opensSection(l.word) ? l.word : l.section;
+    lines.push(tag + l.word);
+  }
+  return lines.join('\n');
+}
+
+/** One block as told: whole (its head and every line), or its head as changes, the new and reworded lines and the removed ones. */
 function blockText(c: BlockChange): string {
   if (c.whole) return `${c.block.head}\n${c.block.tagged.join('\n')}\n`;
   const tag = `[${c.block.version}] `;
   const out = [deltaHead(c)];
-  if (c.added.length) {
-    // Each new line under the parts it belongs to, so its scope and, for a lead, whose words it is stay.
-    const lines: string[] = [];
-    let author: string | undefined;
-    let section: string | undefined;
-    for (const l of c.added) {
-      if (l.author && l.author !== author) { lines.push(tag + l.author); section = undefined; }
-      if (l.section && l.section !== section) lines.push(tag + l.section);
-      author = opensAuthor(l.word) ? l.word : l.author;
-      section = opensAuthor(l.word) ? undefined : opensSection(l.word) ? l.word : l.section;
-      lines.push(tag + l.word);
-    }
-    out.push(`New or reworded:\n${lines.join('\n')}`);
-  }
+  const fresh = c.added.filter((l) => !l.reworded);
+  const reworded = c.added.filter((l) => l.reworded);
+  if (fresh.length) out.push(`New:\n${withParts(tag, fresh)}`);
+  if (reworded.length) out.push(`Reworded:\n${withParts(tag, reworded)}`);
   if (c.removed.length) {
     const added = new Set(c.added.map((l) => l.word));
     out.push(`Removed, no longer in force:\n${c.removed.map(item(c.block.words.filter((w) => !added.has(w)), [...added])).join('\n')}`);
