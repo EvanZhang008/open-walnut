@@ -100,6 +100,9 @@ describe('a server hello names its read-only ops', () => {
   it('a read-only mount of a remote (a test server) names its run and no reads: it answers no relay', () => {
     expect(serverHello(true)).toEqual({ run: expect.any(String) })
     expect(serverHello(false).readOps).toContain('host_list')
+    // A server that binds says so; a read-only test server never binds (gateway-identity-core.ts).
+    expect(serverHello(false).binds).toBe(true)
+    expect(serverHello(true).binds).toBeUndefined()
   })
 
   it('the real server has its registry before its first hello: it loads the ops at import', () => {

@@ -155,8 +155,11 @@ const SERVER_RUN_ID = crypto.randomUUID()
  * server) lists none, since it answers no relay. No list before the registry loads.
  */
 export function serverHello(readOnlyRemote: boolean): Record<string, unknown> {
-  const readOps = readOnlyRemote ? [] : opNames({ readonly: true }).filter((name) => getOpOwner(name) === 'core')
-  return readOps.length > 0 ? { run: SERVER_RUN_ID, readOps } : { run: SERVER_RUN_ID }
+  if (readOnlyRemote) return { run: SERVER_RUN_ID }
+  const readOps = opNames({ readonly: true }).filter((name) => getOpOwner(name) === 'core')
+  // `binds`: this server names its Walnut on this host (leader.configure) after the hello, so
+  // until it does the daemon gives none of another Walnut's calls to it (gateway-identity-core.ts).
+  return readOps.length > 0 ? { run: SERVER_RUN_ID, readOps, binds: true } : { run: SERVER_RUN_ID, binds: true }
 }
 /** Source deploys before the binary fallback: the first over the shared master,
  *  the rest over fresh connections (deployDaemon). */

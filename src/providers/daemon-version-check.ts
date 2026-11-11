@@ -290,6 +290,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/leader-core.ts',
   'src/providers/walnut-scope-core.ts',
   'src/providers/served-walnuts-core.ts',
+  'src/providers/gateway-identity-core.ts',
   // A model or effort change while the companion leads: same rule.
   'src/providers/live-settings-core.ts',
   // The offline search on a host: same rule.

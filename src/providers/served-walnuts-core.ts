@@ -37,6 +37,8 @@ export interface ServedWalnuts {
   note(home: string): void
   /** Each Walnut seen within `windowMs`, by key, with when. */
   recent(windowMs?: number): Record<string, number>
+  /** A server socket spoke for `home` here within the last week (kept across restarts). */
+  knows(home: string): boolean
   /** Writes the file now (at startup, once capabilities are known). */
   write(): void
 }
@@ -72,10 +74,12 @@ export function createServedWalnuts(deps: ServedWalnutsDeps): ServedWalnuts {
     }
   }
 
+  // One Walnut whatever slashes its dir is written with (daemon-shared.ts walnutKeyOf).
+  const keyFor = (home: string): string => (home ? deps.keyOf(home.replace(/\/+/g, '/').replace(/(.)\/$/, '$1')) : '-')
+
   return {
     note(home) {
-      // One Walnut whatever slashes its dir is written with (daemon-shared.ts walnutKeyOf).
-      const key = home ? deps.keyOf(home.replace(/\/+/g, '/').replace(/(.)\/$/, '$1')) : '-'
+      const key = keyFor(home)
       const now = deps.now()
       seen[key] = now
       const before = written[key]
@@ -86,6 +90,11 @@ export function createServedWalnuts(deps: ServedWalnutsDeps): ServedWalnuts {
       const out: Record<string, number> = {}
       for (const [k, at] of Object.entries(seen)) if (at > cutoff) out[k] = at
       return out
+    },
+    knows(home) {
+      if (!home) return false
+      const at = seen[keyFor(home)]
+      return typeof at === 'number' && at > deps.now() - KEEP_MS
     },
     write,
   }

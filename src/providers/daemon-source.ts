@@ -54,6 +54,7 @@ import { createJournalMigration, createOfflineJournal } from './offline-journal-
 import { createLeaderBook } from './leader-core.js'
 import { createWalnutScope } from './walnut-scope-core.js'
 import { createServedWalnuts } from './served-walnuts-core.js'
+import { createGatewayIdentity } from './gateway-identity-core.js'
 import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
 import { createBoardOffline } from './offline-board-core.js'
@@ -275,6 +276,7 @@ export function getDaemonSource(): string {
     ['__CREATE_LEADER_BOOK__', createLeaderBook.toString()],
     ['__CREATE_WALNUT_SCOPE__', createWalnutScope.toString()],
     ['__CREATE_SERVED_WALNUTS__', createServedWalnuts.toString()],
+    ['__CREATE_GATEWAY_IDENTITY__', createGatewayIdentity.toString()],
     ['__CREATE_LIVE_SETTINGS__', createLiveSettings.toString()],
     ['__CREATE_OFFLINE_SEARCH__', createOfflineSearch.toString()],
     ['__CREATE_BOARD_OFFLINE__', createBoardOffline.toString()],
@@ -4625,6 +4627,13 @@ function dispatchCommand(ws, id, cmd) {
       if (typeof cmd.run === 'string' && cmd.run) {
         ws.serverRun = cmd.run.slice(0, 80);
         ws.readOps = helloReadOps(cmd.readOps);
+        // A server that says it binds (gateway-binds-v1) is nobody's target until it does, for a moment.
+        ws.helloAt = cmd.binds === true ? Date.now() : undefined;
+        // Its grace ends: a call held back from it (gatewayCandidates) looks again.
+        if (cmd.binds === true && !gatewayClientHomes.has(ws) && isServerClient(ws)) setTimeout(wakeGatewayCalls, GATEWAY_BIND_GRACE_MS + 50);
+        // A socket bound before it named its run: every socket of that run speaks for its Walnut.
+        var boundHome = gatewayClientHomes.get(ws);
+        if (boundHome && isServerClient(ws)) gatewayIdentity.noteRun(ws.serverRun, boundHome);
       }
       sendOk(ws, id, {
       version: DAEMON_VERSION,
@@ -5308,11 +5317,17 @@ function resolveCallerSid(sid) {
 // daemon-standalone.ts block: host.slice tags the socket with its home, the
 // journal is drained with offline.drain / offline.ack.
 var gatewayClientHomes = new WeakMap();
+// Which Walnut each server socket speaks for, its bulk channel's included, and where a
+// session's call may go (gateway-identity-core.ts, inlined). Mirror daemon-standalone.ts.
+var gatewayIdentity = (__CREATE_GATEWAY_IDENTITY__)();
 function bindGatewayClientHome(ws, home) {
   var fresh = gatewayClientHomes.get(ws) !== home;
   if (fresh) featureRelay.disconnect(featureSocket(ws));
   gatewayClientHomes.set(ws, home);
-  if (isServerClient(ws)) servedWalnuts.note(home);
+  if (isServerClient(ws)) {
+    servedWalnuts.note(home);
+    gatewayIdentity.noteRun(ws.serverRun, home);
+  }
   // This Walnut's primary is here: its calls waiting for one go now.
   if (fresh) setTimeout(wakeGatewayCalls, 0);
 }
@@ -6590,22 +6605,53 @@ function followerScope(ws, id, cmd) {
   return true;
 }
 
-// The server socket a relay for 'home' goes to now (null: none may take it): the
-// server of the caller's Walnut when one pushed a copy; else any trusted client
-// that never identified itself (an older server), never the bridge adapter.
-// 'say' logs why a primary is passed over (twin of daemon-standalone.ts).
-function gatewayTargetFor(home, say) {
-  var target = null;
-  var untagged = null;
+// A new server's socket may name its run this long before it binds (twin of daemon-standalone.ts).
+var GATEWAY_BIND_GRACE_MS = 60000;
+
+// The server sockets as the gateway's pick sees them, in connect order; withQuiet keeps
+// the quiet ones too. A socket that named a run moments ago and is not bound yet is
+// pending (twin of daemon-standalone.ts).
+function gatewayCandidates(withQuiet) {
+  var now = Date.now();
+  var out = [];
   for (const client of wsClients) {
     // A quiet client is a dead forward (see pickTrustedClient): never a target.
-    if (!isServerClient(client) || isQuietTrustedClient(client)) continue;
-    var clientHome = gatewayClientHomes.get(client);
-    if (home && clientHome === home) target = client;
-    else if (!clientHome && !untagged) untagged = client;
+    if (!isServerClient(client) || (!withQuiet && isQuietTrustedClient(client))) continue;
+    var bound = gatewayClientHomes.get(client);
+    var run = client.serverRun;
+    var row = { socket: client, bound: bound, run: run };
+    if (!bound && !!run && typeof client.helloAt === 'number' && now - client.helloAt < GATEWAY_BIND_GRACE_MS) row.pending = true;
+    out.push(row);
   }
-  if (!home) target = untagged;
-  else if (!target && !offlineHost.pendingHandover(home)) target = untagged;
+  return out;
+}
+
+// The Walnut a server socket speaks for: its binding, else its server run's (twin of daemon-standalone.ts).
+function socketWalnut(ws) {
+  return gatewayIdentity.walnutOf(gatewayClientHomes.get(ws), ws.serverRun);
+}
+
+// 'home' identifies itself on this host (a copy, a bound socket now or within the
+// served-walnuts week): a socket that names no Walnut is never its (twin of daemon-standalone.ts).
+function walnutPinned(home) {
+  return !!home && (offlineHost.hasHome(home) || servedWalnuts.knows(home) || gatewayIdentity.knowsHome(home));
+}
+
+// The server socket a relay for 'home' goes to now (null: none may take it): only a
+// socket of the caller's Walnut (bound to it, or of the same server run as one that
+// is). Another Walnut's never; one that names no Walnut only for a Walnut that never
+// named itself here, or for a call no Walnut owns. Never the bridge adapter. 'say'
+// logs why a server is passed over (twin of daemon-standalone.ts).
+function gatewayTargetFor(home, say) {
+  var candidates = gatewayCandidates(false);
+  var pinned = walnutPinned(home);
+  var picked = gatewayIdentity.pick(candidates, home, { pinned: pinned, allowUnidentified: !home || !offlineHost.pendingHandover(home) });
+  var target = picked.target;
+  if (!target && home && say && (picked.otherWalnut > 0 || picked.unidentified > 0)) {
+    logMsg('info', 'gateway: no server of this Walnut connected, other servers not asked', {
+      callerSid: say.callerSid, op: say.op, walnut: walnutScope.label(home), otherWalnut: picked.otherWalnut, unidentified: picked.unidentified,
+    });
+  }
   // While the companion leads this Walnut its primary's sockets are silent: no
   // target until the primary takes the lead back.
   if (home && leaderBook.backupLead(home)) target = null;
@@ -6624,14 +6670,32 @@ function gatewayTargetFor(home, say) {
   return target;
 }
 
+// No server of the call's Walnut may take it, and nothing was sent: retryable. Says so
+// when another Walnut's servers are connected here (twin of daemon-standalone.ts).
+function gatewayNoServerError(home) {
+  var others = false;
+  if (home) {
+    for (const client of wsClients) {
+      if (isServerClient(client) && !gatewayIdentity.sameWalnut(socketWalnut(client), home)) { others = true; break; }
+    }
+  }
+  return gatewayError('hub_unreachable', others
+    ? "no primary server connected for this session's Walnut (another Walnut's server on this host was not asked); nothing was sent, try again"
+    : 'no primary server connected');
+}
+
 // A walnut run outside any session is the Walnut's whose copy this host holds,
 // when it holds just one (twin of daemon-standalone.ts gatewayOwnerHome).
 function gatewayOwnerHome(callerSid) {
   if (callerSid === EXTERNAL_CALLER_SID) {
     var homes = offlineHost.homes();
-    return homes.length === 1 ? homes[0] : undefined;
+    if (homes.length === 1) return homes[0];
+    // No copy here: the Walnut every connected server speaks for, when there is just one.
+    return homes.length === 0 ? gatewayIdentity.soleWalnut(gatewayCandidates(true)) : undefined;
   }
-  return offlineHost.ownerOf(callerSid);
+  // The copy names the session, else what this host recorded of the Walnut that asked
+  // for it (its spawn, the spawn journal; gateway-identity-core.ts, twin of daemon-standalone.ts).
+  return offlineHost.ownerOf(callerSid) || sessionHomeOf(callerSid) || undefined;
 }
 
 function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
@@ -6649,7 +6713,7 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
     if (forwardToBackup(home, capability, callerSid, payload, respond)) return;
     if (waitHere()) return;
     logMsg('info', 'gateway: no server connected', { capability: capability, callerSid: callerSid });
-    return respond(gatewayError('hub_unreachable', 'no primary server connected'));
+    return respond(gatewayNoServerError(home));
   }
   if (home && (!target || (offlineHost.pendingHandover(home) && (!external || readable))) && offlineHost.hasHome(home)) {
     // A search goes to the companion first while it leads (twin of daemon-standalone.ts).
@@ -6677,7 +6741,7 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
       return;
     }
     logMsg('info', 'gateway: no server connected', { capability: capability, callerSid: callerSid });
-    return respond(gatewayError('hub_unreachable', 'no primary server connected'));
+    return respond(gatewayNoServerError(home));
   }
   // A message between two of this Walnut's sessions on this host is delivered
   // here even while the server answers (twin of daemon-standalone.ts).
@@ -6791,7 +6855,7 @@ function relayToPrimary(target, home, capability, callerSid, payload, respond, r
   if (typeof deadline !== 'number') deadline = Date.now() + GATEWAY_HUB_TIMEOUT_MS;
   gatewayRelayCounter += 1;
   var relayId = gatewayRelayCounter;
-  var call = { home: home, capability: capability, callerSid: callerSid, payload: payload, readable: readable, deadline: deadline, sentOn: null, run: undefined, attempts: 0 };
+  var call = { home: home, capability: capability, callerSid: callerSid, payload: payload, readable: readable, deadline: deadline, sentOn: null, run: undefined, attempts: 0, pinned: walnutPinned(home) };
   gatewayRelayPending.set(relayId, { respond: respond, timer: undefined, call: call });
   sendRelayAttempt(relayId, target);
 }
@@ -6853,6 +6917,13 @@ function cmdGatewayResult(ws, id, cmd) {
     logMsg('warn', 'gateway: result from a socket the relay was not sent to', { relayId: relayId, fromBridge: ws.origin === 'bridge' });
     return sendError(ws, id, 'gateway-result: not sent to this socket');
   }
+  // A relay to a Walnut's server is answered by a socket of that Walnut only
+  // (gateway-identity-core.ts; twin of daemon-standalone.ts).
+  if (pending && pending.call && ws.origin !== 'bridge'
+    && !gatewayIdentity.mayAnswer(gatewayClientHomes.get(ws), ws.serverRun, pending.call.home, !!pending.call.pinned)) {
+    logMsg('warn', "gateway: result from another Walnut's server refused", { relayId: relayId, walnut: walnutScope.label(pending.call.home) });
+    return sendError(ws, id, "gateway-result: not this Walnut's relay", { errorKind: 'not_owner' });
+  }
   if (!pending) {
     // Late result after timeout — ack and drop (same as cmdLaunchResult).
     return sendOk(ws, id, { stale: true });
@@ -6900,7 +6971,7 @@ function busyAskAgain(relayId, call, respond, refusal, inMs) {
     });
     gatewayRelayPending.set(next, {
       respond: respond, timer: undefined,
-      call: { home: call.home, capability: call.capability, callerSid: call.callerSid, payload: call.payload, readable: call.readable, deadline: call.deadline, sentOn: null, run: undefined, attempts: 0, busyAgain: attempt },
+      call: { home: call.home, capability: call.capability, callerSid: call.callerSid, payload: call.payload, readable: call.readable, deadline: call.deadline, sentOn: null, run: undefined, attempts: 0, busyAgain: attempt, pinned: call.pinned },
     });
     sendRelayAttempt(next, target);
   }
@@ -13674,19 +13745,26 @@ async function cmdTranscriptArchive(ws, id, cmd) {
 // daemon-standalone.ts.
 const HISTORY_FETCH_MS = 180000;
 if (taskDirCore && typeof taskDirCore.setArchiveLog === 'function') taskDirCore.setArchiveLog((msg) => logMsg('warn', 'transcript archive', { msg }));
-if (taskDirCore && typeof taskDirCore.setRemoteFetcher === 'function') {
-  taskDirCore.setRemoteFetcher((dir, sid) => new Promise((resolve, reject) => {
-    const target = pickTrustedClient('').client;
-    if (!target) return reject(new taskDirCore.RemoteHistoryError('the history of ' + sid + ' is in remote storage, and no Walnut server is connected to fetch it'));
+// The server that fetches a session's history: its own Walnut's, else (no record names the
+// session) any server as before (twin of daemon-standalone.ts).
+function historyFetchTarget(sid) {
+  var home = offlineHost.ownerOf(sid) || sessionHomeOf(sid) || undefined;
+  return { target: home ? gatewayTargetFor(home) : pickTrustedClient('').client, home: home };
+}
+function fetchRemoteHistory(dir, sid) {
+  return new Promise((resolve, reject) => {
+    const picked = historyFetchTarget(sid);
+    if (!picked.target) return reject(new taskDirCore.RemoteHistoryError('the history of ' + sid + ' is in remote storage, and no server of its Walnut is connected to fetch it'));
     const respond = (resp) => {
       if (resp.ok) return resolve();
       const code = resp.error && resp.error.code;
       reject(new taskDirCore.RemoteHistoryError((resp.error && resp.error.message) || 'the server could not fetch it from remote storage', { stillRunning: code === 'hub_timeout' }));
     };
     const deadline = Date.now() + HISTORY_FETCH_MS;
-    relayToPrimary(target, undefined, 'history.fetch', EXTERNAL_CALLER_SID, { dir: dir, sessionId: sid }, respond, false, deadline);
-  }));
+    relayToPrimary(picked.target, picked.home, 'history.fetch', EXTERNAL_CALLER_SID, { dir: dir, sessionId: sid }, respond, false, deadline);
+  });
 }
+if (taskDirCore && typeof taskDirCore.setRemoteFetcher === 'function') taskDirCore.setRemoteFetcher(fetchRemoteHistory);
 async function cmdTaskDirPruneCaches(ws, id, cmd) {
   if (!taskDirCore || typeof taskDirCore.pruneHostCaches !== 'function') return sendError(ws, id, 'taskdir.pruneCaches unsupported: task-dir-core sidecar too old');
   const olderThanMs = Number(cmd.olderThanMs);
@@ -14876,7 +14954,10 @@ function bridgeLinkFor(home) {
 function servesBridgeHome(client, home) {
   var bound = gatewayClientHomes.get(client);
   if (home) { var named = bridgeLinks.get(home); return bound === home || (!bound && !!named && named.pushers.has(client)); }
-  return !bound || !bridgeLinks.has(bound);
+  // An older server's unnamed link: never a socket of a Walnut whose own link is named
+  // (its bulk channel speaks for it by its run; twin of daemon-standalone.ts).
+  var walnut = bound || socketWalnut(client);
+  return !walnut || !bridgeLinks.has(walnut);
 }
 
 // Whether bridge socket client may hear about session sid: a named link only of

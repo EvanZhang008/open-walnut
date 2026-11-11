@@ -625,6 +625,25 @@ first. An ephemeral server's starts carry `strict`, and the daemon refuses one f
 spawn journal records for another Walnut (`session_other_walnut`), live or not. Ratchets:
 `tests/providers/cli-owner-core.test.ts`, `tests/providers/daemon-cli-owner-twins-e2e.test.ts`.
 
+**A session's `walnut` call reaches only its own Walnut's server** (`src/providers/gateway-identity-core.ts`,
+both twins; 2026-11-10: on a host shared by two people's Walnuts, one person's link dropped three
+times in ten minutes and the gateway's fallback to "any server socket that names no Walnut" sent
+that person's sessions' calls to the other person's bulk socket, which never names one). A socket
+speaks for the Walnut it is bound to (`leader.configure`, `host.slice`), else for the Walnut of a
+bound socket of the same server run (the hello's `run`, which the bulk channel sends too). A session
+is pinned to the Walnut its copy, its spawn or the spawn journal names (`gatewayOwnerHome`), and its
+calls go only to that Walnut's sockets: never another Walnut's, and a socket that names none only for
+a Walnut that never identified itself on this host (`walnutPinned`: a copy, a bound socket, or
+`daemon.serves.json` within the week), and never one whose hello said it binds (`binds: true`, every
+server since this change) in the minute before it does. A call no Walnut owns (a session no record
+names, a terminal's `walnut` on a host with two Walnuts' copies) keeps the old rule, a socket that
+names none, which cannot tell two older servers apart; a terminal's call on a host where every
+connected server speaks for one Walnut goes to that one. With none connected the call is answered from the copy, waits,
+or fails `hub_unreachable` saying nothing was sent; it never falls back. A result is taken only from
+that Walnut's sockets (`mayAnswer`). Ratchets: `tests/providers/gateway-walnut-pin-guard.test.ts`
+(every function that sends a relay frame and every caller of the send), E2E with the link dropped
+and stalled again and again beside a second Walnut: `tests/providers/daemon-gateway-walnut-pin-twins-e2e.test.ts`.
+
 **A task whose session host is gone is never stuck** (`src/core/sessions/host-lost.ts`; 2026-11-07:
 a task on a laptop that went offline answered 502 to task_move, "already has its active session" to
 a start elsewhere, and "its host has not confirmed it yet" to task_stop, for good). A stop on a host
