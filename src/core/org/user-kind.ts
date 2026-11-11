@@ -32,7 +32,7 @@ export type UserKind = (typeof USER_KINDS)[number];
 
 /** What each kind means, in the words the refusal and the letter use. */
 export const USER_KIND_WORDS: Readonly<Record<UserKind, string>> = {
-  outward: 'a message or post that leaves Walnut (mail, chat, a public push, a publish)',
+  outward: 'a message or post to people, a public push or publish, or anything leaving the team\'s own code; not a code change, commit or change request in the team\'s own repo/package',
   spending: 'spending money or quota that is not already budgeted',
   credentials: 'a credential, key or sign-in',
   permissions: 'a permission, access or setting that widens what an agent may do',
@@ -50,7 +50,35 @@ export const USER_KIND_WHY_MIN = 10;
 export const NOT_THE_USERS_DECISION =
   'Never the user\'s: undoing something an agent broke or changed (a build, an install, a test run, a file), choosing between '
   + 'reasonable options, anything reversible, and a question whose answer you can read or try. Decide those, do them, and tell '
-  + 'your team (or the user, in a line afterwards) what you chose.';
+  + 'your team (or the user, in a line afterwards) what you chose. A code change, commit, or opening or publishing a change request '
+  + 'in the team\'s own repo/package is team work, not outward; messages to people, public pushes and steps outside that code still need the user\'s words.';
+
+/**
+ * Correct a mistaken outward label only for explicitly owned code work. Both the ask and its
+ * reason matter; the full details are checked too. Unclear ownership or any protected step keeps
+ * the approval gate. This never changes another approval kind or authorizes the code operation.
+ */
+export function isTeamCodeAsk(ask: string | undefined, why: string | undefined, more?: string): boolean {
+  const question = str(ask);
+  const reason = str(why);
+  if (!question || !reason || str(more)) return false;
+  // A closed grammar, not a keyword blacklist: an unrecognized clause, destination or detail
+  // keeps the gate. Finding "CR" somewhere in an email/push ask must never make it team work.
+  const owned = "(?:the team's own|our own|our team's own) (?:repo(?:sitory)?|package|code(?:base)?)";
+  const review = '(?:change request|code review|pull request|CR|PR)';
+  const patch = '(?:(?:logging )?(?:fix|patch|code)|code work)';
+  const scope = `(?: in ${owned})?`;
+  const codeQuestion = new RegExp(`^(?:(?:Open|Create|Publish|Submit) (?:a |the )?${review}|(?:Commit|Change|Edit|Fix|Modify) (?:a |the )?${patch})${scope}\\?$`, 'i');
+  const codeReason = new RegExp(`^It (?:(?:publishes|opens|creates|submits) (?:a |the )?${review}|(?:commits|edits|changes) (?:a |the )?${patch})${scope}(?: for review)?\\.?$`, 'i');
+  const chineseQuestion = /^(?:\u5728\u56e2\u961f\u81ea\u5df1\u7684\u4ed3\u5e93\u63d0\u4ea4\u4ee3\u7801\u5ba1\u67e5\uff0c\u53ef\u4ee5\u5417\uff1f|\u6211\u6765\u5f00\u4e2a\u5c0f\u6539\u52a8\uff0c\u628a [A-Z][a-z]{1,20}(?: [A-Z][a-z]{1,20})? \u65e5\u5fd7\u91cc\u7684[\u4e00-\u9fff]{2,8}\u914d\u7f6e\u53bb\u6389\uff08\u53ea\u6539\u65e5\u5fd7\uff0c\u4e0d\u6539\u5224\u65ad\u903b\u8f91\uff09\uff0c\u53ef\u4ee5\u5417\uff1f)$/;
+  // The configuration noun is data, but it must not carry an action clause either.
+  if (/(?:\u5220\u9664|\u53d1\u9001|\u516c\u5f00|\u6388\u6743|\u4ed8\u8d39|\u8d2d\u4e70|\u767b\u5f55|\u51ed\u636e|\u5bc6\u94a5|\u4e0d\u53ef\u9006)/.test(question)) return false;
+  const chineseReason = /^\u53d1\u5e03\u4ee3\u7801\u5ba1\u67e5$/;
+  const ownsCode = new RegExp(owned, 'i').test(`${question} ${reason}`)
+    || /^\u5728\u56e2\u961f\u81ea\u5df1\u7684\u4ed3\u5e93/.test(question);
+  return ownsCode && (codeQuestion.test(question) || chineseQuestion.test(question))
+    && (codeReason.test(reason) || chineseReason.test(reason));
+}
 
 export type UserKindVerdict =
   | { ok: true; kind: UserKind; why: string }

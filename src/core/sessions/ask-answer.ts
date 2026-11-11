@@ -22,6 +22,7 @@
  * it passes them back in user_words (user-spoke.ts).
  */
 import { log } from '../../logging/index.js';
+import { isTeamCodeAsk } from '../org/user-kind.js';
 import { ambiguousIdMessage, matchIdRef, missingIdMessage } from '../../lib/id-ref.js';
 import type { SessionRecord, Task } from '../types.js';
 import { isLiveSessionStatus } from '../routines/session-target.js';
@@ -181,7 +182,13 @@ export async function prepareAskAnswer(
   // their place only on their own words (2026-11-04 review: Main could otherwise approve a spend).
   const kind = target.status_report?.ask_own?.kind;
   const words = (userWords ?? '').replace(/\s+/g, ' ').trim();
-  if (caller && kind && APPROVAL_KINDS.has(kind) && words.length < 10) {
+  // Older reports may call publishing the team's own code review outward. Do not make a lead
+  // quote the user for that team decision, but keep every real outward or other approval gate.
+  const report = target.status_report;
+  const teamCode = kind === 'outward' && askKey(report?.ask) === askKey(ask) && !report?.ask_options?.length
+    && (!report?.ask_kind || report.ask_kind === 'yes_no' || report.ask_kind === 'text')
+    && isTeamCodeAsk(ask, report?.ask_own?.why, report?.ask_more);
+  if (caller && kind && APPROVAL_KINDS.has(kind) && !teamCode && words.length < 10) {
     throw new AskAnswerError('user_words',
       `Not sent: "${target.title}" asks the user to approve a step of kind ${kind}, which only the user decides. `
       + 'Answer it in their place only with their own words: pass user_words quoting what they said (task_history rows with sentBy "person", or their thread message). Otherwise leave it for them.');
