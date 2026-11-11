@@ -98,7 +98,7 @@ if [[ "${WALNUT_DEVPROD_DRY_RUN:-0}" != "1" && "${WALNUT_DEVPROD_REHEARSAL:-0}" 
   if [[ -n "$ceil_ref" ]]; then
     ceil="$(git -C "$SERVE_ROOT" rev-parse --verify --quiet "$ceil_ref^{commit}" 2>/dev/null || true)"
     if [[ -z "$ceil" ]] || ! git -C "$SERVE_ROOT" merge-base --is-ancestor "$SHA" "$ceil"; then
-      echo "Not deployed yet: production goes only to commits a test of main passed (git config walnut.deployCeiling = $ceil_ref, ${ceil:+now at ${ceil:0:12}}${ceil:-which names no commit}), and ${SHA:0:12} is not in it yet. It goes live with the deploy after that test passes on a main that holds it. This is not a failure; WALNUT_DEPLOY_PAST_CEILING=1 deploys it anyway." >&2
+      echo "Not deployed yet: production goes only to commits a test of main passed (git config walnut.deployCeiling = $ceil_ref, $([[ -n "$ceil" ]] && echo "now at ${ceil:0:12}" || echo "which names no commit")), and ${SHA:0:12} is not in it yet. It goes live with the deploy after that test passes on a main that holds it. This is not a failure; WALNUT_DEPLOY_PAST_CEILING=1 deploys it anyway." >&2
       exit 4
     fi
   fi

@@ -263,7 +263,7 @@ describe('the deploy queue', () => {
     const untested = commit(f, 'untested')
     const held = await call(f, {}, [untested]).done
     expect(held.code, held.stderr).toBe(4)
-    expect(held.stderr).toContain(`and ${untested.slice(0, 12)} is not in it yet`)
+    expect(held.stderr).toContain(`now at ${tested.slice(0, 12)}), and ${untested.slice(0, 12)} is not in it yet`)
     // At once, with no runner, and a forced deploy keeps to it too.
     expect(fs.existsSync(path.join(f.queue, 'runner.lock'))).toBe(false)
     const forced = await call(f, { WALNUT_DEVPROD_FORCE: '1' }, [untested]).done
