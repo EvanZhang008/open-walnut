@@ -107,7 +107,7 @@ async function startStream(page: Page, absorb: boolean) {
 
 /** The WebContent processes of the Playwright WebKit build started after `since`. */
 function webContentPids(sinceMs: number): number[] {
-  const out = execFileSync('ps', ['-ax', '-o', 'pid=', '-o', 'lstart=', '-o', 'command='], { encoding: 'utf8' });
+  const out = execFileSync('ps', ['-ax', '-o', 'pid=', '-o', 'lstart=', '-o', 'command='], { encoding: 'utf8', maxBuffer: 64 << 20 });
   const pids: number[] = [];
   for (const line of out.split('\n')) {
     if (!line.includes('ms-playwright/webkit') || !line.includes('WebContent')) continue;
