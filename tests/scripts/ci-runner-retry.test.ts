@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { MAX_ATTEMPT, neverRan, planRetry, requiredLegPatterns } from '../../scripts/ci-runner-retry.mjs'
+import { MAX_ATTEMPT, WORKFLOWS, neverRan, planRetry, requiredLegPatterns } from '../../scripts/ci-runner-retry.mjs'
 
 const ROOT = path.resolve(__dirname, '../..')
 const ciYml = fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')
@@ -73,18 +73,36 @@ describe('planRetry', () => {
   })
 })
 
+// Binary matrix run 43036597217 (2026-11-11): macos-15 got no runner; it has no gate job, every row is required.
+describe('the binary matrix', () => {
+  const every = [/^/]
+  const rows = (): Job[] => [ran(1, 'Build the files'), ran(2, 'ubuntu:24.04 (walnut-linux-x64)'), dropped(130579022498, 'macos-15 (walnut-darwin-arm64)')]
+  it('runs again the one row that got no runner, with no CI OK to read', () => {
+    expect(WORKFLOWS['Binary matrix']).toBe('every')
+    expect(planRetry(rows(), every, 1, { gated: false })).toMatchObject({ action: 'job', ids: [130579022498] })
+    // the CI rule (a gate job) would have left it alone
+    expect(planRetry(rows(), every, 1).action).toBe('none')
+  })
+
+  it('leaves it alone when a row ran and did not pass, the 2026-11-11 run with its hung VM', () => {
+    expect(planRetry([...rows(), ran(3, 'centos 7 VM (kernel 3.10)', 'cancelled')], every, 1, { gated: false }).action).toBe('none')
+    expect(planRetry(rows().slice(0, 2), every, 1, { gated: false }).action).toBe('none')
+    expect(planRetry(rows(), every, MAX_ATTEMPT, { gated: false }).action).toBe('none')
+  })
+})
+
 describe('the workflow', () => {
   const wf = parseYaml(fs.readFileSync(path.join(ROOT, '.github/workflows/ci-runner-retry.yml'), 'utf8')) as {
     on: { workflow_run: { workflows: string[]; branches: string[] } }; permissions: Record<string, string>
     jobs: { retry: { if: string; steps: { run?: string; with?: { 'sparse-checkout'?: string } }[] } }
   }
   it('follows a finished push run of CI on main, may start a rerun and runs the script it checks out', () => {
-    expect(wf.on.workflow_run).toMatchObject({ workflows: ['CI'], branches: ['main'] })
+    expect(wf.on.workflow_run).toMatchObject({ workflows: Object.keys(WORKFLOWS), branches: ['main'] })
     expect(wf.permissions.actions).toBe('write')
     expect(wf.jobs.retry.if).toContain("workflow_run.event == 'push'")
     const sparse = wf.jobs.retry.steps.find((s) => s.with?.['sparse-checkout'])!.with!['sparse-checkout']!
     expect(sparse).toContain('scripts/ci-runner-retry.mjs')
     expect(sparse).toContain('.github/workflows/ci.yml')
-    expect(wf.jobs.retry.steps.some((s) => s.run?.includes('bun scripts/ci-runner-retry.mjs') && s.run.includes('run_attempt'))).toBe(true)
+    expect(wf.jobs.retry.steps.some((s) => s.run?.includes('bun scripts/ci-runner-retry.mjs') && s.run.includes('run_attempt') && s.run.includes('"$WORKFLOW"'))).toBe(true)
   })
 })

@@ -10,7 +10,11 @@
  * (the job and CI OK, which needs it), at most twice per run. A leg that ran and failed, or a red
  * report-only job, is left alone: the commit stays red and the release watch reads why.
  *
- *   bun scripts/ci-runner-retry.mjs <run id> <run attempt>   (GH_TOKEN, GH_REPO from the workflow)
+ * The Binary matrix has no gate job: every row is required (scripts/ci-gate.mjs), so a failed push
+ * run there whose only bad rows never ran is run again the same way (2026-11-11, run 43036597217:
+ * macos-15 waited 21 minutes for a runner and was cancelled).
+ *
+ *   bun scripts/ci-runner-retry.mjs <run id> <run attempt> [<workflow name>]   (GH_TOKEN, GH_REPO from the workflow)
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -18,6 +22,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const GATE_JOB = 'CI OK'
+/** The workflows this runs again, and how each says which legs are required. */
+export const WORKFLOWS = { CI: 'ci.yml', 'Binary matrix': 'every' }
 /** A run's attempts this may start: the first run and two more. */
 export const MAX_ATTEMPT = 3
 
@@ -64,9 +70,11 @@ export function neverRan(job) {
  * `none`, `job` (run these again, one at a time is all GitHub takes: the first) or `failed` (several
  * legs never ran: run every failed or cancelled job again).
  */
-export function planRetry(jobs, patterns, attempt) {
-  const gate = jobs.find((j) => j.name === GATE_JOB)
-  if (!gate || gate.conclusion !== 'failure') return { action: 'none', why: `${GATE_JOB} is ${gate?.conclusion ?? 'missing'}` }
+export function planRetry(jobs, patterns, attempt, { gated = true } = {}) {
+  if (gated) {
+    const gate = jobs.find((j) => j.name === GATE_JOB)
+    if (!gate || gate.conclusion !== 'failure') return { action: 'none', why: `${GATE_JOB} is ${gate?.conclusion ?? 'missing'}` }
+  }
   if (attempt >= MAX_ATTEMPT) return { action: 'none', why: `attempt ${attempt} is the last this runs` }
   const required = jobs.filter((j) => j.name !== GATE_JOB && patterns.some((p) => p.test(j.name)))
   const bad = required.filter((j) => j.conclusion !== 'success' && j.conclusion !== 'skipped')
@@ -84,13 +92,15 @@ function gh(args) {
 }
 
 function main() {
-  const [runId, attemptArg] = process.argv.slice(2)
+  const [runId, attemptArg, workflow = 'CI'] = process.argv.slice(2)
   const attempt = Number(attemptArg)
-  if (!runId || !Number.isFinite(attempt)) throw new Error('usage: ci-runner-retry.mjs <run id> <run attempt>')
+  if (!runId || !Number.isFinite(attempt)) throw new Error('usage: ci-runner-retry.mjs <run id> <run attempt> [<workflow name>]')
+  const kind = WORKFLOWS[workflow]
+  if (!kind) { console.log(`Nothing to run again: ${workflow} is not a workflow this runs again.`); return }
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-  const patterns = requiredLegPatterns(fs.readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8'))
+  const patterns = kind === 'every' ? [/^/] : requiredLegPatterns(fs.readFileSync(path.join(root, '.github/workflows', kind), 'utf8'))
   const jobs = JSON.parse(gh(['api', `repos/{owner}/{repo}/actions/runs/${runId}/jobs?per_page=100`])).jobs
-  const plan = planRetry(jobs, patterns, attempt)
+  const plan = planRetry(jobs, patterns, attempt, { gated: kind !== 'every' })
   if (plan.action === 'none') { console.log(`Nothing to run again: ${plan.why}.`); return }
   console.log(`::notice::${plan.why}: ${plan.names.join(', ')}. Running ${plan.action === 'job' ? 'it' : 'the failed jobs'} again.`)
   if (plan.action === 'job') gh(['api', '-X', 'POST', `repos/{owner}/{repo}/actions/jobs/${plan.ids[0]}/rerun`])

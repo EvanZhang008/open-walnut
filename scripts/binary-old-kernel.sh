@@ -20,10 +20,20 @@ image_sha="8540fcfb73b41d2322644b7c4301b52cb1753c6daf9539866214d725870db673"
 port="${WALNUT_VM_SSH_PORT:-2222}"
 
 need() { command -v "$1" >/dev/null 2>&1; }
+# Every step that reaches the network has an end of its own (2026-11-11, Binary matrix run
+# 43036597217: a runner whose DNS failed sat 39 minutes in the install below, silent, until the
+# job's 40 minutes ran out; neither "downloading" nor "waiting" was printed): a stalled one fails here,
+# naming the step.
+apt_opts="-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
 if ! need qemu-system-x86_64 || ! need cloud-localds; then
   if need apt-get && sudo -n true 2>/dev/null; then
-    sudo -n apt-get update -qq
-    sudo -n apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils openssh-client >/dev/null
+    echo "installing qemu and cloud-image-utils..."
+    # shellcheck disable=SC2086
+    sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 300') apt-get $apt_opts update -qq" \
+      || { echo "binary-old-kernel: apt-get update failed or ran past 5 minutes" >&2; exit 1; }
+    # shellcheck disable=SC2086
+    sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 600') apt-get $apt_opts install -y -qq qemu-system-x86 qemu-utils cloud-image-utils openssh-client >/dev/null" \
+      || { echo "binary-old-kernel: installing qemu failed or ran past 10 minutes (is the runner's network up?)" >&2; exit 1; }
   else
     echo "binary-old-kernel: needs qemu-system-x86_64 and cloud-localds" >&2
     exit 2
@@ -46,7 +56,8 @@ trap cleanup EXIT INT TERM
 base="$dir/centos7.qcow2c"
 if [ ! -f "$base" ]; then
   echo "downloading the CentOS 7 cloud image..."
-  curl -fsSL --retry 3 -o "$base.part" "$image_url"
+  curl -fsSL --retry 3 --connect-timeout 20 --speed-limit 102400 --speed-time 60 --max-time 900 -o "$base.part" "$image_url" \
+    || { echo "binary-old-kernel: downloading the CentOS 7 image failed or stalled" >&2; exit 1; }
   mv "$base.part" "$base"
 fi
 actual="$(sha256sum "$base" | cut -d' ' -f1)"
