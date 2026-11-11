@@ -426,7 +426,7 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       if (tab === undefined) {
         // Never a guess (the tab used last was another executor's: tab-words.ts): the task's only
         // tab, else the task's tabs listed, in every connected browser.
-        const mine = h.viewOf(owner).tabs.filter((t) => t.connected)
+        const mine = h.viewOf(owner).tabs.filter((t) => t.connected && (typeof b.device !== 'string' || t.device === c.device))
         if (mine.length > 1) throw new h.BrowserError(tw.whichTabWords(mine), 400, 'which_tab', { tabs: mine.map((t) => t.tab) })
         tab = tw.defaultTab(h.tabsOf(c.device, owner))
         if (tab === undefined) throw new h.BrowserError('Open a page first (action "open"): agents act only in tabs they opened.', 400, 'which_tab', { tabs: [] })

@@ -114,13 +114,21 @@ function cookieNotice(el: Element): boolean {
 }
 
 /** A part of the content with a footer of its own (an article's byline, a dialog's buttons). */
-const PIECE = 'article, section, form, dialog, [role=dialog], [role=alertdialog], [role=article], [role=region]'
+const PIECE = 'article, aside, nav, section, form, blockquote, details, fieldset, figure, li, td, th, dialog, [aria-modal=true], [role=dialog], [role=alertdialog], [role=article], [role=region], [role=listitem], [role=cell]'
 
-/** A footer the content root holds directly: the page's own footer inside main. */
+/**
+ * A footer the content root holds directly: the page's own footer inside main. It ends the root
+ * (it, or each plain wrapper around it, is the last element of its parent), and no piece of content
+ * (a quote, a card list item, a dialog) holds it; a card's or a quote's footer is content.
+ */
 function pageFooterIn(el: Element, root: Element): boolean {
   if (el.tagName !== 'FOOTER' || root.matches(PIECE)) return false
-  for (let p = el.parentElement; p && p !== root; p = p.parentElement) if (p.matches(PIECE)) return false
-  return true
+  for (let c: Element = el, p = el.parentElement; p; c = p, p = p.parentElement) {
+    if (p.lastElementChild !== c) return false
+    if (p === root) return true
+    if (p.matches(PIECE)) return false
+  }
+  return false
 }
 
 function furniture(el: Element, inContent: boolean, root?: Element): boolean {
@@ -193,7 +201,8 @@ export function text(args: TextArgs = {}): { text: string; url: string; title: s
     t = m ? readable(m.el, true) : readable(document.body, false)
     scope = m ? m.scope : 'the page without its menus, header and footer'
     // Main read nothing (an app shell's empty main): the page without its furniture, never its footer.
-    if (!tidy(t) && m) t = readable(document.body, false)
+    if (!tidy(t) && m) { t = readable(document.body, false); scope = 'the page without its menus, header and footer' }
+    // All furniture and no main (a link list): it says so, lists what is on screen, and text --all reads the rest.
   }
   t = tidy(t)
   const chars = t.length

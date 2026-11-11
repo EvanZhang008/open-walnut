@@ -84,6 +84,18 @@ describe('text', () => {
     const kept = await op('text')
     expect(kept.text).toContain('Posted by a test author')
     expect(kept.text).toContain('Section words')
+
+    // A quote's or a card's footer is content; so is a modal's (its buttons), and a footer that does not end main.
+    page.load('<main id="m"><blockquote><p>Quote text</p><footer>Jane Example, 2024</footer></blockquote>'
+      + '<div class="card"><h3>Pro plan</h3><footer>Ten a month</footer></div><p>After the cards.</p></main>')
+    page.place('#m', { x: 0, y: 0, w: 800, h: 400 })
+    const cards = String((await op('text')).text)
+    for (const w of ['Jane Example, 2024', 'Ten a month', 'After the cards.']) expect(cards).toContain(w)
+    page.load('<main id="m"><p>Behind</p></main><div id="d" aria-modal="true"><p>Delete this project?</p><footer><button>Cancel</button><button>Delete</button></footer></div>')
+    page.place('#d', { x: 0, y: 0, w: 400, h: 200 })
+    const modal = String((await op('text')).text)
+    expect(modal).toContain('Delete this project?')
+    expect(modal).toContain('Cancel')
   })
 
   it('an empty main: no main text, and the fields and buttons on screen; a short page with no field is its text alone', async () => {
