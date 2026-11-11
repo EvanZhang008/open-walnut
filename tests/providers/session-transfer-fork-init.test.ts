@@ -86,6 +86,8 @@ vi.mock('../../src/core/session-tracker.js', () => rec.stub([
 ], {
   TRIAGE_AGENTS: new Set(['turn-complete-triage', 'message-send-triage']),
   SESSION_ID_MIN_PREFIX: 8,
+  // The spawn asks whether the id it starts under is an ACP session's (acp-native-guard.ts): none here.
+  getSessionByClaudeId: async () => null,
   renameSessionId: async (from: string, to: string) => { rec.order.push(`rename:${from}->${to}`); return true },
   createSessionRecord: async (id: string) => {
     if (rec.failCreate) throw new Error('disk full')

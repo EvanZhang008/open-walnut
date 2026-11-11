@@ -54,6 +54,7 @@ const OWN_WORDS: Record<string, string> = {
   'components/settings/sections/EngineSplitRow.tsx#modelLineLabel(nameOf(engine), engine, model)': 'a checklist of engines on a model: the entry\'s name is the option',
   'components/settings/sections/EngineSplitRow.tsx#engine': 'that entry\'s engine, in its note on where its model is set',
   'components/settings/sections/EngineSplitRow.tsx#model': 'that entry\'s model as typed, beside its name',
+  'components/settings/sections/EngineSplitRow.tsx#n': 'a checklist of projects the split shares: the project\'s name is the option, and sharing it is all the tick does',
   // The shared components: their callers' props are checked at each caller.
   'components/settings/inputs/SettingsCheckbox.tsx#label': 'checked at each caller',
   'components/settings/inputs/SettingsCheckbox.tsx#leading': 'checked at each caller',
