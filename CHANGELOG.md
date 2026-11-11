@@ -6,6 +6,32 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.31] - 2026-11-11
+
+### Added
+
+- Attach any file in the composer, with per-file progress and retry
+- --here-because keeps a run on the named Mac
+- The attach button opens a file picker in the Mac app
+- Attach any file, with per-file progress and retry
+- Recent lists the tasks you opened, newest first, in one flat list
+- A session the usage limit stopped continues by itself at the reset
+
+### Fixed
+
+- Changes.compute no longer holds the loop, and a recompute redoes only what changed
+- The live draft hears the recorder's own audio, so the final text needs no second pass
+- A whole id names that task, and menus are solid
+- A search on Recent counts its own rows and says when no opened task matches
+- Store the tasks opened lately as the union of every write
+- A deleted task leaves Recent at once, never falling back to its read copy
+- Keep the empty Recent tab on the bar; no Include Complete chip on a Recent search
+- A search on Recent keeps only the hits that show the query
+- Search on Recent narrows Recent; recent opens merge with the server before each PUT
+- A Recent row with no session opens its details; search finds rows read by id
+- Recent holds only a row opened from it; merge its opens at boot
+- Dictation ends with the whole recording's words, and a context read back is heard again
+
 ## [0.6.30] - 2026-11-10
 
 ### Added
