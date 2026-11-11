@@ -23,6 +23,9 @@ import { STALL_MACHINE_METRIC, STALL_OWN_METRIC } from '../stall-cause.js'
 
 const GiB = 1024 ** 3
 
+/** A resumed CLI's start on a machine short of memory (delivery-latency.ts resumeMachineShare). */
+export const RESUME_MACHINE_METRIC = 'send.delivery.resume.machine'
+
 /** Registry counters kept as `<name>{labels}` sums. */
 const COUNTERS = new Set(['host.link.lost'])
 
@@ -32,6 +35,7 @@ function maxKeyOf(name: string, labels: Record<string, string> | undefined): str
   if (name === STALL_OWN_METRIC || name === STALL_MACHINE_METRIC) return name
   if (name === 'session.delivery') {
     const p = labels?.path
+    if (labels?.cause === 'machine') return p === 'resume' ? RESUME_MACHINE_METRIC : null
     if (p === 'stdin' || p === 'mid-turn') return 'send.delivery.live'
     if (p === 'resume') return 'send.delivery.resume'
   }

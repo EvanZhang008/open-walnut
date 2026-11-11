@@ -111,6 +111,7 @@ import {
   clearReconnectCause, decideReconnectStep, getReconnectCause, hostSignalCount, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause, WAKE_GRACE_MS,
 } from './daemon-reconnect-cause.js'
 import { clearLinkDrops, noteLinkDrop, recentLinkDrops } from './daemon-link-drops.js'
+import { noteHostLinkDown, noteHostLinkUp } from './host-link-ledger.js'
 import { FLAP_WINDOW_MS } from '../core/hosts/host-problem.js'
 // Leaf (no runtime imports): the cloud box alias and the companion's last answer.
 import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
@@ -1491,6 +1492,8 @@ export class DaemonConnection {
       this._drainSeenAt = 0
       if (changed) wakeHostLink(`daemon:${this.hostKey}`)
       this._disconnectedSince = null
+      // Rows that waited for this link count that wait out of their delivery (delivery-latency.ts).
+      noteHostLinkUp(this.hostKey)
       this._awakeDown.reset()
       this.stopAwakeTick()
       this._reconnectAttempts = 0
@@ -1507,6 +1510,8 @@ export class DaemonConnection {
       // A link that fell by itself counts toward "unstable"; a planned daemon swap, a deliberate
       // teardown, and a drop this Mac's own wake or network change caused do not (daemon-link-drops.ts).
       const ownChange = this._disconnectedSince - lastHostSignalAt() < WAKE_GRACE_MS
+      // A planned swap's wait is Walnut's own (the update holds the sends), so it stays in the delivery.
+      if (!this._destroyed && !this._handoverArmed) noteHostLinkDown(this.hostKey, this._disconnectedSince)
       if (!this._destroyed && !this._handoverArmed && !ownChange) {
         noteLinkDrop(this.hostKey, this._disconnectedSince)
         // The frame changes meaning when this drop ages out of the window: push one then, so an

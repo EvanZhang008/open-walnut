@@ -133,7 +133,9 @@ import {
   rememberModelWindow, recallModelWindow,
 } from './context-window.js'
 import { hardStopTokens } from '../core/sessions/context-full.js'
-import { deliveryLatency, type KnownLineFate } from './delivery-latency.js'
+import { deliveryLatency, outOfPathBetween, REAL_WAITS, resumeMachineShare, type KnownLineFate, type OutOfPathWaits } from './delivery-latency.js'
+import { memoryPressureSeenSince } from '../core/memory-pressure.js'
+import { linkDownIntervals } from './host-link-ledger.js'
 import {
   openTurn,
   settleTurn,
@@ -1380,6 +1382,8 @@ export class ClaudeCodeSession {
    *  runner writes it across instances). */
   _lastDeliveryMs: number | undefined
   _lastDeliveryPath: string | undefined
+  /** The part of _lastDeliveryMs that was its CLI starting on a machine short of memory (delivery-latency.ts). */
+  _lastDeliveryMachineMs: number | undefined
   /** ── TTFT instrumentation (inc-1786665503510: "text shows only at the very end") ──
    *  Epoch ms of the turn-start edge (idle→running FIFO write / send()); anchor
    *  for all first-* latencies below. Undefined between turns. */
@@ -3225,6 +3229,7 @@ export class ClaudeCodeSession {
         ...steps, ...(costStateInTime !== undefined ? { costStateInTime } : {}),
         totalMs: Date.now() - this._spawnTs,
       })
+      this._cliStartAtMs = Date.now()
       return transport.start({
       args,
       stopFence,
@@ -5174,6 +5179,10 @@ export class ClaudeCodeSession {
   /** When this process was spawned (ms): the window a dead snapshot may still wait for its offer. */
   private _modeWasNamed = false
   private _spawnedAtMs = 0
+  /** When the start went to the host, after Walnut's pre-spawn steps (ms), 0 before the first: from
+   *  then on a resume's wait is the CLI's own start (delivery-latency.ts resumeMachineShare). */
+  private _cliStartAtMs = 0
+  get cliStartAtMs(): number { return this._cliStartAtMs }
   /** This process's death went to start recovery (core/sessions/start-recovery.ts). Cleared by every spawn. */
   private _startDeathOffered = false
   /** Start recovery was asked about this process's death (once per process, taken or not). */
@@ -8578,6 +8587,7 @@ export class ClaudeCodeSession {
           resultLen: resultText?.length ?? 0,
           deliveryMs: this._lastDeliveryMs,
           deliveryPath: this._lastDeliveryPath,
+          deliveryMachineMs: this._lastDeliveryMachineMs,
           // TTFT: turn-start → first thinking/text/tool emit (null = never seen).
           firstThinkingMs: this._turnStartTs !== undefined && this._firstThinkingTs !== undefined
             ? this._firstThinkingTs - this._turnStartTs : null,
@@ -8592,6 +8602,7 @@ export class ClaudeCodeSession {
         // a background command's follow-up) must not report it again.
         this._lastDeliveryMs = undefined
         this._lastDeliveryPath = undefined
+        this._lastDeliveryMachineMs = undefined
 
         // ── Result-text fallback: the turn answered on `result` alone ──
         // (upstream ACP issue #453 / fix #858, adapted). The `result` line is
@@ -14266,15 +14277,32 @@ export class SessionRunner {
    * of the oldest message in the batch (worst-case wait the user felt).
    */
   private logDeliveryLatency(sessionId: string, path: 'stdin' | 'mid-turn' | 'resume', msgs: QueuedMessage[], session?: ClaudeCodeSession, known?: KnownLineFate): void {
-    // Awake time only, and a line written before this delivery counts its own write (delivery-latency.ts).
-    const lat = deliveryLatency(msgs, Date.now(), known)
+    // Awake time only, with the host link up, and a line written before this delivery
+    // counts its own write (delivery-latency.ts).
+    const target = session ?? this.findByClaudeId(sessionId)
+    const hostKey = target?.host || '__local__'
+    const now = Date.now()
+    const waits: OutOfPathWaits = { ...REAL_WAITS, linkDown: (from, to) => linkDownIntervals(hostKey, from, to, now) }
+    const lat = deliveryLatency(msgs, now, known, waits)
+    // A resumed CLI that waited on this machine's paging: that share is the machine's, not the path's.
+    const machineMs = path === 'resume' && lat.deliveryMs !== undefined && !lat.writtenEarlier
+      ? resumeMachineShare({
+        local: hostKey === '__local__', spawnedAtMs: target?.cliStartAtMs ?? 0, now, deliveryMs: lat.deliveryMs,
+        outOfPathSinceSpawnMs: target?.cliStartAtMs ? outOfPathBetween(waits, target.cliStartAtMs, now) : 0,
+        enqueuedAtMs: Math.min(...msgs.map((m) => Date.parse(m.enqueuedAt)).filter((t) => !Number.isNaN(t)), now),
+        pressuredSinceSpawn: !!target?.cliStartAtMs && memoryPressureSeenSince(target.cliStartAtMs),
+      })
+      : 0
     log.session.info('message delivered', {
       sessionId,
       path,
       count: msgs.length,
       ...(lat.deliveryMs !== undefined ? { deliveryMs: lat.deliveryMs } : {}),
       messageId: lat.messageId ?? msgs[0]?.id,
-      ...(lat.sleptMs !== undefined ? { wallMs: lat.wallMs, sleptMs: lat.sleptMs } : {}),
+      ...(lat.wallMs !== undefined ? { wallMs: lat.wallMs } : {}),
+      ...(lat.sleptMs !== undefined ? { sleptMs: lat.sleptMs } : {}),
+      ...(lat.linkDownMs !== undefined ? { linkDownMs: lat.linkDownMs } : {}),
+      ...(machineMs > 0 ? { machineMs } : {}),
       ...(lat.writtenEarlier ? { writtenEarlier: true, fate: known?.fate } : {}),
     })
     if (lat.deliveryMs === undefined) return
@@ -14282,10 +14310,10 @@ export class SessionRunner {
     // (forensic observability). The result handler that reads these lives on
     // ClaudeCodeSession, so the values MUST land on that instance — not on the
     // runner. Fall back to a lookup if the caller didn't pass the instance.
-    const target = session ?? this.findByClaudeId(sessionId)
     if (target) {
       target._lastDeliveryMs = lat.deliveryMs
       target._lastDeliveryPath = path
+      target._lastDeliveryMachineMs = machineMs > 0 ? machineMs : undefined
     }
   }
 

@@ -52,6 +52,8 @@ export interface TurnEvent {
   deliveryMs?: number;
   /** Which delivery path: 'stdin' | 'mid-turn' | 'resume'. */
   deliveryPath?: string;
+  /** The part of deliveryMs that was a resumed CLI starting on a machine short of memory. */
+  deliveryMachineMs?: number;
 
   // ── streaming shape (TTFT — inc-1786665503510 "text only shows at the end") ──
   // Latency from the turn-start edge to the FIRST main-lane emit of each kind,

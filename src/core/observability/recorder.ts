@@ -57,6 +57,7 @@ export function recordTurn(partial: Omit<TurnEvent, 'ts'> & { ts?: number }): vo
       resultLen: turn.resultLen,
       deliveryMs: turn.deliveryMs,
       deliveryPath: turn.deliveryPath,
+      deliveryMachineMs: turn.deliveryMachineMs ?? null,
       firstThinkingMs: turn.firstThinkingMs ?? null,
       firstTextMs: turn.firstTextMs ?? null,
       firstToolMs: turn.firstToolMs ?? null,
@@ -70,7 +71,14 @@ export function recordTurn(partial: Omit<TurnEvent, 'ts'> & { ts?: number }): vo
       observe('session.turn.duration', turn.durationMs, { host: turn.host ?? 'local' });
     }
     if (typeof turn.deliveryMs === 'number') {
-      observe('session.delivery', turn.deliveryMs, { path: turn.deliveryPath ?? 'unknown' });
+      // The machine's share (a CLI that starved starting) is counted apart, as the
+      // event loop's starved stalls are (delivery-latency.ts, stall-cause.ts).
+      const machine = typeof turn.deliveryMachineMs === 'number' && turn.deliveryMachineMs > 0
+        ? Math.min(turn.deliveryMs, turn.deliveryMachineMs) : 0;
+      const path = turn.deliveryPath ?? 'unknown';
+      // A wait that was all the machine's adds no zero to the path's own series.
+      if (machine === 0 || turn.deliveryMs > machine) observe('session.delivery', turn.deliveryMs - machine, { path });
+      if (machine > 0) observe('session.delivery', machine, { path, cause: 'machine' });
     }
     // TTFT histograms — p50/p90 "how long until the user saw anything" per host.
     // A rising session.first_text with flat session.first_thinking = the model

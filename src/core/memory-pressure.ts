@@ -72,6 +72,8 @@ let signals: SignalState = initialSignalState();
 let lastVerdict: Pick<SignalVerdict, 'compressorShare' | 'swapoutBytesPerMin'> = { compressorShare: null, swapoutBytesPerMin: null };
 let holdMs = DEFAULT_HOLD_MS;
 let state: ShedState = initialShedState(holdMs);
+/** The last reading of warn or critical (ms epoch), shedding allowed or not; 0 if none. */
+let lastPressuredReadingAt = 0;
 let reading = false;
 const listeners = new Set<Listener>();
 
@@ -184,6 +186,7 @@ export function applyPressureReading(lvl: PressureLevel, now = Date.now(), why: 
   const prevCause = cause;
   level = lvl;
   cause = why;
+  if (lvl !== 'normal') lastPressuredReadingAt = now;
   const allowShed = process.env.WALNUT_MEMORY_PRESSURE_SHED !== '0';
   const backoff = process.env.WALNUT_MEMORY_PRESSURE_BACKOFF !== '0';
   const next = nextShedState(state, allowShed ? lvl : 'normal', now, holdMs, backoff);
@@ -247,6 +250,11 @@ export function memoryPressureLevel(): PressureLevel {
   return level;
 }
 
+/** The level read warn or critical at some reading since `ms` (epoch), or reads so now. */
+export function memoryPressureSeenSince(ms: number): boolean {
+  return level !== 'normal' || (lastPressuredReadingAt > 0 && lastPressuredReadingAt >= ms);
+}
+
 /** What the last non-normal level came from, the hold while shedding, and the
  *  two early signals' last values (flight records, logs). */
 export function memoryPressureSnapshot(): {
@@ -273,6 +281,7 @@ export function _resetMemoryPressureForTest(): void {
   lastVerdict = { compressorShare: null, swapoutBytesPerMin: null };
   holdMs = DEFAULT_HOLD_MS;
   state = initialShedState(holdMs);
+  lastPressuredReadingAt = 0;
   listeners.clear();
 }
 

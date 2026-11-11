@@ -55,17 +55,24 @@ export function noteSleepSinceLastLook(): void {
   lastMono = mono
 }
 
-/** Milliseconds of `[from, to]` (wall clock) this machine spent asleep, as far as this process saw. */
-export function sleptBetween(from: number, to: number): number {
+/** The parts of `[from, to]` (wall clock) this machine spent asleep, as far as this process saw. */
+export function sleepIntervals(from: number, to: number): Slept[] {
   noteSleepSinceLastLook()
-  if (!(to > from)) return 0
-  let total = 0
+  if (!(to > from)) return []
+  const out: Slept[] = []
   for (const s of intervals) {
     const a = Math.max(from, s.start)
     const b = Math.min(to, s.end)
-    if (b > a) total += b - a
+    if (b > a) out.push({ start: a, end: b })
   }
-  return Math.min(total, to - from)
+  return out
+}
+
+/** Milliseconds of `[from, to]` (wall clock) this machine spent asleep, as far as this process saw. */
+export function sleptBetween(from: number, to: number): number {
+  let total = 0
+  for (const s of sleepIntervals(from, to)) total += s.end - s.start
+  return Math.min(total, Math.max(0, to - from))
 }
 
 /** Tests: drive the ledger with fake clocks (null puts the real ones back) and forget every interval. */

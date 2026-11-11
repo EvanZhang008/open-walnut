@@ -65,6 +65,19 @@ export const BUILTIN_ALARMS: readonly AlarmDef[] = [
     unit: 'ms', action: { then: 'fix-task' },
   },
   {
+    // The machine's share of slow resumes (delivery-latency.ts): a CLI started on this
+    // machine under memory pressure waited on paging. 2026-11-11: local resumes took 47
+    // to 189 s with swap 7.8 of 9.2 GB and 20 GB in the compressor, while the same
+    // resumes on a cloud host took 1 to 4 s. No Walnut code path is there to fix; memory
+    // pressure, swap and a full disk have alarms of their own.
+    id: 'send.resume.starved',
+    title: 'Machine too short of memory to start sessions',
+    description: 'The slowest start of a stopped session on this machine while its memory was under pressure, in each 30 minutes. The session started late because the machine was paging, not because of Walnut.',
+    metric: 'send.delivery.resume.machine', kind: 'gauge', stat: 'max', periodMin: 30, comparison: '>', threshold: 120_000,
+    evaluationPeriods: 2, datapointsToAlarm: 2, missing: 'notBreaching',
+    unit: 'ms', action: { then: 'none' },
+  },
+  {
     id: 'session.hung',
     title: 'Sessions look hung',
     description: 'Sessions that gave no output for 5 minutes after a message reached them, at the 30-second session check.',

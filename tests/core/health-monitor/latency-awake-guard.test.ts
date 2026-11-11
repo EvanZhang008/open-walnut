@@ -14,7 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BUILTIN_ALARMS } from '../../../src/core/health-monitor/alarms.js'
-import { deliveryLatency } from '../../../src/providers/delivery-latency.js'
+import { deliveryLatency, type Interval } from '../../../src/providers/delivery-latency.js'
 import { __resetSleepLedgerForTest, noteSleepSinceLastLook, sleptBetween, SLEEP_GAP_MS } from '../../../src/lib/sleep-ledger.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
@@ -36,13 +36,18 @@ const AWAKE_ONLY: Record<string, { file: string; marker: RegExp; why: string }> 
   },
   'send.delivery.live': {
     file: 'src/providers/claude-code-session.ts',
-    marker: /deliveryLatency\(msgs, Date\.now\(\), known\)/,
-    why: 'deliveryLatency subtracts sleptBetween and counts a line written earlier by its own write',
+    marker: /const waits: OutOfPathWaits = \{ \.\.\.REAL_WAITS, linkDown: [^\n]+\n\s*const lat = deliveryLatency\(msgs, now, known, waits\)/,
+    why: 'deliveryLatency leaves out sleep and the host link\'s downtime, and counts a line written earlier by its own write',
   },
   'send.delivery.resume': {
     file: 'src/providers/claude-code-session.ts',
-    marker: /deliveryLatency\(msgs, Date\.now\(\), known\)/,
+    marker: /const waits: OutOfPathWaits = \{ \.\.\.REAL_WAITS, linkDown: [^\n]+\n\s*const lat = deliveryLatency\(msgs, now, known, waits\)/,
     why: 'the same delivery log as the live paths',
+  },
+  'send.delivery.resume.machine': {
+    file: 'src/providers/claude-code-session.ts',
+    marker: /resumeMachineShare\(\{[^}]*deliveryMs: lat\.deliveryMs/,
+    why: 'the machine share is cut from the same awake, link-up wait',
   },
 }
 
@@ -134,7 +139,9 @@ describe('sleep ledger', () => {
 describe('deliveryLatency', () => {
   const T = Date.parse('2026-11-10T02:32:14.256Z')
   const row = (id: string, at: number) => ({ id, enqueuedAt: new Date(at).toISOString() })
-  const noSleep = () => 0
+  const noSleep = { slept: (): Interval[] => [] }
+  const span = (s: number, e: number) => (from: number, to: number): Interval[] =>
+    Math.min(to, e) > Math.max(from, s) ? [{ start: Math.max(from, s), end: Math.min(to, e) }] : []
 
   it('a fresh write counts from the oldest row to now', () => {
     expect(deliveryLatency([row('a', T), row('b', T + 500)], T + 2_000, undefined, noSleep))
@@ -142,7 +149,7 @@ describe('deliveryLatency', () => {
   })
 
   it('leaves out the time the machine slept (the 2026-11-10 02:32 send)', () => {
-    const slept = (from: number, to: number) => Math.max(0, Math.min(to, T + 428_000) - Math.max(from, T + 7_000))
+    const slept = { slept: span(T + 7_000, T + 428_000) }
     expect(deliveryLatency([row('qm-a2pt3m', T)], T + 467_151, undefined, slept))
       .toEqual({ deliveryMs: 46_151, messageId: 'qm-a2pt3m', wallMs: 467_151, sleptMs: 421_000 })
   })
@@ -158,6 +165,20 @@ describe('deliveryLatency', () => {
       .toEqual({ deliveryMs: 108, messageId: 'a', writtenEarlier: true })
     // The host's clock a little behind this one: never a negative wait.
     expect(deliveryLatency([row('a', T)], T + 103_000, { fate: 'waiting', writtenAt: T - 40 }, noSleep).deliveryMs).toBe(0)
+  })
+
+  it('leaves out the time the host link was down (the 2026-11-11 17:26 clouddev sends)', () => {
+    // Link down 17:25:30 to 17:28:00, the send at 17:26:35, delivered at 17:28:05.
+    const t0 = Date.parse('2026-11-11T17:26:35.140Z')
+    const waits = { slept: () => [], linkDown: span(Date.parse('2026-11-11T17:25:30.796Z'), Date.parse('2026-11-11T17:28:00.325Z')) }
+    expect(deliveryLatency([row('qm-host-c1d4', t0)], Date.parse('2026-11-11T17:28:05.131Z'), undefined, waits))
+      .toEqual({ deliveryMs: 4_806, messageId: 'qm-host-c1d4', wallMs: 89_991, linkDownMs: 85_185 })
+  })
+
+  it('sleep and a down link that overlap are left out once', () => {
+    const waits = { slept: span(T + 10_000, T + 60_000), linkDown: span(T + 20_000, T + 80_000) }
+    expect(deliveryLatency([row('a', T)], T + 100_000, undefined, waits))
+      .toEqual({ deliveryMs: 30_000, messageId: 'a', wallMs: 100_000, sleptMs: 50_000, linkDownMs: 20_000 })
   })
 
   it('a row with no readable enqueue time reads zero, as before', () => {
