@@ -230,7 +230,7 @@ control = http.createServer((req, res) => {
         let personas = false
         try { personas = fs.readFileSync(path.join(c.replicaData, 'cache', 'replica', 'personas.json'), 'utf8').includes('"general"') } catch { /* not yet */ }
         let template = false
-        try { template = fs.readdirSync(path.join(c.base, 'hd', 'offline-host')).some((n) => /^spawn-template-[0-9a-f]+\.json$/.test(n)) } catch { /* not yet */ }
+        try { template = fs.readdirSync(path.join(c.base, 'hd', 'offline-host')).some((n) => /^spawn-template-(hf-)?[0-9a-f]+\.json$/.test(n)) } catch { /* not yet */ }
         return reply(200, { personas, template })
       }
       if (req.method === 'GET' && url.pathname === '/control/mac-session') {

@@ -61,7 +61,7 @@ describe.each(TWINS)('a new Ask Walnut on the host while the Mac sleeps (%s twin
     await waitFor(() => {
       try { return fs.readFileSync(path.join(c.replicaData, 'cache', 'replica', 'personas.json'), 'utf8').includes('"general"') } catch { return false }
     }, 180_000, 'the personas copy to reach the replica')
-    await waitFor(() => filesNamed(hostDaemon(), /^spawn-template-[0-9a-f]+\.json$/).length > 0, 180_000, 'the spawn template to reach the host daemon')
+    await waitFor(() => filesNamed(hostDaemon(), /^spawn-template-(hf-)?[0-9a-f]+\.json$/).length > 0, 180_000, 'the spawn template to reach the host daemon')
     c.sleepMac()
     await c.waitAway(token)
     // Away for writes too: the quiet window has passed, not one failed stream.
