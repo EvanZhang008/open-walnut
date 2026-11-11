@@ -1,7 +1,7 @@
 /**
  * Workers fold into their leader on Home's Flat sections (worker-fold.ts, WorkerFoldTree.tsx;
  * 2026-11-11, the user picked design 2, "inline tree", of ten). A worker of a real leader is no
- * row of its own: the leader's row says "N workers" with the team's mix and opens a tree below
+ * row of its own: the leader's row says "N workers" (and how many need the user) and opens a tree below
  * it. "Show separately" makes one worker a row again, "Fold back" puts it back, "Show all N
  * separately" does the whole team, and Display's "Fold workers into leaders" turns it off; each
  * choice outlives a reload. A worker whose leader is not in the view (Focus) still folds: the
@@ -60,7 +60,8 @@ test.describe('worker fold', () => {
     // Folded: the leader's row carries the team, the workers are no rows.
     const lead = await showSectionCard(panel, 'waiting', leader)
     await expect(lead.getByTestId('worker-fold-toggle')).toHaveText('2 workers')
-    await expect(lead.getByTestId('worker-fold-mix')).toHaveText('2 waiting')
+    // Only who needs the user is counted on the folded line: nobody here.
+    await expect(lead.getByTestId('worker-fold-mix')).toHaveCount(0)
     await expect(lead.getByTestId('leader-pill')).toHaveCount(0)
     await expect(statusSectionCard(panel, 'waiting', w1)).toHaveCount(0)
     await expect(statusSectionCard(panel, 'waiting', w2)).toHaveCount(0)
@@ -79,7 +80,6 @@ test.describe('worker fold', () => {
     const row1 = statusSectionCard(panel, 'waiting', w1)
     await expect(row1).toBeVisible()
     await expect(item1).toContainText('Shown separately')
-    await expect(lead.getByTestId('worker-fold-mix')).toHaveText('2 waiting · 1 in the list')
     await page.reload()
     await selectSection(page, 'All')
     await setStatusSectionOpen(panel, 'waiting', true)
@@ -97,7 +97,6 @@ test.describe('worker fold', () => {
     await tree.getByTestId('worker-fold-show-all').click()
     await expect(statusSectionCard(panel, 'waiting', w1)).toBeVisible()
     await expect(statusSectionCard(panel, 'waiting', w2)).toBeVisible()
-    await expect(lead.getByTestId('worker-fold-mix')).toHaveText('2 waiting · all in the list')
     await tree.getByTestId('worker-fold-all-back').click()
     await expect(statusSectionCard(panel, 'waiting', w1)).toHaveCount(0)
     await expect(statusSectionCard(panel, 'waiting', w2)).toHaveCount(0)
@@ -154,12 +153,16 @@ test.describe('worker fold', () => {
     await presetPanelDesign(page, 'status')
     await openHome(page, baseURL!)
     // The leader needs the user (Needs you never folds, so it stays there); its workers wait.
-    const { leader, w1 } = await team(page, { leader: { phase: 'NEED_ACTION' } })
+    const { project, leader, w1 } = await team(page, { leader: { phase: 'NEED_ACTION' } })
+    await seed(page, { title: 'Fold worker that needs you', project, parent_task_id: leader, phase: 'NEED_ACTION' })
     await page.reload()
     await selectSection(page, 'All')
     const panel = page.locator('.todo-panel').first()
     await setStatusSectionOpen(panel, 'waiting', false)
     const lead = await showSectionCard(panel, 'needs', leader)
+    // The folded line counts only who needs the user.
+    await expect(lead.getByTestId('worker-fold-toggle')).toHaveText('3 workers')
+    await expect(lead.getByTestId('worker-fold-mix')).toHaveText('1 needs you')
     await lead.getByTestId('worker-fold-toggle').click()
     const item = panel.locator(`[data-testid="worker-fold-tree"][data-host-id="${leader}"] [data-fold-task-id="${w1}"]`)
     await item.hover()

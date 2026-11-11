@@ -1,6 +1,6 @@
 /**
  * The folded team on a leader's row (worker-fold.ts; design 2 of ten, 2026-11-11): one quiet line
- * under the title ("9 workers · 1 needs you · 5 working · 3 waiting"), which opens a short tree
+ * under the title ("9 workers  1 needs you": only who needs the user is counted), which opens a short tree
  * below the row. Each tree line opens its task; its text action shows that worker as a row of its
  * own ("Show separately"), or folds it back. Plain words, no icon: the user found the icon of the
  * first draft unclear ("这个 icon 不对 ... 能不能有别的更好的一个 icon").
@@ -33,9 +33,10 @@ export function workerWord(n: number): string {
   return `${n} ${n === 1 ? 'worker' : 'workers'}`;
 }
 
-/** The leader row's line: a disclosure with the count, then the team's mix. */
+/** The leader row's line: a disclosure with the count, then how many need the user (none: nothing). */
 export function FoldSummaryLine({ host, entries, ctl }: { host: Task; entries: readonly FoldEntry[]; ctl: WorkerFoldCtl }) {
   const open = ctl.isOpen(host.id);
+  const needs = foldMixLine(entries);
   return (
     <span className="worker-fold-line" data-testid="worker-fold-line">
       <button
@@ -50,7 +51,7 @@ export function FoldSummaryLine({ host, entries, ctl }: { host: Task; entries: r
         <span className="worker-fold-chevron" aria-hidden="true">{ICONS.ICON_CHEVRON_RIGHT}</span>
         {workerWord(entries.length)}
       </button>
-      <span className="worker-fold-mix" data-testid="worker-fold-mix">{foldMixLine(entries)}</span>
+      {needs ? <span className="worker-fold-mix" data-testid="worker-fold-mix">{needs}</span> : null}
     </span>
   );
 }

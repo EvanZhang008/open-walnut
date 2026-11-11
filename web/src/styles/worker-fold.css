@@ -55,7 +55,7 @@
 .worker-fold-chevron { display: inline-grid; place-items: center; width: 12px; height: 12px; }
 .worker-fold-chevron svg { width: 10px; height: 10px; }
 .worker-fold-toggle.is-open .worker-fold-chevron { transform: rotate(90deg); }
-.worker-fold-mix { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.worker-fold-mix { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--error); font-weight: 500; }
 
 /* A leader the view does not hold, drawn for its workers: quieter than the rows around it. */
 .status-section-card.status-card-fold-quiet .todo-pinned-title { color: var(--fg-muted); }

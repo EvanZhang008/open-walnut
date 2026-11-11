@@ -245,21 +245,14 @@ export function foldStateWords(key: DrawnSectionKey): string {
   return STATUS_SECTION_LABELS[key];
 }
 
-/** "1 needs you · 5 working · 3 waiting · 2 in the list": the host's workers by the state the user sees. */
+/**
+ * The folded line's one count: how many of the team need the user ("1 needs you"), else nothing
+ * (2026-11-11, the user on the live fold: "这个 clap view 只应该显示 needs you"). The rest of the
+ * team's states are in the tree.
+ */
 export function foldMixLine(entries: readonly FoldEntry[]): string {
-  const c = { needs: 0, working: 0, waiting: 0, notstarted: 0 };
-  let out = 0;
-  for (const e of entries) {
-    const s = stateSectionKey(e.task);
-    if (s === 'needs') c.needs++;
-    else if (s === 'working') c.working++;
-    else if (s === 'waiting') c.waiting++;
-    else if (s === 'notstarted') c.notstarted++;
-    if (e.out) out++;
-  }
-  const outWords = out === 0 ? '' : out === entries.length ? 'all in the list' : `${out} in the list`;
-  return [c.needs && `${c.needs} need${c.needs === 1 ? 's' : ''} you`, c.working && `${c.working} working`, c.waiting && `${c.waiting} waiting`, c.notstarted && `${c.notstarted} not started`, outWords]
-    .filter(Boolean).join(' · ');
+  const needs = entries.filter((e) => stateSectionKey(e.task) === 'needs').length;
+  return needs ? `${needs} need${needs === 1 ? 's' : ''} you` : '';
 }
 
 /** The view, kept by view-memory (`open-walnut-view:home.workerFold`), the same in every mount. */

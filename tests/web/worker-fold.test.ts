@@ -141,13 +141,13 @@ describe('view helpers', () => {
   it('reads a worker nobody started as Not started, as its own section would', () => {
     const todo = task({ id: 'todo', phase: 'TODO' })
     expect(stateSectionKey(todo)).toBe('notstarted')
-    expect(foldMixLine([{ task: todo, depth: 0, out: false }])).toBe('1 not started')
+    expect(foldMixLine([{ task: todo, depth: 0, out: false }])).toBe('')
   });
 
-  it('says the team\'s mix', () => {
+  it('the folded line counts only who needs the user', () => {
     const e = (id: string, phase: string, out = false) => ({ task: task({ id, phase: phase as Task['phase'] }), depth: 0, out });
-    expect(foldMixLine([e('a', 'NEED_ACTION', true), e('b', 'IN_PROGRESS'), e('c', 'IN_PROGRESS'), e('d', 'WAITING')]))
-      .toBe('1 needs you · 2 working · 1 waiting · 1 in the list');
-    expect(foldMixLine([e('b', 'IN_PROGRESS', true)])).toBe('1 working · all in the list');
+    expect(foldMixLine([e('a', 'NEED_ACTION', true), e('b', 'IN_PROGRESS'), e('c', 'IN_PROGRESS'), e('d', 'WAITING')])).toBe('1 needs you');
+    expect(foldMixLine([e('a', 'NEED_ACTION'), e('b', 'NEED_ACTION')])).toBe('2 need you');
+    expect(foldMixLine([e('b', 'IN_PROGRESS', true)])).toBe('');
   });
 });
