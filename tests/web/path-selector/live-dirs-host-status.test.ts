@@ -421,6 +421,14 @@ describe('pickerNoteOf', () => {
     expect(n).toMatchObject({ type: 'connecting', lastHeadline: 'Connecting to Dev box timed out' });
   });
 
+  it('an added host that is not connected, with nothing failed or dialling: Connect (2026-11-11)', () => {
+    expect(note(hostStatus({ host: 'devbox', phase: 'idle', phaseLabel: '' }))).toEqual({ type: 'idle' });
+    // Dialling, failed or connected is not idle: those notes say what happens.
+    expect(note(hostStatus({ host: 'devbox', phase: 'ssh' }))?.type).toBe('connecting');
+    expect(note(hostStatus({ host: 'devbox', phase: 'idle', phaseLabel: '' }), loading({ phase: 'ssh', label: 'x' } as never))?.type).not.toBe('idle');
+    expect(note(hostStatus({ host: 'devbox', connected: true, phase: 'connected' }))).toBeNull();
+  });
+
   it('a healthy connected host has no note', () => {
     expect(note(hostStatus({ host: 'devbox', connected: true, phase: 'connected' }))).toBeNull();
   });

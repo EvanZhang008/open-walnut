@@ -18,7 +18,7 @@ import { ADD_ITEMS, addButton, callBack, joinPress, type StepCtx } from './remot
 
 const addSsh = async (ctx: StepCtx) => {
   await addButton(ctx.page).click()
-  await ctx.page.getByTestId('remote-hosts-add-menu').getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
+  await ctx.page.getByTestId('remote-hosts-add-menu').getByRole('menuitem', { name: ADD_ITEMS[2] }).click()
 }
 
 export async function checkNewHost(ctx: StepCtx): Promise<void> {

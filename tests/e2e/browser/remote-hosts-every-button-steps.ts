@@ -19,7 +19,8 @@ export interface StepCtx {
   ran: (...keys: string[]) => void
 }
 
-export const ADD_ITEMS = [/^Join a machine with a link/, /^Add an SSH host/]
+/** The Add host menu, in order: the link, the machines found in ~/.ssh/config, a typed SSH host. */
+export const ADD_ITEMS = [/^Join a machine with a link/, /^Pick from your SSH config/, /^Add an SSH host/]
 
 /** A focus a press put somewhere shows its ring (WebKit draws none for a script's focus by itself). */
 export async function expectRing(page: Page, el: ReturnType<Page['locator']>): Promise<void> {
@@ -136,7 +137,7 @@ export async function checkAddHost(ctx: StepCtx): Promise<void> {
   // comes at the top of the list, Hostname first and focused, Cancel on it.
   const puts = routes.callsTo('PUT', '/api/config').length
   await addButton(page).click()
-  await menu.getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
+  await menu.getByRole('menuitem', { name: ADD_ITEMS[2] }).click()
   const closed = page.getByTestId('host-network-closed')
   await expect(page.getByTestId('host-network-invite')).toHaveCount(0)
   await expect(closed).toHaveAttribute('data-invite-state', 'waiting')
@@ -167,7 +168,7 @@ export async function checkAddHost(ctx: StepCtx): Promise<void> {
   // Host 5 and Host 6): here Hostname, with User typed.
   await page.locator('input[id^="rh-user-"]').fill('sam')
   await addButton(page).click()
-  await menu.getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
+  await menu.getByRole('menuitem', { name: ADD_ITEMS[2] }).click()
   await expect(hostname).toHaveCount(1)
   await expect(hostname).toBeFocused()
   await ctx.sweep()
@@ -180,7 +181,7 @@ export async function checkAddHost(ctx: StepCtx): Promise<void> {
   await expectRing(page, addButton(page))
   // Escape takes an untouched row away, with no confirm; the focus goes back to Add host.
   await addButton(page).click()
-  await menu.getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
+  await menu.getByRole('menuitem', { name: ADD_ITEMS[2] }).click()
   await expect(hostname).toBeFocused()
   await hostname.press('Escape')
   await expect(draft).toHaveCount(0)
@@ -188,7 +189,7 @@ export async function checkAddHost(ctx: StepCtx): Promise<void> {
   // Join with a link closes an untouched SSH row, and shows the link that still works again
   // (2026-11-04 review: a second press made a second link while the first still worked).
   await addButton(page).click()
-  await menu.getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
+  await menu.getByRole('menuitem', { name: ADD_ITEMS[2] }).click()
   await expect(draft).toHaveCount(1)
   await joinPress(page)
   await expect(draft).toHaveCount(0)

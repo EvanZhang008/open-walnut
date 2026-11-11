@@ -1,7 +1,7 @@
 /**
  * Settings > Remote Hosts: Add host's menu, from the mouse and the keyboard, again and again in
  * one page (2026-11-05 reviews, WebKit: after a close by a click on blank page, Enter on Add host
- * opened nothing, or a menu that closed itself within half a second; ArrowDown to the second item
+ * opened nothing, or a menu that closed itself within half a second; ArrowDown to the SSH host item
  * and Enter opened the menu again at its first item instead of adding an SSH host; a click on Add
  * host while its menu was open left it open). The user's own report started this: "this button
  * doesn't wrok can we make sure it wroks?".
@@ -122,7 +122,7 @@ test.describe('Settings > Remote Hosts: Add host from the mouse and the keyboard
       await expect(menu(page)).toHaveCount(0)
     }
 
-    // second-model review, three rounds: Escape, ArrowDown opens at the first item, ArrowDown to the second,
+    // second-model review, three rounds: Escape, ArrowDown opens at the first item, ArrowDown twice to the SSH host,
     // Enter adds an SSH host (its Hostname focused), never the menu again at its first item.
     for (let round = 1; round <= 3; round++) {
       await addButton(page).click()
@@ -133,8 +133,11 @@ test.describe('Settings > Remote Hosts: Add host from the mouse and the keyboard
       await page.keyboard.press('ArrowDown')
       await expect(menu(page)).toBeVisible()
       await expect(menu(page).getByRole('menuitem').first()).toHaveClass(/\bfocused\b/)
+      // The second item picks from ~/.ssh/config; the third adds a typed SSH host.
       await page.keyboard.press('ArrowDown')
       await expect(menu(page).getByRole('menuitem', { name: ADD_ITEMS[1] })).toHaveClass(/\bfocused\b/)
+      await page.keyboard.press('ArrowDown')
+      await expect(menu(page).getByRole('menuitem', { name: ADD_ITEMS[2] })).toHaveClass(/\bfocused\b/)
       await page.keyboard.press('Enter')
       await expect(draft(page), `round ${round}: Enter added the SSH host`).toHaveCount(1)
       await expect(hostname(page)).toBeFocused()
@@ -164,7 +167,7 @@ test.describe('Settings > Remote Hosts: Add host from the mouse and the keyboard
     }
     // Each way in, by the mouse after all of that: the link and the SSH host.
     await addButton(page).click()
-    await menu(page).getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
+    await menu(page).getByRole('menuitem', { name: ADD_ITEMS[2] }).click()
     await expect(hostname(page)).toBeFocused()
     await hostname(page).press('Escape')
     await expect(draft(page)).toHaveCount(0)

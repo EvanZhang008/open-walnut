@@ -14,28 +14,37 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   peekWorkingDirs, prewarmWorkingDirs, refreshWorkingDirs, revalidateWorkingDirs,
-  type ConfiguredHost, type WorkingDirEntry, type WorkingDirsResult,
+  type ConfiguredHost, type FoundHost, type WorkingDirEntry, type WorkingDirsResult,
 } from '@/api/sessions';
 import { configChangeMayAffectHosts } from '@/api/working-dirs-cache';
 import { wsClient } from '@/api/ws';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
 
+const NO_FOUND: FoundHost[] = [];
+
 export interface WorkingDirsState {
   dirs: WorkingDirEntry[];
   /** Every enabled host from config.hosts, including ones with no history yet. */
   hosts: ConfiguredHost[];
+  /** Found in ~/.ssh/config and not added yet: a tab with Connect. */
+  found: FoundHost[];
   /** True only while there is nothing to show yet (a cold cache). */
   loading: boolean;
   error: string | null;
+  /** Fetch the answer again now (a found host was just added from the picker). */
+  refresh: () => void;
 }
 
 export function useWorkingDirs(open: boolean): WorkingDirsState {
   // The page's cached list in the first frame (peekWorkingDirs); the effect below refreshes it.
   const [dirs, setDirs] = useState<WorkingDirEntry[]>(() => peekWorkingDirs()?.dirs ?? []);
   const [hosts, setHosts] = useState<ConfiguredHost[]>(() => peekWorkingDirs()?.hosts ?? []);
+  const [found, setFound] = useState<FoundHost[]>(() => peekWorkingDirs()?.found ?? NO_FOUND);
   const [loading, setLoading] = useState(() => !peekWorkingDirs());
   const [error, setError] = useState<string | null>(null);
   const hostsRef = useRef<ConfiguredHost[] | null>(null);
+  const refreshRef = useRef<() => void>(() => {});
+  const [refresh] = useState(() => () => refreshRef.current());
 
   useEffect(() => {
     if (!open) return;
@@ -45,6 +54,7 @@ export function useWorkingDirs(open: boolean): WorkingDirsState {
       hostsRef.current = r.hosts;
       setDirs(r.dirs);
       setHosts(r.hosts);
+      setFound(r.found ?? NO_FOUND);
       setLoading(false);
       setError(null);
       // Pre-warm only once the host statuses are known: prewarmWorkingDirs skips
@@ -63,6 +73,7 @@ export function useWorkingDirs(open: boolean): WorkingDirsState {
       setLoading(false);
     });
     void settle(revalidateWorkingDirs());
+    refreshRef.current = () => { void settle(refreshWorkingDirs()); };
 
     const onConfigChanged = (data: unknown) => {
       if (configChangeMayAffectHosts(data, hostsRef.current)) void settle(refreshWorkingDirs());
@@ -70,9 +81,10 @@ export function useWorkingDirs(open: boolean): WorkingDirsState {
     wsClient.onEvent('config:changed', onConfigChanged);
     return () => {
       alive = false;
+      refreshRef.current = () => {};
       wsClient.offEvent('config:changed', onConfigChanged);
     };
   }, [open]);
 
-  return { dirs, hosts, loading, error };
+  return { dirs, hosts, found, loading, error, refresh };
 }

@@ -17,7 +17,8 @@ import {
   type HostActionId, type HostDot, type HostProblem,
 } from '@open-walnut/host-problem';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
-import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
+import { seedHostStatus, serverNow, useHostStatus } from '@/hooks/useHostStatus';
+import { answerFoundHost } from '@/api/hosts';
 import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT, type HostActions } from '@/hooks/useHostActions';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
 import { HostCommands } from '@/components/hosts/HostCommands';
@@ -27,7 +28,7 @@ import { HostStatusDot } from './HostStatusDot';
 import { HostConnectSteps } from './HostConnectSteps';
 import { pickerNoteOf, type PickerNote } from './host-status-merge';
 import type { HostLiveState } from './useLiveDirs';
-import { REMOVED_TAB, tabTitle, type HostTab } from './host-tabs';
+import { REMOVED_TAB, foundHostDot, tabTitle, type HostTab } from './host-tabs';
 import '@/styles/host-picker-settings.css';
 
 /**
@@ -44,7 +45,7 @@ export function HostTabBar({ tabs, selected, dots, onSelect }: {
     <div className="sps-host-filter" role="group" aria-label="Host">
       <span className="sps-host-filter-label" aria-hidden>Host</span>
       {tabs.map((tab) => {
-        const dot = tab.kind === 'host' ? dots.get(tab.key) : undefined;
+        const dot = tab.kind === 'host' ? dots.get(tab.key) : tab.kind === 'found' ? foundHostDot(tab.label) : undefined;
         const title = tabTitle(tab, dot);
         return (
           <button
@@ -52,7 +53,8 @@ export function HostTabBar({ tabs, selected, dots, onSelect }: {
             type="button"
             className={`sps-host-tab${selected === tab.key ? ' active' : ''}${tab.kind === 'removed' ? ' sps-host-tab-removed' : ''}`}
             aria-pressed={selected === tab.key}
-            data-host={tab.kind === 'host' ? tab.key : tab.kind === 'removed' ? REMOVED_TAB : undefined}
+            data-host={tab.kind === 'host' || tab.kind === 'found' ? tab.key : tab.kind === 'removed' ? REMOVED_TAB : undefined}
+            {...(tab.kind === 'found' ? { 'data-found': '' } : {})}
             title={title}
             // One accessible name, '{L}: {state}': the dot inside is decorative (it
             // used to add the same sentence again, so the host was read twice).
@@ -85,6 +87,40 @@ export function RemovedHostsNote() {
   return (
     <div className="sps-host-note sps-host-note-removed" data-type="removed">
       <span className="sps-host-note-text">{HOST_REMOVED_NOTE}</span>
+    </div>
+  );
+}
+
+const CONNECT_LABELS = ['Connect', 'Connecting...'];
+export const FOUND_ADD_FAILED_TEXT = 'Could not add it right now. Try again in a moment.';
+
+/**
+ * A host Walnut found in ~/.ssh/config and has not added: what it is, and Connect, which is the
+ * person's yes (the first-run step's Add, POST /api/hosts/:host/found-answer). Nothing is listed
+ * or dialled before that; once added, the tab becomes the host's own and its note follows the
+ * connection (connecting steps, Connected, or a failure with Retry).
+ */
+export function FoundHostNote({ alias, label, onAdded }: { alias: string; label: string; onAdded: () => void }) {
+  const [state, setState] = useState<'idle' | 'adding' | 'failed'>('idle');
+  const connect = () => {
+    setState('adding');
+    answerFoundHost(alias, 'yes')
+      .then((res) => { if (res.status) seedHostStatus(res.status); onAdded(); })
+      .catch(() => setState('failed'));
+  };
+  const adding = state === 'adding';
+  return (
+    <div className="sps-host-note" data-host={alias} data-type="found">
+      <div className="sps-host-note-head">
+        <HostStatusDot dot={foundHostDot(label)} host={alias} />
+        <div className="sps-host-note-body">
+          <span className="sps-host-note-text">Walnut found {label} in your SSH config. It is not added yet; Connect adds it and connects now.</span>
+        </div>
+      </div>
+      <div className="sps-host-note-actions">
+        <StableButton label={adding ? 'Connecting...' : 'Connect'} labels={CONNECT_LABELS} disabled={adding} onClick={connect} testId="sps-note-connect" />
+      </div>
+      {state === 'failed' && <div className="sps-host-note-msg sps-host-note-error" role="status">{FOUND_ADD_FAILED_TEXT}</div>}
     </div>
   );
 }
@@ -209,6 +245,25 @@ export function HostNote({ hostKey, label, live, path, dot, onRelist, onOpenSett
     );
   }
   if (note.type === 'off') return <RemoteOffNote />;
+  if (note.type === 'idle') {
+    const connecting = actions.pending === 'retry';
+    return (
+      <div className="sps-host-note" data-host={hostKey} data-type="idle">
+        <div className="sps-host-note-head">
+          <HostStatusDot dot={dot ?? { kind: 'unknown', title: `${label}: Not connected` }} host={hostKey} />
+          <div className="sps-host-note-body">
+            <span className="sps-host-note-text">{label} is not connected.</span>
+          </div>
+        </div>
+        {!replica && (
+          <div className="sps-host-note-actions">
+            <StableButton label={connecting ? 'Connecting...' : 'Connect'} labels={CONNECT_LABELS} disabled={connecting} onClick={() => { void actions.retry().then(relist); }} testId="sps-note-connect" />
+          </div>
+        )}
+        <NoteMessage actions={actions} />
+      </div>
+    );
+  }
   if (note.type === 'connecting') {
     return <HostConnectSteps key={hostKey} hostKey={hostKey} label={label} pending={note.pending ?? live?.pending} lastHeadline={note.lastHeadline} />;
   }

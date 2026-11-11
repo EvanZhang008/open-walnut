@@ -33,11 +33,12 @@ import {
   createWorkingDirsCache,
   hostsToPrewarm,
   type ConfiguredHost,
+  type FoundHost,
   type WorkingDirEntry,
   type WorkingDirsResult,
 } from './working-dirs-cache';
 
-export type { ConfiguredHost, WorkingDirEntry, WorkingDirsResult } from './working-dirs-cache';
+export type { ConfiguredHost, FoundHost, WorkingDirEntry, WorkingDirsResult } from './working-dirs-cache';
 export { getCachedEngineModelCatalog, getEngineModelCacheGeneration, subscribeEngineModelCache } from './engine-model-cache';
 
 wsClient.onEvent('config:changed', (event) => {
@@ -973,8 +974,8 @@ export async function executePlanContinue(sessionId: string): Promise<{ status: 
 // may touch hosts: see working-dirs-cache.ts for why the old forever-cache was not
 // enough (a host added in Settings never got a tab until a reload).
 const workingDirsCache = createWorkingDirsCache(() =>
-  apiGet<{ dirs: WorkingDirEntry[]; hosts?: ConfiguredHost[] }>('/api/sessions/working-dirs')
-    .then(res => ({ dirs: res.dirs, hosts: res.hosts ?? [] })));
+  apiGet<{ dirs: WorkingDirEntry[]; hosts?: ConfiguredHost[]; found?: FoundHost[] }>('/api/sessions/working-dirs')
+    .then(res => ({ dirs: res.dirs, hosts: res.hosts ?? [], found: res.found ?? [] })));
 
 export function fetchWorkingDirs(): Promise<WorkingDirsResult> { return workingDirsCache.fetch(); }
 

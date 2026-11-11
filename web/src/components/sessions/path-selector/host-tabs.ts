@@ -1,7 +1,8 @@
 /**
  * The folder picker's host tabs (spec 4.1), as a pure model plus one hook.
  *
- * Tabs = All, Local, one per ENABLED configured host, then a trailing muted
+ * Tabs = All, Local, one per ENABLED configured host, one per host found in
+ * ~/.ssh/config and not added yet (it offers Connect, never lists), then a trailing muted
  * "Removed hosts" tab that holds the history of hosts no longer in Settings
  * (removed or disabled), only when such history exists. A host that leaves
  * the config (a tombstone push) loses its tab live: `gone` names hosts the
@@ -13,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { hostDotOf, hostProblemOf, READINESS_ANSWER_GRACE_MS, type HostDot } from '@open-walnut/host-problem';
 import type { HostStatus } from '@/api/hosts';
-import type { ConfiguredHost, WorkingDirEntry } from '@/api/sessions';
+import type { ConfiguredHost, FoundHost, WorkingDirEntry } from '@/api/sessions';
 import { serverNow, useAllHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
 
 export const ALL_TAB = 'all';
@@ -24,7 +25,7 @@ export const REMOVED_TAB_LABEL = 'Removed hosts';
 export interface HostTab {
   key: string;
   label: string;
-  kind: 'all' | 'local' | 'host' | 'removed';
+  kind: 'all' | 'local' | 'host' | 'found' | 'removed';
   /** Auto-discovered FQDN-only entry: the "give it a name" nudge. */
   rawName?: boolean;
 }
@@ -35,6 +36,8 @@ export interface HostTabsModel {
   removedHosts: ReadonlySet<string>;
   /** The configured hosts still live (the All tab fans out to these). */
   liveHosts: ConfiguredHost[];
+  /** Hosts found in ~/.ssh/config and not added yet: a tab each, never listed or dialled. */
+  foundHosts: ReadonlySet<string>;
 }
 
 export function buildHostTabs(input: {
@@ -42,6 +45,8 @@ export function buildHostTabs(input: {
   dirs: readonly WorkingDirEntry[];
   /** Hosts the status store dropped (tombstoned) while the picker was open. */
   gone?: ReadonlySet<string>;
+  /** Found in ~/.ssh/config and waiting for the person's yes (GET working-dirs `found`). */
+  found?: readonly FoundHost[];
 }): HostTabsModel {
   const gone = input.gone ?? new Set<string>();
   const liveHosts = input.configured.filter((h) => !gone.has(h.alias));
@@ -54,19 +59,30 @@ export function buildHostTabs(input: {
     if (tabs.some((t) => t.key === h.alias)) continue;
     tabs.push({ key: h.alias, label: h.label || h.alias, kind: 'host', ...(h.rawName ? { rawName: true } : {}) });
   }
+  const foundHosts = new Set<string>();
+  for (const h of input.found ?? []) {
+    if (tabs.some((t) => t.key === h.alias)) continue;
+    tabs.push({ key: h.alias, label: h.label || h.alias, kind: 'found' });
+    foundHosts.add(h.alias);
+  }
   const removedHosts = new Set<string>();
-  for (const d of input.dirs) if (d.host && !live.has(d.host)) removedHosts.add(d.host);
+  for (const d of input.dirs) if (d.host && !live.has(d.host) && !foundHosts.has(d.host)) removedHosts.add(d.host);
   if (removedHosts.size > 0) tabs.push({ key: REMOVED_TAB, label: REMOVED_TAB_LABEL, kind: 'removed' });
-  return { tabs, removedHosts, liveHosts };
+  return { tabs, removedHosts, liveHosts, foundHosts };
 }
 
 /** The history rows a tab shows. Removed hosts' rows live only under their own tab. */
+const NO_HOSTS: ReadonlySet<string> = new Set();
+
 export function historyForTab(
   dirs: readonly WorkingDirEntry[], tab: string, removedHosts: ReadonlySet<string>,
+  foundHosts: ReadonlySet<string> = NO_HOSTS,
 ): WorkingDirEntry[] {
+  // A found host's folders wait for its Connect: no tab offers them to start a session yet.
+  if (foundHosts.has(tab)) return [];
   return dirs.filter((d) => {
     if (tab === REMOVED_TAB) return !!d.host && removedHosts.has(d.host);
-    if (d.host && removedHosts.has(d.host)) return false;
+    if (d.host && (removedHosts.has(d.host) || foundHosts.has(d.host))) return false;
     if (tab === ALL_TAB) return true;
     if (tab === LOCAL_TAB) return !d.host;
     return d.host === tab;
@@ -83,9 +99,15 @@ export function hostOfTab(tab: string): string | null {
   return tab === ALL_TAB || tab === LOCAL_TAB || tab === REMOVED_TAB ? null : tab;
 }
 
+/** The dot a found host's tab wears: not added yet, so nothing to report but that. */
+export function foundHostDot(label: string): HostDot {
+  return { kind: 'unknown', title: `${label}: Found in your SSH config, not added yet` };
+}
+
 /** The tab button's one title: the dot's sentence, e.g. 'Build box: Claude Code on Build box is 2.1.220...'. */
 export function tabTitle(tab: HostTab, dot: HostDot | undefined): string | undefined {
   if (tab.kind === 'removed') return 'Hosts no longer in Settings';
+  if (tab.kind === 'found') return foundHostDot(tab.label).title;
   return tab.kind === 'host' ? dot?.title : undefined;
 }
 

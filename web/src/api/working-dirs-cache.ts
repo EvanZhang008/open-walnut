@@ -37,10 +37,18 @@ export interface ConfiguredHost {
   rawName?: boolean;
 }
 
+/** A host found in ~/.ssh/config, waiting for the person's yes: the picker offers Connect. */
+export interface FoundHost {
+  alias: string;
+  label: string;
+}
+
 export interface WorkingDirsResult {
   dirs: WorkingDirEntry[];
   /** All configured remote hosts (may be absent on older servers). */
   hosts: ConfiguredHost[];
+  /** Found and not added yet (absent on older servers): never listed, pre-warmed or dialled. */
+  found?: FoundHost[];
 }
 
 export interface WorkingDirsCache {

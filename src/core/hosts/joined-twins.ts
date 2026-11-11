@@ -24,6 +24,7 @@
  */
 import { isIP } from 'node:net'
 import { whereOf } from '../net/net-where.js'
+import { foundHostWaits } from './found-hosts.js'
 
 type HostRows = Record<string, { hostname?: unknown; discovered?: unknown; transport?: unknown; endpoint?: unknown; label?: unknown; enabled?: unknown } | undefined>
 
@@ -81,6 +82,19 @@ export function joinedTwins(hosts: HostRows, net: unknown): Array<{ alias: strin
 export function pickableHosts<T extends { enabled?: unknown }>(hosts: Record<string, T | undefined>, net: unknown): Array<[string, T]> {
   const twins = new Set(joinedTwins(hosts as HostRows, net).map((t) => t.alias))
   return Object.entries(hosts).filter((e): e is [string, T] => !!e[1] && e[1].enabled !== false && !twins.has(e[0]))
+}
+
+/**
+ * The found hosts still waiting for the person's yes (found-hosts.ts `foundHostWaits`), each
+ * machine once: what a picker offers to add next to its live hosts (2026-11-11, the user: a
+ * host found but not connected "should always show in the new task panel"). They are off, so
+ * pickableHosts leaves them out and nothing dials them; the picker only offers Connect.
+ */
+export function foundPickableHosts<T extends { enabled?: unknown; discovered?: unknown; connect?: unknown }>(
+  hosts: Record<string, T | undefined>, net: unknown,
+): Array<[string, T]> {
+  const twins = new Set(joinedTwins(hosts as HostRows, net).map((t) => t.alias))
+  return Object.entries(hosts).filter((e): e is [string, T] => !!e[1] && foundHostWaits(e[1]) && !twins.has(e[0]))
 }
 
 /**

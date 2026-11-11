@@ -129,6 +129,8 @@ export type PickerNote =
   | { type: 'connect'; problem: ConnectProblem }
   | { type: 'listing'; problem: ListingProblem }
   | { type: 'connecting'; lastHeadline?: string; lastHint?: string; pending?: DirListingPending }
+  /** Added, not connected, nothing failed and nothing dialling: the note offers Connect. */
+  | { type: 'idle' }
   | { type: 'giveup'; headline: string; hint: string };
 
 /** A connect failure the listing reported itself (an older server, or before any push). */
@@ -174,5 +176,7 @@ export function pickerNoteOf(input: {
   if (status && !status.connected && isConnectingPhaseWire(status.phase)) return { type: 'connecting', pending: live?.pending };
   if (live?.status === 'error') return { type: 'connect', problem: connectFromListing(live, host, label) };
   if (live?.status === 'loading' && live.pending) return { type: 'connecting', pending: live.pending };
+  // 2026-11-11, the user: a host that is not connected "should always show" with a way to connect.
+  if (status && !status.connected && status.phase === 'idle' && !isHostFailed(status) && live?.status !== 'loading') return { type: 'idle' };
   return null;
 }

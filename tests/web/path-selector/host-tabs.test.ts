@@ -20,6 +20,35 @@ const dir = (cwd: string, host: string | null): WorkingDirEntry =>
   ({ cwd, host, project: '', count: 1, lastUsed: '2026-09-20T00:00:00Z' }) as WorkingDirEntry;
 const dirs = [dir('/Users/alice/walnut', null), dir('/home/alice/api', 'devbox'), dir('/home/alice/old', 'netbox')];
 
+describe('buildHostTabs: hosts found in ~/.ssh/config and not added (2026-11-11)', () => {
+  const found = [{ alias: 'labbox', label: 'labbox' }, { alias: 'devbox', label: 'Dev box' }];
+  const withFound = [...dirs, dir('/home/alice/lab', 'labbox')];
+
+  it('each found host gets a tab of its own after the added hosts, and never a second tab', () => {
+    const m = buildHostTabs({ configured, dirs: withFound, found });
+    expect(m.tabs.map((t) => t.key)).toEqual([ALL_TAB, LOCAL_TAB, 'devbox', 'buildbox', 'labbox', REMOVED_TAB]);
+    expect(m.tabs.find((t) => t.key === 'labbox')).toMatchObject({ kind: 'found' });
+    expect([...m.foundHosts]).toEqual(['labbox']);
+  });
+
+  it('is never listed live, and its history is not Removed hosts', () => {
+    const m = buildHostTabs({ configured, dirs: withFound, found });
+    expect(m.liveHosts.map((h) => h.alias)).not.toContain('labbox');
+    expect(m.removedHosts.has('labbox')).toBe(false);
+  });
+
+  it('offers none of its folders to start in, on its own tab or under All, until Connect adds it', () => {
+    const m = buildHostTabs({ configured, dirs: withFound, found });
+    expect(historyForTab(withFound, 'labbox', m.removedHosts, m.foundHosts)).toEqual([]);
+    expect(historyForTab(withFound, ALL_TAB, m.removedHosts, m.foundHosts).some((d) => d.host === 'labbox')).toBe(false);
+  });
+
+  it('its tab title says it was found and is not added yet', () => {
+    const m = buildHostTabs({ configured, dirs: withFound, found });
+    expect(tabTitle(m.tabs.find((t) => t.key === 'labbox')!, undefined)).toBe('labbox: Found in your SSH config, not added yet');
+  });
+});
+
 describe('buildHostTabs', () => {
   it('All, Local, each enabled host, then Removed hosts only when a removed host has history', () => {
     const m = buildHostTabs({ configured, dirs });

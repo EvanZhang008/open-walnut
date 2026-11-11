@@ -157,7 +157,7 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
     }
 
     // A folder used on a found twin's row is the joined machine's (hosts/joined-twins.ts).
-    const { joinedAliasOf, pickableHosts } = await import('../../core/hosts/joined-twins.js')
+    const { foundPickableHosts, joinedAliasOf, pickableHosts } = await import('../../core/hosts/joined-twins.js')
     const asJoined = joinedAliasOf(hosts, config.net)
 
     // Compute score, hostLabel, resolved project at read time
@@ -208,7 +208,12 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
         label: h.label ?? alias,
         rawName: alias === h.hostname || undefined,
       }))
-    res.json({ dirs: result, hosts: configuredHosts })
+    // Found in ~/.ssh/config and not added yet: the picker shows each with Connect and never
+    // lists or dials it. A field of its own, so an older client (which would list a `hosts`
+    // entry) ignores it.
+    const found = foundPickableHosts(hosts, config.net)
+      .map(([alias, h]) => ({ alias, label: h.label ?? alias }))
+    res.json({ dirs: result, hosts: configuredHosts, found })
   } catch (err) {
     next(err)
   }
