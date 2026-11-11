@@ -191,11 +191,22 @@ enum TalkDebug {
 #if DEBUG
 /// A capture that plays a recorded file in real time and reports its loudness,
 /// for `VoiceRecorder._beginReplayTake`.
+///
+/// Its loudness follows the readings, not the wall clock: each reading moves on by
+/// the time since the last one, at most `maxStep`. A reader that was held up (the
+/// first take on a loaded CI runner) still walks through the whole file, where a
+/// wall clock had run past its end unheard and the take was dropped as silence.
 final class TalkReplayCapture: AudioCapture, AudioLevelSource {
+    /// The most one reading moves on: about two of the Talk monitor's ticks.
+    static let maxStep: TimeInterval = 0.25
     private let samples: [Int16]
     private let rate: Double
-    private let began = Date()
+    private let now: () -> Date
+    private let began: Date
     private var stoppedAt: TimeInterval?
+    /// How far into the file the readings have come, and when the last one was.
+    private var played: TimeInterval = 0
+    private var lastRead: Date?
     /// A real recording of the microphone, thrown away, that holds the session
     /// the take switched on (`VoiceRecorder.activateForReplay`) as a real take
     /// does: without one iOS suspends a Walnut the person left mid-take.
@@ -208,6 +219,8 @@ final class TalkReplayCapture: AudioCapture, AudioLevelSource {
               (try? file.read(into: buffer)) != nil, let data = buffer.int16ChannelData else { return nil }
         samples = Array(UnsafeBufferPointer(start: data[0], count: Int(buffer.frameLength)))
         rate = file.processingFormat.sampleRate
+        now = Date.init
+        began = Date()
         keepAliveURL = FileManager.default.temporaryDirectory.appendingPathComponent("talk-replay-hold-\(UUID().uuidString).caf")
         keepAlive = try? AVAudioRecorder(url: keepAliveURL, settings: [
             AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1,
@@ -215,22 +228,37 @@ final class TalkReplayCapture: AudioCapture, AudioLevelSource {
         keepAlive?.record()
     }
 
+    /// Test seam: these samples, this clock, and no session to hold.
+    init(samples: [Int16], rate: Double, now: @escaping () -> Date) {
+        self.samples = samples
+        self.rate = rate
+        self.now = now
+        began = now()
+        keepAlive = nil
+        keepAliveURL = FileManager.default.temporaryDirectory.appendingPathComponent("talk-replay-none")
+    }
+
     deinit {
         keepAlive?.stop()
         try? FileManager.default.removeItem(at: keepAliveURL)
     }
 
-    var currentTime: TimeInterval { stoppedAt ?? Date().timeIntervalSince(began) }
+    var currentTime: TimeInterval { stoppedAt ?? now().timeIntervalSince(began) }
 
     func stop() {
-        if stoppedAt == nil { stoppedAt = Date().timeIntervalSince(began) }
+        if stoppedAt == nil { stoppedAt = now().timeIntervalSince(began) }
         keepAlive?.stop()
         try? FileManager.default.removeItem(at: keepAliveURL)
     }
 
-    /// RMS of the 50 ms before now; silence past the end of the file.
+    /// RMS of the 50 ms before where the readings have come; silence past the end.
     var level: Float {
-        let end = Int(currentTime * rate)
+        let at = now()
+        if stoppedAt == nil, let last = lastRead {
+            played += min(max(0, at.timeIntervalSince(last)), Self.maxStep)
+        }
+        lastRead = at
+        let end = Int(played * rate)
         let start = max(0, end - Int(rate * 0.05))
         guard end <= samples.count, end > start else { return -160 }
         var sum: Double = 0

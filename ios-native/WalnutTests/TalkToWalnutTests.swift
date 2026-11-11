@@ -1403,3 +1403,36 @@ final class TalkUnsentWordsTests: XCTestCase {
         XCTAssertEqual(TalkPlayback.length(72), "1 min 12 s")
     }
 }
+
+/// The replayed test recording stands in for the microphone in UI tests. Its loudness
+/// follows the readings, so a reader the machine held up still hears the words: on a
+/// loaded CI runner the first take's monitor read nothing for seconds, the wall clock
+/// ran past the recording, and the take was dropped as silent (CI run 42923466536).
+final class TalkReplayCaptureTests: XCTestCase {
+    func testAReaderHeldUpStillHearsTheWholeRecording() {
+        let rate = 16_000.0
+        // 1 s of silence, 1 s of a loud tone, then the end of the file.
+        let samples = [Int16](repeating: 0, count: 16_000)
+            + (0..<16_000).map { Int16(truncatingIfNeeded: ($0 % 40 < 20) ? 12_000 : -12_000) }
+        var clock = Date(timeIntervalSince1970: 0)
+        let capture = TalkReplayCapture(samples: samples, rate: rate, now: { clock })
+        // The first reading comes 6 s late, far past the end of the recording.
+        clock += 6
+        var levels = [capture.level]
+        for _ in 0..<40 {
+            clock += 0.1
+            levels.append(capture.level)
+        }
+        XCTAssertTrue(levels.contains { $0 > -20 }, "the held-up reader never heard the tone: \(levels)")
+        XCTAssertLessThan(levels[1], -100, "the recording's own silence comes first")
+    }
+
+    func testOneReadingMovesOnAtMostAQuarterSecond() {
+        var clock = Date(timeIntervalSince1970: 0)
+        let tone = (0..<8_000).map { Int16(truncatingIfNeeded: ($0 % 40 < 20) ? 12_000 : -12_000) }
+        let capture = TalkReplayCapture(samples: [Int16](repeating: 0, count: 8_000) + tone, rate: 16_000, now: { clock })
+        _ = capture.level
+        clock += 30
+        XCTAssertLessThan(capture.level, -100, "one late reading skipped the silence and the tone at once")
+    }
+}
