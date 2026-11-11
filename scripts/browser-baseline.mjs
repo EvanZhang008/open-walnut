@@ -38,6 +38,11 @@
  * when it failed in every report that ran it); one that fails again stays new.
  * It prints nothing when the suite did not run cleanly or when more than
  * RECHECK_MAX tests are new: that is a real break, and the check fails as it is.
+ * A new failure in a serial spec file is run again with its whole file: its
+ * tests build on the ones before them (connect the extension, then act through
+ * it), so a test run alone by its line fails on the missing setup, never on what
+ * failed in the shard (2026-11-11: the agent tab spec's popup test answered 409
+ * browser_not_connected alone, every time, and read as failing again).
  */
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -89,12 +94,31 @@ export function mergeReports(reports) {
 /** More new failures than this are a real break, not load: `recheck` names none of them. */
 export const RECHECK_MAX = 40
 
-/** The locations to run again: one per new failure, without duplicates; none when the run broke. */
-export function recheckLocations(known, tests, errors) {
+/** Where Playwright's testDir is: report locations are relative to it. */
+const TEST_DIR = 'tests/e2e/browser'
+
+/** A spec file whose tests run in order, each on what the earlier ones left (`describe.configure({ mode: 'serial' })`). */
+export function isSerialSpec(file, testDir = TEST_DIR) {
+  try {
+    return /describe\.(?:configure\(\s*\{[^}]*mode:\s*['"]serial['"]|serial\s*\()/.test(fs.readFileSync(path.join(testDir, file), 'utf8'))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The locations to run again: one per new failure, without duplicates; none when the run broke.
+ * A failure in a serial file is run again with the whole file (`isSerial`), never by its line.
+ */
+export function recheckLocations(known, tests, errors, isSerial = isSerialSpec) {
   if (errors.length) return []
   const { regressions } = judge(known, tests)
   if (!regressions.length || regressions.length > RECHECK_MAX) return []
-  return [...new Set(regressions.map((k) => tests.get(k)?.loc ?? fileOf(k)))].sort()
+  const locOf = (k) => (isSerial(fileOf(k)) ? fileOf(k) : (tests.get(k)?.loc ?? fileOf(k)))
+  const locs = new Set(regressions.map(locOf))
+  // A file run whole already runs each of its lines: drop `<file>:<line>` when `<file>` is listed.
+  const lineOfWholeFile = (l) => /:\d+$/.test(l) && locs.has(l.replace(/:\d+$/, ''))
+  return [...locs].filter((l) => !lineOfWholeFile(l)).sort()
 }
 
 const fileOf = (key) => key.split(' :: ')[0]

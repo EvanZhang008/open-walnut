@@ -10,7 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { judge, mergeReports, RECHECK_MAX, recheckLocations, recordBaseline, reportFiles } from '../../scripts/browser-baseline.mjs'
+import { isSerialSpec, judge, mergeReports, RECHECK_MAX, recheckLocations, recordBaseline, reportFiles } from '../../scripts/browser-baseline.mjs'
 
 const ROOT = path.resolve(__dirname, '../..')
 const SCRIPT = path.join(ROOT, 'scripts/browser-baseline.mjs')
@@ -128,6 +128,35 @@ describe('recheckLocations', () => {
     r.suites[0]!.specs[0]!.file = 'helpers/shared.ts'
     const { tests, errors } = mergeReports([r])
     expect(recheckLocations([], tests, errors)).toEqual(['a.spec.ts'])
+  })
+
+  it('runs a new failure of a serial file again with its whole file, since its tests build on the earlier ones', () => {
+    const { tests, errors } = mergeReports([
+      report({ 'serial.spec.ts': { connect: 'expected', popup: 'unexpected', png: 'unexpected' }, 'plain.spec.ts': { fresh: 'unexpected' } }),
+    ])
+    expect(recheckLocations([], tests, errors, (f) => f === 'serial.spec.ts')).toEqual(['plain.spec.ts:10', 'serial.spec.ts'])
+    // A helper's test names its file whole; that file's line-located failures add nothing.
+    const h = report({ 'mixed.spec.ts': { shared: 'unexpected', own: 'unexpected' } })
+    h.suites[0]!.specs[0]!.file = 'helpers/shared.ts'
+    const mixed = mergeReports([h])
+    expect(recheckLocations([], mixed.tests, mixed.errors, () => false)).toEqual(['mixed.spec.ts'])
+  })
+
+  it('reads a spec file as serial from its source, in either form', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-serial-'))
+    try {
+      fs.writeFileSync(path.join(dir, 'a.spec.ts'), "test.describe.configure({ mode: 'serial' })\ntest('x', () => {})\n")
+      fs.writeFileSync(path.join(dir, 'b.spec.ts'), "test.describe.serial('group', () => {})\n")
+      fs.writeFileSync(path.join(dir, 'c.spec.ts'), "test.describe.configure({ retries: 1 })\ntest('x', () => {})\n")
+      expect(isSerialSpec('a.spec.ts', dir)).toBe(true)
+      expect(isSerialSpec('b.spec.ts', dir)).toBe(true)
+      expect(isSerialSpec('c.spec.ts', dir)).toBe(false)
+      expect(isSerialSpec('missing.spec.ts', dir)).toBe(false)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+    // The real spec this rule came from is serial and found as such from the repo root.
+    expect(isSerialSpec('extension-agent-outward.spec.ts', path.join(ROOT, 'tests/e2e/browser'))).toBe(true)
   })
 
   it('names none when the suite did not run cleanly, or when more than RECHECK_MAX are new (a real break)', () => {
