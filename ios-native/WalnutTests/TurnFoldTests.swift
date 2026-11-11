@@ -215,13 +215,17 @@ final class TurnFoldTests: XCTestCase {
         XCTAssertEqual(outline(plan([person("\(status)\n\nYes, go for it."), said("Started.")])), [
             "bubble:Yes, go for it.", "text",
         ])
-        for outcome in ["moved", "restarted", "org-update", "status", "waiting", "handed-over", "task-routing-policy"] {
+        // The status push carries the state notices of followed tasks too (2026-11-10).
+        for outcome in ["moved", "restarted", "org-update", "status", "waiting", "handed-over", "task-routing-policy",
+                        "completed", "error", "stopped", "blocked"] {
             let note = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"\(outcome)\">\nA note.\n</walnut-message>"
             XCTAssertEqual(TimelineInboundMessage.splitRiders("\(note)\n\nThe words.")?.body, "The words.", outcome)
         }
-        // A notice the queue never puts in front (a subtask's completion) stays the whole row.
-        let completed = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"completed\">\nDone.\n</walnut-message>"
-        XCTAssertNil(TimelineInboundMessage.splitRiders("\(completed)\n\nThe words."))
+        // A note Walnut's queue never puts in front (another sender's, or an outcome off the list) stays the whole row.
+        let trigger = "<walnut-message kind=\"notification\" from=\"Trigger: sample-check\" outcome=\"completed\">\nDone.\n</walnut-message>"
+        XCTAssertNil(TimelineInboundMessage.splitRiders("\(trigger)\n\nThe words."))
+        let offList = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"overdue\">\nLate.\n</walnut-message>"
+        XCTAssertNil(TimelineInboundMessage.splitRiders("\(offList)\n\nThe words."))
     }
 
     func testAReceivedMessageInAnOpenTurnFoldsWithTheStepsAroundIt() {
