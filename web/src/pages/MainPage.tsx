@@ -67,6 +67,8 @@ import { AskWalnutSlot, MAIN_PICK, showAskInSlot } from '@/components/chat/AskWa
 import { agentOfTask, slotAgents } from '@/components/chat/ask-walnut-slot-model';
 import { getAgentsSnapshot, loadAgents } from '@/stores/agents-store';
 import { log } from '@/utils/log';
+import { beginSessionOpen } from '@/utils/session-open-latency';
+import { primeSessionOpenHistory } from '@/api/session-open-prime';
 import { projectDisplayName } from '@/utils/project-display';
 import { discardDraft } from '@/utils/drafts';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
@@ -1714,6 +1716,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // A fullscreen panel would cover the column this opens (useFullscreen explains).
     // After the lock check: a refused open changes nothing on screen, so it must
     // not collapse the view the user is in either.
+    beginSessionOpen(sessionId, opts?.restore ? 'restore' : 'home-column');
+    primeSessionOpenHistory(sessionId);
     yieldFullscreen('open-session');
     const active = document.activeElement;
     if (active instanceof HTMLElement && active !== document.body) {

@@ -30,6 +30,7 @@ describe('first open without a saved remote view', () => {
     expect(res.body.messages[0].msgId).toBe('last');
     expect(res.body.windowed).toBe(true);
     expect(res.body.cursor).toBeUndefined();
+    expect(res.body.firstPaintSource).toBe('preview');
     expect(previewRead).toHaveBeenCalledExactlyOnceWith(sid, '/work/project', 'remote-dev', HISTORY_OPEN_PREVIEW_BYTES);
   });
 

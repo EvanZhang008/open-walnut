@@ -19,6 +19,7 @@ import path from 'node:path';
 import { HISTORY_CACHE_DIR } from '../constants.js';
 import { log } from '../logging/index.js';
 import type { SessionHistoryMessage } from './session-history.js';
+import { HISTORY_CACHE_SCHEMA } from './history-parse.js';
 
 /**
  * Shape version of the cached parse. A file stamped with anything else is DROPPED
@@ -66,8 +67,11 @@ import type { SessionHistoryMessage } from './session-history.js';
  *
  * 12 (2026-11-07): the idle compaction's notice says "before its prompt cache would expire" (it
  * runs before the expiry, never after).
+ *
+ * The number itself lives in history-parse.ts, beside the parser it versions: the session
+ * daemon's ready views (src/providers/history-ready-core.ts) carry it too.
  */
-export const HISTORY_CACHE_SCHEMA = 12;
+export { HISTORY_CACHE_SCHEMA };
 
 /**
  * The incremental read state of the parse, kept beside it (`inc` in the file), so a

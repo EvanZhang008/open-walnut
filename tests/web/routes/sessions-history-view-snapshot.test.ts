@@ -10,7 +10,9 @@
  *     answers it with no host read, windowed flag, fork boundary and count space intact;
  *   - the first paint never carries a cursor (it must not seed a ?since= delta);
  *   - a rewind's cache invalidation forgets the view;
- *   - a delta never overwrites it, and a local session keeps none.
+ *   - a delta keeps the view from the parse it already holds (the next open paints that turn);
+ *   - a local session keeps one too (its cold first paint had no cache to answer from), and every
+ *     first paint says where it came from (`firstPaintSource`).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -42,7 +44,7 @@ import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { createSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { invalidateSessionHistoryCaches } from '../../../src/core/session-history.js';
-import { _resetHistoryViewsForTesting, flushHistoryViewsForTesting, readHistoryView, saveHistoryView, deleteHistoryView, historyViewGeneration, VIEW_MAX_MESSAGES } from '../../../src/core/history-view-snapshot.js';
+import { _resetHistoryViewsForTesting, flushHistoryViewsForTesting, readHistoryView, saveHistoryView, deleteHistoryView, beginHistoryViewRead, VIEW_MAX_MESSAGES } from '../../../src/core/history-view-snapshot.js';
 
 function createApp() {
   const app = express();
@@ -85,6 +87,7 @@ describe('remote first paint from the last served view', () => {
     expect(p1.body.windowed).toBe(true);
     expect(p1.body.cursor).toBeUndefined();
     expect(typeof p1.body.snapshot).toBe('string');
+    expect(p1.body.firstPaintSource).toBe('snapshot');
   });
 
   it('survives a restart through its file (memory dropped)', async () => {
@@ -112,7 +115,7 @@ describe('remote first paint from the last served view', () => {
     expect(p1.body.messages).toEqual([]);
   });
 
-  it('a delta leaves the view as it was', async () => {
+  it('a delta keeps the view from the parse in hand', async () => {
     const sid = 'view-remote-delta';
     await createSessionRecord(sid, '', 'p', '/w', { host: 'clouddev' });
     historyBySid.set(sid, Array.from({ length: 6 }, (_, i) => msg(i)));
@@ -120,15 +123,23 @@ describe('remote first paint from the last served view', () => {
     historyBySid.set(sid, Array.from({ length: 8 }, (_, i) => msg(i)));
     const d = await request(createApp()).get(`/api/sessions/${sid}/history?since=6&anchorMsgId=m5`);
     expect(d.body.delta).toBe(true);
-    expect((await readHistoryView(sid))?.messages).toHaveLength(6);
+    const view = await readHistoryView(sid);
+    expect(view?.messages).toHaveLength(8);
+    expect(view?.messages.at(-1)).toMatchObject({ msgId: 'm7' });
+    expect(view?.total).toBe(8);
   });
 
-  it('keeps no view for a local session, and caps a long one', async () => {
+  it('keeps a view for a local session too, and caps a long one', async () => {
     const local = 'view-local-001';
     await createSessionRecord(local, '', 'p', '/w');
     historyBySid.set(local, [msg(0), msg(1)]);
     await request(createApp()).get(`/api/sessions/${local}/history?tail=400`);
-    expect(await readHistoryView(local)).toBeNull();
+    expect((await readHistoryView(local))?.messages).toHaveLength(2);
+    reads.length = 0;
+    const localP1 = await request(createApp()).get(`/api/sessions/${local}/history?source=streams&tail=400`);
+    expect(reads).toEqual([]);
+    expect(localP1.body.messages.map((m: { msgId: string }) => m.msgId)).toEqual(['m0', 'm1']);
+    expect(localP1.body.firstPaintSource).toBe('snapshot');
 
     const big = 'view-remote-big';
     await createSessionRecord(big, '', 'p', '/w', { host: 'clouddev' });
@@ -151,7 +162,7 @@ describe('remote first paint from the last served view', () => {
 
   it('a read that began before a rewind keeps nothing, in memory or on disk', async () => {
     const sid = 'view-rewind-race';
-    const gen = historyViewGeneration(sid);
+    const gen = beginHistoryViewRead(sid);
     saveHistoryView(sid, { messages: [msg(0) as never], total: 1 }, gen);
     await deleteHistoryView(sid);
     saveHistoryView(sid, { messages: [msg(1) as never], total: 1 }, gen);

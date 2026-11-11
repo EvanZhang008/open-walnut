@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchSessionHistory, fetchSessionHistoryBefore, HISTORY_TAIL_LIMIT } from '@/api/sessions';
 import { perf } from '@/utils/perf-logger';
+import { hasReadableOpenRows, noteSessionOpenSource } from '@/utils/session-open-latency';
+import { takeSessionOpenHistory } from '@/api/session-open-prime';
 import { log } from '@/utils/log';
 import type { SessionHistoryMessage } from '@/types/session';
 import {
@@ -468,6 +470,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         .then((result) => {
           if (cancelled) return;
           endP2(`${result.messages.length} msgs`);
+          if (hasReadableOpenRows(result.messages)) noteSessionOpenSource(sessionId, 'network');
           setLoadingFrom(null);
           setError(null); // successful fetch clears a previous failure (see above)
           // Degraded payload (live read failed, server sent its last-good
@@ -522,12 +525,13 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       // than that (it would re-window the array under the reader). Tracked in a
       // local because messagesRef has not committed yet when Phase 2 is built.
       let p1Count = 0;
-      fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
+      (takeSessionOpenHistory(sessionId) ?? fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal }))
         .then((result) => {
           if (cancelled) return;
           endP1(`${result.messages.length} msgs`);
           diagnoseOrdering('P1:streams', sid, result.messages);
           if (result.messages.length > 0) {
+            if (hasReadableOpenRows(result.messages)) noteSessionOpenSource(sessionId, result.firstPaintSource ?? (result.snapshot ? 'snapshot' : 'preview'));
             p1Count = result.messages.length;
             setMessages(result.messages);
           }
@@ -576,6 +580,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 setLoadingFrom(null);
                 setError(null); // successful fetch clears a previous failure (see above)
                 diagnoseOrdering('P2:full', sid, result.messages);
+                if (hasReadableOpenRows(result.messages)) noteSessionOpenSource(sessionId, 'network');
                 // Degraded payload: render it when it beats what is shown, but do
                 // NOT seed cursor/cache from it: its total is the server's stale
                 // count and would corrupt the next ?since= delta.
@@ -621,6 +626,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     const cached = getHistoryCache(sessionId);
     if (cached) {
       // Memory hit → 0ms instant display, then background Phase 2 verification.
+      if (hasReadableOpenRows(cached.messages)) noteSessionOpenSource(sessionId, 'memory');
       adoptCachedAndVerify(cached);
       return () => { cancelled = true; controller.abort(); };
     }
@@ -639,6 +645,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         if (persisted && persisted.messages.length > 0) {
           // Seed the memory tier so switches within this page-load are sync.
           setHistoryCache(sessionId, persisted);
+          if (hasReadableOpenRows(persisted.messages)) noteSessionOpenSource(sessionId, 'idb');
           adoptCachedAndVerify(persisted);
         } else {
           startNetworkLoad();

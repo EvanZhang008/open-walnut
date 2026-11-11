@@ -59,6 +59,13 @@ afterEach(() => {
 });
 
 describe('fetchSessionHistory coalescing', () => {
+  it('keeps the first-paint source and snapshot through the response projection', async () => {
+    const calls = deferApiGet();
+    const read = fetchSessionHistory('source-projection', { source: 'streams', tail: 400 });
+    calls[0].resolve({ ...RESPONSE, firstPaintSource: 'ready', snapshot: '2026-01-01T00:00:00Z' });
+    expect(await read).toMatchObject({ firstPaintSource: 'ready', snapshot: '2026-01-01T00:00:00Z' });
+  });
+
   it('two concurrent identical requests share ONE network call and both resolve', async () => {
     const calls = deferApiGet();
     const p1 = fetchSessionHistory('sess-1', { tail: 400 });

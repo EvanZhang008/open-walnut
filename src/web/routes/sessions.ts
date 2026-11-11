@@ -5,7 +5,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { role } from '../../core/server-role.js'
-import { historyTurnWindowLimit, isHistoryUserTurn } from '../../lib/history-turn-window.js'
+import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, isHistoryUserTurn } from '../../lib/history-turn-window.js'
 import {
   emitSessionStatusChanged,
   getRecentSessions,
@@ -25,6 +25,9 @@ import {
 } from '../../core/session-tracker.js'
 import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages, isWindowedHistory, HISTORY_COLD_TAIL_READ_BYTES } from '../../core/session-history.js'
 import { resolveDeltaStart, deltaCursor, collectRequestedRevisions, isUnsettledRow } from '../../core/history-delta.js'
+import { firstPaintRace, readyViewEligible, readyViewWithin, type ReadyViewRows } from '../../core/history-ready-view.js'
+import { isReadableView } from '../../providers/history-ready-core.js'
+import { historyOpenScreen } from '../../core/history-open-preview.js'
 import { computeSessionChanges, peekSessionChanges } from '../../core/session-changes.js'
 import { computeSessionGitDiff, type GitDiffBase } from '../../core/session-git-diff.js'
 import { listTasksByIds, getTask, getCustomTiers, pluginOnlyTaskIds } from '../../core/task-manager.js'
@@ -881,6 +884,24 @@ function sendControlError(res: Response, err: SessionControlError): void {
 /** The shortest tail a request may ask for and still replace the kept view (the web asks 400). */
 const HISTORY_VIEW_MIN_TAIL = 400
 
+/**
+ * The rows a kept view holds when no request said how many: what the web's first paint asks
+ * (HISTORY_VIEW_MIN_TAIL rows or INITIAL_HISTORY_TURNS turns, whichever is more), with the fork
+ * boundary moved into the slice.
+ */
+function historyViewSliceOf<T extends { role: string; text: string; injected?: boolean }>(
+  messages: T[],
+  forkBoundaryIndex: number | undefined,
+): { messages: T[]; forkBoundaryIndex?: number } {
+  const limit = Math.max(HISTORY_VIEW_MIN_TAIL, historyTurnWindowLimit(messages, INITIAL_HISTORY_TURNS))
+  const kept = messages.length > limit ? messages.slice(messages.length - limit) : messages
+  const dropped = messages.length - kept.length
+  return {
+    messages: kept,
+    ...(forkBoundaryIndex != null && forkBoundaryIndex >= dropped ? { forkBoundaryIndex: forkBoundaryIndex - dropped } : {}),
+  }
+}
+
 function markUnsettled(messages: readonly SessionHistoryMessage[]): SessionHistoryMessage[] {
   return messages.map(m => (isUnsettledRow(m) ? { ...m, unsettled: true } : m))
 }
@@ -1429,11 +1450,17 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
 
     // Look up session record to get cwd
     const record = await getSessionByClaudeId(sessionId)
-    // Taken before any read: a rewind meanwhile makes that read's view one not to keep.
-    const viewGeneration = record?.host && source !== 'streams'
-      ? (await import('../../core/history-view-snapshot.js')).historyViewGeneration(sessionId) : undefined
+    // Taken before any read: a rewind meanwhile makes that read's view one not to keep, and its
+    // start time keeps an older host answer that arrives later from replacing it.
+    // Local sessions keep one too (2026-11-11): after a restart the parse cache is empty and a
+    // local first paint read and parsed its transcript on this event loop. ACP journals fold
+    // their own bounded P1 below, so a local one keeps none.
+    const viewRead = record && source !== 'streams'
+      && (record.host || engineCaps(record.engine).historySource !== 'acp-journal')
+      ? (await import('../../core/history-view-snapshot.js')).beginHistoryViewRead(sessionId) : undefined
 
     if (source === 'streams') {
+      const screen = (rows: SessionHistoryMessage[]) => historyOpenScreen(rows, row => isReadableView([row]))
       if (record && engineCaps(record.engine).historySource === 'acp-journal') {
         // Tail-bounded P1: bound a COLD fold to the journal's last few MB so a
         // whale journal paints instantly; the fold cache serves the follow-ups.
@@ -1442,7 +1469,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined))
         const { messages, windowed } = preview ?? { messages: [], windowed: false }
         logMessageOrdering('P1:streams', sessionId, messages, record.host)
-        const sliced = sliceHistory(messages)
+        const sliced = screen(sliceHistory(messages))
         const initialUserText = windowed ? undefined : initialUserTextOf(messages)
         res.json({ messages: sliced, total: messages.length, ...(windowed ? { windowed: true } : {}), ...(initialUserText ? { initialUserText } : {}) })
         return
@@ -1454,19 +1481,21 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // walk the local filesystem and return empty. Short-circuit before even calling
       // it so the hook's Phase 1 doesn't waste an event loop tick (and doesn't race
       // with the Phase 2 SSH round-trip).
-      if (record?.host) {
-        // The view this route last served (history-view-snapshot.ts): what the user saw, fork
-        // prefix and all, with no host round trip. A long session's windowed read never reaches
-        // the disk cache below, so without it every open of one waited on the host.
+      // A local session whose parse is still in memory answers from it at once (below).
+      const localWarm = !record?.host && !!(await import('../../core/session-history.js')).getCachedSessionHistory(sessionId)
+      if (record && !localWarm) {
+        // The view this route last served, or the session's daemon built (history-view-snapshot.ts):
+        // a picture of the conversation with no host round trip, fork prefix and all. It says when
+        // it was taken (`snapshot`); the full fetch that follows replaces it.
         const { readHistoryView } = await import('../../core/history-view-snapshot.js')
         const view = await readHistoryView(sessionId)
         if (view) {
-          const viewSlice = sliceHistory(view.messages)
+          const viewSlice = screen(sliceHistory(view.messages))
           const viewDropped = view.messages.length - viewSlice.length
           const boundary = view.forkBoundaryIndex != null && view.forkBoundaryIndex >= viewDropped
             ? view.forkBoundaryIndex - viewDropped : undefined
           res.json({
-            messages: viewSlice, total: view.total, snapshot: view.savedAt,
+            messages: viewSlice, total: view.total, snapshot: view.savedAt, firstPaintSource: 'snapshot',
             ...(view.windowed ? { windowed: true } : {}),
             ...(view.forkedFromSessionId ? { forkedFromSessionId: view.forkedFromSessionId } : {}),
             ...(boundary != null ? { forkBoundaryIndex: boundary } : {}),
@@ -1475,30 +1504,52 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           })
           return
         }
+      }
+      if (record?.host) {
         // Serve disk cache for instant display (Phase 1) while Phase 2 does SSH
         const { readHistoryCache } = await import('../../core/history-disk-cache.js')
         const diskCached = await readHistoryCache(sessionId)
         if (diskCached && diskCached.messages.length > 0) {
-          const cachedSlice = sliceHistory(diskCached.messages)
+          const cachedSlice = screen(sliceHistory(diskCached.messages))
           res.json({
             messages: cachedSlice, total: diskCached.messages.length,
+            snapshot: diskCached.cachedAt, firstPaintSource: 'snapshot',
             ...(diskCached.finishedAgentIds?.length ? { finishedAgentIds: diskCached.finishedAgentIds } : {}),
           })
           return
         }
+      }
+      // No kept view: the session's daemon parses the newest part of the transcript on its own
+      // host (history-ready-view.ts), bounded by READY_VIEW_DEADLINE_MS; a later answer is kept
+      // for the next open, never shown here. The preview below starts at the same time and wins
+      // as soon as it has something to read (firstPaintRace), so a slow or missing ready view
+      // never makes the first paint wait longer than it did; only a preview with nothing to read
+      // waits for it. Forks and ACP sessions keep the paths below.
+      const readyP = record && !localWarm && readyViewEligible(record, false) ? readyViewWithin(record) : null
+      const answerReady = (ready: ReadyViewRows): void => {
+        const readySlice = screen(sliceHistory(ready.messages))
+        res.json({
+          messages: readySlice, total: ready.total, firstPaintSource: 'ready',
+          ...(ready.windowed ? { windowed: true } : {}),
+          ...(ready.finishedAgentIds?.length ? { finishedAgentIds: ready.finishedAgentIds } : {}),
+        })
+      }
+      if (record?.host) {
         // No saved view yet: first paint must not wait for the full cold read and
         // its older-turn backfill. A small, deadline-bound tail gives it live rows.
         const { boundHistoryPreview, HISTORY_OPEN_PREVIEW_BYTES } = await import('../../core/history-open-preview.js')
         const { readSessionHistoryTailWindow, hasInPlaceRewinds } = await import('../../core/session-history.js')
-        const preview = await boundHistoryPreview(sessionId, async () => {
+        const previewP = boundHistoryPreview(sessionId, async () => {
           // Cut anchors can lie outside a preview window. Leave rewound sessions
           // to the existing filtered full read instead of exposing an abandoned branch.
           if (await hasInPlaceRewinds(sessionId)) return null
           const rows = await readSessionHistoryTailWindow(sessionId, record.cwd, record.host, HISTORY_OPEN_PREVIEW_BYTES)
           return rows ? rewriteHistoryRemoteImages(rows, record.host!, sessionId, record.cwd) : null
         })
-        const messages = preview ?? []
-        res.json({ messages: markUnsettled(messages), total: messages.length, ...(messages.length ? { windowed: true } : {}) })
+        const first = await firstPaintRace(readyP, previewP, (rows) => !!rows && isReadableView(rows))
+        if (first.kind === 'ready') { answerReady(first.ready); return }
+        const messages = first.preview ?? []
+        res.json({ messages: markUnsettled(screen(messages)), total: messages.length, firstPaintSource: 'preview', ...(messages.length ? { windowed: true } : {}) })
         return
       }
       // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand.
@@ -1515,8 +1566,13 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       let p1: Awaited<ReturnType<typeof readProviderSessionHistory>>
       try {
         const { boundHistoryPreview, HISTORY_OPEN_PREVIEW_BYTES } = await import('../../core/history-open-preview.js')
-        p1 = await boundHistoryPreview(sessionId, () => readProviderSessionHistory(sessionId, record, undefined, true,
-          { maxColdReadBytes: HISTORY_OPEN_PREVIEW_BYTES })) ?? { messages: [], sourceAvailable: false, windowed: false }
+        // Raced against the ready view, as on the remote path above.
+        const p1P = boundHistoryPreview(sessionId, () => readProviderSessionHistory(sessionId, record, undefined, true,
+          { maxColdReadBytes: HISTORY_OPEN_PREVIEW_BYTES }))
+        p1P.catch(() => {})
+        const first = await firstPaintRace(readyP, p1P, (read) => !!read && isReadableView(read.messages))
+        if (first.kind === 'ready') { answerReady(first.ready); return }
+        p1 = first.preview ?? { messages: [], sourceAvailable: false, windowed: false }
       } catch (err) {
         // The local read failed (daemon not answering). Phase 1 is only a fast
         // preview: answer empty and let the full fetch run its degraded path.
@@ -1528,10 +1584,10 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       }
       const { messages, finishedAgentIds: p1FinishedIds, windowed: p1Windowed } = p1
       logMessageOrdering('P1:streams', sessionId, messages, record?.host)
-      const sliced = sliceHistory(messages)
+      const sliced = screen(sliceHistory(messages))
       const p1InitialUserText = p1Windowed ? undefined : initialUserTextOf(messages)
       res.json({
-        messages: sliced, total: messages.length,
+        messages: sliced, total: messages.length, firstPaintSource: 'preview',
         ...(p1Windowed ? { windowed: true } : {}),
         ...(p1InitialUserText ? { initialUserText: p1InitialUserText } : {}),
         ...(p1FinishedIds && p1FinishedIds.length > 0 ? { finishedAgentIds: p1FinishedIds } : {}),
@@ -2007,6 +2063,17 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
             if (revised.length > 0) revised = await rewriteHistoryRemoteImages(revised, record.host, sessionId, record.cwd)
           }
           if (!ambiguous) {
+            // The turn this delta brings is the next open's first paint too: keep the view from the
+            // parse already in hand (a reached run is a different window, so it keeps none).
+            if (deltaSource === messages && record && viewRead !== undefined) {
+              const kept = historyViewSliceOf(messages, forkBoundaryIndex)
+              const { saveHistoryView } = await import('../../core/history-view-snapshot.js')
+              saveHistoryView(sessionId, {
+                messages: markUnsettled(kept.messages), total, windowed: historyWindowed, forkedFromSessionId,
+                forkBoundaryIndex: kept.forkBoundaryIndex,
+                initialUserText: historyWindowed ? undefined : initialUserTextOf(messages), finishedAgentIds,
+              }, viewRead)
+            }
             res.json({
               messages: markUnsettled(slice),
               ...(revised.length > 0 ? { revisedMessages: markUnsettled(revised) } : {}),
@@ -2047,14 +2114,14 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // BEFORE the tail slice, because the slice is exactly what drops it. Windowed
     // read / failed fork prefix: the head we hold isn't the real head — omit.
     const initialUserText = historyWindowed || forkLoadFailed ? undefined : initialUserTextOf(messages)
-    // A remote session's next open paints this at once (the source=streams branch above). Only
+    // The session's next open paints this at once (the source=streams branch above). Only
     // a view at least as long as an open asks for: a small-tail caller must not shrink it.
-    if (record?.host && !forkLoadFailed && viewGeneration !== undefined && (!tail || tail >= HISTORY_VIEW_MIN_TAIL)) {
+    if (record && !forkLoadFailed && viewRead !== undefined && (!tail || tail >= HISTORY_VIEW_MIN_TAIL)) {
       const { saveHistoryView } = await import('../../core/history-view-snapshot.js')
       saveHistoryView(sessionId, {
         messages: markUnsettled(sliced), total, windowed: historyWindowed, forkedFromSessionId,
         forkBoundaryIndex: adjustedForkBoundary, initialUserText, finishedAgentIds,
-      }, viewGeneration)
+      }, viewRead)
     }
     res.json({
       // Full payloads carry the flag too — a client that first loads mid-flight must

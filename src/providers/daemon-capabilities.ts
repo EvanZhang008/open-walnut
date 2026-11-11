@@ -471,6 +471,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'hook-files-v1',
   'changes-v1',
   'rewind-probe-v1',
+  // 'history-ready-v1' (history-ready-core.ts): `history.readyView {sid, cwd?, cuts?, turns?,
+  // rows?, have?, budgetMs?, legacyHintCutoffMs?, interactive?}` parses the newest part of a
+  // session's transcript on this host with the server's own parser (src/core/history-parse.ts)
+  // and answers the rows of its first paint, gzipped (`rowsGz`), or `unchanged` / `pending` /
+  // `none`; `history.readyKeys {items}` answers each session's current view key from a stat.
+  // Read-only (an archived transcript is read through gunzip, never restored). Trusted socket
+  // only. Sidecar-gated in the source twin (history-ready-core.cjs). Optional: without it the
+  // history route's first paint uses its 128 KiB preview, as before.
+  'history-ready-v1',
   'external-scan-v1',
   'external-scan-filter-v1',
   'external-describe-v1',

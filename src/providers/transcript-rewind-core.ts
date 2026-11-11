@@ -536,19 +536,37 @@ export async function probeTranscriptRewindHostLocal(
     out.targetQueueKeys = targetQueueKeys(lines, input.uuid);
   }
 
-  if (input.cuts) {
-    const deadSet = computeRewindDeadSet(lines, input.cuts);
-    const cap = input.maxDeadUuids ?? DEFAULT_MAX_DEAD_UUIDS;
-    const dead = deadSet.deadUuids ? [...deadSet.deadUuids] : [];
-    if (dead.length > cap) {
-      out.truncated = true;
-      out.deadUuids = [];
-      out.queueDeadKeys = [];
-    } else {
-      out.deadUuids = dead;
-      out.queueDeadKeys = [...deadSet.queueDeadKeys];
-    }
-    out.skippedCuts = deadSet.skippedCuts;
-  }
+  if (input.cuts) Object.assign(out, deadSetOf(lines, input.cuts, input.maxDeadUuids ?? DEFAULT_MAX_DEAD_UUIDS));
   return out;
+}
+
+type DeadSetFields = Required<Pick<RewindProbeOutput, 'deadUuids' | 'queueDeadKeys' | 'skippedCuts'>> & Pick<RewindProbeOutput, 'truncated'>;
+
+/** The recorded cuts replayed over the file's lines, capped (the probe's `cuts` answer). */
+function deadSetOf(lines: RewindTranscriptLine[], cuts: RewindProbeCut[], cap: number): DeadSetFields {
+  const deadSet = computeRewindDeadSet(lines, cuts);
+  const dead = deadSet.deadUuids ? [...deadSet.deadUuids] : [];
+  if (dead.length > cap) return { truncated: true, deadUuids: [], queueDeadKeys: [], skippedCuts: deadSet.skippedCuts };
+  return { deadUuids: dead, queueDeadKeys: [...deadSet.queueDeadKeys], skippedCuts: deadSet.skippedCuts };
+}
+
+/**
+ * The rewind dead set of ONE known transcript file, with the identity it was read at. The
+ * first-paint view (history-ready-core.ts) runs this in its worker thread, never on a daemon's
+ * loop: it reads the whole file. null when the file cannot be read.
+ */
+export async function rewindDeadSetAtPath(
+  jsonlPath: string,
+  cuts: RewindProbeCut[],
+  maxDeadUuids = DEFAULT_MAX_DEAD_UUIDS,
+): Promise<(DeadSetFields & { size: number; mtimeMs: number }) | null> {
+  let st: fs.Stats;
+  try { st = await fsp.stat(jsonlPath); } catch { return null; }
+  if (!st.isFile()) return null;
+  try {
+    const { lines } = await readSlimTranscript(jsonlPath);
+    return { size: st.size, mtimeMs: st.mtimeMs, ...deadSetOf(lines, cuts, maxDeadUuids) };
+  } catch {
+    return null;
+  }
 }

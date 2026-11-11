@@ -102,6 +102,7 @@ export async function searchSessions(q: string, limit = 30): Promise<SessionReco
   for (const session of res.sessions) {
     seedSessionStatus(session, 'rest:session-list');
     seedSessionTitle(session);
+    rememberRecord(session.claudeSessionId, session);
   }
   return res.sessions;
 }
@@ -200,6 +201,9 @@ export type { SessionHistoryMessage } from '@/types/session';
 
 export interface SessionHistoryResult {
   messages: SessionHistoryMessage[];
+  /** First-paint source for latency records; absent on older servers. */
+  firstPaintSource?: 'snapshot' | 'ready' | 'preview';
+  snapshot?: string;
   /** Prefix rows whose CONTENT changed after we synced them — upsert by msgId, do
    *  NOT append. An Agent/Task row gains `bgTaskFinished` from a task-notification
    *  the CLI writes long after the row itself (74s in the measured incident), and a
@@ -395,6 +399,8 @@ async function fetchSessionHistoryRaw(
     staleReason?: string;
     loading?: { from?: unknown };
     historyUnavailable?: string;
+    firstPaintSource?: 'snapshot' | 'ready' | 'preview';
+    snapshot?: string;
     windowed?: boolean;
     initialUserText?: string;
     total?: number;
@@ -432,6 +438,8 @@ async function fetchSessionHistoryRaw(
     staleReason: res.staleReason,
     ...(typeof res.loading?.from === 'string' ? { loading: { from: res.loading.from } } : {}),
     windowed: res.windowed,
+    firstPaintSource: res.firstPaintSource,
+    snapshot: res.snapshot,
     initialUserText: res.initialUserText,
     total: res.total,
   };

@@ -115,6 +115,7 @@ export const SLOW_TEST_FILES = [
   'tests/providers/daemon-link-liveness-twins-e2e.test.ts', // ~35s: both daemon twins, the bridge silence watchdog and the trusted-client keepalive on sub-second clocks
   'tests/providers/daemon-bridge-slow-link-twins-e2e.test.ts', // ~55s: three daemon runtimes, a 1 MB read across a rate-limited bridge link, and a dead link's teardown
   'tests/providers/daemon-bridge-wss-twins-e2e.test.ts', // ~15s: three daemon runtimes dialing wss://localhost with a certificate made by openssl at runtime
+  'tests/providers/history-ready-twins-e2e.test.ts', // not measured yet: compiles the daemon binary (two entries) and boots three daemon runtimes
   'tests/web/routes/bug-report.test.ts', // 5s
   'tests/web/routes/task-hook-maintainer.test.ts', // 5s
   'tests/web/routes/chat-plan-mode.test.ts', // 5s

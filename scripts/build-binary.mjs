@@ -363,7 +363,10 @@ function assetsPlugin({ archivePath, id, daemonVersion }) {
 
 function buildOptions({ version, archivePath, id, daemonVersion, sourcemap }) {
   return {
-    entrypoints: [path.join(repo, 'src/binary/main.ts')],
+    // The ready-view worker (src/providers/history-ready-worker.ts) is compiled in as a second
+    // entry: a compiled file can start a Worker only from an entry of its own, at
+    // /$bunfs/root/providers/history-ready-worker.ts here (history-ready-core.ts readyWorkerEntries).
+    entrypoints: [path.join(repo, 'src/binary/main.ts'), path.join(repo, 'src/providers/history-ready-worker.ts')],
     // Whitespace and syntax only: getDaemonSource() ships core functions as their
     // own text (fn.toString()), and mangled names would break that text.
     minify: { whitespace: true, syntax: true, identifiers: false },

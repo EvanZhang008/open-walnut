@@ -28,7 +28,11 @@ function setOf(name: string): Set<string> {
 }
 
 /** Commands that ask for bytes back: the big frame is the answer, which the relay path carries fine. */
-const DOWNLOADS = new Set(['fs.read'])
+const DOWNLOADS = new Set([
+  'fs.read',
+  // rows is a requested row limit, never uploaded transcript content. The view or keys come back.
+  'history.readyView', 'history.readyKeys',
+])
 
 /** Byte-carrying commands that stay on the session link, and why. */
 const ON_SESSION_LINK: Record<string, string> = {

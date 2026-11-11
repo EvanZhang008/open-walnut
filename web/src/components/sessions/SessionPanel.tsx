@@ -90,6 +90,7 @@ import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { stripSendPrefixes, useSessionSend } from '@/hooks/useSessionSend';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
+import { observeSessionOpen } from '@/utils/session-open-latency';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, peekSessionRecord, keepSessionRecord, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession, type ContinueInNewFolderResult } from '@/api/sessions';
@@ -697,6 +698,17 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       });
     });
   }, [settingsSessionId]);
+
+  const openEngineRef = useRef(session?.engine);
+  const measuredMountRef = useRef<string | null>(null);
+  openEngineRef.current = session?.engine;
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const firstMount = measuredMountRef.current !== sessionId;
+    measuredMountRef.current = sessionId;
+    return observeSessionOpen(panel, sessionId, () => openEngineRef.current ?? 'unknown', firstMount);
+  }, [sessionId]);
 
   const modeSwitchSession = useRef(settingsSessionId);
   modeSwitchSession.current = settingsSessionId;

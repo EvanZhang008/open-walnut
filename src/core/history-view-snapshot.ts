@@ -15,6 +15,19 @@
  *
  * Files: <HISTORY_CACHE_DIR>/views/<sessionId>.json, stamped with HISTORY_CACHE_SCHEMA (a parse shape
  * change drops them like the disk cache), coalesced writes, bounded by count and age.
+ *
+ * Two writers since 2026-11-11: the history route (what it served, `origin` absent) and the
+ * session's daemon (`origin: 'ready'`, its ready view, history-ready-view.ts), which also carries
+ * `readyKey`, the key the daemon gave that view. Beside each view a small `<sessionId>.meta` holds
+ * `{savedAt, readyKey?, contentAt?}`, so the background refresher compares keys without reading
+ * whole views. An older Walnut reads the same `.json` files (the new fields are optional and it
+ * ignores them) and never touches the `.meta` files.
+ *
+ * Older content never replaces newer. Every writer says when the read behind its view began
+ * (`contentAt`, this server's clock, from beginHistoryViewRead): the view holds at least what the
+ * transcript held then. A save whose read began before the kept view's did is dropped, so a host's
+ * answer that arrives late (a slow link, a background build) never puts back a picture the history
+ * route already moved past, and the refresher knows which turns a kept view already covers.
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -33,7 +46,27 @@ export interface HistoryViewSnapshot {
   forkBoundaryIndex?: number;
   initialUserText?: string;
   finishedAgentIds?: string[];
+  /** The daemon's key for this view (history-ready-core.ts readyViewKey); only on a ready view. */
+  readyKey?: string;
+  /** Who wrote it: absent = the history route, 'ready' = the session's daemon. */
+  origin?: 'ready';
+  /** When the read behind it began (ms, this server's clock); absent on a view an older Walnut wrote. */
+  contentAt?: number;
   savedAt: string;
+}
+
+/** What the `.meta` beside a view says: when it was written, when its read began, its ready key. */
+export interface HistoryViewMeta {
+  savedAt: string;
+  readyKey?: string;
+  contentAt?: number;
+}
+
+/** Taken before a read whose result may be saved: a rewind meanwhile, or a newer save, drops it. */
+export interface HistoryViewRead {
+  generation: number;
+  /** When the read began (ms). */
+  at: number;
 }
 
 /** The most rows a view keeps: the client asks for 400 or ten turns, whichever is more. */
@@ -56,10 +89,18 @@ const writing = new Map<string, Promise<void>>();
 let lastPruneAt = 0;
 let tmpSeq = 0;
 
-/** Capture before the read whose result will be saved; pass it to saveHistoryView. */
+/** The session's rewind generation (bumped by every delete). */
 export function historyViewGeneration(sessionId: string): number {
   return generations.get(sessionId) ?? 0;
 }
+
+/** Capture before the read whose result will be saved; pass it to saveHistoryView. */
+export function beginHistoryViewRead(sessionId: string, now = Date.now()): HistoryViewRead {
+  return { generation: historyViewGeneration(sessionId), at: now };
+}
+
+/** The kept view's read began after this one's: this one holds older content. */
+export const olderThanKept = (keptAt: number | undefined, at: number): boolean => keptAt !== undefined && keptAt > at;
 
 function remember(sessionId: string, view: HistoryViewSnapshot): void {
   memory.delete(sessionId);
@@ -69,10 +110,16 @@ function remember(sessionId: string, view: HistoryViewSnapshot): void {
 
 function viewsDir(): string { return path.join(HISTORY_CACHE_DIR, 'views'); }
 function viewPath(sessionId: string): string { return path.join(viewsDir(), `${sessionId}.json`); }
+function metaPath(sessionId: string): string { return path.join(viewsDir(), `${sessionId}.meta`); }
 
-/** Keep `view` as the session's first paint. Only the newest `VIEW_MAX_MESSAGES` rows are kept. */
-export function saveHistoryView(sessionId: string, view: Omit<HistoryViewSnapshot, 'savedAt'>, generation: number): void {
-  if (view.messages.length === 0 || generation !== historyViewGeneration(sessionId)) return;
+/**
+ * Keep `view` as the session's first paint, unless a rewind moved the generation since `read` or
+ * the kept view comes from a later read. Only the newest `VIEW_MAX_MESSAGES` rows are kept.
+ * Returns whether it was taken (the disk copy is checked again when it is written).
+ */
+export function saveHistoryView(sessionId: string, view: Omit<HistoryViewSnapshot, 'savedAt' | 'contentAt'>, read: HistoryViewRead): boolean {
+  if (view.messages.length === 0 || read.generation !== historyViewGeneration(sessionId)) return false;
+  if (olderThanKept(memory.get(sessionId)?.contentAt, read.at)) return false;
   const drop = Math.max(0, view.messages.length - VIEW_MAX_MESSAGES);
   const boundary = view.forkBoundaryIndex != null && view.forkBoundaryIndex >= drop ? view.forkBoundaryIndex - drop : undefined;
   const kept: HistoryViewSnapshot = {
@@ -83,10 +130,12 @@ export function saveHistoryView(sessionId: string, view: Omit<HistoryViewSnapsho
     ...(boundary != null ? { forkBoundaryIndex: boundary } : {}),
     ...(view.initialUserText ? { initialUserText: view.initialUserText } : {}),
     ...(view.finishedAgentIds?.length ? { finishedAgentIds: view.finishedAgentIds } : {}),
+    ...(view.origin === 'ready' && view.readyKey ? { readyKey: view.readyKey, origin: 'ready' as const } : {}),
+    contentAt: read.at,
     savedAt: new Date().toISOString(),
   };
   remember(sessionId, kept);
-  if (pending.has(sessionId)) return;
+  if (pending.has(sessionId)) return true;
   const timer = setTimeout(() => {
     pending.delete(sessionId);
     const prev = writing.get(sessionId) ?? Promise.resolve();
@@ -95,13 +144,41 @@ export function saveHistoryView(sessionId: string, view: Omit<HistoryViewSnapsho
   }, WRITE_COALESCE_MS);
   timer.unref?.();
   pending.set(sessionId, timer);
+  return true;
 }
+
+/** The `.meta` on disk, whatever memory holds. */
+async function readMetaFile(sessionId: string): Promise<HistoryViewMeta | null> {
+  try {
+    const parsed = JSON.parse(await fsp.readFile(metaPath(sessionId), 'utf-8')) as Partial<HistoryViewMeta>;
+    if (typeof parsed?.savedAt !== 'string') return null;
+    return {
+      savedAt: parsed.savedAt,
+      ...(typeof parsed.readyKey === 'string' ? { readyKey: parsed.readyKey } : {}),
+      ...(typeof parsed.contentAt === 'number' && Number.isFinite(parsed.contentAt) ? { contentAt: parsed.contentAt } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+const metaOf = (view: HistoryViewSnapshot): HistoryViewMeta => ({
+  savedAt: view.savedAt,
+  ...(view.readyKey ? { readyKey: view.readyKey } : {}),
+  ...(view.contentAt !== undefined ? { contentAt: view.contentAt } : {}),
+});
 
 async function flush(sessionId: string): Promise<void> {
   const view = memory.get(sessionId);
   if (!view) return;
   const generation = historyViewGeneration(sessionId);
   const tmp = `${viewPath(sessionId)}.${process.pid}.${++tmpSeq}.tmp`;
+  // Memory may have lost the newer view (evicted, a restart): the disk copy decides then.
+  const onDisk = view.contentAt !== undefined ? await readMetaFile(sessionId) : null;
+  if (onDisk && olderThanKept(onDisk.contentAt, view.contentAt!)) {
+    if (memory.get(sessionId) === view) memory.delete(sessionId);
+    return;
+  }
   try {
     const payload = JSON.stringify({ schema: HISTORY_CACHE_SCHEMA, ...view });
     if (payload.length > VIEW_MAX_BYTES) {
@@ -114,6 +191,8 @@ async function flush(sessionId: string): Promise<void> {
     // A rewind while this was written: its delete already ran, so this must not bring the rows back.
     if (generation !== historyViewGeneration(sessionId)) { await fsp.unlink(tmp).catch(() => {}); return; }
     await fsp.rename(tmp, viewPath(sessionId));
+    // The meta follows its view: a route view clears a ready key the daemon gave an older one.
+    await fsp.writeFile(metaPath(sessionId), JSON.stringify(metaOf(view)), 'utf-8').catch(() => {});
   } catch (err) {
     await fsp.unlink(tmp).catch(() => {});
     log.session.debug('history view write failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
@@ -137,6 +216,20 @@ export async function readHistoryView(sessionId: string): Promise<HistoryViewSna
   }
 }
 
+/**
+ * When the session's view was written and its ready key, without reading the view: memory, else
+ * the `.meta` beside it. null when there is no view, or only one an older Walnut wrote (no meta).
+ */
+export async function readHistoryViewMeta(sessionId: string): Promise<HistoryViewMeta | null> {
+  const hot = memory.get(sessionId);
+  if (hot) return metaOf(hot);
+  const meta = await readMetaFile(sessionId);
+  if (!meta) return null;
+  // A meta whose view is gone (pruned, deleted at a rewind) describes nothing.
+  try { await fsp.access(viewPath(sessionId)); } catch { return null; }
+  return meta;
+}
+
 /** Forget the session's view: its parse became wrong without new bytes (a rewind). */
 export async function deleteHistoryView(sessionId: string): Promise<void> {
   generations.set(sessionId, historyViewGeneration(sessionId) + 1);
@@ -144,6 +237,7 @@ export async function deleteHistoryView(sessionId: string): Promise<void> {
   const timer = pending.get(sessionId);
   if (timer) { clearTimeout(timer); pending.delete(sessionId); }
   try { await fsp.unlink(viewPath(sessionId)); } catch { /* already gone */ }
+  try { await fsp.unlink(metaPath(sessionId)); } catch { /* already gone */ }
 }
 
 /** Drop views older than `maxAgeMs`, then the oldest past `maxFiles`. Never throws. */
@@ -163,6 +257,13 @@ export async function pruneHistoryViews(opts: { maxAgeMs?: number; maxFiles?: nu
     for (const [i, e] of entries.entries()) {
       if (i < maxFiles && now - e.mtimeMs <= maxAgeMs) continue;
       try { await fsp.unlink(e.file); removed++; } catch { /* vanished */ }
+      if (e.file.endsWith('.json')) await fsp.unlink(e.file.slice(0, -'.json'.length) + '.meta').catch(() => {});
+    }
+    // A meta left without its view (an older Walnut pruned the view) goes too.
+    for (const name of await fsp.readdir(viewsDir())) {
+      if (!name.endsWith('.meta')) continue;
+      const view = path.join(viewsDir(), name.slice(0, -'.meta'.length) + '.json');
+      try { await fsp.access(view); } catch { await fsp.unlink(path.join(viewsDir(), name)).catch(() => {}); }
     }
   } catch { /* no dir yet */ }
   return removed;

@@ -659,6 +659,7 @@ function releaseSelfApiRoot(): void {
 let routineWakeHandle: import('../core/routines/wake-events.js').RoutineWakeHandle | null = null
 let healthMonitor: SessionHealthMonitor | null = null
 let changesPrewarmer: import('../core/session-changes-prewarm.js').SessionChangesPrewarmer | null = null
+let historyReadyRefresher: import('../core/history-ready-refresh.js').HistoryReadyRefresher | null = null
 let stopSessionGitStatus: (() => void) | null = null
 let unsubscribeMemoryPressure: (() => void) | null = null
 let sessionReaper: SessionReaper | null = null
@@ -4268,6 +4269,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     changesPrewarmer = new SessionChangesPrewarmer()
     changesPrewarmer.start()
 
+    // -- Keep each session's first-paint view current (history-ready-refresh.ts) --
+    // After every turn and when a host comes back, the session's daemon is asked for its ready
+    // view; serial and paced, unchanged sessions cost a stat on their host.
+    historyReadyRefresher?.stop()
+    // Copied data must not trigger a host-wide warmup or mask cold-open acceptance.
+    // Refresher acceptance can opt in on its isolated server explicitly.
+    if (!isEphemeral || process.env.WALNUT_HISTORY_READY_REFRESH === '1') {
+      historyReadyRefresher = await (await import('../core/history-ready-refresh.js')).startHistoryReadyRefresher()
+    }
+
     // -- Session git glance: watched sessions re-read their repos as they work --
     const { startSessionGitStatus } = await import('../core/session-git-status.js')
     stopSessionGitStatus?.()
@@ -7149,6 +7160,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   }
   stopSessionGitStatus?.()
   stopSessionGitStatus = null
+  if (historyReadyRefresher) {
+    historyReadyRefresher.stop()
+    historyReadyRefresher = null
+  }
   if (changesPrewarmer) {
     changesPrewarmer.stop()
     changesPrewarmer = null

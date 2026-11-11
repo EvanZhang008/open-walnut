@@ -149,6 +149,8 @@ import {
   type SessionChangesResult,
 } from './session-changes-core.js'
 import { probeTranscriptRewindHostLocal, type RewindProbeInput, type RewindProbeOutput } from './transcript-rewind-core.js'
+import { Worker as ThreadWorker } from 'node:worker_threads'
+import { createHistoryReady, createReadyWorkerExecutor, readyRequestFromWire, readyWorkerEntries, type ReadyWorkerLike } from './history-ready-core.js'
 import { describeExternalSessions, scanExternalSessions } from './external-session-scan-core.js'
 import {
   ackFire,
@@ -2822,6 +2824,10 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
     case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id as number, cmd)
+    // 'history-ready-v1' (history-ready-core.ts): a session's first-paint view, parsed here.
+    // Trusted socket only (not in the bridge or follower allowlists). Keep in sync with daemon-source.ts.
+    case 'history.readyView': return cmdHistoryReadyView(ws, id as number, cmd)
+    case 'history.readyKeys': return cmdHistoryReadyKeys(ws, id as number, cmd)
     // 'turn-snapshot-v1' (turn-snapshot-core.ts, turn-guard-core.ts). NOT in
     // BRIDGE_ALLOWED_COMMANDS: they read and write host files. Keep in sync with daemon-source.ts.
     case 'turns.list':
@@ -2991,6 +2997,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'bridge.status': return cmdBridgeStatus(ws, id as number, cmd)
     case 'service.handover': case 'service.update': return daemonCommands.run(() => cmdServiceHandover(ws, id, cmd))
     case 'hello': {
+      // Load the parser thread without reading any transcript before a cold click.
+      void historyReadyExecutor.warm()
       // A server names its run: a relay goes again only to the run it went to (gatewayRelaysSocketGone).
       // ...or to any run of a server that names its op read-only (helloReadOps). A hello
       // that names no run (a diagnostic probe on the same socket) changes neither.
@@ -12344,6 +12352,41 @@ async function cmdTranscriptRewindProbe(ws: ServerWebSocket<WsData>, id: number,
     sendOk(ws, id, { found: true, ...output } as unknown as Record<string, unknown>)
   } catch (err) {
     sendError(ws, id, 'transcript.rewindProbe failed: ' + (err as Error).message)
+  }
+}
+
+// ── A session's first-paint view, parsed next to its transcript ('history-ready-v1') ──
+// history-ready-core.ts holds the whole design (bounded parse, rewind dead set, archived tail,
+// readable check). The rewind dead set, read, parse, fit and gzip run in a worker thread
+// (history-ready-worker.ts, compiled in as a second entry), never on this loop; this is the wire.
+// Keep in sync with daemon-source.ts.
+const historyReadyMain = (globalThis as { Bun?: { main?: string } }).Bun?.main ?? ''
+const historyReadyExecutor = createReadyWorkerExecutor(
+  readyWorkerEntries(historyReadyMain, import.meta.url)
+    .map((entry) => () => new ThreadWorker(entry.startsWith('file:') ? new URL(entry) : entry) as unknown as ReadyWorkerLike),
+  { log: (level, msg, data) => logMsg(level, msg, data) },
+)
+const historyReady = createHistoryReady({
+  executor: historyReadyExecutor,
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
+async function cmdHistoryReadyView(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  try {
+    const answer = await historyReady.readyView(readyRequestFromWire(cmd, CLAUDE_CONFIG_HOME))
+    sendOk(ws, id, { ...answer })
+  } catch (err) {
+    sendError(ws, id, 'history.readyView failed: ' + (err as Error).message)
+  }
+}
+
+async function cmdHistoryReadyKeys(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  try {
+    const items = Array.isArray(cmd.items) ? (cmd.items as Array<Record<string, unknown>>).slice(0, 500) : []
+    const keys = await historyReady.readyKeys(items.map((item) => readyRequestFromWire(item, CLAUDE_CONFIG_HOME)), CLAUDE_CONFIG_HOME)
+    sendOk(ws, id, { keys })
+  } catch (err) {
+    sendError(ws, id, 'history.readyKeys failed: ' + (err as Error).message)
   }
 }
 

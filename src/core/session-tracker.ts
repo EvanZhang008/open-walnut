@@ -672,6 +672,22 @@ export async function listRecentSessionRecords(limit: number): Promise<SessionRe
   return rows.map(rowToSession);
 }
 
+/**
+ * The sessions on one host active since `sinceIso`, most recent first (`__local__` = this Mac's,
+ * which carry no host). The ready-view refresher's reconnect pass reads it
+ * (history-ready-refresh.ts); index-backed on last_active_at. Isolated rows.
+ */
+export async function listRecentSessionsOnHost(host: string, sinceIso: string): Promise<SessionRecord[]> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return [];
+  const where = host === '__local__' ? "(host IS NULL OR host IN ('', '__local__'))" : 'host = @host';
+  const rows = db.prepare(
+    `SELECT * FROM sessions WHERE last_active_at >= @since AND ${where} ORDER BY last_active_at DESC`,
+  ).all(host === '__local__' ? { since: sinceIso } : { since: sinceIso, host }) as Record<string, any>[];
+  return rows.map(rowToSession);
+}
+
 /** A session that said what it did, as host learning reads it. */
 export interface HostSessionLine { claudeSessionId: string; cwd: string; title: string; overview: string; lastActiveAt: string }
 

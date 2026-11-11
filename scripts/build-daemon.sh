@@ -149,6 +149,29 @@ SOURCES=(
   src/core/cron/trigger-timing.ts
   src/core/transcript-chain.ts
   src/core/transcript-chain-leaf.ts
+  src/providers/history-ready-core.ts
+  src/providers/history-ready-worker.ts
+  src/core/history-parse.ts
+  src/core/history-parser-version.ts
+  src/core/sessions/legacy-hint-lines.ts
+  src/core/sessions/user-text-projection.ts
+  src/core/hints/hint-format.ts
+  src/core/org/message-about.ts
+  src/core/sessions/cli-error-reply.ts
+  src/core/sessions/prompt-cache.ts
+  src/core/sessions/side-thread-digest.ts
+  src/core/sessions/side-thread-warmup.ts
+  src/core/sessions/walnut-commands.ts
+  src/core/stream/compaction-notice.ts
+  src/core/stream/hook-notice.ts
+  src/core/text-cut.ts
+  src/lib/ai-only-envelope.ts
+  src/lib/history-injected-banner.ts
+  src/lib/history-session-envelope.ts
+  src/lib/history-turn-window.ts
+  src/lib/history-walnut-riders.ts
+  src/lib/turn-end-marker.ts
+  src/lib/walnut-added.ts
   src/core/transcript-chain-prefilter.ts
   src/core/bash-file-ops.ts
   src/providers/daemon-instance-lock.ts
@@ -291,19 +314,19 @@ echo "Building daemon binaries (version: $VERSION)..."
 "$BUN" build --compile --target=bun-linux-x64 --minify \
   --define "process.env.DAEMON_VERSION='$VERSION'" \
   --outfile "$OUTDIR/daemon-linux-x64" \
-  src/providers/daemon-standalone.ts
+  src/providers/daemon-standalone.ts src/providers/history-ready-worker.ts
 echo "$VERSION" > "$OUTDIR/daemon-linux-x64.version"
 
 "$BUN" build --compile --target=bun-linux-arm64 --minify \
   --define "process.env.DAEMON_VERSION='$VERSION'" \
   --outfile "$OUTDIR/daemon-linux-arm64" \
-  src/providers/daemon-standalone.ts
+  src/providers/daemon-standalone.ts src/providers/history-ready-worker.ts
 echo "$VERSION" > "$OUTDIR/daemon-linux-arm64.version"
 
 "$BUN" build --compile --target=bun-darwin-arm64 --minify \
   --define "process.env.DAEMON_VERSION='$VERSION'" \
   --outfile "$OUTDIR/daemon-darwin-arm64" \
-  src/providers/daemon-standalone.ts
+  src/providers/daemon-standalone.ts src/providers/history-ready-worker.ts
 # Walnut's own fixed Mach-O UUID and identifier, so a Mac's Local Network choice
 # for the daemon survives its updates (scripts/lib/macho-identity.mjs).
 "$BUN" scripts/lib/macho-identity.mjs stamp "$OUTDIR/daemon-darwin-arm64" daemon-darwin-arm64 --where-signable
@@ -412,6 +435,12 @@ cp node_modules/@agentclientprotocol/codex-acp/LICENSE "$OUTDIR/codex-acp.LICENS
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/transcript-rewind-core.cjs" \
   src/providers/transcript-rewind-core.ts
+
+# First-paint history view sidecar: the transcript parser the server uses can't live in
+# the source template; 'history-ready-v1' is advertised only when the sidecar loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/history-ready-core.cjs" \
+  src/providers/history-ready-core.ts
 
 # walnut-trigger check-contract sidecar — same rationale: the stdout parse, the
 # dedup rules and the process-group runner can't live in the source template;

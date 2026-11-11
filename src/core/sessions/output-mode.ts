@@ -23,9 +23,13 @@ import path from 'node:path';
 import type { Config, SessionOutputMode, SessionRecord } from '../types.js';
 import { DEFAULT_SESSION_OUTPUT_MODE } from '../types.js';
 import { WALNUT_HOME } from '../../constants.js';
+import { legacyHintCutoff, setLegacyHintCutoff } from './legacy-hint-lines.js';
 
-/** Opening literal of the pre-registry edge instruction, kept to recognise old rows. */
-export const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
+// The pre-registry bracket lines and their stripper live in legacy-hint-lines.ts (no I/O, so the
+// session daemon's history parse can read them too); re-exported here for every existing import.
+export {
+  OUTPUT_MODE_INSTRUCTION_MARKER, OUTPUT_MODE_REMINDER_MARKER, REPLY_LANGUAGE_MARKER, stripLegacyHintLines,
+} from './legacy-hint-lines.js';
 
 /** Turning rich output ON. Names the ONE routing rule the client enforces (a
  *  `<script>` needs the `html-app` fence, which renders in a sandboxed iframe) so
@@ -74,9 +78,6 @@ export const RICH_OUTPUT_MODE_ON_INSTRUCTION =
 export const RICH_OUTPUT_MODE_OFF_INSTRUCTION =
   'rich output mode is off. Return to plain markdown replies.';
 
-/** Opening literal of the pre-registry standing reminder, kept to recognise old rows. */
-export const OUTPUT_MODE_REMINDER_MARKER = '[Rich output mode is still on';
-
 /** The standing reminder: ONE short line, the `rich-output` hint's periodic form.
  *
  *  It says MARKDOWN FIRST on purpose. The old wording ("reply in HTML where
@@ -91,9 +92,6 @@ export const RICH_OUTPUT_MODE_REMINDER =
   + 'a real diagram is responsive inline <svg>, never ASCII or mermaid; '
   + 'colour or layout: raw HTML directly in this reply. '
   + 'No files, screenshots or HTML fences unless requested; no blank lines in a widget.';
-
-/** Opening literal of the pre-registry reply-language line, kept to recognise old rows. */
-export const REPLY_LANGUAGE_MARKER = '[Reply language: ';
 
 /** The setting is one sentence; a pasted essay would sit in every session's prompt. */
 export const REPLY_LANGUAGE_MAX_CHARS = 300;
@@ -135,7 +133,6 @@ export function resolveEffectiveOutputMode(
  * `hint-registry-since.json` (loadLegacyHintCutoff, at server start). Until that
  * read lands it is this process's start, which is never earlier.
  */
-let legacyHintLinesUntil = Date.now();
 export const LEGACY_HINT_CUTOFF_FILE = 'hint-registry-since.json';
 
 /** Read (or, the first time, write) when this home started the hint registry. Never throws. */
@@ -143,75 +140,22 @@ export async function loadLegacyHintCutoff(home = WALNUT_HOME, now = Date.now())
   const file = path.join(home, LEGACY_HINT_CUTOFF_FILE);
   try {
     const at = Date.parse((JSON.parse(await fs.readFile(file, 'utf8')) as { since?: string }).since ?? '');
-    if (Number.isFinite(at)) return (legacyHintLinesUntil = at);
+    if (Number.isFinite(at)) return setLegacyHintCutoff(at);
   } catch { /* first run, or unreadable: write it */ }
   try {
     await fs.writeFile(file, `${JSON.stringify({ since: new Date(now).toISOString() })}\n`, { flag: 'wx' });
-    legacyHintLinesUntil = now;
+    setLegacyHintCutoff(now);
   } catch {
     // Another process wrote it first: read that one.
     try {
       const at = Date.parse((JSON.parse(await fs.readFile(file, 'utf8')) as { since?: string }).since ?? '');
-      if (Number.isFinite(at)) legacyHintLinesUntil = at;
+      if (Number.isFinite(at)) setLegacyHintCutoff(at);
     } catch { /* keep the process start */ }
   }
-  return legacyHintLinesUntil;
+  return legacyHintCutoff();
 }
 
 /** Tests: pin the cutoff. */
 export function _setLegacyHintCutoffForTesting(ms: number): void {
-  legacyHintLinesUntil = ms;
-}
-
-/** The phone's pre-registry voice line. */
-const VOICE_REPLY_MARKER = '[Voice reply: ';
-
-/** Is this whole LINE one of the old bracket lines? Line-anchored, as before. */
-function isLegacyHintLine(line: string): boolean {
-  const t = line.trim();
-  if (t.startsWith(OUTPUT_MODE_INSTRUCTION_MARKER)) return true;
-  // The phone's voice-reply line rides the same way (voice-reply.ts), so the one
-  // display choke point strips it too.
-  if (t.startsWith(VOICE_REPLY_MARKER) && t.endsWith(']')) return true;
-  if (t.startsWith(REPLY_LANGUAGE_MARKER) && t.endsWith(']')) return true;
-  return t.startsWith(OUTPUT_MODE_REMINDER_MARKER) && t.endsWith(']');
-}
-
-/**
- * Take the old bracket lines off a row written before the hint registry started
- * (`at`: the row's time, ms or ISO). A newer row, or one with no time, is returned
- * as it is: the user's own words are never matched against a pattern.
- * Display-only, like the hint parse (src/core/hints/hint-format.ts).
- */
-export function stripLegacyHintLines(text: string, at?: number | string | null): string {
-  const ms = typeof at === 'string' ? Date.parse(at) : at;
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms >= legacyHintLinesUntil) return text;
-  // Fast path: the overwhelming majority of lines have neither marker, and this
-  // runs per user message of every parse (a whale JSONL has thousands).
-  if (
-    !text.includes(OUTPUT_MODE_INSTRUCTION_MARKER)
-    && !text.includes(OUTPUT_MODE_REMINDER_MARKER)
-    && !text.includes(VOICE_REPLY_MARKER)
-    && !text.includes(REPLY_LANGUAGE_MARKER)
-  ) {
-    return text;
-  }
-
-  const lines = text.split('\n');
-  const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (!isLegacyHintLine(lines[i])) {
-      out.push(lines[i]);
-      continue;
-    }
-    // Also swallow the ONE blank line we wrote next to it, preferring the one
-    // BEFORE so two of the user's own paragraphs never fuse into one.
-    if (out.length > 0 && out[out.length - 1].trim() === '') out.pop();
-    else if (lines[i + 1]?.trim() === '') i++;
-  }
-  const stripped = out.join('\n').trim();
-  // Never strip a message down to NOTHING: our wrapper always accompanies the
-  // user's own words, so an "all wrapper" message is someone quoting the literal
-  // text at us — showing it is right, deleting their message is not.
-  return stripped === '' ? text : stripped;
+  setLegacyHintCutoff(ms);
 }

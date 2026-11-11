@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
-import { boundHistoryPreview, HISTORY_OPEN_PREVIEW_BYTES, HISTORY_OPEN_PREVIEW_MS } from '../../src/core/history-open-preview.js';
+import { boundHistoryPreview, historyOpenScreen, HISTORY_OPEN_SCREEN_ROWS, HISTORY_OPEN_PREVIEW_BYTES, HISTORY_OPEN_PREVIEW_MS } from '../../src/core/history-open-preview.js';
 
 afterEach(() => vi.useRealTimers());
 
@@ -8,6 +8,21 @@ describe('cold chat first-paint budget', () => {
   it('keeps the byte window below a single small daemon response', () => {
     expect(HISTORY_OPEN_PREVIEW_BYTES).toBeLessThanOrEqual(128 * 1024);
     expect(HISTORY_OPEN_PREVIEW_MS).toBeLessThanOrEqual(3000);
+  });
+
+  it('a dense history paints only its latest readable screen before the full refresh', () => {
+    const rows = Array.from({ length: 1000 }, (_, i) => ({ text: `answer ${i}`, readable: true }));
+    const screen = historyOpenScreen(rows, row => row.readable);
+    expect(screen).toHaveLength(HISTORY_OPEN_SCREEN_ROWS);
+    expect(screen.at(-1)).toBe(rows.at(-1));
+    expect(historyOpenScreen([], () => false)).toEqual([]);
+  });
+
+  it('a notice-only tail keeps the newest actual answer rather than an unreadable screen', () => {
+    const rows = [{ text: 'actual answer', readable: true }, ...Array.from({ length: 100 }, () => ({ text: 'notice', readable: false }))];
+    const screen = historyOpenScreen(rows, row => row.readable);
+    expect(screen).toEqual(rows);
+    expect(screen.at(-1)).toBe(rows.at(-1));
   });
 
   it('returns rows immediately, and a rejected read degrades without an error', async () => {

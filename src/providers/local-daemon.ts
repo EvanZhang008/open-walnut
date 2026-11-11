@@ -178,7 +178,7 @@ export const LOCAL_UPGRADE_RECHECK_MS = 60_000
 /** How long after a managed update of this Mac's daemon the same build is not tried again. */
 export const LOCAL_MANAGED_UPDATE_COOLDOWN_MS = 600_000
 /** The source daemon's sidecar bundles, copied next to its script (materializeSourceDaemon). */
-const SOURCE_SIDECARS = ['changes-core.cjs', 'usage-core.cjs', 'path-resolve-core.cjs', 'port-scan-core.cjs', 'task-dir-core.cjs', 'host-exec-core.cjs', 'host-reach-core.cjs', 'net-core.cjs', 'secrets-core.cjs', 'transcript-rewind-core.cjs', 'trigger-check-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'acp-daemon-core.cjs']
+const SOURCE_SIDECARS = ['changes-core.cjs', 'usage-core.cjs', 'path-resolve-core.cjs', 'port-scan-core.cjs', 'task-dir-core.cjs', 'host-exec-core.cjs', 'host-reach-core.cjs', 'net-core.cjs', 'secrets-core.cjs', 'transcript-rewind-core.cjs', 'history-ready-core.cjs', 'trigger-check-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'acp-daemon-core.cjs']
 /** How often at most this server loads a service that runs nothing (reviveManagedService). */
 export const REVIVE_EVERY_MS = 60_000
 

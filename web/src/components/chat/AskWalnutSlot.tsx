@@ -49,6 +49,8 @@ import type { QuickStartTaskMeta } from '@/components/sessions/SessionPathSelect
 import { useEvent } from '@/hooks/useWebSocket';
 import { getAgentsSnapshot, loadAgents, subscribeAgents } from '@/stores/agents-store';
 import { log } from '@/utils/log';
+import { beginSessionOpen } from '@/utils/session-open-latency';
+import { primeSessionOpenHistory } from '@/api/session-open-prime';
 import { readString, writeLayoutField } from '@/utils/layout-record';
 import { recordTaskOpened } from '@/utils/recent-opened';
 import { resolveTaskSessionId } from '@/utils/session-status';
@@ -449,6 +451,9 @@ export function AskWalnutSlot({
   }, [dropLaunchedUnless]);
 
   const selectAsk = useCallback((taskId: string) => {
+    const picked = taskId === MAIN_PICK ? mainTask : askTasksRef.current.find((t) => t.id === taskId);
+    const sid = picked ? resolveTaskSessionId(picked) : null;
+    if (sid) { beginSessionOpen(sid, 'ask-slot'); primeSessionOpenHistory(sid); }
     launchGenRef.current++;
     dropLaunchedUnless(taskId);
     setPending(null);
@@ -458,7 +463,7 @@ export function AskWalnutSlot({
     // A person's explicit pick, including Main.
     recordTaskOpened(taskId === MAIN_PICK ? mainTask?.id : taskId);
     setSelectedTaskId(taskId);
-  }, [dropLaunchedUnless, mainTask?.id]);
+  }, [dropLaunchedUnless, mainTask, askTasksRef]);
 
   useEffect(() => {
     const show = (e: Event) => {

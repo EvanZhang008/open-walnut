@@ -48,6 +48,8 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
 
   // Sends without asking; the wake recheck and the ping loop find a dead link.
   'src/core/agents/host-engines.ts': { calls: 2, kind: 'wake-recheck', why: 'a read under its own 4 s deadline; a lost one answers from its cache' },
+  'src/core/history-ready-view.ts': { calls: 2, kind: 'wake-recheck', why: 'read-only view request; the first paint has a 900 ms deadline and a lost read falls back to the preview' },
+  'src/core/history-ready-refresh.ts': { calls: 2, kind: 'wake-recheck', why: 'read-only background keys and views with command timeouts; a lost batch stops the pass until the next reconnect' },
   'src/core/daemon-file-reader.ts': { calls: 21, kind: 'wake-recheck', why: 'file reads (bound by their routes, boundHostRead), writes, usage page reads and a resume\'s stream evidence reads (their own timeouts), whose loss fails to the caller or reads as not known' },
   'src/core/diagnostics/host-probes.ts': { calls: 4, kind: 'wake-recheck', why: 'doctor reads under the caller\'s deadline; a lost one is a warning line' },
   'src/core/hosts/fleet.ts': { calls: 3, kind: 'wake-recheck', why: 'vitals and facts reads with their own timeouts; a lost one keeps the last card' },

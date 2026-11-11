@@ -6,6 +6,12 @@ test('first open shows the latest preview while the ten-turn refresh is still he
   const rows = [{ role: 'assistant', text: 'Newest preview answer', timestamp: '2026-01-01T00:00:01Z', msgId: 'last' }];
   const held: Array<() => Promise<void>> = [];
   let fullReads = 0;
+  const openRecords: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('pageerror', error => pageErrors.push(String(error)));
+  page.on('console', message => {
+    if (message.text().includes('[session-open] first content')) openRecords.push(message.text());
+  });
   await page.route(`**/api/sessions/${sid}`, route => route.fulfill({ json: { session: {
     claudeSessionId: sid, title: 'Cold preview', process_status: 'stopped', mode: 'bypass',
     startedAt: '2026-01-01T00:00:00Z', lastActiveAt: '2026-01-01T00:00:01Z', host: 'remote-dev',
@@ -35,11 +41,14 @@ test('first open shows the latest preview while the ten-turn refresh is still he
     await preview;
     const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`);
     await expect(panel).toContainText('Newest preview answer');
+    expect(pageErrors).toEqual([]);
     await expect.poll(() => fullReads).toBeGreaterThan(0);
     await expect(panel.getByText('Loading remote session...', { exact: true })).toHaveCount(0);
     await expect(panel.locator('.chat-input-textarea')).toBeEnabled();
     // The first paint must precede completion, not merely make the same full fetch faster.
     expect(held.length).toBeGreaterThan(0);
+    await expect.poll(() => openRecords.length).toBe(1);
+    expect(openRecords[0]).toContain(sid);
     for (const release of held.splice(0)) await release();
     await expect(panel).toContainText('Earlier question');
     await expect(panel.getByText('Newest preview answer', { exact: true })).toHaveCount(1);

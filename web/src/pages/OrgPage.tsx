@@ -35,6 +35,8 @@ import { createStripWriter, readColumns } from '@/utils/layout-record';
 import { recordTaskOpened } from '@/utils/recent-opened';
 import type { SessionSlot } from '@/pages/sessionColumns';
 import { log } from '@/utils/log';
+import { beginSessionOpen } from '@/utils/session-open-latency';
+import { primeSessionOpenHistory } from '@/api/session-open-prime';
 import { OrgChartSheet, type ChartStart } from '@/components/org/OrgChartSheet';
 import { OrgChannelList, type ChannelMenuTarget } from '@/components/org/OrgChannelList';
 import { placeParams, readOrgPlace, writeOrgPlace } from '@/components/org/org-place';
@@ -310,10 +312,14 @@ export function OrgPage() {
   // A phone pushes the pick (Back returns to the list); the desktop replaces it. A new pick
   // closes the side panel: what it showed belonged to the node the user left.
   const select = useCallback((key: string, tab?: OrgTab) => {
-    // The person picked a node: record the task it represents.
     // rowOf answers a led project's VP row, so the project's own row is looked up in it.
     const row = rowOf(channelsRef.current, key);
-    recordTaskOpened((row?.key === key ? row : row?.led?.find((l) => l.key === key))?.contactId);
+    const contactId = (row?.key === key ? row : row?.led?.find((l) => l.key === key))?.contactId;
+    const contact = contactId ? tasks.find((t) => t.id === contactId) : undefined;
+    const sid = contact ? resolveTaskSessionId(contact) : null;
+    if (sid) { beginSessionOpen(sid, 'org-node'); primeSessionOpenHistory(sid); }
+    // The person picked a node: record the task it represents.
+    recordTaskOpened(contactId);
     setParams(() => {
       const next = liveParams();
       next.set('node', key);
@@ -322,7 +328,7 @@ export function OrgPage() {
       next.delete('open');
       return next;
     }, phone ? { state: { orgPick: true } } : { replace: true });
-  }, [setParams, phone, channelsRef]);
+  }, [setParams, phone, channelsRef, tasks]);
   const back = useCallback(() => {
     if ((window.history.state as { usr?: { orgPick?: boolean } } | null)?.usr?.orgPick) { navigate(-1); return; }
     // Opened straight on a node (a link, a reload): the list is this page's own way back.

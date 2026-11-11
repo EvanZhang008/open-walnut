@@ -231,7 +231,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -4442,6 +4442,9 @@ function dispatchCommand(ws, id, cmd) {
     case 'changes.compute': return cmdChangesCompute(ws, id, cmd);
     case 'changes.file': return cmdChangesFile(ws, id, cmd);
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id, cmd);
+    // 'history-ready-v1': trusted socket only. Keep in sync with daemon-standalone.ts.
+    case 'history.readyView': return cmdHistoryReadyView(ws, id, cmd);
+    case 'history.readyKeys': return cmdHistoryReadyKeys(ws, id, cmd);
     // 'turn-snapshot-v1' (turn-snapshot-core.ts, turn-guard-core.ts). NOT in
     // BRIDGE_ALLOWED_COMMANDS: they read and write host files. Keep in sync with daemon-standalone.ts.
     case 'turns.list':
@@ -4623,6 +4626,9 @@ function dispatchCommand(ws, id, cmd) {
     case 'bridge.status': return cmdBridgeStatus(ws, id, cmd);
     case 'service.handover': case 'service.update': return daemonCommands.run(function () { return cmdServiceHandover(ws, id, cmd); });
     case 'hello': {
+      // Load the parser thread without reading any transcript before a cold click.
+      historyReadyInstance();
+      if (historyReadyExecutor) void historyReadyExecutor.warm();
       // A server names its run: a relay goes again only to the run it went to (gatewayRelaysSocketGone).
       // ...or to any run of a server that names its op read-only (helloReadOps). A hello
       // that names no run (a diagnostic probe on the same socket) changes neither.
@@ -13965,6 +13971,11 @@ try { vscodeServerCore = require(path.join(__dirname, 'vscode-server-core.cjs'))
 let transcriptRewindCore = null;
 try { transcriptRewindCore = require(path.join(__dirname, 'transcript-rewind-core.cjs')); } catch (err) { transcriptRewindCore = null; }
 
+// First-paint history view sidecar (history-ready-core.cjs, 'history-ready-v1'): the transcript
+// parser the server uses, bundled; it cannot live in this template. Advertised only when it loads.
+let historyReadyCore = null;
+try { historyReadyCore = require(path.join(__dirname, 'history-ready-core.cjs')); } catch (err) { historyReadyCore = null; }
+
 // walnut-trigger check contract sidecar (trigger-check-core.cjs) — same sidecar
 // rationale: the stdout parse, the dedup rules and the process-group runner can't
 // live in this template. 'triggers-v1' is advertised only when the load succeeds;
@@ -14053,6 +14064,7 @@ function daemonCapabilities() {
   if (secretStore) caps.push('secrets-v1');
   if (vscodeServerCore) caps.push('vscode-v1');
   if (transcriptRewindCore) caps.push('rewind-probe-v1');
+  if (historyReadyCore && typeof historyReadyCore.createHistoryReady === 'function') caps.push('history-ready-v1');
   if (triggerCheckCore) caps.push('triggers-v1');
   // Host delivery needs the envelope builder the newer sidecar carries.
   if (triggerCheckCore && typeof triggerCheckCore.claimFires === 'function' && typeof triggerCheckCore.buildTriggerMessage === 'function') caps.push('trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1');
@@ -14582,6 +14594,52 @@ async function cmdTranscriptRewindProbe(ws, id, cmd) {
     sendOk(ws, id, Object.assign({ found: true }, output));
   } catch (err) {
     sendError(ws, id, 'transcript.rewindProbe failed: ' + err.message);
+  }
+}
+
+// ── A session's first-paint view ('history-ready-v1') ──
+// PARITY: keep in sync with daemon-standalone.ts cmdHistoryReadyView. The work is the sidecar's
+// (history-ready-core.ts), run in a worker thread that is the same sidecar file started with
+// workerData.walnutHistoryReadyWorker, never on this loop (the rewind dead set included: the
+// sidecar bundles transcript-rewind-core).
+let historyReady = null;
+let historyReadyExecutor = null;
+function historyReadyInstance() {
+  if (!historyReadyCore) return null;
+  if (!historyReady) {
+    const WorkerThread = require('worker_threads').Worker;
+    const sidecar = path.join(__dirname, 'history-ready-core.cjs');
+    historyReadyExecutor = historyReadyCore.createReadyWorkerExecutor([
+      function () { return new WorkerThread(sidecar, { workerData: { walnutHistoryReadyWorker: true } }); },
+    ], { log: function (level, msg, data) { logMsg(level, msg, data); } });
+    historyReady = historyReadyCore.createHistoryReady({
+      executor: historyReadyExecutor,
+      log: function (level, msg, data) { logMsg(level, msg, data); },
+    });
+  }
+  return historyReady;
+}
+
+async function cmdHistoryReadyView(ws, id, cmd) {
+  const ready = historyReadyInstance();
+  if (!ready) return sendError(ws, id, 'history.readyView: core sidecar not available on this host');
+  try {
+    const answer = await ready.readyView(historyReadyCore.readyRequestFromWire(cmd, CLAUDE_CONFIG_HOME));
+    sendOk(ws, id, Object.assign({}, answer));
+  } catch (err) {
+    sendError(ws, id, 'history.readyView failed: ' + err.message);
+  }
+}
+
+async function cmdHistoryReadyKeys(ws, id, cmd) {
+  const ready = historyReadyInstance();
+  if (!ready) return sendError(ws, id, 'history.readyKeys: core sidecar not available on this host');
+  try {
+    const items = Array.isArray(cmd.items) ? cmd.items.slice(0, 500) : [];
+    const keys = await ready.readyKeys(items.map(function (item) { return historyReadyCore.readyRequestFromWire(item, CLAUDE_CONFIG_HOME); }), CLAUDE_CONFIG_HOME);
+    sendOk(ws, id, { keys: keys });
+  } catch (err) {
+    sendError(ws, id, 'history.readyKeys failed: ' + err.message);
   }
 }
 
