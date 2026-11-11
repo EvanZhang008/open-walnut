@@ -34,3 +34,35 @@ async function isRouterSession(record: SessionRecord): Promise<boolean> {
     return false;
   }
 }
+
+/** How long the own-path check may take before the read goes the usual way. */
+const OWN_PATH_CHECK_MS = 3_000;
+
+/**
+ * Whether a history read can answer "no conversation yet" at once, with no read at
+ * all: a session whose missing transcript is its normal state (historyNotWrittenYet),
+ * that never had a model turn, and whose transcript is not at its own path for its
+ * cwd (a few stats on the host). Without it the reader, finding no file at that
+ * path, searched every transcripts folder on the host for it, and a router waiting
+ * for its first mail answered after 30 to 60 s or failed with "Local daemon read
+ * timeout" while the Mac was busy (2026-11-11, the user: "why this router take so
+ * long to load, not even successful at end"). Anything that cannot be told (a long
+ * cwd's hashed folder, a stat that fails or is slow, a fork, an ACP journal) keeps
+ * the usual read.
+ */
+export async function transcriptNotWrittenYet(record: SessionRecord, nowMs = Date.now()): Promise<boolean> {
+  if (!record.cwd || record.forkedFromSessionId || record.firstTurnAt) return false;
+  const [{ engineCaps }, { turnEvidenceAt }] = await Promise.all([
+    import('../agents/engine-registry.js'), import('../session-tracker.js'),
+  ]);
+  if (engineCaps(record.engine).historySource === 'acp-journal' || turnEvidenceAt(record)) return false;
+  if (!(await historyNotWrittenYet(record, nowMs))) return false;
+  const { DaemonFileReader } = await import('../daemon-file-reader.js');
+  const reader = new DaemonFileReader(record.host ?? '__local__');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const own = await Promise.race([
+    reader.ownSessionPath(record.claudeSessionId, record.cwd, OWN_PATH_CHECK_MS).catch(() => undefined),
+    new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), OWN_PATH_CHECK_MS); }),
+  ]).finally(() => clearTimeout(timer));
+  return own === null;
+}

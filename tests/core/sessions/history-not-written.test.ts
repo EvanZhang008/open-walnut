@@ -18,7 +18,17 @@ vi.mock('../../../src/core/task-manager.js', () => ({
   },
 }))
 
-const { historyNotWrittenYet } = await import('../../../src/core/sessions/history-not-written.js')
+// The host's answer for the transcript's own path: null = proven absent, undefined = cannot tell.
+let ownPath: string | null | undefined = null
+const ownCalls: string[] = []
+vi.mock('../../../src/core/daemon-file-reader.js', () => ({
+  DaemonFileReader: class {
+    constructor(readonly host: string) {}
+    async ownSessionPath(sid: string, cwd: string) { ownCalls.push(`${this.host}|${sid}|${cwd}`); return ownPath }
+  },
+}))
+
+const { historyNotWrittenYet, transcriptNotWrittenYet } = await import('../../../src/core/sessions/history-not-written.js')
 import type { SessionRecord } from '../../../src/core/types.js'
 
 const NOW = Date.parse('2026-11-11T12:00:00.000Z')
@@ -29,6 +39,8 @@ const record = (extra: Partial<SessionRecord> = {}): SessionRecord => ({
 } as SessionRecord)
 
 beforeEach(() => {
+  ownPath = null
+  ownCalls.length = 0
   tasks.clear()
   tasks.set('t-plain', {})
   tasks.set('t-router', { org_role: 'router' })
@@ -62,14 +74,44 @@ describe('a missing transcript that is the normal state', () => {
   })
 })
 
+describe('a history read answers no conversation at once when the own path proves it', () => {
+  const routerRec = (extra: Partial<SessionRecord> = {}) => record({ taskId: 't-router', cwd: '/work/tasks/router-1', ...extra })
+  it('a router with no turn and no file at its own path: no read needed', async () => {
+    expect(await transcriptNotWrittenYet(routerRec(), NOW)).toBe(true)
+    expect(ownCalls).toEqual(['__local__|s1|/work/tasks/router-1'])
+  })
+
+  it('reads as usual when the file is there, cannot be told, or the session ever had a turn', async () => {
+    ownPath = '/home/x/.claude/projects/-work-tasks-router-1/s1.jsonl'
+    expect(await transcriptNotWrittenYet(routerRec(), NOW)).toBe(false)
+    ownPath = undefined
+    expect(await transcriptNotWrittenYet(routerRec(), NOW)).toBe(false)
+    ownPath = null
+    expect(await transcriptNotWrittenYet(routerRec({ firstTurnAt: HOURS_AGO }), NOW)).toBe(false)
+    expect(await transcriptNotWrittenYet(routerRec({ promptCache: { requestAt: HOURS_AGO } } as Partial<SessionRecord>), NOW)).toBe(false)
+    expect(await transcriptNotWrittenYet(routerRec({ forkedFromSessionId: 's0' }), NOW)).toBe(false)
+    expect(await transcriptNotWrittenYet(routerRec({ cwd: undefined }), NOW)).toBe(false)
+  })
+
+  it('never for an ordinary session, a failed one, or one on another host', async () => {
+    expect(await transcriptNotWrittenYet(record({ cwd: '/work/a' }), NOW)).toBe(false)
+    expect(await transcriptNotWrittenYet(routerRec({ process_status: 'error' }), NOW)).toBe(false)
+    expect(await transcriptNotWrittenYet(routerRec({ host: 'devbox' }), NOW)).toBe(false)
+    expect(ownCalls).toEqual([])
+  })
+})
+
+// The source, read once for both guards below.
+const ROOT = path.resolve(import.meta.dirname, '../../..')
+let sourceCache: Array<{ file: string; lines: string[] }> | undefined
+const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+  e.isDirectory() ? walk(path.join(dir, e.name)) : e.name.endsWith('.ts') ? [path.join(dir, e.name)] : [])
+const sources = () => (sourceCache ??= walk(path.join(ROOT, 'src')).map((file) => ({ file, lines: fs.readFileSync(file, 'utf8').split('\n') })))
+
 describe('every "History unavailable" answer asks historyNotWrittenYet first', () => {
-  const ROOT = path.resolve(import.meta.dirname, '../../..')
-  const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-    e.isDirectory() ? walk(path.join(dir, e.name)) : e.name.endsWith('.ts') ? [path.join(dir, e.name)] : [])
   it('finds each site and the predicate within the lines before it', () => {
     const sites: string[] = []
-    for (const file of walk(path.join(ROOT, 'src'))) {
-      const lines = fs.readFileSync(file, 'utf8').split('\n')
+    for (const { file, lines } of sources()) {
       lines.forEach((line, i) => {
         if (!/historyUnavailable:\s*(reason|unavailableHistoryReason)\b/.test(line)) return
         const rel = `${path.relative(ROOT, file)}:${i + 1}`
@@ -80,5 +122,23 @@ describe('every "History unavailable" answer asks historyNotWrittenYet first', (
     }
     // The four known sites: the web history route (two) and the core history reads (two).
     expect(sites.length).toBeGreaterThanOrEqual(4)
+  })
+})
+
+describe('every transcript find walks one level under a projects root', () => {
+  it('names TRANSCRIPT_FIND_DEPTH, never a deeper literal (each session folder held thousands of reads)', () => {
+    const sites: string[] = []
+    for (const { file, lines } of sources()) {
+      lines.forEach((line, i) => {
+        if (!/send\(\s*'fs\.find'/.test(line)) return
+        const call = lines.slice(i, i + 5).join('\n')
+        if (!/\.jsonl'/.test(call)) return
+        const rel = `${path.relative(ROOT, file)}:${i + 1}`
+        sites.push(rel)
+        expect(call, `${rel} finds a transcript with its own depth`).toMatch(/maxDepth:\s*TRANSCRIPT_FIND_DEPTH/)
+      })
+    }
+    // The transcript reader, its probe, and the task move's lookup.
+    expect(sites.length).toBeGreaterThanOrEqual(3)
   })
 })

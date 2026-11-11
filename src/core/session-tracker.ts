@@ -2010,7 +2010,7 @@ function expireErrorNotificationsOnDeath(sessionId: string): void {
  * When a record's facts show a model turn ran, else undefined: a turn's speed with a finished message
  * (from its start), the prompt cache facts of a main-loop request (Claude Code), an ACP turn's context.
  */
-function turnEvidenceAt(r: Partial<SessionRecord>): string | undefined {
+export function turnEvidenceAt(r: Partial<SessionRecord>): string | undefined {
   const speed = r.lastTurnSpeed;
   if (speed && speed.messages > 0) return new Date(speed.startedAt ?? Date.now()).toISOString();
   if (r.promptCache?.requestAt) return r.promptCache.requestAt;

@@ -43,6 +43,18 @@ export function claudeProjectsDir(host?: string): string {
   return dir ? path.join(dir, 'projects') : DEFAULT_CLAUDE_PROJECTS_ROOT;
 }
 
+/**
+ * How deep a find for a session's transcript (`<sid>.jsonl`) walks under a projects
+ * root. Claude Code keeps every transcript (and its archived copy or manifest) one
+ * level down, `projects/<encoded cwd>/<sid>.jsonl`; deeper are only each session's
+ * own sidecar folders (`<sid>/subagents/agent-*.jsonl`, tool results). A depth of 3
+ * also read every one of those folders, one after another: about 5,700 directory
+ * reads on the Mac (1,425 projects) where 1,426 answer the same, and a router
+ * whose transcript did not exist yet waited past the 30 s read deadline for it at
+ * load 280 (2026-11-11). The daemon counts the root as depth 0.
+ */
+export const TRANSCRIPT_FIND_DEPTH = 1;
+
 /** The roots a find for a session's transcript walks, first hit wins: the
  *  resolved one, then the default (an older daemon searches only what it is told). */
 export function claudeProjectsSearchRoots(host?: string): string[] {

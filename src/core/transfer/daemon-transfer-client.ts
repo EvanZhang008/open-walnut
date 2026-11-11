@@ -14,6 +14,7 @@
 
 import crypto from 'node:crypto'
 import { DaemonNeedsUpgradeError } from '../daemon-file-reader.js'
+import { TRANSCRIPT_FIND_DEPTH } from '../claude-config-dir.js'
 import type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile } from '../../providers/transfer-pack-core.js'
 import type { WritePartReply, ReachReply, FetchReply, FetchFileResult } from '../../providers/transfer-core.js'
 import type { HostFacts, HostLoad, ModelEndpointProbe } from '../../providers/host-facts-core.js'
@@ -272,7 +273,7 @@ export async function findTranscript(host: string, sessionId: string): Promise<T
   try {
     const conns = await resolver(host)
     if (conns.length === 0) return { kind: 'unreachable', error: new TransferHostOfflineError(host).message }
-    res = await conns[0].send('fs.find', { path: '~/.claude/projects', name: sessionId + '.jsonl', maxDepth: 3 }, READ_RPC_MS)
+    res = await conns[0].send('fs.find', { path: '~/.claude/projects', name: sessionId + '.jsonl', maxDepth: TRANSCRIPT_FIND_DEPTH }, READ_RPC_MS)
   } catch (err) {
     return { kind: 'unreachable', error: err instanceof Error ? err.message : String(err) }
   }

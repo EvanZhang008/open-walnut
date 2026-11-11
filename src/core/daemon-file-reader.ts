@@ -10,7 +10,7 @@ import { log } from '../logging/index.js'
 import { link, linkTarget } from './hosts/link.js'
 import { isSelfHost } from '../replica/self-host.js'
 import { getConfig } from './config-manager.js'
-import { claudeProjectsSearchRoots } from './claude-config-dir.js'
+import { claudeProjectsSearchRoots, TRANSCRIPT_FIND_DEPTH } from './claude-config-dir.js'
 import { encodeProjectPath, isSafeForProjectEncoding, type SessionFileReader } from './session-file-reader.js'
 import type { FileGitCommit } from './file-history-git.js'
 
@@ -697,11 +697,37 @@ export class DaemonFileReader implements SessionFileReader {
       const result = await conn.send('fs.find', {
         path: root,
         name: sessionId + '.jsonl',
-        maxDepth: 3,
+        maxDepth: TRANSCRIPT_FIND_DEPTH,
       }, timeoutMs)
       if (result.ok && (result.files as string[])?.length) return (result.files as string[])[0]
     }
     return null
+  }
+
+  /**
+   * The transcript at its own path for `cwd` (where the CLI writes it, in every
+   * transcripts root), with no search: its path, null when every root exists and
+   * holds no file there, undefined when that cannot be told (a long cwd's hashed
+   * folder, a missing root, a stat that fails). A few stats, never a walk.
+   */
+  async ownSessionPath(sessionId: string, cwd: string, timeoutMs?: number): Promise<string | null | undefined> {
+    // A long cwd's folder carries a hash this side cannot compute: its own path is unknown.
+    if (!isSafeForProjectEncoding(cwd)) return undefined
+    try {
+      await this.resolve()
+      const conn = await link(this.host)
+      for (const root of claudeProjectsSearchRoots(this.host)) {
+        const rootStat = await conn.send('fs.stat', { path: root }, timeoutMs)
+        if (!rootStat.ok || !rootStat.exists) return undefined
+        const own = path.posix.join(root, encodeProjectPath(cwd), `${sessionId}.jsonl`)
+        const ownStat = await conn.send('fs.stat', { path: own }, timeoutMs)
+        if (!ownStat.ok) return undefined
+        if (ownStat.exists) return own
+      }
+      return null
+    } catch {
+      return undefined
+    }
   }
 
   /**
@@ -714,22 +740,12 @@ export class DaemonFileReader implements SessionFileReader {
    * and unreadable ones and still answers ok (2026-11-05 review).
    */
   async probeSessionPath(sessionId: string, cwd: string, timeoutMs?: number): Promise<string | null | undefined> {
-    // A long cwd's folder carries a hash this side cannot compute: its own path is unknown.
-    if (!isSafeForProjectEncoding(cwd)) return undefined
+    const own = await this.ownSessionPath(sessionId, cwd, timeoutMs)
+    if (own !== null) return own
     try {
-      await this.resolve()
       const conn = await link(this.host)
-      const roots = claudeProjectsSearchRoots(this.host)
-      for (const root of roots) {
-        const rootStat = await conn.send('fs.stat', { path: root }, timeoutMs)
-        if (!rootStat.ok || !rootStat.exists) return undefined
-        const own = path.posix.join(root, encodeProjectPath(cwd), `${sessionId}.jsonl`)
-        const ownStat = await conn.send('fs.stat', { path: own }, timeoutMs)
-        if (!ownStat.ok) return undefined
-        if (ownStat.exists) return own
-      }
-      for (const root of roots) {
-        const result = await conn.send('fs.find', { path: root, name: sessionId + '.jsonl', maxDepth: 3 }, timeoutMs)
+      for (const root of claudeProjectsSearchRoots(this.host)) {
+        const result = await conn.send('fs.find', { path: root, name: sessionId + '.jsonl', maxDepth: TRANSCRIPT_FIND_DEPTH }, timeoutMs)
         if (!result.ok) return undefined
         if ((result.files as string[] | undefined)?.length) return (result.files as string[])[0]
       }

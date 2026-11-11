@@ -861,7 +861,7 @@ import {
   CLAUDE_SESSION_MODES,
 } from '../../core/sessions/session-lifecycle.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
-import { historyNotWrittenYet } from '../../core/sessions/history-not-written.js'
+import { historyNotWrittenYet, transcriptNotWrittenYet } from '../../core/sessions/history-not-written.js'
 import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundHostRead, boundSharedHostRead, isRemoteHost } from '../../core/hosts/remote-read-bound.js'
 
 /** A SessionControlError as the web shape: `{ error }`, plus its `code` when it has one. */
@@ -1458,6 +1458,15 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     const viewRead = record && source !== 'streams'
       && (record.host || engineCaps(record.engine).historySource !== 'acp-journal')
       ? (await import('../../core/history-view-snapshot.js')).beginHistoryViewRead(sessionId) : undefined
+
+    // No conversation yet (a router waiting for its first mail, a session started with no
+    // message), proven by its own path: answer it at once, never after a search of every
+    // transcripts folder on the host (history-not-written.ts transcriptNotWrittenYet).
+    if (record && !req.query.before && await transcriptNotWrittenYet(record)) {
+      const since = typeof req.query.since === 'string' ? parseInt(req.query.since, 10) : undefined
+      res.json({ messages: [], total: 0, cursor: 0, delta: since === 0 })
+      return
+    }
 
     if (source === 'streams') {
       const screen = (rows: SessionHistoryMessage[]) => historyOpenScreen(rows, row => isReadableView([row]))

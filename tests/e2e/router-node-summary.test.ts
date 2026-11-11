@@ -16,6 +16,7 @@ import { addTask } from '../../src/core/task-manager.js';
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { isHistoryStartupWindow } from '../../src/core/sessions/session-lifecycle.js';
 import { routerAreaProfile } from '../../src/core/router/session-policy.js';
+import { DaemonFileReader } from '../../src/core/daemon-file-reader.js';
 import { routerStore } from '../../src/core/router/runtime.js';
 import { routerKey, routerMessageId } from '../../src/core/router/store.js';
 import type { RouterItem, RouterSource } from '../../src/core/router/types.js';
@@ -91,12 +92,23 @@ describe('the router node summary', () => {
     // The launch grace is out of play: only the router rule can answer an empty history here.
     const stored = await getSessionByClaudeId(sid);
     expect(stored && isHistoryStartupWindow(stored)).toBe(false);
-    for (const query of ['', '?tail=400&turns=10']) {
-      const response = await fetch(`${base}/api/sessions/${sid}/history${query}`);
-      expect(response.status).toBe(200);
-      const body = await response.json();
-      expect(body.messages).toEqual([]);
-      expect(body.historyUnavailable, query).toBeUndefined();
+    // Its own path proves there is no transcript, so no read searches every transcripts
+    // folder for it (2026-11-11: that search took the prod router's page past 30 s).
+    const own = vi.spyOn(DaemonFileReader.prototype, 'ownSessionPath');
+    const find = vi.spyOn(DaemonFileReader.prototype, 'findSessionPath');
+    try {
+      for (const query of ['', '?tail=400&turns=10', '?source=streams&tail=400&turns=10', '?since=0']) {
+        const response = await fetch(`${base}/api/sessions/${sid}/history${query}`);
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(body.messages).toEqual([]);
+        expect(body.historyUnavailable, query).toBeUndefined();
+      }
+      expect(own).toHaveBeenCalled();
+      expect(find).not.toHaveBeenCalled();
+    } finally {
+      own.mockRestore();
+      find.mockRestore();
     }
   });
 });
