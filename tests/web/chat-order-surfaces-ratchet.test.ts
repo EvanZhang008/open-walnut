@@ -58,6 +58,7 @@ const SURFACES: Record<string, string> = {
   'web/src/components/notes/NotesSessionChat.tsx': 'no stream before the session; SessionChatHistory after',
   // Draws nothing: reads the rows SessionChatHistory already placed, in screen order, as text for the side panel's snapshot.
   'web/src/popout/ext-snapshot.ts': 'reads drawn rows',
+  'web/src/utils/session-open-latency.ts': 'reads drawn rows for click-to-content timing; never draws or reorders them',
 };
 
 describe('ratchet: every chat surface keeps one order', () => {
@@ -92,7 +93,8 @@ Place its bubbles with bubbleIndexOf / cardLiveRounds (or mount SessionChatHisto
   });
 
   it('history places a mid-turn send at its take and floats a waiting one past the live reply', () => {
-    const parser = read('src/core/session-history.ts');
+    const parser = read('src/core/history-parse.ts');
+    expect(read('src/core/session-history.ts')).toContain("export * from './history-parse.js'");
     expect(parser).toMatch(/raw\.attachment\?\.type === 'queued_command'\) \{\n\s*const j = enqueueOfAttachment\.get\(i\)/);
     expect(parser).toMatch(/floatQueuedRows\(result, resultParentIds\)/);
   });

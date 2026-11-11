@@ -39,6 +39,7 @@ const SEES_QUIET_TURNS: Record<string, string> = {
   'src/core/search.ts': 'reindexes the transcript, which really changed',
   'src/core/search/wiring.ts': 'reindexes the transcript, which really changed',
   'src/core/session-changes-prewarm.ts': 'warms the Changed tab cache: harmless',
+  'src/core/history-ready-refresh.ts': 'refreshes a read-only first-paint view after a compaction changed the transcript; sends no user message or phase update',
   'src/core/sessions/queue-after-turn.ts': 'releases the messages held for the turn\'s end: a quiet turn ends too, and what waited for it goes',
   'src/core/session-git-status.ts': 'recounts the session\'s git changes (debounced; a tree a quiet turn left unchanged changes no count)',
   'src/core/sessions/launch-prompts.ts': 'forgets a launch prompt once the transcript has it',
