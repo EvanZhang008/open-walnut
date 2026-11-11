@@ -2730,6 +2730,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/diagnostics', diagnosticsRouter)
   app.use('/api/components', componentsRouter)
   app.use('/api/audio', audioRouter)
+  app.use('/api/history-remote', (await import('./routes/history-remote.js')).historyRemoteRouter)
+  // A session of this machine kept only in remote storage comes back when this server reads it (core/history-remote/).
+  void import('../core/history-remote/service.js').then((m) => m.installServerFetcher()).catch(() => { /* restores read as missing */ })
   app.use('/api/stt', sttRouter)
   app.use('/api/incidents', incidentsRouter)
   app.use('/api/metrics', metricsRouter)

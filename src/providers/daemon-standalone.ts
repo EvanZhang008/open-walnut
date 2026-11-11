@@ -189,7 +189,7 @@ import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { createDaemonPorts } from './port-scan-core.js'
-import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, restoreSessionAnywhere, resumeSourceId, setArchiveLog, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
+import { archiveTranscripts, bunTranspilerCacheDirs, ensureTaskDir, liveTranscriptIdsFromPs, isTaskDirId, listTaskDirs, plainFindResults, pruneHostCaches, pruneTaskBuilds, pruneTaskDirs, readOpenPaths, removeTaskDirs, restoreForRead, restoreSessionAnywhere, resumeSourceId, setArchiveLog, setRemoteFetcher, RemoteHistoryError, taskDirInUse, taskDirPath, taskDirRoot, taskDirSizes, type HostWork } from './task-dir-core.js'
 import { ensurePwSilencePreload, pwSilenceDir, pwSilenceSessionEnv } from './pw-silence-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
@@ -6179,6 +6179,26 @@ async function cmdTranscriptArchive(ws: ServerWebSocket<WsData>, id: number, cmd
     sendError(ws, id, 'transcript.archive failed: ' + (err as Error).message)
   } finally { transcriptArchiveBusy = false }
 }
+
+/**
+ * A session whose archive files went to remote storage (transcript-offload.ts) comes back
+ * through this daemon's server: only it holds the storage's credentials. The restore asks it
+ * (capability `history.fetch`) to download what is missing next to the manifest and check each
+ * file, then decompresses as for any archive. With no server connected the restore fails with
+ * a RemoteHistoryError and nothing is touched. Keep in sync with daemon-source.ts.
+ */
+const HISTORY_FETCH_MS = 180_000
+// A restore's own warnings (a file kept twice, a fetch that failed) go to this daemon's log from the start.
+setArchiveLog((msg) => logMsg('warn', 'transcript archive', { msg }))
+setRemoteFetcher((dir, sid) => new Promise<void>((resolve, reject) => {
+  const target = pickTrustedClient('').client
+  if (!target) return reject(new RemoteHistoryError('the history of ' + sid + ' is in remote storage, and no Walnut server is connected to fetch it'))
+  relayToPrimary(target, undefined, 'history.fetch', EXTERNAL_CALLER_SID, { dir, sessionId: sid }, (resp) => {
+    if (resp.ok) return resolve()
+    const code = resp.error?.code
+    reject(new RemoteHistoryError(resp.error?.message || 'the server could not fetch it from remote storage', { stillRunning: code === 'hub_timeout' }))
+  }, false, Date.now() + HISTORY_FETCH_MS)
+}))
 
 /** Rebuildable tool caches older than `olderThanMs` (host-cache-prune.ts, host-cache-prune-v1). Keep in sync with daemon-source.ts. */
 async function cmdTaskDirPruneCaches(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {

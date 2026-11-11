@@ -86,8 +86,15 @@ const MANIFEST_VERSION = 1
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 export interface ManifestFile { rel: string; size: number; mtimeMs: number; sha256: string; ino?: number; asideCtimeMs?: number }
+/** One archive file kept in remote storage (transcript-offload.ts): its object and the bytes it must hold. */
+export interface RemoteFile { rel: string; key: string; gzSize: number; gzSha256: string; md5: string }
+/**
+ * Where a session's archive files went: uploaded and checked (`uploadedAt`), and once a later
+ * pass checked them again, removed here (`offloadedAt`). A restore fetches what is missing.
+ */
+export interface ManifestRemote { bucket: string; endpoint?: string; region?: string; uploadedAt: number; offloadedAt?: number; files: RemoteFile[] }
 /** `asideAt` is set while the originals still sit aside (`<file>.walnut-orig`); a finalize clears it. */
-export interface Manifest { version: number; sessionId: string; archivedAt: string; asideAt?: number; files: ManifestFile[] }
+export interface Manifest { version: number; sessionId: string; archivedAt: string; asideAt?: number; files: ManifestFile[]; remote?: ManifestRemote }
 
 export interface ArchiveOptions {
   /** Sessions whose newest touch is older than this many ms are archived. */
@@ -619,6 +626,32 @@ async function restoreSessionNow(dir: string, sid: string): Promise<boolean> {
 async function restoreLocked(dir: string, sid: string): Promise<boolean> {
   const m = await readManifest(dir, sid)
   if (!m) throw new Error(`archive manifest of ${sid} cannot be read`)
+  // Archive files kept only in remote storage come back first; until they are here nothing is touched.
+  if (m.remote) {
+    const missing: RemoteFile[] = []
+    for (const f of m.files) {
+      const p = path.join(dir, f.rel)
+      const there = (await exists(p)) || (await exists(p + ORIG_SUFFIX)) || (await exists(p + ARCHIVE_SUFFIX))
+      const r = m.remote.files.find((x) => x.rel === f.rel)
+      if (!there && r) missing.push(r)
+    }
+    if (missing.length) {
+      if (!remoteFetcher) throw new RemoteHistoryError(`the history of ${sid} is in remote storage, and this host cannot fetch it now`)
+      try {
+        await remoteFetcher(dir, sid)
+      } catch (e) {
+        // The download runs on past the answer's deadline (a large session): wait for its files.
+        if (!(e instanceof RemoteHistoryError && e.stillRunning)) throw e
+        const until = Date.now() + FETCH_WAIT_MS
+        const allHere = async () => { for (const r of missing) if (!(await exists(path.join(dir, r.rel + ARCHIVE_SUFFIX)))) return false; return true }
+        while (!(await allHere())) {
+          if (Date.now() > until) throw new RemoteHistoryError(`the history of ${sid} is still coming back from remote storage; try again in a minute`)
+          await new Promise((r) => setTimeout(r, 1000))
+        }
+      }
+      for (const r of missing) if (!(await exists(path.join(dir, r.rel + ARCHIVE_SUFFIX)))) throw new RemoteHistoryError(`${r.rel} of ${sid} did not come back from remote storage`)
+    }
+  }
   const files = [...m.files]
   // Sidecar files first, the transcript last: a plain transcript means a whole session.
   files.sort((a, b) => (a.rel === sid + '.jsonl' ? 1 : 0) - (b.rel === sid + '.jsonl' ? 1 : 0))
@@ -656,6 +689,25 @@ async function restoreLocked(dir: string, sid: string): Promise<boolean> {
   return true
 }
 
+/** A restore that needs remote storage and could not reach it (no fetcher here, offline, a refused or wrong object). */
+export class RemoteHistoryError extends Error {
+  /** The fetch was not answered in time but may still be running (its files may yet come). */
+  readonly stillRunning: boolean
+  constructor(message: string, opts?: { stillRunning?: boolean }) { super(message); this.name = 'RemoteHistoryError'; this.stillRunning = opts?.stillRunning === true }
+}
+/** How long a restore waits for a fetch that outran its answer. */
+const FETCH_WAIT_MS = 3 * 60_000
+
+/**
+ * Brings the archive files of session `sid` in `dir` that only remote storage holds back to
+ * `<file>.gz`, each checked against the manifest's record. The server sets it to its own
+ * download; a daemon to a request to its server (only the server holds the storage's
+ * credentials). Called with the session's lock held, so it must not take it.
+ */
+export type RemoteFetcher = (dir: string, sid: string) => Promise<void>
+let remoteFetcher: RemoteFetcher | null = null
+export function setRemoteFetcher(fn: RemoteFetcher | null): void { remoteFetcher = fn }
+
 let log: (msg: string) => void = (msg) => { try { process.stderr.write(`[transcript-archive] ${msg}\n`) } catch { /* closed */ } }
 /** Where the archive reports a file kept twice (the daemons pass their logger). */
 export function setArchiveLog(fn: (msg: string) => void): void { log = fn }
@@ -673,7 +725,11 @@ export async function ensurePlain(p: string): Promise<boolean> {
   // transcript a stopped pass left plain) is restored, so what it lists is whole.
   const at = archivedSessionOf(p)
   if (!at) return there
-  try { await restoreSession(at.dir, at.sid) } catch { return there }
+  try { await restoreSession(at.dir, at.sid) } catch (e) {
+    // Kept in remote storage and not fetched: the read goes on as for a missing file, so say why here.
+    if (e instanceof RemoteHistoryError) log(`restore of ${at.sid} from remote storage failed: ${e.message}`)
+    return there
+  }
   return fsp.lstat(p).then(() => true, () => false)
 }
 
@@ -796,6 +852,11 @@ export async function restoreArchivedAt(dir: string, sid: string): Promise<boole
   if (!SID_RE.test(sid)) return false
   try { await fsp.access(manifestPath(dir, sid)) } catch { return false }
   return restoreSession(dir, sid).catch(() => false)
+}
+
+/** The pieces transcript-offload.ts shares with the archive: one lock, one manifest format, one way to place a file. */
+export const archiveInternals = {
+  tryLock, withBeat, beat, stillHeld, readManifest, writeManifest, manifestPath, install, tmpName, fsyncPath, exists, ORIG_SUFFIX, SID_RE,
 }
 
 /** Is session `sid` archived in `dir`? Sync, one stat. */

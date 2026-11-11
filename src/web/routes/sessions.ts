@@ -838,7 +838,7 @@ import {
   CLAUDE_SESSION_MODES,
 } from '../../core/sessions/session-lifecycle.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
-import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundHostRead, boundSharedHostRead } from '../../core/hosts/remote-read-bound.js'
+import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundHostRead, boundSharedHostRead, isRemoteHost } from '../../core/hosts/remote-read-bound.js'
 
 /** A SessionControlError as the web shape: `{ error }`, plus its `code` when it has one. */
 function sendControlError(res: Response, err: SessionControlError): void {
@@ -1485,6 +1485,12 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // full path below): an 8+ MB whale JSONL parsed whole on the event loop
       // took seconds and stalled every other route, only for the tail slice to
       // throw most of it away.
+      // A session kept only in remote storage downloads first: Phase 1 is a fast preview, so it
+      // answers empty at once and the full fetch says it is loading (history-remote/loading.ts).
+      if (await import('../../core/history-remote/loading.js').then((L) => L.remoteOnlyHere(sessionId, record?.cwd))) {
+        res.json({ messages: [], total: 0 })
+        return
+      }
       let p1: Awaited<ReturnType<typeof readProviderSessionHistory>>
       try {
         const { boundHistoryPreview, HISTORY_OPEN_PREVIEW_BYTES } = await import('../../core/history-open-preview.js')
@@ -1571,6 +1577,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // parser's mark lives on the exact object the reader returned. Fork
     // ancestors may carry their own set — unioned where their fetches merge.
     const finishedAgentIdSet = new Set<string>()
+    let fromRemote: { L: typeof import('../../core/history-remote/loading.js'); remote: boolean } | null = null
     try {
       // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand.
       // Tail-bounded request → bound a COLD read to the last few MB too
@@ -1602,17 +1609,28 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // A full read is shared: one still arriving when this request had to
       // answer ("Still loading") goes on, and the client's next request joins
       // it rather than starting over. A delta (?since=) is always fresh.
-      const history = req.query.since === undefined
-        ? await boundSharedHostRead(record?.host, `history\u0000${sessionId}\u0000${tail && tail > 0 ? 'tail' : 'all'}\u0000${turnCount}`, readHistory)
-        : await boundHostRead(record?.host, readHistory)
+      const readKey = `history\u0000${sessionId}\u0000${tail && tail > 0 ? 'tail' : 'all'}\u0000${turnCount}`
+      // A session of this machine kept only in remote storage downloads first: say so while it does.
+      fromRemote = req.query.since === undefined && !isRemoteHost(record?.host)
+        ? await import('../../core/history-remote/loading.js').then(async (L) => ({ L, remote: await L.remoteOnlyHere(sessionId, record?.cwd) }))
+        : null
+      const history = fromRemote
+        ? await fromRemote.L.withRemoteLoading(readKey, fromRemote.remote, readHistory)
+        : req.query.since === undefined
+          ? await boundSharedHostRead(record?.host, readKey, readHistory)
+          : await boundHostRead(record?.host, readHistory)
       messages = history.messages
       historySourceAvailable = history.sourceAvailable
       historyWindowed = history.windowed
       for (const id of history.finishedAgentIds ?? []) finishedAgentIdSet.add(id)
     } catch (err) {
       // Surface remote read errors (SSH auth, daemon connection, etc.) to the frontend
-      const msg = err instanceof Error ? err.message : String(err)
-      log.web.warn('session history read failed', { sessionId, host: record?.host, error: msg })
+      const raw = err instanceof Error ? err.message : String(err)
+      // A session kept in remote storage that could not come back: say where it is, not an errno.
+      const msg = fromRemote && fromRemote.remote && !(err instanceof HostStillLoadingError)
+        ? 'This conversation is kept in remote storage and could not be brought back now (the storage or its credentials did not answer). Nothing was lost; try again.'
+        : raw
+      log.web.warn('session history read failed', { sessionId, host: record?.host, error: raw })
       // Still arriving, on a link that answers: the client keeps what it shows
       // and asks again at once, joining the read (boundSharedHostRead).
       const loading = err instanceof HostStillLoadingError ? { loading: { from: err.from } } : {}

@@ -23,6 +23,8 @@ import { REVIEW_MIXED_SESSION } from './threads-review-fixture'
 import { kanbanSeedTasks } from './board-kanban-seed'
 import { chatEarlierSessionRecords, writeChatEarlierFiles } from './chat-earlier-fixture'
 import { archivedHistoryRecord, archivedHistoryTask, writeArchivedHistory } from './archived-history-fixture'
+import { REMOTE_IDS, remoteHistorySetting, writeRemoteHistory } from './remote-history-fixture'
+import { startFakeS3 } from '../../helpers/fake-s3'
 import { GIT_GLANCE_SESSION, gitGlanceDemoIdPair, gitGlanceJsonl, gitGlanceRecord, gitGlanceTask, writeGitGlanceDemo, writeGitGlanceRepo } from './git-glance-fixture'
 // Transcript past the full read's byte ceiling (whale-history.spec.ts).
 import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
@@ -197,10 +199,13 @@ const mockMainAgent = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
   '../../providers/mock-main-agent.mjs',
 )
+// Remote history storage for session-history-remote.spec.ts: a fake S3 in this process.
+const fixtureS3 = await startFakeS3('walnut-fixture-history')
 await fs.writeFile(
   path.join(tmpBase, 'config.yaml'),
   JSON.stringify({
     version: 1,
+    session: { history_remote: remoteHistorySetting(fixtureS3) },
     defaults: { priority: 'none', platform: 'local' },
     hosts: {
       'fixture-remote': {
@@ -1300,6 +1305,7 @@ await fs.writeFile(
       },
       gitGlanceTask(new Date().toISOString()),
       archivedHistoryTask(new Date().toISOString()),
+      archivedHistoryTask(new Date().toISOString(), REMOTE_IDS),
       ...gitGlanceDemo.map((d) => d.task),
       ...gitGlanceDemoIdPair(new Date().toISOString()),
       {
@@ -2996,6 +3002,9 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
       await fs.writeFile(path.join(dir, `${d.sessionId}.jsonl`), d.jsonl)
     }
   }
+  // A session whose history is only in remote storage (remote-history-fixture.ts), written
+  // first so its offload pass sees no other archived session.
+  await writeRemoteHistory(tmpBase, fixtureS3)
   // A session whose history the archive already compressed (archived-history-fixture.ts).
   await writeArchivedHistory(tmpBase)
   const controllerPath = path.join(vscodeFixtureRoot, 'sync-controller.go')
@@ -4162,6 +4171,7 @@ await fs.writeFile(
       },
       gitGlanceRecord(sessionFixtureNow, gitGlanceRoot),
       archivedHistoryRecord(tmpBase),
+      archivedHistoryRecord(tmpBase, REMOTE_IDS),
       ...gitGlanceDemo.map((d) => d.record),
       {
         claudeSessionId: 'pw-changed-session',

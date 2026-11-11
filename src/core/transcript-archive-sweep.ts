@@ -129,8 +129,28 @@ let inFlight: Promise<ArchivePassRow[]> | null = null
 
 /** One pass now, joined by every caller while it runs. */
 export function archiveHistoryNow(): Promise<ArchivePassRow[]> {
-  inFlight ??= archiveHistoryOnce().finally(() => { inFlight = null })
+  inFlight ??= archiveHistoryOnce().then(withRemotePass).finally(() => { inFlight = null })
   return inFlight
+}
+
+/**
+ * The remote tier (history-remote/service.ts) for this machine, after its archive pass and only
+ * once that pass is through its backlog: compressing comes first, and the two never compete for
+ * the disk at once. Its row reads as the archive's (waiting uploads as `aside`), so the clock
+ * comes back for its second step.
+ */
+async function withRemotePass(rows: ArchivePassRow[]): Promise<ArchivePassRow[]> {
+  const local = rows.find((r) => r.host === '__local__')
+  if (!local || local.partial || local.error || local.skipped) return rows
+  try {
+    const { remotePassOnce } = await import('./history-remote/service.js')
+    const rr = await remotePassOnce()
+    if (rr) rows.push({ host: '__local__:remote', sessions: rr.uploaded, finalized: rr.offloaded, freedBytes: rr.freedBytes, aside: rr.waiting, failed: rr.failed, partial: rr.partial })
+  } catch (err) {
+    rows.push({ host: '__local__:remote', error: (err as Error).message })
+    log.session.warn('session history remote pass failed', { error: (err as Error).message })
+  }
+  return rows
 }
 
 /** A host still busy with a pass (one a restart cut this server off from) is asked again this soon. */

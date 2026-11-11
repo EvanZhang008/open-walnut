@@ -18,6 +18,7 @@ const SITES: Record<string, string> = {
   'src/providers/daemon-standalone.ts': 'restores: fs.read/readRange/readBounded/stat/ls/find and a resume restore first (restoreForRead, plainFindResults, restoreSessionAnywhere)',
   'src/providers/daemon-source.ts': 'restores: the same, through the task-dir-core.cjs sidecar',
   'src/providers/transcript-archive.ts': 'the archive itself',
+  'src/core/history-remote/loading.ts': 'reads only the manifest (is the session kept remotely?) and a stat of its transcript and .gz',
   'src/core/session-file-reader.ts': 'restores: findLocalJsonlPath restores a session archived on this machine; every other read goes through the daemon file commands',
   'src/providers/session-changes-core.ts': 'restores: resolveJsonlPathHostLocal restores on a miss (changes, rewind, path resolution)',
   'src/core/session-jsonl-migration.ts': 'restores before it moves a transcript to a new cwd',

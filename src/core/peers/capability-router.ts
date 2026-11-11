@@ -93,6 +93,8 @@ export async function handleGatewayCapability(
       return handleToolsList(payload ?? {}, host, callerSid);
     case 'tools.call':
       return handleToolsCall(callerSid, payload ?? {}, host, d);
+    case 'history.fetch':
+      return handleHistoryFetch(payload ?? {}, host);
     // Old daemons / old shims still speak these — answer with the replacement
     // instead of a bare unknown-capability error.
     case 'peers.list':
@@ -103,6 +105,24 @@ export async function handleGatewayCapability(
         'peers.send was replaced — run `walnut tools call task_send \'{"to":"...","text":"..."}\'`');
     default:
       return err('bad_request', `unsupported capability: ${JSON.stringify(capability)}`);
+  }
+}
+
+// ── history.fetch — a daemon's restore of a session kept in remote storage ──
+//
+// Only this server holds the bucket's credentials, and only its OWN machine's history goes
+// there (history-remote/service.ts), so only the local daemon may ask. It names the session's
+// project dir and id; the server reads that session's manifest itself, downloads what is
+// missing next to it and checks each file's hash. Anything else is refused. At worst a caller
+// on this machine brings one of the user's own sessions back to disk, which opening it does.
+async function handleHistoryFetch(payload: Record<string, unknown>, host: string): Promise<CapabilityOutcome> {
+  if (host !== '__local__') return err('bad_request', 'history.fetch: only this machine\'s history is in remote storage');
+  try {
+    const { fetchLocalArchive } = await import('../history-remote/service.js');
+    const files = await fetchLocalArchive(payload.dir, payload.sessionId);
+    return { ok: true, result: { files } };
+  } catch (e) {
+    return err('internal', `history.fetch: ${(e as Error).message}`);
   }
 }
 

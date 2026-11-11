@@ -31,7 +31,7 @@ export { taskDirSizes, type TaskDirSize } from './task-dir-sizes.js'
 // Tool caches pruned while the disk is low (host-cache-prune.ts), and the session history
 // archive (transcript-archive.ts): the source twin loads both through this sidecar too.
 export { bunTranspilerCacheDirs, pruneHostCaches, type CachePruneResult } from './host-cache-prune.js'
-export { archiveTranscripts, liveTranscriptIdsFromPs, restoreSessionAnywhere, resumeSourceId, setArchiveLog, restoreForRead, plainFindResults, type ArchiveReport } from './transcript-archive.js'
+export { archiveTranscripts, liveTranscriptIdsFromPs, restoreSessionAnywhere, resumeSourceId, setArchiveLog, setRemoteFetcher, RemoteHistoryError, restoreForRead, plainFindResults, type ArchiveReport } from './transcript-archive.js'
 // The page silencer's preload rides this sidecar to the source twin (pw-silence-core.ts).
 export { ensurePwSilencePreload, pwSilenceDir, pwSilenceSessionEnv } from './pw-silence-core.js'
 

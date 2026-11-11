@@ -13,6 +13,7 @@ import { DefaultEngineRow } from './DefaultEngineRow';
 import { FallbackEngineRow } from './FallbackEngineRow';
 import { ClaudeCodeImportGroups } from './ClaudeCodeImportGroup';
 import { MessageHintsGroup } from './MessageHintsGroup';
+import { HistoryRemoteGroup } from './HistoryRemoteGroup';
 import { DEFAULT_IDLE_COMPACT_LIMIT_PERCENT, IDLE_COMPACT_LIMIT_PERCENT_RANGE } from '../../../../../src/core/sessions/prompt-cache';
 
 interface Props {
@@ -175,6 +176,7 @@ export function SessionsSection({ config, onSave }: Props) {
           control={<NumberInput id="history-compress" field={historyDays.inputProps} unit="days" placeholder="60" min={0} />}
         />
       </SettingsGroup>
+      <HistoryRemoteGroup config={config} save={(patch) => saveSession(patch, 'sessions.history-remote')} />
 
       <SettingsGroup heading="Context">
         <SettingsRow

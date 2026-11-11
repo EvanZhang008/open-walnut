@@ -19,6 +19,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { startFakeS3, type FakeS3 } from '../helpers/fake-s3.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-archive-twins-')))
 const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
@@ -177,6 +178,64 @@ describe.each(TWINS)('session history archive: $name', ({ name, command }) => {
 
     // Nothing of the archive is left behind.
     expect(fs.readdirSync(proj).filter((n) => n.endsWith('.gz') || n.includes('walnut-archive'))).toEqual([])
+  }, 120_000)
+
+  it('a session kept in remote storage comes back through its server (history.fetch), checked by hash', async () => {
+    const home = path.join(root, slug + '-s3', 'home')
+    const proj = path.join(home, '.claude', 'projects', '-work-marina')
+    const body = writeSession(proj, 's-remote')
+    writeSession(proj, 's-alone')
+    const { archiveTranscripts, setRemoteFetcher } = await import('../../src/providers/transcript-archive.js')
+    const { offloadArchived, fetchRemoteArchive, OFFLOAD_KEEP_MS } = await import('../../src/providers/transcript-offload.js')
+    const { remoteStore, resolveRemote } = await import('../../src/core/history-remote/store.js')
+    const projects = [path.join(home, '.claude', 'projects')]
+    const later = Date.now() + 400 * 86_400_000
+    await archiveTranscripts(projects, { olderThanMs: 86_400_000, now: later })
+    await archiveTranscripts(projects, { olderThanMs: 86_400_000, now: later })
+    const keys = { id: process.env.AWS_ACCESS_KEY_ID, secret: process.env.AWS_SECRET_ACCESS_KEY }
+    process.env.AWS_ACCESS_KEY_ID = 'AKIAFAKEFAKEFAKE'
+    process.env.AWS_SECRET_ACCESS_KEY = 'fake-secret'
+    const s3: FakeS3 = await startFakeS3('twins-history')
+    try {
+      const store = await remoteStore(resolveRemote({ enabled: true, bucket: s3.bucket, endpoint: s3.url, region: 'us-east-1' }))
+      const tier = { olderThanMs: 180 * 86_400_000, keyPrefix: 'walnut-history/twin' }
+      expect((await offloadArchived(projects, { ...tier, now: later, store })).uploaded).toBe(2)
+      expect((await offloadArchived(projects, { ...tier, now: later + OFFLOAD_KEEP_MS, store })).offloaded).toBe(2)
+      expect(fs.readdirSync(proj).filter((n) => n.endsWith('.gz'))).toEqual([])
+      setRemoteFetcher(null)
+
+      const d = await boot(command, slug + '-s3', home)
+      await rpc(d, { cmd: 'hello' })
+      // This test plays the daemon's server: it answers history.fetch the way the server does.
+      const asked: unknown[] = []
+      d.ws.on('message', (data: Buffer) => {
+        let msg: { ev?: string; relayId?: number; capability?: string; payload?: { dir?: string; sessionId?: string } }
+        try { msg = JSON.parse(data.toString()) } catch { return }
+        if (msg.ev !== 'gateway-request' || msg.capability !== 'history.fetch') return
+        asked.push(msg.payload)
+        void fetchRemoteArchive(msg.payload!.dir!, msg.payload!.sessionId!, store).then(
+          (files) => d.ws.send(JSON.stringify({ id: rpcId++, cmd: 'gateway-result', relayId: msg.relayId, result: { files } })),
+          (e: Error) => d.ws.send(JSON.stringify({ id: rpcId++, cmd: 'gateway-result', relayId: msg.relayId, error: e.message, errorCode: 'internal' })),
+        )
+      })
+      const rd = await rpc(d, { cmd: 'fs.read', path: path.join(proj, 's-remote.jsonl'), encoding: 'utf-8' })
+      expect(rd.ok).toBe(true)
+      expect(rd.data).toBe(body.main)
+      expect(asked).toEqual([{ dir: proj, sessionId: 's-remote' }])
+      expect(fs.readFileSync(path.join(proj, 's-remote', 'subagents', 'agent-a1.jsonl'), 'utf8')).toBe(body.agent)
+      expect(fs.existsSync(path.join(proj, 's-remote.walnut-archive.json'))).toBe(false)
+
+      // Storage down: the read finds no file and the session stays as it was, only in remote storage.
+      s3.faults.failAll = true
+      const down = await rpc(d, { cmd: 'fs.read', path: path.join(proj, 's-alone.jsonl'), encoding: 'utf-8' })
+      expect(down.ok).toBe(false)
+      expect(fs.existsSync(path.join(proj, 's-alone.walnut-archive.json'))).toBe(true)
+      expect(fs.readdirSync(proj).filter((n) => n.startsWith('s-alone') && (n.endsWith('.gz') || n.includes('walnut-tmp')))).toEqual([])
+    } finally {
+      await s3.close()
+      if (keys.id === undefined) delete process.env.AWS_ACCESS_KEY_ID; else process.env.AWS_ACCESS_KEY_ID = keys.id
+      if (keys.secret === undefined) delete process.env.AWS_SECRET_ACCESS_KEY; else process.env.AWS_SECRET_ACCESS_KEY = keys.secret
+    }
   }, 120_000)
 
   it('a fork of an archived session restores its source before the CLI starts', async () => {

@@ -1406,6 +1406,23 @@ export interface ProviderSyncRules {
 /** Who reads a sync service, as a plugin manifest declares it (`syncAudience`). */
 export type SyncAudience = 'self' | 'shared';
 
+/** `session.history_remote`: where old session history is kept off this machine. */
+export interface HistoryRemoteConfig {
+  enabled?: boolean;
+  /** Days after which compressed history goes to the bucket; 0 = off. Default 180. */
+  days?: number;
+  bucket?: string;
+  region?: string;
+  /** An S3-compatible endpoint (Cloudflare R2, MinIO, ...); empty = AWS S3. */
+  endpoint?: string;
+  /** Path-style addressing, which most S3-compatible stores want. Default: true with an endpoint. */
+  force_path_style?: boolean;
+  /** Object names start with this. Default 'walnut-history'. */
+  prefix?: string;
+  /** Where the credentials come from: the AWS chain (env, default profile, SSO, instance role) or a named profile. */
+  auth?: { method?: 'aws_chain' | 'profile'; profile?: string };
+}
+
 export interface Config {
   version: 1;
   user: { name?: string };
@@ -1737,6 +1754,12 @@ export interface Config {
      *  for longer is compressed in place on its host and comes back the moment it is
      *  opened (src/core/transcript-archive-sweep.ts). Default 60; 0 turns it off. */
     history_compress_days?: number;
+
+    /** Session history older than `days` (default 180) that the archive already compressed
+     *  goes to an S3-compatible bucket and leaves this machine; opening such a session fetches
+     *  it back (src/core/history-remote/). Off until a bucket is set and `enabled` is true.
+     *  Credentials are never here: the standard AWS chain or a named profile of ~/.aws. */
+    history_remote?: HistoryRemoteConfig;
 
     /** Reply STYLE every session starts on: 'rich' lets the model answer in HTML
      *  the console renders natively, 'markdown' keeps replies plain. A session's

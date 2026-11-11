@@ -13559,6 +13559,22 @@ async function cmdTranscriptArchive(ws, id, cmd) {
     sendError(ws, id, 'transcript.archive failed: ' + err.message);
   } finally { transcriptArchiveBusy = false; }
 }
+// A session whose archive files went to remote storage comes back through this daemon's
+// server (capability history.fetch): only it holds the storage's credentials. Mirrors
+// daemon-standalone.ts.
+const HISTORY_FETCH_MS = 180000;
+if (taskDirCore && typeof taskDirCore.setArchiveLog === 'function') taskDirCore.setArchiveLog((msg) => logMsg('warn', 'transcript archive', { msg }));
+if (taskDirCore && typeof taskDirCore.setRemoteFetcher === 'function') {
+  taskDirCore.setRemoteFetcher((dir, sid) => new Promise((resolve, reject) => {
+    const target = pickTrustedClient('').client;
+    if (!target) return reject(new taskDirCore.RemoteHistoryError('the history of ' + sid + ' is in remote storage, and no Walnut server is connected to fetch it'));
+    relayToPrimary(target, undefined, 'history.fetch', EXTERNAL_CALLER_SID, { dir: dir, sessionId: sid }, (resp) => {
+      if (resp.ok) return resolve();
+      const code = resp.error && resp.error.code;
+      reject(new taskDirCore.RemoteHistoryError((resp.error && resp.error.message) || 'the server could not fetch it from remote storage', { stillRunning: code === 'hub_timeout' }));
+    }, false, Date.now() + HISTORY_FETCH_MS);
+  }));
+}
 async function cmdTaskDirPruneCaches(ws, id, cmd) {
   if (!taskDirCore || typeof taskDirCore.pruneHostCaches !== 'function') return sendError(ws, id, 'taskdir.pruneCaches unsupported: task-dir-core sidecar too old');
   const olderThanMs = Number(cmd.olderThanMs);

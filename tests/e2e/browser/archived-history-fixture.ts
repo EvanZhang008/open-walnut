@@ -13,8 +13,12 @@ export const ARCHIVED_TASK = 'pw-task-archived-history'
 export const ARCHIVED_TITLE = 'Archived history fixture task'
 export const ARCHIVED_LAST_ANSWER = 'The header row is unchanged: order id, date, sku, quantity, unit price, total.'
 
-export function archivedHistoryCwd(tmpBase: string): string {
-  return path.join(tmpBase, 'projects', 'archived-history')
+/** One archived fixture session; the remote history fixture makes a second one with its own ids. */
+export interface ArchivedIds { sid: string; task: string; title: string; dir: string }
+export const ARCHIVED_IDS: ArchivedIds = { sid: ARCHIVED_SESSION, task: ARCHIVED_TASK, title: ARCHIVED_TITLE, dir: 'archived-history' }
+
+export function archivedHistoryCwd(tmpBase: string, ids: ArchivedIds = ARCHIVED_IDS): string {
+  return path.join(tmpBase, 'projects', ids.dir)
 }
 
 const TURNS: Array<[string, string]> = [
@@ -24,8 +28,9 @@ const TURNS: Array<[string, string]> = [
   ['Does the CSV header still match what finance imports?', ARCHIVED_LAST_ANSWER],
 ]
 
-export async function writeArchivedHistory(tmpBase: string): Promise<void> {
-  const cwd = archivedHistoryCwd(tmpBase)
+export async function writeArchivedHistory(tmpBase: string, ids: ArchivedIds = ARCHIVED_IDS): Promise<void> {
+  const ARCHIVED_SESSION = ids.sid
+  const cwd = archivedHistoryCwd(tmpBase, ids)
   await fs.mkdir(cwd, { recursive: true })
   const dir = path.join(tmpBase, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
   await fs.mkdir(path.join(dir, ARCHIVED_SESSION, 'subagents'), { recursive: true })
@@ -55,19 +60,20 @@ export async function writeArchivedHistory(tmpBase: string): Promise<void> {
   if (first.sessions !== 1 || second.finalized !== 1) throw new Error(`archived history fixture: expected one archived session, got ${JSON.stringify({ first, second })}`)
 }
 
-export function archivedHistoryTask(nowIso: string): Record<string, unknown> {
+export function archivedHistoryTask(nowIso: string, ids: ArchivedIds = ARCHIVED_IDS): Record<string, unknown> {
+  const ARCHIVED_SESSION = ids.sid
   return {
-    id: ARCHIVED_TASK, title: ARCHIVED_TITLE, status: 'in_progress', phase: 'IN_PROGRESS', priority: 'none', project: 'Walnut', source: 'local',
+    id: ids.task, title: ids.title, status: 'in_progress', phase: 'IN_PROGRESS', priority: 'none', project: 'Walnut', source: 'local',
     session_ids: [ARCHIVED_SESSION], active_session_ids: [], session_id: ARCHIVED_SESSION,
     session_status: { process_status: 'stopped', mode: 'bypass' },
     created_at: nowIso, updated_at: nowIso, description: '', summary: '', note: '', subtasks: [],
   }
 }
 
-export function archivedHistoryRecord(tmpBase: string): Record<string, unknown> {
+export function archivedHistoryRecord(tmpBase: string, ids: ArchivedIds = ARCHIVED_IDS): Record<string, unknown> {
   return {
-    claudeSessionId: ARCHIVED_SESSION, taskId: ARCHIVED_TASK, project: 'Walnut', process_status: 'stopped', mode: 'bypass',
+    claudeSessionId: ids.sid, taskId: ids.task, project: 'Walnut', process_status: 'stopped', mode: 'bypass',
     last_status_change: '2026-08-28T17:03:00.000Z', startedAt: '2026-08-28T17:02:00.000Z', lastActiveAt: '2026-08-28T17:03:00.000Z',
-    messageCount: 6, cwd: archivedHistoryCwd(tmpBase), title: 'Archived history fixture session',
+    messageCount: 6, cwd: archivedHistoryCwd(tmpBase, ids), title: `${ids.title} session`,
   }
 }
