@@ -69,19 +69,48 @@ async function expand(toggle: Locator): Promise<void> {
 
 /** Drag with the mouse, so the card under the pointer can be read before the drop. */
 async function dragOver(page: Page, from: Locator, to: Locator, { drags = true } = {}): Promise<void> {
-  await from.scrollIntoViewIfNeeded()
-  const a = (await from.boundingBox())!
-  await page.mouse.move(a.x + 20, a.y + a.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(a.x + 40, a.y + a.height / 2, { steps: 4 })
-  // The chart draws the drag a task after it starts (OrgChartSheet onDragStart), and that render
-  // moves the cards (the drop zone's words change): read the target's place once it is drawn as a
-  // drop target. Read before it, on a loaded runner the pointer went to where the card had been,
-  // and the drop asked nothing (2026-11-10, CI: no hint, then no question).
-  if (drags) await expect(to).toHaveClass(/\b(can-drop|is-active)\b/)
-  const b = (await to.boundingBox())!
-  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 8 })
-  await page.mouse.move(b.x + b.width / 2 + 4, b.y + b.height / 2, { steps: 2 })
+  // The chart is the shared fixture's: another spec's new project adds a card while this one is
+  // read (org-page.spec.ts makes its own), and the cards move. A press where `from` was a moment
+  // before picked up the card that took its place (2026-11-10, CI: "takes over Org page beta"),
+  // and a pointer sent where `to` was a moment before missed it (no hint). So the drag is checked
+  // to be `from`'s, and the pointer to be over `to`, and each is tried again if not.
+  const dragged = from.locator('xpath=ancestor-or-self::*[contains(concat(" ", normalize-space(@class), " "), " is-dragging ")]')
+  for (let tries = 0; ; tries++) {
+    await from.scrollIntoViewIfNeeded()
+    const a = (await from.boundingBox())!
+    await page.mouse.move(a.x + 20, a.y + a.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(a.x + 40, a.y + a.height / 2, { steps: 4 })
+    if (!drags) break
+    // The chart draws the drag a task after it starts (OrgChartSheet onDragStart), and that render
+    // moves the cards (the drop zone's words change): read the target's place once it is drawn as
+    // a drop target.
+    const started = await expect(dragged.first()).toBeAttached({ timeout: 5_000 }).then(() => true, () => false)
+    if (started) break
+    // Another card's drag, or none: let it go where it started (its own place drops nothing). A
+    // drop that still landed on a VP asks first: that question is cancelled.
+    await page.mouse.up()
+    await expect(page.locator('.is-dragging')).toHaveCount(0)
+    const asked = page.getByTestId('org-chart-confirm')
+    if (await asked.isVisible()) {
+      await asked.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect(asked).toHaveCount(0)
+    }
+    if (tries >= 2) throw new Error('the drag never picked up the card it pressed')
+  }
+  if (!drags) {
+    const b = (await to.boundingBox())!
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 8 })
+    await page.mouse.move(b.x + b.width / 2 + 4, b.y + b.height / 2, { steps: 2 })
+    return
+  }
+  await expect(to).toHaveClass(/\b(can-drop|is-active)\b/)
+  await expect(async () => {
+    const b = (await to.boundingBox())!
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 8 })
+    await page.mouse.move(b.x + b.width / 2 + 4, b.y + b.height / 2, { steps: 2 })
+    await expect(to).toHaveClass(/\bis-over\b/, { timeout: 1_000 })
+  }).toPass({ timeout: 15_000 })
 }
 
 test.beforeAll(async ({ request }) => {
