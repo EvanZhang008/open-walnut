@@ -18,7 +18,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { daemonInstallRoot, renderDaemonSystemdUnit } from '../../src/providers/daemon-service-config.js'
 import { parseUpdateTail, updateSnapshotScript, updateTailScript, type UpdateTailOptions } from '../../src/providers/daemon-update-tail.js'
 import { answerOfRecord, LAUNCHED, launcherScript, PROBATION_BUSY, readNetUpdateRecord, RUNNER_BUSY, runnerScript } from '../../src/providers/daemon-net-update-io.js'
-import { parseProbing, probationScript, PROBATION_GRACE_SECONDS, PROBATION_SECONDS, PROBATION_STARTING_NAME, PROBATION_STARTING_SECONDS, probationRecordLines, probingCheckScript } from '../../src/providers/daemon-update-probation.js'
+import { parseProbing, PROBATION_GRACE_SECONDS, PROBATION_SECONDS, PROBATION_STARTING_NAME, PROBATION_STARTING_SECONDS, probationRecordLines, probingCheckScript } from '../../src/providers/daemon-update-probation.js'
 import { servicePreamble } from '../../src/providers/daemon-update-shell.js'
 import { judgeUpdateRecord } from '../../src/providers/daemon-update-readback.js'
 import { createServiceStubs, type ServiceStubs } from '../helpers/service-stubs.js'
@@ -153,6 +153,29 @@ describe('the probation of a service update that came to serve', () => {
     // second came only because that one did not end the watch (a verdict is written before anything
     // else). A second restart before the first look reads as one (2026-11-10: on a loaded runner 3 s
     // was not enough, and the build was never put back).
+    await vi.waitFor(() => expect(looks(first)).toBeGreaterThanOrEqual(2), { timeout: 45_000, interval: 100 })
+    expect(fs.readFileSync(unit(), 'utf8')).toBe(newUnit)
+    expect(fs.existsSync(failedFile())).toBe(false)
+    restart()
+    await vi.waitFor(() => {
+      expect(fs.readFileSync(unit(), 'utf8')).toBe(previousUnit)
+      expect(fs.existsSync(failedFile())).toBe(true)
+    }, { timeout: 45_000, interval: 250 })
+    expect(fs.readFileSync(failedFile(), 'utf8').split('\n')[2]).toMatch(/^the new daemon stopped and was started again 2 times within \d+ s of its probation/)
+  }, 180_000)
+
+  // 2026-11-11: the tail writes the probation's pid at the detach, before its sh ran a line, and on a
+  // loaded runner the case's first restart came before the probation's first look. That look took
+  // the restarted daemon for the one the tail judged, so one restart went uncounted and the second
+  // never put the build back. The tail now hands the probation the daemon it judged.
+  it('a restart while the probation is still starting (a loaded detach) counts too', async () => {
+    const { previousUnit, newUnit } = updated()
+    const looks = looksAt()
+    // The detach takes 3 s before the probation's sh runs (setsid execs it in place).
+    fs.writeFileSync(path.join(stubs.bin, 'setsid'), '#!/bin/sh\nsleep 3\nexec "$@"\n', { mode: 0o755 })
+    await probationRuns()
+    restart()
+    const first = daemonPid()
     await vi.waitFor(() => expect(looks(first)).toBeGreaterThanOrEqual(2), { timeout: 45_000, interval: 100 })
     expect(fs.readFileSync(unit(), 'utf8')).toBe(newUnit)
     expect(fs.existsSync(failedFile())).toBe(false)
@@ -405,20 +428,6 @@ describe('a later update while the probation runs', () => {
 
 // 2026-11-05 review 6b: a probation's process counted as at work for as long as it lived, so one
 // that hung (a launchctl in its put-back that never answered) held every later update for good.
-describe('the daemon a probation counts restarts from', () => {
-  it('is read before its pid says it is at work, so a restart right after that is counted', () => {
-    // 2026-11-11: a restart that came between the pid and this look was taken for the daemon it
-    // watched, and a crash loop's second restart then counted as the first.
-    const lines = probationScript([], { waitSeconds: 1, staySeconds: 1 }).split('\n')
-    const base = lines.findIndex((l) => l.trim() === 't_up && tp0=$p')
-    const pid = lines.findIndex((l) => l.includes('/probation.pid" &&'))
-    const reset = lines.findIndex((l) => /(^|; )tp0=;/.test(l))
-    expect(base).toBeGreaterThan(-1)
-    expect(reset).toBeLessThan(base)
-    expect(base).toBeLessThan(pid)
-  })
-})
-
 describe('a probation that is past its time', () => {
   it('counts as at work only up to its end and a grace after it; a hung one stops holding updates', async () => {
     const copies = path.join(tb(), 'update-before')

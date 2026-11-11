@@ -264,7 +264,8 @@ export function updateTailLines(o: UpdateTailOptions): string[] {
     '  t_lock',
     '  tr=$(t_dir | head -n 1); [ -n "$tr" ] || tr=/tmp/open-walnut',
     '  [ "$tk" = launchd ] && tsx0=$(t_prog)',
-    `  if t_serve ${wait} && t_stay "$tv_stay"; then tok=1; else tok=0; fi`,
+    // tv_sp: the daemon judged serving, the one the probation counts restarts from.
+    `  tv_sp=; if t_serve ${wait} && t_stay "$tv_stay"; then tok=1; tv_sp=$p; else tok=0; fi`,
     '  [ "$ty" = 1 ] && tq="the new daemon answered and then did not stay serving for $tv_stay s"',
     '  if [ "$tok" = 1 ]; then',
     '    if [ "$tl" = 1 ]; then tt=loaded; ts="the service was not running after the update, so it was started again, and a daemon answers"',

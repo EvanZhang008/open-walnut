@@ -104,8 +104,9 @@ export function probationScript(fns: string[], o: { waitSeconds: number; staySec
     '#!/bin/sh',
     '# Walnut daemon update probation (src/providers/daemon-update-probation.ts), started detached by an update tail.',
     // $1 the runtime dir; $2 how long; $3 how often; $4 the update's dir (the copies name it); $5 the
-    // runners' latest marker; $6 the tail that started it (its hold of the install lock is no one else's).
-    'tr=$1; tv_s=$2; tv_e=$3; tv_d=$4; L=${5:-"/tmp/open-walnut-update-latest-$(id -u)"}; tv_pp=${6:-}; d=$tv_d',
+    // runners' latest marker; $6 the tail that started it (its hold of the install lock is no one else's);
+    // $7 the pid of the daemon the tail judged serving.
+    'tr=$1; tv_s=$2; tv_e=$3; tv_d=$4; L=${5:-"/tmp/open-walnut-update-latest-$(id -u)"}; tv_pp=${6:-}; tv_p0=${7:-}; d=$tv_d',
     ...fns,
     ...probationRecordLines(),
     `tsb="$tb/${SNAPSHOT_DIR}"; ts_b=$tsb`,
@@ -120,10 +121,11 @@ export function probationScript(fns: string[], o: { waitSeconds: number; staySec
     // its pid says it is at work, so nothing written after that goes unseen.
     `tv_c=$(sed -n 2p "$tsb/${PROBATION_STARTING_NAME}" 2>/dev/null); [ -n "$tv_c" ] || tv_c=$(cksum < "$tc" 2>/dev/null)`,
     'tl=0; tx=0; tn=0; ty=0; tt=; tw=; tg_on=; tsx0=; tp0=; tm=0; tvr=0; tvf=',
-    // The daemon it counts restarts from, read before its pid says it is at work too: a restart
-    // right after that is seen as one (2026-11-11: on a loaded runner a restart came between the pid
-    // and this look, was taken for the daemon it watched, and a crash loop's second restart counted once).
-    't_up && tp0=$p',
+    // The daemon it counts restarts from: the one the tail judged, not the first one it finds itself.
+    // The detach takes seconds under load (the tail writes this pid before its sh ran a line), and a
+    // restart inside it was taken for the daemon judged: 2026-11-11, a crash loop's first restart went
+    // uncounted, and its second never put the build back. With none (an older tail), it looks itself.
+    'case "$tv_p0" in ""|*[!0-9]*) t_up && tp0=$p;; *) tp0=$tv_p0;; esac',
     `echo $$ > "$tsb/probation.pid" && rm -f "$tsb/${PROBATION_STARTING_NAME}"`,
     // On the wall clock (a Mac that slept through it still looks once after the wake), to the end
     // the tail wrote down; a miss at the end gets its second look.
@@ -182,7 +184,8 @@ export function probationScript(fns: string[], o: { waitSeconds: number; staySec
 
 /**
  * t_probation: the copies in "$tsb" are kept, dated to the probation's end, and its script is
- * written into the install root and started out of this shell's session. Needs $tb, $tr, $L, $d.
+ * written into the install root and started out of this shell's session. Needs $tb, $tr, $L, $d,
+ * and $tv_sp, the pid of the daemon judged serving (the probation counts its restarts from it).
  */
 export function probationStartLines(fns: string[], o: { probationSeconds: number; everySeconds: number; waitSeconds: number; staySeconds: number }): string[] {
   const script = probationScript(fns, o)
@@ -199,7 +202,7 @@ export function probationStartLines(fns: string[], o: { probationSeconds: number
     // launch in between would find neither the runner nor the probation, and its snapshot would end the watch.
     `  { date +%s; cksum < "$tc" 2>/dev/null; } > "$tsb/${PROBATION_STARTING_NAME}" || :`,
     '  rm -f "$tsb/probation.pid"',
-    `  t_detach "$pf" "$tr" ${o.probationSeconds} ${o.everySeconds} "\${tv_d:-$d}" "\${L:-}" $$`,
+    `  t_detach "$pf" "$tr" ${o.probationSeconds} ${o.everySeconds} "\${tv_d:-$d}" "\${L:-}" $$ "\${tv_sp:-}"`,
     // Its pid at once where the detached process is the probation itself (setsid and perl exec it in
     // place; under this lock, so no later snapshot is between): at work for t_probing however long
     // its start takes (2026-11-05 review 8: a 75 s detach outlived the mark). Never over the pid the
