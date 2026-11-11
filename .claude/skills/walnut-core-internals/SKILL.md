@@ -289,3 +289,20 @@ Threshold is dynamic: 80% of the model's context window (160K for 200K models, 8
 **Defense layer**: `getModelContext()` strips any user message whose `tool_result` blocks have no matching `tool_use` in the preceding assistant message.
 
 The REST `/compact` endpoint calls `triggerBackgroundCompaction()` in `src/web/background-compaction.ts`, which uses the one-shot summarizer from `createCompactionCallbacks()` in `src/web/routes/chat.ts`. No in-process chat loop triggers automatic compaction.
+
+## Skill discovery scopes (from the root AGENTS.md)
+
+
+_Moved from the root `AGENTS.md` on 2026-11-11; the root file keeps a one-line summary of each rule._
+
+### Skill discovery has TWO scopes: don't collapse them
+
+- **Skill discovery has TWO scopes: don't collapse them** (`src/core/skill-loader.ts`). The
+  Personal AI's injected index (`buildSkillsPrompt` → `getPromptSearchDirs()`) covers workspace
+  `skills/` + `~/.open-walnut/skills/` + shipped `dist/data/skills/`: deliberately **NOT**
+  `~/.claude/skills/`, which is the Claude Code CLI's own store. The CLI discovers those
+  deploy/close-session/plan skills natively when needed, so injecting them again would duplicate
+  its own context. Management/`skill_view` scope
+  (`getSearchDirs()`) still covers all four, so a claude skill stays listable and readable.
+  Opt back in with `WALNUT_PERSONAL_AI_CLAUDE_SKILLS=1`. Measured: excluding them cut the Skills
+  prompt section from 10.2K → 3.9K tokens (77 → 34 entries).

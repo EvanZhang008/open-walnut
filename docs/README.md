@@ -64,6 +64,23 @@ must live under one of these top-level categories instead of directly under
 - [Keyboard and undo](reference/keyboard-and-undo.md): moving between session columns
   from the keyboard, completing a task and going on to the next one that needs you, and the
   5 second Undo (with mod+z) on complete, snooze, pin and delete.
+- [Production server](reference/production-server.md): how a deploy reaches :3456 (queue, smoke
+  boot, plugin check, compiled file, rollback, asset mirror, priority), ephemeral servers, test
+  runs, and the onboarding sandbox.
+- [Tasks, subtasks and teams](reference/tasks-and-teams.md): where work created from a task
+  lands, subtask brakes, leaders and Boards, subtask notices, and the phase lifecycle with WAITING.
+- [The user status](reference/user-status.md): Needs you, Working, Waiting and Done as one value
+  on every surface, how a change is pushed, and how one decision shows once.
+- [Org, Brief, Threads, team charter and inbox](reference/org-and-inbox.md): how Main and the
+  leads work for the user, whose word counts, agent parity, and what goes to the inbox.
+- [Session lifecycle rules](reference/session-lifecycle.md): restart recovery, full contexts,
+  compaction readback, lost op answers, unreachable hosts, task directories and notices.
+- [Machine guards](reference/agent-guards.md): no pattern kills, no content on command lines,
+  no sound and no foreground input from agent sessions.
+- [The session daemon](reference/session-daemon.md): host-local work in the daemon, the
+  resilience model, CLI ownership, daemon updates, and directory-scoped CLI crons.
+- [Logs and debugging](reference/logs-and-debugging.md): where logs land, the log toolkit, the
+  stall recorder, send latency, and debugging the Claude Code CLI.
 - [Testing pipeline](reference/testing-pipeline.md) - the four layers, which one
   to run when, the known-failure baseline, and the free CI setup.
 - [ACP seam map](reference/acp-seam-map.md)

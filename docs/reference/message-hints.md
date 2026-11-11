@@ -211,3 +211,16 @@ model received it and its output as it came back. History rows carry `hints` and
 `rawText`; the phone's transcript rows carry `added` (each context block with its
 label and text; hint items, sent from 2026-10-29 to 2026-11-01, are no longer) and
 `textWithoutContext`, and `/api/v1/config` carries `ui.show_walnut_additions`.
+
+## The repo rules for hints
+
+
+_Moved from the root `AGENTS.md` on 2026-11-11; the root file keeps a one-line summary of each rule._
+
+### Walnut text that rides a message is a message hint, defined in ONE registry
+
+- **Walnut text that rides a message is a message hint, defined in ONE registry** (`src/core/hints/`, [docs](./docs/reference/message-hints.md); 2026-10-27, the user: rich and reply-language lines rode every message, "a generic feature to define these hidden messages ... per round, per x round, per compaction"). Question number, rich output, voice reply, the org notes and custom hints are registry entries (built-in, or config `session.hints`), each with its triggers (`every_turn`, `every_n_turns`, `session_start`, `after_compaction`, `on_change`, `on_request`), audience and placement; every send path calls `prepareHintedSend`, none knows which hints exist. Each hint is a Claude Code style `<system-reminder>` block opening `Walnut (<kind>):`; the message's own `<system-reminder` tags are escaped first, so display takes hints off by structure and never matches the person's words. History rows carry `hints` and `rawText`; the session menu's "Raw input & output" shows what the model received. People and agents change hints the same way (`/api/v1/hints`, ops `hint_list/hint_set/hint_reset`). Standing rules are not hints: they live in the system prompt and the instruction notice. The user's Reply language setting is one of those rules: a line of every session's prompt (`src/core/sessions/reply-language-context.ts`), never a hint (2026-11-06, the user: "just remove reply language").
+
+### Text Walnut adds to every message, or every few, costs every session on every turn
+
+- **Text Walnut adds to every message, or every few, costs every session on every turn** (a hint, a hook's `additionalContext`, a notice; 2026-11-06, the user: "especially one every message or every a few message very expensive"; a day of the VP's messages carried 820 KB of hints, 7.3 KB on each of the user's own messages, 63% of it rules the prompt already had). Add one only when nothing else can carry it, never repeat a rule the system prompt has, keep it to a line or two, prefer session start, after compaction and on change, and measure its bytes per message before landing.

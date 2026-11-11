@@ -882,3 +882,9 @@ changes the cloud box, so do it only when you decide to:
 
 The probe registers as host `probe`, so it shows up in the companion's live
 bridge list. Revoke it with `walnut device revoke bridge-probe`.
+
+## Git sync: secrets never ride it
+
+_Moved from the Subsystem Map of the root `AGENTS.md` on 2026-11-11._
+
+`src/integrations/git-sync.ts`: Mac ⇄ EC2 data plane; secrets NEVER ride it: ignore rules are only the first layer, every commit path stages through `stageAllForCommit`, whose content scan (`git-sync-secrets.ts`) holds any file with a credential out of the commit and tells the user (2026-07-26: an unlisted atomic-write temp of a sign-in cache was committed); every git spawn takes `gitChildEnv()` (`src/lib/git-env.ts`), because an inherited `GIT_DIR` outranks `cwd` and git exports one while running hooks

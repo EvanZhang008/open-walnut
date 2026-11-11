@@ -143,3 +143,42 @@ web/src/
 ├── utils/               # Shared utilities (markdown rendering, session-status, time)
 └── styles/globals.css   # Theme
 ```
+
+## Surfaces and kept views (from the root AGENTS.md)
+
+
+_Moved from the root `AGENTS.md` on 2026-11-11; the root file keeps a one-line summary of each rule._
+
+### Sessions render in TWO surfaces, both on the Homepage
+
+- **Sessions render in TWO surfaces, both on the Homepage (`/`): the session columns
+  (`SessionPanel`) and the chat slot.** The dedicated `/sessions` page was removed (2026-07-25);
+  the route is now a redirect shim that reroutes `/sessions?id=…` deep links to the home session
+  columns. The chat spot is the Ask Walnut slot (`AskWalnutSlot`): it hosts an embedded
+  `SessionPanel` for the selected ask (every window control a column has, incl. the × which
+  hides the slot; only lock is absent), and a `DraftSessionPanel` in its New state. The slot
+  adds ONE control to the regular panel: a ≡ button leading the header's title row
+  (`headerLeading`) that opens a drawer with a search box filtering the asks (tasks born
+  `walnut_agent` OR filed under the agent's `Ask …` project), `New chat`, and two links
+  (`Context`, `Fix Walnut`); tests reach those through `openAskWalnutDrawer(page)` in
+  `tests/e2e/browser/draft-helpers.ts`. The drawer's TITLE is the agent switcher: every
+  console agent (Walnut, Mentor, Note Assistant, config-defined) has its own list of asks and
+  its own composer; a launch under another agent sends `agentId`, the server files the task
+  under `Ask <name>` and stamps `task.agent_id` (rule in `src/core/sessions/ask-agent.ts`,
+  client twin `askProjectFor` in `ask-walnut-slot-model.ts`; the persona comes from
+  `buildLaneProfile(config, agentId)`). Deliberately NO `+ Task`/`+ Session`/finder/hide rows:
+  the draft column is the one task-creation surface (a task with no session is a plain todo),
+  ⌘⇧O is the session finder, the panel's × hides the slot. Consequence
+  for tests: a Playwright locator for `.session-panel` or `.draft-session-panel` on `/` must be
+  scoped to `.main-page-session-column` (see `REAL_PANEL` / `DRAFT_PANEL` in
+  `tests/e2e/browser/draft-helpers.ts`) or pinned by `data-session-id`. The slot's panel sits
+  earlier in the DOM, so an unscoped `.first()` grabs the wrong one. Tasks also have two
+  surfaces: the Homepage `TodoPanel` (primary) and `/tasks` →
+  `DashboardPage`/`TasksPageTable` (secondary). Default to the Homepage panels for any
+  Task/Session work, demos, and recordings.
+
+### A page's view choice is kept: usePageView (web/src/utils/view-memory.ts)
+
+Every route but Home unmounts on navigation, so a tab, filter, sort or show-this toggle held in `useState` comes back reset (2026-11-01, the user: "Walnut needs to remember what was open last time, permanently, on every page"). Keep it with `usePageView(page, name, initial, accept)`, or `usePageViewOf(..., id, ...)` for one per node or board; it is mirrored to ui-prefs like the layout. A dialog, a menu, a typed search or one search's results start empty. `tests/web/view-memory-guard.test.ts` fails on a new view-named `useState` started from a literal until it is kept or listed as passing, with why.
+
+Walnut keeps it by itself wherever a view is hosted, plugin pages included (2026-11-02, the user: "make it default feature in walnut no matter where include plugin, remember the state, like full store, file tab, tab location"). A session panel keeps what it shows beside its chat per **place** (`components/sessions/panel-view.ts`: the split view, the file a click opened, the Web service, the Inbox letter, a chat the user hid), the place being its host (the required `viewPlace` prop: `home-column`, `ask-slot`, `org-node`, `plugin:<id>`, ...) and its session, plus the page for a host off Home (`useSheetPlace`). Full screen stays one state of the tab, kept on disk as the place that holds it (`hooks/fullscreen-owner.ts`): a panel that mounts again on that place (a plugin reload, a page reload, a visit elsewhere, a restart) is full screen again; leaving it, entering it elsewhere or opening a column on Home ends it. Each tab shows its own kept view (2026-11-02: in two tabs of one plugin page, a file picked in one switched the other and remounted its editor under the user's typing, because the snapshot read localStorage on every render): a tab reads a view from storage when it first mounts it (for a view kept per id, the first mount of that id) and then only its own writes change it, so another tab's choice shows at the next mount (`tests/web/view-memory-tabs.test.ts`, `tests/e2e/browser/view-state-tabs.spec.ts`). Typed text is no view: a plugin keeps it with `walnut.ui.useDraft(name, { id })`, Walnut's draft store (`plugins/use-draft.ts`; one key per draft, never in ui-prefs, another window's change taken only at mount). A plugin keeps its own view choices with `walnut.ui.useView(name, initial, { id })`, and `walnut-plugin validate` warns on one kept in `useState` and on a draft kept anywhere but `useDraft`, with the matcher the guard uses (`packages/plugin-cli/src/view-state-scan.ts`; the guard also scans the plugins this repository ships). Ratchet: `tests/e2e/browser/view-state-kept.spec.ts`.

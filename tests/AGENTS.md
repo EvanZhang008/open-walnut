@@ -75,7 +75,7 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
   capped at 4, and an exclusive lease on :3457 so a second `bun x playwright test` queues instead
   of colliding (specs hardcode that port; `reuseExistingServer` would otherwise let two runs
   share one fixture server). `[pw-concurrency] … Queuing` = working as designed. Debris from a
-  killed run: `scripts/pw-cleanup.sh status|clean`. Details in the root AGENTS.md.
+  killed run: `scripts/pw-cleanup.sh status|clean`. Details in `docs/reference/testing-pipeline.md`.
 - **The browser suite has a known-failures list** (`tests/setup/known-failures-browser.json`), judged
   on CI by the `Browser baseline` job: it fails only on a failure the list does not name.
   `bun scripts/browser-baseline.mjs check|record <reports>` (docs/reference/testing-pipeline.md).

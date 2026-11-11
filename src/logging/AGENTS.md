@@ -3,6 +3,8 @@
 **Full implementation details: `.claude/skills/walnut-ops/SKILL.md`** (incident investigation
 playbook, always-on sentinels, levels, redaction patterns, browser log persistence
 architecture, investigation commands).
+Where every log lands, the `scripts/walnut-logs.sh` toolkit, the stall recorder and debugging the
+Claude Code CLI: `docs/reference/logs-and-debugging.md`.
 
 ## Essentials
 

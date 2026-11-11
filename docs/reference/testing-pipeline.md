@@ -226,3 +226,53 @@ Do not raise the local budget to "speed things up" — run L1, or L2 on the file
 `bun run test:ci` (`scripts/test-parallel.mjs`) runs exactly the set CI runs, one tier after another: quick, slow, e2e, then the four frontend configs through `scripts/test-frontend.mjs`. Until 2026-10-24 it ran unit + integration + e2e + three frontend configs instead, which missed 201 files that CI runs (`tests/scripts`, `tests/lib`, `tests/replica`, `tests/setup`, `tests/integration` and others) and the notes-roundtrip config. Every unit and integration file is in quick or slow, so nothing dropped out. `bun run test:unit` and `test:integration` still run those two configs on their own.
 
 Before 2026-07-25 the unit and integration tiers each collected ~336 files — the whole suite — because `mergeConfig` **concatenates** `include` arrays instead of replacing them, so each tier's narrowing list was appended to the base's `tests/**`. `npm test` therefore ran nearly every test twice (349 s + 397 s). Both configs now assign `include`/`exclude` after the merge; `tests/setup/quick-tier.test.ts` guards against the regression.
+
+## Playwright runs are machine-wide serialized (don't fight the gate)
+
+
+_Moved from the root `AGENTS.md` on 2026-11-11; the root file keeps a one-line summary of each rule._
+
+Every browser worker is a whole Chromium (~385 MB measured). With several agent
+sessions each running `bun x playwright test`, this used to sum to dozens of browsers
+and wedge the Mac (2026-07-25: load avg **225** on 14 cores, 1210 processes): which
+then surfaced as "Walnut is slow" and as runs dying with `Timed out waiting 30000ms
+from config.webServer`. Concurrent runs were never safe anyway: specs hardcode
+`localhost:3457`, and `reuseExistingServer` makes run #2 attach to run #1's fixture
+server, so they share one dataset and the first to finish kills the other's server.
+
+The Playwright runner is the one tool here that still runs on Node (`bun x playwright test`
+starts it; CI installs Node for it). The fixture servers it tests run on bun like everything else.
+
+`playwright.config.ts` now engages a gate at config-load time (`tests/e2e/browser/pw-gate.ts`):
+
+- **Exclusive lease on :3457**: a second run *queues* instead of interleaving. Seeing
+  `[pw-concurrency] another Playwright run holds :3457 … Queuing` is correct behavior,
+  not a hang. It self-heals (dead holder / 45-min TTL), and it never runs beside a live
+  holder: after `PW_LEASE_WAIT_MIN` (120) it stops with an error and nothing runs.
+- **`workers` capped at 4** (was `undefined` = half the cores = 7). Override with `PW_WORKERS`.
+- **Orphan sweep**: reaps a fixture server left by a SIGKILLed run before
+  `reuseExistingServer` can silently attach to it.
+- **Overload wait**: if something else already saturates the box (concurrent vitest,
+  Xcode, simulators), it waits rather than piling on, up to 10 minutes, then stops with an
+  error and nothing runs. `PW_IGNORE_LOAD=1` skips it.
+- **Machine hold**: a machine with `~/.config/walnut/hold` starts no test run, and one with
+  `~/.config/walnut/night-quiet` none from 22:00 to 08:00 by its own clock (`src/lib/machine-hold.ts`;
+  2026-11-09: review scripts took the lease and started fixture servers on a held Mac at night).
+  Every entry point reads it: every vitest config (`maxWorkers()`, the global setup), every
+  Playwright config and hand-written script (`engageGate`, `perRunWorkers()`, `acquireSync`), the
+  ephemeral test server, and every Playwright browser a Walnut session launches (the silencer
+  preload). The file is the only switch. Ratchet: `tests/setup/machine-hold.test.ts`.
+
+```bash
+scripts/pw-cleanup.sh status   # browsers / fixture server / isolated daemons / leases
+scripts/pw-cleanup.sh clean    # reap orphans + stale leases (skips live runs, never :3456)
+```
+
+**When a Playwright run fails on timeouts, check the load first** (`scripts/pw-cleanup.sh
+status`). At load 486 every spec failed on `page.waitForLoadState`: those are starvation
+artifacts, not product bugs. Fixture cold boot is ~20 s idle but ~70 s at load 133, so
+`webServer.timeout` is 120 s.
+
+**Run a TypeScript script with `bun <file>`.** Bun runs TypeScript itself, so no test path
+needs tsx any more (a bare `npx tsx --version` once measured **88 s** on this machine, which
+alone exceeded the old 30 s webServer budget).
