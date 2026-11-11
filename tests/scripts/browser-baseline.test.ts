@@ -10,7 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { judge, mergeReports, recordBaseline, reportFiles } from '../../scripts/browser-baseline.mjs'
+import { judge, mergeReports, RECHECK_MAX, recheckLocations, recordBaseline, reportFiles } from '../../scripts/browser-baseline.mjs'
 
 const ROOT = path.resolve(__dirname, '../..')
 const SCRIPT = path.join(ROOT, 'scripts/browser-baseline.mjs')
@@ -22,9 +22,10 @@ function report(files: Record<string, Record<string, Status>>) {
     suites: Object.entries(files).map(([file, tests]) => ({
       title: file,
       file,
-      specs: Object.entries(tests).map(([title, status]) => ({
+      specs: Object.entries(tests).map(([title, status], i) => ({
         title,
         file,
+        line: 10 * (i + 1),
         tests: [{ status, results: status === 'unexpected' ? [{ error: { message: `\x1b[31mError: ${title} broke\x1b[39m\nstack` } }] : [] }],
       })),
     })),
@@ -72,12 +73,14 @@ describe('judge', () => {
 })
 
 describe('mergeReports', () => {
-  it('a key in two reports fails only when it failed in every report that ran it', () => {
+  it('a key in two reports fails only when it failed in every report that ran it, and reads flaky when it passed in one', () => {
     const { tests } = mergeReports([
       report({ 'a.spec.ts': { once: 'unexpected', twice: 'unexpected', unrun: 'unexpected' } }),
       report({ 'a.spec.ts': { once: 'expected', twice: 'unexpected', unrun: 'skipped' } }),
     ])
-    expect(tests.get('a.spec.ts :: once')?.status).toBe('expected')
+    // The CI rerun of a new failure: it failed both tries in its shard and passed alone.
+    expect(tests.get('a.spec.ts :: once')?.status).toBe('flaky')
+    expect(judge([], tests).flaky).toEqual(['a.spec.ts :: once'])
     expect(tests.get('a.spec.ts :: twice')?.status).toBe('unexpected')
     expect(tests.get('a.spec.ts :: unrun')?.status).toBe('unexpected')
   })
@@ -109,6 +112,31 @@ describe('mergeReports', () => {
     const { tests } = mergeReports([{ suites: [shared('stt.spec.ts', 'expected'), shared('stt.webkit.spec.ts', 'unexpected')] }])
     expect([...tests.keys()].sort()).toEqual(['stt.spec.ts :: records', 'stt.webkit.spec.ts :: records'])
     expect(tests.get('stt.webkit.spec.ts :: records')?.status).toBe('unexpected')
+  })
+})
+
+describe('recheckLocations', () => {
+  it('names each new failure where it is written, once, and no known one', () => {
+    const { tests, errors } = mergeReports([
+      report({ 'a.spec.ts': { old: 'unexpected', fresh: 'unexpected', ok: 'expected' }, 'b.spec.ts': { other: 'unexpected' } }),
+    ])
+    expect(recheckLocations(['a.spec.ts :: old'], tests, errors)).toEqual(['a.spec.ts:20', 'b.spec.ts:10'])
+  })
+
+  it('a test a helper defines is run again by its spec file', () => {
+    const r = report({ 'a.spec.ts': { fresh: 'unexpected' } })
+    r.suites[0]!.specs[0]!.file = 'helpers/shared.ts'
+    const { tests, errors } = mergeReports([r])
+    expect(recheckLocations([], tests, errors)).toEqual(['a.spec.ts'])
+  })
+
+  it('names none when the suite did not run cleanly, or when more than RECHECK_MAX are new (a real break)', () => {
+    const many = Object.fromEntries(Array.from({ length: RECHECK_MAX + 1 }, (_, i) => [`t${i}`, 'unexpected' as Status]))
+    const broke = mergeReports([report({ 'a.spec.ts': many })])
+    expect(recheckLocations([], broke.tests, broke.errors)).toEqual([])
+    const { tests } = mergeReports([report({ 'a.spec.ts': { fresh: 'unexpected' } })])
+    expect(recheckLocations([], tests, ['Error: fixture server did not start'])).toEqual([])
+    expect(recheckLocations([], tests, [])).toEqual(['a.spec.ts:10'])
   })
 })
 
@@ -166,6 +194,21 @@ describe('the CLI', () => {
     expect(r.stdout).toContain('`b.spec.ts :: fresh`: Error: fresh broke')
   })
 
+  it('recheck prints the new failures to run again and exits 0; their rerun passing turns the check green', () => {
+    const { dir, reports, baseline } = setup()
+    fs.writeFileSync(baseline, JSON.stringify({ failures: ['a.spec.ts :: old'] }))
+    const r = run(baseline, 'recheck', reports)
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe('b.spec.ts:10\n')
+    expect(run(baseline, 'check', reports).status).toBe(1)
+    fs.writeFileSync(path.join(reports, 'recheck.json'), JSON.stringify(report({ 'b.spec.ts': { fresh: 'expected' } })))
+    const after = run(baseline, 'check', reports)
+    expect(after.status).toBe(0)
+    expect(after.stdout).toContain('1 flaky')
+    expect(run(baseline, 'recheck', '--run', reports).status).toBe(2)
+    void dir
+  })
+
   it('refuses a path that does not exist, an unknown option, and a run with no tests', () => {
     const { dir, reports, baseline } = setup()
     expect(run(baseline, 'check', path.join(dir, 'nope.json')).status).toBe(2)
@@ -206,18 +249,52 @@ describe('the committed list and CI', () => {
     expect([...new Set(missing)]).toEqual([])
   })
 
+  type CiStep = { id?: string; if?: string; uses?: string; with?: Record<string, unknown>; run?: string; shell?: string; env?: Record<string, string>; 'continue-on-error'?: boolean }
+  const baselineJob = () =>
+    (parseYaml(fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')) as {
+      jobs: Record<string, { needs?: string; steps: CiStep[] }>
+    }).jobs['browser-baseline']!
+
   it('CI judges the browser reports with it, in a step whose exit code survives the tee', () => {
-    const doc = parseYaml(fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')) as {
-      jobs: Record<string, { needs?: string; steps: { uses?: string; with?: Record<string, unknown>; run?: string; shell?: string }[] }>
-    }
-    const job = doc.jobs['browser-baseline']!
+    const job = baselineJob()
     expect(job.needs).toBe('browser')
     expect(job.steps.find((s) => s.uses?.startsWith('actions/download-artifact'))?.with?.pattern).toBe('browser-report-*')
-    const judgeStep = job.steps.find((s) => s.run?.includes('bun scripts/browser-baseline.mjs check'))!
+    const checks = job.steps.filter((s) => s.run?.includes('bun scripts/browser-baseline.mjs check'))
+    expect(checks).toHaveLength(2)
     // GitHub's default shell is `bash -e`: `check | tee` then exits with tee's 0, and a
     // new failure left the job green. `shell: bash` is `bash -eo pipefail`.
-    expect(judgeStep.run).toContain('| tee')
-    expect(judgeStep.shell).toBe('bash')
+    for (const s of checks) {
+      expect(s.run).toContain('| tee')
+      expect(s.shell).toBe('bash')
+    }
+    // The first verdict may be red; the last one, after the rerun, decides the job.
+    const [first, last] = checks
+    expect(first!.id).toBe('judge')
+    expect(first!['continue-on-error']).toBe(true)
+    expect(last!.if).toBe("steps.judge.outcome == 'failure'")
+    expect(last!['continue-on-error']).toBeUndefined()
+    expect(job.steps.indexOf(last!)).toBe(job.steps.length - 1)
+  })
+
+  it('CI runs the new failures again alone, into a report the last verdict reads', () => {
+    const steps = baselineJob().steps
+    const find = steps.find((s) => s.run?.includes('bun scripts/browser-baseline.mjs recheck'))!
+    expect(find.id).toBe('recheck')
+    expect(find.if).toBe("steps.judge.outcome == 'failure'")
+    const rerun = steps.find((s) => s.run?.includes('bun x playwright test'))!
+    expect(rerun.run).toContain('--workers=1')
+    expect(rerun.run).toContain('--project=chromium --project=chromium-host-fixture')
+    expect(rerun.run).toContain('"${locs[@]}"')
+    // Anchored under the testDir, and its time counted from the job's start.
+    expect(rerun.run).toContain("sed 's|^|tests/e2e/browser/|'")
+    expect(rerun.run).toMatch(/JOB_STARTED_AT \+ 40 \* 60/)
+    expect(steps[0]!.run).toContain('JOB_STARTED_AT=')
+    expect(rerun.env?.PLAYWRIGHT_JSON_OUTPUT_NAME).toBe('${{ runner.temp }}/browser-reports/recheck.json')
+    // Its own red is no verdict: the check after it reads its report.
+    expect(rerun['continue-on-error']).toBe(true)
+    // The build and the browsers it needs come only when there is something to run.
+    for (const s of steps.slice(steps.indexOf(find) + 1, steps.indexOf(rerun) + 1)) expect(s.if).toContain('steps.recheck.outputs.count')
+    expect(steps.some((s) => s.run?.startsWith('bash scripts/ci/install-browsers.sh'))).toBe(true)
   })
 
   it('CI names each browser shard that wrote no report, by the file its upload names', () => {

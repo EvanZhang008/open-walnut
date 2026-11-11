@@ -36,6 +36,9 @@ export function testsOf(report) {
     for (const spec of suite.specs ?? []) {
       for (const t of spec.tests ?? []) {
         const row = { key: `${root ?? spec.file} :: ${[...here, spec.title].join(' › ')}`, status: t.status }
+        // Where to run it again: its line when it is written in the spec file itself, else the
+        // spec file (a test a helper defines carries the helper's line).
+        if (spec.line) row.loc = spec.file === (root ?? spec.file) ? `${spec.file}:${spec.line}` : root
         const error = t.status === 'unexpected' ? errorLine(t) : undefined
         if (error) row.error = error
         if ((t.results ?? []).some((r) => r.status === 'interrupted')) row.interrupted = true

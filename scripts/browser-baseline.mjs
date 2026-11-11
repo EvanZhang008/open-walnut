@@ -6,6 +6,7 @@
  *   bun scripts/browser-baseline.mjs check  <report.json | dir>...          # judge reports (CI)
  *   bun scripts/browser-baseline.mjs record [--prune] <report.json | dir>... # update the list from them
  *   bun scripts/browser-baseline.mjs check|record [--prune] --run [playwright args]  # run, then that
+ *   bun scripts/browser-baseline.mjs recheck <report.json | dir>...          # where the new failures are, to run again
  *
  * The browser suite had hundreds of old failures (2026-10-31: 511 tests over two
  * CI runs), so a pass/fail gate on it was always red and CI only reported it.
@@ -28,6 +29,15 @@
  * recording from one run turned the next one red. `--prune` also removes the
  * known failures that passed, for after a fix, read from a run that repeated the
  * fixed specs (`--run --repeat-each=3 <specs>`).
+ *
+ * `recheck` prints the new failures' locations (`<spec file>:<line>`, relative to
+ * the Playwright testDir), one per line, for CI to run again alone on a quiet
+ * runner. About 15 of ~4,400 tests failed both tries in a loaded shard on every
+ * main run of 2026-11-10 (a different 15 each time), so the job was red every
+ * run. A test that passes alone is judged as flaky (mergeReports: failed only
+ * when it failed in every report that ran it); one that fails again stays new.
+ * It prints nothing when the suite did not run cleanly or when more than
+ * RECHECK_MAX tests are new: that is a real break, and the check fails as it is.
  */
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -69,10 +79,22 @@ export function mergeReports(reports) {
       const t = raw.interrupted ? { ...raw, status: 'skipped' } : raw
       const prev = tests.get(t.key)
       if (!prev || prev.status === 'skipped') tests.set(t.key, t)
-      else if (prev.status === 'unexpected' && t.status !== 'skipped' && t.status !== 'unexpected') tests.set(t.key, t)
+      // Failed in one report and passed in another (the rerun of a new failure): flaky.
+      else if (prev.status === 'unexpected' && t.status !== 'skipped' && t.status !== 'unexpected') tests.set(t.key, { ...t, status: 'flaky' })
     }
   }
   return { tests, errors }
+}
+
+/** More new failures than this are a real break, not load: `recheck` names none of them. */
+export const RECHECK_MAX = 40
+
+/** The locations to run again: one per new failure, without duplicates; none when the run broke. */
+export function recheckLocations(known, tests, errors) {
+  if (errors.length) return []
+  const { regressions } = judge(known, tests)
+  if (!regressions.length || regressions.length > RECHECK_MAX) return []
+  return [...new Set(regressions.map((k) => tests.get(k)?.loc ?? fileOf(k)))].sort()
 }
 
 const fileOf = (key) => key.split(' :: ')[0]
@@ -140,9 +162,10 @@ export function verdictText(v, knownCount, errors, reasons = new Map()) {
 function main(argv) {
   const usage = 'usage: bun scripts/browser-baseline.mjs check <report.json | dir>...\n' +
     '       bun scripts/browser-baseline.mjs record [--prune] <report.json | dir>...\n' +
-    '       bun scripts/browser-baseline.mjs check|record [--prune] --run [playwright args]\n'
+    '       bun scripts/browser-baseline.mjs check|record [--prune] --run [playwright args]\n' +
+    '       bun scripts/browser-baseline.mjs recheck <report.json | dir>...\n'
   const mode = argv[0]
-  if (!['check', 'record'].includes(mode)) {
+  if (!['check', 'record', 'recheck'].includes(mode)) {
     process.stderr.write(usage)
     return 2
   }
@@ -152,7 +175,7 @@ function main(argv) {
   while (args.length && args[0].startsWith('--')) {
     const flag = args.shift()
     if (flag === '--prune' && mode === 'record') prune = true
-    else if (flag === '--run') { runSuite = true; break }
+    else if (flag === '--run' && mode !== 'recheck') { runSuite = true; break }
     else { process.stderr.write(`unknown option for ${mode}: ${flag}\n${usage}`); return 2 }
   }
   const BASELINE = process.env.WALNUT_BROWSER_BASELINE_FILE ?? DEFAULT_BASELINE
@@ -180,6 +203,11 @@ function main(argv) {
   }
   const { tests, errors } = mergeReports(files.map((f) => JSON.parse(fs.readFileSync(f, 'utf8'))))
   const baseline = readBaseline(BASELINE)
+  if (mode === 'recheck') {
+    const locs = recheckLocations(baseline.failures, tests, errors)
+    if (locs.length) process.stdout.write(`${locs.join('\n')}\n`)
+    return 0
+  }
   if (mode === 'record') {
     if (errors.length) {
       process.stderr.write(`Not recorded: the suite did not run cleanly:\n${[...new Set(errors)].map((e) => `  ${e}`).join('\n')}\n`)

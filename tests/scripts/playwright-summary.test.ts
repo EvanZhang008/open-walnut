@@ -44,6 +44,22 @@ describe('playwright-summary', () => {
     ])
   })
 
+  it('says where to run a test again: its spec line, or its spec file when a helper defines it', () => {
+    const r = {
+      suites: [
+        {
+          title: 'a.spec.ts',
+          file: 'a.spec.ts',
+          specs: [
+            { title: 'here', file: 'a.spec.ts', line: 12, tests: [{ status: 'unexpected' }] },
+            { title: 'shared', file: 'helpers/shared.ts', line: 40, tests: [{ status: 'unexpected' }] },
+          ],
+        },
+      ],
+    }
+    expect(testsOf(r).map((t) => t.loc)).toEqual(['a.spec.ts:12', 'a.spec.ts'])
+  })
+
   it('summarizes totals and lists failures and flakes', () => {
     const out = summarize(REPORT)
     expect(out).toContain('**5 tests:** 2 passed, 1 failed, 1 flaky (passed on a retry), 1 skipped')

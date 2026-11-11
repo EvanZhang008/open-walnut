@@ -26,7 +26,7 @@ const workflow = (file: string) => parseYaml(fs.readFileSync(path.join(REPO, '.g
 
 /** Jobs that build or test Walnut: bun only, the image's Node removed first. */
 const NODE_FREE: Record<string, string[]> = {
-  'ci.yml': ['build', 'test', 'test-heavy', 'test-e2e', 'remote-host', 'browser-baseline'],
+  'ci.yml': ['build', 'test', 'test-heavy', 'test-e2e', 'remote-host'],
   'flake-hunt.yml': ['hunt'],
 }
 /** Jobs that keep Node, each for a reason. */
@@ -34,6 +34,7 @@ const KEEPS_NODE: Record<string, Record<string, string>> = {
   'ci.yml': {
     'node-side': 'the Playwright runner (spec load), a plugin author\'s npm toolchain, the npm channel, the JS daemon on Node (every suite that starts it)',
     browser: 'the Playwright runner',
+    'browser-baseline': 'the Playwright runner: it runs the new failures again alone',
     onboarding: 'the npm channel: a user installs with npm on their own Node',
     rehearsal: 'the npm channel: the release package installed with npm 12',
     field: 'the npm channel: the releases on npm today, installed and updated with npm 12',
