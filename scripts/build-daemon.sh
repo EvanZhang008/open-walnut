@@ -242,6 +242,7 @@ SOURCES=(
   src/providers/oneshot-core.ts
   src/providers/user-line-images-core.ts
   src/core/types.ts
+  src/core/experimental.ts
   src/lib/git-env.ts
   src/providers/path-ref-parse.ts
   src/providers/host-runtime-types.ts

@@ -665,6 +665,7 @@ describe('every free-form map in the Config type is accounted for', () => {
     engines: 'keyed by engine id; each value is a typed EngineConfigEntry',
     hosts: 'keyed by host name; each value is a typed host record',
     session_limits: 'numbers',
+    experimental: 'experiment id (src/core/experimental.ts) to an on/off boolean; the config route refuses any other value',
     placement_weights: 'a placement weight (0 to 100) per host alias (src/core/hosts/placement.ts)',
     plugin_ai: 'keyed by plugin id; each value is an on/off switch and a monthly budget',
     plugin_jobs: 'keyed by plugin id; each value names the machine its jobs run on',

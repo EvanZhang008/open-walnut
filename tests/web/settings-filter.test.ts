@@ -120,9 +120,10 @@ describe('Find a setting matcher', () => {
   it('uses a description snippet when only the description matches', () => {
     const d = hit('bucket', 'backup')
     expect(d?.level).toBe(2) // `bucket` is a keyword too
-    const snippet = hit('scheduled', 'backup')
+    // "Amazon" is only in Backup's description ("... Google Drive or Amazon S3, and restore.").
+    const snippet = hit('amazon', 'backup')
     expect(snippet?.level).toBe(3)
-    expect(snippet?.hint?.startsWith('Scheduled copies')).toBe(true)
+    expect(snippet?.hint).toContain('Amazon S3')
     expect((snippet?.hint ?? '').length).toBeLessThanOrEqual(HINT_MAX)
   })
 })

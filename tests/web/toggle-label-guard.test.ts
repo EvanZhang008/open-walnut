@@ -31,6 +31,7 @@ const TEXT_TAGS = new Set(['span', 'strong', 'em', 'b', 'i', 'small', 'code', 'k
 const OWN_WORDS: Record<string, string> = {
   'components/settings/sections/PluginConfigCards.tsx#label': 'a plugin settings field: the field\'s own title from its schema',
   'components/settings/sections/HooksSection.tsx#s.label': 'a hook\'s boolean setting: the setting\'s own title from the hook',
+  'components/settings/sections/ExperimentalSection.tsx#feature.name': 'an experiment\'s switch: its own name from the fixed registry in src/core/experimental.ts',
   'components/settings/sections/ReplicaCopyRows.tsx#row.label': 'what the companion keeps a copy of ("Notes"): the switch\'s own words',
   'components/settings/sections/CalendarSection.tsx#display.name': 'a checklist of calendars to show: the calendar\'s name is the option, and showing it is all the tick does',
   'components/settings/sections/SecretsGroup.tsx#tickLabel(h)': 'a picker of hosts to give a secret to (This Mac\'s own sessions, or a host to copy it to): taken only by Save',
