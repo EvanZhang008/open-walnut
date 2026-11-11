@@ -112,13 +112,13 @@ describe('the writer of a task\'s stored words', () => {
     const open = vi.fn()
     await openFromSource(taskTextSource(t, 'report'), { path: '/home/me/plan.md' }, { lookup: { peek: () => null, fetch }, open, fail: vi.fn() })
     expect(fetch).toHaveBeenCalledExactlyOnceWith('s-old')
-    expect(open).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/plan.md', host: 'old-box', sourceOnly: true })
+    expect(open).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/plan.md', host: 'old-box' })
 
     // A person's report opens on the primary with no lookup, even when the task runs remotely now.
     const human = status({ now: 'x', reportBy: 'human', reportSessionId: CURRENT })
     const open2 = vi.fn()
     await openFromSource(taskTextSource(human, 'report'), { path: '/home/me/plan.md' }, { lookup: { peek: () => null, fetch }, open: open2, fail: vi.fn() })
-    expect(open2).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/plan.md', host: undefined, sourceOnly: true })
+    expect(open2).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/plan.md', host: undefined })
     expect(fetch).toHaveBeenCalledOnce()
   })
 })

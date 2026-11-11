@@ -150,7 +150,9 @@ export function LetterView({
   const sourceFile = useAgentFileOpener(shown?.sender ?? { unknownSource: true });
   const openBodyFile = useCallback((path: string, line?: number, _term?: undefined, endLine?: number) => {
     if (sourceFile.onFileOpen && shown?.sender?.host === undefined) sourceFile.onFileOpen(path, line, undefined, endLine);
-    else onOpenFile({ path, ...(line ? { line } : {}), ...(endLine ? { endLine } : {}), ...(host ? { host } : {}), ...(shown?.sender?.host !== undefined ? { sourceOnly: true } : {}) });
+    // The sender's machine first; the user's other machines when it lacks the file (a letter relays
+    // a worker's evidence path), never this machine first (agent-text-source.ts openFromSource).
+    else onOpenFile({ path, ...(line ? { line } : {}), ...(endLine ? { endLine } : {}), ...(host ? { host } : {}) });
   }, [sourceFile.onFileOpen, shown?.sender?.host, onOpenFile, host]);
   const onRefOpen = useCallback((ref: AgentRef) => {
     if (ref.kind === 'file') openBodyFile(ref.path, ref.line, undefined, ref.endLine);

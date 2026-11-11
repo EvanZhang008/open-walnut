@@ -336,17 +336,18 @@ test('a letter from a known remote host opens its path there on the first press,
   expect(net.remote().some((f) => f.includes(`file-content host=${REMOTE} ${doc}`))).toBe(true)
 })
 
-test('a missing source file and an older server response never open the primary copy; the next press recovers', async ({ page }) => {
+test('a source file its writer\'s machine lacks opens from the machine that has it, marked as there; one no machine has says so; the next press recovers', async ({ page }) => {
+  // A lead relays a worker's evidence path: the writer's machine is asked first, never alone
+  // (2026-11-11 on production: a VP's card read "Couldn't find … on Local" for a video on another Mac).
   await openApp(page)
   const center = await openInbox(page)
   const reader = await openLetter(page, center, subjects.host)
+  const asked: URL[] = []
   for (const elsewhere of [false, true]) {
     const response = async (route: Route) => {
-      const url = new URL(route.request().url())
-      expect(url.searchParams.get('sourceOnly')).toBe('1')
-      expect(url.searchParams.get('host')).toBe(REMOTE)
+      asked.push(new URL(route.request().url()))
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(
-        elsewhere ? { path: doc, found: true, elsewhere: true } : { path: doc, host: REMOTE, found: false, missing: true, checked: ['Big remote host'] },
+        elsewhere ? { path: doc, found: true, elsewhere: true } : { path: doc, host: REMOTE, found: false, missing: true, checked: ['Big remote host', 'Local'] },
       ) })
     }
     const match = (url: URL) => url.pathname === '/api/files/locate' && url.searchParams.get('ref') === doc
@@ -354,16 +355,26 @@ test('a missing source file and an older server response never open the primary 
     const before = net.files().length
     try {
       await click(page, docIn(reader))
-      await expect(page.getByTestId('file-viewer-missing')).toContainText('Couldn\'t find')
-      expect(net.files().slice(before).filter((f) => !f.includes('files/locate'))).toEqual([])
+      if (elsewhere) {
+        // The writer's machine lacks it and this machine has a file there: that file opens, marked as this machine's.
+        await expectPrimaryText(page)
+        await expect(page.locator('.file-viewer-overlay').getByTestId('sfe-host-chip')).toBeVisible()
+      } else {
+        await expect(page.getByTestId('file-viewer-missing')).toContainText('Couldn\'t find')
+        expect(net.files().slice(before).filter((f) => !f.includes('files/locate'))).toEqual([])
+      }
       await closeFile(page)
       await expect(reader).toBeVisible()
     } finally { await page.unroute(match, response) }
   }
+  expect(asked.length).toBeGreaterThanOrEqual(2)
+  for (const url of asked) {
+    expect(url.searchParams.get('host'), 'the writer\'s machine is asked first').toBe(REMOTE)
+    expect(url.searchParams.get('sourceOnly'), 'never that machine alone').toBeNull()
+  }
   await click(page, docIn(reader))
   await expectRemoteText(page)
   await closeFile(page)
-  expect(net.primary()).toEqual([])
 })
 
 test('a reply another task wrote opens on its session\'s host on the first press; drawing the turns reads no session', async ({ page }) => {

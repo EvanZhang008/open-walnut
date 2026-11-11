@@ -75,7 +75,7 @@ describe('a file lookup lives only as long as its click and its surface', () => 
     latest!.onFileOpen!('/home/me/a.ts', 4)
     expect(h.fetchSession).toHaveBeenCalledExactlyOnceWith('s1')
     await answer(0, 'devbox')
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', line: 4, host: 'devbox', sourceOnly: true })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', line: 4, host: 'devbox' })
   })
 
   it('no source: no opener of its own, so the shared handler keeps its default', async () => {
@@ -108,14 +108,14 @@ describe('a file lookup lives only as long as its click and its surface', () => 
     latest!.onFileOpen!('/b.ts')
     await answer(1, 'devbox')
     await answer(0, 'devbox')
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/b.ts', host: 'devbox', sourceOnly: true })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/b.ts', host: 'devbox' })
 
     h.openFileAnywhere.mockReset()
     latest!.onFileOpen!('/c.ts')
     latest!.onFileOpen!('/d.ts')
     await answer(2, 'devbox')
     await answer(3, 'devbox')
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/d.ts', host: 'devbox', sourceOnly: true })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/d.ts', host: 'devbox' })
   })
 
   it('a failed lookup opens an error-only preview with no host, and the next press retries', async () => {
@@ -132,7 +132,7 @@ describe('a file lookup lives only as long as its click and its surface', () => 
     h.openFileAnywhere.mockReset()
     latest!.onFileOpen!('/home/me/a.ts', 2)
     await answer(1, 'devbox')
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', line: 2, host: 'devbox', sourceOnly: true })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', line: 2, host: 'devbox' })
   })
 
   it('an unrecorded writer opens neither an absolute nor a relative path, asks nothing, and says why', async () => {
@@ -177,7 +177,7 @@ describe('a file lookup lives only as long as its click and its surface', () => 
     latest!.onFileOpen!('/home/me/a.ts')
     expect(h.fetchSession).toHaveBeenCalledExactlyOnceWith('s-old')
     await answer(0, 'devbox')
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', host: 'devbox', sourceOnly: true })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/home/me/a.ts', host: 'devbox' })
   })
 
   it('a lookup in flight opens nothing once the source turns unknown', async () => {

@@ -111,7 +111,8 @@ describe('a tool result opens with its writer', () => {
     let row = 0
     const el = await mount({ sessionId: 'sid-remote', sessionHost: 'devbox' }, () => { row++ })
     await press(fileLink(el))
-    expect(opened).toEqual([expect.objectContaining({ path: ABS, host: 'devbox', sourceOnly: true, line: 3 })])
+    expect(opened).toEqual([expect.objectContaining({ path: ABS, host: 'devbox', line: 3 })])
+    expect(opened[0]!.sourceOnly, 'the writer first, never its machine alone').toBeUndefined()
     expect(fileReads).toEqual([])
     expect(row).toBe(0)
   })

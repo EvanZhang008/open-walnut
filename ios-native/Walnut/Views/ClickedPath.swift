@@ -14,8 +14,9 @@ enum ClickedPathRoute: Equatable {
 /// session: a handoff, a video recorded on the Mac). Opening every path on the
 /// session's host dead-ended those taps. `GET /v1/files/locate` checks the
 /// session's host and the user's other hosts (src/web/routes/files-locate.ts);
-/// a path no host has opens as one plain line, never a stand-in. An explicit source (a letter or board row,
-/// `sourceOnly`) is never replaced by another host's file of that name. Every surface
+/// a path no host has opens as one plain line, never a stand-in. The writer's machine is asked first and
+/// wins when it has the file; only a machine the user tapped (`sourceOnly`) is never replaced by another
+/// host's file of that name. Every surface
 /// that routes a tapped path goes through `locate`;
 /// tests/web/clicked-path-sinks.test.ts fails on one that builds a target itself.
 enum ClickedPath {

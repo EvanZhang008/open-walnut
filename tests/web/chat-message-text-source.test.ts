@@ -257,7 +257,9 @@ describe('a chat row whose writer the surface names', () => {
     expect(toolResult(el).querySelector('a.letter-link[data-letter-id="lt-mvx2abcd-9f3k"]')).not.toBeNull()
     await click(fileLink(el, '/home/me/src/app.ts'))
     expect(opened).toHaveLength(1)
-    expect(opened.at(-1)).toMatchObject({ path: '/home/me/src/app.ts', host: 'devbox', sourceOnly: true })
+    expect(opened.at(-1)).toMatchObject({ path: '/home/me/src/app.ts', host: 'devbox' })
+    // The writer's machine first, the other machines when it lacks the file: never looked up alone.
+    expect(opened.at(-1)!.sourceOnly).toBeUndefined()
     expect(opened.at(-1)!.sourceFailure).toBeUndefined()
     expect(h.fetch).not.toHaveBeenCalled()
   })

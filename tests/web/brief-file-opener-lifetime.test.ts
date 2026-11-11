@@ -115,7 +115,7 @@ describe('a Brief path lookup lives only as long as its click, its letter and it
     open!(ONE, 3)
     expect(h.fetchSession).toHaveBeenCalledExactlyOnceWith('s1')
     await answer(0, 'devbox')
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: ONE, line: 3, host: 'devbox', sourceOnly: true })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: ONE, line: 3, host: 'devbox' })
   })
 
   it('Cancel on the pending chooser outdates its reads: their late answers open nothing', async () => {
@@ -166,7 +166,7 @@ describe('a Brief path lookup lives only as long as its click, its letter and it
     expect(h.openFileAnywhere).not.toHaveBeenCalled()
     open!(ONE)
     await answer(1, 'devbox')
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: ONE, host: 'devbox', sourceOnly: true })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: ONE, host: 'devbox' })
   })
 
   it('a replaced letter never restores its old chooser when the same letter returns', async () => {
@@ -189,7 +189,7 @@ describe('a Brief path lookup lives only as long as its click, its letter and it
     open!('/srv/b.ts')
     await answer(1, 'gpubox')
     await answer(0, 'devbox')
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/srv/b.ts', host: 'gpubox', sourceOnly: true })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: '/srv/b.ts', host: 'gpubox' })
   })
 
   it('a newer task list of the same letter only renames the writers; the pick opens on its machine', async () => {
@@ -202,7 +202,7 @@ describe('a Brief path lookup lives only as long as its click, its letter and it
     expect(picks.map((b) => b.textContent)).toEqual(['machine devbox: Words of New one', 'machine gpubox: Words of Second'])
     await click(picks[0]!)
     expect(q('chooser')).toHaveLength(0)
-    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: TWO, line: 7, host: 'devbox', sourceOnly: true })
+    expect(h.openFileAnywhere).toHaveBeenCalledExactlyOnceWith({ path: TWO, line: 7, host: 'devbox' })
   })
 
   it('the mounted Brief sends raw relative links to its writer opener before any path lookup', async () => {

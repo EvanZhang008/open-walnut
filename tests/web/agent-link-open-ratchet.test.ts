@@ -305,7 +305,8 @@ describe('the Board frame (its own document, so it sends them up)', () => {
     expect(stored).toContain('openBoardFile(req, choices, { nonce, sourceKey });')
     expect(stored).not.toMatch(/setFileChoices\(\{/)
     expect(read('components/inbox/LetterReader.tsx')).toContain('fileView.sourceOnly')
-    expect(read('components/inbox/LetterView.tsx')).toContain("shown?.sender?.host !== undefined ? { sourceOnly: true }")
+    // The sender's machine first, the other machines when it lacks the file: a letter relays evidence paths.
+    expect(read('components/inbox/LetterView.tsx')).not.toContain('sourceOnly: true')
     expect(read('components/sessions/SessionPanel.tsx')).toContain('{ host: target.host, sourceOnly: target.sourceOnly }')
     // The choice is bound to this document and these threads: a replaced page or thread list hides it.
     expect(pane).toMatch(/\{fileChoices\?\.nonce === nonce && fileChoices\.ownerId === ownerId && fileChoices\.sourceKey === sourceKey && <PathSourceChooser/)
@@ -335,7 +336,8 @@ describe('the Board frame (its own document, so it sends them up)', () => {
     expect(frame).toContain("defineProperty(msg, 'nonce', descriptor)")
     expect(frame).not.toContain('msg.nonce = NONCE')
     expect(pane).toContain('boardChoiceFileSource(ownerId, choice)')
-    expect(read('utils/agent-text-source.ts')).toContain('sourceOnly: true')
+    // A known writer's machine is asked first, never alone (tests/web/source-only-callers.test.ts).
+    expect(read('utils/agent-text-source.ts')).not.toMatch(/sourceOnly: (true|!)/)
     expect(read('components/common/AnywhereFileViewer.tsx')).toContain('req.sourceOnly')
     expect(read('components/common/FileViewer.tsx')).toContain('const lookOnly = picked ? true : sourceOnly;')
     expect(read('components/common/FileViewer.tsx')).toContain('{ host: lookHost, sourceOnly: lookOnly }')

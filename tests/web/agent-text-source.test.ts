@@ -2,8 +2,10 @@
  * A path in agent text opens on the machine whose words it is (web/src/utils/agent-text-source.ts).
  *
  * An absolute path with no host opens on this machine first, so a remote session's `/home/me/a.ts`
- * opened a same-named file here. The source's host decides now: a known host wins, else the
- * session record is read on the click only, and a session that cannot be read opens nothing.
+ * opened a same-named file here. The source's host is asked first now: a known host, else the
+ * session record read on the click only, and a session that cannot be read opens nothing. When the
+ * writer's machine lacks the file, the user's other machines answer (2026-11-11: a VP relayed a
+ * worker's video on another Mac, and its thread card read "Couldn't find … on Local").
  */
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { locatePath } from '../../web/src/api/files'
@@ -71,7 +73,7 @@ describe('where a path in agent text opens', () => {
     expect(d.lookup.fetch).not.toHaveBeenCalled()
     const local = deps()
     await openFromSource({ ...src, host: 'local' }, REQ, local)
-    expect(local.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: undefined, sourceOnly: true })
+    expect(local.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: undefined })
   })
 
   it('a task without a writing session opens no guessed machine and draws no image', async () => {
@@ -88,17 +90,30 @@ describe('where a path in agent text opens', () => {
   it('a host the surface knows wins over any session, with no lookup', async () => {
     const d = deps()
     await openFromSource({ host: 'devbox', sessionId: 's1', task: task({ session_id: 's2' }) }, REQ, d)
-    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: 'devbox', sourceOnly: true })
+    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: 'devbox' })
     expect(d.lookup.fetch).not.toHaveBeenCalled()
   })
 
-  it('a known local host stays on the primary even when another host has the same path', async () => {
+  it('a known local host asks the primary first, never another host first', async () => {
     for (const host of ['', 'local', '__local__']) {
       const d = deps()
       await openFromSource({ host, sessionId: 's1' }, REQ, d)
-      expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: undefined, sourceOnly: true })
+      expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: undefined })
       expect(d.lookup.fetch).not.toHaveBeenCalled()
     }
+  })
+
+  it("a writer's path its own machine lacks opens on the machine that has it (a relayed evidence path)", async () => {
+    // The VP writes on the primary; the video it relays was recorded on another Mac.
+    const d = deps()
+    await openFromSource({ host: 'local', sessionId: 'vp' }, REQ, d)
+    const req = d.open.mock.calls[0]![0] as { path: string; host?: string; sourceOnly?: boolean }
+    expect(req.sourceOnly).toBeUndefined()
+    const found = { path: REQ.path, host: 'studio-mac', hostName: 'Studio Mac', found: true, elsewhere: true }
+    const fetch = vi.fn(async (_input: string) => new Response(JSON.stringify(found)))
+    vi.stubGlobal('fetch', fetch)
+    expect(await locatePath(req.path, { host: req.host, sourceOnly: req.sourceOnly })).toEqual(found)
+    expect(new URL(fetch.mock.calls[0]![0] as string, 'http://localhost').searchParams.get('sourceOnly')).toBeNull()
   })
 
   it("a remote session's absolute path asks for that session's host, read on the click", async () => {
@@ -106,20 +121,20 @@ describe('where a path in agent text opens', () => {
     await openFromSource({ task: task({ session_id: 's9' }) }, REQ, d)
     expect(d.lookup.peek).toHaveBeenCalledExactlyOnceWith('s9')
     expect(d.lookup.fetch).toHaveBeenCalledExactlyOnceWith('s9')
-    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: 'devbox', sourceOnly: true })
+    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: 'devbox' })
   })
 
   it('a record the page already holds answers without a request; the explicit session wins over the task', async () => {
     const d = deps({ peek: (sid) => (sid === 's1' ? { host: 'devbox' } : null) })
     await openFromSource({ sessionId: 's1', task: task({ session_id: 's2' }) }, REQ, d)
     expect(d.lookup.fetch).not.toHaveBeenCalled()
-    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: 'devbox', sourceOnly: true })
+    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: 'devbox' })
   })
 
   it('a local session opens here', async () => {
     const d = deps({ fetch: async () => ({ host: '__local__' }) })
     await openFromSource({ sessionId: 's1' }, REQ, d)
-    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: undefined, sourceOnly: true })
+    expect(d.open).toHaveBeenCalledExactlyOnceWith({ ...REQ, host: undefined })
   })
 
   it('a session that cannot be read opens nothing on this machine and says so', async () => {

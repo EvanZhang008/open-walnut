@@ -98,8 +98,10 @@ struct FilePathLinkHandling: ViewModifier {
                 let lookup = tasks, mine = tapSeq, own = task
                 pathLookup = Task { @MainActor in
                     let route = await LinkSourceResolver.route(ref, explicit: explicit, task: own, lookup: lookup) { ref, from in
-                        await ClickedPath.locate(ref, host: from.host, cwd: from.cwd, sessionID: from.sessionID,
-                                                 sourceOnly: from.hostKnown)
+                        // The writer's machine first; the user's other machines when it lacks the file
+                        // (a lead relays a worker's evidence path). Only a machine the user tapped is
+                        // looked up alone (SessionFilesSheet).
+                        await ClickedPath.locate(ref, host: from.host, cwd: from.cwd, sessionID: from.sessionID)
                     }
                     guard !Task.isCancelled, mine == tapSeq else { return }
                     switch route {

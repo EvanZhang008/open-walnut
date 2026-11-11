@@ -151,7 +151,7 @@ export interface SourceOpenDeps {
   fail: (info: { sessionId: string; path: string; error: string; reason: SourceFailReason }) => void;
 }
 
-/** Open `req` (no host of its own) on the source's host, reading the session on this click only. */
+/** Open `req` (no host of its own) from the source's host first, reading the session on this click only. */
 export async function openFromSource(src: AgentTextSource | undefined, req: OpenFileRequest, deps: SourceOpenDeps): Promise<void> {
   const s = sourceHostOf(src);
   if (s.kind === 'none') { deps.open(req); return; }
@@ -160,7 +160,12 @@ export async function openFromSource(src: AgentTextSource | undefined, req: Open
     deps.fail({ sessionId: '', path: req.path, error: reason === 'unrecorded' ? 'The writer of these words was not recorded.' : 'The source task has no writing session.', reason });
     return;
   }
-  if (s.kind === 'host') { deps.open({ ...req, host: s.host, sourceOnly: true }); return; }
+  // The writer's machine is asked first and wins when it has the file; when it does not, the user's
+  // other machines are asked, never this machine first (files-locate.ts). No `sourceOnly`: a lead
+  // or Main relays a worker's evidence path, which lives on the worker's machine, not the writer's
+  // (2026-11-11 on production: a VP's thread card read "Couldn't find … on Local" for a video on
+  // another Mac that the same card had opened there the build before).
+  if (s.kind === 'host') { deps.open({ ...req, host: s.host }); return; }
   let record = deps.lookup.peek(s.sessionId);
   if (!record) {
     try {
@@ -172,7 +177,7 @@ export async function openFromSource(src: AgentTextSource | undefined, req: Open
   }
   if (!record) { deps.fail({ sessionId: s.sessionId, path: req.path, error: 'session not found', reason: 'gone' }); return; }
   const host = record.host && !LOCAL_HOSTS.has(record.host) ? record.host : undefined;
-  deps.open({ ...req, host, sourceOnly: true });
+  deps.open({ ...req, host });
 }
 
 /** Which stored words of a task a surface shows: each has its own recorded writer. */
