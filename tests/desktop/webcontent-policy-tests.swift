@@ -91,24 +91,49 @@ struct WebContentPolicyTests {
         precondition(sup.shouldReportSuppression(.suppressed(.footprint, why: "rate_limited")),
                      "after a hold, the same suppression is news again")
 
-        // The memory notice: on at the first held critical sample, kept through the
-        // dips a bloated page makes, gone under the warn level or on a swap.
+        // The memory notice is the last resort: a critical page whose swap only waits
+        // for the person's next pause shows nothing, one whose swap needs the person
+        // shows it, one that waited `quietWindow` for a pause shows it, and never
+        // twice in one page process (2026-11-11: it came back every ten minutes).
         var notice = MemoryNoticeState()
         let held = WatchdogVerdict.suppressed(.footprint, why: "user_active")
         precondition(!notice.update(level: .high, verdict: .hold, now: now), "high alone shows nothing")
-        precondition(notice.update(level: .critical, verdict: held, now: now))
-        precondition(notice.update(level: .high, verdict: .suppressed(.staleBundle, why: "user_active"), now: now),
+        precondition(!notice.update(level: .critical, verdict: held, now: now),
+                     "a swap that waits for a pause needs no notice")
+        precondition(!notice.update(level: .critical, verdict: .suppressed(.footprint, why: "process_too_young"), now: now.addingTimeInterval(60)),
+                     "nor one that waits for the process to come of age")
+        precondition(notice.update(level: .critical, verdict: held, now: now.addingTimeInterval(MemoryNoticeState.quietWindow)),
+                     "a pause that never came: the notice, once")
+        precondition(notice.update(level: .high, verdict: .suppressed(.staleBundle, why: "user_active"), now: now.addingTimeInterval(MemoryNoticeState.quietWindow + 60)),
                      "a dip under the threshold keeps the notice")
+        notice.dismiss(at: now)
+        for minutes in [1, 10, 11, 60, 600] as [TimeInterval] {
+            precondition(!notice.update(level: .critical, verdict: .suppressed(.footprint, why: "unsaved_work"), now: now.addingTimeInterval(minutes * 60)),
+                         "Later means not again in this page process (\(minutes) min)")
+        }
         precondition(!notice.update(level: .normal, verdict: .hold, now: now), "back under warn: gone")
+        precondition(!notice.update(level: .critical, verdict: .suppressed(.footprint, why: "rate_limited"), now: now.addingTimeInterval(7_200)),
+                     "a page that went back under warn and up again still shows it no more")
+        notice.reset()
+        precondition(!notice.shown && !notice.spent)
         precondition(!notice.update(level: .critical, verdict: .recycle(.footprint), now: now),
                      "a swap that goes now needs no notice")
-        precondition(notice.update(level: .critical, verdict: .suppressed(.footprint, why: "unsaved_work"), now: now))
-        notice.dismiss(at: now)
-        precondition(!notice.update(level: .critical, verdict: held, now: now.addingTimeInterval(60)), "Later holds it back")
-        precondition(notice.update(level: .critical, verdict: held, now: now.addingTimeInterval(MemoryNoticeState.snooze + 1)),
-                     "and it comes back while the page is still critical")
+        precondition(notice.update(level: .critical, verdict: .suppressed(.footprint, why: "unsaved_work"), now: now),
+                     "text a reload would lose: the notice at once")
         notice.reset()
-        precondition(!notice.shown)
+        precondition(notice.update(level: .critical, verdict: .suppressed(.footprint, why: "rate_limited"), now: now),
+                     "the hourly budget spent: the notice at once")
+        notice.reset()
+
+        // Guard for the whole class of holds: every reason a swap can be held for is
+        // either one a pause or the process's age ends by itself (no notice), or one
+        // only the person ends (the notice). A new reason must be put on one side.
+        let endsByItself: Set<String> = ["user_active", "process_too_young"]
+        for why in ["user_active", "process_too_young", "rate_limited", "unsaved_work"] {
+            precondition(endsByItself.contains(why) != MemoryNoticeState.needsPerson.contains(why),
+                         "hold \(why) is on neither side or on both")
+        }
+        precondition(endsByItself.union(MemoryNoticeState.needsPerson) == ["user_active", "process_too_young", "rate_limited", "unsaved_work"])
 
         // Guard for the whole class: a page at critical memory is never left as it is.
         // Every sample a critical page can give (any idle, visibility, age, budget,
@@ -131,8 +156,16 @@ struct WebContentPolicyTests {
                                 var n = MemoryNoticeState()
                                 let shown = n.update(level: .critical, verdict: verdict, now: now)
                                 let goesNow: Bool = { if case .recycle = verdict { return true }; return false }()
-                                precondition(goesNow || shown,
+                                let heldBy: String? = { if case let .suppressed(_, why) = verdict { return why }; return nil }()
+                                let endsAlone = heldBy.map { endsByItself.contains($0) } ?? false
+                                precondition(goesNow || shown || endsAlone,
                                              "critical page left with no swap and no notice: \(mbValue)MB idle \(idle) visible \(visible) age \(age) spent \(spent) unsaved \(unsaved) -> \(verdict)")
+                                if heldBy == "user_active" { precondition(policy.wantsPauseCheck(verdict), "a hold on input is ended by the pause check") }
+                                if endsAlone {
+                                    precondition(!shown, "a hold that ends by itself shows no notice at first")
+                                    precondition(n.update(level: .critical, verdict: verdict, now: now.addingTimeInterval(MemoryNoticeState.quietWindow)),
+                                                 "a hold that never ended shows the notice after the quiet window")
+                                }
                                 if !goesNow, idle >= policy.pauseForRecycle, age >= policy.minProcessAge, spent == 0, !unsaved {
                                     preconditionFailure("a pause of \(idle)s did not swap a critical page: \(verdict)")
                                 }

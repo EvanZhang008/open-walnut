@@ -254,10 +254,12 @@ samples the window's WebKit page process once a minute. Past the recycle
 threshold (2.2 GB) it replaces the process at the user's next 8 s pause in
 input, looked for every 2 s, or at once when the window is hidden; a swap keeps
 the page's URL and the drafts the page stores, and never runs over text a reload
-would lose. While a critical page stays (the user keeps working, unsaved text,
-three swaps already this hour) a native notice over the page says so with
-**Reload Page**: AppKit draws it, so it shows even when the page has stopped
-painting. Going high and again critical, it logs what holds the memory by
+would lose. A native notice over the page with **Reload Page** is the last
+resort, at most once per page process: it shows only when the swap needs the
+person (unsaved text, three swaps already this hour) or a critical page waited
+five minutes for a pause that never came, and after **Later** it does not come
+back in that process. AppKit draws it, so it shows even when the page has
+stopped painting. Going high and again critical, it logs what holds the memory by
 `footprint` category (`webcontent_breakdown`).
 
 A launch next to a Walnut server that already owns the data directory (its lock,

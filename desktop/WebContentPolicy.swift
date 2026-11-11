@@ -178,37 +178,56 @@ struct WebContentPolicy {
 }
 
 /// The notice the shell draws over the page while a page at critical memory is
-/// not replaced (the user keeps working, text a reload would lose, the hourly
-/// budget spent). It is native, not part of the page, because the failure it is
+/// not replaced. It is native, not part of the page, because the failure it is
 /// for is a page process that no longer paints: a notice in the page would be
 /// as blank as the rest of it.
+///
+/// It is the last resort, never the way memory is handled (2026-11-11, the user,
+/// after it came back every ten minutes: "you cannot make the user reload all the
+/// time"). The quiet swap at the person's next short pause is the way: it keeps
+/// the URL and every draft, so a critical page whose swap only waits for a pause
+/// (or for its process to come of age) shows nothing. The notice shows only when
+/// the swap needs the person (text a reload would lose, the hourly budget spent)
+/// or has waited `quietWindow` for a pause that never came, and at most ONCE per
+/// page process: Later means not again in this process.
 struct MemoryNoticeState {
-    /// How long a dismissed notice stays away while the page is still critical.
-    static let snooze: TimeInterval = 600
+    /// How long a critical page may wait for the quiet swap before the notice shows.
+    static let quietWindow: TimeInterval = 300
+    /// Holds that only the person can end: no pause will swap such a page.
+    static let needsPerson: Set<String> = ["unsaved_work", "rate_limited"]
 
     private(set) var shown = false
-    private var dismissedAt: Date?
+    /// Shown once in this page process (dismissed or still up).
+    private(set) var spent = false
+    private var criticalSince: Date?
 
-    /// One sample in, whether the notice should be on screen out. Shown from the
-    /// first critical sample that is not swapped at once; kept through the dips
-    /// under the threshold a bloated page makes (2404, 2168, 2214, 1993 MB a
-    /// minute apart on 11-08) until the page is back under the warn level or its
-    /// process is replaced (`reset`).
+    /// One sample in, whether the notice should be on screen out. Once up it is
+    /// kept through the dips under the threshold a bloated page makes (2404,
+    /// 2168, 2214, 1993 MB a minute apart on 11-08) until the page is back under
+    /// the warn level, the person dismisses it, or its process is replaced (`reset`).
     mutating func update(level: FootprintLevel, verdict: WatchdogVerdict, now: Date) -> Bool {
         if level == .normal {
             shown = false
-            dismissedAt = nil
+            criticalSince = nil
             return false
         }
         if case .recycle = verdict { shown = false; return false }
-        if let dismissedAt, now.timeIntervalSince(dismissedAt) < Self.snooze { shown = false; return false }
-        if level == .critical { shown = true }
+        if shown { return true }
+        guard !spent, level == .critical else { return false }
+        if criticalSince == nil { criticalSince = now }
+        var waitsOnPerson = false
+        if case let .suppressed(_, why) = verdict { waitsOnPerson = Self.needsPerson.contains(why) }
+        let waitedTooLong = now.timeIntervalSince(criticalSince ?? now) >= Self.quietWindow
+        if waitsOnPerson || waitedTooLong {
+            shown = true
+            spent = true
+        }
         return shown
     }
 
     mutating func dismiss(at now: Date) {
         shown = false
-        dismissedAt = now
+        spent = true
     }
 
     mutating func reset() { self = MemoryNoticeState() }
