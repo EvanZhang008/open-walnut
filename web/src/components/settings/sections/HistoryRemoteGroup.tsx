@@ -11,7 +11,7 @@ import { apiGet, apiPost } from '@/api/client';
 import { fetchAwsProfiles } from '@/api/config';
 import { remoteFormConfig, type Method, type Remote, type Target } from './history-remote-model';
 
-interface Status { enabled: boolean; days: number; bucket: string; uploaded: number; remoteOnly: number; remoteBytes: number }
+interface Status { enabled: boolean; days: number; bucket: string; uploaded: number; remoteOnly: number; remoteBytes: number; counting?: boolean; countedAt?: number }
 interface TestResult { ok: boolean; step?: string; error?: string; ms?: number }
 interface SetupResult { ok: boolean; created?: boolean; steps?: string[]; error?: string }
 
@@ -58,6 +58,12 @@ export function HistoryRemoteGroup({ config, save }: { config: Config; save: (pa
     loadStatus();
     fetchAwsProfiles().then(setProfiles).catch(() => {});
   }, [loadStatus]);
+  // The server counts tens of thousands of sessions in the background; ask again until it is done.
+  useEffect(() => {
+    if (!status?.counting) return;
+    const t = setTimeout(loadStatus, 4000);
+    return () => clearTimeout(t);
+  }, [status, loadStatus]);
 
   const current = remoteFormConfig(form, saved);
   useSettingsAutoSave({
@@ -75,7 +81,9 @@ export function HistoryRemoteGroup({ config, save }: { config: Config; save: (pa
   const regionHint = form.endpoint.trim() && form.target !== 'aws' ? 'auto' : 'us-west-2';
 
   const statusLine = status
-    ? status.uploaded === 0
+    ? status.counting && !status.countedAt
+      ? 'Counting the sessions stored remotely…'
+      : status.uploaded === 0
       ? status.enabled ? `Nothing is stored remotely yet. Sessions go once compressed and untouched for ${status.days} days.` : 'Nothing is stored remotely.'
       : `${status.uploaded} ${status.uploaded === 1 ? 'session' : 'sessions'} stored remotely (${fmtBytes(status.remoteBytes)}); ${status.remoteOnly} only there.`
     : 'Reading…';

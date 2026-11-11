@@ -12,7 +12,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { MANIFEST_SUFFIX, RemoteHistoryError, archiveTranscripts, ensurePlain, findNameMatch, plainFindResults, restoreSession, setRemoteFetcher } from '../../src/providers/transcript-archive.js'
 import { OFFLOAD_KEEP_MS, fetchRemoteArchive, offloadArchived, remoteTierStatus, type OffloadStore } from '../../src/providers/transcript-offload.js'
 import { LIFECYCLE_RULE_ID, remoteStore, remoteTimeouts, resolveRemote, setupBucket, testRemote } from '../../src/core/history-remote/store.js'
-import { fetchLocalArchive } from '../../src/core/history-remote/service.js'
+import { fetchLocalArchive, remoteStatus, resetTierCount } from '../../src/core/history-remote/service.js'
 import { remoteOnlyHere, withRemoteLoading } from '../../src/core/history-remote/loading.js'
 import { HostStillLoadingError } from '../../src/core/hosts/remote-read-bound.js'
 import { startFakeS3, type FakeS3 } from '../helpers/fake-s3.js'
@@ -113,6 +113,16 @@ describe('remote history tier (fake S3)', () => {
     expect(manifest('s-a').remote.offloadedAt).toBeGreaterThan(0)
     expect(await remoteOnlyHere('s-a', cwd, [projects])).toBe(true)
     expect(await remoteTierStatus([projects])).toMatchObject({ uploaded: 1, remoteOnly: 1 })
+    // The status route never waits on the count past its deadline: no count yet answers `counting`,
+    // the scan goes on, and the next ask reads it.
+    resetTierCount()
+    const off = { session: { history_remote: { enabled: false } } }
+    const before = await remoteStatus(off as never, { roots: [projects], waitMs: 0 })
+    expect(before).toMatchObject({ counting: true, uploaded: 0 })
+    expect(before.countedAt).toBeUndefined()
+    // The next ask joins the scan already running and gets its count.
+    expect(await remoteStatus(off as never, { roots: [projects], waitMs: 30_000 })).toMatchObject({ counting: false, uploaded: 1, remoteOnly: 1 })
+    expect(await remoteStatus(off as never, { roots: [projects], waitMs: 0 })).toMatchObject({ counting: false, uploaded: 1 })
 
     // Opening: fetched, checked, decompressed.
     useFetcher()

@@ -237,6 +237,8 @@ export async function fetchRemoteArchive(dir: string, sid: string, store: FetchS
 }
 
 /** Sessions here and their bytes, by where their history is: plain-but-archived here, uploaded, only remote. */
+const STATUS_READ_BATCH = 32
+
 export async function remoteTierStatus(projectsDirs: string[]): Promise<{ uploaded: number; remoteOnly: number; remoteBytes: number }> {
   const out = { uploaded: 0, remoteOnly: 0, remoteBytes: 0 }
   for (const root of [...new Set(projectsDirs)]) {
@@ -247,13 +249,16 @@ export async function remoteTierStatus(projectsDirs: string[]): Promise<{ upload
       const dir = path.join(root, p.name)
       let names: string[]
       try { names = await fsp.readdir(dir) } catch { continue }
-      for (const name of names) {
-        if (!name.endsWith(MANIFEST_SUFFIX)) continue
-        const m = await A.readManifest(dir, name.slice(0, -MANIFEST_SUFFIX.length))
-        if (!m?.remote) continue
-        out.uploaded++
-        if (m.remote.offloadedAt !== undefined) out.remoteOnly++
-        out.remoteBytes += m.remote.files.reduce((n, f) => n + f.gzSize, 0)
+      // Read the manifests a few at a time: one by one, tens of thousands took over 10 s.
+      const sids = names.filter((n) => n.endsWith(MANIFEST_SUFFIX)).map((n) => n.slice(0, -MANIFEST_SUFFIX.length))
+      for (let i = 0; i < sids.length; i += STATUS_READ_BATCH) {
+        const ms = await Promise.all(sids.slice(i, i + STATUS_READ_BATCH).map((sid) => A.readManifest(dir, sid).catch(() => null)))
+        for (const m of ms) {
+          if (!m?.remote) continue
+          out.uploaded++
+          if (m.remote.offloadedAt !== undefined) out.remoteOnly++
+          out.remoteBytes += m.remote.files.reduce((n, f) => n + f.gzSize, 0)
+        }
       }
     }
   }

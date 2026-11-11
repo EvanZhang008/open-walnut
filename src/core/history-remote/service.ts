@@ -87,12 +87,51 @@ export async function remotePassOnce(deps?: { config?: Pick<Config, 'session'> |
   return row
 }
 
-export async function remoteStatus(config?: Pick<Config, 'session'> | null): Promise<{
+type TierCounts = { uploaded: number; remoteOnly: number; remoteBytes: number }
+
+/** How long the status route waits for a count before it answers with the last one. */
+export const STATUS_WAIT_MS = 2_500
+/** A count this young is answered as it is, with no new scan. */
+const STATUS_FRESH_MS = 60_000
+const tierCount: { last?: TierCounts & { at: number }; running?: Promise<TierCounts> } = {}
+
+/**
+ * The tier's counts read every manifest of this machine's history (tens of thousands), which
+ * takes longer than a route may hang. One scan runs at a time; the route waits STATUS_WAIT_MS
+ * for it, else answers the last count (or none yet) with `counting`, and the scan goes on.
+ */
+async function tierCounts(roots: string[], waitMs: number): Promise<{ counts?: TierCounts; countedAt?: number; counting: boolean }> {
+  const last = tierCount.last
+  if (last && Date.now() - last.at < STATUS_FRESH_MS) return { counts: last, countedAt: last.at, counting: false }
+  if (!tierCount.running) {
+    const { remoteTierStatus } = await import('../../providers/transcript-offload.js')
+    tierCount.running = remoteTierStatus(roots)
+      .then((c) => { tierCount.last = { ...c, at: Date.now() }; return c })
+      .finally(() => { tierCount.running = undefined })
+    tierCount.running.catch((e) => log.session.warn('remote history status could not be counted', { error: (e as Error).message }))
+  }
+  let timer: NodeJS.Timeout | undefined
+  const done = waitMs <= 0 ? false : await Promise.race([
+    tierCount.running.then(() => true, () => false),
+    new Promise<false>((r) => { timer = setTimeout(() => r(false), waitMs) }),
+  ]).finally(() => clearTimeout(timer))
+  const now = tierCount.last
+  if (done && now) return { counts: now, countedAt: now.at, counting: false }
+  return { ...(now ? { counts: now, countedAt: now.at } : {}), counting: true }
+}
+
+/** Test seam: forget the cached count. */
+export function resetTierCount(): void { tierCount.last = undefined }
+
+export async function remoteStatus(config?: Pick<Config, 'session'> | null, deps?: { roots?: string[]; waitMs?: number }): Promise<{
   enabled: boolean; days: number; bucket: string; region: string; endpoint?: string; prefix: string; auth: ResolvedRemote['auth']
-  uploaded: number; remoteOnly: number; remoteBytes: number
+  uploaded: number; remoteOnly: number; remoteBytes: number; counting: boolean; countedAt?: number
 }> {
   const r = await currentRemote(config)
-  const { remoteTierStatus } = await import('../../providers/transcript-offload.js')
-  const s = await remoteTierStatus(localProjectsDirs())
-  return { enabled: r.enabled, days: r.days, bucket: r.bucket, region: r.region, ...(r.endpoint ? { endpoint: r.endpoint } : {}), prefix: r.prefix, auth: r.auth, ...s }
+  const s = await tierCounts(deps?.roots ?? localProjectsDirs(), deps?.waitMs ?? STATUS_WAIT_MS)
+  const c = s.counts ?? { uploaded: 0, remoteOnly: 0, remoteBytes: 0 }
+  return {
+    enabled: r.enabled, days: r.days, bucket: r.bucket, region: r.region, ...(r.endpoint ? { endpoint: r.endpoint } : {}), prefix: r.prefix, auth: r.auth,
+    uploaded: c.uploaded, remoteOnly: c.remoteOnly, remoteBytes: c.remoteBytes, counting: s.counting, ...(s.countedAt ? { countedAt: s.countedAt } : {}),
+  }
 }
