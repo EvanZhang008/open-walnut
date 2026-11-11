@@ -143,14 +143,22 @@ enum OrgNodeTasksModel {
 
     /// The one line under a row's title: what it needs from him, else what it does now, else on
     /// whom it waits. Never a phase name or a command line.
-    static func line(_ t: WalnutTask) -> String? {
+    static func line(_ t: WalnutTask) -> String? { lineWithField(t)?.text }
+
+    /// Where a path in `line(t)` opens from: the writer of the text it shows.
+    static func lineSource(_ t: WalnutTask) -> LinkSource {
+        lineWithField(t).map { LinkSource.forTaskText(t, $0.field) } ?? .unknown
+    }
+
+    /// The line and which of the task's texts it is, so a path in it opens from that text's writer.
+    static func lineWithField(_ t: WalnutTask) -> (text: String, field: LinkSource.TaskTextField)? {
         let state = TeamStatusModel.state(of: t)
         let s = t.userStatus
         if state == .done { return nil }
-        if state == .needs, let need = TeamStatusModel.needLine(s) { return "\(need.category.label): \(need.text)" }
-        if let now = s?.now?.trimmingCharacters(in: .whitespacesAndNewlines), !now.isEmpty { return now }
+        if state == .needs, let need = TeamStatusModel.needLine(s) { return ("\(need.category.label): \(need.text)", .needs) }
+        if let now = s?.now?.trimmingCharacters(in: .whitespacesAndNewlines), !now.isEmpty { return (now, .now) }
         // Between a turn's end and its report the wait words are a placeholder: none.
-        if state == .waiting, s?.transient != true { return TeamStatusModel.waitingLine(s) }
+        if state == .waiting, s?.transient != true { return (TeamStatusModel.waitingLine(s), .waiting) }
         return nil
     }
 

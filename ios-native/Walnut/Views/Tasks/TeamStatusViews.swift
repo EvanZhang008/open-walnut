@@ -35,31 +35,43 @@ struct TaskStatusCard: View {
             // What it needs from the user, its category word first ("Decide: ...", "Can close:
             // The result is ready"): the whole sentence here, where it is read.
             if state == .needs, let need = TeamStatusModel.needLine(s) {
-                (Text("\(need.category.label): ").bold().foregroundColor(NeedLineView.color(need.category)) + Text(need.text))
+                // The ask is the session's own words: the shared inline renderer and its links.
+                (Text("\(need.category.label): ").bold().foregroundColor(NeedLineView.color(need.category))
+                    + Text(MarkdownParser.inline(need.text)))
                     .font(.subheadline)
+                    .handlingFilePathLinks(task: task, field: .needs)
                     .accessibilityIdentifier(TeamStatusModel.isToRead(s) ? "task.userStatus.read" : "task.userStatus.ask")
                 if !TeamStatusModel.isToRead(s) { CheckedCaption(status: s, font: .caption, id: "task.userStatus.checked") }
             }
             // A turn just ended and its report is still coming: no placeholder words.
             if state == .waiting, s?.transient != true {
-                Text(TeamStatusModel.waitingLine(s))
+                Text(MarkdownParser.inline(TeamStatusModel.waitingLine(s)))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(s?.kind == "stuck" ? UserStatePill.stuckText : .primary)
+                    .handlingFilePathLinks(task: task, field: .waiting)
             }
+            // The session's own now / next / not-done words: the shared inline renderer
+            // and its links, as the ask above.
             if let now = s?.now, !now.isEmpty {
-                Text(now).font(.subheadline)
+                Text(MarkdownParser.inline(now)).font(.subheadline)
+                    .handlingFilePathLinks(task: task, field: .now)
             }
             if let next = s?.next, !next.isEmpty, state != .needs {
-                (Text("Next: ").foregroundColor(.secondary) + Text(next))
+                (Text("Next: ").foregroundColor(.secondary) + Text(MarkdownParser.inline(next)))
                     .font(.subheadline)
+                    .handlingFilePathLinks(task: task, field: .next)
             }
             if let report = task.resultReport, report.isPartial {
                 // Its latest result left things not done: the whole list, here where it is read.
-                (Text("Partial. Not done: ").bold() + Text((report.notDone ?? []).joined(separator: "; ")))
+                (Text("Partial. Not done: ").bold()
+                    + Text(MarkdownParser.inline((report.notDone ?? []).joined(separator: "; "))))
                     .font(.subheadline)
+                    .handlingFilePathLinks(task: task, field: .partial)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Each line above has its own handler: its words may come from an older session than
+        // the task runs now, so a path in them opens from where they were written.
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("task.userStatus")
     }
@@ -271,18 +283,32 @@ struct TeamStatusSection: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(UserStatePill.textColor(.done))
             } else {
-                let lines = b.needs.map { r -> String in
-                    let ask = TeamStatusModel.clause(r.status?.ask ?? "")
-                    let title = TeamStatusModel.clause(r.task.title)
-                    return ask.isEmpty ? title : "\(title) (\(ask))"
-                }
                 (Text("\(b.needs.count) \(b.needs.count == 1 ? "needs" : "need") you: ").bold()
                     .foregroundColor(UserStatePill.textColor(.needs))
-                    + Text(lines.joined(separator: "; ") + "."))
+                    + Text(Self.briefWords(b)))
                     .font(.subheadline)
+                    // Every file link in it carries its own task's writer.
+                    .handlingTaggedFilePathLinks()
             }
         }
         .accessibilityIdentifier("task.team.brief")
+    }
+
+    static func briefWords(_ b: TeamStatusBoard) -> AttributedString {
+        var out = AttributedString()
+        for (i, r) in b.needs.enumerated() {
+            let ask = TeamStatusModel.clause(r.status?.ask ?? "")
+            let title = TeamStatusModel.clause(r.task.title)
+            if i > 0 { out += AttributedString("; ") }
+            // The title's writer is not recorded; the ask's is its Needs you writer.
+            out += FilePreviewLink.tagging(MarkdownParser.inline(title), source: .unknown)
+            if !ask.isEmpty {
+                out += AttributedString(" (")
+                    + FilePreviewLink.tagging(MarkdownParser.inline(ask), source: .forTaskText(r.task, .needs))
+                    + AttributedString(")")
+            }
+        }
+        return out + AttributedString(".")
     }
 
     private func chips(_ b: TeamStatusBoard) -> some View {
@@ -327,6 +353,9 @@ struct TeamStatusRowView: View {
     /// What the task says about itself, under a row with no ask of its own (the work card's
     /// Completed list: its result). Nil keeps the row as it was.
     var detail: String? = nil
+    /// Which of the task's texts `detail` is, so a path in it opens from where it was written;
+    /// nil opens nothing.
+    var detailField: LinkSource.TaskTextField? = nil
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -390,18 +419,20 @@ struct TeamStatusRowView: View {
     private var details: some View {
         let s = row.status
         if row.state == .needs, let need = TeamStatusModel.needLine(s) {
-            NeedLineView(need: need, toRead: row.isToRead, font: .footnote, id: "task.team.need")
+            NeedLineView(need: need, toRead: row.isToRead, font: .footnote, id: "task.team.need", task: row.task)
         } else if let detail, !detail.isEmpty {
-            Text(detail)
+            Text(MarkdownParser.inline(detail))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+                .handlingFilePathLinks(source: detailField.map { LinkSource.forTaskText(row.task, $0) } ?? LinkSource.unknown)
                 .accessibilityIdentifier("task.team.detail")
         } else if let line = OrgNodeTasksModel.line(row.task) {
-            Text(line)
+            Text(MarkdownParser.inline(line))
                 .font(.footnote)
                 .foregroundStyle(row.isStuck ? UserStatePill.stuckText : .secondary)
                 .lineLimit(1)
+                .handlingFilePathLinks(source: OrgNodeTasksModel.lineSource(row.task))
         }
         if let due = s?.due {
             Text(due.state == "overdue" ? "Overdue: was due \(TeamStatusModel.dueText(due.at))" : "Due \(TeamStatusModel.dueText(due.at))")
@@ -423,6 +454,7 @@ struct NeedLineView: View {
     let toRead: Bool
     let font: Font
     let id: String
+    var task: WalnutTask? = nil
 
     /// The category word's colour: Decide red, Review orange, Take a look blue, Can close green.
     static func color(_ c: NeedCategory) -> Color {
@@ -443,11 +475,13 @@ struct NeedLineView: View {
                     .accessibilityHidden(true)
             }
             (Text("\(need.category.label): ").bold().foregroundColor(Self.color(need.category))
-                + Text(need.text).foregroundColor(.secondary))
+                + Text(MarkdownParser.inline(need.text)).foregroundColor(.secondary))
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
         .font(font)
+        // Its words are the task's Needs you line, from that line's own writer.
+        .handlingFilePathLinks(source: task.map { LinkSource.forTaskText($0, .needs) } ?? LinkSource.unknown)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(id)
     }

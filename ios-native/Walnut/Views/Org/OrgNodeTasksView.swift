@@ -155,10 +155,13 @@ struct OrgTaskRow: View {
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                 if let line = OrgNodeTasksModel.line(task) {
-                    Text(line)
+                    Text(MarkdownParser.inline(line))
                         .font(.footnote)
                         .foregroundStyle(state == .needs ? Theme.needsText : .secondary)
                         .lineLimit(1)
+                        // After the colour: a sheet reads the style of the view it hangs on, so a viewer or
+                        // letter opened from this line would come up in the line's own tint.
+                        .handlingFilePathLinks(source: OrgNodeTasksModel.lineSource(task))
                 }
             }
             Spacer(minLength: 4)

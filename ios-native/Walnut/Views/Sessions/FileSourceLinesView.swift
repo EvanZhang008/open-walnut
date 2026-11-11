@@ -18,6 +18,9 @@ struct TextFileTarget: Identifiable, Equatable {
     var hostNote: String? = nil
     /// No host has it: the viewer shows this line instead of reading anything.
     var missing: String? = nil
+    /// No machine is known for it (`ClickedPath.unreachableSource`): the viewer lets the user
+    /// pick the machine to open it from.
+    var unknownSource = false
 
     init(ref: FilePathRef, host: String? = nil, cwd: String? = nil, sessionID: String? = nil,
          hostNote: String? = nil, missing: String? = nil) {
@@ -46,17 +49,39 @@ struct FilePathLinkHandling: ViewModifier {
     var host: String? = nil
     var cwd: String? = nil
     var sessionID: String? = nil
+    var task: WalnutTask? = nil
+    /// The writer of these words is not known: a tap opens nothing (`LinkSource.unknownSource`).
+    var unknownSource = false
+    /// Every file link in this subtree was tagged by the phone with its writer
+    /// (`FilePreviewLink.tagging(_:source:)`): the tag names the machine, and a link with none
+    /// reads as unknown. Off everywhere else, so a tag in an agent's own markup is never read.
+    var readsSourceTags = false
 
+    @Environment(TasksStore.self) private var tasks: TasksStore?
     @State private var htmlTarget: FilePreviewTarget?
     @State private var textTarget: TextFileTarget?
     @State private var dirTarget: DirectoryTarget?
     /// A task mention (`walnut-task://`, `TaskMentions`): the same task sheet the
     /// timeline and a letter's task reference open.
     @State private var taskTarget: TaskOpenTarget?
+    /// A letter link (`LetterMentionLink`): the letter's reader as a sheet here,
+    /// never a switch to the Inbox tab behind whatever is in front.
+    @State private var letterTarget: LetterOpenTarget?
+    /// Cancelled by a newer tap or leaving, so a late answer never opens a stale sheet.
+    @State private var pathLookup: Task<Void, Never>?
+    @State private var tapSeq = 0
 
     func body(content: Content) -> some View {
         content
             .environment(\.openURL, OpenURLAction { url in
+                pathLookup?.cancel()
+                tapSeq &+= 1
+                // A letter id (`walnut-letter://`, or the web's `letter:`): that
+                // letter's reader, over this screen.
+                if let letterID = LetterMentionLink.letterID(from: url) {
+                    letterTarget = LetterOpenTarget(id: letterID)
+                    return .handled
+                }
                 if let taskID = TaskMentionLink.taskID(from: url) {
                     taskTarget = TaskOpenTarget(
                         id: taskID, title: TaskMentionResolver.shared.title(for: taskID))
@@ -65,8 +90,19 @@ struct FilePathLinkHandling: ViewModifier {
                 // Anything that is not one of ours keeps the system behaviour —
                 // an https:// link in a note must still open Safari.
                 guard let ref = FilePreviewLink.reference(from: url) else { return .systemAction }
-                Task { @MainActor in
-                    switch await ClickedPath.locate(ref, host: host, cwd: cwd, sessionID: sessionID) {
+                let explicit = LinkSourceResolver.explicitSource(
+                    for: url, readsSourceTags: readsSourceTags,
+                    own: LinkSource(host: host, cwd: cwd, sessionID: sessionID, unknownSource: unknownSource))
+                // Only the task this handler was given (its own conversation's task, say): never one
+                // a link's query names.
+                let lookup = tasks, mine = tapSeq, own = task
+                pathLookup = Task { @MainActor in
+                    let route = await LinkSourceResolver.route(ref, explicit: explicit, task: own, lookup: lookup) { ref, from in
+                        await ClickedPath.locate(ref, host: from.host, cwd: from.cwd, sessionID: from.sessionID,
+                                                 sourceOnly: from.hostKnown)
+                    }
+                    guard !Task.isCancelled, mine == tapSeq else { return }
+                    switch route {
                     case .directory(let target): dirTarget = target
                     case .html(let target): htmlTarget = target
                     case .text(let target): textTarget = target
@@ -74,12 +110,15 @@ struct FilePathLinkHandling: ViewModifier {
                 }
                 return .handled
             })
+            // A sheet is set only once its lookup ended, so this cancels nothing the sheet itself needs.
+            .onDisappear { pathLookup?.cancel() }
             .sheet(item: $htmlTarget) { HTMLFilePreviewSheet(target: $0) }
             .sessionFileSheet(item: $textTarget) { target in
                 SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
                                   host: target.host ?? "", ref: target.ref,
                                   cwd: target.cwd, sessionID: target.sessionID,
-                                  hostNote: target.hostNote, missingNote: target.missing)
+                                  hostNote: target.hostNote, missingNote: target.missing,
+                                  unknownSource: target.unknownSource)
             }
             .sheet(item: $dirTarget) { DirectoryPreviewSheet(target: $0) }
             .sheet(item: $taskTarget) { destination in
@@ -87,14 +126,31 @@ struct FilePathLinkHandling: ViewModifier {
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
             }
+            .letterReaderSheet($letterTarget)
     }
 }
 
 extension View {
     /// Route `walnut-file://` taps in this subtree to the in-app viewers.
     func handlingFilePathLinks(host: String? = nil, cwd: String? = nil,
-                               sessionID: String? = nil) -> some View {
-        modifier(FilePathLinkHandling(host: host, cwd: cwd, sessionID: sessionID))
+                               sessionID: String? = nil, task: WalnutTask? = nil) -> some View {
+        modifier(FilePathLinkHandling(host: host, cwd: cwd, sessionID: sessionID, task: task))
+    }
+
+    func handlingFilePathLinks(source: LinkSource) -> some View {
+        modifier(FilePathLinkHandling(host: source.hostKnown ? source.host ?? "" : nil,
+                                      cwd: source.cwd, sessionID: source.sessionID,
+                                      unknownSource: source.unknownSource))
+    }
+
+    /// One of a task's own texts: opened from where that text was written, never its current session.
+    func handlingFilePathLinks(task: WalnutTask, field: LinkSource.TaskTextField) -> some View {
+        handlingFilePathLinks(source: .forTaskText(task, field))
+    }
+
+    /// Text built from several writers, each file link tagged with `FilePreviewLink.tagging(_:source:)`.
+    func handlingTaggedFilePathLinks() -> some View {
+        modifier(FilePathLinkHandling(readsSourceTags: true))
     }
 }
 

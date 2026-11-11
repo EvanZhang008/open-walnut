@@ -306,6 +306,7 @@ final class TimelineCodeCell: UICollectionViewCell {
     private var block: TimelineCodeBlock?
     private weak var delegate: TimelineCellActionDelegate?
     private var copiedReset: DispatchWorkItem?
+    private var mentionsObserver: NSObjectProtocol?
     /// The top of the timeline's visible area in this cell's coordinates, last
     /// told by `pinHeader`: the header moves down the card to stay under it
     /// while the block's middle is read, as the web header sticks.
@@ -322,6 +323,7 @@ final class TimelineCodeCell: UICollectionViewCell {
         scroll.showsHorizontalScrollIndicator = true
         scroll.alwaysBounceHorizontal = false
         textView.isSelectable = true
+        textView.accessibilityIdentifier = "timeline.code"
         rule.backgroundColor = .separator
         languageLabel.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
         languageLabel.textColor = .secondaryLabel
@@ -343,10 +345,20 @@ final class TimelineCodeCell: UICollectionViewCell {
         header.addSubview(copyButton)
         header.addSubview(rule)
         scroll.addSubview(textView)
+        // A task id in the code links once the task list knows it; the row's text (its reload key) never changes.
+        mentionsObserver = NotificationCenter.default.addObserver(
+            forName: TaskMentionResolver.didChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restyle() }
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        if let mentionsObserver { NotificationCenter.default.removeObserver(mentionsObserver) }
+    }
 
     private func configureButton(_ button: UIButton, title: String?, symbol: String, label: String) {
         var config = UIButton.Configuration.plain()
@@ -367,7 +379,8 @@ final class TimelineCodeCell: UICollectionViewCell {
     func configure(_ block: TimelineCodeBlock, delegate: TimelineCellActionDelegate?) {
         self.block = block
         self.delegate = delegate
-        textView.attributedText = block.attributed
+        textView.actionDelegate = delegate
+        restyle()
         languageLabel.text = block.label
         languageLabel.isHidden = block.label.isEmpty
         var wrapConfig = wrapButton.configuration
@@ -389,8 +402,22 @@ final class TimelineCodeCell: UICollectionViewCell {
         super.prepareForReuse()
         copiedReset?.cancel()
         copiedReset = nil
+        // A reused cell must never send a tap to the row it drew before.
+        textView.actionDelegate = nil
         scroll.contentOffset = .zero
         visibleTop = -.greatestFiniteMagnitude
+    }
+
+    /// The colored code with its paths, URLs and ids linked (the links only add attributes, so the measured size holds).
+    private func restyle() {
+        guard let block else { return }
+        let linked = NSAttributedString(MarkdownParser.literalCode(block.text))
+        guard linked.length == block.attributed.length else { textView.attributedText = block.attributed; return }
+        let out = NSMutableAttributedString(attributedString: block.attributed)
+        linked.enumerateAttribute(.link, in: NSRange(location: 0, length: linked.length)) { value, range, _ in
+            if let value { out.addAttribute(.link, value: value, range: range) }
+        }
+        textView.attributedText = out
     }
 
     /// Keep the header (Copy, Wrap) in view: `visibleTop` is the top of the

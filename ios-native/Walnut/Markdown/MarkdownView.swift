@@ -5,6 +5,10 @@ import SwiftUI
 struct MarkdownView: View {
     let blocks: [MarkdownBlock]
     var onToggleTask: ((Int, Bool) -> Void)?
+    var linkSource = LinkSource()
+    /// Each file link carries its own writer's tag (FilePreviewLink.tagging(_:source:)): text built
+    /// from several writers reads the tags, never `linkSource`.
+    var readsSourceTags = false
     /// The paragraph, list and quote text style; `.markdownBodyFont(_:)` sets it for a compact
     /// place (a thread card), everything else keeps `.body`.
     @Environment(\.markdownBodyFont) private var bodyFont
@@ -17,7 +21,7 @@ struct MarkdownView: View {
     var lazy = false
 
     var body: some View {
-        Group {
+        let stack = Group {
             if lazy {
                 LazyVStack(alignment: .leading, spacing: 6) { rows }
             } else {
@@ -28,7 +32,11 @@ struct MarkdownView: View {
         // MarkdownParser.inline, and until this line nothing listened: SwiftUI
         // handed the walnut-file:// scheme to the system opener, which dropped it
         // silently. Non-file URLs still open the usual way.
-        .handlingFilePathLinks()
+        if readsSourceTags {
+            stack.handlingTaggedFilePathLinks()
+        } else {
+            stack.handlingFilePathLinks(source: linkSource)
+        }
     }
 
     @ViewBuilder
@@ -97,7 +105,7 @@ struct MarkdownView: View {
             .animation(.snappy(duration: 0.15), value: checked)
 
         case .code(let language, let text):
-            MarkdownCodeBlockView(language: language, text: text)
+            MarkdownCodeBlockView(language: language, text: text, source: block.codeSource)
                 .padding(.vertical, 4)
 
         case .quote(let lines):
@@ -121,8 +129,18 @@ struct MarkdownView: View {
                 .padding(.vertical, 8)
 
         case .image(let raw, let alt):
-            AttachmentImageView(raw: raw, alt: alt)
-                .padding(.vertical, 4)
+            switch MarkdownImagePlan.plan(raw: raw, source: linkSource) {
+            case .load(let onPrimary):
+                AttachmentImageView(raw: raw, alt: alt, onPrimary: onPrimary)
+                    .padding(.vertical, 4)
+            case .link:
+                // Its machine is not known here (or not one the image loader can name): a link the
+                // handler opens from the words' source on a tap, never bytes read on a guess.
+                Text(MarkdownImagePlan.link(raw: raw, alt: alt))
+                    .font(bodyFont)
+                    .padding(.vertical, 2)
+                    .accessibilityIdentifier("markdown.image.link")
+            }
 
         case .embed(let name):
             // Note/synced-block embed — content lives in another note; show a chip.
@@ -196,6 +214,8 @@ extension View {
 struct MarkdownCodeBlockView: View {
     let language: String?
     let text: String
+    /// Who wrote the code: its paths, URLs and ids are linked, and open from this source.
+    var source: LinkSource? = nil
     @State private var wrap = false
     @State private var copied = false
 
@@ -204,7 +224,20 @@ struct MarkdownCodeBlockView: View {
     private var colored: AttributedString {
         let font = UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular)
         let ns = CodeHighlighter.attributed(text, grammar: fence.grammar, font: font)
-        return (try? AttributedString(ns, including: \.uiKit)) ?? AttributedString(text)
+        var colored = (try? AttributedString(ns, including: \.uiKit)) ?? AttributedString(text)
+        // The code as written with its references linked, laid over the colors (links only add attributes).
+        var links = MarkdownParser.literalCode(text)
+        if let source { links = FilePreviewLink.tagging(links, source: source) }
+        guard links.characters.count == colored.characters.count else { return colored }
+        for run in links.runs {
+            guard let link = run.link else { continue }
+            let from = links.characters.distance(from: links.startIndex, to: run.range.lowerBound)
+            let to = links.characters.distance(from: links.startIndex, to: run.range.upperBound)
+            let range = colored.index(colored.startIndex, offsetByCharacters: from)..<colored.index(colored.startIndex, offsetByCharacters: to)
+            colored[range].link = link
+            colored[range].foregroundColor = nil
+        }
+        return colored
     }
 
     var body: some View {

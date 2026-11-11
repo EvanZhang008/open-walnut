@@ -6,6 +6,8 @@ import Foundation
 struct MarkdownBlock: Identifiable, Equatable {
     let id: Int
     let kind: Kind
+    /// A code block's file links carry this writer's tag (`FilePreviewLink.tagging`); nil leaves them untagged.
+    var codeSource: LinkSource? = nil
 
     enum Kind: Equatable {
         case heading(level: Int, text: AttributedString)
@@ -378,7 +380,65 @@ enum MarkdownParser {
         TaskMentions.apply(&attributed)
         linkifyBareURLs(&attributed)
         linkifyPreviewableFilePaths(&attributed)
+        // Last: an id inside a link one of the passes above made stays that link's.
+        linkifyLetterIDs(&attributed)
         return attributed
+    }
+
+    private final class LiteralCode { let text: AttributedString; init(_ t: AttributedString) { text = t } }
+    private static let literalCodeCache: NSCache<NSString, LiteralCode> = {
+        let c = NSCache<NSString, LiteralCode>()
+        c.totalCostLimit = 4 * 1024 * 1024
+        return c
+    }()
+
+    /// Code shown as written (a fenced block): the same reference passes as `inline`, in the
+    /// same order, but on the raw characters, never parsed as markdown and never one changed,
+    /// so the drawn text is the code and its measured size still holds.
+    static func literalCode(_ text: String, resolver: TaskMentionResolver = .shared) -> AttributedString {
+        let shared = resolver === TaskMentionResolver.shared
+        let key = "\(resolver.version)\u{1}\(text)" as NSString
+        if shared, let hit = literalCodeCache.object(forKey: key) { return hit.text }
+        var attributed = AttributedString(text)
+        TaskMentions.apply(&attributed, resolver: resolver, inPlace: true)
+        linkifyBareURLs(&attributed)
+        linkifyPreviewableFilePaths(&attributed)
+        linkifyLetterIDs(&attributed)
+        if shared { literalCodeCache.setObject(LiteralCode(attributed), forKey: key, cost: key.length) }
+        return attributed
+    }
+
+    /// A letter id an agent writes (`lt-m9x2k1-a4f7`, "see lt-… in your inbox")
+    /// becomes a `walnut-letter://` link that opens that letter (`LetterMentionLink`,
+    /// shown in `LetterReaderSheet`). The text stays the id as written. Inside an
+    /// inline code span the id is linked in place and keeps its code style, as the
+    /// web's `linkLetterIds` does. Never inside a run that is already a link (a
+    /// markdown link's text, a URL, a path, a task mention).
+    static func linkifyLetterIDs(_ attributed: inout AttributedString) {
+        guard let regex = LetterMentionLink.tokenRegex else { return }
+        let plain = String(attributed.characters)
+        // O(1)-ish pre-check: every letter id starts with this.
+        guard plain.contains("lt-") else { return }
+        let ns = plain as NSString
+        var hits: [(offset: Int, length: Int, url: URL)] = []
+        for match in regex.matches(in: plain, range: NSRange(location: 0, length: ns.length)) {
+            guard let url = LetterMentionLink.url(for: ns.substring(with: match.range)),
+                  let range = Range(match.range, in: plain) else { continue }
+            hits.append((plain.distance(from: plain.startIndex, to: range.lowerBound),
+                         plain.distance(from: range.lowerBound, to: range.upperBound), url))
+        }
+        // By character offset, recomputed per edit: an index taken before a
+        // mutation is not promised to survive it.
+        for hit in hits {
+            let chars = attributed.characters
+            let lower = chars.index(chars.startIndex, offsetBy: hit.offset)
+            let upper = chars.index(lower, offsetBy: hit.length)
+            let slice = attributed[lower..<upper]
+            if slice.runs.contains(where: { $0.link != nil }) { continue }
+            attributed[lower..<upper].link = hit.url
+            attributed[lower..<upper].foregroundColor = .accentColor
+            attributed[lower..<upper].underlineStyle = .single
+        }
     }
 
     // MARK: - Line break tags

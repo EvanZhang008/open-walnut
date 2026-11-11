@@ -82,12 +82,6 @@ struct LetterReaderView: View {
     @State private var composerHeight: CGFloat = 0
     @State private var draftGrowth = DraftGrowthFollow()
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    /// A DEFERRED document (over the server's inline threshold) is streamed to a
-    /// local file and rendered from there — never held as a String, so a 100MB
-    /// audio digest costs the app nothing beyond one copy chunk.
-    @State private var deferredBodyFile: URL?
-    @State private var deferredBodyLoading = false
-    @State private var deferredBodyError: String?
     /// The one re-read a thread signal started; a newer signal replaces it.
     @State private var threadReread: Task<Void, Never>?
     /// Which of the overlapping reads (open, pull, thread signals) is newest.
@@ -160,7 +154,7 @@ struct LetterReaderView: View {
             threadReread?.cancel()
             // Opening a reply's session pushes over the reader, which stays in the
             // stack: its streamed document must still be on disk on the way back.
-            if openedSession == nil { LetterBodyDownload.clearCache() }
+            if openedSession == nil { LetterBodyDownload.clearCache(owner: letterId) }
             // Same rule as the chat composer: a view the user left must not keep
             // the mic open. The take is PRESERVED, never deleted, and comes back
             // as the saved-recording row.
@@ -339,7 +333,7 @@ struct LetterReaderView: View {
             if !letter.openActions.isEmpty { decisionCard(letter) }
             if let answer = letter.answered { answeredCard(letter, answer) }
             bodySection(letter)
-            EmailItemsView(letterId: letterId, items: letter.items ?? [], onOpenTask: openTask)
+            EmailItemsView(letterId: letterId, items: letter.items ?? [], linkSource: letter.linkSource, onOpenTask: openTask)
             taskRefs(letter)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -556,77 +550,38 @@ struct LetterReaderView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         } else if letter.isBodyDeferred {
-            deferredBody(letter)
+            // Streamed to a file, never held as a String: a 100MB digest costs one copy chunk.
+            LetterRoutedHTMLBody(letterId: letterId, inline: nil, route: letter.bodyRouteURL(), sizeBytes: letter.bodyBytes,
+                                 linkSource: letter.linkSource)
         } else if letter.body == nil && loading {
             ProgressView().controlSize(.small).frame(maxWidth: .infinity)
         } else if letter.displayBody.isEmpty {
-            Text(letter.previewLine.isEmpty ? "This letter has no body." : letter.previewLine)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            if letter.previewLine.isEmpty {
+                Text("This letter has no body.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                // The agent's preview, through the shared inline renderer and its links.
+                Text(MarkdownParser.inline(letter.previewLine))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .handlingFilePathLinks(source: letter.linkSource)
+            }
         } else if letter.isHTMLBody {
-            LetterHTMLBody(html: letter.displayBody)
+            LetterRoutedHTMLBody(letterId: letterId, inline: letter.displayBody, route: letter.bodyRouteURL(),
+                                 linkSource: letter.linkSource)
         } else {
             // Not MarkdownView directly: a markdown body needs the same
             // no-remote-subresource floor the html body's CSP gives it.
             LetterMarkdownBody(markdown: letter.displayBody)
+                .linked(from: letter.linkSource)
                 .accessibilityIdentifier("inbox.letter.markdownBody")
         }
         if letter.bodyWasClipped {
             Text("Only the first \(Letter.phoneBodyCap / 1000)K characters are shown here. Open this letter in the web console for the whole document.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-        }
-    }
-
-    /// The big-document path. There is nothing to apologise for here: the WHOLE
-    /// letter arrives, it just comes over its own streamed request, so the only
-    /// state worth showing is progress and a retry.
-    @ViewBuilder
-    private func deferredBody(_ letter: Letter) -> some View {
-        if let file = deferredBodyFile {
-            // Always the HTML frame, and that is not a shortcut: a markdown body
-            // is capped at 200KB server-side, well under the inline threshold, so
-            // a deferred document is by construction html.
-            LetterHTMLBody(fileURL: file)
-        } else if let deferredBodyError {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(deferredBodyError).font(.callout).foregroundStyle(.secondary)
-                Button("Try Again") { Task { await loadDeferredBody(letter) } }
-                    .font(.callout)
-            }
-            .accessibilityIdentifier("inbox.letter.deferredBodyError")
-        } else {
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(deferredBodySizeLabel(letter)).font(.caption).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityIdentifier("inbox.letter.deferredBodyLoading")
-            .task(id: letter.id) { await loadDeferredBody(letter) }
-        }
-    }
-
-    private func deferredBodySizeLabel(_ letter: Letter) -> String {
-        guard let bytes = letter.bodyBytes, bytes > 0 else { return "Loading the document…" }
-        let mb = Double(bytes) / 1_048_576
-        return mb >= 1
-            ? String(format: "Loading the document (%.1f MB)…", mb)
-            : "Loading the document…"
-    }
-
-    private func loadDeferredBody(_ letter: Letter) async {
-        guard !deferredBodyLoading, deferredBodyFile == nil else { return }
-        guard let url = letter.bodyStreamURL else {
-            deferredBodyError = "This letter's body couldn't be located on the server."
-            return
-        }
-        deferredBodyLoading = true
-        deferredBodyError = nil
-        defer { deferredBodyLoading = false }
-        do {
-            deferredBodyFile = try await LetterBodyDownload.fetchDocument(from: url, isHTML: true)
-        } catch {
-            deferredBodyError = error.localizedDescription
         }
     }
 

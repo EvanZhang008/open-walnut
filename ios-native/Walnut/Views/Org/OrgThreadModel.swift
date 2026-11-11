@@ -162,6 +162,42 @@ enum OrgThreadModel {
         t.messages.contains { $0.answer?.clipped == true }
     }
 
+    // MARK: Who wrote each block (the web's `thread-text-source.ts`)
+    //
+    // A path in a card opens on the machine of whoever wrote the words around it: the summary by
+    // its recorded writer, an answer by the session it was read from, an opener by its post.
+    // Never the node's current session; a block with no writer recorded is unknown, so its paths
+    // ask which machine instead of guessing one.
+
+    static func summarySource(_ t: OrgThread) -> LinkSource {
+        if clean(t.reply_by) == "human" { return .primary }
+        return session(t.reply_sid, t.reply_host)
+    }
+
+    static func answerSource(_ a: OrgThreadMessage.Answer?) -> LinkSource {
+        session(a?.sid, a?.host)
+    }
+
+    static func openerSource(_ o: OrgThread.Opener) -> LinkSource {
+        if clean(o.by) == "human" { return .primary }
+        return session(o.sid, o.host)
+    }
+
+    /// The block an exchange shows: the node's opening post, else its answer.
+    static func source(of x: Exchange) -> LinkSource {
+        x.opener.map(openerSource) ?? answerSource(x.answer)
+    }
+
+    private static func session(_ sid: String?, _ host: String?) -> LinkSource {
+        guard let sid = clean(sid) else { return .unknown }
+        return LinkSource(host: clean(host), sessionID: sid)
+    }
+
+    private static func clean(_ s: String?) -> String? {
+        let t = s?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return t.isEmpty ? nil : t
+    }
+
     /// An answer as the card draws it: one the server cut for the read (`clipped`) says where the rest is.
     static func answerText(_ a: OrgThreadMessage.Answer) -> String {
         a.clipped == true ? a.text + "\n\n*Shortened here; the whole answer is in the chat.*" : a.text

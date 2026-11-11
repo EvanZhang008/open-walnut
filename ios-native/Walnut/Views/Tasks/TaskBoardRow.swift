@@ -322,7 +322,7 @@ struct TaskBoardRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if showsProject { projectLine }
                 if let need {
-                    NeedLineView(need: need, toRead: isToRead, font: .caption, id: "board.row.need.\(row.id)")
+                    NeedLineView(need: need, toRead: isToRead, font: .caption, id: "board.row.need.\(row.id)", task: row.task)
                 }
             }
             // Spans to the trailing edge so the whole width right of the ring opens

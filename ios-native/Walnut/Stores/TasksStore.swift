@@ -879,7 +879,10 @@ final class TasksStore {
             // "" = stop watching, the same clear convention as the dates.
             watchedAt: edit.watchedAt.map { $0.isEmpty ? nil : $0 } ?? task.watchedAt,
             source: task.source,
-            syncHold: task.syncHold
+            syncHold: task.syncHold,
+            // Who wrote its words: an edit never makes them unknown (LinkSource.forTaskText).
+            summarySessionID: task.summarySessionID,
+            lastWords: task.lastWords
         )
     }
 
@@ -976,7 +979,9 @@ final class TasksStore {
             waitUntil: t.waitUntil,
             watchedAt: t.watchedAt,
             source: t.source,
-            syncHold: t.syncHold
+            syncHold: t.syncHold,
+            summarySessionID: t.summarySessionID,
+            lastWords: t.lastWords
         )
     }
 

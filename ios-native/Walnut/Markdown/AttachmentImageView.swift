@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import ImageIO
+import CryptoKit
 
 private enum AttachmentLimits {
     static let memoryBytes = 64 * 1024 * 1024
@@ -282,6 +283,62 @@ final class AttachmentLoader {
         return image
     }
 
+    // MARK: - A file on a named machine
+
+    /// Image files the file viewer draws as a picture (the formats `downsample` decodes).
+    nonisolated static let fileImageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic"]
+
+    nonisolated static func isFileImage(_ path: String) -> Bool {
+        fileImageExtensions.contains((path as NSString).pathExtension.lowercased())
+    }
+
+    /// `path` on `host` ("" = the primary), as raw file bytes from that machine only
+    /// (`/file-content?raw=1&host=`). No session and no media route: that route serves the
+    /// primary's own file of the name first, whichever machine was meant.
+    nonisolated static func fileImageURL(base: URL, path: String, host: String) -> URL? {
+        let named = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remote = named.isEmpty || named == "local" || named == "__local__" ? nil : named
+        return WalnutAPI.rawFileContentURL(base: base, path: path, host: remote)
+    }
+
+    /// One entry per server, signed-in device, machine and path: the same path on two machines is
+    /// two pictures, and another account on the same server never reads this one's. The token
+    /// enters only as its SHA-256, so the key (and the disk name made from it) never holds it.
+    nonisolated static func fileImageKey(server: String, token: String, path: String, host: String) -> String {
+        let named = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let machine = named == "local" || named == "__local__" ? "" : named
+        return "file\u{1}\(server)\u{1}\(sha256Hex(token))\u{1}\(machine)\u{1}\(path)"
+    }
+
+    /// The disk cache name of a file image: a hash of the whole key, so no two keys share a file
+    /// (the attachment names flatten `/` and `:`, which could) and no path or host shows in it.
+    nonisolated static func fileImageDiskName(_ key: String) -> String { "file-" + sha256Hex(key) }
+
+    private nonisolated static func sha256Hex(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The picture of a file the user chose to open from `host` (`SourceFileImageView`). The same
+    /// bounded download, downsample and two-tier cache as every attachment; never `MediaContext`.
+    func fileImage(path: String, host: String) async -> UIImage? {
+        guard let base = AppConfig.serverURL, let url = Self.fileImageURL(base: base, path: path, host: host),
+              let token = AppConfig.token else { return nil }
+        let key = Self.fileImageKey(server: base.absoluteString, token: token, path: path, host: host)
+        if let cached = memory.object(forKey: key as NSString) { return cached }
+        if let running = inflight[key] { return await running.value }
+        let disk = diskDirectory.appendingPathComponent(Self.fileImageDiskName(key))
+        let task = Task.detached(priority: .userInitiated) { [disk, diskDirectory] in
+            await Self.loadImage(resolved: (url, true), token: token, diskURL: disk, diskDirectory: diskDirectory)
+        }
+        inflight[key] = task
+        let image = await task.value
+        inflight[key] = nil
+        if let image {
+            memory.setObject(image, forKey: key as NSString, cost: Self.decodedCost(image))
+        }
+        return image
+    }
+
     /// Seed the cache with an image the caller just uploaded, so the editor's
     /// placeholder resolves instantly instead of round-tripping the fetch.
     func seed(_ image: UIImage, for raw: String) {
@@ -396,6 +453,10 @@ final class AttachmentLoader {
 struct AttachmentImageView: View {
     let raw: String
     let alt: String
+    /// The words were written on the primary: the absolute path is read from the primary's own
+    /// files (`fileImage`, host ""), never through the session on screen or the media route
+    /// (`MarkdownImagePlan`).
+    var onPrimary = false
 
     @State private var image: UIImage?
     @State private var failed = false
@@ -431,7 +492,13 @@ struct AttachmentImageView: View {
             }
         }
         .task(id: raw) {
-            if let loaded = await AttachmentLoader.shared.image(for: raw) {
+            let loaded: UIImage?
+            if onPrimary {
+                loaded = await AttachmentLoader.shared.fileImage(path: raw, host: "")
+            } else {
+                loaded = await AttachmentLoader.shared.image(for: raw)
+            }
+            if let loaded {
                 // Forensic crumb: a remote image landing swaps a fixed-height
                 // placeholder for real content — a row-height change that can
                 // arrive many SECONDS after the page settled (cloud-bridge
@@ -443,6 +510,59 @@ struct AttachmentImageView: View {
                 image = loaded
             } else {
                 failed = true
+            }
+        }
+    }
+}
+
+/// An image file opened in the file viewer, read from the machine the viewer names (a lookup
+/// confirmed it, or the user picked it). Shows only the picture of the path and machine it is
+/// drawn for now: a late answer for an earlier one is dropped.
+struct SourceFileImageView: View {
+    let path: String
+    let host: String
+
+    @State private var image: UIImage?
+    @State private var imageKey: String?
+    @State private var failedKey: String?
+    @State private var showViewer = false
+
+    private var key: String { "\(host)\u{1}\(path)" }
+
+    var body: some View {
+        Group {
+            if let image, imageKey == key {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showViewer = true }
+                    .fullScreenCover(isPresented: $showViewer) { ImageViewer(image: image) }
+                    .accessibilityElement()
+                    .accessibilityLabel((path as NSString).lastPathComponent)
+                    .accessibilityIdentifier("session.files.viewer.image")
+            } else if failedKey == key {
+                ContentUnavailableView {
+                    Label("Can't Show the Image", systemImage: "photo.badge.exclamationmark")
+                } description: {
+                    Text("\((path as NSString).lastPathComponent) couldn't be read as a picture.")
+                }
+                .accessibilityIdentifier("session.files.viewer.imageFailed")
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: key) {
+            let mine = key
+            let loaded = await AttachmentLoader.shared.fileImage(path: path, host: host)
+            guard !Task.isCancelled, mine == key else { return }
+            if let loaded {
+                image = loaded
+                imageKey = mine
+            } else {
+                failedKey = mine
             }
         }
     }
@@ -543,5 +663,34 @@ extension AttachmentLoader {
         inflight = [:]
         memory.removeAllObjects()
         try? FileManager.default.removeItem(at: diskDirectory)
+    }
+}
+
+/// How a markdown image is drawn given where its words were written (`MarkdownView.linkSource`).
+/// The attachment loader names no host: it reads an absolute path through the session on screen,
+/// and the media route serves the primary's own file of that name first. So an absolute path
+/// loads only in words known to be written on the primary, and then as the primary's raw file
+/// (`AttachmentLoader.fileImage`, host ""); an unknown writer, a session not looked up yet,
+/// another machine or a `~` path get a file link, read from its source only when tapped. Text with
+/// no source (a note), a URL and a vault name load as before.
+enum MarkdownImagePlan: Equatable {
+    case load(onPrimary: Bool)
+    case link
+
+    static func plan(raw: String, source: LinkSource) -> MarkdownImagePlan {
+        let path = raw.hasPrefix("/") || raw.hasPrefix("~")
+        guard path, !source.isEmpty else { return .load(onPrimary: false) }
+        // The primary's raw file read takes an absolute path (`~/` is a remote host's form), so a
+        // `~` path stays a link the source handler looks up on tap.
+        if raw.hasPrefix("/"), !source.unknownSource, source.hostKnown, source.host == nil { return .load(onPrimary: true) }
+        return .link
+    }
+
+    /// "Image: chart.png" as a walnut-file link to the path.
+    static func link(raw: String, alt: String) -> AttributedString {
+        let name = alt.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = AttributedString("Image: " + (name.isEmpty ? (raw as NSString).lastPathComponent : name))
+        text.link = FilePreviewLink.url(for: FilePathRef(path: raw))
+        return text
     }
 }

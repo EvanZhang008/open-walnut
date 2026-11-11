@@ -79,9 +79,11 @@ struct TaskDetailSheet: View {
                             Text("Summary")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.secondary)
-                            Text(summary)
+                            Text(MarkdownParser.inline(summary))
                                 .font(.body)
                                 .foregroundStyle(.primary)
+                                .handlingFilePathLinks(task: current, field: .summary)
+                                .accessibilityIdentifier("task.summary")
                         }
                     }
                     // Wave-1 detail plane: description/note readback with
@@ -101,6 +103,7 @@ struct TaskDetailSheet: View {
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .accessibilityIdentifier("task.detail.scroll")
             .task {
                 if detailController.detail == nil || usedInitialDetail { await detailController.load() }
                 usedInitialDetail = true

@@ -16,6 +16,10 @@ struct OrgThreadMessage: Codable, Equatable, Identifiable {
         var about: [String]? = nil
         /// The server cut `text` to the read's `answer_max` (additive): the whole answer is in the chat.
         var clipped: Bool? = nil
+        /// The session (and its host) whose transcript this answer was read from: where a path in
+        /// it opens. Absent from an older record: its writer is not known.
+        var sid: String? = nil
+        var host: String? = nil
     }
 
     let id: String
@@ -40,6 +44,10 @@ struct OrgThread: Codable, Equatable, Identifiable {
         let at: String
         let from: String
         var ref: String? = nil
+        /// Who wrote the post: "human", or a session with its `sid` and `host`.
+        var by: String? = nil
+        var sid: String? = nil
+        var host: String? = nil
     }
     struct Snoozed: Codable, Equatable { let until: String; let at: String }
     struct Pinned: Codable, Equatable { let at: String; var by: String? = nil }
@@ -66,6 +74,11 @@ struct OrgThread: Codable, Equatable, Identifiable {
     /// the one `user_status.threads` counts by, so this list and the header's count agree. Absent
     /// from an older server: the phone judges it itself (`OrgThreadModel.shownToHim`).
     var shown: Bool? = nil
+    /// Who wrote the summary (`reply`): "human", or a session with its `reply_sid` and `reply_host`.
+    /// Absent from an older record or server: the summary's writer is not known.
+    var reply_by: String? = nil
+    var reply_sid: String? = nil
+    var reply_host: String? = nil
 }
 
 /// What one read of a node's threads brought: the threads, and how many his view shows by the
@@ -111,7 +124,36 @@ struct AnyEncodable: Encodable {
 /// `GET /tasks/:id/brief`: the letter and how current it is. `sections` and `rules` are for the
 /// node itself and are not decoded.
 struct OrgBriefReply: Decodable {
-    struct Letter: Decodable, Equatable { let text: String; let at: String }
+    struct Letter: Decodable, Equatable {
+        /// Who wrote each part of `text`: UTF-16 offsets, contiguous over the whole text
+        /// (`src/core/sessions/brief-source.ts`). `by` is "human", "agent" or "task:<id>".
+        struct Source: Decodable, Equatable {
+            let start: Int
+            let end: Int
+            let by: String
+            let sessionId: String?
+        }
+        let text: String
+        let at: String
+        /// Nil from an older server or a letter stored before it: every path reads as an unknown writer.
+        let textSources: [Source]?
+
+        init(text: String, at: String, textSources: [Source]? = nil) {
+            self.text = text
+            self.at = at
+            self.textSources = textSources
+        }
+
+        private enum CodingKeys: String, CodingKey { case text, at, textSources = "text_sources" }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            text = try c.decode(String.self, forKey: .text)
+            at = try c.decode(String.self, forKey: .at)
+            // A malformed list only loses the writers, never the letter.
+            textSources = try? c.decodeIfPresent([Source].self, forKey: .textSources)
+        }
+    }
     struct Fresh: Decodable, Equatable {
         struct Moved: Decodable, Equatable {
             let id: String

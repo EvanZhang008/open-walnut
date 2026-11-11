@@ -99,6 +99,9 @@ describe('lazy stacks on the phone sit where their height cannot go stale', () =
     const cards = code(fs.readFileSync(path.join(APP, 'Views/Org/OrgThreadsView.swift'), 'utf8'))
     expect(cards).toMatch(/LetterMarkdownBody\(markdown:/)
     const body = code(fs.readFileSync(path.join(APP, 'Views/Inbox/LetterMarkdownBody.swift'), 'utf8'))
-    expect(body).toMatch(/MarkdownView\(blocks: Self\.blocks\(for: markdown\)\)/)
+    // Its own arguments (the link writer) are free; `lazy:` is not one of them.
+    const call = /MarkdownView\(blocks: Self\.blocks\(for: markdown\)([^)]*)\)/.exec(body)
+    expect(call, 'LetterMarkdownBody draws its Markdown with MarkdownView').not.toBeNull()
+    expect(call![1]).not.toMatch(/\blazy:/)
   })
 })

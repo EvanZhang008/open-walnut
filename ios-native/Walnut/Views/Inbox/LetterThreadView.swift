@@ -56,7 +56,8 @@ struct LetterThreadView: View {
                     case .turn(let entry):
                         turn(entry)
                         if !entry.isHuman {
-                            EmailItemsView(letterId: letter.id, items: entry.items ?? [], onOpenTask: onOpenTask)
+                            EmailItemsView(letterId: letter.id, items: entry.items ?? [],
+                                           linkSource: letter.linkSource(for: entry), onOpenTask: onOpenTask)
                         }
                         if entry.isHuman, let line = status(entry) {
                             LetterReplyStatusLine(
@@ -155,17 +156,36 @@ struct LetterThreadView: View {
 
             if let body = entry.body, !body.isEmpty {
                 if entry.isHTMLBody {
-                    LetterHTMLBody(html: body)
+                    LetterRoutedHTMLBody(letterId: letter.id, inline: body, route: letter.turnBodyRouteURL(entry),
+                                         linkSource: letter.linkSource(for: entry))
                 } else {
                     // Same remote-image block as the letter body — a thread turn
                     // is agent-authored text too.
                     LetterMarkdownBody(markdown: body)
+                        .linked(from: letter.linkSource(for: entry))
                 }
+            } else if entry.isHTMLBody, entry.bodyDeferred == true {
+                LetterRoutedHTMLBody(
+                    letterId: letter.id, inline: nil, route: letter.turnBodyRouteURL(entry),
+                    sizeBytes: entry.bodyBytes, idPrefix: "inbox.letter.turn",
+                    linkSource: letter.linkSource(for: entry)
+                )
             } else if let text = entry.text, !text.isEmpty {
-                Text(text)
-                    .font(.callout)
-                    .textSelection(.enabled)
-                    .accessibilityIdentifier(entry.isHuman ? "inbox.letter.humanTurn" : "inbox.letter.agentTurn")
+                if entry.isPersonWritten {
+                    // The human's own words, shown as they typed them.
+                    Text(text)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("inbox.letter.humanTurn")
+                } else {
+                    // An agent's plain reply is agent-authored markdown like a rich
+                    // turn: the same renderer (task, file and letter links, and the
+                    // remote-image block), at the turn's callout size.
+                    LetterMarkdownBody(markdown: text)
+                        .linked(from: letter.linkSource(for: entry))
+                        .markdownBodyFont(.callout)
+                        .accessibilityIdentifier("inbox.letter.agentTurn")
+                }
             } else if entry.bodyFile != nil, (entry.images ?? []).isEmpty {
                 // The index kept the turn but its body file is gone. Say so
                 // rather than rendering an empty card.

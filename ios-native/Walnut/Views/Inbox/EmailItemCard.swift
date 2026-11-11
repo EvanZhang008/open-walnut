@@ -3,6 +3,8 @@ import SwiftUI
 struct EmailItemCard: View {
     let letterId: String
     let item: InboxEmailItem
+    /// Where the letter (or thread turn) carrying this item was written: its summary's paths open there.
+    let linkSource: LinkSource
     var duplicateAccount = false
     var onOpenTask: (String, String?) -> Void = { _, _ in }
     private let store = InboxItemStore.shared
@@ -23,7 +25,9 @@ struct EmailItemCard: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(item.subject).font(.body.weight(.semibold)).textSelection(.enabled)
                 .accessibilityIdentifier("inbox.item.\(item.id).subject")
-            Text(item.summary).font(.body).lineLimit(expanded ? nil : 2).textSelection(.enabled)
+            // The model's summary of the email: agent text, through the shared inline renderer.
+            Text(MarkdownParser.inline(item.summary)).font(.body).lineLimit(expanded ? nil : 2).textSelection(.enabled)
+                .handlingFilePathLinks(source: linkSource)
             Button(expanded ? "Show less" : "Show more") { expanded.toggle() }
                 .font(.caption).frame(minHeight: 44).accessibilityValue(expanded ? "Expanded" : "Collapsed")
             sourceIdentity

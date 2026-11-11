@@ -434,6 +434,7 @@ final class InboxContractTests: XCTestCase {
         XCTAssertTrue(document.contains("Content-Security-Policy"))
         XCTAssertTrue(document.contains("default-src 'none'"))
         XCTAssertTrue(document.contains("img-src data: blob:"))
+        XCTAssertTrue(document.contains("base-uri 'none'"))
         XCTAssertTrue(document.contains("width=device-width"))
         // No remote stylesheet/font/script hooks of our own, either.
         XCTAssertFalse(document.contains("http://"))

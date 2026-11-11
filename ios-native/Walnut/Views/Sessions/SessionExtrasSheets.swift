@@ -168,7 +168,7 @@ struct SessionPlanSheet: View {
                     HStack { ProgressView(); Text("Loading plan…").foregroundStyle(.secondary) }
                         .padding(.top, 40)
                 } else if let plan {
-                    MarkdownView(blocks: MarkdownParser.parse(plan.content), lazy: true)
+                    MarkdownView(blocks: MarkdownParser.parse(plan.content), linkSource: plan.linkSource(requestedSessionID: sessionId), lazy: true)
                         .padding(16)
                 } else if let emptyText {
                     ContentUnavailableView {
@@ -312,10 +312,12 @@ struct SideQuestionsSheet: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(question.question)
                 .font(.subheadline.weight(.semibold))
-            Text(question.answer)
+            // The session's answer is agent text: the shared inline renderer and its links.
+            Text(MarkdownParser.inline(question.answer))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(12)
+                .handlingFilePathLinks(sessionID: sessionId)
             HStack(spacing: 6) {
                 if let when = question.createdDate {
                     Text(AppClock.relativeNamed(when))

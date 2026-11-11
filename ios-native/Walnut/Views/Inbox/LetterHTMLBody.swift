@@ -21,7 +21,7 @@ import WebKit
 ///   player renders and silently refuses to play. Still no network — an
 ///   `https://` media URL stays blocked, so opening a letter reveals nothing.
 /// - **Navigation lockdown**: only the initial in-memory document ever renders.
-///   A real link tap opens in Safari; every other navigation is cancelled.
+///   A tapped server reference opens in the app, any other web link in Safari; the rest is cancelled.
 /// - **Ephemeral data store**: nothing is persisted or shared with the app's
 ///   own session.
 ///
@@ -39,15 +39,21 @@ struct LetterHTMLBody: View {
     }
 
     let source: Source
+    var linkSource = LinkSource()
 
     @State private var height: CGFloat = 60
 
     init(html: String) { self.source = .inline(html) }
     init(fileURL: URL) { self.source = .file(fileURL) }
+    init(source: Source, linkSource: LinkSource = LinkSource()) {
+        self.source = source
+        self.linkSource = linkSource
+    }
 
     var body: some View {
-        LetterHTMLWebView(source: webViewSource, height: $height)
+        LetterHTMLLinkedWebView(source: webViewSource, height: $height)
             .frame(height: height)
+            .handlingFilePathLinks(source: linkSource)
             .accessibilityIdentifier("inbox.letter.htmlBody")
     }
 
@@ -93,12 +99,19 @@ struct LetterHTMLBody: View {
     /// halves instead of concatenated in memory (LetterBodyDownload). One source
     /// for both paths: a second copy would let a big letter render under a weaker
     /// CSP than a small one.
-    static func documentPieces() -> (prelude: String, suffix: String) {
+    static func documentPieces(styled: Bool = true) -> (prelude: String, suffix: String) {
         let prelude = """
         <!DOCTYPE html><html><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; font-src data:">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'">
+
+        """
+        return (prelude + (styled ? phoneStyle : "") + "</head><body>\n", "\n</body></html>\n")
+    }
+
+    /// Restates the initial values the server frame's reset changes, so placed after it the reset has no effect.
+    static let phoneStyle = """
         <style>
         :root { color-scheme: light dark; }
         html, body { margin: 0; padding: 0; background: transparent; }
@@ -108,8 +121,10 @@ struct LetterHTMLBody: View {
           line-height: 1.45;
           color: #1c1c1e;
           word-break: break-word;
+          overflow-wrap: normal;
           -webkit-text-size-adjust: 100%;
         }
+        table, pre, audio { max-width: none; }
         a { color: #8B5A2B; }
         h1, h2, h3, h4 { line-height: 1.25; margin: 1em 0 0.4em; }
         h1 { font-size: 1.35em; } h2 { font-size: 1.2em; } h3 { font-size: 1.08em; }
@@ -129,10 +144,54 @@ struct LetterHTMLBody: View {
           blockquote { color: #c7c7cc; }
         }
         </style>
-        </head><body>
 
         """
-        return (prelude, "\n</body></html>\n")
+
+    /// After the frame's reset, so the phone style beats it and the agent's CSS still beats both.
+    static func serverFrameStyleEnd(in peek: Data) -> Int? {
+        guard let marker = peek.range(of: Data(serverFrameMarker.utf8)),
+              let end = peek.range(of: Data("</style>".utf8), in: marker.upperBound..<peek.endIndex)
+        else { return nil }
+        return peek.distance(from: peek.startIndex, to: end.upperBound)
+    }
+
+    static let serverFrameMarker = #"<base target="_blank"><style>"#
+}
+
+/// Pure, so a test can pin what a letter document's navigations may do.
+enum LetterHTMLNavigation {
+    enum Decision: Equatable {
+        case allow
+        case cancel
+        case openInApp(URL)
+        case openInSafari(URL)
+    }
+
+    static func decide(
+        url: URL?, navigationType: WKNavigationType, targetIsMainFrame: Bool?, server: URL?
+    ) -> Decision {
+        // Sub-frames can't navigate the reader away; let them settle.
+        if targetIsMainFrame == false { return .allow }
+        // The document itself: loadHTMLString has no real URL, a streamed body is a local file.
+        guard let url, let scheme = url.scheme?.lowercased(), scheme != "about", !url.isFileURL else { return .allow }
+        // Only a real tap: meta refresh, forms and redirects never navigate or open a reference.
+        guard navigationType == .linkActivated else { return .cancel }
+        if AgentDocumentRef.isRoute(url, server: server) {
+            guard let appURL = AgentDocumentRef.appURL(for: url, server: server) else { return .cancel }
+            return .openInApp(appURL)
+        }
+        return scheme == "http" || scheme == "https" ? .openInSafari(url) : .cancel
+    }
+}
+
+/// Reads `openURL` below `handlingFilePathLinks`, which sets it.
+private struct LetterHTMLLinkedWebView: View {
+    let source: LetterHTMLWebView.Source
+    @Binding var height: CGFloat
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        LetterHTMLWebView(source: source, height: $height, onOpenURL: { openURL($0) })
     }
 }
 
@@ -155,6 +214,7 @@ private struct LetterHTMLWebView: UIViewRepresentable {
 
     let source: Source
     @Binding var height: CGFloat
+    let onOpenURL: (URL) -> Void
 
     func makeUIView(context: Context) -> WKWebView {
         let webView = WKWebView(frame: .zero, configuration: LetterHTMLBody.webViewConfiguration())
@@ -170,6 +230,7 @@ private struct LetterHTMLWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.onOpenURL = onOpenURL
         guard context.coordinator.loadedKey != source.key else { return }
         context.coordinator.loadedKey = source.key
         load(source, into: webView)
@@ -194,11 +255,13 @@ private struct LetterHTMLWebView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate {
         private let parent: LetterHTMLWebView
         var loadedKey: String
+        var onOpenURL: (URL) -> Void
         private var observation: NSKeyValueObservation?
 
         init(_ parent: LetterHTMLWebView, key: String) {
             self.parent = parent
             self.loadedKey = key
+            self.onOpenURL = parent.onOpenURL
         }
 
         /// Content height WITHOUT JavaScript: `scrollView.contentSize` is laid
@@ -230,26 +293,25 @@ private struct LetterHTMLWebView: UIViewRepresentable {
             decidePolicyFor navigationAction: WKNavigationAction,
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
         ) {
-            // Sub-frames can't navigate the reader away; let them settle.
-            guard navigationAction.targetFrame?.isMainFrame != false else {
+            let decision = LetterHTMLNavigation.decide(
+                url: navigationAction.request.url,
+                navigationType: navigationAction.navigationType,
+                targetIsMainFrame: navigationAction.targetFrame?.isMainFrame,
+                server: AppConfig.serverURL
+            )
+            switch decision {
+            case .allow:
                 decisionHandler(.allow)
-                return
-            }
-            let url = navigationAction.request.url
-            // The in-memory document itself (loadHTMLString has no real URL),
-            // or the local file the streamed-body path assembled for us.
-            if url == nil || url?.scheme == nil || url?.scheme == "about" || url?.isFileURL == true {
-                decisionHandler(.allow)
-                return
-            }
-            // A real tap on a link opens in Safari. Everything else — meta
-            // refresh, form posts, any redirect — is dropped, so the body can
-            // never navigate to another page.
-            if navigationAction.navigationType == .linkActivated,
-               let url, url.scheme == "http" || url.scheme == "https" {
+            case .cancel:
+                decisionHandler(.cancel)
+            case .openInApp(let url):
+                decisionHandler(.cancel)
+                let open = onOpenURL
+                Task { @MainActor in open(url) }
+            case .openInSafari(let url):
+                decisionHandler(.cancel)
                 Task { @MainActor in UIApplication.shared.open(url) }
             }
-            decisionHandler(.cancel)
         }
     }
 }

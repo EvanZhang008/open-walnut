@@ -3,13 +3,15 @@ import SwiftUI
 struct EmailItemsView: View {
     let letterId: String
     let items: [InboxEmailItem]
+    /// The letter's (or its thread turn's) source, handed to every card.
+    let linkSource: LinkSource
     var onOpenTask: (String, String?) -> Void = { _, _ in }
     private let store = InboxItemStore.shared
     private func card(_ item: InboxEmailItem) -> some View {
         let duplicate = items.contains { other in
             other.id != item.id && other.accountLabel == item.accountLabel && other.source?.account != item.source?.account
         }
-        return EmailItemCard(letterId: letterId, item: item, duplicateAccount: duplicate, onOpenTask: onOpenTask)
+        return EmailItemCard(letterId: letterId, item: item, linkSource: linkSource, duplicateAccount: duplicate, onOpenTask: onOpenTask)
     }
     var body: some View {
         if !items.isEmpty {

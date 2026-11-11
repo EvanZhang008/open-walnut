@@ -668,7 +668,7 @@ struct OrgThreadCard: View {
                     .foregroundStyle(.secondary)
             }
             if let reply = t.reply?.trimmingCharacters(in: .whitespacesAndNewlines), !reply.isEmpty {
-                OrgFoldedMarkdown(markdown: reply, budget: 110, id: "org.thread.summary")
+                OrgFoldedMarkdown(markdown: reply, budget: 110, id: "org.thread.summary", source: OrgThreadModel.summarySource(t))
             }
             chips
             if !conversation {
@@ -1025,6 +1025,7 @@ struct OrgThreadAnswer: View {
             text = exchange.answer.map(OrgThreadModel.answerText) ?? ""; at = exchange.answer?.at ?? ""; by = name
         }
         let shown = TimelineTurnMarker.strip(MessageAboutTag.strip(text))
+        let source = OrgThreadModel.source(of: exchange)
         return VStack(alignment: .leading, spacing: 4) {
             Text("\(by) · \(clock(at))")
                 .font(.caption.weight(.semibold))
@@ -1036,9 +1037,10 @@ struct OrgThreadAnswer: View {
                     .lineLimit(2)
             }
             if folded {
-                OrgFoldedMarkdown(markdown: shown, budget: 80, id: "org.thread.answer.body")
+                OrgFoldedMarkdown(markdown: shown, budget: 80, id: "org.thread.answer.body", source: source)
             } else {
                 LetterMarkdownBody(markdown: shown)
+                    .linked(from: source)
                     .markdownBodyFont(.subheadline)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("org.thread.answer.body")
@@ -1370,12 +1372,15 @@ struct OrgFoldedMarkdown: View {
     let markdown: String
     let budget: Int
     let id: String
+    /// Who wrote this text: a path in it opens on that machine, never by guess.
+    var source: LinkSource = .unknown
     @State private var whole = false
 
     var body: some View {
         let preview = OrgThreadModel.preview(markdown, budget: budget)
         VStack(alignment: .leading, spacing: 4) {
             LetterMarkdownBody(markdown: whole || preview == nil ? markdown : preview!)
+                .linked(from: source)
                 .markdownBodyFont(.subheadline)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier(id)

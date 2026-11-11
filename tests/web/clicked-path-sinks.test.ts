@@ -61,6 +61,14 @@ const IOS_EXEMPT: Record<string, string> = {
   'ios-native/Walnut/Views/HTMLFilePreview.swift': 'the HTML preview names the file it already shows (its dock seat)',
   'ios-native/Walnut/Timeline/TimelineCollectionController.swift': 'only parses the tap and hands it to its body as .previewFile, which looks it up',
 }
+/**
+ * Match the tap-router scan only because they parse a link to tag it with its writer; the tap
+ * itself goes through MarkdownView(readsSourceTags: true) to FilePathLinkHandling, which calls
+ * ClickedPath.locate (checked below). Not exempt from the sheet-target rule.
+ */
+const IOS_TAGS_ONLY: Record<string, string> = {
+  'ios-native/Walnut/Views/Org/OrgBriefView.swift': 'tags each path link of the Brief with the writer of its span; MarkdownView routes the tap',
+}
 const IOS_BUILDS_TARGET = /\b(DirectoryTarget|FilePreviewTarget|TextFileTarget)\(/
 const IOS_TAP_ROUTER = /case \.previewFile\(|FilePreviewLink\.reference\(from:/
 
@@ -91,7 +99,27 @@ describe('iOS: tapped paths are looked up before a sheet opens', () => {
   })
 
   it('every tap router goes through ClickedPath.locate', () => {
-    const offenders = files.filter(({ f, src }) => IOS_TAP_ROUTER.test(src) && !IOS_EXEMPT[f] && !/ClickedPath\.locate\(/.test(src)).map(({ f }) => f)
+    const offenders = files.filter(({ f, src }) => IOS_TAP_ROUTER.test(src) && !IOS_EXEMPT[f] && !IOS_TAGS_ONLY[f] && !/ClickedPath\.locate\(/.test(src)).map(({ f }) => f)
     expect(offenders).toEqual([])
+  })
+
+  it('a file that only tags its links still reads as a router, and its taps reach ClickedPath.locate', () => {
+    const src = (f: string) => files.find((one) => one.f === f)?.src ?? ''
+    for (const f of Object.keys(IOS_TAGS_ONLY)) {
+      const own = src(f)
+      expect(IOS_TAP_ROUTER.test(own), `${f} no longer matches the router scan: drop it from IOS_TAGS_ONLY`).toBe(true)
+      expect(own, f).toMatch(/FilePreviewLink\.tagging\(/)
+      expect(own, `${f} draws the tagged text with MarkdownView(readsSourceTags: true)`).toMatch(/MarkdownView\([^\n]*readsSourceTags: true\)/)
+      expect(own, `${f} handles no tap itself`).not.toMatch(/case \.previewFile\(|onOpenURL|OpenURLAction|\.environment\(\\\.openURL/)
+      expect(own.split('\n').some((l) => IOS_BUILDS_TARGET.test(l) && !/^\s*\/\//.test(l)), `${f} builds no sheet target`).toBe(false)
+    }
+    // MarkdownView hands tagged text to the tagged handler ...
+    expect(src('ios-native/Walnut/Markdown/MarkdownView.swift')).toMatch(/if readsSourceTags \{\s*stack\.handlingTaggedFilePathLinks\(\)/)
+    // ... which is FilePathLinkHandling reading the tags, and that looks the path up.
+    const lines = src('ios-native/Walnut/Views/Sessions/FileSourceLinesView.swift')
+    expect(lines).toMatch(/func handlingTaggedFilePathLinks\(\) -> some View \{\s*modifier\(FilePathLinkHandling\(readsSourceTags: true\)\)/)
+    const handler = /\nstruct FilePathLinkHandling: ViewModifier \{[\s\S]*?\n\}\n/.exec(lines)?.[0] ?? ''
+    expect(handler).toMatch(/readsSourceTags: readsSourceTags/)
+    expect(handler).toMatch(/ClickedPath\.locate\(/)
   })
 })

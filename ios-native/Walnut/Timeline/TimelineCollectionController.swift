@@ -564,8 +564,11 @@ extension TimelineCollectionController: TimelineCellActionDelegate {
         case .openURL(let url):
             // A task mention (walnut-task://) opens the task in the app. Server-side
             // file links (walnut-file:// or a bare absolute path in a markdown link)
-            // open the in-app preview, not Safari.
-            if let taskID = TaskMentionLink.taskID(from: url) {
+            // open the in-app preview, not Safari. A letter id (walnut-letter://)
+            // opens that letter in a sheet over the timeline.
+            if let letterID = LetterMentionLink.letterID(from: url) {
+                onAction(.openLetter(id: letterID))
+            } else if let taskID = TaskMentionLink.taskID(from: url) {
                 onAction(.openTask(id: taskID))
             } else if let ref = FilePreviewLink.reference(from: url) {
                 onAction(.previewFile(ref: ref))

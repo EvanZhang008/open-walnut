@@ -18,6 +18,16 @@ struct LetterEnvelopeRow: View {
     static let unreadDotSize: CGFloat = 10
 
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// The list's Select mode (`InboxView` hands its edit mode down).
+    @Environment(\.editMode) private var editMode
+
+    private var isSelecting: Bool { editMode?.wrappedValue.isEditing == true }
+
+    /// The preview line as the inline markdown renderer draws it: the same pass
+    /// every other agent text takes (`MarkdownParser.inline`).
+    static func preview(_ line: String) -> AttributedString {
+        MarkdownParser.inline(line)
+    }
 
     /// At an accessibility text size the relative time leaves the subject's line
     /// and goes under it: side by side, measured at the largest size on the pinned
@@ -53,15 +63,22 @@ struct LetterEnvelopeRow: View {
                 if timeUnderSubject { relativeTime }
 
                 if !letter.previewLine.isEmpty {
-                    Text(letter.previewLine)
+                    // The agent's own words, through the shared inline renderer (task,
+                    // file, URL and letter links), and a link opens what it names instead
+                    // of the row opening the letter. In Select mode a tap selects the
+                    // row, so the links step aside.
+                    Text(Self.preview(letter.previewLine))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                        .allowsHitTesting(!isSelecting)
+                        .handlingFilePathLinks(source: letter.linkSource)
                 }
 
                 HStack(spacing: 6) {
                     if Self.showsTypeBadge(letter) { typeBadge }
-                    chip(letter.hostLabel, icon: letter.hostLabel == "Mac" ? "laptopcomputer" : "server.rack")
+                    chip(letter.hostLabel, icon: letter.hostLabel == "Mac" ? "laptopcomputer"
+                         : letter.hostLabel == Letter.unknownHostLabel ? "questionmark.circle" : "server.rack")
                     if let answer = letter.answered {
                         chip(answer.by.map { "Answered by \($0.displayName)" } ?? "Answered", icon: "checkmark")
                     }

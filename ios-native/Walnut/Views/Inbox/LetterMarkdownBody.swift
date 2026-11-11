@@ -22,9 +22,16 @@ import SwiftUI
 /// the human can still see that the agent meant to show something.
 struct LetterMarkdownBody: View {
     let markdown: String
+    var linkSource = LinkSource()
 
     var body: some View {
-        MarkdownView(blocks: Self.blocks(for: markdown))
+        MarkdownView(blocks: Self.blocks(for: markdown), linkSource: linkSource)
+    }
+
+    func linked(from source: LinkSource) -> LetterMarkdownBody {
+        var copy = self
+        copy.linkSource = source
+        return copy
     }
 
     static func blocks(for markdown: String) -> [MarkdownBlock] {

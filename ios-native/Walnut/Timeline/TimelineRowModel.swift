@@ -817,6 +817,10 @@ enum TimelineRowAction {
     /// mention (`TaskMentionLink`, `walnut-task://`): the hosts present
     /// `TaskSessionSheet`, the same sheet a letter's task reference opens.
     case openTask(id: String)
+    /// Open a letter in the letter sheet over the timeline. Raised when a tapped
+    /// link is a letter link (`LetterMentionLink`): the hosts present
+    /// `LetterReaderSheet`, so the letter opens where the user is looking.
+    case openLetter(id: String)
     case toggleExpanded(rowID: String)
     /// A thinking or tool row was tapped: present the activity drawer. Carries
     /// its own content (see `TimelineActivityDetail`) — the coordinator forwards

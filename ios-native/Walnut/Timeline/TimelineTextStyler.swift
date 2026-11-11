@@ -330,6 +330,9 @@ enum TimelineTextStyler {
             TaskMentions.apply(&attributed)
             MarkdownParser.linkifyBareURLs(&attributed)
             MarkdownParser.linkifyPreviewableFilePaths(&attributed)
+            // A letter id opens the letter; the timeline owns the tap
+            // (TimelineCollectionController → TimelineRowAction.openLetter).
+            MarkdownParser.linkifyLetterIDs(&attributed)
             let style = paragraphStyle(spacing: 0, lineSpacing: 3)
             return styledInline(attributed, font: font, color: color, paragraph: style)
         }

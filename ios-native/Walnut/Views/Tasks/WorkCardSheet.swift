@@ -257,7 +257,7 @@ struct WorkCardSheet: View {
             LazyVStack(spacing: 0) {
                 ForEach(found, id: \.task.id) { row in
                     Button { opened = TaskOpenTarget(id: row.task.id, title: row.task.title) } label: {
-                        TeamStatusRowView(row: row, showsPill: false, detail: Self.detail(list, row.task))
+                        TeamStatusRowView(row: row, showsPill: false, detail: Self.detail(list, row.task), detailField: .result)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

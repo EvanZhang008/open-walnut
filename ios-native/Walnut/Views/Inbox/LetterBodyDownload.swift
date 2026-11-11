@@ -36,11 +36,15 @@ enum LetterBodyDownload {
         }
     }
 
+    /// The server splices its frame head within a document's first 8KB.
+    static let framePeekBytes = 16 * 1024
+
     /// Download `url` and wrap it into a phone-shaped HTML document on disk.
     /// Returns the file URL to hand to `LetterHTMLBody`.
-    static func fetchDocument(from url: URL, isHTML: Bool) async throws -> URL {
+    /// `owner` names the file, so closing one letter never deletes another's.
+    static func fetchDocument(from url: URL, isHTML: Bool, refs: Bool = false, owner: String? = nil) async throws -> URL {
         guard let token = AppConfig.token else { throw Failure.notConfigured }
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: refs ? routedURL(url) : url)
         request.authorizeForWalnut(token: token)
         // A big body over a phone link legitimately takes a while; the default
         // 30s request timeout would kill it mid-transfer.
@@ -52,16 +56,51 @@ enum LetterBodyDownload {
             throw Failure.http(http.statusCode)
         }
         defer { try? FileManager.default.removeItem(at: downloaded) }
-        guard isHTML else { return try persist(downloaded, as: "txt") }
-        return try assembleDocument(bodyFile: downloaded)
+        guard isHTML else { return try persist(downloaded, as: "txt", owner: owner) }
+        return try assembleDocument(bodyFile: downloaded, owner: owner)
+    }
+
+    /// Older servers ignore `refs` (or both) and the phone frame still wraps what comes back.
+    static func routedURL(_ url: URL, server: URL? = AppConfig.serverURL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        var items = (components.queryItems ?? []).filter { !["frame", "refs", "ref_base"].contains($0.name) }
+        items.append(URLQueryItem(name: "frame", value: "1"))
+        items.append(URLQueryItem(name: "refs", value: "1"))
+        // The server sees http behind an HTTPS tunnel, so the paired address names the links' origin.
+        if let base = refBase(for: server) { items.append(URLQueryItem(name: "ref_base", value: base)) }
+        components.queryItems = items
+        return components.url ?? url
+    }
+
+    static func refBase(for server: URL?) -> String? {
+        guard let server, var c = URLComponents(url: server, resolvingAgainstBaseURL: false),
+              let scheme = c.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              !(c.host ?? "").isEmpty else { return nil }
+        var path = c.percentEncodedPath
+        while path.hasSuffix("/") { path.removeLast() }
+        c.user = nil
+        c.password = nil
+        c.query = nil
+        c.fragment = nil
+        c.percentEncodedPath = path + AgentDocumentRef.route
+        return c.string
+    }
+
+    static func fileName(owner: String?, ext: String) -> String {
+        "\(prefix(owner: owner))\(UUID().uuidString).\(ext)"
+    }
+
+    private static func prefix(owner: String?) -> String {
+        let safe = owner.map { String($0.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == "-" }) } ?? ""
+        return safe.isEmpty ? "letter-" : "letter-\(safe)--"
     }
 
     /// Move a finished download into the caches dir under a stable extension.
     /// WKWebView needs a real path it may keep reading; the URLSession temp file
     /// is deleted the moment this function returns.
-    private static func persist(_ src: URL, as ext: String) throws -> URL {
+    private static func persist(_ src: URL, as ext: String, owner: String?) throws -> URL {
         let dir = try bodyCacheDir()
-        let dest = dir.appendingPathComponent("letter-\(UUID().uuidString).\(ext)")
+        let dest = dir.appendingPathComponent(fileName(owner: owner, ext: ext))
         do {
             try FileManager.default.copyItem(at: src, to: dest)
         } catch {
@@ -71,19 +110,20 @@ enum LetterBodyDownload {
     }
 
     /// prelude + body + suffix, written through a bounded buffer.
-    private static func assembleDocument(bodyFile: URL) throws -> URL {
+    private static func assembleDocument(bodyFile: URL, owner: String?) throws -> URL {
         let dir = try bodyCacheDir()
-        let dest = dir.appendingPathComponent("letter-\(UUID().uuidString).html")
+        let dest = dir.appendingPathComponent(fileName(owner: owner, ext: "html"))
         guard FileManager.default.createFile(atPath: dest.path, contents: nil) else {
             throw Failure.io("could not create \(dest.lastPathComponent)")
         }
         do {
             let out = try FileHandle(forWritingTo: dest)
             defer { try? out.close() }
-            let (prelude, suffix) = LetterHTMLBody.documentPieces()
-            try out.write(contentsOf: Data(prelude.utf8))
             let input = try FileHandle(forReadingFrom: bodyFile)
             defer { try? input.close() }
+            let peek = try input.read(upToCount: framePeekBytes) ?? Data()
+            try out.write(contentsOf: assembledHead(peek: peek))
+            let suffix = LetterHTMLBody.documentPieces().suffix
             while true {
                 guard let chunk = try input.read(upToCount: copyChunkBytes), !chunk.isEmpty else { break }
                 try out.write(contentsOf: chunk)
@@ -95,6 +135,17 @@ enum LetterBodyDownload {
             throw Failure.io(error.localizedDescription)
         }
         return dest
+    }
+
+    static func assembledHead(peek: Data) -> Data {
+        guard let end = LetterHTMLBody.serverFrameStyleEnd(in: peek) else {
+            return Data(LetterHTMLBody.documentPieces().prelude.utf8) + peek
+        }
+        var head = Data(LetterHTMLBody.documentPieces(styled: false).prelude.utf8)
+        head.append(peek.prefix(end))
+        head.append(Data(LetterHTMLBody.phoneStyle.utf8))
+        head.append(peek.dropFirst(end))
+        return head
     }
 
     /// Caches, not Documents: a letter body is re-downloadable, so it must be
@@ -119,5 +170,16 @@ enum LetterBodyDownload {
     static func clearCache() {
         guard let dir = try? bodyCacheDir() else { return }
         try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// A letter opened from a link in another must not delete the files of the one under it.
+    static func clearCache(owner: String) {
+        guard let dir = try? bodyCacheDir(),
+              let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return }
+        let own = prefix(owner: owner)
+        guard own != "letter-" else { return clearCache() }
+        for name in names where name.hasPrefix(own) {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+        }
     }
 }

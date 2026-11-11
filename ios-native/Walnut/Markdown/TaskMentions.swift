@@ -20,7 +20,8 @@ import SwiftUI
 /// Code: a bare id that is a whole inline code span is the same citation in backticks
 /// and becomes the title link too; an id inside longer code or a fenced block keeps its
 /// own text and is not linked (a timeline row's reload key is its plain text, so a link
-/// that changes no character could never reach an on-screen cell).
+/// that changes no character could never reach an on-screen cell). A fenced block shown as
+/// written links the id in place instead (`MarkdownParser.literalCode`, `inPlace: true`).
 enum TaskMentions {
     /// A standalone token, tried in this order: a UUID, a short id, then a run that may be
     /// an id's first segment. The neighbour classes are spelled out in ASCII on purpose:
@@ -185,9 +186,11 @@ enum TaskMentions {
 
     /// Style the task links the source rewrite produced (accent, semibold) and turn every
     /// bare id the store knows into a link titled with the task's current title.
-    static func apply(_ attributed: inout AttributedString, resolver: TaskMentionResolver = .shared) {
+    /// `inPlace`: the id keeps its own characters and font, only gaining the link and colour.
+    static func apply(_ attributed: inout AttributedString, resolver: TaskMentionResolver = .shared,
+                      inPlace: Bool = false) {
         styleTaskLinks(&attributed)
-        linkifyBareIDs(&attributed, resolver: resolver)
+        linkifyBareIDs(&attributed, resolver: resolver, inPlace: inPlace)
     }
 
     private static func styleTaskLinks(_ attributed: inout AttributedString) {
@@ -212,7 +215,8 @@ enum TaskMentions {
         }
     }
 
-    private static func linkifyBareIDs(_ attributed: inout AttributedString, resolver: TaskMentionResolver) {
+    private static func linkifyBareIDs(_ attributed: inout AttributedString, resolver: TaskMentionResolver,
+                                       inPlace: Bool) {
         // An empty table resolves nothing; its first fill always re-renders (see
         // `TaskMentionResolver.update`), so skipping the scan loses nothing.
         guard let regex = tokenRegex, !resolver.isEmpty else { return }
@@ -235,6 +239,12 @@ enum TaskMentions {
             let slice = attributed[lower..<upper]
             // Never inside a link (a markdown link's text, a URL or path claimed already).
             if slice.runs.contains(where: { $0.link != nil }) { continue }
+            if inPlace {
+                guard let url = TaskMentionLink.url(for: hit.id) else { continue }
+                attributed[lower..<upper].link = url
+                attributed[lower..<upper].foregroundColor = .accentColor
+                continue
+            }
             let isCode: (AttributedString.Runs.Run) -> Bool = {
                 $0.inlinePresentationIntent?.contains(.code) == true
             }

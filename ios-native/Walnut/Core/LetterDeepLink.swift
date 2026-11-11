@@ -233,6 +233,69 @@ final class LetterDeepLink {
     }
 }
 
+/// `walnut-letter://letter/<id>`: "open this letter". Made by
+/// `MarkdownParser.linkifyLetterIDs` from a letter id an agent wrote in text
+/// (`lt-<timestamp36>-<rand>`), the way `TaskMentionLink` carries a task. The
+/// SwiftUI markdown surfaces (`FilePathLinkHandling`) and the timeline
+/// (`TimelineCollectionController` → `TimelineRowAction.openLetter`) open it in a
+/// letter sheet over the screen it was tapped on (`LetterReaderSheet`); the
+/// system opener never sees one. The web's markdown link form
+/// `[words](letter:<id>)` (web/src/utils/markdown.ts) is read as the same link.
+enum LetterMentionLink {
+    static let scheme = "walnut-letter"
+    /// The web's `letter:<id>` link destination.
+    static let markdownScheme = "letter"
+
+    /// A letter id standing alone in text: the web's `LETTER_ID_SRC`
+    /// (web/src/utils/letter-links.ts), so a message links the same ids in both
+    /// places. JavaScript's `\w` is ASCII, so it is spelled out here (ICU's is
+    /// Unicode and would treat CJK prose around an id as a word): not after a
+    /// word character, `.`, `/` or `-` (a longer token, a path or URL segment),
+    /// not before a word character or `-`. The lengths are
+    /// `LetterDeepLink.isValidLetterId`'s, and every hit is checked against it again.
+    static let tokenPattern =
+        #"(?<![A-Za-z0-9_./\-])"#
+        + #"lt-[0-9a-z]{1,12}-[0-9a-z]{4,12}"#
+        + #"(?![A-Za-z0-9_\-])"#
+
+    static let tokenRegex = try? NSRegularExpression(pattern: tokenPattern)
+
+    /// The link for a letter id; nil for anything that is not one (the id becomes
+    /// a URL path, so it is validated like a push's).
+    static func url(for letterId: String) -> URL? {
+        guard LetterDeepLink.isValidLetterId(letterId) else { return nil }
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = "letter"
+        components.path = "/" + letterId
+        return components.url
+    }
+
+    static func isLetterLink(_ url: URL) -> Bool { url.scheme == scheme || url.scheme == markdownScheme }
+
+    /// The letter id a letter link carries (`walnut-letter://letter/<id>` or the
+    /// web's `letter:<id>`); nil for any other URL, and for a letter link whose id
+    /// is not a valid one.
+    static func letterID(from url: URL) -> String? {
+        let id: String
+        switch url.scheme {
+        case scheme:
+            guard url.host == "letter" else { return nil }
+            id = String(url.path(percentEncoded: false).drop(while: { $0 == "/" }))
+        default:
+            // The web's `letter:<id>`, read from the link's own text as `LETTER_HREF_RE`
+            // (`^letter:<id>$`) does: an opaque URL's host and path are not promised
+            // to read back the same from every builder (a markdown-parsed link read
+            // nil where `URL(string:)` read the id).
+            let prefix = markdownScheme + ":"
+            let raw = url.relativeString.hasPrefix(prefix) ? url.relativeString : url.absoluteString
+            guard raw.hasPrefix(prefix) else { return nil }
+            id = String(raw.dropFirst(prefix.count))
+        }
+        return LetterDeepLink.isValidLetterId(id) ? id : nil
+    }
+}
+
 extension QuickActionDelegate {
     /// Background/silent delivery (`content-available`). A TAP does not come
     /// through here — that is the `UNUserNotificationCenter` delegate's job

@@ -21,6 +21,8 @@ struct ChatTimelineBody: View {
     /// A tapped task mention (`walnut-task://`): the task sheet a letter's task
     /// reference opens, so a task reads the same wherever it was cited.
     @State private var openedTask: TaskOpenTarget?
+    /// A tapped letter link (`walnut-letter://`): the letter's reader over this timeline.
+    @State private var openedLetter: LetterOpenTarget?
 
     var body: some View {
         // LAYER ORDER IS LOAD-BEARING (DOCK-c, 2026-08-29). The empty state used to be
@@ -78,6 +80,8 @@ struct ChatTimelineBody: View {
                     case .openTask(let id):
                         openedTask = TaskOpenTarget(
                             id: id, title: TaskMentionResolver.shared.title(for: id))
+                    case .openLetter(let id):
+                        openedLetter = LetterOpenTarget(id: id)
                     case .previewFile(let ref):
                         // Personal AI chat always runs on the primary box.
                         // HTML keeps the rendered WKWebView preview (and its dock
@@ -132,7 +136,8 @@ struct ChatTimelineBody: View {
         .sessionFileSheet(item: $textTarget) { target in
             SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
                               host: target.host ?? "", ref: target.ref,
-                              hostNote: target.hostNote, missingNote: target.missing)
+                              hostNote: target.hostNote, missingNote: target.missing,
+                              unknownSource: target.unknownSource)
         }
         .sheet(item: $dirTarget) { target in
             DirectoryPreviewSheet(target: target)
@@ -145,6 +150,7 @@ struct ChatTimelineBody: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
+        .letterReaderSheet($openedLetter)
         // The sizes of the files the messages name, for their cards: the main
         // chat's are on the machine Walnut runs on.
         .task(id: sentFilePaths) { await SentFileSizes.shared.request(sentFilePaths, host: nil) }

@@ -315,6 +315,10 @@ struct SessionPlanPayload: Codable {
     let content: String
     let planFile: String?
     let sourceSessionId: String?
+
+    func linkSource(requestedSessionID: String) -> LinkSource {
+        LinkSource(sessionID: sourceSessionId ?? requestedSessionID)
+    }
 }
 
 /// One side-question Q&A from GET /v1/sessions/:id/side-questions.

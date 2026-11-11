@@ -148,6 +148,10 @@ struct LetterThreadEntry: Codable, Equatable, Identifiable {
     /// Human turns only: the file names of the pictures that went with it.
     /// Absent on servers that predate pictures on letters.
     var images: [String]? = nil
+    /// Agent turns: the session that wrote this turn, recorded by the server from its trusted
+    /// caller (the same shape as `Letter.sender`). Absent on older turns: their writer is not
+    /// known, and is never taken to be the letter's own sender.
+    var sender: LetterSender? = nil
 
     /// Stable within one letter: the store appends turns and never reorders.
     var id: String { "\(from)|\(at ?? 0)|\(bodyFile ?? "")" }
@@ -294,10 +298,17 @@ struct Letter: Codable, Identifiable, Equatable {
 
     /// Which box it came from, in the words the rest of the app uses.
     var hostLabel: String {
-        let host = sender?.host ?? ""
-        if host.isEmpty || host == "local" || host == "__local__" { return "Mac" }
-        return host
+        let host = sender?.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if host == "local" || host == "__local__" { return "Mac" }
+        if !host.isEmpty { return host }
+        // A Walnut session that names no host: its machine is not known, never assumed the Mac.
+        let sid = sender?.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !sid.isEmpty, sid != "external" { return Self.unknownHostLabel }
+        // An external agent, or a letter with no sender: as before.
+        return "Mac"
     }
+
+    static let unknownHostLabel = "Unknown host"
 
     var taskTitle: String? {
         guard let title = sender?.taskTitle, !Self.oneLine(title).isEmpty else { return nil }
@@ -359,6 +370,28 @@ struct Letter: Codable, Identifiable, Equatable {
     var bodyStreamURL: URL? {
         guard let relative = bodyUrl, !relative.isEmpty, let base = AppConfig.serverURL else { return nil }
         return URL(string: base.absoluteString + relative)
+    }
+
+    func bodyRouteURL(server: URL? = AppConfig.serverURL) -> URL? {
+        Self.routeURL(relative: bodyUrl, id: id, turn: nil, server: server)
+    }
+
+    /// `turn` is the entry's index in `thread`, which keeps the server's order.
+    func turnBodyRouteURL(_ entry: LetterThreadEntry, server: URL? = AppConfig.serverURL) -> URL? {
+        guard let turn = threadEntries.firstIndex(of: entry) else { return nil }
+        return Self.routeURL(relative: entry.bodyUrl, id: id, turn: turn, server: server)
+    }
+
+    private static func routeURL(relative: String?, id: String, turn: Int?, server: URL?) -> URL? {
+        guard let server else { return nil }
+        // Only a path on this server: a relative URL is appended to the origin the token goes to.
+        if let relative, relative.hasPrefix("/"), !relative.hasPrefix("//") {
+            return URL(string: server.absoluteString + relative)
+        }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        guard !id.isEmpty, let encoded = id.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        let path = "/api/v1/human-inbox/\(encoded)/body" + (turn.map { "?turn=\($0)" } ?? "")
+        return URL(string: server.absoluteString + path)
     }
 }
 

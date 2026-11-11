@@ -512,9 +512,18 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// Why a task in a project that syncs is kept local (additive, 2026-11-01). Every copy of a
     /// row carries it.
     var syncHold: WalnutSyncHold? = nil
+    /// The session that wrote `summary` (additive, 2026-11-07): a path in the summary opens from
+    /// there. nil from an older server: not known, never the task's current session. Every copy
+    /// of a row (`applyEdit`, `withPinned`) carries it.
+    var summarySessionID: String? = nil
+    /// Walnut's read of where its last turn stopped, with the session it read it from (additive).
+    /// Every copy of a row carries it.
+    var lastWords: WalnutLastWords? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project
+        case summarySessionID = "summary_session_id"
+        case lastWords = "last_words"
         case dueDate = "due_date"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
@@ -560,18 +569,51 @@ struct WalnutResultReport: Codable, Equatable {
     /// Set once the not-done items were taken up or dropped. The list projection leaves a settled
     /// report out; the full row (GET /v1/tasks/:id) keeps it with this mark.
     var settled: Settled? = nil
+    /// Who gave it, `human` or `task:<id>`, and the giving session (additive, 2026-11-07): a path
+    /// in its words opens from there; nil reads as not known.
+    var by: String? = nil
+    var sessionId: String? = nil
+    /// `local` when a person on the primary gave it (additive): a `human` without it is an older
+    /// record whose writer is not known.
+    var host: String? = nil
+    /// Who wrote `not_done` when not the giver of `result` (`unknown` when Walnut could not name
+    /// one; additive, 2026-11-07).
+    var notDoneBy: String? = nil
 
     struct Settled: Codable, Equatable {
         var at: String? = nil
     }
 
     private enum CodingKeys: String, CodingKey {
-        case at, result, settled
+        case at, result, settled, by, sessionId, host
         case notDone = "not_done"
+        case notDoneBy = "not_done_by"
+    }
+
+    /// The server's spelling of the session id is read either way; an odd one reads as unknown.
+    private enum LegacyKeys: String, CodingKey {
+        case sessionIdSnake = "session_id"
     }
 
     /// Partial: a non-empty not-done list nobody settled (the server's `isPartial`).
     var isPartial: Bool { !(notDone ?? []).isEmpty && settled == nil }
+}
+
+extension WalnutResultReport {
+    /// In an extension, so the memberwise init stays.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        at = try c.decodeIfPresent(String.self, forKey: .at)
+        notDone = try c.decodeIfPresent([String].self, forKey: .notDone)
+        result = try c.decodeIfPresent(String.self, forKey: .result)
+        settled = try c.decodeIfPresent(Settled.self, forKey: .settled)
+        by = (try? c.decodeIfPresent(String.self, forKey: .by)) ?? nil
+        host = (try? c.decodeIfPresent(String.self, forKey: .host)) ?? nil
+        notDoneBy = (try? c.decodeIfPresent(String.self, forKey: .notDoneBy)) ?? nil
+        let camel = (try? c.decodeIfPresent(String.self, forKey: .sessionId)) ?? nil
+        let snake = (try? decoder.container(keyedBy: LegacyKeys.self).decodeIfPresent(String.self, forKey: .sessionIdSnake)) ?? nil
+        sessionId = camel ?? snake
+    }
 }
 
 /// `live_activity` on a task row: what its running session does now, read by the server from
@@ -634,6 +676,106 @@ struct WalnutUserStatus: Codable, Equatable {
     /// Between a turn's end and its report: `waitingOn` is Walnut's placeholder ("Its report on
     /// the turn that just ended"), never words to show the user (additive, 2026-10).
     var transient: Bool? = nil
+    /// Who wrote the report `now` / `next` (and a session's own ask) come from: `self`, `human`,
+    /// `unknown` or `task:<id>`, and the session that wrote it when recorded. A path in those words
+    /// opens from that session, never the task's current one; nil from an older server reads as
+    /// not known (additive, 2026-11-07; `LinkSource.forTaskText`).
+    var reportBy: String? = nil
+    var reportSessionId: String? = nil
+    /// Who wrote `waitingOn` when a report said it (its own waiting words, or words it quoted), and
+    /// that session. Absent when Walnut made the words itself or the record predates the field:
+    /// not known, and never borrowed from the report's `now` / `next` writer (additive, 2026-11-07).
+    var waitingBy: String? = nil
+    var waitingSessionId: String? = nil
+    /// Who wrote a session's own `ask`, and that session (additive, 2026-11-07). Absent when the
+    /// ask is not a report's words or the record predates the field: not known.
+    var askBy: String? = nil
+    var askSessionId: String? = nil
+    /// The task's own line and its writer (additive, 2026-11-07).
+    var line: WalnutStatusLine? = nil
+    /// Its question a lead, VP or Main answered in the user's place: `by` is the answering task's
+    /// id or `human`, `sessionId` the session that answered (additive, 2026-11-07).
+    var answeredFor: WalnutAnsweredFor? = nil
+}
+
+/// `user_status.line` (server `StatusLine`). Decoded leniently: an odd shape reads as no writer
+/// (unknown), never a failed task list.
+struct WalnutStatusLine: Codable, Equatable {
+    var text: String? = nil
+    /// self | human | unknown | task:<id>
+    var by: String? = nil
+    var byName: String? = nil
+    var at: String? = nil
+    var sessionId: String? = nil
+
+    init(text: String? = nil, by: String? = nil, byName: String? = nil, at: String? = nil, sessionId: String? = nil) {
+        self.text = text
+        self.by = by
+        self.byName = byName
+        self.at = at
+        self.sessionId = sessionId
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        text = (try? c?.decodeIfPresent(String.self, forKey: .text)) ?? nil
+        by = (try? c?.decodeIfPresent(String.self, forKey: .by)) ?? nil
+        byName = (try? c?.decodeIfPresent(String.self, forKey: .byName)) ?? nil
+        at = (try? c?.decodeIfPresent(String.self, forKey: .at)) ?? nil
+        sessionId = (try? c?.decodeIfPresent(String.self, forKey: .sessionId)) ?? nil
+    }
+}
+
+/// `user_status.answeredFor` (server same-ask.ts answeredAbove). Decoded leniently.
+struct WalnutAnsweredFor: Codable, Equatable {
+    var by: String? = nil
+    var byTitle: String? = nil
+    var at: String? = nil
+    var ask: String? = nil
+    var sessionId: String? = nil
+
+    init(by: String? = nil, byTitle: String? = nil, at: String? = nil, ask: String? = nil, sessionId: String? = nil) {
+        self.by = by
+        self.byTitle = byTitle
+        self.at = at
+        self.ask = ask
+        self.sessionId = sessionId
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        by = (try? c?.decodeIfPresent(String.self, forKey: .by)) ?? nil
+        byTitle = (try? c?.decodeIfPresent(String.self, forKey: .byTitle)) ?? nil
+        at = (try? c?.decodeIfPresent(String.self, forKey: .at)) ?? nil
+        ask = (try? c?.decodeIfPresent(String.self, forKey: .ask)) ?? nil
+        sessionId = (try? c?.decodeIfPresent(String.self, forKey: .sessionId)) ?? nil
+    }
+}
+
+/// `last_words` on a task row (server `sessions/last-words.ts`): where its last turn stopped, as
+/// Walnut read it from `session_id`. Decoded leniently.
+struct WalnutLastWords: Codable, Equatable {
+    var text: String? = nil
+    var at: String? = nil
+    var sessionId: String? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case text, at
+        case sessionId = "session_id"
+    }
+
+    init(text: String? = nil, at: String? = nil, sessionId: String? = nil) {
+        self.text = text
+        self.at = at
+        self.sessionId = sessionId
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        text = (try? c?.decodeIfPresent(String.self, forKey: .text)) ?? nil
+        at = (try? c?.decodeIfPresent(String.self, forKey: .at)) ?? nil
+        sessionId = (try? c?.decodeIfPresent(String.self, forKey: .sessionId)) ?? nil
+    }
 }
 
 /// `user_status.threads` (server `src/core/org/thread-view.ts` `ThreadCounts`): how many threads

@@ -8,10 +8,11 @@ struct WalnutAPI {
 
     private let session: URLSession
 
-    init() {
+    init(protocolClasses: [AnyClass] = []) {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         config.waitsForConnectivity = false
+        if !protocolClasses.isEmpty { config.protocolClasses = protocolClasses + (config.protocolClasses ?? []) }
         session = URLSession(configuration: DemoMode.configured(config))
     }
 

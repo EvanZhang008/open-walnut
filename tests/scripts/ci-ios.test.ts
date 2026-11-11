@@ -98,7 +98,7 @@ const DRIVES_HOME_SCREEN = /com\.apple\.springboard/
 // Fixture classes that probe their server and skip on the offline pairing, so CI runs
 // them as skips. A new fixture class goes here (when it probes) or into IOS_CI_SKIP_UI.
 const PROBES_ITS_FIXTURE = [
-  'BoardOrderParityUITests', 'DemoModeUITests', 'InboxSelectUITests', 'LetterReplyUITests',
+  'AgentTextLinksUITests', 'BoardOrderParityUITests', 'DemoModeUITests', 'InboxSelectUITests', 'LetterReplyUITests',
   'MidTurnQueueUITests', 'ModelPillHealUITests', 'ProvenanceAndInboxUITests', 'SendOnceUITests',
   'SessionMidTurnOrderUITests', 'SessionStreamStormUITests',
 ]

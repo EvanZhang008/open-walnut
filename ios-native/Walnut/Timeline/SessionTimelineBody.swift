@@ -43,6 +43,8 @@ struct SessionTimelineBody: View {
     /// A tapped task mention (`walnut-task://`): the task sheet a letter's task
     /// reference opens, so a task reads the same wherever it was cited.
     @State private var openedTask: TaskOpenTarget?
+    /// A tapped letter link (`walnut-letter://`): the letter's reader over this timeline.
+    @State private var openedLetter: LetterOpenTarget?
 
     /// The queue rows by the id of the message they hold (the bubble's `clientMessageId`).
     private var queueRowsByMessage: [String: SessionQueuedMessage] {
@@ -184,6 +186,8 @@ struct SessionTimelineBody: View {
                     case .openTask(let id):
                         openedTask = TaskOpenTarget(
                             id: id, title: TaskMentionResolver.shared.title(for: id))
+                    case .openLetter(let id):
+                        openedLetter = LetterOpenTarget(id: id)
                     case .previewFile(let ref):
                         // HTML keeps the rendered WKWebView preview (and its dock
                         // seat); every other extension is text, where a line
@@ -231,7 +235,8 @@ struct SessionTimelineBody: View {
             SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
                               host: target.host ?? "", ref: target.ref,
                               cwd: target.cwd, sessionID: target.sessionID,
-                              hostNote: target.hostNote, missingNote: target.missing)
+                              hostNote: target.hostNote, missingNote: target.missing,
+                              unknownSource: target.unknownSource)
         }
         .sheet(item: $dirTarget) { target in
             DirectoryPreviewSheet(target: target)
@@ -244,6 +249,7 @@ struct SessionTimelineBody: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
+        .letterReaderSheet($openedLetter)
         .task { await WalnutAdditionsSetting.shared.refreshIfStale() }
         // The sizes of the files the messages name, for their cards, from the
         // session's host.

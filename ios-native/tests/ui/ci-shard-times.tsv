@@ -1,5 +1,8 @@
 # Seconds the WalnutUITests classes took on CI, read by ci-shard.py to balance the UI shards.
 # class<TAB>seconds of its timed tests<TAB>tests timed. Refresh: ci-shard.py record <job log>.
+# AgentTextLinksUITests: not measured on CI yet. It skips there without its media fixture, like the
+# classes in PROBES_ITS_FIXTURE (0.1 to 0.4 s a test); 0.2 s a test until ci-shard.py record replaces it.
+AgentTextLinksUITests	5.8	29
 AskQuestionCardUITests	130.7	4
 BoardOrderParityUITests	3.5	3
 BoardRingTapUITests	190.7	4
