@@ -35,6 +35,7 @@ const NOT_A_HOST_LINK: Record<string, string> = {
   'web/src/pages/ConnectExtensionPage.tsx': 'the browser extension',
   'src/web/routes/devices.ts': 'paired devices (a comment)',
   'web/src/components/settings/sections/HostFleetVitals.tsx': 'the uptime lane of the last 12 hours, not the link now',
+  'web/src/components/settings/sections/HostFleetCard.tsx': 'the dashboard card\'s uptime lane of the last 12 hours, not the link now',
   'web/src/components/settings/sections/useSshHostEditor.ts': 'a comment naming the row receipt',
 }
 

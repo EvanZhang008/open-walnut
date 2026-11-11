@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const GATE = path.join(ROOT, 'scripts/push-gate.sh')
@@ -512,7 +513,7 @@ esac
       const real = spawnSync('bash', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim()
       fs.writeFileSync(path.join(dir, 'git'), `#!/bin/bash\nif [ "$1" = ls-remote ] && [ "$(cat '${n}')" -gt 0 ]; then echo $(( $(cat '${n}') - 1 )) > '${n}'; echo "fatal: unable to access: Could not resolve host: github.com" >&2; exit 128; fi\nexec '${real}' "$@"\n`, { mode: 0o755 })
       const env = cleanEnv({ ...g.env, WALNUT_PUSH_GATE_READ_SECS: '0' })
-      env.PATH = `${dir}:${env.PATH}`
+      env.PATH = guardedPath([dir], env.PATH)
       return spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env })
     }
     const two = flaky(2)
