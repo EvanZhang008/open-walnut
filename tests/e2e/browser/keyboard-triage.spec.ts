@@ -913,13 +913,17 @@ test('a reload inside the window keeps the Undo: Cmd+Z after it brings the task 
   // The address already has C in B's place: the reload brings back the strip as it is now.
   await expect.poll(() => new URL(page.url()).searchParams.get('s2')).toBe(SID('c'))
   await page.reload()
-  await expect(homeColumns(page)).toHaveCount(2, { timeout: 30_000 })
+  // The Undo is back as soon as the page is, for the time it had left; the columns load after it.
+  // Waiting for them first outlasted that time: at one CPU the Undo showed 1 s after the reload
+  // with about 3 s left, and the columns came 5.6 s later (2026-11-11, CI: no toast, both tries).
+  // So it is read and used at once, and the columns are checked after.
   const done = toast(page, 'Task completed')
-  await expect(done).toBeVisible({ timeout: 4_000 })
+  await expect(done).toBeVisible({ timeout: 30_000 })
   await expect(done).toContainText(TITLE('b'))
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('Meta+z')
   await expect.poll(() => phase(page, 'b')).toBe('NEED_ACTION')
+  await expect(homeColumns(page)).toHaveCount(2, { timeout: 30_000 })
   await expect(col(page, 'b')).toHaveCount(1, { timeout: 15_000 })
   await expect(col(page, 'c')).toHaveCount(0, { timeout: 15_000 })
   // Used once: another reload brings nothing back.
