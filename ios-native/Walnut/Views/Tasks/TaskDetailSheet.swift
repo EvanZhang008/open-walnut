@@ -304,9 +304,10 @@ struct TaskDetailSheet: View {
             } label: {
                 StatusCircle(status: current.statusKind)
                     .font(.title2)
-                    .padding(.top, 2)
+                    .headerControl()
             }
             .buttonStyle(.plain)
+            .padding(.top, -6)
             .accessibilityLabel(StatusCircle.toggleAccessibility(current.statusKind).label)
             .accessibilityValue(StatusCircle.toggleAccessibility(current.statusKind).value)
             .accessibilityHint(StatusCircle.toggleAccessibility(current.statusKind).hint)
@@ -327,8 +328,7 @@ struct TaskDetailSheet: View {
             Image(systemName: watched ? "eye.fill" : "eye")
                 .font(.title3)
                 .foregroundStyle(watched ? Theme.tint : .secondary)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+                .headerControl()
         }
         .buttonStyle(.plain)
         .padding(.top, -6)
@@ -474,4 +474,24 @@ struct TaskDetailSheet: View {
     static func fullDate(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
     }
+}
+
+/// A glyph button beside the task page's title (the status circle, the Watch eye):
+/// a fingertip's 44pt at least, and as big as its glyph. A fixed 44pt box let the
+/// glyph, which grows with the text size, spill out of the box and get cut off at
+/// the largest sizes; the glyph also stops growing at `typeCap`, so the two never
+/// squeeze the title, which keeps growing, to a word per line.
+private struct TaskHeaderControl: ViewModifier {
+    static let typeCap = DynamicTypeSize.accessibility2
+
+    func body(content: Content) -> some View {
+        content
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+            .dynamicTypeSize(...Self.typeCap)
+    }
+}
+
+private extension View {
+    func headerControl() -> some View { modifier(TaskHeaderControl()) }
 }
