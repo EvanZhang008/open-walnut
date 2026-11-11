@@ -66,6 +66,15 @@ agent (Claude Code, Codex and the rest) belong to that agent's own settings; Wal
 model someone chose and lists each engine's models, so it stays generic and works the same on every
 platform.
 
+## Experimental behavior
+
+New behavior that changes what users see by default ships behind an experimental flag.
+Add its id, name, description and default (`false`) to `src/core/experimental.ts`; Settings
+shows one switch per entry. Only an explicit choice enables it. Keep today's behavior when
+the flag is off. When the experiment ends, remove its switch or change its registry default.
+Store overrides in `Config.experimental`, preserve unknown boolean flags for newer versions,
+and keep automated preference writes in the test run's own copy.
+
 ## Existing users keep working and keep upgrading
 
 Every change reaches people who already run an older Walnut. Before it lands, make sure:

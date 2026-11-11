@@ -18,13 +18,15 @@
  * The Mac derives (boot-policy row 'user-status'); a replica reads the rows it copies, so
  * while the Mac is away the stored statuses stay as it left them until it is back.
  */
+import { experimentalEnabled } from './experimental.js';
+import { workerStatus } from './worker-status.js';
 import { currentLastWords } from './sessions/last-words.js';
 import { personMarkedNeeds } from './sessions/person-needs.js';
 import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
 import { routineRunToClose } from './routines/run-close.js';
-import { deriveUserStatus, reportIsCurrent, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
+import { deriveUserStatus, fallbackUserState, reportIsCurrent, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
 import { answeredAbove, answerFor, answersOf, askKey, foldSameAsk, withdrawnAtOf, type RelativeAsk } from './same-ask.js';
 import { isSignInAsk, signInWaitWords, type SignInState } from './sign-in-ask.js';
 import { relativeAsksIndex } from './same-ask-tree.js';
@@ -58,6 +60,7 @@ let live = false;
 
 /** The facts every task in one pass is derived from, each store read once. */
 export interface StatusFacts {
+  followWorkers?: boolean;
   /** Per session id: what its record says. */
   sessions: Map<string, {
     processStatus?: string; errorMessage?: string; errorReason?: string; statusSince?: string;
@@ -329,7 +332,7 @@ function endpointWaitOf(
 
 /** Read every fact source (the slow ones from the cache). Never throws: a store that cannot be
  *  read contributes nothing. `allIds` resolves a Board choice's task prefix. */
-export async function readStatusFacts(tasks: readonly Task[], allIds: readonly string[] = tasks.map((t) => t.id)): Promise<StatusFacts> {
+export async function readStatusFacts(tasks: readonly Task[], allIds: readonly string[] = tasks.map((t) => t.id), followWorkersChoice?: boolean): Promise<StatusFacts> {
   const taskIds = new Set(tasks.map((t) => t.id));
   const sessionIds = new Set<string>();
   for (const t of tasks) {
@@ -426,7 +429,9 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
   }
   for (const [sid, s] of sessions) if (s.taskId && taskIds.has(s.taskId)) link(s.taskId, sid);
   const threads = await readNodeThreads(tasks);
-  return { sessions, letters, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered, threads };
+  const { getConfig } = await import('./config-manager.js');
+  const followWorkers = followWorkersChoice ?? experimentalEnabled((await getConfig()).experimental, 'leader_status_follows_workers');
+  return { followWorkers, sessions, letters, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered, threads };
 }
 
 /**
@@ -726,7 +731,7 @@ export function childrenByParent(everything: readonly Task[]): Map<string, Task[
  */
 export function statusOf(
   task: Task, facts: StatusFacts, childrenOf: ReadonlyMap<string, readonly Task[]>, nowMs = Date.now(),
-): { input: UserStatusInput; status: UserStatus } {
+): { input: UserStatusInput; status: UserStatus; own?: UserStatus } {
   const input = statusInputOf(task, facts, nowMs);
   const derived = deriveUserStatus(input, nowMs);
   const children = (childrenOf.get(task.id) ?? []).filter((child) => child.router_area_id === task.router_area_id);
@@ -746,7 +751,13 @@ export function statusOf(
     withdrawnAt: (id, ask) => withdrawnAtOf(facts.tasksById?.get(id)?.asks_withdrawn, ask),
     signIn: (ask) => isSignInAsk(ask, facts.loginWords ?? []),
   });
-  return { input, status: signInHeld(answeredAbove(folded, answersOf(task), nowMs, facts.personInputAt?.get(task.id)), facts) };
+  const own = signInHeld(answeredAbove(folded, answersOf(task), nowMs, facts.personInputAt?.get(task.id)), facts);
+  // The experiment: a leader's status follows its workers (worker-status.ts). Main and a VP keep
+  // their own rule (orgNodeNeverNeeds, their Threads); a worker not derived yet reads its phase.
+  if (!facts.followWorkers || task.org_role || !children.length) return { input, status: own };
+  const workers = children.map((c): UserStatus => c.phase === 'COMPLETE' || c.status === 'done'
+    ? { state: 'done' } : c.user_status ?? { state: fallbackUserState(c.phase, c.status) });
+  return { input, status: workerStatus(own, workers, { hasLeader: !!task.parent_task_id }), own };
 }
 
 /** Every task's sign-in asks beside its teammates', when its own ask is one (one sign-in is one ask). */
@@ -780,6 +791,32 @@ function signInHeld(status: UserStatus, facts: StatusFacts): UserStatus {
   return { ...rest, state: 'waiting', kind: facts.signIn?.ok ? 'task' : 'outside', waitingOn: words };
 }
 
+/** `ids` and every ancestor of each, stopping at a cycle. */
+function withAncestors(ids: ReadonlySet<string>, tasks: readonly Task[]): Set<string> {
+  const parentOf = new Map(tasks.map((t) => [t.id, t.parent_task_id] as const));
+  const out = new Set(ids);
+  for (const id of ids) {
+    let parent = parentOf.get(id);
+    while (parent && !out.has(parent)) { out.add(parent); parent = parentOf.get(parent); }
+  }
+  return out;
+}
+
+/** Children before parents, once each, even when imported data contains a cycle. */
+function childrenFirst(tasks: readonly Task[], children: ReadonlyMap<string, readonly Task[]>): Task[] {
+  const wanted = new Set(tasks.map((t) => t.id));
+  const seen = new Set<string>();
+  const out: Task[] = [];
+  const visit = (t: Task) => {
+    if (seen.has(t.id)) return;
+    seen.add(t.id);
+    for (const c of children.get(t.id) ?? []) if (wanted.has(c.id)) visit(c);
+    out.push(t);
+  };
+  for (const t of tasks) visit(t);
+  return out;
+}
+
 /**
  * Derive and store the status of the given open tasks (all of them when `ids` is null).
  * Returns how many changed. A finished task is never written: every reader reads COMPLETE
@@ -789,20 +826,27 @@ function signInHeld(status: UserStatus, facts: StatusFacts): UserStatus {
 export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = Date.now()): Promise<number> {
   const { listTasks, updateTaskRaw } = await import('./task-manager.js');
   const everything = await listTasks();
-  const targets = everything.filter((t) => (ids ? ids.has(t.id) : true) && t.phase !== 'COMPLETE' && t.status !== 'done');
+  const { getConfig } = await import('./config-manager.js');
+  const followWorkers = experimentalEnabled((await getConfig()).experimental, 'leader_status_follows_workers');
+  // While the experiment is on, a changed task's open ancestors are derived in the same pass,
+  // children first (childrenFirst below), so a nested change reaches the top in one pass.
+  const wanted = ids && followWorkers ? withAncestors(ids, everything) : ids;
+  const targets = everything.filter((t) => (wanted ? wanted.has(t.id) : true) && openLeader(t));
   if (!targets.length) return 0;
-  const facts = await readStatusFacts(targets, everything.map((t) => t.id));
+  const facts = await readStatusFacts(targets, everything.map((t) => t.id), followWorkers);
   completeStatusFacts(facts, everything);
   await readFoldEvidence(facts, targets);
   let changed = 0;
   const toClose: { task: Task; status: UserStatus }[] = [];
   const childrenOf = childrenByParent(everything);
-  for (const task of targets) {
-    const { input, status: next } = statusOf(task, facts, childrenOf, nowMs);
+  const ordered = facts.followWorkers ? childrenFirst(targets, childrenOf) : targets;
+  for (const task of ordered) {
+    const { input, status: next, own } = statusOf(task, facts, childrenOf, nowMs);
     const settlesAt = handBackSettlesAt(task, next, nowMs, !!input.hasSession);
     // A routine run that ended with nothing for the user closes itself (routines/run-close.ts).
     // A candidate here (a triage run's `turn` too); closeRoutineRun decides with the triage check.
-    if (settlesAt === null && routineRunToClose(task, next, true)) toClose.push({ task, status: next });
+    // Judged on the task's own status: the worker rule only changes what is shown.
+    if (settlesAt === null && routineRunToClose(task, own ?? next, true)) toClose.push({ task, status: own ?? next });
     if (sameStatus(task.user_status, next)) continue;
     if (settlesAt !== null) {
       if (!settleTimers.has(task.id)) log.task.info('user-status: hand-back held', { taskId: task.id, untilMs: settlesAt });
@@ -818,17 +862,20 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
       return { changed: false };
     });
     if (res.changed) {
+      const prior = task.user_status;
+      // With the experiment on, a parent later in this pass reads the accepted child status.
+      if (facts.followWorkers) task.user_status = next;
       changed += 1;
       // Its leader carries its questions (rollUpAsks): re-derived in the next pass, one level each.
       if (task.parent_task_id) mark(task.parent_task_id);
       // The tasks whose same ask waits on it (same-ask.ts) read its new status in the next pass.
       for (const t of everything) if (t.user_status?.sameAsk?.id === task.id) mark(t.id);
       // A teammate folded under another whose ask was just answered there is told once.
-      if (next.sameAsk?.answered && next.sameAsk.team && !task.user_status?.sameAsk?.answered) {
+      if (next.sameAsk?.answered && next.sameAsk.team && !prior?.sameAsk?.answered) {
         void import('./sessions/ask-answer.js').then((m) => m.tellFoldAnswered(task, next.sameAsk!)).catch(() => {});
       }
       // Into Needs you: the line `walnut-logs.sh flips` pairs with the phase moves.
-      if (next.state === 'needs' && task.user_status?.state !== 'needs') {
+      if (next.state === 'needs' && prior?.state !== 'needs') {
         log.task.info('user-status: now needs you', { taskId: task.id, source: next.source });
       }
     }
@@ -886,6 +933,17 @@ function markAll(): void {
   schedule();
 }
 
+/** The experiment's value as of the last config change seen (undefined: none seen yet). */
+let followWorkersSeen: boolean | undefined;
+
+async function experimentSwitched(): Promise<boolean> {
+  const { getConfig } = await import('./config-manager.js');
+  const now = experimentalEnabled((await getConfig()).experimental, 'leader_status_follows_workers');
+  const moved = followWorkersSeen !== undefined && followWorkersSeen !== now;
+  followWorkersSeen = now;
+  return moved;
+}
+
 function onEvent(event: { name: string; data: unknown; source?: string }): void {
   // Its own writes, and the activity stamp a session writes on every event, move nothing here.
   if (event.source === OWN_SOURCE || event.source === 'session-touch') return;
@@ -898,6 +956,10 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
       // A finished or moved subtask's question leaves its leader's list (rollUpAsks); the event
       // names only the new parent, so a former one drops it at the minute sweep.
       mark(d.task?.parent_task_id);
+      return;
+    case EventNames.CONFIG_CHANGED:
+      // Every status is derived again only when the experiment was switched (worker-status.ts).
+      void experimentSwitched().then((moved) => { if (moved) markAll(); }).catch(() => {});
       return;
     case EventNames.HOST_STATUS: {
       // A host's link went down or came back: its tasks read Waiting on it, or no longer.
@@ -949,6 +1011,7 @@ let stopRetryFollow: (() => void) | null = null;
 export function startUserStatusSync(): void {
   if (!bootPolicy('user-status') || live) return;
   live = true;
+  void experimentSwitched().catch(() => {});
   bus.subscribe(SUBSCRIBER, onEvent as never, {
     global: true,
     interest: [
@@ -957,7 +1020,7 @@ export function startUserStatusSync(): void {
       EventNames.SESSION_ENDED, EventNames.SESSION_STARTED, EventNames.SESSION_USAGE_LIMIT,
       EventNames.HUMAN_INBOX_LETTER, LETTER_ANSWERED, LETTER_STATE, EventNames.BOARD_CHANGED,
       EventNames.CRON_JOB_ADDED, EventNames.CRON_JOB_UPDATED, EventNames.CRON_JOB_REMOVED,
-      EventNames.ORG_THREADS_CHANGED, EventNames.HOST_STATUS,
+      EventNames.ORG_THREADS_CHANGED, EventNames.HOST_STATUS, EventNames.CONFIG_CHANGED,
     ],
   });
   // A turn-end report armed, asked or settled changes what the task waits on (user-status.ts).

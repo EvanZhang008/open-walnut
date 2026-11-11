@@ -391,6 +391,8 @@ export function lastWordsOfStatus(s: Pick<UserStatus, 'toRead' | 'waitingOn'> | 
 }
 /** A task with no session that a person or a lead set to NEED_ACTION by hand. */
 export const MARKED_ASK = 'It was set to need you by hand: open it.';
+/** A worker that reported its work finished, for its lead to check and close. */
+export const LEAD_CLOSE_WAIT = 'Its lead, to check the result and close it';
 export const COMPLETE_IS_VERIFIED = 'A COMPLETE task counts as verified by the user: write it as done, never as waiting on their check or test, and never remind them of it.';
 
 export interface UserStatus {
@@ -1212,7 +1214,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     if (report?.state === 'done') {
       // Main and a lead are never closed: they wait on the user's next message.
       if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
-      if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to check the result and close it', ...w });
+      if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: LEAD_CLOSE_WAIT, ...w });
       return toRead('result', RESULT_TO_READ, w);
     }
     // It said its own work goes on (a build it started, a test run) and something wakes it: Working.
@@ -1291,7 +1293,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (wake) return wake;
   if (report?.state === 'done') {
     if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
-    if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to check the result and close it', ...w });
+    if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: LEAD_CLOSE_WAIT, ...w });
     return toRead('result', RESULT_TO_READ, w);
   }
   if (until) return strip({ state: 'waiting', kind: 'time', waitingOn: 'Its next check', until, ...w });

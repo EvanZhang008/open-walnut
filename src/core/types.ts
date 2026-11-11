@@ -1,3 +1,5 @@
+export { EXPERIMENTAL_FEATURES, experimentalEnabled } from './experimental.js';
+export type { ExperimentalFlags, ExperimentalFeatureId } from './experimental.js';
 import type { StatusReport, TaskBrief, UserStatus } from './user-status.js';
 import type { TaskResultReport, TaskReviewScore } from './peers/structured-reply.js';
 import type { AskAnswer, AskAnswerWithdrawal } from './same-ask.js';
@@ -1424,6 +1426,8 @@ export interface HistoryRemoteConfig {
 }
 
 export interface Config {
+  /** Optional experiments. Each missing flag reads its registry default. */
+  experimental?: Record<string, boolean>;
   version: 1;
   user: { name?: string };
   /** The org's own names, set on the Org page (src/core/org/org-settings.ts): the org's name

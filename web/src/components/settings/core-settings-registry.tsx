@@ -8,6 +8,7 @@ import { BugReportSection } from './sections/BugReportSection'
 import { CalendarSection } from './sections/CalendarSection'
 import { CloudSection } from './sections/CloudSection'
 import { DevicesSection } from './sections/DevicesSection'
+import { ExperimentalSection } from './sections/ExperimentalSection'
 import { DevicesWaySection } from './sections/DevicesWaySection'
 import { PhonesCloudLanding } from './sections/PhonesCloudLanding'
 import { FocusTiersSection } from './sections/FocusTiersSection'
@@ -352,6 +353,14 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: "An API for Walnut's small background jobs instead of Claude Code.",
     keywords: ['api provider', 'bedrock', 'anthropic', 'openrouter', 'api model', 'api'],
     render: ({ config, saveSection }) => <ProvidersSection config={config} onSave={saveSection} />,
+  },
+  // Experiments (src/core/experimental.ts): one switch each, off until the user turns it on.
+  {
+    owner: 'walnut', id: 'experimental', label: 'Experimental', title: 'Experimental', group: 'configure',
+    icon: 'bolt', tint: '#AF52DE',
+    description: 'Optional behavior changes that stay off until you choose them.',
+    keywords: ['experimental', 'experiment', 'leader', 'worker', 'status'],
+    render: ({ config, saveSection }) => <ExperimentalSection config={config} onSave={saveSection} />,
   },
   // Diagnostics: read-mostly panels about what Walnut did, not knobs.
   {

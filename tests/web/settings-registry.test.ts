@@ -35,6 +35,7 @@ const EXPECTED_IDS = [
   'devices', 'cloud', 'devices-tailscale', 'devices-browser', 'devices-phones', 'remote-hosts', 'advanced',
   // Use an API instead of Claude Code: renders under Advanced (navHidden).
   'providers',
+  'experimental',
   // Diagnostics group. No `time` row: time tracking's only UI is the walnut-time
   // Plugin App, and the duplicate Settings section was deleted in 95473094.
   // No `timeline` row either: the screen-activity Life Tracker (Screen Tracking)

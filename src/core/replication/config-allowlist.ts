@@ -33,6 +33,7 @@ export type AllowSpec = true | { readonly [key: string]: AllowSpec }
 
 const ALLOW: Record<string, AllowSpec> = {
   version: true,
+  experimental: { '*': true },
   user: { name: true },
   // The org's name and the user's role on the chart: a replica's Org page shows the same names.
   org: { name: true, founder_title: true },

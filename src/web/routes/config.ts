@@ -1,6 +1,8 @@
 /**
  * Config routes — read/write application configuration.
  */
+import { experimentalConfigView, writeTestExperimental } from '../../core/experimental-prefs.js'
+import { validExperimentalFlags } from '../../core/experimental.js'
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import path from 'node:path'
@@ -146,7 +148,7 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // that run here, so the console tells a session here from one on the Mac. Absent
     // everywhere else (the Mac, the companion): their answer is unchanged.
     const replicaHostKey = role() === 'replica' && placement() === 'host' ? (process.env.WALNUT_HOST_KEY ?? '').trim() : ''
-    res.json({ config: configForClients(shown), ...(configCopied === undefined ? {} : { configCopied }), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, loginSession: (await import('../../core/login-session.js')).loginSessionState(), canRevealLocalFiles, macAccess, remoteIdUniquenessGaps, cloud: CLOUD_MODE, role: role(), placement: placement(), webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
+    res.json({ config: configForClients(experimentalConfigView(shown)), ...(configCopied === undefined ? {} : { configCopied }), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, loginSession: (await import('../../core/login-session.js')).loginSessionState(), canRevealLocalFiles, macAccess, remoteIdUniquenessGaps, cloud: CLOUD_MODE, role: role(), placement: placement(), webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
   } catch (err) {
     next(err)
   }
@@ -598,6 +600,11 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     const { push_tokens: ignoredPushTokens, ...sent } = req.body ?? {}
     const body = restoreMaskedSecrets(sent, await getConfig())
 
+    if (body.experimental !== undefined && !validExperimentalFlags(body.experimental)) {
+      res.status(400).json({ error: 'experimental must be an object of boolean flags' })
+      return
+    }
+
     if (body.version !== undefined && body.version !== 1) {
       res.status(400).json({ error: 'version must be 1' })
       return
@@ -720,6 +727,10 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     if (ignoredPushTokens !== undefined) {
       log.web.info('config: push_tokens in a config write ignored (the push registry owns them)')
     }
+    const privateExperiment = body.experimental !== undefined && writeTestExperimental(body.experimental, (await getConfig()).experimental)
+    if (privateExperiment) delete body.experimental
+    // A test run's own choice neither writes the user's file nor tells other windows.
+    if (privateExperiment && !Object.keys(body).length) { res.json({ ok: true }); return }
     await updateConfig(body)
     // Re-read merged config so the event carries the full picture
     const read = await getConfig()

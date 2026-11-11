@@ -37,6 +37,7 @@ const [bearer, provKey, header, credProc, engineKey, pluginPass, pluginSecret, t
 export function fullConfigFixture(): Record<string, unknown> {
   return {
     version: 1,
+    experimental: { leader_status_follows_workers: false },
     user: { name: 'Marina' },
     org: { name: 'Marina Labs', founder_title: 'Chair' },
     defaults: { priority: 'backlog', platform: 'local', project: 'Acme', engine: 'claude' },
