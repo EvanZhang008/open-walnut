@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { openDraftOnCwd, draftPanel } from './draft-helpers'
 import { fixtureHome, lockUserSettingsFile, openSessionsSection } from './engine-settings-helpers'
+import { dropFakes } from './route-teardown'
 
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1200, height: 800 } })
@@ -13,7 +14,7 @@ test.beforeAll(async ({ request }) => {
   originalMode = item.source === 'default' ? undefined : item.value
 })
 // The status poll keeps firing; a route handler still fetching when the page closes would fail the test.
-test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+test.afterEach(async ({ page }) => { await dropFakes(page) })
 test.afterAll(async ({ request }) => {
   await request.patch('/api/engines/claude/settings', { data: originalMode === undefined ? { unset: ['permissions.defaultMode'] } : { set: { 'permissions.defaultMode': originalMode } } })
   await release?.()
