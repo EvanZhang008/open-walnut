@@ -36,12 +36,16 @@ function jstr(s, key,   raw, parts, n, i, p, c, out) {
   return p out
 }
 # JSON string escape by hand: awks disagree on backslashes in a gsub replacement.
+# Every control character becomes a space: JSON forbids them raw, and a reason
+# with one is invalid JSON the engine ignores, which allows the command (a ps
+# row or a path can carry an escape sequence).
 function jesc(s,   i, c, out) {
+  if (JESC_CTRL == "") for (i = 1; i < 32; i++) JESC_CTRL = JESC_CTRL sprintf("%c", i)
   out = ""
   for (i = 1; i <= length(s); i++) {
     c = substr(s, i, 1)
     if (c == "\\" || c == "\"") out = out "\\" c
-    else if (c == "\n" || c == "\t" || c == "\r") out = out " "
+    else if (index(JESC_CTRL, c) || c == "\177") out = out " "
     else out = out c
   }
   return out

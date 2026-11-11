@@ -13,6 +13,7 @@ import { shellDollarGuardHooks } from './shell-dollar-guard-hook.js'
 import { patternSignalGuardHooks } from './pattern-kill-guard-hook.js'
 import { codexProviderGuardHooks } from './codex-provider-guard-hook.js'
 import { soundGuardHooks } from './sound-guard-hook.js'
+import { typecheckGuardHooks } from './typecheck-guard-hook.js'
 import { orgWorkGuardHooks } from './org-work-guard-hook.js'
 import { ownReadbackHooks } from './own-readback-hook.js'
 import type { OrgRole } from '../core/types.js'
@@ -27,7 +28,7 @@ import type { OrgRole } from '../core/types.js'
 export function sessionSettingsHooks(env: NodeJS.ProcessEnv = process.env, opts: { orgRole?: OrgRole; prompt?: string } = {}): Record<string, unknown> | null {
   const hooks: Record<string, unknown[]> = {}
   // Concatenate per event, so two sources on the same event never drop one.
-  for (const part of [compactOpenItemsHooks(env), gitTmpGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternSignalGuardHooks(env), soundGuardHooks(env), codexProviderGuardHooks(env), stopUnansweredHooks(env), orgWorkGuardHooks(opts.orgRole === 'router' ? undefined : opts.orgRole, env), ownReadbackHooks(opts.orgRole, opts.prompt ?? '', env)]) {
+  for (const part of [compactOpenItemsHooks(env), gitTmpGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternSignalGuardHooks(env), soundGuardHooks(env), typecheckGuardHooks(env), codexProviderGuardHooks(env), stopUnansweredHooks(env), orgWorkGuardHooks(opts.orgRole === 'router' ? undefined : opts.orgRole, env), ownReadbackHooks(opts.orgRole, opts.prompt ?? '', env)]) {
     for (const [event, groups] of Object.entries(part ?? {})) hooks[event] = [...(hooks[event] ?? []), ...(groups as unknown[])]
   }
   return Object.keys(hooks).length > 0 ? hooks : null
