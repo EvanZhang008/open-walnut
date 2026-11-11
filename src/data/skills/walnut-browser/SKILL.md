@@ -20,6 +20,9 @@ walnut browser click --text "Login fails" --read         # click by its words; s
 walnut browser close                                     # when you are done with the tab
 ```
 
+`--read --max 800` (on `open` and `click` alike) reads only the first 800 characters of the main
+text, for a page you need one fact from.
+
 What a step changed: `went to <url> "<title>"`, `opened a new tab N`, `the page content changed`,
 `a field's value changed` (only the field you typed in), or `nothing changed on the page`.
 Nothing changed means the step did nothing: snapshot and act again; never wait for an address it
@@ -44,6 +47,9 @@ walnut browser screenshot                # saves a JPEG and prints its path: Rea
 ```
 
 Subagents can drive the browser too: the same task, the same tabs, the same approvals and rules.
+**With two or more tabs, or subagents in the browser at the same time, every command names its
+tab with `--tab N`** (`open` prints N; `tabs` lists them). A command with no tab then is refused
+with the task's tabs listed (`which_tab`, exit 1), never run in a tab another agent is using.
 
 ## Turning it on
 
@@ -165,8 +171,9 @@ More actions, when the commands above are not enough:
   Do not also ask them in chat.
 - **`site_denied`**: the user said no to that site. Do not try again or find another way to
   reach it unless they say so.
-- **`not_your_tab`**: the user took the tab back with Stop, or closed it. Do not reopen the
-  same page without saying why in your reply.
+- **`not_your_tab`**: the user took the tab back with Stop, or closed it, or this task closed it
+  earlier (the answer says which: another agent of the task, a subagent, may have closed it). Do
+  not reopen the same page without saying why in your reply.
 - You see and act only in tabs your task opened, never the user's own tabs, except a tab the
   user handed you from Walnut's side panel: the first message then says "They let you act in
   this tab: tab N" (or the user writes "You can act in this tab of my browser: tab N"). Use

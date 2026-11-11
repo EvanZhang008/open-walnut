@@ -25,9 +25,15 @@ describe('the usage', () => {
     const more = lines.findIndex((l) => l === 'More:')
     expect(start).toBe(1)
     const first = lines.slice(start + 1, more)
-    expect(first.length).toBeLessThanOrEqual(11)
-    expect(first.map((l) => l.trim().split(/\s/)[0])).toEqual(['open', 'snapshot', 'click', 'type', 'text', 'find', 'wait', 'close', 'e.g.'])
+    expect(first.length).toBeLessThanOrEqual(12)
+    expect(first.map((l) => l.trim().split(/\s/)[0])).toEqual(['open', 'snapshot', 'click', 'type', 'text', 'find', 'wait', 'close', 'e.g.', 'e.g.', 'Two'])
     expect(BROWSER_USAGE).toContain('open https://example.com/issues --read')
+    // A short read on open and click, with an example (2026-11-10 review: 4,300 characters for one fact).
+    expect(first.find((l) => l.trim().startsWith('open'))).toContain('[--read [--max N]]')
+    expect(first.find((l) => l.trim().startsWith('click'))).toContain('[--read [--max N]]')
+    expect(BROWSER_USAGE).toMatch(/open https:\/\/\S+ --read --max 800/)
+    // Several tabs or subagents at once: every command names its tab (2026-11-10: a subagent's bare close closed the main agent's tab).
+    expect(first.at(-1)).toMatch(/subagents in the browser at once: every command names its tab with --tab N \(open prints N\)/)
     expect(lines.every((l) => l.length <= 130)).toBe(true)
   })
 })
@@ -77,6 +83,7 @@ describe('parsing', () => {
   it('--read and --max on any step; text e12 reads that element', () => {
     expect(parseBrowserArgv(['open', 'https://x.test', '--read'])).toMatchObject({ args: { action: 'open', url: 'https://x.test', read_text: true } })
     expect(parseBrowserArgv(['click', '--text', 'Issues', '--read', '--max', '900'])).toMatchObject({ args: { action: 'click', text: 'Issues', read_text: true, max: 900 } })
+    expect(parseBrowserArgv(['open', 'https://x.test', '--read', '--max', '800'])).toMatchObject({ args: { action: 'open', url: 'https://x.test', read_text: true, max: 800 } })
     expect(parseBrowserArgv(['text', 'f3:e12'])).toMatchObject({ args: { action: 'text', ref: 'f3:e12' } })
     expect(parseBrowserArgv(['text', '--selector', 'article p', '--all'])).toMatchObject({ args: { action: 'text', selector: 'article p', all: true } })
     expect(parseBrowserArgv(['text', '--max', 'lots'])).toMatchObject({ ok: false, error: '--max takes a whole number (characters for text, elements for snapshot)' })
