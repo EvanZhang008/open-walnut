@@ -101,7 +101,9 @@ describe.each(TWINS)('a new Ask Walnut on the host while the Mac sleeps (%s twin
     const rec = JSON.parse(fs.readFileSync(filesNamed(hostDaemon(), new RegExp(`^${sid}\\.json$`)).find((p) => p.includes('resume-records'))!, 'utf8')) as { args: string[] }
     expect(rec.args[0]).toBe('claude')
     expect(rec.args[rec.args.indexOf('--session-id') + 1]).toBe(sid)
-    expect(rec.args[rec.args.indexOf('--permission-mode') + 1]).toBe('default')
+    // No mode named and no Auto-capable CLI or engine setting on the host: the CLI's own
+    // default, so no flag (claude-launch-mode.ts, host-start-core.ts implicitModeCli).
+    expect(rec.args).not.toContain('--permission-mode')
     const copied = JSON.parse(fs.readFileSync(path.join(c.replicaData, 'cache', 'replica', 'personas.json'), 'utf8')) as { rows: Record<string, { systemPrompt: string }> }
     const persona = rec.args[rec.args.indexOf('--append-system-prompt') + 1]!
     expect(persona.startsWith(copied.rows.general!.systemPrompt)).toBe(true)

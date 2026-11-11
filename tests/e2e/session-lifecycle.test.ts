@@ -26,6 +26,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
+import { resolveClaudeLaunchMode } from '../../src/providers/claude-launch-mode.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { waitForWsEvent } from '../helpers/ws-event-wait.js'
@@ -599,7 +600,7 @@ describe('Session permission mode', () => {
     await delay(50)
   })
 
-  it('session without mode defaults to bypassPermissions', async () => {
+  it('session without mode follows the engine settings, else Auto, never a forced bypassPermissions', async () => {
     const ws = await connectWs()
     const resultPromise = waitForWsEvent(ws, 'session:result', { taskId: 'sess-task-mode-nomode' })
 
@@ -612,8 +613,11 @@ describe('Session permission mode', () => {
     const resultEvent = await resultPromise
     const rd = resultEvent.data as { result: string; isError: boolean }
     expect(rd.isError).toBe(false)
-    // No mode → Walnut defaults to bypassPermissions (no approval prompts).
-    expect(rd.result).toContain('[permission-mode:bypassPermissions]')
+    // No mode: Claude Code's own settings, else Auto on a CLI that supports it, else the
+    // CLI's own default (claude-launch-mode.ts), so the flag is what that rule picks here.
+    const choice = await resolveClaudeLaunchMode('__local__', process.cwd())
+    if (choice.cli) expect(rd.result).toContain(`[permission-mode:${choice.cli}]`)
+    else expect(rd.result).not.toContain('[permission-mode:')
 
     ws.close()
     await delay(50)

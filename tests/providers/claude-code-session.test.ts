@@ -41,12 +41,20 @@ import { enqueueMessage, getQueue, markProcessing, resetCache as resetQueueCache
 import { turnUserUuid } from '../../src/providers/batch-uuid.js';
 import fs from 'node:fs';
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js';
+import { resolveClaudeLaunchMode } from '../../src/providers/claude-launch-mode.js';
 
 // Retrieve the actual tmpBase from the mocked module (single source of truth)
 const tmpBase = WALNUT_HOME;
 
 // Use mock CLI directly — it has #!/usr/bin/env node shebang and is executable.
 const MOCK_CLI = path.resolve(import.meta.dirname, 'mock-claude.mjs');
+// With no mode named, a session follows Claude Code's own settings, else Auto on a CLI that
+// supports it, else the CLI's own default (claude-launch-mode.ts). The flag it gets is the one
+// that rule picks on this machine: `--permission-mode <cli>`, or none.
+async function implicitModePart(): Promise<string> {
+  const choice = await resolveClaudeLaunchMode('__local__', process.cwd());
+  return choice.cli ? `[permission-mode:${choice.cli}]` : '';
+}
 
 // ── File-level mock daemon ──
 //
@@ -605,7 +613,7 @@ describe('ClaudeCodeSession', () => {
     expect(rd.result).toContain('[permission-mode:bypassPermissions]');
   });
 
-  it('no mode defaults to bypassPermissions', async () => {
+  it('no mode follows the engine settings, else Auto, never a forced bypassPermissions', async () => {
     const collected = collectEvents('task-default');
     const session = useDaemon(new ClaudeCodeSession('task-default', 'proj', MOCK_CLI));
     session.send('default mode test');
@@ -613,9 +621,9 @@ describe('ClaudeCodeSession', () => {
     const result = await waitForResult(collected);
     expect(result.name).toBe(EventNames.SESSION_RESULT);
     const rd = result.data as { result: string };
-    // No mode → Walnut now defaults to bypassPermissions (users shouldn't be
-    // prompted to approve every edit; plan mode must be explicitly requested).
-    expect(rd.result).toContain('[permission-mode:bypassPermissions]');
+    const part = await implicitModePart();
+    if (part) expect(rd.result).toContain(part);
+    else expect(rd.result).not.toContain('[permission-mode:');
   });
 
   it('send() with cwd passes working directory to spawned process', async () => {
@@ -931,7 +939,7 @@ describe('SessionRunner', () => {
     expect(rd.result).toContain('[permission-mode:bypassPermissions]');
   });
 
-  it('no mode in session:start defaults to bypassPermissions', async () => {
+  it('no mode in session:start follows the engine settings, else Auto', async () => {
     const collected = collectEvents('no-mode-task');
 
     bus.emit(EventNames.SESSION_START, {
@@ -943,7 +951,9 @@ describe('SessionRunner', () => {
     const result = await waitForResult(collected);
     expect(result.name).toBe(EventNames.SESSION_RESULT);
     const rd = result.data as { result: string };
-    expect(rd.result).toContain('[permission-mode:bypassPermissions]');
+    const part = await implicitModePart();
+    if (part) expect(rd.result).toContain(part);
+    else expect(rd.result).not.toContain('[permission-mode:');
   });
 
   it('emits session:error for session:send with unknown session ID', async () => {
