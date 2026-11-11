@@ -16,6 +16,7 @@ import { markTierUsed } from './filter-bar-persist';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common/DatePicker';
+import { snoozeWhenWords } from '../common/date-time-pick';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { SnoozeUntilEvent, WAIT_UNTIL_ICON } from './TaskStatusControl';
 import { TaskMenuRows } from './TaskMenuRows';
@@ -145,7 +146,8 @@ export function KebabDateRow({ label, date, display, onChange, extra, testId, cl
  *  watch (an armed trigger) a Waiting task waits on. Empty when neither. */
 export function snoozeDisplay(task: Pick<Task, 'start_date' | 'phase' | 'user_status'>): string {
   const start = task.start_date ? formatStartDateDisplay(task.start_date) : '';
-  const time = start && start !== 'Started' ? start : '';
+  // A timed snooze says its hour ("Sun 3:30 PM"), a date-only one its day words as before.
+  const time = start && start !== 'Started' ? (snoozeWhenWords(task.start_date!) ?? start) : '';
   const on = task.phase === 'WAITING' ? task.user_status?.waitingOn ?? '' : '';
   const watch = /^A watch:\s*/i.test(on) ? on.replace(/^A watch:\s*/i, '') : '';
   return [time, watch].filter(Boolean).join(' · ');

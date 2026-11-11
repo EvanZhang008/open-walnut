@@ -276,6 +276,12 @@ test('Snooze until picks a day at an hour of your own', async ({ page, browserNa
   await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
   await expect.poll(async () => Date.parse((await taskOf(task.id)).start_date ?? ''), { timeout: 10_000 }).toBe(await localAt(later!, 15, 30))
 
+  // The closed row says the hour it was snoozed to, never "4d".
+  menu = await openRowKebab(page, task)
+  await expect(toggleOf(menu, 'task-snooze-row')).toHaveText(/^Snoozed until: (Today|Tomorrow|\w{3}|\w{3} \d{1,2},) 3:30 PM$/)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+
   // Set keeps the snoozed day and changes only its hour; Enter in the field does the same.
   menu = await openRowKebab(page, task)
   row = await snoozeRow(menu)

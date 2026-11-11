@@ -37,6 +37,7 @@ import { RowProjectName } from './RowProjectName';
 import { isPhoneLayout, phonePhaseAttrs } from './phone-row-behavior';
 import { formatWaitUntil } from './TaskStatusControl';
 import { formatStartDateDisplay } from '../common/DatePicker';
+import { snoozeWhenWords } from '../common/date-time-pick';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { recentActivityTime, recentActivityTitle } from './recent-activity-time';
 import {
@@ -188,7 +189,8 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
   const snoozeDate = sectionKey !== 'waiting' ? ''
     : task.user_status ? task.user_status.snoozed?.until ?? ''
     : task.phase !== 'WAITING' ? task.start_date ?? '' : '';
-  const snoozedUntil = snoozeDate ? formatStartDateDisplay(snoozeDate) : '';
+  // A timed snooze says its hour ("Sun 3:30 PM"), a date-only one its day words.
+  const snoozedUntil = snoozeDate ? (snoozeWhenWords(snoozeDate) ?? formatStartDateDisplay(snoozeDate)) : '';
   // Under Waiting / snoozed: why it waits (not started, stopped, a watch, ...). Under Needs you:
   // what to do with it, then what it asks or has to read (2026-11-03, the user: "thridline cna
   // show what need u", "in one line").

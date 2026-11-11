@@ -256,7 +256,11 @@ describe('TaskActionMenuItems with the draft props', () => {
 
   it('TaskSnoozeRow reads what is set now (a time, a watch, or nothing) and opens both kinds of snooze', async () => {
     const future = new Date(Date.now() + 8 * 3_600_000).toISOString();
-    expect(snoozeDisplay({ start_date: future, phase: 'TODO' })).toBe(formatStartDateDisplay(future));
+    // A timed snooze says its hour, never "8h" (2026-11-11); a date-only one keeps its day words.
+    expect(snoozeDisplay({ start_date: future, phase: 'TODO' })).toMatch(/^(Today|Tomorrow) \d{1,2}:\d{2} (AM|PM)$/);
+    const day = new Date(Date.now() + 3 * 86_400_000);
+    const ymd = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+    expect(snoozeDisplay({ start_date: ymd, phase: 'TODO' })).toBe(formatStartDateDisplay(ymd));
     expect(snoozeDisplay({ start_date: '2020-01-01', phase: 'TODO' })).toBe('');
     expect(snoozeDisplay({ phase: 'WAITING', user_status: { state: 'waiting', waitingOn: 'A watch: PR review' } } as never)).toBe('PR review');
     expect(snoozeDisplay({ phase: 'TODO', user_status: { state: 'waiting', waitingOn: 'A watch: PR review' } } as never)).toBe('');
@@ -281,7 +285,7 @@ describe('TaskActionMenuItems with the draft props', () => {
 
     await render({ ...task, start_date: future });
     expect(host.querySelector('[data-testid="task-snooze-row"] .task-kebab-date-label')!.textContent)
-      .toBe(`Snoozed until: ${formatStartDateDisplay(future)}`);
+      .toBe(`Snoozed until: ${snoozeDisplay({ start_date: future, phase: "TODO" })}`);
     await render({ ...task, phase: 'COMPLETE' });
     expect(host.querySelector('[data-testid="task-snooze-row"]')).toBeNull();
   });
