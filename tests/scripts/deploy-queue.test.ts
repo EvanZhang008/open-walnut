@@ -255,6 +255,37 @@ describe('the deploy queue', () => {
     await runnerGone(f)
   }, 60_000)
 
+  it('with a deploy ceiling, production goes to the ceiling commit, never past it, and a newer commit is held (2026-11-11: trunk landing)', async () => {
+    const f = fixture()
+    const tested = commit(f, 'tested')
+    git(f.repo, 'update-ref', 'refs/walnut/deep-green', tested)
+    git(f.repo, 'config', 'walnut.deployCeiling', 'refs/walnut/deep-green')
+    const untested = commit(f, 'untested')
+    const held = await call(f, {}, [untested]).done
+    expect(held.code, held.stderr).toBe(4)
+    expect(held.stderr).toContain(`and ${untested.slice(0, 12)} is not in it yet`)
+    // At once, with no runner, and a forced deploy keeps to it too.
+    expect(fs.existsSync(path.join(f.queue, 'runner.lock'))).toBe(false)
+    const forced = await call(f, { WALNUT_DEVPROD_FORCE: '1' }, [untested]).done
+    expect(forced.code, forced.stderr).toBe(4)
+    const live = await call(f, {}, [tested]).done
+    expect(live.code, live.stderr).toBe(0)
+    expect(deploys(f).filter((d) => d.kind === 'start').map((d) => d.sha)).toEqual([tested])
+    await runnerGone(f)
+    // A ceiling that names no commit holds every deploy (never lets an untested one through).
+    const g = fixture()
+    commit(g, 'top')
+    git(g.repo, 'config', 'walnut.deployCeiling', 'refs/walnut/deep-green')
+    const r = await call(g).done
+    expect(r.code, r.stderr).toBe(4)
+    expect(r.stderr).toContain('which names no commit')
+    expect(deploys(g)).toEqual([])
+    // Past the ceiling on purpose.
+    const past = await call(g, { WALNUT_DEPLOY_PAST_CEILING: '1' }).done
+    expect(past.code, past.stderr).toBe(0)
+    await runnerGone(g)
+  }, 90_000)
+
   it('a commit production already serves is answered at once, with no runner', async () => {
     const f = fixture()
     const head = git(f.repo, 'rev-parse', 'HEAD')

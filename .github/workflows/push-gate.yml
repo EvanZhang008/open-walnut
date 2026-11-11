@@ -76,7 +76,7 @@ jobs:
         run: |
           base=FETCH_HEAD
           msg=$(git log -1 --format=%B HEAD)
-          case $msg in 'push gate: the files of '*) printf '%s\n' "$msg" | grep -qx 'Walnut-Gate: land' && base=HEAD^ ;; esac
+          case $msg in 'push gate: the files of '*) printf '%s\n' "$msg" | grep -qxE 'Walnut-Gate: (land|since)' && base=HEAD^ ;; esac
           bun scripts/push-gate-plan.mjs --ios-base "$base"
       # Through env, never pasted into the script: `why` names files of the change.
       - name: Status
@@ -162,7 +162,7 @@ jobs:
         run: |
           base=FETCH_HEAD
           msg=$(git log -1 --format=%B HEAD)
-          case $msg in 'push gate: the files of '*) printf '%s\n' "$msg" | grep -qx 'Walnut-Gate: land' && base=HEAD^ ;; esac
+          case $msg in 'push gate: the files of '*) printf '%s\n' "$msg" | grep -qxE 'Walnut-Gate: (land|since)' && base=HEAD^ ;; esac
           specs=$(bash scripts/push-gate.sh --specs "$base" HEAD)
           echo "specs=$specs" >> "$GITHUB_OUTPUT"
           echo "browser specs: ${specs:-none}"

@@ -89,10 +89,25 @@ JS
   fi
 fi
 
-# Every other caller waits its turn in the queue; the runner's own deploy, a forced
+# The deploy ceiling (`git config walnut.deployCeiling <ref>`, set where a test of main gates
+# production): only a commit that ref holds deploys, forced or queued, at once, before any wait.
+# A dry run and a rehearsal deploy nothing; WALNUT_DEPLOY_PAST_CEILING=1 deploys past it, at once
+# (the queue's runner keeps to the ceiling).
+if [[ "${WALNUT_DEVPROD_DRY_RUN:-0}" != "1" && "${WALNUT_DEVPROD_REHEARSAL:-0}" != "1" && "${WALNUT_DEPLOY_PAST_CEILING:-0}" != "1" ]]; then
+  ceil_ref="$(git -C "$SERVE_ROOT" config --get walnut.deployCeiling 2>/dev/null || true)"
+  if [[ -n "$ceil_ref" ]]; then
+    ceil="$(git -C "$SERVE_ROOT" rev-parse --verify --quiet "$ceil_ref^{commit}" 2>/dev/null || true)"
+    if [[ -z "$ceil" ]] || ! git -C "$SERVE_ROOT" merge-base --is-ancestor "$SHA" "$ceil"; then
+      echo "Not deployed yet: production goes only to commits a test of main passed (git config walnut.deployCeiling = $ceil_ref, ${ceil:+now at ${ceil:0:12}}${ceil:-which names no commit}), and ${SHA:0:12} is not in it yet. It goes live with the deploy after that test passes on a main that holds it. This is not a failure; WALNUT_DEPLOY_PAST_CEILING=1 deploys it anyway." >&2
+      exit 4
+    fi
+  fi
+fi
+
+# Every other caller waits its turn in the queue; the runner's own deploy, a forced (or past-ceiling)
 # one and a dry run go straight on. WALNUT_DEPLOY_QUEUE=0 turns the queue off.
 if [[ "$DQ_IS_RUNNER" != "1" && "${WALNUT_DEVPROD_FORCE:-0}" != "1" && "${WALNUT_DEVPROD_DRY_RUN:-0}" != "1" \
-  && "${WALNUT_DEPLOY_QUEUE:-1}" != "0" ]]; then
+  && "${WALNUT_DEPLOY_QUEUE:-1}" != "0" && "${WALNUT_DEPLOY_PAST_CEILING:-0}" != "1" ]]; then
   if [[ -f "$DQ_LIB" ]]; then
     # shellcheck source=lib/deploy-queue.sh
     source "$DQ_LIB"

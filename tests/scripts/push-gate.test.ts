@@ -556,6 +556,29 @@ esac
     expect(fs.readFileSync(g.seen, 'utf8')).toContain('refs/gate/')
   })
 
+  it('runs a deep test with --run since a commit: the whole tier on the files GitHub already has, with the specs touched since it (2026-11-11: trunk landing)', () => {
+    const tiers = ['quick 1/1', 'frontend', 'browser specs']
+    const g = ghRepo({ statuses: [st('walnut/gate-plan', 'success', '3 tiers, full'), ...tiers.map((t) => st(`walnut/push-gate (${t})`, 'success', 'passed'))] })
+    const green = git(g.r, 'rev-parse', 'HEAD')
+    const tip = commit(g.r, { 'tests/e2e/browser/x.txt': 'landed since\n', '.github/workflows/push-gate.yml': '# runs scripts/push-gate-plan.mjs\n' }, 'lands since the green one')
+    git(g.r, 'push', '-q', URL, 'main:main')   // trunk: GitHub's main already has the files
+    const verdicts = path.join(path.dirname(g.r), 'verdicts')
+    const env = { ...g.env, WALNUT_PUSH_GATE_VERDICTS: verdicts, WALNUT_PUSH_GATE_SAME_TREE: '1', WALNUT_PUSH_GATE_SINCE: green }
+    const out = spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env: cleanEnv(env) })
+    expect(out.status, out.stdout + out.stderr).toBe(0)
+    const gated = fs.readFileSync(g.seen, 'utf8').match(/commits\/([0-9a-f]{40})\/statuses/)![1]
+    expect(git(g.r, 'log', '-1', '--format=%B', gated)).toMatch(/^Walnut-Gate: since$/m)
+    expect(git(g.r, 'rev-parse', `${gated}^{tree}`)).toBe(git(g.r, 'rev-parse', `${tip}^{tree}`))
+    expect(git(g.r, 'rev-parse', `${gated}^^{tree}`)).toBe(git(g.r, 'rev-parse', `${green}^{tree}`))
+    expect(git(g.r, 'rev-parse', `${gated}^^`)).toBe(tip)
+    // A pass of the whole tier counts for a push of the same files.
+    expect(fs.existsSync(path.join(verdicts, git(g.r, 'rev-parse', `${tip}^{tree}`)))).toBe(true)
+    // A since commit that does not exist is refused, with nothing run.
+    const bad = spawnSync('bash', [GATE, '--run', URL, tip], { cwd: g.r, encoding: 'utf8', env: cleanEnv({ ...env, WALNUT_PUSH_GATE_VERDICTS: path.join(verdicts, 'x'), WALNUT_PUSH_GATE_SINCE: 'f'.repeat(40) }) })
+    expect(bad.status).toBe(2)
+    expect(bad.stderr).toMatch(/WALNUT_PUSH_GATE_SINCE/)
+  })
+
   it('runs a land\'s gate with --run in land mode: the land alone on top of its main, kept apart from a full pass', () => {
     const tiers = ['land 1/1', 'frontend', 'browser specs']
     const g = ghRepo({ statuses: [st('walnut/gate-plan', 'success', '3 tiers, land: 12 test files'), ...tiers.map((t) => st(`walnut/push-gate (${t})`, 'success', 'passed'))] })

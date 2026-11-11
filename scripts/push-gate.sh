@@ -56,6 +56,9 @@
 #       those tests (walnut-cloud's trace of a red push); nothing is kept
 #     WALNUT_PUSH_GATE_SAME_TREE=1: judge the commit even when GitHub's main has the same files
 #       (a main's own failures: walnut-cloud asks for them)
+#     WALNUT_PUSH_GATE_SINCE=<commit>: the whole tier, with the browser specs touched since that
+#       commit (walnut-cloud's deep test of main since the last deep-green one; GitHub's main has
+#       the same files then, so the specs touched since it would be none)
 # A pass is kept by the files it judged (WALNUT_PUSH_GATE_VERDICTS, default
 # ~/.cache/walnut-push-gate/<tree>, 14 days), so the same files pushed as another commit pass.
 set -uo pipefail
@@ -149,6 +152,14 @@ if [ "${1:-}" = --run ]; then
   # What the push will carry, as the Mac's own commits: the ones GitHub has no copy of (by patch).
   carried=$(git log --cherry-pick --right-only --no-merges --format='  %h %s' "$b...$t" 2>/dev/null | head -40)
   parent=$b
+  if [ $gk = full ] && [ -n "${WALNUT_PUSH_GATE_SINCE:-}" ]; then
+    sb=$(git rev-parse -q --verify "$WALNUT_PUSH_GATE_SINCE^{commit}") || { echo "push-gate --run: no commit $WALNUT_PUSH_GATE_SINCE (WALNUT_PUSH_GATE_SINCE)" >&2; exit 2; }
+    gk=since
+    if [ "$(git rev-parse "$sb^{tree}")" != "$(git rev-parse "$b^{tree}")" ]; then
+      parent=$(git commit-tree "$sb^{tree}" -p "$b" -m "push gate: the files of $(git rev-parse --short "$sb"), the commit a deep test runs since") \
+        || { echo "push-gate --run: could not write the gate's base commit" >&2; exit 1; }
+    fi
+  fi
   if [ $gk = land ] && [ "$(git rev-parse "$lb^{tree}")" != "$(git rev-parse "$b^{tree}")" ]; then
     # The main the land goes onto, as one commit on GitHub's main, so the land is HEAD^..HEAD.
     parent=$(git commit-tree "$lb^{tree}" -p "$b" -m "push gate: the files of $(git rev-parse --short "$lb"), the main a land goes onto") \
@@ -156,6 +167,7 @@ if [ "${1:-}" = --run ]; then
   fi
   msg="push gate: the files of $(git rev-parse --short "$t")"
   [ $gk != land ] || msg=$(printf '%s\n\nWalnut-Gate: land' "$msg")
+  [ $gk != since ] || msg=$(printf '%s\n\nWalnut-Gate: since' "$msg")
   [ $gk != files ] || msg=$(printf '%s\n\nWalnut-Gate: files\n%s' "$msg" "$(printf '%s\n' "$named" | sed 's/^/Walnut-Gate-Test: /')")
   t=$(git commit-tree "$t^{tree}" -p "$parent" -m "$msg") \
     || { echo "push-gate --run: could not write the gate commit" >&2; exit 1; }

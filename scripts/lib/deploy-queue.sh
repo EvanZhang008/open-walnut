@@ -15,6 +15,9 @@
 #   - then it deploys the checkout's HEAD of that moment, which carries every
 #     waiting commit on it (a commit HEAD does not carry goes alone, in turn,
 #     unless that would take production back: a commit a rebase replaced);
+#   - with `git config walnut.deployCeiling <ref>` set (a ref that a later test of main moves
+#     to each commit it passed), it deploys that ref instead of HEAD, and a waiting commit the
+#     ref does not carry yet is answered "held": production goes only to tested commits;
 #   - it runs detached from every caller, with none of a caller's WALNUT_DEVPROD_*
 #     knobs (a rehearsal's own excepted);
 #   - every caller whose commit it carried hears "deployed X, which contains your
@@ -24,7 +27,7 @@
 # (2400) caps a caller's wait (the runner goes on). WALNUT_DEVPROD_FORCE=1 and a dry
 # run skip the queue. A rehearsal keeps its queue in its own state dir.
 # State (WALNUT_DEPLOY_QUEUE_DIR, else ~/.local/state/open-walnut/deploy-queue):
-#   requests/<id>  a waiting commit     results/<id>  ok|failed|refused <target> <log> <code>
+#   requests/<id>  a waiting commit     results/<id>  ok|failed|refused|held <target> <log> <code>
 #   runner.lock/   the runner's pid     current       the deploy running now
 #   next-at        when it may go       last-restart  its last deploy that served
 #   logs/          one log per deploy   runner.log    the runner's own lines
@@ -69,6 +72,18 @@ dq_busy_mem() {
     return 0
   fi
   awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END { if (t > 0 && a * 100 < t * 5) printf "%d MB of memory available\n", a / 1024 }' /proc/meminfo 2>/dev/null
+}
+
+# The deploy ceiling: the commit `git config walnut.deployCeiling` names in SERVE_ROOT; nothing
+# when it is not set (deploys follow HEAD); `-` when it is set but names no commit on HEAD's line
+# (then nothing deploys: a broken ceiling never lets an untested commit through).
+dq_ceiling() {
+  local ref sha
+  ref="$(git -C "$SERVE_ROOT" config --get walnut.deployCeiling 2>/dev/null || true)"
+  [[ -n "$ref" ]] || return 0
+  sha="$(git -C "$SERVE_ROOT" rev-parse --verify --quiet "$ref^{commit}" 2>/dev/null || true)"
+  if [[ -n "$sha" ]] && git -C "$SERVE_ROOT" merge-base --is-ancestor "$sha" HEAD 2>/dev/null; then printf '%s' "$sha"; else printf -- '-'; fi
+  return 0
 }
 
 dq_rehearsal() {
@@ -205,7 +220,7 @@ dq_runner() {
   dq_lock "$q" || return 0
   trap 'dq_unlock "'"$q"'"' EXIT
   dq_log "runner $$ started (gap ${DQ_GAP}s)"
-  local served served_sha built id sha pending last now at wait head target log code before refused
+  local served served_sha built id sha pending last now at wait head target log code before refused ceiling carried
   while :; do
     served="$(dq_served)"; served_sha="${served%% *}"; built="${served##* }"
     # Requests production already carries are answered.
@@ -256,18 +271,26 @@ dq_runner() {
     # turn, unless that would take production back past the build it serves (a
     # commit a rebase replaced: its change is in HEAD under another id, or not).
     head="$(git -C "$SERVE_ROOT" rev-parse HEAD)"
+    ceiling="$(dq_ceiling)"; carried=0
+    [[ -z "$ceiling" ]] || head="$ceiling"
+    [[ "$ceiling" != "-" ]] || head=0000000000000000000000000000000000000000   # carries nothing
     target="$head"; refused=0
     for id in $pending; do
       sha="$(cat "$q/requests/$id" 2>/dev/null || true)"
       [[ -n "$sha" ]] || continue
-      dq_covers "$head" "$sha" && continue
+      dq_covers "$head" "$sha" && { carried=1; continue; }
+      if [[ -n "$ceiling" ]]; then
+        # Past the ceiling (or a ceiling that names nothing): not tested yet. Held, never deployed alone.
+        dq_put "$q/results/$id" "held $sha $ceiling 0"; rm -f "$q/requests/$id"; refused=1
+        continue
+      fi
       if [[ -n "$served_sha" ]] && ! git -C "$SERVE_ROOT" merge-base --is-ancestor "$served_sha" "$sha" 2>/dev/null; then
         dq_put "$q/results/$id" "refused $sha $served_sha 0"; rm -f "$q/requests/$id"; refused=1
         continue
       fi
       target="$sha"; break
     done
-    (( refused == 0 )) || continue
+    (( refused == 0 )) || [[ -n "$ceiling" && $carried == 1 ]] || continue
     log="$q/logs/$(date +%Y%m%dT%H%M%S)-${target:0:12}.log"
     dq_put "$q/current" "$target $(date +%s) $log"
     dq_log "deploying ${target:0:12} for$pending (log $log)"
@@ -308,7 +331,7 @@ dq_runner() {
 
 # ── A caller ─────────────────────────────────────────────────────────────────
 # Prints the answer filed for request `id` (arg 2) and returns its exit code:
-# 0 live, 1 failed or refused; 2 when there is none yet.
+# 0 live, 1 failed or refused, 4 held past the deploy ceiling; 2 when there is none yet.
 dq_answer() {
   local q="$1" id="$2" sha="$3" kind target log code
   [[ -f "$q/results/$id" ]] || return 2
@@ -324,6 +347,10 @@ dq_answer() {
         grep -h '^Deploy incomplete: ' "$log" >&2 || true
       fi
       return 0 ;;
+    held)
+      if [[ "$log" == "-" ]]; then echo "Not deployed: git config walnut.deployCeiling names no commit on the checkout's HEAD line, so nothing deploys until a test of main passes and moves it." >&2
+      else echo "Not deployed yet: production goes only to commits a test of main passed (git config walnut.deployCeiling, now at ${log:0:12}), and ${sha:0:12} is past it. It goes live with the deploy after that test passes on a main that holds it." >&2; fi
+      return 4 ;;
     refused)
       echo "Not deployed: your commit ${sha:0:12} is not on the checkout's HEAD (a rebase replaced it, or it is on another branch), and production serves ${log:0:12}, which deploying it alone would take back. Deploy the commit that carries it now (usually HEAD)." >&2
       return 1 ;;
@@ -335,7 +362,8 @@ dq_answer() {
 }
 
 # Files SHA, makes sure a runner runs, and waits for the answer. Exit code: 0 live,
-# 1 its deploy failed or was refused, 3 still waiting at the cap (the runner goes on).
+# 1 its deploy failed or was refused, 3 still waiting at the cap (the runner goes on), 4 held
+# past the deploy ceiling (walnut.deployCeiling).
 dq_request() {
   local sha="$1" q id served served_sha said="" line now deadline target log next rc knobs
   q="$(dq_dir)"
