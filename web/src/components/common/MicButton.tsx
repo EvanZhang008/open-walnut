@@ -19,6 +19,9 @@ import { draftKey } from '@/utils/drafts';
 import { KEEP_SELECTION_ATTR } from '@/utils/selection-guard';
 import { notifyDictationActivity, type DictationControl } from '@/hooks/useSendAfterDictation';
 
+/** How long the mic may take to send its first sound before the button says so in words. */
+const SLOW_START_HINT_MS = 700;
+
 export interface MicControl extends DictationControl {
   discard: () => void;
 }
@@ -112,7 +115,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
       : {}),
     ...(language ? { language } : {}),
   };
-  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning, discardRecording, finishRecording, isBusy } = useSpeechToText(sttOptions);
+  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, micLive, micOpening, silenceWarning, discardRecording, finishRecording, isBusy } = useSpeechToText(sttOptions);
   // The final words (if any) are delivered before transcribing turns false, so a
   // box that listens here knows no more text is coming for this recording.
   const busyNow = isRecording || isTranscribing;
@@ -181,6 +184,18 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
 
   const dismissTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const wrapperRef = useRef<HTMLDivElement>(null);
+
+  // A mic that is slow to open (a Bluetooth headset, up to 2 s) says so in words:
+  // the grey ring alone does not tell a first-time user to wait. A mic that opens
+  // at once (well under this delay) never shows it, so the bubble does not flash.
+  // From the press: the browser opening the mic, then the mic sending nothing yet.
+  const starting = (micOpening || (isRecording && !micLive)) && !silenceWarning;
+  const [slowStart, setSlowStart] = useState(false);
+  useEffect(() => {
+    if (!starting) { setSlowStart(false); return; }
+    const t = setTimeout(() => setSlowStart(true), SLOW_START_HINT_MS);
+    return () => clearTimeout(t);
+  }, [starting]);
 
   // Error bubble dismissal — re-arm whenever a new error arrives.
   const [errorDismissed, setErrorDismissed] = useState(false);
@@ -422,6 +437,8 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
     size === 'sm' && 'mic-btn-sm',
     sttUnavailable && 'mic-unconfigured',
     isRecording && 'mic-recording',
+    // Recording, but the mic has not sent sound yet: not red until it hears.
+    starting && 'mic-starting',
     isRecording && silenceWarning && 'mic-recording-silent',
     isTranscribing && 'mic-transcribing',
   ].filter(Boolean).join(' ');
@@ -439,8 +456,10 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
       : isTranscribing
         ? 'Transcribing...'
         : isRecording
-          ? (silenceWarning ?? 'Stop recording')
-          : 'Voice input';
+          ? (silenceWarning ?? (micLive ? 'Stop recording' : 'Starting the microphone: speak when it turns red'))
+          : starting
+            ? 'Starting the microphone: speak when it turns red'
+            : 'Voice input';
 
   // Plain function (not useCallback): we're past an early return, hooks are not allowed here.
   const handleClick = () => {
@@ -528,6 +547,11 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
           </svg>
         )}
       </button>
+      {slowStart && starting && (
+        <div className="mic-start-hint" role="status">
+          <span>Starting the microphone: speak when it turns red</span>
+        </div>
+      )}
       {/* Non-destructive dead-mic warning — shown WHILE recording; recording is never
           auto-stopped, and this clears itself the moment sound is detected again. */}
       {isRecording && silenceWarning && (

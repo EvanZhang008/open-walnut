@@ -72,6 +72,14 @@ export interface UseSpeechToTextReturn {
   /** Live mic input level 0..1 (smoothed RMS) while recording — drives the waveform UI */
   level: number;
   /**
+   * The mic is delivering sound this recording. False from the press until the
+   * first sample above the dead floor: a Bluetooth headset (AirPods) opens its mic
+   * up to 2 s after the stream does, and words said before that are not recorded.
+   */
+  micLive: boolean;
+  /** Pressed, and the browser is still opening the mic (before recording starts). */
+  micOpening: boolean;
+  /**
    * Non-destructive warning shown WHILE recording when the mic appears dead (silent
    * stream). Recording is never auto-stopped; this just nudges the user to check their
    * mic. Auto-clears as soon as sound is detected. null = no warning.
@@ -169,6 +177,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   const [lastDebugPath, setLastDebugPath] = useState<string | null>(null);
   const [hasLastRecording, setHasLastRecording] = useState(false);
   const [level, setLevel] = useState(0);
+  const [micLive, setMicLive] = useState(false);
+  const [micOpening, setMicOpening] = useState(false);
   const [silenceWarning, setSilenceWarning] = useState<string | null>(null);
   const [isDrafting, setIsDrafting] = useState(false);
   // Live-draft machinery: interval timer + in-flight guard (drop ticks while a
@@ -199,6 +209,11 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  // While the browser opens the mic there is no recorder yet, so a second press
+  // would open a second stream and the first would never close (the mic stays
+  // in use, a headset stays in its low-quality call mode). That press cancels.
+  const openingRef = useRef(false);
+  const cancelOpenRef = useRef(false);
   const chunksRef = useRef<Blob[]>([]);
   // Web Audio analyser for live level + early silence detection
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -329,12 +344,33 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       return;
     }
 
+    // Pressed again while the mic is still opening: cancel that start.
+    if (openingRef.current) {
+      cancelOpenRef.current = true;
+      setMicOpening(false);
+      return;
+    }
+
     // Start recording
     try {
       // Load the engine while the user talks, not in front of the first draft.
       warmupStt();
       const clickAt = performance.now();
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: DICTATION_AUDIO_CONSTRAINTS });
+      openingRef.current = true;
+      cancelOpenRef.current = false;
+      setMicOpening(true);
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: DICTATION_AUDIO_CONSTRAINTS });
+      } finally {
+        openingRef.current = false;
+      }
+      if (cancelOpenRef.current || !isMountedRef.current) {
+        cancelOpenRef.current = false;
+        for (const track of stream.getTracks()) track.stop();
+        setMicOpening(false);
+        return;
+      }
       const openedMs = Math.round(performance.now() - clickAt);
       streamRef.current = stream;
 
@@ -343,6 +379,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       sawAnyNonDeadRef.current = false;
       analyserAttachedRef.current = false;
       micHealthRef.current = initialMicHealth();
+      setMicLive(false);
       timelineRef.current = [];
       recBytesRef.current = 0;
       setSilenceWarning(null);
@@ -419,6 +456,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
             });
             const tick = micHealthTick(micHealthRef.current, rms);
             if (tick.state.alive && !micHealthRef.current.alive) {
+              setMicLive(true);
               // How long the user talked into nothing: the words said before
               // the first sample are not in the recording.
               const settings = stream.getAudioTracks()[0]?.getSettings();
@@ -446,6 +484,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       } catch {
         // Analyser is best-effort; ignore and record without level/silence detection.
       }
+      // No analyser, no way to hear the first sound: never hold the button in its
+      // starting look.
+      if (!analyserAttachedRef.current) setMicLive(true);
 
       // Prefer webm/opus, fall back to whatever is available
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -682,6 +723,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       recPcmRef.current = decode ? new RecorderPcm(decode) : null;
       recordStartedAtRef.current = Date.now();
       setIsRecording(true);
+      setMicOpening(false);
       setIsDrafting(false);
       lastDraftRef.current = null;
       discardedRef.current = false;
@@ -909,6 +951,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         }
       }, DRAFT_INTERVAL_MS);
     } catch (err) {
+      setMicOpening(false);
       stopStream();
       if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
         setError('Microphone permission denied');
@@ -1028,6 +1071,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     lastDebugPath,
     hasLastRecording,
     level,
+    micLive,
+    micOpening,
     silenceWarning,
     isDrafting,
     discardRecording,

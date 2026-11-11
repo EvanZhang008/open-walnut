@@ -22,9 +22,10 @@ async function shot(page: Page, name: string): Promise<void> {
 }
 
 /** getUserMedia answers an oscillator; `window.__micGain(g)` sets its level (0 = digital zero). */
-async function useControllableMic(page: Page, startGain: number): Promise<void> {
-  await page.addInitScript((g0: number) => {
+async function useControllableMic(page: Page, startGain: number, openDelayMs = 0): Promise<void> {
+  await page.addInitScript(([g0, delay]: [number, number]) => {
     const fake = async (): Promise<MediaStream> => {
+      if (delay) await new Promise((r) => setTimeout(r, delay))
       const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
       const ctx = new Ctx()
       await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 1000))])
@@ -35,6 +36,8 @@ async function useControllableMic(page: Page, startGain: number): Promise<void> 
       const dst = ctx.createMediaStreamDestination()
       osc.connect(gain).connect(dst)
       osc.start();
+      const w = window as unknown as { __micStreams?: MediaStream[] }
+      w.__micStreams = [...(w.__micStreams ?? []), dst.stream];
       (window as unknown as { __micGain: (g: number) => void }).__micGain = (g: number) => { gain.gain.setValueAtTime(g, ctx.currentTime) }
       return dst.stream
     }
@@ -43,7 +46,7 @@ async function useControllableMic(page: Page, startGain: number): Promise<void> 
     }
     if (!navigator.mediaDevices) Object.defineProperty(navigator, 'mediaDevices', { value: {}, configurable: true })
     Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: fake, configurable: true, writable: true })
-  }, startGain)
+  }, [startGain, openDelayMs] as [number, number])
 }
 
 const setGain = (page: Page, g: number) => page.evaluate((v) => (window as unknown as { __micGain: (g: number) => void }).__micGain(v), g)
@@ -59,6 +62,8 @@ export function registerMicStallScenarios(): void {
     await d.mic.click()
     await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
     await page.waitForTimeout(1500)
+    // A mic that opens at once never shows the slow-start note.
+    await expect(d.panel.locator('.mic-start-hint')).toHaveCount(0)
     // The stall: digital zero for 6 s, the longest the user's recordings lost.
     await setGain(page, 0)
     const deadline = Date.now() + 6000
@@ -77,6 +82,121 @@ export function registerMicStallScenarios(): void {
     await d.mic.click()
     await expect(d.mic).not.toHaveClass(/mic-recording/, { timeout: 15_000 })
     await expect(d.textarea).toHaveValue(/why does phase/, { timeout: 20_000 })
+  })
+
+  // 2026-11-10: with AirPods the mic sent its first sound 0.9 to 1.9 s after the
+  // press in 17 of 52 takes, and some recordings began mid-word: what was said
+  // before then is not recorded. The button stays grey until the first sound.
+  test('a headset mic that opens late: the button stays grey until the first sound, then turns red', async ({ page }) => {
+    test.setTimeout(90_000)
+    await useControllableMic(page, 0)
+    const lane = await stubEngine(page)
+    const d = await openComposer(page)
+
+    await d.mic.click()
+    await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
+    await expect(d.mic).toHaveClass(/mic-starting/)
+    await expect(d.mic).toHaveAttribute('title', 'Starting the microphone: speak when it turns red')
+    // Really the muted grey of the theme (a missing colour variable once left it
+    // black in light mode and white in dark), with a thin ring, not a thick one.
+    const look = await d.mic.evaluate((el) => {
+      const probe = document.createElement('span')
+      probe.style.color = 'var(--fg-muted)'
+      el.parentElement!.appendChild(probe)
+      const muted = getComputedStyle(probe).color
+      probe.remove()
+      const cs = getComputedStyle(el)
+      return { muted, ring: parseFloat(cs.outlineWidth), style: cs.outlineStyle, width: el.getBoundingClientRect().width }
+    })
+    // The button fades its colour (a 0.15 s transition), so wait for it to settle.
+    await expect.poll(async () => d.mic.evaluate((el) => getComputedStyle(el).color), { message: 'the muted grey', timeout: 3000 }).toBe(look.muted)
+    expect(look.style).toBe('dashed')
+    expect(look.ring, 'a thin ring').toBeLessThanOrEqual(2)
+    const grey = look.muted
+    await page.waitForTimeout(1200)
+    await expect(d.mic).toHaveClass(/mic-starting/)
+    // Slow to open: the button says in words to wait.
+    const hint = page.locator('.mic-start-hint')
+    await expect(hint).toHaveText('Starting the microphone: speak when it turns red')
+    await shot(page, 'mic-starting-grey')
+    // The headset's first sound.
+    await setGain(page, 0.3)
+    await expect(d.mic).not.toHaveClass(/mic-starting/, { timeout: 3000 })
+    await expect(d.mic).toHaveAttribute('title', 'Stop recording')
+    await expect(hint).toHaveCount(0)
+    const red = await d.mic.evaluate((el) => {
+      const probe = document.createElement('span')
+      probe.style.color = 'var(--error)'
+      el.parentElement!.appendChild(probe)
+      const c = getComputedStyle(probe).color
+      probe.remove()
+      return c
+    })
+    expect(red).not.toBe(grey)
+    await expect.poll(async () => d.mic.evaluate((el) => getComputedStyle(el).color), { message: 'red once it hears', timeout: 3000 }).toBe(red)
+    expect(await d.mic.evaluate((el) => el.getBoundingClientRect().width), 'the button keeps its size').toBe(look.width)
+    await shot(page, 'mic-live-red')
+    // A pause after that is no new start: it stays red.
+    await setGain(page, 0)
+    await page.waitForTimeout(1000)
+    await expect(d.mic).not.toHaveClass(/mic-starting/)
+    await setGain(page, 0.3)
+    lane.phase = 'recovered'
+    await d.mic.click()
+    await expect(d.mic).not.toHaveClass(/mic-recording/, { timeout: 15_000 })
+    // The next press starts grey again.
+    await setGain(page, 0)
+    await d.mic.click()
+    await expect(d.mic).toHaveClass(/mic-starting/, { timeout: 15_000 })
+    await setGain(page, 0.3)
+    await expect(d.mic).not.toHaveClass(/mic-starting/, { timeout: 3000 })
+    await d.mic.click()
+  })
+
+  test('a mic the browser is slow to open: grey from the press, with the note, never the idle look', async ({ page }) => {
+    test.setTimeout(90_000)
+    await useControllableMic(page, 0.3, 1500)
+    await stubEngine(page)
+    const d = await openComposer(page)
+
+    await d.mic.click()
+    // Before the stream opens: not recording yet, but already the starting look.
+    await expect(d.mic).toHaveClass(/mic-starting/, { timeout: 1000 })
+    await expect(d.mic).not.toHaveClass(/mic-recording/)
+    await expect(d.mic).toHaveAttribute('title', 'Starting the microphone: speak when it turns red')
+    await expect(page.locator('.mic-start-hint')).toBeVisible({ timeout: 2000 })
+    await shot(page, 'mic-opening-grey')
+    // The stream opens with sound: red, the note gone.
+    await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
+    await expect(d.mic).not.toHaveClass(/mic-starting/, { timeout: 3000 })
+    await expect(page.locator('.mic-start-hint')).toHaveCount(0)
+    await d.mic.click()
+  })
+
+  test('a second press while the mic is opening cancels it, and no mic stream is left open', async ({ page }) => {
+    test.setTimeout(90_000)
+    await useControllableMic(page, 0.3, 1500)
+    await stubEngine(page)
+    const d = await openComposer(page)
+
+    await d.mic.click()
+    await expect(d.mic).toHaveClass(/mic-starting/, { timeout: 1000 })
+    await page.waitForTimeout(500)
+    await d.mic.click()
+    // Back to idle at once, and it never starts recording once the open finishes.
+    await expect(d.mic).not.toHaveClass(/mic-starting/, { timeout: 1000 })
+    await page.waitForTimeout(2000)
+    await expect(d.mic).not.toHaveClass(/mic-recording/)
+    await expect(page.locator('.mic-start-hint')).toHaveCount(0)
+    const tracks = await page.evaluate(() =>
+      ((window as unknown as { __micStreams?: MediaStream[] }).__micStreams ?? []).flatMap((s) => s.getTracks().map((t) => t.readyState)))
+    expect(tracks.length, 'the browser opened the mic once').toBe(1)
+    expect(tracks, 'every mic stream is closed').toEqual(['ended'])
+    // The next press records normally.
+    await d.mic.click()
+    await expect(d.mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
+    await expect(d.mic).not.toHaveClass(/mic-starting/, { timeout: 3000 })
+    await d.mic.click()
   })
 
   test('a mic that gives nothing from the start warns, sized to its words, and the warning clears on sound', async ({ page }) => {

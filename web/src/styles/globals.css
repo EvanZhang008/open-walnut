@@ -8466,6 +8466,17 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   height: 14px;
 }
 
+/* Pressed, but the mic has sent no sound yet (the browser still opening it, or a
+   Bluetooth headset, which takes up to 2 s): grey and dashed, no pulse, until the
+   first sound turns it red. Words said before then are not in the recording. */
+.mic-btn.mic-starting {
+  color: var(--fg-muted) !important;
+  /* An outline, not a border: the button keeps its size, so the row never jumps. */
+  outline: 1.5px dashed var(--fg-muted);
+  outline-offset: -2px;
+  animation: none;
+}
+
 /* Recording but the mic looks dead — amber tint replaces the red pulse as a hint,
    without interrupting the recording. Clears automatically when sound returns. */
 .mic-recording-silent {
@@ -8475,7 +8486,8 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 }
 
 /* Floating non-destructive dead-mic warning, anchored above the mic button */
-.mic-silence-warning {
+.mic-silence-warning,
+.mic-start-hint {
   position: absolute;
   bottom: calc(100% + 6px);
   right: 0;
@@ -8501,6 +8513,12 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 .mic-silence-warning svg {
   flex-shrink: 0;
   color: var(--warning, #d98a00);
+}
+
+/* The mic is still opening (a slow headset): the same bubble as the dead-mic
+   warning, but a quiet note with no warning colour. */
+.mic-start-hint {
+  border-color: var(--border);
 }
 
 /* Transcription-failure bubble — same anchor as the silence warning, red accents + Retry */
@@ -9181,7 +9199,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   font-size: 0.85rem;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  color: var(--text-muted);
+  color: var(--fg-muted);
 }
 .stt-dropdown-trigger {
   display: flex;
@@ -9198,7 +9216,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 .stt-dropdown-trigger:hover { border-color: var(--accent); }
 .stt-dropdown-selected { display: flex; align-items: center; gap: 8px; }
 .stt-dropdown-icon { font-size: 1.1rem; }
-.stt-dropdown-chevron { font-size: 0.7rem; color: var(--text-muted); }
+.stt-dropdown-chevron { font-size: 0.7rem; color: var(--fg-muted); }
 
 .stt-dropdown-menu {
   position: absolute;
@@ -9222,7 +9240,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--text-muted);
+  color: var(--fg-muted);
 }
 .stt-dropdown-divider {
   height: 1px;
@@ -9248,7 +9266,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 .stt-dropdown-option-disabled { opacity: 0.65; }
 .stt-dropdown-option-body { display: flex; flex-direction: column; flex: 1; gap: 1px; }
 .stt-dropdown-option-name { display: flex; align-items: center; gap: 6px; font-weight: 500; }
-.stt-dropdown-option-desc { font-size: 0.8rem; color: var(--text-muted); }
+.stt-dropdown-option-desc { font-size: 0.8rem; color: var(--fg-muted); }
 .stt-dropdown-option-features { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .stt-feature-tag {
   display: inline-flex;
@@ -9256,7 +9274,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   padding: 1px 5px;
   border-radius: 3px;
   font-size: 0.65rem;
-  color: var(--text-muted);
+  color: var(--fg-muted);
   background: var(--bg-secondary);
   white-space: nowrap;
 }
@@ -9277,7 +9295,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 .stt-badge-local { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
 .stt-badge-cloud { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .stt-badge-active { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
-.stt-badge-downloaded { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text-muted); }
+.stt-badge-downloaded { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--fg-muted); }
 .stt-badge-missing { background: color-mix(in srgb, var(--error) 12%, transparent); color: var(--error); font-size: 0.65rem; }
 .stt-badge-recommended { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); font-weight: 600; }
 
@@ -9318,7 +9336,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   background: none;
   cursor: pointer;
   font-size: 0.85rem;
-  color: var(--text-muted);
+  color: var(--fg-muted);
   border-bottom: 2px solid transparent;
   transition: all 0.15s;
 }
@@ -9364,7 +9382,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   align-items: center;
   justify-content: center;
   font-size: 1rem;
-  color: var(--text-muted);
+  color: var(--fg-muted);
   border-radius: 4px;
 }
 .stt-model-delete-btn:hover { color: var(--error); background: color-mix(in srgb, var(--error) 10%, transparent); }
@@ -9375,8 +9393,8 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   gap: 12px;
   font-size: 0.8rem;
 }
-.stt-model-desc { color: var(--text-muted); flex: 1; }
-.stt-model-meta { color: var(--text-muted); white-space: nowrap; }
+.stt-model-desc { color: var(--fg-muted); flex: 1; }
+.stt-model-meta { color: var(--fg-muted); white-space: nowrap; }
 
 .stt-manual-path {
   padding: 8px 0;
@@ -9427,12 +9445,12 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 .stt-step-running .stt-step-indicator { color: var(--accent); }
 
 .stt-step-label { font-weight: 500; flex: 1; }
-.stt-step-percent { color: var(--text-muted); font-size: 0.8rem; }
+.stt-step-percent { color: var(--fg-muted); font-size: 0.8rem; }
 
 .stt-step-message {
   margin: 4px 0 0 24px;
   font-size: 0.8rem;
-  color: var(--text-muted);
+  color: var(--fg-muted);
 }
 .stt-step-error .stt-step-message { color: var(--error); }
 
