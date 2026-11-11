@@ -26,6 +26,7 @@ import { formatAbsoluteTime } from './addons-format'
 import { apiGet, apiPost } from '@/api/client'
 import { fetchAwsProfiles } from '@/api/config'
 import { useEvent } from '@/hooks/useWebSocket'
+import { usePageView } from '@/utils/view-memory'
 import {
   DESTINATIONS, DESTINATION_NOTE, MAX_INTERVAL_HOURS, destinationSummary, RETENTION_NOTE, blockedReason, buildBackupConfig, cleanDestination,
   engineOf, fieldProblem, fmtBytes, legacyToEncrypted, missingFields, othersAfterSwitch, sameDestination, secretNeedsRetyping, stableJson, testHelp,
@@ -110,16 +111,8 @@ const emptyDrafts = (saved?: BackupDestinationConfig, others: BackupDestinationC
   }
 }
 
-const TAB_KEY = 'walnut.backup.tab'
-const readTab = (): BackupDestinationType | null => {
-  try {
-    const t = sessionStorage.getItem(TAB_KEY)
-    return DESTINATIONS.some((d) => d.value === t) ? t as BackupDestinationType : null
-  } catch { return null }
-}
-const writeTab = (t: BackupDestinationType): void => {
-  try { sessionStorage.setItem(TAB_KEY, t) } catch { /* private mode: not kept */ }
-}
+/** A kept tab that names a service this build still offers. */
+const isServiceTab = (t: unknown): t is BackupDestinationType => DESTINATIONS.some((d) => d.value === t)
 
 const legacyOf = (b: BackupConfig): LegacyFields => ({ bucket: b.bucket, region: b.region, prefix: b.prefix, auth: b.auth })
 /** A new, empty folder in the same bucket for backups that start over with a new key. */
@@ -141,8 +134,9 @@ export function BackupSection({ config, onSave }: Props) {
   const intervalToSave = intervalOk ? Number(intervalHours) : (saved.interval_hours ?? 24)
   const [legacyMode, setLegacyMode] = useState(savedEngine === 'mirror')
   const [legacy, setLegacy] = useState<LegacyFields>(legacyOf(saved))
-  // The tab looked at stays across a reload of this window (a Google sign-in finishing, say).
-  const [type, setType] = useState<BackupDestinationType>(() => readTab() ?? savedDest?.type ?? 'r2')
+  // The tab looked at is a view choice (view-memory): it stays across a reload (a Google sign-in
+  // finishing, say) and a restart; until one is picked, the service in use.
+  const [type, setType] = usePageView<BackupDestinationType>('settings', 'backup.tab', () => savedDest?.type ?? 'r2', isServiceTab)
   const [drafts, setDrafts] = useState<Drafts>(() => emptyDrafts(savedDest, saved.other_destinations))
   const [profiles, setProfiles] = useState<string[]>([])
   const [status, setStatus] = useState<BackupStatus | null>(null)
@@ -296,7 +290,6 @@ export function BackupSection({ config, onSave }: Props) {
   }
   const pickType = (t: BackupDestinationType) => {
     setType(t)
-    writeTab(t)
     setEditing(!!keptOf(t) && !!readTyped()[t])
     setTestResult(null)
   }
@@ -343,8 +336,7 @@ export function BackupSection({ config, onSave }: Props) {
   const [runStarting, setRunStarting] = useState(false)
   // The saved bucket's fields, folded to one line until "Edit" (open again after a reload with edits not saved).
   const [editing, setEditing] = useState(() => {
-    const t = readTab() ?? savedDest?.type ?? 'r2'
-    return !!readTyped()[t] && (savedDest?.type === t || (saved.other_destinations ?? []).some((o) => o.type === t))
+    return !!readTyped()[type] && (savedDest?.type === type || (saved.other_destinations ?? []).some((o) => o.type === type))
   })
   const handleRunNow = async () => {
     if (runStarting || status?.running || justDone) return
@@ -408,7 +400,7 @@ export function BackupSection({ config, onSave }: Props) {
 
   const switchToEncrypted = () => {
     setDrafts((cur) => ({ ...cur, s3: legacyToEncrypted(saved) }))
-    setType('s3'); writeTab('s3')
+    setType('s3')
     setLegacyMode(false)
     setTestResult(null)
   }

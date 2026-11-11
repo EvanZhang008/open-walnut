@@ -67,6 +67,15 @@ async function openBackup(page: Page) {
 }
 
 test.describe('Backup settings', () => {
+  // The tab looked at is a kept view (view-memory), mirrored to ui-prefs. On the shared fixture
+  // server a pick in one test would come back in the next one's fresh browser at boot, so this
+  // file's prefs writes are answered in the page and each test starts on the service in use.
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/api/ui-prefs**', (route) => route.request().method() === 'GET'
+      ? route.continue()
+      : route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) }))
+  })
+
   test('a new setup: R2 fields, test, recovery key, restore', async ({ page }) => {
     const config = await holdConfigWrites(page, {})
     await answer(page, '**/api/backup/status', { configured: false, running: false, consecutiveFailures: 0, primary: true })
@@ -295,7 +304,8 @@ test.describe('Backup settings', () => {
   })
 
   test('Drive in use with the R2 tab open after a reload: backups still read as running', async ({ page }) => {
-    await page.addInitScript(() => sessionStorage.setItem('walnut.backup.tab', 'r2'))
+    // The R2 tab is the kept view choice (view-memory), as a reload leaves it.
+    await page.addInitScript(() => localStorage.setItem('open-walnut-view:settings.backup.tab', JSON.stringify('r2')))
     await holdConfigWrites(page, {
       enabled: true, interval_hours: 24, recovery_key_saved_at: '2026-11-01T00:00:00Z',
       destination: { type: 'gdrive' }, other_destinations: [{ type: 'r2', bucket: 'b', account_id: '0123456789abcdef0123456789abcdef', access_key_id: 'AK', secret_access_key: '••••abcd' }],
