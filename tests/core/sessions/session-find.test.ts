@@ -140,9 +140,15 @@ describe('a tool call counts the words its card shows', () => {
     expect(count([tool('Bash', { command: 'npm test -- --grep checkout-69\necho otter' })], 'checkout-69')).toBe(1);
     expect(count([tool('Bash', { command: 'npm test -- --grep checkout-69\necho otter' })], 'otter')).toBe(0);
     expect(count([tool('Bash', { command: 'ls', description: 'Count the otters' })], 'otter')).toBe(1);
-    // Any other tool: `key: value` pairs, each cut to 60 characters.
-    expect(count([tool('Read', { file_path: '/repo/otter.md' })], 'file_path: /repo/otter')).toBe(1);
-    expect(count([tool('Read', { file_path: `/repo/${'a'.repeat(70)}otter.md` })], 'otter')).toBe(0);
+    // Any other tool: its short name and what it touched (the row's words, design 1,
+    // 2026-11-11), its first line cut to 160 characters.
+    expect(count([tool('Read', { file_path: '/repo/otter.md' })], 'Read /repo/otter')).toBe(1);
+    expect(count([tool('Read', { file_path: '/repo/otter.md' })], 'file_path')).toBe(0);
+    expect(count([tool('Read', { file_path: `/repo/${'a'.repeat(170)}otter.md` })], 'otter')).toBe(0);
+    expect(count([tool('mcp__walnut__task_get', { id: 'otter-1' })], 'task_get')).toBe(1);
+    expect(count([tool('mcp__walnut__task_get', { id: 'otter-1' })], 'mcp__walnut')).toBe(0);
+    // A call with no one target reads its input as `key: value` pairs, each cut to 60 characters.
+    expect(count([tool('TodoWrite', { mode: 'otter' })], 'mode: otter')).toBe(1);
   });
 
   it('an Edit shows its file name and its short diff', () => {
