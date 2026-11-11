@@ -1,8 +1,9 @@
 /**
- * Remote Hosts' Add host: the pane's one way to add a host, a menu of the two ways in, each
- * with a line saying what it needs. The menu hangs under the button with their right edges
- * aligned at every width (ContextMenu `anchorRef`), and it is opaque (remote-hosts.css): Linux
- * WebKit drew the menus' backdrop blur as nothing, so the page behind read through the words.
+ * Remote Hosts' Add host: the pane's one way to add a host, a menu of the ways in, each with a
+ * line saying what it needs (Pick from your SSH config opens first-run setup's hosts step
+ * again). The menu hangs under the button with their right edges aligned at every width
+ * (ContextMenu `anchorRef`), and it is opaque (remote-hosts.css): Linux WebKit drew the menus'
+ * backdrop blur as nothing, so the page behind read through the words.
  * Opened from the keyboard (Enter, Space, or ArrowDown on the closed button) its first item is
  * highlighted. Escape gives focus back to the button, and so does a scroll that closes it (also
  * when the scroll moved the button into the sticky bar), and a press on blank page. A press on the
@@ -23,7 +24,7 @@ function Item({ title, sub }: { title: string; sub: string }) {
   );
 }
 
-export function AddHostButton({ onJoin, onSsh }: { onJoin: () => void; onSsh: () => void }) {
+export function AddHostButton({ onJoin, onSsh, onPick }: { onJoin: () => void; onSsh: () => void; onPick?: () => void }) {
   const anchor = useRef<HTMLSpanElement>(null);
   const button = useCallback(() => anchor.current?.querySelector<HTMLButtonElement>('button') ?? null, []);
   const { menu, buttonProps, close } = useMenuButton(button);
@@ -49,6 +50,7 @@ export function AddHostButton({ onJoin, onSsh }: { onJoin: () => void; onSsh: ()
           onClose={close}
           items={[
             { key: 'join', label: <Item title="Join a machine with a link" sub="Run one command on it. No SSH needed." />, onSelect: onJoin },
+            ...(onPick ? [{ key: 'pick', label: <Item title="Pick from your SSH config" sub="The machines in ~/.ssh/config, one click each." />, onSelect: onPick }] : []),
             { key: 'ssh', label: <Item title="Add an SSH host" sub="A machine this Mac already reaches with ssh." />, onSelect: onSsh },
           ]}
         />

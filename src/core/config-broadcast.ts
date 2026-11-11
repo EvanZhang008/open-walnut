@@ -24,6 +24,7 @@
 import { CLOUD_MODE } from '../constants.js'
 import { maskForMacClients, redactConfig } from './config-redact.js'
 import { bus, EventNames, type EmitOptions } from './event-bus.js'
+import { withoutCloudBoxHost } from './hosts/cloud-box-host.js'
 
 /** The config as a client may see it: the view `GET /api/config` answers with. */
 export function configForClients<T>(config: T): T {
@@ -40,4 +41,13 @@ export function configChangedForClients(data: unknown): unknown {
 /** Announce a config change with the config it left (whole, or the part that changed). */
 export function emitConfigChanged(config: object, destinations: string[], options?: EmitOptions): void {
   bus.emit(EventNames.CONFIG_CHANGED, { config: configForClients(config) as Record<string, unknown> }, destinations, options)
+}
+
+/**
+ * Announce a config.yaml change to Settings: the config as GET /api/config shows it, without
+ * the injected cloud box row (nothing to edit there, and a save must never write it back).
+ */
+export function emitSettingsConfigChanged(config: { hosts?: unknown }, options: EmitOptions = { source: 'api' }): void {
+  const hosts = withoutCloudBoxHost(config.hosts as never)
+  emitConfigChanged(hosts === config.hosts ? config : { ...config, hosts }, ['web-ui'], options)
 }

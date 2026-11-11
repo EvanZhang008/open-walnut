@@ -61,6 +61,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     },
     hosts_warmup: { enabled: true },
     hosts_found: { asking_since: '2026-11-02T09:00:00.000Z' },
+    first_run: { at: '2026-11-02T09:00:00.000Z', steps: ['hosts'], answered: { hosts: '2026-11-02T09:05:00.000Z' } },
     net: { enabled: true },
     local_capabilities: ['gpu'],
     ssh_login_files: ['/Users/marina/.ssh/id_planted'],

@@ -1,6 +1,7 @@
 import { withRecentHumanInput } from '@/utils/recent-opened';
 import { memo, useEffect, useRef } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
+import { FirstRunHost } from './components/first-run/FirstRunHost';
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { NavigateFunction } from 'react-router-dom';
 import { AppHostPage } from './apps/AppHostPage';
@@ -178,6 +179,7 @@ export function App() {
       <PageFind />
       <UnpairedNotice />
       <ApprovalPrompts />
+      <FirstRunHost />
       <div className={isHome ? 'main-page-wrapper' : 'main-page-wrapper main-page-wrapper-hidden'}>
         <RouteShownContext.Provider value={isHome}>
           <StableMainPage visible={isHome} navigateRef={navigateRef} />

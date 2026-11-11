@@ -1,5 +1,5 @@
 import { log } from '../logging/index.js';
-import { CLOUD_MODE, CONFIG_FILE } from '../constants.js';
+import { CLOUD_MODE, CONFIG_FILE, WALNUT_HOME } from '../constants.js';
 import {
   VALID_PRIORITIES,
   type Config,
@@ -11,10 +11,11 @@ import { KNOWN_PROVIDERS } from '../model/providers/defaults.js';
 import { scanSshConfig } from './ssh-config-scanner.js';
 import { realSshReachAllowed } from '../lib/real-ssh-guard.js';
 import { injectCloudBoxHost, withoutCloudBoxHost } from './hosts/cloud-box-host.js';
-import { isHostReplicaProgram } from './server-role.js';
+import { isCompanion, isHostReplicaProgram } from './server-role.js';
 import { COMPANION_ALIAS, migrateLegacyCompanionKeep } from './replication/companion-keep.js';
 import { applyFoundHostAnswers, askingAboutFoundHosts, mergeFoundHosts } from './hosts/found-hosts.js';
 import { noteRequestTagConfig } from './sessions/request-tag.js';
+import { firstRunStampAllowed, homeHoldsWork, stampFirstRun } from './first-run.js';
 import {
   dumpConfig,
   modifyConfigDoc,
@@ -540,25 +541,29 @@ export const CLAUDE_CATALOG_PROTOCOLS: ReadonlySet<string> = new Set(['bedrock',
 export async function seedConfigDefaults(): Promise<void> {
   if (isHostReplicaProgram()) return;
   await migrateConfigFileToProjectOnly();
+  // A fresh install (nothing stored yet, and no one's work in the data home) asks the
+  // first-run questions (core/first-run.ts). Read before the lock: the check is async.
+  const mayStamp = firstRunStampAllowed(process.env, isCompanion()) && !(await homeHoldsWork(WALNUT_HOME));
   try {
     await modifyConfigDoc((existing) => {
+      const stamped = mayStamp && stampFirstRun(existing);
       // Seeded already by an older seed, which marked the file with the retired
       // agent-form model list (available_models).
       const agent = existing.agent as { main_model?: unknown; available_models?: unknown } | undefined;
       if (agent && typeof agent === 'object' && agent.available_models !== undefined) {
-        return { write: false, result: undefined };
+        return { write: stamped, result: undefined };
       }
       // The seed is the Claude default set (a Claude main model, `provider: claude-code`).
       // A file that picked another main provider (Ollama, OpenAI, a local server) keeps
       // only what its user wrote (2026-10-30: a Path D config grew 13 Claude ids).
-      if (!seedsClaudeDefaults(existing)) return { write: false, result: undefined };
+      if (!seedsClaudeDefaults(existing)) return { write: stamped, result: undefined };
       // Seeded from the stored file itself, inside the lock, so a save that landed
       // after boot began is what gets the defaults, not an older read of it.
       const config = normalizeReadConfig({ ...DEFAULT_CONFIG, ...structuredClone(existing) } as Config);
       // Field by field, so a file the user wrote by hand (only a main model, say)
       // still gets the rest, and a seeded file is never written again.
       const seeded = { version: config.version, user: config.user, defaults: config.defaults, provider: config.provider };
-      let changed = false;
+      let changed = stamped;
       if (!(agent && typeof agent === 'object' && agent.main_model !== undefined)) { existing.agent = config.agent; changed = true; }
       for (const [key, value] of Object.entries(seeded)) {
         if (value !== undefined && existing[key] === undefined) { existing[key] = value; changed = true; }

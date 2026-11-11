@@ -40,6 +40,8 @@ describe('classifyHostConnectError', () => {
     ['capability handshake failed', 'daemon'],
     ['ephemeral server: no daemon running on devbox and ephemeral sandboxes do not deploy/start remote daemons (attach-only)', 'ephemeral'],
     ["ephemeral server: remote host 'devbox' is off for test servers (set WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to attach anyway)", 'ephemeral'],
+    // providers/daemon-connection.ts: the machine answers ssh but is not Linux (uname -s).
+    ['server runs Darwin: Walnut sets up SSH hosts on Linux only', 'not_linux'],
     ['something nobody has seen before', 'unknown'],
     // A host network machine (core/hosts/net-link.ts): offline, or online with no daemon.
     ['home-pc is not online on the host network: this machine could not reach it', 'unreachable'],

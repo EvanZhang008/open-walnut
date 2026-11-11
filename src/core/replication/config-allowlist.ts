@@ -103,6 +103,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   session_server: 'the Mac server process settings',
   hosts_warmup: 'ssh warmup on the Mac',
   hosts_found: 'when the Mac started asking about found hosts; only the Mac dials them',
+  first_run: 'the Mac\'s own first-run questions and answers; the companion asks none',
   net: 'the Mac\'s own host network switch; the companion keeps the member list itself',
   local_capabilities: 'the Mac\'s own capability tags, read where its fleet card is built, on the Mac',
   ssh_login_files: 'ssh files on the Mac',

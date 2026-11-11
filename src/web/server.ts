@@ -116,6 +116,7 @@ import { setSelfApiRoot } from '../lib/self-api-root.js'
 import { guardProcessStdio } from '../lib/stdio-epipe-guard.js'
 import { systemRouter } from './routes/system.js'
 import { hostsRouter } from './routes/hosts.js'
+import { firstRunRouter } from './routes/first-run.js'
 import { cloudSetupRouter } from './routes/cloud-setup.js'
 import { searchIndexRouter } from './routes/search-index.js'
 import { componentsRouter } from './routes/components.js'
@@ -2495,6 +2496,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // The host network's Settings routes (core/net/net-mac.ts), ahead of /:host routes.
   if (bootPolicy('host-network')) app.use('/api/hosts/net', (await import('./routes/hosts-net.js')).hostsNetRouter)
   app.use('/api/hosts', hostsRouter)
+  app.use('/api/first-run', firstRunRouter)
   app.use('/api/workspaces', (await import('./routes/workspaces.js')).workspacesRouter) // per-task isolated workspaces
   // Test-only remote-host fixture: mounted solely by the Playwright fixture
   // server (the flag, AND ephemeral, AND not cloud: hostFixtureRouteAllowed).

@@ -47,6 +47,8 @@ export interface DirProbe {
 export interface DaemonDirProbe {
   /** Raw `uname -m`. */
   arch?: string
+  /** Raw `uname -s` (Linux, Darwin, ...): the ssh path installs a Linux daemon only. */
+  os?: string
   home?: string
   tmp: DirProbe
   cache: DirProbe
@@ -100,6 +102,7 @@ export function buildDaemonDirProbeScript(opts: DirProbeScriptOpts = {}): string
     `C=${cache}`,
     `echo '${PROBE_HEADER}'`,
     'echo "arch=$(uname -m 2>/dev/null)"',
+    'echo "os=$(uname -s 2>/dev/null)"',
     'echo "home=$HOME"',
     // The error text of a failed mkdir or write says which kind of unusable.
     'w_reason() { case "$1" in *[Rr]ead-only*) echo read-only;; *"No space"*|*[Qq]uota*) echo full;; '
@@ -178,6 +181,7 @@ export function parseDaemonDirProbe(output: string): DaemonDirProbe | null {
   const cachePath = kv.get('cache_path') || undefined
   return {
     ...(kv.get('arch') ? { arch: kv.get('arch') } : {}),
+    ...(kv.get('os') ? { os: kv.get('os') } : {}),
     ...(kv.get('home') ? { home: kv.get('home') } : {}),
     tmp: { path: kv.get('tmp_path') || PROD_REMOTE_DAEMON_DIR, status: asStatus(kv.get('tmp')), freeMb: asMb(kv.get('tmp_free_mb')), live: kv.get('tmp_live') === '1' },
     cache: { path: cachePath, status: asStatus(kv.get('cache')), freeMb: asMb(kv.get('cache_free_mb')), live: kv.get('cache_live') === '1' },

@@ -96,6 +96,8 @@ const KNOWN_DEFERRED_FOCUS: Array<{ file: string; call: string; why: string }> =
   { file: 'components/notes/slash-commands/TaskSearchPanel.tsx', call: 'inputRef.current?.focus()', why: "the panel's one search input" },
   { file: 'components/sessions/SessionPathSelector.tsx', call: 'searchRef.current?.focus({ preventScroll: true })', why: "the selector's one search box" },
   { file: 'components/sessions/SessionHeaderLabels.tsx', call: 'buttonRef.current?.focus()', why: 'a keyboard user whose focus was inside the closing label list gets it back on the list button, never a form field' },
+  { file: 'components/first-run/FirstRunDialog.tsx', call: 'modalRef.current?.focus()', why: 'the dialog box itself, on open (it has no typing field)' },
+  { file: 'components/first-run/FirstRunDialog.tsx', call: 'next.focus()', why: "the next host's Add button or the dialog's primary button, only when focus fell to the page" },
   { file: 'components/settings/sections/cloud/PairQrDialog.tsx', call: '(primaryRef.current ?? boxRef.current)?.focus()', why: 'a button or the dialog box' },
   { file: 'components/tasks/QuickTaskComposer.tsx', call: 'inputRef.current?.focus()', why: "the composer's one input, on open" },
   { file: 'components/tasks/QuickTaskComposer.tsx', call: 'inputRef.current?.focus()', why: "the composer's one input, after a create" },

@@ -1699,6 +1699,17 @@ export interface Config {
     /** When Walnut started asking (ISO time). */
     asking_since?: string;
   };
+  /** First-run setup (core/first-run.ts): written once, into the config.yaml a fresh
+   *  install creates. A config without it (every install from before) is never asked. */
+  first_run?: {
+    /** When the install created its config (ISO time). */
+    at?: string;
+    /** The questions this install asks, fixed at creation, so a question added in a
+     *  later release never reaches an install that already finished its setup. */
+    steps?: string[];
+    /** Step id -> when the person answered it (Done or Not now; ISO time). */
+    answered?: Record<string, string>;
+  };
   /** Files a login command writes outside ~/.ssh (an SSH proxy's own sign-in, a
    *  token file; a directory counts by its newest file, `~/` is expanded). While
    *  a host waits on a login (an expired certificate, the proxy's login), a

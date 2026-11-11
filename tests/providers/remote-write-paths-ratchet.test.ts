@@ -81,6 +81,7 @@ const FILES: Record<string, Entry> = {
   'src/core/plugins/plugin-hosts.ts': { count: 1, kind: 'gated', why: 'runOnPluginHost refuses a host whose isolation is off' },
   'src/core/hosts/ssh-cert-expiry-alert.ts': { count: 1, kind: 'read', why: '`ssh host true`: does the sign-in work' },
   'src/providers/ssh-credential-evidence.ts': { count: 2, kind: 'local', why: '`ssh -G`, reads this machine\'s ssh config' },
+  'src/core/hosts/ssh-key-of.ts': { count: 1, kind: 'local', why: '`ssh -G <alias>`, reads which key this machine\'s ssh offers a host (first-run walkthrough)' },
   'src/providers/stream-lane.ts': { count: 1, kind: 'transport', why: 'a port forward to the connection\'s daemon (`cat >/dev/null`)' },
   'src/providers/transfer-core.ts': { count: 2, kind: 'user-directed', why: 'a task transfer the person asked for: `ssh true` and an scp read into a local temp file' },
   'src/web/terminal/dtach-lifecycle.ts': { count: 1, kind: 'gated', why: 'its socket dir is the test server\'s term dir (REMOTE_DTACH_SOCKET_DIR)' },

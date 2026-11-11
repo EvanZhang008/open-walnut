@@ -118,6 +118,8 @@ export type HostConnectErrorKind =
   | 'refused'
   | 'timeout'
   | 'runtime'
+  // The machine answers ssh but is not Linux (a Mac): the ssh path installs a Linux daemon only.
+  | 'not_linux'
   | 'daemon'
   | 'ephemeral'
   | 'listing'
@@ -165,7 +167,7 @@ export function credentialRetryDelayMs(attempt: number): number {
 /** Whether a plain retry of the same attempt can succeed, per kind (the API's `retryable`). */
 export const RETRYABLE: Record<HostConnectErrorKind, boolean> = {
   auth: false, host_key: false, cert_expired: false, agent_missing: false, proxy_login: false, proxy: true, shell_noise: false,
-  dns: false, unreachable: true, refused: true, timeout: true, runtime: false, daemon: true,
+  dns: false, unreachable: true, refused: true, timeout: true, runtime: false, not_linux: false, daemon: true,
   ephemeral: false, listing: true, unknown: true,
   cloud_update: false, cloud_exec_off: false, cloud_other_mac: false, cloud_tunnel: true,
 }
@@ -229,6 +231,7 @@ export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, targe
     case 'refused': return `Nothing is listening for SSH on ${who}. Check the port and that sshd is running on the host.`
     case 'unreachable': return `${who} is not reachable from this machine right now (VPN down, host asleep, or a firewall). Retry once the network is back.`
     case 'timeout': return `Connecting to ${who} took too long. The host may be unreachable (VPN?), or a first-time daemon install is still running; Retry in a moment.`
+    case 'not_linux': return `${who} is not a Linux machine. Walnut sets up SSH hosts on Linux only; add a Mac with Settings › Remote Hosts › Add host › Join a machine with a link, and run its one command there.`
     case 'runtime': return 'The session daemon needs bun or node on the host, and neither could run there. Install one (`curl -fsSL https://bun.sh/install | bash`, or Node.js from your package manager), then Retry.'
     case 'daemon': return 'SSH works but the session daemon did not come up. Retry; if it keeps failing, check daemon-start.log in the daemon directory on the host (/tmp/open-walnut, or ~/.cache/open-walnut when /tmp is unusable).'
     case 'listing': return `${who} is connected, but this directory could not be listed. Check that the path exists and is readable there, then Retry.`
@@ -263,6 +266,8 @@ const WALNUT_SENTENCES: Array<[HostConnectErrorKind, RegExp]> = [
   // providers/daemon-connection.ts (a test server) and providers/remote-sh.ts
   ['ephemeral', /ephemeral server|attach-only/g],
   ['shell_noise', /shell_noise:/g],
+  // providers/daemon-connection.ts (notLinuxSentence)
+  ['not_linux', /walnut sets up ssh hosts on linux only/g],
 ]
 
 /**
@@ -353,4 +358,9 @@ function nameToken(lowerName: string): RegExp {
  */
 export function describeListingError(hostLabel: string): HostConnectHint {
   return { kind: 'listing', hint: hintForKind('listing', hostLabel, { label: hostLabel }), retryable: RETRYABLE.listing }
+}
+
+/** The connect error of a machine that answers ssh but is not Linux (`uname -s`); the not_linux kind reads it. */
+export function notLinuxSentence(host: string, os: string): string {
+  return `${host} runs ${os.slice(0, 40)}: Walnut sets up SSH hosts on Linux only`
 }

@@ -23,6 +23,8 @@ import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
 import { AddHostButton } from './AddHostMenu';
+import { ADD_SSH_HOST_EVENT, openFirstRunHosts, takeAddSshRequest } from '@/api/first-run';
+import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { RemoteHostSshRow } from './RemoteHostSshRow';
 import { HostJoinClosed, HostJoinError, HostJoinLink, HostJoinMaking } from './HostJoinLink';
 import { NetMachineRow } from './NetMachineRow';
@@ -60,6 +62,7 @@ export function RemoteHostsSection(props: Props) {
 }
 
 function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<typeof createRowStore> }) {
+  const replica = useIsCloudReplica();
   const network = useHostNetwork(config.hosts);
   const machineName = useHostDisplayLabels();
   const netAliases = Object.fromEntries(Object.entries(config.hosts ?? {}).filter(([, h]) => h.transport === 'net').map(([alias]) => [alias, machineName(alias)]));
@@ -117,6 +120,16 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
     }
     land.ssh(editor.addHost()._key);
   };
+  // First-run setup's "Add a machine that is not listed" (api/first-run.ts): a new SSH row
+  // once this page is up, whether it was open already or mounts for it.
+  const addSshRef = useRef(addSshHost);
+  addSshRef.current = addSshHost;
+  useEffect(() => {
+    const take = () => { if (takeAddSshRequest()) addSshRef.current(); };
+    take();
+    window.addEventListener(ADD_SSH_HOST_EVENT, take);
+    return () => window.removeEventListener(ADD_SSH_HOST_EVENT, take);
+  }, []);
   // Add host > Join with a link: a draft nobody typed in goes; a link that still waits shows again.
   const joinWithLink = () => {
     for (const h of hosts) if (untouchedDraft(h)) editor.removeHost(h._key);
@@ -241,7 +254,8 @@ function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<
         actions={
           <span className="rh-header-actions">
             <HostNeedsLook look={look} onLook={setLook} onShow={land.showLook} />
-            <AddHostButton onJoin={joinWithLink} onSsh={addSshHost} />
+            {/* The picker is the Mac's (the dialog that opens it renders nothing on the companion). */}
+            <AddHostButton onJoin={joinWithLink} onSsh={addSshHost} onPick={replica ? undefined : openFirstRunHosts} />
           </span>
         }
       >

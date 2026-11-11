@@ -211,6 +211,8 @@ describe('daemon dir probe, executed', () => {
     const { parsed } = probe()
     expect(parsed.arch).toBe(execFileSync('uname', ['-m'], { encoding: 'utf-8' }).trim())
     expect(parsed.home).toBe(path.join(root, 'home'))
+    // uname -s, so a machine that is not Linux is told apart before any upload.
+    expect(parsed.os).toBe(execFileSync('uname', ['-s'], { encoding: 'utf-8' }).trim())
   })
 })
 

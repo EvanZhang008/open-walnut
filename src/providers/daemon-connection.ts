@@ -80,7 +80,7 @@ import { isAcpEngine } from '../core/agents/engine-registry.js'
 import { getOpOwner, opNames } from '../ops/registry.js'
 import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
-import { classifyHostConnectError, CONNECT_IN_FLIGHT_PHASES, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
+import { notLinuxSentence, classifyHostConnectError, CONNECT_IN_FLIGHT_PHASES, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
 import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, runSshBounded, shq, userShellPathScript } from './remote-sh.js'
 import { chunkListScript, parseChunkList, parseUploadPrecheck, remoteSha256Command, resumeFailureCap, sha256Hex, uploadPrecheckScript } from './upload-resume.js'
 import { count as metricsCount } from '../core/observability/metrics.js'
@@ -3786,6 +3786,10 @@ export class DaemonConnection {
     if (!probe) {
       throw new Error(`daemon dir check on ${this.hostKey} answered without its result lines; Walnut will not guess where the daemon lives, and retries the connect`)
     }
+    // The ssh path installs a Linux daemon (and a Linux service): a Mac or BSD machine would get a
+    // file it cannot run (exit 127). Say so once, as its own kind (not_linux), and never upload.
+    const os = probe.os?.trim()
+    if (os && os.toLowerCase() !== 'linux') throw new Error(notLinuxSentence(this.hostKey, os))
     if (probe.arch) this._remoteArch = probe.arch.trim() === 'aarch64' ? 'arm64' : 'x64'
     if (probe.home) this._remoteHome = probe.home
     const choice: DaemonDirChoice = chooseDaemonDir(probe)

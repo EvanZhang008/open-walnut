@@ -122,12 +122,8 @@ hostsRouter.post('/:host/found-answer', async (req, res, next) => {
       res.status(r.status).json({ error: r.error, code: r.code })
       return
     }
-    const [{ emitConfigChanged }, { withoutCloudBoxHost }] = await Promise.all([
-      import('../../core/config-broadcast.js'), import('../../core/hosts/cloud-box-host.js'),
-    ])
-    const config = await getConfig()
-    const hosts = withoutCloudBoxHost(config.hosts)
-    emitConfigChanged(hosts === config.hosts ? config : { ...config, hosts }, ['web-ui'], { source: 'api' })
+    const { emitSettingsConfigChanged } = await import('../../core/config-broadcast.js')
+    emitSettingsConfigChanged(await getConfig())
     let status: HostStatus | undefined
     if (r.answer === 'yes') {
       // The dial starts now (progress arrives as host:status); a refusal (remote hosts
@@ -136,6 +132,23 @@ hostsRouter.post('/:host/found-answer', async (req, res, next) => {
       status = (c.body as { status?: HostStatus }).status
     }
     res.json({ ok: true, host, answer: r.answer, ...(status ? { status } : {}) })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/hosts/:host/ssh-key: the key this machine's ssh signs in to the host with
+// (core/hosts/ssh-key-of.ts), for first-run setup's walkthrough commands. Local only.
+hostsRouter.get('/:host/ssh-key', async (req, res, next) => {
+  try {
+    const host = typeof req.params.host === 'string' ? req.params.host.trim() : ''
+    const { isCompanion } = await import('../../core/server-role.js')
+    if (isCompanion() || !host) {
+      res.json({ key: null })
+      return
+    }
+    const { sshKeyOf } = await import('../../core/hosts/ssh-key-of.js')
+    res.json({ key: await sshKeyOf(host) })
   } catch (err) {
     next(err)
   }

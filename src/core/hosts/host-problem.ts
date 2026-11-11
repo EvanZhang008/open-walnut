@@ -11,7 +11,7 @@ export const LOOP_DIAL_PHASES: ReadonlySet<string> = new Set(['ssh', 'probe', 'i
 /** Mirrors HostConnectErrorKind (host-connect-hint.ts), kept local so this file stays import-free. */
 export type HostFailureKind =
   | 'auth' | 'host_key' | 'cert_expired' | 'agent_missing' | 'proxy_login' | 'proxy' | 'shell_noise'
-  | 'dns' | 'unreachable' | 'refused' | 'timeout' | 'runtime' | 'daemon'
+  | 'dns' | 'unreachable' | 'refused' | 'timeout' | 'runtime' | 'not_linux' | 'daemon'
   | 'ephemeral' | 'listing' | 'cloud_update' | 'cloud_exec_off' | 'cloud_other_mac' | 'cloud_tunnel' | 'unknown'
 
 export type HostPhaseWire =
@@ -93,18 +93,18 @@ export const BANNER_READINESS_KINDS: readonly string[] = [
   'claude_missing', 'claude_needs_node', 'claude_error', 'claude_not_logged_in',
 ]
 /** A reconnect that meets one of these will not heal itself: the screen shows it as failed. */
-export const STANDING_FAILURE_KINDS: readonly string[] = ['auth', 'host_key', 'dns', 'cert_expired', 'agent_missing', 'proxy_login']
+export const STANDING_FAILURE_KINDS: readonly string[] = ['auth', 'host_key', 'dns', 'cert_expired', 'agent_missing', 'proxy_login', 'not_linux']
 /** Waiting on the user's login (one row for all hosts that share the kind). */
 export const CREDENTIAL_WAIT_KINDS: readonly string[] = ['cert_expired', 'agent_missing', 'proxy_login']
 /** Opening the picker never re-dials a host that failed with one of these (key taps, agent prompts). */
 export const NO_PREWARM_KINDS: readonly string[] = [
-  'auth', 'host_key', 'cert_expired', 'agent_missing', 'proxy_login', 'dns', 'shell_noise', 'runtime',
+  'auth', 'host_key', 'cert_expired', 'agent_missing', 'proxy_login', 'dns', 'shell_noise', 'runtime', 'not_linux',
   'cloud_update', 'cloud_exec_off', 'cloud_other_mac',
 ]
 /** The cloud box host's own failures: fixed on the companion, never in Settings › Remote Hosts. */
 export const CLOUD_BOX_KINDS: readonly string[] = ['cloud_update', 'cloud_exec_off', 'cloud_other_mac', 'cloud_tunnel']
 /** Their detail is a filesystem or daemon log line, not SSH output. */
-export const DETAILS_NOT_SSH_KINDS: readonly string[] = ['listing', 'daemon', 'runtime', ...CLOUD_BOX_KINDS]
+export const DETAILS_NOT_SSH_KINDS: readonly string[] = ['listing', 'daemon', 'runtime', 'not_linux', ...CLOUD_BOX_KINDS]
 /** Readiness notes that explain, never ask for action. */
 export const INFO_ONLY_KINDS: readonly string[] = ['daemon_dir_fallback']
 
@@ -162,7 +162,7 @@ export function hostFailureHeadline(
     case 'cloud_exec_off': return 'Cloud companion has session hosting turned off'
     case 'cloud_other_mac': return 'Another Mac is connected to this cloud companion'
     case 'cloud_tunnel': return `Could not reach ${label} through the cloud companion`
-    default: return `Could not connect to ${label}`
+    default: return kind === 'not_linux' ? `${label} is not a Linux machine` : `Could not connect to ${label}`
   }
 }
 
