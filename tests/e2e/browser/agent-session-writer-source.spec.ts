@@ -247,16 +247,22 @@ async function settle(page: Page): Promise<void> {
 }
 
 /**
- * The tool card named `name` inside the merged run whose line reads `run` ("Searched files, read
- * a file ›"): the run opened by a press on its own line (a turn fold's body is no run body), then
- * the card's own header.
+ * The tool card named `name`: inside the merged run whose line reads `run` ("Searched files, read
+ * a file ›") when the page draws one, opened by a press on its own line (a turn fold's body is no
+ * run body); an opened turn draws its calls flat, one row each (main's "every step of a turn is one
+ * row", 2026-11-11), so there the card is on the page as it is. Then the card's own header.
  */
 async function openTool(page: Page, panel: Locator, run: string, name: string): Promise<Locator> {
+  const named = (scope: Locator) => scope.locator('.chat-tool-block').filter({ has: page.locator('.chat-tool-block-name', { hasText: new RegExp(`^${name}$`) }) })
   const r = runRow(panel, run)
-  await expect(r.label).toHaveCount(1, { timeout: 15_000 })
-  if ((await r.body.count()) === 0) await click(page, r.toggle)
-  await expect(r.body).toBeVisible()
-  const tool = r.body.locator('.chat-tool-block').filter({ has: page.locator('.chat-tool-block-name', { hasText: new RegExp(`^${name}$`) }) })
+  await expect.poll(async () => (await r.label.count()) + (await named(panel).count()), { timeout: 15_000 }).toBeGreaterThan(0)
+  let scope = panel
+  if ((await r.label.count()) === 1) {
+    if ((await r.body.count()) === 0) await click(page, r.toggle)
+    await expect(r.body).toBeVisible()
+    scope = r.body
+  }
+  const tool = named(scope)
   await expect(tool).toHaveCount(1, { timeout: 15_000 })
   // A card the page remembers open is restored a moment after it draws: pressing before that closes it again.
   await settle(page)
