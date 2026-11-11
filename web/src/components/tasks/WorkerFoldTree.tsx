@@ -10,6 +10,7 @@ import * as ICONS from '../common/Icons';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { taskUserState } from '@/utils/session-status';
 import { foldMixLine, stateSectionKey, type FoldEntry } from './worker-fold';
+import { STATUS_SECTION_LABELS } from './status-sections';
 import '@/styles/worker-fold.css';
 
 /** What a section row needs to draw its folded team: TodoPanel's fold state and its writers. */
@@ -28,8 +29,6 @@ export interface WorkerFoldCtl {
   /** A row shown separately that could fold back: its leader, and whether its whole team is out. */
   foldBackOf(task: Task): { leader: Task; team: boolean } | null;
 }
-
-const STATE_WORDS: Record<string, string> = { needs: 'Needs you', working: 'Working', waiting: 'Waiting', notstarted: 'Not started', done: 'Done' };
 
 export function workerWord(n: number): string {
   return `${n} ${n === 1 ? 'worker' : 'workers'}`;
@@ -73,7 +72,8 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
       {entries.map(({ task, depth, out }) => {
         const key = stateSectionKey(task);
         // Out because the user showed it separately (it can fold back), or because its section
-        // never folds (Needs you, Watching): that one only says where it is.
+        // never folds (Needs you, Watching): that one only says where it is. A line names the
+        // state by the section it is drawn in, in that section's own words.
         const back = out ? ctl.foldBackOf(task) : null;
         return (
           <div
@@ -90,7 +90,7 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
                 {ICONS.sectionRowIcon(key, key === 'done', task.phase, false, taskUserState(task))}
               </span>
               <span className="worker-fold-title">{orgDisplayTitle(task)}</span>
-              <span className="worker-fold-state">{back ? 'Shown separately' : out ? `${STATE_WORDS[key]} · in the list` : STATE_WORDS[key]}</span>
+              <span className="worker-fold-state">{back ? 'Shown separately' : out ? `${STATUS_SECTION_LABELS[key]} · in the list` : STATUS_SECTION_LABELS[key]}</span>
             </button>
             {!out || back ? (
               <button
