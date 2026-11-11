@@ -3459,6 +3459,26 @@ export interface ContextRecoveryState {
   owed?: Array<{ id: string; text: string; at: string; sentBy?: 'person' | 'agent'; source?: string }>;
 }
 
+/** SessionRecord.safeguardSwitch: refused turns in a row, and the models Walnut moved the session to (sessions/safeguard-switch.ts). */
+export interface SafeguardSwitchState {
+  /** Turns the model's safeguards refused in a row since the last clean turn. */
+  streak: number;
+  /** When the first of them ended. */
+  since?: string;
+  /** The flag the last refusal named (`reasoning_extraction`). */
+  category?: string;
+  /** Model families this session ran on since it last worked (the first one included): never picked again. */
+  tried?: string[];
+  /** Each switch Walnut made (the last 10). */
+  switches?: Array<{ at: string; from: string; to: string; toId: string; category?: string; resent: number }>;
+  /** Every family on the menu refused too: Walnut stopped switching, the error is the user's. */
+  gaveUpAt?: string;
+  /** The words the refused turns got, until a clean turn (kept for a restart mid-switch). */
+  owed?: Array<{ text: string; at: string; sentBy?: 'person' | 'agent' }>;
+  /** A switch is under way since then: a restart runs it again. */
+  switchingAt?: string;
+}
+
 export interface SessionRecord {
   claudeSessionId: string;
   taskId: string;
@@ -3723,6 +3743,9 @@ export interface SessionRecord {
    *  long", src/core/sessions/context-full-recovery.ts): it compacts the session, then resends what
    *  got no answer. The error banner reads it. */
   contextRecovery?: ContextRecoveryState;
+  /** Turns the model's safeguards refused in a row, and the models Walnut switched the session to
+   *  after two (src/core/sessions/safeguard-switch.ts). */
+  safeguardSwitch?: SafeguardSwitchState;
   /** Where this session stops when Claude Code's auto-compact is off for it: the CLI refuses every
    *  request at this many context tokens (sessions/context-full.ts hardStopTokens). Absent while
    *  auto-compact is on or its state is unknown. The context percentage is measured against it. */

@@ -73,6 +73,9 @@ export async function turnHold(
   // "Prompt is too long", answered nothing, and the recovery compacts and resends (2026-11-06).
   const { contextFullRecovery } = await import('./context-full-recovery.js');
   if (contextFullRecovery()?.holds(rec.claudeSessionId)) return 'turn';
+  // So is one the safeguard switch moves to another model: its last turn was refused (safeguard-switch.ts).
+  const { safeguardSwitchHolds } = await import('./safeguard-switch.js');
+  if (safeguardSwitchHolds(rec.claudeSessionId)) return 'turn';
   if (opts.queue) {
     const { getStore } = await queueStore();
     const rows = (await getStore().catch(() => null))?.queues[rec.claudeSessionId] ?? [];

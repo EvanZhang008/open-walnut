@@ -172,6 +172,8 @@ let appendSystemPrompt = null;
 let outputFormat = 'json';
 let inputFormat = null;
 let modelFlag = null;
+/** Set by a "safeguard-refuse-unless:<model>" line: refuse every line until the model contains it. */
+let safeguardRefuseUnless = null;
 // Servers added live with mcp_set_servers (real CLI 2.1.312): named in the next results.
 let liveMcpServers = [];
 let effortFlag = null;
@@ -1322,6 +1324,38 @@ if (outputFormat === 'stream-json') {
     //          at its blocking limit with auto-compact off (2026-11-05 transcript): a synthetic
     //          assistant "Prompt is too long" (isApiErrorMessage, error invalid_request) and an
     //          is_error result, before any model call. Then STAY ALIVE, as the real CLI does.
+    // 2a.-1.54. MOCK_SAFEGUARD_REFUSE_MODELS=<a,b>: while the model (--model, or a live apply_flag_settings
+    //          switch; "mock-model" when none) contains one of these, every line but a slash command is refused
+    //          the way Claude Code 2.1.322 answers a safeguards refusal (2026-11-11 stream file): a synthetic
+    //          assistant reply (is_api_error_message, error invalid_request, stop_reason refusal, the flag in
+    //          stop_details) and an is_error result with stop_reason refusal. Then STAY ALIVE.
+    //          A line starting "safeguard-refuse-unless:<model>" does the same for this one process: it is
+    //          refused, and so is every line after it, until the model contains <model> (a browser spec
+    //          shares one server, so it cannot set the env for one session).
+    const refuseUnlessMatch = effectiveMessage.match(/^safeguard-refuse-unless:(\S+)/);
+    if (refuseUnlessMatch) safeguardRefuseUnless = refuseUnlessMatch[1];
+    const refuseModels = (process.env.MOCK_SAFEGUARD_REFUSE_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean);
+    const refusedNow = (refuseModels.length && refuseModels.some((m) => (modelFlag || 'mock-model').includes(m)))
+      || (safeguardRefuseUnless && !(modelFlag || 'mock-model').includes(safeguardRefuseUnless));
+    if (refusedNow && !effectiveMessage.trim().startsWith('/')) {
+      const sid = outputSessionId;
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      const text = `API Error: ${modelFlag || 'mock-model'}'s safeguards flagged this message (https://www.anthropic.com/legal/aup). This sometimes happens with safe, normal conversations.\n\nDetails: \`[reasoning_extraction]\``;
+      emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
+      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: liveMcpServers.map((name) => ({ name, status: 'connected' })), permissionMode: permissionMode || 'default' });
+      setTimeout(() => {
+        const refused = { id: randomUUID(), type: 'message', role: 'assistant', model: '<synthetic>', stop_reason: 'refusal', stop_sequence: '',
+          stop_details: { type: 'refusal', category: 'reasoning_extraction', explanation: 'blocked' },
+          content: [{ type: 'text', text }], usage: { input_tokens: 0, output_tokens: 0 } };
+        emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, uuid: randomUUID(), is_api_error_message: true, error: 'invalid_request', refused_message_id: 'msg_mock', message: refused });
+        persistMockTurn(sid, effectiveMessage, { message: refused, lineFields: { isApiErrorMessage: true, error: 'invalid_request' } }, process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_PERSIST_DIR);
+        emit({ type: 'result', subtype: 'success', is_error: true, stop_reason: 'refusal', terminal_reason: 'api_error', duration_ms: 60, num_turns: 1, result: text, session_id: sid,
+          total_cost_usd: nextSnapshotCost(0.0001), usage: { input_tokens: 0, output_tokens: 0 } });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn({ announce: true });
+      }, 60);
+      return;
+    }
     if (Number(process.env.MOCK_CONTEXT_FULL_AT) > 0 && mockContextTokens >= Number(process.env.MOCK_CONTEXT_FULL_AT)
       && !isCompactCommand(effectiveMessage)) {
       const sid = outputSessionId;

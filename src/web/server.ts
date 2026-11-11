@@ -747,6 +747,7 @@ let autoContinueHandle: { stop: () => void } | null = null
 let idleCompactionHandle: { stop: () => void } | null = null
 let promptRefreshRespawnHandle: { stop: () => void } | null = null
 let contextFullRecoveryHandle: { stop: () => void } | null = null
+let safeguardSwitchHandle: { stop: () => void } | null = null
 let endpointWaitHandle: { stop: () => void } | null = null
 let usageLimitWaitHandle: { stop: () => void } | null = null
 let threadAiHandles: Array<{ stop: () => void }> = []
@@ -2130,36 +2131,45 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // A turn that ends with "Prompt is too long" gets its session compacted and its unanswered
       // messages resent (src/core/sessions/context-full-recovery.ts).
       const { startContextFullRecovery } = await import('../core/sessions/context-full-recovery.js')
+      // A recovery that held a turn's error and could not get past it: the card and the phase the error
+      // would have raised, while `still()` says the session is still in that state.
+      const raiseHeldError = async (rec: import('../core/types.js').SessionRecord, words: string, why: string, still: () => Promise<boolean>) => {
+        const ref = rec.taskId ? await resolveTaskRef(rec.taskId).catch(() => null) : null
+        if (!(await still())) return
+        await publishSessionErrorNotification({
+          title: 'Session Error',
+          body: `${ref ? `${ref}: ` : ''}${words}`,
+          dedupScope: `session:${rec.claudeSessionId}:runtime`,
+          sessionId: rec.claudeSessionId,
+          taskId: rec.taskId,
+        })
+        // The session stays the task's. A compaction's quiet turn keeps a short grace after its result,
+        // in which the phase ignores the session: wait it out.
+        if (!rec.taskId) return
+        const { isQuietTurn } = await import('../core/sessions/quiet-turn.js')
+        for (let i = 0; i < 90 && isQuietTurn(rec.claudeSessionId); i++) await new Promise((r) => setTimeout(r, 1_000))
+        if (!(await still())) return
+        const { applySessionPhase } = await import('../core/phase.js')
+        await applySessionPhase(rec.taskId, 'session:error', why, { sessionId: rec.claudeSessionId })
+          .catch((err) => log.web.warn('held session error: phase not applied', { taskId: rec.taskId, why, error: String(err) }))
+      }
+      const { getSessionByClaudeId: currentRecord } = await import('../core/session-tracker.js')
       contextFullRecoveryHandle = startContextFullRecovery({
-        // Only a recovery that gave up is the user's: its card then says why (held while it works).
-        gaveUp: async (rec, words, failedAt) => {
-          const { getSessionByClaudeId } = await import('../core/session-tracker.js')
-          // Only while the record still holds this failure: a click may have recovered it meanwhile.
-          const stillFailed = async () => {
-            const now = await getSessionByClaudeId(rec.claudeSessionId).catch(() => null)
-            return now?.contextRecovery?.state === 'failed' && now.contextRecovery.at === failedAt
-          }
-          const ref = rec.taskId ? await resolveTaskRef(rec.taskId).catch(() => null) : null
-          if (!(await stillFailed())) return
-          await publishSessionErrorNotification({
-            title: 'Session Error',
-            body: `${ref ? `${ref}: ` : ''}${words}`,
-            dedupScope: `session:${rec.claudeSessionId}:runtime`,
-            sessionId: rec.claudeSessionId,
-            taskId: rec.taskId,
-          })
-          // The phase the error would have set, held while the recovery worked (the session stays the
-          // task's: its banner's Compact and resend is the way on). A compaction's quiet turn keeps a
-          // short grace after its result, in which the phase ignores the session: wait it out.
-          if (rec.taskId) {
-            const { isQuietTurn } = await import('../core/sessions/quiet-turn.js')
-            for (let i = 0; i < 90 && isQuietTurn(rec.claudeSessionId); i++) await new Promise((r) => setTimeout(r, 1_000))
-            if (!(await stillFailed())) return
-            const { applySessionPhase } = await import('../core/phase.js')
-            await applySessionPhase(rec.taskId, 'session:error', 'context-full-recovery:gave-up', { sessionId: rec.claudeSessionId })
-              .catch((err) => log.web.warn('context recovery: phase not applied', { taskId: rec.taskId, error: String(err) }))
-          }
-        },
+        // Only a recovery that gave up is the user's (its banner's Compact and resend is the way on),
+        // and only while the record still holds this failure: a click may have recovered it meanwhile.
+        gaveUp: (rec, words, failedAt) => raiseHeldError(rec, words, 'context-full-recovery:gave-up', async () => {
+          const now = await currentRecord(rec.claudeSessionId).catch(() => null)
+          return now?.contextRecovery?.state === 'failed' && now.contextRecovery.at === failedAt
+        }),
+      })
+      // Two turns in a row the model's safeguards refused move the session to another model, and what
+      // got no answer is resent (src/core/sessions/safeguard-switch.ts).
+      const { startSafeguardSwitch } = await import('../core/sessions/safeguard-switch.js')
+      safeguardSwitchHandle = startSafeguardSwitch({
+        // Only a switch that could not happen is the user's; a turn that runs again (someone's message)
+        // is past this error.
+        gaveUp: (rec, words) => raiseHeldError(rec, words, 'safeguard-switch:gave-up', async () =>
+          (await currentRecord(rec.claudeSessionId).catch(() => null))?.process_status !== 'running'),
       })
     }
     // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
@@ -5567,8 +5577,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // "Prompt is too long" of a session Walnut recovers: it compacts and resends
       // (sessions/context-full-recovery.ts), so the task keeps its session and its phase.
       const { contextFullRecovery } = await import('../core/sessions/context-full-recovery.js')
-      const contextRecoveryHolds = !!sessionId && isError
-        && !!contextFullRecovery()?.takes(result, await laneCheckRead(sessionId).catch(() => null))
+      const { safeguardSwitchHolds } = await import('../core/sessions/safeguard-switch.js')
+      const contextRecoveryHolds = (!!sessionId && isError
+        && !!contextFullRecovery()?.takes(result, await laneCheckRead(sessionId).catch(() => null)))
+        // Refused twice in a row by the model's safeguards: Walnut moves it to another model and
+        // resends (sessions/safeguard-switch.ts), and raises the card itself only if it cannot.
+        || safeguardSwitchHolds(sessionId, turnGen)
       if (isError) {
         // A retry-exhaustion result that auto-continue is about to resume is not
         // a condition for the human: the card sat red for the whole continued
@@ -5583,7 +5597,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         } else if (contextRecoveryHolds) {
           // "Prompt is too long": Walnut compacts and resends (sessions/context-full-recovery.ts), and
           // raises the card itself only if it gives up.
-          log.session.info('session error card held: the context recovery compacts this session', { sessionId, taskId })
+          log.session.info('session error card held: the context recovery or the safeguard switch works on this session', { sessionId, taskId })
         } else if (endpointWaitHolds) {
           // The endpoint was never reached, or the usage limit stopped it: Walnut waits and continues
           // (sessions/endpoint-wait.ts, sessions/usage-limit-wait.ts), and raises the card itself only
@@ -5678,7 +5692,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // Same rule for an armed ScheduleWakeup (user decision 2026-09-01,
         // inc-1788284320937): the model ended its turn only to be re-invoked
         // by the timer — the fired turn that does NOT re-arm hands back.
-        if (!workContinues) {
+        // An ACP turn the model's safeguards refused ends "clean" (stopReason refusal): while the
+        // safeguard switch moves the session, its task keeps its phase (sessions/safeguard-switch.ts).
+        const refusedHeld = safeguardSwitchHolds(sessionId, turnGen)
+        if (refusedHeld) log.session.info('session result phase held: the safeguard switch moves this session', { sessionId, taskId })
+        if (!workContinues && !refusedHeld) {
           try {
             const { applySessionPhase } = await import('../core/phase.js')
             // turnGen threads the emitting session's turn generation into the
@@ -7411,6 +7429,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (idleCompactionHandle) {
     idleCompactionHandle.stop()
     idleCompactionHandle = null
+  }
+  if (safeguardSwitchHandle) {
+    safeguardSwitchHandle.stop()
+    safeguardSwitchHandle = null
   }
   if (contextFullRecoveryHandle) {
     contextFullRecoveryHandle.stop()

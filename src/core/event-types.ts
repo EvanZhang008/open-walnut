@@ -275,6 +275,8 @@ export interface SessionResultEvent {
   retryExhausted?: boolean;
   /** The subscription's usage limit stopped the turn (sessions/usage-limit-wait.ts continues it at the reset). */
   usageLimit?: import('./sessions/usage-limit-model.js').UsageLimitFacts;
+  /** The model's safeguards refused this turn (sessions/safeguard-stop.ts): the safeguard switch counts it. */
+  safeguardStop?: import('./sessions/safeguard-stop.js').SafeguardStopFacts;
   interrupted?: boolean;
   /** The turn was a compaction stopped before its boundary (claude-code-session.ts): it ends as no work stopped. */
   compactionStopped?: boolean;

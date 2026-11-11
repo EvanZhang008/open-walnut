@@ -32,6 +32,7 @@ import type {
   SessionStartParams,
 } from './types.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
+import { safeguardStopOfResult } from '../core/sessions/safeguard-stop.js'
 
 // ── Types ──
 
@@ -613,7 +614,9 @@ export class SdkSession {
         resultText = errorResult.errors?.join('\n') ?? ''
       }
 
+      const refused = safeguardStopOfResult(result as { is_error?: unknown; stop_reason?: unknown })
       this.emitEvent('session:result', {
+        ...(refused ? { safeguardStop: refused } : {}),
         sessionId: result.session_id,
         result: resultText,
         subtype,

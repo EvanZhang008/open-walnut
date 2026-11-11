@@ -296,6 +296,8 @@ export type ModelChangeResult =
 export async function applySessionModelChange(
   sessionId: string,
   rawModel: unknown,
+  /** `remember: false`: Walnut's own switch (safeguard-switch.ts), never a pick for the next Ask Walnut. */
+  opts: { remember?: boolean } = {},
 ): Promise<ModelChangeResult> {
   if (typeof rawModel !== 'string' || !rawModel.trim()) {
     throw new SessionControlError('model must be a non-empty string', 400);
@@ -371,7 +373,7 @@ export async function applySessionModelChange(
   // the pill re-selects this exact row next time (no-op off Ask Walnut). Not
   // for a value the CLI just refused — that must not become every future Ask
   // Walnut's default.
-  if (!rejectedByCli) await rememberAskWalnutSessionPick(sessionId, { model: rawModel });
+  if (!rejectedByCli && opts.remember !== false) await rememberAskWalnutSessionPick(sessionId, { model: rawModel });
 
   log.session.info('session model changed', { sessionId, model: rawModel, cliModel, appliedLive: applied, effectiveModel });
   return { model: rawModel, cliModel, appliedLive: applied, effectiveModel };

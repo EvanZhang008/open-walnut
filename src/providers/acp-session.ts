@@ -108,6 +108,7 @@ import {
 } from './acp-permission-posture.js'
 import { CODEX_MODEL_PREFIX_ENV, codexPickForProvider, codexRawConfig, parseCodexBaseConfig, resolveCodexEngine } from './codex-engine-config.js'
 import { parseUsageLimitReset, usageLimitSentence } from './usage-limit-text.js'
+import { safeguardStopOfAcpStopReason } from '../core/sessions/safeguard-stop.js'
 import type { UsageLimitFacts } from '../core/sessions/usage-limit-model.js'
 import type { OutlivingSource } from '../core/sessions/outliving-work.js'
 
@@ -1030,6 +1031,11 @@ export class AcpSession {
       // Its own command runs on (or ended, and its wake is on the way): the turn ended, the work did
       // not, so the task stays in progress (server.ts session-result, as for a Claude background command).
       if (name === 'session:result' && (this._backgroundWork.length > 0 || this._pendingWake)) full.detachedBgActive = true
+      // The model's safeguards refused the turn (the protocol's own stop reason): the safeguard switch counts it.
+      if (name === 'session:result' && v > this._committedV) {
+        const refused = safeguardStopOfAcpStopReason(full.stopReason)
+        if (refused) full.safeguardStop = { ...refused, ...(this._models.currentModelId ? { model: this._models.currentModelId } : {}) }
+      }
       if (name === 'session:permission-request') {
         const requestId = full.requestId as string
         const options = (full.acpOptions as Array<{ optionId?: string; kind?: string; name?: string }>) ?? []

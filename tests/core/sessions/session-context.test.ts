@@ -375,7 +375,10 @@ describe('buildSessionContext (identity note)', () => {
     // the cap (two tasks reached rounds 9 and 12), and a wrong-chat message is forwarded, never sent back. 10,332.
     // 10400 → 10500 (2026-11-10) for the user's MCP-first rule: the Walnut MCP tools whenever they
     // are listed, the CLI (the same ops) only where they are missing or for a scripted chain.
-    expect(systemPrompt.length).toBeLessThan(10500)
+    // 10500 → 10800 (2026-11-11) for the safeguard switch line: refused sessions kept retrying ("I can't
+    // switch models directly myself") until the user typed /model; Walnut now switches after two, and a
+    // session may ask its lead to switch it sooner.
+    expect(systemPrompt.length).toBeLessThan(10800)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

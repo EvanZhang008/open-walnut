@@ -198,6 +198,8 @@ export interface SessionResultData {
   duration?: number
   usage?: { input_tokens: number; output_tokens: number }
   modelUsage?: Record<string, { input_tokens: number; output_tokens: number }>
+  /** The model's safeguards refused the turn (core/sessions/safeguard-stop.ts). */
+  safeguardStop?: { category?: string; model?: string }
 }
 
 export interface SessionErrorData {

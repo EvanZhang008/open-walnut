@@ -105,6 +105,7 @@ import { reportLiveActivity } from '../core/sessions/live-activity-registry.js'
 import { noteRateLimitEvent } from '../core/sessions/subscription-limits.js'
 import { parseRateLimitInfo } from '../core/sessions/subscription-limits-model.js'
 import { blockedLimitOf, claudeUsageLimitFacts, usageLimitTakes } from '../core/sessions/usage-limit-model.js'
+import { safeguardStopOfCliLine, safeguardStopOfResult, type SafeguardStopFacts } from '../core/sessions/safeguard-stop.js'
 import { matchesUsageLimitText, parseUsageLimitReset } from './usage-limit-text.js'
 import { processActionsRefused, refuseProcessAction } from '../core/sessions/replica-process-guard.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
@@ -1379,6 +1380,13 @@ export class ClaudeCodeSession {
    *  reply's own api_error_params): its reset and window. Reset at every turn boundary; read at the
    *  result for the usage-limit wait (core/sessions/usage-limit-wait.ts). */
   private _turnLimitRejected: { resetsAt?: number; window?: string; blocked?: boolean } | null = null
+  /** The model's safeguards refused this turn (sessions/safeguard-stop.ts): read from Claude Code's own
+   *  error reply and result line, and stamped on the turn's session:result for the safeguard switch. */
+  private _turnSafeguardStop: SafeguardStopFacts | null = null
+  /** The `safeguardStop` fact of a turn's session:result: only an error turn the safeguards ended. */
+  private safeguardStopFields(isError: boolean | undefined): { safeguardStop?: SafeguardStopFacts } {
+    return isError && this._turnSafeguardStop ? { safeguardStop: { ...this._turnSafeguardStop } } : {}
+  }
   /** Delivery latency + path of the most recent delivered batch, surfaced into the
    *  per-turn wide event (forensic observability). Stamped by SessionRunner's
    *  logDeliveryLatency onto the target session instance (not `private` because the
@@ -1956,6 +1964,7 @@ export class ClaudeCodeSession {
       // the signal; fullText would be pre-error prose.
       result: outcome?.isError ? (outcome.resultText ?? this.fullText) : this.fullText,
       isError,
+      ...this.safeguardStopFields(isError),
       ...((interrupted || outcome?.interrupted) && !isError ? { interrupted: true } : {}),
       ...(outcome?.totalCost !== undefined ? {
         totalCost: outcome.totalCost,
@@ -2243,6 +2252,7 @@ export class ClaudeCodeSession {
         costDelta: this.billableCostDelta(totalCost),
         duration: durationMs,
         isError,
+        ...this.safeguardStopFields(isError),
       }, ['main-ai', 'session-runner'], { source: 'session-runner' })
     }, ClaudeCodeSession.TEAM_IDLE_TIMEOUT_MS)
   }
@@ -3005,6 +3015,7 @@ export class ClaudeCodeSession {
     this._askUserIntercepted = false
     this._sawApiTimeoutThisTurn = false
     this._turnLimitRejected = null
+    this._turnSafeguardStop = null
     this.fullText = ''
     this._emittedAssistantText = false  // Fresh process — nothing streamed yet
     this._failedLocalCommandThisTurn = false
@@ -4419,6 +4430,7 @@ export class ClaudeCodeSession {
       this._askUserIntercepted = false
       this._sawApiTimeoutThisTurn = false
       this._turnLimitRejected = null
+      this._turnSafeguardStop = null
       this._toolInputFilePaths = new Map()
       this._emittedStreamKeys = new Set()
       this._lastEmittedText = new Map()
@@ -7620,6 +7632,9 @@ export class ClaudeCodeSession {
         if (!msg.parent_tool_use_id && typeof msg.error === 'string' && msg.message?.model === '<synthetic>') {
           // Claude Code's own error reply: an error line, as its history row reads (session-history.ts
           // cliError), never the model's answer (2026-11-06: "Prompt is too long" read as one).
+          // A refusal by the model's safeguards is noted for the turn's result (safeguard switch).
+          const refused = this._isReplayedByOffset() !== true ? safeguardStopOfCliLine(msg as Parameters<typeof safeguardStopOfCliLine>[0]) : null
+          if (refused) this._turnSafeguardStop = { ...refused, ...(this._model ? { model: this._model } : {}) }
           const text = msg.message.content.filter(block => block.type === 'text').map(block => block.text ?? '').join('\n').trim()
           if (text && firstSightingOfLine(this._seenCompactionLineUuids, msg.uuid)) {
             bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
@@ -8136,6 +8151,14 @@ export class ClaudeCodeSession {
         // A live result proves this process read its input, also when no init
         // came first (a slash command answered locally): its first line ran.
         this.releaseResumeLine()
+        // The turn's own word that the safeguards ended it (its error reply said so first, with the flag).
+        // Any other result ends what an earlier line said: a turn the CLI started itself (a background
+        // command's follow-up) passes no turn start of Walnut's that would reset it.
+        if (safeguardStopOfResult(result as { is_error?: unknown; stop_reason?: unknown })) {
+          this._turnSafeguardStop ??= this._model ? { model: this._model } : {}
+        } else {
+          this._turnSafeguardStop = null
+        }
 
         // ── Task-notification-origin results (#870) — checked BEFORE the duplicate
         // guards. A followup result is not a turn-over, so it never sets
@@ -8713,6 +8736,7 @@ export class ClaudeCodeSession {
             costDelta,
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
+            ...this.safeguardStopFields(effectiveIsError),
             teamActive: true,
             ...(userInterrupted && !effectiveIsError ? { interrupted: true } : {}),
             ...resultUsageFields,
@@ -8760,6 +8784,7 @@ export class ClaudeCodeSession {
             isError: effectiveIsError ?? false,
             retryExhausted,
             ...(usageLimit ? { usageLimit } : {}),
+            ...this.safeguardStopFields(effectiveIsError),
             ...(userInterrupted && !effectiveIsError ? { interrupted: true } : {}),
             ...(onlyCompactionStopped ? { compactionStopped: true } : {}),
             ...(detachedBgActive ? { detachedBgActive: true } : {}),

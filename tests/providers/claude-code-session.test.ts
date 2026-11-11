@@ -4930,3 +4930,73 @@ describe("Claude Code's own error reply streams as its error line", () => {
     }
   });
 });
+
+// 2026-11-11: a turn the model's safeguards refused carries the fact on its session:result, read from
+// Claude Code's own marks (its error reply's stop_reason and the result line), never from the words.
+describe('a refused turn carries safeguardStop on its result', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const feed = (session: ClaudeCodeSession, obj: unknown) => (session as any).handleStreamLine(JSON.stringify(obj));
+  const refusalText = "API Error: Opus 5.5's safeguards flagged this message (https://www.anthropic.com/legal/aup). This sometimes happens with safe, normal conversations.\n\nDetails: `[reasoning_extraction]`";
+  // The stream-json form of Claude Code 2.1.322's reply (snake_case marks), as a daemon stream file holds it.
+  const refusedReply = {
+    type: 'assistant', parent_tool_use_id: null, uuid: 'u-refused-1', session_id: 'sess-refused',
+    error: 'invalid_request', is_api_error_message: true, refused_message_id: 'msg_x',
+    message: {
+      id: 'm-refused-1', model: '<synthetic>', role: 'assistant', type: 'message', stop_reason: 'refusal',
+      stop_details: { type: 'refusal', category: 'reasoning_extraction' }, content: [{ type: 'text', text: refusalText }],
+    },
+  };
+  const result = (extra: Record<string, unknown>) => ({
+    type: 'result', subtype: 'success', session_id: 'sess-refused', duration_ms: 10, num_turns: 1, total_cost_usd: 0, ...extra,
+  });
+  const resultOf = (seen: BusEvent[]) => seen.filter((e) => e.name === EventNames.SESSION_RESULT).map((e) => e.data as Record<string, unknown>);
+
+  it('the refusal reply then its error result: safeguardStop with the flag', () => {
+    const session = useDaemon(new ClaudeCodeSession('task-refused', 'proj', MOCK_CLI));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any).claudeSessionId = 'sess-refused';
+    const seen: BusEvent[] = [];
+    bus.subscribe('main-ai', (e: BusEvent) => { seen.push(e); });
+    try {
+      feed(session, refusedReply);
+      feed(session, result({ is_error: true, stop_reason: 'refusal', terminal_reason: 'api_error', result: refusalText }));
+      const results = resultOf(seen);
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ isError: true, safeguardStop: { category: 'reasoning_extraction' } });
+    } finally {
+      bus.unsubscribe('main-ai');
+    }
+  });
+
+  it('a result line alone that says refusal counts; another error, or prose naming the safeguards, does not', () => {
+    const session = useDaemon(new ClaudeCodeSession('task-refused-2', 'proj', MOCK_CLI));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any).claudeSessionId = 'sess-refused-2';
+    const seen: BusEvent[] = [];
+    bus.subscribe('main-ai', (e: BusEvent) => { seen.push(e); });
+    try {
+      feed(session, result({ is_error: true, stop_reason: 'refusal', terminal_reason: 'api_error', result: refusalText }));
+      expect(resultOf(seen)[0]).toMatchObject({ isError: true, safeguardStop: {} });
+    } finally {
+      bus.unsubscribe('main-ai');
+    }
+    for (const [i, extra] of ([
+      { is_error: true, stop_reason: 'end_turn', result: refusalText },
+      { is_error: false, stop_reason: 'end_turn', result: 'The safeguards flagged this message earlier; I carried on.' },
+    ] as Array<Record<string, unknown>>).entries()) {
+      const other = useDaemon(new ClaudeCodeSession(`task-not-refused-${i}`, 'proj', MOCK_CLI));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (other as any).claudeSessionId = `sess-not-refused-${i}`;
+      const got: BusEvent[] = [];
+      bus.subscribe('main-ai', (e: BusEvent) => { got.push(e); });
+      try {
+        feed(other, result(extra));
+        const r = resultOf(got);
+        expect(r).toHaveLength(1);
+        expect(r[0]!.safeguardStop).toBeUndefined();
+      } finally {
+        bus.unsubscribe('main-ai');
+      }
+    }
+  });
+});

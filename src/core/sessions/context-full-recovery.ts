@@ -129,6 +129,16 @@ export function addContextRecoveryFailListener(listener: (fail: ContextRecoveryF
   return () => { failListeners.delete(listener); };
 }
 
+/**
+ * Another recovery that held a turn's end let it go without a turn of its own to follow (the safeguard
+ * switch, safeguard-switch.ts, giving up or stopping): the same readers settle it.
+ */
+export function reportHeldTurnFailed(fail: ContextRecoveryFail): void {
+  for (const listener of failListeners) {
+    try { listener(fail); } catch { /* a listener's own fault */ }
+  }
+}
+
 /** How long, and how often, a compaction a restart caught is looked for in its host. */
 export const RESTART_CHECK_MS = 30 * 60_000;
 export const RESTART_CHECK_EVERY_MS = 30_000;
@@ -1016,13 +1026,18 @@ export function contextFullRecovery(): ContextFullRecovery | null {
 
 /**
  * Whether a session's turn end belongs to the recovery: it holds the session (a compaction, a resend,
- * one a restart caught), or the turn ended on a "Prompt is too long" it takes. Whatever acts on a
+ * one a restart caught), or the turn ended on a "Prompt is too long" it takes; or to the safeguard
+ * switch, which moves a session its model's safeguards refused to another model (safeguard-switch.ts). Whatever acts on a
  * turn's end (closing a run, closing a handed-over task, a hand-back) waits while this says so: such
  * a turn answered nothing (2026-11-06). Guard: tests/core/sessions/context-full-turn-end-guard.test.ts.
  */
 export async function contextRecoveryHoldsTurn(sessionId: string | undefined, result?: string | null): Promise<boolean> {
+  if (!sessionId) return false;
+  // A turn the model's safeguards refused, whose session Walnut moves to another model, answered nothing too.
+  const { safeguardSwitchHolds } = await import('./safeguard-switch.js');
+  if (safeguardSwitchHolds(sessionId)) return true;
   const recovery = instance;
-  if (!recovery || !sessionId) return false;
+  if (!recovery) return false;
   if (recovery.holds(sessionId)) return true;
   if (!isContextFullText(result)) return false;
   const { getSessionByClaudeId } = await import('../session-tracker.js');

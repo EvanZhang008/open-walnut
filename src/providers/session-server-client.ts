@@ -351,6 +351,7 @@ export class SessionServerClient {
         duration: d.duration,
         isError: d.subtype !== 'success' && d.subtype !== 'interrupted',
         subtype: d.subtype,
+        ...(d.safeguardStop ? { safeguardStop: d.safeguardStop } : {}),
       }, ['main-ai', 'session-runner'], { source: 'session-server' })
       break
     }

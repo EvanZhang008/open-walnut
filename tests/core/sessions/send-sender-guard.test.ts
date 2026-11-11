@@ -114,6 +114,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/idle-compaction.ts': 1,
   // "Prompt is too long" recovery: its bare `/compact` (unframed, a quiet turn) and the resend note, both agents'.
   'src/core/sessions/context-full-recovery.ts': 1,
+  // Two refused turns in a row: the note that names the new model and resends what got no answer (an agent's).
+  'src/core/sessions/safeguard-switch.ts': 1,
   'src/core/session-message-queue.ts': 1,          // the queue's own enqueue inside sendMessageToSession
   'src/core/sessions/adopt-notice.ts': 1,
   // A teammate's folded ask answered elsewhere: one Walnut note, source wait-until like needs-recheck.
@@ -193,7 +195,7 @@ const SOURCE_SENDER: Record<string, 'person' | 'agent'> = {
   'routine-trigger': 'agent', 'routine-watcher': 'agent', 'router-runtime': 'agent', 'brief-refresh': 'agent', 'side-thread-digest': 'agent',
   'app-state': 'agent', subagent: 'agent', 'notification-fix': 'agent', 'session-start': 'agent',
   'api-agent': 'agent', 'board-reminder': 'agent', 'auto-continue': 'agent', 'hook:abc': 'agent',
-  'brand-new-source': 'agent', 'background-work-ended': 'agent', 'idle-compact': 'agent', 'context-compact': 'agent', 'context-recovery': 'agent', 'pr-watch': 'agent',
+  'brand-new-source': 'agent', 'background-work-ended': 'agent', 'idle-compact': 'agent', 'context-compact': 'agent', 'context-recovery': 'agent', 'safeguard-switch': 'agent', 'pr-watch': 'agent',
   // Bus tags of emits that are attributed on their own (START_EMITTERS), not send sources a person types into.
   'web-ui': 'agent', 'subagent-runner': 'agent',
 };

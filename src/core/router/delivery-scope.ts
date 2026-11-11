@@ -13,7 +13,7 @@ export function isRouterDelivery(sessionId: string, messageId: string | undefine
   return !!held && held.sessionId === sessionId && held.messageId === messageId;
 }
 
-export const AREA_RECOVERY_SOURCES = new Set(['auto-recover', 'context-compact', 'context-recovery']);
+export const AREA_RECOVERY_SOURCES = new Set(['auto-recover', 'context-compact', 'context-recovery', 'safeguard-switch']);
 
 export const ROUTER_RUNTIME_SOURCE = 'router-runtime';
 

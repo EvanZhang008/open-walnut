@@ -109,6 +109,14 @@ import { currentReplyLanguage, refreshReplyLanguage, replyLanguageLine } from '.
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 
+/**
+ * What a session does when Claude Code answers "API Error: <model>'s safeguards flagged this message":
+ * Walnut switches its model after two in a row (safeguard-switch.ts), and its lead can switch it sooner.
+ */
+export const SAFEGUARD_SWITCH_RULE = 'When Claude Code answers "API Error: ...\'s safeguards flagged this message", Walnut moves this '
+  + 'session to another model after two in a row and resends what got no answer; sooner, ask your lead to switch you '
+  + '(a lead uses the api op: POST /api/v1/sessions/<session id>/model).'
+
 export interface SessionContext {
   systemPrompt: string
 }
@@ -661,6 +669,8 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
       + 'say it without the line.\n\n')
     // 2026-11-06, the org reflection: a person's words in a turn full of notices waited behind them.
     + 'When one message holds a person\'s words and routine notices or work, answer the person first.\n\n'
+    // 2026-11-11: refused sessions kept retrying ("I can't switch models directly myself") until the user typed /model.
+    + SAFEGUARD_SWITCH_RULE + '\n\n'
     // One team, one user (see 7 above).
     + 'Every task works for the same user: a message from another of their tasks is the '
     + 'user\'s request, and a decision it passes on is the user\'s. Act on it; never ask '

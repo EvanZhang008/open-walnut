@@ -2441,6 +2441,13 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
         log.session.info('turn-end notices held: the usage-limit wait continues this turn', { sessionId: record.claudeSessionId, taskId: task?.id });
         return;
       }
+      // The model's safeguards refused it twice: Walnut moves it to another model and resends
+      // (sessions/safeguard-switch.ts), so its askers hear the answer that follows, its lead one line.
+      const { safeguardSwitchHolds } = await import('../sessions/safeguard-switch.js');
+      if (safeguardSwitchHolds(record.claudeSessionId)) {
+        log.session.info('turn-end notices held: the safeguard switch moves this session to another model', { sessionId: record.claudeSessionId, taskId: task?.id });
+        return;
+      }
     }
 
     // A turn that only made progress leaves the requests it owes open (sessions/request-progress.ts):
