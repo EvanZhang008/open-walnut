@@ -1215,9 +1215,16 @@ enum BoardModel {
             for held in heldWaiting where honoured == nil || held.tier == honoured {
                 scoped.append(held.row)
             }
-            // Watching spans the whole projection, pinned or not, any tier, any state.
+            // Watching follows the honoured tier, including held WAITING and completed rows.
+            // All still includes unpinned watches.
             var watched: [BoardRow] = []
             for task in tasks where BoardStatusSectionModel.isWatched(task) {
+                if let honoured {
+                    let tier = boardTier(
+                        pinned: task.pinned, splitTier: splitTierOf[task.id], knownTiers: knownTiers
+                    )
+                    guard tier == honoured else { continue }
+                }
                 watched.append(BoardRow(
                     task: task, session: sessionOf[task.id],
                     knownSessionIds: knownSessionIds[task.id],

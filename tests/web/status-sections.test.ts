@@ -139,28 +139,42 @@ describe('buildStatusSections', () => {
     const t = all();
     const later = task({ phase: 'IN_PROGRESS', updated_at: '2026-10-20T00:00:00.000Z' });
     const scope = [t.needs, t.working, later, t.todo, t.parked, t.done, t.watchedDone];
-    const m = buildStatusSections({ scope, all: [...scope, t.elsewhere], passes: () => true });
+    const m = buildStatusSections({ scope, passes: () => true });
     expect(ids(m.needs)).toEqual([t.needs.id]);
     // A to-do nobody started waits, beside the parked one (2026-10-31).
     expect(ids(m.waiting).sort()).toEqual([t.parked.id, t.todo.id].sort());
     expect(ids(m.done)).toEqual([t.done.id]);
     expect(ids(m.working)).toEqual([later.id, t.working.id]);
     expect(m.workingCount).toBe(2);
-    // Watching spans every view, the task outside this view's scope included.
-    expect(ids(m.watching)).toEqual([t.watchedDone.id, t.elsewhere.id]);
+    // Watching follows the same view scope as the other sections.
+    expect(ids(m.watching)).toEqual([t.watchedDone.id]);
+  });
+
+  it('keeps only the current view’s watched rows when the status filter hides other sections', () => {
+    const t = all();
+    const m = buildStatusSections({ scope: [t.watchedDone, t.needs], statesActive: false, passes: () => true });
+    expect(ids(m.watching)).toEqual([t.watchedDone.id]);
+    expect(m.needs).toEqual([]);
+    expect(m.workingCount).toBe(0);
+  });
+
+  it('deduplicates watched rows and clears Watching when the view is empty', () => {
+    const t = all();
+    expect(ids(buildStatusSections({ scope: [t.watchedDone, t.watchedDone], passes: () => true }).watching)).toEqual([t.watchedDone.id]);
+    expect(buildStatusSections({ scope: [], passes: () => true }).watching).toEqual([]);
   });
 
   it('the chips narrow every section, Watching too', () => {
     const t = all();
     const scope = [t.needs, t.parked, t.watchedDone, t.elsewhere];
-    const m = buildStatusSections({ scope, all: scope, passes: (x) => x.project === 'Garden' });
+    const m = buildStatusSections({ scope, passes: (x) => x.project === 'Garden' });
     expect(ids(m.watching)).toEqual([t.watchedDone.id]);
     expect(m.needs.length + m.waiting.length).toBe(2);
   });
 
   it('a duplicate in the scope counts once', () => {
     const t = all();
-    const m = buildStatusSections({ scope: [t.working, t.working, t.needs, t.needs], all: [], passes: () => true });
+    const m = buildStatusSections({ scope: [t.working, t.working, t.needs, t.needs], passes: () => true });
     expect(m.workingCount).toBe(1);
     expect(m.working).toHaveLength(1);
     expect(m.needs).toHaveLength(1);
@@ -168,34 +182,34 @@ describe('buildStatusSections', () => {
 
   it('the unloaded archive joins the Completed count only when asked', () => {
     const t = all();
-    expect(buildStatusSections({ scope: [t.done], all: [], passes: () => true, archiveHidden: 40, archiveCounts: true }).doneUnloaded).toBe(40);
-    expect(buildStatusSections({ scope: [t.done], all: [], passes: () => true, archiveHidden: 40, archiveCounts: false }).doneUnloaded).toBe(0);
+    expect(buildStatusSections({ scope: [t.done], passes: () => true, archiveHidden: 40, archiveCounts: true }).doneUnloaded).toBe(40);
+    expect(buildStatusSections({ scope: [t.done], passes: () => true, archiveHidden: 40, archiveCounts: false }).doneUnloaded).toBe(0);
   });
 
   it('an archive a chip keeps out of the count is still offered (archiveLeft)', () => {
     const t = all();
-    expect(buildStatusSections({ scope: [t.done], all: [], passes: () => true, archiveHidden: 40, archiveOffered: true }).archiveLeft).toBe(true);
+    expect(buildStatusSections({ scope: [t.done], passes: () => true, archiveHidden: 40, archiveOffered: true }).archiveLeft).toBe(true);
     // A tier view (not the whole board) is not offered the archive.
-    expect(buildStatusSections({ scope: [t.done], all: [], passes: () => true, archiveHidden: 40, archiveCounts: false }).archiveLeft).toBe(false);
-    expect(buildStatusSections({ scope: [t.done], all: [], passes: () => true, archiveHidden: 40, archiveCounts: true }).archiveLeft).toBe(false);
-    expect(buildStatusSections({ scope: [t.done], all: [], passes: () => true, archiveHidden: 0, archiveOffered: true }).archiveLeft).toBe(false);
+    expect(buildStatusSections({ scope: [t.done], passes: () => true, archiveHidden: 40, archiveCounts: false }).archiveLeft).toBe(false);
+    expect(buildStatusSections({ scope: [t.done], passes: () => true, archiveHidden: 40, archiveCounts: true }).archiveLeft).toBe(false);
+    expect(buildStatusSections({ scope: [t.done], passes: () => true, archiveHidden: 0, archiveOffered: true }).archiveLeft).toBe(false);
   });
 
   it('a row in its exit grace stays where it was drawn', () => {
     // Completed from Needs you: still under Needs you while it fades out.
     const justDone = task({ status: 'done', phase: 'COMPLETE', completed_at: new Date().toISOString() });
-    const m = buildStatusSections({ scope: [justDone], all: [], passes: () => true, placeOf: () => 'needs' });
+    const m = buildStatusSections({ scope: [justDone], passes: () => true, placeOf: () => 'needs' });
     expect(ids(m.needs)).toEqual([justDone.id]);
     expect(m.done).toHaveLength(0);
     // Completed in the list: the list holds it, so no section draws it.
-    const inList = buildStatusSections({ scope: [justDone], all: [], passes: () => true, placeOf: () => 'working' });
+    const inList = buildStatusSections({ scope: [justDone], passes: () => true, placeOf: () => 'working' });
     expect(inList.done).toHaveLength(0);
     expect(inList.workingCount).toBe(1);
   });
 
   it('a snoozed task sleeps under Waiting / snoozed', () => {
     const later = task({ start_date: '2099-01-01' });
-    const m = buildStatusSections({ scope: [later], all: [], passes: () => true, snoozed: (x) => x.id === later.id });
+    const m = buildStatusSections({ scope: [later], passes: () => true, snoozed: (x) => x.id === later.id });
     expect(ids(m.waiting)).toEqual([later.id]);
     expect(m.workingCount).toBe(0);
   });

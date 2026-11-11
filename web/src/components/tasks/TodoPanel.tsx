@@ -7593,8 +7593,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const snoozed = dateDefault ? (t: Task) => !dimPasses(t, 'date', filterEvalCtx) : undefined;
     const lastPlace = lastPlaceRef.current;
     return buildStatusSections({
-      scope: sectionsActive ? sectionScope : [],
-      all: isSearchMode ? [] : tasks,
+      scope: isSearchMode ? [] : sectionScope,
+      statesActive: sectionsActive,
       passes,
       snoozed,
       archiveHidden: tasksStore?.completedHidden ?? 0,

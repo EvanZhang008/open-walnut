@@ -61,10 +61,10 @@ describe('Not started: Home (Flat)', () => {
 
   it('only Flat splits it out: By project keeps those tasks in its list', () => {
     const rows = [...NOT_STARTED.map((us) => task({ us })), ...WAITS.map((us) => task({ us, phase: 'WAITING' }))];
-    const flat = buildStatusSections({ scope: rows, all: rows, passes: () => true, splitNotStarted: true });
+    const flat = buildStatusSections({ scope: rows, passes: () => true, splitNotStarted: true });
     expect(flat.notstarted).toHaveLength(NOT_STARTED.length);
     expect(flat.waiting).toHaveLength(WAITS.length);
-    const plain = buildStatusSections({ scope: rows, all: rows, passes: () => true });
+    const plain = buildStatusSections({ scope: rows, passes: () => true });
     expect(plain.notstarted).toHaveLength(0);
     expect(plain.waiting).toHaveLength(rows.length);
     for (const us of NOT_STARTED) expect(stateSectionNoNeeds(task({ us }))).toBe('working');

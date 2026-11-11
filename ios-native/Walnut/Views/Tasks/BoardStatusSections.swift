@@ -7,7 +7,7 @@ import Foundation
 // task panel and this board draw the same headings (`web/src/components/tasks/
 // status-sections.ts` is the web's half of this file):
 //
-//   Watching           open    tasks the user watches, whatever their state, from every tier
+//   Watching           open    tasks the user watches in the current tier, whatever their state
 //                              (open first, then the user's choice; so are Needs you, Working)
 //   Needs you          open    open tasks whose one user status says the user is needed, To read
 //                              ones included (nothing asked, a result or an answer to read:
@@ -256,8 +256,7 @@ enum BoardStatusSectionModel {
     /// - Parameters:
     ///   - scoped: the board rows of the view (the honoured tier, or the whole pinned
     ///     board), WAITING rows included, in board order.
-    ///   - watched: every watched row of the projection, from any tier and pinned or not:
-    ///     a watched task is in front of the user in every view.
+    ///   - watched: watched rows of the honoured tier; All includes unpinned watches too.
     ///   - workingCount: the rows the bands then draw.
     static func make(
         scoped: [BoardRow], watched: [BoardRow], workingCount: Int,

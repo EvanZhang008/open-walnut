@@ -176,28 +176,36 @@ final class BoardStatusSectionsTests: XCTestCase {
 
     // MARK: - Watching
 
-    /// Watching spans the whole projection: an unpinned task, a task in another tier than the
-    /// one in view, a done task and a WAITING one. A watched task is in no other section and
-    /// in no band.
-    func testWatchingSpansTheWholeProjectionAndOwnsItsRows() {
+    /// Watching follows the selected tier, including done and WAITING tasks. An unpinned
+    /// watch is visible only on All. A watched task is in no other section or band.
+    func testWatchingFollowsTheSelectedTierAndOwnsItsRows() {
         let tasks = [
             task("plain"),
             task("wPinned", watched: "2026-08-25T00:00:00Z"),
             task("wUnpinned", pinned: false, watched: "2026-08-24T00:00:00Z"),
             task("wOther", watched: "2026-08-26T00:00:00Z"),
+            task("wWait", watched: "2026-08-27T00:00:00Z"),
             task("wDone", status: "done", phase: "COMPLETE", watched: "2026-08-23T00:00:00Z"),
             task("wNeeds", phase: "NEED_ACTION", watched: "2026-08-22T00:00:00Z"),
             task("wParked", phase: "WAITING", watched: "2026-08-21T00:00:00Z"),
             task("notWatched", watched: ""),
         ]
-        let tierOf = ["plain": "focus", "wPinned": "focus", "wOther": "satellite", "wDone": "focus",
+        let tierOf = ["plain": "focus", "wPinned": "focus", "wOther": "satellite", "wWait": "wait", "wDone": "focus",
                       "wNeeds": "focus", "wParked": "focus", "notWatched": "focus"]
-        let b = board(tasks, tierOf: tierOf, scope: "focus")
-        XCTAssertEqual(b.sections.watching.map(\.id),
-            ["wParked", "wNeeds", "wDone", "wUnpinned", "wPinned", "wOther"],
-            "every watched task, oldest watch first")
-        XCTAssertEqual(Set(bandIds(b)), ["plain", "notWatched"])
-        XCTAssertTrue(b.sections.needs.isEmpty && b.sections.waiting.isEmpty && b.sections.done.isEmpty)
+        for grouping in [BoardGrouping.tier, .project] {
+            let b = board(tasks, tierOf: tierOf, grouping: grouping, scope: "focus")
+            XCTAssertEqual(b.sections.watching.map(\.id),
+                ["wParked", "wNeeds", "wDone", "wPinned"], "only Focus, oldest watch first")
+            XCTAssertEqual(Set(bandIds(b)), ["plain", "notWatched"])
+            XCTAssertTrue(b.sections.needs.isEmpty && b.sections.waiting.isEmpty && b.sections.done.isEmpty)
+            let satellite = board(tasks, tierOf: tierOf, grouping: grouping, scope: "satellite")
+            XCTAssertEqual(satellite.sections.watching.map(\.id), ["wOther"])
+            XCTAssertEqual(satellite.rail.first { $0.bandId == "satellite" }?.count, 1)
+            XCTAssertEqual(board(tasks, tierOf: tierOf, grouping: grouping, scope: "wait").sections.watching.map(\.id), ["wWait"])
+            let all = board(tasks, tierOf: tierOf, grouping: grouping)
+            XCTAssertEqual(all.sections.watching.map(\.id),
+                ["wParked", "wNeeds", "wDone", "wUnpinned", "wPinned", "wOther", "wWait"])
+        }
     }
 
     /// A new watch lands at the foot: Watching keeps the order the user added them, and a

@@ -4,7 +4,10 @@
  * will expand"). Every view draws its tasks under four status headings, plus the
  * user's Watching list on top:
  *
- *   Watching   open    tasks the user keeps in front of them, whatever their state
+ *   Watching   open    tasks the user keeps in front of them, whatever their state, drawn
+ *                      from the view's own scope like every other section: a tier tab shows
+ *                      only that tier's watched tasks (2026-11-11, the user: a Focus task is
+ *                      Watching only inside Focus); All, Projects and Recent show every one
  *   Needs you  open    the task's user status is Needs you, or To read (it finished, or
  *                      answered the user, asking nothing: 2026-11-02, the user, under Waiting
  *                      "this is not waiting"; 2026-11-03, "I dont wnat serpeate to read"); each
@@ -288,8 +291,8 @@ export interface StatusSectionsModel {
 export interface StatusSectionsInput {
   /** The tasks the current view draws from (a tier's members, the pins, every task). */
   scope: readonly Task[];
-  /** Every task, for Watching: a watched task shows in every view. */
-  all: readonly Task[];
+  /** False when the Status filter hides state sections; Watching still follows the view. */
+  statesActive?: boolean;
   /** The view's chips, with the Status rule let go (each section is a status), and
    *  the default Date rule too (a snoozed task is a section of its own). */
   passes: (task: Task) => boolean;
@@ -321,7 +324,9 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
   for (const t of input.scope) {
     if (seen.has(t.id)) continue;
     seen.add(t.id);
-    if (isWatched(t) || !input.passes(t)) continue;
+    if (!input.passes(t)) continue;
+    if (isWatched(t)) { watching.push(t); continue; }
+    if (input.statesActive === false) continue;
     const place = input.placeOf?.(t) ?? (input.splitNotStarted ? drawnSectionOf(t, input.snoozed) : stateSectionOf(t, input.snoozed));
     switch (place) {
       case 'needs': needs.push(t); break;
@@ -331,7 +336,6 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
       default: working.push(t);
     }
   }
-  for (const t of input.all) if (isWatched(t) && input.passes(t)) watching.push(t);
   return {
     watching: sortSectionTasks('watching', watching),
     needs: sortSectionTasks('needs', needs),
