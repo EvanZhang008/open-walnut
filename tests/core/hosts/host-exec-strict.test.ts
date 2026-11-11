@@ -192,6 +192,10 @@ describe('lines as each bash printed them (2026-11-05 code review 13; real runs 
     // The same with another pid: a member of this pipe; with output between: not.
     expect(failedStepOf(bgPipe.replace('bg 21', 'bg 0'), J, 1)?.command).toBe('grep -q nomatch-zz /etc/hostname')
     expect(failedStepOf(bgPipe.replace('bg 21', 'bg 0').replace(`\n\n${M} 1 [1 0]`, `\nmid\n\n${M} 1 [1 0]`), J, 1)?.command).toBe('cat')
+    // bash 3.2 (macOS) has no $BASHPID: its subshell asks a sh it execs for its parent, so the same
+    // pid tells the background job (2026-11-11: it said pid 0, and the Mac named the job's grep).
+    const bg3 = `${m(1, '1', 0, 'grep -q zz-nomatch /dev/null', 'in a subshell, bash 3, pid 52390')}${m(1, '1 0', 2, 'cat', 'bash 3, bg 52390')}`
+    expect(failedStepOf(bg3, J, 1)).toEqual({ exitCode: 1, command: 'cat', pipeStatus: [1, 0] })
     const arith = `${m(1, '1', 1, 'grep -q x f', 'in a subshell, bash 5, pid 0')}${m(1, '0', 4, '(( 1 == 2 ))', 'bash 5, bg 0')}`
     expect(failedStepOf(arith, J, 1)?.command).toBe('(( 1 == 2 ))')
     const bash4 = `${m(1, '1', 0, 'false', 'in a subshell, bash 4, pid 5769')}${m(1, '1', 2, 'grep -q zz /etc/hostname', 'bash 4, bg 5769')}`

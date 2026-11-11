@@ -43,13 +43,16 @@ const headSrc = (jobId: string) => `walnut strict ${esc(jobId)} ${sealFor(jobId)
  * also differs: only bash 5 counts a `-c` line's lines from 1 (code review 13: bash 4 gives the line
  * a function is written on, less one). So every line says bash's major version, the inner line also
  * that it is inner: failedStepOf names its command, and the output keeps only the outer line,
- * without the tag. The inner line also gives its subshell's pid ($BASHPID) and the outer line the
- * last background job's ($!): a subshell started with `&` lends the shell's step nothing, whatever
- * printed when (code review 13: `( …; grep -q x f ) &` named a later failing pipe).
+ * without the tag. The inner line also gives its subshell's pid ($BASHPID; bash 3.2 has none, so it
+ * asks a sh it execs for its parent, a fork only when a subshell fails) and the outer line the last
+ * background job's ($!): a subshell started with `&` lends the shell's step nothing, whatever printed
+ * when (code review 13: `( …; grep -q x f ) &` named a later failing pipe; 2026-11-11, it still did
+ * on the Mac's bash 3.2, whose inner line said pid 0).
  */
 const BASH_TAG = '\t(bash '
 const SUBSHELL_TAG = '\t(in a subshell, bash '
-const TAG_RE = /\t\((in a subshell, )?bash (\d+)(?:, (?:pid|bg) (\d+))?\)$/
+// A pid may be empty: bash 3.2 asks /bin/sh for it, which a broken machine may lack.
+const TAG_RE = /\t\((in a subshell, )?bash (\d+)(?:, (?:pid|bg) (\d*))?\)$/
 
 /**
  * A job id is `hx-` and [A-Za-z0-9_-] only (exec.run refuses others), so it sits in the trap's quotes as it is.
@@ -65,7 +68,7 @@ const TAG_RE = /\t\((in a subshell, )?bash (\d+)(?:, (?:pid|bg) (\d+))?\)$/
  * never names it). With keep (host-exec-keep.ts) keep's own EXIT trap, set before this prefix, does
  * the same job (`exitTrap` false).
  */
-const prefix = (jobId: string, seal: string, exitTrap = true) => `set -e; (set -o pipefail) 2>/dev/null && set -o pipefail; if [ -n "\${BASH_VERSION:-}" ]; then set -E; ${exitTrap ? 'trap : EXIT; ' : ''}trap 'walnut_rc=$? walnut_ps="\${PIPESTATUS[*]}"; walnut_in="${BASH_TAG}\${BASH_VERSINFO[0]:-0}, bg \${!:-0})"; [ "\${BASH_SUBSHELL:-0}" = 0 ] || walnut_in="${SUBSHELL_TAG}\${BASH_VERSINFO[0]:-0}, pid \${BASHPID:-0})"; case $- in *e*) printf "\\n${strictMark(jobId, seal)} %s [%s] line %s: %s%s\\n" "$walnut_rc" "$walnut_ps" "\${LINENO:-0}" "$BASH_COMMAND" "$walnut_in" >&2;; esac' ERR; fi`
+const prefix = (jobId: string, seal: string, exitTrap = true) => `set -e; (set -o pipefail) 2>/dev/null && set -o pipefail; if [ -n "\${BASH_VERSION:-}" ]; then set -E; ${exitTrap ? 'trap : EXIT; ' : ''}trap 'walnut_rc=$? walnut_ps="\${PIPESTATUS[*]}"; walnut_in="${BASH_TAG}\${BASH_VERSINFO[0]:-0}, bg \${!:-0})"; [ "\${BASH_SUBSHELL:-0}" = 0 ] || walnut_in="${SUBSHELL_TAG}\${BASH_VERSINFO[0]:-0}, pid \${BASHPID:-$(exec /bin/sh -c "echo \\$PPID" 2>/dev/null)})"; case $- in *e*) printf "\\n${strictMark(jobId, seal)} %s [%s] line %s: %s%s\\n" "$walnut_rc" "$walnut_ps" "\${LINENO:-0}" "$BASH_COMMAND" "$walnut_in" >&2;; esac' ERR; fi`
 /**
  * Walnut's own commands, which bash 4 may name as the step that failed after them: strict's traps, and
  * keep's EXIT trap, which bash names in single quotes by its first line (host-exec-keep.ts TRAP_FIRST_LINE).
@@ -140,9 +143,10 @@ function marksOf(output: string, jobId: string): Mark[] {
  *
  * A subshell started with `&` lends nothing (its pid is the shell's `$!`).
  *
- * Known limits, from what bash prints. bash 3.2 has no subshell pid, so a background subshell that
- * failed last of all with nothing printed after it, in a run that exited with its code, is taken as
- * the step. For a `( … )` that runs no ERR trap inside (it ends with its own `exit N`, or bash ran
+ * Known limits, from what bash prints. bash 3.2 prints no line of the shell's own after a subshell
+ * failed, so a background subshell that failed last of all with nothing printed after it, in a run
+ * that exited with its code, is taken as the step; nor does it say a pipe's codes when the pipe's
+ * last member (a loop, a `{ … }`) failed inside. For a `( … )` that runs no ERR trap inside (it ends with its own `exit N`, or bash ran
  * its one failing command in place of the subshell, `( grep -q x f )`), bash 4 names a command that
  * ran before it, and so does the answer. Walnut's own commands are never named: no step then.
  */

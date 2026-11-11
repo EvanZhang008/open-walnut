@@ -33,7 +33,7 @@ function run(bash: string, line: string): { rc: number; out: string; jobId: stri
   return { rc: r.status ?? -1, out: fs.readFileSync(log, 'utf8'), jobId }
 }
 
-describe.each(bashes)('strict on bash %s', (_version, bash) => {
+describe.each(bashes)('strict on bash %s', (version, bash) => {
   it('marks no failure inside `$( … )`, where bash goes on (the `$-` guard)', () => {
     const r = run(bash, 'x=$(false; echo y); echo "x=$x"')
     expect(r.rc).toBe(0)
@@ -60,7 +60,9 @@ describe.each(bashes)('strict on bash %s', (_version, bash) => {
 
   it('names the command inside a pipe\'s last member that is a loop or a `{ … }`', () => {
     const loop = run(bash, "printf 'a\\nb\\n' | while read -r l; do grep -q \"zz$l\" /dev/null; done\necho never")
-    expect(failedStepOf(loop.out, loop.jobId, loop.rc)).toMatchObject({ exitCode: 1, command: 'grep -q "zz$l" /dev/null', pipeStatus: [0, 1] })
+    // bash 3.2 (macOS) prints no line of the shell's own after the loop failed inside, so no pipe codes.
+    const codes = Number(version.split('.')[0]) >= 4 ? { pipeStatus: [0, 1] } : {}
+    expect(failedStepOf(loop.out, loop.jobId, loop.rc)).toMatchObject({ exitCode: 1, command: 'grep -q "zz$l" /dev/null', ...codes })
     const group = run(bash, 'echo hi | { read x; false; }\necho never')
     expect(failedStepOf(group.out, group.jobId, group.rc)).toMatchObject({ exitCode: 1, command: 'false' })
   })

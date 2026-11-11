@@ -108,13 +108,15 @@ export const PREBOOT_MARGIN_SECONDS = 600
 
 /**
  * t_mtime FILE: its mtime (epoch s; GNU and busybox stat -c, BSD stat -f). t_boot: when this boot
- * began (Linux /proc/stat btime, macOS kern.boottime). t_preboot FILE: written before this boot,
- * by a process a reboot or a power loss ended, whatever process has its pid now.
+ * began (Linux /proc/stat btime, macOS kern.boottime; sysctl is in /usr/sbin, which a PATH of
+ * /usr/bin:/bin lacks: 2026-11-11, such a Mac never took over a lock left before its boot). t_preboot
+ * FILE: written before this boot, by a process a reboot or a power loss ended, whatever process has
+ * its pid now.
  */
 export function bootLines(): string[] {
   return [
     't_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }',
-    't_boot() { if [ -r /proc/stat ]; then sed -n "s/^btime //p" /proc/stat; else sysctl -n kern.boottime 2>/dev/null | sed -n "s/^{ sec = \\([0-9]*\\),.*/\\1/p"; fi; }',
+    't_boot() { if [ -r /proc/stat ]; then sed -n "s/^btime //p" /proc/stat; else { sysctl -n kern.boottime 2>/dev/null || /usr/sbin/sysctl -n kern.boottime 2>/dev/null; } | sed -n "s/^{ sec = \\([0-9]*\\),.*/\\1/p"; fi; }',
     `t_preboot() { tz_f=$(t_mtime "$1"); tz_o=$(t_boot); case "$tz_f$tz_o" in ""|*[!0-9]*) return 1;; esac; [ -n "$tz_f" ] && [ -n "$tz_o" ] && [ "$tz_f" -lt $((tz_o - ${PREBOOT_MARGIN_SECONDS})) ]; }`,
   ]
 }
