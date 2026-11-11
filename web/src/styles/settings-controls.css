@@ -518,6 +518,10 @@ textarea.settings-input {
    one width, so the right column lines up whatever the longest engine or model name is. */
 .settings-select.engine-row-control { width: 15rem; }
 
+/* A select in a column of short inputs (the remote history Profile row): the inputs' width, so a
+   long name cannot push the control past its share of the row at 660px (N3-01). */
+.settings-select.settings-select--short { width: 240px; }
+
 .settings-select:focus {
   outline: none;
   border-color: var(--accent);

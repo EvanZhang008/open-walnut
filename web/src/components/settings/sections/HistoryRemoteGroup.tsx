@@ -169,7 +169,7 @@ export function HistoryRemoteGroup({ config, save }: { config: Config; save: (pa
           htmlFor="history-remote-profile"
           indent
           control={profiles.length > 0 ? (
-            <select id="history-remote-profile" className="settings-select" value={form.profile} onChange={(e) => set('profile')(e.target.value)}>
+            <select id="history-remote-profile" className="settings-select settings-select--short" value={form.profile} onChange={(e) => set('profile')(e.target.value)}>
               <option value="">Choose a profile</option>
               {profiles.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
