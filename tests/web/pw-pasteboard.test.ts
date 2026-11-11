@@ -75,6 +75,11 @@ describe('a WebKit test browser on a Mac has its own pasteboard', () => {
     const guard = tail.search(/guardWebkitPasteboard\(core\.webkit/)
     expect(guard, 'the guard is installed outside the silencer try, so it cannot fail quietly').toBeGreaterThan(0)
     expect(tail.slice(0, guard), 'and outside any later try').not.toMatch(/\btry \{/)
+    // And outside the silenced flag's block: the session and Mac runner preload sets that flag
+    // first, and a guard inside it never ran there (2026-11-11).
+    const flagBlockEnd = src.indexOf('\n}\n', src.indexOf('if (!g[FLAG])'))
+    expect(flagBlockEnd).toBeGreaterThan(0)
+    expect(src.search(/guardWebkitPasteboard\(core\.webkit/), 'the guard runs whoever set the silenced flag first').toBeGreaterThan(flagBlockEnd)
   })
 
   it.skipIf(process.platform !== 'darwin')('on a Mac, the library redirects the general pasteboard and the real one is untouched', () => {

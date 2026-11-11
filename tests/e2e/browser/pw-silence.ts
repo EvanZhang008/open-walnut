@@ -14,7 +14,7 @@
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { AUTOMATION_SILENCE_JS } from '../../../src/lib/automation-silence.js'
-import { guardWebkitPasteboard } from './pw-pasteboard.js'
+import { PASTEBOARD_GUARDED, guardWebkitPasteboard } from './pw-pasteboard.js'
 
 interface ContextLike { addInitScript(script: { content: string }): Promise<void> }
 interface Instrumentation { addListener(listener: { runAfterCreateBrowserContext?: (c: ContextLike) => Promise<void> }): void }
@@ -55,10 +55,15 @@ if (!g[FLAG]) {
   } catch (e) {
     console.warn(`[pw-silence] could not silence test browsers: ${(e as Error).message}`)
   }
-  // Nor does a WebKit test browser on a Mac ever write the person's clipboard (pw-pasteboard.ts).
-  // Outside the try above: when it cannot be put in place, the run stops instead of going on.
-  const core = createRequire(import.meta.url)('playwright-core') as Record<string, unknown> & { _defaultLaunchOptions?: { env?: Record<string, string>; executablePath?: string } }
-  guardWebkitPasteboard(core.webkit as Parameters<typeof guardWebkitPasteboard>[0], process.platform, undefined, () => core._defaultLaunchOptions)
+}
+
+// Nor does a WebKit test browser on a Mac ever write the person's clipboard (pw-pasteboard.ts).
+// Outside the try above: when it cannot be put in place, the run stops instead of going on. Outside
+// the flag too: a runner's or a session's preload sets it first (2026-11-11: every Mac queue run
+// launched WebKit unguarded). Once per library: a guarded launch is not wrapped again.
+const core = createRequire(import.meta.url)('playwright-core') as Record<string, unknown> & { webkit: { launch: unknown }; _defaultLaunchOptions?: { env?: Record<string, string>; executablePath?: string } }
+if (!(core.webkit.launch as Record<symbol, boolean>)[PASTEBOARD_GUARDED]) {
+  guardWebkitPasteboard(core.webkit as unknown as Parameters<typeof guardWebkitPasteboard>[0], process.platform, undefined, () => core._defaultLaunchOptions)
 }
 
 // On a Mac, no WebKit test browser ever becomes the frontmost app (src/providers/pw-noactivate-core.ts).
