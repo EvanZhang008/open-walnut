@@ -40,6 +40,12 @@ export const PW_NOACTIVATE_M = [
   '',
 ].join('\n')
 
+/** The clangs (with their macOS SDK) the library is built with, in order: the Command Line Tools, then Xcode. */
+export const PW_CLANG_TOOLS: ReadonlyArray<readonly [clang: string, sdk: string]> = [
+  ['/Library/Developer/CommandLineTools/usr/bin/clang', '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk'],
+  ['/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang', '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk'],
+]
+
 /** The preload's part: `quietWebkitServer` points every WebKit launch of one Playwright at the runner. */
 export function pwNoActivatePreloadPart(): string {
   return [
@@ -56,11 +62,7 @@ export function pwNoActivatePreloadPart(): string {
     '/** A clang and its macOS SDK from the Command Line Tools or Xcode, or null (never the /usr/bin shim: with no tools it shows an install dialog). */',
     'function clangPath() {',
     "  const fs = require('node:fs');",
-    '  const tools = [',
-    "    ['/Library/Developer/CommandLineTools/usr/bin/clang', '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk'],",
-    "    ['/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang', '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk'],",
-    '  ];',
-    '  for (const t of tools) if (fs.existsSync(t[0]) && fs.existsSync(t[1])) return t;',
+    '  for (const t of ' + JSON.stringify(PW_CLANG_TOOLS) + ') if (fs.existsSync(t[0]) && fs.existsSync(t[1])) return t;',
     '  return null;',
     '}',
     '',

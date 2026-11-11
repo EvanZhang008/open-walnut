@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Worker } from 'node:worker_threads'
-import { PW_NOACTIVATE_M } from '../../src/providers/pw-noactivate-core'
+import { PW_CLANG_TOOLS, PW_NOACTIVATE_M } from '../../src/providers/pw-noactivate-core'
 import { pwSilencePreloadSource } from '../../src/providers/pw-silence-core'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -40,6 +40,39 @@ class WebKit extends BrowserType { amendEnvironment(env) { return { ...env, CURL
 module.exports = { WebKit }
 `
 
+const FAKE_BROWSER_SH = '#!/bin/sh\nprintf "%s|%s|%s|%s" "$DYLD_INSERT_LIBRARIES" "$DYLD_FRAMEWORK_PATH" "$DYLD_LIBRARY_PATH" "$*"\n'
+const FAKE_BROWSER_C = `#include <stdio.h>
+#include <stdlib.h>
+static const char *v(const char *k) { const char *s = getenv(k); return s ? s : ""; }
+int main(int argc, char **argv) {
+  printf("%s|%s|%s|", v("DYLD_INSERT_LIBRARIES"), v("DYLD_FRAMEWORK_PATH"), v("DYLD_LIBRARY_PATH"));
+  for (int i = 1; i < argc; i++) printf(i > 1 ? " %s" : "%s", argv[i]);
+  return 0;
+}
+`
+const MAC = realPlatform === 'darwin'
+const CLANG = PW_CLANG_TOOLS.find(([c, sdk]) => fs.existsSync(c) && fs.existsSync(sdk))
+/**
+ * On a Mac, the stand-in browser is a compiled program and the library a real (empty) one: macOS drops
+ * every DYLD_ variable at the exec of a protected binary such as /bin/sh, so a shell stand-in never sees
+ * them, and dyld ends a process whose inserted library is not a Mach-O file. Built once per run.
+ */
+let macFakes: { browser: string; lib: string } | undefined
+function macFakeBuild(): { browser: string; lib: string } {
+  if (macFakes) return macFakes
+  const [clang, sdk] = CLANG!
+  const d = path.join(tmp, 'fakes')
+  fs.mkdirSync(d, { recursive: true })
+  fs.writeFileSync(path.join(d, 'browser.c'), FAKE_BROWSER_C)
+  fs.writeFileSync(path.join(d, 'lib.c'), 'int walnut_noactivate_stand_in;\n')
+  execFileSync(clang, ['-isysroot', sdk, '-o', path.join(d, 'browser'), path.join(d, 'browser.c')], { stdio: 'pipe', timeout: 120_000 })
+  execFileSync(clang, ['-isysroot', sdk, '-dynamiclib', '-o', path.join(d, 'lib.dylib'), path.join(d, 'lib.c')], { stdio: 'pipe', timeout: 120_000 })
+  macFakes = { browser: path.join(d, 'browser'), lib: path.join(d, 'lib.dylib') }
+  return macFakes
+}
+/** A test that runs the stand-in browser through the runner: a Mac needs a clang to build it. */
+const itRunsBrowser = it.skipIf(MAC && !CLANG)
+
 /** A copy of the preload in its own folder (it writes its runner beside itself), a fake WebKit build and a fake Playwright. */
 function setup(name: string, withLibrary = true) {
   const dir = path.join(tmp, name)
@@ -47,7 +80,8 @@ function setup(name: string, withLibrary = true) {
   fs.mkdirSync(path.join(browser, 'Playwright.app', 'Contents', 'MacOS'), { recursive: true })
   const app = path.join(browser, 'Playwright.app', 'Contents', 'MacOS', 'Playwright')
   // Stands in for the browser: prints what the runner hands it.
-  fs.writeFileSync(app, '#!/bin/sh\nprintf "%s|%s|%s|%s" "$DYLD_INSERT_LIBRARIES" "$DYLD_FRAMEWORK_PATH" "$DYLD_LIBRARY_PATH" "$*"\n', { mode: 0o755 })
+  if (MAC && CLANG) fs.copyFileSync(macFakeBuild().browser, app)
+  else fs.writeFileSync(app, FAKE_BROWSER_SH, { mode: 0o755 })
   const pwRun = path.join(browser, 'pw_run.sh')
   fs.writeFileSync(pwRun, '#!/bin/sh\n', { mode: 0o755 })
   const core = path.join(dir, 'node_modules', 'playwright-core')
@@ -55,14 +89,18 @@ function setup(name: string, withLibrary = true) {
   fs.writeFileSync(path.join(core, 'lib', 'server', 'webkit', 'webkit.js'), FAKE_SERVER(pwRun))
   fs.writeFileSync(path.join(dir, 'pw-silence-preload.cjs'), pwSilencePreloadSource())
   const lib = path.join(dir, 'pw-noactivate', `noactivate-${createHash('sha256').update(PW_NOACTIVATE_M).digest('hex').slice(0, 16)}.dylib`)
-  if (withLibrary) { fs.mkdirSync(path.dirname(lib), { recursive: true }); fs.writeFileSync(lib, 'dylib') }
+  if (withLibrary) {
+    fs.mkdirSync(path.dirname(lib), { recursive: true })
+    if (MAC && CLANG) fs.copyFileSync(macFakeBuild().lib, lib)
+    else fs.writeFileSync(lib, 'dylib')
+  }
   const preload = require(path.join(dir, 'pw-silence-preload.cjs')) as Preload
   const server = { WebKit: (new Function('module', FAKE_SERVER(pwRun) + '; return module.exports')({}) as { WebKit: ServerWebKit }).WebKit }
   return { dir, browser, app, lib, core, preload, server }
 }
 
 describe('a Mac WebKit test browser starts through the no-activation runner', () => {
-  it('every launch of the WebKit browser type gets the runner as its executable', async () => {
+  itRunsBrowser('every launch of the WebKit browser type gets the runner as its executable', async () => {
     Object.defineProperty(process, 'platform', { value: 'darwin' })
     const s = setup('mac')
     expect(s.preload.quietWebkitServer(s.server)).toBe(true)
@@ -94,21 +132,25 @@ describe('a Mac WebKit test browser starts through the no-activation runner', ()
     expect((await new linux.server.WebKit()._prepareToLaunch({})).executable).toBe(path.join(linux.browser, 'pw_run.sh'))
   })
 
-  it('a launch through the private pasteboard runner loads the no-activation library too', async () => {
+  itRunsBrowser('a launch through the private pasteboard runner loads the no-activation library too', async () => {
     Object.defineProperty(process, 'platform', { value: 'darwin' })
     const s = setup('pasteboard')
     s.preload.quietWebkitServer(s.server)
     type Amend = (env: Record<string, string>, dir: string, persistent: boolean, options: Record<string, unknown>) => Record<string, string>
     const amend = (new s.server.WebKit() as unknown as { amendEnvironment: Amend }).amendEnvironment.bind(new s.server.WebKit())
     const runner = path.join(ROOT, 'tests/e2e/browser/pw-pasteboard/run-webkit.sh')
-    const env = amend({ WALNUT_PW_PASTEBOARD_DYLIB: '/pb.dylib', KEEP: '1' }, '/data', false, { executablePath: runner })
-    expect(env).toEqual({ WALNUT_PW_PASTEBOARD_DYLIB: `/pb.dylib:${s.lib}`, KEEP: '1', CURL: 'x' })
+    // The pasteboard library stand-in: a real one on a Mac, where dyld loads it.
+    const pb = path.join(s.dir, 'pb.dylib')
+    if (MAC && CLANG) fs.copyFileSync(macFakeBuild().lib, pb)
+    else fs.writeFileSync(pb, 'dylib')
+    const env = amend({ WALNUT_PW_PASTEBOARD_DYLIB: pb, KEEP: '1' }, '/data', false, { executablePath: runner })
+    expect(env).toEqual({ WALNUT_PW_PASTEBOARD_DYLIB: `${pb}:${s.lib}`, KEEP: '1', CURL: 'x' })
     // Once only, and nothing for a launch without that runner.
-    expect(amend(env, '/data', false, { executablePath: runner }).WALNUT_PW_PASTEBOARD_DYLIB).toBe(`/pb.dylib:${s.lib}`)
+    expect(amend(env, '/data', false, { executablePath: runner }).WALNUT_PW_PASTEBOARD_DYLIB).toBe(`${pb}:${s.lib}`)
     expect(amend({ KEEP: '1' }, '/data', false, {})).toEqual({ KEEP: '1', CURL: 'x' })
     // The runner itself hands both to the browser.
     const out = execFileSync(runner, ['--headless'], { encoding: 'utf8', env: { ...process.env, WALNUT_PW_WEBKIT_RUN: path.join(s.browser, 'pw_run.sh'), WALNUT_PW_PASTEBOARD_DYLIB: env.WALNUT_PW_PASTEBOARD_DYLIB } })
-    expect(out.split('|')[0]).toBe(`/pb.dylib:${s.lib}`)
+    expect(out.split('|')[0]).toBe(`${pb}:${s.lib}`)
   })
 
   it('with no library and no tools to build one, the launch goes on as it was, with one warning', async () => {

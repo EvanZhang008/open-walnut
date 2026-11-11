@@ -115,11 +115,7 @@ function noActWarn(e) {
 /** A clang and its macOS SDK from the Command Line Tools or Xcode, or null (never the /usr/bin shim: with no tools it shows an install dialog). */
 function clangPath() {
   const fs = require('node:fs');
-  const tools = [
-    ['/Library/Developer/CommandLineTools/usr/bin/clang', '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk'],
-    ['/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang', '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk'],
-  ];
-  for (const t of tools) if (fs.existsSync(t[0]) && fs.existsSync(t[1])) return t;
+  for (const t of [["/Library/Developer/CommandLineTools/usr/bin/clang","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"],["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"]]) if (fs.existsSync(t[0]) && fs.existsSync(t[1])) return t;
   return null;
 }
 
