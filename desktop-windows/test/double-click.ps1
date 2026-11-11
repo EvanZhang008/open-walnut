@@ -20,6 +20,17 @@ public static class Mouse {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, IntPtr e);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  // The top-level window a click at (x, y) lands in.
+  public static IntPtr RootAt(int x, int y) {
+    POINT p; p.X = x; p.Y = y;
+    IntPtr h = WindowFromPoint(p);
+    return h == IntPtr.Zero ? h : GetAncestor(h, 2);
+  }
   public static void Click(int x, int y, int times) {
     SetCursorPos(x, y);
     for (int i = 0; i < times; i++) { mouse_event(2, 0, 0, 0, IntPtr.Zero); mouse_event(4, 0, 0, 0, IntPtr.Zero); System.Threading.Thread.Sleep(90); }
@@ -55,10 +66,42 @@ function Find-In($root, [scriptblock]$match, [int]$seconds) {
   }
   return $null
 }
-# A click where a person clicks: the middle of the element, with the real mouse.
+# The top-level window an element sits in.
+function Top-Of($e) {
+  $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
+  $top = $e
+  for ($p = $walker.GetParent($top); $p -and -not [Windows.Automation.Automation]::Compare($p, $A::RootElement); $p = $walker.GetParent($top)) { $top = $p }
+  return $top
+}
+# A click where a person clicks: the middle of the element, with the real mouse, and only once the
+# element's own window is the one under that point. 2026-11-11, Release archives run 43013299448:
+# the runner's own Terminal window (its hosted compute agent's log) sat over Explorer, the
+# double-click on the installer's row selected text in that Terminal, and nothing ran. A window in
+# the way is brought behind (minimized) first; one that stays in the way fails the step by name.
 function Click-Element($e, [int]$times = 1) {
   $r = $e.Current.BoundingRectangle
-  [Mouse]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2), $times)
+  $x = [int]($r.X + $r.Width / 2); $y = [int]($r.Y + $r.Height / 2)
+  $top = Top-Of $e
+  $own = [IntPtr]$top.Current.NativeWindowHandle
+  if ($own -ne [IntPtr]::Zero) {
+    if ([Mouse]::IsIconic($own)) { [Mouse]::ShowWindow($own, 9) | Out-Null }
+    [Mouse]::SetForegroundWindow($own) | Out-Null
+    for ($i = 0; $i -lt 6; $i++) {
+      $at = [Mouse]::RootAt($x, $y)
+      if ($at -eq $own -or $at -eq [IntPtr]::Zero) { break }
+      $over = $A::FromHandle($at)
+      $what = '"' + $over.Current.Name + '" class ' + $over.Current.ClassName
+      if ($over.Current.ClassName -in 'Shell_TrayWnd', 'Progman', 'WorkerW' -or $i -eq 5) {
+        Shot 'click-covered.png'
+        throw ('a click on "' + $e.Current.Name + '" would land on ' + $what)
+      }
+      [Mouse]::ShowWindow($at, 6) | Out-Null
+      Say ('moved ' + $what + ' out of the way of "' + $e.Current.Name + '"')
+      Start-Sleep -Milliseconds 700
+      [Mouse]::SetForegroundWindow($own) | Out-Null
+    }
+  }
+  [Mouse]::Click($x, $y, $times)
 }
 function Shot([string]$name) {
   $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds
