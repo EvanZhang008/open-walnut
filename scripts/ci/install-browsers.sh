@@ -5,6 +5,7 @@
 # limit cancelled it) or crawl (a gate run took 8 minutes for 180 packages). So apt gives up on a
 # stalled connection and tries it again itself, each try of the whole install is bounded, and a
 # try killed mid-way waits for its apt-get to let go of dpkg's lock before the next one.
+# When apt never gets through, the browsers alone are installed from Playwright's host.
 # Guard: tests/scripts/ci-playwright-install.test.ts.
 set -u
 [ "$#" -gt 0 ] || { echo "usage: install-browsers.sh <browser>..." >&2; exit 2; }
@@ -22,4 +23,11 @@ for try in 1 2; do
     sleep 5
   done
 done
+# The runner's own image already holds what a browser needs to start (it ships Chrome); only
+# apt's mirror was out of reach (2026-11-11, nightly-extra-tests run 43041166867: "Temporary
+# failure resolving 'azure.archive.ubuntu.com'" on both tries, and every spec then failed on a
+# missing browser). The browser itself comes from Playwright's own download host: take it alone,
+# and let a spec say so if a system package is truly missing.
+echo "::warning::the system packages did not install; installing the browsers alone"
+timeout 600 bun x playwright install "$@" && exit 0
 exit 1

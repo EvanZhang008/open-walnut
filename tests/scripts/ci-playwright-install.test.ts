@@ -33,6 +33,17 @@ describe('workflows bound the browser install', () => {
     expect(s).toMatch(/fuser \/var\/lib\/dpkg\/lock-frontend/)
   })
 
+  // Nightly extra tests run 43041166867 (2026-11-11): the runner could not resolve apt's mirror on
+  // either try, and every spec then failed on a browser that was never downloaded.
+  it('installs the browsers alone, bounded, once apt never got through', () => {
+    const s = fs.readFileSync(path.join(ROOT, SCRIPT), 'utf8')
+    const tries = s.indexOf('for try in')
+    const alone = s.search(/timeout \d+ bun x playwright install "\$@" && exit 0/)
+    expect(tries).toBeGreaterThan(0)
+    expect(alone).toBeGreaterThan(s.indexOf('done\ndone', tries))
+    expect(s.trimEnd().endsWith('exit 1')).toBe(true)
+  })
+
   it('the scan catches a direct install', () => {
     expect(directInstalls('x.yml', '      - run: bun x playwright install --with-deps chromium')).toHaveLength(1)
     expect(directInstalls('x.yml', '        run: bash scripts/ci/install-browsers.sh chromium webkit')).toEqual([])
