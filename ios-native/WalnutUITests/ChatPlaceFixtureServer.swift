@@ -52,6 +52,10 @@ final class ChatPlaceFixtureServer {
     /// How long an answer waits before it goes out, per path (a slow server for one read). Set
     /// before `start`.
     var answerDelay: ((_ method: String, _ path: String) -> TimeInterval)?
+    /// Answers kept back until `releaseHeld()`: a slow read the test ends itself, not a clock, so
+    /// a slow runner's queries can never outlast it (CI, 2026-11-10: a 5 s read landed before Back).
+    private var holdMatch: ((_ method: String, _ path: String) -> Bool)?
+    private var heldAnswers: [() -> Void] = []
 
     init(options: Options = Options()) throws {
         self.options = options
@@ -107,8 +111,26 @@ final class ChatPlaceFixtureServer {
         }
     }
 
+    /// From now on, an answer `match` names waits until `releaseHeld()` (any `answerDelay` it had
+    /// is dropped: the hold is its delay).
+    func holdAnswers(where match: @escaping (_ method: String, _ path: String) -> Bool) {
+        queue.sync { holdMatch = match }
+    }
+
+    /// Sends every held answer now and holds no more.
+    func releaseHeld() {
+        queue.sync {
+            holdMatch = nil
+            let answers = heldAnswers
+            heldAnswers.removeAll()
+            for send in answers { send() }
+        }
+    }
+
     func stop() {
         queue.sync {
+            holdMatch = nil
+            heldAnswers.removeAll()
             ping?.cancel()
             ping = nil
             for connection in held.values { connection.cancel() }
@@ -204,6 +226,12 @@ final class ChatPlaceFixtureServer {
         let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data("{}".utf8)
         let head = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Not Found")\r\nContent-Type: application/json\r\n"
             + "Content-Length: \(data.count)\r\nConnection: close\r\n\r\n"
+        if let holdMatch, holdMatch(method, path) {
+            heldAnswers.append {
+                connection.send(content: Data(head.utf8) + data, completion: .contentProcessed { _ in connection.cancel() })
+            }
+            return
+        }
         let wait = answerDelay?(method, path) ?? 0
         guard wait > 0 else {
             connection.send(content: Data(head.utf8) + data, completion: .contentProcessed { _ in connection.cancel() })

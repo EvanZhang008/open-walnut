@@ -19,6 +19,11 @@ final class ThreadPushNavigationUITests: ThreadPushUITestCase {
 
     func testXBackFromThePageAndATabSwitchEndASlowPush() throws {
         try openBarPage("X")
+        // The slow VP's read waits until the test lets it go, after his move: on a slow runner a
+        // timed read landed before Back, so the open was not slow at all and the second one opened
+        // straight from the chat the first had found.
+        let slowRead = "/api/v1/tasks/\(OrgThreadsFixture.slowTaskID)"
+        fixture?.holdAnswers { $0 == "GET" && $1 == slowRead }
         push(slowThread, task: OrgThreadsFixture.slowTaskID)
         let opening = el("chat.orgOpening")
         XCTAssertTrue(opening.waitForExistence(timeout: 4), "X: nothing says the chat is on its way")
@@ -26,19 +31,22 @@ final class ThreadPushNavigationUITests: ThreadPushUITestCase {
         back()
         XCTAssertTrue(el("org.bar.threads").waitForExistence(timeout: 10), "X: Back did not reach the VP's chat")
         XCTAssertTrue(opening.waitForNonExistence(timeout: 3), "X: the open still says it is on its way after Back")
-        Thread.sleep(forTimeInterval: OrgThreadsFixture.slowSeconds + 2)
+        fixture?.releaseHeld()
+        Thread.sleep(forTimeInterval: 3)
         shot("X-after-back")
         XCTAssertFalse(titled(OrgThreadsFixture.slowTitle).exists, "X: the slow push opened over the chat he went Back to")
         XCTAssertFalse(el("org.node.page").exists, "X: a page opened over the chat he went Back to")
 
         // The same push, and he goes to Inbox and back.
+        fixture?.holdAnswers { $0 == "GET" && $1 == slowRead }
         push(slowThread, task: OrgThreadsFixture.slowTaskID)
         XCTAssertTrue(opening.waitForExistence(timeout: 4), "X: nothing says the second open is on its way")
         app.tabBars.buttons["Inbox"].tap()
         Thread.sleep(forTimeInterval: 1)
         app.tabBars.buttons["Chat"].tap()
         XCTAssertTrue(opening.waitForNonExistence(timeout: 3), "X: the open still says it is on its way after a tab switch")
-        Thread.sleep(forTimeInterval: OrgThreadsFixture.slowSeconds + 2)
+        fixture?.releaseHeld()
+        Thread.sleep(forTimeInterval: 3)
         shot("X-after-tab")
         XCTAssertFalse(titled(OrgThreadsFixture.slowTitle).exists, "X: the slow push opened after he went to another tab")
         XCTAssertTrue(el("org.bar.threads").exists, "X: he is not on the VP's chat he left")
