@@ -177,3 +177,6 @@
 :root .session-history .op-card-stack { gap: 0; }
 :root .session-history .provenance-card.provenance-card-slim { gap: 8px; }
 :root .process-fold > .tool-run-toggle .tool-run-lead { flex-shrink: 0; white-space: nowrap; }
+/* A run's own line (a live turn's commands, a long run) reads like the fold line: chevron first. */
+:root .session-history .tool-run-row:not(.tool-run-row--step) > .tool-run-toggle { gap: 6px; }
+:root .session-history .tool-run-chevron--lead .step-icon { width: 14px; height: 14px; flex-basis: 14px; }

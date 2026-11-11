@@ -409,8 +409,10 @@ export function ToolRunShell({ phrase, calls, failCount, running, count, disclos
     return line ? [{ line, command }] : [];
   }) : [];
   const answers = runAnswerLines(answered.map((a) => a.line), answered.map((a) => a.command));
+  // Chevron first, as the turn's fold line reads (design 1, 2026-11-11).
   const line = (
     <>
+      <span className={`tool-run-chevron tool-run-chevron--lead${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
       <span className="tool-run-label">
         {segments.length === 0 ? phrase : segments.map((seg, i) => (
           <Fragment key={seg.kind}>
@@ -422,7 +424,6 @@ export function ToolRunShell({ phrase, calls, failCount, running, count, disclos
       {count !== undefined && count > 0 && <span className="tool-run-count">{toolCallsLabel(count)}</span>}
       {failCount > 0 && <span className="tool-run-fail">{failCount} failed</span>}
       {running && <span className="tool-run-live-dot" />}
-      <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
     </>
   );
   if (flat) return <div className="tool-run-row tool-run-flat" data-flat="true"><RunLive.Provider value={!!running}><SoleCallContext.Provider value={false}>{children}</SoleCallContext.Provider></RunLive.Provider></div>;
