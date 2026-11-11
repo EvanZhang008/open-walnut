@@ -167,13 +167,31 @@ export async function switchHostBlocker(host: string, engine: SessionEngine): Pr
  * otherwise records it as pending, and the turn's end runs it (engine-switch-watch.ts).
  * A task with no conversation yet just starts on the engine.
  */
+/**
+ * A session cannot loosen a task's mode past its own through a switch (delegated-mode.ts), on
+ * either branch (a new session, or one replacing the task's conversation). Keeping the mode the
+ * task's session already runs in loosens nothing. Checked before anything else is refused.
+ */
+async function capSwitchMode(req: EngineSwitchRequest, task: Task): Promise<void> {
+  if (!req.permissionMode || !req.callerSid) return;
+  const { taskConversation } = await import('./task-session-claim.js');
+  const current = await taskConversation(task.id).catch(() => null);
+  if (current?.mode === req.permissionMode) return;
+  const { capStartMode } = await import('./delegated-mode.js');
+  try { await capStartMode(req.callerSid, req.permissionMode); }
+  catch (err) { throw new EngineSwitchError(err instanceof Error ? err.message : String(err), 403, 'mode_above_caller'); }
+}
+
 export async function requestEngineSwitch(req: EngineSwitchRequest): Promise<EngineSwitchResult> {
   const tm = await import('../task-manager.js');
   const readTask = () => tm.getTask(req.taskId).catch((err: unknown) => {
     throw new EngineSwitchError(err instanceof Error ? err.message : String(err), 404, 'task_not_found');
   });
   const task = await readTask();
-  if (req.callerSid) return switchFrom(req, task);
+  if (req.callerSid) {
+    await capSwitchMode(req, task);
+    return switchFrom(req, task);
+  }
   // A person's picks for one task run one at a time, read to start, and only the newest of those
   // waiting runs (review round 6: two picks queued behind a third both passed the in-flight check,
   // and the newer one was answered with the older one's switch). Each follows the one before it,

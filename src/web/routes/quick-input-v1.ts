@@ -268,17 +268,17 @@ quickInputV1Router.post('/quick/session', async (req: Request, res: Response, ne
       await sendAndFollow(async () => sendToTaskSession(task, await taskSessionRecord(task), text, cliText, false, quickSource(req)), res)
       return
     }
-    await sendAndFollow(() => startAsk(text, images, quickSource(req) === 'ui' ? 'quick-input' : 'api-agent'), res)
+    await sendAndFollow(() => startAsk(text, images, quickSource(req) === 'ui' ? 'quick-input' : 'api-agent', startingSid(req)), res)
   } catch (err) {
     next(err)
   }
 })
 
 /** A new ask started with the text: the same task and session the phone's New chat makes. */
-async function startAsk(text: string, images: SessionImage[], source: string): Promise<QuickMainResult> {
+async function startAsk(text: string, images: SessionImage[], source: string, callerSid?: string): Promise<QuickMainResult> {
   const { validateMobileLaunchBody, performMobileLaunch } = await import('../../core/sessions/mobile-launch.js')
   const message = await withSavedImages(text, images)
-  const launched = await performMobileLaunch(validateMobileLaunchBody({ walnutAgent: true, message }), source)
+  const launched = await performMobileLaunch(validateMobileLaunchBody({ walnutAgent: true, message }), source, callerSid ? { callerSid } : {})
   return { taskId: launched.taskId, sessionId: launched.sessionId ?? null, started: true }
 }
 
@@ -358,6 +358,11 @@ function quickSource(req: Request): string {
 /** The person's message into one task's chat: its live session, or a session started with it. */
 export async function sendToTaskChat(task: Task, text: string, source: string = 'ui', images: SessionImage[] = []): Promise<QuickMainResult> {
   return sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, source)
+}
+
+/** The session making this request: a task it starts here runs at most as loose as it (delegated-mode.ts). */
+function startingSid(req: Request): string | undefined {
+  return req.get('x-walnut-caller-sid')?.trim() || undefined
 }
 
 async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false, source: string = 'ui'): Promise<QuickMainResult> {

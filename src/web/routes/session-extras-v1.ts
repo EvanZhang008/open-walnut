@@ -192,6 +192,10 @@ sessionExtrasV1Router.post('/sessions/:id/controls', async (req: Request, res: R
     const sessionId = validSid(req, res)
     if (!sessionId) return
     const body = (req.body ?? {}) as Record<string, unknown>
+    // A session sets a mode at most as loose as its own (delegated-mode.ts), before any relay.
+    const { modeChangeRefusal } = await import('../../core/sessions/delegated-mode.js')
+    const refused = body.id === 'mode' ? await modeChangeRefusal(req.get('x-walnut-caller-sid'), body.value) : null
+    if (refused) { sendError(res, 403, 'mode_above_caller', refused); return }
     if (CLOUD_MODE) {
       const { cloudChatLaneControls, CLOUD_CHAT_MODE } = await import('../../core/sessions/cloud-chat-lane.js')
       const fixed = await cloudChatLaneControls(sessionId)

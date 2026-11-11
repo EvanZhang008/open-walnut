@@ -70,6 +70,12 @@ export interface QuickStartParams {
   host?: string;
   model?: string;
   mode?: string;
+  /** The session that asks for this start (`x-walnut-caller-sid`): the launch runs at most as
+   *  loose as its own mode (delegated-mode.ts capStartMode). Absent: the person, or Walnut itself. */
+  callerSid?: string;
+  /** `mode` came from defaults the caller did not name (its project's): a looser one comes down
+   *  to the caller's mode instead of refusing the start. */
+  modeImplied?: boolean;
   /** Retry mode: reuse this task instead of creating a new one. */
   existingTaskId?: string;
   /** "Start anyway": skip the host gate's claude_outdated / claude_not_logged_in refusal (host-start-gate.ts). */
@@ -365,6 +371,14 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       engineDecided = true;
       fallbackDecided = true;
     }
+  }
+  // A session starts work at most as loose as itself, a project's default mode included.
+  if (params.callerSid) {
+    const { capStartMode } = await import('./delegated-mode.js');
+    const asked = params.modeImplied ? undefined : params.mode;
+    const capped = await capStartMode(params.callerSid, asked);
+    mode = mode !== undefined && mode !== asked ? await capStartMode(params.callerSid, mode, { implied: true }) : capped;
+    if (launchSource?.started) launchSource = { ...launchSource, started: { ...launchSource.started, ...(mode ? { mode: mode as import('../types.js').SessionMode } : {}) } };
   }
   const selfDecides = !fallbackDecided && !fallback && selfDecidesFallback(source, walnutAgent);
   // Only a launch whose engine was decided here (or by its caller) writes or clears the note: a

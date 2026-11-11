@@ -12,6 +12,8 @@ test.beforeAll(async ({ request }) => {
   const view = await (await request.get('/api/engines/claude/settings')).json()
   const item = view.groups.flatMap((g: { items: Array<{ key: string; value: unknown; source: string }> }) => g.items).find((i: { key: string }) => i.key === 'permissions.defaultMode')
   originalMode = item.source === 'default' ? undefined : item.value
+  // Start from the fixture's own value: a spec that ran before on this server may have changed it.
+  await request.patch('/api/engines/claude/settings', { data: { set: { 'permissions.defaultMode': 'bypassPermissions' } } })
 })
 // The status poll keeps firing; a route handler still fetching when the page closes would fail the test.
 test.afterEach(async ({ page }) => { await dropFakes(page) })
@@ -42,6 +44,30 @@ test('Settings edits the engine default, preserves adjacent settings and can cle
   await picker.selectOption('bypassPermissions')
   await expect(picker).toBeEnabled()
   await expect(picker).toHaveValue('bypassPermissions')
+})
+
+// While the engine's file is still being read the row says so, never "Not set" (2026-11-11:
+// production showed "Not set" for about 3 s on a Mac whose settings name bypassPermissions).
+test('the row reads Loading until the engine settings arrive, then the saved mode', async ({ page }) => {
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/engines/claude/settings**', async route => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    await held
+    await route.fallback()
+  })
+  const picker = page.getByTestId('claude-default-mode')
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()
+  await page.locator('.sidebar-nav a[href="/settings"]').click()
+  await page.getByTestId('settings-nav-sessions').click()
+  await expect(picker).toBeDisabled()
+  await expect(picker.locator('option').first()).toHaveText('Loading…')
+  release()
+  await expect(picker).toBeEnabled()
+  await expect(picker).toHaveValue('bypassPermissions')
+  await expect(picker.locator('option').first()).toHaveText('Not set (Auto when supported)')
 })
 
 test('Auto denial remains after a failed switch, then one click switches to asking', async ({ page, request }) => {

@@ -423,6 +423,13 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
   const hosts = config.hosts ?? {};
   const known = new Set(Object.entries(hosts).filter(([, h]) => (h as { enabled?: boolean }).enabled !== false).map(([k]) => k));
   const plan = planTransfer(task, session, req, known);
+  // A session cannot loosen the task's mode past its own through a transfer (delegated-mode.ts),
+  // on the fork and the fresh start alike; keeping the mode the conversation runs in loosens nothing.
+  if (req.callerSid && req.permissionMode && req.permissionMode !== session.mode) {
+    const { capStartMode } = await import('../sessions/delegated-mode.js');
+    try { await capStartMode(req.callerSid, req.permissionMode); }
+    catch (err) { throw new TransferError(err instanceof Error ? err.message : String(err), 403, 'mode_above_caller'); }
+  }
   // The SDK session server starts fresh sessions and cannot fork one: while
   // starts go through it, the conversation is replayed instead. Its live link
   // decides, not session_server.enabled (a server that never connected leaves

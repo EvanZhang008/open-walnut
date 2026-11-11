@@ -317,6 +317,8 @@ export const MOBILE_DRAFT_TIER = 'focus';
 export async function performMobileLaunch(
   input: MobileLaunchInput,
   source: string,
+  /** The session asking (`x-walnut-caller-sid`): the launch runs at most as loose as it. */
+  opts: { callerSid?: string } = {},
 ): Promise<MobileLaunchResult> {
   // Host: must be an enabled config.hosts alias. Refused with the gate's own
   // host_removed body, so the phone and the web draft answer a gone host alike.
@@ -345,6 +347,7 @@ export async function performMobileLaunch(
     host: wsPlace ? wsPlace.host : input.host,
     model: ask ? ask.model : pick?.model ?? input.model,
     mode: pick?.mode ?? input.mode,
+    ...(opts.callerSid ? { callerSid: opts.callerSid, ...(input.mode ? {} : { modeImplied: true }) } : {}),
     existingTaskId: input.taskId,
     taskTitle: input.taskTitle,
     project: ask ? ask.project : input.project,

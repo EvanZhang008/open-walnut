@@ -496,7 +496,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     const fallback: FallbackDecision | null = launchPick.fallback
     const effectiveEngine = launchPick.engine
     // The project's mode when the body named none (validated with the body's below).
-    const launchMode = mode || launchPick.mode
+    let launchMode = mode || launchPick.mode
 
     // Normalize model through the shared switch validator (same ruleset as
     // POST /:sessionId/model): legacy alias ids map to their CLI form, catalog
@@ -555,6 +555,19 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       if (!CLAUDE_SESSION_MODES.includes(launchMode as SessionMode)) {
         res.status(400).json({ error: `Invalid mode: ${launchMode}. Must be one of: ${CLAUDE_SESSION_MODES.join(', ')}` })
         return
+      }
+    }
+    // A session's start runs at most as loose as that session (delegated-mode.ts): a looser mode
+    // it names is refused, a looser project default comes down to its mode.
+    const startedBySid = req.get('x-walnut-caller-sid')?.trim() || undefined
+    if (startedBySid) {
+      const { capStartMode } = await import('../../core/sessions/delegated-mode.js')
+      try {
+        const capped = await capStartMode(startedBySid, mode || undefined)
+        launchMode = !mode && launchMode ? await capStartMode(startedBySid, launchMode, { implied: true }) : capped
+      } catch (err) {
+        if (err instanceof QuickStartError) { res.status(err.statusCode).json({ error: err.message }); return }
+        throw err
       }
     }
 
@@ -741,6 +754,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       const requestedHints = requestedHintsOf((req.body as { hints?: unknown }).hints)
       const updatedTask = await quickStartSession({
         message: sessionMessage, messagePrefix, cwd, host, model, mode: launchMode,
+        ...(startedBySid ? { callerSid: startedBySid, ...(mode ? {} : { modeImplied: true }) } : {}),
         // Hints the first message asks for (the side panel's object-context), beside the words.
         ...(requestedHints ? { hints: requestedHints } : {}),
         ...(inOwnTaskDir ? { ownTaskDir: true } : {}),
@@ -1356,6 +1370,9 @@ sessionsRouter.post('/:sessionId/controls', async (req: Request, res: Response) 
   const sessionId = String(req.params.sessionId)
   const { id, value } = req.body as { id?: unknown; value?: unknown }
   try {
+    const { modeChangeRefusal } = await import('../../core/sessions/delegated-mode.js')
+    const refused = id === 'mode' ? await modeChangeRefusal(req.get('x-walnut-caller-sid'), value) : null
+    if (refused) { res.status(403).json({ error: refused, code: 'mode_above_caller' }); return }
     res.json(await applySessionControl(sessionId, id, value))
   } catch (err) {
     if (err instanceof SessionControlError) {
@@ -1380,6 +1397,9 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
     // Route IDs are provider session IDs. ACP runtime IDs are transport-local
     // identities and must never select or implicitly create a durable record.
     try {
+      const { modeChangeRefusal } = await import('../../core/sessions/delegated-mode.js')
+      const refused = await modeChangeRefusal(req.get('x-walnut-caller-sid'), (req.body as { mode?: unknown } | undefined)?.mode)
+      if (refused) { res.status(403).json({ error: refused, code: 'mode_above_caller' }); return }
       const session = await patchSession(sessionId, (req.body ?? {}) as Record<string, unknown>)
       log.web.info('session updated via REST', { sessionId, fields: Object.keys(req.body ?? {}) })
       res.json({ session })
@@ -3074,7 +3094,19 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
       res.status(400).json({ error: `Invalid mode: ${mode}. Must be one of: ${CLAUDE_SESSION_MODES.join(', ')}` })
       return
     }
-    const execMode = mode ?? 'bypass'
+    let execMode = mode ?? 'bypass'
+    // A session's plan execution runs at most as loose as that session (delegated-mode.ts): a
+    // looser mode it names is refused, the Bypass default comes down to its mode.
+    const execBySid = req.get('x-walnut-caller-sid')?.trim()
+    if (execBySid) {
+      const { capStartMode } = await import('../../core/sessions/delegated-mode.js')
+      try {
+        execMode = (mode ? await capStartMode(execBySid, mode) : await capStartMode(execBySid, execMode, { implied: true })) ?? execMode
+      } catch (err) {
+        if (err instanceof QuickStartError) { res.status(err.statusCode).json({ error: err.message, code: 'mode_above_caller' }); return }
+        throw err
+      }
+    }
 
     // Build message with plan content + file path reference (survives compaction via re-read).
     const planMessage = buildPlanExecutionMessage(planResult.planFile, planResult.content, instructions)

@@ -3076,6 +3076,7 @@ export class ClaudeCodeSession {
       ? { text: message, ...(opts?.uuid ? { uuid: opts.uuid } : {}) }
       : null
     this._spawnedAtMs = Date.now()
+    this._switchedFrom = undefined
 
     const isResume = !!resumeSessionId && !forkSession
     // Pre-assigned id (init-only spawn) names the stream/FIFO files directly —
@@ -5183,6 +5184,9 @@ export class ClaudeCodeSession {
    *  then on a resume's wait is the CLI's own start (delivery-latency.ts resumeMachineShare). */
   private _cliStartAtMs = 0
   get cliStartAtMs(): number { return this._cliStartAtMs }
+  /** A confirmed set_permission_mode, until a stream line shows its new mode: an `init` showing
+   *  any other was written before the switch and never reverts it. Cleared by every spawn. */
+  private _switchedFrom: { from: SessionMode; to: SessionMode } | undefined
   /** This process's death went to start recovery (core/sessions/start-recovery.ts). Cleared by every spawn. */
   private _startDeathOffered = false
   /** Start recovery was asked about this process's death (once per process, taken or not). */
@@ -6945,7 +6949,14 @@ export class ClaudeCodeSession {
         const permMode = sys.permissionMode
         if (typeof permMode === 'string' && (sys.subtype === 'status' || (sys.subtype === 'init' && this._spawnedAtMs > 0 && this._isReplayedByOffset() !== true))) {
           const mapped = mapPermissionMode(permMode)
-          if (mapped && mapped !== this._mode) {
+          const fence = this._switchedFrom
+          const staleInit = !!fence && sys.subtype === 'init' && mapped !== fence.to
+          if (fence && (mapped === fence.to || sys.subtype === 'status')) this._switchedFrom = undefined
+          if (staleInit) {
+            log.session.info('init line from before a mode switch ignored', {
+              sessionId: this.claudeSessionId, taskId: this.taskId, lineMode: mapped, mode: this._mode,
+            })
+          } else if (mapped && mapped !== this._mode) {
             const oldMode = this._mode
             this._mode = mapped
             if (this.claudeSessionId) {
@@ -9906,6 +9917,7 @@ export class ClaudeCodeSession {
     // Only confirmed state is user-visible or persisted. Keep the daemon's
     // auto-response policy in sync immediately instead of waiting for a later
     // system/status event that may be delayed or absent.
+    if (this._mode !== mode) this._switchedFrom = { from: this._mode, to: mode }
     this._mode = mode
     const daemonUpdated = await this._transport.setMode?.(mode)
     if (daemonUpdated === false) {

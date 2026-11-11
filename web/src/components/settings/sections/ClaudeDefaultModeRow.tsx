@@ -51,7 +51,8 @@ export function ClaudeDefaultModeRow({ config }: { config: Config }) {
       <select id="claude-default-mode" data-testid="claude-default-mode" className="settings-select"
         disabled={busy || !item || !!item.invalid} value={item?.source === 'default' ? '' : String(item?.value ?? '')}
         onChange={e => void save(e.target.value)}>
-        <option value="">Not set (Auto when supported)</option>
+        {/* Until the engine's file is read, the empty value means unknown, never "Not set". */}
+        <option value="">{item ? 'Not set (Auto when supported)' : error ? 'Unavailable' : 'Loading…'}</option>
         {item && item.source !== 'default' && !item.options?.some(o => o.value === item.value) && <option value={String(item.value)}>{String(item.value)} (engine setting)</option>}
         {item?.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select>

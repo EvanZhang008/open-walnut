@@ -131,10 +131,10 @@ test.describe('composer "+" -> Engine settings popover', () => {
     await expect(popoverRow(dialog, 'outputStyle').locator('select')).toHaveCount(1)
     await expect(popoverRow(dialog, 'enableWorkflows').locator('select')).toHaveCount(1)
 
-    // The permission-mode help is shown in full, second sentence included.
+    // The permission-mode help is shown in full, its last sentence included.
     const permHelp = popoverRow(dialog, 'permissions.defaultMode').locator('.engine-setting-help')
     await permHelp.scrollIntoViewIfNeeded()
-    await expect(permHelp).toContainText('terminal sessions only')
+    await expect(permHelp).toContainText('The session mode pill changes only that session.')
     expect(await permHelp.evaluate((el) => ({
       clamp: getComputedStyle(el).getPropertyValue('-webkit-line-clamp'), overflow: el.scrollHeight <= el.clientHeight + 1,
     }))).toEqual({ clamp: 'none', overflow: true })

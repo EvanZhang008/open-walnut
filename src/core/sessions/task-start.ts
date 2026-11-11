@@ -318,15 +318,8 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
 
 async function startOrWait(params: SessionStartParams): Promise<SessionStartResult> {
   if (params.callerSid) {
-    const { resolveCaller } = await import('./session-send-core.js');
-    const caller = await resolveCaller(params.callerSid);
-    const { delegatedMode } = await import('./delegated-mode.js');
-    // A session caps what it starts at its own mode; a sid that names no session
-    // reads as Default. The person's own CLI and an installed plugin are not capped.
-    const uncapped = caller.kind === 'human' || (caller.kind === 'external' && !!caller.app);
-    if (!uncapped) try {
-      params = { ...params, mode: delegatedMode(caller.kind === 'session' ? caller.record.mode : 'default', params.mode) };
-    } catch (err) { throw new QuickStartError(err instanceof Error ? err.message : String(err), 403); }
+    const { capStartMode } = await import('./delegated-mode.js');
+    params = { ...params, mode: await capStartMode(params.callerSid, params.mode) };
   }
   let result: SessionStartResult;
   const picked: { split?: { key: string; engine: SessionEngine; model?: string } } = {};

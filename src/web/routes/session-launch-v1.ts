@@ -434,7 +434,8 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
     }
 
     try {
-      const result = await performMobileLaunch(input, routeSource('mobile-launch', req.headers))
+      const callerSid = req.get('x-walnut-caller-sid')?.trim() || undefined
+      const result = await performMobileLaunch(input, routeSource('mobile-launch', req.headers), callerSid ? { callerSid } : {})
       res.status(201).json(result)
     } catch (err) {
       if (err instanceof QuickStartError) {

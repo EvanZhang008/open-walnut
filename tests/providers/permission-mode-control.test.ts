@@ -76,6 +76,25 @@ describe('ClaudeCodeSession.applyPermissionMode', () => {
     expect(daemonModes).toEqual(['bypass'])
   })
 
+  it('an init line from before a confirmed switch does not revert it; the next one that shows the new mode is read again', async () => {
+    const { session, internals, writes } = makeSession()
+    ;(internals as unknown as { _spawnedAtMs: number })._spawnedAtMs = Date.now()
+    // An init names the session: the transport would rename its stream files.
+    ;(internals._transport as unknown as { renameForSession: () => void }).renameForSession = () => {}
+    const init = (permissionMode: string) => internals.handleStreamLine(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sid-pm', permissionMode }))
+    const changing = session.applyPermissionMode('default')
+    respond(internals, { subtype: 'success', request_id: JSON.parse(writes[0]!).request_id, response: { mode: 'default' } })
+    await expect(changing).resolves.toBe(true)
+    // Written before the switch, read after it.
+    init('plan')
+    expect(session.mode).toBe('default')
+    init('default')
+    expect(session.mode).toBe('default')
+    // Past the fence, the engine's init is ground truth again.
+    init('plan')
+    expect(session.mode).toBe('plan')
+  })
+
   it('reinitializes an old live process when bypass capability was absent at startup', async () => {
     const runner = new SessionRunner()
     const live = {

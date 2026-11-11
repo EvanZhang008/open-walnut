@@ -259,6 +259,10 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
     const sessionId = validSid(req, res)
     if (!sessionId) return
     const body = (req.body ?? {}) as Record<string, unknown>
+    // A session sets a mode at most as loose as its own (delegated-mode.ts), before any relay.
+    const { modeChangeRefusal } = await import('../../core/sessions/delegated-mode.js')
+    const refused = await modeChangeRefusal(req.get('x-walnut-caller-sid'), body.mode)
+    if (refused) { sendError(res, 403, 'mode_above_caller', refused); return }
     const patch = {
       ...(body.title !== undefined ? { title: body.title } : {}),
       ...(body.archived !== undefined ? { archived: body.archived } : {}),
