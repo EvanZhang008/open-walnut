@@ -554,7 +554,8 @@ describe('release.yml', () => {
       expect(call.uses, files).toBe('./.github/workflows/binary-matrix.yml')
       expect(needsOf(files), files).toContain(build)
       expect(call.with, files).toEqual({ files: `\${{ needs.${build}.outputs.files }}`, version: versionOut, ref })
-      expect(call.permissions, files).toEqual({ contents: 'read' })
+      // actions: read for the matrix's artifact fetch (FETCH_ARTIFACT in binary-matrix.yml).
+      expect(call.permissions, files).toEqual({ contents: 'read', actions: 'read' })
       expect(needsOf(publish), publish).toEqual(expect.arrayContaining([build, files]))
       // The publishing job builds nothing: bun runs the scripts that pack and publish, from
       // the checkout alone (no install, no build).

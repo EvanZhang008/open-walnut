@@ -55,9 +55,10 @@ env:
   # A second download that cannot hang (2026-11-11, push run 43016273510, centos:7 row): both of
   # actions/download-artifact's tries stalled on the blob for their full 8 minutes while every other
   # row got the same artifact in under a minute, so the row failed. The retry reads the artifact
-  # through the REST API with curl, which gives up on a stream slower than 1 MB/s for 30 s and asks
-  # again (a fresh signed link each time), three times. Inline, not a script or a local action: a
-  # release checks out `ref`, which may predate any file added here
+  # through the REST API with curl, which gives up on a stream slower than 1 MB/s for 30 s or a try
+  # past 150 s and asks again (a fresh signed link each time), three times, inside a 10-minute
+  # step. Inline, not a script or a local action: a release checks out `ref`, which may predate
+  # any file added here
   # (tests/scripts/binary-matrix-download.test.ts).
   FETCH_ARTIFACT: |
     set -eu
@@ -67,8 +68,8 @@ env:
     zip="$RUNNER_TEMP/fetch-$name.zip"
     try=1
     while :; do
-      id=$(curl -fsS --retry 3 --max-time 60 -H "$auth" "$api/runs/$GITHUB_RUN_ID/artifacts?name=$name&per_page=1" | jq -r '.artifacts[0].id // empty') || id=
-      if [ -n "$id" ] && curl -fL --connect-timeout 20 --speed-limit 1048576 --speed-time 30 --max-time 300 -sS -H "$auth" -o "$zip" "$api/artifacts/$id/zip"; then break; fi
+      id=$(curl -fsS --retry 3 --retry-all-errors --max-time 60 -H "$auth" "$api/runs/$GITHUB_RUN_ID/artifacts?name=$name&per_page=1" | jq -r '.artifacts[0].id // empty') || id=
+      if [ -n "$id" ] && curl -fL --retry 2 --retry-all-errors --connect-timeout 20 --speed-limit 1048576 --speed-time 30 --max-time 150 -sS -H "$auth" -o "$zip" "$api/artifacts/$id/zip"; then break; fi
       echo "::warning::fetching artifact $name (try $try of 3) stalled or failed"
       [ "$try" -lt 3 ] || exit 1
       try=$((try + 1)); sleep 10
@@ -167,7 +168,7 @@ jobs:
           if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files == '' && steps.files.outputs.missing == 'true'
-        timeout-minutes: 16
+        timeout-minutes: 10
         env:
           GH_TOKEN: ${{ github.token }}
         run: sh -c "$FETCH_ARTIFACT" fetch walnut-files dist-bin
@@ -195,7 +196,7 @@ jobs:
           if [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::$gz or SHA256SUMS is missing after the download; downloading ${{ inputs.files }} again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files != '' && steps.release.outputs.missing == 'true'
-        timeout-minutes: 16
+        timeout-minutes: 10
         env:
           GH_TOKEN: ${{ github.token }}
           NAME: ${{ inputs.files }}
@@ -253,7 +254,7 @@ jobs:
           if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files == '' && steps.files.outputs.missing == 'true'
-        timeout-minutes: 16
+        timeout-minutes: 10
         env:
           GH_TOKEN: ${{ github.token }}
         run: sh -c "$FETCH_ARTIFACT" fetch walnut-files dist-bin
@@ -279,7 +280,7 @@ jobs:
           if [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::$gz or SHA256SUMS is missing after the download; downloading ${{ inputs.files }} again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files != '' && steps.release.outputs.missing == 'true'
-        timeout-minutes: 16
+        timeout-minutes: 10
         env:
           GH_TOKEN: ${{ github.token }}
           NAME: ${{ inputs.files }}
@@ -337,7 +338,7 @@ jobs:
           if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files == '' && steps.files.outputs.missing == 'true'
-        timeout-minutes: 16
+        timeout-minutes: 10
         env:
           GH_TOKEN: ${{ github.token }}
         run: sh -c "$FETCH_ARTIFACT" fetch walnut-files dist-bin
@@ -367,7 +368,7 @@ jobs:
           if [ -s "$RUNNER_TEMP/release/SHA256SUMS" ] && [ -s "$gz" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
           else echo "::warning::$gz or SHA256SUMS is missing after the download; downloading ${{ inputs.files }} again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
       - if: inputs.files != '' && steps.release.outputs.missing == 'true'
-        timeout-minutes: 16
+        timeout-minutes: 10
         env:
           GH_TOKEN: ${{ github.token }}
           NAME: ${{ inputs.files }}

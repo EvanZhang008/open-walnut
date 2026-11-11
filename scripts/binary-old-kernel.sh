@@ -29,8 +29,10 @@ if ! need qemu-system-x86_64 || ! need cloud-localds; then
   if need apt-get && sudo -n true 2>/dev/null; then
     echo "installing qemu and cloud-image-utils..."
     # shellcheck disable=SC2086
-    sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 300') apt-get $apt_opts update -qq" \
-      || { echo "binary-old-kernel: apt-get update failed or ran past 5 minutes" >&2; exit 1; }
+    # The index refresh is best effort: the runner's image holds lists of its own, and on a slow
+    # mirror (2026-11-11, three runs from 16:00 UTC: past 5 minutes) the install may still get through.
+    sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 240') apt-get $apt_opts update -qq" \
+      || echo "::warning::binary-old-kernel: apt-get update failed or ran past 4 minutes; installing from the lists the runner has"
     # shellcheck disable=SC2086
     sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 600') apt-get $apt_opts install -y -qq qemu-system-x86 qemu-utils cloud-image-utils openssh-client >/dev/null" \
       || { echo "binary-old-kernel: installing qemu failed or ran past 10 minutes (is the runner's network up?)" >&2; exit 1; }
@@ -56,7 +58,7 @@ trap cleanup EXIT INT TERM
 base="$dir/centos7.qcow2c"
 if [ ! -f "$base" ]; then
   echo "downloading the CentOS 7 cloud image..."
-  curl -fsSL --retry 3 --connect-timeout 20 --speed-limit 102400 --speed-time 60 --max-time 900 -o "$base.part" "$image_url" \
+  curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --speed-limit 102400 --speed-time 60 --max-time 900 -o "$base.part" "$image_url" \
     || { echo "binary-old-kernel: downloading the CentOS 7 image failed or stalled" >&2; exit 1; }
   mv "$base.part" "$base"
 fi

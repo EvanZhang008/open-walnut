@@ -23,7 +23,7 @@ describe('binary matrix network steps', () => {
   it('every curl has a connect timeout, a total and a stall bound', () => {
     const curls = lines.filter(({ l }) => /\bcurl\s+-/.test(l))
     expect(curls.length).toBeGreaterThan(0)
-    const bare = curls.filter(({ l }) => !/--max-time \d+/.test(l) || (!/--speed-limit \d+ --speed-time \d+/.test(l) && !/-fsS --retry \d+ --max-time 60\b/.test(l)))
+    const bare = curls.filter(({ l }) => !/--max-time \d+/.test(l) || (!/--speed-limit \d+ --speed-time \d+/.test(l) && !/-fsS --retry \d+ --retry-all-errors --max-time 60\b/.test(l)))
     expect(bare.map(({ at, l }) => `${at}: ${l.trim()}`)).toEqual([])
   })
 

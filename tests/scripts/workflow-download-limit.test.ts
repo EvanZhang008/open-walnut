@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 
 const DIR = path.resolve(__dirname, '../../.github/workflows')
-type Step = { uses?: string; 'timeout-minutes'?: number }
+type Step = { uses?: string; run?: string; 'timeout-minutes'?: number }
 type Job = { 'timeout-minutes'?: number; steps?: Step[] }
 const MAX_STEP_MINUTES = 10
 
@@ -21,12 +21,14 @@ const downloads = fs.readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f)).flatMap(
   const jobs = (parseYaml(fs.readFileSync(path.join(DIR, file), 'utf8')) as { jobs?: Record<string, Job> }).jobs ?? {}
   return Object.entries(jobs).flatMap(([name, job]) =>
     (job.steps ?? []).map((step, i) => ({ where: `${file} ${name} step ${i + 1}`, step, job }))
-      .filter(({ step }) => step.uses?.startsWith('actions/download-artifact@')))
+      // The binary matrix's own fetch (FETCH_ARTIFACT, curl through the REST API) is a download too.
+      .filter(({ step }) => step.uses?.startsWith('actions/download-artifact@') || /\$FETCH_ARTIFACT"? fetch /.test(step.run ?? '')))
 })
 
 describe('every artifact download ends on its own limit, not the job limit', () => {
   it('finds the downloads', () => {
     expect(downloads.length).toBeGreaterThanOrEqual(20)
+    expect(downloads.filter((d) => d.step.run?.includes('FETCH_ARTIFACT')).length).toBeGreaterThanOrEqual(6)
   })
 
   it.each(downloads.map((d) => [d.where, d] as const))('%s has a step limit', (_where, { step, job }) => {
