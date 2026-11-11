@@ -28,14 +28,25 @@ apt_opts="-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::
 if ! need qemu-system-x86_64 || ! need cloud-localds; then
   if need apt-get && sudo -n true 2>/dev/null; then
     echo "installing qemu and cloud-image-utils..."
-    # shellcheck disable=SC2086
-    # The index refresh is best effort: the runner's image holds lists of its own, and on a slow
-    # mirror (2026-11-11, three runs from 16:00 UTC: past 5 minutes) the install may still get through.
-    sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 240') apt-get $apt_opts update -qq" \
-      || echo "::warning::binary-old-kernel: apt-get update failed or ran past 4 minutes; installing from the lists the runner has"
-    # shellcheck disable=SC2086
-    sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 600') apt-get $apt_opts install -y -qq qemu-system-x86 qemu-utils cloud-image-utils openssh-client >/dev/null" \
-      || { echo "binary-old-kernel: installing qemu failed or ran past 10 minutes (is the runner's network up?)" >&2; exit 1; }
+    # Three rounds of refresh and install, 30 s apart, and only what the script runs (no recommended
+    # packages: 73 instead of 306 on a bare image). The refresh is best effort, since the runner's
+    # image holds lists of its own; but when it fails the lists may name versions the mirror no longer
+    # has (2026-11-11, Binary matrix runs 43058047203 and 43060778879: the runner's DNS failed, the
+    # refresh was skipped, and the install got 404 for libsoup and libnfs), so a failed install
+    # refreshes again. Worst case about 22 minutes, inside the job's 40.
+    tries=0
+    while :; do
+      tries=$((tries + 1))
+      # shellcheck disable=SC2086
+      sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 120') apt-get $apt_opts update -qq" \
+        || echo "::warning::binary-old-kernel: apt-get update failed or ran past 2 minutes (try $tries of 3); installing from the lists the runner has"
+      # shellcheck disable=SC2086
+      sudo -n sh -c "$(command -v timeout >/dev/null 2>&1 && echo 'timeout 300') apt-get $apt_opts install -y -qq --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils openssh-client >/dev/null" \
+        && break
+      [ "$tries" -lt 3 ] || { echo "binary-old-kernel: installing qemu failed 3 times, each within 5 minutes (is the runner's network up?)" >&2; exit 1; }
+      echo "::warning::binary-old-kernel: installing qemu failed (try $tries of 3); refreshing the lists and trying again in 30 s"
+      sleep 30
+    done
   else
     echo "binary-old-kernel: needs qemu-system-x86_64 and cloud-localds" >&2
     exit 2

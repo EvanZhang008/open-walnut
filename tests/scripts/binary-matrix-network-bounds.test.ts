@@ -4,6 +4,8 @@
  * qemu install until the job's 40 minutes ran out. So each apt-get the matrix runs is under a
  * timeout with apt's own timeouts, and each curl has a connect timeout, a total and a stall bound.
  * This fails on a new apt-get or curl in the matrix's workflow or its scripts without them.
+ * Runs 43058047203 and 43060778879 (same day): the refresh failed on DNS, and the install then got
+ * 404 for packages the runner's old lists named, so a failed install refreshes and tries again.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -34,5 +36,19 @@ describe('binary matrix network steps', () => {
     expect(bare.map(({ at, l }) => `${at}: ${l.trim()}`)).toEqual([])
     const src = fs.readFileSync(path.join(ROOT, 'scripts/binary-old-kernel.sh'), 'utf8')
     expect(src).toMatch(/apt_opts="-o Acquire::Retries=\d -o Acquire::http::Timeout=\d+ -o Acquire::https::Timeout=\d+"/)
+  })
+
+  it('a failed qemu install refreshes the lists and tries again, a bounded number of times', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts/binary-old-kernel.sh'), 'utf8')
+    const loop = src.slice(src.indexOf('while :; do'), src.indexOf('done', src.indexOf('while :; do')))
+    expect(loop).toMatch(/apt-get \$apt_opts update/)
+    expect(loop).toMatch(/apt-get \$apt_opts install [^\n]*--no-install-recommends/)
+    expect(loop.indexOf('update')).toBeLessThan(loop.indexOf('install -y'))
+    expect(loop).toMatch(/\[ "\$tries" -lt (\d) \] \|\| \{[^}]*exit 1; \}/)
+    expect(loop).toMatch(/sleep \d+/)
+    // the whole loop stays well inside the job's limit
+    const n = Number(/\[ "\$tries" -lt (\d) \]/.exec(loop)![1])
+    const per = [...loop.matchAll(/timeout (\d+)/g)].reduce((a, m) => a + Number(m[1]), 0) + Number(/sleep (\d+)/.exec(loop)![1])
+    expect(n * per).toBeLessThanOrEqual(25 * 60)
   })
 })
