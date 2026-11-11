@@ -236,6 +236,16 @@ function outboundCallsOf(t: SessionHistoryTool): OutboundSend[] {
 const PIN_JUMP_FRESH_MS = 4000;
 
 
+/** The rows "Load earlier turns" (or a page of older rows) opens above
+ *  `start`: EARLIER_HISTORY_TURNS turns of the main conversation; when no main
+ *  row is above it (only a question's rows), that many turns of every row, so
+ *  the press always opens something. */
+function earlierRows(messages: ReadonlyArray<HistoryTurnRowLike>, start: number, onMain: ((i: number) => boolean) | undefined): number {
+  const added = historyTurnWindowLimit(messages, EARLIER_HISTORY_TURNS, onMain, start);
+  return added > 0 || !onMain ? added : historyTurnWindowLimit(messages, EARLIER_HISTORY_TURNS, undefined, start);
+}
+type HistoryTurnRowLike = Parameters<typeof historyTurnWindowLimit>[0][number];
+
 /** A row of the main conversation, for a window that counts its turns: on the
  *  tree's root, and no question's turn by its anchor (history-turn-window.ts). */
 function onMainLine(keyOf: (id: string | undefined) => string, m: HistoryRowIds & { walnutMessageId?: string }, questionIds: ReadonlySet<string>): boolean {
@@ -1582,8 +1592,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (el) pendingBottomDistance.current = el.scrollHeight - el.scrollTop;
     const start = olderRenderStart.current ?? renderWindowStart.current ?? messages.length;
     olderRenderStart.current = null;
-    const added = historyTurnWindowLimit(messages, EARLIER_HISTORY_TURNS,
-      mainLineWindow ? (i) => onMainLine(rowThreadKey, messages[i], questionIds) : undefined, start);
+    const added = earlierRows(messages, start,
+      mainLineWindow ? (i) => onMainLine(rowThreadKey, messages[i], questionIds) : undefined);
     setTruncationOffset(messages.length - start + added);
   }, [olderPageSeq]);
 
@@ -3312,12 +3322,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // review). The server's first page counts the same way (history-turn-window.ts).
   // A question's turns are known by their anchors too: one on a reply not
   // loaded yet makes no node of the tree, yet its follow-ups are no main turns.
-  const questionIds = useMemo(() => questionTurnIds(tagAnchors), [tagAnchors]);
+  // By content: withTagAnchors returns a new array whenever an optimistic row
+  // changes, and the parts memo below must not rebuild for that.
+  const anchorsSig = useMemo(() => tagAnchors.map((a) => `${a.msgId}>${a.parent}`).join('|'), [tagAnchors]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- anchorsSig stands for tagAnchors' content
+  const questionIds = useMemo(() => questionTurnIds(tagAnchors), [anchorsSig]);
   const mainLineWindow = currentKey === ROOT_THREAD_KEY && (hasQuestions || questionIds.size > 0);
   const rowThreadKeyRef = useRef(rowThreadKey);
   rowThreadKeyRef.current = rowThreadKey;
   // The tree is built from these (tag anchors included), so they stand for it.
-  const windowAnchors = mainLineWindow ? tagAnchors : null;
+  const windowAnchors = mainLineWindow ? anchorsSig : null;
   // What the pass mints keeps its identity from pass to pass (part-identity.ts),
   // so a page of older rows re-renders the new rows only.
   const partIdentity = useMemo(() => new PartIdentity(), [sessionId]);
@@ -6543,8 +6557,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               isAtBottom.current = false;
               const el = containerRef.current;
               if (el) pendingBottomDistance.current = el.scrollHeight - el.scrollTop;
-              const added = historyTurnWindowLimit(messages, EARLIER_HISTORY_TURNS,
-                mainLineWindow ? (i) => onMainLine(rowThreadKey, messages[i], questionIds) : undefined, hiddenCount);
+              const added = earlierRows(messages, hiddenCount,
+                mainLineWindow ? (i) => onMainLine(rowThreadKey, messages[i], questionIds) : undefined);
               setTruncationOffset(messages.length - hiddenCount + added);
             }}
           >

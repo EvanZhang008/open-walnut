@@ -25,7 +25,7 @@ const NO_QUESTIONS: Record<string, string> = {
 }
 
 /** A line that counts turns names one of these: the main-line filter, or a test built on it. */
-const MAIN_LINE = /mainLineRows\(|mainLineWindow|isMainTurn/
+const MAIN_LINE = /mainLineRows\(|mainLineWindow|isMainTurn|\bonMain\b/
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -46,7 +46,7 @@ describe('a turns window counts the main conversation', () => {
         if (rel === OWN) continue
         readFileSync(file, 'utf8').split('\n').forEach((text, i) => {
           // A call of the window, or the turn test handed to a paged read or a count.
-          if (/historyTurnWindowLimit\(/.test(text) || /isText:\s*isHistoryUserTurn|filter\(isHistoryUserTurn\)/.test(text)) {
+          if (/historyTurnWindowLimit\(|\bearlierRows\(/.test(text) || /isText:\s*isHistoryUserTurn|filter\(isHistoryUserTurn\)/.test(text)) {
             found.push({ file: rel, line: i + 1, text })
           }
         })
