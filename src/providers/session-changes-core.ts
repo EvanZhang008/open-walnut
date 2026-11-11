@@ -884,6 +884,50 @@ async function readHeadBlobs(
   return out;
 }
 
+/**
+ * The repo root of every file the Changed view can show (not excluded, not an
+ * orphan), keyed by its path as written. One repo can be reached by two
+ * spellings through a symlink (a symlinked home: /home/u/repo and
+ * /local/home/u/repo): grouping keys on the root's real path, so one file
+ * written through both spellings is one file. Its accums are merged here into
+ * the first spelling seen, ops in the order their spellings first appeared,
+ * and the other key leaves `fileMap` (never mutating an accum: the map can
+ * share them with the kept parse state).
+ */
+export async function resolveRootsOneSpelling(
+  fileMap: Map<string, FileAccum>,
+  resolveRepoRoot: (filePath: string, fileCwd?: string) => Promise<{ root: string; orphan: boolean }>,
+  realDirOf: (dir: string) => Promise<string>,
+  slice: () => Promise<void> = async () => {},
+): Promise<Map<string, string>> {
+  const accums = [...fileMap.values()].filter((a) => !isExcludedPath(a.filePath));
+  const resolved = new Map<FileAccum, { root: string; key: string }>();
+  await eachPooled(accums, CONTENT_READ_PARALLELISM, async (accum) => {
+    await slice();
+    const { root, orphan } = await resolveRepoRoot(accum.filePath, accum.cwd);
+    if (!orphan) resolved.set(accum, { root, key: `${await realDirOf(root)}\0${path.relative(root, accum.filePath)}` });
+  });
+  // Merged in map order, so the result does not depend on which lookup ended first.
+  const rootByPath = new Map<string, string>();
+  const byRealFile = new Map<string, FileAccum>();
+  for (const accum of accums) {
+    const r = resolved.get(accum);
+    if (!r) continue;
+    const { root, key } = r;
+    const first = byRealFile.get(key);
+    if (!first) {
+      byRealFile.set(key, accum);
+      rootByPath.set(accum.filePath, root);
+      continue;
+    }
+    const merged: FileAccum = { filePath: first.filePath, cwd: first.cwd ?? accum.cwd, ops: [...first.ops, ...accum.ops] };
+    fileMap.set(first.filePath, merged);
+    fileMap.delete(accum.filePath);
+    byRealFile.set(key, merged);
+  }
+  return rootByPath;
+}
+
 /** Nearest ancestor dir containing `.git` — plain-fs walk (host-local). */
 async function findGitRootHostLocal(startDir: string): Promise<string | null> {
   let dir = startDir;
@@ -978,6 +1022,14 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
     return { root: dir, orphan: true };
   };
 
+  const realDirs = new Map<string, Promise<string>>();
+  const realDirOf = (dir: string): Promise<string> => {
+    let p = realDirs.get(dir);
+    if (!p) { p = fsp.realpath(dir).catch(() => dir); realDirs.set(dir, p); }
+    return p;
+  };
+  const realCwdRepoRoot = cwdRepoRoot ? await realDirOf(cwdRepoRoot) : null;
+
   const prevMemo = opts.changesMemo;
   const memo: HostLocalChangesMemo = { files: new Map(), topByDir: new Map(), headBlobs: new Map() };
   const stats: HostLocalComputeStats = { files: 0, reconstructed: 0, reused: 0, gitSpawns: 0 };
@@ -997,13 +1049,10 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
     deletedBefore: string | null;
   }
   const candidates: Candidate[] = [];
-  const rootByPath = new Map<string, string>();
+  const rootByPath = await resolveRootsOneSpelling(fileMap, resolveRepoRoot, realDirOf, slice);
   await eachPooled([...fileMap.values()], CONTENT_READ_PARALLELISM, async (accum) => {
     await slice();
-    if (isExcludedPath(accum.filePath)) return;
-    const { root, orphan } = await resolveRepoRoot(accum.filePath, accum.cwd);
-    if (orphan) return;
-    rootByPath.set(accum.filePath, root);
+    if (!rootByPath.has(accum.filePath)) return;
     // stat-before-read: transcript ops can name FIFOs/sockets/dirs (a session
     // that ran mkfifo, or wrote a .pipe path). open() on a writer-less FIFO
     // blocks a fs-pool thread FOREVER (2026-08-15: wedged all daemon fs RPCs).
@@ -1045,12 +1094,6 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
       })();
       dirTop.set(dir, p);
     }
-    return p;
-  };
-  const realDirs = new Map<string, Promise<string>>();
-  const realDirOf = (dir: string): Promise<string> => {
-    let p = realDirs.get(dir);
-    if (!p) { p = fsp.realpath(dir).catch(() => dir); realDirs.set(dir, p); }
     return p;
   };
   const shaByTop = new Map<string, Promise<string | null>>();
@@ -1150,12 +1193,15 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   });
 
   // 4-6. Group by repo root, drop no-ops/excluded, order.
+  // Keyed by the root's real path: a repo reached through a symlink by two
+  // spellings is one group (resolveRootsOneSpelling).
   const groupsByRoot = new Map<string, SessionRepoGroup>();
   for (const accum of fileMap.values()) {
     await slice();
     const change = changesByPath.get(accum.filePath);
     const root = rootByPath.get(accum.filePath);
     if (!change || root === undefined) continue;
+    const realRoot = await realDirOf(root);
     // Drop CLEAN net no-op edits (edited then reverted); keep partial no-ops
     // and structural changes (rename/delete) — same policy as the server path.
     const structural = change.status === 'renamed' || change.status === 'deleted';
@@ -1165,11 +1211,15 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
       const relOld = path.relative(root, change.oldRelPath);
       change.oldRelPath = relOld && !relOld.startsWith('..') ? relOld : path.basename(change.oldRelPath);
     }
-    let group = groupsByRoot.get(root);
+    let group = groupsByRoot.get(realRoot);
     if (!group) {
-      const meta = groupMeta(root, effectiveCwd, cwdRepoRoot);
-      group = { repoRoot: root, label: meta.label, kind: meta.kind, files: [] };
-      groupsByRoot.set(root, group);
+      // The session's own spelling when this is its repo, else the first one seen;
+      // its kind from the real paths, its name as the session spells it.
+      const repoRoot = cwdRepoRoot && realRoot === realCwdRepoRoot ? cwdRepoRoot : root;
+      const meta = groupMeta(realRoot, effectiveCwd, realCwdRepoRoot);
+      const label = meta.kind === 'submodule' ? meta.label : path.basename(repoRoot) || repoRoot;
+      group = { repoRoot, label, kind: meta.kind, files: [] };
+      groupsByRoot.set(realRoot, group);
     }
     group.files.push(change);
   }
