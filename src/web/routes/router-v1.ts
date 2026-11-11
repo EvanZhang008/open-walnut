@@ -105,6 +105,22 @@ routerV1Router.get('/router/areas', async (req: Request, res: Response, next: Ne
   } catch (error) { failure(res, next, error); }
 });
 
+// GET /api/v1/router/nodes/:id/summary → RouterNodeSummary: what a router's Org page shows above its
+// chat (counts, its wake, its conversation, the newest route's target; never an item's words).
+routerV1Router.get('/router/nodes/:id/summary', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primary();
+    if (callerSid(req)?.trim()) throw new RouterError('area_forbidden', 'Sessions read only their own routing context, not a router\'s summary.', 403);
+    const { routerNodeSummary, RouterSummaryError } = await import('../../core/router/summary.js');
+    try {
+      res.json(await routerNodeSummary(String(req.params.id)));
+    } catch (error) {
+      if (error instanceof RouterSummaryError) { sendV1Error(res, error.status, error.code, error.message); return; }
+      throw error;
+    }
+  } catch (error) { failure(res, next, error); }
+});
+
 routerV1Router.put('/router/areas', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primary(true);

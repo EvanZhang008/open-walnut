@@ -257,6 +257,7 @@ const CHECK_STAMP_MS = 10 * 60_000;
  *  `checks`: when an armed trigger of the task last ran its check. */
 async function readRoutines(kind: 'triggers' | 'schedules' | 'checks'): Promise<Map<string, any>> {
   const schedules = kind === 'schedules';
+  const { wakesTask, wakeWordsOf } = await import('./routines/routine-wake-target.js');
   const out = new Map<string, any>();
   await safely('triggers', async () => {
     const { listRoutines } = await import('./routines/routines-core.js');
@@ -264,7 +265,8 @@ async function readRoutines(kind: 'triggers' | 'schedules' | 'checks'): Promise<
     const { jobs } = await listRoutines(true);
     for (const job of jobs as import('./cron/types.js').CronJob[]) {
       const target = (job.executor?.config as { target?: unknown } | undefined)?.target;
-      if (job.executor?.type !== 'session' || typeof target !== 'string' || !job.enabled) continue;
+      // Every executor kind that wakes the task its config names (routine-wake-target.ts).
+      if (!wakesTask(job) || typeof target !== 'string' || !job.enabled) continue;
       if (kind === 'checks') {
         const ran = job.state?.lastCheck?.atMs;
         if (!job.check || triggerRunState(job) !== 'armed' || typeof ran !== 'number') continue;
@@ -280,7 +282,7 @@ async function readRoutines(kind: 'triggers' | 'schedules' | 'checks'): Promise<
         const next = job.state?.nextRunAtMs;
         list.push({ name: job.name, ...(typeof next === 'number' ? { nextAt: new Date(next).toISOString() } : {}) });
       } else if (!schedules && job.check && triggerRunState(job) === 'armed') {
-        list.push({ id: job.id, name: job.name });
+        list.push({ id: job.id, name: wakeWordsOf(job) });
       } else continue;
       out.set(target, list);
     }

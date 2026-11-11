@@ -1087,3 +1087,30 @@ describe('hasRouterDecisions', () => {
   })
 })
 
+describe('overview (the router page summary)', () => {
+  it('reads zero and no newest row for an empty area', async () => {
+    expect(await store().overview()).toEqual({ counts: {} })
+  })
+
+  it('counts each state and names the newest row by its latest change', async () => {
+    const ledger = store()
+    const first = await ledger.claim(item(mail('crew', 'm1')), { status: 'routing', taskId: 'task-a', reason: 'thread match' }, 1_000)
+    await ledger.claim(item(mail('crew', 'm2')), { status: 'not_routed', reason: 'newsletter' }, 2_000)
+    await ledger.claim(item(mail('crew', 'm3')), { status: 'routing', taskId: 'task-b', reason: 'new subject' }, 3_000)
+    await ledger.settle(first.route.key, messageId(first.route.key, 'task-a'), { status: 'routed' }, 4_000)
+    const view = await ledger.overview()
+    expect(view.counts).toEqual({ routed: 1, not_routed: 1, routing: 1 })
+    expect(view.latest).toMatchObject({ key: first.route.key, status: 'routed', taskId: 'task-a', at: 4_000 })
+  })
+
+  it('leaves out legacy receipts: work handled before the router is no decision of its own', async () => {
+    const ledger = store()
+    await ledger.recordLegacy(item(mail('crew', 'old')), { taskId: 'task-desk', reason: 'Handled before the router', evidence: 'Reply in the desk thread', at: 9_000 })
+    expect(await ledger.overview()).toEqual({ counts: {} })
+    await ledger.claim(item(mail('crew', 'new')), { status: 'not_routed', reason: 'newsletter' }, 2_000)
+    const view = await ledger.overview()
+    expect(view.counts).toEqual({ not_routed: 1 })
+    expect(view.latest).toMatchObject({ status: 'not_routed', at: 2_000 })
+  })
+})
+

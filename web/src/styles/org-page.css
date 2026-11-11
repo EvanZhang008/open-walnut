@@ -214,6 +214,15 @@
 .org-router-from-mail p + p { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .org-router-from-mail-label { font-weight: 600; }
 .org-router-from-mail-state { color: var(--fg-secondary); }
+/* A router's state above its chat (OrgRouterOverview): what it does, whether it runs, what it routed. */
+.org-router-overview { flex: none; padding: 10px 20px; border-bottom: 1px solid var(--border); color: var(--fg); font-size: 13px; overflow-wrap: anywhere; }
+.org-router-overview p { margin: 0; }
+.org-router-overview-what { color: var(--fg-secondary); }
+.org-router-overview-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 8px 0 0; }
+.org-router-overview-facts > div { display: contents; }
+.org-router-overview-facts dt { font-weight: 600; }
+.org-router-overview-facts dd { margin: 0; min-width: 0; }
+.org-router-overview-next { margin-top: 8px !important; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .org-chat-start-actions { display: flex; gap: 8px; }
 .org-router-sources { margin: 0; padding: 0 0 0 16px; font-size: 13px; }
 .org-router-setup-actions { display: flex; gap: 8px; margin-top: 4px; }

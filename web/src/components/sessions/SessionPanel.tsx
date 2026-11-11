@@ -410,6 +410,8 @@ interface SessionPanelProps {
   headerSlot?: HTMLElement | null;
   /** With headerSlot: the kebab's Board row opens the host's Board instead of this panel's own. */
   onHostBoard?: () => void;
+  /** What an empty conversation says instead of "No conversation history found" (a router's page: why it is empty). */
+  emptyHistory?: ReactNode;
   /**
    * A plain chat (the browser side panel's Ask, about the page the person is on): the
    * conversation and a composer, nothing of a coding session. No header (the host has its
@@ -455,7 +457,7 @@ const PLAIN_CHAT_CONTROLS: ReadonlySet<string> = new Set(['mode', 'model']);
  */
 const carriedTitles = new Map<string, string>();
 
-const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar }: SessionPanelProps) {
+const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -3834,6 +3836,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           <SessionChatHistory
             key={`${sessionId}:${rewindEpoch}`}
             sessionId={sessionId}
+            emptyHistory={emptyHistory}
             publishTimeline={treeGrid ? timelineShare : undefined}
             engine={session?.engine}
             phase={taskPhase}

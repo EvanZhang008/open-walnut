@@ -232,6 +232,11 @@ for (const area of AREAS) {
     // A router is its own row, never a VP row, and has no Tasks, Brief or Threads side bar.
     expect(await page.getByTestId('org-channel').filter({ hasText: name }).count()).toBe(0);
     await expect(page.getByTestId('org-rail-toggle')).toHaveCount(0);
+    // Its page says what it is and where it stands (2026-11-11: it said only "No conversation history found").
+    await expect(page.getByTestId('org-router-overview-what')).toContainText(`reads the mail you assign to ${area.label}`);
+    await expect(page.getByTestId('org-router-overview-state')).toHaveText(/^Paused: it reads nothing/);
+    await expect(page.getByTestId('org-router-overview-routed')).toHaveText('No email so far.');
+    await expect(page.getByText('No conversation history found')).toHaveCount(0);
 
     // Settings: an empty name cannot be saved, Discard brings the saved name back, a rename is saved.
     await expect(page.getByTestId('org-router-settings')).toBeVisible();
@@ -389,6 +394,9 @@ test('Personal router pause: a failed resume stays paused everywhere, the real r
   await expect(routerRow(page, personal)).toContainText('Ready');
   await expect(routerRow(page, personal)).not.toContainText('Paused');
   await expect(page.getByTestId('org-router-summary')).toContainText('Ready for assigned items');
+  // The page's state line follows the save: running or not yet started, and how mail reaches it.
+  await expect(page.getByTestId('org-router-overview-state')).toHaveText(/^(Running|Not running yet)/);
+  await expect(page.getByTestId('org-router-overview-next')).toContainText('Nothing is assigned to Personal yet');
   // The Work router is not touched by Personal's resume.
   expect((await areas()).routers.find((r) => r.taskId === routerOf.work)?.paused).toBe(true);
 

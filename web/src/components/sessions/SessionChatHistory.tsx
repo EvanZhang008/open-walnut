@@ -310,6 +310,8 @@ const NEVER_RESET = () => false;
 
 interface SessionChatHistoryProps {
   sessionId: string;
+  /** What an empty conversation says instead of "No conversation history found". */
+  emptyHistory?: ReactNode;
   /** Coding agent backing this session. Legacy records without one are Claude Code. */
   engine?: SessionEngine;
   phase?: string;
@@ -646,7 +648,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys, unsentKeys };
 }
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, workingText }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, workingText, emptyHistory }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -6358,7 +6360,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {/* A session an engine switch started idle shows its task's earlier sessions instead. */}
         {!error && !hasContent && !loading && !phase2Pending && !loadingFrom && chatEarlier.length === 0 && !earlierSessionsTaskId && (
           <div className="session-history-empty">
-            <p className="text-muted">No conversation history found</p>
+            {emptyHistory ?? <p className="text-muted">No conversation history found</p>}
           </div>
         )}
         {/* Show a subtle loading indicator when Phase 2 (SSH) is still fetching */}

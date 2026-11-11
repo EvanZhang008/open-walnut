@@ -485,6 +485,23 @@ export class RouterStore {
   }
 
   /**
+   * How many items of this area the router itself decided, in each state, and the newest of them:
+   * the router page's summary (no item words). Legacy receipts (work handled before the router
+   * existed) are no decision of its own and are left out.
+   */
+  async overview(): Promise<{ counts: Partial<Record<RouterRouteStatus, number>>; latest?: RouterRoute }> {
+    const client = await this.open()
+    const rows = await client.all<{ status: string; n: number }>("SELECT status, COUNT(*) AS n FROM router_items WHERE receipt_origin IS NOT 'legacy' GROUP BY status")
+    const counts: Partial<Record<RouterRouteStatus, number>> = {}
+    for (const row of rows) {
+      const status = (ROUTE_STATUSES as readonly string[]).includes(row.status) ? row.status as RouterRouteStatus : 'unknown'
+      counts[status] = (counts[status] ?? 0) + Number(row.n)
+    }
+    const latest = await client.get<RouterRow>(`SELECT ${COLUMNS} FROM router_items WHERE receipt_origin IS NOT 'legacy' ORDER BY at DESC, key DESC LIMIT 1`)
+    return { counts, ...(latest ? { latest: rowToRoute(latest, this.areaId) } : {}) }
+  }
+
+  /**
    * True when any row is not a legacy receipt: a decision the router itself made, in any status
    * (routing, routed, not_routed, failed, unknown). No clock is read, so a row from any time counts.
    */

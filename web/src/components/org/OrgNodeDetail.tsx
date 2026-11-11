@@ -38,7 +38,9 @@ import { askWords } from './org-ask-form';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { recentMainStart } from './ask-main';
 import { OrgNodeStart } from './OrgNodeStart';
-import { OrgRouterSettings } from './OrgRouterSettings';
+import { OrgRouterSettings, routerLinkRows } from './OrgRouterSettings';
+import { OrgRouterOverview, routerEmptyChatLine } from './OrgRouterOverview';
+import { useRouterAreaNames } from './router-area-names';
 import { OrgRouterFromMail } from './OrgRouterFromMail';
 import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
@@ -52,7 +54,7 @@ import { ORG_TASK_TAB_LABELS, isKeptRailTab, orgTaskTabs, ownAskFirst, railTabSh
 import { stateCountLabel } from '@open-walnut/user-status';
 import type { ImageAttachment } from '@/api/chat';
 import {
-  mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
+  areaIdWords, mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
 } from './org-channels-model';
 
 export type OrgTab = 'board' | 'team' | 'chat';
@@ -195,6 +197,21 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const isRouter = row.kind === 'router';
   const routerTask = isRouter && contact?.org_role === 'router' ? contact : undefined;
   const hasBoard = useHasBoard(isRouter ? undefined : row.contactId);
+  // A router's chat is empty until mail of its area reaches it: say so instead of "No conversation
+  // history found" (memoized: SessionChatHistory is memo'd and compares the element by identity).
+  const routerLinkNames = useMemo(
+    () => (routerTask ? routerLinkRows(routerTask.router_links ?? [], tasks).filter((r) => r.state === 'open').map((r) => r.name) : []),
+    [routerTask, tasks],
+  );
+  // Keyed on primitives: routerTask is a new object on every task update, and the chat is memo'd.
+  const isRouterNode = !!routerTask;
+  const routerAreaId = routerTask?.router_area_id || '';
+  const routerAreaNames = useRouterAreaNames(routerAreaId ? [routerAreaId] : []);
+  const routerAreaLabel = routerAreaId ? (routerAreaNames[routerAreaId] || areaIdWords(routerAreaId)) : 'its area';
+  const routerEmptyChat = useMemo(
+    () => (isRouterNode ? <p className="text-muted" data-testid="org-router-empty-chat">{routerEmptyChatLine(routerAreaLabel)}</p> : undefined),
+    [isRouterNode, routerAreaLabel],
+  );
   const columns = useMemo(
     () => (row.kind === 'main' ? mainTeamColumns(rows) : isRouter ? [] : teamColumns(row, tasks)),
     [row, rows, tasks, isRouter],
@@ -455,6 +472,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
           save never moves or remounts the chat below. */}
       {routerTask && <OrgRouterFromMail node={row.key} routerId={routerTask.id} title={title} paused={routerTask.router_paused !== false} />}
       {routerTask && <OrgRouterSettings key={routerTask.id} router={routerTask} tasks={tasks} tasksLoading={!!tasksLoading} />}
+      {routerTask && <OrgRouterOverview key={`overview-${routerTask.id}`} routerId={routerTask.id} title={title} links={routerLinkNames} paused={routerTask.router_paused !== false} />}
       {/* One parent for both places, so moving the rail never remounts it (a picked choice, an
           open More and the held order stay when a side panel narrows the page). */}
       <div ref={(el) => { splitRef.current = el; railWidth.panelRef.current = el; }} className={`org-detail-split ${railHidden ? 'no-rail' : railSide ? 'has-rail' : 'is-stacked'}${isRouter ? ' is-router-split' : ''}`}>
@@ -468,7 +486,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         {shown === 'team' && renderTeam()}
         {shown === 'chat' && (sessionId ? (
           <div ref={chatHostRef} className="org-chat-host" data-testid="org-chat">
-            <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} onTaskClick={openChip} onSessionClick={onOpenSession} />
+            <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(!isRouter && hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} {...(routerEmptyChat ? { emptyHistory: routerEmptyChat } : {})} onTaskClick={openChip} onSessionClick={onOpenSession} />
           </div>
         ) : (
           // No session yet: it starts by itself in the background (org-autostart.ts); Retry only after a failure.

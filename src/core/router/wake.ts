@@ -95,6 +95,9 @@ function defaultDeps(): RouterWakeDeps {
 export type RouterWakeGate = { ready: true; area: RouterArea; task: WakeTask; file: RouterAreasFile } | { ready: false; reason: string };
 
 /** Area, active router and its task as configured now; paused, complete or org off is quiet, a mismatch throws. */
+/** The gate's answer for a paused router (its registry entry or its task), read by the router page too. */
+export const ROUTER_PAUSED_REASON = 'The area router is paused.';
+
 export async function routerWakeGate(areaId: string, deps: RouterWakeDeps, target?: string): Promise<RouterWakeGate> {
   routerAreaId(areaId);
   const file = await deps.readAreas();
@@ -105,7 +108,7 @@ export async function routerWakeGate(areaId: string, deps: RouterWakeDeps, targe
     throw new RouterWakeError('router_other_area', `Task ${target} is not a task of router area ${areaId}.`);
   }
   const router = activeRouter(file, areaId);
-  if (!router) return { ready: false, reason: 'The area router is paused.' };
+  if (!router) return { ready: false, reason: ROUTER_PAUSED_REASON };
   if (target !== undefined && router.taskId !== target) {
     throw new RouterWakeError('router_changed', `Task ${target} is not the active router of area ${areaId}.`);
   }
@@ -115,7 +118,7 @@ export async function routerWakeGate(areaId: string, deps: RouterWakeDeps, targe
     throw new RouterWakeError('router_task_mismatch', `Task ${task.id} is not a local router of area ${areaId}.`);
   }
   if (task.phase === 'COMPLETE') return { ready: false, reason: 'The area router is complete.' };
-  if (task.router_paused !== false) return { ready: false, reason: 'The area router is paused.' };
+  if (task.router_paused !== false) return { ready: false, reason: ROUTER_PAUSED_REASON };
   if (!await deps.orgEnabled()) return { ready: false, reason: 'The org is off.' };
   return { ready: true, area, task, file };
 }
@@ -143,6 +146,21 @@ export async function pendingSources(file: RouterAreasFile, area: RouterArea, de
     }
   }
   return pending;
+}
+
+/** Whether this router's wake would hand it items now, and why not (the router page's summary): the wake's own gate. */
+export async function routerReadiness(areaId: string, taskId: string): Promise<{ ready: true } | { ready: false; reason: string }> {
+  try {
+    const gate = await routerWakeGate(areaId, defaultDeps(), taskId);
+    return gate.ready ? { ready: true } : { ready: false, reason: gate.reason };
+  } catch (error) {
+    return { ready: false, reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** How many of an area's confirmed items still wait for a route (the router page's summary). */
+export async function pendingCount(file: RouterAreasFile, area: RouterArea): Promise<number> {
+  return (await pendingSources(file, area, defaultDeps())).length;
 }
 
 /** A window of at most `size` that moves on each wake, so a stuck head never hides the tail. */
