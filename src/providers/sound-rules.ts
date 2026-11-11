@@ -71,8 +71,8 @@ export const CODE_SPAWN_RE = '(system|popen|getoutput|getstatusoutput|run|call|c
 /** The refusal both guards give, after "Walnut refused this command: ". */
 export function soundAdvice(what: string): string {
   return `it would make sound on the machine it runs on (${what}). The person there wants no sound from an agent, never a volume change or an unmute. `
-    + 'Work silently: speech to a file (say -o out.aiff, espeak -w out.wav) fed to the app or simulator, audio through a virtual audio device '
-    + '(BlackHole, a null sink), a player with a null output (mpv --ao=null). Muting alone and reading the volume are fine; setting any level is not. '
+    + 'Work silently: speech to a file (say -o out.aiff, espeak -w out.wav), a virtual audio device '
+    + '(BlackHole, a null sink), a player with a null output (mpv --ao=null). Muting and reading the volume are fine; setting any level is not. '
     + 'Text that only names these: write it with the Write tool.'
 }
 
@@ -90,6 +90,43 @@ export function soundAdvice(what: string): string {
 export const INPUT_PROGRAMS = ['cliclick', 'xdotool', 'ydotool', 'wtype', 'xte', 'dotool'] as const
 /** Programs whose subcommand (any word that is no option) sends real input or drives the UI. */
 export const INPUT_SUBCOMMANDS = { peekaboo: '^(click|type|press|hotkey|scroll|swipe|drag|move|paste|menu|dialog|agent|run)$' } as const
+/** Python modules that send real input: `python3 -m <one>` and a package runner of one are refused as the programs are. */
+export const INPUT_MODULES = ['pyautogui', 'pynput', 'autopy'] as const
+/**
+ * Package runners run the program they name (`npx cliclick`, `bunx peekaboo click`, `uvx pyautogui`,
+ * `pipx run ...`, `uv run python -m ...`), so the guard judges that program as if typed (2026-11-11).
+ * Key: the runner and its subcommand words. `value`: its options that take a value (the package of
+ * `--package x cmd`, `--from x cmd`), `line`: options whose value is a shell line it runs (`npx -c`),
+ * `module`: options whose value is the program itself (`uv run -m pyautogui`). The program word loses its
+ * directory, version and extras (`@scope/name@1.2`, `name==1.2`, `name[gui]`), and is read lowercase.
+ */
+export interface PackageRunner { value: string; line?: string; module?: string }
+const NPM_RUNNER: PackageRunner = { value: '^(-p|--package|-w|--workspace|--registry|--cache|--userconfig|--prefix|--loglevel|--node-options|--script-shell)$', line: '^(-c|--call)$' }
+const UV_RUNNER: PackageRunner = {
+  // Every --*-package, --*index, --*index-url, --*-file and --*group takes a value too.
+  value: '^(-[wpfcP]|--(from|with|with-editable|with-requirements|python|python-platform|find-links|constraints|overrides|directory|project|cache-dir|extra|exclude-newer|index-strategy|keyring-provider|resolution|prerelease|link-mode|color)|--([a-z-]*-)?(index|index-url|file|group|package))$',
+  module: '^(-m|--module)$',
+}
+const RUN_CMD: PackageRunner = { value: '^(-e|--environment|-n|--name|-p|--prefix|--manifest-path|-C|--directory|--project|--cwd)$' }
+export const PACKAGE_RUNNERS: Record<string, PackageRunner> = {
+  npx: NPM_RUNNER, 'npm exec': NPM_RUNNER, 'npm x': NPM_RUNNER,
+  bunx: { value: '^(-p|--package|--cwd|--registry)$' }, 'bun x': { value: '^(-p|--package|--cwd|--registry)$' }, 'bun run': { value: '^(--cwd|--filter|-F)$' },
+  pnpx: { value: '^(--package|-C|--dir)$', line: '^(-c|--shell-mode)$' }, 'pnpm dlx': { value: '^(--package|-C|--dir)$', line: '^(-c|--shell-mode)$' },
+  'pnpm exec': { value: '^(-C|--dir|-F|--filter)$', line: '^(-c|--shell-mode)$' },
+  'yarn dlx': { value: '^(-p|--package)$' }, 'yarn exec': { value: '^$' }, 'yarn run': { value: '^$' },
+  uvx: UV_RUNNER, 'uv tool run': UV_RUNNER, 'uv run': UV_RUNNER,
+  'pipx run': { value: '^(--spec|--python|--pip-args|--index-url)$' },
+  'poetry run': RUN_CMD, 'pdm run': RUN_CMD, 'hatch run': RUN_CMD, 'rye run': RUN_CMD, 'pixi run': RUN_CMD, 'conda run': RUN_CMD,
+}
+/** Options a runner takes before its subcommand (`uv --quiet run`, `pnpm -C dir exec`) that take a value. */
+export const RUNNER_GLOBAL_VALUE_RE = '^(-C|--dir|--prefix|--directory|--project|--config-file|--cache-dir|-w|--workspace|-F|--filter|--color|--loglevel|--cwd)$'
+/** Cut from a package runner's program word, after its directory: a version, extras or a git ref, then an archive or git suffix. */
+export const PACKAGE_VERSION_RE = '[@=<>~!#\\[].*$'
+export const PACKAGE_SUFFIX_RE = '\\.(git|tgz|tar\\.gz|zip|whl)$'
+/** Python's short options before `-m` that take no value; `-X` and `-W` take one, as the next word or attached. */
+export const PYTHON_FLAGS_RE = '^-[bBdEhiIOPqRsSuvVx]+$'
+export const PYTHON_VALUE_FLAG_RE = '^-[bBdEhiIOPqRsSuvVx]*[WX]'
+export const PYTHON_MODULE_RE = '^-[bBdEhiIOPqRsSuvVx]*m'
 /** AppleScript / JXA through System Events (matched on the text as written) clicking or pressing keys (strings emptied). */
 export const OSA_SYSTEM_EVENTS = 'system events'
 export const OSA_INPUT_RE = word('keystroke|key[ \t]+code|keycode|key[ \t]+down|keydown|key[ \t]+up|keyup|click')
@@ -102,9 +139,9 @@ export const INPUT_REASON_VAR = 'WALNUT_INPUT_REASON'
 export const INPUT_REASON_MIN = 10
 
 export function inputAdvice(what: string): string {
-  return `it would send real input to the front window of the machine it runs on (${what}): the pointer moves or clicks, or keys are typed, `
-    + 'wherever the person there is working. Drive only a window the test owns, from inside it: Playwright (page.click, keyboard.type), '
-    + 'XCUITest, `xcrun simctl io` or idb for a simulator. If this command truly must drive a window it owns this way, '
+  return `it would send real input (${what}) to the front window of this machine, where a person may be working. `
+    + 'Drive only a window the test owns, from inside it: Playwright (page.click, keyboard.type), '
+    + 'XCUITest, `xcrun simctl io` or idb. If this command truly must drive its own window this way, '
     + `put ${INPUT_REASON_VAR}='<why, ${INPUT_REASON_MIN}+ characters>' in front of it on the same line.`
 }
 

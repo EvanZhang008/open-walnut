@@ -19,7 +19,8 @@ import {
   ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_SPAWN_RE, FFMPEG_AUDIO_OUT_RE, JXA_MUTE_ONLY_RE, MEDIA_APPS_RE,
   OSA_BEEP_RE, OSA_JXA_VOLUME_RE, OSA_MEDIA_TELL_RE, OSA_MUTE_ONLY_RE, OSA_PLAY_RE, OSA_SAVING_RE, OSA_SAY_RE,
   OSA_SET_VOLUME_RE, OSA_SHELL_RE, OSA_APP_VOLUME_RE, STRING_RE,
-  CODE_INPUT_API_RE, INPUT_PREFIX, INPUT_PROGRAMS, INPUT_REASON_MIN, INPUT_REASON_VAR, INPUT_SUBCOMMANDS, OSA_INPUT_RE, OSA_SYSTEM_EVENTS,
+  CODE_INPUT_API_RE, INPUT_MODULES, INPUT_PREFIX, INPUT_PROGRAMS, INPUT_REASON_MIN, INPUT_REASON_VAR, INPUT_SUBCOMMANDS, OSA_INPUT_RE, OSA_SYSTEM_EVENTS,
+  PACKAGE_RUNNERS, PACKAGE_SUFFIX_RE, PACKAGE_VERSION_RE, PYTHON_FLAGS_RE, PYTHON_MODULE_RE, PYTHON_VALUE_FLAG_RE, RUNNER_GLOBAL_VALUE_RE,
 } from './sound-rules.js'
 
 const re = (s: string) => new RegExp(s)
@@ -32,7 +33,7 @@ const R = {
   codeApi: re(CODE_AUDIO_API_RE), spawn: all(CODE_SPAWN_RE), string: all(STRING_RE),
   osaInput: re(OSA_INPUT_RE), codeInput: re(CODE_INPUT_API_RE), peekaboo: re(INPUT_SUBCOMMANDS.peekaboo),
 }
-const INPUTS = new Set<string>(INPUT_PROGRAMS)
+const INPUTS = new Set<string>([...INPUT_PROGRAMS, ...INPUT_MODULES])
 /** `WALNUT_INPUT_REASON=<10+ characters>` in front of the command lets its foreground input through. */
 /** Above 0 while judging a command whose line named its reason: input checks are off, sound checks are not. */
 let inputOff = 0
@@ -320,9 +321,16 @@ function commandHit(words: string[], start: number, input: CommandInput, depth: 
     inputOff++
     try { return commandHit(words, start, input, depth, scanExec) } finally { inputOff-- }
   }
+  // A package runner: its program is judged as if typed.
+  const target = runnerTarget(words, i)
+  if (target === 'none') return null
+  if (target && 'line' in target) return lineHit(target.line, depth + 1)
+  if (target) return commandHit([...words.slice(0, target.at), target.word, ...words.slice(target.at + 1)], target.at, input, depth, scanExec)
   // python3.11 is python3.
   const name = path.posix.basename(words[i]).replace(/^(python[23]?)(\.[0-9]+)+$/, '$1')
   const args = words.slice(i + 1)
+  // python3 -m <module>: the module is judged as a program.
+  if (/^python[23]?$/.test(name)) { const mod = pythonModule(args); if (mod) return programHit(mod.name, mod.args) }
   if (ANY_SHELL.has(name)) {
     const script = shellInput(args)
     if (script === null) return null
@@ -353,6 +361,67 @@ function commandHit(words: string[], start: number, input: CommandInput, depth: 
     for (let k = i + 1; k < words.length; k++) {
       if (EXEC_FLAGS.has(words[k])) { const h = commandHit(words, k + 1, NO_INPUT, depth, false); if (h) return h }
     }
+  }
+  return null
+}
+
+const RUNNERS = Object.entries(PACKAGE_RUNNERS).map(([key, r]) => ({
+  words: key.split(' '), value: re(r.value), line: r.line ? re(r.line) : null, module: r.module ? re(r.module) : null,
+}))
+const GLOBAL_VALUE = re(RUNNER_GLOBAL_VALUE_RE)
+/** A package runner's program word as the program it names: no directory, version, extras or archive suffix, lowercase. */
+const packageProgram = (w: string) => path.posix.basename(w).replace(re(PACKAGE_VERSION_RE), '').replace(re(PACKAGE_SUFFIX_RE), '').toLowerCase()
+/** A module a runner or python names (`uv run -m a.b`): its top-level name, lowercase. */
+const moduleProgram = (w: string) => w.split('.')[0].toLowerCase()
+
+/** The index after a runner's subcommand words (`uv --quiet run`: options before each one skipped), or -1 when they do not follow. */
+function runnerWords(words: string[], i: number, kw: string[]): number {
+  let k = i + 1
+  for (let m = 1; m < kw.length; m++) {
+    while (k < words.length && words[k] !== kw[m] && words[k].startsWith('-') && words[k] !== '--') k += GLOBAL_VALUE.test(words[k]) ? 2 : 1
+    if (words[k] !== kw[m]) return -1
+    k++
+  }
+  return k
+}
+
+/** What a package runner at words[i] runs: its program word's index and name, a shell line, nothing, or null when it is no runner. */
+function runnerTarget(words: string[], i: number): { at: number; word: string } | { line: string } | 'none' | null {
+  const name = path.posix.basename(words[i])
+  let r: (typeof RUNNERS)[number] | undefined
+  let k = -1
+  for (const x of RUNNERS) { if (x.words[0] !== name) continue; k = runnerWords(words, i, x.words); if (k >= 0) { r = x; break } }
+  if (!r) return null
+  const at = (j: number) => (j < words.length ? { at: j, word: packageProgram(words[j]) } : 'none' as const)
+  for (; k < words.length; k++) {
+    const w = words[k]
+    if (w === '--') return at(k + 1)
+    const eq = /^(--[^=]+)=([\s\S]*)$/.exec(w)
+    if (r.line && (r.line.test(w) || (eq && r.line.test(eq[1])))) return eq ? { line: eq[2] } : k + 1 < words.length ? { line: words[k + 1] } : 'none'
+    if (r.module) {
+      if (r.module.test(w)) return k + 1 < words.length ? { at: k + 1, word: moduleProgram(words[k + 1]) } : 'none'
+      if (eq && r.module.test(eq[1])) return { at: k, word: moduleProgram(eq[2]) }
+      if (!w.startsWith('--') && w.length > 2 && r.module.test(w.slice(0, 2))) return { at: k, word: moduleProgram(w.slice(2)) }
+    }
+    if (!w.startsWith('-') || w === '-') return at(k)
+    if (r.value.test(w)) k++
+  }
+  return 'none'
+}
+
+/** The module `python -m <module>` runs (its top-level name, lowercase) and its arguments, or null. */
+function pythonModule(args: string[]): { name: string; args: string[] } | null {
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k]
+    if (re(PYTHON_MODULE_RE).test(a)) {
+      const rest = a.replace(re(PYTHON_MODULE_RE), '')
+      const mod = rest !== '' ? rest : args[k + 1]
+      if (mod === undefined) return null
+      return { name: moduleProgram(mod), args: args.slice(rest !== '' ? k + 1 : k + 2) }
+    }
+    // -W ignore and -X dev take the next word; -Wignore and -Xdev carry it.
+    if (re(PYTHON_VALUE_FLAG_RE).test(a)) { if (a.replace(re(PYTHON_VALUE_FLAG_RE), '') === '') k++; continue }
+    if (!re(PYTHON_FLAGS_RE).test(a)) return null
   }
   return null
 }

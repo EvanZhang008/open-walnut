@@ -98,7 +98,7 @@ describe('the rule set', () => {
 })
 
 describe('real foreground input (2026-11-09: cliclick on a Mac whose person was watching a video)', () => {
-  const INPUT_REFUSAL = /^Walnut refused this command: it would send real input to the front window of the machine it runs on \((.+?)\): the pointer/
+  const INPUT_REFUSAL = /^Walnut refused this command: it would send real input \((.+?)\) to the front window of this machine/
   describe.each(SHELLS)('the hook under %s', (shell) => {
     it.each(INPUT_CASES)('%j -> refused=%s', (command, refused) => {
       const r = run(shell, command)
@@ -124,7 +124,7 @@ describe('real foreground input (2026-11-09: cliclick on a Mac whose person was 
   // A new input program added to the list is refused by both twins with no further code, and the case table names it.
   it.each(INPUT_PROGRAMS.map((p) => [p]))('always refuses %s, and the case table lists it', (p) => {
     expect(soundRisk(`${p} x`)).toBe(INPUT_PREFIX + p)
-    if (SHELLS.length) expect(run(SHELLS[0], `${p} x`).reason).toMatch(new RegExp(`\\(${p}\\): the pointer`))
+    if (SHELLS.length) expect(run(SHELLS[0], `${p} x`).reason).toMatch(new RegExp(`\\(${p}\\) to the front window`))
     expect(INPUT_CASES.some(([c, refused]) => refused && new RegExp(`(^|[ /|"])${p}( |$)`).test(c))).toBe(true)
   })
 })

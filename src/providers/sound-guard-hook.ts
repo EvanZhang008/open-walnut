@@ -36,7 +36,8 @@ import {
   ALWAYS_PLAYS, AUDIO_FILE_RE, CODE_AUDIO_API_RE, CODE_SPAWN_RE, FFMPEG_AUDIO_OUT_RE, JXA_MUTE_ONLY_RE, MEDIA_APPS_RE,
   OSA_BEEP_RE, OSA_JXA_VOLUME_RE, OSA_MEDIA_TELL_RE, OSA_MUTE_ONLY_RE, OSA_PLAY_RE, OSA_SAVING_RE, OSA_SAY_RE,
   OSA_SET_VOLUME_RE, OSA_SHELL_RE, OSA_APP_VOLUME_RE, STRING_RE, soundAdvice,
-  CODE_INPUT_API_RE, INPUT_PREFIX, INPUT_PROGRAMS, INPUT_REASON_MIN, INPUT_REASON_VAR, INPUT_SUBCOMMANDS, OSA_INPUT_RE, OSA_SYSTEM_EVENTS, inputAdvice,
+  CODE_INPUT_API_RE, INPUT_MODULES, INPUT_PREFIX, INPUT_PROGRAMS, INPUT_REASON_MIN, INPUT_REASON_VAR, INPUT_SUBCOMMANDS, OSA_INPUT_RE, OSA_SYSTEM_EVENTS, inputAdvice,
+  PACKAGE_RUNNERS, PACKAGE_SUFFIX_RE, PACKAGE_VERSION_RE, PYTHON_FLAGS_RE, PYTHON_MODULE_RE, PYTHON_VALUE_FLAG_RE, RUNNER_GLOBAL_VALUE_RE,
 } from './sound-rules.js'
 
 /** A string as an awk string literal (a regex of sound-rules.ts is used as a dynamic regex) ("..."), its backslashes doubled. */
@@ -45,6 +46,17 @@ const s = (re: string) => '"' + re.replace(/\\t/g, '\t').replace(/\\n/g, '\n').r
 /** The refusal around what was found, which awk puts between. */
 const [ADVICE_PRE, ADVICE_POST] = soundAdvice('\u0000').split('\u0000')
 const [INPUT_PRE, INPUT_POST] = inputAdvice('\u0000').split('\u0000')
+/** The package runners as awk arrays, each set of options written once for the runners sharing it (RV[a] = RV[b] = "..."). */
+function runnerInit(): string {
+  const lines: string[] = []
+  for (const [arr, field] of [['RV', 'value'], ['RLN', 'line'], ['RMOD', 'module']] as const) {
+    const by = new Map<string, string[]>()
+    for (const [k, r] of Object.entries(PACKAGE_RUNNERS)) { const v = r[field]; if (v) by.set(v, [...(by.get(v) ?? []), k]) }
+    for (const [v, keys] of by) lines.push(`  ${keys.map((k) => `${arr}[${s(k)}]`).join(' = ')} = ${s(v)}`)
+  }
+  return lines.join('\n')
+}
+
 /** The assignment that lets a command's foreground input through: the name and = and at least INPUT_REASON_MIN characters. */
 const REASON_LEN = INPUT_REASON_VAR.length + 1 + INPUT_REASON_MIN
 
@@ -269,7 +281,7 @@ function lastsilent(name, A, n,   k, v, nullout, notrack) {
 }
 function prog(name, A, n,   k, v, first, dev, j, sub1) {
   if (index(" ${ALWAYS_PLAYS.join(' ')} ", " " name " ")) return name
-  if (!IOFF && index(" ${INPUT_PROGRAMS.join(' ')} ", " " name " ")) return ${s(INPUT_PREFIX)} name
+  if (!IOFF && index(" ${[...INPUT_PROGRAMS, ...INPUT_MODULES].join(' ')} ", " " name " ")) return ${s(INPUT_PREFIX)} name
   if (name == "peekaboo") { if (!IOFF) for (k = 1; k <= n; k++) if (A[k] !~ /^-/ && tolower(A[k]) ~ ${s(INPUT_SUBCOMMANDS.peekaboo)}) return ${s(INPUT_PREFIX + 'peekaboo ')} A[k]; return "" }
   # Options end at --: what follows is text, except open's files.
   k = has(A, n, "--")
@@ -330,8 +342,52 @@ function wrapopt(b, w) {
   if (b == "arch") return w ~ /^-(arch|e|d)$/
   return 0
 }
+# A package runner at word j: the index of the program it runs (that word made plain in CW), 0 when it
+# runs none or a shell line (left in RL), -1 when it is no runner.
+function runner(d, ci, j,   n, key, kw, nk, m, k, w, v) {
+  n = CN[d, ci]; RL = ""
+  for (key in RV) {
+    nk = split(key, kw, " ")
+    if (kw[1] != base(CW[d, ci, j])) continue
+    # Its subcommand words, options before each one skipped (uv --quiet run).
+    k = j + 1
+    for (m = 2; m <= nk; m++) {
+      while (k <= n && CW[d, ci, k] != kw[m] && CW[d, ci, k] ~ /^-/ && CW[d, ci, k] != "--") k += CW[d, ci, k] ~ ${s(RUNNER_GLOBAL_VALUE_RE)} ? 2 : 1
+      if (CW[d, ci, k] != kw[m]) break
+      k++
+    }
+    if (m <= nk) continue
+    for (; k <= n; k++) {
+      w = CW[d, ci, k]
+      if (w ~ /^[0-9]*(>|>>|<|&>|&>>|>&|<&|<>|>\|)$/) { k++; continue }
+      if (w ~ /^[0-9]*[<>]/ || w ~ /^&>/) continue
+      if (w == "--") { k++; break }
+      v = w; sub(/=.*$/, "", v)
+      if ((key in RLN) && (w ~ RLN[key] || (w ~ /^--[^=]+=/ && v ~ RLN[key]))) {
+        if (w ~ /^--[^=]+=/) { RL = w; sub(/^[^=]*=/, "", RL) } else RL = CW[d, ci, k + 1]
+        return 0
+      }
+      # A module it runs (-m a.b, --module=a.b, -ma.b): its top-level name is the program.
+      if (key in RMOD) {
+        if (w ~ RMOD[key]) { if (k == n) return 0; w = CW[d, ci, ++k] }
+        else if (w ~ /^--[^=]+=/ && v ~ RMOD[key]) sub(/^[^=]*=/, "", w)
+        else if (w !~ /^--/ && length(w) > 2 && substr(w, 1, 2) ~ RMOD[key]) w = substr(w, 3)
+        else w = "\001"
+        if (w != "\001") { sub(/\..*$/, "", w); CW[d, ci, k] = tolower(w); return k }
+        w = CW[d, ci, k]
+      }
+      if (w !~ /^-./) break
+      if (w ~ RV[key]) k++
+    }
+    if (k > n) return 0
+    w = base(CW[d, ci, k]); sub(${s(PACKAGE_VERSION_RE)}, "", w); sub(${s(PACKAGE_SUFFIX_RE)}, "", w)
+    CW[d, ci, k] = tolower(w)
+    return k
+  }
+  return -1
+}
 # Judge command ci of depth d from its word j on.
-function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F) {
+function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F, M, nm) {
   n = CN[d, ci]
   for (; j <= n; j++) {
     w = CW[d, ci, j]
@@ -359,9 +415,28 @@ function judge(d, ci, j, exec,   n, w, b, A, na, k, r, F) {
     j--
   }
   if (j > n) return
+  # A package runner: its program is judged as if typed.
+  k = runner(d, ci, j)
+  if (k > 0) { judge(d, ci, k, exec); return }
+  if (k == 0) { if (RL != "") scan(RL, d + 1); return }
   b = base(CW[d, ci, j])
   if (b ~ /^python[23]?(\.[0-9]+)+$/) sub(/(\.[0-9]+)+$/, "", b)
   na = args(d, ci, j + 1, A)
+  # python3 -m <module>: the module is judged as a program.
+  if (b ~ /^python[23]?$/) {
+    for (k = 1; k <= na; k++) {
+      if (A[k] ~ ${s(PYTHON_MODULE_RE)}) {
+        r = A[k]; sub(${s(PYTHON_MODULE_RE)}, "", r)
+        if (r == "") { if (k == na) return; r = A[++k] }
+        sub(/\..*$/, "", r); nm = 0
+        for (k++; k <= na; k++) M[++nm] = A[k]
+        hit(prog(tolower(r), M, nm)); return
+      }
+      # -W ignore and -X dev take the next word; -Wignore and -Xdev carry it.
+      if (A[k] ~ ${s(PYTHON_VALUE_FLAG_RE)}) { r = A[k]; sub(${s(PYTHON_VALUE_FLAG_RE)}, "", r); if (r == "") k++; continue }
+      if (A[k] !~ ${s(PYTHON_FLAGS_RE)}) break
+    }
+  }
   if (isshell(b)) {
     for (k = 1; k <= na; k++) {
       if (A[k] ~ /^--command=/) { r = A[k]; sub(/^--command=/, "", r); scan(r, d + 1); return }
@@ -496,6 +571,7 @@ BEGIN {
   OK["aplay"] = "^(-l|-L|--list-devices|--list-pcms)$"; OK["pacat"] = "^(-r|--record)$"
   OK["ffplay"] = "^-an$"
   ON["pw-cat"] = "^(-p|--playback)$"; ON["festival"] = "^--tts$"
+${runnerInit()}
 }
 {
   cmd = jstr($0, "command")
@@ -506,7 +582,11 @@ BEGIN {
 
 
 /** Names that may make sound, for the fast bail-out: anything else is allowed unparsed. */
-const TRIGGERS = [...INPUT_PROGRAMS, 'peekaboo', 'Peekaboo', 'keystroke', 'click', 'CGEvent', 'cgevent', 'CGWarp', 'CGDisplayMove', 'pyautogui', 'PyAutoGUI', 'pynput', 'robotjs', 'nut-tree', 'autopy', 'moveMouse', 'movemouse', 'mouseClick', 'mouseclick', 'keyTap', 'keytap', 'typeString', 'typestring', 'keyCode', 'keycode', 'EventTap', 'eventtap', 'say', 'play', 'afplay', 'aplay', 'paplay', 'pacat', 'pw-cat', 'espeak', 'mpv', 'mplayer', 'mpg', 'ogg123', 'vlc', 'sox', 'ffmpeg', 'festival', 'beep', 'speaker-test', 'canberra', 'open', 'volume', 'mute', 'amixer', 'pactl', 'pamixer', 'wpctl', 'osascript', 'Sound', 'Speech', 'sound', 'speech', 'pyttsx3', 'Volume', 'Say', 'Beep', 'Play', 'Audio', 'audio']
+const TRIGGERS = [...INPUT_PROGRAMS, ...INPUT_MODULES, 'peekaboo', 'Peekaboo', 'keystroke', 'click', 'CGEvent', 'cgevent', 'CGWarp', 'CGDisplayMove', 'pyautogui', 'PyAutoGUI', 'pynput', 'robotjs', 'nut-tree', 'autopy', 'moveMouse', 'movemouse', 'mouseClick', 'mouseclick', 'keyTap', 'keytap', 'typeString', 'typestring', 'keyCode', 'keycode', 'EventTap', 'eventtap', 'say', 'play', 'afplay', 'aplay', 'paplay', 'pacat', 'pw-cat', 'espeak', 'mpv', 'mplayer', 'mpg', 'ogg123', 'vlc', 'sox', 'ffmpeg', 'festival', 'beep', 'speaker-test', 'canberra', 'open', 'volume', 'mute', 'amixer', 'pactl', 'pamixer', 'wpctl', 'osascript', 'Sound', 'Speech', 'sound', 'speech', 'pyttsx3', 'Volume', 'Say', 'Beep', 'Play', 'Audio', 'audio']
+
+/** The bail-out's patterns, read on lowercased text: a trigger another one contains adds nothing (`afplay` has `play`). */
+const LOWER = [...new Set(TRIGGERS.map((t) => t.toLowerCase()))]
+const BAIL_OUT = LOWER.filter((t) => !LOWER.some((u) => u !== t && t.includes(u)))
 
 /** The awk program as the hook runs it: comment lines and indentation left out. */
 export const SOUND_AWK_PROGRAM = SOUND_AWK.replace(/^[ \t]*#.*\n/gm, '').replace(/^[ \t]+/gm, '')
@@ -520,16 +600,17 @@ const PACKED = gzipSync(Buffer.from(SOUND_AWK_PROGRAM), { level: 9 }).toString('
 
 /** Too long to parse: refused when any of these names appears as a word at all. */
 const LONG_NAMES = [...ALWAYS_PLAYS, 'say', 'espeak', 'espeak-ng', 'aplay', 'pacat', 'pw-cat', 'mpv', 'mplayer', 'ffplay', 'ffmpeg', 'sox', 'festival',
-  'osascript', 'amixer', 'pactl', 'pamixer', 'wpctl', 'open', 'xdg-open', ...INPUT_PROGRAMS, 'peekaboo']
+  'osascript', 'amixer', 'pactl', 'pamixer', 'wpctl', 'open', 'xdg-open', ...INPUT_PROGRAMS, ...INPUT_MODULES, 'peekaboo']
 
 /** The hook command: a fast `case` bail-out, then the awk check. */
 export const SOUND_GUARD_COMMAND = [
-  '# Walnut sound guard: src/providers/sound-guard-hook.ts (the awk program below is gzip + base64)',
+  '# Walnut sound guard: src/providers/sound-guard-hook.ts',
   'in=$(cat 2>/dev/null)',
-  `case $in in ${TRIGGERS.map((t) => `*${t}*`).join('|')}) ;; *) exit 0 ;; esac`,
+  // Lowercased: a package runner's program is read lowercase (`uvx PyNput`), so the bail-out must not miss one.
+  `case $(printf '%s' "$in" | tr A-Z a-z) in ${BAIL_OUT.map((t) => `*${t}*`).join('|')}) ;; *) exit 0 ;; esac`,
   'if [ ${#in} -gt 100000 ]; then',
   `  printf '%s' "$in" | grep -Eiq '(^|[^A-Za-z0-9_-]|\\\\[nt])(${LONG_NAMES.join('|')})([^A-Za-z0-9_-]|$)|set volume' || exit 0`,
-  "  msg='Walnut refused this command: it is too long to check and names a program that can make sound or send input to the front window. Make no sound and send no input on this machine; write long text with the Write tool.'",
+  "  msg='Walnut refused this command: it is too long to check and names a program that makes sound or sends input. Write long text with the Write tool.'",
   'else',
   `  b='${PACKED}'`,
   `  p=$( (printf '%s' "$b" | base64 -d 2>/dev/null || printf '%s' "$b" | base64 -D 2>/dev/null) | gzip -dc 2>/dev/null)`,
