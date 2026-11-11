@@ -1612,7 +1612,7 @@ describe('the sidebar on the shared fixture', () => {
     .map(({ file }) => file)
     .sort()
   const BEFORE = [
-    'backup-settings.spec.ts', 'companion-keep.spec.ts', 'create-plugin-page.spec.ts',
+    'companion-keep.spec.ts', 'create-plugin-page.spec.ts',
     'engine-settings-popover-fixes.spec.ts', 'engine-settings-popover-groups.spec.ts',
     'engine-settings-popover-r2.spec.ts', 'engine-settings-popover-r2.webkit.spec.ts',
     'engine-settings-popover-r3-rows.spec.ts', 'engine-settings-popover-scope.spec.ts',
