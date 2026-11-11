@@ -109,9 +109,9 @@ enum TimelineHostedCell {
                         .thinking(id: row.id, text: fullText, detailRef: detailRef)))
                 }
             )
-        case .toolRun(let phrase, let failCount, let running, let expanded, let badgeStacked):
+        case .toolRun(let phrase, let failures, let running, let expanded, let badgeStacked):
             TimelineToolRunView(
-                phrase: phrase, failCount: failCount, running: running, expanded: expanded,
+                phrase: phrase, failures: failures, running: running, expanded: expanded,
                 badgeStacked: badgeStacked,
                 onToggle: { delegate?.timelineCell(didRequest: .toggleExpanded(rowID: row.id)) }
             )
@@ -1062,7 +1062,7 @@ private struct TimelineThinkingChipView: View {
 /// then lays the member rows out under this one; the row itself never changes height.
 private struct TimelineToolRunView: View {
     let phrase: String
-    let failCount: Int
+    let failures: TimelineFoldFailures
     let running: Bool
     let expanded: Bool
     /// The shape the row's height was measured for (`TimelineRowBuilder.runRowHeight`).
@@ -1078,7 +1078,7 @@ private struct TimelineToolRunView: View {
     var body: some View {
         TimelineChipRow(
             identifier: "tool.run",
-            label: TimelineChipAccessibility.toolRun(phrase: phrase, failCount: failCount,
+            label: TimelineChipAccessibility.toolRun(phrase: phrase, failures: failures,
                                                     expanded: expanded),
             wraps: true,
             onOpen: onToggle
@@ -1096,7 +1096,7 @@ private struct TimelineToolRunView: View {
                 .layoutPriority(1)
             } else {
                 phraseText
-                if failCount > 0 { badgeText.layoutPriority(2) }
+                if !failures.isEmpty { badgeText.layoutPriority(2) }
             }
             TimelineChipChevron()
                 .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -1120,7 +1120,7 @@ private struct TimelineToolRunView: View {
     }
 
     private var badgeText: some View {
-        Text(TimelineChipAccessibility.failedBadge(failCount))
+        Text(TimelineChipAccessibility.failedBadge(failures))
             .font(.caption.weight(.semibold))
             .lineLimit(1)
             .foregroundStyle(Theme.danger)

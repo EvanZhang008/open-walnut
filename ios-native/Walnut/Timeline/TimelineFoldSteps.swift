@@ -32,7 +32,7 @@ enum TimelineFoldSteps {
         case ack
         case update
         /// A line the runtime wrote (a turn interrupted, an error). An error one is
-        /// counted by the fold's red "N failed", not on its line.
+        /// counted by the fold's red "N errors", not on its line.
         case notice(error: Bool)
     }
 
@@ -52,7 +52,7 @@ enum TimelineFoldSteps {
         case .injected:
             return [.context(skill: m.source == "skill")]
         case .notification:
-            return [.notice(error: TimelineTurnShape.isFailure(m))]
+            return [.notice(error: TimelineFoldFailures.isErrorRow(m))]
         case nil where !m.isUser:
             let reading = TimelineTurnMarker.read(m.text)
             if !reading.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [.update] }

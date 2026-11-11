@@ -313,7 +313,7 @@ final class WalnutAddedTests: XCTestCase {
         TimelineTextStyler.adopt(.accessibilityExtraExtraExtraLarge)
         let builder = TimelineRowBuilder()
         let wide = builder.addedRows(id: "w", items: [contextItem, hintItem], expanded: false, width: pageWidth)[0]
-        let one = builder.foldRow(id: "o", phrase: "Ran", failCount: 0, expanded: false, width: pageWidth)
+        let one = builder.foldRow(id: "o", phrase: "Ran", failures: .none, expanded: false, width: pageWidth)
         XCTAssertGreaterThan(wide.height, one.height)
     }
 

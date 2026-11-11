@@ -236,7 +236,7 @@ final class TurnFoldTests: XCTestCase {
         // header counts it (the one rule, the web's fold-rows.ts).
         let failed = plan([peer(), tool("Bash", "rebuild", isError: true)])
         XCTAssertEqual(outline(failed), ["fold:turn:Received 1 message \u{00B7} Ran 1 tool[\"inbound\", \"run:1\"]"])
-        if case .fold(let f)? = failed.first { XCTAssertEqual(f.failCount, 1) } else { XCTFail("no fold") }
+        if case .fold(let f)? = failed.first { XCTAssertEqual(f.failures, TimelineFoldFailures(calls: 1, errors: 0)) } else { XCTFail("no fold") }
         // Alone, a received message is its one line, never a bubble and never a fold.
         XCTAssertEqual(outline(plan([said("Earlier."), peer()])), ["text", "inbound"])
         XCTAssertEqual(outline(plan([said("Earlier."), peer(), peer("Second note.")])),
@@ -264,7 +264,7 @@ final class TurnFoldTests: XCTestCase {
                 + "[\"inbound\", \"run:4\", \"ack\", \"inbound\", \"bubble:Turn interrupted\", \"run:1\"]",
             "text",
         ])
-        if case .fold(let f) = parts[2] { XCTAssertEqual(f.failCount, 1) } else { XCTFail("no fold") }
+        if case .fold(let f) = parts[2] { XCTAssertEqual(f.failures, TimelineFoldFailures(calls: 1, errors: 0)) } else { XCTFail("no fold") }
         // Error notices are the red count; others are named on the line, and alone
         // either kind reads by what it was.
         XCTAssertEqual(TimelineFoldSteps.phrase([.notice(error: true), .notice(error: true)]), "2 notices")
@@ -306,15 +306,15 @@ final class TurnFoldTests: XCTestCase {
         let refused = tool("Bash", "sleep 25", isError: true,
                            result: "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.")
         XCTAssertFalse(TimelineTurnShape.isFailure(refused))
-        XCTAssertEqual(TimelineToolRunFold.failCount([refused]), 0)
+        XCTAssertEqual(TimelineFoldFailures.count([refused]), .none)
         let broken = tool("Bash", "make", isError: true, result: "make: *** [all] Error 2")
         XCTAssertFalse(TimelineTurnShape.isFailure(cut))
         XCTAssertTrue(TimelineTurnShape.isFailure(broken), "a real error still counts")
-        XCTAssertEqual(TimelineToolRunFold.failCount([cut]), 0, "a lone stopped call carries no red badge either")
-        XCTAssertEqual(TimelineToolRunFold.failCount([cut, broken]), 1)
+        XCTAssertEqual(TimelineFoldFailures.count([cut]), .none, "a lone stopped call carries no red badge either")
+        XCTAssertEqual(TimelineFoldFailures.count([cut, broken]), 1)
         // Stopped in the middle of work, then the person's message: no red count over the work.
         let parts = plan([person(), said("Running the shards."), cut, stop(), person("Just say hello."), said("Hello.")])
-        for part in parts { if case .fold(let f) = part { XCTAssertEqual(f.failCount, 0) } }
+        for part in parts { if case .fold(let f) = part { XCTAssertEqual(f.failures, .none) } }
     }
 
     func testAQuestionToThePersonAndWordsStillEndAStretch() {

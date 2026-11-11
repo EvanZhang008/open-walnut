@@ -97,13 +97,13 @@ final class ToolRunFoldTests: XCTestCase {
 
     private func runPayload(
         _ row: TimelineRow?, _ file: StaticString = #filePath, _ line: UInt = #line
-    ) throws -> (phrase: String, failCount: Int, running: Bool, expanded: Bool) {
-        guard case .toolRun(let phrase, let failCount, let running, let expanded, _)
+    ) throws -> (phrase: String, failures: TimelineFoldFailures, running: Bool, expanded: Bool) {
+        guard case .toolRun(let phrase, let failures, let running, let expanded, _)
                 = try XCTUnwrap(row, "no run row", file: file, line: line).content else {
             XCTFail("expected the .toolRun case", file: file, line: line)
             throw XCTSkip("not a run row")
         }
-        return (phrase, failCount, running, expanded)
+        return (phrase, failures, running, expanded)
     }
 
     /// The id a run gets: where its first member sits, never that member's own id
@@ -168,7 +168,7 @@ final class ToolRunFoldTests: XCTestCase {
         XCTAssertEqual(kinds(built), ["bubble", "toolRun", "text"])
         let run = try runPayload(built[1])
         XCTAssertEqual(run.phrase, "Ran 2 commands, read a file")
-        XCTAssertEqual(run.failCount, 0)
+        XCTAssertEqual(run.failures, .none)
         XCTAssertFalse(run.expanded)
         XCTAssertEqual(built[1].id, "assistant|2026-10-03T00:00:00Z|tool|Bash#0#run",
                        "the run is named by where its first member sits")
@@ -262,11 +262,11 @@ final class ToolRunFoldTests: XCTestCase {
         let built = await rows([tool("t1", "Bash", "ls", isError: true), tool("t2", "Bash", "pwd"),
                                 tool("t3", "Edit", "/r/a.ts", isError: true), prose("p")])
         let run = try runPayload(built[0])
-        XCTAssertEqual(run.failCount, 2)
-        XCTAssertEqual(TimelineChipAccessibility.toolRun(phrase: run.phrase, failCount: run.failCount,
+        XCTAssertEqual(run.failures, 2)
+        XCTAssertEqual(TimelineChipAccessibility.toolRun(phrase: run.phrase, failures: run.failures,
                                                          expanded: false),
                        "Ran 2 commands, edited a file, 2 failed, collapsed")
-        XCTAssertEqual(TimelineChipAccessibility.toolRun(phrase: "Ran a command", failCount: 0,
+        XCTAssertEqual(TimelineChipAccessibility.toolRun(phrase: "Ran a command", failures: .none,
                                                          expanded: true),
                        "Ran a command, expanded")
     }
@@ -312,7 +312,7 @@ final class ToolRunFoldTests: XCTestCase {
         let after = await actor.buildSnapshot(input([rich, prose("p")], expanded: [opened])).rows
         XCTAssertEqual(after[0].id, before[0].id)
         XCTAssertEqual(kinds(after), ["toolRun", "toolChip", "text"], "still open")
-        XCTAssertEqual(try runPayload(after[0]).failCount, 1, "the new payload still reaches the run")
+        XCTAssertEqual(try runPayload(after[0]).failures, 1, "the new payload still reaches the run")
         guard case .toolChip(_, _, _, let result, _, _, _, _, _) = after[1].content else {
             return XCTFail("member is not a tool chip")
         }
@@ -389,9 +389,9 @@ final class ToolRunFoldTests: XCTestCase {
 
     func testToggleReachesTheCellThroughTheContentKey() {
         let closed = TimelineRowBuilder().toolRunRow(id: "x#run", members: [member("Bash")],
-                                                     failCount: 0, running: false, expanded: false)
+                                                     failures: .none, running: false, expanded: false)
         let open = TimelineRowBuilder().toolRunRow(id: "x#run", members: [member("Bash")],
-                                                   failCount: 0, running: false, expanded: true)
+                                                   failures: .none, running: false, expanded: true)
         XCTAssertEqual(closed.height, open.height, "opening a run never grows the run row itself")
         XCTAssertNotEqual(closed.contentKey, open.contentKey)
         XCTAssertNotEqual(closed.revision, open.revision)
@@ -477,7 +477,7 @@ final class ToolRunFoldTests: XCTestCase {
         XCTAssertNil(preview)
         XCTAssertEqual(maxLines, 0)
         let capsule = TimelineRowBuilder().toolRunRow(id: "x#run", members: [member("Bash")],
-                                                      failCount: 0, running: false, expanded: false)
+                                                      failures: .none, running: false, expanded: false)
         XCTAssertEqual(built[0].height, capsule.height, "one capsule line, nothing under it")
     }
 

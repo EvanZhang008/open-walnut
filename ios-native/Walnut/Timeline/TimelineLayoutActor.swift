@@ -210,7 +210,7 @@ actor TimelineLayoutActor {
             rows.append(builder.toolRunRow(
                 id: runID,
                 members: TimelineToolRunFold.phraseMembers(members),
-                failCount: TimelineToolRunFold.failCount(members),
+                failures: TimelineFoldFailures.count(members),
                 running: false, expanded: expanded, width: input.width
             ))
             if expanded {
@@ -248,7 +248,7 @@ actor TimelineLayoutActor {
                     let id = TimelineTurnFold.rowID(scope: input.scope, key: fold.key)
                     let expanded = input.expandedRowIDs.contains(id)
                     rows.append(builder.foldRow(id: id, phrase: fold.phrase,
-                                                failCount: fold.failCount, expanded: expanded,
+                                                failures: fold.failures, expanded: expanded,
                                                 width: input.width))
                     if expanded { appendPlan(fold.members) }
                 case .added(let key, let items):
@@ -291,8 +291,9 @@ actor TimelineLayoutActor {
             rows.append(builder.foldRow(
                 id: id,
                 phrase: TimelineFoldSteps.phrase(steps),
-                // Every failure history holds, error notices too (the settled fold counts them).
-                failCount: tail.rows.filter(TimelineTurnShape.isFailure).count,
+                // Every failure history holds, its failed calls and its error lines apart, as the
+                // settled fold counts them.
+                failures: TimelineFoldFailures.count(tail.rows),
                 expanded: expanded, running: input.streaming && liveCalls.contains { !$0.finished },
                 width: input.width))
             if expanded {

@@ -476,12 +476,12 @@ final class TimelineHostedHeightParityTests: XCTestCase {
                 TimelineTextStyler.adopt(category)
                 let builder = TimelineRowBuilder()
                 let folds = ["Received 1 message", "Received 12 messages \u{00B7} Sent 3 \u{00B7} Ran 8 tools"].map {
-                    builder.foldRow(id: "f-\($0.count)", phrase: $0, failCount: failing ? 1 : 0,
+                    builder.foldRow(id: "f-\($0.count)", phrase: $0, failures: failing ? TimelineFoldFailures(calls: 1, errors: 7835) : .none,
                                     expanded: false, width: pageWidth)
                 }
                 checked += assertFits(folds, "fold rows at \(category.rawValue)", category: category)
                 if category == .accessibilityExtraExtraExtraLarge {
-                    XCTAssertGreaterThan(folds[1].height, builder.foldRow(id: "one", phrase: "Ran", failCount: 0,
+                    XCTAssertGreaterThan(folds[1].height, builder.foldRow(id: "one", phrase: "Ran", failures: .none,
                                                                           expanded: false, width: pageWidth).height,
                                          "a long fold phrase wraps at the largest size instead of truncating")
                 }

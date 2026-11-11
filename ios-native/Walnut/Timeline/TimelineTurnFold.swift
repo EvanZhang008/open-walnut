@@ -40,7 +40,8 @@ enum TimelineTurnFold {
         let key: String
         /// The closed row's words: counts of what the steps did (`TimelineFoldSteps`).
         let phrase: String
-        let failCount: Int
+        /// The red count: failed calls and error lines apart (`TimelineFoldFailures`).
+        let failures: TimelineFoldFailures
         let members: [Part]
     }
 
@@ -256,7 +257,7 @@ private final class Planner {
             let rows = quiet.flatMap(Self.rows)
             out.append(.fold(fold(.turn, first: first, phrase: TimelineFoldSteps.phrase(rows.flatMap(TimelineFoldSteps.steps)),
                                   members: quiet.map { member($0, acks: true) },
-                                  failCount: rows.filter(TimelineTurnShape.isFailure).count)))
+                                  failures: TimelineFoldFailures.count(rows))))
         }
         // A person's message right after quiet steps: the notes Walnut put in front
         // of it are messages received too, so they join that row instead of drawing
@@ -335,7 +336,7 @@ private final class Planner {
         flushQuiet()
         guard end < parts.count else { return (out, nil) }
         let tail = lead + parts[end...].map(\.part)
-        let key = fold(.turn, first: tail[0], phrase: "", members: [], failCount: 0).key
+        let key = fold(.turn, first: tail[0], phrase: "", members: [], failures: .none).key
         return (out, TimelineTurnFold.LiveTail(key: key, rows: tail.flatMap(Self.rows),
                                                members: tail.map { member($0, acks: true) }))
     }
@@ -455,7 +456,7 @@ private final class Planner {
     }
 
     private func fold(_ kind: TimelineTurnFold.Kind, first: TimelineToolRunFold.Part, phrase: String,
-                      members: [Part], failCount: Int) -> TimelineTurnFold.Fold {
+                      members: [Part], failures: TimelineFoldFailures) -> TimelineTurnFold.Fold {
         let head = Self.rows(first)[0]
         let prefix: String
         switch kind {
@@ -465,7 +466,7 @@ private final class Planner {
         let n = keyCounts[base, default: 0]
         keyCounts[base] = n + 1
         return TimelineTurnFold.Fold(kind: kind, key: "\(base)#\(n)", phrase: phrase,
-                                     failCount: failCount, members: members)
+                                     failures: failures, members: members)
     }
 }
 

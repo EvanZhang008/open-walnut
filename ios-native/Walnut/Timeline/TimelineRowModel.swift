@@ -237,13 +237,13 @@ enum TimelineRowContent {
     /// (`toggleExpanded`, the notification card's mechanism); it never grows in
     /// place, so it keeps exactly one pre-measured height in both states.
     ///
-    /// `failCount` is the "N failed" badge; `running` pulses the line while a
+    /// `failures` is the red badge ("2 failed · 3 errors", `TimelineFoldFailures`); `running` pulses the line while a
     /// member is still receiving tokens. The phrase is the web console's, word for
     /// word (`TimelineToolRunPhrase`), so a turn reads the same on both.
     /// `badgeStacked`: the badge takes its own line under the phrase (an
     /// accessibility text size), decided with the height and carried here so the
     /// cell draws the shape that was measured.
-    case toolRun(phrase: String, failCount: Int, running: Bool, expanded: Bool, badgeStacked: Bool)
+    case toolRun(phrase: String, failures: TimelineFoldFailures, running: Bool, expanded: Bool, badgeStacked: Bool)
     /// Small grey capsule (generic one-line status capsules).
     case chip(icon: String, text: String)
     /// Notification card (session error / cron / …). Collapse mirrors the
@@ -408,9 +408,9 @@ extension TimelineRowContent {
             hasher.combine(maxLines)
             hasher.combine(detailRef)
             hasher.combine(stacked)
-        case .toolRun(let phrase, let failCount, let running, let expanded, let badgeStacked):
+        case .toolRun(let phrase, let failures, let running, let expanded, let badgeStacked):
             hasher.combine(phrase)
-            hasher.combine(failCount)
+            hasher.combine(failures)
             hasher.combine(running)
             hasher.combine(badgeStacked)
             // Drawn (the chevron turns) under a stable id and an unchanged height:
@@ -730,17 +730,17 @@ enum TimelineChipAccessibility {
         return parts.joined(separator: ", ")
     }
 
-    /// The "N failed" badge on a folded run, as drawn.
-    static func failedBadge(_ failCount: Int) -> String {
-        "\(failCount) failed"
+    /// The red badge on a folded run, as drawn: "2 failed", "3 errors", "2 failed · 3 errors".
+    static func failedBadge(_ failures: TimelineFoldFailures) -> String {
+        failures.words
     }
 
     /// The phrase, the failures when there are any, then the state: a folded run
     /// says what will happen on the tap ("collapsed" opens it), the same way the
     /// chevron's direction does for a sighted reader.
-    static func toolRun(phrase: String, failCount: Int, expanded: Bool) -> String {
+    static func toolRun(phrase: String, failures: TimelineFoldFailures, expanded: Bool) -> String {
         var parts = [phrase]
-        if failCount > 0 { parts.append(failedBadge(failCount)) }
+        if !failures.isEmpty { parts.append(failedBadge(failures)) }
         parts.append(expanded ? "expanded" : "collapsed")
         return parts.joined(separator: ", ")
     }

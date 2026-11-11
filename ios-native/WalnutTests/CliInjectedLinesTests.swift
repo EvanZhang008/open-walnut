@@ -292,7 +292,7 @@ final class CliInjectedLinesTests: XCTestCase {
         guard case .toolRun(_, _, _, let isOpen, _) = closed[0].content else { return XCTFail("no row") }
         XCTAssertFalse(isOpen)
         // VoiceOver reads the label and that a tap opens it.
-        XCTAssertEqual(TimelineChipAccessibility.toolRun(phrase: hook.label, failCount: 0, expanded: false),
+        XCTAssertEqual(TimelineChipAccessibility.toolRun(phrase: hook.label, failures: .none, expanded: false),
                        "\(hook.label), collapsed")
         let open = await rows(messages, expanded: [id])
         guard case .toolRun(_, _, _, let nowOpen, _) = open[0].content,

@@ -1081,7 +1081,7 @@ final class TimelineRowBuilder {
                                inputPreview: message.inputPreview,
                                resultPreview: message.resultPreview,
                                agent: message.agent,
-                               phase: TimelineTurnShape.isFailure(message) ? .failed : .transcript,
+                               phase: TimelineFoldFailures.isFailedCall(message) ? .failed : .transcript,
                                detailRef: message.activityDetailRef, stacked: stacked,
                                sentTo: TimelineTurnFold.isOutbound(message) ? (message.sentTo ?? []) : []),
             height: Self.capsuleRowHeight(badged: message.agent?.isEmpty == false,
@@ -1096,19 +1096,19 @@ final class TimelineRowBuilder {
     /// member rows out after it. The revision is content-derived because the id is
     /// stable while the run grows (a live turn folds each finished call into the
     /// same first-member id). `width` 0 (a caller that has none) is one line.
-    func toolRunRow(id: String, members: [TimelineToolRunPhrase.Member], failCount: Int,
+    func toolRunRow(id: String, members: [TimelineToolRunPhrase.Member], failures: TimelineFoldFailures,
                     running: Bool, expanded: Bool, width: CGFloat = 0) -> TimelineRow {
         let phrase = TimelineToolRunPhrase.phrase(members)
         var hasher = Hasher()
         hasher.combine(phrase)
-        hasher.combine(failCount)
+        hasher.combine(failures)
         hasher.combine(running)
         hasher.combine(expanded)
         return TimelineRow(
             id: id, revision: hasher.finalize(),
-            content: .toolRun(phrase: phrase, failCount: failCount, running: running,
-                              expanded: expanded, badgeStacked: Self.stacksRunBadge(failCount: failCount)),
-            height: runRowHeight(phrase: phrase, failCount: failCount, width: width)
+            content: .toolRun(phrase: phrase, failures: failures, running: running,
+                              expanded: expanded, badgeStacked: Self.stacksRunBadge(failures: failures)),
+            height: runRowHeight(phrase: phrase, failures: failures, width: width)
         )
     }
 
@@ -1117,7 +1117,7 @@ final class TimelineRowBuilder {
     /// truncating, so a fold's line stays readable at accessibility sizes (it read
     /// "Show 2 hidden… ›"). The text's width is what the cell's `HStack`
     /// leaves it: the badge and the chevron keep their own widths (spacing 5).
-    private func runRowHeight(phrase: String, failCount: Int, width: CGFloat) -> CGFloat {
+    private func runRowHeight(phrase: String, failures: TimelineFoldFailures, width: CGFloat) -> CGFloat {
         let oneLine = Self.capsuleRowHeight(badged: false)
         guard width > 0, !phrase.isEmpty else { return oneLine }
         let caption = TimelineTextStyler.captionFont
@@ -1130,10 +1130,10 @@ final class TimelineRowBuilder {
         // phrase (`TimelineToolRunView`), as a chip's detail does: beside it, it left
         // the phrase ~170pt, where TextKit and SwiftUI wrapped a line apart and the
         // row clipped (573.81pt reserved, 623pt drawn).
-        let badgeStacked = Self.stacksRunBadge(failCount: failCount)
-        if failCount > 0, !badgeStacked {
+        let badgeStacked = Self.stacksRunBadge(failures: failures)
+        if !failures.isEmpty, !badgeStacked {
             let badgeFont = UIFont.systemFont(ofSize: caption.pointSize, weight: .semibold)
-            let badge = (TimelineChipAccessibility.failedBadge(failCount) as NSString)
+            let badge = (TimelineChipAccessibility.failedBadge(failures) as NSString)
                 .size(withAttributes: [.font: badgeFont]).width
             textWidth -= 5 + ceil(badge)
         }
@@ -1152,25 +1152,25 @@ final class TimelineRowBuilder {
     /// Does a run or fold row's failure badge take its own line? Asked of the
     /// category the actor adopted for this build, and carried in the row's content
     /// so the cell draws that shape even after the next build adopts another.
-    static func stacksRunBadge(failCount: Int) -> Bool {
-        failCount > 0 && TimelineChipLayout.stacksDetail(TimelineTextStyler.adoptedCategory)
+    static func stacksRunBadge(failures: TimelineFoldFailures) -> Bool {
+        !failures.isEmpty && TimelineChipLayout.stacksDetail(TimelineTextStyler.adoptedCategory)
     }
 
     /// A turn fold's own row (`TimelineTurnFold`): the run row's capsule, reading
     /// the fold's words. Opening it lays the members out after it, as a run does.
     /// `running` breathes the row while a live call inside it runs.
-    func foldRow(id: String, phrase: String, failCount: Int, expanded: Bool,
+    func foldRow(id: String, phrase: String, failures: TimelineFoldFailures, expanded: Bool,
                  running: Bool = false, width: CGFloat = 0) -> TimelineRow {
         var hasher = Hasher()
         hasher.combine(phrase)
-        hasher.combine(failCount)
+        hasher.combine(failures)
         hasher.combine(expanded)
         hasher.combine(running)
         return TimelineRow(
             id: id, revision: hasher.finalize(),
-            content: .toolRun(phrase: phrase, failCount: failCount, running: running, expanded: expanded,
-                              badgeStacked: Self.stacksRunBadge(failCount: failCount)),
-            height: runRowHeight(phrase: phrase, failCount: failCount, width: width)
+            content: .toolRun(phrase: phrase, failures: failures, running: running, expanded: expanded,
+                              badgeStacked: Self.stacksRunBadge(failures: failures)),
+            height: runRowHeight(phrase: phrase, failures: failures, width: width)
         )
     }
 
@@ -1209,7 +1209,7 @@ final class TimelineRowBuilder {
     /// text, measured by the measurer the text cell lays it out with.
     private func labelledFoldRows(id: String, phrase: String, items: [(label: String, text: String)],
                                   expanded: Bool, width: CGFloat) -> [TimelineRow] {
-        var rows = [foldRow(id: id, phrase: phrase, failCount: 0, expanded: expanded, width: width)]
+        var rows = [foldRow(id: id, phrase: phrase, failures: .none, expanded: expanded, width: width)]
         guard expanded else { return rows }
         for (n, item) in items.enumerated() {
             let text = Self.addedItemText(label: item.label, text: item.text)
@@ -1327,7 +1327,7 @@ final class TimelineRowBuilder {
                 id: runID,
                 members: folded.map { TimelineToolRunPhrase.Member(name: $0.call.name,
                                                                    detail: $0.call.detail) },
-                failCount: 0, running: folded.contains { !$0.call.finished }, expanded: expanded,
+                failures: .none, running: folded.contains { !$0.call.finished }, expanded: expanded,
                 width: width
             ))
             if expanded {

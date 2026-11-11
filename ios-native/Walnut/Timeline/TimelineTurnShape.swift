@@ -171,11 +171,11 @@ enum TimelineTurnShape {
         return result.hasPrefix("[Request interrupted by user") || result.hasPrefix("The user doesn't want to proceed with this tool use")
     }
 
-    /// A failed step the reader must be able to see: a tool error, an error card. A call the
-    /// person stopped is not one: the Stop marker beside it says what happened.
+    /// A failed step the reader must be able to see: a failed call or an error card. A call the
+    /// person stopped is not one: the Stop marker beside it says what happened. Never count with it:
+    /// a fold counts failed calls and error lines apart (`TimelineFoldFailures.count`).
     static func isFailure(_ m: ChatMessage) -> Bool {
-        if m.kind == .tool { return m.isError == true && !isRoutedQuestion(m) && !isInterruptedCall(m) }
-        return m.kind == .notification && NotificationStyling(message: m).isError
+        TimelineFoldFailures.isFailedCall(m) || TimelineFoldFailures.isErrorRow(m)
     }
 
     static func shape(_ messages: [ChatMessage], streaming: Bool) -> [Turn] {
