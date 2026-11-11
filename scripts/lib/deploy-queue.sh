@@ -54,6 +54,23 @@ dq_busy_load() {
   awk -v l="$l" -v c="$c" -v m="$DQ_BUSY_LOAD" 'BEGIN { if (c < 1) c = 1; if (l != "" && l / c > m) print l }'
 }
 
+# Memory tight, in words, else nothing (2026-11-11: a deploy's web build adds about 1.4 GB, and the
+# Mac logged memory tight 150 to 190 times a day): macOS memory pressure at warn or worse, or swap
+# 90% used; on Linux under 5% of memory available. Same wait as a busy load, bounded by the busy
+# gap. WALNUT_DEPLOY_MEM_TEST stands in for the reading in tests ("" = read the machine).
+dq_busy_mem() {
+  local t="${WALNUT_DEPLOY_MEM_TEST-}" pl su st
+  if [[ -n "$t" ]]; then [[ "$t" == ok ]] || echo "$t"; return 0; fi
+  pl="$(sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null)"
+  if [[ "$pl" =~ ^[0-9]+$ ]]; then
+    (( pl >= 2 )) && { echo "memory pressure level $pl"; return 0; }
+    read -r st su < <(sysctl -n vm.swapusage 2>/dev/null | awk '{gsub("M","",$3); gsub("M","",$6); printf "%d %d\n", $3, $6}')
+    [[ "$st" =~ ^[0-9]+$ && "$su" =~ ^[0-9]+$ ]] && (( st > 0 && su * 100 >= st * 90 )) && echo "swap ${su}/${st} MB used"
+    return 0
+  fi
+  awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END { if (t > 0 && a * 100 < t * 5) printf "%d MB of memory available\n", a / 1024 }' /proc/meminfo 2>/dev/null
+}
+
 dq_rehearsal() {
   [[ "${WALNUT_DEVPROD_REHEARSAL:-0}" == "1" && "${WALNUT_DEVPROD_REHEARSAL_DIR:-}" == /* && -d "${WALNUT_DEVPROD_REHEARSAL_DIR:-}" ]]
 }
@@ -222,9 +239,10 @@ dq_runner() {
       continue
     fi
     if [[ "${WALNUT_DEPLOY_NO_GAP:-0}" != "1" ]] && (( last + DQ_BUSY_GAP > now )); then
-      busy="$(dq_busy_load)"
+      busy="$(dq_busy_load)"; bwhy="load $busy, over $DQ_BUSY_LOAD per CPU"; [[ -z "$busy" ]] || busy="load $busy"
+      [[ -n "$busy" ]] || { busy="$(dq_busy_mem)"; bwhy="$busy"; }
       if [[ -n "$busy" ]]; then
-        [[ -n "${busy_said:-}" ]] || dq_log "the Mac is busy (load $busy, over $DQ_BUSY_LOAD per CPU): the deploy waits for it to ease, until $(dq_clock "$(( last + DQ_BUSY_GAP ))") at the latest"
+        [[ -n "${busy_said:-}" ]] || dq_log "the Mac is busy ($bwhy): the deploy waits for it to ease, until $(dq_clock "$(( last + DQ_BUSY_GAP ))") at the latest"
         busy_said=1
         dq_put "$q/next-at" "$(( last + DQ_BUSY_GAP ))"; dq_put "$q/busy" "$busy"
         wait=$(( last + DQ_BUSY_GAP - now ))
@@ -360,7 +378,7 @@ dq_request() {
       fi
     elif [[ -f "$q/next-at" && -f "$q/busy" ]]; then
       next="$(dq_num "$q/next-at")"
-      line="Deploy queued: this Mac is busy (load $(cat "$q/busy" 2>/dev/null)); the next deploy goes once it eases, at $(dq_clock "$next") at the latest, with the newest commit then, which includes ${sha:0:12}."
+      line="Deploy queued: this Mac is busy ($(cat "$q/busy" 2>/dev/null)); the next deploy goes once it eases, at $(dq_clock "$next") at the latest, with the newest commit then, which includes ${sha:0:12}."
     elif [[ -f "$q/next-at" ]]; then
       next="$(dq_num "$q/next-at")"
       line="Deploy queued: production restarted recently, and restarts at most once per $(( DQ_GAP / 60 )) min; the next deploy goes at $(dq_clock "$next") with the newest commit then, which includes ${sha:0:12}."

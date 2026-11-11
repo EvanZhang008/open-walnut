@@ -88,7 +88,7 @@ function call(f: Fixture, env: Record<string, string> = {}, args: string[] = [])
     env: {
       ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_DEPLOY_QUEUE_DIR: f.queue, WALNUT_DEPLOY_CONFIG_URL: `file://${f.config}`,
       // The machine's own load never stretches a test's gap (WALNUT_DEPLOY_BUSY_GAP_SECS).
-      WALNUT_DEPLOY_MIN_GAP_SECS: String(GAP), WALNUT_DEPLOY_LOAD_TEST: '0', STUB_DEPLOYS: f.deploys, STUB_CONFIG: f.config, STUB_FAIL: f.fail, ...env,
+      WALNUT_DEPLOY_MIN_GAP_SECS: String(GAP), WALNUT_DEPLOY_LOAD_TEST: '0', WALNUT_DEPLOY_MEM_TEST: 'ok', STUB_DEPLOYS: f.deploys, STUB_CONFIG: f.config, STUB_FAIL: f.fail, ...env,
     },
   })
   let stdout = ''
@@ -177,6 +177,18 @@ describe('the deploy queue', () => {
     expect(easy.code, easy.stderr).toBe(0)
     expect(deploys(g).filter((d) => d.kind === 'start')[0].at).toBeLessThan(t1 + 30)
     await runnerGone(g)
+  }, 90_000)
+
+  it('tight memory stretches the gap like a busy load (2026-11-11: the web build of a deploy adds about 1.4 GB)', async () => {
+    const f = fixture()
+    stampNow(f)
+    const t0 = Math.floor(Date.now() / 1000)
+    const tight = await call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_BUSY_GAP_SECS: '12', WALNUT_DEPLOY_MEM_TEST: 'memory pressure level 2' }).done
+    expect(tight.code, tight.stderr).toBe(0)
+    expect(deploys(f).filter((d) => d.kind === 'start')[0].at).toBeGreaterThanOrEqual(t0 + 12)
+    expect(fs.readFileSync(path.join(f.queue, 'runner.log'), 'utf8')).toMatch(/the Mac is busy \(memory pressure level 2\): the deploy waits/)
+    expect(tight.stdout).toMatch(/Deploy queued: this Mac is busy \(memory pressure level 2\); the next deploy goes once it eases/)
+    await runnerGone(f)
   }, 90_000)
 
   it('a commit that lands while a deploy runs goes with the next one, a gap after it', async () => {
