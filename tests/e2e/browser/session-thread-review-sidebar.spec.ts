@@ -386,7 +386,9 @@ test.describe('the fullscreen review sidebar', () => {
     // A drag is not a click: the column stays open.
     await expect(bar).toHaveAttribute('aria-expanded', 'true')
     await shot(page, 'resize-dragged')
-    // The width is kept across a reload.
+    // The width is kept across a reload (full screen left first: a reload brings
+    // back no sheet the test did not open itself).
+    await leaveFullscreen(page)
     await page.reload()
     await page.waitForLoadState('networkidle')
     await goFullscreen(panel)
