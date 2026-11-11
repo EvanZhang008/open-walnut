@@ -28,13 +28,14 @@ html .open-walnut-fullscreen.is-changed-open {
   max-width: none;
   margin: 0 !important;
 }
-/* With the review column open beside the chat (thread-review.css: 300px cards
-   plus a 20px gap), the sheet grows outward by that width, half on each side,
+/* With the review column open beside the chat (thread-review.css: the cards'
+   width, 300px unless the reader dragged it to --review-col-w, plus a 20px
+   gap), the sheet grows outward by that width, half on each side,
    so the chat keeps the width it had (2026-11-03, the user: "once there is this
    review, it can grow outward"; "normally each side is ten percent"). The margins
    never drop under the gutter, so a narrow window gives what it has and no more. */
 html .open-walnut-fullscreen:has(.session-history[data-review-sidebar="open"]) {
-  --fullscreen-review-grow: 320px;
+  --fullscreen-review-grow: calc(var(--review-col-w, 300px) + 20px);
   --fullscreen-side: max(var(--fullscreen-gutter), calc(min(calc(var(--fullscreen-area) * 0.1), calc((var(--fullscreen-area) - 960px) / 2)) - var(--fullscreen-review-grow) / 2));
 }
 html .open-walnut-fullscreen-backdrop {

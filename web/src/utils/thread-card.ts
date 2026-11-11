@@ -211,8 +211,9 @@ export function placeCardOver(
 ): CardPlacement & { maxHeight: number; grown: CardGrown } {
   const right = Math.round(anchor.right);
   const span = Math.max(CARD_MIN_WIDTH, right - 8);
-  const width = Math.min(CARD_ENLARGED_WIDTH, span);
-  const wide = Math.min(CARD_GROWN_WIDTH, span);
+  // Never narrower than the review card it lies over (the reader may widen that column).
+  const width = Math.min(Math.max(CARD_ENLARGED_WIDTH, Math.round(anchor.right - anchor.left)), span);
+  const wide = Math.min(Math.max(CARD_GROWN_WIDTH, width), span);
   const want = Math.min(maxRoom, Math.max(ENLARGED_MIN_HEIGHT, Math.round((visible.bottom - visible.top) * ENLARGED_MIN_SHARE)));
   let top = anchor.top;
   if (visible.bottom - 12 - top < want) top = Math.max(visible.top + 8, visible.bottom - 12 - want);

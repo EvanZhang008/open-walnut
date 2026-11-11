@@ -29,6 +29,13 @@ export interface ThreadReplyBoxProps {
   onEscape?: () => void;
   /** After a send went through (the owner scrolls the conversation to its end). */
   onSent?: () => void;
+  /** The person's newest message to the question, drawn as one muted line
+   *  inside the box above the text field (a review card: its body shows the
+   *  answers; 2026-11-10, the user: the bubbles there were "too much, put it
+   *  inside the input bar"). */
+  asked?: string;
+  /** Its whole text, the line's tooltip. */
+  askedTitle?: string;
 }
 
 export const ThreadReplyBox = memo(function ThreadReplyBox(p: ThreadReplyBoxProps) {
@@ -104,7 +111,16 @@ export const ThreadReplyBox = memo(function ThreadReplyBox(p: ThreadReplyBoxProp
   return (
     <>
       <PictureStrip pictures={pictures} className="thread-card-pictures" testId="thread-card-pictures" />
-      <div className={`thread-card-composer${pictureInput.dragOver ? ' is-drag-over' : ''}`} data-testid="thread-reply-box" {...pictureInput.dropProps}>
+      <div
+        className={`thread-card-composer${p.asked ? ' has-asked' : ''}${pictureInput.dragOver ? ' is-drag-over' : ''}`}
+        data-testid="thread-reply-box"
+        {...pictureInput.dropProps}
+      >
+        {p.asked && (
+          <div className="thread-card-asked" data-testid="thread-reply-asked" title={p.askedTitle || p.asked}>
+            <span className="thread-card-you">You:</span> {p.asked}
+          </div>
+        )}
         <textarea
           ref={boxRef}
           className="thread-card-input"

@@ -568,8 +568,19 @@ show inline after the open ones, other completed hits that show the query fold i
   card; Esc leaves the box, never the full screen) (2026-11-08, the user: the side comments are Ask
   here and must have an input box; guard `tests/web/ask-card-reply-box-guard.test.ts`). A
   vertical bar on the column's edge (`ThreadReviewBar`, sticky below the glass header) folds the
-  column to a strip with the count and back, one preference for every panel and window
-  (`useReviewSidebarCollapsed`, `walnut:review-sidebar.v1`). Its head's
+  column to a strip with the count and back on a click, one preference for every panel and window
+  (`useReviewSidebarCollapsed`, `walnut:review-sidebar.v1`). Open, the bar is also the column's
+  resize handle (2026-11-10, the user: it "can be drag"): a press moved past 4px drags the width
+  (pointer captured; the sheet grows outward with it, so the bar is kept under the pointer by
+  measuring), ArrowLeft/ArrowRight step 16px, a double-click resets 300px (so a single click folds
+  only after 220ms); `clampReviewWidth` keeps it between 240px and what leaves 520px of text. One
+  width for every session, kept with `usePageView('session', 'reviewWidth')`, drawn as
+  `--review-col-w` on the fullscreen sheet (read by `--thread-review-w` and the sheet's
+  `--fullscreen-review-grow`), written to the DOM during a drag, never a render per frame. In a
+  review card the person's words are never the blue bubble (2026-11-10, the user: "too much, put it
+  inside the input bar"): `ThreadCardConversation asks="lines"` draws earlier questions as muted
+  "You: ..." lines and leaves the newest to the reply box (`ThreadReplyBox asked`, a two-line clamp
+  inside the composer above the text field); the open card keeps its bubbles. Its head's
   click, Enter, its passage's click or the mark menu's Open opens the question's full card OVER it
   (`placeCardOver`, `CARD_ENLARGED_WIDTH`), every round in full and scrollable, the timeline staying
   put; there ⤢ is full screen in place (`fillRef`: the card is fixed over the history box's

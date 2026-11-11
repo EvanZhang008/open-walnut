@@ -160,7 +160,7 @@ export function useThreadReviewPane(a: ThreadReviewPaneArgs): ThreadReviewPane {
   const sidebar = review.available ? (
     <>
       {review.gutter && (
-        <ThreadReviewBar collapsed={collapsed} count={review.anchors.size} onToggle={toggle} />
+        <ThreadReviewBar collapsed={collapsed} count={review.anchors.size} onToggle={toggle} resize={review.resize} />
       )}
       <ThreadReviewSidebar
         layerRef={review.layerRef} open={review.on} entries={shown} anchors={review.anchors} selected={selected}

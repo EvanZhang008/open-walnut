@@ -8,9 +8,12 @@
  * already once per frame of DOM change at most) and when the box resizes. A
  * measure that moved nothing changes no state.
  */
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { ThreadMark } from '@/utils/thread-mark-hit';
-import { anchorsSig, REVIEW_MIN_BOX, reviewGutterOf, reviewSidebarOn, type ReviewGutter } from '@/utils/review-sidebar';
+import {
+  anchorsSig, clampReviewWidth, isReviewWidth, REVIEW_CARD_W, reviewGutterOf, reviewMinBox, reviewRoomOf, reviewSidebarOn, type ReviewGutter,
+} from '@/utils/review-sidebar';
+import { usePageView } from '@/utils/view-memory';
 import { useReviewSidebarCollapsed } from './useReviewSidebarCollapsed';
 import { log } from '@/utils/log';
 
@@ -35,7 +38,34 @@ export interface ReviewSidebar {
   anchors: ReadonlyMap<string, number>;
   /** For useThreadMarks: the marks just derived. */
   onMarks: (marks: readonly ThreadMark[]) => void;
+  /** The card column's width, for its bar (ThreadReviewBar). */
+  resize: ReviewResize;
 }
+
+/**
+ * The card column's width, dragged on its bar (2026-11-10, the user: the line
+ * between the text and the cards "can be drag"). One width for every session,
+ * kept with the view memory (mirrored to ui-prefs). It is drawn as the CSS
+ * variable `--review-col-w` on the fullscreen sheet, read by the history's
+ * gutter, the cards and the sheet's outward growth (fullscreen-tab.css), and
+ * written straight to the DOM while a drag runs: no render per frame.
+ */
+export interface ReviewResize {
+  /** The width drawn now. */
+  width: () => number;
+  /** The room the cards and the text share now (undefined: the column is not open). */
+  room: () => number | undefined;
+  /** Draw this width now, not kept (a drag in progress). */
+  preview: (width: number) => void;
+  /** Draw and keep it. */
+  commit: (width: number, via: string) => void;
+  /** Back to the default width. */
+  reset: () => void;
+  /** A drag runs: the box's own resize leaves the width alone meanwhile. */
+  setDragging: (on: boolean) => void;
+}
+
+export const REVIEW_WIDTH_VAR = '--review-col-w';
 
 const NO_ANCHORS: ReadonlyMap<string, number> = new Map();
 const REVIEW_EMPTY_HOLD_MS = 1200;
@@ -66,8 +96,38 @@ export function useReviewSidebar(a: ReviewSidebarArgs): ReviewSidebar {
   // width in state re-rendered the whole timeline on every frame of a column
   // drag (React bails out on an unchanged boolean).
   const [wide, setWide] = useState(false);
-  const available = reviewSidebarOn({ fullscreen, boxWidth: wide ? REVIEW_MIN_BOX : 0, conversationMode, hasQuestions });
+  const [want, setWant] = usePageView('session', 'reviewWidth', REVIEW_CARD_W, isReviewWidth);
+  const wantRef = useRef(want);
+  wantRef.current = want;
+  const available = reviewSidebarOn({ fullscreen, boxWidth: wide ? reviewMinBox(want) : 0, conversationMode, hasQuestions, cardWidth: want });
   const [collapsed, setCollapsed] = useReviewSidebarCollapsed();
+
+  // The width drawn: the one wanted, clamped to what the box leaves the text.
+  const appliedRef = useRef(clampReviewWidth(want));
+  const hostRef = useRef<HTMLElement | null>(null);
+  const draggingRef = useRef(false);
+  const apply = useCallback((w: number) => {
+    appliedRef.current = w;
+    const host = containerRef.current?.closest<HTMLElement>('.open-walnut-fullscreen') ?? null;
+    if (hostRef.current && hostRef.current !== host) hostRef.current.style.removeProperty(REVIEW_WIDTH_VAR);
+    hostRef.current = host;
+    if (host && host.style.getPropertyValue(REVIEW_WIDTH_VAR) !== `${w}px`) host.style.setProperty(REVIEW_WIDTH_VAR, `${w}px`);
+  }, [containerRef]);
+  const room = useCallback((): number | undefined => {
+    const el = containerRef.current;
+    if (!el || el.getAttribute('data-review-sidebar') !== 'open') return undefined;
+    const cs = getComputedStyle(el);
+    return reviewRoomOf({
+      boxWidth: el.clientWidth, padLeft: parseFloat(cs.paddingLeft) || 0, padRight: parseFloat(cs.paddingRight) || 0, cardWidth: appliedRef.current,
+    });
+  }, [containerRef]);
+  // The box resized, the column opened, or the wanted width changed: draw what fits.
+  const fit = useCallback(() => {
+    if (draggingRef.current) return;
+    apply(clampReviewWidth(wantRef.current, room()));
+  }, [apply, room]);
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
 
   // Fullscreen is a class on the panel root: follow it.
   useEffect(() => {
@@ -87,16 +147,49 @@ export function useReviewSidebar(a: ReviewSidebarArgs): ReviewSidebar {
     const el = containerRef.current;
     if (!el || !fullscreen) { setWide(false); return; }
     const read = () => {
-      setWide(el.clientWidth >= REVIEW_MIN_BOX);
+      setWide(el.clientWidth >= reviewMinBox(wantRef.current));
       const cs = getComputedStyle(el);
       const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
       el.style.setProperty('--review-visible-h', `${Math.max(120, Math.round(el.clientHeight - pad - 8))}px`);
+      fitRef.current();
     };
     read();
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(read);
     ro?.observe(el);
-    return () => ro?.disconnect();
+    return () => {
+      ro?.disconnect();
+      hostRef.current?.style.removeProperty(REVIEW_WIDTH_VAR);
+      hostRef.current = null;
+    };
   }, [containerRef, fullscreen]);
+  // A width picked here or in another panel: draw it, and see whether the box still fits.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !fullscreen) return;
+    setWide(el.clientWidth >= reviewMinBox(want));
+    fit();
+  }, [want, fullscreen, containerRef, fit]);
+
+  const resize = useMemo<ReviewResize>(() => ({
+    width: () => appliedRef.current,
+    room,
+    preview: (w) => apply(w),
+    commit: (w, via) => {
+      draggingRef.current = false;
+      apply(w);
+      wantRef.current = w;
+      log.info('thread-review', 'column width set', { width: w, via });
+      setWant(w);
+    },
+    reset: () => {
+      draggingRef.current = false;
+      log.info('thread-review', 'column width set', { width: REVIEW_CARD_W, via: 'reset' });
+      wantRef.current = REVIEW_CARD_W;
+      setWant(REVIEW_CARD_W);
+      fitRef.current();
+    },
+    setDragging: (on) => { draggingRef.current = on; },
+  }), [apply, room, setWant]);
 
   const layerRef = useRef<HTMLDivElement | null>(null);
   const marksRef = useRef<readonly ThreadMark[]>([]);
@@ -167,5 +260,5 @@ export function useReviewSidebar(a: ReviewSidebarArgs): ReviewSidebar {
   }, [available, anchors.size]);
   // Folded, the bar is there only while a card would be: its count is never 0.
   const gutter = reviewGutterOf({ available, collapsed, cards: anchors.size > 0 || (held && !collapsed) ? Math.max(1, anchors.size) : 0 });
-  return { available, gutter, on: gutter === 'open', collapsed, setCollapsed, layerRef, anchors, onMarks };
+  return { available, gutter, on: gutter === 'open', collapsed, setCollapsed, layerRef, anchors, onMarks, resize };
 }

@@ -19,14 +19,18 @@
  * scroll with the text. Their tops are written straight to the DOM after each
  * render and on a card's resize: one read of the heights, one write each.
  */
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
+import {
+  memo, useCallback, useEffect, useId, useLayoutEffect, useRef,
+  type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject,
+} from 'react';
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { ThreadMarkState } from '@/utils/thread-mark-state';
 import { hasWords, questionBodyOf } from '@/utils/thread-card';
 import { displayTitleOf, type ThreadMetaIndex } from '@/utils/thread-meta';
 import { isTurnHead, type ThreadTree } from '@/utils/thread-tree';
-import { liftReviewCard, plainExcerpt, REVIEW_BODY_MAX, REVIEW_BODY_MIN, REVIEW_GAP, REVIEW_TYPING_BODY, stackReviewCards } from '@/utils/review-sidebar';
+import { liftReviewCard, askedLine, clampReviewWidth, plainExcerpt, REVIEW_BODY_MAX, REVIEW_BODY_MIN, REVIEW_DRAG_SLOP, REVIEW_GAP, REVIEW_TYPING_BODY, stackReviewCards, stepReviewWidth } from '@/utils/review-sidebar';
+import type { ReviewResize } from '@/hooks/useReviewSidebar';
 import { stripQuestionTag } from '@/utils/question-tag';
 import type { ImageAttachment } from '@/api/chat';
 import { cardFollowUpPlaceholder } from './ThreadCommentCard';
@@ -39,6 +43,8 @@ export interface ReviewEntry {
   title: string;
   state: ThreadMarkState;
   question: string;
+  /** The newest question at full length (the reply box's tooltip). */
+  questionFull?: string;
   answer: string;
   rounds: number;
 }
@@ -105,12 +111,14 @@ export function buildReviewEntries(a: {
       if (!last || t.at > last.at) last = t;
     }
     const number = a.numbers.get(key);
+    const body = last ? questionBodyOf(typedUserText(last.user.text ?? '')) : '';
     out.push({
       key,
       ...(number !== undefined ? { number } : {}),
       title: displayTitleOf(node, a.metaIndex).title,
       state: a.markStates.get(key) ?? 'read',
-      question: last ? plainExcerpt(questionBodyOf(typedUserText(last.user.text ?? '')), 240) : '',
+      question: body ? plainExcerpt(body, 240) : '',
+      questionFull: body ? askedLine(body) : '',
       answer: answerExcerpt(last?.reply?.text ?? ''),
       rounds,
     });
@@ -143,8 +151,9 @@ export function withSentQuestions(entries: ReviewEntry[], sent: ReadonlyMap<stri
   return entries.map((e) => {
     const text = sent.get(e.key);
     if (text === undefined) return e;
-    const question = plainExcerpt(questionBodyOf(typedUserText(text)), 240);
-    return question && question !== e.question ? { ...e, question, answer: '' } : e;
+    const body = questionBodyOf(typedUserText(text));
+    const question = plainExcerpt(body, 240);
+    return question && question !== e.question ? { ...e, question, questionFull: askedLine(body), answer: '' } : e;
   });
 }
 
@@ -409,6 +418,8 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
             draftKey={p.draftKeyOf(e.key)}
             canAsk={p.canAsk}
             placeholder={cardFollowUpPlaceholder(e.title)}
+            asked={e.question}
+            askedTitle={e.questionFull || e.question}
             onSend={(text, images) => p.onSend(e.key, text, images)}
             onFocus={() => p.onPick(e.key)}
             onSent={() => followEnd(e.key)}
@@ -424,6 +435,27 @@ export interface ThreadReviewBarProps {
   /** Cards on screen, shown on the folded bar. */
   count: number;
   onToggle: () => void;
+  /** The column's width (open only): dragged, arrow keys, double-click resets. */
+  resize?: ReviewResize;
+}
+
+/** A click on the open bar folds the column only once no second click follows
+ *  (a double-click resets the width, and the first click must not fold it). */
+const FOLD_DELAY_MS = 220;
+const RESIZING_CLASS = 'walnut-col-resizing';
+
+interface BarDrag {
+  id: number;
+  x0: number;
+  /** The pointer's x now. */
+  px: number;
+  on: boolean;
+  raf: number;
+  /** Bar movement per px of width, measured (the sheet grows outward with the
+   *  column, so the bar moves less than the width changed). */
+  slope: number;
+  prev?: { w: number; x: number };
+  settle: number;
 }
 
 /**
@@ -431,24 +463,158 @@ export interface ThreadReviewBarProps {
  * content box, so below the glass header), as tall as what is visible
  * (`--review-visible-h`, written by useReviewSidebar's resize observer). Open, a
  * thin line between the text and the cards; folded, a narrow strip at the right
- * holding the question count. Either way the whole bar is the one button.
+ * holding the question count. A click folds or unfolds the column. Open, the
+ * line is also its resize handle (2026-11-10, the user: it "can be drag"): a
+ * press that moves past REVIEW_DRAG_SLOP drags the column's width (the pointer
+ * captured, the bar kept under it), ArrowLeft / ArrowRight change it by
+ * REVIEW_W_STEP, a double-click puts the default width back.
  */
 export const ThreadReviewBar = memo(function ThreadReviewBar(p: ThreadReviewBarProps) {
   const label = p.collapsed ? `Show questions (${p.count})` : 'Hide questions';
+  const resizable = !p.collapsed && !!p.resize;
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const drag = useRef<BarDrag | null>(null);
+  const swallowClick = useRef(false);
+  const foldTimer = useRef(0);
+  const toggleRef = useRef(p.onToggle);
+  toggleRef.current = p.onToggle;
+  const resizeRef = useRef(p.resize);
+  resizeRef.current = p.resize;
+  const hintId = useId();
+
+  const endDrag = useCallback((commit: boolean) => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d) return;
+    if (d.raf) cancelAnimationFrame(d.raf);
+    if (!d.on) return;
+    document.documentElement.classList.remove(RESIZING_CLASS);
+    ref.current?.classList.remove('is-dragging');
+    const rz = resizeRef.current;
+    if (!rz) return;
+    rz.setDragging(false);
+    if (!commit) return;
+    // A quick release lands before the next frame: the rest of the way to the
+    // pointer is taken now (2026-11-11: a flick of 60px kept only 23 of them).
+    const w = rz.width();
+    const r = ref.current?.getBoundingClientRect();
+    const err = r ? d.px - (r.left + r.width / 2) : 0;
+    rz.commit(Math.abs(err) < 1 ? w : clampReviewWidth(Math.round(w + err / d.slope), rz.room()), 'drag');
+  }, []);
+  useEffect(() => () => {
+    window.clearTimeout(foldTimer.current);
+    endDrag(true);
+  }, [endDrag]);
+  // Folded mid-drag (another window's choice): the drag ends where it is.
+  useEffect(() => { if (!resizable) endDrag(true); }, [resizable, endDrag]);
+
+  const barX = () => {
+    const r = ref.current?.getBoundingClientRect();
+    return r ? r.left + r.width / 2 : 0;
+  };
+  // Once a frame: the width that puts the bar under the pointer, from the
+  // last width and where the bar moved for it.
+  const frame = () => {
+    const d = drag.current;
+    const rz = resizeRef.current;
+    if (!d || !rz) return;
+    d.raf = 0;
+    const w = rz.width();
+    const x = barX();
+    if (d.prev && Math.abs(w - d.prev.w) >= 2) {
+      const k = (x - d.prev.x) / (w - d.prev.w);
+      if (k < -0.2 && k > -1.5) d.slope = k;
+    }
+    d.prev = { w, x };
+    const err = d.px - x;
+    if (Math.abs(err) < 1) return;
+    const next = clampReviewWidth(Math.round(w + err / d.slope), rz.room());
+    if (next === w) return;
+    rz.preview(next);
+    if (ref.current) ref.current.dataset.width = String(next);
+    d.settle += 1;
+    if (d.settle < 6) d.raf = requestAnimationFrame(frame);
+  };
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    swallowClick.current = false;
+    if (!resizable || e.button !== 0) return;
+    // No text selection starts from the handle; the click still fires.
+    e.preventDefault();
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* an old engine: moves on the bar only */ }
+    drag.current = { id: e.pointerId, x0: e.clientX, px: e.clientX, on: false, raf: 0, slope: -1, settle: 0 };
+  };
+  const onPointerMove = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    const d = drag.current;
+    if (!d || e.pointerId !== d.id) return;
+    d.px = e.clientX;
+    if (!d.on) {
+      if (Math.abs(e.clientX - d.x0) <= REVIEW_DRAG_SLOP) return;
+      d.on = true;
+      window.clearTimeout(foldTimer.current);
+      foldTimer.current = 0;
+      resizeRef.current?.setDragging(true);
+      document.documentElement.classList.add(RESIZING_CLASS);
+      ref.current?.classList.add('is-dragging');
+    }
+    d.settle = 0;
+    if (!d.raf) d.raf = requestAnimationFrame(frame);
+  };
+  const onPointerUp = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    const d = drag.current;
+    if (!d || e.pointerId !== d.id) return;
+    // A drag is no click (the click that follows would fold the column).
+    if (d.on) swallowClick.current = true;
+    endDrag(true);
+  };
+  const onClick = (e: ReactMouseEvent<HTMLButtonElement>) => {
+    if (swallowClick.current) { swallowClick.current = false; return; }
+    // Folded, or the keyboard (detail 0): at once.
+    if (!resizable || e.detail === 0) { toggleRef.current(); return; }
+    window.clearTimeout(foldTimer.current);
+    foldTimer.current = 0;
+    if (e.detail >= 2) { resizeRef.current?.reset(); return; }
+    foldTimer.current = window.setTimeout(() => { foldTimer.current = 0; toggleRef.current(); }, FOLD_DELAY_MS);
+  };
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const rz = resizeRef.current;
+    if (!resizable || !rz || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const next = stepReviewWidth(rz.width(), e.key, rz.room());
+    if (ref.current) ref.current.dataset.width = String(next);
+    rz.commit(next, 'keyboard');
+  };
+
   return (
     <div className="thread-review-bar-slot" data-collapsed={p.collapsed ? 'true' : undefined}>
       <button
+        ref={ref}
         type="button"
         className="thread-review-bar"
         data-testid="thread-review-bar"
+        data-resizable={resizable ? 'true' : undefined}
+        data-width={resizable ? p.resize!.width() : undefined}
         aria-label={label}
         aria-expanded={!p.collapsed}
-        title={label}
-        onClick={p.onToggle}
+        aria-describedby={resizable ? hintId : undefined}
+        title={resizable ? `${label}. Drag to resize, double-click to reset` : label}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => endDrag(true)}
+        onLostPointerCapture={() => { if (drag.current?.on) endDrag(true); }}
+        onClick={onClick}
+        onKeyDown={onKeyDown}
       >
         <span className="thread-review-bar-chevron" aria-hidden="true">{p.collapsed ? '‹' : '›'}</span>
         {p.collapsed && <span className="thread-review-bar-count" aria-hidden="true">{p.count}</span>}
       </button>
+      {resizable && (
+        <span id={hintId} className="thread-review-sr-only">
+          Drag, or press the left and right arrow keys, to resize the question column; double-click resets its width.
+        </span>
+      )}
     </div>
   );
 });

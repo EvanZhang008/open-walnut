@@ -9,6 +9,7 @@
  *  a 300px column plus its gaps leaves at least ~520px of text (beside the
  *  question map's panel too). A split's chat column is usually narrower. */
 export const REVIEW_MIN_BOX = 880;
+/** The card column's default width; the reader drags it (clampReviewWidth). */
 export const REVIEW_CARD_W = 300;
 /** Between two cards. */
 export const REVIEW_GAP = 8;
@@ -21,9 +22,64 @@ export const REVIEW_TYPING_BODY = 160;
 /** A card's conversation at most (with 55vh, the `.thread-review-body` cap in thread-review.css). */
 export const REVIEW_BODY_MAX = 420;
 
+/** The card column's width as the reader drags its bar (2026-11-10, the user:
+ *  the line between the text and the cards "can be drag"): at least this... */
+export const REVIEW_W_MIN = 240;
+/** ...and never so wide that the conversation keeps less than this. */
+export const REVIEW_TEXT_MIN = 520;
+/** One arrow key press on the bar. */
+export const REVIEW_W_STEP = 16;
+/** A press that moves this far is a drag, not a click (the click folds). */
+export const REVIEW_DRAG_SLOP = 4;
+
+/** The narrowest history box the sidebar shows in for a chosen column width:
+ *  a narrower pick lowers it; a wider one does not raise it (the column is
+ *  clamped to what fits, see fitReviewWidth). */
+export function reviewMinBox(cardWidth: number = REVIEW_CARD_W): number {
+  return REVIEW_MIN_BOX - REVIEW_CARD_W + Math.max(REVIEW_W_MIN, Math.min(cardWidth, REVIEW_CARD_W));
+}
+
 /** Whether the sidebar can show at all (it is then measured, cards or not). */
-export function reviewSidebarOn(a: { fullscreen: boolean; boxWidth: number; conversationMode: boolean; hasQuestions: boolean }): boolean {
-  return a.fullscreen && a.conversationMode && a.hasQuestions && a.boxWidth >= REVIEW_MIN_BOX;
+export function reviewSidebarOn(a: { fullscreen: boolean; boxWidth: number; conversationMode: boolean; hasQuestions: boolean; cardWidth?: number }): boolean {
+  return a.fullscreen && a.conversationMode && a.hasQuestions && a.boxWidth >= reviewMinBox(a.cardWidth);
+}
+
+/** A stored column width that still reads as one (a hand-edited or older value
+ *  falls back to the default). */
+export function isReviewWidth(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= REVIEW_W_MIN && v <= 4000;
+}
+
+/**
+ * The room the cards and the text share in the history box now: its width
+ * less its side paddings, plus the column width those paddings hold (the
+ * right padding carries the column while it is open).
+ */
+export function reviewRoomOf(a: { boxWidth: number; padLeft: number; padRight: number; cardWidth: number }): number {
+  return a.boxWidth - a.padLeft - a.padRight + a.cardWidth;
+}
+
+/**
+ * The column width to draw for the width the reader wants: at least
+ * REVIEW_W_MIN, and at most what leaves REVIEW_TEXT_MIN of text in `room`
+ * (reviewRoomOf; unknown room: no upper bound). A room too small for both
+ * still gets the minimum column.
+ */
+export function clampReviewWidth(want: number, room?: number): number {
+  const max = room === undefined || !Number.isFinite(room) ? Number.POSITIVE_INFINITY : room - REVIEW_TEXT_MIN;
+  const w = Number.isFinite(want) ? want : REVIEW_CARD_W;
+  return Math.round(Math.max(REVIEW_W_MIN, Math.min(w, max)));
+}
+
+/** One arrow key's width (left widens the column, the bar being its left edge). */
+export function stepReviewWidth(current: number, key: 'ArrowLeft' | 'ArrowRight', room?: number): number {
+  return clampReviewWidth(current + (key === 'ArrowLeft' ? REVIEW_W_STEP : -REVIEW_W_STEP), room);
+}
+
+/** A drag's width: the column's left edge follows the pointer (`dx` from the
+ *  press, right is positive, so a drag left widens it). */
+export function dragReviewWidth(start: number, dx: number, room?: number): number {
+  return clampReviewWidth(start - dx, room);
 }
 
 /**
@@ -112,6 +168,17 @@ export function plainExcerpt(text: string, max: number): string {
   const cut = plain.slice(0, max - 1);
   const space = cut.lastIndexOf(' ');
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/** A person's own message as a review card shows it (2026-11-10, the user, of
+ *  the blue bubbles in the side cards: "too much, put it inside the input
+ *  bar"): one plain line after "You:", its attachments counted. The card's CSS
+ *  clamps it to two lines; the whole of it is the line's tooltip. */
+export function askedLine(text: string, attachments = 0, max = 2000): string {
+  const words = plainExcerpt(text, max);
+  if (attachments <= 0) return words;
+  const count = `[${attachments} attachment${attachments === 1 ? '' : 's'}]`;
+  return words ? `${words} ${count}` : count;
 }
 
 /** Positions as one comparable string (a re-measure that moved nothing is a no-op). */

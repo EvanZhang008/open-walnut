@@ -5525,7 +5525,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }
   /** A question's conversation, as the open card and its review card draw it. */
-  const conversationFor = (key: string): ReactNode => {
+  const conversationFor = (key: string, asks?: 'lines'): ReactNode => {
     const turns = turnsFor(key);
     const optimistic = deduped.filter((m) => m.role === 'user' && m.status !== 'failed' && optimisticThreadKey(m) === key);
     const seq = [...(seqByKey.get(key) ?? [])];
@@ -5556,10 +5556,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         empty={turns.length === 0 && !deduped.some((m) => m.role === 'user' && optimisticThreadKey(m) === key)}
         sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost}
         onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen}
+        {...(asks ? { asks } : {})}
       />
     );
   };
-  reviewBodyRef.current = conversationFor;
+  // A review card: the person's words as muted lines, the newest in its reply box.
+  reviewBodyRef.current = (key) => conversationFor(key, 'lines');
   const cardBody = cardKey ? conversationFor(cardKey) : null;
   /** The card's "Quote in chat": the chat's composer writes to this question
    *  from now on (its chip says so); the card closes. An Ask not sent yet

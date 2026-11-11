@@ -140,7 +140,9 @@ test.describe('the fullscreen review sidebar', () => {
       const title = el.querySelector('.thread-review-title') as HTMLElement
       return {
         text: el.textContent ?? '',
-        questions: el.querySelectorAll('.thread-card-q .session-msg-user').length,
+        // The newest question sits in the reply box (2026-11-10: no blue bubbles in a review card).
+        questions: el.querySelectorAll('[data-testid="thread-reply-asked"]').length,
+        bubbles: el.querySelectorAll('.session-msg-user').length,
         answers: el.querySelectorAll('.session-msg-assistant').length,
         bodyH: body?.getBoundingClientRect().height ?? 0,
         scrolls: !!body && body.scrollHeight > body.clientHeight + 1 && getComputedStyle(body).overflowY === 'auto',
@@ -150,7 +152,8 @@ test.describe('the fullscreen review sidebar', () => {
     }))
     const cap = Math.min(420, 900 * 0.55)
     for (const r of rows) {
-      expect(r.questions, `the question shows: ${r.text.slice(0, 80)}`).toBeGreaterThanOrEqual(1)
+      expect(r.questions, `the question shows: ${r.text.slice(0, 80)}`).toBe(1)
+      expect(r.bubbles, 'no chat bubble in a review card').toBe(0)
       expect(r.oneLine).toBe(true)
       expect(r.bodyH, 'capped').toBeLessThanOrEqual(cap + 1)
       expect(r.bodyText).not.toMatch(/\[Q\s?\d+\]/)
@@ -212,8 +215,10 @@ test.describe('the fullscreen review sidebar', () => {
     await history.evaluate((el) => { el.scrollTop = 0 })
     await wheelIntoView(page, history, first.locator('button.thread-review-head'))
     const body = first.locator('.thread-review-body')
-    await expect(body.locator('.thread-card-q')).toHaveCount(REVIEW_ROUNDS.length)
-    for (const q of REVIEW_ROUNDS) await expect(body).toContainText(q)
+    // Earlier rounds as muted lines in the body, the newest in the reply box.
+    await expect(body.locator('.thread-card-q-line')).toHaveCount(REVIEW_ROUNDS.length - 1)
+    for (const q of REVIEW_ROUNDS.slice(0, -1)) await expect(body).toContainText(q)
+    await expect(first.getByTestId('thread-reply-asked')).toContainText(REVIEW_ROUNDS[REVIEW_ROUNDS.length - 1])
     await expect(body.locator('pre')).toContainText(REVIEW_ROUND_CODE)
     expect(await body.evaluate((el) => el.scrollHeight > el.clientHeight + 20), 'three rounds overflow the cap').toBe(true)
     // The wheel goes over the part of the card the history box shows.
@@ -327,6 +332,109 @@ test.describe('the fullscreen review sidebar', () => {
     expect(Math.round((await geometry()).marginRight)).toBe(12)
     await shot(page, '6d-sheet-narrow')
     await page.evaluate(() => localStorage.removeItem('walnut:review-sidebar.v1'))
+  })
+
+  test('the bar between the text and the cards drags to resize; a click folds, a double click resets, a reload keeps it (2026-11-10)', async ({ page }) => {
+    // The user, on a screenshot of this line: "can be drag".
+    const panel = await openFullscreen(page)
+    await page.evaluate(() => localStorage.removeItem('walnut:review-sidebar.v1'))
+    await goFullscreen(panel)
+    await expect(sidebarCards(panel)).toHaveCount(REVIEW_COUNT, { timeout: 15_000 })
+    const bar = panel.getByTestId('thread-review-bar')
+    const cardW = async () => Math.round((await sidebarCards(panel).first().boundingBox())!.width)
+    await expect.poll(cardW).toBe(300)
+    // The reader's mouse: press on the line, move left 120px, release.
+    const b = (await bar.boundingBox())!
+    const x = b.x + b.width / 2, y = b.y + Math.min(b.height / 2, 200)
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x - 30, y, { steps: 4 })
+    await page.mouse.move(x - 60, y, { steps: 4 })
+    // The line follows the pointer while it drags.
+    // (within a few frames: the sheet grows outward with the column, so the bar's
+    // place for a width is measured as it goes)
+    await expect.poll(async () => { const m = (await bar.boundingBox())!; return Math.abs(m.x + m.width / 2 - (x - 60)) },
+      { timeout: 1_500, message: 'the bar stays under the pointer' }).toBeLessThan(12)
+    await page.mouse.up()
+    await expect.poll(cardW).toBeGreaterThan(340)
+    const dragged = await cardW()
+    // Dragged far: the column stops where the text keeps its least room (520px).
+    const far = (await bar.boundingBox())!
+    await page.mouse.move(far.x + far.width / 2, y)
+    await page.mouse.down()
+    await page.mouse.move(far.x - 600, y, { steps: 8 })
+    await page.mouse.up()
+    const textW = await panel.locator('.session-history').evaluate((el) => {
+      const cs = getComputedStyle(el)
+      return el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+    })
+    expect(textW, 'the text keeps its room').toBeGreaterThanOrEqual(500)
+    const widest = await cardW()
+    expect(widest).toBeGreaterThanOrEqual(dragged)
+    await bar.dblclick()
+    await expect.poll(cardW).toBe(300)
+    // Back to the first drag's width for the reload check, in one quick flick
+    // released at once: the release takes the bar the rest of the way to the
+    // pointer (it kept 23 of 60px when the last frame was dropped).
+    const again = (await bar.boundingBox())!
+    await page.mouse.move(again.x + again.width / 2, y)
+    await page.mouse.down()
+    await page.mouse.move(again.x + again.width / 2 - 60, y, { steps: 8 })
+    await page.mouse.up()
+    await expect.poll(cardW).toBeGreaterThan(340)
+    const kept = await cardW()
+    // A drag is not a click: the column stays open.
+    await expect(bar).toHaveAttribute('aria-expanded', 'true')
+    await shot(page, 'resize-dragged')
+    // The width is kept across a reload.
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    await goFullscreen(panel)
+    await expect(sidebarCards(panel).first()).toBeVisible({ timeout: 30_000 })
+    await expect.poll(cardW).toBe(kept)
+    // A double click puts it back to 300px, and the column stays open.
+    await bar.dblclick()
+    await expect.poll(cardW).toBe(300)
+    await expect(bar).toHaveAttribute('aria-expanded', 'true')
+    // A plain click still folds and brings it back.
+    await bar.click()
+    await expect(bar).toHaveAttribute('aria-expanded', 'false')
+    await bar.click()
+    await expect(bar).toHaveAttribute('aria-expanded', 'true')
+    // Never narrower than 240px, however far it is dragged.
+    const c = (await bar.boundingBox())!
+    await page.mouse.move(c.x + c.width / 2, c.y + 100)
+    await page.mouse.down()
+    await page.mouse.move(c.x + 400, c.y + 100, { steps: 8 })
+    await page.mouse.up()
+    await expect.poll(cardW).toBe(240)
+    await bar.dblclick()
+    await expect.poll(cardW).toBe(300)
+    // The width rides the synced view prefs (written 800ms after the last
+    // change): let the reset reach them, or the next test opens at a dragged width.
+    await page.waitForTimeout(1500)
+  })
+
+  test('a card holds no bubble of the reader\'s own: the newest ask sits inside its reply box (2026-11-10)', async ({ page }) => {
+    // The user, of the blue bubbles on the cards: "too much, put it inside the input bar".
+    const panel = await openFullscreen(page)
+    await goFullscreen(panel)
+    await expect(sidebarCards(panel)).toHaveCount(REVIEW_COUNT, { timeout: 15_000 })
+    for (const c of (await sidebarCards(panel).all()).slice(0, 4)) {
+      await expect(c.locator('.session-msg-user, .chat-bubble-user')).toHaveCount(0)
+      const asked = c.getByTestId('thread-reply-asked')
+      if (await asked.count() === 0) continue
+      // Inside the box's frame, above the text field.
+      const frame = (await c.locator('.thread-card-composer').boundingBox())!
+      const line = (await asked.boundingBox())!
+      const field = (await c.locator('textarea.thread-card-input').boundingBox())!
+      expect(line.y).toBeGreaterThanOrEqual(frame.y - 1)
+      expect(line.y + line.height).toBeLessThanOrEqual(field.y + 2)
+      expect(line.x).toBeGreaterThanOrEqual(frame.x - 1)
+      expect(line.x + line.width).toBeLessThanOrEqual(frame.x + frame.width + 1)
+      expect(line.height, 'one or two lines').toBeLessThan(40)
+    }
+    await shot(page, 'asked-in-box')
   })
 
   test('a click on a card, its passage or Enter opens the full question over the card; Quote in chat', async ({ page }) => {
@@ -766,8 +874,11 @@ test.describe('the fullscreen review sidebar', () => {
       const b = (await box.boundingBox())!
       expect(b.y + b.height, 'the box stays above the view\'s foot').toBeLessThanOrEqual(hb.y + hb.height)
       await expect.poll(() => body.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 3_000 }).toBeLessThan(2)
+      // The reader's newest ask sits in the box now (2026-11-10, "put it inside the
+      // input bar"), so it counts with the conversation shown above it.
+      const asked = await card.locator('.thread-card-asked').evaluateAll((els) => els.reduce((h, el) => h + (el as HTMLElement).offsetHeight, 0))
       const seen = await body.evaluate((el) => ({ shown: el.clientHeight, all: el.scrollHeight }))
-      expect(seen.shown, 'the card keeps a readable piece of its conversation, not one line').toBeGreaterThanOrEqual(Math.min(seen.all, 130))
+      expect(seen.shown + asked, 'the card keeps a readable piece of its conversation, not one line').toBeGreaterThanOrEqual(Math.min(seen.all + asked, 130))
     }
   })
 
@@ -851,11 +962,12 @@ test.describe('asks on turns that are not loaded', () => {
     await again.getByRole('button', { name: 'Expand session to full screen' }).click()
     await expect(again).toHaveClass(/open-walnut-fullscreen/)
     const card3 = sidebarCards(again).filter({ hasText: 'Mixed point 3' })
-    const asked = card3.locator('.thread-card-q').filter({ hasText: 'What is in this picture?' })
+    // The newest question sits in the card's reply box as one line (2026-11-10:
+    // no bubbles in a review card); its picture is in the open card.
+    const asked = card3.getByTestId('thread-reply-asked').filter({ hasText: 'What is in this picture?' })
     await expect(asked).toHaveCount(1, { timeout: 30_000 })
-    await expect(asked.locator('img')).toHaveCount(1, { timeout: 15_000 })
     // (The mock engine's answer echoes the whole message it got: only the
-    // question's own bubble and the card's head are the card's words.)
+    // question's own line and the card's head are the card's words.)
     for (const own of [asked, card3.locator('button.thread-review-head')]) {
       await expect(own).not.toContainText('Images attached')
       await expect(own).not.toContainText('/images/')

@@ -6,6 +6,12 @@
  * order. The comment card (beside the passage, and in the Files tab) uses it;
  * so does every fullscreen review card, under its head (ThreadReviewSidebar).
  *
+ * A review card (ThreadReviewSidebar) draws the person's words smaller
+ * (`asks="lines"`, 2026-11-10, the user, of the blue bubbles there: "too much,
+ * put it inside the input bar"): its body holds the answers, each earlier
+ * question one muted "You: ..." line between them, and the newest question sits
+ * in the card's reply box (ThreadReplyBox `asked`), never in the body.
+ *
  * Rows never carry `data-message-id`: the marks find their passage by that
  * attribute (`bodyForMsgId`), and a copy here would be found first. Each
  * question sits in `.thread-card-q` (tests and the fold read it).
@@ -16,6 +22,7 @@ import type { SessionHistoryMessage } from '@/types/session';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
 import type { CardTurn } from '@/utils/thread-card';
 import { questionPartsOf } from '@/utils/thread-card';
+import { askedLine } from '@/utils/review-sidebar';
 import { MessageAttachments } from './MessageAttachments';
 import { SessionMessage, StableMarkdownBody } from './SessionMessage';
 import { useSessionTextRender } from '@/hooks/useAgentFileOpener';
@@ -50,6 +57,19 @@ const QuestionBubble = memo(function QuestionBubble({ message, h }: { message: S
           {parts.body && <StableMarkdownBody text={parts.body} cwd={h.sessionCwd} host={host} inlineImages={images} />}
         </div>
       </div>
+    </div>
+  );
+});
+
+/** The question as a review card's body draws it: one muted line, no bubble. */
+const QuestionLine = memo(function QuestionLine({ message }: { message: SessionHistoryMessage }) {
+  const line = useMemo(() => {
+    const parts = questionPartsOf(typedUserText(message.text ?? ''));
+    return askedLine(parts.body, parts.images.length + parts.files.length);
+  }, [message.text]);
+  return (
+    <div className="thread-card-q thread-card-q-line" title={line}>
+      <span className="thread-card-you">You:</span> {line}
     </div>
   );
 });
@@ -89,6 +109,10 @@ export interface ThreadCardConversationProps extends RowHandlers {
   streaming: boolean;
   /** Nothing to show at all. */
   empty: boolean;
+  /** How the person's questions are drawn: the chat's blue bubbles (the open
+   *  card, default), or a review card's muted lines with the newest one left
+   *  to its reply box. */
+  asks?: 'bubbles' | 'lines';
 }
 
 export const ThreadCardConversation = memo(function ThreadCardConversation(p: ThreadCardConversationProps) {
@@ -104,6 +128,13 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
   const liveReply = p.live && liveReplyId && p.live.block.type === 'text'
     && !p.turns[p.turns.length - 1].replies.some((r) => r !== p.supersededReply && r.msgId === liveReplyId)
     ? replyRow(p.live.block, liveReplyId) : undefined;
+  const lines = p.asks === 'lines';
+  // A review card's newest question is in its reply box, not here.
+  const newest = p.rounds.length > 0 ? p.rounds[p.rounds.length - 1].bubble : p.turns[p.turns.length - 1]?.user;
+  const question = (m: SessionHistoryMessage) => {
+    if (!lines) return <QuestionBubble message={m} h={h} />;
+    return m === newest ? null : <QuestionLine message={m} />;
+  };
   const reply = (r: SessionHistoryMessage) => (
     <SessionMessage
       key={r.msgId ?? r.walnutMessageId} message={r} sessionId={h.sessionId} sessionCwd={h.sessionCwd}
@@ -120,7 +151,7 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
         if (liveReply && last) replies.push(liveReply);
         return (
           <div key={t.user.msgId ?? t.user.walnutMessageId} className="thread-card-turn">
-            <QuestionBubble message={t.user} h={h} />
+            {question(t.user)}
             {replies.map(reply)}
             {t.replies.length === 0 && last && p.awaiting && !liveReply && !p.live && (
               <div className="thread-card-noanswer" data-awaiting="true">Waiting for its answer…</div>
@@ -134,7 +165,7 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
       {p.live && !liveReply && <LiveAnswer key={`live-${p.live.index}`} live={p.live} streaming={p.streaming} h={h} />}
       {p.rounds.map(({ bubble: m, live }) => (
         <div key={`opt-${m.queueId}`} className="thread-card-turn" data-status={m.status}>
-          <QuestionBubble message={m} h={h} />
+          {question(m)}
           {live && <LiveAnswer key={`live-${live.index}`} live={live} streaming={p.streaming} h={h} />}
         </div>
       ))}

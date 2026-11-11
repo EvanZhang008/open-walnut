@@ -3,7 +3,9 @@
    level with its line. The layer is zero height at the top of the scroll
    content (like the comment card's), so the cards scroll with the text. */
 .session-history[data-review-sidebar] {
-  --thread-review-w: 300px;
+  /* The column's width: the reader's drag on the bar (useReviewSidebar writes
+     --review-col-w on the fullscreen sheet), 300px by default. */
+  --thread-review-w: var(--review-col-w, 300px);
   --thread-review-gap: 20px;
   --thread-review-fold-w: 16px;
 }
@@ -62,6 +64,12 @@
   transition: width 120ms ease, background 120ms ease;
 }
 .thread-review-bar:hover::before { width: 4px; background: var(--border-strong); }
+/* Open, the line is also the column's resize handle (ThreadReviewBar). */
+.thread-review-bar[data-resizable="true"] { cursor: col-resize; touch-action: none; user-select: none; -webkit-user-select: none; }
+.thread-review-bar.is-dragging::before { width: 4px; background: var(--accent); }
+html.walnut-col-resizing,
+html.walnut-col-resizing * { cursor: col-resize !important; user-select: none !important; -webkit-user-select: none !important; }
+.thread-review-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 .thread-review-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .thread-review-bar-chevron {
   position: relative;
