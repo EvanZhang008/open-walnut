@@ -41,7 +41,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The connector this commit pins, which the throwaway Walnut's daemon downloads
+  # (src/providers/net-binary.ts). A push that moves its version also starts walnut-net.yml,
+  # which takes a while to build it, so the join waits here for the release first (2026-11-09:
+  # a join started two minutes before walnut-net-v0.2.1 was out and failed on its 404).
+  connector:
+    name: The host network connector this commit pins is out
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: sh scripts/net-release-ready.sh --wait 3300
+
   join:
+    needs: connector
     runs-on: windows-latest
     timeout-minutes: 75
     steps:
@@ -83,7 +98,15 @@ jobs:
           mkdir -p "$HOME"
           ws=$(wslpath -u '${{ github.workspace }}')
           tmp=$(wslpath -u '${{ runner.temp }}')
-          curl -fsSL --retry 3 --retry-all-errors https://bun.sh/install | bash -s "bun-v1.4.4"
+          # bun's installer downloads bun itself, out of reach of curl's --retry (2026-11-09: one
+          # GitHub 504 there failed the job), so the whole install is tried up to three times. Saved
+          # to a file first: a pipe into bash runs nothing, and succeeds, when the download fails.
+          for i in 1 2 3; do
+            curl -fsSL --retry 3 --retry-all-errors -o "$tmp/bun-install.sh" https://bun.sh/install \
+              && bash "$tmp/bun-install.sh" "bun-v1.4.4" && break
+            [ "$i" -lt 3 ] || exit 1
+            sleep 20
+          done
           export PATH="$HOME/.bun/bin:$PATH"
           mkdir -p "$HOME/w"
           tar -C "$ws" --exclude=./node_modules --exclude=./web/node_modules --exclude=./.git -cf - . | tar -C "$HOME/w" -xf -

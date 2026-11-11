@@ -60,6 +60,7 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       tiers: ${{ steps.plan.outputs.tiers }}
+      ios: ${{ steps.plan.outputs.ios }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -68,8 +69,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      # GitHub's main, to tell whether the commit touches the iOS app (as the browser job tells
+      # its specs): a land's gate commit sits on the main it lands on, so its parent is the base.
+      - run: git fetch -q --depth=1 origin main
       - id: plan
-        run: bun scripts/push-gate-plan.mjs
+        run: |
+          base=FETCH_HEAD
+          msg=$(git log -1 --format=%B HEAD)
+          case $msg in 'push gate: the files of '*) printf '%s\n' "$msg" | grep -qxE 'Walnut-Gate: (land|since)' && base=HEAD^ ;; esac
+          bun scripts/push-gate-plan.mjs --ios-base "$base"
       # Through env, never pasted into the script: `why` names files of the change.
       - name: Status
         env:
@@ -154,7 +162,7 @@ jobs:
         run: |
           base=FETCH_HEAD
           msg=$(git log -1 --format=%B HEAD)
-          case $msg in 'push gate: the files of '*) printf '%s\n' "$msg" | grep -qx 'Walnut-Gate: land' && base=HEAD^ ;; esac
+          case $msg in 'push gate: the files of '*) printf '%s\n' "$msg" | grep -qxE 'Walnut-Gate: (land|since)' && base=HEAD^ ;; esac
           specs=$(bash scripts/push-gate.sh --specs "$base" HEAD)
           echo "specs=$specs" >> "$GITHUB_OUTPUT"
           echo "browser specs: ${specs:-none}"
@@ -180,8 +188,10 @@ jobs:
       - run: bun run build && (cd web && bun x vite build)
         if: steps.specs.outputs.specs != ''
       # WebKit too: the *.webkit.spec.ts specs launch it themselves, as in ci.yml.
-      - run: bun x playwright install --with-deps chromium webkit
+      # apt can stall or crawl on a runner; the script bounds it (scripts/ci/install-browsers.sh).
+      - name: Install the browsers
         if: steps.specs.outputs.specs != ''
+        run: bash scripts/ci/install-browsers.sh chromium webkit
       - name: browser specs
         id: tests
         if: steps.specs.outputs.specs != ''
@@ -202,9 +212,54 @@ jobs:
           CONTEXT: walnut/push-gate (browser specs)
         run: bash scripts/push-gate-status.sh "$RUNNER_TEMP/out.txt"
 
+  # The iOS app's build, when the commit touches ios-native/ (the plan's `ios`): build-for-testing,
+  # so the test targets compile too, with no simulator and no signing. ci.yml runs its tests after
+  # the push; this keeps a commit that does not compile off main.
+  ios:
+    name: Gate (iOS build)
+    needs: plan
+    if: ${{ needs.plan.outputs.ios == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.GATE_SHA }}
+      - name: XcodeGen
+        run: command -v xcodegen >/dev/null || brew install xcodegen
+      - name: iOS build
+        id: tests
+        continue-on-error: true
+        shell: bash
+        working-directory: ios-native
+        run: |
+          set -o pipefail
+          xcodegen generate || { echo 'the iOS app failed to build: xcodegen could not generate the project' | tee "$RUNNER_TEMP/out.txt"; exit 1; }
+          rc=0
+          xcodebuild build-for-testing -project Walnut.xcodeproj -scheme Walnut \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO > "$RUNNER_TEMP/build.txt" 2>&1 || rc=$?
+          # The compiler's errors, not 20,000 lines of build log: the status names the first one.
+          # GitHub runs this under bash -e and pipefail: a build with no error line, or one with so
+          # many that a cut closes the pipe early, must not end the step before the verdict below.
+          { grep -aE ': error: ' "$RUNNER_TEMP/build.txt" || true; } | sort -u | sed -n '1,40p' | tee "$RUNNER_TEMP/out.txt"
+          tail -5 "$RUNNER_TEMP/build.txt"
+          if [ $rc != 0 ]; then
+            e=$({ grep -a -m1 -E ': error: ' "$RUNNER_TEMP/build.txt" || true; } | sed -E 's#^.*/ios-native/##')
+            echo "the iOS app failed to build: ${e:-xcodebuild exited $rc}" | tee -a "$RUNNER_TEMP/out.txt"
+            exit 1
+          fi
+      - name: Status
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.tests.outcome }}
+          CONTEXT: walnut/push-gate (iOS build)
+        run: bash scripts/push-gate-status.sh "$RUNNER_TEMP/out.txt"
+
   verdict:
     name: Gate verdict
-    needs: [plan, test, browser]
+    needs: [plan, test, browser, ios]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -215,6 +270,7 @@ jobs:
       - name: Verdict
         env:
           GH_TOKEN: ${{ github.token }}
-          NEEDS: ${{ needs.plan.result }} ${{ needs.test.result }} ${{ needs.browser.result }}
+          # The iOS build is skipped when the commit leaves ios-native/ alone: that is no failure.
+          NEEDS: ${{ needs.plan.result }} ${{ needs.test.result }} ${{ needs.browser.result }} ${{ needs.ios.result == 'skipped' && 'success' || needs.ios.result }}
           GATE_TIERS: ${{ needs.plan.outputs.tiers }}
         run: bash scripts/push-gate-status.sh --verdict

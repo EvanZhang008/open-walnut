@@ -1,0 +1,204 @@
+name: Nightly extra tests
+
+# The tests CI's jobs do not run, every night: each needs a fixture of its own
+# (a real replica, a host server alone, a cloud box, a real daemon, the built SPA),
+# an environment its fixture server reads at boot, a Mac, or a real install. Until
+# 2026-11-09 nothing ran them, and several had rotted unseen (a fixture that built
+# its daemon for one Mac, a stack test a month behind its stack).
+# tests/setup/test-file-coverage-guard.test.ts fails on a test file that neither CI
+# nor this workflow runs. Report only: not in CI OK, and nothing waits on it.
+
+on:
+  schedule:
+    - cron: '41 6 * * *'
+    # The real voice install downloads 1.6 GB: once a week is enough.
+    - cron: '17 8 * * 0'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/nightly-extra-tests.yml'
+
+concurrency:
+  group: nightly-extra-tests
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: 'true'
+  # The CUDA provider onnxruntime-node fetches by default is never used here.
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+jobs:
+  # Playwright specs with their own config and fixture server, and specs whose gate
+  # opens only with an environment the shared fixture cannot hold for every spec.
+  # One step each, on its own port; a failed step leaves the next ones running.
+  browser-own-fixtures:
+    name: Browser specs with their own fixture
+    if: github.event.schedule != '17 8 * * 0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      PW_IGNORE_LOAD: '1'
+    steps:
+      # A job's env cannot read the runner context (GitHub rejects the whole file),
+      # so the daemon dir under the runner's temp dir is set for later steps here.
+      - run: echo "WALNUT_DAEMON_DIR=$RUNNER_TEMP/open-walnut-browser" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
+      - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
+      # warm-session and unified-update-notice serve the built server and SPA.
+      - run: bun run build && (cd web && bun x vite build)
+      # apt can stall or crawl on a runner; the script bounds it (scripts/ci/install-browsers.sh).
+      - name: Install the browsers
+        run: bash scripts/ci/install-browsers.sh chromium
+      - name: Cloud host (a real replica beside the Mac)
+        if: ${{ !cancelled() }}
+        env: { PW_WORKERS: '1' }
+        run: bun x playwright test -c tests/e2e/browser/cloud-host.config.ts --project=chromium
+      - name: Cloud host, as the second Mac
+        if: ${{ !cancelled() }}
+        env: { PW_WORKERS: '1' }
+        run: bun x playwright test -c tests/e2e/browser/cloud-host-other-mac.config.ts --project=chromium
+      - name: Cloud host, the link going silent
+        if: ${{ !cancelled() }}
+        env: { PW_WORKERS: '1' }
+        run: bun x playwright test -c tests/e2e/browser/cloud-host-silent-link.config.ts --project=chromium
+      - name: Cloud host, the link cut and flapping
+        if: ${{ !cancelled() }}
+        env: { PW_WORKERS: '1' }
+        run: bun x playwright test -c tests/e2e/browser/cloud-host-link-down.config.ts --project=chromium
+      - name: Host server alone
+        if: ${{ !cancelled() }}
+        env: { PW_WORKERS: '1' }
+        run: bun x playwright test -c tests/e2e/browser/host-alone.config.ts --project=chromium
+      - name: Host replica while the Mac sleeps
+        if: ${{ !cancelled() }}
+        env: { REPLICA_APP: built }
+        run: bun x playwright test -c tests/e2e/browser/replica.config.ts --project=chromium-desktop
+      - name: Session commit (a real daemon and git repo)
+        if: ${{ !cancelled() }}
+        run: bun x playwright test -c tests/e2e/browser/session-commit.config.ts --project=chromium
+      - name: Upload through a daemon swap (a real daemon replaced mid-upload)
+        if: ${{ !cancelled() }}
+        run: bun x playwright test -c tests/e2e/browser/daemon-swap-upload.config.ts --project=chromium
+      - name: Warm session (the built server and SPA)
+        if: ${{ !cancelled() }}
+        run: bun x playwright test -c tests/e2e/browser/warm-session.config.ts --project=chromium
+      - name: Changed tab compare (PW_COMPARE_FIXTURE)
+        if: ${{ !cancelled() }}
+        env: { PW_COMPARE_FIXTURE: '1', PW_TEST_PORT: '3531' }
+        run: bun x playwright test tests/e2e/browser/diff-compare.spec.ts --project=chromium
+      - name: Task workspaces (PW_WORKSPACE_FIXTURE)
+        if: ${{ !cancelled() }}
+        env: { PW_WORKSPACE_FIXTURE: '1', PW_TEST_PORT: '3515' }
+        run: bun x playwright test tests/e2e/browser/task-workspaces.spec.ts --project=chromium
+      - name: Update notice on the built SPA (PW_BUILT_SPA)
+        if: ${{ !cancelled() }}
+        env: { PW_BUILT_SPA: '1', PW_TEST_PORT: '3532' }
+        run: WALNUT_WEB_STATIC_DIR="$PWD/dist/web/static" bun x playwright test tests/e2e/browser/unified-update-notice.spec.ts --project=chromium
+      - name: Walnut's own /compact notice (MOCK_CONTEXT_FULL_AT)
+        if: ${{ !cancelled() }}
+        env: { MOCK_CONTEXT_FULL_AT: '177000', MOCK_CONTEXT_WINDOW: '200000', PW_TEST_PORT: '3533' }
+        run: bun x playwright test tests/e2e/browser/walnut-command-notice.spec.ts --project=chromium
+      - name: Idle compaction row (WALNUT_IDLE_COMPACT_LEAD_MS)
+        if: ${{ !cancelled() }}
+        env: { WALNUT_IDLE_COMPACT_LEAD_MS: '3580000', MOCK_CONTEXT_WINDOW: '450000', PW_TEST_PORT: '3534' }
+        run: bun x playwright test tests/e2e/browser/compact-context.spec.ts --project=chromium
+      - name: Upload the traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-browser-own-fixtures
+          path: test-results/
+          if-no-files-found: ignore
+
+  # The Mac app's window tests: they build the whole app shell with AppKit and WebKit,
+  # so they run on a Mac (scripts/test-desktop.sh covers its Foundation-only parts in CI).
+  desktop-windows:
+    name: Mac app windows (update, pop-out)
+    if: github.event.schedule != '17 8 * * 0'
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
+      - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
+      - name: Update windows
+        if: ${{ !cancelled() }}
+        run: bash scripts/test-desktop-update-windows.sh
+      # Starts the browser suite's fixture server (temp data, mock CLI) and a session.
+      - name: Pop-out windows
+        if: ${{ !cancelled() }}
+        env:
+          WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-popout
+        run: bash scripts/test-desktop-popout.sh
+
+  # The Whisper one-button setup for real: Homebrew installs whisper-cpp and the model
+  # downloads (1.6 GB), so it runs on Sundays only, or when started by hand (never on a push of this
+  # file). A runner is a machine without either, as the spec needs.
+  stt-real-install:
+    name: Voice setup, real install (weekly)
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 8 * * 0'
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
+      - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
+      - run: bun run build && (cd web && bun x vite build)
+      - run: bun x playwright install chromium
+      - name: Whisper Set up (WALNUT_STT_REAL_INSTALL)
+        env:
+          PW_IGNORE_LOAD: '1'
+          WALNUT_STT_REAL_INSTALL: '1'
+          # The fixture is an isolated server, where voice is off unless asked
+          # (src/core/stt/voice-here.ts): without this the installed engine never reads ready.
+          WALNUT_STT_AUTO_SETUP: '1'
+          WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-stt
+        run: bun x playwright test tests/e2e/browser/stt-install.spec.ts --project=chromium
+      - name: Upload the traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-stt-real-install
+          path: test-results/
+          if-no-files-found: ignore

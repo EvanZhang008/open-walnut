@@ -18,6 +18,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# CI_RUNNER_SHARE: the repository runs 20 jobs at a time, and the push gate (push-gate.yml) runs
+# on the same runners before every land writes main, so its wait is how long a ready land takes to
+# go live. A push's run here is after the fact (the gate already ran its quick and frontend tiers
+# and touched browser specs on that commit), so its long matrices take a few runners each, not all
+# (2026-11-09: two runs held 12 to 17 of the 20 for 80 to 90 minutes, gate jobs fell to 3 to 8
+# with 20 to 45 queued, and lands went live at 3 an hour). A pull request runs at full width.
+# tests/scripts/ci-runner-share.test.ts keeps every long matrix capped.
+
 # Runner images are pinned (ubuntu-24.04, macos-26), here and in release.yml and
 # flake-hunt.yml: a `-latest` label moves to a new OS on GitHub's date (ubuntu
 # to 26.04 from 2026-10-19), which would turn CI red without a commit. Moving to
@@ -57,6 +65,9 @@ jobs:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - run: bun run lint
       - run: bun run build
+      # The cloud companion's CDK stack (infra/), synthesized offline: its own
+      # dependencies (aws-cdk-lib), so its own install, about 20 s in all.
+      - run: bun run test:infra
 
   # The parts of the pipeline that need Node, all blocking (CI OK needs this
   # job). The Playwright runner: it loads every spec before it runs one, so a
@@ -76,6 +87,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
+      # On a push to main, at most 2 legs at a time (CI_RUNNER_SHARE above).
+      max-parallel: ${{ github.event_name == 'push' && 2 || 32 }}
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
@@ -132,6 +145,8 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build
     strategy:
+      # On a push to main, at most 3 legs at a time (CI_RUNNER_SHARE above).
+      max-parallel: ${{ github.event_name == 'push' && 3 || 32 }}
       fail-fast: false
       matrix:
         include:
@@ -234,6 +249,8 @@ jobs:
     needs: build
     timeout-minutes: 40
     strategy:
+      # On a push to main, at most 2 legs at a time (CI_RUNNER_SHARE above).
+      max-parallel: ${{ github.event_name == 'push' && 2 || 32 }}
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6]
@@ -769,6 +786,8 @@ jobs:
     needs: build
     timeout-minutes: 60
     strategy:
+      # On a push to main, at most 4 legs at a time (CI_RUNNER_SHARE above).
+      max-parallel: ${{ github.event_name == 'push' && 4 || 32 }}
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
@@ -797,7 +816,9 @@ jobs:
       - run: bun run build && (cd web && bun x vite build)
       # WebKit too: the *.webkit.spec.ts specs launch it themselves (the Mac app
       # is WebKit), and without it each one failed at launch (98 tests, 2026-10-23).
-      - run: bun x playwright install --with-deps chromium webkit
+      # apt can stall or crawl on a runner; the script bounds it (scripts/ci/install-browsers.sh).
+      - name: Install the browsers
+        run: bash scripts/ci/install-browsers.sh chromium webkit
       - name: browser tests
         id: report
         continue-on-error: true
@@ -892,19 +913,34 @@ jobs:
   # the next day: it failed twice in its first day, once on two test races (fixed),
   # once with failure text no one without a login could read. It goes back once each
   # failure names its test as an annotation (The failed tests) and it has five green
-  # runs in a row. The UI leg may fail without failing the run (continue-on-error).
+  # runs in a row. The UI legs may fail without failing the run (continue-on-error).
   # WalnutUITests runs through ios-native/tests/ui/run-ui-tests.sh, the only way its
   # pairing reaches the XCUITest runner (ios-native/README.md), at its offline
   # default: a dead loopback port, no server and nobody's data.
+  # The UI layer runs in shards, each its own runner with its own simulator and build: one
+  # leg reached 38 of its tests in its 50 minute step (run 42735468568; about 61 minutes of
+  # tests, after 12 minutes of boot and build). ios-native/tests/ui/ci-shard.py deals every
+  # UI class with tests that IOS_CI_SKIP_UI does not leave out to a shard, weighed by the
+  # time CI measured (ios-native/tests/ui/ci-shard-times.tsv), so a new class needs no list.
+  # Four shards of about 18 minutes of tests each: the third of three ran out of its 45 minute
+  # step (run 42831643140: 12 to 15 minutes of build and boot before the first test, then
+  # 30 minutes of tests). macOS runners are scarce (five at a time, shared with the
+  # rehearsals), so on a push the job holds two, as it did with one UI leg.
   ios:
-    name: iOS app (${{ matrix.layer }})
+    name: iOS app (${{ matrix.layer }}${{ matrix.shard && format(' {0}/{1}', matrix.shard, matrix.shards) || '' }})
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 55
     continue-on-error: ${{ matrix.layer == 'ui' }}
     strategy:
       fail-fast: false
+      max-parallel: ${{ github.event_name == 'push' && 2 || 5 }}
       matrix:
-        layer: [unit, ui]
+        include:
+          - layer: unit
+          - { layer: ui, shard: 1, shards: 4 }
+          - { layer: ui, shard: 2, shards: 4 }
+          - { layer: ui, shard: 3, shards: 4 }
+          - { layer: ui, shard: 4, shards: 4 }
     # What this job leaves to the Mac (tests/scripts/ci-ios.test.ts keeps both lists whole):
     # the wall-clock budgets of the perf gates (a whole class, or the timed methods of
     # one whose other tests count work), which a shared runner misses by up to
@@ -933,6 +969,13 @@ jobs:
         -skip-testing:WalnutUITests/PeerMessageUITests
         -skip-testing:WalnutUITests/SessionStopSteerUITests
         -skip-testing:WalnutUITests/TalkRealServerUITests
+        -skip-testing:WalnutUITests/TalkShortcutUITests
+        -skip-testing:WalnutUITests/TaskAnchorTapUITests
+        -skip-testing:WalnutUITests/ThreadPushLiveUITests
+        -skip-testing:WalnutUITests/ThreadPushReviewUITests
+        -skip-testing:WalnutUITests/ThreadPushSolReviewUITests
+        -skip-testing:WalnutUITests/ThreadPushStatesUITests
+        -skip-testing:WalnutUITests/ThreadPushUITestCase
         -skip-testing:WalnutUITests/VoiceHistoryUITests
         -skip-testing:WalnutUITests/VoiceQuickActionUITests
         -skip-testing:WalnutUITests/WorkCardUITests
@@ -977,18 +1020,23 @@ jobs:
             -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -derivedDataPath "$RUNNER_TEMP/dd" -resultBundlePath "$RUNNER_TEMP/ios-unit.xcresult" \
             -only-testing:WalnutTests $IOS_CI_SKIP_UNIT
-      # Its own limit, under the job's 60: a job that runs out of time is cancelled, and a
+      # Its own limit, under the job's 55: a job that runs out of time is cancelled, and a
       # cancelled job runs no failure() step, so a hang would keep no evidence. A step that
-      # runs out fails, and the steps below still run (the leg took about 36 minutes; this
-      # limit plus the evidence step's stays 5 minutes under the job's).
+      # runs out fails, and the steps below still run (a shard builds for about 8 minutes,
+      # then runs about 20 of tests; this limit plus the evidence step's stays 5 minutes
+      # under the job's). The shard's classes are named, never the whole target: a shard
+      # with none fails here rather than run every class.
       - name: UI tests (WalnutUITests, offline pairing)
         if: matrix.layer == 'ui'
-        timeout-minutes: 50
+        timeout-minutes: 45
         shell: bash
         run: |
+          only=$(python3 ios-native/tests/ui/ci-shard.py ${{ matrix.shard }} ${{ matrix.shards }} $IOS_CI_SKIP_UI) || exit 1
+          echo "UI shard ${{ matrix.shard }} of ${{ matrix.shards }} runs:"
+          echo "$only"
           WALNUT_UITEST_UDID="$SIM_UDID" WALNUT_UITEST_DD="$RUNNER_TEMP/dd" \
             WALNUT_UITEST_RESULT_BUNDLE="$RUNNER_TEMP/ios-ui.xcresult" \
-            bash ios-native/tests/ui/run-ui-tests.sh -only-testing:WalnutUITests $IOS_CI_SKIP_UI
+            bash ios-native/tests/ui/run-ui-tests.sh $only $IOS_CI_SKIP_UI
       # The result bundle stays on the runner, never an artifact: a public repo's artifacts
       # are anyone's to download, and the 130 MB bundle (build logs, the runner's
       # environment) failed the leak audit on 2026-10-31.
@@ -1018,7 +1066,7 @@ jobs:
         if: failure() && matrix.layer == 'ui' && fromJSON(steps.evidence.outputs.kept || '0') > 0
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ui-failure-evidence-attempt-${{ github.run_attempt }}
+          name: ios-ui-failure-evidence-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ios-ui-evidence
           if-no-files-found: ignore
           retention-days: 7
