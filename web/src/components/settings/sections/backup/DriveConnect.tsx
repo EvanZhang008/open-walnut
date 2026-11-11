@@ -263,6 +263,8 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
         ) : (
           <SettingsButton variant="primary" onClick={connect} busy={busy} busyLabel="Opening..."
             disabled={(needsOwnClient && !hasOwnClient) || halfClient}
+            title={halfClient ? 'Fill in both the client ID and the client secret, or neither.'
+              : needsOwnClient && !hasOwnClient ? 'Fill in your own Google client ID and secret first.' : undefined}
             data-testid="backup-gdrive-connect">
             Connect Google Drive
           </SettingsButton>
@@ -280,7 +282,8 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
               <span className="settings-inline-pair">
                 <input id="backup-gdrive-paste" type="text" data-no-draft="autosave" className="settings-input"
                   value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="http://127.0.0.1..." />
-                <SettingsButton onClick={finish} busy={finishing} busyLabel="Finishing..." disabled={!pasted.trim()} data-testid="backup-gdrive-finish">
+                <SettingsButton onClick={finish} busy={finishing} busyLabel="Finishing..." disabled={!pasted.trim()}
+                  title={pasted.trim() ? undefined : 'Paste the address it ended on first.'} data-testid="backup-gdrive-finish">
                   Finish
                 </SettingsButton>
               </span>

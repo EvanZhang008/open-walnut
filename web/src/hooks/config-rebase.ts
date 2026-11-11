@@ -50,3 +50,48 @@ function rebaseValue(next: unknown, was: unknown, now: unknown): unknown {
   }
   return merged;
 }
+
+/**
+ * This page's own writes, so a save is measured against what the user saw
+ * after them and not only against the last config painted.
+ *
+ * Two saves in a row (a switch turned off, then on again before the first
+ * save's refresh came back) used to lose the second: it was diffed against the
+ * painted config, which still showed the switch on, so "on" read as no change
+ * and the server's "off" from the first save was kept (2026-11-11, the Backup
+ * switch on a slow runner). Each landed write gets a number; a painted config
+ * carries the number of the last write it reflects; a save replays what each
+ * newer write CHANGED (its partial against the base it was measured on) over
+ * its base before it diffs. Only the change, never the whole payload sent: that
+ * also carries sibling fields read from the server, and replaying those would
+ * make a section's stale copy of another writer's field look like an edit.
+ */
+export class OwnWrites {
+  private seq = 0;
+  private writes: { seq: number; partial: Partial<Config>; base: Config }[] = [];
+
+  /** The write count now: a read issued now reflects every write up to it. */
+  mark(): number {
+    return this.seq;
+  }
+
+  /** A save of `partial`, measured against `base`, landed on the server. */
+  wrote(partial: Partial<Config>, base: Config): void {
+    this.writes.push({ seq: ++this.seq, partial, base });
+    // A queued save holds a base a few writes old at most; keep a margin, never an unbounded list.
+    if (this.writes.length > 50) this.writes.splice(0, this.writes.length - 50);
+  }
+
+  /** `base` (painted at `baseMark`) with what this page's later writes changed laid over it. */
+  seen(base: Config, baseMark: number): Config {
+    let out = base;
+    for (const w of this.writes) {
+      if (w.seq <= baseMark) continue;
+      const changed = rebaseOnto(w.partial, w.base, out) as Obj;
+      const next: Obj = { ...(out as unknown as Obj) };
+      for (const [k, v] of Object.entries(changed)) if (v !== undefined) next[k] = v;
+      out = next as unknown as Config;
+    }
+    return out;
+  }
+}

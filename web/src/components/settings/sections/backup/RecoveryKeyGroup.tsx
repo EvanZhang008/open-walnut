@@ -160,6 +160,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
               className="settings-input settings-input--mono backup-key-input" value={typed} onChange={(e) => { setTyped(e.target.value); setError(null) }}
               placeholder="WB1-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXX" />
             <SettingsButton variant="primary" onClick={useTypedKey} busy={checking} busyLabel="Checking..." disabled={!typed.trim()}
+              title={typed.trim() ? undefined : 'Type or paste the recovery key first.'}
               data-testid="backup-key-use">
               Use this key
             </SettingsButton>
@@ -219,7 +220,8 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
                 : 'Show, copy or download it first, then keep it in a password manager or on paper: a new computer needs it to restore.'}
               data-testid="backup-key-unsaved"
               control={
-                <SettingsButton variant={firstSetup ? 'primary' : undefined} disabled={!seen} onClick={() => { setShown(false); onMarkSaved(firstSetup) }} data-testid="backup-key-saved">
+                <SettingsButton variant={firstSetup ? 'primary' : undefined} disabled={!seen}
+                  title={seen ? undefined : 'Show, copy or download the key first.'} onClick={() => { setShown(false); onMarkSaved(firstSetup) }} data-testid="backup-key-saved">
                   {firstSetup ? 'I saved it, turn on backups' : 'I saved it'}
                 </SettingsButton>
               }

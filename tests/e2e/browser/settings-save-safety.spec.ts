@@ -135,8 +135,9 @@ test('clearing a remote host alias to retype it renames the host, never deletes 
 })
 
 test('S3 Backup fields can be filled in while scheduled backups are off', async ({ page }) => {
+  // The older S3 copy (a bucket already set) keeps its own form; a new setup picks a service instead.
   const server = await mockConfigServer(page, (cfg) => {
-    cfg.backup = { enabled: false, bucket: '', region: 'us-west-2', prefix: 'walnut' }
+    cfg.backup = { enabled: false, bucket: 'old-walnut-backup', region: 'us-west-2', prefix: 'walnut' }
   })
   await openSettings(page)
   await clickNav(page, 'backup')
@@ -146,6 +147,9 @@ test('S3 Backup fields can be filled in while scheduled backups are off', async 
   expect((server.state().backup as Cfg).enabled).toBe(false)
   await expect(page.getByRole('button', { name: 'Test connection' })).toBeEnabled()
 
+  // How often is chosen once backups are on.
+  await page.locator('#backup-enabled').click()
+  await expect.poll(() => (server.state().backup as Cfg).enabled, { timeout: 10_000 }).toBe(true)
   // The interval field can be emptied and retyped without snapping back.
   const every = page.locator('#backup-interval')
   await every.fill('')

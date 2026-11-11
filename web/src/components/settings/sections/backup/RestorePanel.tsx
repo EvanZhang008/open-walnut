@@ -260,6 +260,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
         data-testid="backup-restore-row"
         control={
           <SettingsButton onClick={items ? () => setItems(null) : () => void open()} busy={loading} busyLabel="Loading..." disabled={blocked && !items}
+            title={blocked && !items ? (blockedWhy ?? 'Set up where backups go first.') : undefined}
             data-testid="backup-restore-open">
             {items ? 'Close' : 'Choose a backup'}
           </SettingsButton>
@@ -313,7 +314,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
               className="settings-input settings-input--mono" aria-label="Restore into folder"
               value={target} onChange={(e) => { setTarget(e.target.value); setStartError(null) }}
               placeholder={suggested ?? 'Optional'} />
-            <SettingsButton variant="primary" onClick={start} busy={starting} busyLabel="Starting..." disabled={!picked} data-testid="backup-restore-start">
+            <SettingsButton variant="primary" onClick={start} busy={starting} busyLabel="Starting..." disabled={!picked}
+              title={picked ? undefined : 'Pick a backup first.'} data-testid="backup-restore-start">
               Restore
             </SettingsButton>
           </div>

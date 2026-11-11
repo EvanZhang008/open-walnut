@@ -135,6 +135,16 @@ test('F27 N03 F31 F33 F36: number fields end on the content edge, no-op bulk lin
 
 test('F17 F18 F28: plugin slots line up, install rows stack', async ({ page }) => {
   await recordWrites(page)
+  // Bucket versioning matters to the older S3 copy (a bucket set, files sent as they are), so the warning is its (read when
+  // Settings opens, so routed before it).
+  await page.route('**/api/config', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const res = await route.fetch()
+    const json = await res.json()
+    const cfg = json.config ?? json
+    cfg.backup = { enabled: false, bucket: 'example-bucket', region: 'us-west-2', prefix: 'walnut' }
+    return route.fulfill({ response: res, json })
+  })
   await openSettings(page)
   // Plugins live on the Apps page, which the side bar opens; Settings has no row for it.
   await openApps(page, 20_000)
@@ -223,7 +233,8 @@ test('F01: Recent guesses are one row per guess, never drawn over each other', a
 })
 
 test('S3 Backup: text typed while another field saves is not wiped by the refresh', async ({ page }) => {
-  let backup: Record<string, unknown> = { enabled: false, bucket: '', region: 'us-west-2', prefix: 'walnut' }
+  // The older S3 copy (a bucket already set) keeps its own form, saved as it is typed.
+  let backup: Record<string, unknown> = { enabled: false, bucket: 'old-bucket', region: 'us-west-2', prefix: 'walnut' }
   let puts = 0
   let release: () => void = () => {}
   const held = new Promise<void>((r) => { release = r })
@@ -247,7 +258,7 @@ test('S3 Backup: text typed while another field saves is not wiped by the refres
   await page.locator('#backup-enabled').click()
   await expect.poll(() => puts, { timeout: 10_000 }).toBe(1)
   await page.locator('#backup-bucket').fill('example-bucket')
-  release() // the switch's save lands now: its refresh carries bucket '' from before the typing
+  release() // the switch's save lands now: its refresh carries the bucket from before the typing
   await page.waitForTimeout(2500)
   await expect(page.locator('#backup-bucket')).toHaveValue('example-bucket')
   await page.unrouteAll({ behavior: 'ignoreErrors' })

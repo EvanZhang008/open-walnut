@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Config } from '../../src/core/types'
-import { rebaseOnto } from '../../web/src/hooks/config-rebase'
+import { OwnWrites, rebaseOnto } from '../../web/src/hooks/config-rebase'
 
 const cfg = (c: Record<string, unknown>) => c as unknown as Config
 
@@ -79,5 +79,61 @@ describe('rebaseOnto', () => {
     const fresh = cfg({ agent: { language: 'en' }, defaults: { engine: 'codex' } })
     const out = rebaseOnto({ agent: { language: 'ja' } } as Partial<Config>, base, fresh)
     expect(out).toEqual({ agent: { language: 'ja' } })
+  })
+})
+
+describe('OwnWrites: a save measured against what the user saw after this page\'s own writes', () => {
+  // The 2026-11-11 Backup switch: on (painted), off (saved, refresh not back yet), on again.
+  const painted = cfg({ backup: { enabled: true, interval_hours: 24 } })
+  const off = { backup: { enabled: false, interval_hours: 24 } } as Partial<Config>
+  const on = { backup: { enabled: true, interval_hours: 24 } } as Partial<Config>
+  const server = cfg({ backup: { enabled: false, interval_hours: 24 } })
+
+  it('measured against the painted config alone, turning it back on is lost (the bug this guards)', () => {
+    expect(rebaseOnto(on, painted, server)).toEqual({ backup: { enabled: false, interval_hours: 24 } })
+  })
+
+  it('a second save before the first one\'s refresh keeps what the user picked last', () => {
+    const own = new OwnWrites()
+    const baseMark = own.mark()
+    own.wrote(off, painted)
+    expect(rebaseOnto(on, own.seen(painted, baseMark), server)).toEqual({ backup: { enabled: true, interval_hours: 24 } })
+  })
+
+  it('replays only what a write changed: another writer\'s field it carried along is not made an edit', () => {
+    // An agent set interval_hours to 12 after the page painted 24; the first save carried 12 from the server.
+    const agentServer = cfg({ backup: { enabled: true, interval_hours: 12 } })
+    const own = new OwnWrites()
+    const baseMark = own.mark()
+    const sentA = rebaseOnto(off, painted, agentServer)
+    expect(sentA).toEqual({ backup: { enabled: false, interval_hours: 12 } })
+    own.wrote(off, painted)
+    // The second save still holds the painted 24: only the switch is the user's edit.
+    const afterA = cfg({ backup: { enabled: false, interval_hours: 12 } })
+    expect(rebaseOnto(on, own.seen(painted, baseMark), afterA)).toEqual({ backup: { enabled: true, interval_hours: 12 } })
+  })
+
+  it('a config painted after a write is not given that write again', () => {
+    const own = new OwnWrites()
+    own.wrote(off, painted)
+    const repainted = cfg({ backup: { enabled: false, interval_hours: 24 } })
+    expect(own.seen(repainted, own.mark())).toBe(repainted)
+  })
+
+  it('a key a write left undefined is not laid over the base', () => {
+    const own = new OwnWrites()
+    const base = cfg({ backup: { enabled: true }, agent: { language: 'en' } })
+    const mark = own.mark()
+    own.wrote({ agent: undefined } as unknown as Partial<Config>, base)
+    expect(own.seen(base, mark)).toEqual({ backup: { enabled: true }, agent: { language: 'en' } })
+  })
+
+  it('keeps a bounded list of writes', () => {
+    const own = new OwnWrites()
+    const base = cfg({ backup: { enabled: true, interval_hours: 0 } })
+    for (let i = 0; i < 200; i++) own.wrote({ backup: { enabled: true, interval_hours: i } } as Partial<Config>, base)
+    const seen = own.seen(base, own.mark() - 1) as unknown as { backup: { interval_hours: number } }
+    expect(seen.backup.interval_hours).toBe(199)
+    expect((own as unknown as { writes: unknown[] }).writes.length).toBeLessThanOrEqual(50)
   })
 })

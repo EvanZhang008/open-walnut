@@ -283,35 +283,34 @@ async function expectDimmed(page: Page, selector: string) {
 
 test('C51 C79: S3 Backup can be filled in and tested before it is switched on; Test connection keeps its box', async ({ page }) => {
   await mockCalendar(page)
-  await mockConfig(page, (cfg) => { cfg.backup = { enabled: false, bucket: '', region: 'us-west-2', prefix: 'walnut' } })
+  await mockConfig(page, (cfg) => { cfg.backup = { enabled: false } })
   await openSettings(page)
 
-  // S3 Backup: master first; Destination and Credentials stay usable while off,
+  // Backup: where backups go comes first and stays usable while backups are off,
   // so a bucket can be set up and tested before any scheduled run is armed.
   await clickNav(page, 'backup')
-  const firstRow = page.locator('#backup .settings-row').first()
-  await expect(firstRow).toContainText('Scheduled backups')
+  await expect(page.locator('#backup .settings-group-block').first()).toContainText('Where backups go')
   await expect(page.locator('#backup-enabled')).toHaveAttribute('aria-checked', 'false')
-  for (const heading of ['Destination', 'Credentials']) {
-    await expect(page.locator(`#backup .settings-group-block:has(.settings-group-title:text-is("${heading}"))`)).not.toHaveAttribute('aria-disabled', 'true')
-  }
-  await expect(page.locator('#backup-bucket')).toBeEditable()
+  await page.getByTestId('backup-service-s3').click()
+  await expect(page.locator('#backup-s3-bucket')).toBeEditable()
   await shot(page, 'backup-off')
-  await page.locator('#backup-enabled').click()
-  await expect(page.locator('#backup-enabled')).toHaveAttribute('aria-checked', 'true')
-  await expect(page.locator('#backup .settings-group-block:has(.settings-group-title:text-is("Destination"))')).not.toHaveAttribute('aria-disabled', 'true')
-  await expect(page.locator('#backup-bucket')).toBeEditable()
 
-  // C79: Test connection turns into Testing... in the same box, and the row's
+  // C79: the test button turns into Testing... in the same box, and the row's
   // label does not move.
-  await page.route('**/api/backup/test', async (route) => {
+  await page.route('**/api/backup/destination/test', async (route) => {
     await new Promise((r) => setTimeout(r, 800))
     return json(route, { ok: false, error: 'bucket not found' })
   })
-  await page.locator('#backup-bucket').fill('example-bucket')
+  await page.locator('#backup-s3-bucket').fill('example-bucket')
+  // Fake, invented for this test: placeholder access keys, open nothing.
+  if (await page.locator('#backup-s3-access-key').isVisible()) {
+    await page.locator('#backup-s3-access-key').fill('FAKE-ACCESS-KEY-ID')
+    await page.locator('#backup-s3-secret').fill('example-secret-not-real')
+  }
   const testBtn = page.getByTestId('backup-test-connection')
   const connRow = page.getByTestId('backup-connection-row')
   const label = connRow.locator('.settings-row-label')
+  const idle = (await testBtn.textContent()) ?? ''
   const [btnBefore, labelBefore] = [await testBtn.boundingBox(), await label.boundingBox()]
   await testBtn.click()
   await expect(testBtn).toHaveText('Testing...')
@@ -320,8 +319,9 @@ test('C51 C79: S3 Backup can be filled in and tested before it is switched on; T
   expect(Math.abs((btnDuring?.width ?? 0) - (btnBefore?.width ?? 0))).toBeLessThanOrEqual(1)
   expect(Math.abs((labelDuring?.x ?? 0) - (labelBefore?.x ?? 0))).toBeLessThanOrEqual(1)
   expect(Math.abs((labelDuring?.width ?? 0) - (labelBefore?.width ?? 0))).toBeLessThanOrEqual(1)
-  await expect(connRow).toContainText("Couldn't connect: bucket not found")
-  await expect(testBtn).toHaveText('Test connection')
+  await expect(page.getByTestId('backup-destination-group')).toContainText("Couldn't connect. bucket not found")
+  await expect(testBtn).toHaveText(idle)
+  await expect(page.locator('#backup-enabled')).toHaveAttribute('aria-checked', 'false')
 
   // Calendar: master off dims every account group but keeps it visible.
   await clickNav(page, 'calendar')

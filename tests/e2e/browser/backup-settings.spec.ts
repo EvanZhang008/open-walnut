@@ -12,20 +12,43 @@ import { test, expect, type Page } from '@playwright/test'
 // Fake, invented for this test: shaped like a recovery key, opens nothing.
 const KEY = 'WB1-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-FAKE0-00'
 
-async function holdConfigWrites(page: Page, initialBackup: Record<string, unknown>): Promise<{ last: () => Record<string, unknown> | null }> {
+async function holdConfigWrites(page: Page, initialBackup: Record<string, unknown>): Promise<{ last: () => Record<string, unknown> | null; holdRefreshAfterNextWrite: () => { reached: Promise<void>; release: () => void }; readsSinceWrite: () => number }> {
   let written: Record<string, unknown> | null = null
+  // A slow machine: the read after the next write answers with the config as it was asked, once released.
+  let armed = false
+  let holdNext = false
+  let held: Promise<void> | null = null
+  let reachedHold = () => {}
+  let readsSinceWrite = 0
   await page.route('**/api/config', async (route) => {
     if (route.request().method() === 'PUT') {
       const body = route.request().postDataJSON() as Record<string, unknown>
       written = { ...(written ?? {}), ...((body.config as Record<string, unknown> | undefined) ?? body) }
+      if (armed) { armed = false; holdNext = true }
+      readsSinceWrite = 0
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
     }
+    const asked = written
+    const wait = holdNext ? held : null
+    holdNext = false
     const res = await route.fetch()
     const data = await res.json() as { config: Record<string, unknown> }
-    data.config = { ...data.config, backup: initialBackup, ...(written ?? {}) }
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
+    data.config = { ...data.config, backup: initialBackup, ...((wait ? asked : written) ?? {}) }
+    if (wait) { reachedHold(); await wait }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) })
+    readsSinceWrite++
   })
-  return { last: () => written }
+  return {
+    last: () => written,
+    holdRefreshAfterNextWrite: () => {
+      let release = () => {}
+      held = new Promise<void>((r) => { release = r })
+      const reached = new Promise<void>((r) => { reachedHold = r })
+      armed = true
+      return { reached, release: () => release() }
+    },
+    readsSinceWrite: () => readsSinceWrite,
+  }
 }
 
 async function answer(page: Page, glob: string, body: unknown, status = 200): Promise<void> {
@@ -121,6 +144,20 @@ test.describe('Backup settings', () => {
     expect((config.last()?.backup as Record<string, unknown>).destination).toMatchObject({ type: 'r2', bucket: 'walnut-backup' })
     await section.locator('#backup-enabled').click()
     await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled, { timeout: 2000 }).toBe(true)
+    // On a slow machine: off, then on again before the first save's refresh is back. The last pick wins,
+    // on the server and on screen (the second save used to be read as "no change" and lost).
+    const hold = config.holdRefreshAfterNextWrite()
+    await section.locator('#backup-enabled').click()
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled).toBe(false)
+    await hold.reached
+    await section.locator('#backup-enabled').click()
+    await expect(section.locator('#backup-enabled')).toBeChecked()
+    hold.release()
+    await expect.poll(() => (config.last()?.backup as Record<string, unknown> | undefined)?.enabled).toBe(true)
+    // The second save's own refresh is the last read: once it is back the page rests on the user's last pick.
+    await expect.poll(() => config.readsSinceWrite()).toBeGreaterThan(0)
+    expect((config.last()?.backup as Record<string, unknown>).enabled).toBe(true)
+    await expect(section.locator('#backup-enabled')).toBeChecked()
 
     // Restore lists the backups, newest first and picked, and restores the one chosen.
     await expect(section.getByTestId('backup-run-now')).toBeEnabled()

@@ -586,7 +586,10 @@ export function BackupSection({ config, onSave }: Props) {
                 )}
                 <SettingsButton onClick={() => void handleTest(Boolean(testResult?.askOtherKey))} busy={testing} busyLabel="Testing..." data-testid="backup-test-connection"
                   variant={!legacyMode && !draftIsSaved && missing.length === 0 && !problem ? 'primary' : undefined}
-                  disabled={legacyMode ? !legacy.bucket?.trim() : missing.length > 0 || !!problem}>
+                  disabled={legacyMode ? !legacy.bucket?.trim() : missing.length > 0 || !!problem}
+                  // Disabled, it says why (the same words the row shows once something is typed).
+                  title={legacyMode ? (legacy.bucket?.trim() ? undefined : 'Fill in the bucket first.')
+                    : missing.length > 0 ? `Fill in ${missing.join(', ')} first.` : problem ?? undefined}>
                   {testResult?.askOtherKey ? 'Use this folder'
                     : legacyMode || draftIsSaved ? 'Test connection' : savedDest && savedDest.type !== type ? `Use ${labelOf(type)}` : 'Test and save'}
                 </SettingsButton>
@@ -625,10 +628,10 @@ export function BackupSection({ config, onSave }: Props) {
       <SettingsGroup
         heading="Backups"
         data-testid="backup-backups-group"
-        footer={
-          <>
-            Your whole data folder is backed up, except caches, search indexes, Git sync's history and health data.
-          </>
+        footer={legacyMode
+          // The older copy sends files as they are: credentials included, readable by whoever reads the bucket.
+          ? <>What gets backed up: everything in your data folder, credentials (<code>auth.json</code>) included, so use a bucket only you can access.</>
+          : <>Your whole data folder is backed up, except caches, search indexes, Git sync's history and health data.</>
         }
       >
         {/* The one place that says why nothing can run yet; the rows below are greyed with it. */}
@@ -702,6 +705,7 @@ export function BackupSection({ config, onSave }: Props) {
             </span>
           ) : (
             <SettingsButton onClick={handleRunNow} disabled={!!runBlocked || justDone} busy={status?.running === true || runStarting} busyLabel="Backing up..."
+              title={runBlocked ?? undefined}
               reserve={['Back up now', 'Backed up']} data-testid="backup-run-now">
               {justDone ? 'Backed up' : 'Back up now'}
             </SettingsButton>
