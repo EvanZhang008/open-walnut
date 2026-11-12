@@ -11959,6 +11959,12 @@ function cmdGetState(ws, id, cmd) {
       protection: deriveSessionProtection(session, sid, Date.now()),
       // C1: assembled on demand — the PULL half of snapshot flow.
       snapshot: assembleSessionSnapshot(session),
+      // Whether the CLI is between turns as this daemon sees it. Keep in sync with daemon-standalone.ts.
+      quiet: {
+        turnActive: !!(session.foldState && session.foldState.turnActive === true),
+        lineAwaitingAnswer: session.ttftSendTs != null,
+        promptOpen: !!session.pendingCtrl,
+      },
     });
   }
   if (cmd.memoryOnly === true) return sendOk(ws, id, { snapshotAvailable: false, cronSupervision });

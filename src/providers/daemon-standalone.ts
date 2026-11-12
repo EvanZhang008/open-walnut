@@ -10283,6 +10283,14 @@ function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
       protection: deriveSessionProtection(session, sid, Date.now()),
       // C1: assembled on demand — the PULL half of snapshot flow.
       snapshot: assembleSessionSnapshot(session),
+      // Whether the CLI is between turns as this daemon sees it, a line its own same-host delivery
+      // wrote included (ttftSendTs: set at each write, cleared at that turn's first text or end).
+      // The server's prompt respawn asks it right before its stop (sessions/prompt-refresh-respawn.ts).
+      quiet: {
+        turnActive: session.foldState?.turnActive === true,
+        lineAwaitingAnswer: session.ttftSendTs != null,
+        promptOpen: !!session.pendingCtrl,
+      },
     })
   }
   if (cmd.memoryOnly === true) return sendOk(ws, id, { snapshotAvailable: false, cronSupervision })

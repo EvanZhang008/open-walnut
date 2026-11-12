@@ -745,6 +745,7 @@ let companionJournalDueHandle: { stop: () => void } | null = null
 let companionCardsHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let idleCompactionHandle: { stop: () => void } | null = null
+let promptRefreshRespawnHandle: { stop: () => void } | null = null
 let contextFullRecoveryHandle: { stop: () => void } | null = null
 let endpointWaitHandle: { stop: () => void } | null = null
 let usageLimitWaitHandle: { stop: () => void } | null = null
@@ -2120,7 +2121,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (role() === 'leader') {
       const { startIdleCompaction } = await import('../core/sessions/idle-compaction.js')
       const { sessionRunner: idleRunner } = await import('../providers/claude-code-session.js')
-      idleCompactionHandle = startIdleCompaction(idleRunner)
+      const idle = startIdleCompaction(idleRunner)
+      idleCompactionHandle = idle
+      // After a compaction, a session whose stored prompt is far behind is respawned on its current
+      // prompt once it is quiet, when that costs less than restating it (src/core/sessions/prompt-refresh-respawn.ts).
+      const { startPromptRefreshRespawn } = await import('../core/sessions/prompt-refresh-respawn.js')
+      promptRefreshRespawnHandle = startPromptRefreshRespawn(idleRunner, (id) => idle.instance.armedFor(id) !== undefined)
       // A turn that ends with "Prompt is too long" gets its session compacted and its unanswered
       // messages resent (src/core/sessions/context-full-recovery.ts).
       const { startContextFullRecovery } = await import('../core/sessions/context-full-recovery.js')
@@ -7396,6 +7402,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (endpointWaitHandle) {
     endpointWaitHandle.stop()
     endpointWaitHandle = null
+  }
+  if (promptRefreshRespawnHandle) {
+    promptRefreshRespawnHandle.stop()
+    promptRefreshRespawnHandle = null
   }
   if (idleCompactionHandle) {
     idleCompactionHandle.stop()

@@ -3729,6 +3729,23 @@ export interface SessionRecord {
     compactsAt: number;
     source: 'auto-compact' | 'model';
   }>;
+  /** Walnut's last decision to move this session onto its current prompt after a compaction
+   *  (src/core/sessions/prompt-refresh-respawn.ts): one per compaction boundary, so a decision is
+   *  never tried twice on the same context. */
+  promptRefresh?: {
+    /** The compaction boundary it was decided after (`lastCompactUuid` then). */
+    compactUuid: string;
+    at: string;
+    /** respawned: it runs on the current prompt; current: its prompt lacked nothing; not-worth: the
+     *  rewrite costs more than the restatement would; failed: the respawn did not go through (the
+     *  next boundary tries again). */
+    outcome: 'respawned' | 'current' | 'not-worth' | 'failed';
+    /** Bytes of the default instructions the stored prompt lacked. */
+    debtBytes: number;
+    /** Context tokens the refresh writes again (0 when nothing read the context since the compaction). */
+    rewriteTokens?: number;
+    error?: string;
+  };
   /** Archived — hidden from UI but data preserved. */
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */

@@ -1301,6 +1301,22 @@ export class RemoteSessionManager implements SessionManager {
     }
   }
 
+  /**
+   * The daemon's own word that the CLI is between turns with nothing on its way: no turn open, no
+   * line written (by the server or the host's own same-host delivery) still waiting for its answer,
+   * no prompt open, nothing keeping it alive. False when it cannot say (an older daemon, no link).
+   */
+  async quietForRespawn(): Promise<boolean> {
+    if (!this._sid || !this.conn?.connected) return false
+    try {
+      const result = await this.conn.send('getState', { sid: this._sid, memoryOnly: true }, 5_000) as DaemonGetStateResult
+      const q = result.ok ? result.quiet : undefined
+      return !!q && result.alive === true && !q.turnActive && !q.lineAwaitingAnswer && !q.promptOpen && !result.protection?.source
+    } catch {
+      return false
+    }
+  }
+
   // ── Session Management ──
 
   renameForSession(sessionId: string): void {

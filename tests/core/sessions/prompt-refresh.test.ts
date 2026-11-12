@@ -23,7 +23,8 @@ import { addTask } from '../../../src/core/task-manager.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js'
 import { buildSessionContext } from '../../../src/core/sessions/session-context.js'
 import {
-  TASK_CONTEXT_JOIN, freshResumePrompt, promptDebtBytes, refreshOnResume, replayBuysNothing,
+  MIN_REFRESH_DEBT_BYTES, ORG_NODE_REFRESH_HORIZON, TASK_CONTEXT_JOIN, freshResumePrompt, nothingReadSinceCompaction,
+  promptDebtBytes, refreshHorizon, refreshOnResume, refreshPays, replayBuysNothing,
 } from '../../../src/core/sessions/prompt-refresh.js'
 import { instructionNoticeFor } from '../../../src/core/sessions/instruction-notice.js'
 
@@ -104,5 +105,76 @@ describe('the instruction notice', () => {
     const rec = (await getSessionByClaudeId(sid))!
     const cache = { ...expired, expiresAt: new Date(Date.now() - 1000).toISOString() }
     expect(instructionNoticeFor({ ...rec, promptCache: cache, process_status: 'stopped' } as typeof rec, task)).toContain('Walnut changed your default instructions')
+  })
+})
+
+describe('refreshPays (2026-11-11, the Walnut VP: about 33 KB restated after each compaction, 4 to 6 a day)', () => {
+  // The VP's own numbers: a 3,171-byte prompt from 2026-10-24, 33 KB behind, 192K tokens at the
+  // turn end after its 11-11 18:32 compaction, a 1-hour cache.
+  const vp = { debtBytes: 33_000, storedPromptBytes: 3_171, now: NOW }
+  const afterCompaction = { tokens: 192_036, ttlMs: 3_600_000, requestAt: at(-60_000), expiresAt: at(3_540_000) }
+
+  it('an org node right after its compaction: the rewrite pays back within its horizon; any other session: not', () => {
+    expect(refreshPays({ ...vp, facts: afterCompaction, horizon: ORG_NODE_REFRESH_HORIZON })).toBe(true)
+    expect(refreshPays({ ...vp, facts: afterCompaction, horizon: 1 })).toBe(false)
+  })
+
+  it('a big warm conversation (the VP\'s natural cold resumes came at 245K to 450K): replay', () => {
+    expect(refreshPays({ ...vp, facts: { ...afterCompaction, tokens: 300_000 }, horizon: ORG_NODE_REFRESH_HORIZON })).toBe(false)
+  })
+
+  it('nothing read since the compaction (Walnut\'s idle /compact): only the old prompt is written again, so even one compaction pays', () => {
+    const compacted = { tokens: 18_000, ttlMs: 3_600_000, requestAt: at(-5_000), expiresAt: at(3_595_000), compactedAt: at(-5_000) }
+    expect(nothingReadSinceCompaction(compacted)).toBe(true)
+    expect(refreshPays({ debtBytes: 9_000, storedPromptBytes: 2_000, facts: compacted, horizon: 1, now: NOW })).toBe(true)
+    // A request after it read the summary: that is a conversation to write again.
+    expect(nothingReadSinceCompaction({ ...compacted, requestAt: at(-1_000) })).toBe(false)
+  })
+
+  it('a small debt waits on a warm cache; an expired cache refreshes any debt; no debt or no facts never', () => {
+    const tiny = { tokens: 1_000, ttlMs: 3_600_000, requestAt: at(-5_000), expiresAt: at(3_595_000), compactedAt: at(-5_000) }
+    expect(refreshPays({ debtBytes: MIN_REFRESH_DEBT_BYTES - 1, storedPromptBytes: 100, facts: tiny, horizon: 30, now: NOW })).toBe(false)
+    expect(refreshPays({ debtBytes: 200, storedPromptBytes: 100, facts: expired, horizon: 1, now: NOW })).toBe(true)
+    expect(refreshPays({ debtBytes: 0, storedPromptBytes: 100, facts: expired, horizon: 30, now: NOW })).toBe(false)
+    expect(refreshPays({ ...vp, facts: undefined, horizon: 30 })).toBe(false)
+  })
+
+  it('a 5-minute cache writes at 1.25x, a 1-hour one at 2x: both sides scale, and the read the rewrite gives up weighs more at 1.25x', () => {
+    const fiveMin = { ...afterCompaction, ttlMs: 300_000, expiresAt: at(240_000) }
+    // 265K: (265K + 0.8K) x 1.15 = 306K <= 30 x 8.25K x 1.25 = 309K, while x 1.9 = 505K > 495K.
+    expect(refreshPays({ ...vp, facts: { ...fiveMin, tokens: 265_000 }, horizon: 30 })).toBe(true)
+    expect(refreshPays({ ...vp, facts: { ...afterCompaction, tokens: 265_000 }, horizon: 30 })).toBe(false)
+  })
+
+  it('every org node kind counts on the long horizon (fails when a new role is added without a horizon)', async () => {
+    const src = await fs.readFile(new URL('../../../src/core/types.ts', import.meta.url), 'utf8')
+    const roles = [...(src.match(/export type OrgRole = ([^;]+);/)?.[1] ?? '').matchAll(/'([a-z_-]+)'/g)].map((m) => m[1])
+    expect(roles.length).toBeGreaterThanOrEqual(3)
+    for (const org_role of roles) expect(refreshHorizon({ org_role }), org_role).toBe(ORG_NODE_REFRESH_HORIZON)
+    expect(refreshHorizon({})).toBe(1)
+  })
+
+  it('a warm cache right after a compaction refreshes an org node at its cold resume', async () => {
+    const { sid } = await seed(0.05)
+    const { getTask } = await import('../../../src/core/task-manager.js')
+    const rec = (await getSessionByClaudeId(sid))!
+    const task = (await getTask(rec.taskId!))!
+    expect(promptDebtBytes(rec, task)).toBeGreaterThanOrEqual(MIN_REFRESH_DEBT_BYTES)
+    const facts = { tokens: 60_000, ttlMs: 3_600_000, requestAt: at(-60_000), expiresAt: at(3_540_000) }
+    expect(refreshOnResume({ ...rec, promptCache: facts }, task, NOW)).toBe(false)
+    expect(refreshOnResume({ ...rec, promptCache: facts }, { ...task, org_role: 'lead' }, NOW)).toBe(true)
+    // The live runner's newer facts win over the record's.
+    expect(refreshOnResume({ ...rec, promptCache: facts }, { ...task, org_role: 'lead' }, NOW, { ...facts, tokens: 400_000 })).toBe(false)
+  })
+})
+
+describe('every resume spawn that replays a stored prompt asks for the current one (fails on a new spawn path that skips it)', () => {
+  it('each function that reads resolveResumeArgs passes its prompt through resumeSpawnPrompt', async () => {
+    const src = await fs.readFile(new URL('../../../src/providers/claude-code-session.ts', import.meta.url), 'utf8')
+    // Split into top-level class members by their two-space indent.
+    const members = src.split(/\n  (?=(?:private |async |public |static )*[A-Za-z_]+\s*\()/)
+    const readers = members.filter((m) => /await this\.resolveResumeArgs\(/.test(m))
+    expect(readers.length).toBeGreaterThanOrEqual(2)
+    for (const m of readers) expect(m, m.slice(0, 80)).toMatch(/this\.resumeSpawnPrompt\(/)
   })
 })

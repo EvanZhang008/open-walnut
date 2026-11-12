@@ -197,6 +197,10 @@ export interface DaemonGetStateResult extends DaemonCommandResult {
   taskState?: DaemonTaskState
   /** C1: assembled SessionSnapshot (absent from pre-snapshot daemons). */
   snapshot?: import('./daemon-fold.js').SessionSnapshot
+  /** Keep-alive verdict of the daemon's reaper (`source` set when something keeps the session alive). */
+  protection?: { source?: string | null }
+  /** Whether the CLI is between turns as the daemon sees it (absent from older daemons). */
+  quiet?: { turnActive: boolean; lineAwaitingAnswer: boolean; promptOpen: boolean }
 }
 
 export interface DaemonEvent {

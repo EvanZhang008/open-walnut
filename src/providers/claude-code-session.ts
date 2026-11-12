@@ -4789,6 +4789,14 @@ export class ClaudeCodeSession {
 
   /** The CLI is inside a turn whose result has not landed (the same test `send` uses for a line queued behind it). */
   get inTurn(): boolean { return this._processStatus === 'running' && !this._turnResultEmitted }
+  /** The host's daemon says the CLI is between turns with nothing on its way (RemoteSessionManager.quietForRespawn); false when it cannot say. */
+  quietForRespawn(): Promise<boolean> {
+    const t = this._transport as { quietForRespawn?: () => Promise<boolean> } | null | undefined
+    return t?.quietForRespawn ? t.quietForRespawn() : Promise.resolve(false)
+  }
+
+  /** Side questions and control requests sent to the CLI and not answered yet (a respawn would cut them). */
+  get controlRequestsPending(): number { return this._pendingSideQuestions.size + this._pendingControlAcks.size }
 
   /**
    * A system/init: the CLI says whether it reports its command queue. With the capability, the
@@ -11107,6 +11115,8 @@ export class SessionRunner {
   /** Explicit native restarts currently replacing a CLI transport. Hidden
    *  self-report requests use this barrier to retry once on the new process. */
   private nativeSessionReinitializations = new Map<string, Promise<void>>()
+  /** Sessions whose in-flight reinitialize is Walnut's own prompt respawn (respawnOnCurrentPrompt). */
+  private promptRespawns = new Set<string>()
   /** Sessions constructed by reattach but not yet published into acpSessions. */
   private acpAttachingSessions = new Set<AcpSession>()
   /** Fences async reattach work that completes after runner destruction. */
@@ -12146,6 +12156,11 @@ export class SessionRunner {
     return this.findSessionByClaudeId(claudeSessionId)?.outlivingWork
       ?? this.acpSessions.get(claudeSessionId)?.outlivingWork
       ?? []
+  }
+
+  /** Side questions and control requests the session's CLI has not answered yet; 0 when no runner holds it. */
+  controlRequestsPendingOf(claudeSessionId: string): number {
+    return this.findSessionByClaudeId(claudeSessionId)?.controlRequestsPending ?? 0
   }
 
   /** The model's turn is still running (no result yet); null when this server holds no runner for it. */
@@ -14662,10 +14677,11 @@ export class SessionRunner {
       const record = await getSessionByClaudeId(sessionId)
       if (!record || record.appliedAppendSystemPrompt !== stored) return stored
       const { freshResumePrompt } = await import('../core/sessions/prompt-refresh.js')
-      const fresh = await freshResumePrompt(record)
+      // The live runner's facts are newer than the record's (stored at turn ends).
+      const fresh = await freshResumePrompt(record, Date.now(), this.findSessionByClaudeId(sessionId)?.promptCache ?? record.promptCache)
       if (!fresh) return stored
       await updateSessionRecord(sessionId, { appliedAppendSystemPrompt: fresh })
-      log.session.info('resume: runs on the current prompt (its cache expired and the stored one is behind)', {
+      log.session.info('resume: runs on the current prompt (the stored one is behind, and rebuilding costs less than restating it)', {
         sessionId, storedLength: stored.length, promptLength: fresh.length,
       })
       return fresh
@@ -14898,13 +14914,21 @@ export class SessionRunner {
     // in-flight restart satisfies it, so join it. A restart WITH an override
     // carries new state and must NOT coalesce: it chains AFTER the current
     // restart and runs again, else a permission-mode change arriving during a
-    // restart window would be silently dropped.
+    // restart window would be silently dropped. Nor does one join Walnut's own
+    // prompt respawn, which gives way to anything that comes (respawnOnCurrentPrompt).
     const existing = this.nativeSessionReinitializations.get(sessionId)
-    if (existing && !modeOverride) return existing
+    if (existing && !modeOverride && !this.promptRespawns.has(sessionId)) return existing
 
-    const operation = existing
-      ? existing.then(() => this.performNativeReinitialize(sessionId, modeOverride))
+    // After a prompt respawn, whatever it ended in: it is Walnut's, and this one was asked for.
+    const before = existing && this.promptRespawns.has(sessionId) ? existing.catch(() => {}) : existing
+    const operation = before
+      ? before.then(() => this.performNativeReinitialize(sessionId, modeOverride))
       : Promise.resolve().then(() => this.performNativeReinitialize(sessionId, modeOverride))
+    this.trackReinitialize(sessionId, operation)
+    return operation
+  }
+
+  private trackReinitialize(sessionId: string, operation: Promise<void>): void {
     this.nativeSessionReinitializations.set(sessionId, operation)
     operation.then(
       () => {
@@ -14918,10 +14942,61 @@ export class SessionRunner {
         }
       },
     )
-    return operation
   }
 
-  private async performNativeReinitialize(sessionId: string, modeOverride?: SessionMode): Promise<void> {
+  /**
+   * Move an idle session onto its current prompt with a respawn that runs no turn (the Restart
+   * path, `reinitialize`), when the stored prompt is behind and rebuilding it pays
+   * (sessions/prompt-refresh.ts). Walnut's own step: sessions/prompt-refresh-respawn.ts decides
+   * when, after a compaction; the caller has checked that nothing runs in the CLI. 'not-due' when
+   * the rebuild would change nothing, so the CLI is never stopped for a replay.
+   */
+  async respawnOnCurrentPrompt(sessionId: string, stillWanted: () => boolean): Promise<'respawned' | 'not-due' | 'gave-way'> {
+    // Someone's restart is on its way: it runs on the current prompt too when that pays.
+    if (this.nativeSessionReinitializations.has(sessionId)) return 'gave-way'
+    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record || isAcpEngine(record.engine)) return 'not-due'
+    const { freshResumePrompt } = await import('../core/sessions/prompt-refresh.js')
+    const facts = this.findSessionByClaudeId(sessionId)?.promptCache ?? record.promptCache
+    const fresh = await freshResumePrompt(record, Date.now(), facts)
+    if (!fresh) return 'not-due'
+    if (this.nativeSessionReinitializations.has(sessionId)) return 'gave-way'
+    // Asked again with no await before the stop goes out: a message or a turn that came meanwhile wins.
+    const wanted = () => {
+      const live = this.findSessionByClaudeId(sessionId)
+      return stillWanted() && !this.activeProcessing.has(sessionId) && live?.inTurn === false
+        && live.controlRequestsPending === 0 && !live.workOutlivesTurn && !live.cronArmed
+        && live.getPendingPermissionRequests().length === 0
+    }
+    let respawned = false
+    this.promptRespawns.add(sessionId)
+    const operation = this.performNativeReinitialize(sessionId, undefined, {
+      by: 'system', prompt: fresh,
+      // The daemon's word too: a line its own same-host delivery wrote is invisible here until the
+      // CLI's output comes back. What is left is the round trip from its answer to the stop.
+      quietCheck: (t) => t.quietForRespawn(),
+      stillWanted: () => (respawned = wanted()),
+    })
+    this.trackReinitialize(sessionId, operation)
+    try { await operation } finally { this.promptRespawns.delete(sessionId) }
+    if (!respawned) return 'gave-way'
+    // Respawned on the prompt built above, or (its store failed) on the stored one.
+    return (await getSessionByClaudeId(sessionId))?.appliedAppendSystemPrompt === fresh ? 'respawned' : 'not-due'
+  }
+
+  private async performNativeReinitialize(
+    sessionId: string, modeOverride?: SessionMode,
+    opts: {
+      by?: 'user' | 'system'
+      /** The prompt to spawn on, already built (a prompt respawn): stored before the spawn, never rebuilt after the stop. */
+      prompt?: string
+      /** Asked right before the stop: false gives way with nothing changed. */
+      quietCheck?: (target: ClaudeCodeSession) => Promise<boolean>
+      stillWanted?: () => boolean
+    } = {},
+  ): Promise<void> {
+    const by = opts.by ?? 'user'
     const { getSessionByClaudeId } = await import('../core/session-tracker.js')
     const record = await getSessionByClaudeId(sessionId)
     if (!record) throw new Error(`reinitialize: no session record for ${sessionId}`)
@@ -14975,6 +15050,16 @@ export class SessionRunner {
     // clear activeProcessing and tell the UI the batch completed — so the
     // frontend stops the streaming spinner / "Running" state immediately instead
     // of waiting out the 60s safety timeout. Mirrors handleSend's interrupt path.
+    // A respawn nobody asked for gives way to anything that came meanwhile: the daemon asked
+    // first, then this server's own view with no await between it and the stop going out.
+    if (opts.quietCheck && !(await opts.quietCheck(target))) {
+      log.session.info('reinitialize: gave way (the host says the session is not quiet)', { sessionId })
+      return
+    }
+    if (opts.stillWanted && !opts.stillWanted()) {
+      log.session.info('reinitialize: gave way (a message or a turn came first)', { sessionId })
+      return
+    }
     this.settleInFlightTurn(sessionId)
 
     // Stop through the daemon's SIGINT-first path and wait for its ack so the
@@ -14985,7 +15070,20 @@ export class SessionRunner {
     // requests. Re-read after the old process is stopped so changes made during
     // the restart window are applied to the replacement CLI.
     const { model, effort, profile: storedProfile, lane, resumeSessionAt, appendSystemPrompt: storedPrompt } = await this.resolveResumeArgs(sessionId)
-    const resumePrompt = await this.resumeSpawnPrompt(sessionId, storedPrompt)
+    let resumePrompt: string | undefined
+    if (opts.prompt !== undefined) {
+      resumePrompt = opts.prompt
+      // Stored before the spawn, as resumeSpawnPrompt does: a line frozen meanwhile compares against it.
+      if (opts.prompt !== storedPrompt) {
+        const { updateSessionRecord } = await import('../core/session-tracker.js')
+        await updateSessionRecord(sessionId, { appliedAppendSystemPrompt: opts.prompt }).catch((err) => {
+          log.session.warn('reinitialize: the new prompt was not stored; respawning on the stored one', { sessionId, error: err instanceof Error ? err.message : String(err) })
+          resumePrompt = storedPrompt
+        })
+      }
+    } else {
+      resumePrompt = await this.resumeSpawnPrompt(sessionId, storedPrompt)
+    }
     // A respawn someone asked for takes the Walnut tools whatever the cache (resume-mcp-mount.ts).
     const profile = await this.resumeSpawnProfile(sessionId, storedProfile, { respawn: true })
     const refreshedRecord = await getSessionByClaudeId(sessionId)
@@ -15008,7 +15106,7 @@ export class SessionRunner {
             // Written before the restart returns, so it can never land after the
             // queued message the caller sends next has made the session Running.
             import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
-              updateSessionRecord(sessionId, { process_status: 'idle', activity: undefined, errorMessage: undefined, status_reason: 'restart_reinitialize', status_changed_by: 'user' } as Record<string, unknown>))
+              updateSessionRecord(sessionId, { process_status: 'idle', activity: undefined, errorMessage: undefined, status_reason: 'restart_reinitialize', status_changed_by: by } as Record<string, unknown>))
               .catch(() => {})
               .finally(() => resolve())
           } else {

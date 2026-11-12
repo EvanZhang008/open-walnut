@@ -12,6 +12,14 @@
  * compaction, about a fifth of everything it read in 12 hours, and its session never started
  * on a newer prompt. After a refresh the session holds the current words and is told only
  * what changes from then on (the notice and place bookkeeping key on the prompt's hash).
+ *
+ * A warm cache gives way too when the refresh pays for itself (`refreshPays`, 2026-11-11, the
+ * org review): a long-lived node never reached an expired cache (the Walnut VP's cold resumes
+ * all came within the hour) and was restated about 33 KB after each of its 4 to 6 compactions a
+ * day. The refresh rewrites the conversation once; the restatement is written again at every
+ * compaction. Right after a compaction the conversation is at its smallest, so that is where the
+ * respawn on the current prompt is tried (prompt-refresh-respawn.ts), and a cold resume that
+ * comes then takes it too.
  */
 import type { SessionRecord, Task } from '../types.js';
 import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
@@ -19,6 +27,8 @@ import { WALNUT_PROMPT_MARK, defaultInstructions } from './session-context.js';
 import { dueChanges, parseInstructions, renderDue } from './instruction-diff.js';
 import { currentUserProfile } from './user-profile-context.js';
 import { isCompanion, isFollower } from '../server-role.js';
+import { isOrgNode } from '../org/org-enabled.js';
+import { ONE_HOUR_MS, type PromptCacheFacts } from './prompt-cache.js';
 
 /** How the session start joins a caller's own prompt and Walnut's (claude-code-session.ts handleStart). */
 export const TASK_CONTEXT_JOIN = '\n\n---\n\n## Task Context\n\n';
@@ -51,14 +61,75 @@ export function promptDebtBytes(record: Pick<SessionRecord, 'appliedAppendSystem
   return due ? Buffer.byteLength(renderDue(due), 'utf8') : 0;
 }
 
-/** True when the next spawn of this session should run on the current prompt (sync). */
-export function refreshOnResume(record: RefreshRecord, task: Parameters<typeof defaultInstructions>[0], now = Date.now()): boolean {
+/**
+ * A refresh on a warm cache waits for a debt this large: below it the restatement is a few
+ * lines, and a respawn is not worth its churn.
+ */
+export const MIN_REFRESH_DEBT_BYTES = 8_192;
+/**
+ * How many more compactions a refresh may take to pay for itself. An org node (Main, a VP, a lead)
+ * lives for weeks (the Walnut VP: 103 compactions from 2026-10-24 to 11-11), so 30 of them, about
+ * a week of a busy node; any other session is counted on for one more only.
+ */
+export const ORG_NODE_REFRESH_HORIZON = 30;
+const OTHER_REFRESH_HORIZON = 1;
+/** Prompt prices relative to plain input (Anthropic: a 1-hour cache write 2x, a 5-minute one 1.25x, a read 0.1x). */
+const CACHE_READ = 0.1;
+const cacheWrite = (ttlMs: number | undefined) => (ttlMs !== undefined && ttlMs >= ONE_HOUR_MS ? 2 : 1.25);
+/** About this many bytes of Walnut's English prose per token. */
+const BYTES_PER_TOKEN = 4;
+
+/** Nothing has read the context since the compaction: the next request writes it whole either way. */
+export function nothingReadSinceCompaction(facts: PromptCacheFacts | undefined): boolean {
+  return !!facts?.compactedAt && facts.requestAt === facts.compactedAt;
+}
+
+/**
+ * Whether running on the current prompt costs less than restating its debt (pure). In plain-input
+ * tokens: a refresh on a warm cache writes again the conversation and the old prompt it would have
+ * read (none of the conversation when nothing read it since a compaction); the lines the old prompt
+ * lacks cost the same either way, in the system prompt or in the notice due now. Not refreshing writes
+ * the restatement again at every compaction, `horizon` of them counted. An expired cache gives the
+ * conversation nothing to read, so any debt pays. Unknown facts never refresh a warm session.
+ */
+export function refreshPays(input: {
+  facts: PromptCacheFacts | undefined; debtBytes: number; storedPromptBytes: number; horizon: number; now?: number;
+}): boolean {
+  const { facts, debtBytes } = input;
+  if (debtBytes <= 0) return false;
+  if (replayBuysNothing(facts, input.now ?? Date.now())) return true;
+  if (!facts || debtBytes < MIN_REFRESH_DEBT_BYTES) return false;
+  const write = cacheWrite(facts.ttlMs);
+  const rewritten = (nothingReadSinceCompaction(facts) ? 0 : facts.tokens) + input.storedPromptBytes / BYTES_PER_TOKEN;
+  return rewritten * (write - CACHE_READ) <= input.horizon * (debtBytes / BYTES_PER_TOKEN) * write;
+}
+
+/** How many compactions this session's refresh may take to pay back (`refreshPays`). */
+export function refreshHorizon(task: { org_role?: string } | null | undefined): number {
+  return isOrgNode(task) ? ORG_NODE_REFRESH_HORIZON : OTHER_REFRESH_HORIZON;
+}
+
+/** Whether the session's prompt can be rebuilt here at all: a Claude Code task session on the Mac, prompt refresh on. */
+export function promptRefreshable(record: Pick<RefreshRecord, 'taskId' | 'lane' | 'engine'>): boolean {
   if (process.env.WALNUT_PROMPT_REFRESH === '0') return false;
   if (!record.taskId || record.lane || isAcpEngine(resolveEngine(record.engine))) return false;
-  if (!replayBuysNothing(record.promptCache, now)) return false;
   // A replica builds a thinner prompt (no Reply language, no fleet line): the Mac's stays.
-  if (isCompanion() || isFollower()) return false;
-  return promptDebtBytes(record, task) > 0;
+  return !isCompanion() && !isFollower();
+}
+
+/**
+ * True when the next spawn of this session should run on the current prompt (sync). `facts`: the
+ * cache facts to judge by, when the caller holds newer ones than the record (the live runner's).
+ */
+export function refreshOnResume(
+  record: RefreshRecord, task: Parameters<typeof defaultInstructions>[0] & { org_role?: string }, now = Date.now(), facts = record.promptCache,
+): boolean {
+  if (!promptRefreshable(record)) return false;
+  if (!facts) return false;
+  const debtBytes = promptDebtBytes(record, task);
+  return refreshPays({
+    facts, debtBytes, storedPromptBytes: Buffer.byteLength(record.appliedAppendSystemPrompt ?? '', 'utf8'), horizon: refreshHorizon(task), now,
+  });
 }
 
 /**
@@ -66,11 +137,12 @@ export function refreshOnResume(record: RefreshRecord, task: Parameters<typeof d
  * refreshOnResume says so, else null (replay the stored one). Only a prompt Walnut
  * built is rebuilt: Walnut's alone, or a caller's own prompt followed by Walnut's.
  */
-export async function freshResumePrompt(record: RefreshRecord & Partial<Pick<SessionRecord, 'cwd' | 'host'>>, now = Date.now()): Promise<string | null> {
+export async function freshResumePrompt(
+  record: RefreshRecord & Partial<Pick<SessionRecord, 'cwd' | 'host'>>, now = Date.now(), facts = record.promptCache,
+): Promise<string | null> {
   const stored = record.appliedAppendSystemPrompt;
-  if (!stored || !record.taskId || process.env.WALNUT_PROMPT_REFRESH === '0') return null;
-  // The cheap facts first: most resumes replay, and this runs before each of their spawns.
-  if (record.lane || isAcpEngine(resolveEngine(record.engine)) || !replayBuysNothing(record.promptCache, now)) return null;
+  // The cheap facts first: this runs before each resume spawn.
+  if (!stored || !facts || !record.taskId || !promptRefreshable(record)) return null;
   const join = stored.indexOf(TASK_CONTEXT_JOIN);
   const callerPrompt = join >= 0 ? stored.slice(0, join) : null;
   if (callerPrompt === null && !stored.startsWith(WALNUT_PROMPT_MARK)) return null;
@@ -80,7 +152,7 @@ export async function freshResumePrompt(record: RefreshRecord & Partial<Pick<Ses
   // The default instructions read the user's profile and Reply language from their copies: read them now.
   const [{ refreshUserProfile }, { refreshReplyLanguage }] = await Promise.all([import('./user-profile-context.js'), import('./reply-language-context.js')]);
   await Promise.all([refreshUserProfile(), refreshReplyLanguage()]);
-  if (!refreshOnResume(record, task, now)) return null;
+  if (!refreshOnResume(record, task, now, facts)) return null;
   const { buildSessionContext } = await import('./session-context.js');
   const ctx = await buildSessionContext(record.taskId, record.cwd ?? undefined, record.host ?? undefined);
   if (!ctx.systemPrompt) return null;

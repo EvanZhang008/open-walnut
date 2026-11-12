@@ -102,6 +102,8 @@ export interface MockDaemonOptions {
 export class MockDaemon {
   private wss: WebSocketServer | null = null
   private sessions = new Map<string, DaemonSession>()
+  /** What getState's quiet check answers: true makes every session read busy (a turn open on the host). */
+  notQuiet = false
   /** The servers a session started (ports-v1): the real host scan, rooted at this mock's CLIs. */
   private ports = createDaemonPorts({
     agentPids: () => {
@@ -336,6 +338,16 @@ export class MockDaemon {
       case 'appendUserMarker': return this.cmdAppendUserMarker(ws, id, cmd)
       case 'stop': return this.cmdStop(ws, id, cmd)
       case 'status': return this.cmdStatus(ws, id, cmd)
+      // Only the memory-only read the prompt respawn's quiet check makes (remote-session-manager.ts
+      // quietForRespawn); every other getState stays unknown here, as before.
+      case 'getState': {
+        if (cmd.memoryOnly !== true) return this.sendError(ws, id, `unknown command: ${cmd.cmd}`)
+        const session = this.sessions.get(cmd.sid as string)
+        const busy = this.notQuiet
+        return this.sendOk(ws, id, session
+          ? { exists: true, alive: session.exitCode === null, protection: { source: null }, quiet: { turnActive: busy, lineAwaitingAnswer: false, promptOpen: false } }
+          : { snapshotAvailable: false })
+      }
       case 'rename': return this.cmdRename(ws, id, cmd)
       case 'ping': return this.sendOk(ws, id, { pong: true })
       // Mirrors daemon-standalone's cmdBridgeConfigure reply shape; the

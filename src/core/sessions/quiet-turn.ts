@@ -133,6 +133,12 @@ export function isQuietTurn(sessionId: string | undefined | null, turnGen?: unkn
   return !!t;
 }
 
+/** A quiet turn is on its way or running: begun, its result not come yet (the grace after it does not count). */
+export function quietTurnRunning(sessionId: string | undefined | null): boolean {
+  const t = sessionId ? turns.get(sessionId) : undefined;
+  return !!t && !t.endedAt;
+}
+
 /** The kind of the session's quiet turn, if one runs. */
 export function quietTurnKind(sessionId: string | undefined | null): QuietTurnKind | undefined {
   return sessionId ? turns.get(sessionId)?.kind : undefined;

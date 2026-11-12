@@ -92,6 +92,11 @@ export async function applyStatusAnswer(
   return true;
 }
 
+/** Whether a status ask of this session is waiting for its quiet time or on its way (a respawn would cut it). */
+export function statusQuestionPending(sessionId: string): boolean {
+  return timers.has(sessionId) || inFlight.has(sessionId);
+}
+
 /** Whether a status ask of this session is on its way now (its answer comes; a watch need not ask). */
 export function statusAskInFlight(sessionId: string): boolean {
   return inFlight.has(sessionId);

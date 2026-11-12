@@ -1350,6 +1350,15 @@ describe('L1/L2 daemon-standalone vs daemon-source parity (versioned events + ta
     expect(standaloneSrc).toMatch(/rebuildTaskStateFromJsonl\(jsonlPath,\s*Date\.now\(\)\)/)
     expect(templateSrc).toMatch(/rebuildTaskStateFromJsonl\(jsonlPath,\s*Date\.now\(\)\)/)
   })
+  it.each(['standalone', 'source'])('getState tells whether the CLI is between turns, a same-host line included, in %s (the prompt respawn asks it before its stop)', (variant) => {
+    const src = variant === 'standalone' ? standaloneSrc : templateSrc
+    const start = src.indexOf('function cmdGetState(')
+    const body = src.slice(start, src.indexOf('\n// ── Rename session files', start))
+    expect(body).toMatch(/quiet:\s*\{/)
+    expect(body).toMatch(/turnActive:[^,\n]*foldState[^,\n]*turnActive === true/)
+    expect(body).toMatch(/lineAwaitingAnswer:\s*session\.ttftSendTs != null/)
+    expect(body).toMatch(/promptOpen:\s*!!session\.pendingCtrl/)
+  })
   it.each(['standalone', 'source'])('memory-only getState never probes disk in %s', (variant) => {
     const src = variant === 'standalone' ? standaloneSrc : templateSrc
     const start = src.indexOf('function cmdGetState(')
