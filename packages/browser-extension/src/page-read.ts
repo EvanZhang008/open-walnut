@@ -26,8 +26,29 @@ import { INTERACTIVE, PageError, all, byRef, clip, nameOf, refFor, roleOf, state
 /** What `text` gives by default, and at most. */
 export const TEXT_MAX = 4000
 export const TEXT_MAX_ALL = 100_000
-/** What a default snapshot lists at most (the whole page: 300). */
-export const SNAPSHOT_MAX = 80
+/**
+ * What a default snapshot lists at most (the whole page: 300). 2026-11-11: 80 made a GitHub repo
+ * page's snapshot 6.8 KB, most of it the site's header and menus; `--max N` lists more.
+ */
+export const SNAPSHOT_MAX = 40
+/** How many of the page's menu links a default snapshot names, in one short line per menu. */
+const MENU_LINKS_MAX = 30
+/** The page's own menus (one inside main, an article or a dialog is that content's own). */
+const PAGE_MENUS = 'nav, header, footer, [role=navigation], [role=banner], [role=contentinfo]'
+const CONTENT_ROOT = 'main, [role=main], article, dialog, [role=dialog], [aria-modal=true]'
+
+/** The page menu a link sits in (its header, a nav, its footer), or none. */
+function menuOf(el: Element): Element | null {
+  if (roleOf(el) !== 'link') return null
+  const m = el.closest(PAGE_MENUS)
+  return m && !m.closest(CONTENT_ROOT) && !el.closest(CONTENT_ROOT) ? m : null
+}
+
+function menuName(m: Element): string {
+  const label = m.getAttribute('aria-label')?.trim()
+  const kind = m.matches('footer, [role=contentinfo]') ? 'footer' : m.matches('header, [role=banner]') ? 'header' : 'menu'
+  return label ? `${kind} "${clip(label, 40)}"` : kind
+}
 
 /** Page furniture: never the content an agent came to read. */
 const CHROME = 'nav, aside, [role=navigation], [role=complementary], [role=search], [role=banner], [role=contentinfo], script, style, noscript, template'
@@ -267,7 +288,7 @@ export function snapshot(args: SnapshotArgs = {}): { snapshot: string; url: stri
   const max = typeof args.max === 'number' && args.max > 0 ? Math.floor(args.max) : whole ? 300 : SNAPSHOT_MAX
   const seen = new Set<Element>()
   const lines: string[] = [`Page: ${clip(document.title, 120)}`, `URL: ${location.href}`, '']
-  const heads = all(document, 'h1, h2, h3').filter((h) => visible(h) && (whole || nearView(h))).slice(0, whole ? 30 : 12)
+  const heads = all(document, 'h1, h2, h3').filter((h) => visible(h) && (whole || nearView(h))).slice(0, whole ? 30 : 8)
   if (heads.length) {
     lines.push('Headings:')
     for (const h of heads) lines.push(`  ${h.tagName.toLowerCase()} ${clip(h.textContent ?? '', 120)}`)
@@ -282,11 +303,25 @@ export function snapshot(args: SnapshotArgs = {}): { snapshot: string; url: stri
   let count = 0
   let elsewhere = 0
   let full = false
+  // The page's menu links on screen, by menu, as short "[ref] name" items (the default only).
+  const menus = new Map<Element, string[]>()
+  let menuLinks = 0
   for (const el of all(document, INTERACTIVE)) {
     if (seen.has(el) || !visible(el)) continue
     seen.add(el)
     if (roleOf(el) === 'generic' && !clip(nameOf(el), 100)) continue
     if (!whole && !nearView(el)) { elsewhere++; continue }
+    // A whole region focusable as one (a tabindex on a box of text) is no control to act on.
+    if (!whole && roleOf(el) === 'generic' && nameOf(el).length > 100) continue
+    const menu = whole ? null : menuOf(el)
+    if (menu) {
+      if (menuLinks >= MENU_LINKS_MAX) { elsewhere++; continue }
+      const items = menus.get(menu) ?? []
+      items.push(`[${refFor(el)}] ${clip(nameOf(el), 30)}`)
+      menus.set(menu, items)
+      menuLinks++
+      continue
+    }
     if (count >= max) { full = true; elsewhere++; continue }
     const state = stateOf(el)
     const off = !whole && / ?\boffscreen$/.test(state)
@@ -294,15 +329,19 @@ export function snapshot(args: SnapshotArgs = {}): { snapshot: string; url: stri
     if (off) near.push(line); else lines.push(line)
     count++
   }
-  if (!whole && count === near.length) lines.push('  (none)')
+  if (!whole && count === near.length && !menus.size) lines.push('  (none)')
   if (near.length) lines.push('Just off screen (scroll to them, or act by ref):', ...near)
+  if (menus.size) {
+    lines.push('Links in the page\'s menus (snapshot --all lists each in full):')
+    for (const [m, items] of menus) lines.push(`  ${menuName(m)}: ${items.join(' · ')}`)
+  }
   if (whole) {
     if (full) lines.push('  ... more elements (scroll and snapshot again)')
     const t = clip(document.body?.innerText ?? '', 2500)
     if (t) lines.push('', 'Text:', t)
     return { snapshot: lines.join('\n'), url: location.href, title: document.title, count }
   }
-  if (elsewhere) lines.push(`  … ${elsewhere} more element(s) off screen${full ? ' or past the first ' + max : ''}: find <words> finds one, snapshot --all (all) lists the page, scroll then snapshot`)
+  if (elsewhere) lines.push(`  … ${elsewhere} more element(s) off screen${full ? ' or past the first ' + max : ''}: find <words> finds one, snapshot --max N (max) lists more, --all (all) the whole page`)
   lines.push('', 'Read the page: text (its main content).')
   return { snapshot: lines.join('\n'), url: location.href, title: document.title, count, ...(elsewhere ? { more: elsewhere } : {}) }
 }

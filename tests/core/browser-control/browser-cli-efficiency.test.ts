@@ -60,6 +60,22 @@ describe('the guide and the exit codes', () => {
     expect(said).toMatch(/no walnut-browser skill/)
   })
 
+  it('walnut browser guide more prints the reference file; the short guide and help stay small (2026-11-11: 16.8 KB skill)', async () => {
+    const p = parseBrowserArgv(['guide', 'more'])
+    expect(p).toMatchObject({ ok: true, op: 'api', args: { method: 'GET', path: '/api/v1/skills/walnut-browser/references/more.md' }, guide: true })
+    if (!p.ok) return
+    let text = ''
+    expect(await runBrowser(p, { call: async () => ({ ok: true, result: { content: '# The rest\n\nDialogs.\n' } }), say: () => undefined, out: (t) => { text += t }, cwd: os.tmpdir() })).toBe(BROWSER_EXIT.ok)
+    expect(text).toBe('# The rest\n\nDialogs.\n')
+    const fs = await import('node:fs')
+    const dir = 'src/data/skills/walnut-browser'
+    // The guide every agent reads first, and the usage: budgets an addition must earn.
+    expect(fs.readFileSync(`${dir}/SKILL.md`, 'utf8').length).toBeLessThan(6000)
+    expect(BROWSER_USAGE.length).toBeLessThan(3000)
+    const more = fs.readFileSync(`${dir}/references/more.md`, 'utf8')
+    for (const w of ['dialog', '--record', 'network-body', 'take <tab>', 'upload', 'click-label']) expect(more).toContain(w)
+  })
+
   it('a wait whose text never came exits 3 (an error to look at), a call with no answer in time exits 2', async () => {
     const run = async (code: string) => {
       const p = parseBrowserArgv(['wait', 'Never there', '--ms', '500'])

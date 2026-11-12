@@ -8,14 +8,14 @@ import path from 'node:path'
 import { noBrowserLine, type GoneBrowser } from './gone-words.js'
 
 export const BROWSER_USAGE = [
-  'usage: walnut browser <command> [--tab N] [--json]      walnut browser guide: the whole guide, plain text',
+  'usage: walnut browser <command> [--tab N] [--json]      walnut browser guide: how to use it (guide more: the rest)',
   'Start here (a read takes 3 to 5 calls; every step says what it changed):',
   '  open <url> [--read [--max N]]     a tab in Walnut\'s agent window; --read prints its main text too (--max N: that many chars)',
-  '  snapshot [--all]                  the elements on screen, a ref each (e12); --all: the whole page',
+  '  snapshot [--max N] [--all]        the controls on screen, a ref each (e12): 40 unless --max; --all: the whole page',
   '  click <ref> | --text <words> [--read [--max N]]   then says: went to <url>, opened tab N, or nothing changed',
   '  type [<ref>] <text> [--submit] [--clear]',
   '  text [<ref> | --selector css] [--max N] [--all]   the main content (no menus, header, footer); 4000 chars',
-  '  find <words> [--role button]      the best few matches, with refs',
+  '  find <words> [--role button] [--exact] [--limit N]   the best few matches, with refs',
   '  wait <text> | --url <part or /regex/> | --gone <text> [--ms N]   10 s unless --ms (up to 30000)',
   '  close                             when you are done',
   '  e.g.  open https://example.com/issues --read;  click --text "Login fails" --read;  close',
@@ -28,14 +28,12 @@ export const BROWSER_USAGE = [
   '  click --at X,Y | click-label <N>;  type <text> --at X,Y [--slowly];  drag <ref|X,Y> <ref|X,Y> [--steps N]',
   '  screenshot [<file>] [--full] [--annotate];  zoom <X> <Y> <W> <H> [<file>]   (default: a .jpg in $WALNUT_TASK_DIR/shots)',
   '  upload <ref> <file>... | --selector <css> <file>...   (10 MB in all; --trusted --path P: a file on the browser\'s machine)',
-  '  downloads [--wait] [--ms N];  resize <width> <height> [--viewport];  find <text> [--exact] [--limit N]',
+  '  downloads [--wait] [--ms N];  resize <width> <height> [--viewport]',
   '  fill-login [--item <id|name>] [--fresh-sign-in];  fill-code [--item <id|name>];  request-sign-in [<what>] [--site S]',
   '  open <url> --record;  network [--url part] [--method M] [--status 4xx] [--type XHR] [--limit N] [--include-static] [--stop]',
   '  network-body <id> [--max-chars N];  network-request-body <id>;  console [--level error] [--limit N]',
   '  dialog [read] | accept|dismiss [--text T];  evaluate <expression>   (a tab you opened)',
-  '  Refs: e12 in the page, f3:e12 inside a frame. Real input (Chrome\'s debugger) is the default for click, hover, type and',
-  '  press in your own tab; --no-trusted uses page events, --trusted asks for it by name. A covered agent window takes page',
-  '  events (the answer says trusted false and why). --json prints the whole result.',
+  '  Refs: e12, f3:e12 in a frame. --trusted / --no-trusted: real input or page events (guide more). --json: the whole result.',
   'Exit: 0 done; 1 refused or a choice to make (the person said no, not your tab, which tab or login: the message',
   '  lists them); 2 Walnut or the browser did not answer in time (run it again); 3 an error, a wait whose text or',
   '  address did not come included (look at the page: text or snapshot). A --read whose read failed exits with the',
@@ -45,10 +43,13 @@ export const BROWSER_USAGE = [
 export const BROWSER_EXIT = { ok: 0, refused: 1, timeout: 2, error: 3 } as const
 /** The skill `walnut browser guide` prints. */
 export const GUIDE_SKILL = 'walnut-browser'
+/** Its reference file `walnut browser guide more` prints. */
+export const GUIDE_MORE = 'more.md'
 
 /** A skill's markdown without its front matter (the guide). */
 export function guideText(body: unknown): string | undefined {
-  const content = (body as { skill?: { content?: unknown } } | undefined)?.skill?.content
+  const b = body as { skill?: { content?: unknown }; content?: unknown } | undefined
+  const content = b?.skill?.content ?? b?.content
   if (typeof content !== 'string' || !content.trim()) return undefined
   return `${content.replace(/^---\n[\s\S]*?\n---\n+/, '').trim()}\n`
 }
@@ -64,7 +65,7 @@ export interface BrowserIo {
 }
 
 export type ParsedBrowser =
-  | { ok: true; op: 'browser' | 'browser_status' | 'skill_read'; args: Record<string, unknown>; json: boolean; file?: string; upload?: string[]; guide?: true }
+  | { ok: true; op: 'browser' | 'browser_status' | 'skill_read' | 'api'; args: Record<string, unknown>; json: boolean; file?: string; upload?: string[]; guide?: true }
   | { ok: false; error: string; help?: true }
 
 /** What a front end prints for a parse that did not give an action: help to stdout (exit 0), an error with the usage to stderr. */
@@ -142,8 +143,11 @@ export function parseBrowserArgv(argv: string[]): ParsedBrowser {
   try {
     switch (verb) {
       case 'status': return { ok: true, op: 'browser_status', args: {}, json }
-      // The skill as plain text (a model reads 16 KB of escaped JSON from skill_read otherwise).
-      case 'guide': return { ok: true, op: 'skill_read', args: { dirName: GUIDE_SKILL }, json, guide: true }
+      // The skill as plain text (a model reads its escaped JSON from skill_read otherwise); `guide more`
+      // its reference file, the steps the short guide leaves out.
+      case 'guide': return rest[0] === 'more'
+        ? { ok: true, op: 'api', args: { method: 'GET', path: `/api/v1/skills/${GUIDE_SKILL}/references/${GUIDE_MORE}` }, json, guide: true }
+        : { ok: true, op: 'skill_read', args: { dirName: GUIDE_SKILL }, json, guide: true }
       case 'drag': {
         const end = (w: string | undefined, name: string): Record<string, unknown> => {
           const m = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/.exec(w ?? '')
