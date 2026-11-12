@@ -15,6 +15,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const files = vi.hoisted(() => ({
   asks: [] as string[],
   fail: null as Error | null,
+  /** What the release lookup answers (HostFileSource.published): none unless a test publishes the file. */
+  published: { none: 'this server runs a build of its own checkout, which no release publishes' } as Record<string, unknown>,
+  publishedAsks: [] as string[],
 }))
 vi.mock('../../src/core/host-server/index.js', () => ({
   hostServerRootSpec: () => undefined,
@@ -25,6 +28,7 @@ vi.mock('../../src/core/host-server/index.js', () => ({
       if (files.fail) throw files.fail
       return { id: '0.6.99-abc1234', version: '0.6.99', commit: 'abc1234', target, gz: Buffer.alloc(1024), sha256: 'a'.repeat(64), gzSha256: 'b'.repeat(64) }
     },
+    published: async (target: string) => { files.publishedAsks.push(target); return files.published },
   }),
 }))
 
@@ -53,6 +57,8 @@ interface Routes {
   expected?: string | null
   /** The upload fails with this. */
   uploadFails?: string
+  /** What the host's own download of the file answers (daemon-file-fetch.ts); an Error: the ssh command failed. */
+  fetch?: string | Error
   system?: string
   start: Partial<Record<'bun' | 'binary' | 'node', string>>
   startLog?: Partial<Record<'bun' | 'binary' | 'node', string>>
@@ -70,6 +76,8 @@ function setup(routes: Routes) {
   const starts: string[] = []
   const deploys: string[] = []
   const uploads: Array<{ path: string; sha256?: string }> = []
+  /** What the upload step's bar read when the slot's install ran. */
+  const transfers: unknown[] = []
   const bunReplies = [...(routes.bun ?? [BUN_MISSING])]
   let lastStarted: 'bun' | 'binary' | 'node' = 'bun'
   vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (...args: unknown[]) => {
@@ -90,7 +98,17 @@ function setup(routes: Routes) {
     if (cmd.includes('s=$(uname -s')) return routes.system ?? LINUX_ARM
     if (cmd === 'printf %s "$HOME"') return '/home/me'
     if (cmd.includes('echo slot=none')) return (routes.slot ?? 'none').startsWith('slot=') ? routes.slot! : `slot=${routes.slot ?? 'none'}`
-    if (cmd.includes('echo slot=installed')) return routes.install ?? 'slot=installed'
+    if (cmd.includes('echo fetch=ok')) {
+      if (routes.fetch instanceof Error) throw routes.fetch
+      return routes.fetch ?? ''
+    }
+    if (cmd.includes('fetched_bytes=')) return ''
+    // The delta's look at the slot: what the bar read by then.
+    if (cmd.includes('delta=nobase')) { transfers.push(['before the delta', conn.connectTransfer]); return '' }
+    if (cmd.includes('echo slot=installed')) {
+      transfers.push(conn.connectTransfer)
+      return routes.install ?? 'slot=installed'
+    }
     if (cmd.includes('nohup ')) {
       lastStarted = runtimeOf(cmd)
       starts.push(`${lastStarted}: ${cmd}`)
@@ -104,17 +122,24 @@ function setup(routes: Routes) {
   vi.spyOn(priv(conn), 'deployBinary').mockImplementation(async () => { deploys.push('prebuilt binary') })
   vi.spyOn(priv(conn), 'getLocalBinaryPath').mockImplementation(async () => null)
   vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(routes.expected ?? null)
-  vi.spyOn(conn, 'uploadFile').mockImplementation(async (p: string, _d: Buffer, o?: { sha256?: string }) => {
+  vi.spyOn(conn, 'uploadFile').mockImplementation(async (p: string, d: Buffer, o?: { sha256?: string; onProgress?: (sent: number, total: number) => void }) => {
     seen.push(`UPLOAD ${p}`)
     if (routes.uploadFails) throw new Error(routes.uploadFails)
+    o?.onProgress?.(0, d.length)
+    o?.onProgress?.(d.length, d.length)
     uploads.push({ path: p, sha256: o?.sha256 })
     return { skipped: false }
   })
-  return { conn, seen, starts, deploys, uploads }
+  return { conn, seen, starts, deploys, uploads, transfers }
 }
 
 const GLOBAL_KEY = '__WALNUT_SINGLE_FILE__'
-beforeEach(() => { files.asks = []; files.fail = null })
+beforeEach(() => {
+  files.asks = []
+  files.fail = null
+  files.published = { none: 'this server runs a build of its own checkout, which no release publishes' }
+  files.publishedAsks = []
+})
 afterEach(() => {
   vi.restoreAllMocks()
   delete (globalThis as Record<string, unknown>)[GLOBAL_KEY]
@@ -222,6 +247,124 @@ describe('a compiled Mac deploys the host\'s walnut file as its daemon', () => {
     const { conn, deploys } = setup({ start: { node: STARTED } })
     expect(await priv(conn).deployAndStart()).toBe(32100)
     expect(files.asks).toEqual([])
+    expect(deploys).toEqual(['source:node'])
+  })
+})
+
+// A first connect through an SSH relay spent about three minutes sending the ~67 MB gz in
+// 256 KB chunks; a host that reaches the release downloads the same bytes in seconds.
+describe('a released build: the host downloads the file itself, the upload only when that fails', () => {
+  const URL = 'https://github.example.test/o/r/releases/download/v0.6.99/walnut-0.6.99-linux-arm64.gz'
+  const publish = (over: Record<string, unknown> = {}) => { files.published = { url: URL, gzSha256: 'b'.repeat(64), sha256: 'a'.repeat(64), ...over } }
+
+  it('the release holds this very file: the host fetches it into the gz beside the slot, nothing is sent, the same install runs', async () => {
+    compiledMac()
+    publish()
+    const { conn, seen, uploads, starts, transfers } = setup({ fetch: 'fetch=ok', start: { binary: STARTED } })
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    expect(files.publishedAsks).toEqual(['linux-arm64'])
+    expect(uploads).toEqual([])
+    const fetch = seen.find((c) => c.includes('echo fetch=ok'))!
+    expect(fetch).toContain(`'${URL}'`)
+    expect(fetch).toContain(`'${'b'.repeat(64)}'`)
+    // The part has a name of its own beside the slot's gz; the install takes it from there.
+    const part = /W_P='([^']+)'/.exec(fetch)![1]!
+    expect(part).toMatch(/^\/tmp\/open-walnut\/daemon-linux-arm64\.gz\.fetch-[0-9a-f]{16}$/)
+    // Checked against the plain file's sha256 and moved in by the upload path's own install, after the fetch.
+    const install = seen.findIndex((c) => c.includes('echo slot=installed'))
+    expect(install).toBeGreaterThan(seen.indexOf(fetch))
+    expect(seen[install]).toContain('a'.repeat(64))
+    expect(seen[install]).toContain(`gzip -dc '${part}'`)
+    expect(transfers).toEqual([{ via: 'download', done: 1024, total: 1024 }])
+    expect(starts.map((s) => s.split(':')[0])).toEqual(['binary'])
+  })
+
+  it('a host that cannot download it (no curl or wget, a checksum that does not match, no answer, a failed command): the upload goes, as before', async () => {
+    const answers: Array<string | Error> = ['fetch=no reason=no-downloader', 'fetch=no reason=sha\ndetail=got 0000', '', new Error('Remote command timed out after 180000ms')]
+    for (const fetch of answers) {
+      compiledMac()
+      publish()
+      const { conn, uploads, starts, transfers } = setup({ fetch, start: { binary: STARTED } })
+      expect(await priv(conn).deployAndStart()).toBe(32100)
+      expect(uploads).toEqual([{ path: '/tmp/open-walnut/daemon-linux-arm64.gz', sha256: 'b'.repeat(64) }])
+      // The download's numbers left the bar when it gave way; then the bar is the upload's.
+      expect(transfers).toEqual([['before the delta', null], { via: 'upload', done: 1024, total: 1024 }])
+      expect(starts.map((s) => s.split(':')[0])).toEqual(['binary'])
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('a host whose download failed is not asked again on the next deploy, for a while', async () => {
+    compiledMac()
+    publish()
+    const { conn, seen, uploads } = setup({ fetch: 'fetch=no reason=download\ndetail=exit 7: Failed to connect', start: { binary: STARTED } })
+    await priv(conn).deployWalnutFile()
+    await priv(conn).deployWalnutFile()
+    expect(seen.filter((c) => c.includes('echo fetch=ok'))).toHaveLength(1)
+    expect(uploads).toHaveLength(2)
+    expect((conn as unknown as { _hostFetchOff: { until: number; why: string } })._hostFetchOff).toMatchObject({ why: 'download: exit 7: Failed to connect' })
+  })
+
+  it('the install after a download fails: the deploy answers as after an upload, and nothing is sent', async () => {
+    compiledMac()
+    publish()
+    const { conn, uploads, deploys } = setup({ fetch: 'fetch=ok', install: 'no marker', start: { node: STARTED } })
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    // As when the install after an upload fails: the source goes instead.
+    expect(uploads).toEqual([])
+    expect(deploys).toEqual(['source:node'])
+  })
+
+  it('a release whose file is other bytes than this build (a dev build of the same version): no download is tried', async () => {
+    compiledMac()
+    publish({ sha256: 'c'.repeat(64) })
+    const { conn, seen, uploads } = setup({ fetch: 'fetch=ok', start: { binary: STARTED } })
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    expect(seen.some((c) => c.includes('echo fetch=ok'))).toBe(false)
+    expect(uploads.map((u) => u.path)).toEqual(['/tmp/open-walnut/daemon-linux-arm64.gz'])
+  })
+
+  it('a build no release publishes: the lookup says so and the upload goes, the host is asked nothing new', async () => {
+    compiledMac()
+    const { conn, seen, uploads } = setup({ fetch: 'fetch=ok', start: { binary: STARTED } })
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    expect(files.publishedAsks).toEqual(['linux-arm64'])
+    expect(seen.some((c) => c.includes('echo fetch=ok'))).toBe(false)
+    expect(uploads).toHaveLength(1)
+  })
+
+  it('the slot already holds the file: no lookup, no download, nothing sent', async () => {
+    compiledMac()
+    publish()
+    const { conn, seen, uploads } = setup({ slot: 'have', fetch: 'fetch=ok', start: { binary: STARTED } })
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    expect(files.publishedAsks).toEqual([])
+    expect(seen.some((c) => c.includes('echo fetch=ok'))).toBe(false)
+    expect(uploads).toEqual([])
+  })
+
+  it('WALNUT_HOST_FETCH=0 keeps the upload', async () => {
+    compiledMac()
+    publish()
+    vi.stubEnv('WALNUT_HOST_FETCH', '0')
+    try {
+      const { conn, seen, uploads } = setup({ fetch: 'fetch=ok', start: { binary: STARTED } })
+      expect(await priv(conn).deployAndStart()).toBe(32100)
+      expect(seen.some((c) => c.includes('echo fetch=ok'))).toBe(false)
+      expect(uploads).toHaveLength(1)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('the downloaded file does not run here as this build\'s daemon: no upload of the same bytes, the source instead', async () => {
+    compiledMac()
+    publish()
+    const { conn, uploads, deploys } = setup({
+      fetch: 'fetch=ok', expected: 'walnut-daemon-new', install: 'slot=unrunnable\ndetail=GLIBC_2.38 not found', start: { node: STARTED },
+    })
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    expect(uploads).toEqual([])
     expect(deploys).toEqual(['source:node'])
   })
 })

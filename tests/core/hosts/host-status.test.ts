@@ -24,6 +24,45 @@ function state(phase: DaemonConnectPhase, extra: Partial<DaemonConnectState> = {
   };
 }
 
+describe('buildHostStatus: the upload step\'s progress bar', () => {
+  const upload = (s: ReturnType<typeof buildHostStatus>) => s.steps.find((x) => x.phase === 'upload')!;
+
+  it('puts the bytes so far on the active upload step, and only there', () => {
+    const s = buildHostStatus('devbox', devbox, state('upload', { transfer: { via: 'upload', done: 3_000_000, total: 69_948_502 } }), undefined, AT);
+    expect(upload(s)).toEqual({ phase: 'upload', label: 'Upload daemon', status: 'active', progress: { via: 'upload', done: 3_000_000, total: 69_948_502 } });
+    expect(s.steps.filter((x) => x.progress)).toHaveLength(1);
+    // An upload from here keeps the step's usual sentence.
+    expect(s.phaseLabel).toBe(describeConnectPhase('upload', 'Big dev box'));
+  });
+
+  it('says the host downloads it when it does', () => {
+    const s = buildHostStatus('devbox', devbox, state('upload', { transfer: { via: 'download', done: 0, total: 67_101_187 } }), undefined, AT);
+    expect(upload(s).progress).toEqual({ via: 'download', done: 0, total: 67_101_187 });
+    expect(s.phaseLabel).toBe('Big dev box is downloading the session daemon from the Walnut release');
+    // Downloaded: the install runs (the check, one run, the rename) and the sentence says so.
+    const full = buildHostStatus('devbox', devbox, state('upload', { transfer: { via: 'download', done: 67_101_187, total: 67_101_187 } }), undefined, AT);
+    expect(full.phaseLabel).toBe('Big dev box downloaded the session daemon from the Walnut release and is installing it');
+  });
+
+  it('a count past its total reads full, never more', () => {
+    const s = buildHostStatus('devbox', devbox, state('upload', { transfer: { via: 'upload', done: 900, total: 500 } }), undefined, AT);
+    expect(upload(s).progress).toEqual({ via: 'upload', done: 500, total: 500 });
+  });
+
+  it('nothing outside the upload step, without a total, or with no transfer: the steps as before', () => {
+    const plain = (phase: DaemonConnectPhase) => buildHostStatus('devbox', devbox, state(phase), undefined, AT);
+    for (const phase of ['start', 'connected', 'failed'] as DaemonConnectPhase[]) {
+      const s = buildHostStatus('devbox', devbox, state(phase, { transfer: { via: 'upload', done: 1, total: 2 } }), undefined, AT);
+      expect(s.steps).toEqual(plain(phase).steps);
+      expect(s.phaseLabel).toBe(plain(phase).phaseLabel);
+    }
+    const noTotal = buildHostStatus('devbox', devbox, state('upload', { transfer: { via: 'download', done: 5, total: 0 } }), undefined, AT);
+    expect(noTotal.steps).toEqual(plain('upload').steps);
+    expect(noTotal.phaseLabel).toBe(plain('upload').phaseLabel);
+    expect(plain('upload').steps.some((x) => 'progress' in x)).toBe(false);
+  });
+});
+
 describe('buildHostStatus — steps and wording per phase', () => {
   it('marks everything before the active step done and everything after todo', () => {
     for (const [i, phase] of DAEMON_CONNECT_STEPS.entries()) {

@@ -21,6 +21,7 @@ import {
   connectPhaseNote,
   describeConnectPhase,
   describeConnectSteps,
+  withTransfer,
   type ConnectStep,
   type HostConnectErrorKind,
 } from '../sessions/host-connect-hint.js'
@@ -186,6 +187,10 @@ export function buildHostStatus(
   }
   const note = connectPhaseNote(state.phase, label)
   if (note) status.note = note
+  // The daemon file's bytes on the host so far: the upload step's progress bar.
+  const moving = withTransfer(status.steps, status.phase, state.transfer, label)
+  status.steps = moving.steps
+  if (moving.phaseLabel) status.phaseLabel = moving.phaseLabel
   if (state.phase === 'failed' && state.error) {
     status.error = state.error
     // The ssh target as the USER would type it — the hint quotes it back.

@@ -65,6 +65,12 @@ import { setDaemonFileFence } from './daemon-file-fence.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
 import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotDeltaInstallScript, slotDeltaPath, slotInstallScript, slotNeedKb, type SlotFit } from './daemon-file-slot.js'
 import { DELTA_BLOCK_BYTES, blockHashScript, parseBlockHashes, planWalnutFileDelta } from './walnut-file-delta.js'
+import { createTransferMeter, type ConnectTransfer } from './connect-transfer.js'
+import type { HostFileTarget } from '../core/host-server/host-target.js'
+import {
+  HOST_FETCH_MAX_SECONDS, HOST_FETCH_POLL_MS, HOST_FETCH_RETRY_MS, hostFetchPartPath, hostFetchScript, hostFetchSizeScript, newFetchToken,
+  parseHostFetchAnswer, parseHostFetchSize, planHostFetch,
+} from './daemon-file-fetch.js'
 import { singleFile } from '../lib/single-file.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
 import { CALLER_PROOF_CAPABILITY } from './gateway-core.js'
@@ -704,6 +710,10 @@ export class DaemonConnection {
   }
   private _phase: DaemonConnectPhase = 'idle'
   private _phaseSince = Date.now()
+  /** How far the daemon's file has got onto the host in the `upload` step (connect-transfer.ts). */
+  private _transfer = createTransferMeter({ active: () => this._phase === 'upload', notify: () => notifyDaemonPhaseChange(this.hostKey) })
+  /** The host's own download of the walnut file failed: not asked again until then (fetchWalnutFileOnHost). */
+  private _hostFetchOff: { until: number; why: string } | null = null
   /** When the current connect() attempt began (null = no attempt yet). Phase
    *  elapsed only tells you about the CURRENT step; a first connect that has
    *  spent 90s across four steps needs the whole-attempt clock to read right. */
@@ -1552,6 +1562,8 @@ export class DaemonConnection {
   get connectPhase(): DaemonConnectPhase { return this._phase }
   /** When the current phase began (ms epoch). */
   get connectPhaseSince(): number { return this._phaseSince }
+  /** In the `upload` step: the daemon file's bytes on the host so far, sent or downloaded there (null: not known). */
+  get connectTransfer(): ConnectTransfer | null { return this._phase === 'upload' ? this._transfer.current : null }
   /** When the current/last connect() attempt began (null = never attempted). */
   get connectStartedAt(): number | null { return this._connectStartedAt }
   /** Where the daemon keeps its files on the host, once a probe has decided. */
@@ -1566,6 +1578,8 @@ export class DaemonConnection {
     if (this._phase === phase) return
     this._phase = phase
     this._phaseSince = Date.now()
+    // A transfer belongs to the step it ran in.
+    this._transfer.clear()
     if (phase === 'failed') {
       // connect()'s catch lands here BEFORE the pool's catch records the cause in
       // the failure cache, so announcing now would push a failure with no error
@@ -3551,6 +3565,8 @@ export class DaemonConnection {
       opts.onProgress?.(data.length, data.length)
       return { skipped: true }
     }
+    // The single stream says nothing until it ends: the bar starts at 0 meanwhile.
+    opts.onProgress?.(0, data.length)
     if (await this.pipeSingleStream(data, remotePath, sha)) { opts.onProgress?.(data.length, data.length); return { skipped: false } }
     log.session.warn('DaemonConnection: single-stream upload failed, falling back to chunked', { host: this.hostKey, bytes: data.length, remotePath })
     await this.pipeChunked(data, remotePath, `${remotePath}.chunks-${sha.slice(0, 16)}`, 'upload', {
@@ -5832,6 +5848,7 @@ export class DaemonConnection {
         this._deployedViaSource = false
         return 'binary'
       } catch (err) {
+        this.endTransfer()
         if (opts.keepBinary) throw new DaemonStageError(`the daemon binary did not get onto the host: ${err instanceof Error ? err.message : String(err)}`)
         // Binary deploy failed (e.g. SSH proxy killed the transfer).
         // Fall back to lightweight source deploy (~44KB, always passes).
@@ -6518,9 +6535,10 @@ export class DaemonConnection {
    * runs) in the binary's slot `<dir>/daemon-linux-<arch>`, which the binary start
    * runs as `--start` and checks with `--status` (src/binary/main.ts). Not sent
    * when the slot already holds it, copied on the host from a host server install
-   * of it, else uploaded like any large file (one stream, then 256 KB chunks that
-   * resume after a cut: uploadFile) and unpacked beside the slot, checked by
-   * sha256, renamed into place.
+   * of it, downloaded by the host itself from the release that publishes this
+   * very file (fetchWalnutFileOnHost), else uploaded like any large file (one
+   * stream, then 256 KB chunks that resume after a cut: uploadFile) and unpacked
+   * beside the slot, checked by sha256, renamed into place.
    */
   private async deployWalnutFile(): Promise<void> {
     const t0 = Date.now()
@@ -6558,22 +6576,128 @@ export class DaemonConnection {
       })
       return
     }
-    if (await this.deployWalnutFileDelta(slot, file, fit)) {
+    try {
+      // Before the delta too: a download from the release takes seconds, a delta through a relay a minute or two.
+      if (await this.fetchWalnutFileOnHost(slot, file, fit, target.target)) {
+        log.session.info('DaemonConnection: walnut file deployed as the daemon', {
+          host: this.hostKey, target: target.target, id: file.id, how: 'downloaded by the host from its release', deployMs: Date.now() - t0,
+        })
+        return
+      }
+      if (await this.deployWalnutFileDelta(slot, file, fit)) {
+        log.session.info('DaemonConnection: walnut file deployed as the daemon', {
+          host: this.hostKey, target: target.target, id: file.id, how: 'delta from the file in the slot', deployMs: Date.now() - t0,
+        })
+        return
+      }
+      // A delta that gave way leaves no numbers of its own on the bar.
+      this.endTransfer()
+      const gz = `${slot}.gz`
+      const sent = await this.uploadFile(gz, file.gz, { sha256: file.gzSha256, onProgress: (done, total) => this._transfer.report('upload', done, total) })
+      const installed = await this.sshExec(slotInstallScript(slot, gz, file.sha256, fit), 120_000)
+      const answer = parseSlotAnswer(installed)
+      if (answer === 'unrunnable') this.walnutFileUnfit(parseSlotDetail(installed).said)
+      if (answer !== 'installed') throw new Error('the walnut file did not go into the daemon slot')
       log.session.info('DaemonConnection: walnut file deployed as the daemon', {
-        host: this.hostKey, target: target.target, id: file.id, how: 'delta from the file in the slot', deployMs: Date.now() - t0,
+        host: this.hostKey, target: target.target, id: file.id, how: sent.skipped ? 'its gz was already on the host' : 'uploaded',
+        gzBytes: file.gz.length, deployMs: Date.now() - t0,
       })
-      return
+    } catch (err) {
+      // What goes next in this step (the source) moves no bar: the failed transfer's numbers go.
+      this.endTransfer()
+      throw err
+    }
+  }
+
+  /** The step's transfer is over without filling its bar: the frame says so at once. */
+  private endTransfer(): void {
+    const had = this._transfer.current
+    this._transfer.clear()
+    if (had && this._phase === 'upload') notifyDaemonPhaseChange(this.hostKey)
+  }
+
+  /**
+   * The host downloads the walnut file itself (daemon-file-fetch.ts): seconds
+   * from the release where an upload through an SSH relay takes minutes. Only
+   * the exact file this computer would send (the release names its sha256), into
+   * a checked part beside the slot, then the same install as after an upload
+   * (the sha256, the run as this build's daemon, the rename), with the same
+   * answer when that install fails. False, with nothing changed in the slot, for
+   * a build no release publishes, a host without curl or wget or a sha256 tool,
+   * one that cannot reach the release, a slow or broken download: the delta and
+   * the upload go next, as before, and a host whose download failed is not asked
+   * again for HOST_FETCH_RETRY_MS (a host with no way out would otherwise pay the
+   * connect timeout on every new build).
+   */
+  private async fetchWalnutFileOnHost(slot: string, file: { sha256: string; gzSha256: string; gz: Buffer }, fit: SlotFit, target: HostFileTarget): Promise<boolean> {
+    if (process.env.WALNUT_HOST_FETCH === '0') return false
+    const off = this._hostFetchOff
+    if (off && Date.now() < off.until) {
+      log.session.info('DaemonConnection: the host does not download the walnut file itself', { host: this.hostKey, reason: `its last download failed (${off.why})` })
+      return false
+    }
+    const t0 = Date.now()
+    let plan: ReturnType<typeof planHostFetch>
+    try {
+      const { sharedHostFileSource } = await import('../core/host-server/index.js')
+      plan = planHostFetch(await sharedHostFileSource().published(target), file)
+    } catch (err) {
+      plan = { skip: `its release could not be looked up (${err instanceof Error ? err.message : String(err)})` }
+    }
+    if ('skip' in plan) {
+      log.session.info('DaemonConnection: the host does not download the walnut file itself', { host: this.hostKey, reason: plan.skip.slice(0, 300) })
+      return false
     }
     const gz = `${slot}.gz`
-    const sent = await this.uploadFile(gz, file.gz, { sha256: file.gzSha256 })
-    const installed = await this.sshExec(slotInstallScript(slot, gz, file.sha256, fit), 120_000)
-    const answer = parseSlotAnswer(installed)
-    if (answer === 'unrunnable') this.walnutFileUnfit(parseSlotDetail(installed).said)
-    if (answer !== 'installed') throw new Error('the walnut file did not go into the daemon slot')
-    log.session.info('DaemonConnection: walnut file deployed as the daemon', {
-      host: this.hostKey, target: target.target, id: file.id, how: sent.skipped ? 'its gz was already on the host' : 'uploaded',
-      gzBytes: file.gz.length, deployMs: Date.now() - t0,
+    const token = newFetchToken()
+    const part = hostFetchPartPath(gz, token)
+    const total = plan.total
+    // The bar follows the part's size while the host downloads: only in the connect's own step, and
+    // only over the shared master (without one each read would be a new login).
+    let watching = total !== null && this._phase === 'upload'
+    if (watching) this._transfer.report('download', 0, total!)
+    if (watching && this._controlPath) {
+      void (async () => {
+        while (watching && !this._destroyed) {
+          await new Promise((r) => setTimeout(r, HOST_FETCH_POLL_MS))
+          if (!watching) return
+          const n = parseHostFetchSize(await this.sshExec(hostFetchSizeScript(gz, token), 10_000).catch(() => ''))
+          if (watching && n !== null) this._transfer.report('download', n, total!)
+        }
+      })()
+    }
+    const home = this.bunScriptOpts.installHome
+    let out = ''
+    let error: string | null = null
+    try {
+      out = await this.sshExec(hostFetchScript({
+        url: plan.url, gz, token, gzSha256: plan.gzSha256, maxSeconds: HOST_FETCH_MAX_SECONDS, minRate: plan.minRate, ...(home ? { home } : {}),
+      }), (HOST_FETCH_MAX_SECONDS + 30) * 1000)
+    } catch (err) {
+      error = (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 300)
+    } finally {
+      watching = false
+    }
+    const answer = parseHostFetchAnswer(out)
+    if (!answer?.ok) {
+      const why = answer && !answer.ok ? `${answer.reason}${answer.detail ? `: ${answer.detail}` : ''}` : `no answer${error ? ` (${error})` : ''}`
+      this._hostFetchOff = { until: Date.now() + HOST_FETCH_RETRY_MS, why: why.slice(0, 300) }
+      log.session.info('DaemonConnection: the host could not download the walnut file itself; sending it', {
+        host: this.hostKey, url: plan.url, why: why.slice(0, 300), ms: Date.now() - t0,
+      })
+      this.endTransfer()
+      return false
+    }
+    if (total !== null) this._transfer.report('download', total, total)
+    // From here on the host holds this very file, checked: the install answers as after an upload.
+    const installed = await this.sshExec(slotInstallScript(slot, part, file.sha256, fit), 120_000)
+    const slotAnswer = parseSlotAnswer(installed)
+    if (slotAnswer === 'unrunnable') this.walnutFileUnfit(parseSlotDetail(installed).said)
+    if (slotAnswer !== 'installed') throw new Error('the walnut file did not go into the daemon slot')
+    log.session.info('DaemonConnection: the host downloaded the walnut file from its release', {
+      host: this.hostKey, url: plan.url, gzBytes: total, ms: Date.now() - t0,
     })
+    return true
   }
 
   /**
@@ -6594,7 +6718,7 @@ export class DaemonConnection {
         return false
       }
       const remote = slotDeltaPath(slot)
-      await this.uploadFile(remote, delta.payload, { sha256: delta.payloadSha256 })
+      await this.uploadFile(remote, delta.payload, { sha256: delta.payloadSha256, onProgress: (done, total) => this._transfer.report('upload', done, total) })
       const installed = await this.sshExec(slotDeltaInstallScript(slot, remote, file.sha256, {
         blocks: delta.blocks, changed: delta.changed, blockBytes: DELTA_BLOCK_BYTES,
       }, fit), 180_000)
@@ -6706,7 +6830,9 @@ export class DaemonConnection {
           host: this.hostKey, gzBytes: gzSize,
         })
         // Fall through to chunked path below.
-        const { chunks: totalChunks, totalFailures } = await this.pipeChunked(gzData, remotePath + '.gz', `${this._remoteDir}/deploy_chunks`, 'binary deploy')
+        const { chunks: totalChunks, totalFailures } = await this.pipeChunked(gzData, remotePath + '.gz', `${this._remoteDir}/deploy_chunks`, 'binary deploy', {
+          onProgress: (done, total) => this._transfer.report('upload', done, total),
+        })
 
         // Unpack and make executable
         const unpackResult = await this.sshExec(
@@ -10155,6 +10281,8 @@ export interface DaemonConnectState {
   drops?: number[]
   /** A host network machine's daemon update: under way with the link down, not back, or failed. */
   daemonUpdate?: DaemonUpdateView
+  /** In the `upload` step: how far the daemon's file has got onto the host, sent or downloaded there. */
+  transfer?: ConnectTransfer
 }
 
 export function getDaemonConnectState(hostKey: string): DaemonConnectState {
@@ -10168,6 +10296,8 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
     connectElapsedMs: conn?.connectStartedAt ? Math.max(0, now - conn.connectStartedAt) : 0,
   }
   if (conn?.remoteRuntime) state.runtime = conn.remoteRuntime
+  const transfer = conn?.connectTransfer
+  if (transfer && state.phase === 'upload') state.transfer = { ...transfer }
   const dir = conn?.remoteDirChoice
   if (dir) state.daemonDir = { ...dir, ...(conn?.remoteHome ? { home: conn.remoteHome } : {}) }
   const failure = failureCache.get(hostKey)

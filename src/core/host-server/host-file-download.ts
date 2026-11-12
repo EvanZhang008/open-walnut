@@ -14,6 +14,9 @@
  * there) so that the caller tries the other one; any other failure (a network
  * error, a download that does not match its checksum) is thrown. Everything
  * streams: a 60 MB file is never held, hashed or unpacked in one piece.
+ *
+ * createPublishedLookup reads only a release's SHA256SUMS: where a HOST can
+ * download the same file itself, instead of this computer sending it.
  */
 
 import crypto from 'node:crypto'
@@ -100,7 +103,7 @@ export function sha512sOf(integrity: unknown): Buffer[] {
 }
 
 /** A body to read, or null for a 404 (`file://` reads a dir laid out like the URL: tests, mirrors). */
-async function body(ctx: DownloadContext, url: string, timeoutMs: number): Promise<Readable | null> {
+async function body(ctx: Pick<DownloadContext, 'fetch'>, url: string, timeoutMs: number): Promise<Readable | null> {
   if (url.startsWith('file://')) {
     const file = decodeURI(url.slice('file://'.length))
     return (await fs.promises.access(file).then(() => true, () => false)) ? fs.createReadStream(file) : null
@@ -122,16 +125,26 @@ async function readSmall(stream: Readable, what: string): Promise<string> {
   return Buffer.concat(parts).toString('utf8')
 }
 
+/** `<base>/v<version>`, where a release's assets and its SHA256SUMS are. */
+const releaseRoot = (base: string, version: string): string => `${base.replace(/\/+$/, '')}/v${version}`
+
+/** The release's SHA256SUMS text, or null when the version has no release there. */
+async function releaseSums(ctx: Pick<DownloadContext, 'fetch'>, root: string, timeoutMs: number): Promise<string | null> {
+  const sumsUrl = `${root}/SHA256SUMS`
+  const stream = await body(ctx, sumsUrl, timeoutMs)
+  return stream ? readSmall(stream, sumsUrl) : null
+}
+
 /** The release asset, checked against SHA256SUMS. */
 export async function fromGithubRelease(ctx: DownloadContext, base: string, version: string, target: HostFileTarget): Promise<Fetched> {
-  const root = `${base.replace(/\/+$/, '')}/v${version}`
+  const root = releaseRoot(base, version)
   const sumsUrl = `${root}/SHA256SUMS`
   const asset = `walnut-${version}-${target}.gz`
   let text: string
   try {
-    const stream = await body(ctx, sumsUrl, META_MS)
-    if (!stream) return { absent: `there is no GitHub release of it (${sumsUrl} is not there)` }
-    text = await readSmall(stream, sumsUrl)
+    const got = await releaseSums(ctx, root, META_MS)
+    if (got === null) return { absent: `there is no GitHub release of it (${sumsUrl} is not there)` }
+    text = got
   } catch (err) {
     throw new Error(`Could not read the release's checksums (${sumsUrl}: ${(err as Error).message}); this computer downloads the walnut file for the host once.`)
   }
@@ -151,6 +164,52 @@ export async function fromGithubRelease(ctx: DownloadContext, base: string, vers
   const sha256 = fileHash.digest('hex')
   if (sums.file && sums.file !== sha256) throw new Error(`${asset} does not unpack to the file its SHA256SUMS names.`)
   return { file: plain, sha256, gz: gzTmp, from: asset }
+}
+
+/**
+ * A published build's walnut file on its GitHub release, as a host downloads it
+ * itself (src/providers/daemon-file-fetch.ts): the asset's URL and the sha256s
+ * of the gz and of the file inside it, both from the release's SHA256SUMS.
+ */
+export interface PublishedAsset { url: string; gzSha256: string; sha256: string }
+export type Published = PublishedAsset | { none: string }
+
+/** One SHA256SUMS read, short: a lookup that cannot answer only means the host gets the upload. */
+const PUBLISHED_LOOKUP_MS = 10_000
+/** A release that was not there (or not readable) is asked again after this; one that was is kept. */
+export const PUBLISHED_RECHECK_MS = 10 * 60_000
+
+/**
+ * Looks up the release asset of a version and target, once per process for an
+ * answer that names one (a release's SHA256SUMS never changes), again after
+ * PUBLISHED_RECHECK_MS for one that does not. Never throws: any failure is a
+ * `none` that says why. Only a web address counts as a base: a host cannot read
+ * this computer's `file://` mirror.
+ */
+export function createPublishedLookup(deps: { fetch: typeof fetch; base: () => string; now?: () => number }): (version: string, target: HostFileTarget) => Promise<Published> {
+  const now = deps.now ?? Date.now
+  const seen = new Map<string, { answer: Published; at: number }>()
+  return async (version, target) => {
+    const base = deps.base()
+    if (!/^https?:\/\//i.test(base)) return { none: `its release base (${base}) is not a web address a host can download from` }
+    const key = `${base}\n${version}\n${target}`
+    const kept = seen.get(key)
+    if (kept && ('url' in kept.answer || now() - kept.at < PUBLISHED_RECHECK_MS)) return kept.answer
+    const root = releaseRoot(base, version)
+    const asset = `walnut-${version}-${target}.gz`
+    let answer: Published
+    try {
+      const text = await releaseSums({ fetch: deps.fetch }, root, PUBLISHED_LOOKUP_MS)
+      const sums = text === null ? null : sumsFor(text, version, target)
+      answer = !sums ? { none: `there is no GitHub release of Walnut ${version}` }
+        : sums.gz && sums.file ? { url: `${root}/${asset}`, gzSha256: sums.gz, sha256: sums.file }
+          : { none: `the release of Walnut ${version} does not list ${asset} and the file inside it` }
+    } catch (err) {
+      answer = { none: `the release of Walnut ${version} could not be read (${(err as Error).message})` }
+    }
+    seen.set(key, { answer, at: now() })
+    return answer
+  }
 }
 
 /**

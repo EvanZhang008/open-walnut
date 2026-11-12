@@ -36,6 +36,12 @@ export interface HostConnectStep {
   /** Short chip label ("Upload daemon"), not a sentence. */
   label: string;
   status: 'done' | 'active' | 'todo';
+  /**
+   * Only on the active `upload` step while the daemon's file goes onto the host: bytes
+   * there so far of `total`, sent from this computer (`upload`) or downloaded by the host
+   * itself (`download`). Absent from older servers.
+   */
+  progress?: { via: 'upload' | 'download'; done: number; total: number };
 }
 
 /** A readiness problem as the server words it (host-readiness-problems.ts). */

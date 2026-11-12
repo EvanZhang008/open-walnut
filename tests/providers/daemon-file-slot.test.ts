@@ -67,11 +67,13 @@ describe('the daemon slot on a host', () => {
     expect(fs.existsSync(`${slot}.part`)).toBe(false)
   })
 
-  it('clears what earlier uploads into the slot left: the gz and the chunks of a cut one', () => {
+  it('clears what earlier uploads into the slot left: the gz, the chunks of a cut one, a cut download\'s part', () => {
     const leftovers = () => fs.readdirSync(path.dirname(slot)).filter((n) => n !== path.basename(slot)).sort()
     const strew = () => {
       fs.mkdirSync(`${slot}.gz.chunks-0123456789abcdef`, { recursive: true })
       fs.writeFileSync(`${slot}.gz.chunks-0123456789abcdef/chunk_00000`, 'x')
+      // What a host's own download that was cut off left (daemon-file-fetch.ts).
+      fs.writeFileSync(`${slot}.gz.fetch-0123456789abcdef`, 'x')
       fs.writeFileSync(path.join(path.dirname(slot), 'daemon.pid'), '1')
     }
     fs.mkdirSync(path.dirname(slot), { recursive: true })
@@ -95,7 +97,7 @@ describe('the daemon slot on a host', () => {
     fs.rmSync(app)
     strew()
     expect(parseSlotAnswer(run(slotCheckScript(slot, sha(FILE), [app])))).toBe('none')
-    expect(leftovers()).toEqual(['daemon-linux-arm64.gz.chunks-0123456789abcdef', 'daemon.pid'])
+    expect(leftovers()).toEqual(['daemon-linux-arm64.gz.chunks-0123456789abcdef', 'daemon-linux-arm64.gz.fetch-0123456789abcdef', 'daemon.pid'])
   })
 
   it('refuses a gz that unpacks to another file, and keeps the daemon file there', () => {

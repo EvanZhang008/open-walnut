@@ -66,6 +66,7 @@ const CONNECTION: Record<string, Entry> = {
   probeOrInstallBun: { count: 3, kind: 'own-dir', why: 'bunScriptOpts: the install runs with HOME and BUN_INSTALL under the isolated install home' },
   deployWalnutFile: { count: 5, kind: 'own-dir', why: 'the slot is in the chosen daemon dir; the host server install is not looked at for an isolated daemon' },
   deployWalnutFileDelta: { count: 3, kind: 'own-dir', why: 'the slot and its delta file, in the chosen daemon dir' },
+  fetchWalnutFileOnHost: { count: 3, kind: 'own-dir', why: 'the release asset into the gz beside the slot (and its part file), that part\'s size, the slot\'s install: all in the chosen daemon dir; curl writes nothing else, wget keeps no HSTS file' },
   seedHostFileFromDaemon: { count: 1, kind: 'not-for-test-server', why: 'a host server install step (shared host or the replica check only)' },
   deployBinary: { count: 4, kind: 'own-dir', why: 'mkdir, version, unpack: all in the chosen daemon dir' },
   pipeChunked: { count: 9, kind: 'own-dir', why: 'its chunk dir and target, under the chosen daemon dir' },

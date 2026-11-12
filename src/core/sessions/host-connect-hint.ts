@@ -14,6 +14,7 @@
 
 import type { DaemonConnectPhase } from '../../providers/daemon-connection.js'
 import { IS_DEMO } from '../../constants.js'
+import type { ConnectTransfer } from '../../providers/connect-transfer.js'
 
 /** Connect phases that mean "still working" (the client should keep polling). */
 export const IN_PROGRESS_PHASES: ReadonlySet<DaemonConnectPhase> = new Set<DaemonConnectPhase>([
@@ -71,6 +72,30 @@ export interface ConnectStep {
   phase: DaemonConnectPhase
   label: string
   status: 'done' | 'active' | 'todo'
+  /**
+   * Only on the active `upload` step while the daemon's file goes onto the host:
+   * bytes there so far of `total`, sent from here (`upload`) or downloaded by the
+   * host itself (`download`). A client that knows nothing of it shows the step as before.
+   */
+  progress?: ConnectTransfer
+}
+
+/**
+ * The step list with the transfer on the active `upload` step, and the sentence
+ * for that step when the host downloads the file itself (then installs it).
+ * Anything else (no transfer, another phase, no total) leaves both as they were.
+ */
+export function withTransfer(
+  steps: ConnectStep[], phase: string, transfer: ConnectTransfer | undefined, hostLabel: string,
+): { steps: ConnectStep[]; phaseLabel?: string } {
+  if (phase !== 'upload' || !transfer || !(transfer.total > 0)) return { steps }
+  const progress: ConnectTransfer = { via: transfer.via, done: Math.max(0, Math.min(transfer.total, transfer.done)), total: transfer.total }
+  const out = steps.map((s) => (s.phase === 'upload' && s.status === 'active' ? { ...s, progress } : s))
+  if (transfer.via !== 'download') return { steps: out }
+  // Full: the host checks it, runs it once and moves it in (up to a minute).
+  return progress.done < progress.total
+    ? { steps: out, phaseLabel: `${hostLabel} is downloading the session daemon from the Walnut release` }
+    : { steps: out, phaseLabel: `${hostLabel} downloaded the session daemon from the Walnut release and is installing it` }
 }
 
 /**

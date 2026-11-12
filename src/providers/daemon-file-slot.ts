@@ -96,14 +96,16 @@ export function slotCheckScript(slot: string, sha256: string, alsoAt: string[] =
 }
 
 /**
- * The gz an upload into the slot puts beside it and the chunk dirs a cut upload
- * leaves (uploadFile keys them by the file's sha: `<gz>.chunks-<sha prefix>`). A
- * cut upload of an older build would otherwise stay on the host for good.
+ * The gz an upload into the slot puts beside it, the chunk dirs a cut upload
+ * leaves (uploadFile keys them by the file's sha: `<gz>.chunks-<sha prefix>`) and
+ * the parts a host's own download of it left (`<gz>.fetch-<token>`,
+ * daemon-file-fetch.ts). A cut upload of an older build would otherwise stay on
+ * the host for good.
  */
 function leftoversOf(slot: string): string {
   const gz = shq(`${slot}.gz`)
   const delta = shq(`${slot}.delta.gz`)
-  return `rm -rf ${gz} ${gz}.chunks-* ${delta} ${delta}.chunks-* ${shq(`${slot}.delta.raw`)} 2>/dev/null`
+  return `rm -rf ${gz} ${gz}.chunks-* ${gz}.fetch-* ${delta} ${delta}.chunks-* ${shq(`${slot}.delta.raw`)} 2>/dev/null`
 }
 
 /** Where a delta's payload goes beside the slot (walnut-file-delta.ts): leftoversOf removes it. */
@@ -164,8 +166,8 @@ export function slotDeltaInstallScript(
  * run it once (`fit`: it must print the daemon version the Mac expects, which
  * also proves it runs on this host's CPU and C library), and rename it into
  * place. A running daemon keeps its old file (a rename never writes into a
- * file a process runs). The gz goes, and so do the chunks a cut upload of
- * another build left beside it. `slot=installed` on success; `slot=unrunnable`
+ * file a process runs). The gz goes, and so does what other tries left beside
+ * the slot (a cut upload's chunks, a cut download's part). `slot=installed` on success; `slot=unrunnable`
  * (and what it printed) for a file that does not fit, which is removed with its gz.
  */
 export function slotInstallScript(slot: string, gz: string, sha256: string, fit: SlotFit = {}): string {
@@ -182,7 +184,9 @@ export function slotInstallScript(slot: string, gz: string, sha256: string, fit:
     fitsSh(fit),
     `if ! w_fits ${part}; then rm -f ${part}; ${leftoversOf(slot)}; ${UNFIT_ANSWER}; exit 0; fi`,
     `mv -f ${part} ${q} || { rm -f ${part}; echo "cannot move the walnut file into the daemon slot" >&2; exit 1; }`,
+    // The file it came from, and what other tries left beside the slot (a cut download's part).
     `rm -rf ${shq(gz)} ${shq(gz)}.chunks-* 2>/dev/null`,
+    leftoversOf(slot),
     'echo slot=installed',
   ].join('\n')
 }

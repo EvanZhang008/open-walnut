@@ -43,6 +43,7 @@ const SSH_SPAWN_ALLOWED: Record<string, string> = {
 const REMOTE_SH_ALLOWED: Record<string, string> = {
   'src/providers/daemon-connection.ts': 'the SSH route',
   'src/providers/daemon-file-slot.ts': 'the SSH route: daemon deploy',
+  'src/providers/daemon-file-fetch.ts': 'the SSH route: daemon deploy (the host downloads the file itself)',
   'src/providers/remote-daemon-dir.ts': 'the SSH route: daemon dir',
   'src/providers/remote-fold-prewarm.ts': 'the SSH route: prewarm before the daemon answers',
   'src/providers/remote-isolation.ts': 'the SSH route: a test server\'s isolated daemon scripts',

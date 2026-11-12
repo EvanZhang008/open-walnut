@@ -44,12 +44,12 @@ import {
   buildFileInClone, findBun, packageJsonAt, pinnedBun, pruneAbandonedWork, WORK_OWNER, type BunPick, type CloneBuild,
 } from './host-file-build.js'
 import {
-  defaultNpmRegistry, defaultReleaseBase, fromGithubRelease, fromNpm, hasher, hashFile, MAX_FILE_BYTES, type Fetched,
+  createPublishedLookup, defaultNpmRegistry, defaultReleaseBase, fromGithubRelease, fromNpm, hasher, hashFile, MAX_FILE_BYTES, type Fetched, type Published,
 } from './host-file-download.js'
 import type { HostFileTarget } from './host-target.js'
 import { readRunningBuild, runningDist } from './package.js'
 
-export { defaultNpmRegistry, defaultReleaseBase, sumsFor } from './host-file-download.js'
+export { defaultNpmRegistry, defaultReleaseBase, sumsFor, type Published, type PublishedAsset } from './host-file-download.js'
 
 export interface HostFile {
   id: string
@@ -69,6 +69,12 @@ export interface HostFileSource {
   buildId(): Promise<{ id: string; version: string; commit: string | null }>
   /** This server's build as the file for `target`: from the cache, else built or downloaded (`say` tells how it goes). */
   file(target: HostFileTarget, say?: (message: string) => void): Promise<HostFile>
+  /**
+   * Where a host can download this server's file for `target` itself: the GitHub
+   * release asset of a published build, or `none` saying why there is none (a
+   * build of a checkout, a version with no release there). Reads only SHA256SUMS.
+   */
+  published(target: HostFileTarget): Promise<Published>
 }
 
 /**
@@ -273,6 +279,7 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
   const refusalKey = (id: string, target: HostFileTarget, want: string | null) => `${id}\n${target}\n${want ?? ''}`
   const expectedDaemon = (): string | null => { try { return opts.daemonVersion?.() ?? null } catch { return null } }
   let swept: Promise<unknown> | null = null
+  const lookupPublished = createPublishedLookup({ fetch: fetchImpl, base: () => opts.releaseBase ?? defaultReleaseBase(), now: clock })
   let open: Batch | null = null
   let previous: Promise<unknown> = Promise.resolve()
 
@@ -519,6 +526,15 @@ export function createHostFileSource(opts: HostFileSourceOptions): HostFileSourc
       if (o.kind === 'none') throw new Error(o.why)
       if (o.kind === 'checkout') checkCommitted(o)
       return { id: o.id, version: o.info.version, commit: o.info.commit }
+    },
+    async published(target) {
+      const o = await getOrigin()
+      if (o.kind === 'none') return { none: o.why }
+      // A build of a checkout is never a release's bytes (each build stamps its own date).
+      if (o.kind === 'checkout') return { none: 'this server runs a build of its own checkout, which no release publishes' }
+      const { version, commit, dirty } = o.info
+      if (dirty || !commit || !RELEASE_VERSION.test(version)) return { none: `this Walnut (${formatBuildVersion(o.info)}) is not a published release build` }
+      return lookupPublished(version, target)
     },
     file(target, say) {
       const current = inflight.get(target)
