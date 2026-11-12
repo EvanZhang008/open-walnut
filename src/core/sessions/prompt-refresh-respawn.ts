@@ -301,9 +301,12 @@ export class PromptRefreshRespawn {
         log.session.info('prompt refresh: respawn not done', { sessionId, taskId: rec.taskId, why: done });
         return done;
       }
-      // Said only when the spawn really moved it (a host that did not answer leaves it in place).
+      // Said only when the spawn really moved it, read from what the move recorded (a host that
+      // did not answer, or a failure it recorded, leaves it in place).
       const after = folder ? await this.deps.getSession(sessionId) : null;
-      const moved = !!after && !(await this.deps.folderDue(after, task));
+      const trim = (p: string | null | undefined) => (p ?? '').replace(/\/+$/, '');
+      const moved = !!after && after.folderMoved?.why === 'own-folder'
+        && trim(after.cwd) === trim(after.folderMoved.to) && trim(after.cwd) !== trim(rec.cwd);
       // Neither the prompt nor the folder changed (the move was left): nothing to tell.
       if (moved || verdict.debtBytes > 0) this.deps.emitNote(sessionId, rec.taskId, promptRefreshNote(verdict.debtBytes, moved));
       log.session.info('prompt refresh: respawned on the current prompt', { sessionId, taskId: rec.taskId, ...base, folder, moved });

@@ -574,7 +574,10 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       const { taskDirForHost, ensureTaskDirOnHost } = await import('./task-dir-place.js');
       if (cwd && cwd === await taskDirForHost(updatedTask.id, '__local__')) await ensureTaskDirOnHost(updatedTask.id, '__local__');
     }
-    if (!conversation) {
+    // A start in the task's isolated workspace (the board's ▶ names it) keeps that folder.
+    const { belongsToWorkspace } = await import('../workspaces/decisions.js');
+    const inWorkspace = !!updatedTask.workspace && !!cwd && belongsToWorkspace(updatedTask.workspace, cwd);
+    if (!conversation && !inWorkspace) {
       // A VP or lead runs in its own task directory unless a person named this folder (org-own-folder.ts).
       const { ownFolderStartCwd } = await import('./org-own-folder.js');
       const own = await ownFolderStartCwd(updatedTask, host, { cwd, cwdChosen: params.cwdChosen, callerSid: params.callerSid, source });

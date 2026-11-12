@@ -1795,6 +1795,13 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   start then goes ahead at once even on a full host; shorter is `400`).
   The answer adds `applied`, the names of those fields it honoured; a server
   older than them omits it and ignores the fields.
+  Additive, 2026-11-12: `"cwd_chosen"?: true` says the person picked `cwd`
+  for this start (the web draft's folder picker; the `walnut` CLI's
+  task_start / task_create send it whenever they name a `cwd`). A VP or lead
+  (`org_role` lead or router) runs in its own task directory whatever folder
+  the body names, except one picked this way on a request with no
+  `x-walnut-caller-sid`; a client that omits the flag (an older one, or the
+  board's start button, which fills in the task's folder) chose nothing.
   `202` means ACCEPTED,
   not spawned (the spawn is async in session-runner), same as `POST /sessions`.
   Class C: `501 not_supported_cloud` on a REPLICA (no session-runner there);

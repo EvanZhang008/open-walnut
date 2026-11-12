@@ -17,7 +17,7 @@ const DEBT = 33_000
 
 function record(over: Partial<SessionRecord> = {}): SessionRecord {
   return {
-    claudeSessionId: SID, taskId: 'mvm0n3bu-6910', project: 'Walnut', process_status: 'idle', engine: 'claude',
+    claudeSessionId: SID, taskId: 'mvm0n3bu-6910', project: 'Walnut', process_status: 'idle', engine: 'claude', cwd: '/repo',
     appliedAppendSystemPrompt: 'old prompt', lastCompactUuid: 'boundary-1', lastCompactAt: iso(-60_000),
     ...over,
   } as SessionRecord
@@ -132,12 +132,18 @@ describe('a clean turn end after a compaction', () => {
 })
 
 describe('a VP or lead still running in a repository (org-own-folder.ts)', () => {
-  /** Outside its own folder until a respawn has run (the spawn moves it). */
+  /** Outside its own folder until a respawn has run (the spawn moves it, or records why not). */
   const outside = (h: () => { deps: PromptRefreshRespawnDeps }) => vi.fn(async () => (h().deps.respawn as ReturnType<typeof vi.fn>).mock.calls.length === 0)
+  const OWN = '/state/tasks/mvm0n3bu-6910'
+  /** A respawn whose spawn moved the session into its own folder, as moveToOwnFolderBeforeSpawn records it. */
+  const movingRespawn = (h: () => ReturnType<typeof harness>) => vi.fn(async () => {
+    h().set({ ...h().get()!, cwd: OWN, folderMoved: { from: '/repo', to: OWN, at: iso(0), by: 'walnut', why: 'own-folder' } })
+    return 'respawned' as const
+  })
 
   it('respawns where the cost rule alone says it is not worth it (2026-11-12: 429K of context, 31 KB of prompt debt), and says it moved', async () => {
     let ref: ReturnType<typeof harness>
-    const h = ref = harness({ folderDue: outside(() => ref) })
+    const h = ref = harness({ folderDue: outside(() => ref), respawn: movingRespawn(() => ref) })
     h.live.promptCache = { ...h.live.promptCache!, tokens: 429_000 }
     await h.pr.onTurnEnd(SID)
     await h.fireAll()
@@ -149,7 +155,7 @@ describe('a VP or lead still running in a repository (org-own-folder.ts)', () =>
   it('respawns with its prompt current too, since the folder alone pays', async () => {
     debt = 0
     let ref: ReturnType<typeof harness>
-    const h = ref = harness({ folderDue: outside(() => ref) })
+    const h = ref = harness({ folderDue: outside(() => ref), respawn: movingRespawn(() => ref) })
     await h.pr.onTurnEnd(SID)
     await h.fireAll()
     expect(h.deps.respawn).toHaveBeenCalledWith(SID, expect.any(Function), { folder: true })
@@ -172,6 +178,22 @@ describe('a VP or lead still running in a repository (org-own-folder.ts)', () =>
 
   it('a spawn that left it in place (its host did not answer) is not told as moved', async () => {
     const h = harness({ folderDue: async () => true })
+    h.live.promptCache = { ...h.live.promptCache!, tokens: 429_000 }
+    await h.pr.onTurnEnd(SID)
+    await h.fireAll()
+    expect(h.deps.respawn).toHaveBeenCalledTimes(1)
+    expect(h.deps.emitNote).toHaveBeenCalledWith(SID, 'mvm0n3bu-6910', expect.not.stringContaining('its own folder'))
+  })
+
+  it('a move the spawn recorded as failed (not due any more, but still in the repository) is not told as moved', async () => {
+    let ref: ReturnType<typeof harness>
+    const h = ref = harness({
+      folderDue: outside(() => ref),
+      respawn: vi.fn(async () => {
+        ref.set({ ...ref.get()!, ownFolderMove: { from: '/repo', why: 'history-conflict', at: iso(0), files: ['/a.jsonl', '/b.jsonl'] } })
+        return 'respawned' as const
+      }),
+    })
     h.live.promptCache = { ...h.live.promptCache!, tokens: 429_000 }
     await h.pr.onTurnEnd(SID)
     await h.fireAll()

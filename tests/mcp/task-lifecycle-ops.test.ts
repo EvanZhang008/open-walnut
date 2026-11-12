@@ -139,6 +139,15 @@ describe('task_start notes what it could not apply', () => {
     expect(String(missed.outcome)).toContain('Not applied: workspace')
   })
 
+  it('a cwd the op names was chosen: it says so (cwd_chosen); with no cwd it sends none', async () => {
+    const f = fakeCall({ [START]: { taskId: 't-1', sessionId: 's-9', started: true } })
+    await run('task_start', { id: 't-1', cwd: '/repo' }, f.call)
+    expect(f.calls.at(-1)!.body).toMatchObject({ cwd: '/repo', cwd_chosen: true })
+    const g = fakeCall({ [START]: { taskId: 't-1', sessionId: 's-9', started: true } })
+    await run('task_start', { id: 't-1' }, g.call)
+    expect(g.calls.at(-1)!.body).not.toHaveProperty('cwd_chosen')
+  })
+
   it('a continued conversation keeps its own settings and points at task_session_set', async () => {
     const f = fakeCall({ [START]: { taskId: 't-1', sessionId: 's-1', started: true, continued: true, applied: [] } })
     const out = await run('task_start', { id: 't-1', model: 'opus', effort: 'high' }, f.call)

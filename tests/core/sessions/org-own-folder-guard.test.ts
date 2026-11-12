@@ -84,13 +84,34 @@ describe('every session start decides a VP\'s or lead\'s folder through the one 
     // before the daemon is asked to start it, so a refusal there costs no move.
     expect(spawn.indexOf('moveToOwnFolderBeforeSpawn(')).toBeGreaterThan(spawn.indexOf("stepDone('costStateMs')"))
     expect(spawn.indexOf('moveToOwnFolderBeforeSpawn(')).toBeLessThan(spawn.indexOf('transport.start('))
-    // A start the daemon then refuses puts the conversation back.
-    const after = runner.slice(runner.indexOf('const spawnPromise = startSpawn()'), runner.indexOf('const spawnPromise = startSpawn()') + 600)
-    expect(after).toMatch(/ownMoveUndo/)
+    // A start the daemon then refuses puts the conversation back, only on a failure that proves
+    // nothing started (a start that went out and failed late may have a CLI writing there).
+    const after = runner.slice(runner.indexOf('const spawnPromise = startSpawn()'), runner.indexOf('const spawnPromise = startSpawn()') + 1200)
+    expect(after).toMatch(/if \(undo && startProvedNothingStarted\(err, startSent\)\)/)
+    expect(spawn.indexOf('startSent = true')).toBeLessThan(spawn.indexOf('transport.start('))
+    expect(spawn.indexOf('startSent = true')).toBeGreaterThan(spawn.indexOf('moveToOwnFolderBeforeSpawn('))
   })
 
   it('a node\'s workers inherit the folder it was moved from, never its own directory', () => {
     expect(body(read('src/core/sessions/caller-placement.ts'), /export async function resolveCallerPlacement/)).toMatch(/handedDownCwd\(record\)/)
+  })
+
+  /** Server code that queues a task_start op itself: the op marks a folder it names as chosen (cwd_chosen). */
+  const QUEUES_START: Record<string, string> = {
+    'src/core/human-inbox/item-plans.ts': 'an inbox action names the previewed folder only for a task that is no VP or lead (runsInOwnFolder)',
+  }
+
+  it('a plan that fills a folder in never passes it off as a person\'s choice for a VP or lead', () => {
+    const found: string[] = []
+    for (const file of sourceFiles(path.join(ROOT, 'src'))) {
+      const rel = path.relative(ROOT, file)
+      if (rel.startsWith('src/ops/')) continue // the op itself (task-execution.ts startTask)
+      if (/tool: ['"]task_start['"]/.test(code(fs.readFileSync(file, 'utf8')))) found.push(rel)
+    }
+    expect(found.sort(), 'a new server-side task_start op: name a folder only when a person picked it, or skip it for an org node (runsInOwnFolder)').toEqual(Object.keys(QUEUES_START).sort())
+    expect(read('src/core/human-inbox/item-plans.ts')).toMatch(/!!launchCwd && !runsInOwnFolder\(launchTask\)/)
+    // The op says a named folder was chosen, so its callers above must not name a filled-in one.
+    expect(body(read('src/ops/task-execution.ts'), /export async function startTask/)).toMatch(/cwd_chosen: true/)
   })
 
   /** Files that name an org role and a folder together, and why that is no folder decision of their own. */

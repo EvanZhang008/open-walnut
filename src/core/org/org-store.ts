@@ -471,6 +471,8 @@ export async function contactLaunch(task: Task): Promise<ContactLaunch | undefin
   try {
     const { resolveTaskLaunchReadOnly } = await import('../sessions/task-launch-plan.js');
     const plan = await resolveTaskLaunchReadOnly(task, { taskIdPrefix: task.id, source: 'org-contact' }, { preview: true });
+    // A VP whose remote host has not said where its own directory is yet: no place to show.
+    if (!plan.cwd) return undefined;
     return { cwd: plan.cwd, host: plan.host || null };
   } catch (err) {
     log.task.info('org: no launch place for contact', { taskId: task.id, error: err instanceof Error ? err.message : String(err) });

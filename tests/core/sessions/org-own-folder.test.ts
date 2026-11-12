@@ -50,7 +50,9 @@ const cliHolder = async (_sid: string) => {
   if (daemon.holders.shift()) return { state: 'held' as const, detail: 'live pid 4242' }
   return { state: 'free' as const, ...(daemon.journaledHome ? { journaledHome: daemon.journaledHome } : {}) }
 }
-const conversation = { moves: [] as Array<{ from: string | null; to: string }>, answer: 'moved' as 'moved' | 'missing' | 'unknown' | Error, backAnswer: 'moved' as 'moved' | Error }
+const pooled = { conn: null as null | { hasCapability: (c: string) => boolean } }
+vi.mock('../../../src/providers/daemon-connection.js', () => ({ getConnectedDaemonConnection: vi.fn(() => pooled.conn) }))
+const conversation = { moves: [] as Array<{ from: string | null; to: string }>, answer: 'moved' as 'moved' | 'in-place' | 'missing' | 'unknown' | Error, backAnswer: 'moved' as 'moved' | Error }
 vi.mock('../../../src/core/sessions/folder-gone.js', () => ({
   moveConversation: vi.fn(async (rec: { cwd: string | null }, to: string) => {
     const back = conversation.moves.length > 0
@@ -62,8 +64,8 @@ vi.mock('../../../src/core/sessions/folder-gone.js', () => ({
 }))
 
 import {
-  handedDownCwd, moveToOwnFolderBeforeSpawn, ownFolderMoveDecision, ownFolderStartCwd, personNamedCwd, runsInOwnFolder,
-  HELD_ELSEWHERE_MS, MOVE_RETRY_MS,
+  handedDownCwd, moveToOwnFolderBeforeSpawn, ownFolderConflictNotice, ownFolderMoveDecision, ownFolderMoveDue, ownFolderStartCwd, personNamedCwd, runsInOwnFolder,
+  HELD_ELSEWHERE_MS, MOVE_RETRY_MS, TRANSIENT_RETRY_MS,
 } from '../../../src/core/sessions/org-own-folder.js'
 
 const SID = 'aaaaaaaa-1111-4222-8333-444444444444'
@@ -78,6 +80,7 @@ beforeEach(() => {
   record = { claudeSessionId: SID, taskId: LEAD, cwd: '/repo', engine: 'claude' }
   Object.assign(daemon, { connected: true, caps: new Set(['cli-holder-v1']), holders: [], journaledHome: null, asked: 0 })
   Object.assign(conversation, { moves: [], answer: 'moved', backAnswer: 'moved' })
+  pooled.conn = null
 })
 
 describe('runsInOwnFolder', () => {
@@ -130,7 +133,6 @@ describe('ownFolderStartCwd', () => {
   it('an agent naming a repository for a lead does not put it there', async () => {
     expect(await ownFolderStartCwd(lead, '', { cwd: '/repo', cwdChosen: true, callerSid: 's-1', source: 'api-v1' })).toEqual({ kind: 'own', cwd: OWN })
     expect(await ownFolderStartCwd(lead, '', { cwd: '/repo', source: 'engine-switch' })).toEqual({ kind: 'own', cwd: OWN })
-    expect(await ownFolderStartCwd(lead, '', { workspace: { provider: 'x' }, callerSid: 's-1', source: 'api-v1' })).toEqual({ kind: 'own', cwd: OWN })
   })
 
   it('a folder the person picked for this start is kept', async () => {
@@ -145,9 +147,9 @@ describe('ownFolderStartCwd', () => {
     expect(linked).toEqual(['devbox'])
   })
 
-  it('a preview (the Org page\'s draft, an inbox plan) never waits on a host link', async () => {
+  it('a preview (the Org page\'s draft, an inbox plan) never waits on a host link, and answers with no folder yet', async () => {
     taskDirs.set('devbox2:lead-1', null)
-    await expect(ownFolderStartCwd(lead, 'devbox2', { source: 'human-inbox' }, { preview: true })).rejects.toThrow(/own task directory/)
+    expect(await ownFolderStartCwd(lead, 'devbox2', { source: 'human-inbox' }, { preview: true })).toEqual({ kind: 'own', cwd: null })
     expect(linked).toEqual([])
   })
 })
@@ -175,6 +177,8 @@ describe('ownFolderMoveDecision', () => {
     ['an archived record', { task: lead, record: { ...rec, archived: true }, ownDir: OWN }, 'no-record'],
     ['open in a terminal lately', { task: lead, record: { ...rec, heldElsewhere: { at: ago(HELD_ELSEWHERE_MS - 60_000), host: '', holder: 'terminal' as const } }, ownDir: OWN }, 'held-elsewhere'],
     ['a lasting failure for this folder today', { task: lead, record: { ...rec, ownFolderMove: { from: '/repo', why: 'move-failed', at: ago(3_600_000) } }, ownDir: OWN }, 'failed-recently'],
+    ['a CLI still running within the hour', { task: lead, record: { ...rec, ownFolderMove: { from: '/repo', why: 'process-running', at: ago(TRANSIENT_RETRY_MS - 60_000) } }, ownDir: OWN }, 'failed-recently'],
+    ['its history in two places, even a month later', { task: lead, record: { ...rec, ownFolderMove: { from: '/repo', why: 'history-conflict', at: ago(30 * MOVE_RETRY_MS) } }, ownDir: OWN }, 'failed-for-good'],
   ])('%s stays', (_name, input, why) => {
     expect(ownFolderMoveDecision({ now: NOW, ...input } as Parameters<typeof ownFolderMoveDecision>[0])).toEqual({ move: false, why })
   })
@@ -182,6 +186,7 @@ describe('ownFolderMoveDecision', () => {
     ['a person\'s folder no longer in use', { ...rec, cwd: '/other', cwdByPerson: '/repo' }],
     ['a terminal hold a day old', { ...rec, heldElsewhere: { at: ago(HELD_ELSEWHERE_MS + 60_000), host: '', holder: 'terminal' as const } }],
     ['a failure a day old', { ...rec, ownFolderMove: { from: '/repo', why: 'move-failed', at: ago(MOVE_RETRY_MS + 60_000) } }],
+    ['a passing failure an hour old', { ...rec, ownFolderMove: { from: '/repo', why: 'host-unasked', at: ago(TRANSIENT_RETRY_MS + 60_000) } }],
     ['a failure for another folder', { ...rec, ownFolderMove: { from: '/elsewhere', why: 'move-failed', at: ago(60_000) } }],
   ])('%s does not hold it back', (_name, record) => {
     expect(ownFolderMoveDecision({ task: lead, record, ownDir: OWN, now: NOW })).toEqual({ move: true })
@@ -210,13 +215,15 @@ describe('moveToOwnFolderBeforeSpawn', () => {
     expect(record!.cwd).toBe(OWN)
   })
 
-  it('a CLI of the session on the host (a terminal\'s claude -r) is asked again, then left alone, not recorded as a failure', async () => {
+  it('a CLI of the session on the host (a terminal\'s claude -r) is asked again, then left alone for an hour', async () => {
     daemon.holders = [{ kind: 'live', pid: 4242, unrecorded: true }, { kind: 'live', pid: 4242 }, { kind: 'live', pid: 4242 }]
     expect(await move()).toBeNull()
     expect(daemon.asked).toBe(3)
     expect(conversation.moves).toEqual([])
     expect(record!.cwd).toBe('/repo')
-    expect(record!.ownFolderMove).toBeUndefined()
+    expect(record!.ownFolderMove).toMatchObject({ from: '/repo', why: 'process-running' })
+    expect(ownFolderMoveDecision({ task: tasks.get(LEAD) as never, record: record as never, ownDir: OWN })).toEqual({ move: false, why: 'failed-recently' })
+    expect(ownFolderMoveDecision({ task: tasks.get(LEAD) as never, record: record as never, ownDir: OWN, now: Date.now() + TRANSIENT_RETRY_MS + 1 })).toEqual({ move: true })
   })
 
   it('a CLI just stopped that leaves the table on the second ask: moved', async () => {
@@ -242,10 +249,10 @@ describe('moveToOwnFolderBeforeSpawn', () => {
     expect((await move())?.cwd).toBe(OWN)
   })
 
-  it('a host with no link, or one whose answer is lost: left, not recorded (it may answer next time)', async () => {
+  it('a host with no link, or one whose answer is lost: left, and asked again an hour later', async () => {
     daemon.connected = false
     expect(await move()).toBeNull()
-    expect(record!.ownFolderMove).toBeUndefined()
+    expect(record!.ownFolderMove).toMatchObject({ why: 'host-unasked' })
   })
 
   it('a conflict or a missing transcript is recorded once', async () => {
@@ -256,6 +263,38 @@ describe('moveToOwnFolderBeforeSpawn', () => {
     record!.ownFolderMove = undefined
     expect(await move()).toBeNull()
     expect(record!.ownFolderMove).toMatchObject({ why: 'transcript-missing' })
+  })
+
+  it('its history in two places: moved neither, never tried again for that folder, and the node told once naming both files', async () => {
+    conversation.answer = Object.assign(new Error('two places'), { extra: { code: 'history_conflict', files: ['/p/a/s.jsonl', '/p/b/s.jsonl'] } })
+    expect(await move()).toBeNull()
+    expect(record!.ownFolderMove).toMatchObject({ from: '/repo', why: 'history-conflict', files: ['/p/a/s.jsonl', '/p/b/s.jsonl'] })
+    expect(ownFolderMoveDecision({ task: tasks.get(LEAD) as never, record: record as never, ownDir: OWN, now: Date.now() + 365 * MOVE_RETRY_MS })).toEqual({ move: false, why: 'failed-for-good' })
+    const text = ownFolderConflictNotice(record!.ownFolderMove as never)
+    expect(text).toContain('/p/a/s.jsonl and /p/b/s.jsonl')
+    expect(text).toContain('will not try again')
+    expect(text).toContain('merged nothing')
+    // A later spawn: not tried, nothing rewritten, so the told mark stays.
+    record!.ownFolderMove = { ...(record!.ownFolderMove as object), told: true }
+    daemon.asked = 0
+    expect(await move()).toBeNull()
+    expect(daemon.asked).toBe(0)
+    expect(record!.ownFolderMove).toMatchObject({ why: 'history-conflict', told: true })
+  })
+
+  it('a conversation another spawn already moved there: spawned there, with nothing of this one\'s to put back', async () => {
+    conversation.answer = 'in-place'
+    const res = await move()
+    expect(res).toEqual({ cwd: OWN })
+    expect(res!.undo).toBeUndefined()
+  })
+
+  it('the undo asks the host again: a CLI that started anyway keeps the conversation where it writes', async () => {
+    const res = await move()
+    daemon.holders = [{ kind: 'live', pid: 77 }]
+    expect(await res!.undo!()).toBe(OWN)
+    expect(conversation.moves).toEqual([{ from: '/repo', to: OWN }])
+    expect(record!.cwd).toBe(OWN)
   })
 
   it('never on a test server', async () => {
@@ -286,5 +325,19 @@ describe('handedDownCwd', () => {
     expect(handedDownCwd({ cwd: OWN })).toBe(OWN)
     expect(handedDownCwd({ cwd: '/tasks/x', folderMoved: { from: '/gone', to: '/tasks/x', at: '', by: 'human' } })).toBe('/tasks/x')
     expect(handedDownCwd({ cwd: '/elsewhere', folderMoved: { from: '/repo', to: OWN, at: '', by: 'walnut', why: 'own-folder' } })).toBe('/elsewhere')
+  })
+})
+
+describe('ownFolderMoveDue', () => {
+  const task = { id: LEAD, org_role: 'lead', phase: 'IN_PROGRESS' } as never
+  const rec = { claudeSessionId: SID, cwd: '/repo', engine: 'claude' } as never
+  it('due for a lead in a repository on a daemon that can say who holds it, or one not linked yet', async () => {
+    expect(await ownFolderMoveDue(rec, task)).toBe(true)
+    pooled.conn = { hasCapability: (c) => c === 'cli-holder-v1' }
+    expect(await ownFolderMoveDue(rec, task)).toBe(true)
+  })
+  it('not due on a linked daemon too old to say: its move would be left, so no respawn for it', async () => {
+    pooled.conn = { hasCapability: () => false }
+    expect(await ownFolderMoveDue(rec, task)).toBe(false)
   })
 })

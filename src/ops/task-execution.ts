@@ -159,7 +159,10 @@ export function queuedOutcome(taskId: string, queued: { position?: number; host?
 }
 
 export async function startTask(id: string, body: Record<string, unknown>, call: Call): Promise<Record<string, unknown>> {
-  const started = await call('POST', `/tasks/${encodeURIComponent(id)}/start`, body) as Record<string, unknown> | undefined
+  // An op never fills a folder in: one it names was chosen (a VP's or lead's start keeps it only
+  // on a person's request with no caller session; core/sessions/org-own-folder.ts personNamedCwd).
+  const sent = typeof body.cwd === 'string' && body.cwd ? { ...body, cwd_chosen: true } : body
+  const started = await call('POST', `/tasks/${encodeURIComponent(id)}/start`, sent) as Record<string, unknown> | undefined
   if (!started || typeof started.taskId !== 'string') {
     throw new Error(`Start response was incomplete. Read task_get for ${id} before retrying; do not create another task.`)
   }

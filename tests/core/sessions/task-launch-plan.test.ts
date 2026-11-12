@@ -7,6 +7,7 @@ import type { Task } from '../../../src/core/types.js';
 import { addTask } from '../../../src/core/task-manager.js';
 import { PROJECTS_MEMORY_DIR } from '../../../src/constants.js';
 import { taskDirForHost } from '../../../src/core/sessions/task-dir-place.js';
+import { updateConfig } from '../../../src/core/config-manager.js';
 
 describe('Read-only task launch resolution', () => {
   it('resolves a task with no folder to its own task directory without creating it or claiming a session', async () => {
@@ -32,5 +33,24 @@ describe('Read-only task launch resolution', () => {
     const ready = { ...workspace, state: 'ready', cwd: '/fixture/workspace' } as Task['workspace'];
     expect((await resolveTaskLaunchReadOnly({ ...task, workspace: ready }, params)).cwd).toBe('/fixture/workspace');
     expect((await resolveTaskLaunchReadOnly({ ...task, workspace }, { ...params, cwd: '/fixture/elsewhere' })).cwd).toBe('/fixture/elsewhere');
+  });
+  it('a VP or lead starts in its own task directory, except in its isolated workspace or a folder the person picked', async () => {
+    const lead = { ...(await addTask({ title: 'Acme lead', project: '' })).task, org_role: 'lead' } as Task;
+    const own = await taskDirForHost(lead.id, '__local__');
+    const base = { taskIdPrefix: lead.id, source: 'api-v1' };
+    expect((await resolveTaskLaunchReadOnly(lead, { ...base, cwd: '/fixture/repo' })).cwd).toBe(own);
+    expect((await resolveTaskLaunchReadOnly(lead, { ...base, cwd: '/fixture/repo', cwdChosen: true })).cwd).toBe('/fixture/repo');
+    // Its isolated workspace is a copy, never the repository: it keeps that folder.
+    const ready = { state: 'ready', host: '__local__', anchor: '/fixture/repo', root: '/fixture/ws', cwd: '/fixture/ws' } as Task['workspace'];
+    expect((await resolveTaskLaunchReadOnly({ ...lead, workspace: ready }, base)).cwd).toBe('/fixture/ws');
+  });
+  it('a preview of a VP or lead on a remote host that has not said its root shows no folder, and never throws', async () => {
+    // The inbox's plan of an action and the Org page's contact read this (item-plans.ts, org-store.ts).
+    await updateConfig({ hosts: { devbox9: { hostname: 'devbox9.example.test', enabled: true } } } as never);
+    const lead = { ...(await addTask({ title: 'Acme remote lead', project: '' })).task, org_role: 'lead' } as Task;
+    const plan = await resolveTaskLaunchReadOnly(lead, { taskIdPrefix: lead.id, source: 'human-inbox', host: 'devbox9' }, { preview: true });
+    expect(plan.cwd).toBe('');
+    expect(plan.host).toBe('devbox9');
+    expect(plan.createTaskDir).toBe(true);
   });
 });

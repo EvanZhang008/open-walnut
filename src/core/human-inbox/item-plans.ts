@@ -146,7 +146,12 @@ export async function prepareInboxItem(letterId: string, itemId: string, raw: un
         frozen.project = String(create.project);
         plan.ops.push({ tool: 'task_create', args: { ...create, idempotency_key: plan.idempotencyKey, record_only: true } });
       }
-      plan.ops.push({ tool: 'task_start', args: { id: taskId, message: text, ...plan.launch, expect_reply: false, start_attempt_id: randomUUID() } });
+      // A VP or lead names no folder: its start resolves its own task directory (one its remote host
+      // has not said yet is ''), and a folder the op named would read as the person's choice.
+      const { cwd: launchCwd, ...launchRest } = plan.launch;
+      const { runsInOwnFolder } = await import('../sessions/org-own-folder.js');
+      const namesCwd = !!launchCwd && !runsInOwnFolder(launchTask);
+      plan.ops.push({ tool: 'task_start', args: { id: taskId, message: text, ...launchRest, ...(namesCwd ? { cwd: launchCwd } : {}), expect_reply: false, start_attempt_id: randomUUID() } });
     }
   }
   await import('../../ops/index.js');

@@ -276,38 +276,45 @@ async function continueNow(sessionId: string, opts: { by?: string }): Promise<Co
 
 /**
  * Move a Claude Code session's conversation to where a resume in `to` finds it: its transcript
- * (wherever its project dir is) and the `<sid>/` sidecar, through the host's daemon. 'missing'
- * and 'unknown' (the host could not be asked) move nothing; a conflict throws. Shared by the gone
- * folder's button and the VP's move to its own folder (org-own-folder.ts). The CLI must not be
- * running: it appends to the transcript by path.
+ * (wherever its project dir is) and the `<sid>/` sidecar, through the host's daemon. 'in-place'
+ * (it is already there: another spawn moved it), 'missing' and 'unknown' (the host could not be
+ * asked) move nothing; a conflict throws. Shared by the gone folder's button and the VP's move to
+ * its own folder (org-own-folder.ts). The CLI must not be running: it appends to the transcript
+ * by path.
  */
-export async function moveConversation(record: SessionRecord, to: string): Promise<'moved' | 'missing' | 'unknown'> {
+export async function moveConversation(record: SessionRecord, to: string): Promise<'moved' | 'in-place' | 'missing' | 'unknown'> {
   const found = await findTranscript(record)
   if (found.state !== 'found') return found.state
-  await moveTranscript(record, found.path, to)
-  return 'moved'
+  return await moveTranscript(record, found.path, to) ? 'moved' : 'in-place'
 }
 
-/** Move the transcript (and its sidecar dir) into the new folder's project dir, through the host's daemon. */
-async function moveTranscript(record: SessionRecord, found: string, to: string): Promise<void> {
+/**
+ * Move the transcript (and its sidecar dir) into the new folder's project dir, through the host's
+ * daemon. False: it was there already, nothing moved.
+ */
+async function moveTranscript(record: SessionRecord, found: string, to: string): Promise<boolean> {
   const { encodeProjectPath, isSafeForProjectEncoding } = await import('../session-file-reader.js')
   if (!isSafeForProjectEncoding(to)) throw new SessionControlError(`The task directory ${to} is too long a path for Claude Code's history layout`, 500)
   const sid = record.claudeSessionId
   const projectsRoot = path.posix.dirname(path.posix.dirname(found))
   // The CLI names a project dir by the folder's real path (macOS /tmp is /private/tmp).
-  const real = isLocal(record.host)
-    ? await (await import('node:fs/promises')).realpath(to).catch(() => to)
-    : await (await import('../transfer/daemon-transfer-client.js')).realpathOn(record.host!, to).catch(() => to)
-  const targetDir = `${projectsRoot}/${encodeProjectPath(real)}`
+  const realOf = async (p: string) => isLocal(record.host)
+    ? await (await import('node:fs/promises')).realpath(p).catch(() => p)
+    : await (await import('../transfer/daemon-transfer-client.js')).realpathOn(record.host!, p).catch(() => p)
+  const targetDir = `${projectsRoot}/${encodeProjectPath(await realOf(to))}`
   const target = `${targetDir}/${sid}.jsonl`
-  if (found === target) return
   const reader = isLocal(record.host) ? await localFiles() : new (await import('../daemon-file-reader.js')).DaemonFileReader(record.host!)
+  const conflict = (a: string, b: string) => new SessionControlError(`This conversation's history is in two places (${a} and ${b}); Walnut moved neither. Keep the one you want and try again.`, 409, { code: 'history_conflict', files: [a, b] })
+  if (found === target) {
+    // Already there, unless a copy is also where the session ran (the lookup may find either).
+    const source = record.cwd ? `${projectsRoot}/${encodeProjectPath(await realOf(record.cwd))}/${sid}.jsonl` : null
+    if (source && source !== target && await reader.stat(source).catch(() => null)) throw conflict(source, target)
+    return false
+  }
   await reader.ensureDir(targetDir)
   // Never over another file. The CLI resumes the copy in its own folder's project dir
   // first, so two copies would quietly continue the older one: say so instead.
-  if (await reader.stat(target)) {
-    throw new SessionControlError(`This conversation's history is in two places (${found} and ${target}); Walnut moved neither. Keep the one you want and try again.`, 409, { code: 'history_conflict' })
-  }
+  if (await reader.stat(target)) throw conflict(found, target)
   await reader.renamePath(found, target)
   // Subagent transcripts, tool results and workflow manifests live beside it, under <sid>/.
   const sidecar = `${path.posix.dirname(found)}/${sid}`
@@ -317,6 +324,7 @@ async function moveTranscript(record: SessionRecord, found: string, to: string):
     }))
   }
   log.session.info('folder gone: transcript moved', { sessionId: sid, host: record.host ?? '__local__', from: found, to: target })
+  return true
 }
 
 /** This machine's files, in the shape moveTranscript uses for a host's (the server owns this disk). */
@@ -445,7 +453,27 @@ export async function pendingFolderMovedNotice(sessionId: string): Promise<{ tex
     const { getSessionByClaudeId, updateSessionRecordConditionally } = await import('../session-tracker.js')
     const record = await getSessionByClaudeId(sessionId)
     const moved = record?.folderMoved
-    if (!moved || moved.told) return null
+    if (!moved || moved.told) {
+      // A VP's or lead's move into its own folder found its history in two places: said once.
+      const failed = record?.ownFolderMove
+      if (failed?.why !== 'history-conflict' || failed.told) return null
+      const { ownFolderConflictNotice } = await import('./org-own-folder.js')
+      return {
+        text: kit.buildWalnutMessage({
+          kind: 'notification',
+          attrs: { from: 'Walnut', outcome: 'folder-not-moved', note: 'automated Walnut status notice' },
+          body: ownFolderConflictNotice(failed),
+        }),
+        markTold: async () => {
+          await updateSessionRecordConditionally(
+            sessionId,
+            { ownFolderMove: { ...failed, told: true } } as Record<string, unknown>,
+            (current) => current.ownFolderMove?.at === failed.at,
+            { preserveLastActiveAt: true },
+          ).catch(() => {})
+        },
+      }
+    }
     return {
       text: folderMovedNotice(moved, moved.why === 'own-folder' ? 'own-folder' : 'kept'),
       markTold: async () => {

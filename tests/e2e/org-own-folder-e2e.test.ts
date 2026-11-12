@@ -10,8 +10,9 @@
  * post-compaction respawn even with its prompt current, keeping its conversation (`--resume`, the
  * transcript and its sidecar moved to the new folder's project dir), the record points there
  * (the task keeps its folder for its subtasks), and its next message says so once; a start the
- * daemon refuses after the move puts the conversation back; a CLI of the session still running on
- * the host (a terminal's `claude -r`) or another Walnut's session is never moved.
+ * daemon refuses before spawning puts the conversation back, one that failed after it went out
+ * does not; a CLI of the session still running on the host (a terminal's `claude -r`) or another
+ * Walnut's session is never moved; a history in two places is never merged, the node is told once.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -221,7 +222,8 @@ describe('a VP or lead runs in its own folder', () => {
   it('a start the daemon refuses after the move puts the conversation back where it was', async () => {
     const { id, sid, from } = await leadInRepo('Acme lead whose respawn is refused')
     const own = (await taskDirForHost(id, '__local__'))!
-    daemon.injectStartFault('mkfifo failed: no space left on device')
+    // The daemon's one-CLI-per-session refusal: sent before it spawns anything.
+    daemon.injectStartFault(`start: session ${sid} already has a running CLI (pid 4242, started by a process no Walnut daemon recorded)`, { errorKind: 'session_live', reason: 'session_live' })
     try {
       const rec = await compactAndDecide(id, sid)
       expect(rec!.promptRefresh!.outcome).toBe('respawned')
@@ -237,6 +239,57 @@ describe('a VP or lead runs in its own folder', () => {
     expect(existsSync(transcriptIn(own, sid))).toBe(false)
   }, 150_000)
 
+  it('a start that failed after it went out (it may have spawned) leaves the conversation in its own folder', async () => {
+    const { id, sid, from } = await leadInRepo('Acme lead whose respawn failed late')
+    const own = (await taskDirForHost(id, '__local__'))!
+    daemon.injectStartFault('mkfifo failed: no space left on device')
+    try {
+      await compactAndDecide(id, sid)
+      expect(starts(sid).at(-1)!.payload.cwd).toBe(own)
+      await new Promise((r) => setTimeout(r, 1_000))
+    } finally {
+      daemon.injectStartFault(null)
+    }
+    const rec = (await getSessionByClaudeId(sid))!
+    expect(rec.cwd).toBe(own)
+    expect(existsSync(transcriptIn(own, sid))).toBe(true)
+    expect(existsSync(from)).toBe(false)
+  }, 150_000)
+
+  it('its history in two places: Walnut moves neither, tells the node once naming both, and does not try again', async () => {
+    const { id, sid, from } = await leadInRepo('Acme lead with two histories')
+    const own = (await taskDirForHost(id, '__local__'))!
+    await fs.mkdir(own, { recursive: true })
+    const copy = transcriptIn(own, sid)
+    await fs.mkdir(path.dirname(copy), { recursive: true })
+    await fs.writeFile(copy, '{"type":"user","note":"an older copy"}\n')
+    await compactAndDecide(id, sid)
+    const rec = (await until('left with its conflict', () => getSessionByClaudeId(sid), (r) => r?.process_status === 'idle' && !!r.ownFolderMove))!
+    expect(rec.cwd).toBe(repo)
+    expect(rec.ownFolderMove).toMatchObject({ from: repo, why: 'history-conflict' })
+    expect(new Set(rec.ownFolderMove!.files)).toEqual(new Set([from, copy]))
+    expect(existsSync(from)).toBe(true)
+    expect(await fs.readFile(copy, 'utf8')).toContain('an older copy')
+
+    const sendsBefore = sentTexts(sid).length
+    await sendMessageToSession(sid, 'big-context-turn:30000:1h', { source: 'ui', taskId: id })
+    const texts = await until('next line sent', async () => sentTexts(sid), (t) => t.length > sendsBefore)
+    expect(texts.at(-1)).toContain('outcome="folder-not-moved"')
+    expect(texts.at(-1)).toContain(from)
+    expect(texts.at(-1)).toContain(copy)
+    await until('told', () => getSessionByClaudeId(sid), (r) => r?.ownFolderMove?.told === true && r.process_status === 'idle')
+    const sendsAfter = sentTexts(sid).length
+    await sendMessageToSession(sid, 'big-context-turn:30000:1h', { source: 'ui', taskId: id })
+    const again = await until('second line sent', async () => sentTexts(sid), (t) => t.length > sendsAfter)
+    expect(again.at(-1)).not.toContain('folder-not-moved')
+    await until('idle', () => getSessionByClaudeId(sid), (r) => r?.process_status === 'idle')
+
+    const startsNow = starts(sid).length
+    const next = await compactAndDecide(id, sid)
+    expect(next!.promptRefresh!.outcome).toBe('current')
+    expect(starts(sid).length).toBe(startsNow)
+  }, 150_000)
+
   it('a CLI of the session still running on the host (a terminal\'s claude -r) is never moved under it', async () => {
     const { id, sid, from } = await leadInRepo('Acme lead open in a terminal')
     daemon.heldElsewhere.set(sid, 4242)
@@ -249,7 +302,8 @@ describe('a VP or lead runs in its own folder', () => {
       const rec = (await until('respawned in place', () => getSessionByClaudeId(sid), (r) => r?.process_status === 'idle'))!
       expect(rec.cwd).toBe(repo)
       expect(rec.folderMoved).toBeUndefined()
-      expect(rec.ownFolderMove).toBeUndefined()
+      // Asked again an hour later at the soonest.
+      expect(rec.ownFolderMove).toMatchObject({ from: repo, why: 'process-running' })
       expect(existsSync(from)).toBe(true)
       for (const s of starts(sid).slice(startsBefore)) expect(s.payload.cwd).toBe(repo)
     } finally {

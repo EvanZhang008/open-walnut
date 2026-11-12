@@ -85,6 +85,7 @@ import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { isFolderGoneReason } from '../core/sessions/folder-gone-words.js'
+import { isSessionStopSuperseded } from '../core/sessions/session-stop.js'
 import { recordedSessionMode } from '../core/sessions/acp-recorded-mode.js'
 import { isWalnutOwnToolUse } from './acp-permission-posture.js'
 import { isWakeupArmed } from './daemon-fold.js'
@@ -800,6 +801,19 @@ type OpeningWrite = {
 function recordedModeToResume(record: { mode?: SessionMode; modeChosen?: boolean }): SessionMode | undefined {
   const fallbackAuto = record.modeChosen !== true && record.mode !== undefined && SESSION_MODE_CLI_MAP[record.mode] === 'auto'
   return fallbackAuto ? undefined : record.mode
+}
+
+/**
+ * A spawn failure that proves no CLI of the session started: thrown before the start went out, or
+ * a refusal the host's daemon sends before it spawns anything (another process holds the session,
+ * a stop came first, the budget holds it, the folder is gone). Anything else (a start that spawned
+ * and could not deliver its message, a link lost after the start was sent) may have a CLI running.
+ */
+export function startProvedNothingStarted(err: unknown, startSent: boolean): boolean {
+  if (!startSent) return true
+  if (err instanceof SessionHeldElsewhereError || isSessionStopSuperseded(err)) return true
+  if (err instanceof BudgetPausedError || err instanceof BudgetCheckingError || err instanceof CwdMissingError) return true
+  return isFolderGoneReason(err instanceof Error ? err.message : String(err))
 }
 
 export class ClaudeCodeSession {
@@ -3122,6 +3136,8 @@ export class ClaudeCodeSession {
     let resumeNow = true
     // Puts a VP's or lead's conversation back where it was when the start after its move fails.
     let ownMoveUndo: (() => Promise<string>) | null = null
+    // The start went out to the host: from here a failure no longer proves no CLI started.
+    let startSent = false
     const startSpawn = async (): Promise<{ pid: number | null; outputFile: string; fileSize: number } & SpawnLineOutcome> => {
       // Each pre-spawn step's ms, logged once before transport.start, so a slow
       // resume names the step it waited on (2026-11-08: 29 s, step unknown).
@@ -3273,6 +3289,7 @@ export class ClaudeCodeSession {
         totalMs: Date.now() - this._spawnTs,
       })
       this._cliStartAtMs = Date.now()
+      startSent = true
       return transport.start({
       args,
       stopFence,
@@ -3345,13 +3362,19 @@ export class ClaudeCodeSession {
     // on both success and failure (a failed spawn must not wedge delivery forever).
     const consumedBeforeSpawn = this._consumedOffset
     const spawnPromise = startSpawn().catch(async (err: unknown) => {
-      // The start after a move to the node's own folder did not happen (the host refused it:
-      // another CLI holds the session, a stop came first): the conversation goes back.
+      // The start after a move to the node's own folder did not happen: the conversation goes
+      // back. Only on a failure that proves no CLI started (one thrown before the start went
+      // out, or a refusal the host sends before it spawns anything): a start that spawned and
+      // then failed to deliver, or lost its link, may have a CLI writing in the new folder.
       const undo = ownMoveUndo
       ownMoveUndo = null
-      if (undo) {
+      if (undo && startProvedNothingStarted(err, startSent)) {
         resolvedCwd = await undo().catch(() => resolvedCwd)
         if (this._transport === transport) this._cwd = resolvedCwd
+      } else if (undo) {
+        log.session.warn('org node folder: the start failed after it went out; the conversation stays in its own folder', {
+          sessionId: resumeSessionId, taskId: this.taskId, cwd: resolvedCwd, error: err instanceof Error ? err.message : String(err),
+        })
       }
       throw err
     })

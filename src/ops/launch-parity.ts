@@ -29,6 +29,7 @@ export const LAUNCH_PARITY: Readonly<Record<string, ParityEntry>> = {
   engine: { op: ['task_create.engine', 'task_start.engine'] },
   project: { op: 'task_create.project' },
   createCwd: { op: ['task_create.create_cwd', 'task_start.create_cwd'] },
+  cwdChosen: { op: ['task_create.cwd', 'task_start.cwd'], note: 'an op that names cwd chose it (it never fills one in) and sends cwd_chosen; a VP\'s or lead\'s start keeps it only on a request with no caller session' },
   workspace: { op: ['task_create.workspace', 'task_start.workspace', 'workspace_providers'] },
   taskId: { op: 'task_start.id', note: 'a bound draft starts an existing task' },
   taskMeta: { op: 'task_create', note: 'each field is listed in TASK_META_PARITY' },
