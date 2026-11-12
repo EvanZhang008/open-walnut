@@ -220,7 +220,8 @@ describe('src/web/server.ts keeps the fence', () => {
 
   it('stopServer voids the owner and stops the lane at its entry, before any await and the pool reset', () => {
     const stop = from('stopServer')
-    expect(stop).toMatch(/^export async function stopServer\([^)]*\): Promise<void> \{\n(\s*\/\/[^\n]*\n)*\s*localDaemonLaneOwner\+\+\n\s*localDaemonLane\?\.stop\(\)\n\s*localDaemonLane = null\n/)
+    // Only comments and the synchronous shutdown-step setup (shutdown-steps.ts) come first: no await.
+    expect(stop).toMatch(/^export async function stopServer\([^)]*\): Promise<void> \{\n(\s*(?:\/\/[^\n]*|beginShutdownSteps\([^\n]*\))\n)*\s*localDaemonLaneOwner\+\+\n\s*localDaemonLane\?\.stop\(\)\n\s*localDaemonLane = null\n/)
     expect(stop.indexOf('sessionRunner.destroy()')).toBeGreaterThan(stop.indexOf('localDaemonLane = null'))
   })
 
