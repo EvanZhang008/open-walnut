@@ -1324,6 +1324,14 @@ if [[ -z "$(lkg_file)" ]]; then
   echo "Note: no last-known-good file at $LKG_DIR yet; if the new server fails after the switch, :$PORT stays unserved until a deploy succeeds." >&2
 fi
 
+# A task move production started while this deploy built and smoke-booted (that can take half an
+# hour on a busy Mac) holds the stop, as one running before the build held the queue
+# (scripts/lib/deploy-queue.sh, dq_hold_moves: bounded, and the move runs again after a restart
+# anyway). A forced deploy does not wait; a dry run stopped before the build.
+# shellcheck source=lib/deploy-queue.sh
+. "$REPO_ROOT/scripts/lib/deploy-queue.sh"
+if [[ "${WALNUT_DEVPROD_FORCE:-0}" != "1" ]]; then dq_hold_moves; fi
+
 # LAST thing before the outgoing server is stopped. Deliberately after the build
 # and the smoke boot (those take minutes — draining first would just let new turns
 # start), and before `launchctl remove`, which is itself a kill.

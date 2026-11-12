@@ -296,6 +296,113 @@ describe('transfer.pack: git repos', () => {
   })
 })
 
+describe('transfer.pack: a base the target holds (task-move-base-v1)', () => {
+  /** A pushed repo two commits ahead of its remote; returns the commits. */
+  function ahead(name: string) {
+    const r = pushedRepo(name)
+    const pushed = git(r.work, ['rev-parse', 'HEAD'])
+    write(path.join(r.work, 'src/a.txt'), 'second\n')
+    git(r.work, ['commit', '-q', '-am', 'second'])
+    const second = git(r.work, ['rev-parse', 'HEAD'])
+    write(path.join(r.work, 'src/a.txt'), 'third\n')
+    git(r.work, ['commit', '-q', '-am', 'third'])
+    return { ...r, pushed, second, head: git(r.work, ['rev-parse', 'HEAD']) }
+  }
+  const prereqs = (bundle: string) => fs.readFileSync(bundle).subarray(0, 600).toString('latin1').split('\n\n')[0]!
+    .split('\n').filter((l) => l.startsWith('-')).map((l) => l.slice(1, 41))
+
+  it('a commit the target holds that HEAD builds on is the base when fewer commits follow it', async () => {
+    const a = ahead('have-near')
+    const out = path.join(a.root, 'out')
+    const r = await packer.pack({ cwd: a.work, outDir: out, haves: [a.pushed, a.second, 'f'.repeat(40)] })
+    expect(r.meta).toMatchObject({ bundle: { base: a.second, from: 'target' }, ahead: 1 })
+    expect(prereqs(path.join(out, 'repo.bundle'))).toEqual([a.second])
+  })
+
+  it('the remote stays the base when no commit the target holds is nearer', async () => {
+    const a = ahead('have-far')
+    const unrelated = dir('unrelated')
+    git(unrelated, ['init', '-q'])
+    git(unrelated, ['commit', '-q', '--allow-empty', '-m', 'elsewhere'])
+    const r = await packer.pack({ cwd: a.work, outDir: path.join(a.root, 'out'), haves: [a.pushed, git(unrelated, ['rev-parse', 'HEAD'])] })
+    expect(r.meta).toMatchObject({ bundle: { base: a.pushed }, ahead: 2 })
+    expect((r.meta.bundle as { from?: string }).from).toBeUndefined()
+  })
+
+  it('a target that holds HEAD itself gets no bundle at all (git refuses an empty one)', async () => {
+    const a = ahead('have-head')
+    const r = await packer.pack({ cwd: a.work, outDir: path.join(a.root, 'out'), haves: [a.head] })
+    expect(r.meta).toMatchObject({ bundle: { base: a.head, from: 'target' }, ahead: 0 })
+    expect(r.files.map((f) => f.name)).toEqual(['meta.json'])
+  })
+
+  it('noBundle packs what the checkout is and never its commits', async () => {
+    const a = ahead('no-bundle')
+    const r = await packer.pack({ cwd: a.work, outDir: path.join(a.root, 'out'), noBundle: true })
+    expect(r.meta).toMatchObject({ head: a.head, headOnRemote: false, bundle: null })
+    expect(r.files.map((f) => f.name)).toEqual(['meta.json'])
+  })
+
+  it('transfer.recent names HEAD and first parents 1, 2, 4, 8 back; a missing or relative root names none', async () => {
+    const root = dir('recent')
+    git(root, ['init', '-q'])
+    for (let i = 0; i < 10; i++) git(root, ['commit', '-q', '--allow-empty', '-m', 'c' + i])
+    const all = git(root, ['rev-list', '--first-parent', 'HEAD']).split('\n')
+    const r = await packer.recent({ roots: [root, path.join(tmp, 'gone'), 'relative/x'] })
+    expect(r.roots).toEqual([
+      { root, commits: [all[0], all[1], all[2], all[4], all[8]] },
+      { root: path.join(tmp, 'gone'), commits: [] },
+    ])
+  })
+})
+
+describe('transfer.pack: the bundle deadline (bundleMs)', () => {
+  let clock = 1_000_000
+  /** A packer whose git calls get 1 s and whose `git count-objects -v` prints `out` (null: the real one). */
+  const withObjects = (out: string | null) => createTransferPack({
+    ...packerDeps,
+    now: () => clock,
+    timeouts: { gitMs: 1_000 },
+    spawn: ((cmd: string, args: string[], o: Record<string, unknown>) => (out !== null && cmd === 'git' && args[0] === 'count-objects'
+      ? packerDeps.spawn('/bin/sh', ['-c', 'printf "%s" "$1"', 'sh', out], o as never)
+      : packerDeps.spawn(cmd, args, o as never))) as unknown as TransferPackDeps['spawn'],
+  })
+  const repo = () => { const d = dir('objects'); git(d, ['init', '-q']); return d }
+
+  it('normal output: a second per MB of loose and packed objects on top of one git call', async () => {
+    expect(await withObjects('count: 10\nsize: 2048\nin-pack: 5\npacks: 1\nsize-pack: 10240\nprune-packable: 0\ngarbage: 0\nsize-garbage: 0\n').bundleMs(repo())).toBe(13_000)
+  })
+
+  it('empty output: the floor of three git calls', async () => {
+    expect(await withObjects('').bundleMs(repo())).toBe(3_000)
+  })
+
+  it('huge output: capped at BUNDLE_MAX_MS (8 minutes)', async () => {
+    expect(await withObjects('size-pack: 99999999\n').bundleMs(repo())).toBe(8 * 60_000)
+  })
+
+  it('a --shared clone counts the packs of its alternate (count-objects leaves them out)', async () => {
+    const src = repo()
+    write(path.join(src, 'big.bin'), crypto.randomBytes(6 * 1024 * 1024))
+    git(src, ['add', '-A'])
+    git(src, ['commit', '-q', '-m', 'big'])
+    git(src, ['repack', '-q', '-a', '-d'])
+    const clone = path.join(dir('shared-clone'), 'c')
+    git(tmp, ['clone', '-q', '--shared', src, clone])
+    expect(git(clone, ['count-objects', '-v'])).toMatch(/^alternate: /m)
+    const ms = await withObjects(null).bundleMs(clone)
+    expect(ms).toBeGreaterThanOrEqual(1_000 + 6_000)
+    expect(ms).toBeLessThan(1_000 + 9_000)
+  })
+
+  it('the bundle gets only what is left of the pack\'s 9 minutes, never less than one git call', async () => {
+    const p = withObjects('size-pack: 99999999\n')
+    expect(await p.bundleMs(repo(), clock - 8.5 * 60_000)).toBe(30_000)
+    expect(await p.bundleMs(repo(), clock - 9.5 * 60_000)).toBe(1_000)
+    expect(await p.bundleMs(repo(), clock)).toBe(8 * 60_000)
+  })
+})
+
 describe('transfer.pack: plain folders', () => {
   it('tars the folder without build output and dependency dirs', async () => {
     const root = dir('plain')

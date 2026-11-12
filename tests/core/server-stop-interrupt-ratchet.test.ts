@@ -288,7 +288,7 @@ describe('a long transfer waits out a dropped link', () => {
     // 2026-11-12: a 41 minute sleep used up both moves' 10 minute bounds; they failed on wake.
     const lw = read('src/core/transfer/link-wait.ts')
     expect(lw.match(/Date\.now\(\)/g)).toHaveLength(2) // the default clock, and its reset
-    expect(body(lw, 'export async function awaitLink<C>(')).toContain('awakeStopwatch(POLL_JUMP_MS)')
+    expect(body(lw, 'export async function awaitLink<C>(')).toContain('awakeStopwatch(POLL_JUMP_MS, pollMs + DIAL_WAIT_MS)')
     expect(lw.slice(lw.indexOf('export function awakeStopwatch('))).toMatch(/^[^]*?sleptBetween\(last, now\)/)
     expect(read('src/core/transfer/part-retry.ts')).not.toMatch(/Date\.now\(\)/)
     const client = read('src/core/transfer/daemon-transfer-client.ts')

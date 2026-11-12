@@ -1041,6 +1041,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // own folder. Both twins, not bridge-reachable, not for followers. Optional: without it a move
   // back sets the work up in a new folder beside the old copy.
   'task-move-into-v1',
+  // 'task-move-base-v1' (transfer-pack-core.ts): `transfer.recent {roots}` answers the commits each
+  // repository here holds near its HEAD, and `transfer.pack` takes `haves` (bundle only what follows
+  // the newest of them HEAD builds on) and `noBundle` (never the commits). A move to this host then
+  // ships what it lacks, not every commit since the remote's merge base. Both twins, read only, not
+  // bridge-reachable, not for followers. Optional: without it the base comes from the remote.
+  'task-move-base-v1',
   // 'host-vitals-v1' (host-vitals-core.ts): `host.vitals {days?, bucketMinutes?}` answers
   // how this host is doing (CPU use, load, memory available, uptime, linked, running
   // sessions) and folds the minute ledger the daemon writes under HOME (31 days) into

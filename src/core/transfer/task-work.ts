@@ -27,6 +27,7 @@ import type { PackedFile, PackMeta, PackReply, ScanReply } from './daemon-transf
 import { readHostProfile, repoKey } from '../hosts/host-profile.js';
 import { interruptedByShutdown } from '../server-stopping.js';
 import { copyNow, earlierPiece } from './move-resume.js';
+import { baseMissing, setUpFrom, targetCommits, targetRoots } from './target-base.js';
 
 export interface WorkPiece {
   kind: 'repo' | 'files' | 'checkout';
@@ -255,8 +256,18 @@ async function moveWork(opts: MoveTaskWorkOptions): Promise<MovedWork> {
   const cleanRepos: MovedWork['cleanRepos'] = [];
   const outDir = (n: number) => `${transfersDir(sourceHost)}/${moveId}/${n}/pack`;
   let n = 0;
+  const profile = await readHostProfile(targetHost).catch(() => null);
+  // A repository's pack bundles only the commits the target's copy of it lacks (target-base.ts).
+  const packAgainstTarget = async (opts: Parameters<typeof client.packWorkspace>[1], folder: string, intoDest?: string): Promise<PackReply> => {
+    const commits = targetMoves ? await targetCommits(client, targetHost, targetRoots(profile, folder, intoDest ? [intoDest] : [])) : null;
+    const pack = await client.packWorkspace(sourceHost, { ...opts, ...(commits?.haves.length ? { haves: commits.haves } : {}) });
+    const from = setUpFrom(pack.meta, profile, pack.meta.kind === 'git' ? cloneUrlOf(pack.meta) : undefined, intoDest);
+    return baseMissing(pack.meta, commits, from) ? client.packWorkspace(sourceHost, { ...opts, outDir: outDir(n++) }) : pack;
+  };
   for (const repo of scan?.repos ?? []) {
-    const pack = await client.packWorkspace(sourceHost, { cwd: repo.root, outDir: outDir(n++) });
+    const want = repo.rel || path.posix.basename(repo.root);
+    const intoDest = canInto && present.has(want.split('/')[0]!) ? `${targetTaskDir}/${want}` : undefined;
+    const pack = await packAgainstTarget({ cwd: repo.root, outDir: outDir(n++) }, path.posix.basename(repo.root), intoDest);
     const m = pack.meta;
     const own = !!m.dirty || (!!m.head && !m.headOnRemote) || !!m.noCommits || !cloneUrlOf(m);
     // The session's own folder always goes: it is where the work continues.
@@ -264,7 +275,6 @@ async function moveWork(opts: MoveTaskWorkOptions): Promise<MovedWork> {
       cleanRepos.push({ source: repo.root, ...(cloneUrlOf(m) ? { url: cloneUrlOf(m) } : {}) });
       continue;
     }
-    const want = repo.rel || path.posix.basename(repo.root);
     packed.push({
       piece: { kind: 'repo', source: repo.root, rel: nameFor(want, true) }, pack,
       ...(canInto && present.has(want.split('/')[0]!) && m.kind === 'git' && !m.noCommits ? { into: want } : {}),
@@ -275,26 +285,28 @@ async function moveWork(opts: MoveTaskWorkOptions): Promise<MovedWork> {
   let cwdPiece: Packed | undefined = packed.find((p) => cwd && inside(cwd, p.piece.source));
   // Where in its repository the session ran, kept when it continues in another copy of it.
   let relCwd = cwdPiece && cwd ? path.posix.relative(cwdPiece.piece.source, cwd) : '';
-  const ownUnknown = new Set<Packed>();
   const notes: string[] = [];
   const clearable: MovedWork['clearable'] = [];
   if (!cwdPiece && cwd && !(sourceTaskDir && inside(cwd, sourceTaskDir))) {
-    const probe = await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), paths: [] });
+    // What it is only: never its commits (older daemons ignore noBundle and bundle anyway).
+    const probe = await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), paths: [], noBundle: true });
     relCwd = probe.meta.relCwd ?? '';
     if (probe.meta.kind === 'git') {
       const same = packed.find((p) => p.pack.meta.kind === 'git' && (sameRepoUrl(cloneUrlOf(p.pack.meta), cloneUrlOf(probe.meta))
         || p.pack.meta.remotes?.some((r) => r.url.replace(/\/+$/, '') === probe.meta.root)));
       const mine = await ownFiles(session, probe.meta.root, sourceHost);
-      if (same && (!mine || mine.paths.length === 0)) {
-        // The work is the task directory's clone of this repository: the session continues there.
-        cwdPiece = same;
+      if (same && (!mine || mine.paths.length === 0)) cwdPiece = same; // The task directory's clone of it: the session continues there.
+      else if (!mine || mine.paths.length === 0) {
+        // A shared checkout's commits and branch are shared state, never this task's (2026-11-12: a
+        // move shipped 2,240 commits of the shared main): with no file of its own there, nothing rides.
+        const known = profile?.observed.repoPaths[repoKey(cloneUrlOf(probe.meta), path.posix.basename(probe.meta.root))]?.path;
+        notes.push(`${probe.meta.root}: a shared checkout; ${mine ? 'the session changed no file there' : 'which files the session changed there could not be read'}, so nothing of it was copied (its commits are shared, never the task's). The session continues in the task directory${known ? `; ${known} is ${targetHost === LOCAL_HOST ? 'this Mac' : targetHost}'s own checkout of it` : ''}.`);
       } else {
-        const pack = mine && mine.paths.length > 0
-          ? await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), paths: mine.paths, ownBefore: mine.before })
-          : probe;
+        // Only the files this session changed there, on the commit they build on: a bundle of just
+        // what the target's copy lacks of it.
+        const pack = await packAgainstTarget({ cwd, outDir: outDir(n++), paths: mine.paths, ownBefore: mine.before }, path.posix.basename(probe.meta.root));
         cwdPiece = { piece: { kind: 'checkout', source: probe.meta.root, rel: nameFor(path.posix.basename(probe.meta.root)) }, pack };
-        if (!mine) ownUnknown.add(cwdPiece);
-        else if (pack.meta.limited?.files?.length) clearable.push({ root: probe.meta.root, files: pack.meta.limited.files, backupFrom: pack.outDir, leftUntracked: pack.meta.untracked?.skippedCount ?? 0 });
+        if (pack.meta.limited?.files?.length) clearable.push({ root: probe.meta.root, files: pack.meta.limited.files, backupFrom: pack.outDir, leftUntracked: pack.meta.untracked?.skippedCount ?? 0 });
         packed.push(cwdPiece);
       }
     } else if (unmovableFolder(probe.meta.root)) {
@@ -325,7 +337,6 @@ async function moveWork(opts: MoveTaskWorkOptions): Promise<MovedWork> {
     }
   }
 
-  const profile = await readHostProfile(targetHost).catch(() => null);
   const pieces: MovedPiece[] = [];
   const setUp = (piece: MovedPiece): void => { pieces.push(piece); if (piece.applied) opts.onApplied?.(piece); };
   // The target is asked to set a piece up: until it answers, a server stop leaves it in doubt.
@@ -360,7 +371,6 @@ async function moveWork(opts: MoveTaskWorkOptions): Promise<MovedWork> {
       ...(m.ahead ? { commits: m.ahead } : {}),
       ...(m.limited && (m.limited.leftOutTracked + m.limited.leftOutUntracked) > 0
         ? { leftOut: { count: m.limited.leftOutTracked + m.limited.leftOutUntracked, sample: m.limited.leftOut } } : {}),
-      ...(ownUnknown.has(p) ? { ownUnknown: true } : {}),
     };
     // Into an existing copy: one the cut run made (as it holds it now), else one a move away left (as it left it).
     const leftDest = p.into ? `${targetTaskDir}/${p.into}` : undefined;

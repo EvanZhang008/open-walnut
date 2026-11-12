@@ -2805,6 +2805,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'transfer.scan': return replyTransfer(ws, id as number, 'transfer.scan', () => transferPack.scan(cmd), false)
     case 'transfer.apply': return replyTransfer(ws, id as number, 'transfer.apply', () => transferPack.apply(cmd), true)
     case 'transfer.clear': return replyTransfer(ws, id as number, 'transfer.clear', () => transferPack.clear(cmd), true)
+    case 'transfer.recent': return replyTransfer(ws, id as number, 'transfer.recent', () => transferPack.recent(cmd), false)
     // 'host-vitals-v1' (host-vitals-core.ts): now (CPU, load, memory, uptime) and the
     // ledger fold (up and linked minutes, outages, boots). Read-only, like host.facts.
     case 'host.vitals': return replyTransfer(ws, id as number, 'host.vitals', () => hostVitals.vitals(cmd) as unknown as Promise<Record<string, unknown>>, false)

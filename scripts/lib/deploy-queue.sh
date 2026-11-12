@@ -32,7 +32,8 @@
 #   next-at        when it may go       last-restart  its last deploy that served
 #   logs/          one log per deploy   runner.log    the runner's own lines
 #   busy, moving   why next-at waits (a busy Mac, a move production runs)
-# Ratchet: tests/scripts/deploy-queue.test.ts. Needs SERVE_ROOT, JS_RUN and DQ_SCRIPT.
+# Ratchet: tests/scripts/deploy-queue.test.ts. Needs SERVE_ROOT, JS_RUN and DQ_SCRIPT (the runner;
+# dev-prod.sh sources it for dq_hold_moves only).
 
 DQ_GAP="${WALNUT_DEPLOY_MIN_GAP_SECS:-600}"
 [[ "$DQ_GAP" =~ ^[0-9]+$ ]] || DQ_GAP=600
@@ -106,6 +107,30 @@ dq_moving() {
     return 0
   done
   return 0
+}
+
+# Right before production is stopped (dev-prod.sh, after its build and smoke boot): a move that
+# started while those ran holds the stop too (2026-11-12: a build took 28 minutes at a load of 70,
+# a move began 18 minutes in, and the restart cut it). Waits while dq_moving names one, at most
+# DQ_MOVE_HOLD from the start of this wait, and says which task. WALNUT_DEPLOY_MOVE_POLL_SECS (5)
+# is how often it looks. Portable to bash 3.2.
+dq_hold_moves() {
+  local moving start now poll="${WALNUT_DEPLOY_MOVE_POLL_SECS:-5}"
+  [[ "$poll" =~ ^[0-9]+$ ]] && (( poll > 0 )) || poll=5
+  moving="$(dq_moving)"
+  [[ -n "$moving" ]] || return 0
+  start="$(date +%s)"
+  dq_log "production runs a move ($moving): stopping it waits for the move to end, until $(dq_clock "$(( start + DQ_MOVE_HOLD ))") at the latest"
+  while :; do
+    sleep "$poll"
+    moving="$(dq_moving)"
+    if [[ -z "$moving" ]]; then dq_log "the move ended: production stops now"; return 0; fi
+    now="$(date +%s)"
+    if (( now - start >= DQ_MOVE_HOLD )); then
+      dq_log "the move ($moving) still runs at the end of its ${DQ_MOVE_HOLD}s hold: production stops, and the move runs again after the restart"
+      return 0
+    fi
+  done
 }
 
 # The deploy ceiling: the commit `git config walnut.deployCeiling` names in SERVE_ROOT; nothing

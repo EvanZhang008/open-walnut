@@ -4423,6 +4423,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'transfer.scan': return replyTransfer(ws, id, 'transfer.scan', function () { return transferPack.scan(cmd); }, false);
     case 'transfer.apply': return replyTransfer(ws, id, 'transfer.apply', function () { return transferPack.apply(cmd); }, true);
     case 'transfer.clear': return replyTransfer(ws, id, 'transfer.clear', function () { return transferPack.clear(cmd); }, true);
+    case 'transfer.recent': return replyTransfer(ws, id, 'transfer.recent', function () { return transferPack.recent(cmd); }, false);
     // 'host-vitals-v1' (host-vitals-core.ts): now (CPU, load, memory, uptime) and the
     // ledger fold (up and linked minutes, outages, boots). Read-only, like host.facts.
     case 'host.vitals': return replyTransfer(ws, id, 'host.vitals', function () { return hostVitals.vitals(cmd); }, false);

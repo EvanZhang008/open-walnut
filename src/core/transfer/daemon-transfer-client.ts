@@ -170,6 +170,11 @@ export interface PackOptions {
   /** A probe: skip the bundle of a repository no other host can clone, which would carry its
    *  whole history (older daemons ignore it and bundle as before). */
   noFullBundle?: boolean
+  /** Commits the target holds: the bundle carries only what follows the newest of them HEAD
+   *  builds on ('task-move-base-v1'; older daemons ignore it and base it on the remote). */
+  haves?: string[]
+  /** Never the repository's commits: what it is and its own files only ('task-move-base-v1'). */
+  noBundle?: boolean
 }
 
 /** Pack the workspace at `cwd` on `host` into `outDir` there (meta.json and friends). */
@@ -206,6 +211,23 @@ export function clearMovedFiles(host: string, opts: { root: string; files: Packe
 /** The git repositories and loose files in `dir` on `host`. */
 export function scanWorkDir(host: string, dir: string): Promise<ScanReply> {
   return call<ScanReply>(host, TASK_MOVE_CAPABILITY, 'transfer.scan', { dir }, 60_000)
+}
+
+export const TASK_MOVE_BASE_CAPABILITY = 'task-move-base-v1'
+
+/**
+ * The commits each repository at `roots` on `host` holds near its HEAD ('task-move-base-v1'), or
+ * null from a daemon without it. A move bundles only what follows the newest of them.
+ */
+export async function recentCommits(host: string, roots: string[]): Promise<Map<string, string[]> | null> {
+  if (!roots.length) return new Map()
+  try {
+    const r = await call<{ roots?: Array<{ root: string; commits: string[] }> }>(host, TASK_MOVE_BASE_CAPABILITY, 'transfer.recent', { roots }, READ_RPC_MS)
+    return new Map((r.roots ?? []).map((x) => [x.root, Array.isArray(x.commits) ? x.commits : []]))
+  } catch (err) {
+    if (err instanceof DaemonNeedsUpgradeError) return null
+    throw err
+  }
 }
 
 export const TASK_MOVE_INTO_CAPABILITY = 'task-move-into-v1'

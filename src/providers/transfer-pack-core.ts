@@ -11,8 +11,10 @@
  *                   they are listed in meta.untracked.skipped instead (at most 200)
  *   repo.bundle     git: only when HEAD is on no remote-tracking ref: the commits since
  *                   the merge base with the best remote ref (upstream, origin/HEAD, any),
- *                   or a full bundle of HEAD when there is no remote ref at all or no
- *                   remote another host can reach (none, or only folders on this host)
+ *                   or since the commit of `haves` (what the target holds) after which the
+ *                   fewest follow, or a full bundle of HEAD when there is no remote ref at
+ *                   all or no remote another host can reach (none, or only folders on this
+ *                   host); none with `noBundle`
  *   workspace.tgz   not git: the folder without node_modules, .git, .venv, dist, build,
  *                   target, __pycache__; cut and deleted past maxTarBytes (meta.tooLarge)
  *
@@ -70,7 +72,8 @@ export interface PackMeta {
   dirty?: boolean
   untracked?: PackUntracked
   /** null when HEAD is on a remote; `{}` for a full bundle; `{base}` for base..HEAD. */
-  bundle?: { base?: string } | null
+  /** `from: 'target'`: the base is a commit the target said it holds (`haves`, 'task-move-base-v1'). */
+  bundle?: { base?: string; from?: 'target' } | null
   /** Every remote is a folder on this host (a `--shared` clone of a local checkout):
    *  the URL that folder's own first remote names, the one another host can clone. */
   upstreamUrl?: string
@@ -98,6 +101,9 @@ export interface PackFile { name: string; size: number; sha256: string }
 export interface PackReply { outDir: string; meta: PackMeta; files: PackFile[] }
 
 /** `transfer.scan {dir, maxDepth?}` ('task-move-v1'): what a task directory holds. */
+/** `transfer.recent` ('task-move-base-v1'): commits near each repository's HEAD here. */
+export interface RecentReply { roots: Array<{ root: string; commits: string[] }> }
+
 export interface ScanReply {
   dir: string
   exists: boolean
@@ -146,9 +152,12 @@ export function createTransferPack(deps: TransferPackDeps) {
   var TAR_MS = (deps.timeouts && deps.timeouts.tarMs) || 5 * 60000
   // A bundle of a long history on a busy machine outlasts one git call's deadline (2026-11-12: a
   // move right after the Mac woke failed on "git bundle: timed out" at 60 s). It gets a second per
-  // MB of the repository's objects, at least three git calls' worth, at most BUNDLE_MAX_MS: under
-  // the server's own deadline for the whole pack (daemon-transfer-client.ts, PACK_RPC_MS, 10 min).
+  // MB of the repository's objects (its alternates' packs too: a task's clone is --shared), at
+  // least three git calls' worth, at most BUNDLE_MAX_MS, and never past PACK_BUDGET_MS since the
+  // pack began: the server's own deadline for the whole pack is 10 minutes
+  // (daemon-transfer-client.ts, PACK_RPC_MS), and the diff and the tar before it count too.
   var BUNDLE_MAX_MS = 8 * 60000
+  var PACK_BUDGET_MS = 9 * 60000
   var SKIPPED_CAP = 200
   var NAMES = ['meta.json', 'changes.patch', 'untracked.tgz', 'repo.bundle', 'workspace.tgz']
   var DIR_EXCLUDES = ['node_modules', '.git', '.venv', 'dist', 'build', 'target', '__pycache__']
@@ -234,15 +243,34 @@ export function createTransferPack(deps: TransferPackDeps) {
 
   function text(r: RunResult): string { return r.code === 0 ? r.stdout.toString('utf8').trim() : '' }
 
-  /** The deadline of `git bundle create` in `root`, by the size of its objects (git count-objects). */
-  async function bundleMs(root: string): Promise<number> {
-    var kib = 0
-    var lines = text(await git(root, ['count-objects', '-v'])).split('\n')
+  /**
+   * The deadline of `git bundle create` in `root`, by the size of its objects (git count-objects,
+   * and the packs of each alternate it names), for a pack that began at `startedAt`.
+   */
+  async function bundleMs(root: string, startedAt?: number): Promise<number> {
+    var bytes = 0
+    var lines = text(await git(root, ['count-objects', '-v'], { timeoutMs: 10000 })).split('\n')
     for (var i = 0; i < lines.length; i++) {
       var m = /^(size|size-pack): (\d+)$/.exec(lines[i].trim())
-      if (m) kib += Number(m[2])
+      if (m) bytes += Number(m[2]) * 1024
+      var alt = /^alternate: (.+)$/.exec(lines[i].trim())
+      if (alt) bytes += await packBytes(alt[1].replace(/^"|"$/g, ''))
     }
-    return Math.min(BUNDLE_MAX_MS, Math.max(3 * GIT_MS, GIT_MS + Math.round(kib / 1024) * 1000))
+    var bySize = Math.min(BUNDLE_MAX_MS, Math.max(3 * GIT_MS, GIT_MS + Math.round(bytes / (1024 * 1024)) * 1000))
+    var left = typeof startedAt === 'number' ? PACK_BUDGET_MS - (now() - startedAt) : Infinity
+    return Math.max(Math.min(GIT_MS, bySize), Math.min(bySize, left))
+  }
+
+  /** The bytes of the packs in an objects folder (an alternate): 0 when it cannot be read. */
+  async function packBytes(objects: string): Promise<number> {
+    var dir = deps.path.join(objects, 'pack')
+    var names = await deps.fs.promises.readdir(dir).then(function (n) { return n }, function () { return [] as string[] })
+    var total = 0
+    for (var i = 0; i < names.length; i++) {
+      if (!/\.pack$/.test(names[i])) continue
+      total += await deps.fs.promises.stat(deps.path.join(dir, names[i])).then(function (st) { return st.size }, function () { return 0 })
+    }
+    return total
   }
 
   function lastLine(s: string): string {
@@ -399,7 +427,24 @@ export function createTransferPack(deps: TransferPackDeps) {
     return text(await git(root, ['merge-base', 'HEAD', best])) || null
   }
 
-  async function packGit(cwd: string, root: string, outDir: string, maxUntracked: number, written: string[], only: string[] | null, ownBefore: Record<string, unknown> | null, noFullBundle: boolean): Promise<PackMeta> {
+  /**
+   * Of `haves` (commits the target holds), the one HEAD builds on with the fewest commits after
+   * it, and that count; null when HEAD builds on none of them (or this host lacks them all).
+   */
+  async function nearestHave(root: string, haves: string[]): Promise<{ sha: string; ahead: number } | null> {
+    var best: { sha: string; ahead: number } | null = null
+    for (var i = 0; i < haves.length; i++) {
+      if ((await git(root, ['merge-base', '--is-ancestor', haves[i], 'HEAD'])).code !== 0) continue
+      var ahead = Number(text(await git(root, ['rev-list', '--count', 'HEAD', '^' + haves[i]])))
+      if (isFinite(ahead) && (!best || ahead < best.ahead)) best = { sha: haves[i], ahead: ahead }
+      if (best && best.ahead === 0) break
+    }
+    return best
+  }
+
+  async function packGit(cwd: string, root: string, outDir: string, maxUntracked: number, written: string[], only: string[] | null, ownBefore: Record<string, unknown> | null,
+    bundleOpts: { noFullBundle: boolean; noBundle: boolean; haves: string[]; startedAt: number }): Promise<PackMeta> {
+    var noFullBundle = bundleOpts.noFullBundle
     var realCwd = await deps.fs.promises.realpath(cwd).then(function (p) { return p }, function () { return cwd })
     var relCwd = deps.path.relative(root, realCwd)
     if (relCwd.indexOf('..') === 0 || deps.path.isAbsolute(relCwd)) relCwd = ''
@@ -500,21 +545,37 @@ export function createTransferPack(deps: TransferPackDeps) {
     meta.dirty = onlySet ? written.indexOf('changes.patch') >= 0 || u.files.length > 0 : !!tracked || u.files.length > 0
 
     // A probe that would never use a whole history (`noFullBundle`) skips it.
-    if (head && !headOnRemote && !(noFullBundle && !portable)) {
+    // `noBundle` ('task-move-base-v1'): what it is and its own files only, never its commits.
+    if (head && !headOnRemote && !bundleOpts.noBundle && !(noFullBundle && !portable && !bundleOpts.haves.length)) {
       var base: string | null = null
+      var fromTarget = false
       // A remote no other host can reach is no base: the bundle then carries every commit.
       if (portable && deep) {
         for (var b2 = 0; b2 < deep.tips.length && !base; b2++) base = text(await git(root, ['merge-base', 'HEAD', deep.tips[b2]])) || null
       }
       if (portable && !base) base = await bundleBase(root, upstreamFull && upstreamFull.indexOf('refs/remotes/') === 0 ? upstreamFull : null)
+      // A commit the target holds is the better base when fewer commits follow it (2026-11-12: this
+      // host's main reaches no remote as the same commits, so a base from the remote was 2,240
+      // commits back while the target's checkout, which follows this host's main, held all but a few).
+      var near = bundleOpts.haves.length ? await nearestHave(root, bundleOpts.haves) : null
+      if (near) {
+        var viaBase = base ? Number(text(await git(root, ['rev-list', '--count', 'HEAD', '^' + base]))) : Infinity
+        if (!(viaBase <= near.ahead)) { base = near.sha; fromTarget = true }
+      }
+      if (fromTarget && near && near.ahead === 0) {
+        // The target holds HEAD itself: nothing to bundle (git refuses an empty bundle).
+        meta.bundle = { base: base!, from: 'target' as const }
+        meta.ahead = 0
+        return meta
+      }
       var args = ['bundle', 'create', deps.path.join(outDir, 'repo.bundle')]
       if (base) args.push('^' + base)
       args.push('HEAD')
       if (branch) args.push('refs/heads/' + branch)
-      var b = await git(root, args, { timeoutMs: await bundleMs(root) })
+      var b = await git(root, args, { timeoutMs: await bundleMs(root, bundleOpts.startedAt) })
       if (b.code !== 0) throw fail('git_failed', 'git bundle: ' + (b.timedOut ? 'timed out' : lastLine(b.stderr)))
       written.push('repo.bundle')
-      meta.bundle = base ? { base: base } : {}
+      meta.bundle = !base ? {} : fromTarget ? { base: base, from: 'target' as const } : { base: base }
       var ahead = Number(text(await git(root, ['rev-list', '--count', 'HEAD'].concat(base ? ['^' + base] : []))))
       if (isFinite(ahead)) meta.ahead = ahead
     }
@@ -917,6 +978,7 @@ export function createTransferPack(deps: TransferPackDeps) {
   }
 
   async function pack(cmd: Record<string, unknown>): Promise<PackReply> {
+    var startedAt = now()
     var cwd = localPath(cmd.cwd, 'cwd')
     var outDir = localPath(cmd.outDir, 'outDir')
     var st = await deps.fs.promises.stat(cwd).then(function (s) { return s }, function () { return null })
@@ -935,7 +997,8 @@ export function createTransferPack(deps: TransferPackDeps) {
     var written: string[] = []
     // `paths: []` of a plain folder asks only what it is (a probe): nothing is archived.
     var ownBefore = cmd.ownBefore && typeof cmd.ownBefore === 'object' ? cmd.ownBefore as Record<string, unknown> : null
-    var meta = top ? await packGit(cwd, root, outDir, maxUntracked, written, only, ownBefore, cmd.noFullBundle === true)
+    var haves = Array.isArray(cmd.haves) ? cmd.haves.filter(function (h): h is string { return typeof h === 'string' && /^[0-9a-f]{40}$/.test(h) }).slice(0, 64) : []
+    var meta = top ? await packGit(cwd, root, outDir, maxUntracked, written, only, ownBefore, { noFullBundle: cmd.noFullBundle === true, noBundle: cmd.noBundle === true, haves: haves, startedAt: startedAt })
       : only && only.length === 0 ? { kind: 'dir' as const, root: root, relCwd: '', createdAt: '' }
       : await packDir(cwd, outDir, maxTar, written, exclude)
     meta.createdAt = new Date(now()).toISOString()
@@ -1056,5 +1119,25 @@ export function createTransferPack(deps: TransferPackDeps) {
     return { root: root, backup: backupTo, cleared: cleared, kept: kept }
   }
 
-  return { pack: pack, scan: scan, apply: apply, clear: clear }
+  /**
+   * `transfer.recent {roots}` ('task-move-base-v1'): the commits each repository here holds near
+   * its HEAD (HEAD, then its first parents 1, 2, 4 ... 4096 back), so a move to this host bundles
+   * only what it lacks (`haves` of transfer.pack). Read only; a root that is no repository answers
+   * no commits.
+   */
+  async function recent(cmd: Record<string, unknown>): Promise<RecentReply> {
+    var roots = Array.isArray(cmd.roots) ? cmd.roots.filter(function (r): r is string { return typeof r === 'string' && deps.path.isAbsolute(r) }).slice(0, 8) : []
+    var out: RecentReply['roots'] = []
+    for (var i = 0; i < roots.length; i++) {
+      var isDir = await deps.fs.promises.stat(roots[i]).then(function (st) { return st.isDirectory() }, function () { return false })
+      var r = isDir ? await git(roots[i], ['rev-list', '--first-parent', '-n', '4097', 'HEAD']) : null
+      var all = r ? text(r).split('\n').filter(function (l) { return /^[0-9a-f]{40}$/.test(l) }) : []
+      var picks: string[] = []
+      for (var k = 0; k < all.length; k = k === 0 ? 1 : k * 2) picks.push(all[k])
+      out.push({ root: roots[i], commits: picks })
+    }
+    return { roots: out }
+  }
+
+  return { pack: pack, scan: scan, apply: apply, clear: clear, recent: recent, bundleMs: bundleMs }
 }

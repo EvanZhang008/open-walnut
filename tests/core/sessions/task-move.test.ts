@@ -212,6 +212,7 @@ function daemonFor(host: string): TransferConn {
         case 'transfer.scan': return answer(() => pack.scan(p));
         case 'transfer.apply': return W.failApply ? { ok: false, error: 'clone: the network is down', code: 'apply_failed' } : answer(() => pack.apply(p));
         case 'transfer.clear': return answer(() => pack.clear(p));
+        case 'transfer.recent': return answer(() => pack.recent(p));
         case 'fs.writePart': return answer(() => core.writePart(p, { boundHome: null, origin: null }));
         case 'fs.find': return { ok: true, files: [] };
         case 'fs.readRange': {
@@ -393,6 +394,88 @@ describe('task_move', () => {
     expect(fs.existsSync(path.join(shared, 'foreign.txt'))).toBe(true);
     expect(said).toMatch(/Left on the old host: 2 changed files .* that this task did not change \((a\.txt, foreign\.txt|foreign\.txt, a\.txt)\)/);
     expect((await getSessionByClaudeId(sid))?.archived).toBe(true);
+  }, 120_000);
+
+  it('a session in a shared checkout that changed nothing there carries nothing of it: no bundle, never its commits (2026-11-12)', async () => {
+    // 2026-11-12: a move shipped 2,240 commits of the shared main, a bundle growing for hours.
+    const { taskId, clone } = await taskInSharedCheckout();
+    fs.rmSync(path.dirname(clone), { recursive: true, force: true });
+    // The shared checkout is ahead of every remote (as this Mac's main is): its commits are shared state.
+    write(path.join(shared, 'c1.txt'), 'shared commit\n');
+    git(shared, ['add', 'c1.txt']);
+    git(shared, ['commit', '-q', '-m', 'a commit of the shared main']);
+    W.changes = [];
+
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+
+    expect(res).toMatchObject({ state: 'done', host: 'cloud' });
+    const destTaskDir = `${W.homes.cloud}/tasks/${taskId}`;
+    expect(W.starts[0]).toMatchObject({ cwd: destTaskDir });
+    expect(fs.readdirSync(destTaskDir).filter((n) => n.startsWith('marina'))).toEqual([]);
+    const said = res.moved!.join('\n');
+    expect(said).toMatch(/: a shared checkout; the session changed no file there, so nothing of it was copied \(its commits are shared, never the task's\)\. The session continues in the task directory; .*cloud-workplace\/marina is cloud's own checkout of it\./);
+    // No bundle was ever made for it, on either host.
+    const bundles = (dir: string) => (fs.existsSync(dir) ? execFileSync('find', [dir, '-name', 'repo.bundle*'], { encoding: 'utf8' }).trim() : '');
+    expect(bundles(W.homes.__local__)).toBe('');
+    expect(bundles(W.homes.cloud)).toBe('');
+  }, 120_000);
+
+  it('a session that changed two files of a shared checkout carries exactly those two', async () => {
+    const { taskId, clone } = await taskInSharedCheckout();
+    fs.rmSync(path.dirname(clone), { recursive: true, force: true });
+    write(path.join(shared, 'b.txt'), 'b edited by the task\n');
+    write(path.join(shared, 'own.txt'), 'the task\'s new file\n');
+    W.changes = [{ repoRoot: shared, label: 'marina', kind: 'cwd', files: [
+      { relPath: 'b.txt', filePath: path.join(shared, 'b.txt'), status: 'modified', before: 'b1\n', after: 'b edited by the task\n', ops: 1, partial: false },
+      { relPath: 'own.txt', filePath: path.join(shared, 'own.txt'), status: 'added', before: '', after: 'the task\'s new file\n', ops: 1, partial: false },
+    ] }];
+
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+
+    const dest = `${W.homes.cloud}/tasks/${taskId}/marina`;
+    expect(res).toMatchObject({ state: 'done', host: 'cloud' });
+    expect(W.starts[0]).toMatchObject({ cwd: dest });
+    expect(fs.readFileSync(`${dest}/b.txt`, 'utf8')).toBe('b edited by the task\n');
+    expect(fs.readFileSync(`${dest}/own.txt`, 'utf8')).toBe('the task\'s new file\n');
+    // Not another writer's edit or file.
+    expect(fs.readFileSync(`${dest}/a.txt`, 'utf8')).toBe('a1\n');
+    expect(fs.existsSync(`${dest}/foreign.txt`)).toBe(false);
+    const changed = [...git(dest, ['diff', '--name-only', 'HEAD']).split('\n'), ...git(dest, ['ls-files', '--others', '--exclude-standard']).split('\n')].filter(Boolean)
+    expect(changed.sort()).toEqual(['b.txt', 'own.txt']);
+  }, 120_000);
+
+  it('a carried repository whose target holds a recent commit of it bundles only what follows that commit', async () => {
+    const { taskId, clone } = await taskInSharedCheckout();
+    // The shared main moves on by three commits no remote has; the cloud's checkout follows it.
+    for (const i of [1, 2, 3]) {
+      write(path.join(shared, `c${i}.txt`), `shared ${i}\n`);
+      git(shared, ['add', `c${i}.txt`]);
+      git(shared, ['commit', '-q', '-m', `shared commit ${i}`]);
+    }
+    git(targetBase, ['fetch', '-q', shared, 'main']);
+    git(targetBase, ['reset', '-q', '--hard', 'FETCH_HEAD']);
+    const sharedHead = git(shared, ['rev-parse', 'HEAD']);
+    // The task's clone builds its own commit on that main.
+    git(clone, ['stash', '-q', '--include-untracked']);
+    git(clone, ['fetch', '-q', 'origin']);
+    git(clone, ['rebase', '-q', 'origin/main']);
+    git(clone, ['stash', 'pop', '-q']);
+    const head = git(clone, ['rev-parse', 'HEAD']);
+
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+
+    expect(res).toMatchObject({ state: 'done', host: 'cloud' });
+    const dest = `${W.homes.cloud}/tasks/${taskId}/marina`;
+    expect(git(dest, ['rev-parse', 'HEAD'])).toBe(head);
+    expect(fs.readFileSync(`${dest}/c3.txt`, 'utf8')).toBe('shared 3\n');
+    // One commit rode, on the cloud's own commit; from the remote's base it would have been four.
+    expect(res.moved!.join('\n')).toContain('1 commit no remote has');
+    // The bundle the move shipped needs only the target's own commit: one prerequisite, sharedHead.
+    const bundles = execFileSync('find', [W.root, '-name', 'repo.bundle'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
+    expect(bundles.length).toBeGreaterThan(0)
+    const header = fs.readFileSync(bundles.at(-1)!).subarray(0, 600).toString('latin1').split('\n\n')[0]!
+    expect(header).toContain(head)
+    expect(header.split('\n').filter((l) => l.startsWith('-')).map((l) => l.slice(1, 41))).toEqual([sharedHead])
   }, 120_000);
 
   it('placement: a first start on an overloaded Mac goes to the cloud host, in the task directory, from the cloud\'s own checkout', async () => {

@@ -43,7 +43,7 @@ export class TransferCommandError extends Error {
  */
 const same = (p: Record<string, unknown>) => p
 export const RESEND_ON_LOST: Readonly<Record<string, (params: Record<string, unknown>, attempt: number) => Record<string, unknown>>> = {
-  'transfer.scan': same, 'transfer.realpath': same, 'transfer.reach': same,
+  'transfer.scan': same, 'transfer.realpath': same, 'transfer.reach': same, 'transfer.recent': same,
   'host.facts': same, 'host.load': same, 'host.endpoint': same,
   'transfer.pack': (p, n) => ({ ...p, outDir: `${String(p.outDir).replace(/\/+$/, '')}-again-${n}` }),
 }
