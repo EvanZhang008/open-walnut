@@ -124,6 +124,9 @@ export async function sweepExpired(): Promise<number> {
 /** On boot: arm the clock of every pending approval and expire the overdue ones. */
 export async function initApprovals(): Promise<void> {
   await sweepExpired()
+  // Keys an older Walnut kept for a Mac that has since enrolled a newer one (keys.ts).
+  const { retireReplacedMacKeys } = await import('./keys.js')
+  await retireReplacedMacKeys().catch((err) => log.web.warn('approvals: retiring replaced Mac keys failed', { error: String(err) }))
   const file = await readJsonFile<ApprovalsFile>(approvalsFile(), EMPTY)
   // A decision made just before a restart, inside the asker's grace, is still told.
   const { rearmAskerNotices } = await import('./tell-asker.js')

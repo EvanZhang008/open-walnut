@@ -228,6 +228,30 @@ describe('biometric approvals and device keys', () => {
     expect((await listKeys()).find((k) => k.id === newMac.id)?.status).toBe('active')
   })
 
+  it('on boot, keys an older Walnut kept for a Mac that enrolled a newer one go, with their asks (the 2026-11-12 keys.json)', async () => {
+    const { retireReplacedMacKeys } = await import('../../../src/core/approvals/keys.js')
+    const { WALNUT_HOME } = await import('../../../src/constants.js')
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+    const phone = softKey()
+    const a = softKey(); const b = softKey(); const c = softKey(); const later = softKey()
+    await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
+    const asked = await enrollKey({ publicKey: b.spki, name: 'Studio', kind: 'mac-app' })
+    // The shape production held: an old active key, a pending one, then the current active key.
+    const file = path.join(WALNUT_HOME, 'approvals', 'keys.json')
+    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as { keys: Array<Record<string, unknown>> }
+    raw.keys.push(
+      { id: a.id, name: 'Studio', kind: 'mac-app', publicKey: a.spki, createdAt: '2026-11-11T23:28:42.093Z', status: 'active', activatedAt: '2026-11-11T23:28:42.093Z' },
+      { id: c.id, name: 'Studio', kind: 'mac-app', publicKey: c.spki, createdAt: '2099-11-12T13:14:05.333Z', status: 'active', activatedAt: '2099-11-12T13:14:05.333Z' },
+      { id: later.id, name: 'Studio', kind: 'mac-app', publicKey: later.spki, createdAt: '2099-11-13T00:00:00.000Z', status: 'pending' },
+    )
+    await fs.writeFile(file, JSON.stringify(raw))
+    expect(await retireReplacedMacKeys()).toBe(2)
+    expect((await listKeys()).map((k) => k.id).sort()).toEqual([phone.id, c.id, later.id].sort())
+    expect((await getApproval(asked.enrollment!.id))?.status).toBe('canceled')
+    expect(await retireReplacedMacKeys()).toBe(0)
+  })
+
   it('only keys.ts writes the device keys, and only enrollKey adds one (where a device retires its earlier keys)', async () => {
     const fs = await import('node:fs')
     const path = await import('node:path')

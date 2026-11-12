@@ -132,13 +132,7 @@ async function enrollOne(input: EnrollInput): Promise<EnrollResult> {
       if (retired.length) file.keys = file.keys.filter((k) => !retired.includes(k))
       return file
     })
-    for (const old of retired) {
-      if (old.enrollApprovalId) await cancelInternal(old.enrollApprovalId, 'the device enrolled a newer key from its own app').catch(() => undefined)
-    }
-    if (retired.length) {
-      log.web.info('approval keys retired: the same device enrolled a newer key', { keyId: keep.id, kind: keep.kind, name: keep.name, retired: retired.map((k) => ({ id: k.id, status: k.status })) })
-      changed()
-    }
+    await afterRetire(retired, keep)
   }
   if (!key) throw new ApprovalError(403, 'first_key_from_phone', FIRST_KEY_MESSAGE)
   if (withdraw) await cancelInternal(withdraw, 'the device signs now: it was set up from its own app').catch(() => undefined)
@@ -220,5 +214,42 @@ export async function removeKey(id: string): Promise<void> {
     throw new ApprovalError(409, 'last_key', 'This is the last device that signs approvals, so Walnut keeps it: with none, the next device would be trusted on first use. If that phone is lost, delete approvals/keys.json in the Walnut data folder by hand.')
   }
   if (enrollId) await cancelInternal(enrollId, 'the device was removed').catch(() => undefined)
+  changed()
+}
+
+/**
+ * On boot: the same rule for keys an older Walnut kept. Per Mac (name), the key it enrolled last
+ * that is active stays; its earlier keys, active or pending, go with their asks. A pending key
+ * newer than that one stays (a request with no app proof, still the person's to approve).
+ */
+export async function retireReplacedMacKeys(): Promise<number> {
+  let retired: ApprovalKey[] = []
+  await updateJsonFile<ApprovalKeysFile>(keysFile(), EMPTY, (file) => {
+    const at = (k: ApprovalKey) => Date.parse(k.createdAt) || 0
+    const newest = new Map<string, ApprovalKey>()
+    for (const k of file.keys) {
+      if (k.kind !== 'mac-app' || k.status !== 'active') continue
+      const cur = newest.get(k.name)
+      if (!cur || at(k) > at(cur)) newest.set(k.name, k)
+    }
+    retired = file.keys.filter((k) => {
+      const keep = k.kind === 'mac-app' ? newest.get(k.name) : undefined
+      return !!keep && k.id !== keep.id && at(k) <= at(keep)
+    })
+    if (retired.length) file.keys = file.keys.filter((k) => !retired.includes(k))
+    return file
+  })
+  await afterRetire(retired)
+  return retired.length
+}
+
+async function afterRetire(retired: ApprovalKey[], keep?: ApprovalKey): Promise<void> {
+  if (!retired.length) return
+  for (const old of retired) {
+    if (old.enrollApprovalId) await cancelInternal(old.enrollApprovalId, 'this Mac enrolled a newer key from its own app').catch(() => undefined)
+  }
+  log.web.info('approval keys retired: the same Mac enrolled a newer key', {
+    ...(keep ? { keyId: keep.id, name: keep.name } : {}), retired: retired.map((k) => ({ id: k.id, name: k.name, status: k.status })),
+  })
   changed()
 }
