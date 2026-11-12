@@ -76,6 +76,7 @@ import { lineAnswerFrame } from './line-fate-core.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
 import { matchesRetryExhaustion } from '../core/session-auto-continue.js'
 import { DaemonFileReader } from '../core/daemon-file-reader.js'
+import { readAttachEvidence, ON_DEMAND_ATTACH_EVIDENCE_MS, EVIDENCE_TIMEOUT, type StreamEvidence } from './attach-evidence.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
 // local images via daemon and rewrites paths inside start() and writeMessage().
 import type { SshTarget } from './session-io.js'
@@ -3619,13 +3620,65 @@ export class ClaudeCodeSession {
   }
 
   /**
+   * Stale-watermark heal (incident inc-1786428350008): the watermark seeded from
+   * the record is a byte position in ONE file incarnation. When the stream file
+   * was recreated (the /tmp→HOME streams move, a reboot wiping /tmp, a fresh
+   * same-sid spawn), the record still carries the DEAD file's offset — every event
+   * in the new (smaller) file sits "below" it, so the replay guard suppresses the
+   * real end-of-turn result and the task never reaches NEED_ACTION. When the
+   * evidence proves the mismatch (offset beyond EOF, or file epoch differs), drop
+   * the in-memory seed and durably reset the record: consumedOffset 0 paired with
+   * the new epoch is the tracker's sanctioned regression (epoch-reset
+   * arbitration). Without an epoch from the daemon (pre-epoch fs.stat) the durable
+   * write is skipped — the in-memory reset still unblocks this process lifetime.
+   */
+  private static async healStaleWatermark(
+    session: ClaudeCodeSession,
+    record: SessionRecord,
+    streamEvidence: Exclude<StreamEvidence, string>,
+  ): Promise<void> {
+    if (session._consumedOffset >= 0) {
+      try {
+        const { isStaleWatermark } = await import('../core/session-reconcile.js')
+        if (isStaleWatermark(record, streamEvidence)) {
+          log.session.warn('attachToExisting: consumedOffset belongs to a dead stream-file incarnation — resetting watermark', {
+            sessionId: record.claudeSessionId,
+            staleConsumedOffset: session._consumedOffset,
+            fileSize: streamEvidence.fileSize,
+            recordEpoch: record.streamEpoch ?? null,
+            fileEpoch: streamEvidence.streamEpoch ?? null,
+          })
+          session._consumedOffset = -1
+          if (streamEvidence.streamEpoch && record.claudeSessionId) {
+            const { updateSessionRecord } = await import('../core/session-tracker.js')
+            await updateSessionRecord(record.claudeSessionId, {
+              consumedOffset: 0,
+              streamEpoch: streamEvidence.streamEpoch,
+            }).catch(() => {})
+            record.consumedOffset = 0
+            record.streamEpoch = streamEvidence.streamEpoch
+          }
+        }
+      } catch (err) {
+        log.session.warn('attachToExisting: stale-watermark check failed', {
+          sessionId: record.claudeSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+  }
+
+  /**
    * Attach to an existing running process (for reconnection after restart).
    * Does NOT spawn — just tails the output file and monitors PID.
+   * `evidenceBudgetMs`: a send or a person waits on this attach (attach-evidence.ts).
+   * `lineFollows`: the caller writes a line into the process right after it.
    */
   static async attachToExisting(
     record: SessionRecord,
     cliCommand?: string,
     testDaemonUrl?: string,
+    opts?: { evidenceBudgetMs?: number; lineFollows?: boolean },
   ): Promise<ClaudeCodeSession> {
     const { getTask } = await import('../core/task-manager.js')
     const task = record.taskId ? await getTask(record.taskId).catch(() => undefined) : undefined
@@ -3730,19 +3783,21 @@ export class ClaudeCodeSession {
       && record.consumedOffset < Number.MAX_SAFE_INTEGER) {
       session._consumedOffset = record.consumedOffset
     }
-    if (record.pid && record.costWatermarkPid === record.pid) {
+    // The host reads this attach makes, all in one place (attach-evidence.ts): a send
+    // waiting on an on-demand attach gives them one short budget, after which the
+    // attach goes on as if the host had not answered.
+    const costSeeded = !!record.pid && record.costWatermarkPid === record.pid
+    const evidence = await readAttachEvidence(record, {
+      needCost: !costSeeded,
+      ...(opts?.evidenceBudgetMs !== undefined ? { budgetMs: opts.evidenceBudgetMs } : {}),
+    })
+    if (costSeeded) {
       session._costBaselineKnown = session._costWatermark.seed(record.costWatermark)
     } else {
       session._costBaselineKnown = false
-      try {
-        const restored = await new DaemonFileReader(record.host ?? '__local__')
-          .readCostState(record.claudeSessionId, record.cwd)
-        if (restored) {
-          session._costWatermark.seed(restored.totalCostUsd)
-          session._costBaselineKnown = true
-        }
-      } catch (error) {
-        log.session.warn('attached cost state unavailable', { sessionId: record.claudeSessionId, error: String(error) })
+      if (evidence.cost.kind === 'read' && evidence.cost.value) {
+        session._costWatermark.seed(evidence.cost.value.totalCostUsd)
+        session._costBaselineKnown = true
       }
     }
     // The process this record reported lifecycle for is still the one attached:
@@ -3791,24 +3846,23 @@ export class ClaudeCodeSession {
         if (isMainAgentTask(task)) taskPhasePastInProgress = true
       } catch { /* task not found — assume non-terminal */ }
     }
-    let streamEvidence: Awaited<ReturnType<typeof import('../core/session-reconcile.js')['fetchStreamTailFold']>> = 'not-fetched'
-    try {
-      const { fetchStreamTailFold } = await import('../core/session-reconcile.js')
-      // consumedOffset arms the whale-turn watermark fallback (incident 57b125ab:
-      // a 37-min turn pushed the anchor beyond the tail-window cap, so every
-      // attach returned 'tail-window-exhausted' and the stuck record never healed).
-      streamEvidence = await fetchStreamTailFold(record.claudeSessionId, record.host,
-        { consumedOffset: record.consumedOffset })
-    } catch (err) {
-      streamEvidence = 'evidence-fetch-threw'
-      log.session.warn('attachToExisting: stream evidence fetch failed', {
-        sessionId: record.claudeSessionId,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
+    // The stream tail's fold, read above with the cost state (readAttachEvidence).
+    // consumedOffset armed its whale-turn watermark fallback (incident 57b125ab: a
+    // 37-min turn pushed the anchor beyond the tail-window cap, so every attach
+    // returned 'tail-window-exhausted' and the stuck record never healed).
+    const streamEvidence = evidence.stream
     if (typeof streamEvidence !== 'string') {
       session.resultEmitted = record.process_status === 'error'
         || (streamEvidence.fold.turnEnded && taskPhasePastInProgress)
+    } else if (streamEvidence === EVIDENCE_TIMEOUT && opts?.lineFollows) {
+      // A line is written into this process right after the attach: what it
+      // reports next is that line's turn, never a processed one replayed (the
+      // transport subscribes to future events only), so nothing is held back for
+      // the phase proxy's sake (incident 10e7df54: a guessed phase swallowed a real result).
+      log.session.info('attachToExisting: stream evidence missed the send budget — a line follows, results stay open', {
+        sessionId: record.claudeSessionId, taskPhasePastInProgress,
+      })
+      session.resultEmitted = record.process_status === 'error'
     } else {
       log.session.info('attachToExisting: no stream evidence — resultEmitted falls back to phase proxy', {
         sessionId: record.claudeSessionId, reason: streamEvidence, taskPhasePastInProgress,
@@ -3817,47 +3871,8 @@ export class ClaudeCodeSession {
         || record.process_status === 'error'
     }
 
-    // ── Stale-watermark heal (incident inc-1786428350008) ──
-    // The watermark seeded above is a byte position in ONE file incarnation.
-    // When the stream file was recreated (the /tmp→HOME streams move, a reboot
-    // wiping /tmp, a fresh same-sid spawn), the record still carries the DEAD
-    // file's offset — every event in the new (smaller) file sits "below" it,
-    // so the replay guard suppresses the real end-of-turn result and the task
-    // never reaches NEED_ACTION. When the evidence proves the mismatch
-    // (offset beyond EOF, or file epoch differs), drop the in-memory seed and
-    // durably reset the record: consumedOffset 0 paired with the new epoch is
-    // the tracker's sanctioned regression (epoch-reset arbitration). Without
-    // an epoch from the daemon (pre-epoch fs.stat) the durable write is
-    // skipped — the in-memory reset still unblocks this process lifetime.
-    if (typeof streamEvidence !== 'string' && session._consumedOffset >= 0) {
-      try {
-        const { isStaleWatermark } = await import('../core/session-reconcile.js')
-        if (isStaleWatermark(record, streamEvidence)) {
-          log.session.warn('attachToExisting: consumedOffset belongs to a dead stream-file incarnation — resetting watermark', {
-            sessionId: record.claudeSessionId,
-            staleConsumedOffset: session._consumedOffset,
-            fileSize: streamEvidence.fileSize,
-            recordEpoch: record.streamEpoch ?? null,
-            fileEpoch: streamEvidence.streamEpoch ?? null,
-          })
-          session._consumedOffset = -1
-          if (streamEvidence.streamEpoch && record.claudeSessionId) {
-            const { updateSessionRecord } = await import('../core/session-tracker.js')
-            await updateSessionRecord(record.claudeSessionId, {
-              consumedOffset: 0,
-              streamEpoch: streamEvidence.streamEpoch,
-            }).catch(() => {})
-            record.consumedOffset = 0
-            record.streamEpoch = streamEvidence.streamEpoch
-          }
-        }
-      } catch (err) {
-        log.session.warn('attachToExisting: stale-watermark check failed', {
-          sessionId: record.claudeSessionId,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
+    // ── Stale-watermark heal (incident inc-1786428350008, healStaleWatermark) ──
+    if (typeof streamEvidence !== 'string') await ClaudeCodeSession.healStaleWatermark(session, record, streamEvidence)
 
     // Create the session manager for attach (all sessions go through daemon now).
     //
@@ -4273,6 +4288,32 @@ export class ClaudeCodeSession {
             ...permissionEventFields(pending.request_id, pending.request),
           }, ['*'], { source: 'session-runner', urgency: 'urgent' })
         }
+      }
+    }
+
+    // The reads that missed the send budget (attach-evidence.ts): applied when they
+    // come, only while still safe. A cost baseline no result has seeded yet (a
+    // result seeds it itself), and a dead file's watermark only while no event has
+    // been consumed past the one seeded here.
+    if (evidence.late) {
+      const seededOffset = session._consumedOffset
+      const attachedTransport = session._transport
+      const current = () => session._transport === attachedTransport && session._active
+      const lateCost = evidence.late.cost
+      if (lateCost) {
+        void lateCost.then((c) => {
+          if (c.kind !== 'read' || !c.value || session._costBaselineKnown || !current()) return
+          session._costWatermark.seed(c.value.totalCostUsd)
+          session._costBaselineKnown = true
+          log.session.info('attachToExisting: late cost state seeded the baseline', { sessionId: record.claudeSessionId })
+        })
+      }
+      const lateStream = evidence.late.stream
+      if (lateStream) {
+        void lateStream.then(async (ev) => {
+          if (typeof ev === 'string' || !current() || session._consumedOffset !== seededOffset) return
+          await ClaudeCodeSession.healStaleWatermark(session, record, ev)
+        }).catch(() => { /* logged inside */ })
       }
     }
 
@@ -12061,7 +12102,7 @@ export class SessionRunner {
       log.session.info('getOrAttachLiveSession: rehydrating via attachToExisting', {
         sessionId: claudeSessionId, host: record.host, pid: record.pid, taskId: record.taskId,
       })
-      const attached = await ClaudeCodeSession.attachToExisting(record, this.cliCommand, this._testDaemonUrl)
+      const attached = await ClaudeCodeSession.attachToExisting(record, this.cliCommand, this._testDaemonUrl, { evidenceBudgetMs: ON_DEMAND_ATTACH_EVIDENCE_MS })
 
       // Race guard mirrors processNext: a concurrent path may have populated the
       // map while attachToExisting awaited — if so, discard ours so we don't
@@ -15843,7 +15884,7 @@ export class SessionRunner {
             log.session.info('processNext: rehydrating session via attachToExisting', {
               sessionId, host: record.host, pid: record.pid, taskId: record.taskId,
             })
-            const attached = await ClaudeCodeSession.attachToExisting(record, this.cliCommand, this._testDaemonUrl)
+            const attached = await ClaudeCodeSession.attachToExisting(record, this.cliCommand, this._testDaemonUrl, { evidenceBudgetMs: ON_DEMAND_ATTACH_EVIDENCE_MS, lineFollows: true })
             // Race guard: a concurrent path (startup init() phase 1, or a concurrent
             // session:start for the same taskId) may have populated this.sessions
             // while attachToExisting was awaiting. If so, discard ours — registering
