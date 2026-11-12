@@ -87,6 +87,8 @@ export interface HostsFullDetail {
   /** The tasks whose sessions are in a turn there, and its slots (the answer's `queued.running` / `cap`). */
   running?: string[];
   cap?: number;
+  /** When its live session limit is what is full: its live processes, the ones that must stay, and the limit (sessions/live-sessions.ts). */
+  live?: { live: number; pinned: number; limit: number };
   /** Why it stays on that host: placement's own words, or that the start keeps its host (task-start.ts). */
   placement?: string;
 }
@@ -221,6 +223,7 @@ async function admitOnce(taskId: string, host: string | undefined | null, opts: 
         const reason = fullReason(v);
         throw new HostsFullError(`Not started: ${v.label} has no room (${reason}).`, {
           taskId, host: key, label: v.label, reason, running: await runningOn(key), cap: v.runningLimit,
+          ...(v.live && v.live.pinned >= v.live.limit ? { live: v.live } : {}),
         });
       }
     }

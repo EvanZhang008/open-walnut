@@ -93,6 +93,8 @@ export interface HostLoadView {
   running: number;
   /** Its slots (hostSlots). */
   runningLimit: number;
+  /** Its live session processes against its live limit: this Mac only (sessions/live-sessions.ts). */
+  live?: LiveCount;
   memTotalBytes?: number;
   /** How much placement prefers it (placement_weights; 50 normal, 0 never). */
   weight?: number;
@@ -111,6 +113,10 @@ export interface HostLoadView {
   at?: string;
   error?: string;
 }
+
+/** A host's live session processes (sessions/live-sessions.ts): all of them, the ones that must stay
+ *  (in a turn, own work running, at a prompt, the user in it; plus the starts holding a slot), and its limit. */
+export interface LiveCount { live: number; pinned: number; limit: number }
 
 const cache = new Map<string, { at: number; load: HostLoad }>();
 /** A host that did not answer is not asked again for as long (each start would wait 4 s for it). */
@@ -216,17 +222,28 @@ export function localLoadPerCpu(line: number): number {
 /** Judge one host's numbers against the caps (pure). */
 export function judgeHost(
   host: string, label: string, load: HostLoad | undefined, running: number, runningLimit: number,
-  caps = placementCaps(), error?: string,
+  caps = placementCaps(), error?: string, live?: LiveCount,
 ): HostLoadView {
   const view: HostLoadView = { host, label, known: !!load, running, runningLimit, busy: false, reasons: [], full: false, fullReasons: [], score: 0 };
+  if (live && live.limit > 0) view.live = live;
   // Its slots hold whether or not its load can be read (review round 3, Sol).
   if (running >= runningLimit) {
     view.full = true;
     view.fullReasons.push(`all ${runningLimit} slots taken`);
   }
+  // Its live processes (sessions/live-sessions.ts): full only when the ones that must stay fill the
+  // limit; idle ones above it exit by themselves, so they only steer placement to another host.
+  const liveFull = !!view.live && view.live.pinned >= view.live.limit;
+  const liveBusy = !!view.live && view.live.live >= view.live.limit;
+  if (liveFull) {
+    view.full = true;
+    view.fullReasons.push(`all ${view.live!.limit} live sessions busy`);
+  }
+  const liveReason = liveBusy ? `${view.live!.live} live sessions (limit ${view.live!.limit}, ${view.live!.pinned} busy)` : null;
   if (!load) {
     view.busy = true;
     view.reasons.push(`its load is unknown${error ? ` (${error})` : ''}`);
+    if (liveReason) view.reasons.push(liveReason);
     if (error) view.error = error;
     return view;
   }
@@ -255,6 +272,7 @@ export function judgeHost(
     view.reasons.push(`${(load.diskFreeBytes / 1024 ** 3).toFixed(1)} GB disk free (floor ${Math.round(caps.diskFreeBytes / 1024 ** 3)} GB)`);
   }
   if (running >= runningLimit) view.reasons.push(`${running} sessions in a turn (limit ${runningLimit})`);
+  if (liveReason) view.reasons.push(liveReason);
   view.busy = view.reasons.length > 0;
   if (memShare != null && memShare <= caps.memAvailShare) view.fullReasons.push('memory nearly full');
   if (judged >= caps.loadPerCpu * 2) view.fullReasons.push(`load past ${caps.loadPerCpu * 2} per CPU`);
@@ -322,12 +340,44 @@ export async function hostLoads(opts: { hosts?: string[] } = {}): Promise<HostLo
     const got = await loadOf(host);
     const label = host === LOCAL ? 'this Mac' : hostDisplayName(host, config.hosts?.[host]?.label);
     const slots = hostSlots(key, got.load, config.session_limits, (k) => activeSessionLimitFor(k, undefined));
-    const view = judgeHost(host, label, got.load, running, slots, caps, got.error);
+    const live = host === LOCAL ? await localLiveCount(config, runner, holders.get(host) ?? []) : undefined;
+    const view = judgeHost(host, label, got.load, running, slots, caps, got.error, live);
     // The weight: the room score scaled by how much the user prefers this host.
     view.weight = placementWeight(host, config);
     view.score = Math.round(view.score * (view.weight / DEFAULT_WEIGHT) * 1000) / 1000;
     return view;
   }));
+}
+
+/**
+ * This machine's live session processes against its live limit (sessions/live-sessions.ts): the
+ * starts holding a slot count as ones that must stay. Undefined with no limit or on any failure.
+ */
+async function localLiveCount(
+  config: import('../types.js').Config,
+  runner: import('../sessions/live-sessions.js').LiveRunnerView | null,
+  holders: readonly string[],
+): Promise<LiveCount | undefined> {
+  try {
+    const m = await import('../sessions/live-sessions.js');
+    const limit = m.localLiveLimit(config.session);
+    if (limit <= 0) return undefined;
+    const { listLocalLiveSessions } = await import('../session-tracker.js');
+    const live = (await listLocalLiveSessions()).filter(m.isLocalLiveProcess);
+    const withinMs = m.userHereWindowMs(config.session);
+    const holding = new Set(holders);
+    let pinned = 0;
+    for (const s of live) {
+      // A start holding a slot whose session is up already is starting: it stays.
+      if ((s.taskId && holding.has(s.taskId)) || m.mustStay(s, runner, false) != null || await m.userHereIn(s, withinMs)) pinned++;
+    }
+    // Each start not up yet is one process more, and one that must stay.
+    const liveTasks = new Set(live.map((s) => s.taskId).filter(Boolean));
+    const coming = holders.filter((id) => !liveTasks.has(id)).length;
+    return { live: live.length + coming, pinned: pinned + coming, limit };
+  } catch {
+    return undefined;
+  }
 }
 
 /** Words that say the work needs the Mac itself (or its user's screen). */

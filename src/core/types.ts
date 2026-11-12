@@ -1877,6 +1877,14 @@ export interface Config {
     /** How many minutes an idle FIFO session stays alive before being auto-killed.
      *  Set to 0 to disable idle timeout entirely. Default: 30. */
     idle_timeout_minutes?: number;
+    /** Minutes a session on this machine whose turn is over may stay quiet before its process
+     *  exits (the next message resumes it). Default 30, 0 = off. Not for a session whose own work
+     *  runs on, one at a permission prompt, Main or a VP, or one the user is in now
+     *  (src/core/sessions/live-sessions.ts). */
+    local_idle_exit_minutes?: number;
+    /** Live Claude Code processes on this machine before the longest-quiet idle ones exit and
+     *  automatic starts wait. Default one per 2.4 GB of memory (4 to 64), 0 = no limit. */
+    local_live_limit?: number;
     /** Maximum number of idle sessions per host before evicting the oldest.
      *  Default: local=30, remote=40. Set to 0 to disable idle limit. */
     max_idle?: number;

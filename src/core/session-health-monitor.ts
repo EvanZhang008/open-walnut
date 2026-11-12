@@ -32,6 +32,11 @@ import { memoryPressureShedding } from './memory-pressure.js'
 import { ENDED_SESSION_IDLE_TIMEOUT_MS, isEndedSessionCli } from './sessions/ended-session-clis.js'
 import { transcriptLastActivityMs } from './transcript-last-activity.js'
 import { reportGauge } from './health-monitor/gauges.js'
+import {
+  localIdleExitMs, localLiveLimit, isLocalLiveProcess, mustStay, exitsLast, userHereIn, userHereWindowMs, evictionOrder,
+  EVICT_MIN_QUIET_MS,
+  type EvictionCandidate, type LiveRunnerView,
+} from './sessions/live-sessions.js'
 
 /** Best effort: an unreadable task is not the main agent's. */
 async function isMainAgentTaskId(taskId: string): Promise<boolean> {
@@ -58,6 +63,8 @@ const IDLE_REAP_CONCURRENCY = 4
  * asked every 30 s for over a day (1500+ refusals a day in its log).
  */
 export const IDLE_REAP_RETRY_BACKOFF_MS = 30 * 60_000
+/** How long the live limit's announcement (`session:will-reap`) comes before its stop: one tick. */
+export const LIVE_LIMIT_WARN_MS = 25_000
 
 /** What an idle reap calls. Loaded once per tick, before the reap workers start. */
 interface IdleReapTools {
@@ -201,6 +208,8 @@ export class SessionHealthMonitor {
   private willReapWarnedBase = new Map<string, number>()
   /** Idle stops the owner refused: sid → the pid asked about and when (IDLE_REAP_RETRY_BACKOFF_MS). */
   private idleReapDeclined = new Map<string, { pid: number; at: number }>()
+  /** Sessions the live limit announced it will stop: sid → the quiet clock it was announced on, and when. */
+  private liveLimitWarned = new Map<string, { base: number; at: number }>()
   /** Transcript activity of local sessions the server has heard nothing from
    *  since it started: { at: read time, ms: newest entry or null }. */
   private transcriptActivity = new Map<string, { at: number; ms: number | null }>()
@@ -472,6 +481,12 @@ export class SessionHealthMonitor {
     if (ctx.overBudget()) return
     const idleTimedOutIds = await this.checkIdleTimeout(sessions, updateSessionRecord, taskMap, cachedIsAlive, ctx)
     endPhase('idleTimeout')
+
+    // The live limit of this machine (sessions/live-sessions.ts): past it, the longest-quiet
+    // sessions whose turn is over exit. Its stops are skipped by the loop below like the idle ones.
+    if (ctx.overBudget()) return
+    for (const id of await this.enforceLiveLimit(sessions, updateSessionRecord, taskMap, cachedIsAlive, idleTimedOutIds, ctx)) idleTimedOutIds.add(id)
+    endPhase('liveLimit')
 
     if (ctx.overBudget()) return
     let livenessChecked = 0
@@ -876,6 +891,7 @@ export class SessionHealthMonitor {
     const killedIds = new Set<string>()
     // Config override applies uniformly to local + remote when set. 0 = disabled.
     let configOverrideMs: number | null = null
+    let idleExitMs: number | null = localIdleExitMs(undefined)
     try {
       const { getConfig } = await import('./config-manager.js')
       const config = await getConfig()
@@ -883,6 +899,7 @@ export class SessionHealthMonitor {
       if (mins != null) {
         configOverrideMs = mins === 0 ? 0 : mins * 60 * 1000
       }
+      idleExitMs = localIdleExitMs(config.session)
     } catch (err) {
       log.session.debug('health monitor: config not available, using default idle timeout', {
         error: err instanceof Error ? err.message : String(err),
@@ -954,8 +971,18 @@ export class SessionHealthMonitor {
       const turnOver = mgr?.cliState != null
         ? mgr.cliState === 'idle'
         : session.process_status !== 'running'
-      if (!isRemote && !cronArmed && !outlivingWork && turnOver && memoryPressureShedding()) {
-        idleTimeoutMs = Math.min(idleTimeoutMs, PRESSURE_IDLE_TIMEOUT_MS)
+      // The idle exit (sessions/live-sessions.ts): on this machine a session whose turn is over
+      // exits after its quiet minutes, sooner under memory pressure. Main, the VPs and a chat the
+      // user is in now keep the plain timeout (2026-11-11, the Operations VP; the pressure rule had
+      // reaped both VPs at 15 minutes).
+      if (!isRemote && !cronArmed && !outlivingWork && turnOver) {
+        let shortMs = idleExitMs ?? Number.POSITIVE_INFINITY
+        if (memoryPressureShedding()) shortMs = Math.min(shortMs, PRESSURE_IDLE_TIMEOUT_MS)
+        if (shortMs < idleTimeoutMs) {
+          // A task this tick could not read counts as an org node: never stopped early on a guess.
+          const orgNode = session.taskId ? (taskMap.has(session.taskId) ? exitsLast(taskMap.get(session.taskId)) : true) : false
+          if (!orgNode && !await userHereIn(session, shortMs, now)) idleTimeoutMs = shortMs
+        }
       }
       // Still in a login session macOS ended (its daemon was replaced): stopped soon
       // after its turn, so the next message resumes it in the current session.
@@ -1171,6 +1198,132 @@ export class SessionHealthMonitor {
   }
 
   /**
+   * The live limit of this machine (sessions/live-sessions.ts). Past it, the longest-quiet local
+   * sessions whose turn is over, quiet at least EVICT_MIN_QUIET_MS, exit through the idle reap's
+   * stop, Main and the VPs last; never a session in a turn, one whose own work runs on, one at a
+   * prompt, a /loop or a team, or one the user is in now.
+   *
+   * Two ticks per stop: the first announces it (`session:will-reap`, so an armed idle compaction
+   * goes out while the CLI lives, and a plugin hears it), the next stops it if it is still quiet on
+   * the same clock and still a candidate. At most IDLE_REAP_CONCURRENCY stops and twice that many
+   * daemon probes a tick, inside the tick's budget; the next tick goes on. Resolves the stopped ids.
+   */
+  private async enforceLiveLimit(
+    sessions: SessionRecord[],
+    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
+    taskMap: Map<string, Task>,
+    cachedIsAlive: (s: SessionRecord) => Promise<boolean>,
+    alreadyStopped: ReadonlySet<string>,
+    ctx?: TickContext,
+  ): Promise<Set<string>> {
+    const stopped = new Set<string>()
+    let cfg: import('./sessions/live-sessions.js').LiveSessionConfig | undefined
+    try {
+      const { getConfig } = await import('./config-manager.js')
+      cfg = (await getConfig()).session
+    } catch { /* defaults */ }
+    const limit = localLiveLimit(cfg)
+    const hereMs = userHereWindowMs(cfg)
+    const live = limit > 0 ? sessions.filter((s) => isLocalLiveProcess(s) && !alreadyStopped.has(s.claudeSessionId)) : []
+    if (live.length <= limit) { this.liveLimitWarned.clear(); return stopped }
+
+    const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
+    let runner: (LiveRunnerView & { isBackgroundWorkActive?(id: string): boolean | Promise<boolean> }) | undefined
+    try {
+      runner = (await import('../providers/claude-code-session.js')).sessionRunner
+    } catch { /* no runner: nothing can be judged idle, nothing is stopped */ }
+    if (!runner) return stopped
+    const now = Date.now()
+    type Mgr = NonNullable<ReturnType<typeof getRegisteredSessionManager>>
+    const byId = new Map<string, { session: SessionRecord; mgr: Mgr; base: number }>()
+    const candidates: EvictionCandidate[] = []
+    for (const session of live) {
+      if (ctx?.overBudget()) break
+      const sid = session.claudeSessionId
+      const mgr = getRegisteredSessionManager(sid)
+      if (!mgr) continue
+      if (mgr.cliState != null && mgr.cliState !== 'idle') continue
+      if (mustStay(session, runner, false)) continue
+      const declined = this.idleReapDeclined.get(sid)
+      if (declined && declined.pid === session.pid && now - declined.at < IDLE_REAP_RETRY_BACKOFF_MS) continue
+      const base = await this.quietSince(session, mgr, now)
+      if (base == null) continue
+      if (await userHereIn(session, hereMs, now)) continue
+      // A task this tick could not read counts as an org node: never stopped early on a guess.
+      const last = session.taskId ? (taskMap.has(session.taskId) ? exitsLast(taskMap.get(session.taskId)) : true) : false
+      byId.set(sid, { session, mgr, base })
+      candidates.push({ claudeSessionId: sid, quietMs: now - base, last })
+    }
+    let over = live.length - limit
+    const take = Math.min(over, IDLE_REAP_CONCURRENCY)
+    const victims: Array<{ session: SessionRecord; mgr: Mgr; quietMs: number; base: number }> = []
+    let probes = 0
+    for (const c of evictionOrder(candidates)) {
+      if (victims.length >= Math.min(over, take) || probes >= 2 * IDLE_REAP_CONCURRENCY || ctx?.overBudget()) break
+      const hit = byId.get(c.claudeSessionId)!
+      // A record whose process is already gone holds no memory: one fewer to stop (the loop below
+      // writes its record).
+      if (!await cachedIsAlive(hit.session)) { over--; continue }
+      // A background workflow keeps its turn open with no output (see checkIdleTimeout).
+      probes++
+      if (await probeWithTimeout(runner.isBackgroundWorkActive?.(c.claudeSessionId) ?? false, true, 'isBackgroundWorkActive', c.claudeSessionId)) continue
+      victims.push({ ...hit, quietMs: c.quietMs })
+    }
+    // Announce first, stop on a later tick: only a session announced at least one tick ago on the
+    // same quiet clock is stopped now; the rest are announced and wait.
+    const chosen = new Set(victims.map((v) => v.session.claudeSessionId))
+    for (const sid of [...this.liveLimitWarned.keys()]) if (!chosen.has(sid)) this.liveLimitWarned.delete(sid)
+    const due: typeof victims = []
+    for (const v of victims) {
+      const sid = v.session.claudeSessionId
+      const warned = this.liveLimitWarned.get(sid)
+      if (warned && warned.base === v.base && now - warned.at >= LIVE_LIMIT_WARN_MS) { due.push(v); continue }
+      if (!warned || warned.base !== v.base) {
+        this.liveLimitWarned.set(sid, { base: v.base, at: now })
+        this.emitWillReap(v.session, { remainingMs: LIVE_LIMIT_WARN_MS, idleDurationMs: v.quietMs, idleTimeoutMs: v.quietMs + LIVE_LIMIT_WARN_MS, episodeBaseMs: v.base })
+      }
+    }
+    if (victims.length > 0) {
+      log.session.info('health monitor: live session limit', {
+        live: live.length, limit, over, candidates: candidates.length, announced: victims.length - due.length, stopping: due.length,
+      })
+    }
+    if (due.length === 0) return stopped
+    const tools = await loadIdleReapTools().catch(() => null)
+    if (!tools) return stopped
+    await Promise.all(due.map(async (v) => {
+      const sid = v.session.claudeSessionId
+      // Checked again right before the stop: a message that came in since the choice wins.
+      const again = Date.now()
+      const stillQuiet = (v.mgr.cliState == null || v.mgr.cliState === 'idle') && runner!.isInTurn?.(sid) !== true
+        && !(v.mgr.lastEventAt > v.base) && again - v.base >= EVICT_MIN_QUIET_MS
+      if (!stillQuiet) { this.liveLimitWarned.delete(sid); return }
+      this.liveLimitWarned.delete(sid)
+      const quietMinutes = Math.round(v.quietMs / 60_000)
+      log.session.info('health monitor: live session limit — stopping a quiet session', {
+        sessionId: sid, taskId: v.session.taskId, pid: v.session.pid, quietMinutes, live: live.length, limit,
+      })
+      this.transcriptActivity.delete(sid)
+      const killed = await this.reapIdleSession(v.session, v.mgr, quietMinutes, updateSessionRecord, tools,
+        `Stopped after ${quietMinutes} quiet min to free memory: ${live.length} sessions were live on this machine (limit ${limit}). The next message resumes it.`,
+      ).catch((err: unknown) => {
+        log.session.warn('health monitor: live-limit stop failed', { error: err instanceof Error ? err.message : String(err) })
+        return null
+      })
+      if (killed) stopped.add(killed)
+    }))
+    return stopped
+  }
+
+  /** When a live session last did anything: its manager's clock, else (some minutes after this
+   *  server attached it) its transcript's newest entry; null when unknown. */
+  private async quietSince(session: SessionRecord, mgr: { lastEventAt: number; attachedAt?: number }, now: number): Promise<number | null> {
+    if (mgr.lastEventAt > 0) return mgr.lastEventAt
+    if (now - (mgr.attachedAt ?? 0) < TRANSCRIPT_SEED_GRACE_MS) return null
+    return this.transcriptActivityMs(session, now)
+  }
+
+  /**
    * Stop one idle session through its owner and record the idle timeout.
    * Resolves the session id when it was stopped, null when the owner declined
    * or could not be reached (the record is left as it was).
@@ -1181,6 +1334,7 @@ export class SessionHealthMonitor {
     idleMinutes: number,
     updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
     tools: IdleReapTools,
+    message = `No output for ${idleMinutes} min`,
   ): Promise<string | null> {
     // Mark BEFORE any signal: an unmarked kill reaches the session's liveness
     // monitor as an unexplained death and used to be reported as "session init
@@ -1220,7 +1374,7 @@ export class SessionHealthMonitor {
     const updateNow = new Date().toISOString()
     const updated = await updateSessionRecord(session.claudeSessionId, {
       process_status: 'stopped',
-      errorMessage: `No output for ${idleMinutes} min`,
+      errorMessage: message,
       activity: undefined,
       last_status_change: updateNow,
       status_reason: 'idle_timeout',

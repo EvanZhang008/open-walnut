@@ -197,6 +197,7 @@ const RAW_READERS: Record<string, string> = {
   'src/core/sessions/endpoint-wait-takes.ts': 'a session:result: the endpoint wait takes only a real turn end',
   'src/core/human-inbox/item-status.ts': 'an inbox item\'s live status from a snapshot',
   'src/core/session-health-monitor.ts': 'the idle reap: a /loop gets the cron timeout',
+  'src/core/sessions/live-sessions.ts': 'the live limit and idle exit keep a /loop owner alive (its cron fires inside that process)',
   'src/core/sessions/session-lifecycle.ts': 'refuses to terminate a /loop owner (cron_owner)',
   'src/core/sessions/host-work.ts': 'the host daemon\'s snapshot read as at work for the silent-target notice: a turn, background work, a team or an armed wakeup, never a /loop alone',
   'src/core/sessions/replaced-session.ts': 'the owning daemon\'s snapshot of a session a move replaces: work its turn left running holds the move, as turnHold does',

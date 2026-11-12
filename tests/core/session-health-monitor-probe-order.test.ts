@@ -55,7 +55,7 @@ vi.mock('../../src/providers/session-manager.js', () => ({
   getRegisteredSessionManager: (sid: string) => managers.get(sid) ?? null,
 }));
 vi.mock('../../src/core/config-manager.js', () => ({
-  getConfig: async () => ({ session: { idle_timeout_minutes: 60 } }),
+  getConfig: async () => ({ session: { idle_timeout_minutes: 60, local_idle_exit_minutes: 0, local_live_limit: 0 } }),
   updateConfig: async () => undefined,
   seedConfigDefaults: async () => undefined,
 }));

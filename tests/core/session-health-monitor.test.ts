@@ -38,7 +38,7 @@ vi.mock('../../src/providers/session-manager.js', () => ({
 
 // Mock config-manager — returns a config with no idle_timeout override
 vi.mock('../../src/core/config-manager.js', () => ({
-  getConfig: async () => ({ session: {} }),
+  getConfig: async () => ({ session: { local_idle_exit_minutes: 0, local_live_limit: 0 } }),
 }));
 
 // Mock task-manager to avoid setting up a full task store for clearSessionSlot calls

@@ -161,6 +161,8 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     // session the line is gone (sessions/instruction-notice.ts).
     reply_language: 'the reply language every session\'s prompt carries, built on the Mac',
     idle_compaction: 'the idle compaction runs on the Mac only (sessions/idle-compaction.ts)',
+    local_idle_exit_minutes: 'the idle exit of the Mac\'s own sessions, sized for that machine (sessions/live-sessions.ts)',
+    local_live_limit: 'the live session limit of the Mac\'s own machine (sessions/live-sessions.ts)',
     history_compress_days: 'the history archive runs on the primary only (transcript-archive-sweep.ts)',
     history_remote: 'the remote history tier runs on the primary only, with its own credentials (core/history-remote/)',
     hints: 'the message hints the Mac composes into each message it delivers (core/hints/)',

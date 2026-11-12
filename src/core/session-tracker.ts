@@ -797,6 +797,12 @@ export async function listNonTerminalSessions(): Promise<SessionRecord[]> {
   ).map(cloneSession);
 }
 
+/** This machine's records whose process should be alive, by their status (sessions/live-sessions.ts). */
+export async function listLocalLiveSessions(): Promise<SessionRecord[]> {
+  const view = await readStoreView();
+  return view.filter((s) => !s.host && !s.archived && (s.process_status === 'running' || s.process_status === 'idle')).map(cloneSession);
+}
+
 /** Default session limits: local=7, any remote host=20. */
 const DEFAULT_LOCAL_LIMIT = 7;
 const DEFAULT_REMOTE_LIMIT = 20;

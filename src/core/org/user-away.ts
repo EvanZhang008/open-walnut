@@ -101,6 +101,23 @@ export async function userAwayFrom(task: Pick<Task, 'id' | 'org_role'> | null | 
   }
 }
 
+/**
+ * Whether a person is in this task's chat now or was within `withinMs`, for ANY task, org node or
+ * not (sessions/live-sessions.ts keeps such a session's process alive). The same signals as
+ * userAwayFrom: what he typed there, the attention heartbeats, a phone streaming one of its sessions.
+ */
+export async function userInTaskChat(
+  taskId: string | undefined, sessions: readonly Pick<SessionRecord, 'claudeSessionId' | 'chatInputAt'>[],
+  withinMs: number, now = Date.now(),
+): Promise<boolean> {
+  let streaming = false;
+  try {
+    const { sseConnCount } = await import('../../web/sse-channels.js');
+    streaming = sessions.some((s) => sseConnCount(`session:${s.claudeSessionId}`) > 0);
+  } catch { /* no web server in this process */ }
+  return !awayStateOf({ taskId: taskId ?? '', sessions, heartbeats: seen, streaming, now, afterMs: withinMs }).away;
+}
+
 /** Test seam. */
 export function _resetUserAwayForTest(): void {
   seen.clear();

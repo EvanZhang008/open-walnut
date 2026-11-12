@@ -60,7 +60,7 @@ vi.mock('../../src/providers/session-manager.js', () => ({
 }));
 
 vi.mock('../../src/core/config-manager.js', () => ({
-  getConfig: async () => ({ session: { idle_timeout_minutes: idleTimeoutMinutes } }),
+  getConfig: async () => ({ session: { idle_timeout_minutes: idleTimeoutMinutes, local_idle_exit_minutes: 0, local_live_limit: 0 } }),
   // task-manager's store init reaches these; without them the task lookup phase
   // logs a mock-shape warning that has nothing to do with what we're testing.
   updateConfig: async () => undefined,
