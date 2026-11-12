@@ -52,6 +52,24 @@ const HEALTH_CHECK_INTERVAL_MS = 30_000
 const HEALTH_CHECK_IDLE_INTERVAL_MS = 5 * 60_000
 /** Per-tick budget — must stay below the interval so ticks can never overlap-stack. */
 const HEALTH_CHECK_BUDGET_MS = 20_000
+/**
+ * Every awaited phase of a tick has a deadline: what is left of the budget (at least
+ * PHASE_MIN_MS) plus PHASE_GRACE_MS, room for one daemon command's own 30s timeout.
+ * The budget alone is cooperative, checked BETWEEN phases, so a phase that waited on a
+ * slow host held the whole tick: ticks of 14, 29 and 52 minutes on 2026-11-12, while
+ * the snapshot pull that would have settled a dead remote CLI never ran.
+ */
+const PHASE_MIN_MS = 5_000
+const PHASE_GRACE_MS = 15_000
+/** An overrun phase still running warns again this often while later ticks skip it. */
+const PHASE_STUCK_WARN_MS = 5 * 60_000
+/** Past this, an overrun phase is given up on: a promise that never settles must not
+ *  switch the monitor off until the next restart. */
+const PHASE_ABANDON_MS = 15 * 60_000
+/** Phases that read each other's results (the ids each one already handled). While
+ *  one of them overruns, none of them runs: an empty skip set from an abandoned
+ *  idle reap would let the liveness loop overwrite the 'stopped' it is writing. */
+const DEPENDENT_PHASES = new Set(['reconcileStuck', 'hungSessions', 'idleTimeout', 'liveLimit', 'taskPhases'])
 /** Orphan sweep runs on its own slow cadence — a leaked process doesn't need 30s precision. */
 const ORPHAN_SWEEP_EVERY_TICKS = 120
 /** Idle stops in flight at once per tick (each waits on its daemon, up to ~15s). */
@@ -195,6 +213,11 @@ export async function probeWithTimeout<T>(
 export class SessionHealthMonitor {
   private handle: PeriodicHandle | null = null
   private tickCount = 0
+  /** Phases that overran their deadline and still run (name → start ms): a later
+   *  tick skips them, so an abandoned phase never runs twice at once. */
+  private phasesInFlight = new Map<string, number>()
+  /** When each in-flight phase last warned that it is still running. */
+  private phaseStuckWarnedAt = new Map<string, number>()
   private emptyTicks = 0
   /**
    * sessionId → the last-activity timestamp the pending reap was computed from
@@ -244,6 +267,68 @@ export class SessionHealthMonitor {
       bus.unsubscribe('health-monitor-adaptive')
       log.session.info('session health monitor stopped')
     }
+  }
+
+  /**
+   * Run one phase of a tick under its deadline. A phase that overruns keeps running
+   * (nothing can cancel it) but the tick stops waiting for it; until it settles, later
+   * ticks skip it and stop after the snapshot pull (checkInner), so its work never
+   * overlaps a second copy of itself or the phases that read its result.
+   */
+  private async phase<T>(name: string, ctx: TickContext, skipped: T, run: () => Promise<T>): Promise<T> {
+    const since = this.phasesInFlight.get(name)
+    if (since !== undefined) {
+      const runningForMs = Date.now() - since
+      if (runningForMs > PHASE_ABANDON_MS) {
+        log.session.error('health monitor: overrun phase given up on, it runs again', { phase: name, runningForMs })
+        this.phasesInFlight.delete(name)
+        this.phaseStuckWarnedAt.delete(name)
+      } else {
+        const warnedAt = this.phaseStuckWarnedAt.get(name) ?? since
+        if (Date.now() - warnedAt >= PHASE_STUCK_WARN_MS) {
+          this.phaseStuckWarnedAt.set(name, Date.now())
+          log.session.warn('health monitor: overrun phase still running, skipped again', { phase: name, runningForMs })
+        } else {
+          log.session.debug('health monitor: phase skipped, its last run still going', { phase: name, runningForMs })
+        }
+        return skipped
+      }
+    }
+    const deadlineMs = Math.max(PHASE_MIN_MS, HEALTH_CHECK_BUDGET_MS - ctx.elapsedMs()) + PHASE_GRACE_MS
+    const startedAt = Date.now()
+    const work = run()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const overran = Symbol('overran')
+    const outcome = await Promise.race([
+      work,
+      new Promise<typeof overran>((resolve) => {
+        timer = setTimeout(() => resolve(overran), deadlineMs)
+        // Never what keeps the process alive at shutdown (probeWithTimeout does the same).
+        if (typeof timer === 'object' && 'unref' in timer) timer.unref()
+      }),
+    ]).finally(() => { if (timer) clearTimeout(timer) })
+    if (outcome !== overran) return outcome as T
+    this.phasesInFlight.set(name, startedAt)
+    log.session.warn('health monitor: phase overran its deadline, the tick moves on', { phase: name, deadlineMs })
+    work.then(
+      () => log.session.info('health monitor: overrun phase finished', { phase: name, tookMs: Date.now() - startedAt }),
+      (err) => log.session.warn('health monitor: overrun phase failed', {
+        phase: name, tookMs: Date.now() - startedAt, error: err instanceof Error ? err.message : String(err),
+      }),
+    ).finally(() => {
+      // Only the run that set the entry clears it (a given-up run may settle after a new one began).
+      if (this.phasesInFlight.get(name) === startedAt) {
+        this.phasesInFlight.delete(name)
+        this.phaseStuckWarnedAt.delete(name)
+      }
+    })
+    return skipped
+  }
+
+  /** A phase that reads another's result has an overrun copy still running. */
+  private dependentPhaseInFlight(): boolean {
+    for (const name of this.phasesInFlight.keys()) if (DEPENDENT_PHASES.has(name)) return true
+    return false
   }
 
   /**
@@ -334,7 +419,7 @@ export class SessionHealthMonitor {
 
     // Auto-recover remote sessions stuck in 'error' due to connection loss
     if (!ctx.overBudget()) {
-      await this.recoverInfraFailedSessions(allSessions, updateSessionRecord)
+      await this.phase('recoverInfra', ctx, undefined, () => this.recoverInfraFailedSessions(allSessions, updateSessionRecord))
     }
     const tRecover = Date.now()
 
@@ -384,7 +469,7 @@ export class SessionHealthMonitor {
       // re-examination class lives in the WIDER scan set (every 'error' row is
       // dropped above by isTerminalSession), and a wedged record must not need
       // some OTHER session to be live before anyone looks at it.
-      if (!ctx.overBudget()) await this.checkSnapshotPull(sessions, ctx, allSessions)
+      if (!ctx.overBudget()) await this.phase('snapshotPull', ctx, undefined, () => this.checkSnapshotPull(sessions, ctx, allSessions))
       const total = Date.now() - checkT0
       if (total > 500) log.session.warn('health monitor: check() slow (no active sessions)', { totalMs: total, orphanMs: tOrphan - checkT0, recoverMs: tRecover - tOrphan })
       return
@@ -441,7 +526,7 @@ export class SessionHealthMonitor {
     // NO tick that will ever PULL the daemon's authoritative state for it — the UI
     // panel shows the pre-restart snapshot forever (inc-1784012867247).
     if (ctx.overBudget()) return
-    await this.reconcilePendingBackgroundTasks(sessions)
+    await this.phase('pendingBgTasks', ctx, undefined, () => this.reconcilePendingBackgroundTasks(sessions))
     endPhase('pendingBgTasks')
 
     // C2 snapshot pull channel — 30s PULL of the daemon-authoritative
@@ -452,43 +537,60 @@ export class SessionHealthMonitor {
     // set above drops every 'error' row (isTerminalSession counts 'error' as
     // terminal), and those are exactly the records that get wedged.
     if (ctx.overBudget()) return
-    await this.checkSnapshotPull(sessions, ctx, allSessions)
+    await this.phase('snapshotPull', ctx, undefined, () => this.checkSnapshotPull(sessions, ctx, allSessions))
     endPhase('snapshotPull')
+
+    // A phase below overran its deadline and still runs (this tick or an earlier one):
+    // they read each other's results, so none runs beside it (DEPENDENT_PHASES).
+    // The recovery reads above and the snapshot pull keep going meanwhile.
+    // Checked before each of them, not only on the budget: check() without a ctx never
+    // runs over budget.
+    const halt = (): boolean => {
+      if (ctx.overBudget()) return true
+      if (!this.dependentPhaseInFlight()) return false
+      log.session.debug('health monitor: later phases wait for an overrun phase', {
+        phases: [...this.phasesInFlight.keys()],
+      })
+      return true
+    }
+    if (halt()) return
 
     // Authoritative reconcile for stuck sessions — the periodic safety net behind
     // the event-driven paths. Any lost/swallowed result event (tailer freeze,
     // restart window, WS drop, replay-guard swallow) previously wedged
     // process_status at 'running' — or the task at IN_PROGRESS — forever because
     // NOTHING re-checked them against the daemon stream file. This does.
-    if (ctx.overBudget()) return
-    const reconciledIds = await this.reconcileStuckRunningSessions(sessions, taskMap)
+    if (halt()) return
+    const reconciledIds = await this.phase('reconcileStuck', ctx, new Set<string>(), () => this.reconcileStuckRunningSessions(sessions, taskMap, ctx))
     endPhase('reconcileStuck')
 
     // Detect hung Claude Code processes: message delivered but no Claude output for 5 minutes.
     // Root cause: Claude Code can hang internally (e.g. between autocompact and API call)
     // while the process stays alive. Idle timeout misses this because Walnut's own user
     // message writes refresh the file mtime.
-    if (ctx.overBudget()) return
-    const hungKilledIds = await this.checkHungSessions(sessions, updateSessionRecord, ctx)
+    if (halt()) return
+    const hungSkipped = new Set<string>()
+    const hungKilledIds = await this.phase('hungSessions', ctx, hungSkipped, () => this.checkHungSessions(sessions, updateSessionRecord, ctx))
     // The health monitor's gauge: sessions that look hung right now (core/health-monitor/alarms.ts).
-    reportGauge('session.hung', hungKilledIds.size)
+    // Not from a skipped or overrun run: its empty set would clear a real alarm.
+    if (hungKilledIds !== hungSkipped) reportGauge('session.hung', hungKilledIds.size)
     endPhase('hungSessions')
 
     // Idle timeout — kill sessions with stale outputFile mtime past the configured threshold.
     // Returns IDs of sessions it killed — the main loop must skip those to avoid
     // a race where the stale in-memory process_status ('idle') causes the main loop
     // to overwrite the correct 'stopped' with 'error' + "Process exited without result".
-    if (ctx.overBudget()) return
-    const idleTimedOutIds = await this.checkIdleTimeout(sessions, updateSessionRecord, taskMap, cachedIsAlive, ctx)
+    if (halt()) return
+    const idleTimedOutIds = await this.phase('idleTimeout', ctx, new Set<string>(), () => this.checkIdleTimeout(sessions, updateSessionRecord, taskMap, cachedIsAlive, ctx))
     endPhase('idleTimeout')
 
     // The live limit of this machine (sessions/live-sessions.ts): past it, the longest-quiet
     // sessions whose turn is over exit. Its stops are skipped by the loop below like the idle ones.
-    if (ctx.overBudget()) return
-    for (const id of await this.enforceLiveLimit(sessions, updateSessionRecord, taskMap, cachedIsAlive, idleTimedOutIds, ctx)) idleTimedOutIds.add(id)
+    if (halt()) return
+    for (const id of await this.phase('liveLimit', ctx, new Set<string>(), () => this.enforceLiveLimit(sessions, updateSessionRecord, taskMap, cachedIsAlive, idleTimedOutIds, ctx))) idleTimedOutIds.add(id)
     endPhase('liveLimit')
 
-    if (ctx.overBudget()) return
+    if (halt()) return
     let livenessChecked = 0
     for (const session of sessions) {
       // In-loop budget: each iteration can await a liveness probe AND up to three
@@ -696,8 +798,8 @@ export class SessionHealthMonitor {
     endPhase('livenessLoop')
 
     // Layer 2: Reconcile task phases from session facts (30s cycle)
-    if (ctx.overBudget()) return
-    await this.reconcileTaskPhases(sessions, taskMap, cachedIsAlive)
+    if (halt()) return
+    await this.phase('taskPhases', ctx, undefined, () => this.reconcileTaskPhases(sessions, taskMap, cachedIsAlive))
     endPhase('taskPhases')
 
     // Log total check duration (> 500ms = worth investigating)
@@ -1695,7 +1797,7 @@ export class SessionHealthMonitor {
    *  change re-arms the probe immediately. */
   private stoppedProbeAt = new Map<string, { at: number; stamp: string | undefined }>()
 
-  private async reconcileStuckRunningSessions(sessions: SessionRecord[], taskMap?: Map<string, Task>): Promise<Set<string>> {
+  private async reconcileStuckRunningSessions(sessions: SessionRecord[], taskMap?: Map<string, Task>, ctx?: TickContext): Promise<Set<string>> {
     const ACTIVITY_FRESH_MS = 3 * 60 * 1000   // events this recent = genuinely streaming
     const RECONCILE_RETRY_MS = 5 * 60 * 1000  // min gap between tail reads per session
     const MAX_PER_TICK = 5                    // bound worst-case I/O per 30s tick
@@ -1707,6 +1809,8 @@ export class SessionHealthMonitor {
 
     for (const session of sessions) {
       if (attempted >= MAX_PER_TICK) break
+      // Each attempt reads a stream tail from its host: stop at the budget like the other loops.
+      if (ctx?.overBudget()) break
       const recordDebt = session.process_status === 'running'
       // Phase debt (incident 10e7df54): record settled but the linked task never
       // saw the (swallowed) result — stuck IN_PROGRESS with nothing to advance it.

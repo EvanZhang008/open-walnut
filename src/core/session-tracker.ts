@@ -31,6 +31,7 @@ import {
   isUnstampedStatusWrite,
   noteSuppressedStatusWrite,
   noteSuppressedErrorReason,
+  putBoundedEntry,
 } from './session-snapshot-gate.js';
 // Also a zero-import leaf — see the file header for why classification cannot
 // live in a prose match.
@@ -894,19 +895,67 @@ export async function getAllAliveSessionsByHost(): Promise<Record<string, Sessio
 }
 
 /**
+ * When each stale record was last repaired (sid → ms). The callers run every few
+ * seconds (the capacity check on every send, both alive-by-host reads), and a repair
+ * does not always land at once: for a session the snapshot projection owns
+ * (enforce mode), the gate drops this legacy write whole and only the host's own
+ * snapshot can move the record. Without this map that drop repeated the repair, and
+ * its warning, every 5 seconds until the projection caught up (157 lines in one
+ * hour for one dead remote CLI, 2026-11-12).
+ */
+const staleRepairAt = new Map<string, { repairAt: number; warnAt: number; recheckAt: number }>();
+/** Gap between repairs of one record: the cadence of the health monitor's pull. */
+const STALE_REPAIR_GAP_MS = 30_000;
+/** One warning per record this often: a new episode, or one that has not ended. */
+const STALE_WARN_GAP_MS = 10 * 60_000;
+/** Gap between host rechecks of one record. The first repair asks at once; after
+ *  that the health monitor's own pull asks every 30s, and each recheck logs its
+ *  outcome (a choked link logs a timeout warning), so a stale path asking on the
+ *  repair cadence would bring the flood back in other words. */
+const STALE_RECHECK_GAP_MS = 5 * 60_000;
+
+/**
  * Asynchronously correct stale session records whose process has exited
  * but process_status is still 'running'. Fire-and-forget — callers
  * don't need to wait for this; the returned results already exclude
  * these sessions.
+ *
+ * At most one repair per record per 30s and one warning per 10 min; the rest is
+ * debug. A record the snapshot projection owns is also re-checked against its host
+ * (recheckSession: one getState over the pooled link, applied through
+ * applySnapshot, the sanctioned writer), so it converges on the host's word
+ * instead of waiting for the health monitor's next pull. The legacy write still
+ * goes through the gate, which hands its reason to the projection.
  */
 function fixStaleRecords(sessionIds: string[]): void {
   // A host replica repairs no copied row: its liveness is the Mac's label, and
   // its rows change only through the copy (sessions/replica-process-guard.ts).
   // Every caller funnels here (the limit check and both alive-by-host reads).
   if (refuseProcessAction('stale_repair')) return;
-  log.session.warn('fixing stale records', { count: sessionIds.length, ids: sessionIds });
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const ownedByProjection = getSnapshotStatusMode() === 'enforce';
+  const warned: string[] = [];
+  const quiet: string[] = [];
+  const due: string[] = [];
   for (const id of sessionIds) {
+    const last = staleRepairAt.get(id) ?? { repairAt: 0, warnAt: 0, recheckAt: 0 };
+    if (nowMs - last.repairAt < STALE_REPAIR_GAP_MS) continue;
+    const next = { ...last, repairAt: nowMs };
+    if (nowMs - last.warnAt >= STALE_WARN_GAP_MS) { next.warnAt = nowMs; warned.push(id); } else quiet.push(id);
+    if (ownedByProjection && isSnapshotCovered(id) && nowMs - last.recheckAt >= STALE_RECHECK_GAP_MS) {
+      next.recheckAt = nowMs;
+      recheckStaleRecord(id);
+    }
+    // Re-inserted so the cap evicts the record repaired longest ago, not the first seen.
+    staleRepairAt.delete(id);
+    putBoundedEntry(staleRepairAt, id, next, 500);
+    due.push(id);
+  }
+  if (due.length === 0) return;
+  if (warned.length > 0) log.session.warn('fixing stale records', { count: warned.length, ids: warned });
+  if (quiet.length > 0) log.session.debug('fixing stale records again', { count: quiet.length, ids: quiet });
+  const now = new Date(nowMs).toISOString();
+  for (const id of due) {
     updateSessionRecord(id, {
       process_status: 'stopped',
       last_status_change: now,
@@ -916,6 +965,19 @@ function fixStaleRecords(sessionIds: string[]): void {
       log.session.warn('failed to fix stale record', { sessionId: id, error: String(err) });
     });
   }
+}
+
+function recheckStaleRecord(sessionId: string): void {
+  import('./sessions/session-lifecycle.js')
+    .then(({ recheckSession }) => recheckSession(sessionId))
+    .catch((err) => log.session.debug('stale record: host recheck failed', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    }));
+}
+
+/** Test hook: forget the repair cadence. */
+export function _resetStaleRepairForTests(): void {
+  staleRepairAt.clear();
 }
 
 export interface SessionLimitResult {
