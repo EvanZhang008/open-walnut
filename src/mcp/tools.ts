@@ -143,16 +143,12 @@ export function registerWalnutTools(
         ...(op.tags.readonly ? { readOnlyHint: true } : {}),
         ...(op.tags.destructive !== undefined ? { destructiveHint: op.tags.destructive } : {}),
       },
-      // Claude Code defers ALL MCP tools behind ToolSearch by default
-      // (ENABLE_TOOL_SEARCH unset → 'tst' mode): they never appear in the
-      // initial prompt, so the Personal AI never used them — it fell back to
-      // the Bash/curl paths its skill teaches (observed live 2026-08-16:
-      // init carried 0 mcp__ tools, debug showed "0/17 deferred included").
-      // 'anthropic/alwaysLoad' is the per-tool opt-out the CLI honors; these
-      // ops ARE the session's primary interface to Walnut, so they must be
-      // visible from turn 1. ~17 small schemas ≈ a modest one-time prompt
-      // cost, far cheaper than every op-call spawning a CLI via Bash.
-      _meta: { 'anthropic/alwaysLoad': true },
+      // No 'anthropic/alwaysLoad': Claude Code lists the tools by name and loads a
+      // schema when the model asks for it (ToolSearch), as the host server does
+      // (src/providers/walnut-mcp-stdio.ts). Loaded up front, the 174 schemas were
+      // about 503 KB (some 125K tokens) on every request of Main and every ask:
+      // 2026-11-12, Main's context came back to 242K right after each compaction
+      // and it compacted three times in three minutes against a 250K window.
     }, async (args: Record<string, unknown>) => {
       // A separate process: the server re-judges its socket, and can only lower this.
       return runWithCallId(op.name, args ?? {}, base)
