@@ -30,8 +30,7 @@ const GUARD_AWK = String.raw`BEGIN{RS="\001"}
 H=tolower(H);c=tolower($0)
 if(c~/"tool_name":"bash"/){gsub(/[0-9]?>(&[0-9]|\/dev\/null)/,"",c)
 if(c!~/>|(sed|perl|ruby|yq)[^;&|]* -[a-z]*i|[ ;&|(":](tee|mv|cp|rm|truncate|dd|ln|install|rsync|chmod|chown|python3?|node|bun|deno|osascript) /)exit
-w=c~/\.open-walnut/||index(c,H)
-if(w&&c~/approvals([\/" ;&|)\\]|$)/)d("write Walnut's approval records")
+if(c~/open-walnut\/approvals([\/" ;&|)\\]|$)/||index(c,H"/approvals")||(c~/cd [^;&|]*open-walnut/&&c~/[ "]approvals([\/" ;&|)\\]|$)/))d("write Walnut's approval records")
 if(c~/config\.yaml/&&c~/ask_me/)d("change the Approvals switch in config.yaml")
 exit}
 if(c!~/"tool_name":"(write|edit|multiedit|notebookedit)"/||!match($0,/"(file|notebook)_path":"[^"]*"/))exit

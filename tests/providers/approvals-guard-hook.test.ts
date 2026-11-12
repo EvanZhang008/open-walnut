@@ -69,6 +69,8 @@ const CASES: Array<[string, () => Record<string, unknown>, boolean]> = [
   ['Bash', () => ({ command: 'grep ask_me ~/.open-walnut/config.yaml 2>&1 | head' }), false],
   ['Bash', () => ({ command: "cd /home/u/.local/state/open-walnut/tasks/T1/walnut && sed -i '' s/a/b/ src/core/approvals/keys.ts" }), false],
   ['Bash', () => ({ command: 'echo [] > /tmp/fx/approvals/keys.json' }), false],
+  // A read of the approvals route that names the data folder elsewhere in the line (2026-11-12, a false refusal).
+  ['Bash', () => ({ command: 'curl -s localhost:3456/api/v1/approvals | python3 -c "print(1)"; ls ~/.open-walnut/../x/dist 2>/dev/null' }), false],
   ['Write', () => ({ file_path: `${home}/other/config.yaml`, content: 'x: 1\n' }), false],
   ['Write', () => ({ file_path: `${home}/repo/src/core/approvals/keys.ts`, content: 'export {}' }), false],
   ['Read', () => ({ file_path: `${W()}/approvals/keys.json` }), false],
