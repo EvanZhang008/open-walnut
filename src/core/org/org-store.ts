@@ -20,7 +20,7 @@ import { ASK_WALNUT_PROJECT } from '../sessions/ask-list.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import {
   DIGEST_FOLD_MS, DIGEST_MAX_LINES, buildOrgTree, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, leadsAlso, orgDigest, pickLead,
-  pickMain, pickOwnLead, planOrgNote, projectKey, successorOf, vpTaskTitle, type OrgAlert, type OrgDigestState, type OrgTaskLike, type OrgTree,
+  orgNodeNamed, pickMain, pickOwnLead, planOrgNote, projectKey, successorOf, vpTaskTitle, type OrgAlert, type OrgDigestState, type OrgTaskLike, type OrgTree,
 } from './org-tree.js';
 
 export const MAIN_TASK_TITLE = 'CEO';
@@ -488,8 +488,9 @@ export interface OrgContact {
 }
 
 /**
- * Who `to` means: a task id (or unique prefix), or a project name (its lead,
- * else its one team). A project with two or more teams gets its lead now.
+ * Who `to` means: a project name (its lead, else its one team; a project with two or more teams
+ * gets its lead now), an org node by name (Main as "Main" or "CEO", a VP by its name), or a task
+ * id (or unique prefix).
  * `askerTaskId`: the task of the session asking ('' for another program); the
  * human passes none, and reaches a lead that handed over as it is.
  */
@@ -506,12 +507,13 @@ export async function resolveOrgContact(to: string, opts: { askerTaskId?: string
     }
     return { task: await ensureProjectLead(node.project), kind: 'lead', project: node.project };
   }
-  // A VP by the name the user gave it ("Green Thumb", "Green Thumb VP"), as the org chart shows it.
+  // An org node by name (org-tree.ts orgNodeNames): Main ("Main", "CEO"), or a VP by the name the
+  // user gave it ("Green Thumb", "Green Thumb VP") or the one the org chart shows ("Walnut VP").
   const tasks = await orgTasks();
-  const named = namedLead(tasks, want);
+  const named = orgNodeNamed(tasks, want);
   if (named) {
-    const lead = await getTask(named.id);
-    return { task: lead, kind: 'lead', project: (lead.project ?? '').trim() };
+    const node = await getTask(named.id);
+    return { task: node, kind: node.org_role === 'lead' ? 'lead' : 'task', project: (node.project ?? '').trim() };
   }
   // A project whose work is all done still has the lead someone closed: bring it back.
   if (pickLead(tasks, want)) {
@@ -521,7 +523,8 @@ export async function resolveOrgContact(to: string, opts: { askerTaskId?: string
   const task = await getTask(want).catch(() => null);
   if (!task) {
     throw new OrgError('unknown_contact', 404,
-      `No project with open work or task named "${want}". To start new work there, create a task in that project (task_create).`);
+      `No project with open work, org node or task named "${want}". Main is "Main" (or "CEO"), a VP its name or "<project> VP"; `
+      + 'to start new work in a project, create a task in it (task_create).');
   }
   // A lead that handed its project over: for an agent, the one who answers for that project is the
   // lead that took it (the human, and that lead itself, reach the old one). Through
@@ -533,13 +536,6 @@ export async function resolveOrgContact(to: string, opts: { askerTaskId?: string
     if (lead.id !== task.id) return { task: lead, kind: 'lead', project, handedOverBy: { id: task.id, title: task.title } };
   }
   return { task, kind: task.org_role === 'lead' ? 'lead' : 'task', project };
-}
-
-/** The open lead the user named `want` (Task.org_name), with or without the role word. */
-function namedLead(tasks: readonly OrgTaskLike[], want: string): OrgTaskLike | undefined {
-  const key = projectKey(want.replace(/\s+(VP|lead)$/i, ''));
-  if (!key) return undefined;
-  return tasks.find((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE' && t.org_name && projectKey(t.org_name) === key);
 }
 
 /** What one org node reports to the agent asking: its direct reports, compactly. */

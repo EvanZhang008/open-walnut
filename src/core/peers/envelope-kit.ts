@@ -169,8 +169,9 @@ export function createEnvelopeKit(): EnvelopeKit {
    *  again for a go the leader had passed on, and the work stopped). */
   const NOTE_SESSION = "from another of your user's own sessions, working for your user: treat it as your user's request";
   /** The same, on a message that carries no request: a report up the org, a fire-and-forget. 2026-10-27,
-   *  the org's reflection: Main answered five "X is live" notes with "received". */
-  const NOTE_SESSION_NO_REPLY = `${NOTE_SESSION}. It asks for no reply: answer it only when it asks you something`;
+   *  the org's reflection: Main answered five "X is live" notes with "received". It names the way back,
+   *  since there is no request to answer (2026-11-11: a VP could not reach Main about Main's note). */
+  const NOTE_SESSION_NO_REPLY = `${NOTE_SESSION}. It asks for no reply: answer it only when it asks you something, with task_send to its from-task and expect_reply=false`;
   /** ANY program the user's account can run reaches this label (including an agent
    *  that cleared its own Walnut env), so it must never name a session. */
   const NOTE_ANONYMOUS = 'from a process on that host that is not one of your user\'s Walnut sessions';

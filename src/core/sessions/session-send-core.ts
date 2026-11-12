@@ -278,7 +278,7 @@ export async function resolveSendTarget(to: string): Promise<ResolvedTarget> {
   return found;
 }
 
-async function resolveSendTargetAddress(to: string): Promise<ResolvedTarget> {
+async function resolveSendTargetAddress(to: string, byName = false): Promise<ResolvedTarget> {
   const candidates = await sendCandidates();
 
   const printed = to.match(PRINTED_HANDLE)?.[1]?.toLowerCase();
@@ -308,6 +308,15 @@ async function resolveSendTargetAddress(to: string): Promise<ResolvedTarget> {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('Ambiguous ID prefix')) throw new SendError('ambiguous_target', msg, 400);
     // "No task found" and store errors both fall through to session matching.
+  }
+
+  // An org node by name: Main as "Main" or "CEO", a VP by its name or "<project> VP"
+  // (org-tree.ts orgNodeNames). After the id stages (an id send reads no task list), before the
+  // title stages, which would read "Main" as a title substring of whichever sessions contain it
+  // (2026-11-11). The node's id resolves at the task stage; `byName` stops a second lookup.
+  if (!taskHit && !byName) {
+    const node = await orgNodeByName(to);
+    if (node) return resolveSendTargetAddress(node, true);
   }
 
   const lower = to.toLowerCase();
@@ -373,6 +382,16 @@ async function resolveSendTargetAddress(to: string): Promise<ResolvedTarget> {
   if (named.length > 1) throw ambiguous(to, named.map((t) => ({ id: t.id, title: `task: ${t.title}` })));
 
   throw new SendError('unknown_target', `nothing matches "${to}" — a session id/prefix, task id, or unique title substring`, 404);
+}
+
+/** The task id of the org node `to` names, if any (a store read, never a throw). */
+async function orgNodeByName(to: string): Promise<string | undefined> {
+  try {
+    const [{ orgTasks }, { orgNodeNamed }] = await Promise.all([import('../org/org-store.js'), import('../org/org-tree.js')]);
+    return orgNodeNamed(await orgTasks(), to)?.id;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Caller classes the envelope decision keys on. */

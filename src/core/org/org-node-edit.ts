@@ -25,7 +25,7 @@ import type { Task } from '../types.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { OrgError, ensureLeadNow, leadDescription, orgTasks, withOrgLock } from './org-store.js';
-import { ORG_INSTRUCTIONS_MAX, isOrgMember, pickLead, pickOwnLead, projectKey, vpTaskTitle } from './org-tree.js';
+import { ORG_INSTRUCTIONS_MAX, isOrgMember, namesMain, pickLead, pickOwnLead, projectKey, vpTaskTitle } from './org-tree.js';
 import { defaultOrgInstructions, isDefaultOrgInstructions } from './core-instructions.js';
 import { orgInstructionsAuthor, type OrgInstructionsWriter } from './instructions-author.js';
 
@@ -78,6 +78,8 @@ function oneLine(raw: unknown, what: string): string {
 export function cleanVpName(raw: unknown): string {
   const name = oneLine(raw, 'The VP\'s name').replace(/\s+(VP|lead)$/i, '').trim();
   if (!name) throw new OrgError('bad_name', 400, 'The VP\'s name must not be empty.');
+  // Agents reach Main by these words (org-tree.ts orgNodeNamed): a VP by one would never be reached.
+  if (namesMain(name)) throw new OrgError('bad_name', 400, `"${name}" is what the CEO goes by: give the VP another name.`);
   return name;
 }
 

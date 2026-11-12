@@ -12,7 +12,7 @@
  *     project back first withdraws an unread handover and keeps the lead
  * Only the Claude CLI is mocked (no session is started here).
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi, onTestFinished } from 'vitest'
 import fs from 'node:fs/promises'
 import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -208,6 +208,45 @@ describe('/api/v1/org', () => {
       if (['Site', 'Remote', 'Nowhere', 'Bare', 'Older'].includes(t.project ?? '')) await deleteTask(t.id)
     }
     await updateConfig({ hosts: {} })
+  })
+
+  it('Main and a VP are reached by name through org_send and task_send (2026-11-11: "Main" was unknown_contact)', async () => {
+    const main = (await api<{ task: { id: string } }>('POST', '/org/main')).json.task
+    await addTask({ title: 'pick apples', project: 'Orchard' })
+    await addTask({ title: 'prune trees', project: 'Orchard' })
+    const lead = (await api<{ task: { id: string } }>('POST', '/org/contact', { to: 'Orchard' })).json.task
+    // Work whose titles contain the names must not catch them.
+    const decoy = await addTask({ title: 'Main CEO dashboard', project: 'Orchard' })
+    const sids: Record<string, string> = {}
+    // Later tests start Main's own session: take these sessions away again, whatever happens here.
+    onTestFinished(async () => {
+      const { deleteSessionRecords } = await import('../../src/core/session-tracker.js')
+      await deleteSessionRecords(new Set(Object.values(sids)), 'test')
+      for (const id of Object.keys(sids)) await updateTaskRaw(id, { session_id: '', exec_session_id: '', session_ids: [] } as never)
+    })
+    for (const id of [main.id, lead.id, decoy.task.id]) {
+      const sid = `sid-name-${id}`
+      await createSessionRecord(sid, id, 'Orchard', WALNUT_HOME)
+      await updateSessionRecord(sid, { title: (await getTask(id)).title })
+      await updateTaskRaw(id, { session_id: sid })
+      sids[id] = sid
+    }
+    for (const to of ['Main', 'main', 'CEO', 'the CEO']) {
+      const c = await api<{ task: { id: string; org_role?: string } }>('POST', '/org/contact', { to })
+      expect([to, c.status, c.json.task?.id]).toEqual([to, 200, main.id])
+    }
+    for (const to of ['Orchard VP', 'orchard lead']) {
+      const c = await api<{ task: { id: string }; kind: string }>('POST', '/org/contact', { to })
+      expect([to, c.status, c.json.task?.id, c.json.kind]).toEqual([to, 200, lead.id, 'lead'])
+    }
+    const { resolveSendTarget } = await import('../../src/core/sessions/session-send-core.js')
+    for (const [to, id] of [['Main', main.id], ['CEO', main.id], ['Orchard VP', lead.id]] as const) {
+      const r = await resolveSendTarget(to)
+      expect([to, r.session.claudeSessionId, r.taskId]).toEqual([to, sids[id], id])
+    }
+    const unknown = await api<{ error?: string }>('POST', '/org/contact', { to: 'Mainland' })
+    expect(unknown.status).toBe(404)
+    expect(unknown.json.error).toContain('"Main" (or "CEO")')
   })
 
   it('the Inbox has no lead; an unknown contact is a 404 that names it', async () => {

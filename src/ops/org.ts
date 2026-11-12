@@ -48,7 +48,7 @@ defineOp({
     + 'Asks for a reply by default when it goes down or across; a note up the org (to your own VP, or to Main) '
     + 'asks for none unless you pass expect_reply=true.',
   input: {
-    to: z.string().min(1).describe('A project name ("Inbox" for the Inbox), the name the user gave a VP, or a task id'),
+    to: z.string().min(1).describe('A project name ("Inbox" for the Inbox), "Main" (or "CEO"), a VP by its name or "<project> VP", or a task id'),
     task: z.string().min(1).optional().describe('A task in that contact\'s team that already owns this work: the message goes to it directly, and the contact sees it in its next update'),
     title: z.string().min(1).max(200).optional().describe('One-line TL;DR the reader sees first'),
     text: z.string().min(1).describe(`What you ask or hand over. ${MESSAGE_TEXT_HINT}`),

@@ -65,7 +65,7 @@ defineOp({
     'Legacy session ids and handles are also accepted.',
   input: {
     to: z.string().min(1).optional().describe(
-      'Task id or unique prefix. Omit only with in_reply_to. Legacy conversation ids and printed handles are accepted for compatibility.'),
+      'Task id or unique prefix, or an org node by name ("Main" or "CEO", a VP\'s name or "<project> VP"). Omit only with in_reply_to. Legacy conversation ids and printed handles are accepted for compatibility.'),
     title: z.string().min(1).max(200).optional().describe(
       'One-line TL;DR of the message (about 10 words): the reader sees only this line until they open the message. Always give one; put the detail in `text`.'),
     text: z.string().min(1).optional().describe(`Message text: the detail behind the title. Required, except on an answer (in_reply_to) that gives \`result\`. ${MESSAGE_TEXT_HINT}`),

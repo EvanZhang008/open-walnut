@@ -255,6 +255,64 @@ export function pickMain<T extends OrgTaskLike>(tasks: readonly T[]): T | undefi
   return best;
 }
 
+/** The words that name Main, whatever its task is titled: its role and the UI's name for it. */
+const MAIN_NAMES = ['main', 'main agent', CEO_LABEL.toLowerCase()];
+
+/** One way to write a node's name: case, spacing and a leading "the" do not matter. */
+function nodeNameKey(name: string | undefined): string {
+  return (name ?? '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/^the /, '');
+}
+
+/** `name` is one of the words that always name Main: no VP may go by it (org-node-edit.ts). */
+export function namesMain(name: string): boolean {
+  return MAIN_NAMES.includes(nodeNameKey(name));
+}
+
+/**
+ * Every name an org node answers to (lowercase, as `orgNodeNamed` compares): Main by "Main",
+ * "Main agent", "CEO" and its title; a VP by the name the user gave it (bare, "<name> VP",
+ * "<name> lead"), the name the Org page shows, its title and "<project> VP" / "<project> lead".
+ * Empty for any other task. A bare project name is not one of them: org_send reads that as the
+ * project first (resolveOrgContact).
+ */
+export function orgNodeNames(task: OrgTaskLike): string[] {
+  const names = new Set<string>();
+  const add = (n: string | undefined) => { const k = nodeNameKey(n); if (k) names.add(k); };
+  if (task.org_role === 'main') {
+    for (const n of MAIN_NAMES) add(n);
+    add(task.title);
+  } else if (task.org_role === 'lead') {
+    const own = task.org_name?.trim();
+    if (own) { add(own); add(`${own} ${VP_LABEL}`); add(`${own} lead`); }
+    add(orgDisplayTitle(task));
+    add(task.title);
+    const project = (task.project ?? '').trim();
+    if (project) { add(`${project} ${VP_LABEL}`); add(`${project} lead`); }
+  }
+  return [...names];
+}
+
+/**
+ * The org node `want` names (orgNodeNames): Main (the one pickMain picks), or the one open VP
+ * that answers to it. A name two open VPs share names neither; a VP the user named outranks
+ * one whose title or project merely reads the same.
+ * 2026-11-11: a VP answering Main's note sent org_send to "Main" and was told
+ * unknown_contact, because only a VP's user-given name was looked up.
+ */
+export function orgNodeNamed<T extends OrgTaskLike>(tasks: readonly T[], want: string): T | undefined {
+  const key = nodeNameKey(want);
+  if (!key) return undefined;
+  const main = pickMain(tasks);
+  if (main && orgNodeNames(main).includes(key)) return main;
+  const leads = tasks.filter((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE' && orgNodeNames(t).includes(key));
+  if (leads.length <= 1) return leads[0];
+  const named = leads.filter((t) => {
+    const own = t.org_name?.trim();
+    return !!own && [own, `${own} ${VP_LABEL}`, `${own} lead`].some((n) => nodeNameKey(n) === key);
+  });
+  return named.length === 1 ? named[0] : undefined;
+}
+
 /** The best of some leads: an open one first, then the oldest (stable across reads). */
 function bestLead<T extends OrgTaskLike>(leads: readonly T[]): T | undefined {
   let best: T | undefined;
