@@ -62,7 +62,7 @@ test('first-level pin choices switch tiers, unpin, undo and keep custom names in
     await pinEntered
     expect(tierRequests).toBe(0)
     // Undo before the write answers must survive a fresh list read and the delayed response.
-    await page.keyboard.press('Meta+z')
+    await page.keyboard.press('ControlOrMeta+z')
     menu = await openMenu(page, task.id)
     await expect(menu.getByTestId('kebab-unpin')).toHaveCount(0)
     await page.keyboard.press('Escape')
@@ -105,7 +105,7 @@ test('first-level pin choices switch tiers, unpin, undo and keep custom names in
     await menu.screenshot({ path: `${SHOTS}/first-level.png` })
     await menu.getByTestId('kebab-unpin').click()
     await expect.poll(storedTier).toBeNull()
-    await page.keyboard.press('Meta+z')
+    await page.keyboard.press('ControlOrMeta+z')
     await expect.poll(storedTier).toBe('satellite')
     // The old shortcut still works: pressing the current tier unpins too.
     menu = await openMenu(page, task.id)

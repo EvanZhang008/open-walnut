@@ -13,6 +13,24 @@ const sources = fs.readdirSync(DIR)
   .filter((f) => f.endsWith('.ts'))
   .map((f) => ({ file: f, text: fs.readFileSync(path.join(DIR, f), 'utf8') }))
 
+describe('pin undo shortcuts', () => {
+  const fixedUndo = /\.press\(['"](?:Meta|Control)\+z['"]\)/i
+
+  it('every spec that writes an atomic pin uses the platform undo key', () => {
+    const pinWriters = sources.filter(({ text }) => text.includes('/api/focus/batch'))
+    expect(pinWriters.map(({ file }) => file)).toContain('task-pin-first-level.spec.ts')
+    const offenders = pinWriters.flatMap(({ file, text }) => text.split('\n')
+      .flatMap((line, i) => fixedUndo.test(line) ? [`${file}:${i + 1}: ${line.trim()}`] : []))
+    expect(offenders).toEqual([])
+  })
+
+  it('rejects either fixed modifier and accepts the platform modifier', () => {
+    expect(fixedUndo.test("await page.keyboard.press('Meta+z')")).toBe(true)
+    expect(fixedUndo.test("await page.keyboard.press('Control+z')")).toBe(true)
+    expect(fixedUndo.test("await page.keyboard.press('ControlOrMeta+z')")).toBe(false)
+  })
+})
+
 describe('calendar time grid positions', () => {
   // The grid's hour height is `--cal-hour-px` (fitted to the window, zoomable), and it
   // starts at `data-start-minute`. A spec that moved the mouse or the scroll by a fixed
