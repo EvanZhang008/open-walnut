@@ -21,7 +21,7 @@ import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { memoryPressureShedding } from './memory-pressure.js';
 import type { SessionRecord } from './types.js';
-import { fetchReadyView, HISTORY_READY_CAPABILITY, READY_VIEW_ROWS, READY_VIEW_TURNS, readyViewEligible, wireCut, type ReadyViewConnection } from './history-ready-view.js';
+import { fetchReadyView, HISTORY_READY_CAPABILITY, READY_VIEW_ROWS, readyViewEligible, readyViewTurns, wireCut, type ReadyViewConnection } from './history-ready-view.js';
 import { readHistoryViewMeta, type HistoryViewMeta } from './history-view-snapshot.js';
 import { legacyHintCutoff } from './sessions/legacy-hint-lines.js';
 
@@ -156,7 +156,7 @@ export class HistoryReadyRefresher {
               ...(r.cwd ? { cwd: r.cwd } : {}),
               // The same cut fields fetchReadyView sends, so both ask about one view.
               ...(r.inPlaceRewinds?.length ? { cuts: r.inPlaceRewinds.map(wireCut) } : {}),
-              turns: READY_VIEW_TURNS, rows: READY_VIEW_ROWS, legacyHintCutoffMs: cutoff,
+              turns: readyViewTurns(r), rows: READY_VIEW_ROWS, legacyHintCutoffMs: cutoff,
             })),
           }, 30_000);
           if (!res.ok || !res.keys || typeof res.keys !== 'object') break;

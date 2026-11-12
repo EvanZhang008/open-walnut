@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { historyTurnWindowLimit, isQuestionTurnRow, mainLineRows, questionTurnIds } from '../../../src/lib/history-turn-window.js'
+import { READY_VIEW_TURNS, readyViewTurns } from '../../../src/core/history-ready-view.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const OWN = 'src/lib/history-turn-window.ts'
@@ -22,6 +23,10 @@ const OWN = 'src/lib/history-turn-window.ts'
 const NO_QUESTIONS: Record<string, string> = {
   'web/src/components/sessions/ChatEarlierBlock.tsx':
     'the earlier chat a new session carries (its rows only, no question anchors of this session)',
+  'src/providers/history-ready-core.ts':
+    'the ready view parsed on the session\'s host, which has no question anchors: the server asks it '
+    + 'for ten turns plus one per question turn (history-ready-view.ts readyViewTurns, checked below) '
+    + 'and re-slices its rows by the main line',
 }
 
 /** A line that counts turns names one of these: the main-line filter, or a test built on it. */
@@ -61,6 +66,24 @@ describe('a turns window counts the main conversation', () => {
     const bad = found.filter((f) => !NO_QUESTIONS[f.file] && !MAIN_LINE.test(f.text) && !MAIN_LINE.test(nextLine(f)))
     expect(bad.map((f) => `${f.file}:${f.line}: ${f.text.trim()}`)).toEqual([])
     for (const f of Object.keys(NO_QUESTIONS)) expect(files, `${f} is still a window (or drop it from the list)`).toContain(f)
+  })
+
+  it('a ready view asks its host for the main turns plus one per question turn, everywhere it asks', () => {
+    expect(readyViewTurns({})).toBe(READY_VIEW_TURNS)
+    const anchors = Array.from({ length: 12 }, (_, i) => ({ msgId: `q${i}`, parent: 'a1' }))
+    expect(readyViewTurns({ threadAnchors: anchors as never })).toBe(READY_VIEW_TURNS + 12)
+    const many = Array.from({ length: 300 }, (_, i) => ({ msgId: `q${i}`, parent: 'a1' }))
+    expect(readyViewTurns({ threadAnchors: many as never })).toBe(100)
+    // Every request of a ready view (or of its key) names its turns through readyViewTurns,
+    // so a view built for the first paint and a key compared on reconnect are one view.
+    const asks: string[] = []
+    for (const file of sources(path.join(ROOT, 'src'))) {
+      const rel = path.relative(ROOT, file)
+      readFileSync(file, 'utf8').split('\n').forEach((text, i) => {
+        if (/\bturns:\s*[^,}]*READY_VIEW_TURNS/.test(text)) asks.push(`${rel}:${i + 1}: ${text.trim()}`)
+      })
+    }
+    expect(asks).toEqual([])
   })
 
   it('the filter: a question\'s turns (by the id it was sent under too) are not turns; without anchors every turn is', () => {

@@ -32,6 +32,7 @@ import { HISTORY_PARSER_VERSION } from './history-parser-version.js';
 import { HISTORY_OPEN_SCREEN_ROWS } from './history-open-preview.js';
 import { isUnsettledRow } from './history-delta.js';
 import { READY_MAX_JSON_BYTES, READY_MAX_ROWS } from '../providers/history-ready-core.js';
+import { questionTurnIds } from '../lib/history-turn-window.js';
 
 /** How long the history route's first paint waits for a host's ready view. */
 export const READY_VIEW_DEADLINE_MS = 900;
@@ -42,6 +43,17 @@ export const READY_VIEW_BACKGROUND_BUDGET_MS = 10_000;
 /** Turns and rows a ready view aims for: what the web asks of its first paint (400 rows, ten turns). */
 export const READY_VIEW_TURNS = 10;
 export const READY_VIEW_ROWS = 400;
+
+/**
+ * The turns a session's ready view asks its host for: the main conversation's ten, plus one
+ * per Ask here follow-up. The host parses without the question anchors and counts every user
+ * turn, so a session whose last turns were sent in cards still gets ten main turns back, which
+ * the route then re-slices by the main line (sessions.ts sliceHistory). Capped at the host's
+ * own limit (history-ready-core.ts turnsOf).
+ */
+export function readyViewTurns(record: Pick<SessionRecord, 'threadAnchors'>): number {
+  return Math.min(100, READY_VIEW_TURNS + questionTurnIds(record.threadAnchors).size);
+}
 
 export const HISTORY_READY_CAPABILITY = 'history-ready-v1';
 /** The most base64 a ready answer's rows may be (gzip of READY_MAX_JSON_BYTES, never larger in practice). */
@@ -153,7 +165,7 @@ export async function fetchReadyView(
       sid: sessionId,
       ...(record.cwd ? { cwd: record.cwd } : {}),
       ...(cuts ? { cuts: cuts.map(wireCut) } : {}),
-      turns: opts.interactive ? 1 : READY_VIEW_TURNS,
+      turns: opts.interactive ? 1 : readyViewTurns(record),
       rows: opts.interactive ? HISTORY_OPEN_SCREEN_ROWS : READY_VIEW_ROWS,
       budgetMs,
       legacyHintCutoffMs: legacyHintCutoff(),
