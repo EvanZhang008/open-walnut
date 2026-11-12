@@ -1494,7 +1494,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // No conversation yet (a router waiting for its first mail, a session started with no
     // message), proven by its own path: answer it at once, never after a search of every
     // transcripts folder on the host (history-not-written.ts transcriptNotWrittenYet).
-    if (record && !req.query.before && await transcriptNotWrittenYet(record)) {
+    if (source !== 'streams' && record && !req.query.before && await transcriptNotWrittenYet(record)) {
       const since = typeof req.query.since === 'string' ? parseInt(req.query.since, 10) : undefined
       res.json({ messages: [], total: 0, cursor: 0, delta: since === 0 })
       return
@@ -1562,6 +1562,11 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           })
           return
         }
+      }
+      // Missing-transcript probes touch the host: only after the kept first-paint paths missed.
+      if (record && !localWarm && await transcriptNotWrittenYet(record)) {
+        res.json({ messages: [], total: 0 })
+        return
       }
       // No kept view: the session's daemon parses the newest part of the transcript on its own
       // host (history-ready-view.ts), bounded by READY_VIEW_DEADLINE_MS; a later answer is kept

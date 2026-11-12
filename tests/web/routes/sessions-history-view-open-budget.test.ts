@@ -99,6 +99,8 @@ describe("Walnut's own share of opening a remote session", () => {
       // The open before this one: a full read while the host answered keeps the view.
       const full = await request(app).get(`/api/sessions/${sid}/history?tail=400`);
       expect(full.body.messages).toHaveLength(200);
+      // Only calls after the host went down belong to the first-paint budget.
+      hostCalls.length = 0;
       if (kept !== 'in memory') { await flushHistoryViewsForTesting(); _resetHistoryViewsForTesting(); }
 
       // The host stops answering: every read of it now hangs forever.
@@ -116,6 +118,11 @@ describe("Walnut's own share of opening a remote session", () => {
         expect(p1.status).toBe(200);
         bodies.push(p1.body);
       }
+      const screen = await request(app).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=400`)
+        .timeout(OPEN_BUDGET_MS * 4);
+      expect(screen.status).toBe(200);
+      expect(screen.body.messages).toHaveLength(40);
+      expect(screen.body.messages.at(-1)).toMatchObject({ msgId: 'm199' });
       const worst = Math.max(...times);
       console.log(`[open-budget] ${kept}: opens ${times.join(', ')} ms`);
       expect(hostCalls, `the first paint called the host (it hangs): ${hostCalls.join(', ')}`).toEqual([]);
