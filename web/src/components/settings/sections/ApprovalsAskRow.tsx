@@ -19,6 +19,7 @@ import { listApprovals, type Approval } from '@/api/approvals';
 import { askApprovalsOff, useApprovals } from '@/components/approvals/approvals-store';
 import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
+import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import '@/styles/approvals-ask-row.css';
 
 type Save = (patch: (c: Config) => Partial<Config>, opts: { rowKey: string }) => Promise<unknown>;
@@ -79,6 +80,7 @@ export function ApprovalsAskRow({ config, save }: { config: Config; save: Save }
 }
 
 function UnaskedList({ off }: { off: boolean }) {
+  const hostLabel = useHostDisplayLabels();
   const [items, setItems] = useState<Approval[] | null>(null);
   const [all, setAll] = useState(false);
   useEffect(() => {
@@ -119,7 +121,7 @@ function UnaskedList({ off }: { off: boolean }) {
                   </summary>
                   <dl className="approvals-unasked-more-info">
                     {a.requester.command && (<><dt>Command</dt><dd><code>{a.requester.command}</code></dd></>)}
-                    <dt>From</dt><dd>{fromText(a)}</dd>
+                    <dt>From</dt><dd>{fromText(a, hostLabel)}</dd>
                     <dt>When</dt><dd>{new Date(a.answer?.at ?? a.createdAt).toLocaleString()}</dd>
                     {a.detail && (<><dt>Detail</dt><dd><pre>{a.detail}</pre></dd></>)}
                   </dl>
@@ -137,9 +139,9 @@ function UnaskedList({ off }: { off: boolean }) {
   );
 }
 
-/** Who asked, in a few words: the task, the process, the machine. */
-function fromText(a: Approval): string {
+/** Who asked, in a few words: the task, the process, the machine (by its label). */
+function fromText(a: Approval, hostLabel: (alias: string) => string): string {
   const r = a.requester;
   const who = r.taskTitle ? `“${r.taskTitle}”` : r.process ? r.process : 'a script';
-  return `${who} ${r.local ? 'on this computer' : `on ${r.host}`}`;
+  return `${who} ${r.local ? 'on this computer' : `on ${hostLabel(r.host)}`}`;
 }

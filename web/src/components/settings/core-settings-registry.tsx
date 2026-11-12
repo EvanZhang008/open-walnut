@@ -117,8 +117,9 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
       { word: 'light', rowLabel: 'Appearance', anchor: 'settings-theme' },
       'appearance', 'panels', 'columns',
       { word: 'your name', rowLabel: 'Your name', anchor: 'settings-name' },
-      { word: 'approvals', rowLabel: 'Ask me before agents act', anchor: 'settings-approvals-ask-me' },
-      { word: 'approve', rowLabel: 'Ask me before agents act', anchor: 'settings-approvals-ask-me' },
+      // Not the row's own label: its "agents" would make General beat Sessions for "agent".
+      { word: 'approvals', rowLabel: 'Approvals', anchor: 'settings-approvals-ask-me' },
+      { word: 'approve', rowLabel: 'Approvals', anchor: 'settings-approvals-ask-me' },
       'focus bar',
     ],
     render: ({ config, saveSection }) => <GeneralSection config={config} onSave={saveSection} />,
