@@ -3,6 +3,7 @@
  * a grant the task holds, one made at once for a task on one of the user's own hosts, or a letter
  * that asks the user, once per task and host (exec-grants.ts keeps them).
  */
+import os from 'node:os'
 import { log } from '../../logging/index.js'
 import { HostExecError, hostName, type Caller } from './host-exec.js'
 
@@ -214,7 +215,16 @@ async function grantOrAsk(caller: Caller, host: string, preview: string | null):
   if (ask?.state !== 'denied' && !grants.wasRevoked(caller.taskId, host)) {
     const { asksPerson } = await import('../approvals/ask-me.js')
     if (!(await asksPerson())) {
-      const off = grants.findGrant(caller.taskId, host) ?? await grants.grant(caller.taskId, host, 'approvals-off')
+      const had = grants.findGrant(caller.taskId, host)
+      const off = had ?? await grants.grant(caller.taskId, host, 'approvals-off')
+      if (!had) {
+        const { recordUnasked } = await import('../approvals/ask-me.js')
+        await recordUnasked('hostExec', {
+          what: `Let ${caller.taskTitle ? `“${caller.taskTitle}”` : 'a task'} run commands on ${name}`,
+          ...(preview ? { detail: preview } : {}),
+          requester: { ...(caller.host === LOCAL ? { host: os.hostname() || 'this computer', local: true as const } : { host: caller.host }), taskId: caller.taskId, ...(caller.taskTitle ? { taskTitle: caller.taskTitle } : {}) },
+        })
+      }
       log.session.info('host exec: approvals are off, the task uses the host with no letter', { taskId: caller.taskId, fromHost: caller.host, host, grantId: off.id })
       return off.id
     }

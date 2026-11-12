@@ -1025,6 +1025,16 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         const { asksPerson } = await import('../approvals/ask-me.js')
         return asksPerson()
       },
+      async recordUnasked(input: { what: string; detail?: string }): Promise<void> {
+        const what = typeof input?.what === 'string' ? input.what.trim() : ''
+        if (!what) return
+        const { recordUnasked } = await import('../approvals/ask-me.js')
+        await recordUnasked('pluginStep', {
+          what: what.slice(0, 300),
+          ...(typeof input.detail === 'string' && input.detail ? { detail: input.detail.slice(0, 4000) } : {}),
+          requester: { host: (await import('node:os')).hostname() || 'this computer', process: `plugin ${pluginId}`, local: true },
+        })
+      },
       async send(input: PluginLetterInput): Promise<{ letterId: string }> {
         chargeLetterQuota(pluginId)
         const { sendLetter } = await import('../human-inbox/store.js')

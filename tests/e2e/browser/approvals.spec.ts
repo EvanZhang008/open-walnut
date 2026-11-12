@@ -690,27 +690,48 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
     await expect(page.locator('.app-layout, #root').first()).toBeVisible()
     await offHome(page)
 
-    const made = await ask(request, { what: `Post the release notes ${stamp()}` })
+    const askMeNow = async () => ((await (await request.get('/api/v1/approvals')).json()) as { askMe: boolean }).askMe
+    const note = page.getByTestId('approval-stopped-asking')
+
+    // Stop asking, then Undo: approvals are on again, the one approved stays approved.
+    const first = await ask(request, { what: `Post the release notes ${stamp()}` })
+    const firstCard = page.locator(`[data-testid="approval-card"][data-approval-id="${first.approval.id}"]`)
+    await expect(firstCard).toBeVisible({ timeout: 15_000 })
+    await firstCard.getByTestId('approval-stop-asking').click()
+    expect((await waitFor(request, first.approval.id, first.waitToken)).approval.status).toBe('approved')
+    await expect(note).toContainText('Agents won’t ask you any more')
+    await expect.poll(askMeNow).toBe(false)
+    await note.getByTestId('approval-stopped-undo').click()
+    await expect(note).toContainText('Approvals are on again')
+    await expect.poll(askMeNow).toBe(true)
+
+    // Stop asking again, and keep it.
+    const made = await ask(request, { what: `Post the weekly update ${stamp()}` })
     const card = page.locator(`[data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
     await expect(card).toBeVisible({ timeout: 15_000 })
     await card.getByTestId('approval-stop-asking').click()
     expect((await waitFor(request, made.approval.id, made.waitToken)).approval.status).toBe('approved')
-
-    // Settings, General: the row reads off now.
-    await page.getByTestId('settings-nav-general').click()
-    const toggle = page.locator('#settings-approvals-ask-me')
-    await expect(toggle).toHaveAttribute('aria-checked', 'false', { timeout: 15_000 })
+    await expect(note).toContainText('Agents won’t ask you any more')
 
     // Off: the next ask is answered at once, with no card.
-    const quiet = await ask(request, { what: `Post the changelog ${stamp()}` })
+    const quietWhat = `Post the changelog ${stamp()}`
+    const quiet = await ask(request, { what: quietWhat })
     expect(quiet.approval).toMatchObject({ status: 'approved', unasked: 'approve' })
     await page.waitForTimeout(1500)
     await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${quiet.approval.id}"]`)).toHaveCount(0)
 
+    // The note's link opens Settings, General: the row reads off, with what went ahead under it.
+    await note.getByTestId('approval-stopped-settings').click()
+    const toggle = page.locator('#settings-approvals-ask-me')
+    await expect(toggle).toHaveAttribute('aria-checked', 'false', { timeout: 15_000 })
+    await expect(page.getByTestId('settings-approvals-unasked')).toContainText(quietWhat)
+    if (process.env.APR_SHOTS) await page.getByTestId('settings-approvals-ask-me-row').screenshot({ path: `${process.env.APR_SHOTS}/settings-switch-off.png` })
+
     // On again from Settings: the next ask waits for the person.
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-checked', 'true')
-    await expect.poll(async () => ((await (await request.get('/api/v1/approvals')).json()) as { askMe: boolean }).askMe).toBe(true)
+    await expect(page.getByTestId('settings-approvals-unasked')).toHaveCount(0)
+    await expect.poll(askMeNow).toBe(true)
     const asked = await ask(request, { what: `Post the roadmap ${stamp()}` })
     await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${asked.approval.id}"]`)).toBeVisible({ timeout: 15_000 })
     await request.post(`/api/v1/approvals/${asked.approval.id}/answer`, { data: { decision: 'deny' } })

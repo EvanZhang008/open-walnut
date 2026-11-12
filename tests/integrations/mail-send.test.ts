@@ -691,6 +691,10 @@ describe('with approvals off, an agent\'s send goes out with no letter', () => {
       expect(callsFor(draft.draftId)).toHaveLength(1);
       expect((await mailLetters()).length).toBe(lettersBefore);
       expect(await sendsOf(draft.draftId)).toHaveLength(1);
+      // Listed where the person reads what went ahead unasked (Settings, General).
+      const { listApprovals } = await import('../../src/core/approvals/store.js');
+      const listed = (await listApprovals({ status: 'all' })).filter((a) => a.unasked === 'mailSend');
+      expect(listed.map((a) => a.what)).toEqual([expect.stringContaining('Sent the mail “Approvals off”')]);
     } finally {
       if (before === undefined) delete process.env.WALNUT_APPROVALS_ASK; else process.env.WALNUT_APPROVALS_ASK = before;
     }

@@ -272,6 +272,8 @@ export interface MailUnsubscribeDeps {
   now?: () => number
   /** Whether an agent's unsubscribe waits for the person (`config.approvals.ask_me`). Absent: it asks. */
   asksPerson?: () => Promise<boolean>
+  /** Lists an unsubscribe that went ahead with approvals off (Settings, General). */
+  recordUnasked?: (what: string) => Promise<void>
   /**
    * Socket and resolver seam, handed straight to `fetchUnsubscribe`. NOT a way past the guard: every
    * url and every redirect is still checked, and every address the resolver answers with is still
@@ -838,6 +840,7 @@ export class MailUnsubscribe {
       this.deps.log.info('mail unsubscribed with no letter: approvals are off', {
         accountId: subject.accountId, messageId: subject.messageId, listKey: subject.listKey, method: done.method, status: done.status,
       })
+      await this.deps.recordUnasked?.(`Unsubscribed from ${subject.listKey}`)
       return { letterId: '', method: done.method, ...(done.url ? { url: done.url } : {}), listKey: subject.listKey, done }
     }
     const held = await this.ledgerFor(subject.accountId, subject.messageId)

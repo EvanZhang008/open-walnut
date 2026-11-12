@@ -39,9 +39,14 @@ export interface ApprovalsState {
    * for an unlock it is about to share.
    */
   vaultLooking: boolean;
+  /**
+   * The person just turned approvals off from a card ("Approve, and stop asking me"), on the
+   * approval it was clicked on: the corner says so with Undo for a while. `undone` once Undo ran.
+   */
+  stoppedAsking: { id: string; at: number; undone?: boolean } | null;
 }
 
-const EMPTY: ApprovalsState = { items: new Map(), keys: [], touchId: null, busy: {}, errors: {}, done: {}, openId: null, unlockId: null, vaultLooking: false };
+const EMPTY: ApprovalsState = { items: new Map(), keys: [], touchId: null, busy: {}, errors: {}, done: {}, openId: null, unlockId: null, vaultLooking: false, stoppedAsking: null };
 let state: ApprovalsState = EMPTY;
 const subs = new Set<() => void>();
 /** Approvals this page has raised a system notification for, so a re-read never repeats one. */
@@ -348,8 +353,36 @@ export async function approveAndStopAsking(a: Approval): Promise<void> {
   try {
     await setApprovalsAskMe(false);
     log.info('approvals', 'the person turned approvals off from a card', { approvalId: a.id });
+    showStopped({ id: a.id, at: Date.now() });
   } catch (err) {
     log.warn('approvals', 'turning approvals off from a card failed', { approvalId: a.id, error: err instanceof Error ? err.message : String(err) });
+    set({ errors: { ...state.errors, [a.id]: 'Approved, but approvals could not be turned off. Try again in Settings › General.' } });
+  }
+}
+
+/** How long the "won't ask you any more" note stays in the corner. */
+const STOPPED_NOTE_MS = 12_000;
+let stoppedTimer: ReturnType<typeof setTimeout> | null = null;
+function showStopped(next: ApprovalsState['stoppedAsking']): void {
+  if (stoppedTimer) clearTimeout(stoppedTimer);
+  set({ stoppedAsking: next });
+  if (next) stoppedTimer = setTimeout(() => { stoppedTimer = null; set({ stoppedAsking: null }); }, STOPPED_NOTE_MS);
+}
+
+export function dismissStoppedAsking(): void {
+  if (state.stoppedAsking) showStopped(null);
+}
+
+/** Undo of "stop asking me": approvals on again (the one approved stays approved). */
+export async function undoStopAsking(): Promise<void> {
+  const st = state.stoppedAsking;
+  if (!st || st.undone) return;
+  try {
+    await setApprovalsAskMe(true);
+    log.info('approvals', 'the person undid stop asking', { approvalId: st.id });
+    showStopped({ ...st, undone: true });
+  } catch (err) {
+    log.warn('approvals', 'undo of stop asking failed', { approvalId: st.id, error: err instanceof Error ? err.message : String(err) });
   }
 }
 

@@ -32,6 +32,7 @@ export const ASK_ME_GATES = {
   hostExec: 'Running commands on a host',
   calendarWrite: 'Changing a calendar event Walnut did not create',
   vaultUse: 'An agent using a saved password',
+  pluginStep: 'A plugin’s outward step (a post, a send)',
 } as const
 export type AskMeGate = keyof typeof ASK_ME_GATES
 
@@ -62,4 +63,20 @@ export async function goAheadUnasked(gate: AskMeGate, input: { what: string; det
     unasked: gate, ...(input.testRun ? { testRun: input.testRun } : {}),
   })
   return approval
+}
+
+/**
+ * The same record for a step that already went ahead on its own path (a mail sent through its
+ * ledger, a host grant, a released password, a plugin's post): the person's list of what went
+ * ahead unasked (Settings, General) reads these. Never throws: the step is done either way.
+ */
+export async function recordUnasked(gate: AskMeGate, input: { what: string; detail?: string; requester?: ApprovalRequester; testRun?: string }): Promise<void> {
+  try {
+    const { ambientTestRun } = await import('../test-run.js')
+    const testRun = input.testRun ?? ambientTestRun()
+    await goAheadUnasked(gate, { what: input.what, ...(input.detail ? { detail: input.detail } : {}), requester: input.requester ?? { host: (await import('node:os')).hostname() || 'this computer', local: true }, ...(testRun ? { testRun } : {}) })
+  } catch (err) {
+    const { log } = await import('../../logging/index.js')
+    log.web.warn('approvals: recording a step that went ahead unasked failed', { gate, error: err instanceof Error ? err.message : String(err) })
+  }
 }

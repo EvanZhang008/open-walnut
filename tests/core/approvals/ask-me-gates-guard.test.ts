@@ -64,6 +64,7 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
+const recordsStep = (file: string) => /\brecordUnasked\??\.?\(|\bgoAheadUnasked\(|\bunasked\s*:\s*'/.test(code(file));
 const readsSwitch = (file: string) => /\basksPerson\(|\.unasked\b|\bunasked\s*:/.test(code(file));
 
 describe('every approval wait reads the Approvals switch', () => {
@@ -81,6 +82,8 @@ describe('every approval wait reads the Approvals switch', () => {
 
   for (const [file, gate] of Object.entries(GATES)) {
     if ('reads' in gate) it(`${file} reads the switch`, () => expect(readsSwitch(file)).toBe(true));
+    // What went ahead is listed where the person reads it afterwards (Settings, General).
+    if ('reads' in gate) it(`${file} lists what goes ahead unasked`, () => expect(recordsStep(file)).toBe(true));
     if ('readBy' in gate) it(`${file} is read first by ${gate.readBy}`, () => expect(code(gate.readBy)).toMatch(/\basksPerson\(/));
   }
 

@@ -387,7 +387,11 @@
   text-align: left;
   cursor: pointer;
 }
-.approval-line-what { flex: 1 1 0; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Up to two lines of the sentence, then "…": a title cut at one line hid what it asks. */
+.approval-line-what {
+  flex: 1 1 0; min-width: 0; font-weight: 600; overflow: hidden; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+}
 /* Second line: how many and the time, then the buttons. */
 /* Never narrower than a short name and its time: in a narrow column (the Org list) the buttons
    wrap under it instead of cutting the time to "9:56 le". */
@@ -562,6 +566,22 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
   display: block;
   margin: 8px auto 0;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--fg-secondary, var(--fg));
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
 }
+.corner-stack .approval-stop-asking { flex: 1 0 100%; text-align: center; margin-top: 4px; }
+.approval-card-line .approval-stop-asking { flex: 1 0 100%; text-align: right; margin: 4px 0 0; }
+
+/* After "stop asking me": what changed, with Undo and the way to the switch. */
+.approval-stopped { display: flex; flex-direction: column; gap: 6px; border-left-color: var(--success); }
+.approval-dialog .approval-stopped { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.approval-stopped-line { font-weight: 600; }
+.approval-stopped-actions { display: flex; align-items: center; gap: 14px; font-size: 13px; }
+.approval-stopped-close {
+  margin-left: auto; padding: 0 4px; border: 0; background: none; color: var(--fg-muted);
+  font-size: 16px; line-height: 1; cursor: pointer;
+}
+.approval-stopped-close:hover { color: var(--fg); }
 .approval-stop-asking:hover { color: var(--accent-text, var(--accent)); text-decoration: underline; }

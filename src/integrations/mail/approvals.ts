@@ -124,6 +124,8 @@ export class MailApprovals {
      * Absent: it always asks, as the plugin did before the switch.
      */
     asksPerson?: () => Promise<boolean>
+    /** Lists a send that went ahead with approvals off where the person reads them (Settings, General). */
+    recordUnasked?: (what: string) => Promise<void>
   }) {}
 
   private get now(): number {
@@ -145,6 +147,8 @@ export class MailApprovals {
       // as its authorisation (`approval_ref` says so, for whoever later asks who sent it).
       const { send, draft } = await this.consoleSend(draftId, revision, undefined, 'approvals-off')
       this.deps.log.info('mail sent with no letter: approvals are off', { draftId, revision: draft.revision, sendId: send.sendId })
+      const to = draft.to.map((a) => a.address).filter(Boolean).slice(0, 3).join(', ')
+      await this.deps.recordUnasked?.(`Sent the mail “${draft.subject || '(no subject)'}”${to ? ` to ${to}` : ''}`)
       return { draft, letterId: '', sent: send }
     }
     const first = await this.deps.drafts.require(draftId)

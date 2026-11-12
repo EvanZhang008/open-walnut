@@ -137,7 +137,7 @@ export interface FakeWalnutResult {
   /** Every letter the plugin sent, in order, with its current state. */
   letters: LetterState[]
   /** What `letters.asksPerson()` answers: the person's Approvals switch. Starts true (asks). */
-  approvals: { asksPerson: boolean }
+  approvals: { asksPerson: boolean; recorded: Array<{ what: string; detail?: string }> }
   /**
    * Stand in for the human: records the answer on the letter and fires the plugin's
    * `onAnswered` handlers, the way the real inbox does. A letter can be answered once.
@@ -231,7 +231,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const appStates: FakeWalnutResult['appStates'] = new Map()
   const appBriefs: FakeWalnutResult['appBriefs'] = new Map()
   const letters: LetterState[] = []
-  const approvals = { asksPerson: true }
+  const approvals = { asksPerson: true, recorded: [] as Array<{ what: string; detail?: string }> }
   const statusItems = new Map<string, StatusItemState>()
   const hostList: HostInfo[] = [{ alias: '__local__', local: true, enabled: true }, ...(options.hosts ?? []).map((host) => structuredClone(host))]
   const hostRuns: Array<{ alias: string; input: HostRunInput }> = []
@@ -836,6 +836,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     // In-memory inbox: `send` records the letter, `answerLetter` on the result plays the human.
     letters: {
       async asksPerson() { return approvals.asksPerson },
+      async recordUnasked(input: { what: string; detail?: string }) { approvals.recorded.push({ ...input }) },
       async send(input: LetterSendInput) {
         const letterId = `letter-${letters.length + 1}`
         letters.push({ letterId, subject: input.subject, actions: structuredClone(input.actions ?? []) })

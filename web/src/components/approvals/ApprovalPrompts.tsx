@@ -22,13 +22,14 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import type { Approval } from '@/api/approvals';
 import {
-  applyApprovalEvent, approveAndStopAsking, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
+  applyApprovalEvent, approveAndStopAsking, dismissStoppedAsking, undoStopAsking, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
   openUnlock, startTouchId, unlockApproves, unlockUndecided, useApprovals, type ApprovalsState,
 } from './approvals-store';
 import { ApprovalUnlock } from './ApprovalUnlock';
@@ -166,20 +167,48 @@ function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approva
         </div>
       </>) : <ApprovalContextRows a={a} hostName={hostName} />}
       <ApprovalDetail a={a} />
-      {a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}
+      {onOpen && a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}
       {s.errors[a.id] ? <div className="approval-error" role="alert">{s.errors[a.id]}</div> : null}
       {/* The unlock form open on it says "Unlock Passwords in this window" in its own label. */}
       {(biometric || a.guard) && !approveKind(s, a) && !unlockUndecided(s, a)
         && !(s.unlockId === a.id && noApproveReason(s, a).startsWith('Unlock Passwords in this window')) ? <div className="approval-note">{noApproveReason(s, a)}</div> : null}
       <ApprovalButtons a={a} s={s} />
-      {!a.singleUse && !a.outsideSwitch && approveKind(s, a) && !s.busy[a.id] ? (
-        <button type="button" className="approval-link approval-stop-asking" data-testid="approval-stop-asking"
-          title="Approve this one and turn approvals off (Settings, General: Ask me before agents act). Steps then go ahead and are logged."
-          onClick={(e) => { e.stopPropagation(); void approveAndStopAsking(a); }}>
-          Approve, and stop asking me
-        </button>
-      ) : null}
+      <StopAsking a={a} s={s} />
     </>
+  );
+}
+
+/** "Approve, and stop asking me": this one, then the Approvals switch off (Settings, General). */
+function StopAsking({ a, s }: { a: Approval; s: ApprovalsState }) {
+  if (a.singleUse || a.outsideSwitch || !approveKind(s, a) || s.busy[a.id]) return null;
+  return (
+    <button type="button" className="approval-link approval-stop-asking" data-testid="approval-stop-asking"
+      title="Approve this one and turn approvals off (Settings › General › Ask me before agents act). Each step then goes ahead and is listed there."
+      onClick={(e) => { e.stopPropagation(); void approveAndStopAsking(a); }}>
+      Approve, and stop asking me
+    </button>
+  );
+}
+
+/**
+ * What the person sees after "stop asking me": the switch is off, with Undo and the way to it.
+ * In the corner (and in the dialog it was clicked in) for a while, or until Undo or ×.
+ */
+function StoppedAsking({ s }: { s: ApprovalsState }) {
+  const navigate = useNavigate();
+  const st = s.stoppedAsking;
+  if (!st) return null;
+  return (
+    <div className="approval-card approval-card-settled approval-stopped" role="status" data-testid="approval-stopped-asking">
+      <div className="approval-stopped-line">
+        {st.undone ? 'Approvals are on again: agents ask you first.' : 'Approved. Agents won’t ask you any more.'}
+      </div>
+      <div className="approval-stopped-actions">
+        {!st.undone && <button type="button" className="approval-link" data-testid="approval-stopped-undo" onClick={() => { void undoStopAsking(); }}>Undo</button>}
+        <button type="button" className="approval-link" data-testid="approval-stopped-settings" onClick={() => { dismissStoppedAsking(); closeApproval(); navigate('/settings#general'); }}>Settings › General</button>
+        <button type="button" className="approval-stopped-close" aria-label="Close" onClick={dismissStoppedAsking}>×</button>
+      </div>
+    </div>
   );
 }
 
@@ -253,6 +282,7 @@ function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
             <div className={`approval-settled-line approval-${settled.status}`} data-testid="approval-dialog-settled">
               {settledWord(settled)}<span className="approval-settled-what">{settled.what}</span>
             </div>
+            {s.stoppedAsking?.id === id && <StoppedAsking s={s} />}
             {list.length > 0 && (
               <div className="approval-dialog-steps">
                 <span>{list.length === 1 ? '1 more waiting' : `${list.length} more waiting`}</span>
@@ -281,7 +311,6 @@ function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
             </ol>
           </div>
         )}
-        {live && <NoticeOffer />}
       </div>
     </div>,
     document.body,
@@ -382,9 +411,10 @@ export function ApprovalPrompts() {
   return (
     <>
       <ApprovalDialog s={s} now={now} />
-      {(card || lastSettled) && (
+      {(card || lastSettled || (s.stoppedAsking && s.stoppedAsking.id !== s.openId)) && (
         <CornerSlot order={CORNER_ORDER.approvals} className="corner-slot-approvals">
         <div className="approval-stack" role="region" aria-label="Approvals">
+          {s.stoppedAsking && s.stoppedAsking.id !== s.openId && <StoppedAsking s={s} />}
           {lastSettled && !card && (
             <div key={lastSettled.id} className={`approval-card approval-card-settled approval-${lastSettled.status}`} data-approval-id={lastSettled.id} data-testid="approval-settled" role="status">
               <div className="approval-settled-line">
@@ -439,11 +469,13 @@ export function ApprovalPrompts() {
                     <Clock a={card} now={now} />
                   </span>
                   {!phone && <ApprovalButtons a={card} s={s} />}
+                  {!phone && <StopAsking a={card} s={s} />}
                   {s.errors[card.id] ? <div className="approval-error" role="alert">{s.errors[card.id]}</div> : null}
                 </div>
               ) : (
                 <div key={card.id} className={`approval-card${card.mode === 'biometric' ? ' approval-card-biometric' : ''}${armedId === card.id ? '' : ' approval-card-arming'}`} data-approval-id={card.id} data-testid="approval-card">
                   <ApprovalBody a={card} s={s} now={now} onOpen={() => openApproval(card.id)} onMinimize={() => setLineFor({ id: card.id, n: waiting.length })} total={waiting.length} />
+                  <NoticeOffer />
                 </div>
               )}
               {/* Over the next request while it shows: it also keeps a click meant for the one

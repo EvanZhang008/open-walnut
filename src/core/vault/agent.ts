@@ -433,6 +433,13 @@ export async function agentUse(input: UseInput, createApproval: ApprovalCreator)
 
   if (decision.kind === 'release') {
     const values = await release(item, { fields, purpose, asker, requester: r, use }, decision.via, undefined, since)
+    if (decision.via === 'approvals-off') {
+      const { recordUnasked } = await import('../approvals/ask-me.js')
+      await recordUnasked('vaultUse', {
+        what: `Gave the password “${item.title}” to ${r.taskTitle ? `“${r.taskTitle}”` : 'an agent'}${purpose ? `: ${purpose}` : ''}`,
+        requester: { host: r.host, ...(r.taskId ? { taskId: r.taskId } : {}), ...(r.taskTitle ? { taskTitle: r.taskTitle } : {}) },
+      })
+    }
     return {
       status: 'released', item: view, values, via: decision.via,
       ...(decision.via === 'grant' && grant ? { grantedUntil: Number.isFinite(grant.until) ? new Date(grant.until).toISOString() : null } : {}),

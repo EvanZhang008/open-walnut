@@ -616,6 +616,12 @@ export interface LettersService {
    * send no approval letter. Absent on a host older than the switch: ask (`?.() ?? true`).
    */
   asksPerson?(): Promise<boolean>
+  /**
+   * List a step that went ahead because approvals are off (a post, a send) where the person reads
+   * what went ahead unasked (Settings, General). One plain sentence in `what`, the sent text in
+   * `detail`. Absent on an older host: skip it. Never throws.
+   */
+  recordUnasked?(input: { what: string; detail?: string }): Promise<void>
   send(input: LetterSendInput): Promise<{ letterId: string }>
   /** Add a turn to the letter's thread, so the human sees what happened after they answered. */
   reply(letterId: string, input: { markdown?: string; html?: string; text?: string; items?: InboxLetterItem[] }): Promise<void>
