@@ -861,18 +861,28 @@ jobs:
   # a red here turns the run red and the release watch reads it. A new entry goes
   # in with `bun scripts/browser-baseline.mjs record <the reports>`, a fixed one
   # leaves with `record --prune` (docs/reference/testing-pipeline.md).
+  # A new failure is run again alone on this quiet runner before it counts: on
+  # 2026-11-10 every main run had about 15 new failures out of ~4,400 tests, each
+  # one failing both tries in its loaded shard, a different 15 each run, so the
+  # job was red on every run. One that passes alone reads as flaky; one that
+  # fails again stays new and fails the job.
   browser-baseline:
     name: Browser baseline
     runs-on: ubuntu-24.04
     needs: browser
     if: ${{ !cancelled() }}
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
+      # The rerun's budget is counted from here, as a shard's is (a slow browser install).
+      - run: echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v5
+      # The Playwright runner, for the rerun of the new failures.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
-      - run: bash scripts/ci-remove-node.sh
       - uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/bun-store
@@ -891,6 +901,9 @@ jobs:
       # shell: bash is `bash -eo pipefail`; the default (`bash -e`) took tee's exit
       # code, so a new failure left the job green.
       - name: Judge the browser reports
+        id: judge
+        # Its red is judged again below once the new failures ran alone.
+        continue-on-error: true
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/browser-reports"
@@ -901,6 +914,47 @@ jobs:
           # whose report outgrew the longest string the JSON reporter can write).
           missing=$(for i in $(seq 1 16); do [ -f "$RUNNER_TEMP/browser-reports/browser-$i.json" ] || printf ' %s' "$i"; done)
           [ -z "$missing" ] || echo "::warning::only $n of 16 browser shards wrote a report (no report from shard$missing); the tests of those shards are not judged" | tee -a "$GITHUB_STEP_SUMMARY"
+          bun scripts/browser-baseline.mjs check "$RUNNER_TEMP/browser-reports" | tee -a "$GITHUB_STEP_SUMMARY"
+      # The new failures' locations; none when the suite did not run cleanly or when
+      # more than RECHECK_MAX (scripts/browser-baseline.mjs) are new, a real break.
+      - name: Find the new failures to run again
+        id: recheck
+        if: steps.judge.outcome == 'failure'
+        shell: bash
+        run: |
+          bun scripts/browser-baseline.mjs recheck "$RUNNER_TEMP/browser-reports" > "$RUNNER_TEMP/recheck.txt"
+          n=$(grep -c . "$RUNNER_TEMP/recheck.txt" || true)
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+          echo "to run again alone: $n"
+          cat "$RUNNER_TEMP/recheck.txt"
+      - if: steps.recheck.outputs.count != '' && steps.recheck.outputs.count != '0'
+        run: bun run build && (cd web && bun x vite build)
+      - name: Install the browsers
+        if: steps.recheck.outputs.count != '' && steps.recheck.outputs.count != '0'
+        run: bash scripts/ci/install-browsers.sh chromium webkit
+      # One worker and nothing else on the runner: the load of a shard is gone. Its report
+      # joins the shards' (a test fails only when it failed in every report that ran it).
+      - name: Run the new failures again, alone
+        if: steps.recheck.outputs.count != '' && steps.recheck.outputs.count != '0'
+        continue-on-error: true
+        shell: bash
+        env:
+          PW_IGNORE_LOAD: '1'
+          WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-browser
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/browser-reports/recheck.json
+        run: |
+          # Each location under the testDir, so calendar.spec.ts never also runs mini-calendar.spec.ts.
+          mapfile -t locs < <(sed 's|^|tests/e2e/browser/|' "$RUNNER_TEMP/recheck.txt")
+          left=$(( JOB_STARTED_AT + 40 * 60 - $(date +%s) ))
+          [ "$left" -ge 60 ] || left=60
+          echo "rerun budget: ${left}s"
+          bun x playwright test --project=chromium --project=chromium-host-fixture --workers=1 --retries=1 --global-timeout=$(( left * 1000 )) --reporter=line,json "${locs[@]}"
+      # The verdict: the same check over the shards' reports and the rerun's.
+      - name: Judge again with the rerun
+        if: steps.judge.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "### After running the new failures again alone" >> "$GITHUB_STEP_SUMMARY"
           bun scripts/browser-baseline.mjs check "$RUNNER_TEMP/browser-reports" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ── The iOS app's tests on a simulator: informational, not in CI OK ───────
@@ -922,8 +976,10 @@ jobs:
   # tests, after 12 minutes of boot and build). ios-native/tests/ui/ci-shard.py deals every
   # UI class with tests that IOS_CI_SKIP_UI does not leave out to a shard, weighed by the
   # time CI measured (ios-native/tests/ui/ci-shard-times.tsv), so a new class needs no list.
-  # Three shards of about 20 minutes of tests each: macOS runners are scarce (five at a time,
-  # shared with the rehearsals), so on a push the job holds two, as it did with one UI leg.
+  # Four shards of about 18 minutes of tests each: the third of three ran out of its 45 minute
+  # step (run 42831643140: 12 to 15 minutes of build and boot before the first test, then
+  # 30 minutes of tests). macOS runners are scarce (five at a time, shared with the
+  # rehearsals), so on a push the job holds two, as it did with one UI leg.
   ios:
     name: iOS app (${{ matrix.layer }}${{ matrix.shard && format(' {0}/{1}', matrix.shard, matrix.shards) || '' }})
     runs-on: macos-26
@@ -931,13 +987,14 @@ jobs:
     continue-on-error: ${{ matrix.layer == 'ui' }}
     strategy:
       fail-fast: false
-      max-parallel: ${{ github.event_name == 'push' && 2 || 4 }}
+      max-parallel: ${{ github.event_name == 'push' && 2 || 5 }}
       matrix:
         include:
           - layer: unit
-          - { layer: ui, shard: 1, shards: 3 }
-          - { layer: ui, shard: 2, shards: 3 }
-          - { layer: ui, shard: 3, shards: 3 }
+          - { layer: ui, shard: 1, shards: 4 }
+          - { layer: ui, shard: 2, shards: 4 }
+          - { layer: ui, shard: 3, shards: 4 }
+          - { layer: ui, shard: 4, shards: 4 }
     # What this job leaves to the Mac (tests/scripts/ci-ios.test.ts keeps both lists whole):
     # the wall-clock budgets of the perf gates (a whole class, or the timed methods of
     # one whose other tests count work), which a shared runner misses by up to
@@ -966,6 +1023,8 @@ jobs:
         -skip-testing:WalnutUITests/PeerMessageUITests
         -skip-testing:WalnutUITests/SessionStopSteerUITests
         -skip-testing:WalnutUITests/TalkRealServerUITests
+        -skip-testing:WalnutUITests/TalkShortcutUITests
+        -skip-testing:WalnutUITests/TaskAnchorTapUITests
         -skip-testing:WalnutUITests/ThreadPushLiveUITests
         -skip-testing:WalnutUITests/ThreadPushReviewUITests
         -skip-testing:WalnutUITests/ThreadPushSolReviewUITests

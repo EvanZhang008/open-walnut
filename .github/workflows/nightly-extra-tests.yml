@@ -65,59 +65,66 @@ jobs:
       # warm-session and unified-update-notice serve the built server and SPA.
       - run: bun run build && (cd web && bun x vite build)
       # apt can stall or crawl on a runner; the script bounds it (scripts/ci/install-browsers.sh).
+      # With no browser every spec below fails in milliseconds on a missing executable, which
+      # reads as 17 broken specs (run 43041166867: the Ubuntu mirror failed), so they skip.
       - name: Install the browsers
+        id: browsers
         run: bash scripts/ci/install-browsers.sh chromium
       - name: Cloud host (a real replica beside the Mac)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env: { PW_WORKERS: '1' }
         run: bun x playwright test -c tests/e2e/browser/cloud-host.config.ts --project=chromium
       - name: Cloud host, as the second Mac
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env: { PW_WORKERS: '1' }
         run: bun x playwright test -c tests/e2e/browser/cloud-host-other-mac.config.ts --project=chromium
       - name: Cloud host, the link going silent
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env: { PW_WORKERS: '1' }
         run: bun x playwright test -c tests/e2e/browser/cloud-host-silent-link.config.ts --project=chromium
       - name: Cloud host, the link cut and flapping
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env: { PW_WORKERS: '1' }
         run: bun x playwright test -c tests/e2e/browser/cloud-host-link-down.config.ts --project=chromium
       - name: Host server alone
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env: { PW_WORKERS: '1' }
         run: bun x playwright test -c tests/e2e/browser/host-alone.config.ts --project=chromium
       - name: Host replica while the Mac sleeps
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env: { REPLICA_APP: built }
         run: bun x playwright test -c tests/e2e/browser/replica.config.ts --project=chromium-desktop
       - name: Session commit (a real daemon and git repo)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         run: bun x playwright test -c tests/e2e/browser/session-commit.config.ts --project=chromium
       - name: Upload through a daemon swap (a real daemon replaced mid-upload)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         run: bun x playwright test -c tests/e2e/browser/daemon-swap-upload.config.ts --project=chromium
       - name: Warm session (the built server and SPA)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         run: bun x playwright test -c tests/e2e/browser/warm-session.config.ts --project=chromium
-      - name: Changed tab compare (PW_COMPARE_FIXTURE)
+      - name: References in agent text (the built SPA and its own triage record)
         if: ${{ !cancelled() }}
+        env: { PW_WORKERS: '1' }
+        run: bun x playwright test -c tests/e2e/browser/agent-text.config.ts --project=chromium
+      - name: Changed tab compare (PW_COMPARE_FIXTURE)
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env: { PW_COMPARE_FIXTURE: '1', PW_TEST_PORT: '3531' }
         run: bun x playwright test tests/e2e/browser/diff-compare.spec.ts --project=chromium
       - name: Task workspaces (PW_WORKSPACE_FIXTURE)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env: { PW_WORKSPACE_FIXTURE: '1', PW_TEST_PORT: '3515' }
         run: bun x playwright test tests/e2e/browser/task-workspaces.spec.ts --project=chromium
       - name: Update notice on the built SPA (PW_BUILT_SPA)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env: { PW_BUILT_SPA: '1', PW_TEST_PORT: '3532' }
         run: WALNUT_WEB_STATIC_DIR="$PWD/dist/web/static" bun x playwright test tests/e2e/browser/unified-update-notice.spec.ts --project=chromium
       - name: Walnut's own /compact notice (MOCK_CONTEXT_FULL_AT)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env: { MOCK_CONTEXT_FULL_AT: '177000', MOCK_CONTEXT_WINDOW: '200000', PW_TEST_PORT: '3533' }
         run: bun x playwright test tests/e2e/browser/walnut-command-notice.spec.ts --project=chromium
       - name: Idle compaction row (WALNUT_IDLE_COMPACT_LEAD_MS)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' }}
         env: { WALNUT_IDLE_COMPACT_LEAD_MS: '3580000', MOCK_CONTEXT_WINDOW: '450000', PW_TEST_PORT: '3534' }
         run: bun x playwright test tests/e2e/browser/compact-context.spec.ts --project=chromium
       - name: Upload the traces
@@ -158,12 +165,19 @@ jobs:
         env:
           WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-popout
         run: bash scripts/test-desktop-popout.sh
+      # The root install already installed web/ (scripts/postinstall.mjs).
+      - name: Recent uses native human input
+        if: ${{ !cancelled() }}
+        run: |
+          bun x playwright install webkit
+          bash scripts/test-desktop-recent.sh
 
   # The Whisper one-button setup for real: Homebrew installs whisper-cpp and the model
-  # downloads (1.6 GB), so it runs on Sundays only. A runner is a machine without either, as the spec needs.
+  # downloads (1.6 GB), so it runs on Sundays only, or when started by hand (never on a push of this
+  # file). A runner is a machine without either, as the spec needs.
   stt-real-install:
     name: Voice setup, real install (weekly)
-    if: github.event_name != 'schedule' || github.event.schedule == '17 8 * * 0'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 8 * * 0'
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -189,6 +203,9 @@ jobs:
         env:
           PW_IGNORE_LOAD: '1'
           WALNUT_STT_REAL_INSTALL: '1'
+          # The fixture is an isolated server, where voice is off unless asked
+          # (src/core/stt/voice-here.ts): without this the installed engine never reads ready.
+          WALNUT_STT_AUTO_SETUP: '1'
           WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-stt
         run: bun x playwright test tests/e2e/browser/stt-install.spec.ts --project=chromium
       - name: Upload the traces

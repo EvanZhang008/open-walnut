@@ -161,6 +161,9 @@ jobs:
       # Its daemons download the host network connector it pins on first use.
       - name: The host network connector it pins is out
         run: sh scripts/net-release-ready.sh
+      # And the optional components it pins, downloaded the first time a feature needs one.
+      - name: The optional components it pins are out
+        run: bun scripts/components-release-ready.mjs
       # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
       - uses: actions/cache@v4
         with:
@@ -190,6 +193,7 @@ jobs:
     needs: stable-build
     permissions:
       contents: read
+      actions: read
     uses: ./.github/workflows/binary-matrix.yml
     with:
       files: ${{ needs.stable-build.outputs.files }}
@@ -348,6 +352,10 @@ jobs:
             # walnut-net.yml has published it, a fresh install could not join (2026-11-09).
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::warning::$green pins a host network connector that is not out yet; the nightly waits for it (last nightly $last)"
+          elif ! bun scripts/components-release-ready.mjs --at "$green"; then
+            # The same for the optional components it pins (components.yml publishes them).
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::$green pins optional components that are not out yet; the nightly waits for them (last nightly $last)"
           else
             git checkout --quiet "$green"
             echo "publish=true" >> "$GITHUB_OUTPUT"
@@ -391,6 +399,7 @@ jobs:
     if: needs.nightly-build.outputs.publish == 'true'
     permissions:
       contents: read
+      actions: read
     uses: ./.github/workflows/binary-matrix.yml
     with:
       files: ${{ needs.nightly-build.outputs.files }}
@@ -535,6 +544,9 @@ jobs:
           elif ! sh scripts/net-release-ready.sh --at "$SHA"; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::warning::the soaked nightly ($SHA) pins a host network connector that is not out; the stable waits for it"
+          elif ! bun scripts/components-release-ready.mjs --at "$SHA"; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::the soaked nightly ($SHA) pins optional components that are not out; the stable waits for them"
           else
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
@@ -592,6 +604,7 @@ jobs:
     if: needs.promote-plan.outputs.publish == 'true'
     permissions:
       contents: read
+      actions: read
     uses: ./.github/workflows/binary-matrix.yml
     with:
       files: ${{ needs.promote-build.outputs.files }}

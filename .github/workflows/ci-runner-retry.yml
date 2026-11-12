@@ -1,0 +1,39 @@
+name: CI runner retry
+
+# A required CI leg GitHub cancels before any machine ran it (no runner free, 2026-11-10: a macOS
+# leg of run 42851742614 waited 21 minutes and was dropped) turns CI OK red on a commit nothing
+# tested. After a push run on main whose CI OK failed only on such legs, this runs them again
+# (scripts/ci-runner-retry.mjs). The Binary matrix the same way, every row required (2026-11-11,
+# run 43036597217: macos-15 got no runner). A leg that ran and failed is never run again here.
+
+on:
+  workflow_run:
+    workflows: [CI, Binary matrix]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  retry:
+    name: Run again a leg that got no runner
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      WORKFLOW: ${{ github.event.workflow_run.name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci-runner-retry.mjs
+            .github/workflows/ci.yml
+          sparse-checkout-cone-mode: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun scripts/ci-runner-retry.mjs "${{ github.event.workflow_run.id }}" "${{ github.event.workflow_run.run_attempt }}" "$WORKFLOW"
