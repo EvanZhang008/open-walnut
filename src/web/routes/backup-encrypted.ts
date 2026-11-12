@@ -23,7 +23,7 @@ import {
   adoptEncryptedBackups, checkRecoveryKey, listEncryptedBackups, restoreEncryptedBackup, testDestination,
 } from '../../core/backup/encrypted-backup.js';
 import {
-  completeDriveConnectFromUrl, readDriveTokens, resolveOAuthClient, revokeDriveTokens,
+  completeDriveConnectFromUrl, machineClientPath, readDriveTokens, readMachineClient, resolveOAuthClient, revokeDriveTokens,
   startDriveConnect, writeDriveTokens, makeAccessTokenGetter, type OAuthClient,
 } from '../../core/backup/gdrive-oauth.js';
 import { driveAbout, findOrCreateFolder } from '../../core/backup/stores/drive-store.js';
@@ -418,9 +418,9 @@ async function driveClientFor(body: unknown): Promise<OAuthClient | null> {
     let secret = sent.client_secret?.trim();
     // The saved secret stands in only for the saved client.
     if (secret?.includes(MASK)) secret = dest?.client_id === clientId ? dest.client_secret : undefined;
-    return resolveOAuthClient({ client_id: clientId, client_secret: secret });
+    return resolveOAuthClient({ client_id: clientId, client_secret: secret }, WALNUT_HOME);
   }
-  return resolveOAuthClient({ client_id: dest?.client_id, client_secret: dest?.client_secret });
+  return resolveOAuthClient({ client_id: dest?.client_id, client_secret: dest?.client_secret }, WALNUT_HOME);
 }
 
 // GET /api/backup/gdrive/status
@@ -428,18 +428,26 @@ encryptedBackupRouter.get('/gdrive/status', async (_req: Request, res: Response)
   // Drive's own settings, in use or kept for later (another service in use).
   const backup = (await getConfig()).backup;
   const dest = backup?.destination?.type === 'gdrive' ? backup.destination : backup?.other_destinations?.find((o) => o.type === 'gdrive');
-  const client = resolveOAuthClient({ client_id: dest?.client_id, client_secret: dest?.client_secret });
-  const builtin = resolveOAuthClient({});
+  const client = resolveOAuthClient({ client_id: dest?.client_id, client_secret: dest?.client_secret }, WALNUT_HOME);
+  const machine = readMachineClient(WALNUT_HOME);
+  const builtin = resolveOAuthClient({}, WALNUT_HOME);
   const tokens = await readDriveTokens(WALNUT_HOME);
+  // Which client the sign-in used (kept with its token). 'missing': that client is no longer
+  // here (its file was removed or replaced), so the token cannot be refreshed: connect again.
+  const signedInWith = !tokens?.folder_id ? undefined
+    : builtin && tokens.client_id === builtin.clientId ? 'builtin'
+      : client?.source === 'custom' && tokens.client_id === client.clientId ? 'custom'
+        : 'missing';
   res.json({
     builtinClient: Boolean(builtin),
+    // The client file saved on this machine stands in for the built-in client: the pane names it.
+    ...(machine && builtin?.clientId === machine.clientId ? { machineClientFile: machineClientPath(WALNUT_HOME) } : {}),
     client: client?.source ?? null,
     connected: Boolean(tokens?.folder_id),
     email: tokens?.email ?? null,
     folderName: tokens?.folder_name ?? null,
     connectedAt: tokens?.connected_at ?? null,
-    // Which client the sign-in used (kept with its token): the user's own one is said in the pane.
-    ...(tokens?.folder_id ? { signedInWith: builtin && tokens.client_id === builtin.clientId ? 'builtin' : 'custom', signedInClientId: tokens.client_id } : {}),
+    ...(signedInWith ? { signedInWith, signedInClientId: tokens!.client_id } : {}),
     pending: connectDone !== null,
     ...(connectDone !== null && connectAuthUrl ? { authUrl: connectAuthUrl } : {}),
   });

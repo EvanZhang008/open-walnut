@@ -6,6 +6,7 @@ import {
   BUILTIN_GOOGLE_CLIENT,
   DRIVE_SCOPE,
   completeDriveConnectFromUrl,
+  machineClientPath,
   makeAccessTokenGetter,
   readDriveTokens,
   resolveOAuthClient,
@@ -252,5 +253,29 @@ describe('resolveOAuthClient', () => {
       expect(resolveOAuthClient()).toBeNull();
     }
     expect(resolveOAuthClient({ client_id: 'mine' })).toEqual({ clientId: 'mine', clientSecret: undefined, source: 'custom' });
+  });
+
+  it('this machine\'s client file comes after config and env, before the built-in client', async () => {
+    delete process.env.WALNUT_GDRIVE_CLIENT_ID;
+    delete process.env.WALNUT_GDRIVE_CLIENT_SECRET;
+    const file = machineClientPath(dataDir);
+    expect(file).toBe(path.join(dataDir, 'local', 'backup', 'gdrive-client.json'));
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    // The shape this module writes, and the file Google's console downloads.
+    await fsp.writeFile(file, JSON.stringify({ client_id: ' machine-id ', client_secret: 'machine-secret' }), { mode: 0o600 });
+    expect(resolveOAuthClient({}, dataDir)).toEqual({ clientId: 'machine-id', clientSecret: 'machine-secret', source: 'builtin' });
+    await fsp.writeFile(file, JSON.stringify({ installed: { client_id: 'downloaded-id', client_secret: 'downloaded-secret' } }));
+    expect(resolveOAuthClient({}, dataDir)).toEqual({ clientId: 'downloaded-id', clientSecret: 'downloaded-secret', source: 'builtin' });
+    // Settings and the environment still win; without dataDir the file is never read.
+    expect(resolveOAuthClient({ client_id: 'mine' }, dataDir)?.source).toBe('custom');
+    process.env.WALNUT_GDRIVE_CLIENT_ID = 'env-id';
+    expect(resolveOAuthClient({}, dataDir)?.clientId).toBe('env-id');
+    delete process.env.WALNUT_GDRIVE_CLIENT_ID;
+    expect(resolveOAuthClient({})?.clientId).not.toBe('downloaded-id');
+    // A malformed or empty file reads as absent, never as an error.
+    for (const bad of ['{not json', '{}', JSON.stringify({ client_id: 7 })]) {
+      await fsp.writeFile(file, bad);
+      expect(resolveOAuthClient({}, dataDir)?.clientId ?? null).toBe(BUILTIN_GOOGLE_CLIENT.clientId || null);
+    }
   });
 });

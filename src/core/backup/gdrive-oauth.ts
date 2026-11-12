@@ -11,10 +11,12 @@
  * per machine, never in config. Token values are never logged.
  */
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createHash, randomBytes } from 'node:crypto';
+import { log } from '../../logging/index.js';
 
 export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
@@ -35,11 +37,45 @@ export interface OAuthClient {
  */
 export const BUILTIN_GOOGLE_CLIENT = { clientId: '', clientSecret: '' };
 
-export function resolveOAuthClient(custom?: { client_id?: string; client_secret?: string }): OAuthClient | null {
+/**
+ * This machine's Google client: `<dataDir>/local/backup/gdrive-client.json` (0600), beside
+ * the token and, like it, never synced to other machines (an encrypted backup carries it,
+ * sealed; a new machine needs it before it can read Drive at all). Either `{client_id, client_secret}` or the file
+ * Google's console downloads (`{installed: {...}}`). It stands where the built-in client
+ * would: Connect needs nothing filled in. Unreadable or malformed reads as absent (logged
+ * with its path, never its content).
+ */
+export function machineClientPath(dataDir: string): string {
+  return path.join(dataDir, 'local', 'backup', 'gdrive-client.json');
+}
+
+export function readMachineClient(dataDir: string): OAuthClient | null {
+  try {
+    const raw = JSON.parse(readFileSync(machineClientPath(dataDir), 'utf-8')) as Record<string, unknown>;
+    const c = (raw.installed ?? raw) as { client_id?: unknown; client_secret?: unknown };
+    const clientId = typeof c.client_id === 'string' ? c.client_id.trim() : '';
+    if (!clientId) return null;
+    const secret = typeof c.client_secret === 'string' ? c.client_secret.trim() : '';
+    return { clientId, clientSecret: secret || undefined, source: 'builtin' };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log.session.warn('backup: Google client file unreadable, ignored', { path: machineClientPath(dataDir), err: (err as Error).name });
+    }
+    return null;
+  }
+}
+
+/**
+ * The client a Drive sign-in uses: the user's own from Settings, else the environment's,
+ * else this machine's client file (when `dataDir` is given), else the built-in one.
+ */
+export function resolveOAuthClient(custom?: { client_id?: string; client_secret?: string }, dataDir?: string): OAuthClient | null {
   const customId = custom?.client_id?.trim();
   if (customId) return { clientId: customId, clientSecret: custom?.client_secret?.trim() || undefined, source: 'custom' };
   const envId = process.env.WALNUT_GDRIVE_CLIENT_ID?.trim();
   if (envId) return { clientId: envId, clientSecret: process.env.WALNUT_GDRIVE_CLIENT_SECRET?.trim() || undefined, source: 'builtin' };
+  const machine = dataDir ? readMachineClient(dataDir) : null;
+  if (machine) return machine;
   if (BUILTIN_GOOGLE_CLIENT.clientId) {
     return { clientId: BUILTIN_GOOGLE_CLIENT.clientId, clientSecret: BUILTIN_GOOGLE_CLIENT.clientSecret || undefined, source: 'builtin' };
   }

@@ -302,6 +302,29 @@ describe('encrypted backups through the routes', () => {
     expect((await call('GET', '/recovery-key')).body).toMatchObject({ key: realKey });
   }, 60_000);
 
+  it('a Google client file saved on this machine: the pane names it and Connect uses it, nothing filled in', async () => {
+    const { machineClientPath } = await import('../../src/core/backup/gdrive-oauth.js');
+    const file = machineClientPath(WALNUT_HOME);
+    const envId = process.env.WALNUT_GDRIVE_CLIENT_ID!;
+    const envSecret = process.env.WALNUT_GDRIVE_CLIENT_SECRET!;
+    delete process.env.WALNUT_GDRIVE_CLIENT_ID;
+    delete process.env.WALNUT_GDRIVE_CLIENT_SECRET;
+    try {
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await fsp.writeFile(file, JSON.stringify({ installed: { client_id: envId, client_secret: envSecret } }), { mode: 0o600 });
+      expect((await call('GET', '/gdrive/status')).body).toMatchObject({ builtinClient: true, client: 'builtin', machineClientFile: file });
+      const c = await call<{ authUrl: string }>('POST', '/gdrive/connect', {});
+      expect(new URL(c.body.authUrl).searchParams.get('client_id')).toBe(envId);
+      expect((await call('POST', '/gdrive/connect/cancel', {})).body).toMatchObject({ ok: true, cancelled: true });
+    } finally {
+      await fsp.rm(file, { force: true });
+      process.env.WALNUT_GDRIVE_CLIENT_ID = envId;
+      process.env.WALNUT_GDRIVE_CLIENT_SECRET = envSecret;
+    }
+    // Without the file the status says nothing of one.
+    expect((await call('GET', '/gdrive/status')).body).not.toHaveProperty('machineClientFile');
+  });
+
   it('Google Drive: connect with PKCE, back up into its folder, restore', async () => {
     const before = await call('GET', '/gdrive/status');
     expect(before.body).toMatchObject({ builtinClient: true, connected: false });
@@ -319,6 +342,15 @@ describe('encrypted backups through the routes', () => {
     const after = await call('GET', '/gdrive/status');
     // Signed in with Walnut's own client: the pane says nothing about a client of the user's.
     expect(after.body).toMatchObject({ connected: true, folderName: 'Walnut Backup', signedInWith: 'builtin' });
+    // The client it signed in with gone (env cleared here; a removed client file the same):
+    // the pane is told the token can no longer be refreshed, never that it is the user's own client.
+    const envId = process.env.WALNUT_GDRIVE_CLIENT_ID;
+    delete process.env.WALNUT_GDRIVE_CLIENT_ID;
+    try {
+      expect((await call('GET', '/gdrive/status')).body).toMatchObject({ connected: true, signedInWith: 'missing', builtinClient: false });
+    } finally {
+      process.env.WALNUT_GDRIVE_CLIENT_ID = envId;
+    }
 
     // Same recovery key as before (this machine has one); Drive gets a new repository.
     scheduler.resetAnchor();

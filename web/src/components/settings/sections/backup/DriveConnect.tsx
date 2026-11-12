@@ -21,9 +21,11 @@ import type { BackupDestinationConfig } from './backup-model'
 
 interface DriveStatus {
   builtinClient: boolean
+  /** The client file saved on this computer (local/backup/gdrive-client.json), when it is the one used. */
+  machineClientFile?: string
   client: 'builtin' | 'custom' | null
-  /** The client the sign-in used (from its token), when connected. */
-  signedInWith?: 'builtin' | 'custom'
+  /** The client the sign-in used (from its token), when connected; 'missing': it is no longer on this computer. */
+  signedInWith?: 'builtin' | 'custom' | 'missing'
   signedInClientId?: string
   connected: boolean
   email: string | null
@@ -157,7 +159,11 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
     const clientId = dest.client_id?.trim() || status.signedInClientId
     const ownClientNote = (status.signedInWith ?? status.client) === 'custom'
       ? ` Uses your own Google client${clientId ? ` (${clientId.length > 24 ? `${clientId.slice(0, 12)}...${clientId.slice(-12)}` : clientId})` : ''}: a new computer needs the same ID and secret.`
-      : ''
+      : status.signedInWith === 'missing'
+        ? ' The Google client this sign-in used is no longer on this computer, so backups stop: put it back, or disconnect and connect again.'
+      : status.machineClientFile && status.signedInWith === 'builtin'
+        ? ` Uses the Google client saved on this computer (${status.machineClientFile}): a new computer needs a copy of that file.`
+        : ''
     if (confirmingDisconnect) {
       return (
         <SettingsRow
@@ -246,7 +252,9 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
             ? `Add the client ${hasId ? 'secret' : 'ID'} too: Google needs both.`
             : needsOwnClient && !hasOwnClient
               ? 'First add a Google client above (once, about 5 minutes).'
-              : 'Sign in with Google and allow Walnut to make its own backup folder.'}
+              : status.machineClientFile && !hasOwnClient
+                ? `Sign in with Google and allow Walnut to make its own backup folder. Uses the Google client saved on this computer (${status.machineClientFile}).`
+                : 'Sign in with Google and allow Walnut to make its own backup folder.'}
         error={error ?? undefined}
         data-testid="backup-gdrive-row"
         control={waiting ? (

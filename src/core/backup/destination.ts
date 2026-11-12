@@ -59,7 +59,7 @@ export async function makeStore(dest: BackupDestinationConfig, dataDir: string):
   const missing = missingFields(dest);
   if (missing.length > 0) throw new Error(`Backup destination is not set up: ${missing.join(', ')} missing.`);
   if (dest.type === 'gdrive') {
-    const client = resolveOAuthClient({ client_id: dest.client_id, client_secret: dest.client_secret });
+    const client = resolveOAuthClient({ client_id: dest.client_id, client_secret: dest.client_secret }, dataDir);
     if (!client) throw new Error('No Google client is set up for Drive backups. Connect Google Drive in Settings.');
     const tokens = await readDriveTokens(dataDir);
     if (!tokens?.folder_id) {
