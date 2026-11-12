@@ -1,7 +1,7 @@
 import { bus } from '../event-bus.js';
 import { routerStore } from './runtime.js';
-import { resolveRouterItem } from './source-registry.js';
-import type { RouterItem, RouterRoute, RouterSource } from './types.js';
+import { handleRouterNoise, hasRouterNoise, resolveRouterItem, type RouterNoiseOutcome } from './source-registry.js';
+import { RETRY_FAILED_PREFIX, type RouterItem, type RouterRoute, type RouterSource } from './types.js';
 import { routerKey, RouterStoreError, type RouterStore } from './store.js';
 import type { Task } from '../types.js';
 import { WALNUT_HOME } from '../../constants.js';
@@ -12,6 +12,8 @@ import { RouteLockBusyError, withLedgerRouteLock } from './route-lock.js';
  * Send refusals that end a handoff as failed rather than unknown. The archived-target refusal never comes back
  * for a task that is moving hosts: the send core holds that message and it goes with the task.
  */
+export { RETRY_FAILED_PREFIX };
+
 export const SEND_REFUSED: readonly string[] = ['task_complete', 'target_complete', 'unknown_target', 'target_archived', 'org_off', 'queue_full', 'throttled', 'area_forbidden', 'cross_area'];
 
 export class RouterError extends Error {
@@ -76,6 +78,13 @@ export interface RouterDeliveryDeps {
   routeLockWaitMs?: number;
   /** Sends the person's letter for a for_user decision; default: one inbox letter per item. */
   letter?: (areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid?: string) => Promise<void>;
+  /**
+   * Tidies an item the router judged noise (mail: mark read, archive). Default: the source's hook,
+   * when the person turned on the experiment; null turns it off.
+   */
+  noise?: ((source: RouterSource) => Promise<RouterNoiseOutcome | undefined>) | null;
+  /** Tests: wait for the noise tidy before answering (it runs after the answer otherwise). */
+  awaitNoise?: boolean;
 }
 
 /** The new work's id: the same item in the same area always names the same task. */
@@ -278,12 +287,51 @@ export async function routeItem(input: RouteItemInput, deps: RouterDeliveryDeps 
   // No area, no ledger to write: the checks inside refuse it in their usual order (access first).
   if (!named) return routeItemLocked(input, deps, undefined);
   const ledger = deps.store ?? routerStore(named.id);
+  let result: { route: RouterRoute; fresh: boolean };
   try {
-    return await withLedgerRouteLock(ledger, () => routeItemLocked(input, deps, named.id), { timeoutMs: deps.routeLockWaitMs });
+    result = await withLedgerRouteLock(ledger, () => routeItemLocked(input, deps, named.id), { timeoutMs: deps.routeLockWaitMs });
   } catch (error) {
     if (error instanceof RouteLockBusyError) throw new RouterError(error.code, error.message, error.status);
     throw error;
   }
+  // After the answer, outside the lock: a mail server's flag and move calls hold up neither the
+  // router's tool call nor the area's other routes. The reason gains what was done when it is done.
+  const tidying = tidyNoise(input, result, ledger, deps).catch(() => undefined);
+  if (deps.awaitNoise) await tidying;
+  return result;
+}
+
+/** Only the person turns this on (Settings, Experimental); the router never decides it for them. */
+async function noiseByChoice(source: RouterSource): Promise<RouterNoiseOutcome | undefined> {
+  if (!hasRouterNoise(source.kind)) return undefined;
+  const [{ getConfig }, { experimentalEnabled }] = await Promise.all([import('../config-manager.js'), import('../experimental.js')]);
+  if (!experimentalEnabled((await getConfig()).experimental, 'router_tidies_noise_mail')) return undefined;
+  return await handleRouterNoise(source);
+}
+
+/** The words in front of a noise item's reason, saying what was done with it; none when nothing was tried. */
+export function noiseActionPrefix(outcome: RouterNoiseOutcome): string | undefined {
+  if (outcome.read && outcome.archived) return 'Marked read and archived: ';
+  if (outcome.archived) return 'Archived: ';
+  if (outcome.read) return outcome.note ? `Marked read, not archived (${outcome.note}): ` : 'Marked read: ';
+  return outcome.note ? `Left as it was (${outcome.note}): ` : undefined;
+}
+
+/**
+ * Once per item, by the claim's winner: noise the router just decided is tidied, and its reason says
+ * how. A source that cannot or a step that fails leaves the mail where it was, and the decision stands.
+ */
+async function tidyNoise(input: RouteItemInput, result: { route: RouterRoute; fresh: boolean }, store: RouterStore,
+  deps: RouterDeliveryDeps): Promise<void> {
+  if (!result.fresh || result.route.status !== 'not_routed' || input.forUser || input.retry) return;
+  const noise = deps.noise === undefined ? noiseByChoice : deps.noise;
+  if (!noise) return;
+  // The ledger's own source: the exact delivery the router decided, version included.
+  const outcome = await noise({ ...result.route.source }).catch(() => undefined);
+  const prefix = outcome ? noiseActionPrefix(outcome) : undefined;
+  if (!prefix) return;
+  const noted = await store.noteAction(result.route.key, prefix).catch(() => undefined);
+  if (noted) await announce(noted, deps);
 }
 
 async function routeItemLocked(input: RouteItemInput, deps: RouterDeliveryDeps, lockedAreaId: string | undefined): Promise<{ route: RouterRoute; fresh: boolean }> {
@@ -351,9 +399,11 @@ async function routeItemLocked(input: RouteItemInput, deps: RouterDeliveryDeps, 
   } catch (error) {
     const e = error as { code?: string; message?: string; statusCode?: number };
     const refused = error instanceof RouterError || error instanceof RouterAreaError || SEND_REFUSED.includes(e.code ?? '');
+    const message = e.message ?? String(error);
     const settled = await store.settle(claimed.route.key, claimed.route.messageId!, {
       status: refused ? 'failed' : 'unknown',
-      error: (e.message ?? String(error)).slice(0, 500),
+      // A refused retry is final: the wake does not hand it to the router again.
+      error: (refused && input.retry ? `${RETRY_FAILED_PREFIX}${message}` : message).slice(0, 500),
     });
     const route = settled.route ?? claimed.route;
     await announce(route, deps);

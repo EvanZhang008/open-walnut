@@ -19,6 +19,9 @@ import { MailFilterMover } from './mail-filter-moves.js'
 import { registerMailItemSource } from './item-source.js'
 import { readRouterAreas } from '../../core/router/areas.js'
 import { registerMailRouterSource } from './router-source.js'
+import { tidyNoiseMail } from './router-noise.js'
+import type { RouterNoiseOutcome } from '../../core/router/source-registry.js'
+import type { RouterSource } from '../../core/router/types.js'
 import { decorateMailRoutes } from './router-decoration.js'
 import { bindMailAccounts, createMailRouterIntake } from './router-intake.js'
 import { createMailOps } from './ops.js'
@@ -138,7 +141,10 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const unregisterItemSource = registerMailItemSource(store)
   const routingHome = path.dirname(path.dirname(walnut.storage.dataDir))
   const bodies = new MailBodyStore(walnut.storage.dataDir)
-  const unregisterRouterSource = registerMailRouterSource(store, bodies)
+  // Late-bound: the noise decision marks read through the service and archives through the mover,
+  // both built below. A replica changes no mail, so its router source has no noise hook.
+  let tidyNoise: (source: RouterSource) => Promise<RouterNoiseOutcome> = async () => ({ read: false, archived: false })
+  const unregisterRouterSource = registerMailRouterSource(store, bodies, walnut.replica ? {} : { noise: (source) => tidyNoise(source) })
   // Inbox sorting. Built before the service because ingest classifies each row it writes. The rules
   // file lives in this plugin's data dir; its poll is a HOST timer so teardown cancels it.
   const sort = new MailSortEngine({
@@ -248,6 +254,25 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     log: walnut.log,
     sort,
   })
+  // One account's noise is tidied one mail at a time: a router deciding fifty newsletters in a row
+  // queues fifty, and a mail server sees them in order, not all at once.
+  const tidyChains = new Map<string, Promise<unknown>>()
+  const tidyOne = (source: RouterSource) => tidyNoiseMail({
+    store,
+    canMarkRead: (accountId) => {
+      const spec = providers.get(providerIdOf(accountId))
+      return !!spec?.capabilities.markRead && typeof spec.markRead === 'function'
+    },
+    markRead: (accountId, messageId) => service.markRead(accountId, messageId, true),
+    canArchive: (accountId) => filters.canArchive(accountId),
+    archive: (accountId, messageId, stillCurrent) => filters.archiveNow(accountId, messageId, stillCurrent),
+  }, source)
+  tidyNoise = (source) => {
+    const run = (tidyChains.get(source.account) ?? Promise.resolve()).catch(() => undefined).then(() => tidyOne(source))
+    tidyChains.set(source.account, run)
+    void run.catch(() => undefined).finally(() => { if (tidyChains.get(source.account) === run) tidyChains.delete(source.account) })
+    return run
+  }
   // One direction only: `accounts` reaches the loop (setup kicks a poll, a delete forgets the
   // account's backoff), and the loop no longer reaches back, because health writes now go
   // straight to the store as a bare UPDATE rather than through the mirror's upsert. The late

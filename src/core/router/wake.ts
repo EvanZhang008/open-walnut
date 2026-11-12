@@ -11,7 +11,7 @@ import type { SessionRecord, Task } from '../types.js';
 import { activeRouter, allAreaItems, readRouterAreas, taskArea, type RouterArea, type RouterAreasFile } from './areas.js';
 import { isRouterAreaSession } from './session-policy.js';
 import { routerAreaId, routerKey } from './store.js';
-import type { RouterRoute, RouterSource } from './types.js';
+import { retryOwed, type RouterRoute, type RouterSource } from './types.js';
 import { ROUTER_RUNTIME_SOURCE, takeRouterWakeGrant } from './delivery-scope.js';
 import { currentRouterSources } from './source-registry.js';
 
@@ -19,7 +19,10 @@ export const ROUTER_WAKE_OWNER = 'router';
 export const ROUTER_WAKE_TEMPLATE = 'router:pending';
 export const ROUTER_WAKE_EXECUTOR = 'router';
 export const ROUTER_WAKE_INPUT = 'Confirmed incoming items await this area router.';
+// Stored verbatim in every router's wake job, whose executor refuses any other text: never reword it.
 export const ROUTER_WAKE_INSTRUCTIONS = 'Read each listed item with router_context and record its route with router_route.';
+/** Rides each wake message beside the fixed instructions: a refused delivery is listed for its one retry. */
+export const ROUTER_WAKE_RETRY_NOTE = 'An item whose route shows failed (its delivery was refused) is routed once more: router_route with retry: true and its brief.';
 export const ROUTER_WAKE_BATCH = 50;
 export const ROUTER_WAKE_EVERY_MS = 5 * 60_000;
 const LOOKUP_BATCH = 200;
@@ -53,6 +56,8 @@ export interface RouterWakeDeps {
   currentSources?(sources: readonly RouterSource[]): Promise<RouterSource[]>;
   /** Moves the area's unsettled open arrivals to their mail's current copy (account-intake.ts); absent = none. */
   followOpen?(areaId: string): Promise<number>;
+  /** After a wake listed these items: the refused deliveries among them have had their one retry offered. */
+  offerRetries?(areaId: string, sources: readonly RouterSource[]): Promise<void>;
 }
 
 function defaultDeps(): RouterWakeDeps {
@@ -90,6 +95,12 @@ function defaultDeps(): RouterWakeDeps {
     async followOpen(areaId) {
       const { followOpenArrivals } = await import('./account-intake.js');
       return await followOpenArrivals(areaId, { routesFor: (id, sources) => this.routesFor(id, sources) });
+    },
+    async offerRetries(areaId, sources) {
+      const { routerStore } = await import('./runtime.js');
+      const store = routerStore(areaId);
+      const routes = await store.getSources(sources);
+      await store.offerRetry([...new Set([...routes.values()].filter((route) => retryOwed(route)).map((route) => route.key))]);
     },
     async waitingSources(_areaId, sources, routerTaskId) {
       const { handoffWaitingSources } = await import('./handoff-approval.js');
@@ -129,7 +140,10 @@ export async function routerWakeGate(areaId: string, deps: RouterWakeDeps, targe
   return { ready: true, area, task, file };
 }
 
-/** This area's confirmed items with no ledger row and still current in the cache, in file order; failed and unknown rows are not pending, nor held asks. */
+// A refused delivery is handed back to its router once (types.ts); an uncertain one (unknown) never is.
+export { retryOwed };
+
+/** This area's confirmed items still current in the cache with no ledger row, or a refused delivery owed its one retry, in file order; unknown rows and held asks are not pending. */
 export async function pendingSources(file: RouterAreasFile, area: RouterArea, deps: Pick<RouterWakeDeps, 'routesFor' | 'waitingSources' | 'currentSources'>,
   opts: { first?: boolean } = {}): Promise<RouterSource[]> {
   const routerTaskId = activeRouter(file, area.id)?.taskId;
@@ -142,7 +156,10 @@ export async function pendingSources(file: RouterAreasFile, area: RouterArea, de
   for (let at = 0; at < mine.length; at += LOOKUP_BATCH) {
     const batch = mine.slice(at, at + LOOKUP_BATCH).map((item) => ({ ...item.source }));
     const routes = await deps.routesFor(area.id, batch);
-    const ledgerless = batch.filter((source) => !routes.has(routerKey(source)));
+    const ledgerless = batch.filter((source) => {
+      const route = routes.get(routerKey(source));
+      return !route || retryOwed(route);
+    });
     // A confirmed snapshot a later delivery replaced never gets a ledger row, so it must not wake forever.
     const open = ledgerless.length ? await (deps.currentSources ? deps.currentSources(ledgerless) : currentRouterSources(ledgerless)) : [];
     const held = open.length && routerTaskId && deps.waitingSources ? await deps.waitingSources(area.id, open, routerTaskId) : new Set<string>();
@@ -180,7 +197,7 @@ export function wakeWindow<T>(pending: readonly T[], cursor: number, size = ROUT
 
 export function routerWakeMessage(areaId: string, items: readonly RouterSource[], more: number): string {
   return JSON.stringify({
-    instructions: ROUTER_WAKE_INSTRUCTIONS, areaId,
+    instructions: ROUTER_WAKE_INSTRUCTIONS, retry: ROUTER_WAKE_RETRY_NOTE, areaId,
     items: items.map((source) => ({ ...source })), more,
   });
 }
@@ -308,6 +325,8 @@ async function wake(gate: Extract<RouterWakeGate, { ready: true }>, target: stri
   const sid = sessionId;
   await withRouterWake(sid, () => deps.send(sid, message, messageId, target));
   cursors.set(fresh.area.id, window.next);
+  // Sent: a refused delivery it listed had its one retry offered, whatever the router does with it.
+  await deps.offerRetries?.(fresh.area.id, window.items).catch(() => undefined);
   return {
     status: 'ok', delivered: { sessionId: sid },
     summary: `${started ? 'Started the router and sent' : 'Sent'} ${window.items.length} pending items to it.`,

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { registerRouterSource, RouterSourceError } from '../../core/router/source-registry.js';
+import { registerRouterSource, RouterSourceError, type RouterNoiseOutcome } from '../../core/router/source-registry.js';
 import type { RouterItem } from '../../core/router/types.js';
 import type { MailStore, MessageRow } from './store.js';
 import { MailBodySnapshotError, type MailBodyStore } from './bodies.js';
@@ -87,7 +87,9 @@ export async function relocateMailItem(store: Pick<MailStore, 'getMessage' | 'me
   return item.scopeKey === scopeKey ? item : undefined;
 }
 
-export function registerMailRouterSource(store: MailStore, bodies: MailBodyStore): () => void {
+/** `noise`: what the router's noise decision does to an email (router-noise.ts); without it, nothing. */
+export function registerMailRouterSource(store: MailStore, bodies: MailBodyStore,
+  opts: { noise?: (source: RouterItem['source']) => Promise<RouterNoiseOutcome> } = {}): () => void {
   const rowFor = async (source: RouterItem['source']) => {
     const row = await store.getMessage(source.account, source.message);
     if (!row) throw new RouterSourceError('source_missing', 'The exact email is not in the mail cache.');
@@ -134,5 +136,6 @@ export function registerMailRouterSource(store: MailStore, bodies: MailBodyStore
         && versions.get(JSON.stringify([one.account, one.message])) === one.version);
     },
     relocate: (_source, scopeKey) => relocateMailItem(store, scopeKey),
+    ...(opts.noise ? { noise: opts.noise } : {}),
   });
 }

@@ -40,6 +40,8 @@ import {
   type RouterSettleResult,
   type RouterSource,
   type RouterSourceKind,
+  RETRY_FAILED_PREFIX,
+  RETRY_OFFERED_PREFIX,
 } from './types.js'
 
 export const ROUTER_HISTORY_MAX = 500
@@ -546,6 +548,37 @@ export class RouterStore {
     )
     const row = await client.get<RouterRow>(`SELECT ${COLUMNS} FROM router_items WHERE key = ?`, [key])
     return { settled: updated.changes === 1, route: row ? rowToRoute(row, this.areaId) : undefined }
+  }
+
+  /**
+   * Marks these refused deliveries as offered their one retry (the wake handed them to the router),
+   * so no later wake hands them again, whatever the router does. Only `failed` rows not marked yet.
+   */
+  async offerRetry(keys: readonly string[]): Promise<number> {
+    if (keys.length === 0) return 0
+    const client = await this.open()
+    const updated = await client.run(
+      "UPDATE router_items SET error = substr(? || COALESCE(error, ''), 1, 500) WHERE status = 'failed' AND message_id IS NOT NULL"
+      + " AND key IN (SELECT value FROM json_each(?)) AND instr(COALESCE(error, ''), ?) <> 1 AND instr(COALESCE(error, ''), ?) <> 1",
+      [RETRY_OFFERED_PREFIX, JSON.stringify(keys), RETRY_OFFERED_PREFIX, RETRY_FAILED_PREFIX],
+    )
+    return updated.changes
+  }
+
+  /**
+   * Puts what was done with a noise item in front of its reason ("Marked read and archived: ..."), so
+   * the item's decision line says it. Only a `not_routed` row, once per prefix, cut to 500 characters.
+   */
+  async noteAction(key: string, prefix: string): Promise<RouterRoute | undefined> {
+    nonEmpty('key', key)
+    nonEmpty('prefix', prefix)
+    const client = await this.open()
+    await client.run(
+      "UPDATE router_items SET reason = substr(? || reason, 1, 500) WHERE key = ? AND status = 'not_routed' AND instr(reason, ?) <> 1",
+      [prefix, key, prefix],
+    )
+    const row = await client.get<RouterRow>(`SELECT ${COLUMNS} FROM router_items WHERE key = ?`, [key])
+    return row ? rowToRoute(row, this.areaId) : undefined
   }
 
   /**

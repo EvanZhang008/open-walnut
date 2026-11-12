@@ -109,3 +109,20 @@ export interface RouterSettleResult {
   settled: boolean
   route: RouterRoute | undefined
 }
+
+/**
+ * A refused delivery gets one retry, offered by the wake: the row's error then starts with
+ * RETRY_OFFERED_PREFIX (handed to the router once, whatever it does with it), or with
+ * RETRY_FAILED_PREFIX after the retry was refused too. Either way it is never handed again.
+ */
+export const RETRY_OFFERED_PREFIX = 'Retry offered: ';
+export const RETRY_FAILED_PREFIX = 'Retry failed: ';
+/** Only a recent refusal is offered: an old one (from before an upgrade, say) is never redelivered. */
+export const RETRY_WINDOW_MS = 24 * 60 * 60_000;
+
+/** Whether the wake still owes this route its one retry: refused, recent, and not offered yet. */
+export function retryOwed(route: Pick<RouterRoute, 'status' | 'messageId' | 'error' | 'at'>, now = Date.now()): boolean {
+  const error = route.error ?? '';
+  return route.status === 'failed' && !!route.messageId && now - route.at <= RETRY_WINDOW_MS
+    && !error.startsWith(RETRY_OFFERED_PREFIX) && !error.startsWith(RETRY_FAILED_PREFIX);
+}

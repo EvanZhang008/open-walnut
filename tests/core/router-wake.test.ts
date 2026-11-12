@@ -16,10 +16,10 @@ import { normalizeRouterAreas, type RouterAreasFile } from '../../src/core/route
 import { isRouterWake, takeRouterWakeGrant } from '../../src/core/router/delivery-scope.js'
 import { routerAreaProfile } from '../../src/core/router/session-policy.js'
 import { routerKey } from '../../src/core/router/store.js'
-import type { RouterRoute, RouterSource } from '../../src/core/router/types.js'
+import { RETRY_FAILED_PREFIX, RETRY_OFFERED_PREFIX, RETRY_WINDOW_MS, type RouterRoute, type RouterSource } from '../../src/core/router/types.js'
 import {
   ROUTER_WAKE_BATCH, ROUTER_WAKE_INPUT, ROUTER_WAKE_INSTRUCTIONS, ROUTER_WAKE_TEMPLATE,
-  checkRouterPending, configureRouterWake, createRouterWakeExecutor, pendingSources, routerWakeJobId, routerWakeMessage, routerWakeMessageId, wakeWindow,
+  checkRouterPending, configureRouterWake, createRouterWakeExecutor, pendingSources, retryOwed, routerWakeJobId, routerWakeMessage, routerWakeMessageId, wakeWindow,
   type RouterWakeDeps,
 } from '../../src/core/router/wake.js'
 import { templateRun } from '../../src/core/routines/trigger-templates.js'
@@ -126,6 +126,38 @@ describe('pendingSources', () => {
     expect(pending[0]).toEqual(mail('INBOX:1:3'))
     expect(pending.at(-1)).toEqual(mail('INBOX:1:449'))
     expect(pending.some((s) => s.account !== ACCOUNT)).toBe(false)
+  })
+
+  it('hands a recent refused delivery back once, never one already offered, retried, old or uncertain', async () => {
+    const file = areas(6)
+    const now = Date.now()
+    const failed = (i: number, error: string, at = now - 60_000): RouterRoute => ({ ...route(mail(`INBOX:1:${i}`), 'failed'), messageId: `qm-${i}`, error, at })
+    const fake = deps({ file, routes: [
+      failed(0, 'No isolated receiver is ready in this area.'),
+      failed(1, `${RETRY_FAILED_PREFIX}No isolated receiver is ready in this area.`),
+      failed(2, `${RETRY_OFFERED_PREFIX}No isolated receiver is ready in this area.`),
+      failed(3, 'Refused weeks ago.', now - RETRY_WINDOW_MS - 1),
+      { ...route(mail('INBOX:1:4'), 'unknown'), messageId: 'qm-4', at: now },
+      route(mail('INBOX:1:5'), 'routed'),
+    ] })
+    expect(await pendingSources(file, file.areas[0]!, fake)).toEqual([mail('INBOX:1:0')])
+    expect(retryOwed(failed(0, 'refused'))).toBe(true)
+    // A failed row with no delivery id (a creation refused before any send) has nothing to retry.
+    expect(retryOwed({ ...route(mail('INBOX:1:6'), 'failed'), at: now })).toBe(false)
+  })
+
+  it('a wake that lists a refused delivery marks its retry offered, so the next wake does not hand it again', async () => {
+    const file = areas(2)
+    const offered: string[][] = []
+    const fake = deps({ file, sessions: [routerSession('idle')], routes: [
+      { ...route(mail('INBOX:1:0'), 'failed'), messageId: 'qm-0', error: 'refused', at: Date.now() },
+      route(mail('INBOX:1:1'), 'routed'),
+    ] })
+    fake.offerRetries = async (areaId, sources) => { offered.push([areaId, ...sources.map((s) => s.message)]) }
+    await createRouterWakeExecutor(fake).run(await wakeJob(), ref, '')
+    expect(fake.sent).toHaveLength(1)
+    expect(JSON.parse(fake.sent[0]!.message)).toMatchObject({ instructions: ROUTER_WAKE_INSTRUCTIONS, retry: expect.stringContaining('retry: true') })
+    expect(offered).toEqual([['personal', 'INBOX:1:0']])
   })
 
   it('does not wake on unversioned legacy mail confirmations', async () => {

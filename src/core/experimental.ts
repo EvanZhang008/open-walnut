@@ -12,6 +12,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'Read a message on top while you ask below: "Send in split" in the Send menu, and "Read in split" on a message (its hover strip and its right-click menu). The pane on top keeps its place while the chat below goes on.',
     default: false,
   },
+  {
+    id: 'router_tidies_noise_mail',
+    name: 'Mail router tidies noise',
+    description: 'When a mail router judges an email to be noise, Walnut marks it read and moves it from the inbox to the archive. Nothing is deleted or sent, and its recorded reason says what was done.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

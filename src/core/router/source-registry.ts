@@ -40,6 +40,18 @@ export interface RouterSourceAdapter {
    * delivery changed), or null when the cache holds no copy of it any more.
    */
   relocate?(source: RouterSource, scopeKey: string): Promise<RouterItem | null | undefined>;
+  /**
+   * The router judged this item noise: tidy it the reversible way the source allows (mail: mark it
+   * read, then move it from the inbox to the archive). Never deletes and never sends anything.
+   */
+  noise?(source: RouterSource): Promise<RouterNoiseOutcome>;
+}
+
+/** What a source did with an item its router judged noise; `note` says why a step was not taken. */
+export interface RouterNoiseOutcome {
+  read: boolean;
+  archived: boolean;
+  note?: string;
 }
 
 const host = globalThis as typeof globalThis & { __walnutRouterSources?: Map<RouterSource['kind'], RouterSourceAdapter> };
@@ -53,12 +65,13 @@ export function assertRouterSource(kind: unknown, adapter: unknown): asserts ada
   }
   if (!adapter || typeof adapter !== 'object') throw new TypeError('A routing source adapter must be an object with resolve() and an optional read().');
   for (const key of Object.keys(adapter)) {
-    if (key !== 'resolve' && key !== 'read' && key !== 'currentSources' && key !== 'relocate') {
-      throw new TypeError(`A routing source adapter takes only resolve(), read(), currentSources() and relocate(), not "${key}".`);
+    if (key !== 'resolve' && key !== 'read' && key !== 'currentSources' && key !== 'relocate' && key !== 'noise') {
+      throw new TypeError(`A routing source adapter takes only resolve(), read(), currentSources(), relocate() and noise(), not "${key}".`);
     }
   }
-  const { resolve, read, currentSources, relocate } = adapter as Record<string, unknown>;
+  const { resolve, read, currentSources, relocate, noise } = adapter as Record<string, unknown>;
   if (relocate !== undefined && typeof relocate !== 'function') throw new TypeError('A routing source adapter\'s relocate must be a function when given.');
+  if (noise !== undefined && typeof noise !== 'function') throw new TypeError('A routing source adapter\'s noise must be a function when given.');
   if (typeof resolve !== 'function') throw new TypeError('A routing source adapter needs a resolve() function.');
   if (read !== undefined && typeof read !== 'function') throw new TypeError('A routing source adapter\'s read must be a function when given.');
   if (currentSources !== undefined && typeof currentSources !== 'function') {
@@ -177,5 +190,40 @@ export async function relocateRouterItem(source: RouterSource, scopeKey: string)
     return checkedItem(item, item.source);
   } catch (error) {
     throw new RouterSourceError('source_unavailable', error instanceof Error ? error.message : String(error));
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+/** Whether this kind's source can tidy noise at all (asked before the person's choice is read). */
+export function hasRouterNoise(kind: RouterSource['kind']): boolean {
+  return typeof adapters.get(kind)?.noise === 'function';
+}
+
+/**
+ * How long a source may take to tidy one noise item, queue included (mail tidies one account's items
+ * one at a time); it runs after the router's answer. Not tracked across a restart: a tidy cut short
+ * leaves the mail where it was (read, perhaps), and the reason without its prefix.
+ */
+export const ROUTER_NOISE_MS = 30 * 60_000;
+
+/**
+ * Tidies one item its router judged noise, through its source's hook. Undefined when the source has
+ * none; never throws, so a mail server that refuses leaves the decision as it was recorded.
+ */
+export async function handleRouterNoise(source: RouterSource, timeoutMs = ROUTER_NOISE_MS): Promise<RouterNoiseOutcome | undefined> {
+  const adapter = adapters.get(source.kind);
+  if (!adapter?.noise) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const raw: unknown = await Promise.race([
+      adapter.noise(Object.freeze({ ...source })),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('The source took too long to tidy the item.')), timeoutMs); }),
+    ]);
+    const answer = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    return {
+      read: answer.read === true, archived: answer.archived === true,
+      ...(typeof answer.note === 'string' && answer.note ? { note: answer.note.slice(0, 200) } : {}),
+    };
+  } catch (error) {
+    return { read: false, archived: false, note: (error instanceof Error ? error.message : String(error)).slice(0, 200) };
   } finally { if (timer) clearTimeout(timer); }
 }

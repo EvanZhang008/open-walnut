@@ -102,6 +102,8 @@ const ROW_READERS: Record<string, string> = {
   bodylessMessages: 'one folder',
   searchMessages: 'oneCopyEach',
   unreadInboxMessages: 'the inbox only',
+  // Every copy on purpose: the router's relocate (router-source.ts) picks one copy by its folder's role.
+  messagesByRfcId: 'every copy of one Message-ID, for a caller that picks one',
 };
 
 describe('the class: every cached-row reader is listed', () => {

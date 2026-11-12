@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  assertRouterSource, currentRouterSources, readRouterItem, registerRouterSource, resolveRouterItem,
+  assertRouterSource, currentRouterSources, handleRouterNoise, hasRouterNoise, readRouterItem, registerRouterSource, resolveRouterItem,
   type RouterItemContent, type RouterSourceAdapter,
 } from '../../src/core/router/source-registry.js';
 import type { RouterSource } from '../../src/core/router/types.js';
@@ -223,5 +223,28 @@ describe('router source current check', () => {
     expect(() => assertRouterSource('mail', { resolve, currentSources: async () => [] })).not.toThrow();
     expect(() => assertRouterSource('mail', { resolve, currentSources: [] })).toThrow('currentSources must be a function');
     expect(() => assertRouterSource('mail', { resolve, current: async () => [] })).toThrow('not "current"');
+  });
+});
+
+describe('a source tidying an item its router judged noise', () => {
+  it('is asked only when it has the hook, and its answer is reduced to what it says it did', async () => {
+    expect(hasRouterNoise('wechat')).toBe(false);
+    expect(await handleRouterNoise(source)).toBeUndefined();
+    const noise = vi.fn(async () => ({ read: true, archived: 'yes', note: '', extra: 1 }) as never);
+    await withAdapter({ resolve: async (one) => itemOf(one), noise }, async () => {
+      expect(hasRouterNoise('wechat')).toBe(true);
+      expect(await handleRouterNoise(source)).toEqual({ read: true, archived: false });
+      expect(noise).toHaveBeenCalledWith(source);
+    });
+    expect(() => assertRouterSource('wechat', { resolve: async () => itemOf(source), noise: 'no' })).toThrow('noise must be a function');
+  });
+
+  it('never throws: a refusal or a source that hangs becomes a note', async () => {
+    await withAdapter({ resolve: async (one) => itemOf(one), noise: async () => { throw new Error('mail server down'); } }, async () => {
+      expect(await handleRouterNoise(source)).toEqual({ read: false, archived: false, note: 'mail server down' });
+    });
+    await withAdapter({ resolve: async (one) => itemOf(one), noise: () => new Promise(() => undefined) }, async () => {
+      expect(await handleRouterNoise(source, 20)).toEqual({ read: false, archived: false, note: 'The source took too long to tidy the item.' });
+    });
   });
 });

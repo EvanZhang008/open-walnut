@@ -21,10 +21,11 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { readRouterAreas, updateRouterAreas, RouterAreaError, type RouterAreasFile } from '../../src/core/router/areas.js'
 import {
-  routeItem, routerNewWorkId, RouterError, type RouteItemInput, type RouterDeliveryDeps, type RouterNewWorkRequest,
+  noiseActionPrefix, RETRY_FAILED_PREFIX, routeItem, routerNewWorkId, RouterError, type RouteItemInput, type RouterDeliveryDeps, type RouterNewWorkRequest,
 } from '../../src/core/router/service.js'
 import { taskIdForKey } from '../../src/core/task-create-idempotency.js'
 import { RouterStore, routerKey, routerMessageId } from '../../src/core/router/store.js'
+import { registerRouterSource } from '../../src/core/router/source-registry.js'
 import type { RouterItem, RouterRoute, RouterSource } from '../../src/core/router/types.js'
 import type { Task } from '../../src/core/types.js'
 import { seedTaskStore } from '../helpers/router-task-store.js'
@@ -709,5 +710,114 @@ describe('an item its source no longer has', () => {
     }))
     expect(await routeItem(input(), d)).toEqual({ fresh: false, route: result.route })
     expect(f.send).not.toHaveBeenCalled()
+  })
+})
+
+describe('noise the router decides', () => {
+  const noiseInput = (extra: Partial<RouteItemInput> = {}) => input({ notRouted: true, taskId: undefined, text: undefined, reason: 'Newsletter, nobody owns it', ...extra })
+
+  it('tidies a fresh noise decision once, and its reason says what was done', async () => {
+    const f = fakes()
+    const noise = vi.fn(async () => ({ read: true, archived: true }))
+    const d = deps(f, { noise, awaitNoise: true })
+    const first = await routeItem(noiseInput(), d)
+    // The answer is the decision; what was done is written beside it once done.
+    expect(first).toMatchObject({ fresh: true, route: { status: 'not_routed', reason: 'Newsletter, nobody owns it' } })
+    expect(noise).toHaveBeenCalledTimes(1)
+    expect(noise.mock.calls[0]).toEqual([P_ITEM])
+    expect(await store().get(routerKey(P_ITEM))).toMatchObject({ reason: 'Marked read and archived: Newsletter, nobody owns it' })
+    // The same decision again is the same row: nothing is tidied twice, the reason is not prefixed twice.
+    const again = await routeItem(noiseInput(), d)
+    expect(again.fresh).toBe(false)
+    expect(noise).toHaveBeenCalledTimes(1)
+    expect(again.route.reason).toBe('Marked read and archived: Newsletter, nobody owns it')
+    expect(f.send).not.toHaveBeenCalled()
+  })
+
+  it('names a step that did not happen, and leaves the reason alone when nothing was tried', async () => {
+    const f = fakes()
+    const noise = vi.fn(async (source: RouterSource) => source.message === P_ITEM.message
+      ? { read: true, archived: false, note: 'this account has no archive' }
+      : { read: false, archived: false })
+    const d = deps(f, { noise, awaitNoise: true })
+    await routeItem(noiseInput(), d)
+    await routeItem(noiseInput({ source: P_ITEM_2 }), d)
+    expect((await store().get(routerKey(P_ITEM)))?.reason).toBe('Marked read, not archived (this account has no archive): Newsletter, nobody owns it')
+    expect((await store().get(routerKey(P_ITEM_2)))?.reason).toBe('Newsletter, nobody owns it')
+  })
+
+  it('never tidies routed work or a letter to the person, and a hook that throws leaves the decision as recorded', async () => {
+    const f = fakes()
+    const noise = vi.fn(async () => { throw new Error('mail server down') })
+    const letter = vi.fn(async () => undefined)
+    const d = deps(f, { noise, letter, awaitNoise: true })
+    await routeItem(input(), d)
+    await routeItem({ source: P_ITEM_2, forUser: true, reason: 'A bill only the person can pay', text: 'Pay it by Friday.', byTaskId: 'task-p-router' }, d)
+    expect(noise).not.toHaveBeenCalled()
+    await updateRouterAreas(home, (file) => ({ ...file, items: [...file.items, { source: mail(SHARED, 'INBOX:1:13'), areaId: 'personal' }] }))
+    areas = await readRouterAreas(home)
+    await routeItem(noiseInput({ source: mail(SHARED, 'INBOX:1:13') }), deps(f, { noise, awaitNoise: true }))
+    expect(noise).toHaveBeenCalledTimes(1)
+    expect(await store().get(routerKey(mail(SHARED, 'INBOX:1:13')))).toMatchObject({ status: 'not_routed', reason: 'Newsletter, nobody owns it' })
+  })
+
+  it('tidies nothing until the person turns the experiment on, though the mail source can', async () => {
+    const f = fakes()
+    const hook = vi.fn(async () => ({ read: true, archived: true }))
+    // A mail source that could tidy: only the person's choice (off by default) may let it.
+    const dispose = registerRouterSource('mail', { resolve: async (one) => ({ source: { ...one }, key: routerKey(one), sender: 's', subject: 's' }), noise: hook })
+    try {
+      await routeItem(noiseInput(), deps(f, { awaitNoise: true }))
+      expect(hook).not.toHaveBeenCalled()
+      expect((await store().get(routerKey(P_ITEM)))?.reason).toBe('Newsletter, nobody owns it')
+      await routeItem(noiseInput({ source: P_ITEM_2 }), deps(f, { noise: null, awaitNoise: true }))
+      expect(hook).not.toHaveBeenCalled()
+    } finally { dispose() }
+  })
+
+  it('answers the router before the tidy is done', async () => {
+    const f = fakes()
+    let finish: (value: { read: boolean; archived: boolean }) => void = () => undefined
+    const noise = vi.fn(() => new Promise<{ read: boolean; archived: boolean }>((resolve) => { finish = resolve }))
+    const answer = await routeItem(noiseInput(), deps(f, { noise }))
+    expect(answer.route.reason).toBe('Newsletter, nobody owns it')
+    expect(noise).toHaveBeenCalledTimes(1)
+    finish({ read: true, archived: true })
+    await vi.waitFor(async () => expect((await store().get(routerKey(P_ITEM)))?.reason).toBe('Marked read and archived: Newsletter, nobody owns it'))
+  })
+
+  it('says each outcome in plain words', () => {
+    expect(noiseActionPrefix({ read: true, archived: true })).toBe('Marked read and archived: ')
+    expect(noiseActionPrefix({ read: true, archived: false })).toBe('Marked read: ')
+    expect(noiseActionPrefix({ read: false, archived: true })).toBe('Archived: ')
+    expect(noiseActionPrefix({ read: false, archived: false, note: 'a later delivery replaced the email' })).toBe('Left as it was (a later delivery replaced the email): ')
+    expect(noiseActionPrefix({ read: false, archived: false })).toBeUndefined()
+  })
+})
+
+describe('the one automatic retry of a refused delivery', () => {
+  it('an offered retry is marked once in the ledger, and the router may still take it', async () => {
+    const f = fakes()
+    const d = deps(f)
+    f.send.mockRejectedValueOnce(Object.assign(new Error('queue is full'), { code: 'queue_full' }))
+    const failed = await routeItem(input(), d)
+    const ledger = store()
+    expect(await ledger.offerRetry([failed.route.key, 'no-such-key'])).toBe(1)
+    expect(await ledger.offerRetry([failed.route.key])).toBe(0)
+    expect(await ledger.get(failed.route.key)).toMatchObject({ status: 'failed', error: 'Retry offered: queue is full' })
+    const retried = await routeItem(input({ retry: true }), d)
+    expect(retried.route).toMatchObject({ status: 'routed' })
+    expect(await ledger.offerRetry([failed.route.key])).toBe(0)
+  })
+
+  it('a retry the receiver refuses again is final, and its error says so', async () => {
+    const f = fakes()
+    const d = deps(f)
+    f.send.mockRejectedValue(Object.assign(new Error('No isolated receiver is ready in this area.'), { code: 'queue_full' }))
+    const first = await routeItem(input(), d)
+    expect(first.route).toMatchObject({ status: 'failed', error: 'No isolated receiver is ready in this area.' })
+    const retried = await routeItem(input({ retry: true }), d)
+    expect(retried.route).toMatchObject({ status: 'failed', error: `${RETRY_FAILED_PREFIX}No isolated receiver is ready in this area.` })
+    expect(f.send).toHaveBeenCalledTimes(2)
   })
 })

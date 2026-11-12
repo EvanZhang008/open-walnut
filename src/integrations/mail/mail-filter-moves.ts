@@ -107,6 +107,27 @@ export class MailFilterMover {
     return queued
   }
 
+  /**
+   * One mail to the archive now, for the mail router's noise decision (router-noise.ts): no rule and
+   * no move ledger, one provider call, made only while `stillCurrent` says the cached copy is the one
+   * the router decided (asked right before the call). A refusal is not retried later: the mail stays
+   * in the inbox, read, and the answer says why.
+   */
+  async archiveNow(accountId: string, messageId: string, stillCurrent: () => Promise<boolean>): Promise<{ ok: boolean; reason?: string }> {
+    if (this.disposed) return { ok: false, reason: 'mail is shutting down' }
+    if (!this.canArchive(accountId)) return { ok: false, reason: CANNOT_ARCHIVE }
+    // After a rule batch already running, so one account never has two moves in flight from here.
+    while (this.running) await this.running
+    if (!await stillCurrent()) return { ok: false, reason: 'a later delivery replaced the email' }
+    const outcome = (await this.move(accountId, [{ message_id: messageId } as MoveRow])).get(messageId) ?? { ok: false, reason: 'no answer' }
+    if (!outcome.ok) return { ok: false, reason: (outcome.reason ?? 'the mail server did not move it').slice(0, 200) }
+    const pairs = new Map<string, FolderPair>()
+    await this.dropCached(accountId, [messageId], pairs)
+    if (pairs.size > 0) this.deps.groupsChanged([...pairs.values()])
+    this.deps.onSettled?.({ accountId, moved: 1, failed: 0, messageIds: [messageId] })
+    return { ok: true }
+  }
+
   /** Run after `delayMs`, unless a run is already due sooner. */
   schedule(delayMs: number): void {
     if (this.disposed) return
