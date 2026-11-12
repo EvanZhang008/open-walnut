@@ -1,4 +1,5 @@
 import { bus } from '../event-bus.js';
+import { routerLetterContent } from './letter-content.js';
 import { routerStore } from './runtime.js';
 import { handleRouterNoise, hasRouterNoise, resolveRouterItem, type RouterNoiseOutcome } from './source-registry.js';
 import { RETRY_FAILED_PREFIX, type RouterItem, type RouterRoute, type RouterSource } from './types.js';
@@ -154,12 +155,9 @@ export async function ensureRouterNewWork(request: RouterNewWorkRequest, home = 
 /** The router's one letter for an item only the person can act on: who sent it, its subject, why, and what to do. */
 async function routerLetter(areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid?: string): Promise<void> {
   const { sendLetterOnce } = await import('../human-inbox/store.js');
-  const subject = (item.subject || '(no subject)').replace(/\s+/g, ' ').slice(0, 100);
-  const from = (item.sender || 'unknown sender').replace(/\s+/g, ' ').slice(0, 200);
   await sendLetterOnce({
-    subject: `For you: ${subject}`,
+    ...routerLetterContent(item, route, brief),
     type: 'review',
-    markdown: [`**From:** ${from}`, `**Subject:** ${subject}`, '', `**Why it is yours:** ${route.reason}`, '', brief.trim()].join('\n'),
     ...(route.byTaskId ? { taskRefs: [route.byTaskId] } : {}),
     sender: { sessionId: callerSid?.trim() || 'external', ...(route.byTaskId ? { taskId: route.byTaskId } : {}) },
   }, { opKey: `router-letter:${areaId}:${route.key}` });

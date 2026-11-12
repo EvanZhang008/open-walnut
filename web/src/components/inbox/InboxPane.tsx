@@ -12,7 +12,7 @@ import '@/styles/human-inbox.css';
 
 export function InboxPane({
   letters, loaded, error, showArchived, onToggleArchived, unreadOnly, onToggleUnreadOnly,
-  onOpen, onTogglePin, onToggleArchive, onToggleRead,
+  onOpen, onNavigate, onTogglePin, onToggleArchive, onToggleRead,
 }: {
   /** The rows to show — already narrowed by the Unread filter when it is on. */
   letters: LetterEnvelope[];
@@ -24,6 +24,7 @@ export function InboxPane({
   unreadOnly: boolean;
   onToggleUnreadOnly: () => void;
   onOpen: (id: string) => void;
+  onNavigate: (to: string) => void;
   onTogglePin: (letter: LetterEnvelope) => void;
   onToggleArchive: (letter: LetterEnvelope) => void;
   onToggleRead: (letter: LetterEnvelope) => void;
@@ -60,6 +61,7 @@ export function InboxPane({
               key={letter.id}
               letter={letter}
               onOpen={() => onOpen(letter.id)}
+              onNavigate={onNavigate}
               onTogglePin={() => onTogglePin(letter)}
               onToggleArchive={() => onToggleArchive(letter)}
               onToggleRead={() => onToggleRead(letter)}

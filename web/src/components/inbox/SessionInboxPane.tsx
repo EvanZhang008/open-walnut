@@ -157,6 +157,7 @@ export function SessionInboxPane({
                   key={letter.id}
                   letter={letter}
                   onOpen={() => open(letter.id)}
+                  onNavigate={onNavigate}
                   onTogglePin={() => togglePin(letter)}
                   onToggleArchive={() => toggleArchive(letter)}
                   onToggleRead={() => markRead(letter.id, !letter.read)}

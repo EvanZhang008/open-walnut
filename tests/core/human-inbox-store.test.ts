@@ -81,7 +81,7 @@ describe('human inbox store — send, list, get', () => {
     expect(record.archived).toBe(false);
     expect(record.bodyFormat).toBe('markdown');
     // Preview derived from the body: markdown markup stripped to plain words.
-    expect(record.textPreview).toBe('Summary The rebase was orphaned. See docs/report.md.');
+    expect(record.textPreview).toBe('The rebase was orphaned. See docs/report.md.');
     expect(record.sender.taskTitle).toBe('Fix the sync freeze');
 
     const { letters, unreadCount } = await listLetters();
@@ -121,7 +121,7 @@ describe('human inbox store — send, list, get', () => {
       html: '<style>p{color:red}</style><p>Disk is at 70%.</p><p>No action needed.</p>',
       type: 'info',
     }));
-    expect(record.textPreview).toBe('Disk is at 70%. No action needed.');
+    expect(record.textPreview).toBe('Disk is at 70%.');
   });
 
   it('never publishes a cropped path or URL as a complete preview reference', async () => {

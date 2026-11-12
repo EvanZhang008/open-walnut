@@ -69,6 +69,7 @@ const SURFACES: Record<string, 'hook' | 'fallback' | 'renderer'> = {
   'components/org/OrgThreads.tsx': 'hook',
   'components/triage/TriagePanel.tsx': 'hook',
   'components/inbox/LetterView.tsx': 'hook',
+  'components/inbox/LetterCardBody.tsx': 'hook',
   'components/org/OrgBrief.tsx': 'hook',
   // The Brief's opener (OrgBrief passes it to useEntityClickHandler): renders a block only to find a path's writers.
   'components/org/useBriefFileOpener.tsx': 'renderer',

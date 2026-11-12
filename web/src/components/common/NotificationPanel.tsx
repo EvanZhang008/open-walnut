@@ -659,6 +659,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                 unreadOnly={unreadOnly}
                 onToggleUnreadOnly={toggleUnreadOnly}
                 onOpen={openLetter}
+                onNavigate={onNavigate}
                 onTogglePin={toggleLetterPin}
                 onToggleArchive={toggleLetterArchive}
                 onToggleRead={(l) => markLetterRead(l.id, !l.read)}

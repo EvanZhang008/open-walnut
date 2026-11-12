@@ -112,6 +112,7 @@ export function LetterBody({ body, format, subject, onClick, bodyUrl, onRefOpen,
   return (
     <div
       className="hib-md-body markdown-body"
+      tabIndex={0}
       onClick={onClick}
       dangerouslySetInnerHTML={inner}
     />

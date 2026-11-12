@@ -6,7 +6,8 @@
  * it. Row actions (pin / archive / mark unread) stopPropagation: the row itself
  * opens the reader, and a pin click must never also open it.
  */
-import { memo } from 'react';
+import { memo, useId, useState } from 'react';
+import { LetterCardBody } from './LetterCardBody';
 import { AgentText } from '@/components/common/AgentText';
 import { formatRelative } from '@/contexts/notifications';
 import { LETTER_TYPE_LABEL, answeredByName, letterOriginOf, type LetterEnvelope } from '@/api/human-inbox';
@@ -26,14 +27,19 @@ function PinIcon() {
 interface LetterEnvelopeRowProps {
   letter: LetterEnvelope;
   onOpen: () => void;
+  onNavigate: (to: string) => void;
   onTogglePin: () => void;
   onToggleArchive: () => void;
   onToggleRead: () => void;
 }
 
 export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
-  letter, onOpen, onTogglePin, onToggleArchive, onToggleRead,
+  letter, onOpen, onNavigate, onTogglePin, onToggleArchive, onToggleRead,
 }: LetterEnvelopeRowProps) {
+  const [expanded, setExpanded] = useState(false);
+  const [opened, setOpened] = useState(false);
+  const bodyId = useId();
+  const toggleExpanded = () => { setOpened(true); setExpanded((value) => !value); };
   const sender = letter.sender ?? { sessionId: '', host: '' };
   const replies = letter.thread?.length ?? 0;
   const answered = letter.answered;
@@ -62,13 +68,9 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
   return (
     <div
       className={`hib-row${letter.read ? '' : ' hib-unread'}${letter.pinned ? ' hib-pinned' : ''}`}
-      role="button"
-      tabIndex={0}
+      data-letter-id={letter.id}
       onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); }
-      }}
-      onContextMenu={(e) => menu.open(e, undefined)}
+      onContextMenu={(e) => { if (!(e.target as HTMLElement).closest('.hib-card-content')) menu.open(e, undefined); }}
     >
       {/* Who it is from comes first, in Walnut's colors: a letter is never outside mail. */}
       <div className="hib-row-head">
@@ -83,7 +85,7 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
       </div>
 
       <div className="hib-row-subject-line">
-        <span className="hib-subject">{letter.subject || '(no subject)'}</span>
+        <button className="hib-subject hib-subject-open" onClick={(event) => { event.stopPropagation(); onOpen(); }}>{letter.subject || '(no subject)'}</button>
         <span className={`hib-type hib-type--${letter.type}`}>
           {LETTER_TYPE_LABEL[letter.type] ?? letter.type}
         </span>
@@ -107,6 +109,9 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
       )}
 
       <div className="hib-row-actions">
+        <button className="hib-row-btn hib-card-toggle" aria-expanded={expanded} aria-controls={bodyId} onClick={(event) => { event.stopPropagation(); toggleExpanded(); }}>
+          <span className="hib-card-chevron" aria-hidden="true">›</span>{expanded ? 'Collapse' : 'Read letter'}
+        </button>
         <button
           className="hib-row-btn"
           onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
@@ -125,6 +130,11 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
         >
           {letter.archived ? 'Unarchive' : 'Archive'}
         </button>
+      </div>
+      <div id={bodyId} className={`hib-card-expand${expanded ? ' is-expanded' : ''}`} aria-hidden={!expanded} inert={!expanded}>
+        <div className="hib-card-clip">
+          {opened && <LetterCardBody letter={letter} expanded={expanded} onOpen={onOpen} onNavigate={onNavigate} />}
+        </div>
       </div>
       {menu.state && (
         <ContextMenu

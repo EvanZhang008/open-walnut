@@ -20,7 +20,7 @@ import {
   type LetterSettled,
   type ThreadEntryDelivery,
 } from './types.js';
-import { truncatePreview } from './preview.js';
+import { cleanLegacyPreview } from './preview.js';
 import { normalizeItems, disableDuplicateItems } from './item-schema.js';
 import { cleanPictureNames } from '../answer-pictures.js';
 
@@ -184,7 +184,7 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
     subject: str(r.subject, '(no subject)'),
     type,
     bodyFormat: r.bodyFormat === 'html' ? 'html' : 'markdown',
-    textPreview: truncatePreview(str(r.textPreview)),
+    textPreview: cleanLegacyPreview(str(r.textPreview)),
     sender: normalizeSender(r.sender),
     createdAt: typeof r.createdAt === 'number' ? r.createdAt : 0,
     read: r.read === true,

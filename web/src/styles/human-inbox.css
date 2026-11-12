@@ -117,7 +117,7 @@
   line-height: 1.45;
   color: var(--fg-secondary);
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -153,7 +153,34 @@
 }
 .hib-filter-btn[aria-pressed="true"]:hover { color: var(--accent); }
 
-/* ── Reader overlay ────────────────────────────────────────────────────────── */
+.hib-card-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  text-align: left;
+  cursor: pointer;
+}
+.hib-subject-open { padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.hib-card-expand:not(.is-expanded) { margin-top: -5px; }
+.hib-card-content .hib-md-body { overscroll-behavior: contain; }
+@media (pointer: coarse) {
+  .hib-row-actions .hib-row-btn { min-height: 36px; }
+}
+.hib-card-chevron { flex: 0 0 auto; transition: transform 200ms ease; font-size: 18px; }
+.hib-card-toggle[aria-expanded="true"] .hib-card-chevron { transform: rotate(90deg); }
+.hib-card-expand { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 220ms ease, opacity 180ms ease; }
+.hib-card-expand.is-expanded { grid-template-rows: 1fr; opacity: 1; }
+.hib-card-clip { min-height: 0; overflow: hidden; }
+.hib-card-content { border-top: 1px solid var(--border); padding-top: 10px; cursor: auto; }
+.hib-card-content .hib-md-body { max-height: 50vh; overflow: auto; overflow-wrap: anywhere; }
+.hib-card-content .hib-html-frame { width: 100%; height: 45vh; min-height: 200px; }
+.hib-card-open { margin-top: 10px; }
+@media (prefers-reduced-motion: reduce) {
+  .hib-card-expand, .hib-card-chevron { transition: none; }
+}
+
+/* Reader overlay */
 
 .hib-reader-overlay {
   position: fixed;
