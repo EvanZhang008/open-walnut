@@ -27,7 +27,7 @@ import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
 import { routineRunToClose } from './routines/run-close.js';
 import { deriveUserStatus, fallbackUserState, reportIsCurrent, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
-import { answeredAbove, answerFor, answersOf, askKey, foldSameAsk, withdrawnAtOf, type RelativeAsk } from './same-ask.js';
+import { answeredAbove, answerContextOf, answerFor, answersOf, askKey, foldSameAsk, withdrawnAtOf, type RelativeAsk } from './same-ask.js';
 import { isSignInAsk, signInWaitWords, type SignInState } from './sign-in-ask.js';
 import { relativeAsksIndex } from './same-ask-tree.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
@@ -676,7 +676,7 @@ function stillAsksOf(t: Task | undefined, ask: string, nowMs = Date.now()): bool
   const key = askKey(ask);
   // Answered there for the user (a lead, VP or Main, or the answer reached its own holder): it no
   // longer holds it, and the fold reads answered.
-  if (answerFor(answersOf(t), ask, nowMs) || answeredThereOf(t)) return false;
+  if (answerFor(answersOf(t), ask, nowMs, answerContextOf(t.status_report)) || answeredThereOf(t)) return false;
   const r = t.status_report;
   if (r?.state === 'needs' && askKey(r.ask) === key) {
     if (reportIsCurrent({ report: r, phaseChangedAt: t.phase_changed_at })) return true;
@@ -711,7 +711,7 @@ export function askCheckedAtOf(task: Pick<Task, 'recheck_watch'>, checks: Readon
 
 /** When a lead, VP or Main answered `ask` of that task for the user (Task.ask_answered), or null. */
 function answeredAtOf(t: Task | undefined, ask: string, nowMs = Date.now()): string | null {
-  return (t && answerFor(answersOf(t), ask, nowMs)?.at) ?? null;
+  return (t && answerFor(answersOf(t), ask, nowMs, answerContextOf(t.status_report))?.at) ?? null;
 }
 
 /** Its open subtasks by parent id, for statusOf. */

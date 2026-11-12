@@ -78,9 +78,9 @@ export async function recordAreaWork(raw: Record<string, unknown>, callerSid: st
     const { reportOfChange, ReportChangeError } = await import('../sessions/report-set.js');
     report = reportOfChange({ state: 'needs', ask: raw.ask, user_kind: raw.user_kind, user_kind_why: raw.user_kind_why }, 'self', undefined, Date.now());
     const { refuseSameAsk } = await import('../same-ask-tree.js');
-    const { SameAskError } = await import('../same-ask.js');
+    const { SameAskError, answerContextOf } = await import('../same-ask.js');
     const { reportDecision, stampSaidDecision } = await import('../ask-decision.js');
-    await refuseSameAsk(task.id, report.ask, 'report', raw, [], reportDecision(stampSaidDecision(report, task.status_report), task.due_date)).catch((err: unknown) => {
+    await refuseSameAsk(task.id, report.ask, 'report', raw, [], { ...reportDecision(stampSaidDecision(report, task.status_report), task.due_date), ...answerContextOf(report) }).catch((err: unknown) => {
       throw err instanceof SameAskError ? new ReportChangeError(err.message, err.code, err.status) : err;
     });
   }

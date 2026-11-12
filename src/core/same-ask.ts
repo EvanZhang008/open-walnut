@@ -26,6 +26,7 @@
  * Pure functions here; the tree reads are in same-ask-tree.ts.
  */
 import { normalizeText } from './human-inbox/duplicate-letter.js';
+import { isLocalDraftAsk } from './org/user-kind.js';
 import type { RolledAsk, StatusReport, UserStatus } from './user-status.js';
 
 /** A deliberate second ask says why in at least this many characters. */
@@ -361,7 +362,10 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
   const prev = ctx.prev?.sameAsk;
   const ownSignIn = !!ctx.signIn?.(derived.ask);
   const bothSignIn = (a: RolledAsk): boolean => ownSignIn && !!ctx.signIn?.(a.ask);
+  const draftContext = { more: derived.askForm?.more, kind: derived.askForm?.kind, options: derived.askForm?.options };
+  const draftStillLocal = (ask: string): boolean => !isLocalDraftAsk(ask) || localDraftContext(derived.ask!, draftContext);
   const same = (a: RolledAsk): boolean => {
+    if (!draftStillLocal(a.ask)) return false;
     // One sign-in is one ask, however each task words it (sign-in-ask.ts).
     if (bothSignIn(a)) return true;
     const theirs = ctx.declared?.(a.id);
@@ -391,7 +395,7 @@ export function foldSameAsk(selfId: string, derived: UserStatus, asks: readonly 
       ...(picked.team ? { team: true as const } : {}), ...((hit as RelativeAsk).answered ? { answered: true as const } : {}),
       ...(bothSignIn(hit) ? { signIn: true as const } : {}),
     };
-  } else {
+  } else if (!prev || draftStillLocal(prev.ask)) {
     // An answer given there for the user that was taken back since the fold (sessions/ask-withdraw.ts):
     // only what reached that task after it counts (2026-11-09 review: a teammate read the withdrawn
     // answer as answered for good).
@@ -501,7 +505,21 @@ export const ASKS_ANSWERED_MAX = 8;
 
 /** What answerHolds knows of the ask now: its decision (ask-decision.ts) and when a person last wrote
  *  in the task (SessionRecord.humanInputAt), which lifts a withdrawal made before it. */
-export interface AnswerDecision { id?: string; key?: string; said?: boolean; personAt?: string }
+export interface AnswerDecision {
+  id?: string; key?: string; said?: boolean; personAt?: string;
+  more?: string; kind?: string; options?: readonly unknown[];
+}
+
+/** The one local-only boundary for answers and folds, including the ask's hidden details. */
+function localDraftContext(ask: string, context?: AnswerDecision | null): boolean {
+  return isLocalDraftAsk(ask, context?.more) && !context?.options?.length
+    && (!context?.kind || context.kind === 'yes_no' || context.kind === 'text');
+}
+
+/** The current ask's shape accompanies its words wherever a prior answer is checked. */
+export function answerContextOf(report: Pick<StatusReport, 'ask_more' | 'ask_kind' | 'ask_options'> | null | undefined): AnswerDecision {
+  return { more: report?.ask_more, kind: report?.ask_kind, options: report?.ask_options };
+}
 
 /**
  * Whether `answer` still answers `ask` now, inside the hold (past it, for an ask the user withdrew):
@@ -518,6 +536,9 @@ export function answerHolds(
   decision?: AnswerDecision | null,
 ): boolean {
   if (!answer || !ask) return false;
+  // A local draft and its later publication are different steps, even if the session reuses
+  // its decision id or the sending question is a subset of the draft question's words.
+  if (isLocalDraftAsk(answer.ask) && !localDraftContext(ask, decision)) return false;
   const at = Date.parse(answer.at);
   // A withdrawal holds for good until the user writes in the task after it: then they brought it up.
   const withdrawn = !!answer.withdrawn && !(decision?.personAt && decision.personAt > answer.at);
@@ -607,7 +628,10 @@ export function answeredAbove(
   derived: UserStatus, answers: AskAnswer | readonly AskAnswer[] | null | undefined, nowMs = Date.now(), personAt?: string,
 ): UserStatus {
   if (!answers || derived.state !== 'needs' || derived.source !== 'session' || !derived.ask) return derived;
-  const answer = answerFor(Array.isArray(answers) ? answers : [answers as AskAnswer], derived.ask, nowMs, { ...derived.decision, ...(personAt ? { personAt } : {}) });
+  const answer = answerFor(Array.isArray(answers) ? answers : [answers as AskAnswer], derived.ask, nowMs, { ...derived.decision,
+    more: derived.askForm?.more, kind: derived.askForm?.kind, options: derived.askForm?.options,
+    ...(personAt ? { personAt } : {}),
+  });
   if (!answer) return derived;
   return {
     state: 'waiting', kind: 'task', waitingOn: answeredWords(answer),

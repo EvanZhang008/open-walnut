@@ -80,6 +80,42 @@ export function isTeamCodeAsk(ask: string | undefined, why: string | undefined, 
     && (codeReason.test(reason) || chineseReason.test(reason));
 }
 
+/**
+ * Correct an outward label only for a local preparation question. Use a closed action grammar:
+ * an artifact may name a post or mail, but an extra action never inherits the draft's approval.
+ * The reason may describe eventual publication; the ask and full details name this step.
+ */
+export function isLocalDraftAsk(ask: string | undefined, more?: string): boolean {
+  const question = str(ask).replace(/\uff1f$/, '?');
+  if (!question) return false;
+  const artifact = '(?:CR|PR|change request|code review|pull request|(?:blog )?post|email|mail|(?:Slack )?message|reply|announcement|patch|code|change|release notes|fix)';
+  const topic = '(?:the )?(?:(?:auth|logging|flaky|deploy|merge|submit) )?(?:fix|test|script|conflict|button|outage)';
+  const scope = `(?: to (?:the )?(?:customer|vendor|team))?(?: in another team's package)?(?: (?:for|about) ${topic})?`;
+  const local = '(?:locally|for review|locally for review)';
+  const hold = '(?:(?:keep|hold|save) (?:it|the draft) (?:local(?:ly)?(?: and unpublished)?(?: for (?:now|review))?|unpublished(?: until you review it)?|for review))';
+  const noSend = "(?:(?:do not|don't|never) (?:send|publish|submit|post) it|without (?:publishing it|sending it(?: or posting it)?))";
+  const clause = `(?:${hold}|${noSend})`;
+  const suffix = `(?:[,;]? (?:and |but )?${clause})*`;
+  const draft = new RegExp(`^(?:Can I |Should I |May I )?Draft (?:a |an |the )?${artifact}${scope}(?: (?:draft|${local}))?${suffix}\\?$`, 'i');
+  const prepare = new RegExp(`^(?:Can I |Should I |May I )?(?:Prepare|Write|Compose) (?:a |an |the )?${artifact}${scope}(?: draft)? ${local}${suffix}\\?$`, 'i');
+  // Each Chinese clause names either preparation, a local list edit, or holding/not sending it.
+  // No catch-all clause: a recipient action, deferred send or positive/negative question stays gated.
+  const first = /^(?:(?:\u8981|\u9700\u8981|\u53ef\u4ee5)?\u6211)?(?:\u8d77\u8349|\u8349\u62df|\u51c6\u5907)\s*(?:\u4e00(?:\u884c\u6539\u52a8|\u5c01\u90ae\u4ef6|\u4efd\u5e16\u5b50|\u6761\u6d88\u606f|\u4e2a CR)|CR ?\u8349\u7a3f|\u90ae\u4ef6|\u5e16\u5b50|\u516c\u544a|\u8865\u4e01|\u8349\u7a3f)(?:\u5417)?$|^(?:\u5728)?\u672c\u5730\u5199(?:\u4e00\u4efd\u5e16\u5b50|\u4e00\u5c01\u90ae\u4ef6|\u4e00\u6761\u6d88\u606f)$/i;
+  const rest = /^(?:\u628a\u65b0\u8d26\u53f7\u52a0\u8fdb [a-zA-Z ]{1,40} \u5171\u4eab\u540d\u5355|\u5148\u5b58(?:\u672c\u5730|\u8349\u7a3f)(?:\u7b49\u4f60\u5ba1)?|\u4fdd\u7559\u7b49\u4f60\u5ba1|\u7b49\u4f60\u5ba1|(?:\u5148\u4e0d|\u6682\u4e0d|\u4e0d)(?:\u53d1\u9001|\u53d1\u5e03|\u63d0\u4ea4|\u53d1\u7ed9\u5ba2\u6237))(?:\u5417)?$/;
+  const chinese = question.replace(/[\uff1f?]$/, '').split(/[\uff0c,\uff1b;]/);
+  const localQuestion = draft.test(question) || prepare.test(question)
+    || (first.test(chinese[0] ?? '') && chinese.slice(1).every((part) => rest.test(part)));
+  if (!localQuestion) return false;
+  const explicitHold = /\b(?:local(?:ly)?|unpublished)\b|\b(?:do not|don't|never) (?:submit|publish|send)\b/i.test(question);
+  if (/in another team's package/i.test(question) && !explicitHold) return false;
+  const sharing = /\u5171\u4eab\u540d\u5355/.test(question);
+  if (sharing && (!/\u8d77\u8349\u4e00\u884c\u6539\u52a8/.test(question) || !/\u5148\u5b58(?:\u672c\u5730|\u8349\u7a3f)|\u4fdd\u7559\u7b49\u4f60\u5ba1|\u7b49\u4f60\u5ba1/.test(question))) return false;
+  // Only known local-only detail sentences extend the exception. Unrecognized details retain
+  // approval rather than letting a short safe summary conceal another action.
+  const detail = str(more);
+  return !detail || /^(?:Keep (?:this|the) draft local and unpublished for now\.|Keep the draft local; do not publish it\.)$/i.test(detail);
+}
+
 export type UserKindVerdict =
   | { ok: true; kind: UserKind; why: string }
   | { ok: false; message: string };

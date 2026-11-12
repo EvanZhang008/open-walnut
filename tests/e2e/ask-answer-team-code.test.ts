@@ -12,6 +12,8 @@ import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { ensureProjectLead } from '../../src/core/org/org-store.js';
 import { APPROVAL_KINDS } from '../../src/core/same-ask.js';
+import { refuseSameAsk } from '../../src/core/same-ask-tree.js';
+import { LOCAL_DRAFT_ASKS, PROTECTED_DRAFT_ASKS } from '../helpers/local-draft-asks.js';
 
 const PROJECT = 'Orchid';
 const LEAD_SID = 'ffffffff-3333-4bbb-8ccc-dddddddddddd';
@@ -70,6 +72,84 @@ describe('answers_ask for the team own code', () => {
     const again = await answer(id);
     expect(again.status, JSON.stringify(again.body)).toBe(202);
     expect(again.body).toMatchObject({ delivery: 'recorded' });
+  });
+
+  it.each(LOCAL_DRAFT_ASKS)('records a local unpublished decision despite an old outward label: %s', async (ask) => {
+    const id = await asking(ask, 'outward', 'The eventual publication needs user review.', 'Keep this draft local and unpublished for now.');
+    const r = await answer(id);
+    expect(r.status, JSON.stringify(r.body)).toBe(202);
+    expect(r.body).toMatchObject({ delivery: 'recorded' });
+    expect((await getTask(id)).ask_answered).toMatchObject({ by: lead, ask });
+    const again = await answer(id);
+    expect(again.status, JSON.stringify(again.body)).toBe(202);
+  });
+
+  it.each(PROTECTED_DRAFT_ASKS.filter(Boolean))('keeps a draft mention from approving an outward step: %s', async (ask) => {
+    const id = await asking(ask, 'outward', 'It sends work outside the team.');
+    const r = await answer(id);
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+    expect(JSON.stringify(r.body)).toContain('user_words');
+    expect((await getTask(id)).ask_answered).toBeUndefined();
+  });
+
+  it('protects a later publish when the same draft task asks again', async () => {
+    const id = await asking('Draft a CR locally for review?', 'outward');
+    expect((await answer(id)).status).toBe(202);
+    const ask = 'Publish the CR now?';
+    await updateTaskRaw(id, {
+      status_report: { state: 'needs', ask, ask_own: { kind: 'outward', why: 'It publishes outside the team.' }, at: new Date().toISOString() },
+      user_status: { state: 'needs', source: 'session', ask },
+    } as never, { source: 'test' });
+    expect((await answer(id)).status).toBe(409);
+    expect((await getTask(id)).ask_answered?.ask).not.toBe(ask);
+    expect((await answer(id, 'yes publish that prepared change request now')).status).toBe(202);
+    expect((await getTask(id)).ask_answered?.ask).toBe(ask);
+  });
+
+  it('lets a changed draft report reach the user when details or options add a send', async () => {
+    const ask = 'Draft an email to the customer?';
+    const id = await asking(ask, 'outward');
+    expect((await answer(id)).status).toBe(202);
+    for (const shape of [
+      { ask_more: 'Then send it to the customer.' },
+      { ask_kind: 'single', ask_options: [{ id: 'draft', label: 'Keep the draft local' }, { id: 'send', label: 'Send the email' }] },
+    ]) {
+      const res = await fetch(`${base}/api/v1/tasks/${id}/report`, {
+        method: 'PUT', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': LEAD_SID },
+        body: JSON.stringify({ state: 'needs', ask, user_kind: 'outward', user_kind_why: 'It sends the email outside the team.', ...shape }),
+      });
+      expect(res.status, JSON.stringify(await res.json())).toBe(200);
+      expect((await answer(id)).status).toBe(409);
+    }
+    // Other ask paths carry the full context too, rather than treating one safe part as approval.
+    await expect(refuseSameAsk(id, ask, 'letter', undefined, [ask], { more: 'Then send it to the customer.' })).resolves.toBeUndefined();
+  });
+
+  it('refuses a draft-only summary whose full details include a send', async () => {
+    const id = await asking('Draft an email locally for review?', 'outward', 'It sends an email.', `${'Draft description. '.repeat(400)}Then send it to the customer.`);
+    expect((await answer(id)).status).toBe(409);
+    expect((await getTask(id)).ask_answered).toBeUndefined();
+  });
+
+  it('refuses a draft choice with a send option and a mismatched report', async () => {
+    const id = await asking('Draft an email locally for review?', 'outward');
+    const task = await getTask(id);
+    await updateTaskRaw(id, { status_report: { ...task.status_report!, ask_kind: 'single', ask_options: [
+      { id: 'draft', label: 'Keep a local draft' }, { id: 'send', label: 'Send the email' },
+    ] } }, { source: 'test' });
+    expect((await answer(id)).status).toBe(409);
+    await updateTaskRaw(id, { status_report: { ...task.status_report!, ask: 'Send the draft email?' } }, { source: 'test' });
+    expect((await answer(id)).status).toBe(409);
+    expect((await getTask(id)).ask_answered).toBeUndefined();
+  });
+
+  it('keeps other approval kinds protected for local drafts', async () => {
+    for (const kind of APPROVAL_KINDS) {
+      if (kind === 'outward') continue;
+      const id = await asking('Draft a CR locally for review?', kind);
+      expect((await answer(id)).status, kind).toBe(409);
+      expect((await getTask(id)).ask_answered).toBeUndefined();
+    }
   });
 
   it('refuses a real outward send, leaves it unanswered, and takes the user words on retry', async () => {

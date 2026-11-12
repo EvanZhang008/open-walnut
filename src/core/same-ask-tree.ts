@@ -258,7 +258,7 @@ export async function refuseSameAsk(
     // A withdrawal holds until the user writes in the task after it (same-ask.ts answerHolds).
     const personAt = answers.some((a) => a.withdrawn) ? await personInputAtOf(self!) : undefined;
     for (const ask of [text, ...parts]) {
-      const answer = answerFor(answers, ask, Date.now(), { ...(ask === text ? decision : null), ...(personAt ? { personAt } : {}) });
+      const answer = answerFor(answers, ask, Date.now(), { ...decision, ...(ask !== text ? { id: undefined, key: undefined, said: undefined } : {}), ...(personAt ? { personAt } : {}) });
       if (!answer) continue;
       log.task.info('same-ask: refused, answered above', { taskId, by: answer.by, what });
       throw new SameAskError(answeredAskMessage(answer, what), { taskId, title: self?.title ?? taskId, ask: answer.ask, where: 'status', relation: 'ancestor' });

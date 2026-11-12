@@ -187,9 +187,9 @@ export async function setTaskReport(
   // A Needs you its tree already asks the user is not put on them twice (same-ask.ts); a person's own line is never asked.
   if (report.state === 'needs' && by !== 'human') {
     const { refuseSameAsk } = await import('../same-ask-tree.js');
-    const { SameAskError } = await import('../same-ask.js');
+    const { SameAskError, answerContextOf } = await import('../same-ask.js');
     const { reportDecision } = await import('../ask-decision.js');
-    await refuseSameAsk(task.id, report.ask, 'report', raw as Record<string, unknown>, [], reportDecision(report, task.due_date)).catch((err) => {
+    await refuseSameAsk(task.id, report.ask, 'report', raw as Record<string, unknown>, [], { ...reportDecision(report, task.due_date), ...answerContextOf(report) }).catch((err) => {
       throw err instanceof SameAskError ? new ReportChangeError(err.message, err.code, err.status) : err;
     });
   }
