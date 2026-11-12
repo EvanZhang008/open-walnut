@@ -165,6 +165,7 @@ SOURCES=(
   src/core/stream/compaction-notice.ts
   src/core/stream/hook-notice.ts
   src/core/text-cut.ts
+  src/core/session-effort.ts
   src/lib/ai-only-envelope.ts
   src/lib/history-injected-banner.ts
   src/lib/history-session-envelope.ts

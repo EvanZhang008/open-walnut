@@ -235,6 +235,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/core/stream/compaction-notice.ts',
   'src/core/stream/hook-notice.ts',
   'src/core/text-cut.ts',
+  // The effort registry the parser (and types.ts) import at run time.
+  'src/core/session-effort.ts',
   'src/lib/ai-only-envelope.ts',
   'src/lib/history-injected-banner.ts',
   'src/lib/history-session-envelope.ts',
