@@ -117,7 +117,7 @@ export function hostIdleText(label: string): string {
 
 function SessionHostIdleText({ host, label }: { host: string; label: string }) {
   const actions = useHostActions(host);
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   return (
     <div className="session-host-error" data-testid="session-host-idle">
       <span className="session-error-banner-text">{hostIdleText(label)}</span>
