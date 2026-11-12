@@ -10,6 +10,49 @@
  */
 import { isMacPlatform } from '@/hooks/usePanelKeyRouter';
 import { MAX_PANELS } from '@/hooks/session-panel-limits';
+# Keyboard Shortcuts
+
+The web UI ships a small set of keyboard shortcuts. Press <kbd>?</kbd> (or
+<kbd>Cmd</kbd>/<kbd>Ctrl</kbd> + <kbd>/</kbd>) anywhere to open the in-app
+**Keyboard Shortcuts** panel — it is generated from the same definitions as the
+table below, so it is always the current list.
+
+The authoritative definitions live in
+[`web/src/keyboard/shortcuts.ts`](../web/src/keyboard/shortcuts.ts); the panel is
+rendered by [`ShortcutsHelp.tsx`](../web/src/keyboard/ShortcutsHelp.tsx).
+
+On macOS use <kbd>Cmd</kbd>; on Windows and Linux use <kbd>Ctrl</kbd>.
+
+## Global
+
+| Shortcut | Action |
+| --- | --- |
+| `?` | Open the Keyboard Shortcuts panel |
+| `Cmd`/`Ctrl` + `/` | Open the Keyboard Shortcuts panel |
+| `Cmd`/`Ctrl` + `K` | Open the command palette (jump to a task, note, or session) |
+| `Cmd`/`Ctrl` + `B` | Show or hide the sidebar |
+| `Esc` | Close the open panel, dialog, or overlay |
+
+## Composer and chat
+
+| Shortcut | Action |
+| --- | --- |
+| `Enter` | Send the message |
+| `Shift` + `Enter` | Insert a newline without sending |
+| `Cmd`/`Ctrl` + `Enter` | Send the message from a multi-line editor |
+| `Esc` | Stop the running turn or dismiss the composer's popovers |
+
+## Lists and notes
+
+| Shortcut | Action |
+| --- | --- |
+| `↑` / `↓` | Move the selection through a list or search results |
+| `Enter` | Open the selected item |
+| `Cmd`/`Ctrl` + `S` | Save the note being edited |
+| `Cmd`/`Ctrl` + `F` | Search within the current note or list |
+
+Shortcuts are ignored while you are typing in a text field unless the table above
+says otherwise, so plain letters never trigger an action mid-sentence.
 
 const ORDINAL = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th'];
 
