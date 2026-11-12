@@ -17,6 +17,7 @@ let copy: Record<string, unknown> | null = null
 vi.mock('../../src/core/server-role.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/core/server-role.js')>()),
   placement: () => place,
+  isFollower: () => place !== 'mac',
 }))
 vi.mock('../../src/core/replication/kinds/config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/core/replication/kinds/config.js')>()),
