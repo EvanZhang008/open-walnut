@@ -304,6 +304,8 @@ Tests cover the real usage path and data density of the target UI, plus the rele
 concurrency, failure and recovery paths; say why any of them does not apply. A web issue in the
 Mac app is verified in WebKit, never only in Chromium.
 
+**WebKit acceptance runs on a Linux dev host, never as a test run on the Mac** (2026-11-12: at load 358, five UI tasks sat in the Mac's :3457 queue waiting for WebKit). A change to the Mac app's web pages is accepted with Playwright's WebKit (its Linux build of the same engine, headless: `PW_WEBKIT=1 bun x playwright test <spec> --project webkit`) on a Linux dev host, never the Mac a person uses. After the land, the Mac gets only a short read-only look at live prod in the Mac app: no fixture server, no test run. Only what Linux WebKit cannot show runs on the Mac, one at a time in its :3457 queue: the MediaRecorder specs (`stt-*`, `voice-*`, Linux WebKit has no MediaRecorder) and a layout that differs only in macOS fonts. A task's placement never keeps it on the Mac for WebKit.
+
 **The main agent does the key steps and checks the evidence itself.** Subagents may help, but
 their reports, a simple text sample, a type check, a test run that has only started, or a
 successful deploy never replace walking the user's flow. After a fix, rerun the original repro
@@ -316,7 +318,7 @@ review.
 
 | Tier | What counts | Run | Skip |
 |---|---|---|---|
-| Small | a revert to a state production already ran; CSS, copy, docs or config text only; a few dozen lines with no new branch or state | the one or two tests or specs that touch it, on the engine the user runs (WebKit for the Mac app); the owner reads its own diff; deploy; a short video when it is visible | the full quick tier, `test:pre-commit`, other browser engines, a review agent, an HTML explainer |
+| Small | a revert to a state production already ran; CSS, copy, docs or config text only; a few dozen lines with no new branch or state | the one or two tests or specs that touch it, on the engine the user runs (WebKit for the Mac app, on a Linux dev host); the owner reads its own diff; deploy; a short video when it is visible | the full quick tier, `test:pre-commit`, other browser engines, a review agent, an HTML explainer |
 | Medium | new logic in one area, a few files, no trigger | the affected test groups (`test:focus`, or `test:pre-commit` for its tiers) and the touched flow in Playwright on the user's engine; one review agent on a mid-size model | the whole suite, a second engine unless the change is engine-specific |
 | Large | any trigger, or a change across subsystems | the full flow below: scenario matrix, `test:pre-commit`, the engines the change reaches, an independent review on the strongest model | nothing |
 
@@ -324,7 +326,7 @@ Triggers: user data or storage formats, a migration, concurrency (locks, queues,
 
 - Bug fix: Playwright repro → fix → verify same flow → commit
 - **A bug fix covers the whole class, with a guard test** (2026-10-29: three bugs reported fixed came back the same day; each first fix covered only the known case, a fixed list of note types, one of 29 components with the same render mistake). Name the class the bug belongs to, fix every member, and add a test that fails when a NEW member of the class appears (enumerate the members from the source, as the ratchets here do), not only one for the case that was reported.
-- **A bug is fixed when it works in the user's own build, on the data that showed it.** The Mac app's WKWebView or the phone build, against the real data of the report; a green test on another build or a fixture is not that proof.
+- **A bug is fixed when it works in the user's own build, on the data that showed it.** The Mac app's WKWebView (WebKit acceptance on a Linux dev host, then the read-only look at live prod in the app) or the phone build, against the real data of the report; a green test on another build or a fixture is not that proof.
 - Feature: define E2E scenarios → implement → build → Playwright verify → commit
 - Test UI changes as a real user with Playwright; for load bugs, test `/` and the reported URL 5× and report worst full-load time/errors.
 - **NEVER** commit UI changes without Playwright verification
@@ -332,6 +334,9 @@ Triggers: user data or storage formats, a migration, concurrency (locks, queues,
 - Use `/verify` after implementation
 
 ### Playwright runs are machine-wide serialized (don't fight the gate)
+
+On the Mac this queue is only for the few specs Linux WebKit cannot run (above); every other
+browser run, WebKit acceptance included, belongs on a Linux dev host.
 
 `playwright.config.ts` takes an exclusive lease on :3457 (a second run queues: correct, not a
 hang), caps workers at 4, sweeps orphan fixture servers, waits out an overloaded machine and
