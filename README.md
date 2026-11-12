@@ -40,6 +40,16 @@ coding session in one web page: Claude Code, Codex, Gemini, OpenCode, and Goose,
 laptop or on a remote dev box over SSH. Plugins add your own apps. Open Walnut is
 self-hosted, local-first, MIT licensed, and has no telemetry.
 
+## Why Open Walnut?
+
+| Terminal Claude Code | Open Walnut |
+| --- | --- |
+| One session per terminal, gone when it closes | Sessions keep running across disconnects and restarts |
+| One session at a time | A dashboard of many sessions side by side |
+| Sessions live apart from your work | Every session is tied to a task |
+| Scrollback you lose | Searchable session history |
+| You keep the plan in your head | An org of agents plans and runs the work |
+
 ## What Open Walnut Does
 
 - **An org that runs your work**: the CEO agent sees every project. Each project
