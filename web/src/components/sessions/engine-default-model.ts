@@ -13,21 +13,13 @@ import { acpModelDisplayName } from './acp-model-id';
 
 export interface EngineDefaultModel { id: string; name: string }
 
-/** One catalog read per engine at a time: every Home row with a fallback tag asks at mount. */
-const reading = new Map<string, Promise<EngineDefaultModel | undefined>>();
-
-/** `again`: a retry after a read with no answer, past the server's cached failure. */
+/** `again`: a retry after a read with no answer, past the server's cached failure. Every Home row
+ *  with a fallback tag asks at mount; fetchEngineModelCatalog shares one read among them. */
 function readDefault(engine: string, again = false): Promise<EngineDefaultModel | undefined> {
-  let p = reading.get(engine);
-  if (!p) {
-    p = fetchEngineModelCatalog(engine, undefined, again ? { refresh: true } : undefined)
-      .then((c) => named(c))
-      // A failed read keeps the last catalog this app saw.
-      .catch(() => fromCatalog(engine))
-      .finally(() => { reading.delete(engine); });
-    reading.set(engine, p);
-  }
-  return p;
+  return fetchEngineModelCatalog(engine, undefined, again ? { refresh: true } : undefined)
+    .then((c) => named(c))
+    // A failed read keeps the last catalog this app saw.
+    .catch(() => fromCatalog(engine));
 }
 
 function named(c: { currentModelId?: string; models: Array<{ modelId: string; name?: string }> } | null | undefined): EngineDefaultModel | undefined {

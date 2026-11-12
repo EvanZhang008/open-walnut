@@ -803,9 +803,15 @@ export async function setCodexSessionModel(
   return apiPost(`/api/sessions/${sessionId}/model`, { model });
 }
 
+/** Catalog reads on their way, one per engine, cwd, refresh and cache generation. */
+const engineCatalogReads = new Map<string, { read: Promise<EngineModelCatalog>; timeoutMs: number }>();
+
 /** The ENGINE's model catalog for a DRAFT (no session exists yet): the server
  *  runs a cached one-shot adapter probe. 502 (adapter not answering — missing
- *  credentials / not installed) rejects with the adapter's own words. */
+ *  credentials / not installed) rejects with the adapter's own words.
+ *  Callers that ask while a read of the same catalog is on its way share it:
+ *  the picker, the draft's prefetch, the pill's model name and the fallback
+ *  line all ask as a draft opens, and each used to send its own request. */
 export async function fetchEngineModelCatalog(
   engine: string,
   cwd?: string,
@@ -813,11 +819,30 @@ export async function fetchEngineModelCatalog(
 ): Promise<EngineModelCatalog> {
   const cached = opts?.refresh ? null : getFreshEngineModelCatalog(engine, cwd);
   if (cached) return cached;
+  const timeoutMs = opts?.timeoutMs ?? 20_000;
+  const key = JSON.stringify([engine, cwd ?? null, !!opts?.refresh, getEngineModelCacheGeneration()]);
+  const onItsWay = engineCatalogReads.get(key);
+  if (onItsWay && onItsWay.timeoutMs >= timeoutMs) return onItsWay.read;
+  if (onItsWay) {
+    // A shorter read is on its way (the prefetch gives up after 4s): its answer is ours too,
+    // and only when it gave up does this caller ask again with its own, longer wait.
+    try { return await onItsWay.read; } catch { /* read again below */ }
+    const fresh = opts?.refresh ? null : getFreshEngineModelCatalog(engine, cwd);
+    if (fresh) return fresh;
+  }
+  const read = readEngineModelCatalog(engine, cwd, opts?.refresh === true, timeoutMs);
+  engineCatalogReads.set(key, { read, timeoutMs });
+  const done = () => { if (engineCatalogReads.get(key)?.read === read) engineCatalogReads.delete(key); };
+  read.then(done, done);
+  return read;
+}
+
+async function readEngineModelCatalog(engine: string, cwd: string | undefined, refresh: boolean, timeoutMs: number): Promise<EngineModelCatalog> {
   const requestGeneration = getEngineModelCacheGeneration();
   const params = new URLSearchParams();
   if (cwd) params.set('cwd', cwd);
   // Retry after a probe failure: busts the server's cached failure entry.
-  if (opts?.refresh) params.set('refresh', '1');
+  if (refresh) params.set('refresh', '1');
   const qs = params.toString();
   // 20s default: must OUTLIVE the server's 15s probe deadline — with the
   // browser's default 15s the fetch aborts ("signal timed out") right as the
@@ -825,7 +850,7 @@ export async function fetchEngineModelCatalog(
   // loses the adapter's words. Prefetch callers pass a SHORT timeout instead:
   // aborting client-side frees the connection slot while the server-side
   // probe runs on and still lands in the cache.
-  const catalog = await apiGet<EngineModelCatalog>(`/api/engines/${encodeURIComponent(engine)}/models${qs ? `?${qs}` : ''}`, undefined, { timeoutMs: opts?.timeoutMs ?? 20_000 });
+  const catalog = await apiGet<EngineModelCatalog>(`/api/engines/${encodeURIComponent(engine)}/models${qs ? `?${qs}` : ''}`, undefined, { timeoutMs });
   if (requestGeneration !== getEngineModelCacheGeneration()) {
     throw new Error('Engine configuration changed while loading models. Try again.');
   }
