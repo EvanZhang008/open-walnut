@@ -13,12 +13,16 @@
  */
 
 import crypto from 'node:crypto'
+import { log } from '../../logging/index.js'
 import { DaemonNeedsUpgradeError } from '../daemon-file-reader.js'
 import { TRANSCRIPT_FIND_DEPTH } from '../claude-config-dir.js'
 import type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile } from '../../providers/transfer-pack-core.js'
 import type { WritePartReply, ReachReply, FetchReply, FetchFileResult } from '../../providers/transfer-core.js'
 import type { HostFacts, HostLoad, ModelEndpointProbe } from '../../providers/host-facts-core.js'
 import { MAX_UPLOAD_FRAME_BYTES } from '../../providers/ssh-upload-budget.js'
+import { linkFailureKind } from '../../providers/link-failure.js'
+import { awaitLink, currentLinkWait, linkPollMs } from './link-wait.js'
+import { ServerStoppingError, interruptedByShutdown, isServerStopping } from '../server-stopping.js'
 
 export type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile, WritePartReply, ReachReply, FetchReply, FetchFileResult, HostFacts, HostLoad, ModelEndpointProbe }
 
@@ -49,21 +53,9 @@ export interface TransferConn {
   send(cmd: string, params: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
 }
 
-/** The host is not connected (and could not be dialed in time). */
-export class TransferHostOfflineError extends Error {
-  constructor(public host: string) {
-    super(`Walnut is not connected to ${host === '__local__' ? 'this Mac' : host} right now.`)
-    this.name = 'TransferHostOfflineError'
-  }
-}
-
-/** A daemon answered `ok:false`: its message (without the command prefix), code and extra fields. */
-export class TransferCommandError extends Error {
-  constructor(message: string, public host: string, public command: string, public code: string, public data: Record<string, unknown> = {}) {
-    super(message)
-    this.name = 'TransferCommandError'
-  }
-}
+// The errors a command answers, and the commands sent again on a lost link (transfer-errors.ts).
+export { RESEND_ON_LOST, TransferCommandError, TransferHostOfflineError, TransferServerStoppingError } from './transfer-errors.js'
+import { RESEND_ON_LOST, TransferCommandError, TransferHostOfflineError, TransferServerStoppingError } from './transfer-errors.js'
 
 /** Every connected daemon of a host (a host can hold more than one link). */
 export type TransferConnectionResolver = (host: string) => Promise<TransferConn[]>
@@ -91,16 +83,27 @@ async function defaultResolver(host: string): Promise<TransferConn[]> {
     ])
     const after = pick()
     return after.length > 0 ? after : conn.connected ? [conn as unknown as TransferConn] : []
-  } catch {
+  } catch (err) {
+    // A dial this server's stop refused is that stop, never the host away.
+    if (interruptedByShutdown(err)) throw new TransferServerStoppingError(host)
     return []
   } finally {
     clearTimeout(timer)
   }
 }
 
+/** No link to `host`: the server's own stop when it is stopping, else the host is away. */
+function noLink(host: string, waitedMs = 0): Error {
+  return isServerStopping() ? new TransferServerStoppingError(host) : new TransferHostOfflineError(host, waitedMs)
+}
+
 async function connectionFor(host: string, capability: string): Promise<TransferConn> {
-  const conns = await resolver(host)
-  if (conns.length === 0) throw new TransferHostOfflineError(host)
+  // No dial while stopping (daemon-dial-gate.ts), and a link found now closes in a moment.
+  if (isServerStopping()) throw new TransferServerStoppingError(host)
+  let conns = await resolver(host)
+  const wait = currentLinkWait()
+  if (conns.length === 0 && wait) conns = await awaitLink(host, wait.ms, resolver, () => new TransferServerStoppingError(host))
+  if (conns.length === 0) throw noLink(host, wait?.ms ?? 0)
   const able = conns.find((c) => c.hasCapability(capability))
   if (!able) throw new DaemonNeedsUpgradeError(host, capability)
   return able
@@ -109,10 +112,39 @@ async function connectionFor(host: string, capability: string): Promise<Transfer
 /** Called right before a command leaves for `host`, after its link was found; a throw sends nothing. */
 export type SendGate = (host: string, command: string) => void
 
+/** Every command leaves here: a link the server's own stop closed under it reads as that stop. */
+async function sendOn(conn: TransferConn, host: string, command: string, params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
+  try {
+    return await conn.send(command, params, timeoutMs)
+  } catch (err) {
+    if (isServerStopping()) throw new TransferServerStoppingError(host, command)
+    throw err
+  }
+}
+
 async function call<T>(host: string, capability: string, command: string, params: Record<string, unknown>, timeoutMs: number, gate?: SendGate): Promise<T> {
-  const conn = await connectionFor(host, capability)
-  gate?.(host, command)
-  const res = await conn.send(command, params, timeoutMs)
+  let res: Record<string, unknown>
+  const wait = currentLinkWait()
+  const until = Date.now() + (wait?.ms ?? 0)
+  let sent = params
+  for (let attempt = 1; ; attempt++) {
+    const conn = await connectionFor(host, capability)
+    try {
+      gate?.(host, command)
+      res = await sendOn(conn, host, command, sent, timeoutMs)
+      break
+    } catch (err) {
+      // Inside a link wait: a command that never reached the host (a link the pool still listed was
+      // gone) goes again once a link is back; one that may have run there (`lost`) only when it is
+      // one that can run twice. Outside a wait, and once the wait's bound passed, the error stands.
+      const kind = linkFailureKind(err)
+      const again = kind === 'lost' ? RESEND_ON_LOST[command] : kind === 'no-link' ? (p: Record<string, unknown>) => p : undefined
+      if (!wait || !again || Date.now() >= until) throw err
+      sent = again(params, attempt)
+      log.session.info('transfer: the link went away under a command; it goes again once the link is back', { host, command, kind, attempt })
+      await new Promise((r) => setTimeout(r, linkPollMs()))
+    }
+  }
   if (res.ok === false) {
     const { ok: _ok, id: _id, error, code, ...data } = res
     const message = String(error ?? command + ' failed').replace(command + ' failed: ', '')
@@ -282,7 +314,7 @@ export async function assertPrivateStage(host: string): Promise<void> {
 export async function hostCommand(host: string, capability: string, command: string, params: Record<string, unknown>, timeoutMs = READ_RPC_MS, gate?: SendGate): Promise<Record<string, unknown>> {
   const conn = await connectionFor(host, capability)
   gate?.(host, command)
-  return conn.send(command, params, timeoutMs)
+  return sendOn(conn, host, command, params, timeoutMs)
 }
 
 /**
@@ -300,10 +332,13 @@ export type TranscriptLookup =
 export async function findTranscript(host: string, sessionId: string): Promise<TranscriptLookup> {
   let res: Record<string, unknown>
   try {
+    if (isServerStopping()) return { kind: 'unreachable', error: new TransferServerStoppingError(host).message }
     const conns = await resolver(host)
-    if (conns.length === 0) return { kind: 'unreachable', error: new TransferHostOfflineError(host).message }
-    res = await conns[0].send('fs.find', { path: '~/.claude/projects', name: sessionId + '.jsonl', maxDepth: TRANSCRIPT_FIND_DEPTH }, READ_RPC_MS)
+    if (conns.length === 0) return { kind: 'unreachable', error: noLink(host).message }
+    res = await sendOn(conns[0], host, 'fs.find', { path: '~/.claude/projects', name: sessionId + '.jsonl', maxDepth: TRANSCRIPT_FIND_DEPTH }, READ_RPC_MS)
   } catch (err) {
+    // sendOn already words a link this server's stop closed; any other error is the host's.
+    if (interruptedByShutdown(err)) return { kind: 'unreachable', error: new TransferServerStoppingError(host).message }
     return { kind: 'unreachable', error: err instanceof Error ? err.message : String(err) }
   }
   if (res.ok === false) return { kind: 'unreachable', error: String(res.error ?? 'fs.find failed') }
@@ -383,7 +418,7 @@ export interface RelayResult { bytes: number; sha256: string; chunks: number; re
 async function readChunk(host: string, path: string, start: number, length: number, gate?: SendGate): Promise<{ data: string; bytesRead: number; fileSize: number }> {
   const conn = await connectionFor(host, READ_RANGE_CAPABILITY)
   gate?.(host, 'fs.readRange')
-  const res = await conn.send('fs.readRange', { path, start, length }, READ_RPC_MS)
+  const res = await sendOn(conn, host, 'fs.readRange', { path, start, length }, READ_RPC_MS)
   if (res.ok === false) {
     throw new TransferCommandError(String(res.error ?? 'fs.readRange failed'), host, 'fs.readRange', 'read_failed')
   }
@@ -431,6 +466,9 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
   let retried = 0
   let failures = 0
   let lastError: unknown = null
+  // Inside a link wait (a task move), a dropped link is waited out, not counted as a failed chunk.
+  const wait = currentLinkWait()
+  let linkLostSince: number | undefined
   for (;;) {
     // Outside the try: a stop is final, never a chunk to retry.
     if (opts.signal?.aborted) {
@@ -462,6 +500,7 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
       }, gate)
       chunks++
       failures = 0
+      linkLostSince = undefined
       if (hasher && fresh && !final) { hasher.update(fresh); hashedTo = offset + bytes.length }
       if (opts.onBytes && offset + bytes.length > deliveredTo) {
         opts.onBytes(bytes.subarray(deliveredTo - offset))
@@ -476,12 +515,24 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
         // The receiver lost bytes (a restart, a cleared staging file): resume where it stands.
         const have = Number(err.data.have)
         offset = Number.isFinite(have) && have >= 0 && have < offset ? have : 0
-      } else if ((err instanceof TransferCommandError && FINAL_CODES.includes(err.code)) || err instanceof DaemonNeedsUpgradeError) {
+      } else if ((err instanceof TransferCommandError && FINAL_CODES.includes(err.code)) || err instanceof DaemonNeedsUpgradeError
+        // This server is stopping: no retry gets a link back.
+        || err instanceof ServerStoppingError) {
         throw err
       }
       lastError = err
-      failures++
       retried++
+      const kind = linkFailureKind(err)
+      // Offline inside a wait: connectionFor already waited the whole bound for the link.
+      if (wait && err instanceof TransferHostOfflineError) throw err
+      if (wait && (kind === 'no-link' || kind === 'lost')) {
+        // The next try finds the link back (connectionFor waits for it) and resumes from the receiver's bytes.
+        linkLostSince ??= Date.now()
+        if (Date.now() - linkLostSince > wait.ms) throw lastError
+        await new Promise((r) => setTimeout(r, linkPollMs()))
+        continue
+      }
+      failures++
       // A receiver that keeps losing what it took would loop forever on gaps alone.
       if (failures >= tries || retried > tries * 10) throw lastError
       if (delay > 0) await new Promise((r) => setTimeout(r, delay))

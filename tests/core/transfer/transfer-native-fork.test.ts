@@ -118,8 +118,9 @@ vi.mock('../../../src/core/daemon-file-reader.js', () => ({
 vi.mock('../../../src/core/transfer/daemon-transfer-client.js', async () => {
   const { DaemonNeedsUpgradeError } = await import('../../../src/core/daemon-file-reader.js');
   class TransferHostOfflineError extends Error { constructor(public host: string) { super(`offline ${host}`); } }
+  class TransferServerStoppingError extends Error { constructor(public host: string) { super(`stopping ${host}`); } }
   return {
-    TransferHostOfflineError,
+    TransferHostOfflineError, TransferServerStoppingError,
     probeHostFacts: async () => { throw new Error('no probe in this test'); },
     assertPrivateStage: async (host: string) => {
       st.calls.push({ fn: 'assertPrivateStage', args: [host] });

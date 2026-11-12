@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { gitChildEnv } from '../../src/lib/git-env.js'
 
 const SCRIPTS = path.join(import.meta.dirname, '..', '..', 'scripts')
@@ -88,7 +88,9 @@ function call(f: Fixture, env: Record<string, string> = {}, args: string[] = [])
     env: {
       ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_DEPLOY_QUEUE_DIR: f.queue, WALNUT_DEPLOY_CONFIG_URL: `file://${f.config}`,
       // The machine's own load never stretches a test's gap (WALNUT_DEPLOY_BUSY_GAP_SECS).
-      WALNUT_DEPLOY_MIN_GAP_SECS: String(GAP), WALNUT_DEPLOY_LOAD_TEST: '0', WALNUT_DEPLOY_MEM_TEST: 'ok', STUB_DEPLOYS: f.deploys, STUB_CONFIG: f.config, STUB_FAIL: f.fail, ...env,
+      WALNUT_DEPLOY_MIN_GAP_SECS: String(GAP), WALNUT_DEPLOY_LOAD_TEST: '0', WALNUT_DEPLOY_MEM_TEST: 'ok', STUB_DEPLOYS: f.deploys, STUB_CONFIG: f.config, STUB_FAIL: f.fail,
+      // The running moves that hold a deploy: the test's own folder, never production's.
+      WALNUT_DEPLOY_MOVES_DIR_TEST: path.join(f.root, 'home', 'local', 'running-switches'), ...env,
     },
   })
   let stdout = ''
@@ -190,6 +192,56 @@ describe('the deploy queue', () => {
     expect(tight.stdout).toMatch(/Deploy queued: this Mac is busy \(memory pressure level 2\); the next deploy goes once it eases/)
     await runnerGone(f)
   }, 90_000)
+
+  it('a move production runs holds the deploy until it ends, at most the hold; a dead or old marker holds nothing (2026-11-12)', async () => {
+    // A move to a remote host takes 10 to 15 minutes; a deploy every 10 to 20 cut each one.
+    const marker = (f: Fixture, task: string, pid: number, at = Math.floor(Date.now() / 1000)) => {
+      const dir = path.join(f.root, 'home', 'local', 'running-switches')
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, task), `${pid} ${at} ${task} 0123abcd move to cloud\n`)
+      return path.join(dir, task)
+    }
+    // A live server's marker (this process stands in for it), removed when the move ends after 3 s.
+    const f = fixture()
+    const m = marker(f, 'mvtask-1', process.pid)
+    const t0 = Math.floor(Date.now() / 1000)
+    const held = call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_MOVE_HOLD_SECS: '60' })
+    setTimeout(() => fs.rmSync(m, { force: true }), 3_000)
+    const r = await held.done
+    expect(r.code, r.stderr).toBe(0)
+    const s1 = deploys(f).filter((d) => d.kind === 'start')
+    expect(s1).toHaveLength(1)
+    expect(s1[0].at).toBeGreaterThanOrEqual(t0 + 3)
+    expect(s1[0].at).toBeLessThan(t0 + 40)
+    expect(fs.readFileSync(path.join(f.queue, 'runner.log'), 'utf8')).toMatch(/production runs a move \(task mvtask-1 \(move to cloud\)\): the deploy waits for it to end, until .* at the latest/)
+    expect(r.stdout).toMatch(/Deploy queued: production runs a move \(task mvtask-1 \(move to cloud\)\); the next deploy goes once it ends/)
+    expect(fs.readFileSync(path.join(f.queue, 'runner.log'), 'utf8')).toMatch(/the move ended .*: the deploy goes/)
+    expect(fs.existsSync(path.join(f.queue, 'moving'))).toBe(false)
+    await runnerGone(f)
+
+    // A move that runs on past the hold: the deploy goes at the bound.
+    const g = fixture()
+    marker(g, 'mvtask-2', process.pid)
+    const t1 = Math.floor(Date.now() / 1000)
+    const bounded = await call(g, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_MOVE_HOLD_SECS: '6' }).done
+    expect(bounded.code, bounded.stderr).toBe(0)
+    expect(deploys(g).filter((d) => d.kind === 'start')[0].at).toBeGreaterThanOrEqual(t1 + 6)
+    // The hold ends at its bound, by the hold's clock or the marker's age, whichever comes first.
+    expect(fs.readFileSync(path.join(g.queue, 'runner.log'), 'utf8')).toMatch(/(still runs at the end of its 6s hold|the move ended \(or its marker is past the 6s hold\)): the deploy goes/)
+    await runnerGone(g)
+
+    // A marker of a server no longer alive, and one older than the hold: no wait.
+    const h = fixture()
+    const gone = spawnSync('true').pid!
+    marker(h, 'mvtask-3', gone)
+    marker(h, 'mvtask-4', process.pid, Math.floor(Date.now() / 1000) - 3_600)
+    const t2 = Math.floor(Date.now() / 1000)
+    const free = await call(h, { WALNUT_DEPLOY_MIN_GAP_SECS: '1', WALNUT_DEPLOY_MOVE_HOLD_SECS: '1800' }).done
+    expect(free.code, free.stderr).toBe(0)
+    expect(deploys(h).filter((d) => d.kind === 'start')[0].at).toBeLessThan(t2 + 5)
+    expect(fs.readFileSync(path.join(h.queue, 'runner.log'), 'utf8')).not.toMatch(/runs a move/)
+    await runnerGone(h)
+  }, 150_000)
 
   it('a commit that lands while a deploy runs goes with the next one, a gap after it', async () => {
     const f = fixture()

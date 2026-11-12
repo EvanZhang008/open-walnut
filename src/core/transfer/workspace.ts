@@ -12,6 +12,7 @@
  */
 import path from 'node:path';
 import { log } from '../../logging/index.js';
+import { interruptedByShutdown } from '../server-stopping.js';
 import type { PackMeta, PackReply } from './daemon-transfer-client.js';
 import { LOCAL_HOST } from './planner.js';
 import { WALNUT_HOME } from '../../constants.js';
@@ -81,9 +82,13 @@ export async function moveWorkspace(opts: {
   targetHost: string;
 }): Promise<MovedWorkspace> {
   const client = await import('./daemon-transfer-client.js');
+  const { withLinkWait, MOVE_LINK_WAIT_MS } = await import('./link-wait.js');
   const sourceDir = `${transfersDir(opts.sourceHost)}/${opts.transferId}/pack`;
-  const pack: PackReply = await client.packWorkspace(opts.sourceHost, { cwd: opts.sourceCwd, outDir: sourceDir });
-  return copyPack(pack, { sourceHost: opts.sourceHost, targetHost: opts.targetHost, bundleDir: `${transfersDir(opts.targetHost)}/${opts.transferId}/pack` });
+  // A link that drops while the workspace is copied is waited for (link-wait.ts).
+  return withLinkWait(MOVE_LINK_WAIT_MS, async () => {
+    const pack: PackReply = await client.packWorkspace(opts.sourceHost, { cwd: opts.sourceCwd, outDir: sourceDir });
+    return copyPack(pack, { sourceHost: opts.sourceHost, targetHost: opts.targetHost, bundleDir: `${transfersDir(opts.targetHost)}/${opts.transferId}/pack` });
+  });
 }
 
 /**
@@ -120,6 +125,8 @@ export async function copyPack(pack: PackReply, opts: { sourceHost: string; targ
         await recordReach(opts.targetHost, opts.sourceHost, false, reach.error);
       }
     } catch (err) {
+      // This server is stopping: no relay either, and the direct route is not judged on it.
+      if (interruptedByShutdown(err)) throw err;
       log.session.info('transfer: direct host-to-host copy unavailable, relaying', {
         from: opts.sourceHost, to: opts.targetHost, error: err instanceof Error ? err.message : String(err),
       });

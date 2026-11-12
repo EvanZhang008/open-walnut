@@ -25,6 +25,8 @@ import { LOCAL_HOST } from './planner.js';
 import { copyPack, transfersDir, workspaceInstructions, type MovedWorkspace } from './workspace.js';
 import type { PackedFile, PackMeta, PackReply, ScanReply } from './daemon-transfer-client.js';
 import { readHostProfile, repoKey } from '../hosts/host-profile.js';
+import { interruptedByShutdown } from '../server-stopping.js';
+import { copyNow, earlierPiece } from './move-resume.js';
 
 export interface WorkPiece {
   kind: 'repo' | 'files' | 'checkout';
@@ -55,6 +57,8 @@ export interface MovedPiece {
   error?: string;
   /** The new session's steps when the target did not set it up. */
   steps?: string;
+  /** The source checkout's print when packed (transfer-pack-core.ts workPrint): with `head`, tells a rerun the pack is the same. */
+  print?: string;
   /** Set up in the copy it left on the target (a move back), not in a new folder. */
   into?: boolean;
   /** `into`: the uncommitted files that copy still held from when the work left are kept in a git stash there. */
@@ -161,6 +165,8 @@ async function ownFiles(session: SessionRecord, repoRoot: string, host: string):
     }
     return { paths: [...out], before };
   } catch (err) {
+    // This server is stopping: the move pauses (an unknown list would carry only the committed state).
+    if (interruptedByShutdown(err)) throw err;
     log.session.info('task move: the session\'s own changes could not be read', { sessionId: session.claudeSessionId, error: err instanceof Error ? err.message : String(err) });
     return null;
   }
@@ -191,15 +197,34 @@ export function targetNamer(existing: Iterable<string>): (want: string, layout?:
 /** `into`: the target folder (under its task directory) this repository left on a move away, tried first. */
 interface Packed { piece: WorkPiece; pack: PackReply; into?: string }
 
-/**
- * Pack, copy and set up a task's own work from `sourceHost` onto `targetHost`, under
- * the task directory there. `moveId` names the transfer files on both hosts.
- */
-export async function moveTaskWork(opts: {
+/** What moveTaskWork is asked to move. */
+export interface MoveTaskWorkOptions {
   task: Pick<Task, 'id' | 'title'>; session: SessionRecord; sourceHost: string; targetHost: string; moveId: string;
   /** What an earlier move away from `targetHost` left there (the session's record keeps it): a copy unchanged since takes its work back. */
   leftOnTarget?: readonly LeftCopy[];
-}): Promise<MovedWork> {
+  /** Pieces an earlier run of this same move set up before a server stop cut it short
+   *  (sessions/engine-switch-restart.ts), and pieces it was setting up then (`inDoubt`): each is
+   *  kept, or has this run's pack set up in it, never made again beside it (move-resume.ts). */
+  done?: readonly MovedPiece[];
+  inDoubt?: ReadonlyArray<{ kind: string; source: string; dest: string }>;
+  /** Told right before the target is asked to set a piece up, when it refused, and once it did, so a
+   *  run cut short leaves a record of what is set up and what is in doubt. */
+  onApplying?: (piece: { kind: string; source: string; dest: string }) => void;
+  onRefused?: (dest: string) => void;
+  onApplied?: (piece: MovedPiece) => void;
+}
+
+/**
+ * Pack, copy and set up a task's own work from `sourceHost` onto `targetHost`, under
+ * the task directory there. `moveId` names the transfer files on both hosts. A link to
+ * either host that drops meanwhile is waited for (link-wait.ts), and the step goes on.
+ */
+export async function moveTaskWork(opts: MoveTaskWorkOptions): Promise<MovedWork> {
+  const { withLinkWait, MOVE_LINK_WAIT_MS } = await import('./link-wait.js');
+  return withLinkWait(MOVE_LINK_WAIT_MS, () => moveWork(opts));
+}
+
+async function moveWork(opts: MoveTaskWorkOptions): Promise<MovedWork> {
   const { task, session, sourceHost, targetHost, moveId } = opts;
   const client = await import('./daemon-transfer-client.js');
   const { taskDirForHost, ensureTaskDirOnHost } = await import('../sessions/task-dir-place.js');
@@ -302,8 +327,27 @@ export async function moveTaskWork(opts: {
 
   const profile = await readHostProfile(targetHost).catch(() => null);
   const pieces: MovedPiece[] = [];
+  const setUp = (piece: MovedPiece): void => { pieces.push(piece); if (piece.applied) opts.onApplied?.(piece); };
+  // The target is asked to set a piece up: until it answers, a server stop leaves it in doubt.
+  const apply = async (piece: MovedPiece, args: Parameters<typeof client.applyPack>[1]) => {
+    opts.onApplying?.({ kind: piece.kind, source: piece.source, dest: args.dest });
+    try {
+      return await client.applyPack(targetHost, args);
+    } catch (err) {
+      // A refusal is an answer (nothing was set up there): only a stop's cut leaves it in doubt.
+      if (!interruptedByShutdown(err)) opts.onRefused?.(args.dest);
+      throw err;
+    }
+  };
   for (const [i, p] of packed.entries()) {
-    const dest = p.piece.rel ? `${targetTaskDir}/${p.piece.rel}` : targetTaskDir;
+    // What a run this server's stop cut short left of this piece (move-resume.ts).
+    const earlier = earlierPiece({ done: opts.done, inDoubt: opts.inDoubt, piece: p.piece, meta: p.pack.meta, targetTaskDir, present });
+    if (earlier?.kind === 'keep') {
+      setUp(earlier.piece);
+      log.session.info('task move: a piece an interrupted run already set up is kept', { taskId: task.id, dest: earlier.piece.dest });
+      continue;
+    }
+    const dest = earlier?.kind === 'unpack' ? earlier.dest : p.piece.rel ? `${targetTaskDir}/${p.piece.rel}` : targetTaskDir;
     const bundleDir = `${transfersDir(targetHost)}/${moveId}/${i}/pack`;
     const moved: MovedWorkspace = await copyPack(p.pack, { sourceHost, targetHost, bundleDir });
     const m = p.pack.meta;
@@ -312,22 +356,36 @@ export async function moveTaskWork(opts: {
     const base: MovedPiece = {
       kind: p.piece.kind, source: p.piece.source, dest, applied: false, bytes: moved.bytes,
       ...(m.kind === 'git' ? { branch: m.branch ?? null, head: m.head ?? null, changes: moved.files.includes('changes.patch'), untracked: moved.files.includes('untracked.tgz') ? m.untracked?.count ?? 0 : 0 } : {}),
+      ...(m.print ? { print: m.print } : {}),
       ...(m.ahead ? { commits: m.ahead } : {}),
       ...(m.limited && (m.limited.leftOutTracked + m.limited.leftOutUntracked) > 0
         ? { leftOut: { count: m.limited.leftOutTracked + m.limited.leftOutUntracked, sample: m.limited.leftOut } } : {}),
       ...(ownUnknown.has(p) ? { ownUnknown: true } : {}),
     };
-    if (targetMoves && p.into) {
-      const intoDest = `${targetTaskDir}/${p.into}`;
-      const left = opts.leftOnTarget?.find((l) => l.path.replace(/\/+$/, '') === intoDest);
+    // Into an existing copy: one the cut run made (as it holds it now), else one a move away left (as it left it).
+    const leftDest = p.into ? `${targetTaskDir}/${p.into}` : undefined;
+    const left = leftDest ? opts.leftOnTarget?.find((l) => l.path.replace(/\/+$/, '') === leftDest) : undefined;
+    const leftExpect = left?.print ? { head: left.head, print: left.print } : undefined;
+    let into: { dest: string; expect?: { head: string; print: string } } | null = leftDest ? { dest: leftDest, expect: leftExpect } : null;
+    if (earlier?.kind === 'into') {
+      const now = canInto ? await copyNow(client, targetHost, earlier.dest, `${transfersDir(targetHost)}/${moveId}/${i}/probe`) : undefined;
+      // A copy a move away left, whose set-up's answer the stop cut off: this move's own only once it
+      // holds the packed commit (else the target refused it, and it is still the user's as it was).
+      const usersStill = !earlier.confirmed && !!left && earlier.dest === leftDest && !(now && now.head === m.head);
+      into = usersStill ? { dest: earlier.dest, expect: leftExpect } : now ? { dest: earlier.dest, expect: now } : null;
+    }
+    if (targetMoves && into) {
+      const intoDest = into.dest;
       try {
-        const done = await client.applyPack(targetHost, {
-          dest: intoDest, bundleDir, into: true, ...(url ? { url } : {}), ...(left?.print ? { expect: { head: left.head, print: left.print } } : {}),
+        const done = await apply(base, {
+          dest: intoDest, bundleDir, into: true, ...(url ? { url } : {}), ...(into.expect ? { expect: into.expect } : {}),
         });
-        pieces.push({ ...base, dest: intoDest, applied: true, into: true, head: done.head ?? base.head, ...(done.setAside ? { setAside: true } : {}) });
-        log.session.info('task move: a repository returned into the copy it left', { taskId: task.id, dest: intoDest });
+        setUp({ ...base, dest: intoDest, applied: true, ...(earlier ? {} : { into: true }), head: done.head ?? base.head, ...(done.setAside ? { setAside: true } : {}) });
+        log.session.info(earlier ? 'task move: this run\'s pack is set up in the copy an interrupted run made' : 'task move: a repository returned into the copy it left', { taskId: task.id, dest: intoDest });
         continue;
       } catch (err) {
+        // Cut off by this server's stop: whether it took is unknown (in doubt), never a refusal.
+        if (interruptedByShutdown(err)) throw err;
         const why = err instanceof Error ? err.message.replace(/^transfer\.apply failed: /, '') : String(err);
         base.intoRefused = { dest: intoDest, why };
         log.session.info('task move: the copy the work left changed since; the work goes to a new folder', { taskId: task.id, dest: intoDest, newDest: dest, why });
@@ -335,19 +393,20 @@ export async function moveTaskWork(opts: {
     }
     if (targetMoves) {
       try {
-        const done = await client.applyPack(targetHost, {
+        const done = await apply(base, {
           dest, bundleDir, ...(knownPath && knownPath !== dest ? { cloneFrom: knownPath } : {}), ...(url ? { url } : {}),
         });
-        pieces.push({ ...base, applied: true, head: done.head ?? base.head });
+        setUp({ ...base, applied: true, head: done.head ?? base.head });
         continue;
       } catch (err) {
+        if (interruptedByShutdown(err)) throw err;
         base.error = err instanceof Error ? err.message.replace(/^transfer\.apply failed: /, '') : String(err);
         // The target's daemon removed what its own apply made; nothing else is touched here.
         log.session.warn('task move: the target could not set a piece up; the new session will', { taskId: task.id, dest, error: base.error });
       }
     }
     base.steps = workspaceInstructions(moved, { repoRoot: knownPath && !targetMoves ? knownPath : dest, known: !!knownPath && !targetMoves });
-    pieces.push(base);
+    setUp(base);
   }
 
   const cwdOnTarget = (() => {
@@ -407,6 +466,8 @@ export async function clearMovedCopies(work: Pick<MovedWork, 'clearable'>, opts:
         lines.push(`  Left in ${c.root}: ${res.kept.map((k) => `${k.path} (${k.reason})`).slice(0, 5).join(', ')}${res.kept.length > 5 ? ', …' : ''}.`);
       }
     } catch (err) {
+      // This server is stopping: the files stay in the checkout, and nobody is told they were cleared.
+      if (interruptedByShutdown(err)) throw err;
       log.session.warn('task move: the moved files could not be cleared from the shared checkout', { taskId: opts.taskId, root: c.root, error: err instanceof Error ? err.message : String(err) });
       lines.push(`Still in ${c.root} on the old host: ${names.length} file${names.length === 1 ? '' : 's'} this task changed (${list}); clearing them failed (${err instanceof Error ? err.message : String(err)}).`);
     }

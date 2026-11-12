@@ -133,7 +133,8 @@ describe('every transcript find walks one level under a projects root', () => {
     const sites: string[] = []
     for (const { file, lines } of sources()) {
       lines.forEach((line, i) => {
-        if (!/send\(\s*'fs\.find'/.test(line)) return
+        // send('fs.find', ...) or the move client's sendOn(conn, host, 'fs.find', ...)
+        if (!/\bsend(?:On)?\((?:[^,()]*,\s*){0,2}'fs\.find'/.test(line)) return
         const call = lines.slice(i, i + 5).join('\n')
         if (!/\.jsonl'/.test(call)) return
         const rel = `${path.relative(ROOT, file)}:${i + 1}`

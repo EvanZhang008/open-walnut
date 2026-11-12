@@ -129,11 +129,16 @@ async function tellExpired(taskId: string, sw: EngineSwitchState, error: string)
 /**
  * At startup: a pending switch waits again (or runs, when its turn is over); one a
  * restart cut mid-way is put back to pending, after its old session is restored as
- * the task's session when no new one took over.
+ * the task's session when no new one took over. A switch the previous server's stop cut
+ * short (a deploy) is such a one: it kept `switching` (engine-switch-restart.ts) and keeps its
+ * `interrupted` note, whose pieces already set up the rerun reuses.
  */
 export async function resumeEngineSwitches(): Promise<number> {
   const { listTasks, updateTaskRaw } = await import('../task-manager.js');
   const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js');
+  // The running markers an earlier server left: its switches ended with it (the deploy hold).
+  const { sweepRunningSwitchMarkers } = await import('./running-switches.js');
+  await sweepRunningSwitchMarkers().catch(() => 0);
   let n = 0;
   for (const task of await listTasks()) {
     const sw = task.engine_switch;
@@ -142,10 +147,15 @@ export async function resumeEngineSwitches(): Promise<number> {
     if (sw.state === 'switching') {
       const { taskConversation } = await import('./task-session-claim.js');
       const active = await taskConversation(task.id);
-      if (active && active.claudeSessionId !== sw.from_session_id) {
+      const { endUnconfirmedStarts, tookOver } = await import('./engine-switch-restart.js');
+      // A run the stop cut short (`interrupted`) took over only when the new session's record says
+      // so: a start that never confirmed may still be the task's session (its detach can fail).
+      const holding = active && active.claudeSessionId !== sw.from_session_id ? active.claudeSessionId : undefined;
+      const took = !!holding && (!sw.interrupted || tookOver(await getSessionByClaudeId(holding).catch(() => null), sw));
+      if (holding && took) {
         // The new session started (or the earlier one was resumed) before the restart:
         // finish what follows it (each step is idempotent).
-        const to = active.claudeSessionId;
+        const to = holding;
         if (sw.resume_session_id === to && sw.resume_message) {
           // Its message may not have been queued yet; the same id collapses onto it when it was.
           const { sendResumeMessage } = await import('./engine-switch-resume.js');
@@ -171,12 +181,15 @@ export async function resumeEngineSwitches(): Promise<number> {
           // The task is on the engine its user picked now: a fallback start's note is done.
           engine_fallback: null,
           engine_switch: {
-            ...sw, state: 'done', message: undefined, display_text: undefined, held_rows: undefined,
+            ...sw, state: 'done', message: undefined, display_text: undefined, held_rows: undefined, error: undefined, interrupted: undefined,
             resume_session_id: undefined, resume_message: undefined, session_id: to, ...(sw.resume_session_id === to ? { resumed: true } : {}),
           },
         }, { source: 'engine-switch', emitEvent: true });
         continue;
       }
+      // A start the cut run made that never confirmed is stopped through its owner first: one that
+      // may still run keeps the switch from running again (two CLIs would share the work).
+      const live = sw.interrupted ? await endUnconfirmedStarts(task.id, sw, holding) : null;
       const old = await getSessionByClaudeId(sw.from_session_id).catch(() => null);
       if (old?.archived) await updateSessionRecord(old.claudeSessionId, { archived: false, archive_reason: undefined }).catch(() => {});
       if (old) {
@@ -185,7 +198,15 @@ export async function resumeEngineSwitches(): Promise<number> {
         const { putQueuedRows } = await import('./engine-switch-io.js');
         if (sw.held_rows?.length) await putQueuedRows(old.claudeSessionId, sw.held_rows as never[]).catch(() => {});
       }
-      await updateTaskRaw(task.id, { engine_switch: { ...sw, state: 'pending', held_rows: undefined, resume_session_id: undefined, resume_message: undefined } }, { source: 'engine-switch', emitEvent: true });
+      if (live) {
+        const error = `A restart cut this ${sw.move ? 'move' : 'switch'} short, and the session it was starting could not be stopped (${live}), so it did not run again. The task stays on its session; stop that session, then ask again.`;
+        log.session.warn('engine switch: a cut start may still run; the switch does not run again', { taskId: task.id, switchId: sw.id, why: live });
+        await updateTaskRaw(task.id, { engine_switch: { ...sw, state: 'failed', error, held_rows: undefined, resume_session_id: undefined, resume_message: undefined, interrupted: undefined } }, { source: 'engine-switch', emitEvent: true });
+        continue;
+      }
+      // An unconfirmed start is stopped: the next run starts clean of it.
+      const interrupted = sw.interrupted ? { ...sw.interrupted, unconfirmed_start: undefined } : undefined;
+      await updateTaskRaw(task.id, { engine_switch: { ...sw, state: 'pending', held_rows: undefined, resume_session_id: undefined, resume_message: undefined, interrupted } }, { source: 'engine-switch', emitEvent: true });
     }
     // The watch looks at once and keeps the deadlines (counted from `sw.at`, kept on the task).
     watchPendingSwitch(task.id, sw.from_session_id);

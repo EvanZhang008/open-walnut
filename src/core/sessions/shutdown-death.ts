@@ -22,6 +22,7 @@
 import type { SessionRecord } from '../types.js'
 import { classifySessionError } from '../session-error-kind.js'
 import { LOCAL_HOST, isLocalHost } from './auto-recover-env.js'
+import { isServerStopping } from '../server-stopping.js'
 
 /** How long a death waits for its host's shutdown to show (a crash is handed back this much later). */
 export function shutdownCheckMs(): number {
@@ -29,12 +30,8 @@ export function shutdownCheckMs(): number {
   return process.env.WALNUT_SHUTDOWN_CHECK_MS && Number.isFinite(n) && n >= 0 ? n : 15_000
 }
 
-let serverStopping = false
-
-/** This server began its own stop (stopServer's entry). */
-export function markServerStopping(): void { serverStopping = true }
-/** A server started in this process again (tests start and stop many). */
-export function resetServerStopping(): void { serverStopping = false }
+// The flag lives in server-stopping.ts, read by every long operation a stop can cut short.
+export { markServerStopping, resetServerStopping } from '../server-stopping.js'
 
 export type ShutdownWitness = 'server_stopping' | 'host_link_down'
 
@@ -68,7 +65,7 @@ const LINK_LOST_SLACK_MS = 60_000
 /** The fact that says this host is going down now, or null. */
 export async function shutdownWitness(record: Pick<SessionRecord, 'host' | 'lastActiveAt'>): Promise<ShutdownWitness | null> {
   // This server's own stop takes down only this computer's processes.
-  if (isLocalHost(record.host) && serverStopping) return 'server_stopping'
+  if (isLocalHost(record.host) && isServerStopping()) return 'server_stopping'
   try {
     const { daemonLinkLostSince } = await import('../../providers/daemon-connection.js')
     // The host's daemon went away with its CLI: a host going down (or out of

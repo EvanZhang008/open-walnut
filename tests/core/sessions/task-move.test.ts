@@ -34,6 +34,8 @@ const W = vi.hoisted(() => {
     starts: [] as Array<Record<string, unknown>>,
     stops: [] as string[],
     failStart: false,
+    /** The server's stop comes while a start is under way (its CLI spawned, its answer cut off). */
+    stopAtStart: false,
     /** A start waits on this while set (a move still in flight). */
     gate: null as Promise<void> | null,
     /** fs.ls of the target fails (the listing is no answer). */
@@ -139,6 +141,10 @@ vi.mock('../../../src/core/sessions/task-start.js', () => ({
     await createSessionRecord(sid, String(params.taskIdPrefix), 'Marina', String(params.cwd));
     await updateSessionRecord(sid, { host: params.host === '__local__' ? undefined : params.host, process_status: 'idle', messageCount: 1 } as never);
     if (W.failStart) throw new Error('the CLI would not start');
+    if (W.stopAtStart) {
+      (await import('../../../src/core/server-stopping.js')).markServerStopping();
+      throw new Error('the start was cut off before it confirmed');
+    }
     return { started: true, sessionId: sid };
   },
 }));
@@ -173,6 +179,9 @@ import { __setHostProbeForTesting } from '../../../src/core/sessions/host-lost.j
 import { writeHistoryCache, flushHistoryCacheWrites, readHistoryCache } from '../../../src/core/history-disk-cache.js';
 import { __setOwnerViewForTesting } from '../../../src/core/sessions/replaced-session.js';
 import { runEngineSwitch } from '../../../src/core/sessions/engine-switch.js';
+import { markServerStopping, noteServerStopReason, resetServerStopping } from '../../../src/core/server-stopping.js';
+import { __setLinkWaitPollForTesting } from '../../../src/core/transfer/link-wait.js';
+import { markLinkFailure } from '../../../src/providers/link-failure.js';
 
 const gitconfig = path.join(W.root, 'gitconfig');
 fs.writeFileSync(gitconfig, '[user]\n\tname = Mover\n\temail = mover@example.com\n[init]\n\tdefaultBranch = main\n')
@@ -270,7 +279,7 @@ beforeEach(async () => {
   for (const h of Object.values(W.homes)) { fs.rmSync(h, { recursive: true, force: true }); fs.mkdirSync(h, { recursive: true }); }
   W.owner.clear(); W.stopRefused.clear(); W.stopsAtStart.length = 0;
   __setOwnerViewForTesting(async (rec) => W.owner.get(rec.claudeSessionId) ?? null);
-  W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.history = {}; W.changes = []; W.gate = null; W.failList = false; W.failApply = false;
+  W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.stopAtStart = false; W.history = {}; W.changes = []; W.gate = null; W.failList = false; W.failApply = false;
   await mutateStore((st) => { st.queues = {}; }, false, true);
   __setTransferConnectionResolverForTesting(async (host) => (W.homes[host] ? [daemonFor(host)] : []));
   // Each host's daemon answers fs.stat for its own folders only (both live on this machine).
@@ -751,6 +760,9 @@ describe('task_move', () => {
       .rejects.toMatchObject({ code: 'target_task_dir' });
     expect((await taskConversation(taskId))?.claudeSessionId).toBe(sid);
     expect(W.starts).toHaveLength(0);
+    // Not a server stop: a plain failure, never paused for a boot that would only fail it again.
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'failed' });
+    expect((await getTask(taskId)).engine_switch?.interrupted).toBeUndefined();
   }, 60_000);
 
   it('a move waits for a running turn (an agent moving itself), and refuses the host it is on', async () => {
@@ -1016,4 +1028,222 @@ describe('task_move leaves exactly one live session, there and back', () => {
     expect(git(r.clone, ['rev-parse', 'HEAD'])).toBe(pushed);
     expect(fs.readFileSync(path.join(r.clone, 'cloud.txt'), 'utf8')).toBe('made on the cloud\n');
   }, 180_000);
+});
+
+describe('task_move cut short by this server\'s stop (a deploy)', () => {
+  // 2026-11-12: three moves from this Mac died 1 to 2 s after a deploy began, each recorded as
+  // "Walnut is not connected to this Mac right now." and each asked for again by hand.
+  afterEach(() => { resetServerStopping(); });
+
+  /** Both hosts' daemons, with `hook` run on each command first (it may stop the server, or answer itself). */
+  const hooked = (hook: (host: string, cmd: string, run: () => Promise<Record<string, unknown>>) => Promise<Record<string, unknown>> | null) => {
+    __setTransferConnectionResolverForTesting(async (host) => {
+      if (!W.homes[host]) return [];
+      const d = daemonFor(host);
+      return [{ hasCapability: d.hasCapability, send: (cmd, p, t) => hook(host, cmd, () => d.send(cmd, p, t)) ?? d.send(cmd, p, t) }];
+    });
+  };
+  /** The next boot: links back, the startup pass runs, and the switch lands. */
+  const reboot = async (taskId: string) => {
+    resetServerStopping();
+    __setTransferConnectionResolverForTesting(async (host) => (W.homes[host] ? [daemonFor(host)] : []));
+    const { resumeEngineSwitches } = await import('../../../src/core/sessions/engine-switch-watch.js');
+    expect(await resumeEngineSwitches()).toBe(1);
+    await vi.waitFor(async () => { expect((await getTask(taskId)).engine_switch?.state).toBe('done'); }, { timeout: 30_000, interval: 250 });
+    return (await getTask(taskId)).engine_switch!;
+  };
+  const marinas = (dir: string) => fs.readdirSync(dir).filter((n) => n.startsWith('marina')).sort();
+
+  it('a set-up the stop cut off before its answer is in doubt, and the rerun sets the work up in that copy, never beside it', async () => {
+    const { taskId, clone } = await taskInSharedCheckout();
+    const head = git(clone, ['rev-parse', 'HEAD']);
+    const destTaskDir = `${W.homes.cloud}/tasks/${taskId}`;
+    const dest = `${destTaskDir}/marina`;
+    // The target sets the clone up, then the stop closes the link before its answer comes back.
+    let cut = false;
+    hooked((host, cmd, run) => (host === 'cloud' && cmd === 'transfer.apply' && !cut ? (async () => {
+      await run();
+      cut = true;
+      markServerStopping(); noteServerStopReason('deploy');
+      throw markLinkFailure(new Error('DaemonConnection not connected to cloud: the link stopped answering'), 'lost');
+    })() : null));
+    await expect(requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' }))
+      .rejects.toMatchObject({ code: 'server_restarting' });
+    const paused = (await getTask(taskId)).engine_switch!;
+    expect(paused.state).toBe('switching');
+    expect(paused.interrupted?.applied).toBeUndefined();
+    expect(paused.interrupted?.in_doubt).toEqual([{ kind: 'repo', source: clone, dest }]);
+    expect(fs.existsSync(`${dest}/.git`)).toBe(true);
+
+    const done = await reboot(taskId);
+    expect(done.interrupted).toBeUndefined();
+    expect(W.starts).toHaveLength(1);
+    expect(W.starts[0]).toMatchObject({ cwd: dest });
+    expect(marinas(destTaskDir)).toEqual(['marina']);
+    expect(git(dest, ['rev-parse', 'HEAD'])).toBe(head);
+    expect(fs.readFileSync(`${dest}/b.txt`, 'utf8')).toBe('b edited by the task\n');
+    expect(fs.readFileSync(`${dest}/scratch.txt`, 'utf8')).toBe('untracked of the task\n');
+  }, 180_000);
+
+  it('work that changed between the cut and the rerun reaches the copy the cut run made; the old one is never kept', async () => {
+    const { taskId, clone } = await taskInSharedCheckout();
+    const destTaskDir = `${W.homes.cloud}/tasks/${taskId}`;
+    const dest = `${destTaskDir}/marina`;
+    let applies = 0;
+    hooked((host, cmd) => {
+      if (host === 'cloud' && cmd === 'transfer.apply') applies++;
+      // The stop comes right after the clone was set up: the next command finds it.
+      if (applies === 1 && cmd !== 'transfer.apply') { markServerStopping(); noteServerStopReason('deploy'); }
+      return null;
+    });
+    await expect(requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' }))
+      .rejects.toMatchObject({ code: 'server_restarting' });
+    expect((await getTask(taskId)).engine_switch?.interrupted?.applied?.map((p) => p.dest)).toEqual([dest]);
+    // Before the rerun, the task's own session (back on the old host) commits once more.
+    write(path.join(clone, 'later.txt'), 'made after the cut\n');
+    git(clone, ['add', 'later.txt']);
+    git(clone, ['commit', '-q', '-m', 'after the cut']);
+    const later = git(clone, ['rev-parse', 'HEAD']);
+
+    await reboot(taskId);
+    expect(W.starts).toHaveLength(1);
+    expect(W.starts[0]).toMatchObject({ cwd: dest });
+    expect(marinas(destTaskDir)).toEqual(['marina']);
+    expect(git(dest, ['rev-parse', 'HEAD'])).toBe(later);
+    expect(fs.readFileSync(`${dest}/later.txt`, 'utf8')).toBe('made after the cut\n');
+    expect(fs.readFileSync(`${dest}/b.txt`, 'utf8')).toBe('b edited by the task\n');
+  }, 180_000);
+
+  it('a start the stop cut off is stopped through its owner before the rerun, even when the task still holds it', async () => {
+    const { taskId, sid } = await taskInSharedCheckout();
+    const cutSid = `moved-sid-${W.nextSid + 1}`;
+    const nextSid = `moved-sid-${W.nextSid + 2}`;
+    W.stopAtStart = true;
+    await expect(requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' }))
+      .rejects.toMatchObject({ code: 'server_restarting' });
+    W.stopAtStart = false;
+    const paused = (await getTask(taskId)).engine_switch!;
+    expect(paused.state).toBe('switching');
+    expect(paused.interrupted?.unconfirmed_start?.since).toBeTruthy();
+    // Its detach did not land (the store was closing): the task still holds the cut start.
+    await updateSessionRecord(cutSid, { taskId, legacyTaskId: undefined } as never);
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(cutSid);
+
+    const done = await reboot(taskId);
+    // Never taken for the switch's new session: it had no record of taking over.
+    expect(done.session_id).toBe(nextSid);
+    expect(W.stops).toContain(cutSid);
+    expect(W.stops.indexOf(cutSid)).toBeLessThan(W.stopsAtStart[1].length);
+    expect(W.starts).toHaveLength(2);
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(nextSid);
+    expect((await getSessionByClaudeId(sid))?.supersededBy).toBe(nextSid);
+  }, 180_000);
+
+  it('is paused, not failed, says so plainly, and runs again by itself at the next boot without making its work twice', async () => {
+    const { taskId, sid, clone } = await taskInSharedCheckout();
+    const head = git(clone, ['rev-parse', 'HEAD']);
+    const destTaskDir = `${W.homes.cloud}/tasks/${taskId}`;
+    const dest = `${destTaskDir}/marina`;
+    // The deploy begins right after the target set the first piece (the clone) up: from then on
+    // every daemon link this server holds is closing (stopServer marks the stop before that).
+    let applies = 0;
+    __setTransferConnectionResolverForTesting(async (host) => {
+      if (!W.homes[host]) return [];
+      const d = daemonFor(host);
+      return [{
+        hasCapability: d.hasCapability,
+        send: async (cmd, p, t) => {
+          const r = await d.send(cmd, p, t);
+          if (cmd === 'transfer.apply' && r.ok !== false && ++applies === 1) { markServerStopping(); noteServerStopReason('deploy'); }
+          return r;
+        },
+      }];
+    });
+
+    const cut = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' }).then(() => null, (e: unknown) => e);
+    expect(cut).toMatchObject({ code: 'server_restarting', status: 503 });
+    const said = (cut as Error).message;
+    expect(said).toContain('The Walnut server restarted (a deploy) while the move to cloud ran. Nothing was lost');
+    expect(said).toContain('runs again by itself');
+    expect(said).not.toMatch(/not connected/);
+    // Nothing put back on a server going down; the claim's `switching` stays for the next boot.
+    const paused = (await getTask(taskId)).engine_switch!;
+    expect(paused).toMatchObject({ state: 'switching', move: true, error: said, interrupted: { by: 'a deploy' } });
+    expect(paused.interrupted?.cause).toMatch(/restarting \(a deploy\)/);
+    expect(paused.interrupted?.applied?.map((p) => p.dest)).toEqual([dest]);
+    expect(W.starts).toHaveLength(0);
+    expect((await getSessionByClaudeId(sid))?.archived).toBe(true);
+
+    // The next boot: the links are back, and the startup pass picks the switch up.
+    resetServerStopping();
+    __setTransferConnectionResolverForTesting(async (host) => (W.homes[host] ? [daemonFor(host)] : []));
+    const { resumeEngineSwitches } = await import('../../../src/core/sessions/engine-switch-watch.js');
+    expect(await resumeEngineSwitches()).toBe(1);
+    await vi.waitFor(async () => { expect((await getTask(taskId)).engine_switch?.state).toBe('done'); }, { timeout: 30_000, interval: 250 });
+
+    const done = (await getTask(taskId)).engine_switch!;
+    expect(done.error).toBeUndefined();
+    expect(done.interrupted).toBeUndefined();
+    // One new session, in the clone the cut run had set up: nothing made a second time beside it.
+    expect(W.starts).toHaveLength(1);
+    expect(W.starts[0]).toMatchObject({ taskIdPrefix: taskId, host: 'cloud', cwd: dest });
+    expect(fs.readdirSync(destTaskDir).filter((n) => n.startsWith('marina')).sort()).toEqual(['marina']);
+    expect(git(dest, ['rev-parse', 'HEAD'])).toBe(head);
+    expect(fs.readFileSync(`${dest}/b.txt`, 'utf8')).toBe('b edited by the task\n');
+    // The piece the deploy cut off came in the second run.
+    expect(fs.readFileSync(`${destTaskDir}/plan.md`, 'utf8')).toBe('# the task\'s plan\n');
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(done.session_id);
+    expect(done.session_id).not.toBe(sid);
+  }, 180_000);
+});
+
+describe('task_move through a dropped link', () => {
+  // 2026-11-12: the link to a dev host dropped every few minutes while a move uploaded (once for
+  // 9 minutes), and each drop failed the whole move with "Walnut is not connected to <host>".
+  afterEach(() => { __setLinkWaitPollForTesting(null); });
+
+  it('waits for the link to come back and goes on from the chunk it reached; the move completes', async () => {
+    const { taskId, sid, clone } = await taskInSharedCheckout();
+    const head = git(clone, ['rev-parse', 'HEAD']);
+    __setLinkWaitPollForTesting(100);
+    let writes = 0;
+    let downUntil = 0;
+    let dropped = 0;
+    let marker = '';
+    __setTransferConnectionResolverForTesting(async (host) => {
+      if (!W.homes[host]) return [];
+      if (host === 'cloud' && Date.now() < downUntil) return [];
+      const d = daemonFor(host);
+      return [{
+        hasCapability: d.hasCapability,
+        send: async (cmd, p, t) => {
+          // The second part onto the cloud host: the link goes away under it, for 1.5 s.
+          if (host === 'cloud' && cmd === 'fs.writePart' && ++writes === 2) {
+            dropped++;
+            // While the move runs, its marker holds a deploy (running-switches.ts).
+            marker = fs.readFileSync(path.join(WALNUT_HOME, 'local', 'running-switches', taskId), 'utf8');
+            downUntil = Date.now() + 1_500;
+            throw markLinkFailure(new Error('DaemonConnection not connected to cloud: the link stopped answering'), 'lost');
+          }
+          return d.send(cmd, p, t);
+        },
+      }];
+    });
+
+    const t0 = Date.now();
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+    expect(dropped).toBe(1);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_500);
+    expect(marker).toMatch(new RegExp(`^${process.pid} \\d+ ${taskId} [0-9a-f]{12} move to cloud\\n$`));
+    expect(fs.existsSync(path.join(WALNUT_HOME, 'local', 'running-switches', taskId))).toBe(false);
+    expect(res).toMatchObject({ state: 'done', fromSessionId: sid, host: 'cloud' });
+    const destTaskDir = `${W.homes.cloud}/tasks/${taskId}`;
+    const dest = `${destTaskDir}/marina`;
+    expect(W.starts).toHaveLength(1);
+    expect(W.starts[0]).toMatchObject({ cwd: dest });
+    expect(git(dest, ['rev-parse', 'HEAD'])).toBe(head);
+    expect(fs.readFileSync(`${dest}/b.txt`, 'utf8')).toBe('b edited by the task\n');
+    expect(fs.readFileSync(`${destTaskDir}/plan.md`, 'utf8')).toBe('# the task\'s plan\n');
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'done' });
+  }, 120_000);
 });

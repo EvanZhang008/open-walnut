@@ -31,6 +31,7 @@
 #   runner.lock/   the runner's pid     current       the deploy running now
 #   next-at        when it may go       last-restart  its last deploy that served
 #   logs/          one log per deploy   runner.log    the runner's own lines
+#   busy, moving   why next-at waits (a busy Mac, a move production runs)
 # Ratchet: tests/scripts/deploy-queue.test.ts. Needs SERVE_ROOT, JS_RUN and DQ_SCRIPT.
 
 DQ_GAP="${WALNUT_DEPLOY_MIN_GAP_SECS:-600}"
@@ -72,6 +73,39 @@ dq_busy_mem() {
     return 0
   fi
   awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END { if (t > 0 && a * 100 < t * 5) printf "%d MB of memory available\n", a / 1024 }' /proc/meminfo 2>/dev/null
+}
+
+# A task move running on production holds the deploy too (2026-11-12: a move to a remote host
+# uploads at about 20 KB/s, so a big one takes 10 to 15 minutes, deploys came every 10 to 20
+# minutes, and each one cut the move under way). While production runs an engine switch it keeps a
+# marker, one per task, "<server pid> <start epoch> <task id> <run token> <what>", in
+# <data home>/local/running-switches/ (src/core/sessions/running-switches.ts). A marker
+# whose pid is alive and that is younger than WALNUT_DEPLOY_MOVE_HOLD_SECS (1800) holds the deploy,
+# at most that long after the deploy would otherwise go; a dead pid or an older marker holds
+# nothing. A move cut anyway (a forced deploy, a crash) runs again by itself after the boot.
+DQ_MOVE_HOLD="${WALNUT_DEPLOY_MOVE_HOLD_SECS:-1800}"
+[[ "$DQ_MOVE_HOLD" =~ ^[0-9]+$ ]] || DQ_MOVE_HOLD=1800
+# "task <id> (<what>)" of a switch production runs now, else nothing. The data home is
+# production's (an OPEN_WALNUT_HOME a caller's shell leaked never stands in for it), a rehearsal's
+# own; WALNUT_DEPLOY_MOVES_DIR_TEST stands in for the folder in tests.
+dq_moving() {
+  local dir f pid at task token what now
+  if [[ -n "${WALNUT_DEPLOY_MOVES_DIR_TEST:-}" ]]; then dir="$WALNUT_DEPLOY_MOVES_DIR_TEST"
+  elif dq_rehearsal && [[ -n "${OPEN_WALNUT_HOME:-}" ]]; then dir="${OPEN_WALNUT_HOME%/}/local/running-switches"
+  else dir="$HOME/.open-walnut/local/running-switches"; fi
+  [[ -d "$dir" ]] || return 0
+  now="$(date +%s)"
+  for f in "$dir"/*; do
+    [[ -f "$f" ]] || continue
+    pid=; at=; task=; token=; what=
+    { read -r pid at task token what; } 2>/dev/null < "$f" || true
+    [[ "$pid" =~ ^[0-9]+$ && "$at" =~ ^[0-9]+$ ]] || continue
+    (( pid > 1 && now - at < DQ_MOVE_HOLD )) || continue
+    kill -0 "$pid" 2>/dev/null || continue
+    printf 'task %s (%s)' "${task:-unknown}" "${what:-a switch}"
+    return 0
+  done
+  return 0
 }
 
 # The deploy ceiling: the commit `git config walnut.deployCeiling` names in SERVE_ROOT; nothing
@@ -220,7 +254,7 @@ dq_runner() {
   dq_lock "$q" || return 0
   trap 'dq_unlock "'"$q"'"' EXIT
   dq_log "runner $$ started (gap ${DQ_GAP}s)"
-  local served served_sha built id sha pending last now at wait head target log code before refused ceiling carried
+  local served served_sha built id sha pending last now at wait head target log code before refused ceiling carried moving hold_since=""
   while :; do
     served="$(dq_served)"; served_sha="${served%% *}"; built="${served##* }"
     # Requests production already carries are answered.
@@ -266,6 +300,22 @@ dq_runner() {
       fi
     fi
     busy_said=; rm -f "$q/busy"
+    # A move production runs now: the deploy waits for it, at most DQ_MOVE_HOLD from now.
+    if [[ "${WALNUT_DEPLOY_NO_GAP:-0}" != "1" ]]; then
+      moving="$(dq_moving)"
+      if [[ -n "$moving" ]]; then
+        [[ -n "${hold_since:-}" ]] || { hold_since="$now"; dq_log "production runs a move ($moving): the deploy waits for it to end, until $(dq_clock "$(( now + DQ_MOVE_HOLD ))") at the latest"; }
+        if (( now < hold_since + DQ_MOVE_HOLD )); then
+          dq_put "$q/next-at" "$(( hold_since + DQ_MOVE_HOLD ))"; dq_put "$q/moving" "$moving"
+          sleep 5
+          continue
+        fi
+        dq_log "the move ($moving) still runs at the end of its ${DQ_MOVE_HOLD}s hold: the deploy goes, and the move runs again after the restart"
+      elif [[ -n "${hold_since:-}" ]]; then
+        dq_log "the move ended (or its marker is past the ${DQ_MOVE_HOLD}s hold): the deploy goes"
+      fi
+    fi
+    hold_since=; rm -f "$q/moving"
     rm -f "$q/next-at"
     # The newest commit of now. A waiting commit it does not carry goes alone, in
     # turn, unless that would take production back past the build it serves (a
@@ -379,9 +429,9 @@ dq_request() {
     echo "Deploy queued: ${sha:0:12} goes out with the next deploy (at most one restart per $(( DQ_GAP / 60 )) min); not waiting. State: $q"
     return 0
   fi
-  # The default wait covers a busy Mac's longer gap too (a commit that comes just after a deploy
-  # started waits for that build, the busy gap and its own build).
-  now="$(date +%s)"; deadline=$(( now + ${WALNUT_DEPLOY_WAIT_SECS:-$(( 2400 + DQ_BUSY_GAP ))} ))
+  # The default wait covers a busy Mac's longer gap and a move's hold too (a commit that comes just
+  # after a deploy started waits for that build, the busy gap, a move and its own build).
+  now="$(date +%s)"; deadline=$(( now + ${WALNUT_DEPLOY_WAIT_SECS:-$(( 2400 + DQ_BUSY_GAP + DQ_MOVE_HOLD ))} ))
   while :; do
     rc=0; dq_answer "$q" "$id" "$sha" || rc=$?
     (( rc == 2 )) || return "$rc"
@@ -404,6 +454,9 @@ dq_request() {
       else
         line="Deploying ${target:0:12}; your commit ${sha:0:12} goes with the next one."
       fi
+    elif [[ -f "$q/next-at" && -f "$q/moving" ]]; then
+      next="$(dq_num "$q/next-at")"
+      line="Deploy queued: production runs a move ($(cat "$q/moving" 2>/dev/null)); the next deploy goes once it ends, at $(dq_clock "$next") at the latest, with the newest commit then, which includes ${sha:0:12}."
     elif [[ -f "$q/next-at" && -f "$q/busy" ]]; then
       next="$(dq_num "$q/next-at")"
       line="Deploy queued: this Mac is busy ($(cat "$q/busy" 2>/dev/null)); the next deploy goes once it eases, at $(dq_clock "$next") at the latest, with the newest commit then, which includes ${sha:0:12}."
@@ -414,7 +467,7 @@ dq_request() {
     if [[ -n "$line" && "$line" != "$said" ]]; then echo "$line"; said="$line"; fi
     now="$(date +%s)"
     if (( now >= deadline )); then
-      echo "Still waiting after ${WALNUT_DEPLOY_WAIT_SECS:-$(( 2400 + DQ_BUSY_GAP ))}s; the queue goes on without this call (state $q). Run the deploy again to wait for it." >&2
+      echo "Still waiting after ${WALNUT_DEPLOY_WAIT_SECS:-$(( 2400 + DQ_BUSY_GAP + DQ_MOVE_HOLD ))}s; the queue goes on without this call (state $q). Run the deploy again to wait for it." >&2
       return 3
     fi
     sleep 3

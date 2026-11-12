@@ -3425,6 +3425,25 @@ export interface EngineSwitchState {
    *  message, so a restart before the message was queued still sends it. */
   resume_session_id?: string;
   resume_message?: string;
+  /** This server's stop (a deploy, a restart) cut the switch short: it stays `switching` and the
+   *  next boot runs it again (sessions/engine-switch-restart.ts); `error` says so in plain words. */
+  interrupted?: EngineSwitchInterrupted;
+}
+
+/** EngineSwitchState.interrupted: what a run this server's stop cut short had reached. */
+export interface EngineSwitchInterrupted {
+  at: string;
+  /** The stop in words ("a deploy", "an update"), or empty when its reason was not known. */
+  by: string;
+  cause: string;
+  /** Pieces of the task's work the cut run set up on the target; the next run keeps each one
+   *  only while this run's pack of it is the same, else sets the new pack up in it. */
+  applied?: import('./transfer/task-work.js').MovedPiece[];
+  /** Pieces whose set-up was under way when the stop came: done or not is unknown. */
+  in_doubt?: Array<{ kind: string; source: string; dest: string }>;
+  /** A new session whose start never confirmed: it is stopped through its owner before the next
+   *  run (its id when known; else every session of the task started since `since`). */
+  unconfirmed_start?: { session_id?: string; since: string };
 }
 
 /** SessionRecord.contextRecovery: where Walnut's recovery from a full context stands. */

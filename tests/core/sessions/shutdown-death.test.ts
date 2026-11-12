@@ -102,7 +102,9 @@ describe('where the check runs', () => {
     const stop = server.indexOf('export async function stopServer(')
     const mark = server.indexOf('markServerStopping()', stop)
     expect(mark).toBeGreaterThan(stop)
-    expect(mark - stop).toBeLessThan(500)
+    // Before the first await: nothing is torn down yet (a byte distance broke as comments grew).
+    expect(mark).toBeLessThan(server.indexOf('await ', stop))
+    expect(mark).toBeLessThan(server.indexOf('closeDaemonDials()', stop))
     expect(server.indexOf('resetServerStopping()')).toBeGreaterThan(server.indexOf('export async function startServer('))
   })
 })

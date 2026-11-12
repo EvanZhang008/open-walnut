@@ -208,7 +208,7 @@ const LINK_TROUBLE = /not connected|timed? ?out|closed|ECONNRESET|EPIPE|socket|d
 /** Every way a copy can fail, in one plain sentence, with the target left as it was. */
 export async function copyFailure(err: unknown, job: Pick<CopyJob, 'fromHost' | 'toHost' | 'from' | 'to' | 'sent' | 'total' | 'dialog'>): Promise<HostExecError> {
   if (err instanceof HostExecError) return err
-  const [{ DaemonNeedsUpgradeError }, { TransferCommandError, TransferHostOfflineError }] = await Promise.all([
+  const [{ DaemonNeedsUpgradeError }, { TransferCommandError, TransferHostOfflineError, TransferServerStoppingError }] = await Promise.all([
     import('../daemon-file-reader.js'), import('../transfer/daemon-transfer-client.js'),
   ])
   const untouched = `Nothing was written at ${where(job.toHost, job.to)}.`
@@ -217,6 +217,10 @@ export async function copyFailure(err: unknown, job: Pick<CopyJob, 'fromHost' | 
     if (err.why === 'deadline') return new HostExecError(`The copy stopped at its ${durationText(tuning.deadlineMs)} deadline${progress}. ${untouched} Copy a smaller file (split it), or ask the user.`, 504, 'copy_deadline')
     if (err.why === 'closed') return new HostExecError(`The user closed ${await hostName(err.host ?? '')} to tasks on other hosts (Settings › Remote Hosts); the copy stopped${progress}. ${untouched}`, 403, 'exec_host_closed')
     return new HostExecError(`The user revoked this task's grant for ${await hostName(err.host ?? '')}; the copy stopped${progress}. ${untouched}`, 403, 'exec_grant_revoked')
+  }
+  // This server's own stop closed the links, not a host going away (server-stopping.ts).
+  if (err instanceof TransferServerStoppingError) {
+    return new HostExecError(`${err.message} The copy stopped with it${progress}. ${untouched} Copy it again once Walnut is back.`, 503, 'server_restarting')
   }
   if (err instanceof TransferHostOfflineError) {
     return new HostExecError(`Walnut is not connected to ${await hostName(err.host)} right now. ${untouched} Try again when host_list shows it connected.`, 503, 'host_offline')

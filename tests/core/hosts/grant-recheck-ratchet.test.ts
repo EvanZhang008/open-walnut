@@ -82,10 +82,13 @@ describe('grant recheck ratchet', () => {
     expect(copy).toMatch(/relayFile\([^)]*\{[^}]*\bgate,/)
     expect(copy).toMatch(/sourceSize\([^)]*, gate\)/)
     expect(copy).toMatch(/probe\(job\.toHost, p, gate\)/)
-    const client = fs.readFileSync(path.join(SRC, 'core/transfer/daemon-transfer-client.ts'), 'utf8').split('\n')
-    const sends = client.flatMap((l, i) => (/(await|return) conn\.send\((command|'fs\.readRange')/.test(l) ? [i] : []))
+    const text = fs.readFileSync(path.join(SRC, 'core/transfer/daemon-transfer-client.ts'), 'utf8')
+    const client = text.split('\n')
+    // Every command leaves through sendOn (it reads this server's stop), which sends at once: nothing awaits between.
+    const sends = client.flatMap((l, i) => (/(await|return) sendOn\(conn, host, (command|'fs\.readRange')/.test(l) ? [i] : []))
     expect(sends).toHaveLength(3)
     for (const i of sends) expect(client[i - 1], `the line before "${client[i].trim()}"`).toMatch(/^\s*gate\?\.\(/)
+    expect(text).toMatch(/async function sendOn\([^)]*\)[^{]*\{\n\s*try \{\n\s*return await conn\.send\(command, params, timeoutMs\)/)
   })
 
   // 2026-11-04 review: a wait that began before a revoke went on reading the job's new lines.

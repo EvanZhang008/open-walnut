@@ -2049,8 +2049,13 @@ session instead.
 - `Task.engine_switch` (additive) on the task row: `{ id, state: "pending" |
   "switching" | "done" | "failed", at, from_session_id, from_engine?, to: {
   engine, model?, effort?, permission_mode?, host? }, display_text?, session_id?, resumed?,
-  carried_turns?, trimmed_turns?, transcript_path?, error?, by? }`, the latest
-  switch. Older clients ignore it.
+  carried_turns?, trimmed_turns?, transcript_path?, error?, by?, interrupted? }`, the latest
+  switch. Older clients ignore it. `interrupted` (additive, optional, 2026-11): the Walnut
+  server restarted (a deploy) while the switch or move ran; `state` stays `"switching"`, `error`
+  says so in plain words, and the switch runs again by itself after the restart. Its shape is
+  `{ at, by, cause, applied?, in_doubt?, unconfirmed_start? }` (`by`: `"a deploy"`, `"an update"`
+  or `""`); clients show `error` and need nothing else from it. A move cut short this way also
+  answers `503 server_restarting` with the same words.
 
 ### Commands on another host (additive, 2026-10): `/hosts/:host/exec`, `/host-exec/grants`
 

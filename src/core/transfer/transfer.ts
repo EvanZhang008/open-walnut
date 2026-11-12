@@ -23,6 +23,7 @@
 import os from 'node:os';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { log } from '../../logging/index.js';
+import { interruptedByShutdown } from '../server-stopping.js';
 import type { SessionRecord, Task } from '../types.js';
 import { engineCaps } from '../agents/engine-registry.js';
 import { bus, EventNames, eventData } from '../event-bus.js';
@@ -72,6 +73,8 @@ export async function freshProfile(host: string): Promise<HostProfile | null> {
     const { probeHostFacts } = await import('./daemon-transfer-client.js');
     return await recordProbedFacts(host, await probeHostFacts(host));
   } catch (err) {
+    // This server is stopping: the transfer ends with it (a restart ends a transfer job).
+    if (interruptedByShutdown(err)) throw err;
     log.session.info('transfer: target host probe unavailable', { host, error: err instanceof Error ? err.message : String(err) });
     return profile;
   }
@@ -107,9 +110,11 @@ export async function writeTargetFile(host: string, filePath: string, content: s
 /** A daemon refusal as the HTTP answer it is (an old daemon, an absent host). */
 async function hostFailure(err: unknown): Promise<unknown> {
   const { DaemonNeedsUpgradeError } = await import('../daemon-file-reader.js');
-  const { TransferHostOfflineError } = await import('./daemon-transfer-client.js');
+  const { TransferHostOfflineError, TransferServerStoppingError } = await import('./daemon-transfer-client.js');
   if (err instanceof DaemonNeedsUpgradeError) return new TransferError(err.message, 409, 'daemon_upgrade_required');
   if (err instanceof TransferHostOfflineError) return new TransferError(err.message, 502, 'host_offline');
+  // This server's own stop closed the link: the host is fine, and the transfer can be asked again once Walnut is back.
+  if (err instanceof TransferServerStoppingError) return new TransferError(`${err.message} The transfer stopped with it; ask for it again once Walnut is back.`, 503, 'server_restarting');
   return err;
 }
 
@@ -170,12 +175,14 @@ async function prepareNativeFork(session: SessionRecord, plan: TransferPlan, inP
 /** Relay the source transcript into the private stage; returns the staged file and the source's active leaf. */
 async function stageTranscript(plan: TransferPlan, fork: NativeFork & { stage: NonNullable<NativeFork['stage']> }): Promise<{ path: string; leafUuid: string }> {
   const { relayFile } = await import('./daemon-transfer-client.js');
+  const { withLinkWait, MOVE_LINK_WAIT_MS } = await import('./link-wait.js');
   const parts: Buffer[] = [];
   let relayed: Awaited<ReturnType<typeof relayFile>>;
   try {
-    relayed = await relayFile(plan.source.host, fork.from, plan.target.host, fork.stage.path, {
+    // A link that drops mid-relay is waited for, and the relay resumes from the stage's bytes (link-wait.ts).
+    relayed = await withLinkWait(MOVE_LINK_WAIT_MS, () => relayFile(plan.source.host, fork.from, plan.target.host, fork.stage.path, {
       privateAttempt: fork.stage.attempt, onBytes: (b) => { parts.push(Buffer.from(b)); },
-    });
+    }));
   } catch (err) { throw await hostFailure(err); }
   const bytes = Buffer.concat(parts);
   if (!relayed.path || createHash('sha256').update(bytes).digest('hex') !== relayed.sha256) {

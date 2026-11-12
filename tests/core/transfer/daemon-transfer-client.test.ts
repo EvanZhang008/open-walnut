@@ -13,9 +13,12 @@ import * as path from 'node:path'
 import { createTransferCore, type TransferCoreDeps, type TransferError } from '../../../src/providers/transfer-core.js'
 import { DaemonNeedsUpgradeError } from '../../../src/core/daemon-file-reader.js'
 import {
-  __setTransferConnectionResolverForTesting, fetchFromHost, relayFile, packWorkspace, probeHostFacts, writePart,
-  TransferCommandError, TransferHostOfflineError, type TransferConn,
+  __setTransferConnectionResolverForTesting, applyPack, fetchFromHost, relayFile, packWorkspace, probeHostFacts, scanWorkDir, writePart,
+  TransferCommandError, TransferHostOfflineError, TransferServerStoppingError, findTranscript, type TransferConn,
 } from '../../../src/core/transfer/daemon-transfer-client.js'
+import { markServerStopping, noteServerStopReason, resetServerStopping } from '../../../src/core/server-stopping.js'
+import { __setLinkWaitPollForTesting, withLinkWait } from '../../../src/core/transfer/link-wait.js'
+import { markLinkFailure } from '../../../src/providers/link-failure.js'
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-transfer-client-')))
 afterAll(() => { if (tmp.includes('walnut-transfer-client-')) fs.rmSync(tmp, { recursive: true, force: true }) })
@@ -301,6 +304,107 @@ describe('the other helpers', () => {
     expect(await writePart('b', { path: target, offset: 0, data: Buffer.from('abc') })).toEqual({ staged: 3 })
     expect(b.sent[0].params.data).toBe(Buffer.from('abc').toString('base64'))
     await expect(writePart('b', { path: target, offset: 9, data: 'eHl6' })).rejects.toMatchObject({ code: 'gap', data: { have: 3 } })
+  })
+})
+
+describe('a daemon call while this server stops', () => {
+  // 2026-11-12: a deploy's stop closed the links mid-move, and the move recorded
+  // "Walnut is not connected to this Mac right now." The stop is the server's, not the host's.
+  afterEach(() => resetServerStopping())
+
+  it('is a server stop, never the host offline: no link, a link lost mid-command, a relay mid-file', async () => {
+    markServerStopping()
+    noteServerStopReason('deploy')
+    useHosts({})
+    const none = await probeHostFacts('__local__').then(() => null, (e: unknown) => e)
+    expect(none).toBeInstanceOf(TransferServerStoppingError)
+    expect(none).not.toBeInstanceOf(TransferHostOfflineError)
+    expect((none as Error).message).toBe('The Walnut server is restarting (a deploy); that closed its link to this Mac, which is still fine.')
+    expect(await findTranscript('__local__', 's1')).toMatchObject({ kind: 'unreachable', error: expect.stringContaining('restarting (a deploy)') })
+    resetServerStopping()
+    // The same miss while the server runs is the host away, as before.
+    expect(await probeHostFacts('__local__').then(() => null, (e: unknown) => e)).toBeInstanceOf(TransferHostOfflineError)
+
+    // The stop begins after the link was found; the command's link closes under it.
+    const a = fakeHost({ reply: { os: 'x' }, hook: () => { markServerStopping(); return 'before' } })
+    useHosts({ a })
+    await expect(probeHostFacts('a')).rejects.toMatchObject({ name: 'TransferServerStoppingError', code: 'server_restarting', host: 'a', command: 'host.facts' })
+    resetServerStopping()
+
+    // A relay is not retried through a stop: no retry gets a link back.
+    const src = fakeHost({ file: body })
+    const dst = fakeHost({ hook: (cmd, _p, n) => { if (cmd === 'fs.writePart' && n === 2) { markServerStopping(); return 'before' } } })
+    useHosts({ src, dst })
+    await expect(relayFile('src', '/f', 'dst', path.join(tmp, 'stop', 'f'), { chunkBytes, retryDelayMs: 0 }))
+      .rejects.toBeInstanceOf(TransferServerStoppingError)
+    expect(dst.sent.filter((c) => c.cmd === 'fs.writePart')).toHaveLength(2)
+  })
+})
+
+describe('a link wait (a task move)', () => {
+  afterEach(() => { __setLinkWaitPollForTesting(null); resetServerStopping() })
+
+  it('waits for a host with no link and goes on once it is back; outside a wait it is offline at once', async () => {
+    __setLinkWaitPollForTesting(50)
+    const a = fakeHost({ reply: { os: 'x' } })
+    let backAt = Date.now() + 400
+    __setTransferConnectionResolverForTesting(async (h) => (h === 'a' && Date.now() >= backAt ? [a.conn] : []))
+    await expect(probeHostFacts('a')).rejects.toBeInstanceOf(TransferHostOfflineError)
+    const t0 = Date.now()
+    expect(await withLinkWait(5_000, () => probeHostFacts('a'))).toEqual({ os: 'x' })
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(300)
+    // A link that does not come back within the bound: offline, saying it waited.
+    backAt = Infinity
+    await expect(withLinkWait(200, () => probeHostFacts('a'))).rejects.toBeInstanceOf(TransferHostOfflineError)
+    await expect(withLinkWait(60_000, async () => {
+      setTimeout(() => markServerStopping(), 150)
+      return probeHostFacts('a')
+    })).rejects.toBeInstanceOf(TransferServerStoppingError)
+  })
+})
+
+describe('a command whose link went away under it, inside a link wait', () => {
+  afterEach(() => __setLinkWaitPollForTesting(null))
+  /** A host whose first `fails` sends of `cmd` reject as a link failure of `kind`, then answer. */
+  const flaky = (cmd: string, kind: 'no-link' | 'lost', fails = 1) => {
+    const sent: string[] = []
+    const conn: TransferConn = {
+      hasCapability: () => true,
+      async send(c, params) {
+        sent.push(c)
+        if (c === cmd && sent.filter((x) => x === c).length <= fails) throw markLinkFailure(new Error(`link ${kind}`), kind)
+        return { id: 1, ok: true, echo: params, dest: params.dest, kind: 'git', head: 'h1', steps: [] }
+      },
+    }
+    __setTransferConnectionResolverForTesting(async () => [conn])
+    return sent
+  }
+
+  it('a command that never reached the host goes again once a link is back', async () => {
+    __setLinkWaitPollForTesting(10)
+    const sent = flaky('host.facts', 'no-link')
+    expect(await withLinkWait(5_000, () => probeHostFacts('a'))).toMatchObject({ echo: {} })
+    expect(sent).toEqual(['host.facts', 'host.facts'])
+  })
+
+  it('a lost read that can run twice goes again; a lost apply never does', async () => {
+    __setLinkWaitPollForTesting(10)
+    const sent = flaky('transfer.scan', 'lost')
+    expect(await withLinkWait(5_000, () => scanWorkDir('a', '/w'))).toMatchObject({ echo: { dir: '/w' } })
+    expect(sent).toEqual(['transfer.scan', 'transfer.scan'])
+    // A pack goes again into a folder of its own: the first may still be writing its own.
+    const packs = flaky('transfer.pack', 'lost')
+    const pack = await withLinkWait(5_000, () => packWorkspace('a', { cwd: '/w', outDir: '/o/pack' }))
+    expect(packs).toEqual(['transfer.pack', 'transfer.pack'])
+    expect(pack).toMatchObject({ echo: { outDir: '/o/pack-again-1' } })
+    // An apply may have run there: it is never sent twice, inside a wait or not.
+    const applies = flaky('transfer.apply', 'lost')
+    await expect(withLinkWait(5_000, () => applyPack('a', { dest: '/d', bundleDir: '/b' }))).rejects.toThrow('link lost')
+    expect(applies).toEqual(['transfer.apply'])
+    // Outside a wait nothing is sent again.
+    const once = flaky('transfer.scan', 'lost')
+    await expect(scanWorkDir('a', '/w')).rejects.toThrow('link lost')
+    expect(once).toEqual(['transfer.scan'])
   })
 })
 

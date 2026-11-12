@@ -115,6 +115,8 @@ async function toHost(host: string, part: Part, owner: { taskId?: string; sessio
   } catch (err) {
     if (err instanceof DaemonNeedsUpgradeError) throw new NeedsUpgrade(err.message)
     if (err instanceof client.TransferHostOfflineError) throw new HostOffline(err.message)
+    // The server is restarting (a deploy): the phone retries the chunk once it is back, with this reason.
+    if (err instanceof client.TransferServerStoppingError) throw new HostOffline(err.message)
     if (err instanceof client.TransferCommandError) throw new HostRefusal(err.code, err.message, err.data)
     // A timeout or a link that went away mid-chunk: retry the chunk.
     throw new HostOffline(err instanceof Error ? err.message : String(err))

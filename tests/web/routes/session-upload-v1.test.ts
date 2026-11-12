@@ -38,7 +38,7 @@ import express from 'express'
 import request from 'supertest'
 import { sessionStreamV1Router } from '../../../src/web/routes/session-stream-v1.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { TransferCommandError, TransferHostOfflineError } from '../../../src/core/transfer/daemon-transfer-client.js'
+import { TransferCommandError, TransferHostOfflineError, TransferServerStoppingError } from '../../../src/core/transfer/daemon-transfer-client.js'
 import { DaemonNeedsUpgradeError } from '../../../src/core/daemon-file-reader.js'
 import { UPLOAD_CHUNK_BYTES } from '../../../src/core/sessions/session-uploads.js'
 
@@ -108,6 +108,8 @@ describe('PUT /api/v1/sessions/:id/uploads/:uploadId (primary)', () => {
       [new TransferCommandError('bad name', 'devbox', 'upload.part', 'bad_request'), 400, 'bad_request'],
       [new TransferCommandError('EIO', 'devbox', 'upload.part', 'failed'), 502, 'upload_failed'],
       [new TransferHostOfflineError('devbox'), 503, 'bridge_offline'],
+      // This server restarting (a deploy) is no host away, and the phone retries the chunk once it is back.
+      [new TransferServerStoppingError('devbox'), 503, 'bridge_offline', { message: expect.stringContaining('Walnut server is restarting') }],
       [new Error('daemon command timeout'), 503, 'bridge_offline'],
       [new DaemonNeedsUpgradeError('devbox', 'upload-part-v1'), 400, 'files_need_daemon_upgrade'],
     ]

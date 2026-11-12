@@ -5,7 +5,7 @@
  * and serves static files in production mode.
  */
 
-import { markServerStopping, resetServerStopping } from '../core/sessions/shutdown-death.js'
+import { markServerStopping, noteServerStopReason, resetServerStopping } from '../core/server-stopping.js'
 import { closeHttpServer } from './http-close.js'
 import { beginShutdownSteps, shutdownStep } from './shutdown-steps.js'
 // The bail's line names the step it caught (commands/web.ts).
@@ -7050,6 +7050,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   localDaemonLane = null
   // A session that dies from here on died with this computer's shutdown (sessions/shutdown-death.ts).
   markServerStopping()
+  // Why, for the work this stop cuts short: 'self-update', else a planned restart's marker
+  // ('deploy'), read without taking it (the feature-node stop below takes it). A signal says nothing.
+  noteServerStopReason(opts.reason)
+  void import('../core/planned-restart.js').then((m) => m.peekPlannedRestart(WALNUT_HOME)).then((p) => noteServerStopReason(p?.reason)).catch(() => {})
   // No daemon link is dialled from here on: the next server dials its own (daemon-dial-gate.ts).
   closeDaemonDials()
   // A boot stopped before it listened leaves its port held.

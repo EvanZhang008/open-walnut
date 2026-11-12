@@ -33,6 +33,10 @@
  * on the old host and set up under the task directory on the new one, and the new
  * session starts there with the carried context. A failed copy or start restores the
  * old session as above; the old host's copies are never touched.
+ *
+ * A failure this server's own stop caused (a deploy) is no failure: fail() pauses the switch
+ * instead and restore() puts nothing back, so it runs again after the next boot
+ * (engine-switch-restart.ts). Every catch below throws what fail() answers.
  */
 import { turnHold, type TurnHold } from './turn-end-wait.js';
 import { randomUUID } from 'node:crypto';
@@ -45,6 +49,9 @@ import { contextFingerprint, planResume, resumeEarlier } from './engine-switch-r
 import { recordedSessionMode } from './acp-recorded-mode.js';
 import { hostGone } from './host-lost.js';
 import { hostPath, putQueuedRows, releaseMoveHeld, releaseMoveHeldRows, stashSwitchContext, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
+import { newSwitchProgress, pauseForRestart, type SwitchProgress } from './engine-switch-restart.js';
+import { interruptedByShutdown } from '../server-stopping.js';
+import { clearSwitchRunning, markSwitchRunning } from './running-switches.js';
 import {
   CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, estimateTokens, readActiveContext, readCachedContext, renderCarriedContext, targetWindowTokens,
 } from './engine-switch-context.js';
@@ -385,11 +392,13 @@ type SwitchRunOpts = { overBackground?: boolean; now?: boolean };
 export function runEngineSwitch(taskId: string, state: EngineSwitchState, opts: SwitchRunOpts = {}): Promise<EngineSwitchResult> {
   const running = inFlight.get(taskId);
   if (running) return running.work;
+  // A deploy waits while this runs (running-switches.ts, scripts/lib/deploy-queue.sh).
+  const marker = markSwitchRunning(taskId, state.move ? `move to ${normalizeHost(state.to.host)}` : `switch to ${resolveEngine(state.to.engine)}`);
   const work = execute(taskId, state, opts).then(async (r) => {
     inFlight.delete(taskId);
     if (state.move && r.state === 'done' && r.fromSessionId && r.sessionId) await carryLateRows(taskId, r.fromSessionId, r.sessionId);
     return r;
-  }, (err: unknown) => { inFlight.delete(taskId); throw err; });
+  }, (err: unknown) => { inFlight.delete(taskId); throw err; }).finally(() => clearSwitchRunning(taskId, marker));
   inFlight.set(taskId, { from: state.from_session_id, work, maxMs: state.move ? MOVE_WAIT_MS : SWITCH_WAIT_MS, move: !!state.move });
   return work;
 }
@@ -480,9 +489,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
   const task = await tm.getTask(taskId);
   const old = await tracker.getSessionByClaudeId(state.from_session_id);
   if (!old || isSupersededSession(old)) {
-    const err = new EngineSwitchError('The session this switch started from is gone or already replaced', 409, 'switch_stale');
-    await fail(taskId, state, err);
-    throw err;
+    throw await fail(taskId, state, new EngineSwitchError('The session this switch started from is gone or already replaced', 409, 'switch_stale'));
   }
   const engine = resolveEngine(state.to.engine);
   // A lost host that answers again by now (the probe's own connect, a restart picking the move
@@ -537,9 +544,8 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
     }
     rows = await tracker.getSessionsForTask(taskId);
   } catch (err) {
-    if (retiredEarly) await restore(taskId, old, undefined, new Date().toISOString(), []);
-    await fail(taskId, state, err);
-    throw err;
+    if (retiredEarly) await restore(taskId, old, undefined, new Date().toISOString(), [], err);
+    throw await fail(taskId, state, err);
   }
 
   // Retire the old session: from here its stop is history, not the task's. Its CLI is stopped
@@ -559,39 +565,37 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
       const { endReplacedSession } = await import('./replaced-session.js');
       await endReplacedSession(old, { taskId, ...(state.by ? { by: state.by } : {}) });
     } catch (err) {
-      const refused = err instanceof EngineSwitchError ? err
-        : new EngineSwitchError(err instanceof Error ? err.message : String(err), 409, 'old_session_live');
-      await restore(taskId, old, undefined, new Date().toISOString(), taken);
-      await fail(taskId, state, refused);
-      throw refused;
+      await restore(taskId, old, undefined, new Date().toISOString(), taken, err);
+      throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err
+        : new EngineSwitchError(err instanceof Error ? err.message : String(err), 409, 'old_session_live'));
     }
     return taken;
   };
   let prepared: Awaited<ReturnType<typeof prepare>>;
   let held: HeldRow[];
+  // What this run reached (pieces of the work set up, or under way, a start): a run a server stop cuts short leaves it to the next.
+  const progress = newSwitchProgress();
   if (!state.move) {
     // Read and render before anything changes: a failure here leaves the task as it was.
     try {
       prepared = await prepare(task, old, rows, state, engine, host, retiredEarly);
     } catch (err) {
       // Retired early to stop its turn: it is the task's session again, unlocked and asked as before.
-      if (retiredEarly) await restore(taskId, old, undefined, new Date().toISOString(), []);
-      await fail(taskId, state, err);
-      throw err;
+      if (retiredEarly) await restore(taskId, old, undefined, new Date().toISOString(), [], err);
+      throw await fail(taskId, state, err);
     }
     held = await retire(prepared.left);
   } else {
     // A move stops the old session before its work is copied, so nothing changes under the copy.
     held = await retire();
     try {
-      prepared = await prepare(task, old, rows, state, engine, host);
+      prepared = await prepare(task, old, rows, state, engine, host, false, progress);
     } catch (err) {
-      await restore(taskId, old, undefined, new Date().toISOString(), held);
-      await fail(taskId, state, err);
-      throw err instanceof EngineSwitchError ? err : new EngineSwitchError(
+      await restore(taskId, old, undefined, new Date().toISOString(), held, err);
+      throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err : new EngineSwitchError(
         `The move to ${host === LOCAL_HOST ? 'this Mac' : host} did not happen: ${err instanceof Error ? err.message : String(err)}. The task stays where it was.`,
         typeof (err as { status?: unknown }).status === 'number' ? (err as { status: number }).status : 502,
-        typeof (err as { code?: unknown }).code === 'string' ? (err as { code: string }).code : 'move_failed');
+        typeof (err as { code?: unknown }).code === 'string' ? (err as { code: string }).code : 'move_failed'), progress);
     }
   }
 
@@ -630,12 +634,13 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
         await terminateSession(sessionId, { force: true });
       } catch { /* not running */ }
     }
-    await restore(taskId, old, sessionId, startedAt, held);
-    await fail(taskId, state, err);
-    throw err instanceof EngineSwitchError ? err : new EngineSwitchError(state.move
+    // A stop cut it: that stop may not have reached it (its link is down); the next boot stops it through its owner.
+    progress.start = { ...(sessionId ? { session_id: sessionId } : {}), since: startedAt };
+    await restore(taskId, old, sessionId, startedAt, held, err);
+    throw await fail(taskId, state, err, err instanceof EngineSwitchError ? err : new EngineSwitchError(state.move
       ? `The new session on ${host === LOCAL_HOST ? 'this Mac' : host} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${normalizeHost(old.host) === LOCAL_HOST ? 'this Mac' : old.host}; the copied work is kept at ${prepared.cwd ?? 'its task directory'}.`
       : `The switch to ${engineCaps(engine).displayName} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${engineCaps(old.engine).displayName}.`,
-      502, 'start_failed');
+      502, 'start_failed'), progress);
   }
 
   const at = new Date().toISOString();
@@ -673,7 +678,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
     engine_fallback: null,
     engine_switch: {
       ...state, state: 'done', message: undefined, display_text: undefined, held_rows: undefined, session_id: sessionId,
-      carried_turns: prepared.carried.carriedTurns, trimmed_turns: prepared.carried.trimmedTurns,
+      error: undefined, interrupted: undefined, carried_turns: prepared.carried.carriedTurns, trimmed_turns: prepared.carried.trimmedTurns,
       ...(prepared.transcriptPath ? { transcript_path: prepared.transcriptPath } : {}),
       ...(prepared.moved ? { moved: prepared.moved } : {}),
     },
@@ -692,7 +697,7 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
 }
 
 /** Everything the new session needs, computed while nothing has changed yet. */
-async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], state: EngineSwitchState, engine: SessionEngine, host: string, turnCut = false) {
+async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], state: EngineSwitchState, engine: SessionEngine, host: string, turnCut = false, progress: SwitchProgress = newSwitchProgress()) {
   const oldHost = normalizeHost(old.host);
   // A session that kept no folder: the task's recorded one, only when it lives on the session's host (launch-place.ts).
   let cwd = old.cwd ?? undefined;
@@ -727,6 +732,12 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
     const leftOnTarget = old.engineSwitch?.fromHost !== undefined && normalizeHost(old.engineSwitch.fromHost) === host ? old.engineSwitch.leftCopies : undefined;
     const work = await moveTaskWork({
       task, session: old, sourceHost: oldHost, targetHost: host, moveId: `xf-${state.id.replace(/^es-/, '')}`, ...(leftOnTarget ? { leftOnTarget } : {}),
+      // What a run a server stop cut short set up, or was setting up: kept, or set up again in place, never made beside it.
+      ...(state.interrupted?.applied?.length ? { done: state.interrupted.applied } : {}),
+      ...(state.interrupted?.in_doubt?.length ? { inDoubt: state.interrupted.in_doubt } : {}),
+      onApplying: (piece) => { progress.applying.set(piece.dest, piece); },
+      onRefused: (dest) => { progress.applying.delete(dest); },
+      onApplied: (piece) => { progress.applying.delete(piece.dest); progress.applied.push(piece); },
     });
     cwd = work.cwd;
     moved = work.summary;
@@ -874,16 +885,26 @@ async function stopTurnForSwitch(sessionId: string): Promise<void> {
   throw new EngineSwitchError('The running turn could not be stopped, so the task stays on this session. Stop it, then pick the engine again', 409, 'turn_not_stopped');
 }
 
-/** A switch that did not start: the old session is the task's session again, with its rows. */
-async function restore(taskId: string, old: SessionRecord, newSid: string | undefined, since: string, held: HeldRow[]): Promise<void> {
+/** A row the failed start made for the task would block the old one from being its session again. */
+async function detachFailedStart(taskId: string, old: SessionRecord, newSid: string | undefined, since: string): Promise<void> {
   const tracker = await import('../session-tracker.js');
   const { detachTaskSession } = await import('./task-session-claim.js');
-  // A row the failed start made for the task would block the old one from being its session again.
-  for (const r of await tracker.getSessionsForTask(taskId)) {
+  for (const r of await tracker.getSessionsForTask(taskId).catch(() => [] as SessionRecord[])) {
     if (r.claudeSessionId !== old.claudeSessionId && !isSupersededSession(r) && (r.claudeSessionId === newSid || (r.startedAt ?? '') >= since)) {
       await detachTaskSession(taskId, r.claudeSessionId, 'engine switch did not start').catch(() => {});
     }
   }
+}
+
+/**
+ * A switch that did not start: the old session is the task's session again, with its rows. While
+ * this server stops (`err` came from that stop), only a start that did not confirm is let go of:
+ * the switch is paused (fail), and the next boot puts the old session back.
+ */
+async function restore(taskId: string, old: SessionRecord, newSid: string | undefined, since: string, held: HeldRow[], err: unknown): Promise<void> {
+  await detachFailedStart(taskId, old, newSid, since);
+  if (interruptedByShutdown(err)) return;
+  const tracker = await import('../session-tracker.js');
   await tracker.updateSessionRecord(old.claudeSessionId, { archived: false, archive_reason: undefined }).catch((err: unknown) => log.session.warn('engine switch: restoring the old session failed', {
     taskId, sessionId: old.claudeSessionId, error: err instanceof Error ? err.message : String(err),
   }));
@@ -909,14 +930,23 @@ function mayRun(cur: EngineSwitchState | undefined, state: EngineSwitchState): b
   return cur.state !== 'pending' && cur.state !== 'switching';
 }
 
-/** Record a failure of THIS switch (never over a newer one). Its message stays, so the user can still send it. */
-async function fail(taskId: string, state: EngineSwitchState, err: unknown): Promise<void> {
+/**
+ * Record a failure of THIS switch (never over a newer one), and answer the error to throw: `as`,
+ * else `err`. Its message stays, so the user can still send it. A failure this server's own stop
+ * caused is a pause instead (engine-switch-restart.ts): the switch stays `switching` for the
+ * next boot, with what the run reached (`progress`), and the answer says so.
+ */
+async function fail(taskId: string, state: EngineSwitchState, err: unknown, as?: unknown, progress?: SwitchProgress): Promise<unknown> {
+  const paused = await pauseForRestart(taskId, state, err, progress);
+  if (paused) return new EngineSwitchError(paused, 503, 'server_restarting');
   const message = err instanceof Error ? err.message : String(err);
   log.session.warn('engine switch failed; the task stays on its session', { taskId, switchId: state.id, error: message });
   const tm = await import('../task-manager.js');
   await tm.updateTaskRaw(taskId, (cur) => {
     const sw = cur.engine_switch;
     if (sw && sw.id !== state.id && (sw.state === 'pending' || sw.state === 'switching')) return null;
-    return { engine_switch: { ...state, state: 'failed', error: message, held_rows: undefined } };
+    // A cut run's note is over: this run ended on its own.
+    return { engine_switch: { ...state, state: 'failed', error: message, held_rows: undefined, interrupted: undefined } };
   }, { source: 'engine-switch', emitEvent: true }).catch(() => {});
+  return as ?? err;
 }

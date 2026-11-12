@@ -47,6 +47,11 @@ export function parsePlannedRestart(raw: string, now = Date.now()): PlannedResta
   } catch { return null }
 }
 
+/** Read the marker without taking it (the stopping server's work it cuts short says why). Never throws. */
+export async function peekPlannedRestart(home: string, now = Date.now()): Promise<PlannedRestart | null> {
+  try { return parsePlannedRestart((await fsp.readFile(plannedRestartFile(home), 'utf8')).slice(0, 1024), now) } catch { return null }
+}
+
 /** Read and remove the marker. Never throws; null when there is none (or none that counts). */
 export async function takePlannedRestart(home: string, now = Date.now()): Promise<PlannedRestart | null> {
   const file = plannedRestartFile(home)

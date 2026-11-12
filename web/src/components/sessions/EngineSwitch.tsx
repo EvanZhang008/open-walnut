@@ -227,9 +227,12 @@ export function EngineSwitchLine({ pick, server, refused, sending, catalog, task
     return (
       <div className="engine-switch-line" role="status" data-testid="engine-switch-line" data-state="switching">
         <span className="engine-switch-spinner" aria-hidden="true" />
-        <span className="engine-switch-text">{moveTo
-          ? <>Moving this task&apos;s work and conversation to <strong>{moveTo}</strong>…</>
-          : <>Starting {toName} with this task&apos;s conversation…</>}</span>
+        <span className="engine-switch-text">{server?.state === 'switching' && server.interrupted && server.error
+          // A restart cut it short: it runs again by itself once Walnut is back (engine-switch-restart.ts).
+          ? <>{server.error}</>
+          : moveTo
+            ? <>Moving this task&apos;s work and conversation to <strong>{moveTo}</strong>…</>
+            : <>Starting {toName} with this task&apos;s conversation…</>}</span>
       </div>
     );
   }

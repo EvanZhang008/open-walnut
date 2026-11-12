@@ -10,6 +10,7 @@ import type { ReadTransport } from '../../core/feature-nodes/connections.js'
 import type { Clock } from '../../core/feature-nodes/protocol.js'
 import { ConnectionJournal } from '../../core/feature-nodes/connection-journal.js'
 import { takePlannedRestart } from '../../core/planned-restart.js'
+import { noteServerStopReason } from '../../core/server-stopping.js'
 import { buildIdOf } from '../../core/companion-build/wire.js'
 import { getBuildInfo } from '../../lib/build-info.js'
 import { createSubsystemLogger } from '../../logging/index.js'
@@ -183,6 +184,8 @@ export function stopFeatureNodes(stopReason?: string): Promise<void> {
     const planned = await bounded(takePlannedRestart(WALNUT_HOME), 300, null)
     const open = [...activeSockets.values()]
     const reason = planned?.reason ?? stopReason ?? 'unknown'
+    // Why this server stops, for the work it cuts short (a move paused by a deploy says so).
+    noteServerStopReason(planned?.reason ?? stopReason)
     // stopServer's reason: a signal name, or 'self-update' / 'parent_gone'; only a signal fills `signal`.
     const signal = stopReason && /^SIG[A-Z0-9]+$/.test(stopReason) ? stopReason : undefined
     closeFeatureNodes({ reason, build: buildId(), ...(signal ? { signal } : {}), ...(planned?.build ? { nextBuild: planned.build } : {}) })

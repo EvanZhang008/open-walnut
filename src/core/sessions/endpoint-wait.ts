@@ -410,13 +410,16 @@ function defaultDeps(gaveUp: EndpointWaitDeps['gaveUp']): EndpointWaitDeps {
     },
     probe: async (host, cwd) => {
       if (testProbe) return testProbe(host, cwd)
-      const { probeModelEndpoint, TransferHostOfflineError } = await import('../transfer/daemon-transfer-client.js')
+      const { probeModelEndpoint, TransferHostOfflineError, TransferServerStoppingError } = await import('../transfer/daemon-transfer-client.js')
       const { DaemonNeedsUpgradeError } = await import('../daemon-file-reader.js')
       try {
         const r = await probeModelEndpoint(host, { cwd })
         return { kind: 'probed', url: r.url, probed: r.probed, reachable: r.reachable, ...(r.error ? { error: r.error } : {}) }
       } catch (err) {
         if (err instanceof DaemonNeedsUpgradeError) return { kind: 'unsupported' }
+        // This server is stopping, which says nothing of the host: the check fails as a check (no
+        // probeError written, never "offline") and the next boot looks again.
+        if (err instanceof TransferServerStoppingError) throw err
         if (err instanceof TransferHostOfflineError) return { kind: 'offline' }
         throw err
       }
