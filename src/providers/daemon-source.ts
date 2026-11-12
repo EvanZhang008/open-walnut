@@ -231,7 +231,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -14142,6 +14142,8 @@ function daemonCapabilities() {
   if (vscodeServerCore) caps.push('vscode-v1');
   if (transcriptRewindCore) caps.push('rewind-probe-v1');
   if (historyReadyCore && typeof historyReadyCore.createHistoryReady === 'function') caps.push('history-ready-v1');
+  // A subagent's view ('history-ready-subagent-v1'), only from a sidecar that knows agentId.
+  if (historyReadyCore && historyReadyCore.READY_SUBAGENT_V1 === true) caps.push('history-ready-subagent-v1');
   if (triggerCheckCore) caps.push('triggers-v1');
   // Host delivery needs the envelope builder the newer sidecar carries.
   if (triggerCheckCore && typeof triggerCheckCore.claimFires === 'function' && typeof triggerCheckCore.buildTriggerMessage === 'function') caps.push('trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1');

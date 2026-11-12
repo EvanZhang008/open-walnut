@@ -92,6 +92,18 @@ const MEMO_MAX = 24;
 const LOCATED_MAX = 512;
 
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+/** A subagent's id as Claude Code names its transcript (`agent-<id>.jsonl`). */
+// The server's rule for an agent id (session-extras.ts SUBAGENT_ID_RE), bounded. No `/` can reach
+// the path, and the file is always `agent-<id>.jsonl`, so `.` and `..` stay inside the folder.
+const AGENT_ID_RE = /^[A-Za-z0-9_@.-]{1,128}$/;
+
+/**
+ * This build answers `agentId` requests ('history-ready-subagent-v1'): one subagent's view, read
+ * from `<session dir>/subagents/agent-<id>.jsonl` next to the session's transcript, with the same
+ * bounded parse, fit and gzip as a session's. The source twin advertises the capability only when
+ * its sidecar exports this, so an older sidecar never answers a subagent ask with the session's rows.
+ */
+export const READY_SUBAGENT_V1 = true;
 const ARCHIVE_SUFFIX = '.gz';
 const MANIFEST_SUFFIX = '.walnut-archive.json';
 
@@ -112,6 +124,8 @@ export interface ReadyViewRequest {
   legacyHintCutoffMs?: number;
   /** A person waits on this one: it goes before background builds. */
   interactive?: boolean;
+  /** One subagent of the session instead of the session itself (READY_SUBAGENT_V1). */
+  agentId?: string;
 }
 
 export interface ReadySource {
@@ -146,6 +160,8 @@ export interface ReadyAnswer {
   finishedAgentIds?: string[];
   source: ReadySource;
   parseMs: number;
+  /** The subagent this view is of, echoed so the server never takes a session's view for it. */
+  agentId?: string;
 }
 
 export type PendingAnswer = { status: 'pending'; reason: 'building' | 'locating' | 'not-readable' | 'too-large'; key?: string };
@@ -168,6 +184,8 @@ export interface ReadyJob {
   rows: number;
   legacyHintCutoffMs?: number;
   stageBytes: number[];
+  /** A subagent's view: any rows read (an agent's tail can be all tool steps), echoed back. */
+  agentId?: string;
 }
 
 /** Runs a build somewhere (a worker thread in a daemon, this thread in tests). */
@@ -421,7 +439,8 @@ export async function buildReadyView(job: ReadyJob, onProgress?: (answer: ReadyA
     const sliced = parsed.length > limit ? parsed.slice(parsed.length - limit) : parsed;
     const fitted = fitRows(sliced, READY_MAX_ROWS, READY_MAX_JSON_BYTES);
     if (sliced.length > 0 && fitted.rows.length === 0) tooLarge = true;
-    const readable = isReadableView(fitted.rows);
+    // A subagent's newest rows are what its reader shows, tool steps included.
+    const readable = job.agentId ? fitted.rows.length > 0 : isReadableView(fitted.rows);
     const lastStage = s === stages.length - 1 || capped.cut || reachedStart || want >= PARSE_MAX_BYTES;
     const complete = userTurns >= job.turns || reachedStart;
     if (readable) {
@@ -442,6 +461,7 @@ export async function buildReadyView(job: ReadyJob, onProgress?: (answer: ReadyA
           ...(orphans && orphans.size > 0 ? { finishedAgentIds: [...orphans].sort() } : {}),
           source: { size: job.size, mtimeMs: job.mtimeMs, ...(job.archived ? { archived: true as const } : {}) },
           parseMs,
+          ...(job.agentId ? { agentId: job.agentId } : {}),
         },
         json: fitted.json,
         rows: fitted.rows.length,
@@ -741,8 +761,15 @@ export function createHistoryReady(deps: HistoryReadyDeps): HistoryReady {
       cutsKey: rewindCutsKey(req.cuts), ...(req.cuts && req.cuts.length > 0 ? { cuts: req.cuts } : {}), turns, rows,
       ...(req.legacyHintCutoffMs !== undefined ? { legacyHintCutoffMs: req.legacyHintCutoffMs } : {}),
       stageBytes: stages,
+      ...(req.agentId ? { agentId: req.agentId } : {}),
     }, (answer) => { build.best = answer; });
   }
+
+  const subagentFile = async (transcript: string, sessionId: string, agentId: string): Promise<Located | null> => {
+    const p = path.join(path.dirname(transcript), sessionId, 'subagents', `agent-${agentId}.jsonl`);
+    const st = await statFile(p);
+    return st ? { path: p, archived: false, size: st.size, mtimeMs: st.mtimeMs } : null;
+  };
 
   const sidOk = (sid: unknown): sid is string => typeof sid === 'string' && SID_RE.test(sid) && !sid.includes('..');
   const turnsOf = (v: number | undefined): number => (Number.isInteger(v) && v! > 0 && v! <= 100 ? v! : READY_TURNS);
@@ -753,15 +780,30 @@ export function createHistoryReady(deps: HistoryReadyDeps): HistoryReady {
     const budget = Math.max(0, Math.min(req.budgetMs ?? READY_DEFAULT_BUDGET_MS, 30_000));
     const deadline = now() + budget;
     if (!sidOk(req.sessionId)) return { status: 'none', reason: 'invalid' };
+    if (req.agentId !== undefined && !AGENT_ID_RE.test(req.agentId)) return { status: 'none', reason: 'invalid' };
+    // A subagent has no in-place rewinds of its own: its view is never cut by the session's.
+    if (req.agentId) req = { ...req, cuts: undefined };
     const turns = turnsOf(req.turns);
     const rows = rowsOf(req.rows);
     const where = await byDeadline(locate(req.sessionId, req.cwd, req.claudeHome), deadline, now, 'late' as const);
     if (where === 'late' || (where && 'timedOut' in where)) return { status: 'pending', reason: 'locating' };
     if (!where) return { status: 'none', reason: 'not-found' };
+    // A subagent's transcript sits in the session's own folder beside its transcript (archived
+    // or not, the folder stays): `<project dir>/<session id>/subagents/agent-<id>.jsonl`.
+    if (req.agentId) {
+      const agentFile = 'path' in where ? await subagentFile(where.path, req.sessionId, req.agentId) : null;
+      if (!agentFile) return { status: 'none', reason: 'not-found' };
+      return await serveFound(req, agentFile, turns, rows, deadline);
+    }
     if ('offloaded' in where) return { status: 'none', reason: 'offloaded' };
     const found = await observe(where);
     // Gone between the search and now (archived, moved): the next ask searches again.
     if (!found) { located.delete(req.sessionId); return { status: 'pending', reason: 'locating' }; }
+    return await serveFound(req, found, turns, rows, deadline);
+  }
+
+  /** The view of one located file, as it is now: the memo, a shared build, or a new one. */
+  async function serveFound(req: ReadyViewRequest, found: Located, turns: number, rows: number, deadline: number): Promise<ReadyViewAnswer> {
     const key = readyViewKey(found, req.cuts, { turns, rows, legacyHintCutoffMs: req.legacyHintCutoffMs });
     if (req.have && req.have === key) return { status: 'unchanged', key };
     const hit = memo.get(key);
@@ -847,6 +889,7 @@ export function readyRequestFromWire(cmd: Record<string, unknown>, claudeHome: s
     ...(num(cmd.budgetMs) !== undefined ? { budgetMs: num(cmd.budgetMs) } : {}),
     ...(num(cmd.legacyHintCutoffMs) !== undefined ? { legacyHintCutoffMs: num(cmd.legacyHintCutoffMs) } : {}),
     ...(cmd.interactive === true ? { interactive: true } : {}),
+    ...(typeof cmd.agentId === 'string' ? { agentId: cmd.agentId } : {}),
   };
 }
 

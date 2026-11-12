@@ -4628,6 +4628,8 @@ select {
   color: var(--fg-muted);
   font-size: 13px;
 }
+/* A big agent's reader shows its newest part (subagent-ready-view.ts): one quiet line says so. */
+.wf-modal-windowed { padding: 6px 12px; font-size: 12px; color: var(--fg-muted); }
 
 /* ── Background tasks: the chat's chip + the two-column reader ─────────────────
    The chat shows ONE row per spawn burst (`● Agent  type  model  title  Running

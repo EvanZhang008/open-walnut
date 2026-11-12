@@ -145,10 +145,14 @@ describe.skipIf(TWINS.length === 0)('history.readyView from real daemons (all th
       const cut = cutHere(t, 'u2')
       t.from('u2').user('u2b', 'a different feature').assistant('a2b', 'NEW reply')
       fs.writeFileSync(path.join(projectDir, 'ready-rewound.jsonl'), t.text())
+      // A subagent of ready-plain, in the session's own folder (history-ready-subagent-v1).
+      fs.mkdirSync(path.join(projectDir, 'ready-plain', 'subagents'), { recursive: true })
+      fs.writeFileSync(path.join(projectDir, 'ready-plain', 'subagents', 'agent-a1b2.jsonl'),
+        transcript().user('s1', 'review the diff').assistant('s2', 'Reviewed: two findings.', { effort: 'xhigh' }).text())
 
       await boot(twin, home, daemonDir)
       const hello = await rpc({ cmd: 'hello' }).catch(() => ({} as Record<string, unknown>))
-      if (Array.isArray(hello.capabilities)) expect(hello.capabilities).toContain('history-ready-v1')
+      if (Array.isArray(hello.capabilities)) expect(hello.capabilities).toEqual(expect.arrayContaining(['history-ready-v1', 'history-ready-subagent-v1']))
 
       const plain = await rpc({ cmd: 'history.readyView', sid: 'ready-plain', cwd, budgetMs: 20_000 })
       expect(plain, JSON.stringify(plain)).toMatchObject({ ok: true, status: 'ready', parser: HISTORY_PARSER_VERSION, readable: true })
@@ -162,6 +166,11 @@ describe.skipIf(TWINS.length === 0)('history.readyView from real daemons (all th
       const texts = rowsOf(rewound)
       expect(texts.some((x) => x.includes('ABANDONED'))).toBe(false)
       expect(texts).toContain('NEW reply')
+
+      const agent = await rpc({ cmd: 'history.readyView', sid: 'ready-plain', cwd, agentId: 'a1b2', budgetMs: 20_000 })
+      expect(agent, JSON.stringify(agent)).toMatchObject({ ok: true, status: 'ready', agentId: 'a1b2', parser: HISTORY_PARSER_VERSION })
+      expect(rowsOf(agent)).toEqual(['review the diff', 'Reviewed: two findings.'])
+      expect(await rpc({ cmd: 'history.readyView', sid: 'ready-plain', cwd, agentId: '../x' })).toMatchObject({ status: 'none', reason: 'invalid' })
 
       const keys = await rpc({ cmd: 'history.readyKeys', items: [{ sid: 'ready-plain', cwd }, { sid: 'ready-missing', cwd }] })
       expect(keys).toMatchObject({ ok: true, keys: { 'ready-plain': plain.key, 'ready-missing': null } })

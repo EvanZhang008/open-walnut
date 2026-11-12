@@ -205,6 +205,52 @@ test('agent settings show passed effort, recorded effort, and no guessed default
   await expect(panel.locator('.task-group-prompt-settings')).toContainText('effort: xhigh');
 });
 
+test('a long agent transcript: the reader waits out the host building its view, then shows the newest part and says so', async ({ page }) => {
+  const id = 'parity-harness';
+  const input = { description: 'Old-side parity harness', model: 'opus', run_in_background: true, prompt: 'Run the harness.' };
+  await mockHistory(page, [{ role: 'assistant', timestamp: '2026-01-01T00:00:00.000Z',
+    tools: [{ name: 'Agent', toolUseId: `toolu_${id}`, agentId: id, input, result: `Async agent launched successfully. agentId: ${id}` }] }]);
+  await mockSessionDetail(page);
+  await page.route(`**/api/sessions/${SESSION_ID}/workflow`, r => r.fulfill({ status: 204, body: '' }));
+  let reads = 0;
+  await page.route(`**/api/sessions/${SESSION_ID}/subagent/${id}/history**`, r => {
+    reads++;
+    // The host is still reading the file for the first two asks of each open.
+    if (reads % 3 !== 0) return r.fulfill({ json: { messages: [], pending: true } });
+    return r.fulfill({ json: { windowed: true, total: 900, messages: [
+      { role: 'assistant', timestamp: '2026-01-01T00:00:00.000Z', text: 'Harness finished: 3 differences.', effort: 'xhigh' },
+    ] } });
+  });
+  await page.setContent(`<a href="http://localhost:3457/sessions?id=${SESSION_ID}">Open session</a>`);
+  await page.getByRole('link', { name: 'Open session' }).click();
+  await waitForWs(page);
+  const sessionPanel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`);
+  await expect(sessionPanel).toBeVisible();
+  await injectEvent(page, 'session:background-tasks', {
+    sessionId: SESSION_ID, inFlight: 0, phases: [], agents: [],
+    tasks: [{ taskId: id, toolUseId: `toolu_${id}`, taskType: 'local_agent', status: 'completed', description: input.description, isBackgrounded: true }],
+  });
+  const panel = page.locator('.wf-modal--tasks');
+  for (let open = 0; open < 2; open++) {
+    await sessionPanel.locator('.session-panel-header').getByRole('button', { name: 'More actions' }).click();
+    await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-open');
+    await page.locator('.task-kebab-menu:visible [data-testid="session-kebab-background"]').click();
+    await panel.locator('.bg-task-row').filter({ hasText: input.description }).click();
+    const detail = panel.locator('.bg-tasks-detail');
+    await expect(detail).toContainText('Loading transcript');
+    await expect(detail).toContainText('Harness finished: 3 differences.', { timeout: 15_000 });
+    await expect(detail.getByTestId('subagent-windowed')).toBeVisible();
+    await expect(detail).not.toContainText('Failed to load');
+    await expect(panel.locator('.task-group-prompt-settings, .task-group-prompt-toggle').first()).toBeVisible();
+    if (!(await panel.locator('.task-group-prompt-settings').count())) await panel.locator('.task-group-prompt-toggle').click();
+    await expect(panel.locator('.task-group-prompt-settings')).toContainText('effort: xhigh');
+    await page.keyboard.press('Escape');
+    await expect(panel).toHaveCount(0);
+  }
+  // A windowed view is never cached: the second open asked the host again.
+  expect(reads).toBeGreaterThanOrEqual(6);
+});
+
 test.describe('Inline-subagent interleave (main text integrity)', () => {
   test('subagent text + tool lines mid-turn do not split main text; the chat shows one chip and the panel holds the narration', async ({ page }) => {
     const base = [

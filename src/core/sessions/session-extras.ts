@@ -402,7 +402,7 @@ export async function getSubagentHistoryPayload(
   sessionId: string,
   agentId: string,
   isWorkflow: boolean,
-): Promise<{ messages: unknown[] }> {
+): Promise<{ messages: unknown[]; windowed?: true; total?: number; pending?: true }> {
   if (!SUBAGENT_ID_RE.test(agentId)) {
     throw new SessionControlError('Invalid agentId format', 400);
   }
@@ -412,6 +412,22 @@ export async function getSubagentHistoryPayload(
   // Read on the session's host, within the host-read deadline (remote-read-bound.ts).
   const { boundHostRead } = await import('../hosts/remote-read-bound.js');
   return boundHostRead(record?.host, async () => {
+    // The host builds the agent's newest rows next to its file; only those cross
+    // (subagent-ready-view.ts). The whole-file read below is for a host without it.
+    if (record && !isWorkflow) {
+      const { fetchSubagentView } = await import('../subagent-ready-view.js');
+      const outcome = await fetchSubagentView(record, agentId);
+      if (outcome.kind === 'rows') {
+        const { messages, windowed, total } = outcome.view;
+        return { messages, ...(windowed ? { windowed: true as const, total } : {}) };
+      }
+      if (outcome.kind === 'pending') return { messages: [], pending: true as const };
+      if (outcome.kind === 'failed') {
+        log.session.warn('subagent view failed on its host', { sessionId, agentId, host: record.host, reason: outcome.reason });
+        throw new SessionControlError(`The agent's transcript could not be read on its host (${outcome.reason})`, 502);
+      }
+      log.session.debug('subagent view unavailable, reading the whole file', { sessionId, agentId, reason: outcome.reason });
+    }
     let messages = await readSingleSubagentHistory(sessionId, agentId, record?.cwd, record?.host, isWorkflow);
     // Rewrite remote image paths for remote sessions.
     if (record?.host && messages.length > 0) {

@@ -495,6 +495,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // only. Sidecar-gated in the source twin (history-ready-core.cjs). Optional: without it the
   // history route's first paint uses its 128 KiB preview, as before.
   'history-ready-v1',
+  // 'history-ready-subagent-v1': `history.readyView` also takes `agentId`, and answers that
+  // subagent's view (`<session dir>/subagents/agent-<id>.jsonl`, the same bounded parse, no
+  // rewind cuts, `agentId` echoed). The Background tasks reader of a big remote agent asks it
+  // instead of shipping the whole file (2026-11-12: a 10 MB agent timed out every open).
+  // Sidecar-gated in the source twin (history-ready-core.cjs READY_SUBAGENT_V1).
+  'history-ready-subagent-v1',
   'external-scan-v1',
   'external-scan-filter-v1',
   'external-describe-v1',

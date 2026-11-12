@@ -509,13 +509,22 @@ export async function findInSessionHistory(
   return { matches: Array.isArray(res.matches) ? res.matches : [], total: res.total ?? 0, capped: !!res.capped, partial: !!res.partial };
 }
 
+/** One subagent's transcript rows. A big one is its newest part (`windowed`), built on its host;
+ *  `pending` means the host is still building it: ask again shortly. */
+export interface SubagentHistory {
+  messages: SessionHistoryMessage[];
+  windowed?: true;
+  total?: number;
+  pending?: true;
+}
+
 export async function fetchSubagentHistory(
   sessionId: string,
   agentId: string,
   opts?: { workflow?: boolean },
-): Promise<{ messages: SessionHistoryMessage[] }> {
+): Promise<SubagentHistory> {
   const params = opts?.workflow ? { workflow: '1' } : undefined;
-  return apiGet<{ messages: SessionHistoryMessage[] }>(
+  return apiGet<SubagentHistory>(
     `/api/sessions/${sessionId}/subagent/${encodeURIComponent(agentId)}/history`,
     params,
   );

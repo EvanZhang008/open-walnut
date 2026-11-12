@@ -133,6 +133,21 @@ function validRows(value: unknown): value is SessionHistoryMessage[] {
   return true;
 }
 
+/**
+ * A ready answer's rows, decoded within the caps. Bounded before any decode: a host on another
+ * version, or a broken one, cannot make this server inflate or parse more than a view may be.
+ */
+export async function decodeReadyRowsCapped(rowsGz: unknown): Promise<{ rows: SessionHistoryMessage[] } | { reason: 'malformed' | 'too-large' }> {
+  if (typeof rowsGz !== 'string') return { reason: 'malformed' };
+  if (rowsGz.length > READY_MAX_ROWS_GZ_B64) return { reason: 'too-large' };
+  try {
+    const parsed = JSON.parse((await gunzipCapped(Buffer.from(rowsGz, 'base64'), READY_MAX_JSON_BYTES)).toString('utf8')) as unknown;
+    return validRows(parsed) ? { rows: parsed } : { reason: 'malformed' };
+  } catch {
+    return { reason: 'malformed' };
+  }
+}
+
 export type ReadyFetchOutcome =
   | { kind: 'rows'; rows: ReadyViewRows }
   | { kind: 'unchanged'; key: string }
@@ -183,18 +198,10 @@ export async function fetchReadyView(
   if (res.schema !== HISTORY_CACHE_SCHEMA) return { kind: 'unavailable', reason: 'schema' };
   if (res.parser !== HISTORY_PARSER_VERSION) return { kind: 'unavailable', reason: 'parser' };
   if (res.cutsKey !== rewindCutsKey(cuts)) return { kind: 'unavailable', reason: 'cuts' };
-  if (typeof res.rowsGz !== 'string' || typeof res.key !== 'string') return { kind: 'unavailable', reason: 'malformed' };
-  // Bounded before any decode: a host on another version, or a broken one, cannot make this
-  // server inflate or parse more than a view is allowed to be.
-  if (res.rowsGz.length > READY_MAX_ROWS_GZ_B64) return { kind: 'unavailable', reason: 'too-large' };
-  let messages: SessionHistoryMessage[];
-  try {
-    const parsed = JSON.parse((await gunzipCapped(Buffer.from(res.rowsGz, 'base64'), READY_MAX_JSON_BYTES)).toString('utf8')) as unknown;
-    if (!validRows(parsed)) return { kind: 'unavailable', reason: 'malformed' };
-    messages = parsed;
-  } catch {
-    return { kind: 'unavailable', reason: 'malformed' };
-  }
+  if (typeof res.key !== 'string') return { kind: 'unavailable', reason: 'malformed' };
+  const decoded = await decodeReadyRowsCapped(res.rowsGz);
+  if ('reason' in decoded) return { kind: 'unavailable', reason: decoded.reason };
+  let messages = decoded.rows;
   try { deps.bindEchoClaims(sessionId, messages); } catch { /* text dedup stays the fallback */ }
   if (record.host) messages = await deps.rewriteImages(messages, record.host, sessionId, record.cwd).catch(() => messages);
   messages = messages.map((m) => (isUnsettledRow(m) ? { ...m, unsettled: true } : m));

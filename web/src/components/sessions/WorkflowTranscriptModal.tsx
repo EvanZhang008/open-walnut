@@ -44,6 +44,9 @@ import { AgentText } from '../common/AgentText';
  *  draws is never polled: it is read for the effort the CLI recorded (stream
  *  lines carry none), only when its call passed none, at most EFFORT_READS times. */
 const LIVE_POLL_MS = 8000;
+/** A host still building a big agent's view answers `pending`: asked again this often, this many times. */
+const PENDING_RETRY_MS = 2500;
+const PENDING_RETRIES = 8;
 /** Reads of a running lane's transcript for its effort, at most (see TranscriptBody). */
 const EFFORT_READS = 3;
 
@@ -125,6 +128,8 @@ export function TranscriptBody({ target, sessionId, liveLane }: {
   // "this agent produced nothing" — otherwise a backend/network error silently looks
   // like a legitimately empty run.
   const [failed, setFailed] = useState(false);
+  // A big agent's view is its newest part: the reader says earlier steps are not shown.
+  const [windowed, setWindowed] = useState(false);
   const workflow = target.workflow !== false;
   const live = target.live === true;
   // Previous `live` — a true→false flip means the agent finished while we watched, which
@@ -134,7 +139,7 @@ export function TranscriptBody({ target, sessionId, liveLane }: {
 
   // Switching agents inside the panel: drop the previous agent's messages at once
   // so the old transcript never shows under the new title while the fetch runs.
-  useEffect(() => { setMessages(target.preloaded ?? null); setFailed(false); }, [target.agentId, target.preloaded]);
+  useEffect(() => { setMessages(target.preloaded ?? null); setFailed(false); setWindowed(false); }, [target.agentId, target.preloaded]);
 
   const preloaded = (target.preloaded != null && !live) || target.fetchable === false;
   const fromStream = streamed != null;
@@ -158,6 +163,9 @@ export function TranscriptBody({ target, sessionId, liveLane }: {
     reads.at = streamedAssistants;
     fetchSubagentHistory(sessionId, target.agentId, { workflow })
       .then((res) => {
+        // A view the host still builds says nothing yet: that read does not count
+        // (the next row the stream draws reads again).
+        if (res.pending) { reads.count--; return; }
         // Any assistant record settles it: the CLI either wrote an effort or does not.
         if (res.messages.some(m => m.role === 'assistant')) reads.done = true;
         setReadEffort(recordedAgentEffort(res.messages));
@@ -180,22 +188,41 @@ export function TranscriptBody({ target, sessionId, liveLane }: {
     if (cached && !live) return;
 
     let inFlight = false;
+    let pendingTries = 0;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     // `isFirst` = nothing is on screen yet: only then may a load show the
     // spinner or declare failure. The final fetch after a live→finished flip
     // and every poll refresh in place — a transient error must never blank a
     // transcript that already painted.
-    const load = (isFirst: boolean) => {
-      if (inFlight) return;
+    // `chain` = the open's own load and its asks again while the host still builds
+    // the view (`pending`); a poll's pending is skipped, its next tick asks anyway.
+    const askAgain = (isFirst: boolean) => {
+      clearTimeout(retry);
+      retry = setTimeout(() => load(isFirst, true), PENDING_RETRY_MS);
+    };
+    const load = (isFirst: boolean, chain: boolean) => {
+      if (cancelled) return;
+      // A poll is reading: the chain asks after it, never lost behind it.
+      if (inFlight) { if (chain) askAgain(isFirst); return; }
       inFlight = true;
       if (isFirst) { setLoading(true); setFailed(false); }
+      let again = false;
       return fetchSubagentHistory(sessionId, target.agentId, { workflow })
         .then((res) => {
           if (cancelled) return;
+          if (res.pending) {
+            if (!chain) return;
+            if (pendingTries++ < PENDING_RETRIES) { again = true; askAgain(isFirst); }
+            else if (isFirst) { setMessages([]); setFailed(true); }
+            return;
+          }
+          setWindowed(res.windowed === true);
           setMessages(res.messages);
           // Only a finished agent's transcript is complete enough to cache, and
           // never an empty one: a read that missed would pin "no transcript" for
-          // the page's lifetime.
-          if (!live && res.messages.length > 0) setSubagentCache(sessionId, cacheKey, res.messages);
+          // the page's lifetime. A windowed view is only the newest part: not cached
+          // (the cache holds rows alone, so a hit would lose the note that says so).
+          if (!live && !res.windowed && res.messages.length > 0) setSubagentCache(sessionId, cacheKey, res.messages);
           log.info('workflow', `loaded subagent transcript ${target.agentId}: ${res.messages.length} msgs`, { sessionId });
         })
         .catch((err) => {
@@ -203,17 +230,17 @@ export function TranscriptBody({ target, sessionId, liveLane }: {
           log.warn('workflow', 'failed to load subagent transcript', { agentId: target.agentId, error: String(err) });
           if (isFirst) { setMessages([]); setFailed(true); }
         })
-        .finally(() => { inFlight = false; if (!cancelled && isFirst) setLoading(false); });
+        .finally(() => { inFlight = false; if (!cancelled && isFirst && !again) setLoading(false); });
     };
 
     // Rows the stream drew stay on screen while the saved transcript loads.
-    load(!cached && !justFinished && !lastStreamed.current);
-    if (!live) return () => { cancelled = true; };
+    load(!cached && !justFinished && !lastStreamed.current, true);
+    if (!live) return () => { cancelled = true; clearTimeout(retry); };
     const timer = setInterval(() => {
       if (document.visibilityState === 'hidden') return;
-      load(false);
+      load(false, false);
     }, LIVE_POLL_MS);
-    return () => { cancelled = true; clearInterval(timer); };
+    return () => { cancelled = true; clearInterval(timer); clearTimeout(retry); };
   }, [sessionId, target.agentId, workflow, live, preloaded, fromStream]);
 
   // One renderer, one place for the stream and the saved transcript, so the
@@ -226,7 +253,10 @@ export function TranscriptBody({ target, sessionId, liveLane }: {
       <RowDisclosureScope.Provider value={sessionId}>
       {promptInput && <TaskGroupPrompt input={promptInput} toolUseId={liveLane?.taskBlock.toolUseId ?? target.toolUseId} />}
       {shown && shown.length > 0 ? (
-        <LaneHistoryTimeline messages={shown} sessionId={sessionId} live={live} startedAt={target.startedAt} agentLabel={target.agentLabel} />
+        <>
+          {windowed && !streamed && <div className="wf-modal-windowed" data-testid="subagent-windowed">Earlier steps of this agent are not shown: its transcript is long, so this is its newest part.</div>}
+          <LaneHistoryTimeline messages={shown} sessionId={sessionId} live={live} startedAt={target.startedAt} agentLabel={target.agentLabel} />
+        </>
       ) : loading ? (
         <div className="wf-modal-loading">Loading transcript…</div>
       ) : failed ? (
