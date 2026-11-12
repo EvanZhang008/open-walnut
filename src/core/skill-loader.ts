@@ -491,9 +491,12 @@ function formatSessionIndex(skills: SkillMeta[]): string {
   if (skills.length === 0) return '';
   const byRoot = new Map<string, string[]>();
   for (const s of skills.map(screenIndexEntry)) {
+    // A skill on this disk is named by its folder under its root; one with no path here (the
+    // companion's copy of the Mac's skills, location '(on the Mac)') by its name, under that place.
+    const onDisk = path.isAbsolute(s.location);
     const dir = path.dirname(s.location);
-    const root = path.dirname(dir);
-    const line = `- ${path.basename(dir)}: ${shortSkillLine(s.description)}`;
+    const root = onDisk ? path.dirname(dir) : s.location;
+    const line = `- ${onDisk ? path.basename(dir) : s.name}: ${shortSkillLine(s.description)}`;
     byRoot.set(root, [...(byRoot.get(root) ?? []), line]);
   }
   const groups = [...byRoot.entries()].map(([root, lines]) => `In ${root}:\n${lines.join('\n')}`);

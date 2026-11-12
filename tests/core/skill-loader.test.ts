@@ -239,6 +239,16 @@ describe('formatSessionIndex', () => {
     expect(out).not.toContain('<skill>');
   });
 
+  it('a skill with no path on this disk (the companion\'s copy of the Mac\'s) is named by its name, under its place', () => {
+    const out = formatSessionIndex([
+      { name: 'acme-tool', description: 'How to run the Acme tool', location: '(on the Mac)', category: 'general', type: 'action' },
+      ...skills.slice(2),
+    ]);
+    expect(out).toContain('In (on the Mac):\n- acme-tool: How to run the Acme tool');
+    expect(out).toContain('In /home/u/.open-walnut/skills:\n- mine: My own');
+    expect(out).not.toMatch(/^- \.:/m);
+  });
+
   it('a line is the sentence that says when to use the skill, else its first, at most 90 characters, cut at a word', () => {
     expect(shortSkillLine('Short one. Then more words.')).toBe('Short one');
     expect(shortSkillLine('Build and ship the app. Use when the user wants it on their phone.')).toBe('Use when the user wants it on their phone');

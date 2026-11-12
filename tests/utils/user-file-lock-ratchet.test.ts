@@ -50,6 +50,7 @@ const STORE_LOCKS = new Set<string>([
   'src/core/send-queue.ts: target',                             // send-queue fences
   'src/core/send-relay-index.ts: file',                         // cache/send-queue/relays/<session>.json
   'src/core/session-queue-store.ts: SESSION_QUEUE_FILE',        // the session message queue (its one lock, persist)
+  'src/core/sessions/memory-folder.ts: `${dir}.notes`',          // WALNUT_HOME/agent-memory/<task>.notes: a node's own notes folder
   'src/core/sessions/cloud-chat-lane.ts: MARKS_FILE',           // chat lane marks
   'src/core/skill-usage.ts: file',                              // skill usage counts
   "src/core/stt/voice-archive.ts: join(this.dir(id), 'metadata.json')", // WALNUT_HOME/voice-archive/<id>/metadata.json
