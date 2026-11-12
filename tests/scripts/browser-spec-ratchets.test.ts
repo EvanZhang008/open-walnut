@@ -1296,6 +1296,9 @@ describe('a test that loads a page again after it opened full screen or a split 
     'session-thread-review-sidebar.spec.ts': ['a card shows its whole thread with its own scroll'],
     // The full-screen split that comes back holds each pane's reading place, the check.
     'session-reading-place.spec.ts': ['a reload brings each pane back to its place'],
+    // The full-screen reading split that comes back is the check: the pane, its side-by-side way
+    // and the place measured in full screen before the reload, then the split staying closed.
+    'session-reader-split.spec.ts': ['read a message on top, ask below: open, hold, re-land, resize, turn, reload, close'],
     // Each tab keeps its own view (dc8132c6b): the second tab's load is the check.
     'view-state-tabs.spec.ts': ["another tab's session panel view never moves this tab's"],
     // The Terminal view that comes back is the check: each terminal reattached after a
