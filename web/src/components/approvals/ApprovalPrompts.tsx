@@ -469,7 +469,6 @@ export function ApprovalPrompts() {
                     <Clock a={card} now={now} />
                   </span>
                   {!phone && <ApprovalButtons a={card} s={s} />}
-                  {!phone && <StopAsking a={card} s={s} />}
                   {s.errors[card.id] ? <div className="approval-error" role="alert">{s.errors[card.id]}</div> : null}
                 </div>
               ) : (

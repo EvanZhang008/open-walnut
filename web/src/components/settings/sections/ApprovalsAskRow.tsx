@@ -24,8 +24,17 @@ const FIRST = 5;
 
 export function ApprovalsAskRow({ config, save }: { config: Config; save: Save }) {
   const rowKey = 'general.approvals-ask-me';
+  // Nothing stored: the server's own default (off for a person; a test server may default to on).
+  const stored = config.approvals?.ask_me;
+  const [effective, setEffective] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (typeof stored === 'boolean') return;
+    let live = true;
+    void listApprovals('pending').then((r) => { if (live && typeof r.askMe === 'boolean') setEffective(r.askMe); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [stored]);
   const setting = useOptimisticSetting<boolean>(
-    config.approvals?.ask_me === true,
+    typeof stored === 'boolean' ? stored : effective === true,
     (v) => save(() => ({ approvals: { ask_me: v } }), { rowKey }),
     { rowKey },
   );

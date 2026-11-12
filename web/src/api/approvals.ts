@@ -70,7 +70,7 @@ export interface ApprovalKey {
   publicKey?: string;
 }
 
-export function listApprovals(status: 'pending' | 'all' = 'pending'): Promise<{ approvals: Approval[]; keys: ApprovalKey[] }> {
+export function listApprovals(status: 'pending' | 'all' = 'pending'): Promise<{ approvals: Approval[]; keys: ApprovalKey[]; askMe?: boolean }> {
   return apiGet('/api/v1/approvals', status === 'all' ? { status } : undefined, { quietStatuses: [404, 503] });
 }
 

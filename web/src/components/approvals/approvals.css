@@ -572,7 +572,6 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
   text-underline-offset: 2px;
 }
 .corner-stack .approval-stop-asking { flex: 1 0 100%; text-align: center; margin-top: 4px; }
-.approval-card-line .approval-stop-asking { flex: 1 0 100%; text-align: right; margin: 4px 0 0; }
 
 /* After "stop asking me": what changed, with Undo and the way to the switch. */
 .approval-stopped { display: flex; flex-direction: column; gap: 6px; border-left-color: var(--success); }
