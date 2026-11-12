@@ -274,7 +274,9 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await expect(frame.locator('#sec-a')).toBeVisible()
   const leaderRow = thread.locator('.wn-msg').last()
   await expect(leaderRow.locator('.wn-who')).toHaveText('Leader')
-  await expect(leaderRow.locator('a.wn-link')).toHaveAttribute('href', 'https://example.com/run/1')
+  // The host renders thread text (AgentText's renderer, `boardText`), so a URL is a plain
+  // `<a href>` with no class; the frame's click handler hands it to the main window.
+  await expect(leaderRow.locator('.wn-text a[href^="https://"]')).toHaveAttribute('href', 'https://example.com/run/1')
   await expect(frame.locator('.wn-unread-n')).toHaveText('No new messages', { timeout: 10_000 })
   await expect(leaderRow).not.toHaveAttribute('data-unread')
   const seen = await page.evaluate((id) => localStorage.getItem(`walnut-board-seen:${id}`), leader)

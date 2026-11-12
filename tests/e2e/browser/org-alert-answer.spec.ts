@@ -450,7 +450,9 @@ test('an ask its task shaped: a clear summary, More for the detail, Yes / No and
   await expect(ynRow.getByTestId('org-ask-summary')).toHaveText(`Ship 0.6.22 on Saturday ${STAMP}?`)
   await expect(ynRow.getByTestId('org-ask-more')).toHaveCount(0)
   await ynRow.getByTestId('org-ask-more-toggle').click()
-  await expect(ynRow.getByTestId('org-ask-more')).toHaveText(/The notes cover the rail\.\s+The review is done\./)
+  // AgentText renders the newline as a `<br>` (markdown `breaks`), which textContent drops:
+  // read what the user sees, the rendered text, where it is a line break.
+  await expect.poll(() => ynRow.getByTestId('org-ask-more').innerText()).toMatch(/The notes cover the rail\.\n+The review is done\./)
   await expect(ynForm.getByTestId('org-answer-option')).toHaveText(['Yes', 'No'])
   await expect(ynForm.getByTestId('org-answer-input')).toHaveCount(0)
   // Multiple choice: check, then Send.
