@@ -33,7 +33,14 @@ import {
   clearFailedFetches,
   startMirrorDownload,
   awaitPendingMirror,
+  mirrorLaneState,
+  noteFetchMissing,
+  fetchRecentlyMissing,
+  MIRROR_READS_PER_HOST,
+  MIRROR_SLOT_CAP_MS,
 } from '../../src/core/remote-image-mirror.js'
+
+const HOST = 'remotehost'
 
 const mirrorPath = () => path.join(REMOTE_IMAGES_DIR, 'sess-1', `chart-${Math.random().toString(36).slice(2)}.png`)
 
@@ -237,8 +244,8 @@ describe('startMirrorDownload / awaitPendingMirror (the <img> that beats its byt
     let finish!: (ok: boolean) => void
     const download = vi.fn(() => new Promise<boolean>((r) => { finish = r }))
 
-    const first = startMirrorDownload(p, download)
-    const second = startMirrorDownload(p, download)
+    const first = startMirrorDownload(HOST, p, download)
+    const second = startMirrorDownload(HOST, p, download)
     expect(second).toBe(first)
     expect(download).toHaveBeenCalledTimes(1)
     finish(true)
@@ -247,18 +254,18 @@ describe('startMirrorDownload / awaitPendingMirror (the <img> that beats its byt
 
   it('forgets a slot once its download settles, so a failed one can be retried', async () => {
     const p = mirrorPath()
-    expect(await startMirrorDownload(p, async () => { throw new Error('tunnel dropped') })).toBe(false)
+    expect(await startMirrorDownload(HOST, p, async () => { throw new Error('tunnel dropped') })).toBe(false)
     expect(await awaitPendingMirror(p)).toBeNull()
 
     const retry = vi.fn(async () => true)
-    await startMirrorDownload(p, retry)
+    await startMirrorDownload(HOST, p, retry)
     expect(retry).toHaveBeenCalledTimes(1)
   })
 
   it('hands a waiter the bytes once the download lands', async () => {
     const p = mirrorPath()
     let finish!: () => void
-    startMirrorDownload(p, () => new Promise<boolean>((r) => {
+    startMirrorDownload(HOST, p, () => new Promise<boolean>((r) => {
       finish = () => {
         fs.mkdirSync(path.dirname(p), { recursive: true })
         fs.writeFileSync(p, 'landed')
@@ -278,12 +285,126 @@ describe('startMirrorDownload / awaitPendingMirror (the <img> that beats its byt
     vi.useFakeTimers()
     try {
       const p = mirrorPath()
-      startMirrorDownload(p, () => new Promise<boolean>(() => { /* never settles */ }))
+      startMirrorDownload(HOST, p, () => new Promise<boolean>(() => { /* never settles */ }))
       const waiting = awaitPendingMirror(p)
       await vi.advanceTimersByTimeAsync(10_000)
       expect(await waiting).toBeNull()
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('mirror reads per host (2026-11-12: a replay flood buried the host link)', () => {
+  /** A download that settles only when the test says so. */
+  function gate() {
+    const calls: Array<{ path: string; finish: (ok: boolean) => void }> = []
+    const start = (p: string) => () => new Promise<boolean>((r) => { calls.push({ path: p, finish: r }) })
+    return { calls, start }
+  }
+
+  it('runs at most a few per host and the rest in turn, every one of them', async () => {
+    const g = gate()
+    const paths = Array.from({ length: 50 }, () => mirrorPath())
+    const all = paths.map((p) => startMirrorDownload('flooded', p, g.start(p)))
+    expect(g.calls.length).toBe(MIRROR_READS_PER_HOST)
+    expect(mirrorLaneState('flooded')).toEqual({ running: MIRROR_READS_PER_HOST, queued: 50 - MIRROR_READS_PER_HOST })
+    let settled = 0
+    while (settled < g.calls.length) {
+      g.calls[settled++].finish(settled % 2 === 0)
+      await new Promise((r) => setImmediate(r))
+      expect(mirrorLaneState('flooded').running).toBeLessThanOrEqual(MIRROR_READS_PER_HOST)
+    }
+    expect(g.calls.map((c) => c.path)).toEqual(paths) // first come, first served
+    expect((await Promise.all(all)).length).toBe(50)
+    expect(mirrorLaneState('flooded')).toEqual({ running: 0, queued: 0 })
+  })
+
+  it('never makes one host wait behind another', () => {
+    const g = gate()
+    for (let i = 0; i < 20; i++) { const p = mirrorPath(); startMirrorDownload('busy-host', p, g.start(p)) }
+    const other = mirrorPath()
+    const quiet = vi.fn(() => new Promise<boolean>(() => {}))
+    startMirrorDownload('quiet-host', other, quiet)
+    expect(quiet).toHaveBeenCalledTimes(1)
+    for (const c of g.calls) c.finish(false)
+  })
+
+  it('gives a failed or throwing download\'s slot to the next one', async () => {
+    const throws = Array.from({ length: MIRROR_READS_PER_HOST }, () => mirrorPath())
+    const all = throws.map((p) => startMirrorDownload('failing', p, () => { throw new Error('tunnel dropped') }))
+    const next = vi.fn(async () => true)
+    const last = startMirrorDownload('failing', mirrorPath(), next)
+    expect(await Promise.all(all)).toEqual(throws.map(() => false))
+    expect(await last).toBe(true)
+    expect(next).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts a queued slot at once when an <img> waits for it', async () => {
+    const g = gate()
+    const ahead = Array.from({ length: MIRROR_READS_PER_HOST + 10 }, () => mirrorPath())
+    for (const p of ahead) startMirrorDownload('promo', p, g.start(p))
+    const wanted = mirrorPath()
+    const wantedRun = vi.fn(() => new Promise<boolean>((r) => {
+      fs.mkdirSync(path.dirname(wanted), { recursive: true })
+      fs.writeFileSync(wanted, 'seen')
+      r(true)
+    }))
+    startMirrorDownload('promo', wanted, wantedRun)
+    expect(wantedRun).not.toHaveBeenCalled()
+    // Every slot is still busy: the one the user looks at does not wait for them.
+    expect((await awaitPendingMirror(wanted))?.toString()).toBe('seen')
+    expect(g.calls.length).toBe(MIRROR_READS_PER_HOST)
+    expect(mirrorLaneState('promo')).toEqual({ running: MIRROR_READS_PER_HOST, queued: 10 })
+    for (let i = 0; i < g.calls.length; i++) { g.calls[i].finish(false); await new Promise((r) => setImmediate(r)) }
+    expect(mirrorLaneState('promo')).toEqual({ running: 0, queued: 0 })
+  })
+
+  it('gives back the slot of a download that hangs', async () => {
+    vi.useFakeTimers()
+    try {
+      for (let i = 0; i < MIRROR_READS_PER_HOST; i++) startMirrorDownload('hung', mirrorPath(), () => new Promise<boolean>(() => {}))
+      const next = vi.fn(async () => true)
+      const hungPath = mirrorPath()
+      const hung = startMirrorDownload('hung', hungPath, () => new Promise<boolean>(() => {}))
+      startMirrorDownload('hung', mirrorPath(), next)
+      expect(next).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(MIRROR_SLOT_CAP_MS)
+      expect(next).toHaveBeenCalledTimes(1)
+      // The capped slot counts as failed, so the path can be tried again.
+      await vi.advanceTimersByTimeAsync(MIRROR_SLOT_CAP_MS)
+      expect(await hung).toBe(false)
+      const retry = vi.fn(async () => true)
+      await startMirrorDownload('hung', hungPath, retry)
+      expect(retry).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('remembers every missing path of a busy host, not only the last 500', () => {
+    const paths = Array.from({ length: 1_000 }, (_, i) => `/tmp/gone-${i}.png`)
+    for (const p of paths) noteFetchMissing(HOST, p)
+    expect(paths.every((p) => fetchRecentlyMissing(HOST, p))).toBe(true)
+  })
+})
+
+describe('every fire-and-forget remote image read goes through the per-host lane (guard)', () => {
+  // The class: code that starts a remote image read and does not wait for it. Each
+  // such read must queue behind startMirrorDownload, or a replay that names
+  // thousands of pictures floods the host link again. Enumerated from the source:
+  // a new caller of a raw image download that skips the lane fails here.
+  it('calls the raw downloaders only from inside startMirrorDownload', async () => {
+    const { execFileSync } = await import('node:child_process')
+    const root = path.resolve(__dirname, '../..')
+    const out = execFileSync('git', ['grep', '-n', '-E', 'downloadImageViaDaemon\\(|downloadRemoteFile\\(|downloadToMirror\\(|fetchRemoteBytes\\(', '--', 'src'], { cwd: root, encoding: 'utf-8' })
+    const offenders = out.split('\n').filter(Boolean)
+      .filter((line) => !/async function (downloadImageViaDaemon|downloadToMirror|fetchRemoteBytes)\(|private async downloadRemoteFile\(/.test(line))
+      // A read whose caller waits for it (a request path) is bounded by that caller.
+      .filter((line) => !/await (downloadToMirror|fetchRemoteBytes)\(/.test(line))
+      .filter((line) => !/startMirrorDownload\(/.test(line))
+      // The pass-2 candidate loop runs inside its startMirrorDownload callback.
+      .filter((line) => !/if \(await downloadImageViaDaemon\(host, candidate, lp\)\)/.test(line))
+    expect(offenders).toEqual([])
   })
 })

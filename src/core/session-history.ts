@@ -2626,7 +2626,7 @@ export async function rewriteHistoryRemoteImages(
         if (!fs.existsSync(localPath)) {
           // Published: the <img> for this slot can arrive before the bytes do.
           const lp = localPath
-          startMirrorDownload(lp, () => downloadImageViaDaemon(host, remotePath, lp)).catch(() => {})
+          startMirrorDownload(host, lp, () => downloadImageViaDaemon(host, remotePath, lp)).catch(() => {})
         } else {
           // Pre-sidecar mirror file: record its origin so /api/local-image can
           // revalidate it (the download-once mirror otherwise stays stale forever).
@@ -2665,7 +2665,7 @@ export async function rewriteHistoryRemoteImages(
 
           if (!fs.existsSync(localPath)) {
             const lp = localPath
-            startMirrorDownload(lp, async () => {
+            startMirrorDownload(host, lp, async () => {
               for (const candidate of candidates) {
                 if (await downloadImageViaDaemon(host, candidate, lp)) return true
               }

@@ -1594,7 +1594,7 @@ export class RemoteSessionManager implements SessionManager {
           // Download via daemon fs.read (fire-and-forget), published so the <img>
           // that can arrive before the bytes waits for them (remote-image-mirror.ts).
           const lp = localPath
-          startMirrorDownload(lp, () => this.downloadRemoteFile(remotePath, lp)).catch(() => {})
+          startMirrorDownload(this.hostKey, lp, () => this.downloadRemoteFile(remotePath, lp)).catch(() => {})
         } else {
           // Pre-sidecar mirror file — record origin so it can be revalidated.
           backfillMirrorSidecar(localPath, this.hostKey, remotePath)
@@ -1623,7 +1623,7 @@ export class RemoteSessionManager implements SessionManager {
 
           if (!fs.existsSync(localPath)) {
             const lp = localPath
-            startMirrorDownload(lp, () => this.downloadRemoteFile(cwdPath, lp)).catch(() => {})
+            startMirrorDownload(this.hostKey, lp, () => this.downloadRemoteFile(cwdPath, lp)).catch(() => {})
           } else {
             backfillMirrorSidecar(localPath, this.hostKey, cwdPath)
           }

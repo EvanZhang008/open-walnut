@@ -307,7 +307,10 @@ export async function revalidateMirror(mirrorPath: string): Promise<Buffer | nul
 //    actually ends the storm.
 const FETCH_MISS_BASE_MS = 30 * 1000
 const FETCH_MISS_MAX_MS = 10 * 60 * 1000
-const FETCH_MISS_MAX_KEYS = 500
+// Room for every unresolvable path a busy host's sessions name (4,237 on the dev box,
+// 2026-11-12): at 500 the records evicted each other and the backoff never held.
+// A key is a host and a path, so this is a few MB at most.
+const FETCH_MISS_MAX_KEYS = 20_000
 const missedFetches = new Map<string, { at: number; misses: number }>()
 
 const missKey = (host: string, remotePath: string) => `${host} ${remotePath}`
@@ -410,20 +413,95 @@ async function readRemoteBytes(
 // download instead, and a slot minted twice (replay + stream) is read once.
 const pendingDownloads = new Map<string, Promise<boolean>>()
 
+// ── At most a few mirror reads per host at a time ────────────────────
+// A history rewrite starts one download per image path its rows name, and does
+// not wait for them. Unbounded, that buried the host's link: 2026-11-12, after
+// every server restart the ready-view refresher rewrote each recent session on
+// the dev box, and some 3,000 fs.reads for pictures long gone (4,237 distinct
+// paths: screenshots of other tasks, /tmp files) went out within a minute. Each
+// one waited out the host-read idle bound and answered "could not ask", so none
+// was remembered as missing and the next replay sent them again, while every
+// session history read on that host answered "did not answer in time" (180 an
+// hour, the log spike). Queued here, the same reads trickle out a few at a time,
+// each gets its real answer (and its miss is remembered), and the host's other
+// reads keep their turn. An <img> waiting for a queued slot starts it at once,
+// past the limit: what the user looks at never waits behind a background replay
+// (the browser's six connections bound those). The limit counts slots, not bytes
+// on the wire: a read its caller stopped waiting for may still be on the link.
+export const MIRROR_READS_PER_HOST = 4
+/** A download not settled by this gives its slot back and counts as failed: a hung read never holds the queue or the slot. */
+export const MIRROR_SLOT_CAP_MS = 60_000
+
+interface QueuedDownload { key: string; run: () => void }
+interface HostLane { running: number; queue: QueuedDownload[] }
+const hostLanes = new Map<string, HostLane>()
+
+function laneFor(host: string): HostLane {
+  let lane = hostLanes.get(host)
+  if (!lane) { lane = { running: 0, queue: [] }; hostLanes.set(host, lane) }
+  return lane
+}
+
+function pump(host: string): void {
+  const lane = hostLanes.get(host)
+  if (!lane) return
+  while (lane.running < MIRROR_READS_PER_HOST && lane.queue.length > 0) lane.queue.shift()!.run()
+  if (lane.running === 0 && lane.queue.length === 0) hostLanes.delete(host)
+}
+
 /**
- * Run `download` for `mirrorPath` unless one is already running for that slot (then
- * the running one is returned), and publish it so /api/local-image can wait for the
- * bytes. `download` resolves true once the file is on disk; a throw counts as false.
- * The entry leaves the moment it settles, so a failed download never stays pending.
+ * Run `download` for `mirrorPath` on `host` unless one is already running or queued
+ * for that slot (then that one is returned), and publish it so /api/local-image can
+ * wait for the bytes. At most MIRROR_READS_PER_HOST run per host at a time; the rest
+ * wait their turn, first come first served. `download` resolves true once the file
+ * is on disk; a throw counts as false. The entry leaves the moment it settles, so a
+ * failed download never stays pending.
  */
-export function startMirrorDownload(mirrorPath: string, download: () => Promise<boolean>): Promise<boolean> {
+export function startMirrorDownload(host: string, mirrorPath: string, download: () => Promise<boolean>): Promise<boolean> {
   const key = path.resolve(mirrorPath)
   const running = pendingDownloads.get(key)
   if (running) return running
-  const p = download().catch(() => false)
+  const lane = laneFor(host)
+  const p = new Promise<boolean>((resolve) => {
+    const run = () => {
+      lane.running++
+      let released = false
+      const settle = (ok: boolean) => {
+        if (released) return
+        released = true
+        clearTimeout(cap)
+        lane.running--
+        resolve(ok)
+        pump(host)
+      }
+      const cap = setTimeout(() => settle(false), MIRROR_SLOT_CAP_MS)
+      cap.unref?.()
+      let work: Promise<boolean>
+      try { work = download() } catch { work = Promise.resolve(false) }
+      work.catch(() => false).then(settle)
+    }
+    if (lane.running < MIRROR_READS_PER_HOST) run()
+    else lane.queue.push({ key, run })
+  })
   pendingDownloads.set(key, p)
   void p.then(() => { if (pendingDownloads.get(key) === p) pendingDownloads.delete(key) })
   return p
+}
+
+/** A slot still waiting for its turn starts now: someone is looking at it. */
+function promoteMirrorDownload(key: string): void {
+  for (const lane of hostLanes.values()) {
+    const at = lane.queue.findIndex((q) => q.key === key)
+    if (at < 0) continue
+    lane.queue.splice(at, 1)[0].run()
+    return
+  }
+}
+
+/** Test seam: how many mirror reads run and wait on a host. */
+export function mirrorLaneState(host: string): { running: number; queued: number } {
+  const lane = hostLanes.get(host)
+  return { running: lane?.running ?? 0, queued: lane?.queue.length ?? 0 }
 }
 
 /** Is a download for this slot running right now? */
@@ -437,8 +515,10 @@ export function hasPendingMirror(mirrorPath: string): boolean {
  * same bound a first-time download on the request path has, see above).
  */
 export async function awaitPendingMirror(mirrorPath: string): Promise<Buffer | null> {
-  const p = pendingDownloads.get(path.resolve(mirrorPath))
+  const key = path.resolve(mirrorPath)
+  const p = pendingDownloads.get(key)
   if (!p) return null
+  promoteMirrorDownload(key)
   if (!(await withTimeout(p, DOWNLOAD_TIMEOUT_MS, false))) return null
   return fsp.readFile(mirrorPath).catch(() => null)
 }
