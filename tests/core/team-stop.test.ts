@@ -183,6 +183,7 @@ describe('stopTeam / resumeTeam', () => {
     await import('../../src/core/task-manager.js');
     await import('../../src/providers/claude-code-session.js');
     await import('../../src/core/sessions/context-full-recovery.js'); // turnHold asks it (42cdfd264)
+    await import('../../src/core/sessions/safeguard-switch.js'); // turnHold asks it too (32507224e)
     vi.useFakeTimers({ toFake: ['setTimeout'] });
     try {
       sessions = [sess('s-a', 'a', 'running'), sess('s-a1', 'a1', 'running')];
