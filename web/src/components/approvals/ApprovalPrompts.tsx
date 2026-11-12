@@ -194,19 +194,31 @@ function StopAsking({ a, s }: { a: Approval; s: ApprovalsState }) {
  * What the person sees after "stop asking me": the switch is off, with Undo and the way to it.
  * In the corner (and in the dialog it was clicked in) for a while, or until Undo or ×.
  */
-function StoppedAsking({ s }: { s: ApprovalsState }) {
+function StoppedAsking({ s, now, inDialog = false }: { s: ApprovalsState; now: number; inDialog?: boolean }) {
   const navigate = useNavigate();
   const st = s.stoppedAsking;
   if (!st) return null;
+  const what = s.done[st.id]?.what;
+  // Asked before the switch moved: they still wait for the person, and the note says so.
+  const still = pendingAt(s, now);
   return (
-    <div className="approval-card approval-card-settled approval-stopped" role="status" data-testid="approval-stopped-asking">
+    <div className={`approval-card approval-card-settled approval-stopped${inDialog ? ' approval-stopped-inline' : ''}`} role="status" data-testid="approval-stopped-asking">
       <div className="approval-stopped-line">
-        {st.undone ? 'Approvals are on again: agents ask you first.' : 'Approved. Agents won’t ask you any more.'}
+        {st.undone ? 'Agents ask you first again.' : 'Approved. From now on agents go ahead without asking you.'}
       </div>
+      {what && <div className="approval-stopped-what">{what}</div>}
+      {st.undone
+        ? <div className="approval-stopped-sub">The one you approved stays approved.</div>
+        : still.length > 0 && (
+          <div className="approval-stopped-sub" data-testid="approval-stopped-still">
+            {still.length === 1 ? '1 request asked before this still waits for you.' : `${still.length} requests asked before this still wait for you.`}{' '}
+            {!inDialog && <button type="button" className="approval-link" onClick={() => openApproval(still[0]!.id)}>Review</button>}
+          </div>
+        )}
       <div className="approval-stopped-actions">
-        {!st.undone && <button type="button" className="approval-link" data-testid="approval-stopped-undo" onClick={() => { void undoStopAsking(); }}>Undo</button>}
+        {!st.undone && <button type="button" className="approval-link" data-testid="approval-stopped-undo" title="Turn approvals back on. The one you approved stays approved." onClick={() => { void undoStopAsking(); }}>Ask me again</button>}
         <button type="button" className="approval-link" data-testid="approval-stopped-settings" onClick={() => { dismissStoppedAsking(); closeApproval(); navigate('/settings#general'); }}>Settings › General</button>
-        <button type="button" className="approval-stopped-close" aria-label="Close" onClick={dismissStoppedAsking}>×</button>
+        {!inDialog && <button type="button" className="approval-stopped-close" aria-label="Close" onClick={dismissStoppedAsking}>×</button>}
       </div>
     </div>
   );
@@ -279,10 +291,13 @@ function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
           <ApprovalBody a={live} s={s} now={now} />
         ) : settled ? (
           <>
-            <div className={`approval-settled-line approval-${settled.status}`} data-testid="approval-dialog-settled">
-              {settledWord(settled)}<span className="approval-settled-what">{settled.what}</span>
-            </div>
-            {s.stoppedAsking?.id === id && <StoppedAsking s={s} />}
+            {s.stoppedAsking?.id === id
+              ? <StoppedAsking s={s} now={now} inDialog />
+              : (
+                <div className={`approval-settled-line approval-${settled.status}`} data-testid="approval-dialog-settled">
+                  {settledWord(settled)}<span className="approval-settled-what">{settled.what}</span>
+                </div>
+              )}
             {list.length > 0 && (
               <div className="approval-dialog-steps">
                 <span>{list.length === 1 ? '1 more waiting' : `${list.length} more waiting`}</span>
@@ -372,11 +387,11 @@ export function ApprovalPrompts() {
     shownCard.current = card?.id ?? null;
     if (!was || was === card?.id) return;
     const answered = s.done[was];
-    if (!answered || s.items.has(was) || was === s.openId) return;
+    if (!answered || s.items.has(was) || was === s.openId || s.stoppedAsking?.id === was || s.stoppingId === was) return;
     setReceipt(answered);
     if (receiptTimer.current) clearTimeout(receiptTimer.current);
     receiptTimer.current = setTimeout(() => setReceipt(null), SETTLED_HOLD_MS);
-  }, [card?.id, s.done, s.items, s.openId]);
+  }, [card?.id, s.done, s.items, s.openId, s.stoppedAsking?.id, s.stoppingId]);
   useEffect(() => () => { if (receiptTimer.current) clearTimeout(receiptTimer.current); }, []);
   const holding = card ? receipt : null;
   // A card made smaller (two short lines) stays so until another request comes (it opens full again, so the
@@ -414,7 +429,7 @@ export function ApprovalPrompts() {
       {(card || lastSettled || (s.stoppedAsking && s.stoppedAsking.id !== s.openId)) && (
         <CornerSlot order={CORNER_ORDER.approvals} className="corner-slot-approvals">
         <div className="approval-stack" role="region" aria-label="Approvals">
-          {s.stoppedAsking && s.stoppedAsking.id !== s.openId && <StoppedAsking s={s} />}
+          {s.stoppedAsking && s.stoppedAsking.id !== s.openId && <StoppedAsking s={s} now={now} />}
           {lastSettled && !card && (
             <div key={lastSettled.id} className={`approval-card approval-card-settled approval-${lastSettled.status}`} data-approval-id={lastSettled.id} data-testid="approval-settled" role="status">
               <div className="approval-settled-line">

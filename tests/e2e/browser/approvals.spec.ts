@@ -385,8 +385,9 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   await card3.getByTestId('approval-minimize').click()
   await expect(card3).toHaveClass(/approval-card-line/)
   // Two lines where they fit; in this narrow column (Settings' nav) the buttons take a third line
-  // rather than sit over the time (2026-11-06: "9:56 le" cut under Deny in the Org list).
-  await expect.poll(async () => Math.round((await card3.boundingBox())!.height)).toBeLessThanOrEqual(90)
+  // rather than sit over the time (2026-11-06: "9:56 le" cut under Deny in the Org list), and the
+  // sentence takes two lines where it needs them (2026-11-12 review: "Post th…" beside Approve).
+  await expect.poll(async () => Math.round((await card3.boundingBox())!.height)).toBeLessThanOrEqual(110)
   expect(await card3.evaluate((el) => {
     const c = el.querySelector('.approval-clock')!.getBoundingClientRect()
     return [...el.querySelectorAll('.approval-actions .approval-btn')].every((b) => {
@@ -511,7 +512,8 @@ test('a narrow corner (a page\'s left column): the card reads the whole action a
   // cut to "9:56 le" to make room), buttons kept.
   await card.getByTestId('approval-minimize').click()
   await expect(card).toHaveClass(/approval-card-line/)
-  await expect.poll(async () => Math.round((await card.boundingBox())!.height)).toBeLessThanOrEqual(92)
+  // The sentence may take a second line here (approvals.css .approval-line-what).
+  await expect.poll(async () => Math.round((await card.boundingBox())!.height)).toBeLessThanOrEqual(112)
   const clock = card.locator('.approval-clock').first()
   expect(await clock.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
   await expect(card.getByRole('button', { name: 'Deny', exact: true })).toBeVisible()
@@ -699,19 +701,22 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
     await expect(firstCard).toBeVisible({ timeout: 15_000 })
     await firstCard.getByTestId('approval-stop-asking').click()
     expect((await waitFor(request, first.approval.id, first.waitToken)).approval.status).toBe('approved')
-    await expect(note).toContainText('Agents won’t ask you any more')
+    await expect(note).toContainText('From now on agents go ahead without asking you')
     await expect.poll(askMeNow).toBe(false)
     await note.getByTestId('approval-stopped-undo').click()
-    await expect(note).toContainText('Approvals are on again')
+    await expect(note).toContainText('Agents ask you first again')
     await expect.poll(askMeNow).toBe(true)
 
-    // Stop asking again, and keep it.
+    // Stop asking again, and keep it. A request asked before still waits, and the note says so.
+    const earlier = await ask(request, { what: `Publish the preview site ${stamp()}` })
     const made = await ask(request, { what: `Post the weekly update ${stamp()}` })
     const card = page.locator(`[data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
     await expect(card).toBeVisible({ timeout: 15_000 })
     await card.getByTestId('approval-stop-asking').click()
     expect((await waitFor(request, made.approval.id, made.waitToken)).approval.status).toBe('approved')
-    await expect(note).toContainText('Agents won’t ask you any more')
+    await expect(note).toContainText('From now on agents go ahead without asking you')
+    await expect(note.getByTestId('approval-stopped-still')).toContainText('1 request asked before this still waits for you')
+    expect((await request.post(`/api/v1/approvals/${earlier.approval.id}/answer`, { data: { decision: 'deny' } })).ok()).toBe(true)
 
     // Off: the next ask is answered at once, with no card.
     const quietWhat = `Post the changelog ${stamp()}`
@@ -725,12 +730,17 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
     const toggle = page.locator('#settings-approvals-ask-me')
     await expect(toggle).toHaveAttribute('aria-checked', 'false', { timeout: 15_000 })
     await expect(page.getByTestId('settings-approvals-unasked')).toContainText(quietWhat, { timeout: 20_000 })
+    // A row opens to what it was: the command and who asked.
+    const row = page.getByTestId('settings-approvals-unasked-item').filter({ hasText: quietWhat })
+    await row.locator('summary').click()
+    await expect(row).toContainText('release.sh')
     if (process.env.APR_SHOTS) await page.getByTestId('settings-approvals-ask-me-row').screenshot({ path: `${process.env.APR_SHOTS}/settings-switch-off.png` })
 
     // On again from Settings: the next ask waits for the person.
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-checked', 'true')
-    await expect(page.getByTestId('settings-approvals-unasked')).toHaveCount(0)
+    // The record stays once something went ahead, said to be from while approvals were off.
+    await expect(page.getByTestId('settings-approvals-unasked')).toContainText('While approvals were off')
     await expect.poll(askMeNow).toBe(true)
     const asked = await ask(request, { what: `Post the roadmap ${stamp()}` })
     await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${asked.approval.id}"]`)).toBeVisible({ timeout: 15_000 })

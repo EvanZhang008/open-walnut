@@ -387,8 +387,12 @@
   text-align: left;
   cursor: pointer;
 }
-/* One line, the whole sentence on hover and in the dialog: the line card is the small form. */
-.approval-line-what { flex: 1 1 0; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Two lines of the sentence before "…" (2026-11-12 review, twice: one line cut "Post the release
+   notes" to "Post th…" beside an Approve that takes a click); the whole of it on hover and in the dialog. */
+.approval-line-what {
+  flex: 1 1 0; min-width: 0; font-weight: 600; overflow: hidden; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+}
 /* Second line: how many and the time, then the buttons. */
 /* Never narrower than a short name and its time: in a narrow column (the Org list) the buttons
    wrap under it instead of cutting the time to "9:56 le". */
@@ -572,8 +576,10 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
 
 /* After "stop asking me": what changed, with Undo and the way to the switch. */
 .approval-stopped { display: flex; flex-direction: column; gap: 6px; border-left-color: var(--success); }
-.approval-dialog .approval-stopped { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
 .approval-stopped-line { font-weight: 600; }
+.approval-stopped-what { font-size: 13px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.approval-stopped-sub { font-size: 13px; color: var(--fg); }
+.approval-dialog .approval-stopped-inline { margin-top: 4px; padding: 0; border: 0; }
 .approval-stopped-actions { display: flex; align-items: center; gap: 14px; font-size: 13px; }
 .approval-stopped-close {
   margin-left: auto; padding: 0 4px; border: 0; background: none; color: var(--fg-muted);

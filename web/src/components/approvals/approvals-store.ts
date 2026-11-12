@@ -44,9 +44,11 @@ export interface ApprovalsState {
    * approval it was clicked on: the corner says so with Undo for a while. `undone` once Undo ran.
    */
   stoppedAsking: { id: string; at: number; undone?: boolean } | null;
+  /** "Approve, and stop asking me" is on its way for this one: its own "Approved" receipt is not shown (the note says it). */
+  stoppingId: string | null;
 }
 
-const EMPTY: ApprovalsState = { items: new Map(), keys: [], touchId: null, busy: {}, errors: {}, done: {}, openId: null, unlockId: null, vaultLooking: false, stoppedAsking: null };
+const EMPTY: ApprovalsState = { items: new Map(), keys: [], touchId: null, busy: {}, errors: {}, done: {}, openId: null, unlockId: null, vaultLooking: false, stoppedAsking: null, stoppingId: null };
 let state: ApprovalsState = EMPTY;
 const subs = new Set<() => void>();
 /** Approvals this page has raised a system notification for, so a re-read never repeats one. */
@@ -348,15 +350,16 @@ export async function approveAndStopAsking(a: Approval): Promise<void> {
   const kind = approveKind(state, a);
   if (!kind || a.singleUse || a.outsideSwitch || state.busy[a.id]) return;
   // This one first: a cancelled Touch ID leaves the switch as it was.
+  set({ stoppingId: a.id });
   await decideApproval(a, 'approve', kind === 'touch-id');
-  if (state.done[a.id]?.status !== 'approved') return;
+  if (state.done[a.id]?.status !== 'approved') { set({ stoppingId: null }); return; }
   try {
     await setApprovalsAskMe(false);
     log.info('approvals', 'the person turned approvals off from a card', { approvalId: a.id });
     showStopped({ id: a.id, at: Date.now() });
   } catch (err) {
     log.warn('approvals', 'turning approvals off from a card failed', { approvalId: a.id, error: err instanceof Error ? err.message : String(err) });
-    set({ errors: { ...state.errors, [a.id]: 'Approved, but approvals could not be turned off. Try again in Settings › General.' } });
+    set({ stoppingId: null, errors: { ...state.errors, [a.id]: 'Approved, but approvals could not be turned off. Try again in Settings › General.' } });
   }
 }
 

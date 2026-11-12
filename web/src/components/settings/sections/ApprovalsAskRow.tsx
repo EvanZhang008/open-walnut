@@ -50,12 +50,12 @@ export function ApprovalsAskRow({ config, save }: { config: Config; save: Save }
         data-testid="settings-approvals-ask-me-row"
         control={<ToggleSwitch id="settings-approvals-ask-me" checked={setting.value} busy={setting.busy} onChange={setting.set} />}
       />
-      {!setting.value && <UnaskedList />}
+      <UnaskedList off={!setting.value} />
     </>
   );
 }
 
-function UnaskedList() {
+function UnaskedList({ off }: { off: boolean }) {
   const [items, setItems] = useState<Approval[] | null>(null);
   const [all, setAll] = useState(false);
   useEffect(() => {
@@ -76,19 +76,31 @@ function UnaskedList() {
     return () => { live = false; window.removeEventListener('focus', onFocus); clearInterval(timer); };
   }, []);
   if (!items) return null;
+  // On, with nothing that ever went ahead: nothing to show. Once some did, the record stays.
+  if (!off && items.length === 0) return null;
   const shown = all ? items : items.slice(0, FIRST);
   return (
-    <SettingsRow indent label="Went ahead without asking" data-testid="settings-approvals-unasked">
+    <SettingsRow indent label="Went ahead without asking" help={off ? undefined : 'While approvals were off. Each one asks you now.'} data-testid="settings-approvals-unasked">
       {items.length === 0
         ? <p className="settings-row-help">Nothing yet.</p>
         : (
           <ul className="approvals-unasked-list">
             {shown.map((a) => (
               <li key={a.id} data-testid="settings-approvals-unasked-item">
-                <span className="approvals-unasked-what">{a.what}</span>
-                <span className="approvals-unasked-meta">
-                  {a.requester.taskTitle ? `${a.requester.taskTitle} · ` : ''}{timeAgo(a.answer?.at ?? a.createdAt, { long: true })}
-                </span>
+                <details>
+                  <summary>
+                    <span className="approvals-unasked-what">{a.what}</span>
+                    <span className="approvals-unasked-meta">
+                      {a.requester.taskTitle ? `${a.requester.taskTitle} · ` : ''}{timeAgo(a.answer?.at ?? a.createdAt, { long: true })}
+                    </span>
+                  </summary>
+                  <dl className="approvals-unasked-more-info">
+                    {a.requester.command && (<><dt>Command</dt><dd><code>{a.requester.command}</code></dd></>)}
+                    <dt>From</dt><dd>{fromText(a)}</dd>
+                    <dt>When</dt><dd>{new Date(a.answer?.at ?? a.createdAt).toLocaleString()}</dd>
+                    {a.detail && (<><dt>Detail</dt><dd><pre>{a.detail}</pre></dd></>)}
+                  </dl>
+                </details>
               </li>
             ))}
           </ul>
@@ -100,4 +112,11 @@ function UnaskedList() {
       )}
     </SettingsRow>
   );
+}
+
+/** Who asked, in a few words: the task, the process, the machine. */
+function fromText(a: Approval): string {
+  const r = a.requester;
+  const who = r.taskTitle ? `“${r.taskTitle}”` : r.process ? r.process : 'a script';
+  return `${who} ${r.local ? 'on this computer' : `on ${r.host}`}`;
 }
