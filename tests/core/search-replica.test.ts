@@ -28,6 +28,7 @@ import * as wiring from '../../src/core/search/wiring.js'
 import * as store from '../../src/core/replication/search-replica-store.js'
 import {
   syncSearchReplica, noteSearchDocChange, followerSearchStatuses, _resetSearchReplicaForTesting, type SearchReplicaDeps,
+  HOST_REST_MS, searchReplicaRestFor,
 } from '../../src/core/replication/search-replica.js'
 import type { ReplicaTarget } from '../../src/core/replication/replica-targets.js'
 import { companionSearchDecision, wireDocOf, AUTO_MIN_TOTAL_MB } from '../../src/core/replication/search-replica-wire.js'
@@ -498,5 +499,38 @@ describe('what a follower keeps of the search docs (search-replica-keep.ts)', ()
     kept.set(1, 'task:a', 'v1')
     expect(m.digestWhere((k) => k.startsWith('task:'))).toBe(kept.digest)
     expect(m.digestWhere(() => true)).toBe(m.digest)
+  })
+})
+
+describe('a host follower rests between synced rounds', () => {
+  // 2026-11-12: a session's doc goes whole with every vector each time it changes; a
+  // round every 2 minutes kept the stream to a host at its paced rate, and the relay
+  // on the way ended that connection every couple of MB.
+  it('after a synced round it rests HOST_REST_MS; a failed round does not; a keep change goes at once', async () => {
+    let t = Date.now()
+    const resting: SearchReplicaDeps = { ...deps, restMs: () => HOST_REST_MS, now: () => t }
+    const one = async (opts?: { now?: boolean }) => (await syncSearchReplica(resting, opts))[0]
+    expect(await one()).toMatchObject({ action: 'synced', inSync: true })
+    src.upsert({ kind: 'session', ref: 's-1', title: 'Debug the retry window', note: 'worker budget passage, longer now', updatedAt: 6_000 })
+    await drainBackfill(src)
+    calls = []
+    t += HOST_REST_MS - 1
+    expect(await one()).toMatchObject({ action: 'resting' })
+    expect(calls).toEqual([])
+    // A change of what it keeps (or a new follower) goes through the rest.
+    expect(await one({ now: true })).toMatchObject({ action: 'synced', need: 1, inSync: true })
+    src.upsert({ kind: 'session', ref: 's-1', title: 'Debug the retry window', note: 'worker budget passage, longer still', updatedAt: 7_000 })
+    await drainBackfill(src)
+    t += HOST_REST_MS
+    // A round that fails is tried again on the next tick, not after a rest.
+    const failing: SearchReplicaDeps = { ...resting, targets: () => [{ ...companion, post: async () => ({ ok: false, outcome: 'failed', status: 502, error: 'the stream lane closed' }) }] }
+    expect((await syncSearchReplica(failing))[0]).toMatchObject({ action: 'failed' })
+    t += 1
+    expect(await one()).toMatchObject({ action: 'synced', need: 1, inSync: true })
+  })
+
+  it('a host rests, the companion does not', () => {
+    expect(searchReplicaRestFor({ ...companion })).toBe(0)
+    expect(searchReplicaRestFor({ ...companion, id: 'host:devbox', kind: 'host', label: 'devbox' })).toBe(HOST_REST_MS)
   })
 })

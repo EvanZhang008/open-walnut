@@ -25,9 +25,11 @@ export function rideMaster(bytes: number): boolean {
  * Measured 2026-11-12 on the relay to a dev host, one fresh connection per run:
  * paced at 10 or 20 KB/s, 7 runs of 40 to 90 s all lived; at 30 or 50 KB/s, 2 of 4
  * were ended; at 100 KB/s or more (paced, or with a 64 KB acked window), 14 of 14
- * were ended within seconds, after 32 KB to 5 MB.
+ * were ended within seconds, after 32 KB to 5 MB. Over longer stretches 20 KB/s is not
+ * enough: the stream lane paced at 20 KB/s was ended 15 times in 20 minutes, after 7 to
+ * 476 s, while a 10 KB/s run beside it lived its whole 10 minutes (6 MB).
  */
-export const RELAY_UPLOAD_BYTES_PER_SEC = 20 * 1024
+export const RELAY_UPLOAD_BYTES_PER_SEC = 10 * 1024
 /** Room for one stream piece (48 KB as base64) at once; anything more waits its turn. */
 export const RELAY_UPLOAD_BURST_BYTES = 96 * 1024
 /**

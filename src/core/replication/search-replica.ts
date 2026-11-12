@@ -14,7 +14,7 @@
  *           both sides matched, only what changed since (and the keys removed
  *           since); the whole manifest (under 1 MB for 12k docs) only when that
  *           is unknown or did not bring the follower level.
- *   put     those docs with their vectors, about 1 MB per request; the last
+ *   put     those docs with their vectors, about 256 KB per request; the last
  *           one carries the digest, so the follower knows it is complete.
  *
  * A doc's value is its content hash and its vector state, kept in memory and
@@ -46,7 +46,12 @@ const CONFIG_ROUND_MS = 3_000
 const FULL_SCAN_MS = 60 * 60_000
 /** Rows per slice of the full walk: a cold slice reads its long bodies' overflow pages (64 rows: 72 ms worst on the real 12k-doc index). */
 const SCAN_SLICE = 32
-const PUT_BATCH_BYTES = 1024 * 1024
+/**
+ * A put's size. A relay to a host ends the connection under an upload every couple of MB
+ * (2026-11-12), and a put cut partway is lost whole: at the paced 10 to 20 KB/s a 1 MB put was
+ * in flight 50 s, half the life of the connection. What a put stored stays stored.
+ */
+const PUT_BATCH_BYTES = 256 * 1024
 const PUT_TIMEOUT_MS = 60_000
 /** A follower that does not know kind 'search' is asked again after this. */
 const UNSUPPORTED_REST_MS = 30 * 60_000
@@ -66,6 +71,22 @@ export interface SearchReplicaDeps {
   keep?: (target: ReplicaTarget) => Promise<SearchKeep | null>
   /** Where note keys start, for the notes a follower leaves out (search-replica-keep.ts). */
   notePrefix?: string | null
+  /**
+   * The least time between two synced rounds of one follower (0 or absent: every round).
+   * A host follower rests HOST_REST_MS: its copy answers searches only while the Mac is
+   * away, and a session's doc goes whole with every vector each time it changes, which
+   * every 2 minutes kept its stream to the host at the paced rate (2026-11-12).
+   */
+  restMs?: (target: ReplicaTarget) => number
+  now?: () => number
+}
+
+/** How long a host follower's copy may lag behind after a synced round. */
+export const HOST_REST_MS = 10 * 60_000
+
+/** A follower's rest: a host's copy may lag HOST_REST_MS; the companion's (HTTPS, no relay) none. */
+export function searchReplicaRestFor(target: Pick<ReplicaTarget, 'kind'>): number {
+  return target.kind === 'companion' ? 0 : HOST_REST_MS
 }
 
 /** What Settings shows about one follower's copy. */
@@ -93,6 +114,8 @@ interface FollowerState {
   confirmed: Map<string, string> | null
   unsupportedUntil: number
   status: FollowerSearchStatus | null
+  /** When its last round synced (0: none yet, or the last one failed). */
+  syncedAt: number
 }
 
 const followers = new Map<string, FollowerState>()
@@ -100,7 +123,7 @@ const followers = new Map<string, FollowerState>()
 function stateOf(id: string): FollowerState {
   let s = followers.get(id)
   if (!s) {
-    s = { confirmed: null, unsupportedUntil: 0, status: null }
+    s = { confirmed: null, unsupportedUntil: 0, status: null, syncedAt: 0 }
     followers.set(id, s)
   }
   return s
@@ -209,7 +232,7 @@ async function sendManifest(
   whole: boolean,
   pause: () => Promise<void>,
   dropped: ReadonlySet<string>,
-): Promise<{ need: number; sent: number; removed: number; inSync: boolean }> {
+): Promise<{ need: number; sent: number; removed: number; inSync: boolean; kb: number }> {
   let payload: Record<string, unknown>
   if (whole || !fs.confirmed) {
     payload = { op: 'sync', entries: [...snapshot].map(([k, h]) => ({ k, h })) }
@@ -223,6 +246,7 @@ async function sendManifest(
     const drop = removes.filter((k) => dropped.has(k))
     if (drop.length > 0) payload.drop = drop
   }
+  let up = Buffer.byteLength(JSON.stringify(payload))
   const synced = await step(target, payload)
   const need = Array.isArray(synced.need) ? (synced.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
   const removed = Number(synced.removed) || 0
@@ -235,6 +259,7 @@ async function sendManifest(
     if (batch.length === 0 && !last) return
     const r = await step(target, { op: 'put', docs: batch, ...(last ? { digest } : {}) }, PUT_TIMEOUT_MS)
     sent += Number(r.stored) || 0
+    up += bytes
     if (last) inSync = r.inSync === true
     batch = []
     bytes = 0
@@ -255,11 +280,11 @@ async function sendManifest(
     if (i % 32 === 31) await pause()
   }
   await flush(true)
-  return { need: need.length, sent, removed, inSync }
+  return { need: need.length, sent, removed, inSync, kb: Math.round(up / 1024) }
 }
 
 type RoundOutcome =
-  | { action: 'unavailable' | 'unsupported' | 'keyword-only' | 'off' | 'in-sync' }
+  | { action: 'unavailable' | 'unsupported' | 'keyword-only' | 'off' | 'in-sync' | 'resting' }
   | { action: 'synced'; need: number; sent: number; removed: number; inSync: boolean }
   | { action: 'failed'; error: string }
 
@@ -267,21 +292,24 @@ export type SearchReplicaRoundResult = { target: string } & RoundOutcome
 
 let running: Promise<SearchReplicaRoundResult[]> | null = null
 
-/** One round for every follower, one after another; a round asked for while one runs shares it. Never throws. */
-export function syncSearchReplica(deps: SearchReplicaDeps): Promise<SearchReplicaRoundResult[]> {
+/**
+ * One round for every follower, one after another; a round asked for while one runs shares it.
+ * `now`: a change of what a follower keeps, or a new follower, which no rest holds back. Never throws.
+ */
+export function syncSearchReplica(deps: SearchReplicaDeps, opts: { now?: boolean } = {}): Promise<SearchReplicaRoundResult[]> {
   if (running) return running
-  running = roundAll(deps).finally(() => { running = null })
+  running = roundAll(deps, opts.now === true).finally(() => { running = null })
   return running
 }
 
-async function roundAll(deps: SearchReplicaDeps): Promise<SearchReplicaRoundResult[]> {
+async function roundAll(deps: SearchReplicaDeps, urgent: boolean): Promise<SearchReplicaRoundResult[]> {
   const targets = deps.targets()
   // A follower that left the list (a host server removed) leaves Settings too.
   for (const id of [...followers.keys()]) if (!targets.some((t) => t.id === id)) followers.delete(id)
   const out: SearchReplicaRoundResult[] = []
   for (const target of targets) {
     try {
-      out.push({ target: target.id, ...(await round(deps, target)) })
+      out.push({ target: target.id, ...(await round(deps, target, urgent)) })
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
       out.push({ target: target.id, action: 'failed', error })
@@ -290,12 +318,15 @@ async function roundAll(deps: SearchReplicaDeps): Promise<SearchReplicaRoundResu
   return out
 }
 
-async function round(deps: SearchReplicaDeps, target: ReplicaTarget): Promise<RoundOutcome> {
+async function round(deps: SearchReplicaDeps, target: ReplicaTarget, urgent = false): Promise<RoundOutcome> {
   const pause = deps.pause ?? defaultPause
   const fs = stateOf(target.id)
   const mode = await deps.mode()
   const base = { id: target.id, kind: target.kind, label: target.label, mode, checkedAt: Date.now() }
   if (Date.now() < fs.unsupportedUntil) return { action: 'unsupported' }
+  const now = deps.now ?? Date.now
+  const rest = deps.restMs?.(target) ?? 0
+  if (!urgent && rest > 0 && fs.syncedAt > 0 && now() - fs.syncedAt < rest) return { action: 'resting' }
   if (!(await target.available())) {
     fs.status = { ...base, state: 'unavailable' }
     return { action: 'unavailable' }
@@ -336,6 +367,7 @@ async function round(deps: SearchReplicaDeps, target: ReplicaTarget): Promise<Ro
     const counts = { docs: Number(reply.docs) || 0, vectored: Number(reply.vectored) || 0 }
     if (reply.inSync === true || reply.digest === manifestDigest) {
       fs.confirmed = snapshot
+      fs.syncedAt = now()
       fs.status = { ...base, ...info, ...counts, state: 'ready' }
       return { action: 'in-sync' }
     }
@@ -343,19 +375,22 @@ async function round(deps: SearchReplicaDeps, target: ReplicaTarget): Promise<Ro
     // What changed since both sides last matched; the whole manifest when that
     // is unknown, or when the delta did not bring the follower level.
     let totals = { need: 0, sent: 0, removed: 0 }
+    let kb = 0
     let inSync = false
     for (const whole of fs.confirmed ? [false, true] : [true]) {
       const r = await sendManifest(deps, target, fs, index, snapshot, manifestDigest, whole, pause, dropped)
       totals = { need: totals.need + r.need, sent: totals.sent + r.sent, removed: totals.removed + r.removed }
+      kb += r.kb
       inSync = r.inSync
       if (inSync) break
     }
     if (inSync) fs.confirmed = snapshot
+    fs.syncedAt = inSync ? now() : 0
     fs.status = {
       ...base, ...info, state: inSync ? 'ready' : 'syncing', docs: snapshot.size, pending: 0,
       ...(inSync ? { syncedAt: Date.now() } : {}),
     }
-    log.memory.info('search replica: round', { target: target.id, entries: snapshot.size, ...totals, inSync })
+    log.memory.info('search replica: round', { target: target.id, entries: snapshot.size, ...totals, inSync, sentKB: kb })
     return { action: 'synced', ...totals, inSync }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
@@ -366,6 +401,7 @@ async function round(deps: SearchReplicaDeps, target: ReplicaTarget): Promise<Ro
       return { action: 'unsupported' }
     }
     fs.status = { ...base, state: 'error', error }
+    fs.syncedAt = 0
     log.memory.warn('search replica: round failed', { target: target.id, error })
     return { action: 'failed', error }
   }
@@ -388,12 +424,14 @@ async function defaultDeps(): Promise<SearchReplicaDeps> {
       return { notes: k.notes, memory: k.memory, skills: k.skills, notesExclude: k.notesExclude }
     },
     notePrefix: searchNoteKeyPrefix(WALNUT_HOME, NOTES_DIR),
+    restMs: searchReplicaRestFor,
   }
 }
 
 /**
- * The leader only: a first round a minute after boot, one every 2 minutes,
- * one a few seconds after the setting changes or a follower joins.
+ * The leader only: a first round a minute after boot, one every 2 minutes (a host
+ * follower that synced rests HOST_REST_MS), one a few seconds after the setting
+ * changes or a follower joins, which no rest holds back.
  */
 export function startSearchReplicaSync(given?: SearchReplicaDeps): { stop: () => void } {
   if (isFollower()) return { stop: () => {} }
@@ -401,7 +439,7 @@ export function startSearchReplicaSync(given?: SearchReplicaDeps): { stop: () =>
   let deps: SearchReplicaDeps | null = given ?? null
   const unlisten: Array<() => void> = []
   let wired = false
-  const run = (): void => {
+  const run = (urgent = false): void => {
     if (stopped) return
     void (async () => {
       deps ??= await defaultDeps()
@@ -410,18 +448,18 @@ export function startSearchReplicaSync(given?: SearchReplicaDeps): { stop: () =>
         unlisten.push((await import('../search/wiring.js')).onSearchIndexDocChange(noteSearchDocChange))
         unlisten.push((await import('./replica-targets.js')).onReplicaTargetsChanged(soonRound))
       }
-      await syncSearchReplica(deps)
+      await syncSearchReplica(deps, { now: urgent })
     })().catch((err) => log.memory.warn('search replica: round crashed', { error: err instanceof Error ? err.message : String(err) }))
   }
   let soon: ReturnType<typeof setTimeout> | null = null
   function soonRound(): void {
     if (stopped || soon) return
-    soon = setTimeout(() => { soon = null; run() }, CONFIG_ROUND_MS)
+    soon = setTimeout(() => { soon = null; run(true) }, CONFIG_ROUND_MS)
     soon.unref?.()
   }
-  const first = setTimeout(run, FIRST_ROUND_MS)
+  const first = setTimeout(() => run(), FIRST_ROUND_MS)
   first.unref?.()
-  const every = setInterval(run, ROUND_MS)
+  const every = setInterval(() => run(), ROUND_MS)
   every.unref?.()
   const name = 'search-replica-config'
   // What each replica keeps, as one string: a change starts a round (the first one after boot too).

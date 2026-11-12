@@ -969,8 +969,12 @@ export class DaemonConnection {
    * connection of its own they never ride the session link, whose connection their
    * megabytes would end (2026-11-11). A person's own (a picture pasted into a session, a
    * file saved, an upload) still goes there after the wait rather than being lost.
+   * They ride the bulk channel at any size: on 2026-11-12, with the read copy off the
+   * session link, the link still dropped about once an hour with these in its upload
+   * (replica manifests under 256 KB each, 1.5 MB in 16 minutes; the external session
+   * scan's 500 KB list of known ids every 10 minutes).
    */
-  static readonly BACKGROUND_UPLOADS = new Set(['fs.writePart', 'replica.put', 'replica.sync', 'attachments.put', 'attachments.sync'])
+  static readonly BACKGROUND_UPLOADS = new Set(['fs.writePart', 'replica.put', 'replica.sync', 'attachments.put', 'attachments.sync', 'sessions.discoverExternal'])
   /**
    * Commands whose request is big only sometimes: a picture pasted into a session on the
    * host or a large file saved (fs.write), a replica's manifest of thousands of rows. At
@@ -980,14 +984,15 @@ export class DaemonConnection {
   static readonly BULK_WHEN_BIG = new Set(['fs.write', 'replica.sync', 'attachments.sync'])
   static BULK_WHEN_BIG_BYTES = 256 * 1024
   /**
-   * The request is an upload: one of BULK_UPLOADS, a BULK_WHEN_BIG command at its size, or
-   * the host's whole read copy sent unbound (host-slice-unbound-v1, pushHostSlice).
+   * The request is an upload: one of BULK_UPLOADS or BACKGROUND_UPLOADS, a BULK_WHEN_BIG
+   * command at its size, or the host's whole read copy sent unbound (host-slice-unbound-v1, pushHostSlice).
    */
   static isBackgroundUpload(cmd: string, params: Record<string, unknown>): boolean {
     return DaemonConnection.BACKGROUND_UPLOADS.has(cmd) || (cmd === 'host.slice' && params.bind === false)
   }
   static isUpload(cmd: string, params: Record<string, unknown>): boolean {
     return DaemonConnection.BULK_UPLOADS.has(cmd)
+      || DaemonConnection.BACKGROUND_UPLOADS.has(cmd)
       || (cmd === 'host.slice' && params.bind === false)
       || (DaemonConnection.BULK_WHEN_BIG.has(cmd) && requestBytesEstimate(params) >= DaemonConnection.BULK_WHEN_BIG_BYTES)
   }

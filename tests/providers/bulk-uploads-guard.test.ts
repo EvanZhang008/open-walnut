@@ -74,7 +74,8 @@ function paramsOf(text: string): string {
 }
 
 const SEND_RE = /(?:\bsend\(\s*|call<[^>]*>\([^,()]+,\s*[^,()]+,\s*)'([a-z][a-zA-Z]*\.[a-zA-Z.]+)'\s*,\s*/g
-const BYTES_RE = /base64|\bdata\b|\bsliceGz\b|\brows\b|\bfiles\b|\bentries\b|\bbody\b|\bcontent\b|\bchunk\b|\bimage\b|\bbuf\b/
+// A list of every id this side knows grows with the user's data (the external scan's: 500 KB).
+const BYTES_RE = /\bknown\w*Ids\b|base64|\bdata\b|\bsliceGz\b|\brows\b|\bfiles\b|\bentries\b|\bbody\b|\bcontent\b|\bchunk\b|\bimage\b|\bbuf\b/
 
 function byteCarryingSends(): Array<{ cmd: string; at: string }> {
   const out: Array<{ cmd: string; at: string }> = []
@@ -100,6 +101,7 @@ describe('bytes carried up to a host ride the bulk channel', () => {
   const bulk = setOf('BULK_COMMANDS')
   const uploads = setOf('BULK_UPLOADS')
   const whenBig = setOf('BULK_WHEN_BIG')
+  const background = setOf('BACKGROUND_UPLOADS')
 
   it('every upload is a bulk command', () => {
     expect([...uploads].filter((c) => !bulk.has(c))).toEqual([])
@@ -112,8 +114,8 @@ describe('bytes carried up to a host ride the bulk channel', () => {
 
   it('each byte-carrying daemon command is an upload, a download or listed with why it stays', () => {
     const bad = byteCarryingSends()
-      .filter((s) => !uploads.has(s.cmd) && !whenBig.has(s.cmd) && !DOWNLOADS.has(s.cmd) && !(s.cmd in ON_SESSION_LINK))
-      .map((s) => `${s.at} sends ${s.cmd} with bytes: add it to BULK_UPLOADS (and BULK_COMMANDS) or BULK_WHEN_BIG, or to ON_SESSION_LINK with why`)
+      .filter((s) => !uploads.has(s.cmd) && !whenBig.has(s.cmd) && !background.has(s.cmd) && !DOWNLOADS.has(s.cmd) && !(s.cmd in ON_SESSION_LINK))
+      .map((s) => `${s.at} sends ${s.cmd} with bytes: add it to BULK_UPLOADS (and BULK_COMMANDS), BACKGROUND_UPLOADS or BULK_WHEN_BIG, or to ON_SESSION_LINK with why`)
     expect(bad).toEqual([])
   })
 
@@ -130,9 +132,11 @@ describe('bytes carried up to a host ride the bulk channel', () => {
     expect(once).toMatch(/const upload = DaemonConnection\.isUpload\(cmd, params\)/)
     expect(once).toMatch(/if \(background && this\.bulkOwnLink && !bulkSocket\) \{\s*throw markLinkFailure\(/)
     // Every upload no person waits on is in the background set.
-    const background = setOf('BACKGROUND_UPLOADS')
-    for (const c of ['fs.writePart', 'replica.put', 'replica.sync', 'attachments.put', 'attachments.sync']) expect(background, c).toContain(c)
-    expect([...background].filter((c) => !uploads.has(c) && !whenBig.has(c))).toEqual([])
+    for (const c of ['fs.writePart', 'replica.put', 'replica.sync', 'attachments.put', 'attachments.sync', 'sessions.discoverExternal']) expect(background, c).toContain(c)
+    // At any size (2026-11-12: manifests under the size bar, 1.5 MB in 16 minutes, still
+    // took the session link down): isUpload reads the whole background set.
+    const isUpload = CONN.slice(CONN.indexOf('static isUpload('), CONN.indexOf('static isUpload(') + 400)
+    expect(isUpload).toContain('DaemonConnection.BACKGROUND_UPLOADS.has(cmd)')
   })
 
   it('the listed exceptions are still sent somewhere', () => {

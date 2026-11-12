@@ -46,7 +46,12 @@
 
 import crypto from 'node:crypto'
 
-export const PUT_BATCH_BYTES = 512 * 1024
+/**
+ * A put's size: a host's copies ride a stream paced to 10 KB/s (ssh-upload-budget.ts), so
+ * 256 KB is about 26 s on the wire, well inside PUT_TIMEOUT_MS, and a connection the relay
+ * ends loses at most that much.
+ */
+export const PUT_BATCH_BYTES = 256 * 1024
 export const PUT_TIMEOUT_MS = 60_000
 /** Hash this many rows, then let the event loop run. */
 export const HASH_SLICE = 300
