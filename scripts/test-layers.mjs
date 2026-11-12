@@ -51,6 +51,17 @@ export const LOCAL_MAX_MS = 1500
  * so this keeps the cheapest third of them and the local run near a minute.
  */
 export const SCAN_MAX_MS = 500
+/**
+ * The local layer's scan tests are the ones a change reaches: a test that names a changed file, or
+ * a directory holding one below the top level (`web/src/components/sessions`). A scan test over a
+ * whole top directory (`src`, `web/src`, the repo) reaches every change, so those run cheapest
+ * first up to this much measured cost (an unmeasured one counts UNMEASURED_SCAN_MS), and the rest
+ * wait for the land layer and the deep test. 2026-11-12: every local run took all 626 fast scan
+ * tests whatever the change, and at a Mac load of 140 to 280 one run of one worker took 30 to 100
+ * minutes.
+ */
+export const LOCAL_BROAD_SCAN_MS = 15_000
+export const UNMEASURED_SCAN_MS = 400
 /** The land layer runs scan tests up to this long. */
 export const LAND_SCAN_MAX_MS = 6000
 /** These paths change how every test runs: the land layer adds the whole local layer for them. */
@@ -119,6 +130,39 @@ export function isScanTest(file, text) {
   return SCAN_NAME.test(file) || (SCAN_READS.test(text) && SCAN_TREE.test(text) && !SCAN_SERVER.test(text))
 }
 
+// The repo paths a scan test names: its quoted path literals and the quoted pieces of one join().
+const TOP_DIR = /^(?:src|web|tests|scripts|ios-native|docs|\.github|\.husky|packages|desktop|plugins|examples|infra|site)(?:\/|$)/
+const tidy = (p) => p.replace(/^(?:\.\.?\/)+/, '').replace(/\/+$/, '')
+export function scanPaths(text) {
+  const out = new Set()
+  for (const m of text.matchAll(/['"`]((?:\.\.?\/)*[\w.@-][\w.@/-]*)['"`]/g)) { const p = tidy(m[1]); if (TOP_DIR.test(p)) out.add(p) }
+  for (const m of text.matchAll(/join\(([^()]*)\)/g)) {
+    const p = [...m[1].matchAll(/['"`]([\w.@/-]+)['"`]/g)].map((x) => tidy(x[1])).filter(Boolean).join('/')
+    if (TOP_DIR.test(p)) out.add(p)
+  }
+  return [...out]
+}
+// A top directory, or web/src: a scan test over one of these reaches every change under it.
+const BROAD_DIR = (p) => !p.includes('/') || p === 'web/src'
+/**
+ * How a scan test reaches a change: 'near' when it names a changed file (with or without its
+ * extension) or a directory holding one that is not a whole top directory; 'broad' when it names
+ * no path, or only whole top directories holding one; null when it names paths none of which hold
+ * a changed file.
+ */
+export function scanReach(changed, paths) {
+  if (!paths.length) return 'broad'
+  let broad = false
+  for (const c of changed) {
+    const stem = c.replace(/\.[^./]+$/, '')
+    for (const p of paths) {
+      if (p === c || p === stem) return 'near'
+      if (c.startsWith(p + '/')) { if (BROAD_DIR(p)) broad = true; else return 'near' }
+    }
+  }
+  return broad ? 'broad' : null
+}
+const pathsCache = new Map()
 const scanCache = new Map()
 export function scanTests(universe = quickUniverse(), durations = readDurations(), maxMs = SCAN_MAX_MS, read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8')) {
   return universe.filter((f) => {
@@ -172,7 +216,7 @@ export const HUB_IMPORTERS = 60
  * editing: the same, with only fast reached files.
  */
 export const LIMITS = {
-  local: { fileMaxMs: LOCAL_MAX_MS, maxReached: 60, scanMaxMs: SCAN_MAX_MS, depth: 1 },
+  local: { fileMaxMs: LOCAL_MAX_MS, maxReached: 60, scanMaxMs: SCAN_MAX_MS, depth: 1, broadScanMs: LOCAL_BROAD_SCAN_MS },
   land: { fileMaxMs: Infinity, maxReached: Infinity, scanMaxMs: LAND_SCAN_MAX_MS, depth: Infinity, hubAt: HUB_IMPORTERS },
 }
 
@@ -187,7 +231,7 @@ export const LIMITS = {
  *   and for a change to the test setup, the tests of the setup itself.
  */
 export function scopedLayer(layer, changed, { universe = quickUniverse(), slow = slowUniverse(), durations = readDurations(), graph, namedBy = namers, read, limits = {}, exists = (f) => fs.existsSync(path.join(ROOT, f)) } = {}) {
-  const { fileMaxMs, maxReached, scanMaxMs, depth, hubAt } = { ...LIMITS[layer], ...limits }
+  const { fileMaxMs, maxReached, scanMaxMs, depth, hubAt, broadScanMs } = { ...LIMITS[layer], ...limits }
   const inTier = new Set(universe)
   const why = new Map()
   const add = (f, r) => { if (inTier.has(f) && !why.has(f)) why.set(f, r) }
@@ -200,7 +244,27 @@ export function scopedLayer(layer, changed, { universe = quickUniverse(), slow =
   affordable.sort((a, b) => cost(durations, a) - cost(durations, b) || a.localeCompare(b))
   for (const f of affordable.slice(0, maxReached)) add(f, direct.has(f) ? 'imports a changed file' : 'names a changed file')
   leftToGate.push(...affordable.slice(maxReached))
-  for (const f of scanTests(universe, durations, scanMaxMs, read)) add(f, 'scan test')
+  const scans = scanTests(universe, durations, scanMaxMs, read)
+  if (broadScanMs === undefined) for (const f of scans) add(f, 'scan test')
+  else {
+    // Cached for the tree's own files only: a caller's reader (a test) may give a name other text.
+    const cache = read ? new Map() : pathsCache
+    const reader = read ?? ((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'))
+    const pathsOf = (f) => {
+      if (!cache.has(f)) { let t = ''; try { t = reader(f) } catch { /* gone */ } cache.set(f, scanPaths(t)) }
+      return cache.get(f)
+    }
+    const broad = []
+    for (const f of scans) {
+      const r = scanReach(changed, pathsOf(f))
+      if (r === 'near') add(f, 'scan test over the changed files')
+      else if (r === 'broad') broad.push(f)
+    }
+    const scanCost = (f) => durations[f] ?? UNMEASURED_SCAN_MS
+    broad.sort((a, b) => scanCost(a) - scanCost(b) || a.localeCompare(b))
+    let spent = 0
+    for (const f of broad) { if (spent + scanCost(f) > broadScanMs) break; spent += scanCost(f); add(f, 'scan test over the whole tree') }
+  }
   if (changed.some((f) => SETUP_PATH.test(f))) for (const f of universe) if (f.startsWith('tests/setup/')) add(f, 'the change touches the test setup')
   const files = [...why.keys()].sort()
   const slowSet = new Set(slow)

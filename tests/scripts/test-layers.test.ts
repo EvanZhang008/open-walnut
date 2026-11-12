@@ -123,6 +123,49 @@ describe('scan tests', () => {
   })
 })
 
+describe("the local layer's scan tests: the ones the change reaches", () => {
+  // 2026-11-12: every local run took all 626 fast scan tests whatever the change; at a Mac load of
+  // 140 to 280 one such run of one worker took 30 to 100 minutes.
+  it('reads the repo paths a scan test names, from quoted literals and the pieces of a join()', () => {
+    const text = "fs.readFileSync(path.join(ROOT, 'web', 'src/components'), 'utf8'); walk('../src/core/'); x('not/a/path'); y('docs/a.md')"
+    // Each quoted piece of a join counts on its own too ('web'): a test may name more, never less.
+    const got = layers.scanPaths(text)
+    for (const p of ['docs/a.md', 'src/core', 'web/src/components']) expect(got).toContain(p)
+    expect(got).not.toContain('not/a/path')
+  })
+
+  it('a test naming the file or a directory below the top is near; a whole top directory or no path is broad; elsewhere is none', () => {
+    const c = ['web/src/components/sessions/Note.tsx']
+    expect(layers.scanReach(c, ['web/src/components/sessions/Note.tsx'])).toBe('near')
+    expect(layers.scanReach(c, ['web/src/components/sessions/Note'])).toBe('near')
+    expect(layers.scanReach(c, ['web/src/components'])).toBe('near')
+    expect(layers.scanReach(c, ['web/src'])).toBe('broad')
+    expect(layers.scanReach(c, ['web'])).toBe('broad')
+    expect(layers.scanReach(c, [])).toBe('broad')
+    expect(layers.scanReach(c, ['src/core', 'web/src/pages'])).toBe(null)
+    expect(layers.scanReach(['scripts/x.sh'], ['scripts'])).toBe('broad')
+  })
+
+  it('runs every near one, the broad ones cheapest first within LOCAL_BROAD_SCAN_MS, none elsewhere; the land layer runs them all', () => {
+    const universe = ['tests/near-guard.test.ts', 'tests/far-guard.test.ts', 'tests/cheap-ratchet.test.ts', 'tests/dear-ratchet.test.ts', 'tests/new-ratchet.test.ts']
+    const texts: Record<string, string> = {
+      'tests/near-guard.test.ts': "readdirSync('src/core/sessions')",
+      'tests/far-guard.test.ts': "readdirSync('web/src/pages')",
+      'tests/cheap-ratchet.test.ts': "walk('src')",
+      'tests/dear-ratchet.test.ts': "walk('src')",
+      'tests/new-ratchet.test.ts': '',
+    }
+    const durations = { 'tests/near-guard.test.ts': 450, 'tests/cheap-ratchet.test.ts': 100, 'tests/dear-ratchet.test.ts': 450, 'tests/far-guard.test.ts': 10 }
+    const opts = { universe, durations, namedBy: () => new Set<string>(), graph: fakeGraph({}), read: (f: string) => texts[f] ?? '', limits: { broadScanMs: 100 + layers.UNMEASURED_SCAN_MS } }
+    const local = layers.localLayer(['src/core/sessions/brief.ts'], opts)
+    expect(local.files).toEqual(['tests/cheap-ratchet.test.ts', 'tests/near-guard.test.ts', 'tests/new-ratchet.test.ts'])
+    expect(local.why.get('tests/near-guard.test.ts')).toBe('scan test over the changed files')
+    expect(local.why.get('tests/cheap-ratchet.test.ts')).toBe('scan test over the whole tree')
+    const { limits: _local, ...landOpts } = opts
+    expect(layers.landLayer(['src/core/sessions/brief.ts'], landOpts).files).toEqual([...universe].sort())
+  })
+})
+
 describe('the quick universe', () => {
   it('leaves out the slow and the quarantined files', () => {
     const u = new Set(layers.quickUniverse())

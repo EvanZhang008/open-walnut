@@ -15,7 +15,7 @@ vi.mock('../../../src/core/config-manager.js', async (orig) => {
 });
 
 import { WALNUT_HOME } from '../../../src/constants.js';
-import { __setHostLoadProberForTesting, choosePlacement, hostLoads, hostSlots, judgeHost, localLoadPerCpu, macOnlyReason, placementCaps, placementWeight } from '../../../src/core/hosts/placement.js';
+import { __setHostLoadProberForTesting, choosePlacement, hostLoads, hostSlots, judgeHost, localLoadPerCpu, macOnlyReason, needsMacTools, placementCaps, placementWeight } from '../../../src/core/hosts/placement.js';
 import os from 'node:os';
 import { HostsFullError, __resetHostAdmissionForTesting, __setWaitStepForTesting, admitHostStart, holdSlotFor, isAutomaticStart, slotHoldersOn } from '../../../src/core/sessions/host-admission.js';
 import type { HostLoad } from '../../../src/providers/host-facts-core.js';
@@ -131,6 +131,26 @@ describe('macOnlyReason', () => {
   });
   it('a tag pins it', () => {
     expect(macOnlyReason('anything', undefined, ['mac-only'])).toBeTruthy();
+  });
+});
+
+describe('needsMacTools (where a first start runs)', () => {
+  it.each([
+    'Fix the iOS share sheet',
+    'Rebuild the simulator lane with xcodebuild',
+    'Change the macOS Focus shortcut',
+    'Take a look at my screen',
+  ])('%s needs the Mac', (text) => {
+    expect(needsMacTools(text, undefined)).toBe(true);
+  });
+  // 2026-11-12: four web tasks whose briefs named only where the result is checked stayed on a Mac
+  // at load 150, their tests held by its load watchdog.
+  it.each([
+    'Redesign the note above the composer; check it in the Mac app (WebKit)',
+    'The panel scrolls wrong in the Mac app WKWebView',
+    'A layout bug that shows in Safari',
+  ])('%s does not: a place the result is checked in is no tool the work runs', (text) => {
+    expect(needsMacTools(text, '/Users/me/walnut')).toBe(false);
   });
 });
 

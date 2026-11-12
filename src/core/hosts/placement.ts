@@ -383,8 +383,14 @@ async function localLiveCount(
 /** Words that say the work needs the Mac itself (or its user's screen). */
 const MAC_ONLY = /\b(ios|ipados|iphone|ipad|xcode|xcodebuild|xcrun|simulators?|testflight|swiftui|app store connect|mac app|macos|wkwebview|webkit|safari|peekaboo|osascript|browser[- ]relay|keychain|launchctl|launchd|touch id|(?:on|this|the|my|his|her|their) mac|mac's|my screen|his screen|her screen|their screen|the user's screen|screen recording)\b/i;
 
-/** The Mac's own tools by name: work that needs them runs on a Mac whatever else it says. */
-const MAC_TOOLS = /\b(ios|ipados|iphone|ipad|xcode|xcodebuild|xcrun|simulators?|testflight|swiftui|app store connect|mac app|macos|safari|wkwebview|peekaboo|osascript|keychain|launchctl|launchd|touch id|browser[- ]relay|my screen|his screen|her screen|their screen|the user's screen|screen recording)\b/i;
+/**
+ * The Mac's own tools by name: work that needs them runs on a Mac whatever else it says. A place
+ * the result is checked in ("the Mac app", "WKWebView", "Safari") is no tool the work runs: a web
+ * or server change builds and tests on any host, and its WebKit check runs on the Mac from there
+ * (2026-11-12: four web tasks whose briefs said "check it in the Mac app" stayed on a Mac at load
+ * 150, their test runs held by its load watchdog).
+ */
+const MAC_TOOLS = /\b(ios|ipados|iphone|ipad|xcode|xcodebuild|xcrun|simulators?|testflight|swiftui|app store connect|macos|peekaboo|osascript|keychain|launchctl|launchd|touch id|browser[- ]relay|my screen|his screen|her screen|their screen|the user's screen|screen recording)\b/i;
 
 /**
  * Narrower than macOnlyReason: a tag, an iOS or Xcode folder, or a Mac tool by name.
