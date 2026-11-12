@@ -238,6 +238,13 @@ async function spawnDaemon(name: string, twin: 'source' | 'standalone'): Promise
   // Short: the gateway's unix socket path must fit in 104 bytes on macOS.
   const dir = path.join(base, name.slice(0, 2))
   fs.mkdirSync(dir)
+  // A copy an old test run left on the host (2026-11-12: five such copies made every call
+  // from outside a session nobody's, and each waited 90 s for "no server connected").
+  fs.mkdirSync(path.join(dir, 'offline-host'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'offline-host', 'slice-stale0test.json'), JSON.stringify({
+    v: 1, home: path.join(base, 'old-test-home'), hash: 'h-old', asOf: Date.now() - 30 * 24 * 3600_000, host: name,
+    sessions: [], tasks: [], requests: [], boards: [], boardOf: {},
+  }))
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     WALNUT_DAEMON_DIR: dir,
@@ -418,7 +425,8 @@ describe('the Mac is gone and the cloud companion takes over (real daemon twins)
     const r = await gatewayCall(devbox, A, 'task_send', { to: TASK_B, text: 'status?' })
     expect(r).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })
     expect(inboxOf(oldbox, B).filter((m) => m.includes('status?'))).toHaveLength(0)
-    // A walnut run outside any session (sid 'external') goes to the Mac on both twins, never answered here.
+    // A walnut run outside any session (sid 'external') goes to the Mac on both twins, never answered
+    // here, with an old test run's copy beside the real one.
     for (const d of [devbox, oldbox]) {
       expect(await gatewayCall(d, EXTERNAL, 'task_get', { id: TASK_A })).toMatchObject({ ok: true, result: { answeredBy: 'primary' } })
     }

@@ -566,6 +566,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   const HANDOVER_GRACE_MS = 60_000
 
   const slices = new Map<string, HostSlice>()
+  /** The asOf last written per home: an unchanged copy's newer asOf is written at most once a day. */
+  const writtenAsOf = new Map<string, number>()
   const journal = deps.journal!
   const writes = new Map<string, number[]>()
   /** Rows the server is taking right now (drained, not yet acked): no notice from here. */
@@ -610,6 +612,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const mine = slices.get(slice.home)
       if (mine && Number(mine.asOf ?? 0) >= Number(slice.asOf ?? 0)) continue
       slices.set(slice.home, slice)
+      writtenAsOf.set(slice.home, Number(slice.asOf ?? 0))
     }
   }
 
@@ -707,7 +710,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const prev = slices.get(slice.home)
     const changed = !prev || prev.hash !== slice.hash
     slices.set(slice.home, slice)
-    if (changed) writeAtomic(file('slice', slice.home), slice)
+    if (changed) { writeAtomic(file('slice', slice.home), slice); writtenAsOf.set(slice.home, Number(slice.asOf ?? 0)) } else persistAsOf(slice)
     // A settle made offline for a server-owned copy is spoken for once the server
     // stops listing that request as pending: drop the local marker with it.
     // A journal on disk for this Walnut (one migrated, or written by another process) is its own.
@@ -728,8 +731,30 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   function holdsSlice(home: string, hash: string, asOf?: unknown): boolean {
     const held = home && hash ? slices.get(home) : undefined
     if (!held || held.hash !== hash) return false
-    if (typeof asOf === 'number' && Number.isFinite(asOf) && asOf > Number(held.asOf ?? 0)) held.asOf = asOf
+    if (typeof asOf === 'number' && Number.isFinite(asOf) && asOf > Number(held.asOf ?? 0)) { held.asOf = asOf; persistAsOf(held) }
     return true
+  }
+
+  /**
+   * The Walnuts this host keeps a copy of that are still in use: a server of it was bound
+   * here lately (`served`, the week served-walnuts keeps), or its copy was sent or
+   * confirmed within `maxAgeMs` (30 days). Older is a Walnut nothing keeps here (a test
+   * run's), which says nothing about who calls.
+   */
+  function freshHomes(served?: (home: string) => boolean, now: number = deps.now(), maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): string[] {
+    const out: string[] = []
+    for (const [home, slice] of slices) {
+      if ((served && served(home)) || now - Number(slice.asOf ?? 0) <= maxAgeMs) out.push(home)
+    }
+    return out
+  }
+
+  function persistAsOf(slice: HostSlice): void {
+    const at = Number(slice.asOf ?? 0)
+    const last = writtenAsOf.get(slice.home)
+    if (last !== undefined && at - last < 24 * 60 * 60 * 1000) return
+    writtenAsOf.set(slice.home, at)
+    writeAtomic(file('slice', slice.home), slice)
   }
 
   function hasHome(home: string | undefined): boolean {
@@ -3060,7 +3085,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     noteRoutineTaskWaiting: (home: string, rec: Parameters<typeof noteRoutineTask>[1], opId: string, jobId: string) => whenUnlocked(home, 'task-create', () => noteRoutineTask(home, rec, opId, jobId)),
     noteRoutineTask, checkRoutineRun, knowsSession,
     pendingFor, journalStats, onResult, sweep, deliverTrigger, deliverFromLeader, deliverHuman, callerOf, answersRead, sessionsOf, noteSession, checkSession,
-    triggerHolds, triggerHoldsByHome, homes: () => [...slices.keys()], journal, QUEUEABLE, RETIRED_TASK_INPUTS,
+    triggerHolds, triggerHoldsByHome, homes: () => [...slices.keys()], freshHomes, journal, QUEUEABLE, RETIRED_TASK_INPUTS,
   }
 }
 

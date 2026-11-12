@@ -144,3 +144,33 @@ describe('gateway identity: which socket a call may go to', () => {
     expect(g.walnutOf(undefined, 'r')).toBeUndefined()
   })
 })
+
+describe('gateway identity: whose call one from outside any session is', () => {
+  // 2026-11-12: a dev host held five copies from October test runs beside the real one, so
+  // every trigger script's walnut call was nobody's, waited 90 s and failed "no server connected".
+  const STALE = '/tmp/walnut-live-test-1/home'
+  it('the Walnut of the only copy, or with no copy the one every connected server speaks for', () => {
+    const g = createGatewayIdentity()
+    expect(g.externalOwner([A], [], facts(['s1', B, 'r1']))).toBe(A)
+    expect(g.externalOwner([], [], facts(['s1', A, 'r1'], ['s2', undefined, 'r1']))).toBeUndefined()
+    g.noteRun('r1', A)
+    expect(g.externalOwner([], [], facts(['s1', A, 'r1'], ['s2', undefined, 'r1']))).toBe(A)
+  })
+
+  it('stale copies beside one fresh copy: the fresh one', () => {
+    const g = createGatewayIdentity()
+    expect(g.externalOwner([STALE, A, `${STALE}2`], [A], facts(['s1', A, 'r1']))).toBe(A)
+    // No server connected (the Mac asleep): still that Walnut's, answered from its copy.
+    expect(g.externalOwner([STALE, A], [A], [])).toBe(A)
+  })
+
+  it('two fresh copies are nobody\'s, whichever server is connected', () => {
+    const g = createGatewayIdentity()
+    // B's Mac is asleep and only A's server is here: B's script must not reach A's Walnut.
+    expect(g.externalOwner([A, B], [A, B], facts(['s1', A, 'r1']))).toBeUndefined()
+    expect(g.externalOwner([A, B], [A, B], facts(['s1', A, 'r1'], ['s2', B, 'r2']))).toBeUndefined()
+    expect(g.externalOwner([A, B], [A, B], [])).toBeUndefined()
+    // Only stale copies: nothing says which.
+    expect(g.externalOwner([A, B], [], facts(['s1', A, 'r1']))).toBeUndefined()
+  })
+})

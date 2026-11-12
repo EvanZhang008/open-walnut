@@ -6706,14 +6706,12 @@ function gatewayNoServerError(home) {
     : 'no primary server connected');
 }
 
-// A walnut run outside any session is the Walnut's whose copy this host holds,
-// when it holds just one (twin of daemon-standalone.ts gatewayOwnerHome).
+// A walnut run outside any session is the Walnut whose copy this host holds, when it
+// holds one still in use (twin of daemon-standalone.ts gatewayOwnerHome).
 function gatewayOwnerHome(callerSid) {
   if (callerSid === EXTERNAL_CALLER_SID) {
-    var homes = offlineHost.homes();
-    if (homes.length === 1) return homes[0];
-    // No copy here: the Walnut every connected server speaks for, when there is just one.
-    return homes.length === 0 ? gatewayIdentity.soleWalnut(gatewayCandidates(true)) : undefined;
+    // A stale copy (a test run's) never makes the call nobody's (gateway-identity-core.ts externalOwner).
+    return gatewayIdentity.externalOwner(offlineHost.homes(), offlineHost.freshHomes(function (h) { return servedWalnuts.knows(h) }), gatewayCandidates(true));
   }
   // The copy names the session, else what this host recorded of the Walnut that asked
   // for it (its spawn, the spawn journal; gateway-identity-core.ts, twin of daemon-standalone.ts).

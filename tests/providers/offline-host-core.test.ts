@@ -122,6 +122,22 @@ describe('offline host: the read copy', () => {
     expect((got as { result: { task: { description: string } } }).result.task.description).toBe('progress note')
   })
 
+  it('a copy nothing refreshed for 30 days is not in use, unless its server was bound lately; a probe refreshes it, past a restart', () => {
+    const h = harness()
+    const OLD = '/tmp/walnut-live-test-1/home'
+    h.host.configure(slice({ asOf: h.clock.now - 40 * 24 * 3600_000, home: OLD, hash: 'h-old' }))
+    h.host.configure(slice({ asOf: h.clock.now - 60_000 }))
+    expect(h.host.homes().sort()).toEqual([HOME, OLD].sort())
+    expect(h.host.freshHomes()).toEqual([HOME])
+    expect(h.host.freshHomes((home) => home === OLD).sort()).toEqual([HOME, OLD].sort())
+    // A probe that holds the copy moves its asOf, and the daemon after a restart still knows it.
+    expect(h.host.holdsSlice(OLD, 'h-old', h.clock.now)).toBe(true)
+    expect(h.host.freshHomes().sort()).toEqual([HOME, OLD].sort())
+    const restarted = harness(h.dir)
+    restarted.clock.now = h.clock.now
+    expect(restarted.host.freshHomes().sort()).toEqual([HOME, OLD].sort())
+  })
+
   it('reads a task by id and by unique prefix, and refuses an ambiguous prefix', async () => {
     const h = harness()
     h.host.configure(slice())

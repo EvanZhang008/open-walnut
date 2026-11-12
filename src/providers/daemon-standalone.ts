@@ -5186,12 +5186,11 @@ function gatewayOwnerHome(callerSid: string): string | undefined {
   // session; on a daemon that holds one Walnut's copy it is that Walnut's, so while
   // the Mac is away its reads come from the copy and the rest goes to the companion
   // (2026-11-03: such calls answered hub_unreachable while the companion led).
-  // With two Walnuts on the host nothing says which, so none. Twin of daemon-source.ts.
+  // With two Walnuts on the host nothing says which, so none; a copy nothing refreshed for
+  // weeks (a test run's) is not one of them (gateway-identity-core.ts externalOwner).
+  // Twin of daemon-source.ts.
   if (callerSid === EXTERNAL_CALLER_SID) {
-    const homes = offlineHost.homes()
-    if (homes.length === 1) return homes[0]
-    // No copy here: the Walnut every connected server speaks for, when there is just one.
-    return homes.length === 0 ? gatewayIdentity.soleWalnut(gatewayCandidates(true)) : undefined
+    return gatewayIdentity.externalOwner(offlineHost.homes(), offlineHost.freshHomes((h) => servedWalnuts.knows(h)), gatewayCandidates(true))
   }
   // The copy names the session, else what this host recorded of the Walnut that asked
   // for it (its spawn, the spawn journal): pinned to its Walnut from its first spawn,

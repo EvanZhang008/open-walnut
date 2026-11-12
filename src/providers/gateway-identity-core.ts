@@ -78,6 +78,17 @@ export interface GatewayIdentity {
   sameWalnut(a: string | undefined, b: string | undefined): boolean
   /** The one Walnut these sockets speak for, when they all speak for the same one (none pending or nameless). */
   soleWalnut<S>(candidates: Array<GatewaySocketFacts<S>>): string | undefined
+  /**
+   * The Walnut a call from outside any session (a terminal, a trigger script) is for, or
+   * undefined when nothing says which. `held`: the Walnuts whose copy this host holds;
+   * `fresh`: those a server of which was bound here lately or whose copy is recent. A
+   * copy nothing refreshed for weeks (a test run's, a Walnut gone from this host) never
+   * makes the call nobody's (2026-11-12: five test copies from October beside the real
+   * one made every trigger script's call wait 90 s and fail "no server connected").
+   * Two fresh copies stay nobody's: which server is connected says nothing about whose
+   * script calls, and a call sent to the other person's Walnut is worse than a refusal.
+   */
+  externalOwner<S>(held: string[], fresh: string[], candidates: Array<GatewaySocketFacts<S>>): string | undefined
 }
 
 export function createGatewayIdentity(): GatewayIdentity {
@@ -166,5 +177,12 @@ export function createGatewayIdentity(): GatewayIdentity {
 
   const sameWalnut = (a: string | undefined, b: string | undefined): boolean => !!a && !!b && norm(a) === norm(b)
 
-  return { noteRun, walnutOf, knowsHome, pick, mayAnswer, sameWalnut, soleWalnut }
+  function externalOwner<S>(held: string[], fresh: string[], candidates: Array<GatewaySocketFacts<S>>): string | undefined {
+    if (held.length === 1) return held[0]
+    // No copy here: the Walnut every connected server speaks for, when there is just one.
+    if (held.length === 0) return soleWalnut(candidates)
+    return fresh.length === 1 ? fresh[0] : undefined
+  }
+
+  return { noteRun, walnutOf, knowsHome, pick, mayAnswer, sameWalnut, soleWalnut, externalOwner }
 }
