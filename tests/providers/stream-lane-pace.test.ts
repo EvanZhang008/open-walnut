@@ -123,9 +123,10 @@ describe('DaemonConnection.openStream keeps a background stream off the session 
 
   it("with a lane whose dial failed, 'replica' fails with nothing sent; 'web' takes the session link", async () => {
     await setUp()
-    _setLaneForwardForTesting(async () => { throw new Error('connection refused') })
+    let dials = 0
+    _setLaneForwardForTesting(async () => { dials++; throw new Error('connection refused') })
     conn.keepStreamLane(true)
-    await sleep(200)
+    await waitFor(() => dials > 0, 5_000, 'the lane dial')
     expect(conn.streamLaneUp).toBe(false)
     await expect(conn.openStream('follower', 'replica')).rejects.toThrow(/stream lane to lane-host is not up/)
     expect(daemon.getCommandHistoryFor('stream.open')).toEqual([])
