@@ -14,6 +14,7 @@
  *     was dead text AND long enough to consume the whole one-line row.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { addButton, addRow, directControl } from './composer-controls-overflow-helpers'
 
 // EVERY test here mutates the SAME seeded session's human_note — parallel runs
 // race (one test's cleanup clears another's setup). Serialize within this file.
@@ -61,7 +62,7 @@ async function editorText(locator: import('@playwright/test').Locator): Promise<
   })
 }
 
-test('empty note opens from add menu; saving swaps to the always-visible bar', async ({ page }) => {
+test('empty note opens from the Note button; saving swaps to the always-visible bar', async ({ page }) => {
   // Reset the seeded session's note so the test is idempotent across runs
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: '' } })
 
@@ -70,11 +71,13 @@ test('empty note opens from add menu; saving swaps to the always-visible bar', a
   const pill = panel.locator('.session-notes-pill')
   await expect(pill).toBeHidden()
   await expect(panel.locator('.session-notes')).toHaveCount(0)
-  const add = panel.locator('.session-panel-input .chat-plus-btn')
-  await add.click()
-  await expect(panel.locator('.session-panel-input [data-add-control="btw"]')).toBeVisible()
-  const noteAction = panel.locator('.session-panel-input [data-add-control="note"]')
+  // Note and btw are buttons on the composer's row, not "+" rows.
+  await expect(directControl(panel, 'btw')).toBeVisible()
+  const noteAction = directControl(panel, 'note')
   await expect(noteAction).toBeVisible()
+  await addButton(panel).click()
+  await expect(addRow(panel, 'note')).toHaveCount(0)
+  await page.keyboard.press('Escape')
 
   await noteAction.click()
   const bar = panel.locator('.session-notes')
@@ -112,7 +115,7 @@ test('empty note opens from add menu; saving swaps to the always-visible bar', a
   await expect(bar2.locator('.session-notes-preview')).toHaveText(/remember: deploy after AREX confirms/)
   await expect(panel2.locator('.session-notes-pill')).toHaveCount(0)
 
-  // Clearing the note swaps back: open editor, clear, blur → row unmounts, add menu returns
+  // Clearing the note swaps back: open editor, clear, blur → row unmounts, the Note button returns
   await bar2.locator('.session-notes-toggle').click()
   await bar2.locator('.session-notes-textarea').fill('')
   await expect.poll(async () => {
@@ -122,8 +125,7 @@ test('empty note opens from add menu; saving swaps to the always-visible bar', a
   await panel2.locator('.session-panel-body').click()
   await expect(panel2.locator('.session-notes')).toHaveCount(0)
   await expect(panel2.locator('.session-notes-pill')).toBeHidden()
-  await panel2.locator('.session-panel-input .chat-plus-btn').click()
-  await expect(panel2.locator('.session-panel-input [data-add-control="note"]')).toBeVisible()
+  await expect(directControl(panel2, 'note')).toBeVisible()
 
   // Cleanup
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: '' } })
@@ -161,7 +163,7 @@ test('note is labeled and edits in place without a second input outline', async 
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: '' } })
 })
 
-test('homepage session panel: bar when note exists, add menu when empty', async ({ page }) => {
+test('homepage session panel: bar when note exists, Note button when empty', async ({ page }) => {
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: 'home panel note' } })
 
   const panel = await openSeededSessionOnHome(page)
@@ -172,6 +174,7 @@ test('homepage session panel: bar when note exists, add menu when empty', async 
   await expect(bar).toHaveClass(/session-notes--has-note/)
   await expect(bar.locator('.session-notes-preview')).toHaveText('home panel note')
   await expect(panel.locator('.session-notes-pill')).toHaveCount(0)
+  await expect(directControl(panel, 'note')).toHaveCount(0)
 
   // Bottom-docked: the bar sits at the TOP of the composer block, above the
   // ChatInput card.
@@ -194,9 +197,8 @@ test('homepage session panel: bar when note exists, add menu when empty', async 
   await expect(panel.locator('.session-notes')).toHaveCount(0)
   const pill = panel.locator('.session-notes-pill')
   await expect(pill).toBeHidden()
-  await panel.locator('.session-panel-input .chat-plus-btn').click()
-  await expect(panel.locator('.session-panel-input [data-add-control="note"]')).toBeVisible()
-  await expect(panel.locator('.session-panel-input [data-add-control="btw"]')).toBeVisible()
+  await expect(directControl(panel, 'note')).toBeVisible()
+  await expect(directControl(panel, 'btw')).toBeVisible()
 
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: '' } })
 })

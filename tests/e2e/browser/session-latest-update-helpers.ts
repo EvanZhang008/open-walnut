@@ -1,5 +1,5 @@
 /**
- * "Latest update" in the session composer's "+" menu: the two recap paragraphs
+ * "Latest update" in the session composer's "+" -> More flyout: the two recap paragraphs
  * the turn-complete self-report writes (Overall = the whole session, Latest =
  * the last turn), opened on demand in a popover.
  *
@@ -9,9 +9,9 @@
  * app is a WKWebView).
  *
  * Scenario matrix:
- *  1. a session with a recap draws NOTHING above the composer; the "+" menu
- *     leads with "Latest update"; it opens a popover with both labelled rows in
- *     the user's language (CJK); Escape, the close button and an outside click
+ *  1. a session with a recap draws NOTHING above the composer; the "+" menu's
+ *     More flyout leads its caller rows with "Latest update"; it opens a
+ *     popover with both labelled rows in the user's language (CJK); Escape, the close button and an outside click
  *     each close it, and it opens again every time;
  *  2. a `session:recap-updated` event updates the popover while it is open; an
  *     event for ANOTHER session changes nothing;
@@ -23,6 +23,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
 import { captureWs, injectEvent } from './ws-capture-helpers';
+import { moreMenu, moreRow } from './engine-settings-popover-helpers';
 
 export { captureWs, injectEvent };
 
@@ -111,23 +112,34 @@ export async function expectNoStrip(panel: Locator, texts: string[] = [OVERVIEW_
   for (const t of texts) await expect(panel).not.toContainText(t);
 }
 
-export async function plusMenuLabels(panel: Locator): Promise<string[]> {
+/** "+" -> More of this column's composer; returns the flyout (portalled under <body>). */
+async function openMore(panel: Locator): Promise<Locator> {
   await panel.locator('.chat-plus-btn').first().click();
-  const menu = panel.page().locator('.chat-plus-menu[role=menu]');
+  const menu = panel.locator('.chat-plus-menu[role=menu]').first();
   await expect(menu).toBeVisible();
-  return (await menu.locator('button.chat-plus-menu-item').allInnerTexts()).map((t) => t.trim());
+  await moreRow(menu).click();
+  const more = moreMenu(panel.page());
+  await expect(more).toBeVisible();
+  return more;
 }
 
-/** Open "Latest update" from the "+" menu; returns the popover. */
+/** The rows of the "+" menu's More flyout, where every caller-defined row lives. */
+export async function moreMenuLabels(panel: Locator): Promise<string[]> {
+  const more = await openMore(panel);
+  return (await more.locator('button.chat-plus-menu-item').allInnerTexts()).map((t) => t.trim());
+}
+
+/** Open "Latest update" from "+" -> More; returns the popover. */
 export async function openLatestUpdate(panel: Locator): Promise<Locator> {
   const page = panel.page();
-  await panel.locator('.chat-plus-btn').first().click();
-  const row = page.locator('.chat-plus-menu[role=menu] button.chat-plus-menu-item[data-action-id="latest-update"]');
+  const more = await openMore(panel);
+  const row = more.locator('button.chat-plus-menu-item[data-action-id="latest-update"]');
   await expect(row).toBeVisible();
   await expect(row).toHaveText(/Latest update/);
   await row.click();
   const pop = popoverOf(page);
   await expect(pop).toBeVisible();
+  // The "+" menu and its More flyout both close.
   await expect(page.locator('.chat-plus-menu[role=menu]')).toHaveCount(0);
   return pop;
 }

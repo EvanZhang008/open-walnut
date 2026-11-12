@@ -48,6 +48,7 @@ export interface ComposerControl {
 export interface ComposerControlsBarHandle {
   activate: (id: string) => void;
   state: (id: string) => string;
+  button: (id: string) => HTMLButtonElement | null;
 }
 
 interface ComposerControlsBarProps {
@@ -207,6 +208,7 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
       const control = present.find((c) => c.id === id);
       if (control) activate(control);
     },
+    button: (id) => barRef.current?.querySelector<HTMLButtonElement>(`[data-control-id="${id}"] button`) ?? null,
     state: (id) => {
       const button = barRef.current?.querySelector<HTMLElement>(`[data-control-id="${id}"] button`);
       const ariaLabel = button?.getAttribute('aria-label');

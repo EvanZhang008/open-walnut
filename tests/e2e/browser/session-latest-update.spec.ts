@@ -1,5 +1,5 @@
 /**
- * "Latest update" in the composer's "+" menu, in Chromium (and WebKit through
+ * "Latest update" in the composer's "+" -> More flyout, in Chromium (and WebKit through
  * the twin, session-latest-update.webkit.spec.ts, which runs the same cases).
  * Matrix: session-latest-update-helpers.ts.
  */

@@ -1,26 +1,30 @@
 import { expect, type TestType } from '@playwright/test';
 import {
   TIP_SESSION, OTHER_SESSION, OVERVIEW_ZH, RECAP_ZH, RECAP_NEXT, BOTH,
-  mockTipSession, openColumns, popoverOf, expectNoStrip, plusMenuLabels, openLatestUpdate, expectRows,
+  mockTipSession, openColumns, popoverOf, expectNoStrip, moreMenuLabels, openLatestUpdate, expectRows,
   expectInViewport, shoot, captureWs, injectEvent,
 } from './session-latest-update-helpers';
+import { moreMenu } from './engine-settings-popover-helpers';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function latestUpdateCases(test: TestType<any, any>): void {
   // Room for a cold dev server's first compile (openColumns waits up to 90 s for the panel).
   test.describe.configure({ timeout: 150_000 });
-  test('1. no strip above the composer; "+" leads with Latest update; it opens, closes three ways, and reopens', async ({ page }) => {
+  test('1. no strip above the composer; "+" -> More leads with Latest update; it opens, closes three ways, and reopens', async ({ page }) => {
     await mockTipSession(page, TIP_SESSION, { current: BOTH });
     const panel = await openColumns(page, [TIP_SESSION]);
     await expectNoStrip(panel);
     await shoot(page, 'composer-without-strip', panel.locator('.chat-input-container, .chat-input').first());
 
-    const labels = await plusMenuLabels(panel);
+    const labels = await moreMenuLabels(panel);
     expect(labels.find((l) => /Latest update/.test(l)), labels.join(' | ')).toBeTruthy();
     // The first of the caller rows: it is about this session, not an action.
-    const firstCallerRow = await page.locator('.chat-plus-menu[role=menu] button.chat-plus-menu-item[data-action-id]').first().getAttribute('data-action-id');
+    const firstCallerRow = await moreMenu(page).locator('button.chat-plus-menu-item[data-action-id]').first().getAttribute('data-action-id');
     expect(firstCallerRow).toBe('latest-update');
+    // Escape closes the More flyout first, then the "+" menu.
     await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.chat-plus-menu[role=menu]')).toHaveCount(0);
 
     let pop = await openLatestUpdate(panel);
     await expectRows(pop, OVERVIEW_ZH, RECAP_ZH);
@@ -74,7 +78,7 @@ export function latestUpdateCases(test: TestType<any, any>): void {
   test('4. a session with no recap has no Latest update row', async ({ page }) => {
     await mockTipSession(page, TIP_SESSION, { current: {} });
     const panel = await openColumns(page, [TIP_SESSION]);
-    const labels = await plusMenuLabels(panel);
+    const labels = await moreMenuLabels(panel);
     expect(labels.some((l) => /Latest update/.test(l)), labels.join(' | ')).toBe(false);
     await expectNoStrip(panel);
   });

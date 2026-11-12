@@ -2,13 +2,14 @@ import { devices, test, expect } from '@playwright/test';
 import {
   CTRL_SESSION, CTRL_FILLER, COLUMN_NAME_ONLY, mockControlsSession, openControlsSession, clampColumn,
   overflowBtn, controlOf, rowState, expectSingleRow, shootComposer,
+  addButton, addMenu, addRow, directControl,
   type SettingsWrites,
 } from './composer-controls-overflow-helpers';
 import { openDraft } from './draft-helpers';
 
 test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent });
 
-test('WebKit wide composer leaves full model and Bypass inline while the add menu lists other controls', async ({ page, browserName }) => {
+test('WebKit wide composer leaves full model and Bypass inline, Note and btw as direct buttons, reply style in the add menu', async ({ page, browserName }) => {
   expect(browserName).toBe('webkit');
   await mockControlsSession(page, CTRL_SESSION);
   const panel = await openControlsSession(page, { narrow: false });
@@ -17,10 +18,12 @@ test('WebKit wide composer leaves full model and Bypass inline while the add men
   await expect(controlOf(panel, 'model').locator('button')).toContainText('Fable');
   await expect(overflowBtn(panel)).toHaveCount(0);
   await expectSingleRow(panel);
-  await panel.locator('.session-panel-input .chat-plus-btn').click();
-  const menu = panel.locator('.session-panel-input .chat-plus-menu');
-  for (const id of ['output', 'btw', 'note']) await expect(menu.locator(`[data-add-control="${id}"]`)).toBeVisible();
-  await expect(menu.locator('[data-add-control="note"]')).toHaveText('Note');
+  await expect(directControl(panel, 'btw')).toBeVisible();
+  await expect(directControl(panel, 'note')).toHaveText('Note');
+  await addButton(panel).click();
+  const menu = addMenu(panel);
+  await expect(addRow(panel, 'output')).toBeVisible();
+  for (const id of ['btw', 'note']) await expect(addRow(panel, id)).toHaveCount(0);
   expect(await menu.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)');
   await expect.poll(() => menu.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
   await shootComposer(panel, 'wide-add-menu', 420);
@@ -50,10 +53,10 @@ test('WebKit narrow composer shows Bypass and the short model name with the real
   await shootComposer(panel, 'tight');
   await clampColumn(page, null);
   await expect(model.locator('.session-detail-context-pct')).toContainText('45%');
-  await panel.locator('.session-panel-input .chat-plus-btn').click();
-  const output = panel.locator('.session-panel-input [data-add-control="output"]');
+  await addButton(panel).click();
+  const output = addRow(panel, 'output');
   await expect(output).toContainText('Rich');
-  const menu = panel.locator('.session-panel-input .chat-plus-menu');
+  const menu = addMenu(panel);
   await expect.poll(() => menu.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
   const menuBox = await menu.boundingBox();
   const vp = page.viewportSize()!;
@@ -62,7 +65,7 @@ test('WebKit narrow composer shows Bypass and the short model name with the real
   expect(menuBox!.y).toBeGreaterThanOrEqual(0);
   expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(vp.width);
   expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(vp.height);
-  const addBox = await panel.locator('.session-panel-input .chat-plus-btn').boundingBox();
+  const addBox = await addButton(panel).boundingBox();
   expect(Math.abs(menuBox!.x - addBox!.x), JSON.stringify({ menuBox, addBox })).toBeLessThanOrEqual(12);
   expect(menuBox!.width).toBeLessThan(300);
   const menuHit = await menu.evaluate((el) => {
@@ -73,23 +76,25 @@ test('WebKit narrow composer shows Bypass and the short model name with the real
   await shootComposer(panel, 'narrow-add-menu', 420);
   await output.click();
   await expect.poll(() => writes.body.some((body) => body.output_mode === 'markdown')).toBe(true);
-  await panel.locator('.session-panel-input .chat-plus-btn').click();
+  await addButton(panel).click();
   await expect(output).toContainText('MD');
 });
 
-test('WebKit short viewport keeps the note row reachable in the add menu', async ({ page }) => {
+test('WebKit short viewport keeps the reply style row reachable in the add menu, and Note still opens', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   const panel = await openControlsSession(page, { narrow: false });
   await page.setViewportSize({ width: 1200, height: 420 });
-  await panel.locator('.session-panel-input .chat-plus-btn').click();
-  const menu = panel.locator('.session-panel-input .chat-plus-menu');
+  await addButton(panel).click();
+  const menu = addMenu(panel);
   const box = await menu.boundingBox();
   expect(box).toBeTruthy();
   expect(box!.y).toBeGreaterThanOrEqual(0);
   expect(box!.y + box!.height).toBeLessThanOrEqual(420);
-  const note = menu.locator('[data-add-control="note"]');
-  await note.scrollIntoViewIfNeeded();
-  await note.click();
+  const output = addRow(panel, 'output');
+  await output.scrollIntoViewIfNeeded();
+  await output.click();
+  await expect(menu).toHaveCount(0);
+  await directControl(panel, 'note').click();
   await expect(panel.locator('.session-panel-input .session-notes-editor')).toBeVisible();
 });
 
@@ -111,17 +116,17 @@ test('WebKit draft add menu remains aligned, scrollable and dismissible', async 
   await expect(menu).toHaveCount(0);
 });
 
-test('WebKit side thread and note open from add menu and stay usable', async ({ page }) => {
+test('WebKit side thread and note open from their direct buttons and stay usable', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   await mockControlsSession(page, CTRL_FILLER);
   const panel = await openControlsSession(page, { narrow: true });
-  const add = panel.locator('.session-panel-input .chat-plus-btn');
-  await add.click();
-  await panel.locator('.session-panel-input [data-add-control="btw"]').click();
+  await directControl(panel, 'btw').click();
+  await expect(addMenu(panel)).toHaveCount(0);
   await expect(panel.locator('.session-panel-input .side-question-popover--threads')).toBeVisible();
   await expect(panel.locator('.session-panel-input .side-question-composer textarea')).toBeVisible();
   await page.keyboard.press('Escape');
-  await add.click();
-  await panel.locator('.session-panel-input [data-add-control="note"]').click();
+  await expect(panel.locator('.session-panel-input .side-question-popover--threads')).toHaveCount(0);
+  await directControl(panel, 'note').click();
+  await expect(addMenu(panel)).toHaveCount(0);
   await expect(panel.locator('.session-panel-input .session-notes-editor')).toBeVisible();
 });

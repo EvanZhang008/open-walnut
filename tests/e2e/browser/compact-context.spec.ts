@@ -3,7 +3,7 @@
  * through the real pipeline: the mock CLI reports a 400K-token request with a 1-hour cache split,
  * and answers `/compact` with Claude Code's own compacting status and boundary.
  *
- *  · The "+" menu's "Compact context" row sends `/compact`; the timeline shows the compaction.
+ *  · The "+" -> More flyout's "Compact context" row sends `/compact`; the timeline shows the compaction.
  *  · A big session whose cache went cold (the page's clock moved two hours on) shows nothing and
  *    sends nothing: once the cache expired, compacting is the user's call.
  *  · Settings → Sessions has the idle compaction switch and its threshold.
@@ -11,8 +11,24 @@
  */
 import { test, expect, type Page, type APIRequestContext, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
+import { moreMenu, moreRow } from './engine-settings-popover-helpers'
 
 const SHOTS = process.env.COMPACT_SHOTS ?? '/tmp/compact-context'
+
+/** "+" -> More of the panel's composer: Compact context is a caller row, so it lives in the
+ *  portalled More flyout. Returns that row. */
+async function openCompactRow(panel: Locator): Promise<Locator> {
+  await panel.locator('.session-panel-input .chat-plus-btn').click()
+  await moreRow(panel.locator('.session-panel-input .chat-plus-menu')).click()
+  return moreMenu(panel.page()).locator('[data-action-id="compact-context"]')
+}
+
+/** Escape closes one layer at a time: the More flyout, then the "+" menu. */
+async function closeMenus(page: Page): Promise<void> {
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.chat-plus-menu')).toHaveCount(0)
+}
 const TWO_HOURS = 2 * 60 * 60 * 1000
 
 async function sendViaRpc(page: Page, method: string, payload: Record<string, unknown>): Promise<void> {
@@ -101,13 +117,12 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
   // Warm cache: no offer.
   await expect(panel.getByTestId('compact-offer')).toHaveCount(0)
 
-  await panel.locator('.session-panel-input .chat-plus-btn').click()
-  const row = panel.locator('.session-panel-input .chat-plus-menu [data-action-id="compact-context"]')
+  const row = await openCompactRow(panel)
   await expect(row).toBeVisible()
   await expect(row).toHaveText('Compact context')
   await expect(row).not.toHaveAttribute('aria-disabled', 'true')
   await expect(row).toHaveAttribute('title', /400K tokens in context/)
-  await panel.locator('.session-panel-input .chat-plus-menu').screenshot({ path: `${SHOTS}/${info.project.name}-plus-menu.png` })
+  await moreMenu(page).screenshot({ path: `${SHOTS}/${info.project.name}-plus-menu.png` })
   // Every wording the working line takes, kept from before the click: the mock's compaction is over in
   // MOCK_COMPACT_MS (1.5 s), sooner than the steps below on a slow runner (2026-11-08, GitHub's gate).
   await page.evaluate(() => {
@@ -120,13 +135,13 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
     new MutationObserver(note).observe(document.body, { subtree: true, childList: true, characterData: true })
   })
   await row.click()
-  await expect(panel.locator('.session-panel-input .chat-plus-menu')).toHaveCount(0)
+  await expect(page.locator('.chat-plus-menu')).toHaveCount(0)
   // Opened again at once (before the server says the turn runs), the row is already off.
-  await panel.locator('.session-panel-input .chat-plus-btn').click()
+  await openCompactRow(panel)
   await expect(row).toHaveAttribute('aria-disabled', 'true')
   // A click on it does nothing (dispatched: Playwright would wait for an aria-disabled row to turn on).
   await row.dispatchEvent('click')
-  await page.keyboard.press('Escape')
+  await closeMenus(page)
   // While it runs the working line says what it does, not "is working".
   await expect.poll(() => page.evaluate(() => (window as unknown as { __workingLabels: string[] }).__workingLabels.join('\n')), { timeout: 10_000 })
     .toMatch(/is compacting the context/)
@@ -142,12 +157,12 @@ test('the + menu compacts the session without typing /compact', async ({ page, r
   if (process.env.MOCK_CONTEXT_WINDOW) {
     await expect(panel.locator('.session-detail-context-pct').first()).toHaveText(/^\s*\d%$/, { timeout: 10_000 })
   }
-  await panel.locator('.session-panel-input .chat-plus-btn').click()
+  await openCompactRow(panel)
   await expect(row).toHaveAttribute('aria-disabled', 'true')
   await expect(row).toHaveAttribute('title', /Already compacted/)
   await expect(row.locator('.chat-plus-menu-hint')).toHaveText('Already compacted')
   await row.dispatchEvent('click')
-  await page.keyboard.press('Escape')
+  await closeMenus(page)
   await page.waitForTimeout(2500)
   await expect(compactRows(panel)).toHaveCount(1)
   await expect(panel.locator('.session-history').getByText('/compact', { exact: true })).toHaveCount(1)
@@ -175,9 +190,8 @@ test('a cold cache: no line above the composer, and no /compact sent', async ({ 
   await expect(panel.getByText(/Prompt cache (just )?expired/)).toHaveCount(0)
   await expect(history).not.toContainText('/compact')
   // The user's own call stays one click away.
-  await panel.locator('.session-panel-input .chat-plus-btn').click()
-  await expect(panel.locator('.session-panel-input .chat-plus-menu [data-action-id="compact-context"]')).toBeVisible()
-  await page.keyboard.press('Escape')
+  await expect(await openCompactRow(panel)).toBeVisible()
+  await closeMenus(page)
   await panel.screenshot({ path: `${SHOTS}/${info.project.name}-cold.png` })
   expect(errors).toEqual([])
 })

@@ -21,6 +21,7 @@ import { mkdirSync } from 'node:fs'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
+import { openMoreMenu } from './engine-settings-popover-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -87,20 +88,19 @@ async function openTransferFromPanel(page: Page) {
   return dialog
 }
 
-test('the composer "+" menu opens the same Transfer dialog, right under Engine settings', async ({ page }) => {
+test('the composer "+" -> More flyout opens the same Transfer dialog, right under Engine settings', async ({ page }) => {
   await cannedOptions(page)
   const panel = await openSourcePanel(page)
   // The task-bound rows join once the panel knows its task (the header kebab shows then).
   await expect(panel.locator('.session-panel-title-meta .task-kebab-btn')).toBeVisible()
-  await panel.locator('.chat-plus-btn').click()
-  const menu = panel.locator('.chat-plus-menu[role=menu]')
-  await expect(menu).toBeVisible()
-  const labels = (await menu.locator('button.chat-plus-menu-item').allInnerTexts()).map((t) => t.trim())
+  // A caller row: it lives in the portalled More flyout, never on the "+" menu itself.
+  const more = await openMoreMenu(panel)
+  const labels = (await more.locator('button.chat-plus-menu-item').allInnerTexts()).map((t) => t.trim())
   const at = labels.findIndex((t) => t.startsWith('Transfer harness/host…'))
   expect(at, labels.join(' | ')).toBeGreaterThan(0)
   expect(labels[at - 1]).toContain('Engine settings')
-  await menu.locator('button.chat-plus-menu-item', { hasText: 'Transfer harness/host…' }).click()
-  await expect(menu).toBeHidden()
+  await more.locator('button.chat-plus-menu-item', { hasText: 'Transfer harness/host…' }).click()
+  await expect(page.locator('.chat-plus-menu[role=menu]')).toHaveCount(0)
   const dialog = page.getByTestId('transfer-dialog')
   await expect(dialog).toBeVisible()
   await expect(dialog).toContainText('Now: Claude Code on This Mac')

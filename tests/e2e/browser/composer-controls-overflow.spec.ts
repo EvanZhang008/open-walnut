@@ -1,16 +1,13 @@
-import { test, expect, type Locator } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import {
   CTRL_SESSION, CTRL_FILLER, NARROW_WIDTH, COLUMN_NAME_ONLY, COLUMN_MODEL_IN_MENU,
   mockControlsSession, openControlsSession, clampColumn,
   overflowBtn, controlOf, rowState, expectSingleRow, shootComposer,
+  addButton, addMenu, addRow, directControl,
   type SettingsWrites,
 } from './composer-controls-overflow-helpers';
 
-const addButton = (panel: Locator) => panel.locator('.session-panel-input .chat-plus-btn');
-const addMenu = (panel: Locator) => panel.locator('.session-panel-input .chat-plus-menu');
-const addRow = (panel: Locator, id: string) => addMenu(panel).locator(`[data-add-control="${id}"]`);
-
-test('wide composer keeps only full model and mode inline; add menu holds reply style, side thread and note', async ({ page }) => {
+test('wide composer keeps only full model and mode inline; add menu holds reply style, Note and btw are direct buttons', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   const panel = await openControlsSession(page, { narrow: false });
   expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
@@ -19,10 +16,12 @@ test('wide composer keeps only full model and mode inline; add menu holds reply 
   await expect(controlOf(panel, 'model').locator('button')).toContainText('Fable');
   await expectSingleRow(panel);
 
+  await expect(directControl(panel, 'btw')).toBeVisible();
+  await expect(directControl(panel, 'note')).toHaveText('Note');
   await addButton(panel).click();
   await expect(addRow(panel, 'output')).toContainText('Rich');
-  await expect(addRow(panel, 'btw')).toBeVisible();
-  await expect(addRow(panel, 'note')).toHaveText('Note');
+  await expect(addRow(panel, 'btw')).toHaveCount(0);
+  await expect(addRow(panel, 'note')).toHaveCount(0);
   await expect(controlOf(panel, 'output').locator('button')).toBeHidden();
   await expect(controlOf(panel, 'btw').locator('button')).toBeHidden();
   await expect(controlOf(panel, 'note').locator('button')).toBeHidden();
@@ -124,12 +123,11 @@ test('reply style in add menu updates the session twice and keeps the menu label
   await shootComposer(panel, 'reply-style-restored', 420);
 });
 
-test('side thread and note open from the add menu and keep their content visible after the menu closes', async ({ page }) => {
+test('side thread and note open from their direct buttons without opening the add menu', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   await mockControlsSession(page, CTRL_FILLER);
   const panel = await openControlsSession(page, { narrow: true });
-  await addButton(panel).click();
-  await addRow(panel, 'btw').click();
+  await directControl(panel, 'btw').click();
   await expect(addMenu(panel)).toHaveCount(0);
   await expect(panel.locator('.session-panel-input .side-question-popover--threads')).toBeVisible();
   await expect(panel.locator('.session-panel-input .side-question-composer textarea')).toBeVisible();
@@ -137,14 +135,13 @@ test('side thread and note open from the add menu and keep their content visible
   await page.keyboard.press('Escape');
   await expect(panel.locator('.session-panel-input .side-question-popover--threads')).toHaveCount(0);
 
-  await addButton(panel).click();
-  await addRow(panel, 'note').click();
+  await directControl(panel, 'note').click();
   await expect(panel.locator('.session-panel-input .session-notes-editor')).toBeVisible();
   await expect(addMenu(panel)).toHaveCount(0);
   await expect(controlOf(panel, 'note')).toHaveAttribute('data-hidden', 'true');
 });
 
-test('model picker stays anchored and repeated resize restores full model without moving add actions inline', async ({ page }) => {
+test('model picker stays anchored and repeated resize restores full model without moving reply style inline', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   await mockControlsSession(page, CTRL_FILLER);
   const panel = await openControlsSession(page, { narrow: true });
@@ -160,8 +157,9 @@ test('model picker stays anchored and repeated resize restores full model withou
   await expect(controlOf(panel, 'model').locator('.session-detail-context-pct')).toContainText('45%');
   expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
   await expectSingleRow(panel);
+  await expect(directControl(panel, 'btw')).toBeVisible();
   await addButton(panel).click();
-  await expect(addRow(panel, 'btw')).toBeVisible();
+  await expect(addRow(panel, 'output')).toBeVisible();
 });
 
 test('unknown context percentage is never invented and model remains selectable', async ({ page }) => {
@@ -272,7 +270,7 @@ test('a later failed style change restores the last confirmed value', async ({ p
   await expect(addRow(panel, 'output')).toContainText('MD');
 });
 
-test('short viewport scrolls the add menu to every action without clipping', async ({ page }) => {
+test('short viewport scrolls the add menu to every action without clipping, and Note still opens', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   const panel = await openControlsSession(page, { narrow: false });
   await page.setViewportSize({ width: 1200, height: 420 });
@@ -282,9 +280,11 @@ test('short viewport scrolls the add menu to every action without clipping', asy
   expect(box).toBeTruthy();
   expect(box!.y).toBeGreaterThanOrEqual(0);
   expect(box!.y + box!.height).toBeLessThanOrEqual(420);
-  await addRow(panel, 'note').scrollIntoViewIfNeeded();
-  await expect(addRow(panel, 'note')).toBeVisible();
-  await addRow(panel, 'note').click();
+  await addRow(panel, 'output').scrollIntoViewIfNeeded();
+  await expect(addRow(panel, 'output')).toBeVisible();
+  await addRow(panel, 'output').click();
+  await expect(addMenu(panel)).toHaveCount(0);
+  await directControl(panel, 'note').click();
   await expect(panel.locator('.session-panel-input .session-notes-editor')).toBeVisible();
 });
 

@@ -116,15 +116,34 @@ export async function openPlusMenu(panel: Locator): Promise<Locator> {
   return menu
 }
 
-export const engineSettingsRow = (menu: Locator): Locator =>
-  menu.locator('button.chat-plus-menu-item[role=menuitem]', { hasText: 'Engine settings' })
+/** The composer's "More" flyout. It is portalled under <body>, so it is found on the
+ *  page, never inside a panel; only one composer's flyout is open at a time. */
+export const moreMenu = (page: Page): Locator => page.getByRole('menu', { name: 'More composer actions' })
+
+/** The "More" row of an open "+" menu. */
+export const moreRow = (menu: Locator): Locator => menu.getByRole('menuitem', { name: 'More', exact: true })
+
+/** "+" -> More: Recall, the schedule shortcut and every caller-defined action
+ *  (Latest update, Snooze until, Add a trigger, Engine settings, Transfer,
+ *  Compact context, Main's quick actions) live in this flyout. Returns it. */
+export async function openMoreMenu(panel: Locator): Promise<Locator> {
+  const menu = await openPlusMenu(panel)
+  await moreRow(menu).click()
+  const more = moreMenu(panel.page())
+  await expect(more).toBeVisible()
+  return more
+}
+
+/** Engine settings is a caller-defined action, so it lives in the More flyout. */
+export const engineSettingsRow = (more: Locator): Locator =>
+  more.locator('button.chat-plus-menu-item[role=menuitem]', { hasText: 'Engine settings' })
 
 export const dialogOf = (page: Page): Locator => page.locator('.engine-settings-popover[role=dialog]')
 
-/** "+" -> Engine settings; returns the (single) dialog once it is on screen. */
+/** "+" -> More -> Engine settings; returns the (single) dialog once it is on screen. */
 export async function openPopover(page: Page, panel: Locator): Promise<Locator> {
-  const menu = await openPlusMenu(panel)
-  await engineSettingsRow(menu).click()
+  const more = await openMoreMenu(panel)
+  await engineSettingsRow(more).click()
   const dialog = dialogOf(page)
   await expect(dialog).toBeVisible({ timeout: 15_000 })
   return dialog

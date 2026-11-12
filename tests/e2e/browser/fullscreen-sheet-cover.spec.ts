@@ -19,6 +19,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
+import { directControl } from './composer-controls-overflow-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openTaskFromRail } from './org-view-helpers'
 import { holdApprovalsLock } from './approvals-lock'
@@ -132,8 +133,7 @@ async function expectCovers(page: Page, where: string): Promise<void> {
 }
 
 async function openThreads(panel: Locator): Promise<Locator> {
-  await panel.locator('.session-panel-input .chat-plus-btn').click()
-  await panel.locator('.session-panel-input [data-add-control="btw"]').click()
+  await directControl(panel, 'btw').click()
   const pop = panel.locator('.side-question-popover').first()
   await expect(pop).toBeVisible()
   return pop

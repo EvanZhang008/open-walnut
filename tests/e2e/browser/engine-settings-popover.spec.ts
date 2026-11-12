@@ -15,7 +15,7 @@ import { leaveFullscreen } from './draft-helpers'
 import {
   HOST_LABEL, LOCAL_SCOPE_NOTE, NEXT_TURN_SENTENCE, NEW_SOURCES, REPO, allItems, captureView, claimUserFile, clickComposerOutside,
   clickOutside, composerTextarea, dialogOf, engineSettingsRow, expectInViewport, expectSideBySide, filterBox, fixtureRoot, makeGitProject,
-  openPanels, openPlusMenu, openPopover, plusButton, popoverRow, popoverRowWrap, popoverSources, rect, restoreSeed, rowControl, rowsArea,
+  moreMenu, moreRow, openPanels, openPlusMenu, openPopover, plusButton, popoverRow, popoverRowWrap, popoverSources, rect, restoreSeed, rowControl, rowsArea,
   savedLine, savedUserSentence, scopeOption, sessionsGroup, sessionsItems, shortCwd, shot, startSessionAt, stubGet, visibleRowKeys,
   waitForRows, watchSettingsRequests, type ItemView, type View,
 } from './engine-settings-popover-helpers'
@@ -44,24 +44,16 @@ test.describe('composer "+" -> Engine settings popover', () => {
     const seen = watchSettingsRequests(page)
     const short = shortCwd(cwd)
 
-    // In the block after the Shortcuts block: a separator closes Shortcuts, and
-    // the rows between it and Engine settings are menu items of that same block
-    // (the trigger rows joined it in 8ac701347).
+    // A caller-defined action: never on the "+" menu itself, only in its
+    // portalled More flyout, as a plain menu item.
     const menu = await openPlusMenu(panel)
-    const row = engineSettingsRow(menu)
+    await expect(engineSettingsRow(menu)).toHaveCount(0)
+    await moreRow(menu).click()
+    const more = moreMenu(page)
+    const row = engineSettingsRow(more)
     await expect(row).toBeVisible()
     await expect(row).toHaveAttribute('role', 'menuitem')
-    expect(await row.evaluate((el) => {
-      const kids = Array.from(el.parentElement!.children)
-      const at = kids.indexOf(el)
-      const shortcuts = kids.findIndex((k) => k.classList.contains('chat-plus-menu-label') && k.textContent === 'Shortcuts')
-      let sep = -1
-      for (let i = at - 1; i >= 0; i--) {
-        if (kids[i].getAttribute('role') === 'separator') { sep = i; break }
-      }
-      const between = kids.slice(sep + 1, at).every((k) => k.getAttribute('role') === 'menuitem')
-      return { sep: sep >= 0 && kids[sep].classList.contains('chat-plus-menu-divider') && between, after: sep > shortcuts && shortcuts >= 0 }
-    })).toEqual({ sep: true, after: true })
+    expect(await more.evaluate((el) => el.parentElement === document.body)).toBe(true)
     // The tooltip names the engine, the cwd and the host.
     await expect(row).toHaveAttribute('title', `Claude Code settings for sessions in ${short} on ${HOST_LABEL}`)
 
@@ -70,6 +62,7 @@ test.describe('composer "+" -> Engine settings popover', () => {
     const dialog = dialogOf(page)
     await expect(dialog).toBeVisible()
     await expect(menu).toHaveCount(0)
+    await expect(more).toHaveCount(0)
     expect(await dialog.evaluate((el) => el.parentElement === document.body)).toBe(true)
     expect(await dialog.getAttribute('data-testid')).toBe('engine-settings-popover')
     await waitForRows(dialog)

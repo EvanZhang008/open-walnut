@@ -27,7 +27,10 @@ import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { pasteRichTextAsMarkdown } from '@/utils/html-to-markdown';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
 import { discardedSince, draftSaveMark, isSentDraftCopy, markDraftSent, subscribeDraft, unmarkDraftSent } from '@/utils/drafts';
+import { ComposerDirectControl } from './ComposerDirectControl';
+import { ComposerMoreMenu } from './ComposerMoreMenu';
 import { PlusMenuActionRows } from './PlusMenuActionRows';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './plus-menu-actions';
 import { keepCommandFirst } from './leading-command';
 import { placePrefill, type PrefillMode } from './prefill-place';
@@ -368,7 +371,7 @@ interface ChatInputProps {
   /** A removable chip at the top of the box saying where the send goes (the
    *  session's question target). The owner renders it, × included. */
   contextPill?: React.ReactNode;
-  /** Mounted session controls that the add menu activates without copying state. */
+  /** Mounted controls shared by the add menu and the composer's direct buttons. */
   addMenuControls?: {
     handleRef: RefObject<ComposerControlsBarHandle | null>;
     ids: string[];
@@ -532,7 +535,6 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const [drawingOpen, setDrawingOpen] = useState(false);
   useEffect(() => { setDrawingOpen(false); }, [draftKey, sessionMentionSelfId]);
   const [sendMenuOpen, setSendMenuOpen] = useState(false);
-  const plusGroupRef = useRef<HTMLDivElement>(null);
   const plusBtnRef = useRef<HTMLButtonElement>(null);
   const plusMenuRef = useRef<HTMLDivElement>(null);
   const plusPlacement = useMenuPlacement(plusOpen, plusBtnRef, plusMenuRef, {
@@ -748,29 +750,30 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     if (!caretLeft.current) el.setSelectionRange(el.value.length, el.value.length);
   });
 
-  // Close the "+" and send dropdowns on outside click / Escape.
+  useOverlayLayer({
+    open: plusOpen, refs: [plusMenuRef, plusBtnRef],
+    exemptSelectors: ['.chat-plus-more-flyout'], passOutsideClick: true,
+    onClose: (reason) => {
+      setPlusOpen(false);
+      if (reason === 'escape') textareaRef.current?.focus({ preventScroll: true });
+    },
+  });
+  // The send dropdown is independent from the add menu's overlay stack.
   useEffect(() => {
-    if (!plusOpen && !sendMenuOpen) return;
+    if (!sendMenuOpen) return;
     const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (plusOpen && plusGroupRef.current && !plusGroupRef.current.contains(t)) setPlusOpen(false);
-      if (sendMenuOpen && sendGroupRef.current && !sendGroupRef.current.contains(t)) setSendMenuOpen(false);
+      if (!sendGroupRef.current?.contains(e.target as Node)) setSendMenuOpen(false);
     };
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.preventDefault();
-      // Closed from inside a menu: the focus goes back to the box, as a row's click does.
-      const from = document.activeElement;
-      const inMenu = !!from && (from === document.body
-        || !!plusGroupRef.current?.contains(from) || !!sendGroupRef.current?.contains(from));
-      setPlusOpen(false);
       setSendMenuOpen(false);
-      if (inMenu) textareaRef.current?.focus({ preventScroll: true });
+      textareaRef.current?.focus({ preventScroll: true });
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
-  }, [plusOpen, sendMenuOpen]);
+  }, [sendMenuOpen]);
 
   const queueFull = isStreaming && (queueCount ?? 0) >= MAX_QUEUE_SIZE;
 
@@ -942,7 +945,6 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const mentionDismissedAtRef = useRef<number>(-1);
   // "+"-menu "Reference a file" wants the FILES group to lead even for a
   // line-start "@"; recorded per @ index, cleared when that "@" goes away.
-  const mentionOrderOverrideRef = useRef<{ at: number; order: 'files-first' } | null>(null);
   const mentionPopupRef = useRef<FileMentionHandle>(null); // "@?" recents popup
   const mentionPaletteRef = useRef<MentionPaletteHandle>(null); // unified palette
   // Ref mirrors so handleKeyDown reads latest state without stale closure.
@@ -1030,7 +1032,6 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     setAttachNotice(null);
     closePalette();
     closeMention();
-    mentionOrderOverrideRef.current = null;
     // Clear the "/" span + Esc-dismissal memory — a new message starts fresh
     // (otherwise a dismissed "/" at index 0 would suppress the next palette).
     slashIndexRef.current = -1;
@@ -1598,8 +1599,6 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         mentionDismissedAtRef.current = -1; // a live "@" — clear any stale dismissal
         mentionAtIndexRef.current = m.atIndex;
         mentionEndRef.current = caret; // end of the "@query" span = current caret
-        const override = mentionOrderOverrideRef.current;
-        if (override && override.at !== m.atIndex) mentionOrderOverrideRef.current = null;
         const route = routeMention(m.query);
         if (route.kind === 'recents') {
           if (!mentionEnabled) { if (mentionOpenRef.current) closeMention(); return; }
@@ -1608,10 +1607,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         } else {
           setMentionKind('palette');
           mentionKindRef.current = 'palette';
-          const order = override && override.at === m.atIndex
-            ? override.order
-            : enableEntityMention ? route.order : 'files-first';
-          setMentionOrder(order);
+          setMentionOrder(enableEntityMention ? route.order : 'files-first');
         }
         setMentionQuery(m.query);
         setMentionOpen(true);
@@ -1619,8 +1615,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         return; // "@" and "/" are mutually exclusive triggers
       }
       mentionDismissedAtRef.current = -1; // no active "@" — reset dismissal memory
-      mentionOrderOverrideRef.current = null;
-      if (mentionOpenRef.current) closeMention();
+        if (mentionOpenRef.current) closeMention();
     }
 
     // Slash command detection: the caret follows a "/" at the input start or after
@@ -1808,7 +1803,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   // setRangeText updates the caret before the input event detects the inserted shortcut.
-  const insertShortcut = (trigger: string, opts?: { fileMention?: boolean; skills?: boolean }) => {
+  const insertShortcut = (trigger: string, opts?: { skills?: boolean }) => {
     setPlusOpen(false);
     const el = textareaRef.current;
     if (!el) return;
@@ -1819,10 +1814,6 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const inserted = (needSpace ? ' ' : '') + trigger;
     el.setSelectionRange(caret, caret);
     el.setRangeText(inserted, caret, caret, 'end');
-    // "Reference a file" leads with the FILES half, where a bare "@" would
-    // otherwise lead with the entity groups.
-    const atIndex = caret + (needSpace ? 1 : 0);
-    mentionOrderOverrideRef.current = opts?.fileMention ? { at: atIndex, order: 'files-first' } : null;
     if (opts?.skills) {
       skillsOnlyRef.current = true;
       slashIndexRef.current = caret + (needSpace ? 1 : 0);
@@ -2070,7 +2061,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           <div className="chat-input-controls">
         {/* "+" attach menu — anchors a small popover of attachment actions */}
         {!light && (
-        <div className="chat-plus-group" ref={plusGroupRef}>
+        <div className="chat-plus-group">
           <button
             ref={plusBtnRef}
             className={`chat-plus-btn${plusOpen ? ' active' : ''}`}
@@ -2096,7 +2087,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             </svg>
           </button>
           {plusOpen && (
-            <div ref={plusMenuRef} className="chat-plus-menu" role="menu" style={menuPlacementStyle(plusPlacement)}>
+            <div ref={plusMenuRef} className="chat-plus-menu" role="menu" onPointerDown={(event) => event.stopPropagation()} style={menuPlacementStyle(plusPlacement)}>
               <button
                 className="chat-plus-menu-item"
                 onClick={handleAttachClick}
@@ -2121,40 +2112,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                 <>
                   <div className="chat-plus-menu-divider" role="separator" />
                   <div className="chat-plus-menu-label">Shortcuts</div>
-                  {enableEntityMention && (
-                    <button
-                      className="chat-plus-menu-item"
-                      onClick={() => insertShortcut('@')}
-                      type="button"
-                      role="menuitem"
-                      title="Type @ to reference a task; the agent gets its context (and its session) and decides what to do"
-                    >
+                  {(enableEntityMention || mentionCwd) && (
+                    <button className="chat-plus-menu-item" onClick={() => insertShortcut('@')}
+                      type="button" role="menuitem" title={mentionCwd ? (enableEntityMention ? 'Reference a task, file or folder with @' : 'Reference a file or folder with @') : 'Reference a task with @'}>
                       <span className="chat-plus-menu-key">@</span>
-                      <span>Reference a task</span>
-                    </button>
-                  )}
-                  {mentionCwd && (
-                    <button
-                      className="chat-plus-menu-item"
-                      onClick={() => insertShortcut('@', { fileMention: true })}
-                      type="button"
-                      role="menuitem"
-                      title="Type @ to browse and reference a file"
-                    >
-                      <span className="chat-plus-menu-key">@</span>
-                      <span>Reference a file</span>
-                    </button>
-                  )}
-                  {mentionCwd && (
-                    <button
-                      className="chat-plus-menu-item"
-                      onClick={() => insertShortcut('@?', { fileMention: true })}
-                      type="button"
-                      role="menuitem"
-                      title="Show recent folders or search folders near this session"
-                    >
-                      <span className="chat-plus-menu-key">@?</span>
-                      <span>Find a folder</span>
+                      <span>Reference</span>
                     </button>
                   )}
                   {(showCommands || isSessionMode) && (
@@ -2169,6 +2131,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                       <span>Skills</span>
                     </button>
                   )}
+                </>
+              )}
+              {(promptRecallKey || isSessionMode || !!plusMenuActions?.length) && (
+                <ComposerMoreMenu>
                   {promptRecallKey && (() => {
                     const untouched = !!recallRef.current && recallRef.current.text === value && !hasAttachments;
                     const empty = (value === '' && !hasAttachments) || untouched;
@@ -2214,22 +2180,18 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                       <span>Set up a trigger or cron job</span>
                     </button>
                   )}
-                </>
+                  <PlusMenuActionRows
+                    actions={plusMenuActions ?? []}
+                    onSelect={(action) => selectPlusMenuAction(
+                      action, plusBtnRef.current, () => setPlusOpen(false), plusBtnRef.current?.closest<HTMLElement>('.chat-input-box'),
+                    )}
+                  />
+                </ComposerMoreMenu>
               )}
-              {/* Caller-defined command rows. Close FIRST, then hand over the
-                  anchor: the caller's popover opens on the frame the menu leaves,
-                  and the outside-click closer above never sees the new surface
-                  as a click inside a menu that is already gone. */}
-              <PlusMenuActionRows
-                actions={plusMenuActions ?? []}
-                onSelect={(action) => selectPlusMenuAction(
-                  action, plusBtnRef.current, () => setPlusOpen(false), plusBtnRef.current?.closest<HTMLElement>('.chat-input-box'),
-                )}
-              />
-              {!!addMenuControls?.ids.length && (
+              {!!addMenuControls?.ids.some((id) => id !== 'note' && id !== 'btw') && (
                 <>
                   <div className="chat-plus-menu-divider" role="separator" />
-                  {addMenuControls.ids.map((id) => {
+                  {addMenuControls.ids.filter((id) => id !== 'note' && id !== 'btw').map((id) => {
                     const label = addMenuControls.handleRef.current?.state(id) ?? '';
                     return (
                       <button
@@ -2243,8 +2205,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                           addMenuControls.handleRef.current?.activate(id);
                         }}
                       >
-                        <span>{id === 'output' ? 'Reply style' : id === 'btw' ? 'Side thread' : 'Note'}</span>
-                        {label && (id !== 'note' || label !== 'Note') && <span className="chat-plus-menu-control-value">{label}</span>}
+                        <span>{id === 'output' ? 'Reply style' : id}</span>
+                        {label && <span className="chat-plus-menu-control-value">{label}</span>}
                       </button>
                     );
                   })}
@@ -2281,6 +2243,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         )}
         {/* Blocked: the send controls go, the box and its mic and "+" stay. */}
         {!sendBlocked && !light && controlsSlot}
+        {!sendBlocked && !light && addMenuControls?.ids.filter((id) => id === 'btw' || id === 'note').map((id) => (
+          <ComposerDirectControl key={id} id={id} handleRef={addMenuControls.handleRef} disabled={disabled} />
+        ))}
         <span className="chat-input-controls-spacer" />
         {/* Which earlier message the box holds, while it is untouched. */}
         {recallShown && recallShown.text === value && (

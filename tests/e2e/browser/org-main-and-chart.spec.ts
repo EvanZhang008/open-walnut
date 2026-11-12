@@ -11,7 +11,7 @@
  *     and off the Tasks page
  *   - Main's quick actions (web/src/components/org/main-quick-plus-rows.ts, main-quick-menus.tsx):
  *     no bar of their own; Tidy projects / Put tasks in place / Triage sit under "Quick actions"
- *     in the "+" of Main's own composer, where a click sends Main the action (the draft in the
+ *     in the "+" -> More flyout of Main's own composer, where a click sends Main the action (the draft in the
  *     box stays) and Main answers; a project's ⋮ on the Tasks page asks about that project, and a
  *     failed send says so; a Main waiting on the user's answer is not sent to
  *   - Main's ⋮ "Memory & instructions" (web/src/components/org/AgentMemoryPanel.tsx): its core
@@ -31,6 +31,7 @@ import { isolateUiPrefs } from './todo-panel-helpers'
 import { expectNotInTasksTable, revealInTasksTable } from './tasks-table-helpers'
 import { DEFAULT_ORG_INSTRUCTIONS } from '../../../src/core/org/core-instructions'
 import { expectChatShown } from './org-view-helpers'
+import { moreMenu, moreRow } from './engine-settings-popover-helpers'
 
 // Both browser projects load this file in their own worker at about the same moment: the pid
 // keeps their projects apart (a shared one let one worker's lead answer the other's chat).
@@ -113,14 +114,19 @@ async function openOrgMain(page: Page): Promise<void> {
 const mainChat = (page: Page) => page.locator('[data-testid="org-chat"] .session-panel')
 const replies = (chat: Locator) => chat.locator('.session-msg-assistant')
 
-/** Main's composer "+" in its chat on the Org page, open. */
-async function openMainPlus(page: Page): Promise<Locator> {
+/** Main's composer "+" in its chat on the Org page, then its More flyout, open. The quick
+ *  actions are caller rows, so they live in that flyout, which is portalled under <body>. */
+async function openMainMore(page: Page): Promise<Locator> {
   const chat = mainChat(page)
   await expect(chat).toBeVisible({ timeout: 60_000 })
   await chat.locator('.session-panel-input .chat-plus-btn').click()
-  const menu = chat.locator('.chat-plus-menu')
-  await expect(menu).toBeVisible()
-  return menu
+  const plus = chat.locator('.session-panel-input .chat-plus-menu')
+  await expect(plus).toBeVisible()
+  await expect(quickRows(plus)).toHaveCount(0)
+  await moreRow(plus).click()
+  const more = moreMenu(page)
+  await expect(more).toBeVisible()
+  return more
 }
 const quickRows = (menu: Locator) => menu.locator('[data-action-id^="main-qa-"]')
 
@@ -257,18 +263,19 @@ test('a send from Main\'s composer makes Main, shows its session, and keeps Main
   await expectNotInTasksTable(page, page.locator(`.tp-row[data-task-id="${taskId}"]`))
 })
 
-test('Main\'s quick actions sit in its composer\'s "+", not in a bar of their own', async ({ page }) => {
+test('Main\'s quick actions sit in its composer\'s "+" -> More, not in a bar of their own', async ({ page }) => {
   await openOrgMain(page)
   await expect(page.getByTestId('main-quick-actions')).toHaveCount(0)
   await expect(page.getByTestId('org-detail').getByText('Ask the CEO to')).toHaveCount(0)
   await expectChatShown(page)
-  const menu = await openMainPlus(page)
+  const menu = await openMainMore(page)
   await expect(menu.locator('.chat-plus-menu-label').filter({ hasText: 'Quick actions' })).toBeVisible()
   await expect(quickRows(menu)).toHaveText(['Tidy projects', 'Put tasks in place', 'Triage'])
   await expect(quickRows(menu).first()).toHaveAttribute('title', /Nothing changes until you pick what to apply\./)
   await expect(quickRows(menu).first()).not.toHaveAttribute('aria-disabled', 'true')
   await mainChat(page).locator('.session-panel-input .chat-plus-btn').click()
   await expect(menu).toHaveCount(0)
+  await expect(page.locator('.chat-plus-menu')).toHaveCount(0)
 })
 
 test('Main\'s ⋮ opens its memory and instructions: the words save for its next message, its own MEMORY.md and Walnut\'s read folded', async ({ page, request, browserName }) => {
@@ -434,7 +441,7 @@ test('a quick action from Main\'s "+" sends it, keeps the draft, and Main answer
   const draft = `half typed ${STAMP}`
   await box.fill(draft)
   const pick = (id: string) => async () => {
-    const menu = await openMainPlus(page)
+    const menu = await openMainMore(page)
     await menu.locator(`[data-action-id="main-qa-${id}"]`).click()
     await expect(menu).toHaveCount(0)
   }
@@ -499,7 +506,7 @@ test('a Main waiting on the user\'s answer is not sent to: its chat opens on the
     await openOrgMain(page)
     await expectChatShown(page)
     await expect(mainChat(page).getByText('Which validation target?').first()).toBeVisible({ timeout: 30_000 })
-    const menu = await openMainPlus(page)
+    const menu = await openMainMore(page)
     const triage = menu.locator('[data-action-id="main-qa-triage"]')
     await expect(triage).toHaveAttribute('aria-disabled', 'true', { timeout: 30_000 })
     await expect(triage).toHaveAttribute('title', /The CEO is waiting on your answer/)

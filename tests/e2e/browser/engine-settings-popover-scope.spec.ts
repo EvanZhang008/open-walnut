@@ -13,7 +13,7 @@ import path from 'node:path'
 import { fixtureHome, readClaudeSettings } from './engine-settings-helpers'
 import {
   HOST_LABEL, banner, captureView, claimUserFile, clickComposerOutside, dialogOf, exists, fixtureRoot,
-  makeGitProject, makePlainProject, openPanels, openPlusMenu, engineSettingsRow, openPopover, plusButton,
+  makeGitProject, makePlainProject, moreMenu, moreRow, openPanels, openPlusMenu, engineSettingsRow, openPopover, plusButton,
   popoverRow, projectScopeNote, readExclude, readLocal, restoreSeed, rowControl, savedLine,
   removedProjectSentence, savedProjectBase, scopeOption, expectNoSaved, shortCwd, shot, startSessionAt, stubGet, waitForRows, watchSettingsRequests,
 } from './engine-settings-popover-helpers'
@@ -322,7 +322,8 @@ test.describe('engine settings popover: write scope', () => {
     await expect(dialogOf(page)).toHaveCount(0)
     const menuB = panelB.locator('.chat-plus-menu[role=menu]')
     await expect(menuB).toBeVisible()
-    await engineSettingsRow(menuB).click()
+    await moreRow(menuB).click()
+    await engineSettingsRow(moreMenu(page)).click()
     const dialogB = dialogOf(page)
     await expect(dialogB).toHaveCount(1)
     await waitForRows(dialogB)

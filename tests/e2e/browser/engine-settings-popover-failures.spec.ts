@@ -12,7 +12,7 @@ import path from 'node:path'
 import { fixtureHome } from './engine-settings-helpers'
 import { seedColumns } from './draft-helpers'
 import {
-  HOST_LABEL, banner, claimUserFile, dialogOf, engineSettingsRow, fixtureRoot, makeGitProject, openPanels, openPlusMenu,
+  HOST_LABEL, banner, claimUserFile, dialogOf, engineSettingsRow, fixtureRoot, makeGitProject, openMoreMenu, openPanels,
   openPopover, panelFor, plusButton, popoverGroup, popoverGroups, popoverRow, popoverRowWrap, readLocal, restoreSeed, rowControl, rowsArea,
   scopeOption, startSessionAt, stubGet, stubPatch, waitForRows, watchSettingsRequests, type View,
 } from './engine-settings-popover-helpers'
@@ -324,7 +324,7 @@ test.describe('engine settings popover: failures and edge shapes', () => {
     await page.goto('/')
     const panel = panelFor(page, sid)
     await expect(plusButton(panel)).toBeVisible({ timeout: 30_000 })
-    let menu = await openPlusMenu(panel)
+    let menu = await openMoreMenu(panel)
     let row = engineSettingsRow(menu)
     await expect(row).toHaveAttribute('aria-disabled', 'true')
     await expect(row).toHaveAttribute('title', 'Checking what this engine supports')
@@ -339,7 +339,7 @@ test.describe('engine settings popover: failures and edge shapes', () => {
     mode = 'real'
     await page.reload()
     await expect(plusButton(panel)).toBeVisible({ timeout: 30_000 })
-    menu = await openPlusMenu(panel)
+    menu = await openMoreMenu(panel)
     row = engineSettingsRow(menu)
     await expect(row).toHaveAttribute('aria-disabled', 'true')
     await expect(row).not.toHaveAttribute('aria-disabled', 'true', { timeout: 6000 })

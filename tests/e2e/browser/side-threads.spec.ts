@@ -48,6 +48,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
+import { directControl } from './composer-controls-overflow-helpers'
 
 const SCREENSHOT_DIR = process.env.SIDE_THREADS_SHOTS ?? '/tmp/side-threads'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -269,14 +270,14 @@ async function openParentColumn(page: Page): Promise<Locator> {
   return panel
 }
 
-/** `.side-question-pill` is shared with the Notes pill — filter on the label. It sits
- *  in the add menu now (visually hidden), so it is read for its count, never clicked. */
+/** `.side-question-pill` is shared with the Notes pill — filter on the label. The
+ *  controls bar's own pill is visually hidden and carries the count, so it is read,
+ *  never clicked; the composer's direct "btw" button (same class, no count) opens it. */
 const btwPill = (panel: Locator): Locator =>
-  panel.locator('.side-question-pill', { hasText: 'btw' }).first()
+  panel.locator('.composer-controls-bar .side-question-pill', { hasText: 'btw' }).first()
 
 async function openDrawer(panel: Locator): Promise<Locator> {
-  await panel.locator('.session-panel-input .chat-plus-btn').click()
-  await panel.locator('.session-panel-input [data-add-control="btw"]').click()
+  await directControl(panel, 'btw').click()
   const popover = panel.locator('.side-question-popover').first()
   await expect(popover).toBeVisible({ timeout: 10_000 })
   return popover

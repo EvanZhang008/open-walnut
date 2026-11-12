@@ -102,6 +102,15 @@ export const barOf = (panel: Locator) => panel.locator('.composer-controls-bar')
 export const overflowBtn = (panel: Locator) => panel.getByTestId('composer-overflow-btn');
 export const controlOf = (panel: Locator, id: string) => barOf(panel).locator(`[data-control-id="${id}"]`);
 
+/** The composer's "+" button, its menu, and a session control row in that menu
+ *  (only Reply style, `output`, is one now). */
+export const addButton = (panel: Locator) => panel.locator('.session-panel-input .chat-plus-btn');
+export const addMenu = (panel: Locator) => panel.locator('.session-panel-input .chat-plus-menu');
+export const addRow = (panel: Locator, id: string) => addMenu(panel).locator(`[data-add-control="${id}"]`);
+/** Note and btw: buttons of their own on the composer's controls row, never "+" rows. */
+export const directControl = (panel: Locator, id: 'note' | 'btw') =>
+  panel.locator(`.session-panel-input .chat-input-controls > [data-add-control="${id}"]`);
+
 /** Ids currently ON the row, and the row's height in pill-rows. */
 export async function rowState(panel: Locator): Promise<{ visible: string[]; hidden: string[]; lines: number; height: number }> {
   return barOf(panel).evaluate((bar) => {

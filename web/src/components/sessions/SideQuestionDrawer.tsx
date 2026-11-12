@@ -390,9 +390,12 @@ export function SideQuestionDrawer({
     const onDoc = (e: MouseEvent) => {
       const target = e.target as Element | null;
       if (!rootRef.current || !target || rootRef.current.contains(target)) return;
+      // The visible trigger lives beside the mounted control, in the same composer.
+      if (target.closest('.composer-direct-control[data-add-control="btw"]')
+        && target.closest('.chat-input-box') === rootRef.current.closest('.chat-input-box')) return;
       // Popups the thread body opens (Bash output, plan, quote pins) portal to
       // document.body: a click inside them must not read as "outside".
-      if (target.closest?.(`.plan-popup-overlay, .quote-pin-popover, ${SELECTION_BAR_LAYERS}`)) return;
+      if (target.closest?.(`.plan-popup-overlay, .quote-pin-popover, .chat-plus-more-flyout[data-composer-scope="side-question"], ${SELECTION_BAR_LAYERS}`)) return;
       // Full screen: the backdrop click leaves full screen only (useFullscreen), as the panel's does.
       if (isFullscreen && target.closest?.('.open-walnut-fullscreen-backdrop')) return;
       closeDrawer();

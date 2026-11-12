@@ -3,7 +3,7 @@ import { build } from 'esbuild'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { discoverFixtureRoot, loadHome, openDraftOnCwd } from './draft-helpers'
-import { startSessionAt, openPanels, openPlusMenu, composerTextarea } from './engine-settings-popover-helpers'
+import { startSessionAt, openPanels, composerTextarea, moreMenu, moreRow } from './engine-settings-popover-helpers'
 
 let script = ''
 
@@ -223,14 +223,15 @@ test('the schedule shortcut preserves a draft and asks which timing fits', async
   const input = await openComposer(page)
   await input.fill('Send me a summary when it is ready')
   await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'Set up a trigger or cron job' }).click()
+  await moreRow(page.locator('.chat-plus-menu')).click()
+  await moreMenu(page).getByRole('menuitem', { name: 'Set up a trigger or cron job' }).click()
   await expect(input).toHaveValue('Set up a trigger or cron job: Send me a summary when it is ready')
   await expect(page.getByTestId('sent')).toHaveText('[]')
   await expect.poll(() => page.evaluate(() => localStorage.getItem('input-state:a')))
     .toBe('Set up a trigger or cron job: Send me a summary when it is ready')
 })
 
-test('Find a folder searches recent and nearby directories without replacing the draft', async ({ page }) => {
+test('@? searches recent and nearby directories without replacing the draft', async ({ page }) => {
   const paths = Array.from({ length: 260 }, (_, i) => `/fixture/work/projects/module-${i}`)
   paths.push('/fixture/work/projects/DeltaService', '/fixture/work/notes/weekly-reports')
   const listings: string[] = []
@@ -245,8 +246,7 @@ test('Find a folder searches recent and nearby directories without replacing the
   })
   const input = await openComposer(page, '/fixture/work/')
   await input.fill('Review ')
-  await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
-  await page.getByRole('menuitem', { name: /Find a folder$/ }).click()
+  await input.pressSequentially('@?')
   const picker = page.locator('.file-mention-popup')
   await expect(picker.locator('.fmp-recent-path')).toHaveText(['/fixture/old/DeltaArchive'])
   await expect(input).toHaveValue('Review @?')
@@ -320,9 +320,7 @@ test('folder search ignores old responses, shows failures, and retries without l
   })
   const input = await openComposer(page, '/fixture/')
   try {
-    await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
-    await page.getByRole('menuitem', { name: /Find a folder$/ }).click()
-    await input.pressSequentially('marina')
+    await input.pressSequentially('@?marina')
     await expect.poll(() => attempts).toBe(1)
     await input.press('Escape')
     await expect(page.locator('.file-mention-popup')).toHaveCount(0)
@@ -397,7 +395,7 @@ test('incomplete folder listings keep their matches visible and offer retry', as
   }
 })
 
-test('Find a folder works in a real session and keeps its draft in a short viewport', async ({ page, request }) => {
+test('@? folder search works in a real session and keeps its draft in a short viewport', async ({ page, request }) => {
   const root = await discoverFixtureRoot()
   const cwd = `${root}/projects/walnut`
   const sibling = `${root}/projects/zmarinax`
@@ -409,9 +407,7 @@ test('Find a folder works in a real session and keeps its draft in a short viewp
   const [panel] = await openPanels(page, [sid])
   const input = composerTextarea(panel)
   await input.fill('Review ')
-  const menu = await openPlusMenu(panel)
-  await expect(menu.getByRole('menuitem', { name: /Find a folder$/ })).toBeVisible()
-  await menu.getByRole('menuitem', { name: /Find a folder$/ }).click()
+  await input.pressSequentially('@?')
   const picker = panel.locator('.file-mention-popup')
   await expect(picker).toBeVisible()
   await input.pressSequentially('zmarinax')
@@ -431,15 +427,14 @@ test('Find a folder works in a real session and keeps its draft in a short viewp
   await expect(picker).toBeHidden()
 })
 
-test('Find a folder also searches from a draft column', async ({ page }) => {
+test('@? folder search also works from a draft column', async ({ page }) => {
   const root = await discoverFixtureRoot()
   const cwd = `${root}/projects/walnut`
   await loadHome(page)
   const panel = await openDraftOnCwd(page, cwd)
   const input = composerTextarea(panel)
   await input.fill('Check ')
-  await openPlusMenu(panel)
-  await panel.getByRole('menuitem', { name: /Find a folder$/ }).click()
+  await input.pressSequentially('@?')
   const picker = panel.locator('.file-mention-popup')
   await input.pressSequentially('web')
   await expect(picker.locator('.fmp-recent-item', { hasText: `${cwd}/web` })).toBeVisible({ timeout: 20_000 })

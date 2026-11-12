@@ -18,7 +18,7 @@ import { test, expect } from './shortcut-test-fixture'
 import type { Locator, Page } from '@playwright/test'
 import { openDraft, draftPanel } from './draft-helpers'
 import {
-  startSessionAt, openPanels, openPlusMenu, composerTextarea, plusButton,
+  startSessionAt, openPanels, openMoreMenu, composerTextarea, plusButton,
 } from './engine-settings-popover-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
@@ -207,6 +207,7 @@ test('the pill, the flyout and the Routines card say what each trigger does; the
 })
 
 const PROMPT = 'Set up a trigger or cron job: '
+/** The schedule shortcut sits in the "+" menu's More flyout (openMoreMenu). */
 const triggerRow = (menu: Locator): Locator =>
   menu.getByRole('menuitem', { name: 'Set up a trigger or cron job' })
 
@@ -224,7 +225,7 @@ test('the schedule shortcut preserves drafts and leaves the choice of trigger or
   const box = composerTextarea(panel)
 
   await box.fill('tell me when the nightly build goes red')
-  const menu = await openPlusMenu(panel)
+  const menu = await openMoreMenu(panel)
   await expect(triggerRow(menu)).toBeVisible()
   await shot(menu, 'plus-menu')
   await triggerRow(menu).click()
@@ -234,17 +235,18 @@ test('the schedule shortcut preserves drafts and leaves the choice of trigger or
   expect(await caretAtEnd(box)).toBe(true)
   await expect(panel.locator('.command-palette')).toHaveCount(0)
 
-  await triggerRow(await openPlusMenu(panel)).click()
+  await triggerRow(await openMoreMenu(panel)).click()
   await expect(box).toHaveValue(`${PROMPT}tell me when the nightly build goes red`)
 
   await box.fill('/compact consider the schedule')
-  await triggerRow(await openPlusMenu(panel)).click()
+  await triggerRow(await openMoreMenu(panel)).click()
   await expect(box).toHaveValue('/compact \nSet up a trigger or cron job: consider the schedule')
-  await triggerRow(await openPlusMenu(panel)).click()
+  await triggerRow(await openMoreMenu(panel)).click()
   await expect(box).toHaveValue('/compact \nSet up a trigger or cron job: consider the schedule')
   await box.fill('')
   await page.setViewportSize({ width: 900, height: 420 })
-  const shortMenu = await openPlusMenu(panel)
+  // The More flyout fits a short viewport too.
+  const shortMenu = await openMoreMenu(panel)
   const menuBox = await shortMenu.boundingBox()
   expect(menuBox).toBeTruthy()
   expect(menuBox!.y).toBeGreaterThanOrEqual(0)
@@ -262,7 +264,7 @@ test('the schedule shortcut preserves drafts and leaves the choice of trigger or
   await expect(plusButton(draft)).toBeVisible()
   const draftBox = composerTextarea(draft)
   await draftBox.fill('watch the deploy')
-  await triggerRow(await openPlusMenu(draft)).click()
+  await triggerRow(await openMoreMenu(draft)).click()
   await expect(draftBox).toHaveValue(`${PROMPT}watch the deploy`)
   await expect(box).toHaveValue('')
 })

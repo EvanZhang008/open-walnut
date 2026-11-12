@@ -1,0 +1,19 @@
+.chat-plus-menu.chat-plus-more-flyout {
+  position: fixed;
+  left: auto;
+  bottom: auto;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 16px));
+  overflow-y: auto;
+  background: var(--bg-elevated, var(--card-bg));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.chat-plus-more-flyout > .chat-plus-menu-divider:first-child {
+  display: none;
+}
+
+.composer-direct-control {
+  flex: 0 0 auto;
+}

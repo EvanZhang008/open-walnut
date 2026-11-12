@@ -16,7 +16,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { fixtureHome, readClaudeSettings } from './engine-settings-helpers'
 import {
-  HOST_LABEL, banner, claimUserFile, composerTextarea, dialogOf, filterBox, fixtureRoot, makeGitProject, openPanels, openPlusMenu,
+  HOST_LABEL, banner, claimUserFile, composerTextarea, dialogOf, engineSettingsRow, filterBox, fixtureRoot, makeGitProject, openMoreMenu, openPanels,
   openPopover, plusButton, popoverRow, popoverRowWrap, restoreSeed, rowControl, rowsArea, savedLine, savedProjectBase,
   savedUserSentence, scopeOption, shortCwd, shot, startSessionAt, stubPatch, waitForRows,
 } from './engine-settings-popover-helpers'
@@ -381,10 +381,10 @@ test.describe('engine settings popover: nitpick fixes', () => {
 
   test('off toggle visible on a hovered row, one host rule, each other group as one phrase', async ({ page }) => {
     const [panel] = await openPanels(page, [sidA])
-    const menu = await openPlusMenu(panel)
-    await expect(menu.locator('button.chat-plus-menu-item', { hasText: 'Engine settings' }))
+    const more = await openMoreMenu(panel)
+    await expect(engineSettingsRow(more))
       .toHaveAttribute('title', `Claude Code settings for sessions in ${shortCwd(repoA)} on ${HOST_LABEL}`)
-    await menu.locator('button.chat-plus-menu-item', { hasText: 'Engine settings' }).click()
+    await engineSettingsRow(more).click()
     const dialog = dialogOf(page)
     await waitForRows(dialog)
     // "This Mac" reads the same everywhere, mid-sentence included.
