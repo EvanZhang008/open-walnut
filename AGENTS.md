@@ -301,10 +301,12 @@ by its real effect; do not start a browser for a change with no UI.
 
 **List the acceptance scenarios before writing code; the main agent owns the final result.**
 Tests cover the real usage path and data density of the target UI, plus the relevant edge,
-concurrency, failure and recovery paths; say why any of them does not apply. A web issue in the
-Mac app is verified in WebKit, never only in Chromium.
+concurrency, failure and recovery paths; say why any of them does not apply. Pick the browser
+engine by what the bug is about (2026-11-12, the user: "why try it in webkit just in chrome is
+fine"): Playwright in Chromium for everything, WebKit only for a bug that depends on the engine
+(scrolling, painting, layout, focus, input, media).
 
-**WebKit acceptance runs on a Linux dev host, never as a test run on the Mac** (2026-11-12: at load 358, five UI tasks sat in the Mac's :3457 queue waiting for WebKit). A change to the Mac app's web pages is accepted with Playwright's WebKit (its Linux build of the same engine, headless: `PW_WEBKIT=1 bun x playwright test <spec> --project webkit`) on a Linux dev host, never the Mac a person uses. After the land, the Mac gets only a short read-only look at live prod in the Mac app: no fixture server, no test run. Only what Linux WebKit cannot show runs on the Mac, one at a time in its :3457 queue: the MediaRecorder specs (`stt-*`, `voice-*`, Linux WebKit has no MediaRecorder) and a layout that differs only in macOS fonts. A task's placement never keeps it on the Mac for WebKit.
+**WebKit acceptance runs on a Linux dev host, never as a test run on the Mac** (2026-11-12: at load 358, five UI tasks sat in the Mac's :3457 queue waiting for WebKit). Browser checks run in Chromium; a bug in the Mac app's web pages that depends on the engine (scrolling, painting, layout, focus, input, media) is accepted with Playwright's WebKit (its Linux build of the same engine, headless: `PW_WEBKIT=1 bun x playwright test <spec> --project webkit`) on a Linux dev host, never the Mac a person uses. After the land, the Mac gets only a short read-only look at live prod in the Mac app: no fixture server, no test run. Only what Linux WebKit cannot show runs on the Mac, one at a time in its :3457 queue: the MediaRecorder specs (`stt-*`, `voice-*`, Linux WebKit has no MediaRecorder) and a layout that differs only in macOS fonts. A task's placement never keeps it on the Mac for WebKit.
 
 **The main agent does the key steps and checks the evidence itself.** Subagents may help, but
 their reports, a simple text sample, a type check, a test run that has only started, or a
@@ -318,15 +320,15 @@ review.
 
 | Tier | What counts | Run | Skip |
 |---|---|---|---|
-| Small | a revert to a state production already ran; CSS, copy, docs or config text only; a few dozen lines with no new branch or state | the one or two tests or specs that touch it, on the engine the user runs (WebKit for the Mac app, on a Linux dev host); the owner reads its own diff; deploy; a short video when it is visible | the full quick tier, `test:pre-commit`, other browser engines, a review agent, an HTML explainer |
-| Medium | new logic in one area, a few files, no trigger | the affected test groups (`test:focus`, or `test:pre-commit` for its tiers) and the touched flow in Playwright on the user's engine; one review agent on a mid-size model | the whole suite, a second engine unless the change is engine-specific |
+| Small | a revert to a state production already ran; CSS, copy, docs or config text only; a few dozen lines with no new branch or state | the one or two tests or specs that touch it, in Chromium (WebKit only when the bug depends on the engine, on a Linux dev host); the owner reads its own diff; deploy; a short video when it is visible | the full quick tier, `test:pre-commit`, other browser engines, a review agent, an HTML explainer |
+| Medium | new logic in one area, a few files, no trigger | the affected test groups (`test:focus`, or `test:pre-commit` for its tiers) and the touched flow in Playwright in Chromium (WebKit only for an engine-dependent bug); one review agent on a mid-size model | the whole suite, a second engine unless the change is engine-specific |
 | Large | any trigger, or a change across subsystems | the full flow below: scenario matrix, `test:pre-commit`, the engines the change reaches, an independent review on the strongest model | nothing |
 
 Triggers: user data or storage formats, a migration, concurrency (locks, queues, ordering), security, permissions or credentials, an outward send, the session daemon or process lifecycle, the deploy or release scripts, the frozen `/api/v1` contract or older clients. A failing test in a lower tier is fixed and rerun alone; it moves the change up only when the failure shows the change reaches further than its tier said. A bug fix still adds its guard test in every tier.
 
 - Bug fix: Playwright repro → fix → verify same flow → commit
 - **A bug fix covers the whole class, with a guard test** (2026-10-29: three bugs reported fixed came back the same day; each first fix covered only the known case, a fixed list of note types, one of 29 components with the same render mistake). Name the class the bug belongs to, fix every member, and add a test that fails when a NEW member of the class appears (enumerate the members from the source, as the ratchets here do), not only one for the case that was reported.
-- **A bug is fixed when it works in the user's own build, on the data that showed it.** The Mac app's WKWebView (WebKit acceptance on a Linux dev host, then the read-only look at live prod in the app) or the phone build, against the real data of the report; a green test on another build or a fixture is not that proof.
+- **A bug is fixed when it works on the data that showed it.** Against the real data of the report; a green test on a fixture is not that proof. A bug that depends on the engine (scrolling, painting, layout, focus, input, media) is checked in the user's own engine too: the Mac app's WKWebView (WebKit acceptance on a Linux dev host, then the read-only look at live prod in the app) or the phone build.
 - Feature: define E2E scenarios → implement → build → Playwright verify → commit
 - Test UI changes as a real user with Playwright; for load bugs, test `/` and the reported URL 5× and report worst full-load time/errors.
 - **NEVER** commit UI changes without Playwright verification

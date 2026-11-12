@@ -14,8 +14,9 @@ work is, the heavier ones on GitHub, then the merge. Nothing here chooses which 
 test; the brakes that protect any computer (the Playwright lease on :3457 and its load wait, the
 local worker budget) are in the repository and apply everywhere.
 
-Browser acceptance follows the same rule: a change to the Mac app's web pages is accepted with
-Playwright's WebKit (`PW_WEBKIT=1 bun x playwright test <spec> --project webkit`) on a Linux dev
+Browser acceptance follows the same rule: browser checks run in Chromium, and a bug in the Mac
+app's web pages that depends on the engine (scrolling, painting, layout, focus, input, media) is
+accepted with Playwright's WebKit (`PW_WEBKIT=1 bun x playwright test <spec> --project webkit`) on a Linux dev
 host or GitHub's runners, never as a test run on the Mac a person uses (2026-11-12: at load 358,
 five UI tasks sat in the Mac's :3457 queue waiting for WebKit). After the land, the Mac gets only
 a short read-only look at live prod in the Mac app. Linux WebKit has no MediaRecorder, so the
