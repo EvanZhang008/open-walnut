@@ -12,6 +12,7 @@
  *
  * What it does when the console asks: scroll, clear the selection, add a style, paint marks
  * (CSS Custom Highlights from offsets into its text), bring a mark on screen, and find text.
+ * On its own it keeps the place being read on screen when the frame changes size.
  *
  * Every message it takes is checked: it comes from the parent window, is one of the named
  * types, and has the fields that type needs, of the right kind and size. Every message it sends
@@ -289,14 +290,75 @@ addEventListener('contextmenu', function(e){
   post({ type: 'link-menu', href: a.href, x: e.clientX, y: e.clientY });
 });
 
+/* The place being read, kept when the frame changes size. WebKit has no scroll anchoring
+   (Chromium does it itself, and the step below then finds nothing left to move): a frame made
+   narrower or wider (a column opening beside it, a split dragged) reflowed the page under the
+   same scrollY, and the place being read moved away (2026-11-12: about 2000px on a long page
+   when the view went 80px narrower and back, and the open question's card docked at an edge,
+   far from its passage). The place is the text at the view's middle, outside fixed or sticky
+   boxes (a table of contents, a toolbar), taken whenever the page rests or lays out at the same
+   size; a new size scrolls it back to where it was on screen. Not once the page has scrolled
+   since (its scroll event may not even have come: a resize runs first), which moved the reader
+   back to where they scrolled from (2026-11-12, under load: a page scrolled to its top went
+   back down to the passage). */
+var place = null, vw = innerWidth, vh = innerHeight;
+function pinned(el){
+  for (var e = el; e && e !== D.body; e = e.parentElement) { var p = getComputedStyle(e).position; if (p === 'fixed' || p === 'sticky') return true; }
+  return false;
+}
+/* The line a caret at (x, y) sits on: a text position, so a large box around it (a section, a
+   code block) never stands in for the line being read. */
+function lineAt(x, y){
+  var n = null, o = 0;
+  if (D.caretRangeFromPoint) { var r = D.caretRangeFromPoint(x, y); if (r) { n = r.startContainer; o = r.startOffset; } }
+  else if (D.caretPositionFromPoint) { var c = D.caretPositionFromPoint(x, y); if (c) { n = c.offsetNode; o = c.offset; } }
+  if (!n || n.nodeType !== 3 || !n.data.length || !n.parentElement || pinned(n.parentElement)) return null;
+  // Never collapsed: a caret past a short line's end sits at the text's length.
+  if (o >= n.data.length) o = n.data.length - 1;
+  var g = D.createRange(); g.setStart(n, o); g.setEnd(n, o + 1);
+  return g;
+}
+/* Its top on screen, or null once it has no box (its text replaced or emptied by the page). */
+function topOf(g){
+  if (g.collapsed || g.startContainer.nodeType !== 3 || !g.startContainer.isConnected) return null;
+  var r = g.getClientRects()[0];
+  return r ? r.top : null;
+}
+function takePlace(){
+  place = null;
+  var xs = [0.5, 0.65, 0.8, 0.35, 0.2];
+  for (var k = 0; k < xs.length; k++) {
+    var g = lineAt(innerWidth * xs[k], innerHeight / 2);
+    var t = g ? topOf(g) : null;
+    if (t !== null) { place = { g: g, top: t, y: scrollY }; return; }
+  }
+}
+/* Every new place goes through here: one taken at a new size before the size was seen would
+   be read as where the reader was. */
+function laidOut(){
+  // A hidden frame (an ancestor display:none) has no layout to keep a place in: keep the last one.
+  if (!innerWidth || !innerHeight) return;
+  if (innerWidth !== vw || innerHeight !== vh) {
+    vw = innerWidth; vh = innerHeight;
+    // Scrolled since the place was taken: the reader is elsewhere now (a new size clamping the
+    // page at its end is not a scroll of theirs).
+    var se = D.scrollingElement;
+    var moved = !!place && Math.abs(scrollY - place.y) > 1 && (!se || scrollY < se.scrollHeight - innerHeight - 1);
+    var now = place && !moved ? topOf(place.g) : null;
+    if (now !== null) { var dy = now - place.top; if (Math.abs(dy) > 1) scrollBy(0, dy); }
+  }
+  takePlace();
+  sendRects();
+}
+
 /* Scroll, the reader's own moves, keys. */
 var st = 0;
 addEventListener('scroll', function(){
   if (st) return;
-  st = setTimeout(function(){ st = 0; post({ type: 'scroll', top: scrollY, rect: selRect() }); }, 80);
+  st = setTimeout(function(){ st = 0; laidOut(); post({ type: 'scroll', top: scrollY, rect: selRect() }); }, 80);
 }, { passive: true });
 D.addEventListener('scroll', sendRects, { capture: true, passive: true });
-addEventListener('resize', sendRects);
+addEventListener('resize', laidOut);
 var ut = 0;
 function user(){ var n = Date.now(); if (n - ut > 300) { ut = n; post({ type: 'user' }); } }
 addEventListener('wheel', user, { passive: true });
@@ -337,7 +399,8 @@ new MutationObserver(function(){
 function ready(){
   post({ type: 'ready', href: location.href, top: scrollY });
   pushText();
-  if (window.ResizeObserver) { var ro = new ResizeObserver(sendRects); ro.observe(D.documentElement); if (D.body) ro.observe(D.body); }
+  laidOut();
+  if (window.ResizeObserver) { var ro = new ResizeObserver(laidOut); ro.observe(D.documentElement); if (D.body) ro.observe(D.body); }
 }
 if (D.readyState === 'complete') ready(); else addEventListener('load', ready);
 })();`

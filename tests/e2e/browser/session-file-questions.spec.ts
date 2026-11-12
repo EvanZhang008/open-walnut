@@ -22,6 +22,7 @@ import {
   modePill, nextQuestionNumber, openThreadsSession, readRecord, resetThreadsFixture, switchView, unfoldQuestions, test,
 } from './threads-helpers'
 import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
+import { isolateUiPrefsContext } from './status-section-helpers'
 
 const MD_FILE = 'cache-design.md'
 const HTML_FILE = 'cache-report.html'
@@ -113,8 +114,13 @@ test.describe('Questions about a file passage (Files tab)', () => {
   test.describe.configure({ mode: 'serial' })
   test.setTimeout(240_000)
 
-  test.beforeEach(async ({ request }) => {
+  test.beforeEach(async ({ request, context }) => {
     await resetThreadsFixture(request, TAGGED_SESSION)
+    // The file's reading place is a synced pref: through the shared fixture server the
+    // next test (a repeat, a retry) opened the long page where this one left it, and the
+    // page's restore then pulled it off the passage the test had just scrolled to
+    // (2026-11-12: after one failure, every later repeat missed its Ask here).
+    await isolateUiPrefsContext(context)
   })
 
   test('Ask here on a selection in the markdown preview: a draft card beside the passage, numbered by its send, the reply inside', async ({ page, request }) => {
@@ -480,6 +486,45 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await nothingLeft()
   })
 
+  test('a long HTML page keeps the place being read when the view changes width', async ({ page, browserName }) => {
+    const panel = await openSession(page)
+    const view = await openFile(page, panel, LONG_FILE)
+    const frame = view.frameLocator('.fv-html-preview')
+    await expect(frame.locator('body')).toContainText(LONG_PASSAGE, { timeout: 15_000 })
+    await frame.locator('body').evaluate((el, phrase) => {
+      Array.from(el.querySelectorAll('td')).find((t) => t.textContent === phrase)!.scrollIntoView({ block: 'center' })
+    }, LONG_PASSAGE)
+    // The page at rest: its report of the place is what the console then keeps (a size change
+    // while a scroll has not come to rest keeps nothing, preview-bridge-script.ts).
+    await expect.poll(() => page.evaluate((name) => Object.entries(JSON.parse(localStorage.getItem('open-walnut-file-view-scroll') ?? '{}') as Record<string, { top: number }>)
+      .find(([k]) => k.endsWith(`/${name}`))?.[1].top ?? 0, LONG_FILE)).toBeGreaterThan(5000)
+    const at = async () => Math.round((await frameTextRects(view, LONG_PASSAGE))[0].top)
+    const before = await at()
+    // The chat's column opening beside the files took 80px from the view and gave it
+    // back: WebKit kept the page's scrollY, so the reflowed page showed text about 2000px
+    // further on, and an open card docked at the top, away from its passage (2026-11-12).
+    // The page's bridge keeps the line at the view's middle in place there; Chromium's own
+    // scroll anchoring keeps a line of its choosing (about 200px off here), which the bridge
+    // leaves alone.
+    // The kept line is the view's middle, not this passage: the text between them reflows too,
+    // so the passage may move by a line or two (50px in 1 of 9 runs). Unkept, it moved ~2000px.
+    const near = browserName === 'webkit' ? 120 : 240
+    for (const width of ['calc(100% - 80px)', '']) {
+      await view.locator('.fv-html-preview').evaluate((el, w) => { (el as HTMLElement).style.width = w }, width)
+      await page.waitForTimeout(400)
+      expect(Math.abs(await at() - before), `the passage stays on screen where it was (width ${width || 'back'})`).toBeLessThan(near)
+    }
+    // Scrolled to the top, and the width changes before the page has reported that scroll
+    // (a resize runs before the frame's scroll events): the page stays at its top, never
+    // taken back down to the place it left (2026-11-12, under load).
+    await view.locator('.fv-html-preview').evaluate((el) => {
+      (el as HTMLIFrameElement).contentWindow!.postMessage({ walnutPreview: 1, type: 'scroll-to', top: 0 }, '*')
+      ;(el as HTMLElement).style.width = 'calc(100% - 80px)'
+    })
+    await page.waitForTimeout(400)
+    expect(await frame.locator('body').evaluate(() => Math.round(scrollY)), 'the page stays at its top').toBeLessThan(5)
+  })
+
   test('a long HTML page: a question reopened from the rail after scrolling away brings its passage back, card beside it', async ({ page }) => {
     const panel = await openSession(page)
     const view = await openFile(page, panel, LONG_FILE)
@@ -555,17 +600,28 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await expect(card).toBeVisible()
     await page.waitForTimeout(300)
     const small = (await card.boundingBox())!
-    const passageTop = (await frameTextRects(view, LONG_PASSAGE))[0].top
-    const overIt = small.y + small.height <= passageTop + 1
-    const layer = (await view.locator('.fv-thread-layer').boundingBox())!
-    const wide = Math.round(Math.max(small.width, Math.min(960, layer.width - 16)))
+    // Its edge's distance to the passage, read with the passage as it is then: a column
+    // opening beside the files can still narrow the view meanwhile, which moves both.
+    const passage = async () => {
+      const r = await frameTextRects(view, LONG_PASSAGE)
+      return { top: r[0].top, bottom: r.at(-1)!.top + r.at(-1)!.height }
+    }
+    const p0 = await passage()
+    const overIt = small.y + small.height <= p0.top + 1
+    const gapOf = (b: { y: number; height: number }, p: { top: number; bottom: number }) => overIt ? p.top - (b.y + b.height) : b.y - p.bottom
+    // Read from the layer as it is when the card has grown: the view can still settle its width
+    // after the reopen (1 of 6 Linux WebKit runs, 2026-11-12: measured 80px wider before the click
+    // than the layer the grown card was then placed in).
+    const wide = async () => {
+      const layer = (await view.locator('.fv-thread-layer').boundingBox())!
+      return Math.round(Math.max(small.width, Math.min(960, layer.width - 16)))
+    }
     await card.locator('.thread-card-expand').click()
     await expect(card).toHaveAttribute('data-expanded', 'true')
-    await expect.poll(async () => Math.abs((await card.boundingBox())!.width - wide)).toBeLessThanOrEqual(1)
+    await expect.poll(async () => Math.abs((await card.boundingBox())!.width - await wide())).toBeLessThanOrEqual(1)
     await page.waitForTimeout(300)
     const big = (await card.boundingBox())!
-    if (overIt) expect(Math.abs((big.y + big.height) - (small.y + small.height)), 'its foot stays over the passage').toBeLessThan(2)
-    else expect(Math.abs(big.y - small.y), 'its top stays under the passage').toBeLessThan(2)
+    expect(Math.abs(gapOf(big, await passage()) - gapOf(small, p0)), overIt ? 'its foot stays over the passage' : 'its top stays under the passage').toBeLessThan(2)
     const vb2 = (await view.boundingBox())!
     expect(big.x).toBeGreaterThanOrEqual(vb2.x)
     expect(big.x + big.width).toBeLessThanOrEqual(vb2.x + vb2.width + 1)

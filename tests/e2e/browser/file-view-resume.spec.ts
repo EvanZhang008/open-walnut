@@ -67,6 +67,15 @@ test.beforeEach(async ({ page }) => {
   await page.waitForLoadState('networkidle')
 })
 
+/** The saved offset of drag-fixture.html (the debounced save, the bridge's then the console's). */
+function savedHtmlTop(page: Page): () => Promise<number> {
+  return () => page.evaluate(() => {
+    const all = JSON.parse(localStorage.getItem('open-walnut-file-view-scroll') ?? '{}') as Record<string, { top?: number }>
+    const hit = Object.entries(all).find(([k]) => k.endsWith('drag-fixture.html'))
+    return hit?.[1]?.top ?? 0
+  })
+}
+
 test('lone ~ approximations do not strike out the paragraph', async ({ page }) => {
   const panel = await openSessionPanel(page)
   const explorer = await openFiles(panel)
@@ -180,7 +189,7 @@ test('HTML preview remembers its scroll position too', async ({ page }) => {
   // Scrolled from inside the page, as the reader would (the console cannot reach in).
   await inner.evaluate(() => window.scrollTo(0, 1200))
   await expect.poll(() => inner.evaluate(() => window.scrollY)).toBeGreaterThan(1000)
-  await page.waitForTimeout(500) // debounced save
+  await expect.poll(savedHtmlTop(page), { message: 'the page offset is saved' }).toBeGreaterThan(1000)
 
   await closeFiles(panel)
   explorer = await openFiles(panel)
@@ -195,6 +204,38 @@ test('HTML preview remembers its scroll position too', async ({ page }) => {
   ).toBeGreaterThan(1000)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step5-html-resumed.png` })
+})
+
+test('HTML preview in full screen: the page resumes inside its frame, the pane around it stays put', async ({ page }) => {
+  const panel = await openSessionPanel(page)
+  await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
+  await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+  let explorer = await openFiles(panel)
+  await explorer.locator('.sfe-name', { hasText: 'drag-fixture.html' }).click()
+  let inner = page.frameLocator('iframe.fv-html-preview').locator('body')
+  await expect(inner).toContainText('Drag fixture preview', { timeout: 10_000 })
+  await inner.evaluate(() => window.scrollTo(0, 1200))
+  await expect.poll(() => inner.evaluate(() => window.scrollY)).toBeGreaterThan(1000)
+  await expect.poll(savedHtmlTop(page), { message: 'the page offset is saved' }).toBeGreaterThan(1000)
+
+  await closeFiles(panel)
+  explorer = await openFiles(panel)
+  inner = page.frameLocator('iframe.fv-html-preview').locator('body')
+  await expect(inner).toContainText('Drag fixture preview', { timeout: 10_000 })
+  await expect.poll(() => inner.evaluate(() => window.scrollY), { timeout: 10_000 }).toBeGreaterThan(1000)
+  // Full screen lets the pane scroll by its toolbar's height. The page's offset is the
+  // frame's own (usePreviewFrame): the file view's restore for text bodies found no body
+  // here and scrolled that pane instead, so the toolbar went off screen, and the pane's
+  // small offset was saved over the page's (2026-11-12).
+  const pane = explorer.locator('.session-file-explorer-preview')
+  expect(await pane.evaluate((el) => el.scrollHeight > el.clientHeight), 'the pane can scroll here').toBe(true)
+  for (let i = 0; i < 8; i++) {
+    expect(await pane.evaluate((el) => el.scrollTop), 'the pane stays at its top').toBe(0)
+    await page.waitForTimeout(150)
+  }
+  const saved = await page.evaluate(() => Object.entries(JSON.parse(localStorage.getItem('open-walnut-file-view-scroll') ?? '{}') as Record<string, { top: number }>)
+    .find(([k]) => k.endsWith('/drag-fixture.html'))?.[1].top ?? null)
+  expect(saved, 'the page keeps its own place').toBeGreaterThan(1000)
 })
 
 test('scrolling back to the top is remembered as the top', async ({ page }) => {

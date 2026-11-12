@@ -935,6 +935,13 @@ export function FileContentView({
     const key = `${host ?? 'local'} ${filePath}`;
     const firstRestore = restoredForRef.current !== key;
     restoredForRef.current = key;
+    // The HTML preview's page scrolls inside its frame, which keeps and restores its own
+    // place (usePreviewFrame). Here no body matches, so the walk up found the explorer's
+    // pane, which full screen lets scroll by its toolbar's height: the saved page offset
+    // scrolled the pane instead (the toolbar went off screen, the question rail docked at
+    // the view's top over the page) and the pane's own small offset was then saved over
+    // the page's under the same key (2026-11-12, every reopen of a long HTML file).
+    if (isHtmlExt(data.extension, filePath) && !showSource) return;
 
     let raf = 0;
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
