@@ -59,6 +59,8 @@ const MESSAGE = new Set([
   'api', 'host_http', 'browser', 'task_send', 'board_post', 'org_send', 'thread_create', 'thread_file',
   'human_inbox_send', 'human_inbox_reply', 'human_inbox_answer', 'task_switch_engine', 'task_move',
   'triage_route', 'router_route',
+  // A light subagent's prompt goes to its engine, its description is the panel's label: nothing is stored to edit.
+  'subagent_run',
 ])
 
 describe('every whole-document write op has a partial path', () => {
