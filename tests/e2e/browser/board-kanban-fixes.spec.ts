@@ -108,7 +108,13 @@ test('N1: the pointer holds only its own lane; a card it holds says where it goe
   // 1. The pointer rests on the empty Mitigating lane: a leader move lands at once, counts agree.
   const mit = pane.locator('[data-testid="kanban-lane"][data-lane-id="mitigating"]')
   const mb = (await mit.boundingBox())!
-  await page.mouse.move(mb.x + mb.width / 2, mb.y + mb.height - 20)
+  // Aim at the part of the lane the scroller shows: in a Board beside the chat the lanes scroll
+  // under their own clip, and Resolved's pinned rail sits right of it (N23), so the middle of a
+  // lane cut by the clip lands on the rail.
+  const lanesBox = (await pane.getByTestId('kanban-lanes').boundingBox())!
+  const shownRight = Math.min(mb.x + mb.width, lanesBox.x + lanesBox.width)
+  expect(shownRight - mb.x).toBeGreaterThan(40)
+  await page.mouse.move((mb.x + shownRight) / 2, mb.y + mb.height - 20)
   await expect(pane.locator('.kanban-lanes-host')).toHaveAttribute('data-held-lanes', 'mitigating')
   const a = plain[0]
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/cards/${a}`, { lane: 'mitigating' }, leaderHeaders())
