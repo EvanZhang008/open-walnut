@@ -264,6 +264,10 @@ function expected503(ids: Ready['ids']): Array<{ test: RegExp; whys: string[] }>
     { test: /^503 GET \/api\/v1\/approvals$/, whys: ['leader_only'] },
     // A page visit (the recent pages) is a write the page never reads the answer of.
     { test: /^503 POST \/api\/page-visits$/, whys: presence },
+    // The Mac's plugins and its host fleet are the Mac's to tell: a replica with no Mac answers
+    // needs_leader instead of an empty list (tests/replica/away-mac-only-reads.test.ts).
+    { test: /^503 GET \/api\/plugin-runtime$/, whys: ['plugins_need_mac'] },
+    { test: /^503 GET \/api\/hosts\/status$/, whys: ['fleet_needs_mac'] },
   ]
 }
 
