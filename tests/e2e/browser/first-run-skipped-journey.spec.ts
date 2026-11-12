@@ -67,7 +67,13 @@ test('setup skipped: the new task panel still offers the found host, and one Con
   await page.route((url) => url.pathname === '/api/sessions/list-dirs', async (route: Route) => {
     const host = new URL(route.request().url()).searchParams.get('host')
     if (!host) { await route.fallback(); return }
-    await route.fulfill({ json: { dirs: ['projects', 'notes'], parent: '/home/sam/', exists: true } })
+    // Like the real listing: the prefix's folder, and the names in it that start with its last part.
+    const prefix = new URL(route.request().url()).searchParams.get('prefix') || '/home/sam/'
+    const cut = prefix.lastIndexOf('/') + 1
+    const parent = prefix.slice(0, cut) || '/home/sam/'
+    const tree: Record<string, string[]> = { '/home/sam/': ['projects', 'notes'], '/home/sam/projects/': [], '/home/sam/notes/': [] }
+    const dirs = (tree[parent] ?? []).filter((d) => d.startsWith(prefix.slice(cut)))
+    await route.fulfill({ json: { dirs, parent, exists: parent in tree } })
   })
   await page.route('**/api/hosts/*/found-answer', async (route: Route) => {
     const host = decodeURIComponent(route.request().url().split('/api/hosts/')[1].split('/')[0])
@@ -113,7 +119,8 @@ test('setup skipped: the new task panel still offers the found host, and one Con
 
   // 4. A folder on it, and the first message: the task is ready to start, nothing was sent.
   const input = picker.locator('.sps-search-input')
-  await input.pressSequentially('/home/sam/projects', { delay: 40 })
+  await input.fill('/home/sam/projects')
+  await page.waitForTimeout(600)
   await input.press('Shift+Enter')
   await expect(picker).toBeHidden()
   await expect(draftCwdPill(panel)).toContainText('projects')
