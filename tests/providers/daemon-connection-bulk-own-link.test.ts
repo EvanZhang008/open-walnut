@@ -20,8 +20,9 @@
  *   - O8: the host's whole read copy rides the bulk channel unbound (host-slice-unbound-v1),
  *     after leader.configure bound the session socket; its probe stays on the session link;
  *   - O9: a daemon that refuses leader.configure takes the copy bound, on the session link;
- *   - O10: on a paced connection, a read queued behind MB of upload parts waits for them to go up
- *     and answers;
+ *   - O10: a read sent while MB of upload parts wait on the paced connection takes the session
+ *     link and answers at once (2026-11-12: history reads behind parts said "did not answer in
+ *     time" while the link read connected); with nothing waiting it rides the bulk channel;
  *   - O11: a read whose answer never comes fails alone while uploads still move on the channel:
  *     the channel and the parts on it stay (2026-11-12: reads timed out behind 1 MB parts, each
  *     timeout ended the channel and cut the part going up, over and over, and a move failed).
@@ -238,38 +239,44 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     expect(writes.map((w) => [w.payload.path, w.connIndex])).toEqual([['/tmp/small', 0], ['/tmp/big', 1]])
   })
 
-  it('O10: a read queued behind MB of paced upload parts waits for them and answers', async () => {
-    // 1 MB/s here stands for the relay's 20 KB/s: 3 MB ahead of a read with a 1 s window.
+  it('O10: a read sent while MB of upload parts wait on the paced connection takes the session link and answers at once', async () => {
+    // 1 MB/s here stands for the relay's 20 KB/s: 3 MB ahead would hold a read 3 s on the bulk channel.
     await connectWithForward({ bytesPerSec: 1024 * 1024, burstBytes: 32 * 1024 })
     const file = path.join(os.tmpdir(), `bulk-own-q-${process.pid}-${Date.now()}.bin`)
     fs.writeFileSync(file, Buffer.alloc(8 * 1024, 7))
     try {
+      daemon.clearCommandHistory()
       const part = 'A'.repeat(1024 * 1024)
       // The mock answers a part it has no handler for with ok:false; what counts is that each is answered.
       const parts = [0, 1, 2].map((i) => conn.send('fs.writePart', { path: '/tmp/q', offset: i * part.length, data: part }, 60_000))
       const startedAt = Date.now()
       const read = await conn.send('fs.readRange', { path: file, start: 0, length: 4096 }, 1_000)
       expect(read.ok).toBe(true)
-      expect(Date.now() - startedAt).toBeGreaterThan(2_000)
+      expect(Date.now() - startedAt).toBeLessThan(1_000)
+      expect(daemon.getCommandHistoryFor('fs.readRange')[0].connIndex).toBe(0)
       await Promise.all(parts)
       expect(forwards).toHaveLength(1)
-      expect(daemon.getCommandHistoryFor('fs.writePart')).toHaveLength(3)
+      expect(daemon.getCommandHistoryFor('fs.writePart').map((c) => c.connIndex)).toEqual([1, 1, 1])
+      // With nothing waiting to go up, a read rides the bulk channel again.
+      await conn.send('fs.readRange', { path: file, start: 0, length: 4096 }, 1_000)
+      expect(daemon.getCommandHistoryFor('fs.readRange')[1].connIndex).toBe(1)
     } finally {
       fs.rmSync(file, { force: true })
     }
   }, 20_000)
 
-  it('O11: a read whose answer never comes fails alone while uploads still move; the channel and its parts stay', async () => {
+  it('O11: a read whose answer never comes fails alone while uploads still move behind it; the channel and its parts stay', async () => {
     await connectWithForward({ bytesPerSec: 1024 * 1024, burstBytes: 32 * 1024 })
     const part = 'A'.repeat(1024 * 1024)
     const send = (i: number) => conn.send('fs.writePart', { path: '/tmp/q', offset: i * part.length, data: part }, 60_000)
-    const ahead = [0, 1].map(send)
+    daemon.clearCommandHistory()
     daemon.swallowNextCommand('fs.readRange')
+    // Sent on an empty queue, it rides the bulk channel; parts after it keep the channel busy past its last window.
     const read = conn.send('fs.readRange', { path: '/tmp/none', start: 0, length: 4096 }, 1_000)
-    // Parts behind it keep the channel busy past the read's last window.
-    const behind = [2, 3, 4, 5].map(send)
+    const behind = [0, 1, 2, 3, 4, 5].map(send)
     await expect(read).rejects.toThrow(/daemon command timeout: fs.readRange/)
-    await Promise.all([...ahead, ...behind])
+    expect(daemon.getCommandHistoryFor('fs.readRange')[0].connIndex).toBe(1)
+    await Promise.all(behind)
     expect(forwards).toHaveLength(1)
     expect(daemon.getCommandHistoryFor('fs.writePart')).toHaveLength(6)
   }, 30_000)

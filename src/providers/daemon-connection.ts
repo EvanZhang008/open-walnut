@@ -910,7 +910,11 @@ export class DaemonConnection {
   /** Request bytes written to the bulk socket on the current own connection (its pacer lets them up later). */
   private bulkOwnWritten = 0
   /** Bytes written to the own bulk connection that its pacer has not let go up yet: what a new request waits behind. */
-  private bulkQueuedUp(): number { return Math.max(0, this.bulkOwnWritten - (this.bulkUpBytes() - this.bulkUpBase)) }
+  private bulkQueuedUp(): number {
+    // An unpaced forward counts nothing going up: nothing waits on it either.
+    if (!this.bulkUpSent) return 0
+    return Math.max(0, this.bulkOwnWritten - (this.bulkUpBytes() - this.bulkUpBase))
+  }
   /** Own connections in a row that ended within BULK_OWN_MIN_LIFE_MS: the redial backs off. */
   private bulkShortLives = 0
   private bulkForwardOpenedAt = 0
@@ -943,6 +947,8 @@ export class DaemonConnection {
   private static COMMAND_PROGRESS_CEILING_MS = 5 * 60_000
   /** The same, for a request whose bytes still go up at the bulk connection's pace behind other uploads. */
   private static UPLOAD_PROGRESS_CEILING_MS = 20 * 60_000
+  /** Upload bytes waiting on the paced bulk connection past which a read takes the session link (about 2 s at its pace). */
+  static READ_BEHIND_UPLOAD_BYTES = 40 * 1024
   /** Bytes a request may sit in between the WebSocket and the pacer (socket buffers, one read). */
   private static UPLOAD_BUFFERS_BYTES = 1024 * 1024
   /** What one timeout window must bring to count as the reply arriving (a pong or a keepalive is a few bytes). */
@@ -2612,7 +2618,14 @@ export class DaemonConnection {
     // commands on the main WS. Shared pendingCommands map — the response is
     // matched by id regardless of which socket delivers it.
     const routedBulk = upload || DaemonConnection.BULK_COMMANDS.has(cmd)
-    const bulkSocket = routedBulk && this.bulkWs?.readyState === WebSocket.OPEN
+    // A read (a small request, a big answer) never waits behind uploads on the paced bulk
+    // connection: there it gets no byte until the parts ahead went up at the relay's pace (a
+    // 1 MB part is about 50 s), and a session's history answered "did not answer in time"
+    // while the link read connected (2026-11-12, 20:00Z: 35 in 10 minutes). Its answer comes
+    // down the session link instead, which the relay never cuts for downloads.
+    const readBehindUploads = routedBulk && !upload && this.bulkSocketOwn && this.bulkWs?.readyState === WebSocket.OPEN
+      && this.bulkQueuedUp() + this.bulkWs.bufferedAmount > DaemonConnection.READ_BEHIND_UPLOAD_BYTES
+    const bulkSocket = routedBulk && !readBehindUploads && this.bulkWs?.readyState === WebSocket.OPEN
       ? this.bulkWs
       : null
 
