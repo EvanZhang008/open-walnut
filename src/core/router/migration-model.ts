@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import type { Task } from '../types.js'
 import {
-  ROUTER_CANONICAL_KEY_MAX, ROUTER_RULE_ID_PATTERN, ROUTER_RULE_REVISION_PATTERN, activeRouter,
+  ROUTER_CANONICAL_KEY_MAX, ROUTER_RULE_ID_PATTERN, ROUTER_RULE_REVISION_PATTERN, activeRouter, allAreaItems,
   type RouterArea, type RouterAreasFile,
 } from './areas.js'
 import { ROUTER_AREA_ID_PATTERN, ROUTER_EVIDENCE_MAX, routerKey } from './store.js'
@@ -245,7 +245,7 @@ export function assertNoAreaConflict(file: RouterAreasFile, area: RouterArea, re
     if (!area.sources.some((source) => source.kind === one.source.kind && source.account === one.source.account)) {
       throw new RouterMigrationError('area_source_missing', `Area ${area.id} has no ${one.source.kind} source for this item's account; a migration never widens an area.`)
     }
-    for (const item of file.items) {
+    for (const item of allAreaItems(file)) {
       if (sameSource(item.source, one.source)) {
         if (item.areaId !== area.id) throw new RouterMigrationError('item_other_area', `A ${one.source.kind} item already belongs to area ${item.areaId}.`)
         if (item.canonicalKey !== one.canonicalKey) {

@@ -1,6 +1,7 @@
 // Confirms before the arrival is announced, so ordinary triage never reads a matched private item as unassigned.
 // Capture only reads: an item written then (before the body prefetch) could wake the router at a version about to change.
-import { readRouterAreas, type RouterAreasFile, type RouterRuleBinding } from '../../core/router/areas.js'
+import { accountBinding, activeRouter, readRouterAreas, type RouterAreasFile, type RouterRuleBinding } from '../../core/router/areas.js'
+import { confirmAccountArrivals, ensureAccountRouter, type AccountRouterOutcome } from '../../core/router/account-intake.js'
 import {
   confirmRouterIncoming, pendingRuleAreas, readPendingRuleMatches, sameRuleBinding, type PendingRuleMatch,
 } from '../../core/router/rules.js'
@@ -48,6 +49,11 @@ export interface MailRouterIntakeDeps {
   pendingRules?: (file: RouterAreasFile, home: string) => Promise<ReadonlyArray<PendingRuleMatch>>
   /** Answers the sources it wrote into an area; only those may be announced. */
   confirm?: (sources: readonly RouterSource[], home: string, deps: MailRouterIntakeConfirmDeps) => Promise<readonly RouterSource[]>
+  /** Binds the mailbox to the one mail router, making it when there is none (core/router/account-intake.ts). */
+  ensureRouter?: (accountId: string, home: string) => Promise<AccountRouterOutcome>
+  /** Enters a bound mailbox's arrivals as open items of its area; answers the sources it wrote. */
+  confirmAccount?: (sources: readonly RouterSource[], home: string) => Promise<readonly RouterSource[]>
+  log?: { warn(message: string, data?: Record<string, unknown>): void }
 }
 
 const sourceKey = (one: RouterSource) => JSON.stringify([one.kind, one.account, one.message, one.version ?? ''])
@@ -69,7 +75,21 @@ async function rowsByIds(store: MailRouterIntakeDeps['store'], accountId: string
 export function createMailRouterIntake(deps: MailRouterIntakeDeps): MailIncomingCapture {
   const readAreas = deps.readAreas ?? readRouterAreas
   const confirm = deps.confirm ?? confirmRouterIncoming
+  const ensureRouter = deps.ensureRouter ?? ((accountId: string, home: string) => ensureAccountRouter('mail', accountId, { home }))
+  const confirmAccount = deps.confirmAccount ?? confirmAccountArrivals
+  // Once per mailbox per run while it holds; a failure (or no single router to pick) asks again next time.
+  const ensured = new Set<string>()
+  const ensure = async (accountId: string): Promise<void> => {
+    if (ensured.has(accountId)) return
+    try {
+      const outcome = await ensureRouter(accountId, deps.home)
+      if (outcome.bound || outcome.reason !== 'choose') ensured.add(accountId)
+    } catch (error) {
+      deps.log?.warn('mail router binding failed', { accountId, error: (error instanceof Error ? error.message : String(error)).slice(0, 200) })
+    }
+  }
   return async (accountId: string, headlines: readonly MailHeadline[]): Promise<MailIncomingFinish> => {
+    await ensure(accountId)
     const wanted = new Map<string, Set<string>>()
     for (const one of headlines) {
       if (!one.messageId || !one.version) continue
@@ -112,6 +132,10 @@ export function createMailRouterIntake(deps: MailRouterIntakeDeps): MailIncoming
         return before && now && sameRuleBinding(before, now) && before.areaId === one.areaId && liveRules.has(now.ruleId) ? now : undefined
       }
       const groups = new Map<string, { bindings: RouterRuleBinding[]; sources: RouterSource[] }>()
+      // A mailbox bound to a router area with an active router: every arrival no rule claims goes to that router.
+      const binding = accountBinding(currentFile, 'mail', accountId)
+      const routed = !!binding && !!activeRouter(currentFile, binding.areaId)
+      const bound: RouterSource[] = []
       // A headline with a rule candidate waits for its exact source to be confirmed; `key` is unset for one no rule may match.
       const candidates: Array<{ headline: MailHeadline; key?: string }> = []
       const currentRows = await rowsByIds(deps.store, accountId, [...captured.keys()])
@@ -132,8 +156,13 @@ export function createMailRouterIntake(deps: MailRouterIntakeDeps): MailIncoming
           from: row.from_addr, subject: row.subject, messageId: id, version,
           canonicalKey: mailRouterKey(accountId, id, row.rfc_message_id),
         }
-        if (keptAreas.size === 0) { candidates.push({ headline }); continue }
         const source: RouterSource = { kind: 'mail', account: accountId, message: id, version }
+        if (keptAreas.size === 0) {
+          // Announced either way: the router's own copy stays out of Inbox Triage (triage/router-mail.ts).
+          if (routed) bound.push(source)
+          candidates.push({ headline })
+          continue
+        }
         const bindings = mayMatch(unchanged, row).map((one) => kept(one)!).sort((a, b) => a.ruleId.localeCompare(b.ruleId))
         const groupKey = JSON.stringify(bindings)
         const group = groups.get(groupKey) ?? { bindings, sources: [] }
@@ -143,8 +172,28 @@ export function createMailRouterIntake(deps: MailRouterIntakeDeps): MailIncoming
       }
       const confirmed = new Set<string>()
       for (const group of groups.values()) await confirmBatches(group.sources, { expectedRuleBindings: group.bindings }, confirmed)
+      // A bound arrival restricts nobody, so a failed write only leaves it with Inbox Triage: the event still goes out.
+      try {
+        for (let at = 0; at < bound.length; at += ROUTER_INTAKE_BATCH) await confirmAccount(bound.slice(at, at + ROUTER_INTAKE_BATCH), deps.home)
+      } catch (error) {
+        deps.log?.warn('mail router intake failed', { accountId, error: (error instanceof Error ? error.message : String(error)).slice(0, 200) })
+      }
       // The confirm's answer is the authority: a restricted arrival it did not write stays out of the event.
       return candidates.filter((one) => one.key === undefined || confirmed.has(one.key)).map((one) => one.headline)
     }
+  }
+}
+
+/** Binds every mailbox to its router area; one that cannot be bound now is tried again at its next new mail. */
+export async function bindMailAccounts(
+  store: Pick<MailStore, 'listAccounts'>, home: string, log?: MailRouterIntakeDeps['log'],
+  ensureRouter: NonNullable<MailRouterIntakeDeps['ensureRouter']> = (accountId, at) => ensureAccountRouter('mail', accountId, { home: at }),
+): Promise<void> {
+  const failed = (error: unknown, accountId?: string) =>
+    log?.warn('mail router binding failed', { ...(accountId ? { accountId } : {}), error: (error instanceof Error ? error.message : String(error)).slice(0, 200) })
+  let rows: Awaited<ReturnType<MailStore['listAccounts']>>
+  try { rows = await store.listAccounts() } catch (error) { failed(error); return }
+  for (const row of rows) {
+    try { await ensureRouter(row.account_id, home) } catch (error) { failed(error, row.account_id) }
   }
 }

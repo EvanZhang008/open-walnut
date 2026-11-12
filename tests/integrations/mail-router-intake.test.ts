@@ -2,8 +2,11 @@
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { readRouterAreas, updateRouterAreas, type RouterAreasFile, type RouterRuleBinding } from '../../src/core/router/areas.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { assertNoReassignment, normalizeRouterAreas, readRouterAreas, updateRouterAreas, type RouterAreasFile, type RouterRuleBinding } from '../../src/core/router/areas.js';
+import { ensureAccountRouter } from '../../src/core/router/account-intake.js';
+import { sourceReaderFor } from '../../src/core/router/source-reader.js';
+import { keepTriageMailOutsideAreas } from '../../src/core/triage/router-mail.js';
 import {
   confirmRouterIncoming, readPendingRuleMatches, routerRulesView, saveRouterRuleBindings,
   type PendingRuleMatch, type RouterRulesDeps,
@@ -26,7 +29,7 @@ import { reconcileIdentityRevision } from '../../src/integrations/mail/identity-
 import type { MailHeadline } from '../../src/integrations/mail/events.js';
 import { MailProviderRegistry } from '../../src/integrations/mail/provider-registry.js';
 import { decorateMailRoutes } from '../../src/integrations/mail/router-decoration.js';
-import { createMailRouterIntake, ROUTER_INTAKE_BATCH } from '../../src/integrations/mail/router-intake.js';
+import { bindMailAccounts, createMailRouterIntake, ROUTER_INTAKE_BATCH } from '../../src/integrations/mail/router-intake.js';
 import { mailRowDeliveryVersion, registerMailRouterSource } from '../../src/integrations/mail/router-source.js';
 import { MailService } from '../../src/integrations/mail/service.js';
 import { MailStore } from '../../src/integrations/mail/store.js';
@@ -1121,5 +1124,179 @@ describe('with the real rules confirm and area file, only what the confirm wrote
         expect([...(await routerStore('personal', router.real.home).getSources([source])).values()]).toEqual([receipt]);
       } finally { unregister(); await disposeRouterStores(); }
     });
+  });
+});
+
+describe('a mailbox bound to its router: every new mail reaches that router', () => {
+  // 2026-11-12: the prod Personal router had no rule and no confirmed item, so no mail ever reached it.
+  const prior = process.env.WALNUT_MAIL_AUTO_ROUTER;
+  beforeEach(() => { process.env.WALNUT_MAIL_AUTO_ROUTER = '1'; });
+  afterEach(() => {
+    if (prior === undefined) delete process.env.WALNUT_MAIL_AUTO_ROUTER; else process.env.WALNUT_MAIL_AUTO_ROUTER = prior;
+  });
+
+  async function personalRouter(paused = false) {
+    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'mail-router-bound-'));
+    roots.push(home);
+    seedTaskStore(home);
+    await updateRouterAreas(home, () => ({
+      version: 1,
+      areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: ['router-personal'], sources: [] }],
+      routers: [{ taskId: 'router-personal', areaId: 'personal', paused }],
+      items: [],
+    }) as RouterAreasFile);
+    const wakes = async () => (await checkRouterPending({ areaId: 'personal' }, {
+      readAreas: () => readRouterAreas(home),
+      getTask: async (id) => ({ id, phase: 'IN_PROGRESS', source: 'local', org_role: 'router', router_area_id: 'personal', router_paused: paused }) as WakeTask,
+      orgEnabled: async () => true,
+      routesFor: async () => new Map(),
+      sessionsForTask: async () => [],
+      send: async () => undefined,
+      start: async () => ({}),
+      nonce: () => 'n',
+    })).fire;
+    return { home, wakes, ruleDeps: { targets: async (wanted: string[]) => new Map(wanted.map((id) => [id, { title: id, open: true }])) } as RouterRulesDeps };
+  }
+
+  const routerOpen = async () => true;
+
+  async function bindAndArrive(router: Awaited<ReturnType<typeof personalRouter>>, envelopes: MailEnvelope[]) {
+    const outcome = await ensureAccountRouter('mail', ACCOUNT, { home: router.home, routerOpen });
+    const mail = await harness({ real: { home: router.home, ruleDeps: router.ruleDeps } });
+    const unregister = registerMailRouterSource(mail.store, mail.bodies);
+    await mail.sync.runTick({ force: true });
+    mail.listing.current = [envelope(1), ...envelopes];
+    await mail.sync.runTick({ force: true });
+    return { outcome, mail, unregister };
+  }
+
+  it('binds the mailbox to the one router area and gives that router every arrival, with no rule', async () => {
+    const router = await personalRouter();
+    const { outcome, mail, unregister } = await bindAndArrive(router, [envelope(2), envelope(3, { subject: 'A newsletter' }), envelope(4)]);
+    try {
+      expect(outcome).toEqual({ bound: true, areaId: 'personal', created: false, already: false });
+      const file = await readRouterAreas(router.home);
+      expect(file.accountBindings).toEqual([{ kind: 'mail', account: ACCOUNT, areaId: 'personal', boundAt: expect.any(Number) }]);
+      expect(file.areas[0].sources).toEqual([{ kind: 'mail', account: ACCOUNT }]);
+      // Open, never restricted: the confirmed list stays empty.
+      expect(file.items).toEqual([]);
+      expect((file.openItems ?? []).map((one) => one.source.message).sort()).toEqual(ids(2, 3, 4));
+      expect(await router.wakes()).toBe(true);
+      const pending = await pendingSources(file, file.areas[0], { routesFor: async () => new Map() });
+      expect(pending.map((one) => one.message).sort()).toEqual(ids(2, 3, 4));
+      // Every arrival is still announced, and Inbox Triage leaves the router's mail to it.
+      const announced = mail.events.at(-1)!.headlines;
+      expect(announced.map((one) => one.messageId).sort()).toEqual(ids(2, 3, 4));
+      const triage = await keepTriageMailOutsideAreas([{ accountId: ACCOUNT, headlines: announced } as never], router.home);
+      expect(triage[0].headlines).toEqual([]);
+      // No reader is restricted: an agent with no area reads them as before.
+      const reader = await sourceReaderFor({ kind: 'agent' }, { readAreas: async () => file } as never);
+      expect(reader.kind === 'scoped' && announced.every((one) => reader.allows({
+        kind: 'mail', account: ACCOUNT, message: one.messageId!, version: one.version, canonicalKey: one.canonicalKey,
+      }))).toBe(true);
+      // The same listing again is no new arrival.
+      await mail.sync.runTick({ force: true });
+      expect((await readRouterAreas(router.home)).openItems).toHaveLength(3);
+    } finally { unregister(); }
+  });
+
+  it('a paused router takes nothing: the mail stays with Inbox Triage', async () => {
+    const router = await personalRouter(true);
+    const { mail, unregister } = await bindAndArrive(router, [envelope(2)]);
+    try {
+      const file = await readRouterAreas(router.home);
+      expect(file.accountBindings).toHaveLength(1);
+      expect(file.openItems).toBeUndefined();
+      expect(await router.wakes()).toBe(false);
+      const triage = await keepTriageMailOutsideAreas([{ accountId: ACCOUNT, headlines: mail.events.at(-1)!.headlines } as never], router.home);
+      expect(triage[0].headlines.map((one) => one.messageId)).toEqual(['inbox:m-2']);
+    } finally { unregister(); }
+  });
+
+  it('a rule-confirmed arrival stays restricted to its area, and a later rule closes an open one there', async () => {
+    const router = await personalRouter();
+    const bakery = await setRoutingRule(router.home, { from: 'bakery.example.invalid', taskId: 'task-florist' }, { by: 'human' });
+    const view = await routerRulesView(router.home, router.ruleDeps);
+    await saveRouterRuleBindings({ bindings: [{ ruleId: bakery.id, areaId: 'personal', revision: view.rules[0].revision }], expectedRevision: view.fileRevision }, router.home, router.ruleDeps);
+    const { unregister } = await bindAndArrive(router, [envelope(2, { from: { address: 'desk@bakery.example.invalid' } }), envelope(3)]);
+    try {
+      const file = await readRouterAreas(router.home);
+      expect(file.items.map((one) => one.source.message)).toEqual(['inbox:m-2']);
+      expect((file.openItems ?? []).map((one) => one.source.message)).toEqual(['inbox:m-3']);
+      const open = file.openItems![0].source;
+      const moved = await confirmRouterIncoming([open], router.home, { ...router.ruleDeps, resolve: async (source) => ({ ...(await resolveRouterItem(source)), sender: 'desk@bakery.example.invalid' }) });
+      expect(moved).toEqual([open]);
+      const after = await readRouterAreas(router.home);
+      expect(after.items.map((one) => one.source.message).sort()).toEqual(ids(2, 3));
+      expect(after.openItems).toBeUndefined();
+    } finally { unregister(); }
+  });
+
+  it('a person with no router area gets one made, active, for the mailbox; several areas are the person\'s pick', async () => {
+    const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'mail-router-none-'));
+    roots.push(home);
+    seedTaskStore(home);
+    const made: string[] = [];
+    const createRouter = async (_kind: string, account: string) => {
+      made.push(account);
+      await updateRouterAreas(home, () => ({
+        version: 1, items: [],
+        areas: [{ id: 'mail', name: 'Mail', host: '__local__', taskIds: ['router-mail'], sources: [{ kind: 'mail', account }] }],
+        routers: [{ taskId: 'router-mail', areaId: 'mail', paused: false }],
+      }) as RouterAreasFile);
+      return 'router-mail';
+    };
+    const [first, second] = await Promise.all([
+      ensureAccountRouter('mail', ACCOUNT, { home, routerOpen, createRouter }),
+      ensureAccountRouter('mail', OTHER, { home, routerOpen, createRouter }),
+    ]);
+    expect(made).toEqual([ACCOUNT]);
+    expect(first).toEqual({ bound: true, areaId: 'mail', created: true, already: false });
+    expect(second).toEqual({ bound: true, areaId: 'mail', created: false, already: false });
+    expect((await readRouterAreas(home)).accountBindings?.map((one) => one.account)).toEqual([ACCOUNT, OTHER]);
+
+    const many = await fsp.mkdtemp(path.join(os.tmpdir(), 'mail-router-many-'));
+    roots.push(many);
+    seedTaskStore(many);
+    await updateRouterAreas(many, () => ({
+      version: 1, items: [],
+      areas: [
+        { id: 'personal', name: 'Personal', host: '__local__', taskIds: ['r-1'], sources: [] },
+        { id: 'family', name: 'Family', host: '__local__', taskIds: ['r-2'], sources: [] },
+      ],
+      routers: [{ taskId: 'r-1', areaId: 'personal', paused: false }, { taskId: 'r-2', areaId: 'family', paused: false }],
+    }) as RouterAreasFile);
+    expect(await ensureAccountRouter('mail', ACCOUNT, { home: many, routerOpen, createRouter })).toEqual({ bound: false, reason: 'choose' });
+    expect((await readRouterAreas(many)).accountBindings).toBeUndefined();
+  });
+
+  it('is off with WALNUT_MAIL_AUTO_ROUTER=0', async () => {
+    const router = await personalRouter();
+    process.env.WALNUT_MAIL_AUTO_ROUTER = '0';
+    expect(await ensureAccountRouter('mail', ACCOUNT, { home: router.home, routerOpen })).toEqual({ bound: false, reason: 'off' });
+    expect((await readRouterAreas(router.home)).accountBindings).toBeUndefined();
+  });
+
+  it('the areas file keeps open arrivals honest: one listing per source, a confirmed item never reopens, a binding needs its source', () => {
+    const base = {
+      version: 1, routers: [],
+      areas: [{ id: 'personal', name: 'Personal', host: '__local__', taskIds: [], sources: [{ kind: 'mail', account: ACCOUNT }] }],
+    };
+    const item = { source: { kind: 'mail', account: ACCOUNT, message: 'inbox:m-1', version: 'v1' }, areaId: 'personal' };
+    expect(() => normalizeRouterAreas({ ...base, items: [item], openItems: [item] })).toThrow(/listed twice/);
+    expect(() => normalizeRouterAreas({ ...base, items: [], accountBindings: [{ kind: 'mail', account: OTHER, areaId: 'personal', boundAt: 1 }] }))
+      .toThrow(/no mail source for its bound account/);
+    const closed = normalizeRouterAreas({ ...base, items: [item] });
+    const reopened = normalizeRouterAreas({ ...base, items: [], openItems: [item] });
+    expect(() => assertNoReassignment(closed, reopened)).toThrow(/cannot become an open one/);
+    expect(() => assertNoReassignment(reopened, closed)).not.toThrow();
+  });
+
+  it('binds every mailbox the cache holds at start', async () => {
+    const router = await personalRouter();
+    const { store } = await cache([ACCOUNT, OTHER]);
+    await bindMailAccounts(store, router.home, undefined, (accountId, at) => ensureAccountRouter('mail', accountId, { home: at, routerOpen }));
+    expect((await readRouterAreas(router.home)).accountBindings?.map((one) => [one.account, one.areaId]))
+      .toEqual([[ACCOUNT, 'personal'], [OTHER, 'personal']]);
   });
 });

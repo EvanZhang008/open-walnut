@@ -8,7 +8,7 @@ import { pickDeliverySession } from '../routines/session-target.js';
 import { registerExecutor } from '../routines/registry.js';
 import type { Disposable } from '../plugins/disposable.js';
 import type { SessionRecord, Task } from '../types.js';
-import { activeRouter, readRouterAreas, taskArea, type RouterArea, type RouterAreasFile } from './areas.js';
+import { activeRouter, allAreaItems, readRouterAreas, taskArea, type RouterArea, type RouterAreasFile } from './areas.js';
 import { isRouterAreaSession } from './session-policy.js';
 import { routerAreaId, routerKey } from './store.js';
 import type { RouterRoute, RouterSource } from './types.js';
@@ -128,7 +128,8 @@ export async function pendingSources(file: RouterAreasFile, area: RouterArea, de
   opts: { first?: boolean } = {}): Promise<RouterSource[]> {
   const routerTaskId = activeRouter(file, area.id)?.taskId;
   const allowed = new Set(area.sources.map((source) => JSON.stringify([source.kind, source.account])));
-  const mine = file.items.filter((item) => item.areaId === area.id
+  // Confirmed items, then a bound account's open arrivals.
+  const mine = allAreaItems(file).filter((item) => item.areaId === area.id
     && (item.source.kind !== 'mail' || item.source.version !== undefined)
     && allowed.has(JSON.stringify([item.source.kind, item.source.account])));
   const pending: RouterSource[] = [];

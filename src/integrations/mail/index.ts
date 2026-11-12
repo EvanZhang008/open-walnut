@@ -20,7 +20,7 @@ import { registerMailItemSource } from './item-source.js'
 import { readRouterAreas } from '../../core/router/areas.js'
 import { registerMailRouterSource } from './router-source.js'
 import { decorateMailRoutes } from './router-decoration.js'
-import { createMailRouterIntake } from './router-intake.js'
+import { bindMailAccounts, createMailRouterIntake } from './router-intake.js'
 import { createMailOps } from './ops.js'
 import { guardMailOps, guardMailTools, keepUnassignedMail } from './router-read-guard.js'
 import { createMailMentionSource } from './mention-source.js'
@@ -191,6 +191,8 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     bodies,
     providers,
     routes: (messages) => decorateMailRoutes(messages, routingHome),
+    // Late-bound: the sync is built from this service.
+    arrivals: (accountId, headlines) => sync ? sync.routeArrivals(accountId, headlines) : Promise.resolve(),
     events: {
       unreadReconciled: (event) => {
         events.unreadReconciled(event)
@@ -261,11 +263,18 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // The digest rides the tick rather than a timer of its own: "is today's due" is a clock question,
   // and this plugin already owns exactly one timer. A replica arms no tick at all, which is also how
   // the digest stays off there without a second replica check.
-  const captureIncoming = createMailRouterIntake({ store, home: routingHome })
+  const captureIncoming = createMailRouterIntake({ store, home: routingHome, log: walnut.log })
   sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest, sort, captureIncoming })
   relistDue = (accountId) => sync.markRelistDue(accountId)
   relistNow = (accountId) => sync.relistNow(accountId)
   setActiveMailSync(sync)
+  // Each mailbox goes to the one mail router (made when there is none), so the router reads every
+  // new mail; the intake also binds a mailbox added later, at its first new mail.
+  if (!walnut.replica) {
+    walnut.timers.timeout(() => {
+      void bindMailAccounts(store, routingHome, walnut.log)
+    }, 5_000)
+  }
 
   // The letter answers. Owned by the loader through `walnut.letters`, and filtered host-side to
   // this plugin's own letters, so the ledger can never be handed a letter id it did not issue.

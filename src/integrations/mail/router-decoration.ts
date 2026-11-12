@@ -13,7 +13,8 @@ export async function decorateMailRoutes(messages: MailMessageDto[], home: strin
   const file = await readRouterAreas(home).catch(() => undefined);
   if (!file) return messages.map((message) => ({ ...message, routingUnavailable: true }));
   const byId = new Map(file.areas.map((area) => [area.id, area]));
-  const assignments = new Map(file.items.filter((item) => item.source.kind === 'mail')
+  // Confirmed items and a bound mailbox's open arrivals alike: both are the area router's.
+  const assignments = new Map([...file.items, ...(file.openItems ?? [])].filter((item) => item.source.kind === 'mail')
     .map((item) => [sourceKey(item.source.account, item.source.message, item.source.version), byId.get(item.areaId)]));
   const areaOf = (message: MailMessageDto) => assignments.get(sourceKey(message.accountId, message.messageId, message.deliveryVersion));
   // An area counts only with a router of its own; the account is what the area lists as a source.

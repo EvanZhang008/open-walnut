@@ -1,5 +1,5 @@
 // Mail headlines reach the triage model without any op, so they are judged here as an agent with no area.
-import { readRouterAreas } from '../router/areas.js';
+import { allAreaItems, readRouterAreas } from '../router/areas.js';
 import { pendingRuleAreas, readPendingRuleMatches, type PendingRuleMatch } from '../router/rules.js';
 import { sourceReaderFor, type SourceReaderDeps } from '../router/source-reader.js';
 import type { TriagePendingMail } from './state.js';
@@ -25,12 +25,16 @@ export async function keepTriageMailOutsideAreas(
   };
   const reader = await sourceReaderFor({ kind: 'agent' }, deps);
   if (reader.kind !== 'scoped') throw new Error('triage mail filter: the incoming-item area registry could not be checked');
-  const classified = new Set(file.items.filter((item) => item.source.kind === 'mail').map((item) => item.source.account));
+  const classified = new Set(allAreaItems(file).filter((item) => item.source.kind === 'mail').map((item) => item.source.account));
+  // A bound mailbox's arrival its area's router handles: it restricts no reader, and triage leaves it to the router.
+  const routed = new Set((file.openItems ?? []).filter((item) => item.source.kind === 'mail')
+    .map((item) => JSON.stringify([item.source.account, item.source.message, item.source.version ?? ''])));
   return rows.map((row) => ({
     ...row,
     headlines: row.headlines.filter((headline) => {
       const meta = { ...(headline.from ? { sender: headline.from } : {}), subject: headline.subject };
       if (!headline.messageId) return !classified.has(row.accountId) && pendingRuleAreas(pending, { kind: 'mail', ...meta }).size === 0;
+      if (routed.has(JSON.stringify([row.accountId, headline.messageId, headline.version ?? '']))) return false;
       return reader.allows({
         kind: 'mail',
         account: row.accountId,

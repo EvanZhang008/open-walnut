@@ -37,12 +37,28 @@ export interface RouterRuleBinding {
   confirmedAt: number
 }
 
+/**
+ * A whole account an area takes every new arrival of (the mail plugin binds each mailbox to its
+ * mail router). Its arrivals enter as `openItems`: they wake and route like items, but restrict no
+ * reader, so every session that could read the mail before still can.
+ */
+export interface RouterAccountBinding {
+  kind: RouterSourceKind
+  account: string
+  areaId: string
+  boundAt: number
+}
+
 export interface RouterAreasFile {
   version: 1
   areas: RouterArea[]
   routers: RouterAssignment[]
+  /** Items a person or a rule confirmed: restricted to their area (source-reader, router-area-reader). */
   items: RouterAreaItem[]
   ruleBindings?: RouterRuleBinding[]
+  accountBindings?: RouterAccountBinding[]
+  /** Arrivals of a bound account: the area's router handles them, and no reader is restricted by them. */
+  openItems?: RouterAreaItem[]
 }
 
 export type RouterAreaErrorCode =
@@ -182,6 +198,18 @@ function normalizeItem(value: unknown, index: number): RouterAreaItem {
   return { source, areaId, canonicalKey }
 }
 
+function normalizeAccountBinding(value: unknown, index: number): RouterAccountBinding {
+  const field = `accountBindings[${index}]`
+  if (!isRecord(value)) throw invalid(`${field} must be an object`)
+  const kind = sourceKind(value.kind, `${field}.kind`)
+  const account = plainString(value.account, `${field}.account`, ACCOUNT_MAX)
+  const areaId = plainString(value.areaId, `${field}.areaId`, ROUTER_AREA_ID_MAX)
+  if (typeof value.boundAt !== 'number' || !Number.isFinite(value.boundAt) || value.boundAt < 0) {
+    throw invalid(`${field}.boundAt must be a time`)
+  }
+  return { kind, account, areaId, boundAt: value.boundAt }
+}
+
 function normalizeBinding(value: unknown, index: number): RouterRuleBinding {
   const field = `ruleBindings[${index}]`
   if (!isRecord(value)) throw invalid(`${field} must be an object`)
@@ -209,6 +237,15 @@ export function normalizeRouterAreas(value: unknown): RouterAreasFile {
   const items = (value.items as unknown[]).map(normalizeItem)
   if (value.ruleBindings !== undefined && !Array.isArray(value.ruleBindings)) throw invalid('ruleBindings must be an array')
   const ruleBindings = ((value.ruleBindings ?? []) as unknown[]).map(normalizeBinding)
+  if (value.accountBindings !== undefined && !Array.isArray(value.accountBindings)) throw invalid('accountBindings must be an array')
+  const accountBindings = ((value.accountBindings ?? []) as unknown[]).map(normalizeAccountBinding)
+  if (value.openItems !== undefined && !Array.isArray(value.openItems)) throw invalid('openItems must be an array')
+  const openItems = ((value.openItems ?? []) as unknown[]).map((item, i) => {
+    try { return normalizeItem(item, i) } catch (error) {
+      if (error instanceof RouterAreaError) throw invalid(error.message.replace(/^items\[/, 'openItems['))
+      throw error
+    }
+  })
 
   const areaById = new Map<string, RouterArea>()
   const taskOwner = new Map<string, string>()
@@ -243,7 +280,8 @@ export function normalizeRouterAreas(value: unknown): RouterAreasFile {
 
   const seenItems = new Set<string>()
   const canonicalArea = new Map<string, string>()
-  for (const item of items) {
+  // One exact source is listed once, closed or open; a canonical key never spans two areas either way.
+  for (const item of [...items, ...openItems]) {
     const area = areaById.get(item.areaId)
     if (!area) throw invalid(`An item names unknown area ${item.areaId}`)
     const key = itemKey(item.source)
@@ -269,12 +307,46 @@ export function normalizeRouterAreas(value: unknown): RouterAreasFile {
     boundRules.add(binding.ruleId)
   }
 
-  return { version: 1, areas, routers, items, ...(ruleBindings.length ? { ruleBindings } : {}) }
+  const boundAccounts = new Set<string>()
+  for (const binding of accountBindings) {
+    const area = areaById.get(binding.areaId)
+    if (!area) throw invalid(`Account binding names unknown area ${binding.areaId}`)
+    const key = accountKey(binding.kind, binding.account)
+    if (boundAccounts.has(key)) throw invalid(`A ${binding.kind} account is bound to an area twice`)
+    boundAccounts.add(key)
+    if (!area.sources.some((source) => source.kind === binding.kind && source.account === binding.account)) {
+      throw invalid(`Area ${area.id} has no ${binding.kind} source for its bound account`)
+    }
+  }
+
+  return {
+    version: 1, areas, routers, items,
+    ...(ruleBindings.length ? { ruleBindings } : {}),
+    ...(accountBindings.length ? { accountBindings } : {}),
+    ...(openItems.length ? { openItems } : {}),
+  }
+}
+
+/** Every item an area's router handles: confirmed (restricted) ones, then a bound account's open arrivals. */
+export function allAreaItems(file: Pick<RouterAreasFile, 'items' | 'openItems'>): RouterAreaItem[] {
+  return [...file.items, ...(file.openItems ?? [])]
+}
+
+/** The area a whole account is bound to, if any. */
+export function accountBinding(file: RouterAreasFile, kind: RouterSourceKind, account: string): RouterAccountBinding | undefined {
+  return file.accountBindings?.find((one) => one.kind === kind && one.account === account)
 }
 
 export function assertNoReassignment(before: RouterAreasFile, after: RouterAreasFile): void {
-  const nextItems = new Map(after.items.map((item) => [itemKey(item.source), item]))
+  // Open and closed alike: an item never leaves its area (an open one may become a closed one there).
+  const nextItems = new Map(allAreaItems(after).map((item) => [itemKey(item.source), item]))
+  const nextOpen = new Set((after.openItems ?? []).map((item) => itemKey(item.source)))
   for (const item of before.items) {
+    if (nextOpen.has(itemKey(item.source))) {
+      throw new RouterAreaError('area_reassignment', 409, `A confirmed ${item.source.kind} item of area ${item.areaId} cannot become an open one`)
+    }
+  }
+  for (const item of allAreaItems(before)) {
     const nextItem = nextItems.get(itemKey(item.source))
     const next = nextItem?.areaId
     if (next === item.areaId) {
@@ -355,7 +427,7 @@ function areaOf(file: RouterAreasFile, areaId: string): RouterArea | undefined {
 }
 
 export function sourceArea(file: RouterAreasFile, source: RouterSource): RouterArea | undefined {
-  const item = file.items.find((entry) =>
+  const item = allAreaItems(file).find((entry) =>
     entry.source.kind === source.kind
     && entry.source.account === source.account
     && entry.source.message === source.message

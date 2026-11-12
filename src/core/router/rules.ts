@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import { WALNUT_HOME } from '../../constants.js'
 import { readRoutingRules, ruleMatches, type TriageRoutingRule } from '../triage/routing-rules.js'
 import {
-  ROUTER_CANONICAL_KEY_MAX, ROUTER_RULE_ID_PATTERN, ROUTER_RULE_REVISION_PATTERN, readRouterAreas, updateRouterAreas,
+  allAreaItems, ROUTER_CANONICAL_KEY_MAX, ROUTER_RULE_ID_PATTERN, ROUTER_RULE_REVISION_PATTERN, readRouterAreas, updateRouterAreas,
   type RouterAreasFile, type RouterRuleBinding,
 } from './areas.js'
 import { currentRouterSources, resolveRouterItem } from './source-registry.js'
@@ -243,9 +243,10 @@ function validSource(source: RouterSource): boolean {
 }
 
 function blocked(file: RouterAreasFile, source: RouterSource, areaId: string, canonicalKey: string): boolean {
-  return file.items.some((one) => sameSource(one.source, source)
-    || (one.areaId !== areaId && one.source.kind === source.kind && one.source.account === source.account
-      && (one.canonicalKey === canonicalKey || one.source.message === source.message)))
+  // A bound account's open arrival of this same area is not a block: the rule closes it below.
+  return file.items.some((one) => sameSource(one.source, source))
+    || allAreaItems(file).some((one) => one.areaId !== areaId && one.source.kind === source.kind && one.source.account === source.account
+      && (one.canonicalKey === canonicalKey || one.source.message === source.message))
 }
 
 const expectedBindings = (file: RouterAreasFile, deps: RouterRulesDeps) =>
@@ -317,6 +318,11 @@ export async function confirmRouterIncoming(
       if (!area || blocked(file, one.source, area.id, one.canonicalKey)) continue
       if (!area.sources.some((entry) => entry.kind === one.source.kind && entry.account === one.source.account)) {
         area.sources.push({ kind: one.source.kind, account: one.source.account })
+      }
+      // The rule makes a bound account's open arrival a confirmed (restricted) one of the same area.
+      if (file.openItems?.length) {
+        file.openItems = file.openItems.filter((item) => !sameSource(item.source, one.source))
+        if (file.openItems.length === 0) delete file.openItems
       }
       file.items.push({ source: { ...one.source }, areaId: area.id, canonicalKey: one.canonicalKey })
       entered.push({ ...one.source })

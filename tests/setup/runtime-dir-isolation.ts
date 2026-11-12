@@ -153,6 +153,11 @@ if (process.env.WALNUT_ORG_AUTOSTART === undefined) {
   process.env.WALNUT_ORG_AUTOSTART = '0'
 }
 
+// The mail plugin binds each mailbox to a mail router it makes when there is none; a test turns it on itself.
+if (process.env.WALNUT_MAIL_AUTO_ROUTER === undefined) {
+  process.env.WALNUT_MAIL_AUTO_ROUTER = '0'
+}
+
 // A session death is held up to 15 s while restart recovery checks whether its host is
 // shutting down (src/core/sessions/shutdown-death.ts): every test that kills a session would
 // wait that long for its hand-back. The shutdown drills set this to '1' themselves.

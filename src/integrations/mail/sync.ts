@@ -745,6 +745,16 @@ export class MailSync {
     return { added, updated }
   }
 
+  /**
+   * Mail the cache took outside the poll (the unread refresh): the router intake confirms it as the
+   * poll would, after the account's first backfill. No event: the poll owns "new mail" news.
+   */
+  async routeArrivals(accountId: string, headlines: MailHeadline[]): Promise<void> {
+    if (!this.deps.captureIncoming || headlines.length === 0 || !this.stateFor(accountId).backfilled) return
+    const finish = await this.captureIncoming(accountId, headlines)
+    if (finish) await this.finishIncoming(accountId, finish)
+  }
+
   /** `null` when the capture failed: the event then carries its count only. */
   private async captureIncoming(accountId: string, headlines: MailHeadline[]): Promise<MailIncomingFinish | null> {
     try {

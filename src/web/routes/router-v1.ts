@@ -5,7 +5,7 @@ import { readRouterItem, resolveRouterItem } from '../../core/router/source-regi
 import { routerContext } from '../../core/router/context.js';
 import { routerAccess } from '../../core/router/access.js';
 import { routeItem, routeViews, RouterError } from '../../core/router/service.js';
-import { RouterAreaError, readRouterAreas, updateRouterAreas, normalizeRouterAreas, assertNoReassignment, activeRouter, sourceArea, ROUTER_CANONICAL_KEY_MAX, ensureAreasDataVersion } from '../../core/router/areas.js';
+import { RouterAreaError, allAreaItems, readRouterAreas, updateRouterAreas, normalizeRouterAreas, assertNoReassignment, activeRouter, sourceArea, ROUTER_CANONICAL_KEY_MAX, ensureAreasDataVersion } from '../../core/router/areas.js';
 import { crossRouteItem, needsHandoff } from '../../core/router/cross-route.js';
 import { HandoffApprovalError } from '../../core/router/handoff-approval.js';
 import { WALNUT_HOME } from '../../constants.js';
@@ -126,7 +126,8 @@ routerV1Router.put('/router/areas', async (req: Request, res: Response, next: Ne
     primary(true);
     if (callerSid(req)?.trim()) throw new RouterError('area_forbidden', 'A router cannot widen its own area. Configure the area from its settings.', 403);
     const isObject = req.body && typeof req.body === 'object' && !Array.isArray(req.body);
-    const { ruleBindings: _ignored, ...body } = (isObject ? req.body : {}) as Record<string, unknown>;
+    // Rule bindings, account bindings and a bound account's open arrivals are not set here: kept as saved.
+    const { ruleBindings: _ignored, accountBindings: _bound, openItems: _open, ...body } = (isObject ? req.body : {}) as Record<string, unknown>;
     const proposed = normalizeRouterAreas(isObject ? body : req.body);
     const { queryTasksSlim } = await import('../../core/task-manager.js');
     const ids = proposed.areas.flatMap((area) => area.taskIds);
@@ -139,7 +140,12 @@ routerV1Router.put('/router/areas', async (req: Request, res: Response, next: Ne
     }
     const { updateTaskRaw, getTask } = await import('../../core/task-manager.js');
     const before = await readRouterAreas(WALNUT_HOME);
-    assertNoReassignment(before, proposed);
+    const keep = (file: typeof before) => ({
+      ...(file.ruleBindings ? { ruleBindings: file.ruleBindings } : {}),
+      ...(file.accountBindings ? { accountBindings: file.accountBindings } : {}),
+      ...(file.openItems ? { openItems: file.openItems } : {}),
+    });
+    assertNoReassignment(before, normalizeRouterAreas({ ...proposed, ...keep(before) }));
     // Confirmed members stay as they are; each new one is checked before any marker is written.
     const added = proposed.areas.flatMap((area) => area.taskIds
       .filter((id) => !before.areas.some((one) => one.id === area.id && one.taskIds.includes(id)))
@@ -171,8 +177,9 @@ routerV1Router.put('/router/areas', async (req: Request, res: Response, next: Ne
     await checkAdded();
     const saved = await updateRouterAreas(WALNUT_HOME, (current) => {
       if (JSON.stringify(current) !== JSON.stringify(before)) throw new RouterError('router_configuration_changed', 'The area changed while membership was being confirmed. Read it and retry.', 409);
-      // Rule bindings change only through POST /router/rules; the saved ones are kept as they are.
-      return current.ruleBindings ? { ...proposed, ruleBindings: current.ruleBindings } : proposed;
+      // Rule bindings change only through POST /router/rules, account bindings and open arrivals only
+      // through the mail plugin's intake: the saved ones are kept as they are.
+      return { ...proposed, ...keep(current) };
     });
     res.json(saved);
   } catch (error) { failure(res, next, error); }
@@ -226,13 +233,20 @@ routerV1Router.post('/router/assign', async (req: Request, res: Response, next: 
     const saved = await updateRouterAreas(WALNUT_HOME, (file) => {
       const area = file.areas.find((one) => one.id === areaId);
       if (!area) throw new RouterError('area_missing', 'Create a router for this area first.', 409);
+      // A bound mailbox's open arrival confirmed by the person becomes a restricted item of the same area.
+      const opened = (file.openItems ?? []).find(sameExact);
+      if (opened && opened.areaId !== areaId) throw new RouterError('area_reassignment', 'This item already belongs to another area. It cannot be moved through confirmation.', 409);
+      if (opened) {
+        file.openItems = file.openItems!.filter((one) => !sameExact(one));
+        if (file.openItems.length === 0) delete file.openItems;
+      }
       const prior = file.items.find(sameExact);
       if (prior && prior.areaId !== areaId) throw new RouterError('area_reassignment', 'This item already belongs to another area. It cannot be moved through confirmation.', 409);
       if (prior?.canonicalKey !== undefined && prior.canonicalKey !== canonicalKey) {
         throw new RouterError('area_identity_changed', 'This item was confirmed under another identity. It cannot be changed through confirmation.', 409);
       }
       // Rechecked under the lock: a copy of this item confirmed for another area meanwhile wins.
-      const other = file.items.find((one) => !sameExact(one) && one.areaId !== areaId && one.canonicalKey === canonicalKey
+      const other = allAreaItems(file).find((one) => !sameExact(one) && one.areaId !== areaId && one.canonicalKey === canonicalKey
         && one.source.kind === source.kind && one.source.account === source.account);
       if (other) throw new RouterError('area_reassignment', 'A copy of this item already belongs to another area. It cannot be moved through confirmation.', 409);
       if (!area.sources.some((one) => one.kind === source.kind && one.account === source.account)) area.sources.push({ kind: source.kind, account: source.account });

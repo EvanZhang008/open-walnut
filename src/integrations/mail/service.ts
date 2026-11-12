@@ -185,6 +185,8 @@ export class MailService {
     providers: MailProviderRegistry
     now?: () => number
     routes?: (messages: MailMessageDto[]) => Promise<MailMessageDto[]>
+    /** New mail cached outside the poll (the unread refresh): the router intake takes it. */
+    arrivals?: (accountId: string, headlines: IngestResult['headlines']) => Promise<void>
     /**
      * Optional: told when an unread check settles that changed rows or that a page said was running. Its
      * own seam rather than the whole `MailEvents`, because this is the only thing a read path announces.
@@ -1127,7 +1129,13 @@ export class MailService {
       // Only envelopes of the mailbox asked for: a provider that answers a broader set must not
       // be able to move rows between folders through this door.
       const mine = envelopes.filter((one) => one.mailboxId === mailboxId)
-      await this.ingestPage(accountId, mine)
+      const ingested = await this.ingestPage(accountId, mine)
+      // A mail first cached here is never an arrival of the poll after it: hand it to the router
+      // intake now, or the mailbox's router never hears of it (mail-router-coverage-guard.test.ts).
+      if (ingested.headlines.length > 0 && this.deps.arrivals) {
+        await this.deps.arrivals(accountId, ingested.headlines).catch((error: unknown) => this.deps.log?.warn?.(
+          'mail unread refresh could not hand new mail to the router', { accountId, error: String(error).slice(0, 200) }))
+      }
       const plan = await this.clearUnreadTheProviderNoLongerCounts(
         accountId, mailboxId, mine, { limit: options.limit, returned: envelopes.length, snapshotAt },
       )

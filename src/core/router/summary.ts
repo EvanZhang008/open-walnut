@@ -8,7 +8,7 @@
  * subject, body), which stay behind the area's own reads.
  */
 import { WALNUT_HOME } from '../../constants.js';
-import { activeRouter, readRouterAreas, taskArea } from './areas.js';
+import { activeRouter, allAreaItems, readRouterAreas, taskArea } from './areas.js';
 import { routerStore } from './runtime.js';
 import { ROUTER_PAUSED_REASON, pendingCount, routerReadiness, routerWakeJobId } from './wake.js';
 import type { RouterRouteStatus } from './types.js';
@@ -69,7 +69,7 @@ export async function routerNodeSummary(taskId: string, home = WALNUT_HOME): Pro
   }
   return {
     areaId: area.id, areaName: area.name || area.id, paused, ...(blocked ? { blocked } : {}), sources: area.sources.length,
-    assigned: file.items.filter((item) => item.areaId === area.id).length,
+    assigned: allAreaItems(file).filter((item) => item.areaId === area.id).length,
     waiting, counts, ...(latest ? { latest } : {}), wake, session,
   };
 }

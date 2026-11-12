@@ -178,6 +178,11 @@ async function prepare(spec: LegacyMonitorMigration, inputSha: string, deps: Leg
         const live = routerPausedArea(file, spec)
         assertNoAreaConflict(file, live, resolved)
         for (const one of resolved) {
+          // A bound mailbox's open arrival the migration claims becomes a confirmed (restricted) item.
+          if (file.openItems?.some((item) => sameSource(item.source, one.source) && item.areaId === spec.areaId)) {
+            file.openItems = file.openItems.filter((item) => !sameSource(item.source, one.source))
+            if (file.openItems.length === 0) delete file.openItems
+          }
           if (!file.items.some((item) => sameSource(item.source, one.source))) {
             file.items.push({ source: { ...one.source }, areaId: spec.areaId, canonicalKey: one.canonicalKey })
           }
