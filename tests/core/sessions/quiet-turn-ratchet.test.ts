@@ -56,6 +56,7 @@ const SEES_QUIET_TURNS: Record<string, string> = {
   'src/core/session-reconcile.ts': 'emits the settle edge of a turn whose result was missed; its readers are gated',
   'src/core/session-snapshot-apply.ts': 'emits the settle edge from a daemon snapshot; its readers are gated',
   'src/core/sessions/report-phase.ts': 'emits the settle edge after a restart; its readers are gated',
+  'src/core/sessions/prompt-refresh-respawn.ts': 'moves a compacted session onto its current prompt with no turn and no message; the end of an idle compaction is its cheapest moment (nothing read the context yet), so it waits only while a quiet turn still runs (quietTurnRunning)',
 };
 
 /** The events a turn ends with: its result, its error, its settle edge. */
