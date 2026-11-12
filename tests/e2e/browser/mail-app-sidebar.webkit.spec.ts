@@ -146,7 +146,11 @@ test('nothing scrolls sideways and nothing wraps, at 1280 and at 1000', async ({
       // sizes in it and the chevron against the second line. Both facts now fit one line, because the
       // second clause is a folder count rather than a mail count and gives up its preposition ("6 unread",
       // not "6 with unread"), which is what the measured 154px text slot at a 204px pane can hold.
+      // A router row is the one exception: its name sits above its state on purpose (MailRouterRows.tsx,
+      // a name beside the state was cut to "Personal mail r..." in this pane), and since 4aaa4028e a
+      // mailbox's first new mail gives the fixture an active router, so that row is two lines here.
       const tall = rows
+        .filter((row) => !row.matches('.mail-router-row'))
         .filter((row) => row.getBoundingClientRect().height > 34)
         .map((row) => `${row.textContent?.trim()}: ${Math.round(row.getBoundingClientRect().height)}px`)
       const names = Array.from(document.querySelectorAll(
