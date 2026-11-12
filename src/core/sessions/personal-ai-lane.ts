@@ -31,10 +31,10 @@ import { getSessionByLane, createSessionRecord } from '../session-tracker.js';
 // One source of truth for the seed's header: the store renders the block, this
 // module splices it into the spawn prompt and has to find it again on a repair.
 import { CONVERSATION_SEED_HEADER, clipRenderedSeed } from '../chat-history.js';
-import { personalAiProfile, consoleAgentProfile, mergeProfiles, walnutMcpProfile } from './profiles.js';
+import { GLOBAL_MEMORY_HEADING, personalAiPersona, consoleAgentPersona, mergeProfiles, walnutMcpProfile } from './profiles.js';
 
 const LANE_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
-import { buildCompactSessionSkillsPrompt, buildSessionSkillsPrompt } from '../skill-loader.js';
+import { buildSessionSkillsPrompt } from '../skill-loader.js';
 import type { SessionEngine } from '../types.js';
 import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { resolveDefaultEngine } from '../agents/default-engine.js';
@@ -341,13 +341,15 @@ export async function buildLaneMemoryContext(homeDir: string = WALNUT_HOME, opts
 
 /** The standing memory block for these two documents (buildLaneMemoryContext's text). */
 export function laneMemoryContextOf(memoryMd: string, userMd: string): string {
+  // The block is held to its cap (prompt-blocks.ts standing-memory): its head first, so what a cap
+  // moves to the memory folder is the later sections of MEMORY.md, never these two lines.
   const parts = [
     LANE_MEMORY_HEADER,
     'Walnut injects this at session start — standing context, the same role the old per-turn memory sections played. The live files under your working directory are the source of truth; your edits to them are picked up on the next session start.',
+    'Daily activity logs live in memory/daily/<date>.md — Read recent ones on demand when the user asks "what happened / what did I do".',
   ];
-  if (memoryMd) parts.push(`### Global memory (memory/MEMORY.md)\n\n${memoryMd}`);
   if (userMd) parts.push(`### User profile (memory/USER.md)\n\n${userMd}`);
-  parts.push('Daily activity logs live in memory/daily/<date>.md — Read recent ones on demand when the user asks "what happened / what did I do".');
+  if (memoryMd) parts.push(`${GLOBAL_MEMORY_HEADING}\n\n${memoryMd}`);
   return parts.join('\n\n');
 }
 
@@ -426,13 +428,18 @@ export async function buildLaneProfile(
     memoryContext?: string;
     seedSource?: import('../chat-history.js').SeedSource;
     /**
-     * A task session on the native engine: its Walnut session context carries USER.md
-     * (user-profile-context.ts), versioned so a running session hears an edit, so the
-     * persona leaves it out rather than carry a second copy frozen at spawn.
+     * A task session on the native engine: its Walnut session context rides beside the persona
+     * and carries USER.md (user-profile-context.ts, versioned so a running session hears an
+     * edit), where work lives, the charter and the routing rules, so the persona leaves them out
+     * rather than carry a second copy frozen at spawn.
      */
     userInSessionContext?: boolean;
-    /** The engine reads the persona on its first message (ACP): the short skills index. */
-    compactSkills?: boolean;
+    /**
+     * Every block whole, nothing moved to a memory folder: for a prompt read where the Mac's
+     * folder cannot be (the companion, the personas copy a host replica starts an ask from
+     * while the Mac is away). Also on the companion itself.
+     */
+    uncapped?: boolean;
   },
 ): Promise<{
   profile: import('../types.js').SessionProfile;
@@ -446,7 +453,7 @@ export async function buildLaneProfile(
   // non-fatal: a lane without the index still answers.
   const persona = opts?.persona;
   const skillsIndex = persona ? '' : opts?.skillsIndex
-    ?? await (opts?.compactSkills ? buildCompactSessionSkillsPrompt() : buildSessionSkillsPrompt()).catch(() => '');
+    ?? await buildSessionSkillsPrompt().catch(() => '');
   // Standing memory — Walnut-owned injection, engine-neutral (see
   // buildLaneMemoryContext). Rides the SAME profile as the persona.
   const memoryContext = persona ? '' : opts?.memoryContext
@@ -458,17 +465,28 @@ export async function buildLaneProfile(
   // persona can be built — a dispatcher-launched run (subagent-runner) names a
   // background agent by design and its persona builds exactly the same way.
   let profile;
+  const withSessionContext = !!opts?.userInSessionContext;
+  const { isCompanion } = await import('../server-role.js');
+  const uncapped = !!opts?.uncapped || isCompanion();
   if (persona) {
     profile = mergeProfiles({ systemPrompt: persona.systemPrompt, systemPromptMode: persona.systemPromptMode }, walnutMcpProfile())!;
-  } else if (agentId === 'general') {
-    profile = personalAiProfile(config.user?.name ?? 'the user', skillsIndex, memoryContext);
   } else {
-    const { getAgent } = await import('../agent-registry.js');
-    const agentDef = await getAgent(agentId);
-    if (!agentDef) throw new Error(`Agent '${agentId}' not found`);
-    const { loadContextSources } = await import('../context-sources.js');
-    const contextBlock = await loadContextSources(agentDef, {}).catch(() => '');
-    profile = consoleAgentProfile(agentDef, skillsIndex, contextBlock);
+    let built;
+    if (agentId === 'general') {
+      built = personalAiPersona(config.user?.name ?? 'the user', skillsIndex, memoryContext, { withSessionContext, uncapped });
+    } else {
+      const { getAgent } = await import('../agent-registry.js');
+      const agentDef = await getAgent(agentId);
+      if (!agentDef) throw new Error(`Agent '${agentId}' not found`);
+      const { loadContextSources } = await import('../context-sources.js');
+      const contextBlock = await loadContextSources(agentDef, {}).catch(() => '');
+      built = consoleAgentPersona(agentDef, skillsIndex, contextBlock, { withSessionContext, uncapped });
+    }
+    // What a cap moved (the skills index, the standing memory) is the same for every session:
+    // the shared memory folder, which every node's agent_memory_read falls back to.
+    const { writeOverflows } = await import('./memory-folder.js');
+    await writeOverflows(null, 'persona', built.overflows);
+    profile = mergeProfiles({ systemPrompt: built.systemPrompt, systemPromptMode: 'append' }, walnutMcpProfile())!;
   }
   // Chat latency matters more than reasoning depth here. Without an explicit
   // effort the CLI inherits the user's global settings.json effortLevel (often
@@ -575,6 +593,16 @@ export function buildRepairedLanePrompt(
   return { prompt: `${freshPersona}\n\n${clipRenderedSeed(frozenSeed, room)}`, seed: 'clipped' };
 }
 
+/**
+ * Whether a session's stored spawn prompt carries Walnut's session context, so its persona leaves out
+ * what that context holds. Not stored yet (the spawn persists it a moment after it starts) reads as
+ * yes: every spawn but a slim one builds that context, and a stored prompt without Walnut's mark (an
+ * adopted session, a caller's own prompt) reads as no.
+ */
+function hasWalnutContext(applied: string | null | undefined, mark: string): boolean {
+  return applied === undefined || applied === null || applied.includes(mark);
+}
+
 /** Last drift-repair attempt per session — the check reads skills + memory
  *  files, so once per TTL per session is plenty (a lane re-resolves every turn;
  *  this is the equivalent budget for quick-start walnut sessions). */
@@ -617,7 +645,7 @@ export async function refreshWalnutSessionProfile(sessionId: string): Promise<vo
     // be repaired into the Personal AI.
     // USER.md rides the session context when this session has Walnut's (an adopted AI search has none).
     const { WALNUT_PROMPT_MARK } = await import('./session-context.js');
-    const userInSessionContext = (record.appliedAppendSystemPrompt ?? '').includes(WALNUT_PROMPT_MARK);
+    const userInSessionContext = hasWalnutContext(record.appliedAppendSystemPrompt, WALNUT_PROMPT_MARK);
     let { profile } = await buildLaneProfile(await getConfig(), task.agent_id || 'general', { userInSessionContext });
     // An ask on another host (WP12: started there while the Mac was away) takes no walnut
     // MCP mount, as no session this Mac runs on a remote host does: its walnut tools are
@@ -777,7 +805,9 @@ async function resolveLane(
     if (!isAcpEngine(existingEngine)) {
       // A lane of a task with Walnut's session context reads USER.md there (user-profile-context.ts).
       const { WALNUT_PROMPT_MARK } = await import('./session-context.js');
-      const userInSessionContext = !!existing.taskId && (existing.appliedAppendSystemPrompt ?? '').includes(WALNUT_PROMPT_MARK);
+      // A prompt not stored yet (the spawn persists it a moment later) is read as the mint built it, or the
+      // repair would flip the persona between its two forms and lose the prompt cache each time.
+      const userInSessionContext = !!existing.taskId && hasWalnutContext(existing.appliedAppendSystemPrompt, WALNUT_PROMPT_MARK);
       const { profile, effort } = await buildLaneProfile(config, agentId, { userInSessionContext });
       // PERSONA halves only. The record's prompt also carries the mint-time
       // conversation seed, which is a frozen snapshot: comparing whole prompts
@@ -859,7 +889,7 @@ async function resolveLane(
       ? await recapOntoFirstMessage(agentId, conversationId, firstMessage, lane)
       : null;
     const personaPrefix = firstMessage
-      ? buildAskProfilePrefix((await buildLaneProfile(config, agentId, { compactSkills: true })).profile)
+      ? buildAskProfilePrefix((await buildLaneProfile(config, agentId)).profile)
       : '';
     bus.emit(EventNames.SESSION_START, {
       taskId: askTaskId,

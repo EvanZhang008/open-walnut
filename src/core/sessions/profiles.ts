@@ -9,6 +9,13 @@
 
 import path from 'node:path'
 import { buildRoleSection, buildWorkModesSection } from './persona-sections.js'
+import { PromptComposer, type ComposedBlock, type PromptOverflow } from './prompt-blocks.js'
+
+/** The heading the standing memory puts MEMORY.md under (personal-ai-lane.ts laneMemoryContextOf). */
+export const GLOBAL_MEMORY_HEADING = '### Global memory (memory/MEMORY.md)'
+import { WORK_PLACE_RULE } from '../work-place.js'
+import { TEAM_CHARTER } from '../team-charter.js'
+import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 import type { SessionProfile } from '../types.js'
 
 /**
@@ -95,17 +102,51 @@ The sections below define WHO YOU ARE and HOW YOU SPEAK. Where they conflict wit
  * rides the system prompt precisely so it is ENGINE-NEUTRAL — never delivered
  * through an engine's own context-file convention (CLAUDE.md, AGENTS.md, …),
  * which can change name/format outside our control.
+ *
+ * `withSessionContext`: Walnut's session context rides beside this persona (a task session on
+ * the native engine), and it carries where work lives, the charter and the routing rules: the
+ * persona leaves them out (one copy per prompt). Every block is held to its cap (prompt-blocks.ts);
+ * what a cap moved is in `overflows`, for the caller to write to the memory folder.
  */
-export function personalAiProfile(name: string, skillsIndex?: string, memoryContext?: string): SessionProfile {
-  const skillsSection = skillsIndex?.trim() ? `\n\n${skillsIndex}` : ''
-  const memorySection = memoryContext?.trim() ? `\n\n${memoryContext}` : ''
+export function personalAiPersona(
+  name: string, skillsIndex?: string, memoryContext?: string, opts: { withSessionContext?: boolean; uncapped?: boolean } = {},
+): ComposedPersona {
+  const c = new PromptComposer(opts)
+    .add('persona', `${personaPrecedenceHeader()}\n\n${buildRoleSection(name, { withSessionContext: true })}\n\n`)
+  if (!opts.withSessionContext) addSessionRules(c)
+  const memory = splitStandingMemory(memoryContext)
+  c.add('standing-user', blockOf(memory.head)).add('standing-memory', blockOf(memory.memory)).add('skills-index', blockOf(skillsIndex))
+  return { systemPrompt: c.text().trimEnd(), overflows: c.overflows, blocks: c.blocks }
+}
+
+/**
+ * The standing memory as two blocks: its head lines with USER.md (when the persona carries it),
+ * then the global MEMORY.md, so a long MEMORY.md moves to the folder and never takes the user's
+ * profile with it. Text with no MEMORY.md heading is all head.
+ */
+function splitStandingMemory(text: string | undefined): { head: string; memory: string } {
+  const t = text?.trim() ?? ''
+  const at = t.indexOf(`\n\n${GLOBAL_MEMORY_HEADING}`)
+  return at < 0 ? { head: t, memory: '' } : { head: t.slice(0, at), memory: t.slice(at + 2) }
+}
+
+/** A persona as built: its prompt, the blocks it is made of, and what their caps moved. */
+export type ComposedPersona = { systemPrompt: string; overflows: PromptOverflow[]; blocks: ComposedBlock[] }
+
+export function personalAiProfile(name: string, skillsIndex?: string, memoryContext?: string, opts: { withSessionContext?: boolean } = {}): SessionProfile {
   return mergeProfiles(
-    {
-      systemPrompt: `${personaPrecedenceHeader()}\n\n${buildRoleSection(name)}${memorySection}${skillsSection}`,
-      systemPromptMode: 'append',
-    },
+    { systemPrompt: personalAiPersona(name, skillsIndex, memoryContext, opts).systemPrompt, systemPromptMode: 'append' },
     walnutMcpProfile(),
   )!
+}
+
+/** A block of the persona after its head ('' when there is none). */
+const blockOf = (text: string | undefined): string => (text?.trim() ? `${text.trim()}\n\n` : '')
+
+/** The rules Walnut's session context carries, for a persona that rides without it (an ACP engine, a taskless lane). */
+function addSessionRules(c: PromptComposer): PromptComposer {
+  return c.add('where-work-lives', `${WORK_PLACE_RULE}\n\n`).add('how-we-work', `${TEAM_CHARTER}\n\n`)
+    .add('task-routing', `${TASK_ROUTING_CONTRACT}\n\n`)
 }
 
 /**
@@ -114,19 +155,29 @@ export function personalAiProfile(name: string, skillsIndex?: string, memoryCont
  * the same two work modes. `contextBlock` carries whatever the agent's context
  * sources resolve to (its own memory etc.); the caller does the I/O.
  */
+export function consoleAgentPersona(
+  agentDef: { id: string; name: string; system_prompt?: string },
+  skillsIndex?: string,
+  contextBlock?: string,
+  opts: { withSessionContext?: boolean; uncapped?: boolean } = {},
+): ComposedPersona {
+  const persona = agentDef.system_prompt?.trim() || `You are ${agentDef.name}.`
+  const c = new PromptComposer(opts)
+    .add('agent-persona', `${personaPrecedenceHeader()}\n\n${persona}\n\n`)
+    .add('persona', `${buildWorkModesSection({ withSessionContext: true })}\n\n`)
+  if (!opts.withSessionContext) addSessionRules(c)
+  c.add('agent-context', blockOf(contextBlock)).add('skills-index', blockOf(skillsIndex))
+  return { systemPrompt: c.text().trimEnd(), overflows: c.overflows, blocks: c.blocks }
+}
+
 export function consoleAgentProfile(
   agentDef: { id: string; name: string; system_prompt?: string },
   skillsIndex?: string,
   contextBlock?: string,
+  opts: { withSessionContext?: boolean } = {},
 ): SessionProfile {
-  const persona = agentDef.system_prompt?.trim() || `You are ${agentDef.name}.`
-  const skillsSection = skillsIndex?.trim() ? `\n\n${skillsIndex}` : ''
-  const contextSection = contextBlock?.trim() ? `\n\n${contextBlock}` : ''
   return mergeProfiles(
-    {
-      systemPrompt: `${personaPrecedenceHeader()}\n\n${persona}\n\n${buildWorkModesSection()}${contextSection}${skillsSection}`,
-      systemPromptMode: 'append',
-    },
+    { systemPrompt: consoleAgentPersona(agentDef, skillsIndex, contextBlock, opts).systemPrompt, systemPromptMode: 'append' },
     walnutMcpProfile(),
   )!
 }

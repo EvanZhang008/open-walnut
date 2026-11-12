@@ -424,3 +424,27 @@ describe('the MEMORY.md route and the task lists', () => {
     expect((await getTask(lead.id)).agent_memory?.text).toBe('# Garden\n- one')
   })
 })
+
+// 2026-11-12: a node's memory folder (memory-folder.ts) holds the rest of the prompt blocks a cap
+// moved there and the node's own longer notes, read and written through the same route family.
+describe('the memory folder routes', () => {
+  it('a note is written, listed beside what Walnut moved, read back, and removed; Walnut\'s names are refused', async () => {
+    const app = createApp()
+    const { writeOverflows } = await import('../../../src/core/sessions/memory-folder.js')
+    await writeOverflows(lead.id, 'context', [{ id: 'org-brief', file: 'org-brief.0123abcd.md', title: 'Your Brief', part: 'context', text: 'The rest.', bytes: 9 }])
+    const put = await request(app).put(`/api/v1/tasks/${lead.id}/memory-files/fence-plan.md`).send({ content: '# Fence\n- paint Friday' })
+    expect(put.status).toBe(200)
+    expect(put.body).toMatchObject({ name: 'fence-plan.md', removed: false, count: 1 })
+    const list = await request(app).get(`/api/v1/tasks/${lead.id}/memory-files`)
+    expect(list.body.files.map((f: { name: string; walnut: boolean }) => [f.name, f.walnut])).toEqual([['fence-plan.md', false], ['org-brief.0123abcd.md', true]])
+    const read = await request(app).get(`/api/v1/tasks/${lead.id}/memory-files/org-brief.0123abcd.md`)
+    expect(read.status).toBe(200)
+    expect(read.body.text).toContain('The rest.')
+    const refused = await request(app).put(`/api/v1/tasks/${lead.id}/memory-files/org-brief.md`).send({ content: 'mine' })
+    expect(refused.status).toBe(409)
+    const bad = await request(app).get(`/api/v1/tasks/${lead.id}/memory-files/..%2Fsecret.md`)
+    expect(bad.status).toBe(400)
+    expect((await request(app).put(`/api/v1/tasks/${lead.id}/memory-files/fence-plan.md`).send({ content: '' })).body.removed).toBe(true)
+    expect((await request(app).get(`/api/v1/tasks/${lead.id}/memory-files/fence-plan.md`)).status).toBe(404)
+  })
+})

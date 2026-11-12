@@ -17,7 +17,8 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { THREAD_ONE_PLACE_RULE, THREADS_OPEN_RULE } from '../../../src/core/org/thread-rules.js'
-import { AWAY_INBOX_LINE, THREADS_LINE, defaultInstructions } from '../../../src/core/sessions/session-context.js'
+import { AWAY_INBOX_LINE, THREADS_LINE } from '../../../src/core/sessions/session-context.js'
+import { nodeReads } from '../../helpers/node-reads.js'
 import { threadHintText, type ThreadHintState } from '../../../src/core/org/thread-capture.js'
 import { USER_BACK_TEXT, effectiveHints, userAwayText } from '../../../src/core/hints/hint-registry.js'
 import { getOp, listOps } from '../../../src/ops/index.js'
@@ -46,9 +47,10 @@ describe('the rule says what the user said', () => {
 describe('every place a node reads it carries it', () => {
   it('Main\'s and every lead\'s prompt, through the away line', () => {
     expect(AWAY_INBOX_LINE).toContain(THREAD_ONE_PLACE_RULE)
-    for (const t of [MAIN, LEAD]) expect(defaultInstructions(t)).toContain(THREAD_ONE_PLACE_RULE)
+    // In its prompt or the memory folder its away line's cap points to (nodeReads).
+    for (const t of [MAIN, LEAD]) expect(nodeReads(t)).toContain(THREAD_ONE_PLACE_RULE)
     // A worker has no threads: none of it.
-    expect(defaultInstructions({ project: 'Walnut' })).not.toContain(THREAD_ONE_PLACE_RULE)
+    expect(nodeReads({ project: 'Walnut' })).not.toContain(THREAD_ONE_PLACE_RULE)
   })
 
   it('the thread ops and human_inbox_send', () => {
@@ -62,9 +64,9 @@ describe('every place a node reads it carries it', () => {
 /** Every text an Org node reads: its prompt, the hints, every op and param description, the built-in skills. */
 function nodeTexts(): Array<{ where: string; text: string }> {
   const out: Array<{ where: string; text: string }> = []
-  out.push({ where: 'prompt:main', text: defaultInstructions(MAIN) })
-  out.push({ where: 'prompt:lead', text: defaultInstructions(LEAD) })
-  out.push({ where: 'prompt:vp', text: defaultInstructions({ ...LEAD, org_vp_only: true } as never) })
+  out.push({ where: 'prompt:main', text: nodeReads(MAIN) })
+  out.push({ where: 'prompt:lead', text: nodeReads(LEAD) })
+  out.push({ where: 'prompt:vp', text: nodeReads({ ...LEAD, org_vp_only: true } as never) })
   out.push({ where: 'hint:user-away', text: userAwayText(null) })
   out.push({ where: 'hint:user-back', text: USER_BACK_TEXT })
   out.push({ where: 'hint:threads', text: threadHintText(hint) })

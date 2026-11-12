@@ -10,16 +10,16 @@
 import { renderSelfKnowledgeContract } from '../self-knowledge-contract.js';
 
 /** Stable product contract: what Walnut is and how it works. */
-export function buildWorkModesSection(): string {
+export function buildWorkModesSection(opts: { withSessionContext?: boolean } = {}): string {
   // The suggest-card syntax deliberately does NOT live here — it loads on demand
   // via the shipped `walnut-suggest-cards` skill (one index line instead of ~1.1KB in
   // every prompt).
-  return renderSelfKnowledgeContract();
+  return renderSelfKnowledgeContract(opts);
 }
 
 /** The Personal AI's own identity line, followed by the product contract. */
-export function buildRoleSection(name: string): string {
+export function buildRoleSection(name: string, opts: { withSessionContext?: boolean } = {}): string {
   return `You are Walnut, ${name}'s Personal AI and project manager. You manage tasks, sessions, and knowledge.
 
-${buildWorkModesSection()}`;
+${buildWorkModesSection(opts)}`;
 }

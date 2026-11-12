@@ -47,12 +47,18 @@ describe('the Brief rule', () => {
     ]) expect(BRIEF_LINE).toMatch(re)
   })
 
-  it('rides the default prompt of Main and of every lead, and not a worker\'s', async () => {
-    expect(await promptOf({ org_role: 'main', project: 'Ask Walnut', walnut_agent: true } as Partial<Task>)).toContain(BRIEF_LINE)
-    for (const over of [{ org_role: 'lead' }, { org_role: 'lead', org_leads: ['lighthouse'] }] as Partial<Task>[]) {
-      expect(await promptOf(over)).toContain(BRIEF_LINE)
+  it('rides the default prompt of Main and of every lead, and not a worker\'s: its head always loaded, the rest in the memory folder', async () => {
+    const head = BRIEF_LINE.slice(0, BRIEF_LINE.indexOf(' Walnut reminds you'))
+    const { readMemoryFile } = await import('../../../src/core/sessions/memory-folder.js')
+    for (const over of [{ org_role: 'main', project: 'Ask Walnut', walnut_agent: true }, { org_role: 'lead' }, { org_role: 'lead', org_leads: ['lighthouse'] }] as Partial<Task>[]) {
+      const prompt = await promptOf(over)
+      expect(prompt).toContain(head)
+      const file = /agent_memory_read \{"file":"(org-brief\.[0-9a-f]{8}\.md)"\}/.exec(prompt)?.[1]
+      expect(file).toBeTruthy()
+      // buildSessionContext wrote the rest into the task's folder before it returned.
+      expect((await readMemoryFile('mt-brief-1', file!)).text).toContain('Three sections, always all three')
     }
-    expect(await promptOf({})).not.toContain(BRIEF_LINE)
+    expect(await promptOf({})).not.toContain(head)
     expect([keepsBrief({ org_role: 'main' }), keepsBrief({ org_role: 'lead' }), keepsBrief({})]).toEqual([true, true, false])
   })
 })

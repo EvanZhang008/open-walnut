@@ -964,6 +964,8 @@ defineOp({
 })
 
 // A task's own MEMORY.md (src/core/sessions/agent-memory.ts): Main's, a lead's, a leader's working memory.
+const MEMORY_FOLDER_SCOPE = 'Your memory folder holds the rest of any always-loaded prompt section Walnut cut to its size (your '
+  + 'prompt names the file where it cut, e.g. org-threads.md) and your own longer notes (file on agent_memory_write).'
 const AGENT_MEMORY_SCOPE = 'Your own MEMORY.md is the working memory of your task (Main, a lead, a leader): pending items, '
   + 'a deadline days away, reminders, things to raise later, facts you learned for this work. Only you read it; it never '
   + 'reaches the user\'s Brief, Board or status. It is NOT Walnut\'s global MEMORY.md / USER.md (memory_read / memory_write).'
@@ -971,9 +973,11 @@ const AGENT_MEMORY_SCOPE = 'Your own MEMORY.md is the working memory of your tas
 defineOp({
   name: 'agent_memory_read',
   title: 'Read a task\'s own MEMORY.md',
-  description: `${AGENT_MEMORY_SCOPE} Returns its text, its size and the limits. task defaults to your own task.`,
+  description: `${AGENT_MEMORY_SCOPE} Returns its text, its size and the limits, and the files of your memory folder. `
+    + `${MEMORY_FOLDER_SCOPE} With file: that file whole (yours first, then the shared one). task defaults to your own task.`,
   input: {
     task: z.string().min(1).optional().describe('Task id or unique prefix; default: your own task'),
+    file: z.string().min(1).max(66).optional().describe('A memory folder file to read whole, e.g. "org-threads.md"'),
     hook: z.enum(['startup', 'compact']).optional().describe(
       'Set by Walnut\'s own SessionStart hook for Main and the VPs: what you keep across conversations (your MEMORY.md, '
       + 'your skills\' index, your recent work in your Threads) in the JSON shape the hook prints'),
@@ -987,9 +991,20 @@ defineOp({
     const id = typeof args.task === 'string' && args.task.trim()
       ? args.task.trim()
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
+    if (typeof args.file === 'string' && args.file.trim()) {
+      // A taskless session reads the shared folder: what its prompt moved is there.
+      const body = await call('GET', `/tasks/${encodeURIComponent(id || '_shared')}/memory-files/${encodeURIComponent(args.file.trim())}`) as
+        { name?: string; walnut?: boolean; shared?: boolean; at?: string }
+      return withOutcome(body, `${body.name}${body.walnut ? ', Walnut\'s own file' : ', your note'}${body.shared ? ' (shared)' : ''}, written ${body.at}.`,
+        body.walnut ? 'It is part of your instructions: follow it where it applies.' : 'No further action is required.')
+    }
     if (!id) throw new Error('No task of your own: pass task.')
-    const body = await call('GET', `/tasks/${encodeURIComponent(id)}/agent-memory`) as
-      { title?: string; memory?: AgentMemory | null; chars?: number; soft_limit?: number; limit?: number }
+    const [body, folder] = await Promise.all([
+      call('GET', `/tasks/${encodeURIComponent(id)}/agent-memory`) as Promise<
+        { title?: string; memory?: AgentMemory | null; chars?: number; soft_limit?: number; limit?: number }>,
+      (call('GET', `/tasks/${encodeURIComponent(id)}/memory-files`) as Promise<{ files?: unknown[] }>).catch(() => ({ files: [] })),
+    ])
+    Object.assign(body, { files: folder.files ?? [] })
     const chars = body.chars ?? 0
     // Someone other than the task's own session wrote it last: say who, so its lines are not read as the owner's.
     const writer = agentMemoryWriterNote(body.memory)
@@ -1084,15 +1099,22 @@ defineOp({
     + 'Past the limit the write is refused whole and nothing changes: rewrite it shorter. task defaults to your own task; '
     + 'another task\'s id writes that task\'s MEMORY.md (a deadline you note for a worker, say), as a person may.',
   input: {
-    content: z.string().max(40_000).describe('Markdown: the entry to add (append) or the whole file (replace)'),
+    content: z.string().max(40_000).describe('Markdown: the entry to add (append) or the whole file (replace); with file, the whole note ("" removes it)'),
     mode: z.enum(['append', 'replace']).optional().describe('append (default) or replace'),
     task: z.string().min(1).optional().describe('Task id or unique prefix; default: your own task'),
+    file: z.string().min(1).max(66).optional().describe('Instead of MEMORY.md: a note of your own in your memory folder, e.g. "release-steps.md" (written whole; at most 20 notes, 20,000 characters each). Keep MEMORY.md the short index that names it.'),
   },
   handler: async (args, call) => {
     const id = typeof args.task === 'string' && args.task.trim()
       ? args.task.trim()
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
     if (!id) throw new Error('No task of your own to keep a MEMORY.md for: pass task.')
+    if (typeof args.file === 'string' && args.file.trim()) {
+      const body = await call('PUT', `/tasks/${encodeURIComponent(id)}/memory-files/${encodeURIComponent(args.file.trim())}`, { content: args.content }) as
+        { name?: string; removed?: boolean; bytes?: number; count?: number }
+      return withOutcome(body, body.removed ? `Note ${body.name} removed.` : `Note ${body.name} written: ${body.bytes} bytes, ${body.count} of 20 notes.`,
+        body.removed ? 'No further action is required.' : 'Your prompt lists it from your next session start; name it in your MEMORY.md so you find it after a compaction.')
+    }
     const body = await call('PUT', `/tasks/${encodeURIComponent(id)}/agent-memory`, { content: args.content, mode: args.mode ?? 'append' }) as
       { title?: string; chars?: number; soft_limit?: number }
     const over = (body.chars ?? 0) > (body.soft_limit ?? Infinity)

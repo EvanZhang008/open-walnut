@@ -168,7 +168,7 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
     // The skills index and the standing-memory block both ride INSIDE the system
     // prompt — split them out so their sections show the real injected content
     // (order in the prompt: persona → memory → skills).
-    const skillsMarker = '## Walnut skills (mandatory)'
+    const { SESSION_SKILLS_HEADING: skillsMarker } = await import('../../core/skill-loader.js')
     const skillsIdx = systemPrompt.lastIndexOf(skillsMarker)
     const skillsContent = skillsIdx >= 0 ? systemPrompt.slice(skillsIdx) : ''
     const memoryIdx = systemPrompt.lastIndexOf(LANE_MEMORY_HEADER)

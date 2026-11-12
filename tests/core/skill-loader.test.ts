@@ -12,7 +12,8 @@ import {
   isEligible,
   escapeXml,
   formatSkillsPrompt,
-  formatCompactSkillsPrompt,
+  formatSessionIndex,
+  shortSkillLine,
   buildSkillsPrompt,
   clearSkillsCache,
   listAvailableSkills,
@@ -216,9 +217,9 @@ describe('formatSkillsPrompt', () => {
   });
 });
 
-// 2026-11-01: an ACP engine reads the persona, skills index included, on the first message
-// of every conversation; the XML form was 19.5 KB for 27 skills, half of it tags and paths.
-describe('formatCompactSkillsPrompt', () => {
+// 2026-11-12: every session engine carries one short line per skill (the XML form with whole
+// descriptions and paths measured 30 to 49 KB on every request of Main); skill_read has the rest.
+describe('formatSessionIndex', () => {
   const skills: SkillMeta[] = [
     { name: 'walnut-board', description: 'Keep a team Board.\n  Use when  leading workers.', location: '/opt/w/dist/data/skills/walnut-board/SKILL.md', category: 'walnut', type: 'action' },
     { name: 'walnut-time', description: 'Time review', location: '/opt/w/dist/data/skills/walnut-time/SKILL.md', category: 'walnut', type: 'knowledge' },
@@ -226,19 +227,29 @@ describe('formatCompactSkillsPrompt', () => {
   ];
 
   it('is empty with no skills', () => {
-    expect(formatCompactSkillsPrompt([])).toBe('');
+    expect(formatSessionIndex([])).toBe('');
   });
 
-  it('one line per skill, its file relative to the folder it shares, whole description on one line', () => {
-    const out = formatCompactSkillsPrompt(skills);
+  it('one short line per skill by its directory name, the folder said once, read with skill_read', () => {
+    const out = formatSessionIndex(skills);
     expect(out).toContain('## Walnut skills\n');
-    expect(out).toContain('In /opt/w/dist/data/skills:\n- walnut-board/SKILL.md (action): Keep a team Board. Use when leading workers.\n- walnut-time/SKILL.md (knowledge): Time review');
-    expect(out).toContain('In /home/u/.open-walnut/skills:\n- mine/SKILL.md (action): My own');
+    expect(out).toContain('skill_read {"dirName":"<name>"}');
+    expect(out).toContain('In /opt/w/dist/data/skills:\n- walnut-board: Use when leading workers\n- walnut-time: Time review');
+    expect(out).toContain('In /home/u/.open-walnut/skills:\n- mine: My own');
     expect(out).not.toContain('<skill>');
   });
 
+  it('a line is the sentence that says when to use the skill, else its first, at most 90 characters, cut at a word', () => {
+    expect(shortSkillLine('Short one. Then more words.')).toBe('Short one');
+    expect(shortSkillLine('Build and ship the app. Use when the user wants it on their phone.')).toBe('Use when the user wants it on their phone');
+    const long = shortSkillLine('Use this skill whenever you are about to create any chart, graph, plot, dashboard or visualization in any medium at all');
+    expect(long.length).toBeLessThanOrEqual(91);
+    expect(long.endsWith('\u2026')).toBe(true);
+    expect(long).not.toMatch(/ \u2026$/);
+  });
+
   it('is far shorter than the XML form for the same skills', () => {
-    expect(formatCompactSkillsPrompt(skills).length * 2).toBeLessThan(formatSkillsPrompt(skills).length + 1200);
+    expect(formatSessionIndex(skills).length * 2).toBeLessThan(formatSkillsPrompt(skills).length + 1200);
   });
 });
 

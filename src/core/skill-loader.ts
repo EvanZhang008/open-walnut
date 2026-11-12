@@ -425,21 +425,6 @@ Before replying: scan ALL <available_skills> <description> entries — this scan
 - If a skill you loaded is outdated, missing a step, or wrong, patch it with skill_manage(action='patch') before finishing the task.
 - Only skip loading when you are confident none apply.`;
 
-/**
- * Preamble for CLI session engines (Personal AI lane on claude/codex/…): same index,
- * but the loading verb is the engine's own file-read tool, and it must not
- * confuse these with skills the engine discovered natively in its own store.
- */
-const SESSION_SKILLS_PREAMBLE = `## Walnut skills (mandatory)
-These are Walnut's OWN skills — they live outside any CLI's native skill store, so no engine auto-discovers them; this injected index is the only way you see them. They are IN ADDITION to whatever skills your runtime loaded natively.
-Before replying: scan ALL <available_skills> <description> entries — this scan is not optional.
-- Skills come in two types: **action** (procedures/how-tos to follow) and **knowledge** (curated domain facts to consult).
-- If any skill might apply, ERR ON THE SIDE OF LOADING IT: read its SKILL.md at <location> with your file-read tool. Loading an unneeded skill is cheap; missing a needed one causes wrong answers.
-- Skills encode the user's preferred approach, conventions, and quality standards — load them even for tasks you already know how to do, because the skill defines how it should be done HERE.
-- Multiple relevant skills? Load each relevant one — knowledge skills especially are meant to be consulted together.
-- If a skill you loaded is outdated, missing a step, or wrong, fix its SKILL.md in place (plain file).
-- Only skip loading when you are confident none apply.`;
-
 function formatSkillsPrompt(skills: SkillMeta[], preamble: string = LOOP_SKILLS_PREAMBLE): string {
   if (skills.length === 0) return '';
 
@@ -473,34 +458,51 @@ function formatSkillsPrompt(skills: SkillMeta[], preamble: string = LOOP_SKILLS_
 }
 
 /**
- * The same index in a short form, for an engine that reads it on the first message of
- * every conversation (every ACP engine: the persona rides that message, ask-profile-prefix.ts).
- * Each skill is one line, its file named relative to the folder it shares with the others,
- * and the rules are three sentences: the XML form measured 19.5 KB for 27 skills, of which
- * tags, absolute paths and the preamble were half (2026-11-01: an Ask on a local model read
- * all of it before its first word). The descriptions stay whole, since they hold the words
- * that say when a skill applies.
+ * The skills index every session engine carries (the Personal AI's persona, Main's, an ask's,
+ * an ACP engine's first message alike): one short line per skill, named by its directory, the
+ * folder it lives in said once. 2026-11-12, the user: the always-loaded prompt must be short.
+ * The XML form with every whole description and absolute path measured 30 to 49 KB (56 to 60
+ * skills) on every request of Main; this one is about 5 KB, held to its cap by prompt-blocks.ts,
+ * and a skill's whole text (its description included) is read on demand with skill_read.
  */
-const COMPACT_SKILLS_PREAMBLE = `## Walnut skills
-Walnut's own skills, which no engine finds by itself. When a skill below fits the request, read its SKILL.md with your file-read tool before you act, and follow it; skills hold the user's conventions. If one is wrong or out of date, fix its SKILL.md.`;
+export const SESSION_SKILLS_HEADING = '## Walnut skills';
+const SESSION_SKILLS_PREAMBLE = `${SESSION_SKILLS_HEADING}
+Walnut's own skills, which no engine finds by itself, beside any your runtime loads. Before replying, scan this list; when one might fit, read it whole with skill_read {"dirName":"<name>"} (or its SKILL.md in the folder named) and follow it: skills hold the user's conventions. Fix one that is wrong in its SKILL.md.`;
 
-function formatCompactSkillsPrompt(skills: SkillMeta[]): string {
+/**
+ * A skill's line: the sentence that says when to use it ("Use when ...", the routing words), else
+ * its first sentence, at most this many characters, cut at a word. The whole is one skill_read away.
+ */
+const SKILL_LINE_MAX = 90;
+
+export function shortSkillLine(description: string): string {
+  const flat = description.replace(/\s+/g, ' ').trim();
+  const sentences = flat.split(/(?<=[.!?])\s/);
+  const when = sentences.find((x) => /^(?:Use|Load|Read|Run) (?:it |this(?: skill)? )?(?:when|whenever|for|to|before|after|on)\b/i.test(x));
+  const pick = (when ?? sentences[0] ?? flat).replace(/[.]$/, '');
+  if (pick.length <= SKILL_LINE_MAX) return pick;
+  const cut = pick.slice(0, SKILL_LINE_MAX);
+  const at = cut.lastIndexOf(' ');
+  return `${(at > 30 ? cut.slice(0, at) : cut).replace(/[,;:]$/, '')}\u2026`;
+}
+
+function formatSessionIndex(skills: SkillMeta[]): string {
   if (skills.length === 0) return '';
   const byRoot = new Map<string, string[]>();
   for (const s of skills.map(screenIndexEntry)) {
-    const root = path.dirname(path.dirname(s.location));
-    const line = `- ${path.relative(root, s.location)} (${s.type}): ${s.description.replace(/\s+/g, ' ').trim()}`;
+    const dir = path.dirname(s.location);
+    const root = path.dirname(dir);
+    const line = `- ${path.basename(dir)}: ${shortSkillLine(s.description)}`;
     byRoot.set(root, [...(byRoot.get(root) ?? []), line]);
   }
-  const groups = [...byRoot.entries()].map(([root, lines]) => `In ${root}:\n${lines.join('\n')}`)
-  return `${COMPACT_SKILLS_PREAMBLE}\n\n${groups.join('\n\n')}`;
+  const groups = [...byRoot.entries()].map(([root, lines]) => `In ${root}:\n${lines.join('\n')}`);
+  return `${SESSION_SKILLS_PREAMBLE}\n\n${groups.join('\n\n')}`;
 }
 
 // ─── cache + public API ─────────────────────────────────────────────
 
 let cachedPrompt: string | undefined;
 let cachedSessionPrompt: string | undefined;
-let cachedCompactPrompt: string | undefined;
 /** All sources (incl. ~/.claude/skills) — management UI + skill_view resolution. */
 let cachedSkills: (SkillMeta & { dirName: string })[] | undefined;
 /** Prompt scope only (no ~/.claude/skills) — what the Personal AI's index is built from. */
@@ -511,7 +513,6 @@ let skillsCacheGeneration = 0;
 export function clearSkillsCache(): void {
   cachedPrompt = undefined;
   cachedSessionPrompt = undefined;
-  cachedCompactPrompt = undefined;
   cachedSkills = undefined;
   cachedPromptSkills = undefined;
   skillsCacheGeneration++;
@@ -574,26 +575,16 @@ export async function buildSkillsPrompt(): Promise<string> {
 }
 
 /**
- * Skills index for a CLI SESSION engine (the Personal AI lane) — the "be smart" rule:
- * inject exactly the sources NO engine ever auto-discovers (workspace skills/,
- * ~/.open-walnut/skills/, shipped dist/data/skills/), and never ~/.claude/skills/
- * — the Claude Code CLI loads that store natively (injecting it = double copy),
- * and for other engines (codex, opencode…) those are executor skills that were
- * excluded from the Personal AI's index on purpose. Same scope on every engine, so
- * switching provider tomorrow changes nothing about what the Personal AI can see.
+ * Skills index for a CLI SESSION engine (the Personal AI lane, Main, an ask, an ACP engine's
+ * first message) — the "be smart" rule: exactly the sources NO engine ever auto-discovers
+ * (workspace skills/, ~/.open-walnut/skills/, shipped dist/data/skills/), never ~/.claude/skills/,
+ * which the Claude Code CLI loads natively (injecting it = double copy). Same scope and the same
+ * short form on every engine (formatSessionIndex).
  */
 export async function buildSessionSkillsPrompt(): Promise<string> {
   if (cachedSessionPrompt !== undefined) return cachedSessionPrompt;
-  const skills = await getPromptSkills();
-  cachedSessionPrompt = formatSkillsPrompt(skills, SESSION_SKILLS_PREAMBLE);
+  cachedSessionPrompt = formatSessionIndex(await getPromptSkills());
   return cachedSessionPrompt;
-}
-
-/** buildSessionSkillsPrompt in the short form an ACP engine reads (formatCompactSkillsPrompt). */
-export async function buildCompactSessionSkillsPrompt(): Promise<string> {
-  if (cachedCompactPrompt !== undefined) return cachedCompactPrompt;
-  cachedCompactPrompt = formatCompactSkillsPrompt(await getPromptSkills());
-  return cachedCompactPrompt;
 }
 
 /**
@@ -601,7 +592,7 @@ export async function buildCompactSessionSkillsPrompt(): Promise<string> {
  * its copy of the Mac's skills (stage 4d), never from the skill files git sync wrote there.
  */
 export function formatSessionSkillsPrompt(skills: SkillMeta[]): string {
-  return formatSkillsPrompt(skills, SESSION_SKILLS_PREAMBLE);
+  return formatSessionIndex(skills);
 }
 
 /** List all eligible skills with dirName, name, and description (for UI/API). */
@@ -622,4 +613,4 @@ export async function buildFilteredSkillsPrompt(skillDirNames: string[]): Promis
 }
 
 // Exported for testing
-export { parseFrontmatter, isEligible, escapeXml, formatSkillsPrompt, formatCompactSkillsPrompt, discoverSkills, getSearchDirs, getPromptSearchDirs };
+export { parseFrontmatter, isEligible, escapeXml, formatSkillsPrompt, formatSessionIndex, discoverSkills, getSearchDirs, getPromptSearchDirs };

@@ -58,7 +58,8 @@ async function leaderRows(): Promise<PersonaRow[]> {
   for (const a of agents) {
     if (!ID_RE.test(a.id)) continue
     try {
-      const { profile, effort } = await buildLaneProfile(config, a.id)
+      // Whole: a host reads this copy while the Mac (and its memory folders) may be away.
+      const { profile, effort } = await buildLaneProfile(config, a.id, { uncapped: true })
       const prompt = profile.systemPrompt ?? ''
       if (!prompt || Buffer.byteLength(prompt, 'utf8') > MAX_PROMPT_BYTES) continue
       rows.push({

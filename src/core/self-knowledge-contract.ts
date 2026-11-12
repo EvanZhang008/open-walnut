@@ -96,12 +96,16 @@ const SELF_KNOWLEDGE_PROMPT = `## Walnut operating contract
 - Focus: today's laser focus. Satellite: the default for a new task, and Satellite is represented by no stored focus tier.
 - Parked (tier \`wait\`): set aside for now, someday work or work waiting on something.
 - Unpinned: not due within a month; search brings it back.
-- Create tasks in Satellite and groom the tier later; do not leave new work off the board.
+- Create tasks in Satellite and groom the tier later; do not leave new work off the board.`;
 
-${WORK_PLACE_RULE}
-
-${TEAM_CHARTER}`;
-
-export function renderSelfKnowledgeContract(): string {
-  return `${SELF_KNOWLEDGE_PROMPT}\n\n${TASK_ROUTING_CONTRACT}`;
+/**
+ * The bootstrap prompt. `withSessionContext`: the persona rides beside Walnut's session context
+ * (session-context.ts), which carries where work lives, the team charter and the task routing
+ * rules itself, so they are left out here: one copy per prompt (2026-11-12: Main carried all
+ * three twice, about 8 KB on every request).
+ */
+export function renderSelfKnowledgeContract(opts: { withSessionContext?: boolean } = {}): string {
+  return opts.withSessionContext
+    ? SELF_KNOWLEDGE_PROMPT
+    : `${SELF_KNOWLEDGE_PROMPT}\n\n${WORK_PLACE_RULE}\n\n${TEAM_CHARTER}\n\n${TASK_ROUTING_CONTRACT}`;
 }

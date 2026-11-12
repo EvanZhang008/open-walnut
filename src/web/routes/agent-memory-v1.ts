@@ -5,6 +5,12 @@
  *   GET  /api/v1/tasks/:id/agent-memory   { task_id, title, memory: {text, at} | null, chars, soft_limit, limit }
  *   PUT  /api/v1/tasks/:id/agent-memory   { content, mode?: 'append' (default) | 'replace' }
  *
+ * Its memory folder (src/core/sessions/memory-folder.ts): the rest of the prompt blocks a cap
+ * moved there, and the task's own longer notes. `:id` may be `_shared` for what every node shares.
+ *   GET  /api/v1/tasks/:id/memory-files         { task_id, files: [{name, bytes, at, walnut, shared}] }
+ *   GET  /api/v1/tasks/:id/memory-files/:name   { name, text, at, walnut, shared }
+ *   PUT  /api/v1/tasks/:id/memory-files/:name   { content } (a note of the task's own; "" removes it)
+ *
  * Anyone may read it (the agent, a view that shows it folded). Its own session writes it, and so
  * may a person (no caller header) and another task's session, a lead noting a deadline for its
  * worker, say (2026-10-27, the user: "all human action can be done by agent also"). A write by
@@ -27,6 +33,7 @@ import { log } from '../../logging/index.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
+import { MemoryFolderError, SHARED_FOLDER, listMemoryFiles, readMemoryFile, writeOwnNote } from '../../core/sessions/memory-folder.js'
 
 export const agentMemoryV1Router = Router()
 
@@ -37,6 +44,7 @@ function route(fn: (req: Request, res: Response) => Promise<void>) {
       if (err instanceof AgentMemoryTooLongError) {
         return sendError(res, 413, err.code, err.message, { chars: err.chars, limit: AGENT_MEMORY_MAX_CHARS })
       }
+      if (err instanceof MemoryFolderError) return sendError(res, err.status, err.code, err.message)
       if (sendLinkFailure(req, res, err)) return
       sendError(res, 500, 'internal', err instanceof Error ? err.message : String(err))
     })
@@ -89,4 +97,40 @@ agentMemoryV1Router.put('/tasks/:id/agent-memory', route(async (req, res) => {
     task_id: task.id, title: task.title, memory: written,
     chars: written.text.length, soft_limit: AGENT_MEMORY_SOFT_CHARS, limit: AGENT_MEMORY_MAX_CHARS,
   })
+}))
+
+/** The folder's task id: `_shared`, or a task by id or unique prefix. */
+async function folderTask(raw: string): Promise<{ id: string | null; title: string }> {
+  if (raw === SHARED_FOLDER) return { id: null, title: 'shared' }
+  const task = await resolveTask(raw)
+  return { id: task.id, title: task.title }
+}
+
+agentMemoryV1Router.get('/tasks/:id/memory-files', route(async (req, res) => {
+  const { id, title } = await folderTask(param(req.params.id))
+  res.json({ task_id: id ?? SHARED_FOLDER, title, files: await listMemoryFiles(id) })
+}))
+
+agentMemoryV1Router.get('/tasks/:id/memory-files/:name', route(async (req, res) => {
+  const { id } = await folderTask(param(req.params.id))
+  res.json(await readMemoryFile(id, param(req.params.name), {
+    // A pointer the notice or the compaction hook told before the session's next start wrote its file.
+    regenerate: async () => {
+      if (!id) return []
+      const { composeInstructions } = await import('../../core/sessions/session-context.js')
+      return composeInstructions(await getTask(id), { taskLine: '', taskDir: '', fleet: '' }).overflows
+    },
+  }))
+}))
+
+agentMemoryV1Router.put('/tasks/:id/memory-files/:name', route(async (req, res) => {
+  if (role() === 'replica') throw new RouteError(501, 'not_supported_cloud', 'Memory folder files are written on the primary box')
+  const { id, title } = await folderTask(param(req.params.id))
+  if (!id) throw new RouteError(400, 'bad_request', 'The shared folder holds only Walnut\'s own files: write a note to a task\'s folder.')
+  const b = body(req)
+  if (typeof b.content !== 'string') throw new RouteError(400, 'bad_request', 'content (string) is required')
+  const out = await writeOwnNote(id, param(req.params.name), b.content)
+  const sid = header(req, 'x-walnut-caller-sid')
+  log.task.info('memory folder note written', { taskId: id, name: out.name, bytes: out.bytes, removed: out.removed, callerSid: sid ?? null })
+  res.json({ task_id: id, title, ...out })
 }))

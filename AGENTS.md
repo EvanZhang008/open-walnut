@@ -149,6 +149,7 @@ Hints (`docs/reference/message-hints.md`):
 
 - **Walnut text that rides a message is a message hint, defined in ONE registry** (`src/core/hints/`); every send path calls `prepareHintedSend`. (`docs/reference/message-hints.md`)
 - **Text Walnut adds to every message costs every session on every turn**: only when nothing else can carry it, a line or two, measured in bytes before landing. (`docs/reference/message-hints.md`)
+- **Every always-loaded prompt block is registered with a cap**: Walnut's session context and persona are built only from blocks in `src/core/sessions/prompt-blocks.ts`. Rules and the user's own words are never cut. A list block over its cap keeps its head and a pointer into the node's memory folder (`src/core/sessions/memory-folder.ts`, read with `agent_memory_read {"file"}`). `WALNUT_PROMPT_CAPS=0` restores the old prompt. (`tests/core/sessions/prompt-blocks-guard.test.ts`)
 
 The org and the inbox (`docs/reference/org-and-inbox.md`):
 

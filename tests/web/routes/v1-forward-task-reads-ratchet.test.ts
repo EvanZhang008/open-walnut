@@ -34,6 +34,8 @@ const EXPECTED: Record<string, { by: 'copy' | 'mac'; why: string }> = {
   '/tasks/:id/board': { by: 'mac', why: 'the boards store, which the copy does not keep' },
   '/tasks/:id/board/open-choice': { by: 'mac', why: 'the boards store' },
   '/tasks/:id/board/owner': { by: 'mac', why: 'the boards store' },
+  '/tasks/:id/memory-files': { by: 'mac', why: 'a node\'s memory folder, kept only on the primary' },
+  '/tasks/:id/memory-files/:name': { by: 'mac', why: 'a node\'s memory folder, kept only on the primary' },
   '/tasks/:id/sessions': { by: 'mac', why: 'the session records' },
   '/tasks/:id/threads': { by: 'mac', why: 'an Org node\'s Threads, kept only on the primary' },
   '/tasks/:id/threads/:thread': { by: 'mac', why: 'an Org node\'s Threads, kept only on the primary' },

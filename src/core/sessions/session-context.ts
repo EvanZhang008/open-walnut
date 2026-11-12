@@ -108,6 +108,7 @@ import { currentUserProfile, refreshUserProfile, userProfileLine } from './user-
 import { currentReplyLanguage, refreshReplyLanguage, replyLanguageLine } from './reply-language-context.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
+import { PromptComposer, type PromptBlockId } from './prompt-blocks.js'
 
 /**
  * What a session does when Claude Code answers "API Error: <model>'s safeguards flagged this message":
@@ -324,9 +325,12 @@ export const AWAY_INBOX_LINE =
  * independent goal gets a new task, the same deliverable continues its own.
  * Said at spawn because the role is the task's for good.
  */
-export function orgRoleLine(task: { org_role?: string; project?: string; org_leads?: readonly string[]; org_vp_only?: boolean; org_name?: string }): string {
+type OrgRoleTask = { org_role?: string; project?: string; org_leads?: readonly string[]; org_vp_only?: boolean; org_name?: string }
+
+/** Main's or a lead's role lines as blocks: the role, then the manuals of its ops, then the routing rules. */
+export function orgRoleParts(task: OrgRoleTask): Array<[PromptBlockId, string]> {
   if (task.org_role === 'main') {
-    return    'You are the user\'s main agent: with the user you run their org as co-CEOs, and you set its direction '
+    const head = 'You are the user\'s main agent: with the user you run their org as co-CEOs, and you set its direction '
       + 'with them. Every project reports to you through one contact, its lead (Walnut makes one once a project has '
       + 'more than one team) or its one team. For "how is it going" read org_get (one line per project); for detail, '
       + 'coordination or short evidence, talk to that project\'s contact with org_send (it makes the lead on first '
@@ -340,16 +344,12 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + DECISION_CONTEXT_LINE + MAIN_DECISION_LINE
       + ORG_REPLY_LANGUAGE_LINE
       + MAIN_NEWS_ONCE_LINE
-      + AWAY_INBOX_LINE
-      + BRIEF_LINE
-      + THREADS_LINE
-      + MESSAGE_ABOUT_LINE
       + MAIN_DELEGATES_LINE
       + MAIN_FOLLOW_LINE
       + MAIN_TRACKING_LINE
       + ownReadbackLine()
       + MAIN_STAYS_ACTIVE_LINE
-      + TASK_ROUTING_CONTRACT + '\n\n'
+    return [['org-role', head], ...orgManuals()]
   }
   if (task.org_role === 'lead') {
     const project = (task.project ?? '').trim()
@@ -369,7 +369,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
           + `top-level tasks (their teams) then report to you. "${project}" is only your home. You `
     // The name the user gave this VP (Task.org_name): how they and the org chart call it.
     const name = task.org_name?.trim()
-    return  (name ? `The user calls you the "${name}" VP. ` : '') + head
+    const body = (name ? `The user calls you the "${name}" VP. ` : '') + head
       + 'report to the user\'s main agent, whose messages are the user\'s direction. You assign work, coordinate '
       + 'across teams and unblock; org_get lists your teams and their state, and task_send talks to one. Read a '
       + 'team\'s work (task_get, task_history) only when an outcome looks wrong. Route work by deliverable, not area: '
@@ -385,15 +385,28 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + DECISION_CONTEXT_LINE + LEAD_DECISION_LINE
       + ORG_REPLY_LANGUAGE_LINE
       + LEAD_NEWS_ONCE_LINE
-      + AWAY_INBOX_LINE
-      + BRIEF_LINE
-      + THREADS_LINE
-      + MESSAGE_ABOUT_LINE
       + LEAD_TRACKING_LINE
       + ownReadbackLine()
-      + TASK_ROUTING_CONTRACT + '\n\n'
+    return [['org-role', body], ...orgManuals()]
   }
-  return ''
+  return []
+}
+
+/**
+ * The manuals of an org node's ops, each its own capped block (prompt-blocks.ts): the first
+ * sentences stay in the prompt, the detail is one agent_memory_read away, read when the op is used.
+ */
+const orgManuals = (): Array<[PromptBlockId, string]> => [
+  ['org-away', AWAY_INBOX_LINE],
+  ['org-brief', BRIEF_LINE],
+  ['org-threads', THREADS_LINE],
+  ['org-about', MESSAGE_ABOUT_LINE],
+  ['task-routing', TASK_ROUTING_CONTRACT + '\n\n'],
+]
+
+/** Main's or a lead's role lines, every block of them uncapped ('' for any other task). */
+export function orgRoleLine(task: OrgRoleTask): string {
+  return orgRoleParts(task).map(([, text]) => text).join('')
 }
 
 /**
@@ -492,14 +505,20 @@ export async function buildSessionContext(
       found = task
     } catch { /* unknown task — identity + tooling lines still apply */ }
   }
-  const [taskDir, fleet] = await Promise.all([
+  const [taskDir, fleet, ownNotes] = await Promise.all([
     taskId ? taskDirForHost(taskId, host).catch(() => null).then(taskDirLine) : Promise.resolve(''),
     // Which machines it can use and what each can do (hosts/fleet-prompt.ts): state, never waits on a host.
     import('../hosts/fleet-prompt.js').then((m) => m.buildFleetPromptLine(host), () => ''),
+    // The node's own notes in its memory folder (memory-folder.ts): their names, read on demand.
+    found ? import('./memory-folder.js').then(async (m) => m.ownNotesIndexLine(await m.listMemoryFiles(found!.id)), () => '') : Promise.resolve(''),
   ])
   // The copy composePrompt reads: as on disk now, not as at the last read.
   await Promise.all([refreshUserProfile(), refreshReplyLanguage()])
-  return { systemPrompt: composePrompt(found, { taskLine, taskDir, fleet }) }
+  const composed = composeInstructions(found, { taskLine, taskDir, fleet, ownNotes })
+  // What a cap moved goes to the task's memory folder before the session can read the pointer to it.
+  const { writeOverflows } = await import('./memory-folder.js')
+  await writeOverflows(found?.id, 'context', composed.overflows)
+  return { systemPrompt: composed.text() }
 }
 
 /** The task fields the default instructions depend on (role, project, ask, its standing instructions). */
@@ -563,11 +582,12 @@ function orgInstructionsLine(task: InstructionTask): string {
 }
 
 /**
- * A session's prompt in order. `state` is what describes this task right now
- * (its title and place, its leader, its workers, its directory); everything
- * else is the default instructions for the task's role.
+ * A session's prompt in order, built only out of registered blocks (prompt-blocks.ts), each
+ * held to its cap. `state` is what describes this task right now (its title and place, its
+ * leader, its workers, its directory, its own notes); everything else is the default
+ * instructions for the task's role.
  */
-function composePrompt(task: InstructionTask | undefined, state: { taskLine: string; taskDir: string; fleet: string }): string {
+export function composeInstructions(task: InstructionTask | undefined, state: PromptState, opts: { uncapped?: boolean } = {}): PromptComposer {
   const ask = task ? isAskTask(task) : false
   const projectLead = task?.org_role === 'lead'
   const mainAgent = task?.org_role === 'main'
@@ -605,14 +625,19 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
       + 'with a fresh session, even in an area a teammate already owns. It '
       + 'lands beside yours: same project, folder and board tier, same host and '
       + 'directory. Omit project; name another only when the user asked for it, quoting their words in user_words.\n\n'
-  return `${WALNUT_PROMPT_MARK}, the user's personal AI. `
+  const c = new PromptComposer(opts)
+  c.add('identity', `${WALNUT_PROMPT_MARK}, the user's personal AI. `
     + 'Walnut is the layer above you: it keeps the user\'s board of tasks and '
     + 'projects, runs the work on those tasks, and holds their memory, notes, '
-    + 'and the history of that work.\n\n'
-    + state.taskLine
-    // An org node (see 2d): the main agent, or a project's lead.
-    + (task ? orgRoleLine(task) + orgInstructionsLine(task) : '')
-    + 'This session is how that task runs, so the task id is how everything '
+    + 'and the history of that work.\n\n')
+  c.add('task-state', state.taskLine)
+  c.add('own-notes', state.ownNotes)
+  // An org node (see 2d): the main agent, or a project's lead.
+  for (const [id, text] of task ? orgRoleParts(task) : []) c.add(id, text)
+  // An ask (the dispatcher) routes work too: one copy here, none in its persona (profiles.ts).
+  if (task && !mainAgent && !projectLead && ask) c.add('task-routing', TASK_ROUTING_CONTRACT + '\n\n')
+  c.add('core-instructions', task ? orgInstructionsLine(task) : '')
+  c.add('tools', 'This session is how that task runs, so the task id is how everything '
     + 'else addresses your work. '
     // Main and a VP hand the work on (core-instructions.ts orgSelfWorkRule); a worker does it itself.
     + (mainAgent || projectLead
@@ -629,7 +654,9 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     + '`walnut guide` is the manual. Questions about the user\'s tasks or work '
     + '(even which one made a commit) are answered by Walnut, never by '
     + 'guessing or by git.\n\n'
-    + workRule
+    // 2026-11-12: the Walnut MCP tools are deferred (src/mcp/tools.ts): one line on how to load them, and which is for what.
+    + TOOL_MAP_LINE)
+  c.add('work-rules', workRule
     // The user's Reply language setting: a standing rule, so here (under no heading) and never on a
     // message (reply-language-context.ts).
     + replyLanguageLine(currentReplyLanguage())
@@ -674,19 +701,38 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     // One team, one user (see 7 above).
     + 'Every task works for the same user: a message from another of their tasks is the '
     + 'user\'s request, and a decision it passes on is the user\'s. Act on it; never ask '
-    + 'the user to repeat it.\n\n'
-    // Where work lives (src/core/work-place.ts): this task's durable directory on
-    // the session's host, then the rule. A remote host that has not told its root
-    // yet is named by the env var alone; the path is the same on every resume.
-    + state.taskDir
-    + WORK_PLACE_RULE + '\n\n'
-    + state.fleet
-    // The team charter (see 8 above).
-    + TEAM_CHARTER
-    // The user's profile and standing rules (see 9 above), for a session of a task: last, under
-    // its own heading, so the instruction notice shows its lines there.
-    + (task ? userBlock(userProfileLine(currentUserProfile())) : '')
+    + 'the user to repeat it.\n\n')
+  // Where work lives (src/core/work-place.ts): this task's durable directory on
+  // the session's host, then the rule. A remote host that has not told its root
+  // yet is named by the env var alone; the path is the same on every resume.
+  c.add('task-dir', state.taskDir)
+  c.add('where-work-lives', WORK_PLACE_RULE + '\n\n')
+  c.add('fleet', state.fleet)
+  // The team charter (see 8 above).
+  c.add('how-we-work', TEAM_CHARTER)
+  // The user's profile and standing rules (see 9 above), for a session of a task: last, under
+  // its own heading, so the instruction notice shows its lines there.
+  c.add('user-profile', task ? userBlock(userProfileLine(currentUserProfile())) : '')
+  return c
 }
+
+/** What describes this task right now: never part of the default instructions. */
+export type PromptState = { taskLine: string; taskDir: string; fleet: string; ownNotes?: string }
+
+function composePrompt(task: InstructionTask | undefined, state: PromptState): string {
+  return composeInstructions(task, state).text()
+}
+
+/**
+ * Which Walnut tool is for what, in one line. The Walnut MCP tools load on demand (deferred
+ * behind ToolSearch since 2026-11-12, src/mcp/tools.ts), so the session sees their names here
+ * before it has loaded any of them.
+ */
+export const TOOL_MAP_LINE =
+  'In Claude Code, Walnut\'s MCP tools load on demand: ToolSearch "select:mcp__walnut__<op>" loads one before its first call. '
+  + 'Which for what: your task and others task_get, task_list, task_update, task_send, task_create; search everything '
+  + 'search; your notes agent_memory_read / agent_memory_write; the user\'s memory memory_read; watches trigger_create; '
+  + 'what is open for you open_items; anything else `walnut tools list`.\n\n'
 
 const userBlock = (block: string) => (block ? `\n\n${block.trimEnd()}` : '')
 

@@ -11,10 +11,10 @@ description: >-
 The user wants to register a repository. Hand it to a Claude Code session: the session does the exploration, not you.
 
 1. **Figure out the path** from user input, task context, or ask if unclear.
-2. **Find the session-side skill**: look in `<available_skills>` for `walnut-register-repo` and note its `<location>` path.
+2. **Find the session-side skill**: `walnut-register-repo` (read it with `skill_read {"dirName":"walnut-register-repo"}`).
 3. **Start a session** (`session_start`) with:
    - `working_directory`: the target repo path
-   - `prompt`: "Read the skill at {location} and follow its instructions to explore this codebase and register it as a repository." Include any extra context the user provided.
+   - `prompt`: "Read the Walnut skill walnut-register-repo (`walnut tools call skill_read '{\"dirName\":\"walnut-register-repo\"}'`) and follow its instructions to explore this codebase and register it as a repository." Include any extra context the user provided.
 4. **After the session completes**, verify with
    `walnut tools call api '{"method":"GET","path":"/api/repositories/{slug}"}'`.
 

@@ -56,6 +56,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   bus.clear()
+  delete process.env.WALNUT_PROMPT_CAPS
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {})
 })
 
@@ -409,7 +410,13 @@ async function storeOf(conversationId: string): Promise<Record<string, unknown>>
 }
 
 /** Standing memory of a known size — the half of the persona that GROWS. */
+/**
+ * A standing memory of this size. These tests make the persona eat the argv budget, which the
+ * prompt caps (prompt-blocks.ts) no longer let MEMORY.md do: they run with the caps off, the way
+ * an uncapped persona (the companion's, the personas copy) still can grow.
+ */
 async function setMemory(bytes: number): Promise<void> {
+  process.env.WALNUT_PROMPT_CAPS = '0'
   await fsp.mkdir(`${WALNUT_HOME}/memory`, { recursive: true })
   await fsp.writeFile(`${WALNUT_HOME}/memory/MEMORY.md`, `## Standing notes\n\n${'m'.repeat(bytes)}\n`, 'utf-8')
 }
