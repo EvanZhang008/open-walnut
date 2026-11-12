@@ -16,6 +16,8 @@ import { engageGate } from './pw-gate.js'
 import { CHROMIUM_SILENT } from './pw-silence.js'
 // Linux WebKit paints on the CPU: its GL painting threads crash the page on software GL.
 import './pw-webkit-paint.js'
+// A context that records gets a video the size of its page (pw-video.ts).
+import './pw-video.js'
 // The fixture server runs on bun; only the Playwright runner stays on Node.
 import { bunCommand } from '../../helpers/bun-runtime.js'
 

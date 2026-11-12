@@ -26,7 +26,7 @@ const SCREENSHOT_DIR = '/tmp/t29-campaign/shots'
 // on one worker instead of fullyParallel to keep list assertions deterministic.
 test.describe.configure({ mode: 'default' })
 
-test.use({ video: { mode: 'on', size: { width: 1280, height: 800 } }, viewport: { width: 1280, height: 800 } })
+test.use({ video: 'on', viewport: { width: 1280, height: 800 } })
 
 test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })

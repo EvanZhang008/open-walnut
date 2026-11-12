@@ -22,7 +22,7 @@ const BAR_TAIL = 'End of the taskbar report.'
 
 test.describe.configure({ mode: 'default' })
 test.setTimeout(240_000)
-test.use({ baseURL: base, viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, video: { mode: 'on', size: { width: 1280, height: 900 } } })
+test.use({ baseURL: base, viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, video: 'on' })
 
 test.beforeAll(async ({ request }) => {
   test.setTimeout(300_000)

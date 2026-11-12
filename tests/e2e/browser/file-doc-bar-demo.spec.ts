@@ -11,7 +11,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 
-test.use({ viewport: { width: 1280, height: 800 }, video: { mode: 'on', size: { width: 1280, height: 800 } } })
+test.use({ viewport: { width: 1280, height: 800 }, video: 'on' })
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'

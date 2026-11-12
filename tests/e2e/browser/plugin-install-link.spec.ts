@@ -37,7 +37,7 @@ test.setTimeout(240_000)
 test.describe.configure({ mode: 'serial' })
 test.use({
   viewport: { width: 1280, height: 800 },
-  ...(process.env.PW_VIDEO ? { video: { mode: 'on', size: { width: 1280, height: 800 } } } : {}),
+  ...(process.env.PW_VIDEO ? { video: 'on' } : {}),
 })
 
 const pause = (page: Page, ms = 1200) => (process.env.PW_VIDEO ? page.waitForTimeout(ms) : Promise.resolve())

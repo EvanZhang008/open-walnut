@@ -338,7 +338,7 @@ test.describe('Open from a browser', () => {
   // cookie only the renewal path gets, which Safari's 7-day rules never reach.
   test('a phone stays signed in: it renews by itself, and after Safari cleared its storage the refresh cookie signs it back in', async ({ page, browser }) => {
     // PW_VIDEO=1: the phone's own window is recorded too, with a line saying each step.
-    const recorded = process.env.PW_VIDEO ? { recordVideo: { dir: test.info().outputPath('phone'), size: { width: 390, height: 844 } } } : {}
+    const recorded = process.env.PW_VIDEO ? { recordVideo: { dir: test.info().outputPath('phone') } } : {}
     let context = await browser.newContext({ ...phoneDevice(), ...recorded })
     let phone = await context.newPage()
     const say = (text: string) => process.env.PW_VIDEO ? demoCaption(phone, text) : Promise.resolve()

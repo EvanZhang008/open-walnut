@@ -83,6 +83,7 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
   Playwright config, ratchet `tests/setup/webkit-paint.test.ts`): on Mesa's software GL its GL
   painting threads (`SkiaGPUWorker`) segfault and fail a random spec with "Target crashed" or
   "Target page, context or browser has been closed" (27 faults on the Linux test host on 2026-11-08).
+- **Proof videos are `PW_VIDEO=1` runs** (`tests/e2e/browser/pw-video.ts`, loaded by every Playwright config, ratchet `tests/setup/proof-video.test.ts`): `video.mp4` lands beside each test's `video.webm`, at the page's own size (device pixels in WebKit, CSS pixels in Chromium, whose headless screencast sends no more), with a pointer dot; never give a spec its own video `size`.
 - **Timeout-shaped browser failures are usually machine load, not product bugs.** Check
   `scripts/pw-cleanup.sh status` first — at load 486 (14 cores) every spec failed on
   `page.waitForLoadState`. Fixture cold boot: ~20 s idle, ~70 s at load 133.

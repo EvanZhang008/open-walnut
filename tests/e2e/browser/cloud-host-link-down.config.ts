@@ -14,6 +14,8 @@ import { engageGate } from './pw-gate.js'
 import { CHROMIUM_SILENT } from './pw-silence.js'
 // Linux WebKit paints on the CPU: its GL painting threads crash the page on software GL.
 import './pw-webkit-paint.js'
+// Proof videos: recorded at the page's own size, with a pointer, encoded to MP4.
+import { VIDEO_USE, withVideoReporter } from './pw-video.js'
 // The fixture server runs on bun; only the Playwright runner stays on Node.
 import { bunCommand } from '../../helpers/bun-runtime.js'
 
@@ -28,12 +30,12 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   timeout: 300_000,
-  reporter: 'list',
+  reporter: withVideoReporter('list'),
   use: {
     baseURL: `http://localhost:${port}`,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
-    video: process.env.PW_VIDEO ? { mode: 'on', size: { width: 1280, height: 800 } } : 'off',
+    video: VIDEO_USE,
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: CHROMIUM_SILENT }, ...view } },

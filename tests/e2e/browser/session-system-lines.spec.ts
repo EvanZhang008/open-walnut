@@ -19,7 +19,7 @@ import path from 'node:path'
 
 const SHOTS = '/tmp/system-lines'
 const COLUMNS_KEY = 'open-walnut-home-session-columns'
-if (process.env.SYSTEM_LINES_VIDEO) test.use({ video: { mode: 'on', size: { width: 1280, height: 800 } } })
+if (process.env.SYSTEM_LINES_VIDEO) test.use({ video: 'on' })
 
 const TURN = {
   words: 'SL_BEFORE Tests fail as expected. Now the change.',

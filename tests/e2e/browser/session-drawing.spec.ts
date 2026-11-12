@@ -6,7 +6,7 @@ import { startSessionAt, fixtureRoot, panelFor, openPlusMenu } from './engine-se
 
 const shots = '/tmp/session-drawing';
 test.describe.configure({ timeout: 180_000 });
-test.use({ video: { mode: 'on', size: { width: 1280, height: 900 } } });
+test.use({ video: 'on' });
 
 async function open(page: Page) {
   await page.setViewportSize({ width: 1280, height: 900 });

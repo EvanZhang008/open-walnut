@@ -19,7 +19,7 @@ import { createEnvelopeKit } from '../../../src/core/peers/envelope-kit';
 import { MOCK_SESSION_ID as SESSION_ID, injectEvent, mockSession, open, takeLine, waitForWs } from './mock-session-harness';
 
 const SHOTS = `${process.env.WALNUT_TASK_DIR || '/tmp'}/shots/live-send-fold`;
-if (process.env.LIVE_SEND_VIDEO) test.use({ video: { mode: 'on', size: { width: 1280, height: 900 } } });
+if (process.env.LIVE_SEND_VIDEO) test.use({ video: 'on' });
 
 const kit = createEnvelopeKit();
 const at = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();

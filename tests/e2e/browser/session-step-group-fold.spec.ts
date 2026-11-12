@@ -19,7 +19,7 @@ import { createEnvelopeKit } from '../../../src/core/peers/envelope-kit';
 import { MOCK_SESSION_ID as SESSION_ID, injectEvent, mockSession, open, streamTools, takeLine, waitForWs } from './mock-session-harness';
 
 const SHOTS = '/tmp/step-group-fold';
-if (process.env.STEP_GROUP_VIDEO) test.use({ video: { mode: 'on', size: { width: 1280, height: 900 } } });
+if (process.env.STEP_GROUP_VIDEO) test.use({ video: 'on' });
 
 const kit = createEnvelopeKit();
 const notice = (n: number) => kit.buildWalnutMessage({

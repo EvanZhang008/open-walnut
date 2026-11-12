@@ -5,6 +5,8 @@ import base from '../../../playwright.config'
 import { bunCommand } from '../../helpers/bun-runtime'
 import { CHROMIUM_SILENT } from './pw-silence.js'
 import './pw-webkit-paint.js'
+// A context that records gets a video the size of its page (pw-video.ts).
+import './pw-video.js'
 import { testMatchNames } from './side-config-specs.js'
 
 // Importing pw-silence silences every page of this run; the Chromium projects come from the base config.
@@ -37,10 +39,6 @@ export default defineConfig({
   ],
   fullyParallel: false,
   workers: 1,
-  use: {
-    ...base.use,
-    video: process.env.PW_VIDEO ? { mode: 'on', size: { width: 1280, height: 900 } } : 'off',
-  },
   webServer: {
     ...base.webServer,
     cwd: root,

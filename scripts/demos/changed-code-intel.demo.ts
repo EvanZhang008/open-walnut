@@ -25,7 +25,7 @@ const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
 // Shares pw-changed-session with changed-code-intel.spec.ts (whose serial mode
 // only covers ITS file): the demo config runs one worker.
 
-test.use({ video: { mode: 'on', size: { width: 1440, height: 900 } }, viewport: { width: 1440, height: 900 } })
+test.use({ video: 'on', viewport: { width: 1440, height: 900 } })
 
 async function centerOfText(page: Page, containerSel: string, needle: string) {
   const pt = await page.evaluate(([sel, text]) => {

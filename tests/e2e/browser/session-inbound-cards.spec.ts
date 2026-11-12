@@ -21,7 +21,7 @@ const TASK_ID = 'pw-task-inbound'
 const SHOTS = path.join(process.env.WALNUT_TASK_DIR || '/tmp/wn-inbound-cards', 'shots')
 
 test.describe.configure({ mode: 'serial' })
-test.use({ video: process.env.PW_INBOUND_VIDEO ? { mode: 'on', size: { width: 1100, height: 900 } } : 'off', viewport: { width: 1100, height: 900 } })
+test.use({ video: process.env.PW_INBOUND_VIDEO ? 'on' : 'off', viewport: { width: 1100, height: 900 } })
 
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
 

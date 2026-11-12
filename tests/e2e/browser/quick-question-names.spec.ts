@@ -8,7 +8,7 @@ const STAMP = Date.now().toString(36)
 
 test.use({
   viewport: { width: 1312, height: 822 },
-  video: { mode: 'on', size: { width: 1312, height: 822 } },
+  video: 'on',
 })
 test.setTimeout(180_000)
 

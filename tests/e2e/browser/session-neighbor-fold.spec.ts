@@ -16,7 +16,7 @@ import { MOCK_SESSION_ID as SESSION_ID, injectEvent, mockSession, open, streamTo
 
 const SHOTS = '/tmp/neighbor-fold';
 
-if (process.env.NEIGHBOR_FOLD_VIDEO) test.use({ video: { mode: 'on', size: { width: 1280, height: 900 } } });
+if (process.env.NEIGHBOR_FOLD_VIDEO) test.use({ video: 'on' });
 
 const at = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();
 const bash = (id: string, command: string) => ({ name: 'Bash', toolUseId: id, input: { command }, result: 'ok' });

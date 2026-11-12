@@ -19,7 +19,7 @@ import { createEnvelopeKit } from '../../../src/core/peers/envelope-kit'
 const SESSION_ID = 'pw-worked-for'
 const SHOTS = process.env.WORKED_FOR_SHOTS ?? '/tmp/worked-for'
 
-test.use({ video: { mode: 'on', size: { width: 1280, height: 900 } } })
+test.use({ video: 'on' })
 
 async function injectEvent(page: Page, name: string, data: unknown) {
   await page.evaluate(({ name, data }) => {

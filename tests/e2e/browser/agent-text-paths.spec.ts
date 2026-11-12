@@ -3,7 +3,7 @@ import { test, expect, type BrowserContext, type Locator, type Page } from '@pla
 import { discoverBrowserFixture } from './codex-test-audit';
 import { TINY_SILENT_MP4_BASE64 } from './fixtures/tiny-video';
 import { press as click } from './real-press';
-import { closeLinkedLetter, dragSelect, openSessionBoard, tabTo } from './agent-text-entry-helpers';
+import { closeLinkedLetter, dragSelect, openSessionBoard, showPointer, tabTo } from './agent-text-entry-helpers';
 
 const stamp = Date.now().toString(36);
 const project = `Agent links ${stamp}`;
@@ -14,19 +14,11 @@ let owner = '', picture = '', document = '', movie = '', missing = '', letter = 
 const made: string[] = [];
 const letters: string[] = [];
 test.setTimeout(180_000);
-test.use({ baseURL: base, viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, video: { mode: 'on', size: { width: 1280, height: 900 } } });
+test.use({ baseURL: base, viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, video: 'on' });
 
 test.beforeEach(async ({ page, context }) => {
   await context.addInitScript(() => { Object.defineProperty(crypto, 'randomUUID', { configurable: true, value: undefined }); });
-  await page.addInitScript(() => document.addEventListener('mousemove', (e) => {
-    let pointer = document.getElementById('acceptance-pointer');
-    if (!pointer) {
-      pointer = document.createElement('div'); pointer.id = 'acceptance-pointer';
-      pointer.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;width:12px;height:12px;border:2px solid white;border-radius:50%;background:#0a84ff';
-      document.documentElement.appendChild(pointer);
-    }
-    pointer.style.left = `${e.clientX - 6}px`; pointer.style.top = `${e.clientY - 6}px`;
-  }));
+  await showPointer(page);
 });
 
 async function enter(page: Page) {

@@ -24,7 +24,7 @@ const PROJECT = `RecentOpened${STAMP}`
 const KEY = 'walnut-todo-recent-opened'
 
 // The clip is the acceptance record of this view (one per test, kept on pass too).
-test.use({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1, video: { mode: 'on', size: { width: 1280, height: 860 } } })
+test.use({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1, video: 'on' })
 test.setTimeout(180_000)
 
 const made: string[] = []

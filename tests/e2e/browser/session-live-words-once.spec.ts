@@ -15,7 +15,7 @@ import { test, expect } from '@playwright/test';
 import { MOCK_SESSION_ID as SESSION_ID, injectEvent, mockSession, open, waitForWs } from './mock-session-harness';
 
 const SHOTS = '/tmp/live-words-once';
-if (process.env.LIVE_WORDS_VIDEO) test.use({ video: { mode: 'on', size: { width: 1280, height: 900 } } });
+if (process.env.LIVE_WORDS_VIDEO) test.use({ video: 'on' });
 
 const WORDS = 'LW_WORDS Two things this round: the deploy is live, and the inbox task is back to waiting.';
 const MORE = ' LW_MORE One more line.';

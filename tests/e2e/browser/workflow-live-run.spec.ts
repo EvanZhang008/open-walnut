@@ -25,7 +25,7 @@ let fixtureRoot = ''
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 // A recording (PW_VIDEO=1) keeps the full window size instead of the 800px default.
-if (process.env.PW_VIDEO) test.use({ video: { mode: 'on', size: { width: 1280, height: 800 } } })
+if (process.env.PW_VIDEO) test.use({ video: 'on' })
 
 test.beforeAll(async () => {
   ;({ fixtureRoot } = await discoverBrowserFixture(TEST_PORT))

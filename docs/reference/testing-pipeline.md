@@ -23,6 +23,8 @@ a short read-only look at live prod in the Mac app. Linux WebKit has no MediaRec
 voice and recording specs (`stt-*`, `voice-*`) and a layout that differs only in macOS fonts still
 run in macOS WebKit, one at a time in the Mac's :3457 queue.
 
+A proof video: run the spec with `PW_VIDEO=1` (WebKit on a Linux dev host); each test's `video.mp4` lands beside its `video.webm` in the run's output dir (`test-results/<test>/`, or `--output <dir>`), recorded at the page's own size (WebKit's 2x device pixels; Chromium's screencast sends CSS pixels) with a pointer dot, and `bun scripts/proof-video.mjs check <dir>` fails a clip under 1280 px or coarser than CRF 20 (`tests/e2e/browser/pw-video.ts`).
+
 Layers chosen so the one you run most often is the one that costs least. Run `bun run test` (the same as `test:local`) on every change, `bun run test:land` before you land (the land runs it too), `bun run test:pre-commit` before a bigger commit, and let GitHub Actions run everything on push: Actions is free for this repo (public repos get unlimited minutes on GitHub-hosted runners). Cross-machine features additionally need the L5 live journey before they count as done.
 
 | Layer | Command | Scope | Time | When |

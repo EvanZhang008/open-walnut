@@ -14,11 +14,11 @@
  * reconnects). A line `stop` on stdin ends it: the video is saved as
  * <out>/live-update.webm and, with ffmpeg on PATH, <out>/live-update.mp4.
  */
-import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline'
 import { chromium } from '@playwright/test'
+import { encodeMp4, hasTool } from '../proof-video.mjs'
 
 const args = process.argv.slice(2)
 const arg = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null }
@@ -87,11 +87,8 @@ await browser.close()
 const webm = path.join(out, 'live-update.webm')
 if (video) fs.renameSync(await video.path(), webm)
 let mp4 = null
-if (spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0) {
-  const target = path.join(out, 'live-update.mp4')
-  const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', webm, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-vf', 'scale=1280:-2', '-movflags', '+faststart', target], { encoding: 'utf8' })
-  if (r.status === 0) mp4 = target
-  else emit({ ffmpeg: (r.stderr || '').slice(-400) })
+if (hasTool('ffmpeg')) {
+  try { mp4 = encodeMp4(webm) } catch (e) { emit({ ffmpeg: e.message.slice(-400) }) }
 }
 emit({ done: true, webm, mp4 })
 // The stdin reader would keep this process (and so the rehearsal and its container) alive.

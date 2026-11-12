@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test'
 import { clickCaretInto } from './prosemirror-caret'
 import { api, seed, openNote, drawn, placeImage, pngOf } from './notes-images-helpers'
 
-test.use({ video: { mode: 'on', size: { width: 1280, height: 800 } }, viewport: { width: 1280, height: 800 } })
+test.use({ video: 'on', viewport: { width: 1280, height: 800 } })
 
 test('image walkthrough', async ({ page }) => {
   test.skip(test.info().project.name !== 'webkit', 'a video for WebKit runs only')

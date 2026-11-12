@@ -26,7 +26,7 @@ let fixtureRoot = ''
 
 test.describe.configure({ mode: 'serial' })
 // PW_RECORD_VIDEO=1 keeps a video of each flow (the demo the user asked to see), in test-results.
-if (process.env.PW_RECORD_VIDEO) test.use({ viewport: { width: 1280, height: 800 }, video: { mode: 'on', size: { width: 1280, height: 800 } } })
+if (process.env.PW_RECORD_VIDEO) test.use({ viewport: { width: 1280, height: 800 }, video: 'on' })
 test.setTimeout(180_000)
 
 async function home(page: Page): Promise<void> {

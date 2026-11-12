@@ -51,7 +51,7 @@ let remotePng: Buffer
 
 test.describe.configure({ mode: 'default' })
 test.setTimeout(150_000)
-test.use({ baseURL: base, viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, video: { mode: 'on', size: { width: 1280, height: 900 } } })
+test.use({ baseURL: base, viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, video: 'on' })
 
 test.beforeAll(async () => {
   if (new URL(base).port === '3456') throw new Error('These checks read fixture sessions: run them on a test server, never production')

@@ -68,7 +68,7 @@ test('recorded walkthrough: create, edit, keep unsaved work, live save + merge, 
   const context = await (browser as Browser).newContext({
     baseURL,
     viewport: { width: 1280, height: 720 },
-    recordVideo: { dir: VIDEO_DIR, size: { width: 1280, height: 720 } },
+    recordVideo: { dir: VIDEO_DIR },
   })
   const page = await context.newPage()
 

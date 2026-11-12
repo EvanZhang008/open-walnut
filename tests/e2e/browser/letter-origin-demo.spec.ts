@@ -16,7 +16,7 @@ const API = `http://localhost:${TEST_PORT}/api/v1`
 const NONCE = Date.now().toString(36).slice(-4)
 
 test.skip(process.platform !== 'darwin', 'a clip of macOS WebKit, the Mac app\'s engine')
-test.use({ video: { mode: 'on', size: { width: 1280, height: 800 } }, viewport: { width: 1280, height: 800 } })
+test.use({ video: 'on', viewport: { width: 1280, height: 800 } })
 test.setTimeout(120_000)
 
 const seeded: string[] = []

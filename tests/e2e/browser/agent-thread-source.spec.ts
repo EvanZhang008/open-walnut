@@ -50,7 +50,7 @@ const made: string[] = []
 
 test.describe.configure({ mode: 'default' })
 test.setTimeout(180_000)
-test.use({ baseURL: base, viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, video: { mode: 'on', size: { width: 1280, height: 900 } } })
+test.use({ baseURL: base, viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, video: 'on' })
 
 async function ok(res: { ok(): boolean; status(): number; text(): Promise<string> }, what: string): Promise<any> {
   const text = await res.text()

@@ -13,18 +13,8 @@ export const AGENT_TEXT_BASE = process.env.AGENT_TEXT_URL ?? 'http://localhost:3
 /** A neutral picture of the repo's own (192px) when the run names no real screenshot. */
 const STAND_IN_PICTURE = fileURLToPath(new URL('../../../web/public/icon-192.png', import.meta.url))
 
-/** A dot that follows the mouse, so a recording shows where each press lands. */
-export async function showPointer(page: Page): Promise<void> {
-  await page.addInitScript(() => document.addEventListener('mousemove', (e) => {
-    let pointer = document.getElementById('acceptance-pointer')
-    if (!pointer) {
-      pointer = document.createElement('div'); pointer.id = 'acceptance-pointer'
-      pointer.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;width:12px;height:12px;border:2px solid white;border-radius:50%;background:#0a84ff'
-      document.documentElement.appendChild(pointer)
-    }
-    pointer.style.left = `${e.clientX - 6}px`; pointer.style.top = `${e.clientY - 6}px`
-  }))
-}
+// The proof videos' pointer (a dot on moves, a ripple on presses), so a recording shows where each press lands.
+export { showPointer } from './pointer-overlay'
 
 export { click }
 

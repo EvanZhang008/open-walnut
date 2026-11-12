@@ -13,7 +13,7 @@ import {
   commentOn, leftHalf, openQuestion, openSheet, pagesOnScreen, rightBody, rightComposer, rowCountOf, scrollBoxOf, scrollTopOf, send, siblingPage,
 } from './tree-split-helpers'
 
-test.use({ video: { mode: 'on', size: { width: 1440, height: 900 } } })
+test.use({ video: 'on' })
 
 test.describe('Tree Mode demo', () => {
   test.beforeEach(async ({ request }, info) => {

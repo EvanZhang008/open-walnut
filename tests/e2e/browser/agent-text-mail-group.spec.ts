@@ -9,7 +9,7 @@ import { click, closeFile, dragSelect, expectImage, expectViewerFillsPanel, open
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
-test.use({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, video: { mode: 'on', size: { width: 1280, height: 900 } } })
+test.use({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, video: 'on' })
 
 let server: MailFixtureServer
 let fixture: MailFixture

@@ -7,7 +7,7 @@ holdApprovalsLock('test', { clear: true })
 
 const OUT = '/tmp/approval-simplify'
 fs.mkdirSync(OUT, { recursive: true })
-test.use({ viewport: { width: 1280, height: 800 }, video: { mode: 'on', size: { width: 1280, height: 800 } } })
+test.use({ viewport: { width: 1280, height: 800 }, video: 'on' })
 
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms))
 

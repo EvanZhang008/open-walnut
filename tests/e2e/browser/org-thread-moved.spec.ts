@@ -26,7 +26,7 @@ const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots`
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(180_000)
-test.use({ video: { mode: 'on', size: { width: 1280, height: 800 } }, viewport: { width: 1280, height: 800 } })
+test.use({ video: 'on', viewport: { width: 1280, height: 800 } })
 
 const rowKey = (project: string) => `project:${project.trim().toLowerCase()}`
 

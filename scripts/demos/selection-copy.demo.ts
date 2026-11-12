@@ -18,7 +18,7 @@ import { test, expect, type Page } from '@playwright/test';
 const SESSION_ID = 'pw-selection-demo';
 
 
-test.use({ video: { mode: 'on', size: { width: 1280, height: 800 } }, viewport: { width: 1280, height: 800 } });
+test.use({ video: 'on', viewport: { width: 1280, height: 800 } });
 
 async function injectEvent(page: Page, name: string, data: unknown) {
   await page.evaluate(

@@ -19,7 +19,7 @@ import { MOCK_SESSION_ID, mockSession, open } from './mock-session-harness';
 
 const SHOTS = '/tmp/quiet-fold-merge';
 test.setTimeout(90_000);
-if (process.env.QUIET_FOLD_VIDEO) test.use({ video: { mode: 'on', size: { width: 1280, height: 900 } } });
+if (process.env.QUIET_FOLD_VIDEO) test.use({ video: 'on' });
 
 const ACK = '<walnut-turn status="agent-ack"/>';
 const at = (s: number) => `2026-01-01T00:00:${String(s).padStart(2, '0')}.000Z`;

@@ -24,7 +24,7 @@ const SESSION_ID = 'pw-queued-follows-session'
 const TASK_ID = 'pw-queued-follows-task'
 const VIDEO_DIR = process.env.QUEUED_SPEC_VIDEO_DIR
 
-if (VIDEO_DIR) test.use({ video: { mode: 'on', size: { width: 1280, height: 800 } } })
+if (VIDEO_DIR) test.use({ video: 'on' })
 
 interface QueueRow { id: string; message: string; status: string; stage?: string; delivered?: boolean; enqueuedAt: string }
 

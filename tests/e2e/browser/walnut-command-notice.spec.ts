@@ -18,7 +18,7 @@ const RECORDING = !!process.env.WALNUT_COMMAND_VIDEO
 /** A recording stays on a screen long enough to read it. */
 const hold = (page: Page) => (RECORDING ? page.waitForTimeout(2_000) : Promise.resolve())
 
-test.use({ viewport: { width: 1280, height: 860 }, video: process.env.WALNUT_COMMAND_VIDEO ? { mode: 'on', size: { width: 1280, height: 860 } } : 'off' })
+test.use({ viewport: { width: 1280, height: 860 }, video: process.env.WALNUT_COMMAND_VIDEO ? 'on' : 'off' })
 test.describe.configure({ timeout: 120_000 })
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
 // The mock CLI echoes what it read, and the resend quotes the person's line with the hints it

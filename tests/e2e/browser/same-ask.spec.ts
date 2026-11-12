@@ -54,7 +54,7 @@ test('a lead and its subtask asking the same decision show one Needs you row; an
 
   const context = await browser.newContext({
     viewport: { width: 1280, height: 800 },
-    ...(VIDEO_DIR ? { recordVideo: { dir: VIDEO_DIR, size: { width: 1280, height: 800 } } } : {}),
+    ...(VIDEO_DIR ? { recordVideo: { dir: VIDEO_DIR } } : {}),
   })
   const page = await context.newPage()
   await isolateUiPrefs(page)
@@ -117,7 +117,7 @@ test('two sibling tasks asking the same show one row; their leader answering it 
 
   const context = await browser.newContext({
     viewport: { width: 1280, height: 800 },
-    ...(VIDEO_DIR ? { recordVideo: { dir: VIDEO_DIR, size: { width: 1280, height: 800 } } } : {}),
+    ...(VIDEO_DIR ? { recordVideo: { dir: VIDEO_DIR } } : {}),
   })
   const page = await context.newPage()
   await isolateUiPrefs(page)

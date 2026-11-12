@@ -22,6 +22,8 @@ import { engageGate } from './pw-gate.js'
 import { CHROMIUM_SILENT } from './pw-silence.js'
 // Linux WebKit paints on the CPU: its GL painting threads crash the page on software GL.
 import './pw-webkit-paint.js'
+// A context that records gets a video the size of its page (pw-video.ts).
+import './pw-video.js'
 import { bunCommand } from '../../helpers/bun-runtime.js'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3472)

@@ -5,6 +5,8 @@ import { perRunWorkers } from './tests/e2e/browser/pw-concurrency.js'
 import { engageGate } from './tests/e2e/browser/pw-gate.js'
 // Every test browser is silent: an init script in every frame, and Chromium's own mute.
 import { CHROMIUM_SILENT } from './tests/e2e/browser/pw-silence.js'
+// Proof videos: recorded at the page's own size, with a pointer, encoded to MP4.
+import { VIDEO_USE, withVideoReporter } from './tests/e2e/browser/pw-video.js'
 // Linux WebKit paints on the CPU: its GL painting threads crash the page on software GL.
 import './tests/e2e/browser/pw-webkit-paint.js'
 import { sideConfigSpecs } from './tests/e2e/browser/side-config-specs.js'
@@ -44,7 +46,7 @@ export default defineConfig({
   // processes and ~2.7 GB per run, with nothing coordinating concurrent runs.
   // Overrides: PW_WORKERS (per run), PW_NO_GATE=1 (skip the port lease).
   workers: perRunWorkers(),
-  reporter: 'list',
+  reporter: withVideoReporter('list'),
   // A CI runner has 4 cores and runs 4 workers: one cold load of the dev mode fixture
   // (about 1,700 module requests) took 12 to 14 s there, so a test that loads the app
   // twice ran out of 30 s with nothing wrong (2026-11-01: about 9 of 21 failures of one
@@ -55,9 +57,10 @@ export default defineConfig({
     baseURL: `http://localhost:${testPort}`,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
-    // PW_VIDEO=1 records every test (demo/verification clips); pair with
+    // PW_VIDEO=1 records every test (demo/verification clips) at the page's own size, and
+    // the reporter writes video.mp4 beside each video.webm (pw-video.ts); pair with
     // `--output <dir>` outside test-results/, which peer runs wipe.
-    video: process.env.PW_VIDEO ? 'on' : 'off',
+    video: VIDEO_USE,
     // The task panel opens Flat (web/src/components/tasks/panel-design.ts), its status
     // sections and no list. The specs written against the list remember By project, in
     // every page's storage, so a spec that serves its own ui-prefs keeps it too; a spec

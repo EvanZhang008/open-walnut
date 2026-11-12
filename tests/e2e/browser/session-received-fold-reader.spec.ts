@@ -228,7 +228,7 @@ test('demo: four replies in a row stay one closed row each', async ({ browser })
   test.skip(process.platform !== 'darwin' && !process.env.PW_VIDEO, 'recorded on the Mac or with PW_VIDEO=1');
   const context = await browser.newContext({
     baseURL: test.info().project.use.baseURL,
-    recordVideo: { dir: `${SHOTS}/${test.info().project.name}-demo`, size: { width: 1280, height: 900 } },
+    recordVideo: { dir: `${SHOTS}/${test.info().project.name}-demo` },
   });
   const page = await context.newPage();
   try {

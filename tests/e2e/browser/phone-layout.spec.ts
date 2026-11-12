@@ -30,7 +30,6 @@ test.use({
   isMobile: true,
   hasTouch: true,
   userAgent: PHONE.userAgent,
-  ...(process.env.PW_VIDEO ? { video: { mode: 'on' as const, size: PHONE.viewport } } : {}),
 })
 
 test.beforeAll(async () => {

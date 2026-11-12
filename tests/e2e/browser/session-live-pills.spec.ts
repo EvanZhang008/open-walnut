@@ -117,7 +117,7 @@ function fakeBrowser(page: Page, picture: string) {
 test('servers and the browser show only as header pills, their details in popovers', async ({ browser }, testInfo) => {
   const ctx = await browser.newContext({
     viewport: { width: 1280, height: 820 },
-    recordVideo: { dir: SHOTS, size: { width: 1280, height: 820 } },
+    recordVideo: { dir: SHOTS },
     baseURL: String(testInfo.project.use.baseURL ?? 'http://localhost:3457'),
   })
   const page = await ctx.newPage()

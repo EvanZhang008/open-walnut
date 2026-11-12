@@ -24,7 +24,7 @@ const pause = (page: Page, ms = 1500) => (process.env.PW_VIDEO ? page.waitForTim
 
 test.use({
   viewport: { width: 1280, height: 800 },
-  ...(process.env.PW_VIDEO ? { video: { mode: 'on', size: { width: 1280, height: 800 } } } : {}),
+  ...(process.env.PW_VIDEO ? { video: 'on' } : {}),
 })
 
 test.setTimeout(120_000)

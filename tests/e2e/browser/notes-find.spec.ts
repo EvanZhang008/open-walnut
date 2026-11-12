@@ -181,7 +181,7 @@ function shot(page: Page, name: string) {
 const RECORD = process.platform === 'darwin' || !!process.env.NOTES_FIND_VIDEO
 if (RECORD) {
   test.use({
-    video: { mode: 'on', size: { width: 1280, height: 800 } },
+    video: 'on',
     launchOptions: { slowMo: 120 },
   })
 }
