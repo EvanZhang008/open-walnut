@@ -90,7 +90,8 @@ describe('lean event frames through the server', () => {
       await until(() => plain.seen.filter((s) => s.name === 'task:updated').length >= 1);
       await patch({ phase: 'IN_PROGRESS' });
       await until(() => plain.seen.filter((s) => s.name === 'task:updated').length >= 2);
-      await new Promise((r) => setTimeout(r, 300));
+      // Both sockets hear every event: wait for the lean one to catch up, never on a clock.
+      await until(() => lean.seen.length >= plain.seen.length);
 
       expect(lean.seen.map((s) => s.name)).toEqual(plain.seen.map((s) => s.name));
       for (let i = 0; i < plain.seen.length; i++) {
