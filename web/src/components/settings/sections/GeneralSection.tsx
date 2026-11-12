@@ -208,7 +208,7 @@ export function GeneralSection({ config, onSave }: Props) {
         />
         <SettingsRow
           label="Closed sessions go to"
-          help="Where a session goes when it leaves the columns with × or is pushed out. Recent: the right end of the bottom bar; only Minimize makes a chip. Bar chips: a chip like a minimized one."
+          help="Where a session goes when × closes it or a new one pushes it out."
           data-testid="settings-taskbar-leaving-row"
           control={
             <SegmentedControl
