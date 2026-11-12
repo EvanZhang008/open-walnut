@@ -6,7 +6,7 @@
  * And the two build scripts ship it and compile the updater, so a release app
  * can always finish what it starts.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -175,9 +175,10 @@ describe('apply-update.sh', () => {
     const exe = path.join(s.target, 'Contents', 'MacOS', 'Walnut');
     const gui = spawn('/bin/bash', ['-c', 'exec -a "$1" /bin/sleep 300', 'x', exe], { stdio: 'ignore' });
     started.push(gui.pid!);
-    for (let i = 0; i < 100 && !spawnSync('ps', ['-o', 'command=', '-p', String(gui.pid)], { encoding: 'utf8' }).stdout.startsWith(exe); i++) {
-      await new Promise((ok) => setTimeout(ok, 50));
-    }
+    // Ready once ps shows the stand-in under the app's command line.
+    await vi.waitFor(() => {
+      expect(spawnSync('ps', ['-o', 'command=', '-p', String(gui.pid)], { encoding: 'utf8' }).stdout.startsWith(exe)).toBe(true);
+    }, { timeout: 10_000, interval: 50 });
     expect((await run(['0', s.target, s.staged, s.log], { WALNUT_APPLY_UPDATE_OPEN: s.opener })).status).toBe(1);
     expect(fs.readFileSync(path.join(s.target, 'Contents', 'version'), 'utf8')).toBe('1.0.0');
     expect(fs.readFileSync(s.log, 'utf8')).toContain('quit it first');
