@@ -7044,9 +7044,6 @@ function startPluginSyncPolling(): void {
  * Gracefully shut down the server.
  */
 export async function stopServer(opts: { dropConnections?: boolean; reason?: string; bailMs?: number } = {}): Promise<void> {
-  // Every awaited step below runs through shutdownStep (shutdown-steps.ts): named for the bail,
-  // and bounded to fit inside the caller's bail when it has one.
-  beginShutdownSteps({ bailMs: opts.bailMs })
   // At the entry, before any await: no boot owns the lane any more, and it stops now.
   localDaemonLaneOwner++
   localDaemonLane?.stop()
@@ -7062,6 +7059,9 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   // never hands it the lead. Bounded: never holds the shutdown up.
   leaderLoopHandle?.stop()
   leaderLoopHandle = null
+  // Before the first await: every awaited step below runs through shutdownStep (shutdown-steps.ts),
+  // named for the bail and bounded to fit inside the caller's bail when it has one.
+  beginShutdownSteps({ bailMs: opts.bailMs })
   // While every socket still stands: each feature node gets a 1012 close and the connection
   // journal says why this server stops (a deploy, an update, a signal). Bounded under a second.
   await shutdownStep('feature nodes', async () => (await import('./ws/feature-node-runtime.js')).stopFeatureNodes(opts.reason))
