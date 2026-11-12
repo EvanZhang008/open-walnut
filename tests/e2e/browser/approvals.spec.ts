@@ -724,7 +724,7 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
     await note.getByTestId('approval-stopped-settings').click()
     const toggle = page.locator('#settings-approvals-ask-me')
     await expect(toggle).toHaveAttribute('aria-checked', 'false', { timeout: 15_000 })
-    await expect(page.getByTestId('settings-approvals-unasked')).toContainText(quietWhat)
+    await expect(page.getByTestId('settings-approvals-unasked')).toContainText(quietWhat, { timeout: 20_000 })
     if (process.env.APR_SHOTS) await page.getByTestId('settings-approvals-ask-me-row').screenshot({ path: `${process.env.APR_SHOTS}/settings-switch-off.png` })
 
     // On again from Settings: the next ask waits for the person.

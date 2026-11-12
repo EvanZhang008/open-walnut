@@ -21,6 +21,8 @@ type Save = (patch: (c: Config) => Partial<Config>, opts: { rowKey: string }) =>
 
 /** How many show before "Show all". */
 const FIRST = 5;
+/** How often the list reads again while the page shows. */
+const REREAD_MS = 10_000;
 
 export function ApprovalsAskRow({ config, save }: { config: Config; save: Save }) {
   const rowKey = 'general.approvals-ask-me';
@@ -66,9 +68,12 @@ function UnaskedList() {
       if (live) setItems([]);
     });
     void read();
+    // Nothing announces a step that went ahead (it asks no one), so the list reads again while in
+    // sight: on focus and every REREAD_MS while the page shows.
     const onFocus = () => { void read(); };
     window.addEventListener('focus', onFocus);
-    return () => { live = false; window.removeEventListener('focus', onFocus); };
+    const timer = setInterval(() => { if (document.visibilityState === 'visible') void read(); }, REREAD_MS);
+    return () => { live = false; window.removeEventListener('focus', onFocus); clearInterval(timer); };
   }, []);
   if (!items) return null;
   const shown = all ? items : items.slice(0, FIRST);
