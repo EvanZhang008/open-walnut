@@ -11,7 +11,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  askHereThenTree, centreInHistory, DENSE_SESSION, openThreadsSession, pinColumnWidth, resetThreadsFixture, selectPassage, modePill, openQuestionList, test,
+  askHereThenTree, centreInHistory, DENSE_SESSION, openThreadsSession, pinColumnWidth, resetThreadsFixture, selectPassage, modePill, openQuestionList, test, currentStack,
 } from './threads-helpers'
 
 const TASK = 'pw-task-threads-dense'
@@ -54,7 +54,7 @@ test.describe('question stack visual fixes', () => {
   test('a sliver tip never outlives the page it was shown for', async ({ page }) => {
     const panel = await openDense(page)
     await goTo(panel, 'point 21 change', /^Point 21:/)
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '3')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '3')
     const bars = panel.locator('.thread-sliver-bar')
     await expect(bars).toHaveCount(3)
     const last = (await bars.nth(2).boundingBox())!
@@ -64,7 +64,7 @@ test.describe('question stack visual fixes', () => {
     await expect(tip).toHaveText(/^Back to Point 11:/)
     // Pop with the pointer resting where it is: no pointermove follows.
     await page.keyboard.press('Escape')
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '2')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '2')
     await expect(page.locator('.thread-hover-tip', { hasText: /^Back to Point 11:/ })).toHaveCount(0)
   })
 
@@ -96,7 +96,7 @@ test.describe('question stack visual fixes', () => {
     await expect(panel.locator('.session-history')).toContainText('processed your message', { timeout: 90_000 })
 
     await header.locator('.thread-stack-done').click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '0')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '0')
     const toast = panel.locator('.thread-toast')
     await expect(toast).toBeVisible()
     await expect(toast).toContainText('Archived:')

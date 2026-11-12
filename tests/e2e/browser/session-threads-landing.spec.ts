@@ -13,7 +13,7 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, FAILED_SESSION, REWRITTEN_SESSION, openThreadsSession, passageRects, resetThreadsFixture, sessionPanel, openQuestionList, VIEW_MODE_DEFAULT_KEY, test,
+  centreInHistory, DENSE_SESSION, FAILED_SESSION, REWRITTEN_SESSION, openThreadsSession, passageRects, resetThreadsFixture, sessionPanel, openQuestionList, VIEW_MODE_DEFAULT_KEY, test, currentStack, expectStackDepth,
 } from './threads-helpers'
 import { seedColumns, setPanelMode } from './draft-helpers'
 import { buildDenseSession, densePassage, seededThreadState } from './threads-fixture'
@@ -34,14 +34,6 @@ async function shot(page: Page, name: string): Promise<void> {
 async function boot(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-}
-
-/** The current page's stack. A wide column in Tree Mode shows the page before it
- *  too (a second .thread-stack, left of it), so every read names the right page. */
-const currentStack = (panel: Locator): Locator => panel.locator('.session-panel-body > .thread-stack')
-
-async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
 }
 
 /** Wheel the timeline until `target` sits near 40% of the box. */
@@ -114,7 +106,7 @@ async function clickMark(page: Page, panel: Locator, phrase: string, depth: numb
   await expect(hover).toHaveCount(1)
   const at = r.top
   await page.mouse.click(r.left + 12, r.top + r.height / 2)
-  await expectDepth(panel, depth)
+  await expectStackDepth(panel, depth)
   return at
 }
 
@@ -162,7 +154,7 @@ test.describe('Question stack landing', () => {
     await shot(page, 'c4-depth-4')
     for (let i = chain.length - 1; i >= 0; i--) {
       const tops = await sampleScrollAfterEsc(page, panel)
-      await expectDepth(panel, i)
+      await expectStackDepth(panel, i)
       // No smooth scroll: from the second frame after the pop, scrollTop is still.
       const settled = tops.slice(2)
       expect(new Set(settled).size, `scrollTop per frame: ${tops.join(',')}`).toBe(1)
@@ -186,9 +178,9 @@ test.describe('Question stack landing', () => {
     await expect(row).toBeVisible()
     await centre(page, panel, row)
     await row.click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await expect(panel.locator('.thread-toast')).toContainText(PASSAGE_GONE)
     const answer = panel.locator('.session-history [data-message-id="0199f401-2222-4aaa-8bbb-000000000001"]')
     await expect(answer).toHaveClass(/user-messages-highlight/)
@@ -228,7 +220,7 @@ test.describe('Question stack landing', () => {
       document.addEventListener('click', () => requestAnimationFrame(grab), { capture: true })
     })
     await row.click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect.poll(() => page.evaluate(() => (window as unknown as { __anims: unknown[] }).__anims.length)).toBeGreaterThan(0)
     const anims = await page.evaluate(() => (window as unknown as { __anims: Array<{ duration: number; transform: boolean }> }).__anims)
     for (const a of anims) {
@@ -263,7 +255,7 @@ test.describe('Question stack landing', () => {
     await page.reload()
     await page.waitForLoadState('networkidle')
     panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK)
-    await expectDepth(panel, 3)
+    await expectStackDepth(panel, 3)
     await expect(panel.locator('.thread-quote-head')).toContainText(densePassage('Q24').slice(0, 30))
     await expect.poll(() => panel.locator('.session-history').evaluate((el) => el.scrollTop)).toBeGreaterThan(before - 9)
     const after = await panel.locator('.session-history').evaluate((el) => el.scrollTop)
@@ -284,7 +276,7 @@ test.describe('Question stack landing', () => {
     await page.goto(url)
     await page.waitForLoadState('networkidle')
     panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await page.waitForTimeout(800)
     await expect(panel.locator('.thread-toast')).toHaveCount(0)
   })
@@ -298,12 +290,12 @@ test.describe('Question stack landing', () => {
     // Root to Q1 through the drawer (R0 is above the loaded window), then Q11.
     const drawer = await openQuestionList(page, panel)
     await drawer.locator('.thread-tree-row[data-kind="thread"]', { hasText: 'Buffer flush order' }).first().click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(drawer).toBeHidden()
     const q11 = panel.locator('.thread-asked-row', { hasText: /point 11/i })
     await centre(page, panel, q11)
     await q11.click()
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     // C64 (slice 1b): in a session with questions the map replaces the outline
     // rail and lists the pins under their own pages (this page's and the
     // others'), so no "<n> more" row is needed. A narrow column shows the
@@ -322,13 +314,13 @@ test.describe('Question stack landing', () => {
 
     // From root, a quote pin that lives on Q21's page (three levels down).
     await panel.locator('.thread-sliver-bar').first().click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await openQuestionList(page, panel)
     await drawer.locator('.thread-drawer-chip', { hasText: 'Pinned' }).click()
     const pinRow = drawer.locator('.thread-tree-row[data-kind="pin"]', { hasText: densePassage('Q26').slice(0, 24) })
     await expect(pinRow).toBeVisible()
     await pinRow.click()
-    await expectDepth(panel, 3)
+    await expectStackDepth(panel, 3)
     await expect.poll(() => flashText(page), { timeout: 15_000 }).toContain(densePassage('Q26').slice(0, 20))
     const top = await passageTop(panel, densePassage('Q26'))
     const height = (await panel.locator('.session-history').boundingBox())!.height
@@ -363,7 +355,7 @@ test.describe('Question stack landing', () => {
       await expect(row).toBeVisible({ timeout: 30_000 })
       await centre(page, p, row)
       await row.click()
-      await expectDepth(p, 1)
+      await expectStackDepth(p, 1)
     }
     const depths = () => Promise.all(panels.map((p) => currentStack(p).getAttribute('data-thread-depth')))
     const drawers = () => Promise.all(panels.map((p) => p.locator('.thread-drawer').isVisible()))
@@ -409,7 +401,7 @@ test.describe('Question stack landing', () => {
     const row = panels[0].locator('.thread-asked-row:not(.is-draft)').first()
     await centre(page, panels[0], row)
     await row.click()
-    await expectDepth(panels[0], 1)
+    await expectStackDepth(panels[0], 1)
     await panels[0].locator('.session-panel-body .thread-stack-header .thread-stack-more').click()
     await page.locator('.thread-menu [role="menuitem"]', { hasText: /Remove question/ }).click()
     const confirm = page.locator('.thread-confirm')

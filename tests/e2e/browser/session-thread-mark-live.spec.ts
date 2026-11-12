@@ -28,7 +28,7 @@ import { goToSessionFolder, isolateUiPrefs } from './todo-panel-helpers'
 import fs from 'node:fs/promises'
 import {
   centreInHistory, expectDragInViewport, humanPress, openThreadsSession, passageRects, readRecord, resetThreadsFixture,
-  scrollTextIntoView, selectPassage, sessionPanel, test,
+  scrollTextIntoView, selectPassage, sessionPanel, test, currentStack,
 } from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION, TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TEXT } from './threads-fixture'
 
@@ -222,7 +222,7 @@ test.describe('The scanning line under a passage being answered', () => {
     const panel = await openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'stack' })
     // The panel's own page (the right one while two pages sit side by side).
     const history = panel.locator('.session-panel-body .session-history')
-    const depth = (n: number) => expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(n), { timeout: 15_000 })
+    const depth = (n: number) => expect(currentStack(panel)).toHaveAttribute('data-thread-depth', String(n), { timeout: 15_000 })
     await centreInHistory(page, panel, TAGGED_PASSAGE)
     const q1 = await passageRects(panel, TAGGED_PASSAGE)
     await page.mouse.click(q1[0].left + 8, q1[0].top + q1[0].height / 2)

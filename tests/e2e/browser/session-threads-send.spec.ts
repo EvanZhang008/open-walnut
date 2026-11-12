@@ -21,7 +21,7 @@
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, FAILED_SESSION, mainComposer, mainPage, openThreadsSession, pinColumnWidth, passageRects, readRecord, resetThreadsFixture, selectPassage, modePill, openQuestionList, switchView, test,
+  centreInHistory, DENSE_SESSION, FAILED_SESSION, mainComposer, mainPage, openThreadsSession, pinColumnWidth, passageRects, readRecord, resetThreadsFixture, selectPassage, modePill, openQuestionList, switchView, test, expectStackDepth,
 } from './threads-helpers'
 import { FAILED_ERROR_TEXT, FAILED_PASSAGES, PARKED_FOLLOW_UP, densePassage } from './threads-fixture'
 import { discoverBrowserFixture } from './codex-test-audit'
@@ -45,10 +45,6 @@ async function shot(page: Page, name: string): Promise<void> {
 async function boot(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-}
-
-async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(mainPage(panel).locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
 }
 
 async function resetSend(request: APIRequestContext): Promise<void> {
@@ -84,7 +80,7 @@ async function pressAsk(page: Page, panel: Locator): Promise<Locator> {
  *  switch leaves focus on the pill, so the reader clicks into the composer. */
 async function backToPage(panel: Locator): Promise<void> {
   await switchView(panel, 'stack')
-  await expectDepth(panel, 1)
+  await expectStackDepth(panel, 1)
   await composer(panel).click()
 }
 
@@ -100,7 +96,7 @@ async function askAbout(page: Page, panel: Locator, phrase: string, first?: stri
   await selectPassage(page, mainPage(panel), phrase)
   if (first === undefined) {
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(mainPage(panel).locator('.session-history[data-view-mode="stack"]')).toHaveCount(1)
     await expect(panel.locator('.thread-card')).toHaveCount(0)
     await composer(panel).click()
@@ -215,7 +211,7 @@ test.describe('Question stack: asking and sending', () => {
     await send(panel, 'slow:5000 and phase three')
     await expect(history).toContainText('and phase three')
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     // Root never shows the question's rows or its answers.
     await expect(history).not.toContainText('what does phase two cost')
     await expect(history).not.toContainText('processed your message')
@@ -235,10 +231,10 @@ test.describe('Question stack: asking and sending', () => {
     await shot(page, 'c82-unread-at-root')
     // Back on the page, the answer is complete; leaving clears the dot.
     await row.click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(history).toContainText('processed your message: and phase three')
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await expect(askedRows(panel).first().locator('.thread-status-dot[data-status="unread"]')).toHaveCount(0)
     await expectMapUnread(panel, false)
     // No reload here: the mock CLI's resumed turns never reach this fixture's saved
@@ -253,7 +249,7 @@ test.describe('Question stack: asking and sending', () => {
     await askAbout(page, panel, PHRASE, 'is the rewrite atomic')
     await expect(mainPage(panel).locator('.session-history')).toContainText('processed your message', { timeout: 60_000 })
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     const anchors = (await readRecord(request, SEND_SESSION)).threadAnchors ?? []
     expect(anchors).toHaveLength(1)
 
@@ -269,7 +265,7 @@ test.describe('Question stack: asking and sending', () => {
     await send(panel, 'and if it fails halfway')
     await expect.poll(async () => ((await readRecord(request, SEND_SESSION)).threadAnchors ?? []).length).toBe(2)
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await expect(askedRows(panel)).toHaveCount(1)
     await expect(modePill(panel)).toBeVisible()
 
@@ -279,7 +275,7 @@ test.describe('Question stack: asking and sending', () => {
     await expect(mainPage(panel).locator('.thread-quote-head')).toContainText('rewrites the index')
     await expect(composer(panel)).toHaveAttribute('placeholder', 'Ask about this passage…')
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     expect(((await readRecord(request, SEND_SESSION)).threadAnchors ?? []).length).toBe(2)
   })
 
@@ -290,7 +286,7 @@ test.describe('Question stack: asking and sending', () => {
     await askAbout(page, panel, PHRASE, 'orientation question one')
     await expect(history).toContainText('processed your message', { timeout: 60_000 })
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     // Root after a dive: the main-conversation line leads.
     await send(panel, 'root after the dive')
     await expect(history).toContainText('(Back to the main conversation)')
@@ -298,7 +294,7 @@ test.describe('Question stack: asking and sending', () => {
     // At once back on the question: the newest turn is root's (only the
     // optimistic row says so yet), so the follow-up names its question.
     await askedRows(panel).first().click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await send(panel, 'follow up check one')
     await expect(history).toContainText('(Back to the earlier question about “', { timeout: 60_000 })
     await expect(history).toContainText('follow up check one')
@@ -307,7 +303,7 @@ test.describe('Question stack: asking and sending', () => {
     await send(panel, 'follow up check two')
     await expect(history).toContainText('processed your message: follow up check two', { timeout: 60_000 })
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
   })
 
   test('every page keeps its own draft; an unsent page with text leaves a draft row that leads back', async ({ page, request }) => {
@@ -327,13 +323,13 @@ test.describe('Question stack: asking and sending', () => {
     await selectPassage(page, panel, phrase)
     // Tree Mode: Ask here pushes the new page straight away, no card.
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(panel.locator('.thread-card')).toHaveCount(0)
     // C60: the pending page starts empty; the root draft is untouched.
     await expect(composer(panel)).toHaveValue('')
     await composer(panel).fill('a pending question draft')
     await panel.locator('.thread-stack-back').click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await expect(composer(panel)).toHaveValue('half a root thought')
     const draftRow = panel.locator('.thread-asked-row.is-draft')
     await expect(draftRow).toHaveText(/New question \(draft\)/)
@@ -353,14 +349,14 @@ test.describe('Question stack: asking and sending', () => {
     await expect(row).toBeVisible()
     await centreText(page, panel, phrase)
     await row.click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(mainPage(panel).locator('.thread-quote-head')).toContainText(phrase)
     await expect(composer(panel)).toHaveValue('a pending question draft')
     // Cleared, the page leaves nothing behind.
     await composer(panel).fill('')
     await page.waitForTimeout(400)
     await panel.locator('.thread-stack-back').click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await expect(panel.locator('.thread-asked-row.is-draft')).toHaveCount(0)
     await composer(panel).fill('')
   })
@@ -381,7 +377,7 @@ test.describe('Question stack: asking and sending', () => {
     await expect(history).not.toContainText(PARKED_FOLLOW_UP)
     await expect(history.locator('.session-msg-retry-btn')).toHaveCount(0)
     await rows.nth(1).click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(history).toContainText(PARKED_FOLLOW_UP)
     await expect(history.locator('.session-msg-failed .session-msg-retry-btn')).toHaveCount(1)
     // N41: one Retry for the one undelivered message (the row's), and the strip
@@ -393,10 +389,10 @@ test.describe('Question stack: asking and sending', () => {
     await expect(panel.locator('.session-msg-failed-badge')).not.toContainText('\u2014')
     await shot(page, 'n3-parked-on-its-page')
     await panel.locator('.thread-stack-back').click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     // N4: the errored question's own page carries Retry and the failed-turn hint.
     await rows.nth(0).click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(history).toContainText(FAILED_ERROR_TEXT)
     const strip = panel.locator('[data-thread-strip="failed"]')
     await expect(strip).toContainText('No answer')
@@ -404,7 +400,7 @@ test.describe('Question stack: asking and sending', () => {
     await expect(strip.locator('.thread-strip-btn', { hasText: 'Retry' })).toBeVisible()
     await shot(page, 'n4-in-page-retry')
     await panel.locator('.thread-stack-back').click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
   })
 
   test('a turn that ended in an error reads "No answer · Retry"; Retry asks again on the same question', async ({ page, request }) => {
@@ -427,7 +423,7 @@ test.describe('Question stack: asking and sending', () => {
     await expect.poll(async () => ((await readRecord(request, FAILED_SESSION)).threadAnchors ?? []).length).toBe(anchorsBefore + 1)
     await expect(rows.first()).not.toHaveAttribute('data-status', 'failed', { timeout: 60_000 })
     await rows.first().click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(mainPage(panel).locator('.thread-quote-head')).toContainText(FAILED_PASSAGES[0])
     await expect(mainPage(panel).locator('.session-history')).toContainText('processed your message', { timeout: 60_000 })
     await shot(page, 'c68-retried')
@@ -470,7 +466,7 @@ test.describe('Question stack: asking and sending', () => {
         await askAbout(page, panel, phrases[i])
         await send(panel, asks[i])
       }
-      if (i < 2) { await page.keyboard.press('Escape'); await expectDepth(panel, 0) }
+      if (i < 2) { await page.keyboard.press('Escape'); await expectStackDepth(panel, 0) }
     }
     test.info().annotations.push({ type: 'three asks took', description: `${Date.now() - t0}ms` })
     // A question row is never held back from a running turn (2026-10-23): each line
@@ -497,7 +493,7 @@ test.describe('Question stack: asking and sending', () => {
     expect([...heads].sort()).toEqual([...uuids].sort())
     // Back on root: the root answer lands here.
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await expect(askedRows(panel)).toHaveCount(3)
     return { panel, history }
   }

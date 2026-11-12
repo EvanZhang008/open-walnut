@@ -25,6 +25,19 @@ export function mainPage(panel: Locator): Locator {
   return panel.locator('.session-panel-body')
 }
 
+/** The question page the composer and Esc work on, in a panel or in its own page
+ *  (`mainPage`). Tree Mode shows the page before it too (two `.thread-stack` pages side by
+ *  side from 600px, the previous one in `.tree-split-left`), so a bare
+ *  `panel.locator('.thread-stack')` matches both there and dies of strict mode. */
+export function currentStack(scope: Locator): Locator {
+  return scope.locator('.thread-stack:not(.tree-split-left .thread-stack)')
+}
+
+/** The current page is `depth` levels down (0 is the main conversation). */
+export async function expectStackDepth(scope: Locator, depth: number, timeout = 15_000): Promise<void> {
+  await expect(currentStack(scope)).toHaveAttribute('data-thread-depth', String(depth), { timeout })
+}
+
 /** The panel's own composer (never the split's left half). */
 export function mainComposer(panel: Locator): Locator {
   return panel.locator('.session-panel-input:not(.tree-split-input) .chat-input-textarea')
@@ -460,7 +473,7 @@ export async function unfoldQuestions(panel: Locator): Promise<void> {
 export async function askHereThenTree(page: Page, panel: Locator, pill: Locator = page.locator('[data-testid="quote-pin-pill"]')): Promise<void> {
   await pill.locator('[data-testid="quote-ask-btn"]').click()
   await expect(mainPage(panel).locator('.session-history[data-view-mode="stack"]')).toHaveCount(1)
-  await expect(mainPage(panel).locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
+  await expectStackDepth(panel, 1)
 }
 
 /** Ask here inline (the card beside the passage, in Conversation Mode) from any

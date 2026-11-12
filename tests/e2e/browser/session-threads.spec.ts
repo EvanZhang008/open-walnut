@@ -17,7 +17,7 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, AI_SESSION, DENSE_SESSION, NO_THREAD_SESSION, findBannedGlyphs, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, openQuestionList, test,
+  centreInHistory, AI_SESSION, DENSE_SESSION, NO_THREAD_SESSION, findBannedGlyphs, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, openQuestionList, test, currentStack, expectStackDepth,
 } from './threads-helpers'
 import { AI_PASSAGE } from './threads-fixture'
 
@@ -49,14 +49,6 @@ async function boot(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle')
 }
 
-function frame(panel: Locator): Locator {
-  return panel.locator('.thread-stack')
-}
-
-async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(frame(panel)).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
-}
-
 /** Scroll the timeline with REAL wheel steps until `target` sits mid-box (a
  *  programmatic scrollTop write can be snapped back by bottom follow). */
 async function centre(page: Page, panel: Locator, target: Locator): Promise<void> {
@@ -69,7 +61,7 @@ async function openAsked(page: Page, panel: Locator, text: string | RegExp, dept
   await expect(row).toBeVisible()
   await centre(page, panel, row)
   await row.click()
-  await expectDepth(panel, depth)
+  await expectStackDepth(panel, depth)
 }
 
 test.describe('Question stack', () => {
@@ -90,7 +82,7 @@ test.describe('Question stack', () => {
     await expect(panel.locator('.thread-sliver')).toHaveCount(0)
     await expect(panel.locator('.thread-drawer-edge, .thread-drawer')).toHaveCount(0)
     await expect(panel.locator('.thread-stack-more')).toHaveCount(0)
-    await expect(frame(panel)).toHaveCount(0)
+    await expect(currentStack(panel)).toHaveCount(0)
     const off = panel.locator('.thread-stack-off')
     await expect(off).toHaveCount(1)
     expect(await off.evaluate((el) => getComputedStyle(el).display)).toBe('contents')
@@ -191,7 +183,7 @@ test.describe('Question stack', () => {
     await page.keyboard.press('Escape')
     await expect(card).toHaveCount(0)
     await expect(panel.locator('[data-testid="composer-thread-target"]')).toHaveCount(0)
-    await expect(frame(panel)).toHaveCount(0)
+    await expect(currentStack(panel)).toHaveCount(0)
     await expect(panel.locator('.thread-quote-head')).toHaveCount(0)
     const record = await readRecord(request, AI_SESSION)
     expect(record.threadAnchors ?? []).toHaveLength(0)
@@ -249,7 +241,7 @@ test.describe('Question stack', () => {
       requestAnimationFrame(tick)
     })
     await bars.first().click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await expect(bars).toHaveCount(0)
     await page.waitForTimeout(1500)
     const flashes = await page.evaluate(() => (window as unknown as { __flashes: string[] }).__flashes)
@@ -288,7 +280,7 @@ test.describe('Question stack', () => {
     await page.mouse.move(box.x + box.width / 2 + 10, box.y + 200, { steps: 4 })
     await page.mouse.up()
     await page.waitForTimeout(300)
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     // Hover: the hit zone is 16px wide and the tooltip names the level.
     const zone = await bars.last().evaluate((el) => {
       const s = getComputedStyle(el, '::before')
@@ -304,7 +296,7 @@ test.describe('Question stack', () => {
     await shot(page, 'c79-sliver-hover')
     // A still click pops exactly one level.
     await page.mouse.click(box.x + box.width / 2, box.y + 246)
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
   })
 
   test('no reply arrows, dashes, hamburger or check glyphs, and never the old word, in the question UI', async ({ page }) => {
@@ -355,19 +347,19 @@ test.describe('Question stack', () => {
     await expect(page.locator('.thread-menu')).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(page.locator('.thread-menu')).toHaveCount(0)
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     // The drawer open: Esc closes only the drawer.
     const drawer = await openQuestionList(page, panel)
     await page.keyboard.press('Escape')
     await expect(drawer).toBeHidden()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     // Text in the composer: Esc keeps the page.
     const textarea = panel.locator('.chat-input-textarea').first()
     await textarea.click()
     await textarea.fill('half a follow up')
     await page.keyboard.press('Escape')
     await page.waitForTimeout(300)
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(textarea).toHaveValue('half a follow up')
     // IME composition: an Esc that ends composing is not a pop.
     await textarea.fill('')
@@ -375,10 +367,10 @@ test.describe('Question stack', () => {
       el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', isComposing: true, bubbles: true, cancelable: true }))
     })
     await page.waitForTimeout(300)
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     // Empty composer, nothing open: Esc pops.
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
   })
 
   test('the composer overlays and fullscreen keep their Esc; the page pops only between them', async ({ page }) => {
@@ -394,7 +386,7 @@ test.describe('Question stack', () => {
     await expect(palette).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(palette).toHaveCount(0)
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     await textarea.fill('')
     // A question page's composer is the light one (2026-11-05, the user: only
     // the main conversation's has the model): no picker here to take an Esc.
@@ -406,10 +398,10 @@ test.describe('Question stack', () => {
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
     await textarea.click()
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await page.waitForTimeout(300)
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
     await shot(page, 'c50-fullscreen-root')

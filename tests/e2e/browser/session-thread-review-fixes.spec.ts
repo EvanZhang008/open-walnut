@@ -15,7 +15,7 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, openQuestionList, test,
+  centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, openQuestionList, test, expectStackDepth,
 } from './threads-helpers'
 import { densePassage } from './threads-fixture'
 import { setPanelMode } from './draft-helpers'
@@ -36,10 +36,6 @@ async function boot(page: Page): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-}
-
-async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
 }
 
 /** Wheel the timeline until `target` sits near 40% of the box. */
@@ -95,7 +91,7 @@ test.describe('Question stack review fixes', () => {
   test('R1: a drawer pin jump lands once; Esc back from a question lands on the passage it left, not the pin', async ({ page }) => {
     await boot(page)
     const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     // A root pin from the drawer's Pinned filter: the quote pinned on R2 (Q5's passage).
     const drawer = await openQuestionList(page, panel)
     await drawer.locator('.thread-drawer-chip', { hasText: 'Pinned' }).click()
@@ -103,7 +99,7 @@ test.describe('Question stack review fixes', () => {
     await expect(pinRow).toBeVisible()
     await pinRow.click()
     await expect(drawer).toBeHidden()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await expect.poll(() => flashText(page), { timeout: 15_000 }).toContain(densePassage('Q5').slice(0, 20))
     await page.waitForTimeout(1600)
 
@@ -114,10 +110,10 @@ test.describe('Question stack review fixes', () => {
     // Tree Mode's path bar now above the timeline.
     const askedAt = r.top
     await page.mouse.click(r.left + 12, r.top + r.height / 2)
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await page.waitForTimeout(500)
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await page.waitForTimeout(1200)
     const landed = (await passageRects(panel, phrase))[0].top
     await shot(page, 'r1-esc-back-after-pin-jump')
@@ -187,7 +183,7 @@ test.describe('Question stack review fixes', () => {
   test('R4: moving the pointer across a question mark never re-renders the timeline; the tip follows', async ({ page }) => {
     await boot(page)
     const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     const phrase = densePassage('Q9')
     const r = await hoverMark(page, panel, phrase)
     const tip = page.locator('.thread-hover-tip')
@@ -264,7 +260,7 @@ test.describe('Question stack review fixes', () => {
     }
     const plain = await openThreadsSession(page, NO_THREAD_SESSION, NO_THREAD_TASK, NO_THREAD_READY)
     const withQuestions = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
-    await expectDepth(withQuestions, 0)
+    await expectStackDepth(withQuestions, 0)
     await expect(withQuestions.locator('.thread-stack')).toHaveAttribute('data-thread-bare', '')
     const a = await geometry(plain)
     const b = await geometry(withQuestions)

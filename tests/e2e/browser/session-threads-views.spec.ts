@@ -19,7 +19,7 @@ import { expect, type APIRequestContext, type Locator, type Page } from '@playwr
 import fs from 'node:fs/promises'
 import {
   centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, modePill, openQuestionList, switchView,
-  unfoldQuestions, test,
+  unfoldQuestions, test, expectStackDepth,
 } from './threads-helpers'
 import { buildDenseSession, densePassage } from './threads-fixture'
 
@@ -59,10 +59,6 @@ async function boot(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle')
 }
 
-async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
-}
-
 async function seedWriteSession(request: APIRequestContext): Promise<void> {
   const meta = META.map((m) => ({ ...m, ...Object.fromEntries(RESET_META.map((f) => [f, null])) }))
   const res = await request.patch(`/api/sessions/${WRITE_SESSION}`, { data: { thread_anchors: ANCHORS, thread_meta: meta, pinned_messages: [] } })
@@ -83,7 +79,7 @@ async function openAsked(page: Page, panel: Locator, text: string | RegExp, dept
   await expect(row).toBeVisible()
   await centre(page, panel, row)
   await row.click()
-  await expectDepth(panel, depth)
+  await expectStackDepth(panel, depth)
 }
 
 async function pageMenu(page: Page, panel: Locator, item: string | RegExp): Promise<void> {
@@ -153,7 +149,7 @@ test.describe('Question stack views', () => {
     await expect(panel.locator('.session-history')).toHaveAttribute('data-view-mode', 'linear')
     // Back to Tree Mode through the pill: the page and the scroll he left.
     await switchView(panel, 'stack')
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     await expect(panel.locator('.thread-quote-head')).toContainText(densePassage('Q17').slice(0, 24))
     await expect.poll(() => panel.locator('.session-history').evaluate((el) => el.scrollTop)).toBeGreaterThan(before - 9)
     const after = await panel.locator('.session-history').evaluate((el) => el.scrollTop)
@@ -268,23 +264,23 @@ test.describe('Question stack views', () => {
     await shot(page, 'c36-mark-hover')
     // (b) a click with nothing selected opens it.
     await page.mouse.click(rect.left + 10, rect.top + rect.height / 2)
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(panel.locator('.thread-quote-head')).toContainText(q6.slice(0, 20))
     // C26: after a full re-render of the rows the marks still work.
     await pageMenu(page, panel, 'Conversation Mode')
     await switchView(panel, 'stack')
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await page.waitForTimeout(500)
     const again = (await passageRects(panel, q6))[0]
     await page.mouse.move(again.left + 10, again.top + again.height / 2, { steps: 3 })
     await page.mouse.click(again.left + 10, again.top + again.height / 2)
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     // (e) on Q1's page one passage is both pinned and asked: both paint, a click opens the question.
     await openQuestionList(page, panel)
     await panel.locator('.thread-drawer .thread-tree-row[data-kind="thread"]', { hasText: 'Buffer flush order' }).first().click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     const q11 = densePassage('Q11')
     await centre(page, panel, panel.locator('.session-msg-content', { hasText: q11 }).first())
     await expect.poll(async () => (await highlightsOver(page, q11)).join(',')).toMatch(/thread-mark-(?:[a-z]+-)?neutral/)
@@ -293,7 +289,7 @@ test.describe('Question stack views', () => {
     const r11 = (await passageRects(panel, q11))[0]
     await page.mouse.move(r11.left + 10, r11.top + r11.height / 2, { steps: 3 })
     await page.mouse.click(r11.left + 10, r11.top + r11.height / 2)
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     await shot(page, 'c36-pin-and-mark-opened')
   })
 
@@ -322,15 +318,15 @@ test.describe('Question stack views', () => {
     await second.nth(0).focus()
     await expect(second.nth(0)).toBeFocused()
     await page.keyboard.press('Enter')
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(panel.locator('.thread-stack-title')).toHaveText('Version skip rule')
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     const row = panel.locator('.thread-asked-row', { hasText: 'Batching writes' })
     await centre(page, panel, row)
     await row.focus()
     await page.keyboard.press(' ')
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(panel.locator('.thread-stack-title')).toHaveText('Batching writes')
   })
 
@@ -347,7 +343,7 @@ test.describe('Question stack views', () => {
     await openAsked(page, panel, 'Deeper about reply twenty one', 2)
     // C11: Done on the leaf: resolved at once, one fewer open, back to the passage.
     await panel.locator('.thread-stack-done').first().click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(count).toContainText('2 open')
     const b = panel.locator('.thread-asked-row', { hasText: 'Deeper about reply twenty one' })
     await expect(b).toHaveClass(/is-resolved/)
@@ -361,27 +357,27 @@ test.describe('Question stack views', () => {
     await page.reload()
     await page.waitForLoadState('networkidle')
     panel = await openThreadsSession(page, WRITE_SESSION, WRITE_TASK)
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(panel.locator('.thread-asked-row', { hasText: 'Deeper about reply twenty one' })).toHaveClass(/is-resolved/)
 
     // C77: Done on A, leave for C, then Undo: A reopens, the page stays C.
     await panel.locator('.thread-stack-done').first().click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     const toast = panel.locator('.thread-toast')
     await expect(toast).toBeVisible()
     await openAsked(page, panel, 'Side note on reply nineteen', 1)
     await toast.locator('.thread-toast-action', { hasText: 'Undo' }).click()
     await expect.poll(async () => (await metaOf(request, askUuid(21)))?.status).toBe('open')
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(panel.locator('.thread-stack-title')).toHaveText('Side note on reply nineteen')
     // Undo without leaving: the page comes back.
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await openAsked(page, panel, 'Question about reply twenty', 1)
     await panel.locator('.thread-stack-done').first().click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await panel.locator('.thread-toast .thread-toast-action', { hasText: 'Undo' }).click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(panel.locator('.thread-stack-title')).toHaveText('Question about reply twenty')
     await expect.poll(async () => (await metaOf(request, askUuid(21)))?.status).toBe('open')
   })
@@ -394,13 +390,13 @@ test.describe('Question stack views', () => {
       ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"boom"}' })
       : route.continue()))
     await panel.locator('.thread-stack-done').first().click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     // C12: the failure says so and the row goes back to open.
     await expect(panel.locator('.thread-toast')).toContainText("Couldn't archive. Try again.")
     const row = panel.locator('.thread-asked-row', { hasText: 'Side note on reply nineteen' })
     await expect(row).not.toHaveClass(/is-resolved/)
     await page.waitForTimeout(1200)
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await page.unroute(`**/api/sessions/${WRITE_SESSION}`)
     expect((await metaOf(request, askUuid(24)))?.status).toBe('open')
   })
@@ -412,7 +408,7 @@ test.describe('Question stack views', () => {
     await pageMenu(page, panel, /Remove question/)
     const confirm = page.locator('.thread-confirm')
     if (await confirm.count() > 0) await confirm.locator('.thread-confirm-btn--danger').click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await expect(panel.locator('.thread-asked-row', { hasText: 'Question about reply twenty' })).toHaveCount(0)
     // C14: the anchors stay, the head entry is hidden.
     await expect.poll(async () => (await metaOf(request, askUuid(21)))?.hidden).toBe(true)
@@ -481,7 +477,7 @@ test.describe('Question stack views', () => {
     const wrote = page.waitForResponse((r) => r.request().method() === 'PATCH' && recordUrl.test(r.url()))
     await panel.locator('.thread-stack-done').first().click()
     expect((await wrote).ok()).toBe(true)
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     const row = panel.locator('.thread-asked-row', { hasText: 'Side note on reply nineteen' })
     await expect(row).toHaveClass(/is-resolved/)
     release()

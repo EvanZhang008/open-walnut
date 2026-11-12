@@ -5,7 +5,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, DENSE_SESSION, mainComposer, mainPage, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, test } from './threads-helpers'
+import { centreInHistory, DENSE_SESSION, mainComposer, mainPage, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, test, expectStackDepth } from './threads-helpers'
 import { densePassage } from './threads-fixture'
 
 const DENSE_TASK = 'pw-task-threads-dense'
@@ -17,16 +17,12 @@ async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: `${dir}/${name}.png` })
 }
 
-async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
-}
-
 async function openAsked(page: Page, panel: Locator, text: string | RegExp, depth: number): Promise<void> {
   const row = panel.locator('.thread-asked-row', { hasText: text }).first()
   await expect(row).toBeVisible()
   await centreInHistory(page, panel, row)
   await row.click()
-  await expectDepth(panel, depth)
+  await expectStackDepth(panel, depth)
 }
 
 /** Where the passage sits, on screen and inside the timeline box, from ONE read. */
@@ -90,7 +86,7 @@ test.describe('Question stack landing after a send', () => {
       // on (depth 2 -> 3), never back to the main conversation, and the panel's
       // composer is the new page's box.
       await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-      await expectDepth(view, 3)
+      await expectStackDepth(view, 3)
       // The column is wide enough for pages side by side: the page it was
       // asked on is left of the new one.
       await expect(panel.locator('.tree-split-left').first()).toBeVisible()
@@ -105,7 +101,7 @@ test.describe('Question stack landing after a send', () => {
       await expect(view.locator('.session-history')).toContainText('processed your message', { timeout: 90_000 })
       await page.waitForTimeout(800)
       const tops = await sampleScrollAfterEsc(page, view)
-      await expectDepth(view, 2)
+      await expectStackDepth(view, 2)
       const settled = tops.slice(2)
       expect(new Set(settled).size, `scrollTop per frame: ${tops.join(',')}`).toBe(1)
       const landed = await passagePlace(view, phrase)

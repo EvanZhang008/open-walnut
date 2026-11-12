@@ -31,6 +31,33 @@ describe('pin undo shortcuts', () => {
   })
 })
 
+describe('Tree Mode pages', () => {
+  // From 600px Tree Mode shows the page before the current one beside it, so a panel holds
+  // two .thread-stack pages and a bare panel.locator('.thread-stack') dies of strict mode
+  // (2026-11-12: composer-stop-keeps-process.spec.ts). threads-helpers.ts names the current
+  // page: currentStack(panel), expectStackDepth(panel, depth). "None at all" stays bare.
+  const bare = /(?<![\w.)])panel\.locator\(\s*['"`]\.thread-stack['"`]\s*\)(?!\)\.toHaveCount\(0\))/
+
+  it('no spec reads a bare .thread-stack in a panel', () => {
+    const offenders: string[] = []
+    for (const { file, text } of sources) {
+      text.split('\n').forEach((line, i) => {
+        const t = line.trim()
+        if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/**')) return
+        if (bare.test(line)) offenders.push(`${file}:${i + 1}: ${t}`)
+      })
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(bare.test("await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')")).toBe(true)
+    expect(bare.test("await expect(panel.locator('.thread-stack')).toHaveCount(0)")).toBe(false)
+    expect(bare.test("await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '1')")).toBe(false)
+    expect(bare.test("await expect(mainPage(panel).locator('.thread-stack')).toHaveCount(1)")).toBe(false)
+  })
+})
+
 describe('calendar time grid positions', () => {
   // The grid's hour height is `--cal-hour-px` (fitted to the window, zoomable), and it
   // starts at `data-start-minute`. A spec that moved the mouse or the scroll by a fixed

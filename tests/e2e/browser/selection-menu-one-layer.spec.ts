@@ -23,7 +23,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, test } from './threads-helpers'
+import { centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, test, currentStack } from './threads-helpers'
 import { MAP_SESSION, MAP_TITLES, seededThreadState } from './threads-fixture'
 import { cssColorToRgba } from './css-color'
 
@@ -361,7 +361,7 @@ test.describe('Selection menu: a bar and normal menus over the conversation, in 
     await checkAllStates(page, panel, await underTable(panel), 'tree-under-table')
     await checkAllStates(page, panel, IN_TABLE, 'tree-in-table')
     await mapRow(panel, MAP_TITLES.Q1a).click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '2', { timeout: 15_000 })
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '2', { timeout: 15_000 })
     await expect(panel.locator('.thread-quote-head')).toBeVisible()
     await checkAllStates(page, panel, await lastAnswerWords(panel), 'tree-depth-2')
   })
@@ -369,7 +369,7 @@ test.describe('Selection menu: a bar and normal menus over the conversation, in 
   test('Tree Mode split: the page asked on, in the left half', async ({ page }) => {
     const panel = await openAt(page, 1000, 'stack')
     await mapRow(panel, MAP_TITLES.Q1).click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
     await page.getByRole('button', { name: 'Split', exact: true }).click()
     // The left half (the right page's sibling question is a .tree-split-left too).
     const left = panel.locator('.tree-split-left[data-tree-half="L"]')

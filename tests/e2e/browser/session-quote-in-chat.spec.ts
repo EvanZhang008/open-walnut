@@ -10,7 +10,7 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  AI_SESSION, centreInHistory, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, switchView, test,
+  AI_SESSION, centreInHistory, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, switchView, test, currentStack,
 } from './threads-helpers'
 import { AI_PASSAGE, buildMapSession, MAP_SESSION, MAP_TITLES } from './threads-fixture'
 
@@ -124,7 +124,7 @@ test.describe('Selection pill: Ask here and Quote', () => {
   test('Tree Mode on a question page: Quote stays on the page, its quote waits with the draft', async ({ page }) => {
     const panel = await open(page, MAP_SESSION, MAP_TASK, MAP_READY)
     await mapRow(panel, MAP_TITLES.Q4).click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '1')
     const composer = composerOf(panel)
     await composer.click()
     await composer.fill('a follow-up for Q4')
@@ -132,14 +132,14 @@ test.describe('Selection pill: Ask here and Quote', () => {
     await centreInHistory(page, panel, phrase, { tolerance: 20 })
     await selectPassage(page, panel, phrase)
     await pill(page).getByRole('button', { name: 'Quote' }).click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '1')
     await expect(composer).toHaveValue('a follow-up for Q4')
     await expect(composer).toBeFocused()
     await expectQuoteRow(panel, phrase)
     await shot(page, 'tree-quote-stays')
     // A move away and back keeps the question's own words on its page.
     await mapRow(panel, MAP_TITLES.Q4).click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '1')
     await expect(composer).toHaveValue('a follow-up for Q4')
   })
 

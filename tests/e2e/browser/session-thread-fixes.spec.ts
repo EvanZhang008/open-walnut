@@ -10,7 +10,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, resetThreadsFixture, modePill, openQuestionList, test,
+  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, resetThreadsFixture, modePill, openQuestionList, test, currentStack,
 } from './threads-helpers'
 import { densePassage } from './threads-fixture'
 import { withCssColor } from './css-color'
@@ -90,7 +90,7 @@ test.describe('Slice 1 layout fixes', () => {
       const panel = await openDense(page, width)
       await goTo(panel, 'point 22 change', /^Point 22:/)
       await panel.locator('.thread-stack-header .thread-stack-done').click()
-      await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '2')
+      await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '2')
       const toast = page.locator('.thread-toast')
       await expect(toast).toContainText(/^Archived: /)
       const row = panel.locator('.thread-asked-row.is-resolved', { hasText: /Point 22/ }).first()
@@ -192,7 +192,7 @@ test.describe('Slice 1 layout fixes', () => {
     await expect(asked).toBeVisible()
     await centre(page, panel, asked)
     await asked.click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '1')
     const phrase = densePassage('Q17')
     const tip = page.locator('.thread-hover-tip')
     for (let attempt = 0; attempt < 6 && await tip.count() === 0; attempt++) {
@@ -211,7 +211,7 @@ test.describe('Slice 1 layout fixes', () => {
     await expect(tip).toContainText('Reader skip cost')
     // Esc with the pointer still on the spot: the root page shows, the tip goes.
     await page.keyboard.press('Escape')
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '0')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '0')
     await expect(tip).toHaveCount(0)
   })
 

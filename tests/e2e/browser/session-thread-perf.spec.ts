@@ -9,16 +9,12 @@
  * of such a task on its own debugging).
  */
 import { expect, type Locator, type Page } from '@playwright/test'
-import { centreInHistory, DENSE_SESSION, openThreadsSession, resetThreadsFixture, test } from './threads-helpers'
+import { centreInHistory, DENSE_SESSION, openThreadsSession, resetThreadsFixture, test, expectStackDepth } from './threads-helpers'
 import { chromiumCpuClock, longTaskBudget, machineQuiet, referenceDrawMs, traceTaskTimes, type TaskTime } from './cpu-reference'
 import { serveProductionBundle } from './production-bundle'
 
 const TASK = 'pw-task-threads-dense'
 const READY = 'Walk me through part 6 of the storage notes.'
-
-async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
-}
 
 async function centre(page: Page, panel: Locator, target: Locator): Promise<void> {
   await centreInHistory(page, panel, target, { maxStep: 600 })
@@ -64,7 +60,7 @@ test.describe('Question stack push / pop cost', () => {
       await page.waitForTimeout(500)
       await arm(page)
       await row.click()
-      await expectDepth(panel, i + 1)
+      await expectStackDepth(panel, i + 1)
       steps.push({ step: `push${i + 1}`, ...await take(page) })
     }
     for (let d = chain.length - 1; d >= 0; d--) {
@@ -73,7 +69,7 @@ test.describe('Question stack push / pop cost', () => {
       await page.mouse.move(hb.x + hb.width * 0.7, hb.y + hb.height * 0.6)
       await arm(page)
       await page.keyboard.press('Escape')
-      await expectDepth(panel, d)
+      await expectStackDepth(panel, d)
       steps.push({ step: `pop${d}`, ...await take(page) })
     }
     const worst = Math.max(0, ...steps.flatMap((s) => s.long))

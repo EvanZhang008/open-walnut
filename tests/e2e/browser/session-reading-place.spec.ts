@@ -13,7 +13,7 @@
  * with real wheels and clicks. The rule: web/src/components/sessions/reading-place.ts.
  */
 import { expect, type Locator, type Page } from '@playwright/test'
-import { centreInHistory, resetThreadsFixture, switchView, test } from './threads-helpers'
+import { centreInHistory, resetThreadsFixture, switchView, test, expectStackDepth } from './threads-helpers'
 import { PLACE_READY, PLACE_SESSION, PLACE_TASK, PLACE_TITLES } from './threads-fixture'
 import { captureSends, leftHalf, pagesOnScreen, rightBody, rightComposer, scrollBoxOf, send } from './tree-split-helpers'
 import { openThreadsSession, sessionPanel } from './threads-helpers'
@@ -147,10 +147,6 @@ async function openQuestionAt(page: Page, panel: Locator, title: string): Promis
 }
 
 /** One page at a time: how deep the page on screen is (0 = Main). */
-async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 10_000 })
-}
-
 /** What the timeline keeps (reading-place.ts), for a failure's message. */
 async function kept(page: Page): Promise<string> {
   return page.evaluate((sid) => {
@@ -261,14 +257,14 @@ test.describe('every chat pane keeps the reader\'s place', () => {
     const row = await askedRow(page, rightBody(panel), T.Q1)
     const mainAtRow = await settledPlace(page, rightBody(panel))
     await clickAt(page, row)
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await wheel(page, rightBody(panel), 600)
     const q1 = await settledPlace(page, rightBody(panel))
     await page.keyboard.press('ControlOrMeta+BracketLeft')
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     expectSameOnScreen(await settledPlace(page, rightBody(panel)), mainAtRow, 'Main, back from question 1')
     await openQuestionAt(page, panel, T.Q1)
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     expectSamePlace(await settledPlace(page, rightBody(panel)), q1, 'question 1, opened again')
   })
 

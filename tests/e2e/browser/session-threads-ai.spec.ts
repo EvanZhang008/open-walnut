@@ -16,7 +16,7 @@
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, AI_SESSION, modePill, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, switchView, test,
+  centreInHistory, AI_SESSION, modePill, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, switchView, test, expectStackDepth,
 } from './threads-helpers'
 import { AI_PASSAGE } from './threads-fixture'
 
@@ -33,10 +33,6 @@ async function shot(page: Page, name: string): Promise<void> {
 async function boot(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-}
-
-async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
 }
 
 /** Forget every question the previous test asked on the AI session. */
@@ -73,7 +69,7 @@ async function sendFromCard(input: Locator, text: string): Promise<void> {
 async function backToPage(panel: Locator): Promise<void> {
   await expect(modePill(panel)).toBeVisible({ timeout: 15_000 })
   await switchView(panel, 'stack')
-  await expectDepth(panel, 1)
+  await expectStackDepth(panel, 1)
 }
 
 /** Ask about the passage and send the first question from its card (a session
@@ -175,7 +171,7 @@ test.describe('Question AI on the fixture server', () => {
     await expect.poll(async () => (await aiCalls(request))[head]).toBe(2)
     await shot(page, 'c53-looks-answered')
     await header.locator('.thread-stack-done').click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     const row = panel.locator('.thread-asked-row.is-resolved')
     await expect(row).toHaveCount(1)
     // The AI takeaway replaces the fallback on the open page (C11, C57).
@@ -185,7 +181,7 @@ test.describe('Question AI on the fixture server', () => {
     expect(meta?.takeawaySource).toBe('ai')
     expect((await aiCalls(request))[head]).toBe(3)
     await row.click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(panel.locator('[data-thread-strip="resolved"] .thread-strip-text')).toHaveText(/^Stub takeaway: /)
     await shot(page, 'c57-ai-takeaway')
   })

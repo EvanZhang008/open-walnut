@@ -11,7 +11,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { openThreadsSession, readRecord, resetThreadsFixture, switchView, test } from './threads-helpers'
+import { openThreadsSession, readRecord, resetThreadsFixture, switchView, test, currentStack } from './threads-helpers'
 import { buildMapSession, MAP_SESSION, MAP_TITLES } from './threads-fixture'
 
 const MAP_TASK = 'pw-task-threads-map'
@@ -82,7 +82,7 @@ test.describe('Question map: archive from a row', () => {
     const toast = page.locator('.thread-toast')
     await expect(toast).toContainText(`Archived: ${MAP_TITLES.Q4a}`)
     // Archived, not opened: still the main conversation, no page pushed.
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '0')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '0')
     await expect(rowOf(map, 'Main conversation')).toHaveAttribute('aria-current', 'page')
     await expect(itemOf(map, MAP_TITLES.Q4a)).toHaveCount(0)
     // An archived follow-up folds into its parent's own group, under Q4.
@@ -122,7 +122,7 @@ test.describe('Question map: archive from a row', () => {
     await expect.poll(() => statusOf(request, 'Q1')).toBe('resolved')
     expect(await statusOf(request, 'Q1a')).toBe('open')
     expect(await statusOf(request, 'Q1b')).toBe('open')
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '0')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '0')
 
     await resetThreadsFixture(request, MAP_SESSION)
     await page.reload()
@@ -175,7 +175,7 @@ test.describe('Question map: archive from a row', () => {
     // Esc closed one layer: nothing archived, no page popped or pushed.
     await page.waitForTimeout(400)
     expect(await statusOf(request, 'Q4')).toBe('open')
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '0')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '0')
   })
 
   test('narrow rail: the list stays open across an × and while the follow-ups question is up', async ({ page, request }) => {

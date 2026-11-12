@@ -10,7 +10,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  centreInHistory, DENSE_SESSION, installHighlightRules, mainPage, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList, switchView, test,
+  centreInHistory, DENSE_SESSION, installHighlightRules, mainPage, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList, switchView, test, currentStack,
 } from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION, densePassage } from './threads-fixture'
 import { cssColorToRgba, withCssColor } from './css-color'
@@ -143,7 +143,7 @@ test.describe('Slice 1 fixes, round 3', () => {
     await expect(panel.locator('.thread-card .thread-card-body')).toContainText('processed your message', { timeout: 60_000 })
     // Its page, in Tree Mode.
     await switchView(panel, 'stack')
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
     await expect(panel.locator('.session-history')).toContainText('processed your message', { timeout: 60_000 })
     let head = ''
     await expect.poll(async () => {
@@ -162,7 +162,7 @@ test.describe('Slice 1 fixes, round 3', () => {
     // the board would race that restore and hide a restore that never came.
     panel = sessionPanel(page, RELOAD_SESSION)
     await expect(panel).toBeVisible({ timeout: 30_000 })
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 30_000 })
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '1', { timeout: 30_000 })
     await expect(panel.locator('.thread-quote-head')).toContainText(phrase)
     await expect(panel.locator('.session-history')).toContainText('what drains first')
     await expect(panel.locator('.session-history')).toContainText('processed your message')
@@ -173,17 +173,17 @@ test.describe('Slice 1 fixes, round 3', () => {
   test('a click on a question mark over a pinned passage opens only the question, no pin popover (N38)', async ({ page }) => {
     const panel = await openDense(page, 720)
     await goTo(panel, 'point 1 change', 'Buffer flush order')
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '1')
     // Point 11 is asked about AND pinned on this page.
     const at = await hoverMark(page, panel, densePassage('Q11'))
     await page.mouse.click(at.x, at.y)
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '2')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '2')
     await expect(panel.locator('.thread-stack-header .thread-stack-title')).toHaveText(/^Point 11:/)
     await page.waitForTimeout(600)
     await expect(page.locator('[data-testid="quote-pin-popover"]')).toHaveCount(0)
     // Back on the parent page, nothing of the old press is left over either.
     await page.keyboard.press('Escape')
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
+    await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', '1')
     await expect(page.locator('[data-testid="quote-pin-popover"]')).toHaveCount(0)
   })
 

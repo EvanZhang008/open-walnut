@@ -18,7 +18,7 @@ import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
   AI_SESSION, centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, noBannedGlyphs, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, sessionPanel,
-  modePill, openQuestionList, switchView, test, unfoldQuestions,
+  modePill, openQuestionList, switchView, test, unfoldQuestions, expectStackDepth,
 } from './threads-helpers'
 import {
   AI_PASSAGE, buildMapSession, MAP_PASSAGES, MAP_PIN_QUOTE_TEXT, MAP_SESSION, MAP_TITLES, PINS_ONLY_READY, PINS_ONLY_SESSION,
@@ -89,10 +89,6 @@ async function settledScrollTop(page: Page, history: Locator): Promise<number> {
     prev = now
   }
   return prev
-}
-
-async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
 }
 
 const mapOf = (panel: Locator) => panel.locator('.thread-map')
@@ -254,7 +250,7 @@ test.describe('Question map', () => {
     const panel = await openAt(page, WIDE)
     const map = mapOf(panel)
     await rowNamed(map, MAP_TITLES.Q1a).click()
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     await expect(rowNamed(map, MAP_TITLES.Q1a)).toHaveAttribute('aria-current', 'page')
     await expect(rowNamed(map, MAP_TITLES.Q1)).toHaveAttribute('data-on-path', 'true')
     await expect(rowNamed(map, 'Main conversation')).not.toHaveAttribute('aria-current', 'page')
@@ -268,21 +264,21 @@ test.describe('Question map', () => {
     for (const left of await contentLefts(panel)) expect(left).toBeGreaterThan((await rectOf(bars.last())).right)
     // Main from depth 2.
     await rowNamed(map, 'Main conversation').click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await expect(rowNamed(map, 'Main conversation')).toHaveAttribute('aria-current', 'page')
     // Another branch, then Esc: the map follows the pop.
     await rowNamed(map, MAP_TITLES.Q4a).click()
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     const hb = (await panel.locator('.session-history').boundingBox())!
     await page.mouse.move(hb.x + hb.width * 0.7, hb.y + hb.height * 0.6)
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(rowNamed(map, MAP_TITLES.Q4)).toHaveAttribute('aria-current', 'page')
     // The done group opens in place and its question is a row like any other.
     await map.locator('.thread-map-row[data-kind="done-group"]').click()
     await expect(rowNamed(map, MAP_TITLES.Q3)).toBeVisible()
     await rowNamed(map, MAP_TITLES.Q3).click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(panel.locator('.thread-stack-header')).toContainText(MAP_TITLES.Q3)
     // C17: the group holding the current page stays open; its toggle is off.
     const group = map.locator('.thread-map-row[data-kind="done-group"]')
@@ -293,7 +289,7 @@ test.describe('Question map', () => {
     await expect(rowNamed(map, MAP_TITLES.Q3)).toHaveAttribute('aria-current', 'page')
     // Off that page, the group folds again when asked.
     await rowNamed(map, 'Main conversation').click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     await expect(group).not.toHaveAttribute('aria-disabled', 'true')
     await group.click()
     await expect(rowNamed(map, MAP_TITLES.Q3)).toHaveCount(0)
@@ -304,7 +300,7 @@ test.describe('Question map', () => {
     const panel = await openAt(page, WIDE)
     const map = mapOf(panel)
     await map.locator('.thread-map-row[data-kind="pin"]', { hasText: MAP_PIN_QUOTE_TEXT.slice(0, 16) }).click()
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     await expect(panel.locator('.thread-stack-header')).toContainText(MAP_TITLES.Q1a)
     await expect.poll(async () => {
       const r = (await passageRects(panel, MAP_PIN_QUOTE_TEXT))[0]
@@ -315,7 +311,7 @@ test.describe('Question map', () => {
     await expect(map.locator('.thread-map-back')).toHaveCount(0)
     // Root: the whole-message pin on the root page is a plain jump, and arms Back.
     await rowNamed(map, 'Main conversation').click()
-    await expectDepth(panel, 0)
+    await expectStackDepth(panel, 0)
     const history = panel.locator('.session-history')
     // The pop's landing corrects once after the first frame: read the place it settled on.
     const before = await settledScrollTop(page, history)
@@ -453,7 +449,7 @@ test.describe('Question map', () => {
     await rail.click()
     await expect(overlay).toBeVisible()
     await rowNamed(overlay, MAP_TITLES.Q4).click()
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await expect(overlay).toHaveCount(0)
     // A mouse user is not handed focus: Space must keep scrolling the timeline.
     await expect(rail).not.toBeFocused()
@@ -485,7 +481,7 @@ test.describe('Question map', () => {
     const ring = await page.evaluate(() => getComputedStyle(document.activeElement as Element).outlineStyle)
     expect(ring).not.toBe('none')
     await page.keyboard.press('Enter')
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     await expect(rail).toBeFocused()
     await expect(overlay).toHaveCount(0)
     // One stop: the next Tab leaves the map. Shift+Tab back is not asserted:
@@ -505,10 +501,10 @@ test.describe('Question map', () => {
     await page.keyboard.press('Escape')
     await expect(overlay).toHaveCount(0)
     await expect(rail).toBeFocused()
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     // A second Esc is the page's own: back one level.
     await page.keyboard.press('Escape')
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     await noBannedGlyphs(page, map)
   })
 
@@ -528,7 +524,7 @@ test.describe('Question map', () => {
     for (let i = 0; i < 12 && !(await focusedStop(page)).text.includes(MAP_TITLES.Q2); i++) await page.keyboard.press('ArrowDown')
     expect((await focusedStop(page)).text).toContain(MAP_TITLES.Q2)
     await page.keyboard.press('Enter')
-    await expectDepth(panel, 1)
+    await expectStackDepth(panel, 1)
     const current = map.locator('.thread-map-row[aria-current="page"]')
     await expect(current).toContainText(MAP_TITLES.Q2)
     await expect(current).toHaveAttribute('tabindex', '0')
@@ -743,7 +739,7 @@ test.describe('Question map', () => {
     expect(body.right - body.left).toBeGreaterThanOrEqual(240)
     for (const left of await contentLefts(panel)) expect(left).toBeGreaterThanOrEqual(body.right + 8)
     await rowNamed(map, MAP_TITLES.Q4a).click()
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     await shot(page, 'full-depth-2')
   })
 
@@ -809,7 +805,7 @@ test.describe('Question map', () => {
     const map = mapOf(panel)
     await expect(map).toHaveAttribute('data-shape', 'panel')
     await rowNamed(map, MAP_TITLES.Q1a).click()
-    await expectDepth(panel, 2)
+    await expectStackDepth(panel, 2)
     // Light text on a dark ground: the current row, a plain row, and the box behind them.
     const ground = await panel.locator('.session-history').evaluate((el) => {
       for (let n: Element | null = el; n; n = n.parentElement) {
