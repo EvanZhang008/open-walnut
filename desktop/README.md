@@ -91,6 +91,29 @@ open Walnut.app                 # run from here
 cp -r Walnut.app ~/Applications # or install for the current user
 ```
 
+### Putting a build in place
+
+To replace an installed Walnut.app with a build you made, quit Walnut, then:
+
+```bash
+sh desktop/apply-update.sh 0 /Applications/Walnut.app "$PWD/desktop/Walnut.app" /tmp/apply-update.log
+```
+
+It is the swap the app's own updater runs: it refuses while Walnut still runs,
+renames the old app aside, moves the build in, ends the session hosts that ran
+from the old app (the session daemon keeps its sessions for the next one, and
+whatever started a host starts it again from the new app), deletes the old app
+and opens the new one in the background. The build is moved, not copied.
+
+**Never keep the old app as a copy** (a dated one beside it in /Applications,
+one in Application Support, or under any other name): each copy is one
+more app with Walnut's identity, and a process still running from one asks macOS
+for permissions as that copy. On 2026-11-12 session hosts left running from such
+copies asked for Local Network access again, and a "Don't Allow" given to one
+copy would cut the whole of Walnut off from the local network. To go back to a
+release, download it again. `tests/scripts/no-walnut-app-copies.test.ts` fails on
+a script or an instruction in this repository that names such a copy.
+
 `build-release.sh` additionally produces `Walnut.dmg` (or `Walnut-<arch>.dmg`
 when it carries a release): a drag-to-Applications disk image you can hand to
 other users.
@@ -178,8 +201,10 @@ rules in `AppUpdateMachine.swift`):
    same rule. Then the app stops its server
    (5 seconds at most), hands the swap to `apply-update.sh` and quits. The
    script waits for the app to exit, swaps the new app into place with two
-   renames (the old one comes back if anything fails) and opens it. Sessions
-   run in the session daemon, so they keep going across the restart.
+   renames (the old one comes back if anything fails), ends the session hosts
+   that ran from the old app so they start again under the new one, deletes the
+   old app and opens the new one. Sessions run in the session daemon, which keeps
+   them for its successor, so they keep going across the restart.
 4. **The Walnut inside.** The new app carries the new release's Walnut. On its
    first launch it installs that copy over the older one before the server
    starts (offline, a few seconds), and never over a newer one (a runtime that

@@ -133,6 +133,13 @@ compared).
   its own from one place (a Mac host's daemon service, a server you run from your own
   launchd job) keeps its answer across updates. The deploy refuses a file without it
   before stopping the running server.
+- **There is one Walnut.app, and its session hosts move with it.** A session host keeps
+  running from the bundle it started in, so a host left behind when the app moved asks
+  as a different app (2026-11-12: hosts running from dated copies an agent made by hand
+  asked again). `desktop/apply-update.sh`, the swap for an update and for a build you
+  put in place yourself, ends the old app's hosts once the new app is in place and
+  deletes the old app; never keep a copy (`desktop/README.md`, "Putting a build in
+  place"; `tests/scripts/no-walnut-app-copies.test.ts`).
 - A server started from Terminal never asks: macOS allows command-line tools run
   from Terminal or over SSH, and their children.
 - If the answer was "Don't Allow", Walnut sees connections to the local network fail
