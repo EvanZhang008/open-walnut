@@ -55,6 +55,8 @@ vi.mock('../../../src/core/daemon-file-reader.js', () => ({
 }));
 vi.mock('../../../src/core/transfer/daemon-transfer-client.js', () => ({
   findTranscript: async () => ({ kind: 'none' }),
+  // The transcript, written in parts under the run's link wait.
+  writeFileInParts: async (host: string, path: string, bytes: Buffer) => { edges.writes.push({ host, path, content: bytes.toString('utf8') }); },
 }));
 vi.mock('../../../src/core/sessions/session-lifecycle.js', () => ({
   readProviderSessionHistory: async (sid: string) => {

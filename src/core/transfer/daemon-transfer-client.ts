@@ -22,7 +22,8 @@ import type { HostFacts, HostLoad, ModelEndpointProbe } from '../../providers/ho
 import { MAX_UPLOAD_FRAME_BYTES } from '../../providers/ssh-upload-budget.js'
 import { linkFailureKind } from '../../providers/link-failure.js'
 import { awaitLink, currentLinkWait, linkPollMs } from './link-wait.js'
-import { ServerStoppingError, interruptedByShutdown, isServerStopping } from '../server-stopping.js'
+import { partRetry } from './part-retry.js'
+import { interruptedByShutdown, isServerStopping } from '../server-stopping.js'
 
 export type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile, WritePartReply, ReachReply, FetchReply, FetchFileResult, HostFacts, HostLoad, ModelEndpointProbe }
 
@@ -271,6 +272,29 @@ export async function writePart(host: string, opts: WritePartOptions, gate?: Sen
   return reply!
 }
 
+/**
+ * A whole file this server holds, written onto `host` in parts, size and sha256 checked on the
+ * last one. A failed part goes again as the relay's does (part-retry.ts): inside a link wait, a
+ * dropped link is waited out and the write goes on from the receiver's bytes.
+ */
+export async function writeFileInParts(host: string, path: string, bytes: Buffer, opts: { partBytes?: number; retries?: number; retryDelayMs?: number } = {}): Promise<WritePartReply> {
+  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex')
+  const retry = partRetry({ host, path, size: Math.min(opts.partBytes ?? MAX_UPLOAD_FRAME_BYTES, MAX_UPLOAD_FRAME_BYTES), tries: opts.retries ?? 3, delayMs: opts.retryDelayMs ?? 500 })
+  let offset = 0
+  for (;;) {
+    const end = Math.min(bytes.length, offset + retry.size)
+    const final = end >= bytes.length
+    try {
+      const reply = await writePart(host, { path, offset, data: bytes.subarray(offset, end), ...(final ? { final: true, size: bytes.length, sha256 } : {}) })
+      retry.ok()
+      if (final) return reply
+      offset = end
+    } catch (err) {
+      offset = await retry.next(err, offset)
+    }
+  }
+}
+
 export const UPLOAD_PART_CAPABILITY = 'upload-part-v1'
 
 export interface UploadPartOptions {
@@ -425,12 +449,6 @@ async function readChunk(host: string, path: string, start: number, length: numb
   return { data: String(res.data ?? ''), bytesRead: Number(res.bytesRead ?? 0), fileSize: Number(res.fileSize ?? -1) }
 }
 
-// A refusal from either daemon (not a dropped link) is final: retrying gets the same answer.
-const FINAL_CODES = ['size_mismatch', 'checksum_mismatch', 'source_changed', 'read_failed', 'bad_request', 'too_large',
-  // A private stage's refusals: retrying gets the same answer.
-  'not_owner', 'not_supported', 'topology_unknown', 'not_private_path', 'root_unsafe', 'stage_changed',
-  'stage_foreign', 'stage_incomplete', 'target_exists']
-
 /**
  * Copy one file from `fromHost` to `toHost` through this server, in chunks.
  * Resumes from the receiver's `have` after a gap; any other failure of a chunk
@@ -448,8 +466,6 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
   let total: number | null = typeof opts.size === 'number' ? opts.size : null
   // Each part is one upload frame onto the target: at most what the paced bulk link carries in time.
   const chunk = Math.max(1, Math.min(opts.chunkBytes ?? MAX_UPLOAD_FRAME_BYTES, MAX_CHUNK_BYTES, MAX_UPLOAD_FRAME_BYTES))
-  const tries = Math.max(1, opts.retries ?? 3)
-  const delay = opts.retryDelayMs ?? 500
   const hasher = opts.sha256 ? null : crypto.createHash('sha256')
   let hashedTo = 0
   let deliveredTo = 0
@@ -463,12 +479,8 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
   await connectionFor(fromHost, READ_RANGE_CAPABILITY)
   let offset = 0
   let chunks = 0
-  let retried = 0
-  let failures = 0
-  let lastError: unknown = null
-  // Inside a link wait (a task move), a dropped link is waited out, not counted as a failed chunk.
-  const wait = currentLinkWait()
-  let linkLostSince: number | undefined
+  // What a failed chunk means (part-retry.ts): inside a link wait (a task move), a dropped link is waited out.
+  const retry = partRetry({ host: toHost, path: toPath, size: chunk, tries: opts.retries ?? 3, delayMs: opts.retryDelayMs ?? 500 })
   for (;;) {
     // Outside the try: a stop is final, never a chunk to retry.
     if (opts.signal?.aborted) {
@@ -480,11 +492,11 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
       // An empty file is read once too, so a source that is not empty after all is caught.
       if (total === null || total - offset > 0 || offset === 0) {
         const left = total === null ? 0 : total - offset
-        const got = await readChunk(fromHost, fromPath, offset, left > 0 ? Math.min(chunk, left) : chunk, gate)
+        const got = await readChunk(fromHost, fromPath, offset, left > 0 ? Math.min(retry.size, left) : retry.size, gate)
         if (!(got.fileSize >= 0)) throw new TransferCommandError(`${fromPath}: no file size in the read reply`, fromHost, 'fs.readRange', 'read_failed')
         if (total === null) total = got.fileSize
         if (got.fileSize !== total) throw new TransferCommandError(`${fromPath} is ${got.fileSize} bytes now, expected ${total}`, fromHost, 'fs.readRange', 'source_changed')
-        const want = Math.min(chunk, total - offset)
+        const want = Math.min(retry.size, total - offset)
         if (got.bytesRead !== want) throw new Error(`short read at ${offset}: ${got.bytesRead} of ${want} bytes`)
         bytes = Buffer.from(got.data, 'base64')
         if (bytes.length !== want) throw new Error(`read at ${offset} decoded to ${bytes.length} of ${want} bytes`)
@@ -499,8 +511,7 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
         ...(final && opts.finalPartTimeoutMs !== undefined ? { timeoutMs: opts.finalPartTimeoutMs } : {}),
       }, gate)
       chunks++
-      failures = 0
-      linkLostSince = undefined
+      retry.ok()
       if (hasher && fresh && !final) { hasher.update(fresh); hashedTo = offset + bytes.length }
       if (opts.onBytes && offset + bytes.length > deliveredTo) {
         opts.onBytes(bytes.subarray(deliveredTo - offset))
@@ -508,34 +519,10 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
       }
       offset += bytes.length
       opts.onProgress?.({ sent: offset, total })
-      if (final) return { bytes: reply.staged, sha256: reply.sha256 ?? sha256 ?? '', chunks, retries: retried, ...(reply.path ? { path: reply.path } : {}) }
+      if (final) return { bytes: reply.staged, sha256: reply.sha256 ?? sha256 ?? '', chunks, retries: retry.retries, ...(reply.path ? { path: reply.path } : {}) }
     } catch (err) {
       if (stopped) throw (stopped as { err: unknown }).err
-      if (err instanceof TransferCommandError && err.command === 'fs.writePart' && err.code === 'gap') {
-        // The receiver lost bytes (a restart, a cleared staging file): resume where it stands.
-        const have = Number(err.data.have)
-        offset = Number.isFinite(have) && have >= 0 && have < offset ? have : 0
-      } else if ((err instanceof TransferCommandError && FINAL_CODES.includes(err.code)) || err instanceof DaemonNeedsUpgradeError
-        // This server is stopping: no retry gets a link back.
-        || err instanceof ServerStoppingError) {
-        throw err
-      }
-      lastError = err
-      retried++
-      const kind = linkFailureKind(err)
-      // Offline inside a wait: connectionFor already waited the whole bound for the link.
-      if (wait && err instanceof TransferHostOfflineError) throw err
-      if (wait && (kind === 'no-link' || kind === 'lost')) {
-        // The next try finds the link back (connectionFor waits for it) and resumes from the receiver's bytes.
-        linkLostSince ??= Date.now()
-        if (Date.now() - linkLostSince > wait.ms) throw lastError
-        await new Promise((r) => setTimeout(r, linkPollMs()))
-        continue
-      }
-      failures++
-      // A receiver that keeps losing what it took would loop forever on gaps alone.
-      if (failures >= tries || retried > tries * 10) throw lastError
-      if (delay > 0) await new Promise((r) => setTimeout(r, delay))
+      offset = await retry.next(err, offset)
     }
   }
 }

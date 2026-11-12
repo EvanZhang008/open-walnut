@@ -30,6 +30,14 @@ export function withLinkWait<T>(ms: number, fn: () => Promise<T>): Promise<T> {
   return store.run({ ms }, fn)
 }
 
+/**
+ * Run `fn` outside any link wait: a step with its own deadline keeps it inside a long run (a
+ * start's placement, a model endpoint probe), offline at once as before.
+ */
+export function noLinkWait<T>(fn: () => Promise<T>): Promise<T> {
+  return store.run({ ms: 0 }, fn)
+}
+
 /** The wait the calling code runs under, or null. */
 export function currentLinkWait(): { ms: number } | null {
   const w = store.getStore()

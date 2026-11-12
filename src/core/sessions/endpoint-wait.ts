@@ -413,7 +413,9 @@ function defaultDeps(gaveUp: EndpointWaitDeps['gaveUp']): EndpointWaitDeps {
       const { probeModelEndpoint, TransferHostOfflineError, TransferServerStoppingError } = await import('../transfer/daemon-transfer-client.js')
       const { DaemonNeedsUpgradeError } = await import('../daemon-file-reader.js')
       try {
-        const r = await probeModelEndpoint(host, { cwd })
+        // Its own deadline, inside a move's link wait too: an offline host answers at once.
+        const { noLinkWait } = await import('../transfer/link-wait.js')
+        const r = await noLinkWait(() => probeModelEndpoint(host, { cwd }))
         return { kind: 'probed', url: r.url, probed: r.probed, reachable: r.reachable, ...(r.error ? { error: r.error } : {}) }
       } catch (err) {
         if (err instanceof DaemonNeedsUpgradeError) return { kind: 'unsupported' }

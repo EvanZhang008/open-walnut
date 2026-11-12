@@ -87,24 +87,32 @@ export function expandHome(p: string, host: string, profile: HostProfile | null)
   return p.replace(/^~/, () => home);
 }
 
+/**
+ * A file this server made (a transcript), written onto `host`. Inside a link wait (a task move,
+ * link-wait.ts) it goes in parts that wait out a dropped link (part-retry.ts); a daemon without
+ * fs.writePart takes a small file whole. Outside a wait: whole up to 4 MB, else in parts, one try each.
+ */
 export async function writeTargetFile(host: string, filePath: string, content: string): Promise<void> {
   const bytes = Buffer.from(content, 'utf8');
-  if (bytes.length <= 4 * 1024 * 1024) {
-    const { DaemonFileReader } = await import('../daemon-file-reader.js');
-    await new DaemonFileReader(host).writeFile(filePath, content);
+  const { currentLinkWait } = await import('./link-wait.js');
+  const { writeFileInParts } = await import('./daemon-transfer-client.js');
+  const big = bytes.length > 4 * 1024 * 1024;
+  if (currentLinkWait()) {
+    try {
+      await writeFileInParts(host, filePath, bytes);
+      return;
+    } catch (err) {
+      const { DaemonNeedsUpgradeError } = await import('../daemon-file-reader.js');
+      if (!(err instanceof DaemonNeedsUpgradeError) || big) throw err;
+    }
+  }
+  if (big) {
+    // One try per part, as before link waits.
+    await writeFileInParts(host, filePath, bytes, { retries: 1 });
     return;
   }
-  const { writePart } = await import('./daemon-transfer-client.js');
-  const { createHash } = await import('node:crypto');
-  const sha256 = createHash('sha256').update(bytes).digest('hex');
-  const step = 1024 * 1024;
-  for (let offset = 0; offset < bytes.length; offset += step) {
-    const final = offset + step >= bytes.length;
-    await writePart(host, {
-      path: filePath, offset, data: bytes.subarray(offset, offset + step),
-      ...(final ? { final: true, size: bytes.length, sha256 } : {}),
-    });
-  }
+  const { DaemonFileReader } = await import('../daemon-file-reader.js');
+  await new DaemonFileReader(host).writeFile(filePath, content);
 }
 
 /** A daemon refusal as the HTTP answer it is (an old daemon, an absent host). */
@@ -490,10 +498,14 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
   if (plan.history !== 'native-copy') {
     const { readProviderSessionHistory } = await import('../sessions/session-lifecycle.js');
     const { messages } = await readProviderSessionHistory(session.claudeSessionId, session, session.host, true);
-    transcriptPath = `${transfersDir(plan.target.host)}/${transferId}/transcript.md`;
-    await writeTargetFile(plan.target.host, transcriptPath, await renderTranscriptMarkdownChunked(messages, {
+    const at = `${transfersDir(plan.target.host)}/${transferId}/transcript.md`;
+    transcriptPath = at;
+    const text = await renderTranscriptMarkdownChunked(messages, {
       title: task.title, engine: engineCaps(plan.source.engine).displayName, host: hostLabel(plan.source.host), cwd: plan.source.cwd,
-    }));
+    });
+    // Tens of MB for a long task: written in parts that wait out a dropped link.
+    const { withLinkWait, MOVE_LINK_WAIT_MS } = await import('./link-wait.js');
+    await withLinkWait(MOVE_LINK_WAIT_MS, () => writeTargetFile(plan.target.host, at, text));
     if (plan.history === 'brief') {
       const { writeHandoffBrief } = await import('./brief.js');
       const brief = await writeHandoffBrief(messages, {

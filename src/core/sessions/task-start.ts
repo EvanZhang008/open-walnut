@@ -597,9 +597,11 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
     const slotOpts = { automatic, respectWaiting: automatic && !params.queuedAt && params.host === undefined && params.cwd === undefined && !params.workspace && !task.workspace && !params.startAttemptId };
     let moveSlot: ((holdMs?: number) => void) | undefined;
     const { placeStartByLoad } = await import('./start-placement.js');
-    const placement = area || fallback ? undefined : await placeStartByLoad(task, params, launch, engine, {
+    // Placement keeps its own deadline (a start never hangs), inside a move's link wait too.
+    const { noLinkWait } = await import('../transfer/link-wait.js');
+    const placement = area || fallback ? undefined : await noLinkWait(() => placeStartByLoad(task, params, launch, engine, {
       admit: async (host) => (moveSlot = await admitHostStart(task.id, host, slotOpts)),
-    });
+    }));
     if (placement?.moved && moveSlot) releaseAdmission = moveSlot;
     else {
       moveSlot?.(0);

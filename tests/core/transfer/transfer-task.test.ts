@@ -66,6 +66,8 @@ vi.mock('../../../src/core/transfer/daemon-transfer-client.js', () => ({
   realpathOn: async (_host: string, p: string) => `/private${p}`,
   findTranscript: async (_host: string, sid: string) => ({ kind: 'one', path: `/Users/me/.claude/projects/-work-repo/${sid}.jsonl` }),
   probeHostFacts: async () => { throw new Error('no probe in this test'); },
+  // The transcript, written in parts under the transfer's link wait.
+  writeFileInParts: async (host: string, path: string, bytes: Buffer) => { edges.writes.push({ host, path, content: bytes.toString('utf8') }); },
 }));
 vi.mock('../../../src/core/transfer/brief.js', () => ({
   writeHandoffBrief: async () => ({ text: 'Goal: trailing commas. Next: add a test.', method: 'model' }),

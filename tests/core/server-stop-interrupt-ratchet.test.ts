@@ -18,7 +18,9 @@
  *  6. every long transfer step (pack, copy, relay, apply, a task's work, a workspace) runs under a
  *     link wait (transfer/link-wait.ts), so a dropped link to either host is waited out (2026-11-12:
  *     the link to a dev host dropped every few minutes while a move uploaded), or is listed with
- *     the bound it keeps instead;
+ *     the bound it keeps instead; so does every sender of fs.writePart and every caller of a file
+ *     write in parts (2026-11-12: a move failed on "daemon command lost: fs.writePart", a member
+ *     the first list of steps did not name), and the whole engine switch run is under the wait;
  *  7. only the leader resumes switches at boot (a replica holds a copy of the leader's tasks).
  */
 import { describe, it, expect } from 'vitest'
@@ -74,7 +76,8 @@ function body(src: string, head: string): string {
 
 describe('a server stop is never a host offline', () => {
   it('every reader of TransferHostOfflineError also handles TransferServerStoppingError', () => {
-    const own = new Set(['src/core/transfer/daemon-transfer-client.ts', 'src/core/transfer/transfer-errors.ts'])
+    // part-retry.ts reads the stop as ServerStoppingError, the class TransferServerStoppingError extends.
+    const own = new Set(['src/core/transfer/daemon-transfer-client.ts', 'src/core/transfer/transfer-errors.ts', 'src/core/transfer/part-retry.ts'])
     const readers = SOURCES.filter((f) => !own.has(f.rel) && /\bTransferHostOfflineError\b/.test(f.text))
     expect(readers.map((f) => f.rel).sort()).toEqual(expect.arrayContaining([
       'src/core/hosts/host-copy.ts', 'src/core/transfer/transfer.ts', 'src/web/routes/session-upload-v1.ts',
@@ -111,7 +114,8 @@ describe('a server stop is never a host offline', () => {
     for (const f of SOURCES.filter((s) => s.rel.startsWith('src/core/transfer/'))) {
       for (const [start, open, end] of catchBlocks(f.text)) {
         const b = f.text.slice(open, end)
-        if (/\bthrow\b/.test(b) || /interruptedByShutdown\(/.test(b)) continue
+        // retry.next (part-retry.ts) throws a stop as it is.
+        if (/\bthrow\b/.test(b) || /interruptedByShutdown\(/.test(b) || /\bretry\.next\(/.test(b)) continue
         const flat = b.replace(/\s+/g, ' ')
         const mark = LISTED[f.rel]?.marks.find((m, i) => flat.includes(m.replace(/\s+/g, ' ')) && (used[`${f.rel}#${i}`] ?? 0) === 0 && (used[`${f.rel}#${i}`] = 1))
         if (!mark) unlisted.push(`${f.rel}:${lineOf(f.text, start)}`)
@@ -199,12 +203,12 @@ describe('a long transfer waits out a dropped link', () => {
   const STEP = /\b(relayFile|copyPack|packWorkspace|applyPack|fetchFromHost|moveTaskWork|moveWorkspace)\(/g
   /** Each file that calls a long transfer step, its count, and how a dropped link is handled there. */
   const CALLERS: Record<string, { count: number; way: string }> = {
-    'src/core/sessions/engine-switch.ts': { count: 1, way: 'task_move: moveTaskWork runs its whole move under the link wait' },
+    'src/core/sessions/engine-switch.ts': { count: 1, way: 'task_move: runEngineSwitch runs the whole run under the link wait' },
     'src/core/transfer/task-work.ts': { count: 7, way: 'inside moveWork, which moveTaskWork runs under withLinkWait' },
     'src/core/transfer/move-resume.ts': { count: 1, way: 'copyNow, the probe pack, called from moveWork only' },
     'src/core/transfer/workspace.ts': { count: 4, way: 'moveWorkspace runs under withLinkWait; copyPack is called from waits only (and start-placement)' },
     'src/core/transfer/transfer.ts': { count: 2, way: 'task_transfer: the transcript relay runs under withLinkWait, the workspace through moveWorkspace' },
-    'src/core/sessions/start-placement.ts': { count: 3, way: 'a first start placed on another host: its own deadline (a start never hangs), then it starts where the folder is' },
+    'src/core/sessions/start-placement.ts': { count: 3, way: 'a first start placed on another host: its own deadline (a start never hangs; task-start.ts runs it under noLinkWait), then it starts where the folder is' },
     'src/core/hosts/host-copy.ts': { count: 1, way: 'host_copy: its own deadline and grant gate; a dropped link answers "Copy it again"' },
   }
 
@@ -219,6 +223,47 @@ describe('a long transfer waits out a dropped link', () => {
     expect(found).toEqual(Object.fromEntries(Object.entries(CALLERS).map(([k, v]) => [k, v.count])))
   })
 
+  it('every sender of fs.writePart is listed', () => {
+    const SENDERS: Record<string, string> = {
+      'src/core/transfer/daemon-transfer-client.ts': 'writePart, the transfer client\'s one sender; its callers are listed below',
+      'src/providers/daemon-net-update-io.ts': 'a daemon update\'s upload, one part on its own link; not a step of a move or a transfer',
+    }
+    const found = SOURCES.filter((f) => /(?:\.send\(|call<[^>]*>\([^)]*?)'fs\.writePart'/.test(f.text)).map((f) => f.rel).sort()
+    expect(found).toEqual(Object.keys(SENDERS).sort())
+  })
+
+  it('every write of a file in parts is listed with whether it runs under the wait', () => {
+    const WRITE = /\b(writePart|writeFileInParts|writeTargetFile)\(/g
+    const WRITERS: Record<string, { count: number; way: string }> = {
+      'src/core/transfer/daemon-transfer-client.ts': { count: 2, way: 'relayFile and writeFileInParts, each part through partRetry (part-retry.ts)' },
+      'src/core/transfer/transfer.ts': { count: 3, way: 'writeTargetFile: in parts that wait inside a wait; task_transfer writes its transcript under withLinkWait' },
+      'src/core/sessions/engine-switch-io.ts': { count: 1, way: 'the switch\'s transcript, inside the run runEngineSwitch runs under withLinkWait' },
+      'src/core/hosts/host-mcp-images.ts': { count: 1, way: 'one picture for a tool\'s answer, its own deadline; no wait' },
+      // The receivers: the daemon twins and the core they share.
+      'src/providers/daemon-source.ts': { count: 1, way: 'the receiver' },
+      'src/providers/daemon-standalone.ts': { count: 1, way: 'the receiver' },
+      'src/providers/transfer-core.ts': { count: 1, way: 'the receiver' },
+    }
+    const found: Record<string, number> = {}
+    for (const f of SOURCES) {
+      const n = [...f.text.matchAll(WRITE)].filter((m) => !/function\s*$/.test(f.text.slice(Math.max(0, m.index! - 16), m.index!))).length
+      if (n) found[f.rel] = n
+    }
+    expect(found).toEqual(Object.fromEntries(Object.entries(WRITERS).map(([k, v]) => [k, v.count])))
+    const client = read('src/core/transfer/daemon-transfer-client.ts')
+    for (const fn of ['export async function relayFile(', 'export async function writeFileInParts(']) expect(body(client, fn)).toContain('partRetry(')
+    expect(body(read('src/core/transfer/transfer.ts'), 'export async function writeTargetFile(')).toMatch(/if \(currentLinkWait\(\)\) \{[\s\S]*writeFileInParts\(host, filePath, bytes\)/)
+    expect(read('src/core/transfer/transfer.ts')).toContain('withLinkWait(MOVE_LINK_WAIT_MS, () => writeTargetFile(')
+  })
+
+  it('the whole engine switch run is under the wait, and the steps with their own deadline leave it', () => {
+    expect(body(read('src/core/sessions/engine-switch.ts'), 'export function runEngineSwitch(')).toContain('withLinkWait(MOVE_LINK_WAIT_MS, () => execute(')
+    const leavers = SOURCES.filter((f) => /\bnoLinkWait\(/.test(f.text) && f.rel !== 'src/core/transfer/link-wait.ts').map((f) => f.rel).sort()
+    expect(leavers).toEqual(['src/core/sessions/endpoint-wait.ts', 'src/core/sessions/task-start.ts'])
+    expect(read('src/core/sessions/endpoint-wait.ts')).toContain('noLinkWait(() => probeModelEndpoint(')
+    expect(read('src/core/sessions/task-start.ts')).toContain('noLinkWait(() => placeStartByLoad(')
+  })
+
   it('the moves run under the link wait, and the client waits inside one', () => {
     const work = read('src/core/transfer/task-work.ts')
     expect(body(work, 'export async function moveTaskWork(')).toContain('withLinkWait(MOVE_LINK_WAIT_MS, () => moveWork(opts))')
@@ -226,8 +271,8 @@ describe('a long transfer waits out a dropped link', () => {
     expect(read('src/core/transfer/transfer.ts')).toContain('withLinkWait(MOVE_LINK_WAIT_MS, () => relayFile(')
     const client = read('src/core/transfer/daemon-transfer-client.ts')
     expect(body(client, 'async function connectionFor(')).toMatch(/currentLinkWait\(\)[\s\S]*awaitLink\(/)
-    // The relay does not count a lost link as a failed chunk inside a wait.
-    expect(body(client, 'export async function relayFile(')).toMatch(/if \(wait && \(kind === 'no-link' \|\| kind === 'lost'/)
+    // A part a lost link cut is not counted as a failed part inside a wait (relay and file writes alike).
+    expect(body(read('src/core/transfer/part-retry.ts'), 'export function partRetry(')).toMatch(/if \(wait && \(kind === 'no-link' \|\| kind === 'lost'/)
     // A lost command goes again only when it can run twice: never an apply, a clear, a fetch or a write.
     const resend = read('src/core/transfer/transfer-errors.ts')
     const list = resend.slice(resend.indexOf('RESEND_ON_LOST'))

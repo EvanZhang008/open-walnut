@@ -52,6 +52,7 @@ import { hostPath, putQueuedRows, releaseMoveHeld, releaseMoveHeldRows, stashSwi
 import { newSwitchProgress, pauseForRestart, type SwitchProgress } from './engine-switch-restart.js';
 import { interruptedByShutdown } from '../server-stopping.js';
 import { clearSwitchRunning, markSwitchRunning } from './running-switches.js';
+import { MOVE_LINK_WAIT_MS, withLinkWait } from '../transfer/link-wait.js';
 import {
   CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, estimateTokens, readActiveContext, readCachedContext, renderCarriedContext, targetWindowTokens,
 } from './engine-switch-context.js';
@@ -394,7 +395,10 @@ export function runEngineSwitch(taskId: string, state: EngineSwitchState, opts: 
   if (running) return running.work;
   // A deploy waits while this runs (running-switches.ts, scripts/lib/deploy-queue.sh).
   const marker = markSwitchRunning(taskId, state.move ? `move to ${normalizeHost(state.to.host)}` : `switch to ${resolveEngine(state.to.engine)}`);
-  const work = execute(taskId, state, opts).then(async (r) => {
+  // Every long step of the run waits out a dropped link to either host (link-wait.ts): the work's
+  // copy, the transcript written there, the reads of the old session. A step with its own deadline
+  // leaves the wait (noLinkWait).
+  const work = withLinkWait(MOVE_LINK_WAIT_MS, () => execute(taskId, state, opts)).then(async (r) => {
     inFlight.delete(taskId);
     if (state.move && r.state === 'done' && r.fromSessionId && r.sessionId) await carryLateRows(taskId, r.fromSessionId, r.sessionId);
     return r;
