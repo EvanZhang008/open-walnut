@@ -2219,7 +2219,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
                 <>
                   <div className="chat-plus-menu-divider" role="separator" />
                   {addMenuRowIds.map((id) => {
-                    const label = addMenuControls!.handleRef.current?.state(id) ?? '';
+                    const raw = addMenuControls!.handleRef.current?.state(id) ?? '';
+                    // A folded btw button reads "btw" plus its unread count: the row names it, so only the count stays.
+                    const label = id === 'btw' ? raw.replace(/^btw\s*/, '') : raw;
                     return (
                       <button
                         key={id}
