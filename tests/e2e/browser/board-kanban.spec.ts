@@ -173,7 +173,7 @@ test('C15 C57: the status line says why, in the right tone; only the real asks n
   expect(reds).toBe(3)
 })
 
-test('C21 C46 C94: title, ticket link, Sev chip, 3 line summary, plain text, expand in place', async ({ page }) => {
+test('C21 C46 C94: title, ticket link, Sev chip, 3 line summary, Markdown as written, expand in place', async ({ page }) => {
   test.setTimeout(180_000)
   const pane = await openBoard(page)
   const perm = card(pane, team.perm)
@@ -187,9 +187,10 @@ test('C21 C46 C94: title, ticket link, Sev chip, 3 line summary, plain text, exp
   await (await popup).close()
   await expect(page.getByTestId('board-task-peek')).toHaveCount(0)
   await expect(perm).not.toHaveClass(/is-placeholder/)
-  // Summary: at most 3 lines wide, the tooltip is the whole text.
+  // Summary: at most 3 lines wide, the tooltip is the whole text. The card renders the words as
+  // written (Markdown, so its paragraph ends in a line break the text node keeps; trimmed here).
   const sum = card(pane, team.idle[1]).getByTestId('kanban-card-summary')
-  const box = await sum.evaluate((el) => ({ h: el.clientHeight, lh: parseFloat(getComputedStyle(el).lineHeight), title: el.getAttribute('title') ?? '', text: el.textContent ?? '' }))
+  const box = await sum.evaluate((el) => ({ h: el.clientHeight, lh: parseFloat(getComputedStyle(el).lineHeight), title: el.getAttribute('title') ?? '', text: (el.textContent ?? '').trim() }))
   expect(box.h).toBeLessThanOrEqual(3 * box.lh + 2)
   expect(box.title.startsWith(box.text)).toBe(true)
   expect(box.text).toBe(team.summaries[team.idle[1]])
@@ -199,11 +200,13 @@ test('C21 C46 C94: title, ticket link, Sev chip, 3 line summary, plain text, exp
   expect(lt.h).toBeLessThanOrEqual(2 * lt.lh + 2)
   expect(lt.title).toBe(team.titles[team.longTitle])
   await expect(card(pane, team.nonLatin).getByTestId('kanban-card-title')).toContainText(NON_LATIN_WORDS)
-  // C94: markdown in a summary shows as plain text; a click expands it, Escape folds it, no peek.
+  // C94: Markdown in a summary renders as written (2026-11-10, agent text links its references):
+  // no `**` or backtick shows, the words read as the sentence; a click expands it, Escape folds it, no peek.
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/cards/${team.idle[2]}`, { summary: 'Root cause is **the retry budget** in `ledger-sync`; rollback is out.' })
   const md = card(pane, team.idle[2]).getByTestId('kanban-card-summary')
   await expect(md).toHaveText('Root cause is the retry budget in ledger-sync; rollback is out.', { timeout: 15_000 })
-  expect(await md.locator('strong, code, b, em').count()).toBe(0)
+  expect(await md.locator('strong').allInnerTexts()).toEqual(['the retry budget'])
+  expect(await md.locator('code').allInnerTexts()).toEqual(['ledger-sync'])
   await md.click()
   await expect(md).toHaveAttribute('data-expanded', 'true')
   await card(pane, team.idle[2]).focus()
