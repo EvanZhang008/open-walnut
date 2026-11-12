@@ -199,7 +199,7 @@ function StoppedAsking({ s, now, inDialog = false }: { s: ApprovalsState; now: n
   const st = s.stoppedAsking;
   if (!st) return null;
   const what = s.done[st.id]?.what;
-  // Asked before the switch moved: they still wait for the person, and the note says so.
+  // Asked while it was on: they still wait for the person (the switch never answers them), and the note says so.
   const still = pendingAt(s, now);
   return (
     <div className={`approval-card approval-card-settled approval-stopped${inDialog ? ' approval-stopped-inline' : ''}`} role="status" data-testid="approval-stopped-asking">
@@ -211,7 +211,7 @@ function StoppedAsking({ s, now, inDialog = false }: { s: ApprovalsState; now: n
         ? <div className="approval-stopped-sub">The one you approved stays approved.</div>
         : still.length > 0 && (
           <div className="approval-stopped-sub" data-testid="approval-stopped-still">
-            {still.length === 1 ? '1 request asked before this still waits for you.' : `${still.length} requests asked before this still wait for you.`}{' '}
+            {still.length === 1 ? '1 other request still waits for you.' : `${still.length} other requests still wait for you.`}{' '}
             {!inDialog && <button type="button" className="approval-link" onClick={() => openApproval(still[0]!.id)}>Review</button>}
           </div>
         )}

@@ -707,15 +707,16 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
     await expect(note).toContainText('Agents ask you first again')
     await expect.poll(askMeNow).toBe(true)
 
-    // Stop asking again, and keep it. A request asked before still waits, and the note says so.
-    const earlier = await ask(request, { what: `Publish the preview site ${stamp()}` })
+    // Stop asking again, and keep it. Another request that was already waiting still waits, and the
+    // note says so (the corner shows the first one that came).
     const made = await ask(request, { what: `Post the weekly update ${stamp()}` })
+    const earlier = await ask(request, { what: `Publish the preview site ${stamp()}` })
     const card = page.locator(`[data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
     await expect(card).toBeVisible({ timeout: 15_000 })
     await card.getByTestId('approval-stop-asking').click()
     expect((await waitFor(request, made.approval.id, made.waitToken)).approval.status).toBe('approved')
     await expect(note).toContainText('From now on agents go ahead without asking you')
-    await expect(note.getByTestId('approval-stopped-still')).toContainText('1 request asked before this still waits for you')
+    await expect(note.getByTestId('approval-stopped-still')).toContainText('1 other request still waits for you')
     expect((await request.post(`/api/v1/approvals/${earlier.approval.id}/answer`, { data: { decision: 'deny' } })).ok()).toBe(true)
 
     // Off: the next ask is answered at once, with no card.
