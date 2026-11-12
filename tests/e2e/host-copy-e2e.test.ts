@@ -156,7 +156,7 @@ describe('host_copy', () => {
     // The user's Allow in Settings (the person at this computer: no session header).
     expect((await api('POST', '/api/v1/host-exec/grants', { task_id: taskId, host: 'linuxbox' })).status).toBe(200)
     const copied = await api('POST', '/api/v1/host-copy', { from_host: 'macbox', from: '~/out/run.mp4', to_host: 'linuxbox', to: '~/videos/' }, SID)
-    expect(copied).toMatchObject({ status: 200, body: { from_host: 'macbox', to_host: 'linuxbox', to: '~/videos/run.mp4', sha256: sha(video), chunks: 2 } })
+    expect(copied).toMatchObject({ status: 200, body: { from_host: 'macbox', to_host: 'linuxbox', to: '~/videos/run.mp4', sha256: sha(video), chunks: 3 } })
     expect(fs.readFileSync(path.join(hosts.linuxbox.home, 'videos', 'run.mp4')).equals(video)).toBe(true)
   })
 

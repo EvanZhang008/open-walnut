@@ -197,7 +197,7 @@ describe('host_copy', () => {
     // The probes read one byte each, never a listing; the last part may take as long as hashing the whole file.
     expect(hosts.macbox!.sent.filter((s) => s.cmd === 'fs.readRange').map((s) => s.params.length)).toEqual([1])
     const parts = writes('macbox')
-    expect(parts.map((s) => s.timeoutMs)).toEqual([60_000, 60_000, 60_000 + 1_000])
+    expect(parts.map((s) => s.timeoutMs)).toEqual([60_000, 60_000, 60_000, 60_000, 60_000, 60_000 + 1_000])
 
     const next = Buffer.from('second version')
     put('devbox', 'work/src.tgz', next)

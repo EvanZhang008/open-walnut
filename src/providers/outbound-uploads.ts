@@ -19,7 +19,7 @@
  * Paths under `[Images attached …]` take the picture lane (fs.write) instead,
  * whatever folder they are in, so they are never listed here.
  *
- * The bytes go in UPLOAD_CHUNK_BYTES chunks through the host daemon's
+ * The bytes go in parts of at most MAX_UPLOAD_FRAME_BYTES through the host daemon's
  * `upload.part` (the same lane a phone's session upload takes), and the path is
  * rewritten to the one the host answers. Under the same upload id the host
  * answers a finished file's path again for its last chunk, so shipping twice is
@@ -31,6 +31,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { PASTES_DIR } from '../constants.js'
 import { UPLOAD_CHUNK_BYTES, UPLOAD_ID_RE, isUploadName } from '../core/sessions/session-uploads.js'
+import { MAX_UPLOAD_FRAME_BYTES } from './ssh-upload-budget.js'
 import { localTaskDirRoot } from '../core/sessions/task-dir-place.js'
 import { isTaskDirId } from '../lib/task-dir.js'
 
@@ -39,6 +40,8 @@ export const UPLOAD_PART_CAPABILITY = 'upload-part-v1'
 
 /** A chunk can take a while over a slow tunnel; the phone lane gives each the same. */
 const CHUNK_TIMEOUT_MS = 120_000
+/** A part to a host is at most one upload frame (ssh-upload-budget.ts), smaller than a phone's chunk. */
+const PART_BYTES = Math.min(UPLOAD_CHUNK_BYTES, MAX_UPLOAD_FRAME_BYTES)
 
 /**
  * How many times one ship resumes from where the host says it holds the file.
@@ -218,7 +221,7 @@ export async function shipFile(file: ShippableFile, send: DaemonSend, owner: Shi
     let offset = 0
     let resumes = 0
     for (;;) {
-      const length = Math.min(UPLOAD_CHUNK_BYTES, size - offset)
+      const length = Math.min(PART_BYTES, size - offset)
       const chunk = Buffer.alloc(length)
       if (length > 0) await handle.read(chunk, 0, length, offset)
       const last = offset + length === size
@@ -253,7 +256,7 @@ export async function shipFile(file: ShippableFile, send: DaemonSend, owner: Shi
 
 async function sha256Of(handle: fs.promises.FileHandle, size: number): Promise<string> {
   const hash = createHash('sha256')
-  const buf = Buffer.alloc(Math.min(UPLOAD_CHUNK_BYTES, Math.max(size, 1)))
+  const buf = Buffer.alloc(Math.min(PART_BYTES, Math.max(size, 1)))
   for (let at = 0; at < size;) {
     const { bytesRead } = await handle.read(buf, 0, Math.min(buf.length, size - at), at)
     if (bytesRead === 0) break

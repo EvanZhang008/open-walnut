@@ -57,7 +57,7 @@ setTimeout(() => process.exit(0), 10 * 60_000)
 `
 
 const RETRO = '# Retro\nThe build broke twice; the rollback worked.'
-/** A picture over one 2 MB chunk: it crosses the daemon link as two attachments.put frames. */
+/** A picture over two 1 MB chunks: it crosses the daemon link as three attachments.put frames. */
 const DIAGRAM = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(2 * 1024 * 1024 + 500, 7)])
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 async function waitFor(cond: () => boolean | Promise<boolean>, ms: number, label: string): Promise<void> {

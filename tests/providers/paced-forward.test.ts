@@ -8,8 +8,9 @@
  *   - the forward ending closes the listener; stop() stops the forward under it;
  *   - every SSH forward Walnut opens to a host is paced (the bulk channel by this forward, the stream
  *     lane per stream): a new one fails here until it is;
- *   - no upload command carries more than MAX_UPLOAD_FRAME_BYTES: a daemon closes a client it heard
- *     no whole frame from for 120 s, and at the pace a bigger frame is still going up then.
+ *   - no upload command carries more than MAX_UPLOAD_FRAME_BYTES (writePart and uploadPart split a
+ *     bigger chunk): a daemon closes a client it heard no whole frame from for 120 s, and at the pace
+ *     a bigger frame is still going up then.
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -20,7 +21,7 @@ import { pacedForward } from '../../src/providers/paced-forward.js'
 import type { LaneForward } from '../../src/providers/stream-lane.js'
 import { MAX_UPLOAD_FRAME_BYTES } from '../../src/providers/ssh-upload-budget.js'
 import { createTransferCore } from '../../src/providers/transfer-core.js'
-import { __setTransferConnectionResolverForTesting, uploadPart } from '../../src/core/transfer/daemon-transfer-client.js'
+import { __setTransferConnectionResolverForTesting, uploadPart, writePart } from '../../src/core/transfer/daemon-transfer-client.js'
 import os from 'node:os'
 
 const cleanups: Array<() => unknown> = []
@@ -159,6 +160,28 @@ describe('no upload frame outlasts a daemon keepalive at the bulk pace', () => {
     for (const f of ['core/hosts/host-copy.ts', 'core/attachment-replica.ts']) {
       expect(fs.readFileSync(path.join(root, f), 'utf8'), f).toMatch(/const CHUNK_BYTES = MAX_UPLOAD_FRAME_BYTES\b/)
     }
+    expect(fs.readFileSync(path.join(root, 'providers/outbound-uploads.ts'), 'utf8')).toMatch(/const PART_BYTES = Math\.min\(UPLOAD_CHUNK_BYTES, MAX_UPLOAD_FRAME_BYTES\)/)
+    // Every file that sends an upload command to a host is listed here with how its frames stay small.
+    const SENDERS: Record<string, string> = {
+      'core/transfer/daemon-transfer-client.ts': 'writePart and uploadPart split a chunk into MAX_UPLOAD_FRAME_BYTES parts',
+      'core/attachment-replica.ts': 'CHUNK_BYTES = MAX_UPLOAD_FRAME_BYTES',
+      'providers/outbound-uploads.ts': 'PART_BYTES = min(phone chunk, MAX_UPLOAD_FRAME_BYTES)',
+      'web/routes/session-upload-v1.ts': "a phone's chunk to the companion over its bridge, not an SSH link",
+      'providers/daemon-net-update-io.ts': 'the update over the host network, not an SSH link',
+    }
+    const senders: string[] = []
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (/\.ts$/.test(e.name)) {
+          const text = fs.readFileSync(p, 'utf8')
+          if (/(send|call|bridgeRequest)\w*(<[^>]*>)?\([^)]*'(upload\.part|fs\.writePart|attachments\.put)'/.test(text)) senders.push(path.relative(root, p))
+        }
+      }
+    }
+    walk(root)
+    expect(senders.sort(), 'a new sender of upload frames: cap its frames at MAX_UPLOAD_FRAME_BYTES and list it').toEqual(Object.keys(SENDERS).sort())
     expect(fs.readFileSync(path.join(root, 'core/transfer/daemon-transfer-client.ts'), 'utf8')).toMatch(/Math\.min\(opts\.chunkBytes \?\? MAX_UPLOAD_FRAME_BYTES, MAX_CHUNK_BYTES, MAX_UPLOAD_FRAME_BYTES\)/)
   })
 
@@ -185,5 +208,36 @@ describe('no upload frame outlasts a daemon keepalive at the bulk pace', () => {
     expect(done).toMatchObject({ done: true, sha256: sha })
     expect(sent).toEqual([MAX_UPLOAD_FRAME_BYTES, MAX_UPLOAD_FRAME_BYTES, 99])
     expect(fs.readFileSync(String((done as { path: string }).path)).equals(body)).toBe(true)
+  })
+
+  it('a whole 2.5 MB file in one writePart (a picture an MCP tool returned) goes as 1 MB parts, final and checksum on the last', async () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-paced-write-')))
+    cleanups.push(() => fs.rmSync(tmp, { recursive: true, force: true }))
+    const core = createTransferCore({ fs, path, crypto, spawn: (() => { throw new Error('no spawn') }) as never, env: {}, home: tmp })
+    const sent: Array<{ n: number; offset: unknown; final: unknown; sha: unknown }> = []
+    __setTransferConnectionResolverForTesting(async () => [{
+      hasCapability: () => true,
+      send: async (_cmd: string, params: Record<string, unknown>) => {
+        sent.push({ n: Buffer.from(String(params.data), 'base64').length, offset: params.offset, final: params.final, sha: params.sha256 })
+        return { ok: true, ...(await core.writePart(params)) }
+      },
+    } as never])
+    const body = crypto.randomBytes(2.5 * 1024 * 1024)
+    const sha = crypto.createHash('sha256').update(body).digest('hex')
+    const target = path.join(tmp, 'pic.png')
+    const done = await writePart('devbox', { path: target, offset: 0, data: body.toString('base64'), final: true, size: body.length, sha256: sha })
+    expect(done).toMatchObject({ done: true, sha256: sha })
+    const MB = 1024 * 1024
+    expect(sent).toEqual([
+      { n: MB, offset: 0, final: undefined, sha: undefined },
+      { n: MB, offset: MB, final: undefined, sha: undefined },
+      { n: MB / 2, offset: 2 * MB, final: true, sha },
+    ])
+    expect(fs.readFileSync(target).equals(body)).toBe(true)
+    // An empty file is still one part.
+    sent.length = 0
+    const empty = Buffer.alloc(0)
+    await writePart('devbox', { path: path.join(tmp, 'empty'), offset: 0, data: empty, final: true, size: 0, sha256: crypto.createHash('sha256').update(empty).digest('hex') })
+    expect(sent.map((p) => p.n)).toEqual([0])
   })
 })

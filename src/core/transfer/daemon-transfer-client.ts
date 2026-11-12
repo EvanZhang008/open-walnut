@@ -215,15 +215,28 @@ export interface WritePartOptions {
   timeoutMs?: number
 }
 
-/** One chunk of a file onto `host` (data as bytes, or as base64 text already). */
-export function writePart(host: string, opts: WritePartOptions, gate?: SendGate): Promise<WritePartReply> {
-  const { attempt, timeoutMs, ...rest } = opts
-  const data = typeof opts.data === 'string' ? opts.data : opts.data.toString('base64')
+/**
+ * One chunk of a file onto `host` (data as bytes, or as base64 text already). A chunk over
+ * MAX_UPLOAD_FRAME_BYTES goes as several parts at their offsets, `final` and `sha256` on the last
+ * one only, so no frame outlasts a daemon's keepalive on the paced bulk link.
+ */
+export async function writePart(host: string, opts: WritePartOptions, gate?: SendGate): Promise<WritePartReply> {
+  const { attempt, timeoutMs, final, sha256, data: _data, ...rest } = opts
+  const bytes = typeof opts.data === 'string' ? Buffer.from(opts.data, 'base64') : opts.data
   const wait = timeoutMs ?? PART_RPC_MS
-  if (attempt !== undefined) {
-    return call<WritePartReply>(host, PRIVATE_STAGE_CAPABILITY, 'fs.writePart', { ...rest, data, private: true, attempt }, wait, gate)
+  let reply: WritePartReply | null = null
+  for (let at = 0; at < bytes.length || reply === null; at += MAX_UPLOAD_FRAME_BYTES) {
+    const last = at + MAX_UPLOAD_FRAME_BYTES >= bytes.length
+    const params = {
+      ...rest, offset: opts.offset + at, data: bytes.subarray(at, at + MAX_UPLOAD_FRAME_BYTES).toString('base64'),
+      ...(last && final !== undefined ? { final } : {}), ...(last && sha256 ? { sha256 } : {}),
+    }
+    reply = attempt !== undefined
+      ? await call<WritePartReply>(host, PRIVATE_STAGE_CAPABILITY, 'fs.writePart', { ...params, private: true, attempt }, wait, gate)
+      : await call<WritePartReply>(host, WRITE_PART_CAPABILITY, 'fs.writePart', params, wait, gate)
+    if (last) break
   }
-  return call<WritePartReply>(host, WRITE_PART_CAPABILITY, 'fs.writePart', { ...rest, data }, wait, gate)
+  return reply!
 }
 
 export const UPLOAD_PART_CAPABILITY = 'upload-part-v1'

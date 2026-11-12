@@ -280,8 +280,8 @@ describe('RemoteSessionManager.prepareOutbound (Walnut-owned files to the remote
     const host = '/home/admin/.local/state/open-walnut/uploads/up-abcdefgh-dup1/big.bin'
     expect(outA).toBe(`${FILES}\n- ${host}\n\nfirst`)
     expect(outB).toBe(`${FILES}\n- ${host}\n\nsecond`)
-    // Two chunks for one ship; a second ship would have sent four.
-    expect(conn.send.mock.calls.filter((c) => c[0] === 'upload.part').map((c) => (c[1] as { offset: number }).offset)).toEqual([0, 2 * 1024 * 1024])
+    // Three 1 MB parts for one ship; a second ship would have sent six.
+    expect(conn.send.mock.calls.filter((c) => c[0] === 'upload.part').map((c) => (c[1] as { offset: number }).offset)).toEqual([0, 1024 * 1024, 2 * 1024 * 1024])
   })
 
   it('a host whose daemon cannot take files gets the local path with a note saying so', async () => {
