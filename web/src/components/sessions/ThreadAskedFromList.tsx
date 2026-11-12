@@ -73,6 +73,7 @@ export const ThreadAskedFromList = memo(function ThreadAskedFromList({ rows, onO
           <div
             key={row.key}
             role="button"
+            data-peek-row=""
             tabIndex={0}
             className={`thread-asked-row${row.draft ? ' is-draft' : ''}${row.status === 'resolved' ? ' is-resolved' : ''}`}
             data-thread-key={row.key}

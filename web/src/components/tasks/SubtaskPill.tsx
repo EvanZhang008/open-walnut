@@ -110,7 +110,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
         type="button"
         className={`leader-sub-row${isSelf ? ' is-self' : ''}`}
         data-testid={role === 'leader' ? 'worker-team-leader' : 'worker-team-row'}
-        data-task-id={t.id}
+        data-peek-row="" data-task-id={t.id}
         aria-current={isSelf ? 'true' : undefined}
         title={`Go to "${orgDisplayTitle(t)}"`}
         onClick={() => goTo(t.id, t)}

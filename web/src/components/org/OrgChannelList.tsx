@@ -150,7 +150,7 @@ function KeptChildren({ row, kept, open, onOpenTask, onUnwatch }: { row: Channel
         const title = orgDisplayTitle(t);
         const why = [watched && 'watched', locked && 'locked'].filter(Boolean).join(' and ');
         return (
-          <div key={t.id} className="org-watched-item" role="presentation" data-testid="org-watched-item" data-task-id={t.id} data-state={st} data-watched={watched || undefined} data-locked={locked || undefined} data-open={open?.has(t.id) || undefined}>
+          <div key={t.id} className="org-watched-item" role="presentation" data-testid="org-watched-item" data-peek-row="" data-task-id={t.id} data-state={st} data-watched={watched || undefined} data-locked={locked || undefined} data-open={open?.has(t.id) || undefined}>
             <button
               type="button"
               role="option"

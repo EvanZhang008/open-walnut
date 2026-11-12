@@ -163,7 +163,7 @@ function TeamBoard({ columns, onPick, emptyText }: {
           <ul className="org-team-list">
             {c.items.map((it) => (
               <li key={it.id}>
-                <button type="button" className="org-team-item" data-testid="org-team-item" data-task-id={it.id} onClick={() => onPick(it)} title={it.title}>
+                <button type="button" className="org-team-item" data-testid="org-team-item" data-peek-row="" data-task-id={it.id} onClick={() => onPick(it)} title={it.title}>
                   <span className="org-team-ring" style={{ borderColor: COLUMN_DOT[c.key] }} aria-hidden="true" />
                   <span className="org-team-text">
                     <span className="org-team-title">{it.title}</span>

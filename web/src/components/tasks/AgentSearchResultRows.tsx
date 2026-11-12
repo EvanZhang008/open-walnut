@@ -102,6 +102,7 @@ export function AgentSearchResultRows({ rows, onOpenTask, className }: {
             <button
               type="button"
               className={`agent-search-row${isDone ? ' is-done' : ''}${rowNeedsYou({ phase: row.phase, user_status: row.user_status ?? statusById.get(row.taskId) }) ? ' is-needs-action' : ''}`}
+              data-peek-row=""
               data-task-id={row.taskId}
               title={rowTooltip(row)}
               onClick={() => onOpenTask(row.taskId)}

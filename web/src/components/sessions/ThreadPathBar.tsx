@@ -188,7 +188,7 @@ function LevelMenu({ anchorEl, heading, items, onPick, onClose }: {
       <div className="tree-path-menu-heading">{heading}</div>
       {items.length === 0 && <div className="tree-path-menu-empty">No questions here yet.</div>}
       {items.map((it) => (
-        <button key={it.key} type="button" role="menuitemradio" aria-checked={it.current}
+        <button data-peek-row="" key={it.key} type="button" role="menuitemradio" aria-checked={it.current}
           className="thread-menu-item tree-path-menu-item" data-current={it.current ? 'true' : undefined}
           title={it.title} onClick={() => onPick(it.key)}>
           <span className="tree-path-menu-num">

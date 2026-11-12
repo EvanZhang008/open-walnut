@@ -1142,7 +1142,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
       ref={setNodeRef}
       style={style}
       className={className}
-      data-task-id={task.id}
+      data-peek-row="" data-task-id={task.id}
       data-group-id={groupInfo?.groupId}
       onClick={(e) => {
         if (isEditing) return;
@@ -2150,7 +2150,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
     <div
       ref={setNodeRef}
       style={style}
-      data-task-id={task.id}
+      data-peek-row="" data-task-id={task.id}
       className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isOpenInWindow ? ' todo-recent-card-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (isEditing) return;

@@ -143,3 +143,61 @@ test('text a column clips with no ellipsis peeks too, and a title above it is li
   await expect(pill(page)).toHaveCount(0)
   await expect(page.locator('#peek-fixture button')).toHaveAttribute('title', 'Open the long line: Working')
 })
+
+test('a task row expands as a whole: the pointer anywhere on a status row shows its cut title; its own ⋮ stays quiet', async ({ page, baseURL }) => {
+  const { presetPanelDesign, setStatusSectionOpen } = await import('./status-section-helpers')
+  await isolateUiPrefs(page)
+  await presetPanelDesign(page, 'status')
+  await openHome(page, baseURL!)
+  await showAllSections(page)
+  const panel = page.locator('.todo-panel').first()
+  await setStatusSectionOpen(panel, 'needs', true)
+  await page.mouse.move(1200, 780)
+  // A status row of the fixture whose title the row cuts off, on screen.
+  const cutId = await expect.poll(() => page.evaluate(() => {
+    const row = [...document.querySelectorAll<HTMLElement>('.status-section-card[data-peek-row]')].find((c) => {
+      const t = c.querySelector<HTMLElement>('.todo-pinned-title')
+      const r = c.getBoundingClientRect()
+      return t && t.scrollWidth > t.clientWidth + 1 && r.top > 60 && r.bottom < innerHeight - 20
+    })
+    return row?.dataset.taskId ?? ''
+  }), { timeout: 20_000 }).not.toBe('').then(() => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.status-section-card[data-peek-row]')].find((c) => {
+    const t = c.querySelector<HTMLElement>('.todo-pinned-title')
+    const r = c.getBoundingClientRect()
+    return t && t.scrollWidth > t.clientWidth + 1 && r.top > 60 && r.bottom < innerHeight - 20
+  })!.dataset.taskId!))
+  const card = panel.locator(`.status-section-card[data-task-id="${cutId}"]`).first()
+  const full = (await card.locator('.todo-pinned-title').textContent()) ?? ''
+
+  // On the row, right of its title (the time and project side), not on the title's own text
+  // nor on the row's own ⋮.
+  const kebab = card.getByRole('button', { name: 'More actions' })
+  const at = await card.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const t = el.querySelector('.todo-pinned-title')!.getBoundingClientRect()
+    const k = el.querySelector('[aria-label="More actions"]')?.getBoundingClientRect()
+    const x = Math.max(t.right + 4 - r.left, (k ? k.left : r.right) - r.left - 40)
+    return { x, y: t.top + t.height / 2 - r.top }
+  })
+  await card.hover({ position: at })
+  expect(await page.evaluate(() => !!document.querySelector('.todo-pinned-title:hover'))).toBe(false)
+  await expect(pill(page)).toHaveCount(1)
+  await expect(pill(page)).toHaveText(full)
+  await pill(page).evaluate((el) => Promise.all(el.getAnimations().map((x) => x.finished.catch(() => undefined))))
+  const box = (await pill(page).boundingBox())!
+  await page.screenshot({ path: `${SHOTS}/3-status-row.png`, clip: { x: 0, y: Math.max(0, box.y - 120), width: 1280, height: 260 } })
+  expect(box.x).toBeGreaterThanOrEqual(0)
+  expect(box.x + box.width).toBeLessThanOrEqual(1280)
+  // No native title from the pointer up to the page while it shows, so no dark tooltip opens.
+  const cardBox = (await card.boundingBox())!
+  expect(await titlesAt(page, cardBox.x + at.x, cardBox.y + at.y)).toEqual([])
+
+  // The row's own ⋮ shows itself: over it there is no pill, and its title is back.
+  if (await kebab.count()) {
+    await kebab.hover()
+    await expect(pill(page)).toHaveCount(0)
+    await expect(kebab).toHaveAttribute('title', 'More actions')
+  }
+  await page.mouse.move(1200, 780)
+  await expect(pill(page)).toHaveCount(0)
+})

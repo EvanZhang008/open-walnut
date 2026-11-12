@@ -510,7 +510,7 @@ export function TasksPageTable({
 
   const row = (t: Task) => {
     return (
-      <div key={t.id} className={`tp-row${t.status === 'done' ? ' done' : ''}`} data-task-id={t.id}>
+      <div key={t.id} className={`tp-row${t.status === 'done' ? ' done' : ''}`} data-peek-row="" data-task-id={t.id}>
         <span className="tp-cell-title">
           {/* Same two red marks as the home list, in the row's left gutter: a solid
               dot = unread agent output (clears when the task is opened), a hollow

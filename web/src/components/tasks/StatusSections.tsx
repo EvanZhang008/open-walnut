@@ -301,7 +301,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
       // Renaming: a press in the title edits text, it never drags the row.
       {...(edit.isEditing ? undefined : drag?.listeners)}
       aria-roledescription={drag ? drag.attributes['aria-roledescription'] : undefined}
-      data-task-id={task.id}
+      data-peek-row="" data-task-id={task.id}
       data-dragging={drag?.isDragging ? '1' : undefined}
       data-fold-quiet={quiet ? '1' : undefined}
       className={`todo-pinned-card status-section-card${quiet ? ' status-card-fold-quiet' : ''}${team ? ' status-card-fold-host' : ''}${drag ? ' status-card-draggable' : ''}${drag?.isDragging ? ' is-dragging' : ''}${handlers.limitFlash?.has(task.id) ? ' is-limit-flash' : ''}${twoLine ? ' status-card-two-line' : inlineReason ? ' status-card-reason-inline' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}

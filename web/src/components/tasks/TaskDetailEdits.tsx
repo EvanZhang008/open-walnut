@@ -131,7 +131,7 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
     <Section label="Depends on" count={dependsOn.length || undefined} className="tdp-deps">
       {detail?.is_blocked && <span className="tdp-blocked">blocked</span>}
       {rows.map((dep) => (
-        <div key={dep.id} className="tdp-row tdp-dep-row" data-testid="task-detail-dependency">
+        <div data-peek-row="" key={dep.id} className="tdp-row tdp-dep-row" data-testid="task-detail-dependency">
           <div className="tdp-row-line">
             <button type="button" className="tdp-dep-title" onClick={() => onOpenTask(dep.id)}>{displayTitle(dep)}</button>
             {dep.phase && <span className="tdp-row-end">{PHASE_LABELS[dep.phase as TaskPhase] ?? dep.phase}</span>}
@@ -168,7 +168,7 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
         <div className="tdp-dependents">
           <div className="tdp-label tdp-dependents-label">Waiting on this task <span className="tdp-label-count">{dependents.length}</span></div>
           {dependents.map((dep) => (
-            <button type="button" key={dep.id} className="tdp-dep-title" onClick={() => onOpenTask(dep.id)}>{displayTitle(dep)}</button>
+            <button data-peek-row="" type="button" key={dep.id} className="tdp-dep-title" onClick={() => onOpenTask(dep.id)}>{displayTitle(dep)}</button>
           ))}
         </div>
       )}

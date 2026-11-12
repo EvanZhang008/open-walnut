@@ -305,7 +305,7 @@ export function ContinueRow({ row, kept, onPick }: { row: DrawerRow; kept?: { li
   const d = kept ?? (row.task ? askRowDetail(row.task) : { line: '', needs: false });
   const at = kept ? kept.at : row.task ? askActivityAt(row.task as Task) : undefined;
   return (
-    <button type="button" className="ext-continue-row" data-testid="ext-continue-row" data-task-id={row.id} data-needs={d.needs ? 'true' : 'false'} onClick={onPick} title={row.title}>
+    <button type="button" className="ext-continue-row" data-testid="ext-continue-row" data-peek-row="" data-task-id={row.id} data-needs={d.needs ? 'true' : 'false'} onClick={onPick} title={row.title}>
       <span className={`ask-walnut-drawer-needs${d.needs ? ' is-on' : ''}`} aria-label={d.needs ? 'Needs you' : undefined} />
       <span className="ask-walnut-drawer-item-text">
         <span className="ask-walnut-drawer-item-title">{row.title}</span>

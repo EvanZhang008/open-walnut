@@ -292,7 +292,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
             const state = shownState(taskUserState(item.task));
             const sub = item.family.length - 1;
             const tags = ageTags(item.tier, label(item.tier), item.ages);
-            return <article key={item.task.id} className={`quick-sort-card${i === at ? ' is-current' : ''}`} data-sort-card={item.task.id} data-sort-card-index={i} onPointerDown={() => setCursor(i)} onFocus={() => setCursor(i)}>
+            return <article data-peek-row="" key={item.task.id} className={`quick-sort-card${i === at ? ' is-current' : ''}`} data-sort-card={item.task.id} data-sort-card-index={i} onPointerDown={() => setCursor(i)} onFocus={() => setCursor(i)}>
               <div className="quick-sort-card-proj">{item.task.project?.trim() || 'Inbox'}{sub > 0 && ` · ${sub} ${sub === 1 ? 'subtask moves' : 'subtasks move'} with it`}</div>
               <button type="button" className="quick-sort-card-title" onClick={() => onOpen(item.task)}>{item.task.title}</button>
               <div className="quick-sort-card-meta"><span className={`home-board-state home-board-state-${state}`}><i />{taskStatusLabel(item.task)}</span><span>{label(item.tier)}</span></div>

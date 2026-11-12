@@ -31,7 +31,7 @@ export function DrawerItem({ row, held, selected, onPick, detail }: {
       type="button"
       className={`ask-walnut-drawer-item${selected ? ' is-selected' : ''}`}
       data-testid="ask-walnut-drawer-item"
-      data-task-id={row.id}
+      data-peek-row="" data-task-id={row.id}
       aria-current={selected ? 'true' : undefined}
       onClick={onPick}
       title={row.title}

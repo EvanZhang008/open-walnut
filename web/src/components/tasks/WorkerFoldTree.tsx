@@ -86,7 +86,7 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
         // state by the section it is drawn in, in that section's own words.
         const back = out ? ctl.foldBackOf(task) : null;
         return (
-          <div
+          <div data-peek-row=""
             key={task.id}
             role="listitem"
             className={`worker-fold-item${out ? ' is-out' : ''}${focusedTaskId === task.id ? ' is-focused' : ''}`}

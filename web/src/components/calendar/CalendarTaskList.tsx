@@ -34,7 +34,7 @@ export const TaskListChip = memo(function TaskListChip({
 }) {
   const showPriority = useShowPriority();
   return (
-    <div className={`cal-rail-chip${overlay ? ' cal-rail-chip-overlay' : ''}`}>
+    <div data-peek-row="" className={`cal-rail-chip${overlay ? ' cal-rail-chip-overlay' : ''}`}>
       {showPriority && <PriorityBadge priority={task.priority} />}
       <span className="cal-rail-chip-title">{task.title}</span>
     </div>

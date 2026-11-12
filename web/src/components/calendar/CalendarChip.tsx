@@ -60,7 +60,7 @@ export const CalendarChip = memo(function CalendarChip({
   const tint = isEvent ? item.event.color : undefined;
 
   return (
-    <div
+    <div data-peek-row=""
       className={cls}
       style={tint ? ({ ...style, '--cal-chip-tint': tint } as CSSProperties) : style}
       data-item-id={item.id}

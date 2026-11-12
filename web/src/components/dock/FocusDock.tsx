@@ -118,7 +118,8 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
       tabIndex={0}
       onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); handleClick(); } }}
     >
-      <div className="dock-task-header">
+      {/* The header is the row that expands on hover; the card also holds the chat. */}
+      <div className="dock-task-header" data-peek-row="">
         <div className="dock-task-header-top">
           <span className={`dock-task-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{task.title}</span>
           <span className={`dock-task-phase-badge${unread ? ' dock-task-phase-unread' : ''}${isStreaming ? ' dock-task-phase-streaming' : ''}`}>

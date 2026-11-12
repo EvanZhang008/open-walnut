@@ -145,7 +145,7 @@ export function AdoptWorkerFlyout({ open, anchorRef, anchorPoint, align, leader,
                 type="button"
                 className={`adopt-worker-row${i === active ? ' is-active' : ''}`}
                 data-testid="adopt-worker-row"
-                data-task-id={t.id}
+                data-peek-row="" data-task-id={t.id}
                 title={`Make "${orgDisplayTitle(t)}" a worker of "${orgDisplayTitle(leader)}"`}
                 onMouseEnter={() => setActive(i)}
                 onClick={() => pick(t)}

@@ -64,7 +64,7 @@ export function PhoneNeedsYouStrip({ tasks, onOpen }: { tasks: readonly Task[]; 
       <ul className="phone-needs-you-list">
         {shown.map((t) => (
           <li key={t.id}>
-            <button type="button" className="phone-needs-you-row" data-needs-you-id={t.id} onClick={() => onOpen(t)}>
+            <button data-peek-row="" type="button" className="phone-needs-you-row" data-needs-you-id={t.id} onClick={() => onOpen(t)}>
               <span className="phone-needs-you-title">{orgDisplayTitle(t) || 'Untitled task'}</span>
               <span className="phone-needs-you-meta">
                 <span className="phone-needs-you-reason">{needsYouReason(t)}</span>

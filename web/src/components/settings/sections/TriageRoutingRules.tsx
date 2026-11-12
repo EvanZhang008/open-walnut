@@ -164,7 +164,7 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
               <div className="trr-picks" role="listbox" aria-label="Tasks" id={`trr-picks-${id}`}>
                 {matches.length === 0 && <div className="trr-pick-empty">No open task matches.</div>}
                 {matches.map((t, i) => (
-                  <button key={t.id} type="button" tabIndex={-1} role="option" aria-selected={i === active} id={`trr-pick-${id}-${t.id}`}
+                  <button data-peek-row="" key={t.id} type="button" tabIndex={-1} role="option" aria-selected={i === active} id={`trr-pick-${id}-${t.id}`}
                     className={`trr-pick${i === active ? ' trr-pick-active' : ''}`} data-testid="triage-rule-task-option"
                     title={t.title} onMouseEnter={() => setActive(i)}
                     // Focus stays in the search (WebKit focuses no button on click), so its blur

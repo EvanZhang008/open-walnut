@@ -132,7 +132,7 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
                 type="button"
                 className={`adopt-worker-row${i === active ? ' is-active' : ''}`}
                 data-testid="release-worker-row"
-                data-task-id={t.id}
+                data-peek-row="" data-task-id={t.id}
                 title={`Release "${orgDisplayTitle(t)}" from "${orgDisplayTitle(leader)}". It keeps running on its own.`}
                 onMouseEnter={() => setActive(i)}
                 onClick={() => pick(t)}

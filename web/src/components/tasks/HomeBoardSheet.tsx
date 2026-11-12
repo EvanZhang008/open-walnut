@@ -33,7 +33,7 @@ function BoardTask({ family, mode, onOpen, onMove, onSnooze, onDone, depth = 0, 
   const closed = folded.includes(task.id);
   const until = task.start_date && snoozed(task) ? snoozeUntilText(task.start_date) : '';
   const open = state !== 'done';
-  return <article ref={drag.setNodeRef} className={`home-board-card${depth ? ' home-board-child' : ''}${drag.isDragging ? ' is-dragging' : ''}`} data-board-task={task.id} data-state={state} data-draggable={mode === 'pin' && !moving} onPointerDown={e => {
+  return <article data-peek-row="" ref={drag.setNodeRef} className={`home-board-card${depth ? ' home-board-child' : ''}${drag.isDragging ? ' is-dragging' : ''}`} data-board-task={task.id} data-state={state} data-draggable={mode === 'pin' && !moving} onPointerDown={e => {
     const target = e.target as Element;
     if (e.pointerType !== 'mouse' || target.closest('[data-board-task]') !== e.currentTarget || target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
     drag.listeners?.onPointerDown?.(e);

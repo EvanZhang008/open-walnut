@@ -287,7 +287,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
               <table className="usage-bd-table usage-ec-tasks">
                 <tbody>
                   {data.tasks.map((t) => (
-                    <tr key={t.taskId} className="usage-line" data-task={t.taskId}>
+                    <tr data-peek-row="" key={t.taskId} className="usage-line" data-task={t.taskId}>
                       <td><button type="button" className="usage-ec-open" onClick={() => openTaskOnHome(t.taskId, navigate)}>{t.title}</button>
                         <span className="usage-ec-sub">{[label(t.key), t.project || 'Inbox', t.done ? hours(t.hours) : t.notStarted ? 'never started' : 'open', t.split ? 'split' : '',
                           t.reviews ? `${t.reviews} review${t.reviews === 1 ? '' : 's'}${t.reviewCostUsd ? ` (${money(t.reviewCostUsd)})` : ''}` : '',

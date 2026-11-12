@@ -222,7 +222,7 @@ const TaskListRow = memo(function TaskListRow({
     // session can run hundreds, so the list must stay scannable.
     const elapsed = row.task ? fmtElapsed(rowElapsedMs(row.task, now)) : '';
     return (
-      <button
+      <button data-peek-row=""
         className={`bg-task-row bg-task-row--compact bg-task-row-${row.status} ${selected ? 'bg-task-row--selected' : ''}`}
         onClick={() => onSelect(row.key)}
         aria-pressed={selected}
@@ -236,7 +236,7 @@ const TaskListRow = memo(function TaskListRow({
   }
   const meta = rowMeta(row, now);
   return (
-    <button
+    <button data-peek-row=""
       className={`bg-task-row bg-task-row-${row.status} ${selected ? 'bg-task-row--selected' : ''}`}
       onClick={() => onSelect(row.key)}
       aria-pressed={selected}

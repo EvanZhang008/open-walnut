@@ -175,7 +175,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                         type="button"
                         className="leader-sub-row"
                         data-testid="leader-sub-row"
-                        data-task-id={sub.id}
+                        data-peek-row="" data-task-id={sub.id}
                         title={`Go to "${orgDisplayTitle(sub)}"`}
                         onClick={() => goTo(sub)}
                       >

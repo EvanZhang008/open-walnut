@@ -130,7 +130,7 @@ export function TaskSearchPanel({ tasks, focusedTaskId, onSelect, onBack }: Task
             // Its status in the user's words; a task nobody started shows nothing.
             const phase = task.status !== 'done' && (!task.phase || task.phase === 'TODO') ? '' : taskStatusLabel(task);
             return (
-              <div
+              <div data-peek-row=""
                 key={task.id}
                 className={`notes-task-search-item ${i === selectedIdx ? 'notes-slash-item-active' : ''}`}
                 onMouseEnter={() => setSelectedIdx(i)}

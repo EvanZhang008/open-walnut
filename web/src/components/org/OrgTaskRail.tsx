@@ -142,7 +142,7 @@ function TaskTabList({ tasks, tab, onOpen, now }: { tasks: readonly Task[]; tab:
         const at = own === 'done' ? t.completed_at ?? t.updated_at : t.updated_at;
         return (
           <li key={t.id} className="org-task-item">
-            <div role="button" tabIndex={0} className="org-task-row" data-testid="org-task-row" data-task-id={t.id} data-state={own} onClick={() => onOpen(t.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(t.id); } }} title={note ? `${t.title}\n${note}` : t.title}>
+            <div role="button" tabIndex={0} className="org-task-row" data-testid="org-task-row" data-peek-row="" data-task-id={t.id} data-state={own} onClick={() => onOpen(t.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(t.id); } }} title={note ? `${t.title}\n${note}` : t.title}>
               {own === 'notstarted'
                 ? <span className="org-task-ring" aria-hidden="true">{ICONS.ICON_NOT_STARTED}</span>
                 : <i style={{ background: TAB_DOT[own] }} aria-hidden="true" />}

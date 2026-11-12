@@ -383,7 +383,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
     <div
       ref={setNodeRef}
       style={style}
-      data-task-id={task.id}
+      data-peek-row="" data-task-id={task.id}
       data-group-id={groupInfo?.groupId}
       className={`${cardClass}${groupClass}${projectCollapsed ? ' tier-project-collapsed' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}${filterOverrideReason ? ' task-filter-override' : ''}`}
       onClick={(e) => {
