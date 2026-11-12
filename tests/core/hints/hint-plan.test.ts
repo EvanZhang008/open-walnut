@@ -79,7 +79,7 @@ describe('default schedule', () => {
     expect(sent).toEqual([[], ['question', 'voice-reply'], []]);
     const plan = planHints({ hints: effectiveHints(cfg({})), target: { sessionId: 's6' }, record: rec, config: cfg({}), requested: { question: { arg: '7' } } });
     expect(plan.before).toHaveLength(1);
-    expect(plan.before[0]).toContain('Walnut (question 7): this message is an Ask here question: <walnut-ask thread="7"');
+    expect(plan.before[0]).toContain('Walnut (question 7): Ask here question <walnut-ask thread="7"');
   });
 
   it('a session told rich before the registry is not told again', () => {

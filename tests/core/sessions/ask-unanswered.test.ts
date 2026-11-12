@@ -24,7 +24,7 @@ describe('the question hint names the thread and the tag its answer must sit in'
     expect(text).toContain('<walnut-ask thread="6.1" name="guestbook deployer">');
     expect(text).toContain('<walnut-ask-answer thread="6.1" name="guestbook deployer">');
     expect(text).toContain('</walnut-ask-answer>');
-    expect(text).toMatch(/does not match is not filed/);
+    expect(text).toMatch(/only text inside is filed/);
   });
 
   it('accepts nested ids and nothing else', () => {

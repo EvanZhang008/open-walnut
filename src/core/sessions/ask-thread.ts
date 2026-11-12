@@ -17,10 +17,14 @@ export function askNameOf(meta: { title?: string; question?: string } | undefine
 /** A thread id: the question's number on the main conversation, a path below it when nested (6, 6.1, 6.1.2). */
 export const ASK_THREAD_RE = /^\d{1,5}(?:\.\d{1,5}){0,5}$/;
 
-/** The question hint's words: the question's tag, and the tag its answer must sit in. */
+/**
+ * The question hint's words: one self-contained line naming the question and the tag its answer
+ * goes in. It rides every message of a thread, so it stays short (2026-11-12, the user, of the
+ * ~830-byte block it was: "what is this ask here... hmm"), and nothing of it moves into the
+ * prompt, which every session carries on every request. The tag must open the reply
+ * (web/src/utils/ask-answer.ts askAnswerOpening reads it at the start).
+ */
 export function askHintText(thread: string, name: string): string {
   const attrs = `thread="${thread}"${name ? ` name="${name}"` : ''}`;
-  return `this message is an Ask here question: <walnut-ask ${attrs}>. Begin your reply with the line <walnut-ask-answer ${attrs}>, put your answer to it after that line, and end it with the line </walnut-ask-answer>, with the same thread id and name. `
-    + `Only what is inside that tag is filed under question ${thread}; everything outside it stays in the main conversation, and a tag whose id or name does not match is not filed. `
-    + 'The same holds for every part of the answer: in a later message, after other work, after a compaction, and in a message that also answers other questions (each answer in its own tag with its own thread id and name).';
+  return `Ask here question <walnut-ask ${attrs}>: begin your reply with the line <walnut-ask-answer ${attrs}> and end the answer with </walnut-ask-answer>; only text inside is filed under it, so tag every later part too.`;
 }
