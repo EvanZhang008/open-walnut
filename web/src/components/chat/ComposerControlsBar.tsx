@@ -71,15 +71,18 @@ const DIRECT_BUTTON = '.composer-direct-control';
 
 /**
  * The room a flex row of the composer leaves this bar with its direct buttons
- * folded: the row's content width, less every other item on it (the recall line
- * keeps only its minimum) and the gaps between them. Infinity when the bar does
- * not sit in a flex row, so the caller's own measure stands.
+ * folded: the row's content width, less every other item on its line (the recall
+ * line keeps only its minimum) and the gaps between them. A row that wraps (the
+ * browser side panel's composer) shares its room line by line, so only the items
+ * on the bar's own line count. Infinity when the bar does not sit in a flex row,
+ * so the caller's own measure stands.
  */
 function rowRoom(bar: HTMLElement, spacer: HTMLElement | null, hint: HTMLElement | null, gap: number): number {
   const row = bar.parentElement;
   if (!row) return Infinity;
   const style = getComputedStyle(row);
   if (!style.display.includes('flex') || style.flexDirection.startsWith('column')) return Infinity;
+  const line = style.flexWrap === 'nowrap' ? null : bar.getBoundingClientRect();
   let used = 0;
   let items = 0;
   for (const child of row.children) {
@@ -87,6 +90,10 @@ function rowRoom(bar: HTMLElement, spacer: HTMLElement | null, hint: HTMLElement
     if (el.matches(DIRECT_BUTTON)) continue;
     const childStyle = getComputedStyle(el);
     if (childStyle.display === 'none' || childStyle.position === 'absolute' || childStyle.position === 'fixed') continue;
+    if (line && el !== bar) {
+      const box = el.getBoundingClientRect();
+      if (box.bottom <= line.top + 1 || box.top >= line.bottom - 1) continue;
+    }
     items += 1;
     if (el === bar || el === spacer) continue;
     const w = el.getBoundingClientRect().width;
