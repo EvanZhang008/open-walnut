@@ -1,15 +1,18 @@
 /**
- * Whether an agent's step waits for the person's yes (2026-11-12, the user: "can we make this
- * optional, and I want it to be off by default don't need my approval for anything").
+ * Whether Walnut's own asks wait for the person's yes (2026-11-12, the user: "can we make this
+ * optional, and I want it to be off by default don't need my approval for anything"; later the
+ * same day, of what it covers: browser steps never ask, and an approval the person put in place
+ * on purpose always does).
  *
- * `config.approvals.ask_me` absent or false (the default): no step waits. A post, a mail, a
- * browser step that buys, sends or deletes, a script's `walnut approve`, a hand-off outside a
- * router's area, a command on a new host, all go ahead, and each is recorded where the person
- * reads it afterwards (`unasked` on an approved record: `walnut approvals list --all`, the
- * plugin's own sent log). `true`: every one asks, as before.
+ * `config.approvals.ask_me` absent or false (the default): none of Walnut's own asks waits. A
+ * post, a mail, a browser step that buys, sends or deletes, a hand-off outside a router's area,
+ * an agent's use of a saved password, a command on a new host, all go ahead, and each is recorded
+ * where the person reads it afterwards (`unasked` on an approved record: `walnut approvals list
+ * --all`, the plugin's own sent log). `true`: every one asks, as before.
  *
- * What it never turns off: a signed single-use approval (only its device can sign it; a script
- * that wants it asks with --single-use and reads this switch itself, `askMeOf`), a new signing
+ * What it never covers: an explicit `walnut approve` (or approval_request), which the person put
+ * in a script, hook or CI step to be asked, so it always asks (routes/approvals-v1.ts); a signed
+ * single-use approval (only its device can sign it); a new signing
  * device without its app's proof (the trust root), an OS dialog the system itself shows, a
  * password item the person marked never or sensitive, and the person-only doors (settings,
  * answering an approval). Only a person changes the switch (routes/config.ts).
@@ -39,7 +42,6 @@ import type { ApprovalRequester, ApprovalView } from './types.js'
 
 /** The gates the switch covers, by name (the `unasked` mark on a record). */
 export const ASK_ME_GATES = {
-  approve: 'A script or agent asked with walnut approve',
   browserOutward: 'A browser step that buys, sends or deletes',
   browserSignIn: 'A fresh sign-in on a site open in your own tab',
   routerHandoff: 'A hand-off outside a router task’s area',

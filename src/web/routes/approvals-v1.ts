@@ -290,12 +290,12 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
       ...(requester.taskId ? { taskId: requester.taskId } : {}),
       ...(str(body.why, 400) ? { why: str(body.why, 400) } : {}),
     })
-    // Approvals off (core/approvals/ask-me.ts): the ask is answered yes at once, recorded as not
-    // asked; `walnut approve` reads it and goes on. A signed single-use ask is always asked.
-    const { asksPerson } = await import('../../core/approvals/ask-me.js')
-    const unasked = !singleUse && !(await asksPerson())
+    // An explicit ask (`walnut approve` in a script, hook or CI step, or approval_request) always
+    // asks the person, whatever the Approvals switch says: the person put it there to be asked
+    // (2026-11-12, the user). The switch covers only Walnut's own asks (core/approvals/ask-me.ts),
+    // so its card offers no "stop asking me" (`outsideSwitch`).
     const { approval, waitToken } = await createApproval({
-      ...(unasked ? { unasked: 'approve' } : {}),
+      outsideSwitch: true,
       what: String(body.what ?? ''),
       detail: typeof body.detail === 'string' ? body.detail : undefined,
       mode, timeoutMs, downgraded,

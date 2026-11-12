@@ -243,6 +243,16 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
       pushHostRemoved(host)
       return { host }
     }
+    case 'builtin-approval': {
+      // One of Walnut's own asks, made as a gate makes it (the browser's outward step): it reads the
+      // Approvals switch, so the corner card and its "stop asking me" can be checked in a spec.
+      const { asksPerson, goAheadUnasked } = await import('../../core/approvals/ask-me.js')
+      const { createApproval } = await import('../../core/approvals/store.js')
+      const what = str(body.what) ?? 'A built-in step'
+      const requester = { host: 'this computer', local: true }
+      if (!(await asksPerson())) return { approval: await goAheadUnasked('browserOutward', { what, requester }) }
+      return await createApproval({ what, mode: 'tap', requester })
+    }
     case 'advance-clock': {
       advanceFixtureClock(typeof body.ms === 'number' ? body.ms : 0)
       pushAll()

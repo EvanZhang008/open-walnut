@@ -39,6 +39,14 @@ function stamp(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 }
 
+/** One of Walnut's own asks (the fixture's built-in gate, routes/test-host-fixture.ts): it reads the Approvals switch. */
+async function builtin(request: APIRequestContext, what: string) {
+  const res = await request.post('/api/test/host-fixture', { data: { action: 'builtin-approval', what } })
+  expect(res.status(), await res.text()).toBe(200)
+  return await res.json() as { approval: { id: string; status: string; unasked?: string }; waitToken?: string }
+}
+
+/** An explicit `walnut approve` (its POST): it always asks, whatever the switch says. */
 async function ask(request: APIRequestContext, body: Record<string, unknown>) {
   const res = await request.post('/api/v1/approvals', { data: { cwd: '/work/site', command: 'release.sh', ...body } })
   expect(res.status(), await res.text()).toBe(200)
@@ -122,11 +130,11 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
     const note = page.getByTestId('approval-stopped-asking')
 
     // Stop asking, then Undo: approvals are on again, the one approved stays approved.
-    const first = await ask(request, { what: `Post the release notes ${stamp()}` })
+    const first = await builtin(request, `Post the release notes ${stamp()}`)
     const firstCard = page.locator(`[data-testid="approval-card"][data-approval-id="${first.approval.id}"]`)
     await expect(firstCard).toBeVisible({ timeout: 15_000 })
     await firstCard.getByTestId('approval-stop-asking').click()
-    expect((await waitFor(request, first.approval.id, first.waitToken)).approval.status).toBe('approved')
+    await expect.poll(async () => (await (await request.get(`/api/v1/approvals/${first.approval.id}`)).json()).approval.status).toBe('approved')
     await expect(note).toContainText('From now on agents go ahead without asking you')
     await expect.poll(askMeNow).toBe(false)
     await note.getByTestId('approval-stopped-undo').click()
@@ -135,22 +143,32 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
 
     // Stop asking again, and keep it. Another request that was already waiting still waits, and the
     // note says so (the corner shows the first one that came).
-    const made = await ask(request, { what: `Post the weekly update ${stamp()}` })
-    const earlier = await ask(request, { what: `Publish the preview site ${stamp()}` })
+    const made = await builtin(request, `Post the weekly update ${stamp()}`)
+    const earlier = await builtin(request, `Publish the preview site ${stamp()}`)
     const card = page.locator(`[data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
     await expect(card).toBeVisible({ timeout: 15_000 })
     await card.getByTestId('approval-stop-asking').click()
-    expect((await waitFor(request, made.approval.id, made.waitToken)).approval.status).toBe('approved')
+    await expect.poll(async () => (await (await request.get(`/api/v1/approvals/${made.approval.id}`)).json()).approval.status).toBe('approved')
     await expect(note).toContainText('From now on agents go ahead without asking you')
     await expect(note.getByTestId('approval-stopped-still')).toContainText('1 other request still waits for you')
     expect((await request.post(`/api/v1/approvals/${earlier.approval.id}/answer`, { data: { decision: 'deny' } })).ok()).toBe(true)
 
-    // Off: the next ask is answered at once, with no card.
+    // Off: Walnut's own next ask goes ahead at once, with no card.
     const quietWhat = `Post the changelog ${stamp()}`
-    const quiet = await ask(request, { what: quietWhat })
-    expect(quiet.approval).toMatchObject({ status: 'approved', unasked: 'approve' })
+    const quiet = await builtin(request, quietWhat)
+    expect(quiet.approval).toMatchObject({ status: 'approved', unasked: 'browserOutward' })
     await page.waitForTimeout(1500)
     await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${quiet.approval.id}"]`)).toHaveCount(0)
+
+    // An explicit walnut approve still asks, and its card offers no "stop asking me".
+    const explicit = await ask(request, { what: `Push the release tag ${stamp()}` })
+    expect(explicit.approval).toMatchObject({ status: 'pending' })
+    const explicitCard = page.locator(`[data-testid="approval-card"][data-approval-id="${explicit.approval.id}"]`)
+    await expect(explicitCard).toBeVisible({ timeout: 15_000 })
+    await expect(explicitCard.getByTestId('approval-stop-asking')).toHaveCount(0)
+    if (process.env.APR_SHOTS) await explicitCard.screenshot({ path: `${process.env.APR_SHOTS}/explicit-asks-while-off.png` })
+    await explicitCard.getByRole('button', { name: 'Approve', exact: true }).click()
+    expect((await waitFor(request, explicit.approval.id, explicit.waitToken)).approval.status).toBe('approved')
 
     // The note's link opens Settings, General: the row reads off, with what went ahead under it.
     await note.getByTestId('approval-stopped-settings').click()
@@ -160,7 +178,9 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
     // A row opens to what it was: the command and who asked.
     const row = page.getByTestId('settings-approvals-unasked-item').filter({ hasText: quietWhat })
     await row.locator('summary').click()
-    await expect(row).toContainText('release.sh')
+    await expect(row).toContainText('this computer')
+    // The row says a walnut approve in the person's own script always asks.
+    await expect(page.getByTestId('settings-approvals-ask-me-row')).toContainText('A walnut approve in your own script always asks you')
     if (process.env.APR_SHOTS) await page.getByTestId('settings-approvals-ask-me-row').screenshot({ path: `${process.env.APR_SHOTS}/settings-switch-off.png` })
 
     // On again from Settings: the next ask waits for the person.
@@ -169,7 +189,7 @@ test('stop asking from the card, see it in Settings, and turn it back on there',
     // The record stays once something went ahead, said to be from while approvals were off.
     await expect(page.getByTestId('settings-approvals-unasked')).toContainText('While approvals were off')
     await expect.poll(askMeNow).toBe(true)
-    const asked = await ask(request, { what: `Post the roadmap ${stamp()}` })
+    const asked = await builtin(request, `Post the roadmap ${stamp()}`)
     await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${asked.approval.id}"]`)).toBeVisible({ timeout: 15_000 })
     await request.post(`/api/v1/approvals/${asked.approval.id}/answer`, { data: { decision: 'deny' } })
   } finally {
@@ -794,11 +814,11 @@ test('with a device that signs, turning approvals off waits for its Face ID, fro
     await offHome(page)
 
     // From a card: this request is approved, and the turn-off opens as its own Face ID approval.
-    const first = await ask(request, { what: `Post the release notes ${stamp()}` })
+    const first = await builtin(request, `Post the release notes ${stamp()}`)
     const firstCard = page.locator(`[data-testid="approval-card"][data-approval-id="${first.approval.id}"]`)
     await expect(firstCard).toBeVisible({ timeout: 15_000 })
     await firstCard.getByTestId('approval-stop-asking').click()
-    expect((await waitFor(request, first.approval.id, first.waitToken)).approval.status).toBe('approved')
+    await expect.poll(async () => (await (await request.get(`/api/v1/approvals/${first.approval.id}`)).json()).approval.status).toBe('approved')
     const dialog = page.getByTestId('approval-dialog')
     await expect(dialog).toContainText('Turn approvals off', { timeout: 15_000 })
     await expect(dialog.getByRole('button', { name: /^Approve/ })).toHaveCount(0)
@@ -809,8 +829,8 @@ test('with a device that signs, turning approvals off waits for its Face ID, fro
     await signTurnOff(turnOffId!)
     await expect.poll(askMeNow).toBe(false)
     await page.keyboard.press('Escape')
-    const quiet = await ask(request, { what: `Post the changelog ${stamp()}` })
-    expect(quiet.approval).toMatchObject({ status: 'approved', unasked: 'approve' })
+    const quiet = await builtin(request, `Post the changelog ${stamp()}`)
+    expect(quiet.approval).toMatchObject({ status: 'approved', unasked: 'browserOutward' })
 
     // From Settings: on needs nothing; off keeps the switch on until the phone signs.
     if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()

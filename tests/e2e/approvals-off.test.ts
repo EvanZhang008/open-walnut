@@ -2,8 +2,9 @@
  * The one Approvals switch on a real server (src/core/approvals/ask-me.ts; 2026-11-12, the user:
  * "I want it to be off by default don't need my approval for anything"):
  *
- *  - off (nothing stored): `walnut approve` is answered yes at once, recorded as not asked, and
- *    the CLI goes on (exit 0) with no card;
+ *  - off (nothing stored): Walnut's own asks go ahead, recorded as not asked; an explicit
+ *    `walnut approve` still asks the person and waits (2026-11-12, the user: an approval they put
+ *    in a script is the point of the feature), with no "stop asking me" on its card;
  *  - a session cannot turn it on or off (403 human_only); the person can, from any screen;
  *  - on: the same ask waits for the person again;
  *  - a signed single-use ask is never answered by the switch;
@@ -42,6 +43,16 @@ async function http(method: string, path: string, body?: unknown, headers: Recor
   return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, any> }
 }
 
+async function waitPending(what: string): Promise<Record<string, any>> {
+  for (let i = 0; i < 100; i++) {
+    const list = (await http('GET', '/api/v1/approvals')).body.approvals as Array<Record<string, any>>
+    const found = list.find((a) => a.what === what)
+    if (found) return found
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  throw new Error(`no pending approval "${what}"`)
+}
+
 function approve(what: string, timeoutMs = 10_000) {
   const said: string[] = []
   const code = runApprove({ what, biometric: false, timeoutMs, json: true, cwd: '/work/repo', command: 'post.sh' }, {
@@ -70,14 +81,14 @@ afterAll(async () => {
 })
 
 describe('approvals are off by default', () => {
-  it('walnut approve goes on at once, recorded as not asked, with nothing waiting', async () => {
-    const run = approve('Post the release notes to the team channel?')
+  it('a built-in ask goes ahead, but an explicit walnut approve still waits for the person', async () => {
+    expect(await asksPerson()).toBe(false)
+    const run = approve('Post the release notes to the team channel?', 30_000)
+    const rec = await waitPending('Post the release notes to the team channel?')
+    expect(rec).toMatchObject({ status: 'pending', outsideSwitch: true })
+    expect(rec.unasked).toBeUndefined()
+    expect((await http('POST', `/api/v1/approvals/${rec.id}/answer`, { decision: 'approve' })).status).toBe(200)
     expect(await run.code, run.said.join('\n')).toBe(0)
-    const all = await http('GET', '/api/v1/approvals?status=all')
-    const rec = (all.body.approvals as Array<Record<string, any>>).find((a) => a.what === 'Post the release notes to the team channel?')
-    expect(rec).toMatchObject({ status: 'approved', unasked: 'approve', answer: { decision: 'approve', device: { kind: 'setting' } } })
-    const pending = await http('GET', '/api/v1/approvals')
-    expect((pending.body.approvals as unknown[]).length).toBe(0)
   })
 
   it('never answers a signed single-use ask', async () => {
@@ -106,7 +117,7 @@ describe('only the person moves the switch', () => {
     const off = await http('PUT', '/api/config', { approvals: { ask_me: false } }, { 'x-walnut-caller-sid': 'sess-agent' })
     expect(off.status).toBe(403)
     expect((await http('PUT', '/api/config', { approvals: { ask_me: false } })).status).toBe(200)
-    expect(await approve('Delete the old preview site, again?').code).toBe(0)
+    expect(await asksPerson()).toBe(false)
   })
 })
 
@@ -180,7 +191,6 @@ describe('while a device signs approvals, only its signature turns them off', ()
     expect(await asksPerson()).toBe(false)
     const latch = JSON.parse(await fs.readFile(path.join(WALNUT_HOME, 'approvals', 'switch.json'), 'utf8'))
     expect(latch).toMatchObject({ on: false, by: { approvalId: turnOff.id, keyId: keyIdOf(spki) } })
-    expect(await approve('Post the weekly summary?').code).toBe(0)
 
     // On again needs nothing.
     expect((await http('PUT', '/api/config', { approvals: { ask_me: true } })).status).toBe(200)

@@ -1,8 +1,9 @@
 /**
- * Ask me before agents act (config `approvals.ask_me`, src/core/approvals/ask-me.ts; 2026-11-12, the
- * user: "I want it to be off by default don't need my approval for anything"). Off (absent): an
- * agent's post, mail, browser step, `walnut approve` and first command on another host go ahead
- * with no card or letter. On: each waits for the person's yes.
+ * Walnut's own asks (config `approvals.ask_me`, src/core/approvals/ask-me.ts; 2026-11-12, the user:
+ * "I want it to be off by default don't need my approval for anything"). Off (absent): an agent's
+ * post, mail, browser step, saved password and first command on another host go ahead with no card
+ * or letter. On: each waits for the person's yes. A `walnut approve` the person put in a script
+ * always asks, whatever this says (routes/approvals-v1.ts), and the row says so.
  *
  * Under the switch, while it is off: the steps that went ahead without asking, newest first (the
  * approved records marked `unasked`), so the person can read afterwards what the switch let through.
@@ -65,10 +66,10 @@ export function ApprovalsAskRow({ config, save }: { config: Config; save: Save }
   return (
     <>
       <SettingsRow
-        label="Ask me before agents act"
+        label="Ask me before Walnut's own steps"
         help={offWaiting
           ? 'Approve “Turn approvals off” with Face ID or Touch ID to finish. Until then agents still ask you.'
-          : 'Off: agents post, send mail and run steps without asking you; each is listed below. On: each one waits for your OK.'}
+          : 'Posts, mail, browser steps, saved passwords and a first command on another host. Off: they go ahead, each listed below. A walnut approve in your own script always asks you.'}
         htmlFor="settings-approvals-ask-me"
         error={setting.error ?? offError}
         data-testid="settings-approvals-ask-me-row"

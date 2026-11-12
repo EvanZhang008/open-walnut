@@ -32,8 +32,8 @@ defineOp({
     + '`walnut approve "<what>" [--why <sentence>] [--biometric] [--timeout 10m] [--detail <file>]` instead: it waits and exits 0 only on Approve '
     + '(`--request-only` asks and exits 4, then `walnut approve --approval <id>` runs it once approved). The person sees why, the task, its last steps '
     + 'and whether Walnut saw the asking process inside this session. '
-    + 'While the user\'s Approvals switch is off (the default, Settings, General), the answer is Approve at once with nobody asked '
-    + '(`unasked` on the record), except for `single_use`, which is always asked. '
+    + 'It always asks the person, whatever their Approvals switch says: that switch covers only Walnut\'s own asks (posts, mail, '
+    + 'browser steps), never an approval someone put in a script or asks for on purpose. '
     + 'No op answers one and the answer route refuses every session: a person answers on their device, and an agent never tries. Use it for a step the user must allow '
     + '(the charter\'s own kinds: an outward send, spending, credentials, deleting data), not for questions you can decide.',
   input: {
