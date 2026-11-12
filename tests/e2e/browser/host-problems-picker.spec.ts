@@ -403,7 +403,8 @@ test.describe('Settings host row head', () => {
     const host = row.locator('.rh-host-hostname')
     await expect(row.locator('.rh-host-name')).toHaveText('Dev cloud')
     await expect(alias).toHaveText('devcloud01')
-    await expect(host).toHaveAttribute('title', hostname)
+    // The whole hostname is its text (cut off, it peeks in place on hover).
+    await expect(host).toHaveText(hostname)
     const m = await row.evaluate((el) => {
       const a = el.querySelector('.rh-host-alias') as HTMLElement
       const h = el.querySelector('.rh-host-hostname') as HTMLElement

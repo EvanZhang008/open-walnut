@@ -174,7 +174,7 @@ test('C8: a move the server refuses puts the card back in its place and says so'
   await showLanes(pane, 'waiting-others', 'waiting-cr')
   const from = await laneIds(pane, 'waiting-others')
   const src = from[0]
-  const title = (await card(pane, src).getByTestId('kanban-card-title').getAttribute('title')) ?? ''
+  const title = (await card(pane, src).getByTestId('kanban-card-title').textContent()) ?? ''
   // The last card's lower half, kept inside the lane's visible box: a tall card runs under the lane's bottom edge.
   const to = await pointOn(laneBody(pane, 'waiting-cr').locator('[data-testid="kanban-card"]').last(), 'bottom')
   const lane = (await pane.locator('[data-testid="kanban-lane"][data-lane-id="waiting-cr"]').boundingBox())!

@@ -194,11 +194,12 @@ test('C21 C46 C94: title, ticket link, Sev chip, 3 line summary, Markdown as wri
   expect(box.h).toBeLessThanOrEqual(3 * box.lh + 2)
   expect(box.title.startsWith(box.text)).toBe(true)
   expect(box.text).toBe(team.summaries[team.idle[1]])
-  // C46: the long title clamps to 2 lines with its full name in the tooltip; the non Latin one shows whole.
+  // C46: the long title clamps to 2 lines with its full name in its text, which peeks in place
+  // on hover (utils/truncation-peek.ts); the non Latin one shows whole.
   const long = card(pane, team.longTitle).getByTestId('kanban-card-title')
-  const lt = await long.evaluate((el) => ({ h: el.clientHeight, lh: parseFloat(getComputedStyle(el).lineHeight), title: el.getAttribute('title') }))
+  const lt = await long.evaluate((el) => ({ h: el.clientHeight, lh: parseFloat(getComputedStyle(el).lineHeight), text: el.textContent }))
   expect(lt.h).toBeLessThanOrEqual(2 * lt.lh + 2)
-  expect(lt.title).toBe(team.titles[team.longTitle])
+  expect(lt.text).toBe(team.titles[team.longTitle])
   await expect(card(pane, team.nonLatin).getByTestId('kanban-card-title')).toContainText(NON_LATIN_WORDS)
   // C94: Markdown in a summary renders as written (2026-11-10, agent text links its references):
   // no `**` or backtick shows, the words read as the sentence; a click expands it, Escape folds it, no peek.

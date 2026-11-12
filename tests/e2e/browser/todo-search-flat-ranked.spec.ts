@@ -113,7 +113,8 @@ test('literal hits lead and survive the server pass; loose hits fold into Relate
   await expect(pinnedRow.locator('.todo-search-tier-pill')).toHaveText('Parked');
   await expect(page.locator(`.todo-search-results .todo-panel-item[data-task-id="${literalPlain}"] .todo-search-tier-pill`)).toHaveCount(0);
   const label = pinnedRow.locator('.todo-search-context-pill');
-  await expect(label).toHaveAttribute('title', PROJECT);
+  // The whole project name is the label's text (cut off, it peeks in place on hover).
+  await expect(label).toHaveText(PROJECT);
   // Second line: the title keeps its whole line, and the tier pill + project label sit
   // under it, starting where the title text starts, inside the row.
   await expect(pinnedRow.locator('.todo-item-title-row .todo-search-tier-pill, .todo-item-title-row .todo-search-context-pill')).toHaveCount(0);

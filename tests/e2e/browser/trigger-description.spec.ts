@@ -120,8 +120,11 @@ test('the pill, the flyout and the Routines card say what each trigger does; the
     const legacyRow = flyout.locator('.trigger-jobs-row', { hasText: `PW legacy ${stamp}` })
     const text = describedRow.locator('.trigger-jobs-description')
     await expect(text).toHaveText(LONG)
-    // The whole text is on hover even though only three lines show.
-    await expect(text).toHaveAttribute('title', LONG)
+    // The whole text is on hover even though only three lines show: it peeks in place
+    // (web/src/utils/truncation-peek.ts), with no native title left to open a tooltip.
+    await text.hover()
+    await expect(page.getByTestId('truncation-peek')).toHaveText(LONG)
+    await expect(text).not.toHaveAttribute('title', /./)
     // Sits under the heading (name + cadence), above the check command.
     const [headBox, textBox, runBox] = await Promise.all([
       describedRow.locator('.trigger-jobs-heading').boundingBox(),
