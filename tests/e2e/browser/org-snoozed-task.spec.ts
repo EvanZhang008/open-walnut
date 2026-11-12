@@ -2,14 +2,14 @@
  * A snoozed task on the Org page (2026-10-30, the user: a snoozed task "still showing here" as a red
  * Needs you card; "if it is snoozed, it is not needs you"). Two tasks of one project hand back to the
  * user; one has a start date two weeks out. Only the other one needs the user: the counts, the
- * alert list and the Team tab say so in the one set of names (src/core/user-status.ts), and the
+ * alert list and the All tasks sections say so in the one set of names (src/core/user-status.ts), and the
  * snoozed one reads "Snoozed until <date>" under Waiting / snoozed. Moving its start date to the past
  * brings it back as Needs you, live.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { openTasksBy, showTasks, expectChatShown } from './org-view-helpers'
+import { openSection, openTasksBy, sectionCount, taskRow, taskSection, expectChatShown } from './org-view-helpers'
 
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Snoozeflow ${STAMP}`
@@ -77,27 +77,29 @@ test('a snoozed task is not Needs you on the Org page; its date passing brings i
   await expect(counts).toContainText('Waiting / snoozed')
   await expect(counts).not.toContainText(/needs? you/i)
   // A lead opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
-  await showTasks(detail)
-  const needsTab = detail.locator('[data-testid="org-task-tab"]').filter({ hasText: /^Needs you/ })
-  await expect(needsTab.locator('.org-task-tab-count')).toHaveText('1')
+  await openTasksBy(detail, 'all')
+  const needs = taskSection(detail, 'needs')
+  await expect(needs.getByTestId('org-task-section-head')).toContainText('Needs you')
+  await expect(sectionCount(detail, 'needs')).toHaveText('1')
   // Only the plain one is asked of the user.
-  await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.plain}"]`)).toBeVisible()
+  await expect(needs.locator(`[data-testid="org-alert"][data-task-id="${ids.plain}"]`)).toBeVisible()
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.snoozed}"]`)).toHaveCount(0)
 
-  await openTasksBy(detail, 'team')
-  const col = (key: string) => detail.locator(`[data-testid="org-team-col"][data-column="${key}"]`)
-  await expect(col('needs').locator('.org-team-head')).toContainText('Needs you')
-  await expect(col('needs').locator(`[data-task-id="${ids.plain}"]`)).toBeVisible()
-  await expect(col('waiting').locator('.org-team-head')).toContainText('Waiting / snoozed')
-  const snoozedItem = col('waiting').locator(`[data-task-id="${ids.snoozed}"]`)
-  await expect(snoozedItem).toBeVisible()
-  await expect(snoozedItem.getByTestId('org-team-note')).toContainText(`Snoozed until ${later}`)
+  // The snoozed one is under Waiting / snoozed (folded by default), saying until when.
+  await openSection(detail, 'waiting')
+  await expect(taskSection(detail, 'waiting').getByTestId('org-task-section-head')).toContainText('Waiting / snoozed')
+  const snoozedRow = taskRow(detail, ids.snoozed, 'waiting')
+  await expect(snoozedRow).toBeVisible()
+  await expect(snoozedRow.getByTestId('org-task-note')).toContainText(`Snoozed until ${later}`)
+  await expect(taskRow(detail, ids.snoozed)).toHaveCount(1)
   if (SHOTS) await detail.screenshot({ path: `${SHOTS}/org-snoozed-team.png` })
 
   // The date comes: the start date moves into the past and the task needs the user again, live.
   await patch(request, ids.snoozed, { start_date: '2026-01-01' })
-  await expect(col('needs').locator(`[data-task-id="${ids.snoozed}"]`)).toBeVisible({ timeout: 30_000 })
+  await expect(needs.locator(`[data-testid="org-alert"][data-task-id="${ids.snoozed}"]`)).toBeVisible({ timeout: 30_000 })
   await expectChatShown(detail)
-  await expect(col('needs').getByTestId('org-team-item')).toHaveCount(2, { timeout: 30_000 })
+  await expect(needs.getByTestId('org-alert')).toHaveCount(2, { timeout: 30_000 })
+  await expect(sectionCount(detail, 'needs')).toHaveText('2')
+  await expect(taskRow(detail, ids.snoozed, 'waiting')).toHaveCount(0)
   if (SHOTS) await detail.screenshot({ path: `${SHOTS}/org-snooze-ended.png` })
 })

@@ -13,7 +13,7 @@ import { ORG_MAIN_NODE, buildOrgTree, orgProjectNode } from '../../src/core/org/
 import { resolvePinNode, watchNodeOf } from '../../src/core/org/org-pins.js'
 import { USER_STATE_LABELS } from '../../src/core/user-status.js'
 import { MAIN_KEY, buildChannels, projectRowKey, type AlertProbe } from '../../web/src/components/org/org-channels-model.js'
-import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, ORG_TASK_TABS, TAB_DOT, isKeptRailTab, orgTaskTabs, railTabShown, stateTab, keptByRow, lockedTaskIds, slotTaskIds } from '../../web/src/components/org/org-task-tabs.js'
+import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, ORG_TASK_TABS, TAB_DOT, allTasksSections, orgTaskTabs, stateTab, keptByRow, lockedTaskIds, slotTaskIds } from '../../web/src/components/org/org-task-tabs.js'
 import { STATUS_SECTION_LABELS } from '../../web/src/components/tasks/status-sections.js'
 
 const NOW = Date.UTC(2026, 9, 31, 12, 0)
@@ -97,11 +97,18 @@ describe('the Watching tab', () => {
     expect(ORG_RAIL_TAB_LABELS.watching).toBe('Watching')
   })
 
-  it('opens Watching where an older build kept the Pinned tab', () => {
-    expect(isKeptRailTab('pinned')).toBe(true)
-    expect(railTabShown('pinned')).toBe('watching')
-    for (const tab of ORG_RAIL_TABS) expect(railTabShown(tab)).toBe(tab)
-    expect(isKeptRailTab('nope')).toBe(false)
+  it('All tasks draws a watched task once: in Watching, or its ask\'s card', () => {
+    const tabs = orgTaskTabs(walnut, rows, tasks, NOW)
+    const secs = allTasksSections(tabs, tabs.needs)
+    const of = (tab: string) => secs.find((x) => x.tab === tab)?.tasks.map((t) => t.id) ?? []
+    const asks = new Set(tabs.needs.map((a) => a.taskId))
+    for (const id of of('watching')) {
+      expect(asks.has(id)).toBe(false)
+      for (const tab of ['working', 'waiting', 'notstarted', 'done']) expect(of(tab)).not.toContain(id)
+    }
+    // Finished a month ago, out of Completed's week: it stays in Watching rather than vanish.
+    expect(of('watching')).toContain('shipped')
+    expect(of('done')).not.toContain('shipped')
   })
 
   it('lists a VP\'s watched work in watch order, done ones too, never a plugin\'s own task', () => {

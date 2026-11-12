@@ -33,7 +33,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { openTasksBy, expectChatShown } from './org-view-helpers'
+import { expectChatShown } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`

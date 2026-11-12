@@ -36,7 +36,7 @@ describe('the Org row menu', () => {
   it('moves a project with one row that opens the VPs, never a row per VP', () => {
     const { menu, picks, openChart } = setup(projects)
     const items = menu('Seeds')
-    expect(labels(items)).toEqual(['Seeds', 'Open chat', 'Open team', 'Move under another VP…'])
+    expect(labels(items)).toEqual(['Seeds', 'Open chat', 'Open tasks', 'Move under another VP…'])
     items.find((i) => i.key === 'move')!.onSelect!()
     expect(picks).toHaveLength(1)
     expect(picks[0]!.label).toBe('Move Seeds under')
@@ -64,7 +64,7 @@ describe('the Org row menu', () => {
     const { menu, openChart, picks } = setup([...projects, lead])
     const items = menu('Garden')
     // Short whatever the org's size: its name, its tabs, one move row, one dedicated-VP row.
-    expect(labels(items)).toEqual(['Garden', 'Open chat', 'Open team', 'Move under another VP…', 'Create a dedicated VP…'])
+    expect(labels(items)).toEqual(['Garden', 'Open chat', 'Open tasks', 'Move under another VP…', 'Create a dedicated VP…'])
     items.find((i) => i.key === 'own')!.onSelect!()
     expect(picks[0]!.label).toBe('Create a dedicated VP for')
     expect(picks[0]!.options.map((o) => o.label).sort()).toEqual(['Pond', 'Seeds', 'Shed'])

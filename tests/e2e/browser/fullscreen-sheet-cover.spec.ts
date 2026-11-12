@@ -20,7 +20,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { openTasksBy } from './org-view-helpers'
+import { openTaskFromRail } from './org-view-helpers'
 import { holdApprovalsLock } from './approvals-lock'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -229,10 +229,8 @@ test('Org: the Org chat\'s Side threads, the Org side bar and a task beside the 
   await expect(rail).not.toHaveAttribute('data-fullscreen', '1')
 
   // A task opened beside the page: its panel and its Side threads.
-  await openTasksBy(page, 'team')
-  await page.locator(`[data-testid="org-team-item"][data-task-id="${tasks[0]}"]`).click()
   const side = page.getByTestId('org-side')
-  await expect(side).toHaveAttribute('data-session-id', workSid, { timeout: 30_000 })
+  await openTaskFromRail(page, tasks[0]!, () => expect(side).toHaveAttribute('data-session-id', workSid, { timeout: 5_000 }))
   const panel = side.locator(`.session-panel[data-session-id="${workSid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await threadsFullScreen(page, panel, 'Side threads of the task beside the Org page')

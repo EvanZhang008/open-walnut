@@ -6,18 +6,20 @@
  * The lead's writes go through the route its brief_write op calls, as its session would.
  *
  * Scenario matrix (2026-10-30, the user: the Brief is only the AI's letter, in three sections, and
- * the Needs you cards belong to the default view, Task, whose four tabs read like the home panel):
- *  1. a lead with a Brief: the node opens on Threads (tabs Threads, Tasks, Brief); Task shows its
- *     Needs you tab (Latest, the cards), the switch
+ * the Needs you cards belong to the default view, Task, whose sections read like the home panel):
+ *  1. a lead with a Brief: the node opens on Threads (tabs Threads, Tasks, Brief); Task shows All
+ *     tasks with its Needs you section open (Latest, the cards), the switch
  *     offers Brief with a dot for a rewrite not read yet; Brief shows the letter alone, in its three
  *     sections (Needs you, Working, Waiting / snoozed) with each task under its live status, its
  *     pills wearing that status, its time, no Needs you cards; Task brings the cards back; the
- *     Task view's four tabs carry the home panel's names and counts, and a count pill opens its tab;
+ *     Task view's sections carry the home panel's names and counts, in its order, what waits folded,
+ *     and a count pill opens its section in the same list;
  *  2. a named task moves: its pill recolors at once, its line moves to its new section and shows
  *     the task's words now, marked as moved, and the head says how many lines moved since; opening
  *     a stale Brief asks the lead for a refresh and the page says it is updating; a task asking the
  *     user that the letter leaves out is added in its own words; a named task that finishes leaves;
- *  3. Fold keeps the first lines and survives a reload; a reload opens on the view it was left on;
+ *  3. Fold keeps the first lines and survives a reload; a reload opens on the view it was left on,
+ *     and a section folded on the node stays folded;
  *  4. the lead rewrites its Brief while the page is open: the new letter shows with no reload, in
  *     its sections, no longer moved or updating; a line with no task is stored with its issue, and
  *     the page shows no notice;
@@ -28,6 +30,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { sectionCount, taskRow, taskSection } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
@@ -153,21 +156,30 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   await expect(detail.getByTestId('org-brief-head')).toHaveText(/^Written [^·]*$/)
   await expect(body.locator('[data-brief-moved], [data-brief-added]')).toHaveCount(0)
   await detail.screenshot({ path: `test-results/org-brief-letter-${test.info().project.name}.png` })
-  // The Brief view is the letter alone: no Needs you rows, no tabs.
+  // The Brief view is the letter alone: no Needs you rows, no task sections.
   await expect(detail.getByTestId('org-alerts')).toHaveCount(0)
-  await expect(detail.getByTestId('org-task-tabs')).toHaveCount(0)
+  await expect(detail.getByTestId('org-task-sections')).toHaveCount(0)
   await expect(detail.getByTestId('org-top-brief-new')).toHaveCount(0)
   await detail.getByTestId('org-top-task').click()
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.parser}"]`)).toBeVisible()
-  // Watching first (Home's watched tasks of this node's work, org-pins.ts), then the home panel's four
-  // names, To read folded into Needs you (5ef179d98: no tab of its own); the node opens on Needs you.
-  // Not started lists the review, nobody started it (2026-11-09: its own tab, out of Waiting / snoozed;
-  // the Brief keeps its three sections). (The lead's own turn ended too, so it may need the user as well:
-  // counted, not pinned.)
-  const tabs = detail.getByTestId('org-task-tab')
-  await expect(tabs).toHaveText([/^Watching\s*\d+$/, /^Needs you\s*\d+$/, /^Working\s*\d+$/, /^Waiting \/ snoozed\s*\d+$/, /^Not started\s*\d+$/, /^Completed\s*\d+$/])
-  await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true')
-  const needsCount = Number((await tabs.nth(1).locator('.org-task-tab-count').textContent()) ?? '-1')
+  // All tasks is one list (2026-11-12): Watching first (Home's watched tasks of this node's work,
+  // org-pins.ts), then the home panel's names, To read folded into Needs you (5ef179d98: no section of
+  // its own); a section with nothing in it is left out. Not started lists the review, nobody started it
+  // (2026-11-09: its own section, out of Waiting / snoozed; the Brief keeps its three sections). What is
+  // in front of the user now is open, what waits and what is done start folded. (The lead's own turn
+  // ended too, so it may need the user as well: counted, not pinned.)
+  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
+  const ORDER = ['watching', 'needs', 'working', 'waiting', 'notstarted', 'done']
+  const shownTabs = await detail.getByTestId('org-task-section').evaluateAll((els) => els.map((e) => e.getAttribute('data-tab') ?? ''))
+  expect(shownTabs, 'sections in the home panel\'s order').toEqual(ORDER.filter((t) => shownTabs.includes(t)))
+  expect(shownTabs).toEqual(expect.arrayContaining(['needs', 'notstarted']))
+  const LABELS: Record<string, RegExp> = { watching: /^Watching\s*\d+$/, needs: /^Needs you\s*\d+$/, working: /^Working\s*\d+$/, waiting: /^Waiting \/ snoozed\s*\d+$/, notstarted: /^Not started\s*\d+$/, done: /^Completed\s*\d+$/ }
+  await expect(detail.getByTestId('org-task-section-head')).toHaveText(shownTabs.map((t) => LABELS[t]!))
+  await expect(taskSection(detail, 'needs')).toHaveAttribute('data-open', '1')
+  await expect(taskSection(detail, 'needs').getByTestId('org-task-section-head')).toHaveAttribute('aria-expanded', 'true')
+  await expect(taskSection(detail, 'notstarted')).toHaveAttribute('data-open', '0')
+  await expect(taskRow(detail, ids.review)).toHaveCount(0)
+  const needsCount = Number((await sectionCount(detail, 'needs').textContent()) ?? '-1')
   // Every one is a card, the lead's own ask included (the first, named for the node).
   await expect(detail.getByTestId('org-alert')).toHaveCount(needsCount)
   const own = detail.locator('[data-testid="org-alert"][data-own="1"]')
@@ -175,14 +187,15 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
     await expect(detail.getByTestId('org-alert').first()).toHaveAttribute('data-own', '1')
     await expect(own.getByTestId('org-ask-own')).toContainText('asks you')
   }
-  // The node's header counts its threads, never its tasks' asks (those are this tab).
+  // The node's header counts its threads, never its tasks' asks (those are this section).
   await expect(detail.getByTestId('org-pill-needs')).toHaveCount(0)
   await expect(detail.getByTestId('org-pill-threads')).toHaveText(/^\d+ threads?$/)
-  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-tab', 'needs')
+  // A count in the header opens its section in the same list; Needs you stays open beside it.
   await detail.getByTestId('org-pill-notstarted').click()
-  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-tab', 'notstarted')
-  await expect(detail.locator(`[data-testid="org-task-row"][data-task-id="${ids.review}"]`)).toBeVisible()
-  await expect(detail.getByTestId('org-alerts')).toHaveCount(0)
+  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
+  await expect(taskSection(detail, 'notstarted')).toHaveAttribute('data-open', '1')
+  await expect(taskRow(detail, ids.review, 'notstarted')).toBeVisible()
+  await expect(taskSection(detail, 'needs')).toHaveAttribute('data-open', '1')
   await detail.screenshot({ path: `test-results/org-task-waiting-${test.info().project.name}.png` })
 })
 
@@ -312,14 +325,18 @@ test('Fold keeps the first lines and survives a reload; each node opens on the v
   await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
   await openNode(page, LED)
   await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'brief')
-  // The Task view's tab too: Waiting picked, another page, back.
+  // The Task view's folds too: Needs you (open by default, the parser asks) folded, another page, back.
   await page.getByTestId('org-top-task').click()
-  await page.locator('[data-testid="org-task-tab"][data-tab="waiting"]').click()
+  const needs = taskSection(page, 'needs')
+  await expect(needs).toHaveAttribute('data-open', '1')
+  await needs.getByTestId('org-task-section-head').click()
+  await expect(needs).toHaveAttribute('data-open', '0')
   await page.getByTestId('sidebar-core-app-settings').click()
   await expect(page.getByTestId('org-page')).toHaveCount(0)
   await openNode(page, LED)
   await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
-  await expect(page.locator('[data-testid="org-task-tab"][data-tab="waiting"]')).toHaveAttribute('aria-selected', 'true')
+  await expect(needs).toHaveAttribute('data-open', '0')
+  await expect(needs.getByTestId('org-task-section-head')).toHaveAttribute('aria-expanded', 'false')
 })
 
 test('a rewrite reaches an open Brief at once, with no reload', async ({ page, request }) => {

@@ -28,19 +28,13 @@ export const ORG_TASK_TAB_LABELS: Record<OrgTaskTab, string> = {
   waiting: STATUS_SECTION_LABELS.waiting, notstarted: STATUS_SECTION_LABELS.notstarted, done: STATUS_SECTION_LABELS.done,
 };
 
-/** The rail's tabs: the tasks the user watches first, then the four status tabs, as on the home
+/** The rail's sections (All tasks): the tasks the user watches first, then the status sections, as on the home
  *  panel. Watching is Home's own list (Task.watched_at; 2026-11-02, the user: "if it watching then
  *  concideras pinnedl rename this to watching ... same wathcing as regular home pannel"): the
  *  node's tab holds the watched tasks of its work. A node still opens on Needs you. */
 export type OrgRailTab = 'watching' | OrgTaskTab;
 export const ORG_RAIL_TABS: readonly OrgRailTab[] = ['watching', ...ORG_TASK_TABS];
 export const ORG_RAIL_TAB_LABELS: Record<OrgRailTab, string> = { watching: STATUS_SECTION_LABELS.watching, ...ORG_TASK_TAB_LABELS };
-
-/** A kept tab (usePageViewOf): one of the tabs, the Pinned tab an older build kept, which is
- *  Watching now, or the To read tab one kept, which is Needs you now (railTabShown). */
-export type KeptRailTab = OrgRailTab | 'pinned' | 'read';
-export const isKeptRailTab = (v: unknown): v is KeptRailTab => v === 'pinned' || v === 'read' || (ORG_RAIL_TABS as readonly unknown[]).includes(v);
-export const railTabShown = (v: KeptRailTab): OrgRailTab => (v === 'pinned' ? 'watching' : v === 'read' ? 'needs' : v);
 
 /** Each status tab's dot. */
 export const TAB_DOT: Record<OrgTaskTab, string> = {
@@ -197,3 +191,42 @@ export function taskTabNoteField(task: Task, tab: OrgTaskTab): TaskTextField | n
 /** The node's own ask first, the rest in their order: every ask the Needs you tab counts is a card. */
 export const ownAskFirst = (alerts: readonly OrgAlertView[], ownId: string | undefined): OrgAlertView[] =>
   [...alerts.filter((a) => a.taskId === ownId), ...alerts.filter((a) => a.taskId !== ownId)];
+
+/**
+ * All tasks: the node's work as one list, a section per tab in the rail's order (2026-11-12, the
+ * user: "under tasks, just show all taks, and then board"; Status and Team were two views of it).
+ * The phone's Org Tasks draws the same sections (OrgNodeTasksModel.statusSections). A watched task
+ * is drawn in Watching only, as on Home and the phone, except that an ask stays its card under Needs
+ * you (the card answers it in place) and one finished this week is under Completed. Sections with
+ * nothing in them are left out.
+ */
+export interface OrgTaskSection { tab: OrgRailTab; tasks: Task[]; alerts: OrgAlertView[] }
+/** Open on a node's first look: what is in front of the user now; what waits and what is done fold. */
+export const ORG_SECTION_OPEN_BY_DEFAULT: ReadonlySet<OrgRailTab> = new Set<OrgRailTab>(['watching', 'needs', 'working']);
+export function allTasksSections(tabs: OrgTaskTabs, alerts: readonly OrgAlertView[], approvals = 0): OrgTaskSection[] {
+  const asks = new Set(alerts.map((a) => a.taskId));
+  const doneIds = new Set(tabs.done.map((t) => t.id));
+  // A watched task finished this week is under Completed; one finished before stays in Watching.
+  const watching = tabs.watching.filter((t) => !asks.has(t.id) && (userStateOf(t) !== 'done' || !doneIds.has(t.id)));
+  const inWatching = new Set(watching.map((t) => t.id));
+  const rest = (list: readonly Task[]) => list.filter((t) => !inWatching.has(t.id) && !asks.has(t.id));
+  const out: OrgTaskSection[] = [
+    { tab: 'watching', tasks: watching, alerts: [] },
+    { tab: 'needs', tasks: [], alerts: [...alerts] },
+    { tab: 'working', tasks: rest(tabs.working), alerts: [] },
+    { tab: 'waiting', tasks: rest(tabs.waiting), alerts: [] },
+    { tab: 'notstarted', tasks: rest(tabs.notstarted), alerts: [] },
+    { tab: 'done', tasks: tabs.done, alerts: [] },
+  ];
+  return out.filter((s) => s.tasks.length + s.alerts.length + (s.tab === 'needs' ? approvals : 0) > 0);
+}
+/** The section a header count leads to: its own, else Watching when every task of it is watched there. */
+export function sectionFor(tab: OrgRailTab, sections: readonly OrgTaskSection[]): OrgRailTab | null {
+  if (sections.some((s) => s.tab === tab)) return tab;
+  return sections.some((s) => s.tab === 'watching') ? 'watching' : null;
+}
+/** A section is open by its default unless the user flipped it on this node. */
+export const sectionOpen = (tab: OrgRailTab, flipped: readonly string[]): boolean =>
+  ORG_SECTION_OPEN_BY_DEFAULT.has(tab) !== flipped.includes(tab);
+export const isSectionFlips = (v: unknown): v is string[] =>
+  Array.isArray(v) && v.length <= ORG_RAIL_TABS.length && v.every((x) => (ORG_RAIL_TABS as readonly unknown[]).includes(x));

@@ -363,19 +363,22 @@ test('a right-click on an Org row opens Walnut\'s menu, kept short: open it, mov
   await page.getByTestId('org-channel-main').click({ button: 'right' })
   await expect(menu).toBeVisible()
   await expect(menu).toContainText('Open chat')
+  await expect(menu).toContainText('Open tasks')
+  await expect(menu).not.toContainText('Open VPs')
   await expect(menu).toContainText('Open the org chart')
   expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('')
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
 
-  // A VP row: open it on its team. The VPs it could move under are one row, not a row each.
+  // A VP row: open it on its tasks (All tasks). The VPs it could move under are one row, not a row each.
   await channel(B).click({ button: 'right' })
-  await expect(menu.getByRole('menuitem')).toHaveText(['Open chat', 'Open team', 'Move under another VP…'])
+  await expect(menu.getByRole('menuitem')).toHaveText(['Open chat', 'Open tasks', 'Move under another VP…'])
   await expect(menu).not.toContainText(`${A} VP`)
-  await menu.getByText('Open team', { exact: true }).click()
+  await menu.getByText('Open tasks', { exact: true }).click()
   await expect(menu).toHaveCount(0)
   await expect(channel(B)).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'team')
+  await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
+  await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
 
   // Move it: the row opens the VPs at the cursor, a pick opens the chart on the same question as
   // a drag, and nothing moves before Confirm.

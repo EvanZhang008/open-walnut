@@ -1,7 +1,7 @@
 /**
  * The Org page keeps the user on it (web/src/components/org/OrgSidePanel.tsx): a task clicked
  * on the page opens in a side panel, and the lead list and the detail stay where they are.
- *   - a Team row, a Board chip, and a waiting question's task name open beside the page
+ *   - a row of All tasks, a Board chip, and a waiting question's task name open beside the page
  *   - a task with no session shows what it is and how to start one; × closes the panel
  *   - a reload keeps the opened task; Home opens it on home instead
  *   - a narrow window lays the panel over the detail; a phone shows it alone and Back returns
@@ -11,7 +11,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { openTasksBy, showTasks } from './org-view-helpers'
+import { openTaskFromRail, openTasksBy, showTasks } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 // Both browser projects load this file at about the same moment: the pid keeps them apart.
@@ -62,7 +62,9 @@ async function openLead(page: Page): Promise<void> {
 }
 
 const side = (page: Page) => page.getByTestId('org-side')
-const teamItem = (page: Page, id: string) => page.locator(`[data-testid="org-team-item"][data-task-id="${id}"]`)
+/** Open a task from the side bar's All tasks (its section opened, wherever its state draws it); done
+ *  once the panel beside the page shows it. */
+const openAlpha = (page: Page) => openTaskFromRail(page, ids.alpha, () => expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid, { timeout: 5_000 }))
 
 test.beforeAll(async ({ request }) => {
   const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
@@ -87,16 +89,15 @@ test.afterAll(async ({ request }) => {
   for (const id of made) await removeTask(request, id)
 })
 
-test('a Team task opens beside the page; the list and the detail stay; × closes it', async ({ page }) => {
+test('a task of All tasks opens beside the page; the list and the detail stay; × closes it', async ({ page }) => {
   await openLead(page)
-  await openTasksBy(page, 'team')
+  await openTasksBy(page, 'all')
   const list = page.locator('.org-list')
   const detail = page.locator('.org-detail-pane')
   const listBox = (await list.boundingBox())!
   const detailX = (await detail.boundingBox())!.x
 
-  await teamItem(page, ids.alpha).click()
-  await expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid)
+  await openAlpha(page)
   await expect(side(page).getByText(`I processed your message: Side alpha ready ${STAMP}`).first()).toBeVisible({ timeout: 60_000 })
   await expect(page).toHaveURL(/\/org\?/)
   await expect(page).toHaveURL(new RegExp(`open=task(%3A|:)${ids.alpha}`))
@@ -108,8 +109,7 @@ test('a Team task opens beside the page; the list and the detail stay; × closes
   await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
 
   // Another task replaces it; one with no session says so.
-  await teamItem(page, ids.beta).click()
-  await expect(side(page).getByTestId('org-side-title')).toHaveText(`Side beta ${STAMP}`)
+  await openTaskFromRail(page, ids.beta, () => expect(side(page).getByTestId('org-side-title')).toHaveText(`Side beta ${STAMP}`, { timeout: 5_000 }))
   await expect(side(page)).toContainText('No session yet.')
   await expect(side(page).getByTestId('org-side-start')).toBeVisible()
   await side(page).getByTestId('org-side-close').click()
@@ -142,9 +142,7 @@ test('the name of a task waiting on a question opens it beside the page, questio
 
 test('a reload keeps the opened task; Home opens it on home', async ({ page }) => {
   await openLead(page)
-  await openTasksBy(page, 'team')
-  await teamItem(page, ids.alpha).click()
-  await expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid)
+  await openAlpha(page)
   await page.reload()
   await expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid, { timeout: 30_000 })
   await side(page).getByTestId('org-side-home').click()
@@ -155,11 +153,10 @@ test('a reload keeps the opened task; Home opens it on home', async ({ page }) =
 test('a narrow window lays the panel over the detail, which keeps its width', async ({ page }) => {
   await page.setViewportSize({ width: 1000, height: 760 })
   await openLead(page)
-  await openTasksBy(page, 'team')
+  await openTasksBy(page, 'all')
   const detail = page.locator('.org-detail-pane')
   const before = await detail.boundingBox()
-  await teamItem(page, ids.alpha).click()
-  await expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid)
+  await openAlpha(page)
   const after = await detail.boundingBox()
   const panel = await side(page).boundingBox()
   expect(after!.width).toBeCloseTo(before!.width, 0)
@@ -176,9 +173,7 @@ test('a phone shows the opened task alone, and Back returns to the lead', async 
   await page.getByTestId('sidebar-org').click()
   await expect(page).toHaveURL(/\/org/)
   await page.locator(`[data-testid="org-channel"][data-key="${rowKey}"]`).click()
-  await openTasksBy(page, 'team')
-  await teamItem(page, ids.alpha).click()
-  await expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid)
+  await openAlpha(page)
   await expect(page.locator('.org-detail-pane')).toHaveCount(0)
   await expect(page.locator('.org-list')).toHaveCount(0)
   await page.goBack()

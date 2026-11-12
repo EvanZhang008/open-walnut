@@ -10,7 +10,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { openTasksBy } from './org-view-helpers'
+import { openTaskFromRail } from './org-view-helpers'
 
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Org dividers ${STAMP}`
@@ -41,9 +41,7 @@ async function openAlphaBeside(page: Page): Promise<void> {
   await page.getByTestId('sidebar-org').click()
   await expect(page.getByTestId('org-page')).toBeVisible()
   await openNode(page)
-  await openTasksBy(page, 'team')
-  await page.locator(`[data-testid="org-team-item"][data-task-id="${alpha}"]`).click()
-  await expect(page.getByTestId('org-side')).toBeVisible()
+  await openTaskFromRail(page, alpha, () => expect(page.getByTestId('org-side')).toBeVisible({ timeout: 3_000 }))
 }
 
 const widthOf = async (page: Page, sel: string) => (await page.locator(sel).first().boundingBox())!.width

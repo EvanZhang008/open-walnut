@@ -22,6 +22,7 @@ import { holdApprovalsLock } from './approvals-lock'
 import { ensureVaultSetUp, VAULT_MASTER } from './vault-session-helper'
 import { holdVaultLock } from './vault-lock'
 import { isolateUiPrefsContext } from './status-section-helpers'
+import { openSection, openTasksBy, sectionCount, taskSection } from './org-view-helpers'
 
 test.use({ video: process.env.APR_VIDEO ? 'on' : 'off' })
 test.describe.configure({ mode: 'serial' })
@@ -212,15 +213,12 @@ test('Needs you: approvals are one line on Home, a click opens the request, and 
   await expect(page.getByTestId('org-page')).toBeVisible()
   await page.getByTestId('org-channel-main').click()
   await expect(page.getByTestId('org-channel-main').getByTestId('org-channel-badge')).toBeVisible()
-  // The node's side bar as the person last left it: open it, on Tasks, by status.
-  const toggle = page.getByTestId('org-rail-toggle')
-  if ((await toggle.getAttribute('aria-pressed')) !== 'true') await toggle.click()
-  await page.getByTestId('org-top-task').click()
-  await page.getByTestId('org-task-mode-status').click()
-  await page.locator('[data-testid="org-task-tab"][data-tab="needs"]').click()
-  const orgLine = page.locator('[data-testid="org-rail"] [data-testid="approval-summary"]')
+  // The node's side bar as the person last left it: open it, on Tasks, All tasks, its Needs you open.
+  await openTasksBy(page, 'all')
+  await openSection(page, 'needs')
+  const orgLine = taskSection(page.getByTestId('org-rail'), 'needs').getByTestId('approval-summary')
   await expect(orgLine).toBeVisible({ timeout: 15_000 })
-  await expect(page.locator('[data-testid="org-task-tab"][data-tab="needs"] .org-task-tab-count')).not.toHaveText('0')
+  await expect(sectionCount(page, 'needs')).not.toHaveText('0')
   await orgLine.click()
   await expect(dialog.locator('.approval-what')).toContainText('Rotate keys')
   const approve = dialog.getByRole('button', { name: 'Approve', exact: true })

@@ -48,7 +48,7 @@ export function orgRowMenu({ target, cards, select, openChart, pick }: {
   const items: ContextMenuItem[] = [
     { key: 'head', section: true, label: r.name },
     ...(canTalk ? [{ key: 'chat', label: 'Open chat', onSelect: () => select(r.key, 'chat') }] : []),
-    { key: 'team', label: r.kind === 'main' ? 'Open VPs' : 'Open team', onSelect: () => select(r.key, 'team') },
+    { key: 'team', label: 'Open tasks', onSelect: () => select(r.key, 'team') },
   ];
   if (r.kind === 'main') return [...items, { key: 'sep', divider: true }, { key: 'chart', label: 'Open the org chart', onSelect: () => openChart() }];
 

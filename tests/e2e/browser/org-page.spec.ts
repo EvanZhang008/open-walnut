@@ -3,14 +3,14 @@
  * of Main and the project leads, like a chat app's channels.
  *   - Main is pinned; a project whose work waits on the user's answer comes first, red, with
  *     the question as its line and a count
- *   - a lead opens on its own chat (the first tab), then its Team by the user's status (Needs you /
- *     Working / Waiting, each task with its status line) and its Board; the
+ *   - a lead shows its own chat, then All tasks by the user's status (Needs you / Working /
+ *     Waiting / Not started, each task with its status line) and its Board; the
  *     composer under the Board sends to the lead and the chat shows the answer
  *   - a waiting question's task name opens that task's session beside the page
  *   - search, a pick that survives a reload, live state, the keyboard, and the org chart
  *   - the rows hold still while the pointer is over the list, and re-sort once it leaves
- *   - another page and back (or a reload of /org) shows the same place: the pick, its tab, the
- *     task beside it, the list's scroll
+ *   - another page and back (or a reload of /org) shows the same place: the pick, its sections'
+ *     folds, the task beside it, the list's scroll
  *   - the org's name (the title) and the user's role on the chart are renamed in place and kept;
  *     the main agent reads as the CEO and the leads as VPs
  * The fixture is shared, so this file makes its own projects and removes what it made.
@@ -20,7 +20,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { endRunningTurn, startRunningTurn } from './status-section-helpers'
-import { openTasksBy, showTasks, expectChatShown } from './org-view-helpers'
+import { openSection, openTasksBy, showTasks, taskRow, taskSection, expectChatShown } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 // Both browser projects load this file at about the same moment: the pid keeps them apart.
@@ -138,28 +138,31 @@ test('the sidebar opens Main and the leads; a lead\'s red is its threads, its ta
   const askRow = detail.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(askRow.getByTestId('org-alert-link')).toHaveText(`Alpha ask ${STAMP}`)
   await expect(askRow.getByTestId('org-ask-summary')).toHaveText('Asks you a question')
-  // A node shows its chat, always; Team and Board are ways the side bar's Tasks draws its work, and
-  // Board joins once the lead's board is known.
+  // A node shows its chat, always; All tasks and Board are the ways the side bar's Tasks draws its
+  // work (2026-11-12: Status and Team became one list), and Board joins once the lead's board is known.
   await expectChatShown(detail)
   await detail.getByTestId('org-top-task').click()
   await expect.poll(() => detail.getByTestId('org-task-modes').getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
-    .toEqual(['org-task-mode-status', 'org-task-mode-team', 'org-task-mode-board'])
+    .toEqual(['org-task-mode-all', 'org-task-mode-board'])
   await openTasksBy(detail, 'board')
   await detail.getByTestId('board-view-custom').click()
   await expect(detail.frameLocator('iframe').first().getByText(BOARD_TEXT)).toBeVisible({ timeout: 30_000 })
 
-  await openTasksBy(detail, 'team')
-  await expect(detail.locator('[data-testid="org-team-col"][data-column="needs"]')).toContainText(`Alpha ask ${STAMP}`)
-  const waiting = detail.locator('[data-testid="org-team-col"][data-column="waiting"]')
-  await expect(waiting.locator('.org-team-head')).toContainText('Waiting')
-  await expect(waiting.locator('[data-testid="org-team-item"]', { hasText: `Alpha build ${STAMP}` }).getByTestId('org-team-note'))
-    .toHaveText('Not started yet', { timeout: 30_000 })
+  // All tasks: the ask is a card under Needs you, the build nobody started a row under Not started.
+  await openTasksBy(detail, 'all')
+  await expect(taskSection(detail, 'needs').locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)).toContainText(`Alpha ask ${STAMP}`)
+  await openSection(detail, 'notstarted')
+  await expect(taskSection(detail, 'notstarted').getByTestId('org-task-section-head')).toContainText('Not started')
+  await expect(taskRow(detail, ids.build, 'notstarted')).toContainText(`Alpha build ${STAMP}`, { timeout: 30_000 })
 
-  // Main's own page lists the leads by state.
+  // Main's own page lists every VP's work, each ask named for the VP it is under.
   await page.getByTestId('org-channel-main').click()
   await expect(detail.getByTestId('org-detail-title')).toHaveText('CEO')
-  await openTasksBy(detail, 'team')
-  await detail.locator(`[data-testid="org-team-item"]`, { hasText: ALPHA }).click()
+  await openTasksBy(detail, 'all')
+  const mainAsk = taskSection(detail, 'needs').locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
+  await expect(mainAsk.getByTestId('org-ask-vp')).toHaveText(`${ALPHA} VP`, { timeout: 30_000 })
+  // Back to the VP from its row.
+  await alpha.click()
   await expect(alpha).toHaveAttribute('aria-selected', 'true')
 })
 
@@ -379,16 +382,16 @@ test('a task waiting on a decision letter needs the user: its name opens the let
   await expect(side.locator('.session-inbox-pane')).toContainText(`Send the deposit ${STAMP}`)
 })
 
-test('back on the Org page, it is where it was: the pick, its tab, the task beside it, the list scroll; a reload too', async ({ page }) => {
+test('back on the Org page, it is where it was: the pick, its folds, the task beside it, the list scroll; a reload too', async ({ page }) => {
   await openOrg(page)
   await row(page, ALPHA).click()
   await expect(row(page, ALPHA)).toHaveAttribute('aria-selected', 'true')
-  await openTasksBy(page, 'team')
-  await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'team')
-  // One of this team's own tasks, by id: the columns re-sort as the shared fixture's work moves.
+  await openTasksBy(page, 'all')
+  // Its folds are its own: Not started (folded by default) opened.
+  await openSection(page, 'notstarted')
+  // One of this team's own tasks, by id: the sections re-sort as the shared fixture's work moves.
   const taskId = ids.build
-  const item = page.locator(`[data-testid="org-team-item"][data-task-id="${taskId}"]`)
-  await item.click()
+  await taskRow(page, taskId, 'notstarted').click()
   await expect(page.getByTestId('org-side')).toBeVisible()
   const list = page.locator('.org-list-scroll')
   const top = await list.evaluate((el) => { el.scrollTop = Math.min(80, el.scrollHeight - el.clientHeight); return el.scrollTop })
@@ -397,7 +400,8 @@ test('back on the Org page, it is where it was: the pick, its tab, the task besi
 
   const expectSamePlace = async () => {
     await expect(row(page, ALPHA)).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 })
-    await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'team')
+    await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
+    await expect(taskSection(page, 'notstarted')).toHaveAttribute('data-open', '1')
     await expect(page.getByTestId('org-side')).toBeVisible()
     await expect(page).toHaveURL(new RegExp(`open=[^&]*${taskId}`))
     await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBe(top)

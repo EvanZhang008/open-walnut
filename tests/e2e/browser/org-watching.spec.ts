@@ -2,9 +2,11 @@
  * The Org page's Watching (src/core/org/org-pins.ts, web/src/components/org/org-task-tabs.ts).
  * 2026-11-02, the user: "if it watching then concideras pinnedl rename this to watching", then
  * "same wathcing as regular home pannel". One list, Home's Watch (Task.watched_at):
- *   - the rail's first tab is Watching; the eye on a row (in the tabs and on an ask) watches the
- *     task at once, the same write Home's eye makes, and the server keeps it
- *   - the Watching tab lists the node's watched work in watch order, each with its own state's dot
+ *   - All tasks' first section is Watching (shown while it has something); the eye on a row (in a
+ *     section and on an ask) watches the task at once, the same write Home's eye makes, and the
+ *     server keeps it
+ *   - the Watching section lists the node's watched work in watch order, each with its own state's
+ *     dot, and a watched open task is drawn there only, not again in its state's section
  *   - the Org list shows them under the node's chat row; a click opens the task beside the page,
  *     × (or Delete) stops watching it there
  *   - Home's Watching lists what the Org page watches; a watch made elsewhere (Home, an agent)
@@ -21,7 +23,7 @@ import { isolateUiPrefs } from './todo-panel-helpers'
 import { presetPanelDesign, setStatusSectionOpen, showSectionCard } from './status-section-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { lockLeftmostPanel } from './draft-helpers'
-import { openTasksBy, showTasks } from './org-view-helpers'
+import { openSection, openTaskFromRail, sectionCount, showTasks, taskRow, taskSection } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 
@@ -61,7 +63,7 @@ async function openNode(page: Page): Promise<void> {
   await showTasks(page)
 }
 
-const railTab = (page: Page, tab: string) => page.getByTestId('org-rail').locator(`[data-testid="org-task-tab"][data-tab="${tab}"]`)
+const rail = (page: Page) => page.getByTestId('org-rail')
 const listWatched = (page: Page, node: string) => page.locator(`[data-testid="org-watched"][data-key="${node}"] [data-testid="org-watched-item"]`)
 const railItem = (page: Page, id: string) => page.getByTestId('org-rail').locator(`.org-task-item:has([data-testid="org-task-row"][data-task-id="${id}"])`)
 
@@ -92,20 +94,16 @@ test.afterAll(async ({ request }) => {
   }
 })
 
-test('a row\'s eye watches it; the Watching tab lists them first, in order; the list shows them under the chat; Home lists them too', async ({ page, request }) => {
+test('a row\'s eye watches it; the Watching section lists them first, in order; the list shows them under the chat; Home lists them too', async ({ page, request }) => {
   test.setTimeout(180_000)
   await openNode(page)
-  // Watching is the first tab, under Home's name, and the node still opens on Needs you.
-  const tabs = page.getByTestId('org-rail').getByTestId('org-task-tab')
-  await expect(tabs.first()).toHaveAttribute('data-tab', 'watching')
-  await expect(tabs.first()).toContainText('Watching')
-  await expect(page.getByTestId('org-rail')).not.toContainText('Pinned')
-  await expect(railTab(page, 'needs')).toHaveAttribute('aria-selected', 'true')
-  await railTab(page, 'watching').click()
-  await expect(page.getByTestId('org-rail').getByTestId('org-task-empty')).toContainText('Nothing watched here')
+  // Nothing watched yet: no Watching section (an empty section is left out), and no "Pinned" anywhere.
+  await expect(taskSection(rail(page), 'notstarted')).toBeVisible({ timeout: 30_000 })
+  await expect(taskSection(rail(page), 'watching')).toHaveCount(0)
+  await expect(rail(page)).not.toContainText('Pinned')
 
-  // Nobody started the tasks (no session yet): watch two from the Not started tab.
-  await railTab(page, 'notstarted').click()
+  // Nobody started the tasks (no session yet): watch two from the Not started section (folded by default).
+  await openSection(rail(page), 'notstarted')
   for (const id of [ids.b, ids.a]) {
     const item = railItem(page, id)
     await item.hover()
@@ -118,14 +116,20 @@ test('a row\'s eye watches it; the Watching tab lists them first, in order; the 
   }
   await expect.poll(() => watchedAt(request, ids.a)).toBeTruthy()
   await expect.poll(() => watchedAt(request, ids.b)).toBeTruthy()
-  await expect(railTab(page, 'watching')).toContainText('2')
 
-  // Watching: in watch order, each with its own state.
-  await railTab(page, 'watching').click()
-  const rows = page.getByTestId('org-rail').locator('[data-testid="org-task-list"][data-tab="watching"] [data-testid="org-task-row"]')
+  // Watching is the first section, under Home's name, open by default: in watch order, each with its
+  // own state; a watched task leaves its state's section (drawn once).
+  const watching = taskSection(rail(page), 'watching')
+  await expect(rail(page).getByTestId('org-task-section').first()).toHaveAttribute('data-tab', 'watching')
+  await expect(watching.getByTestId('org-task-section-head')).toContainText('Watching')
+  await expect(watching).toHaveAttribute('data-open', '1')
+  await expect(sectionCount(rail(page), 'watching')).toHaveText('2')
+  const rows = rail(page).locator('[data-testid="org-task-list"][data-tab="watching"] [data-testid="org-task-row"]')
   await expect(rows).toHaveCount(2)
   expect(await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))).toEqual([ids.b, ids.a])
   expect(await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-state')))).toEqual(['waiting', 'waiting'])
+  for (const id of [ids.a, ids.b]) await expect(taskRow(rail(page), id)).toHaveCount(1)
+  await expect(taskRow(rail(page), ids.c, 'notstarted')).toBeVisible()
 
   // The list: the same tasks under the node's row, a little in from the row's own name.
   const children = listWatched(page, NODE)
@@ -165,19 +169,20 @@ test('× in the list stops watching; a watch made elsewhere shows without a relo
   await first.getByTestId('org-watched-stop').click()
   await expect(children).toHaveCount(1)
   await expect.poll(() => watchedAt(request, ids.b)).toBeNull()
-  await expect(railTab(page, 'watching')).toContainText('1')
+  await expect(sectionCount(rail(page), 'watching')).toHaveText('1')
 
-  // Home's eye (another window) watches one: the node's tab and its row show it at once.
+  // Home's eye (another window) watches one: the node's section and its row show it at once.
   const res = await request.patch(`/api/v1/tasks/${ids.c}`, { data: { watched_at: new Date().toISOString() } })
   expect(res.ok(), await res.text()).toBe(true)
   await expect(page.locator(`[data-testid="org-watched"][data-key="${NODE}"] [data-testid="org-watched-item"][data-task-id="${ids.c}"]`)).toBeVisible({ timeout: 30_000 })
-  await expect(railTab(page, 'watching')).toContainText('2')
+  await expect(sectionCount(rail(page), 'watching')).toHaveText('2')
+  await expect(taskRow(rail(page), ids.c, 'watching')).toBeVisible()
 
   // A refused watch shows on the click, then goes back.
   await page.route(`**/api/tasks/${ids.b}`, (route) => (route.request().method() === 'PATCH'
     ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"refused"}' })
     : route.fallback()))
-  await railTab(page, 'notstarted').click()
+  await openSection(rail(page), 'notstarted')
   const item = railItem(page, ids.b)
   await item.hover()
   await item.getByTestId('org-watch-toggle').click()
@@ -185,13 +190,13 @@ test('× in the list stops watching; a watch made elsewhere shows without a relo
   await expect(children).toHaveCount(2)
   await page.unroute(`**/api/tasks/${ids.b}`)
 
-  // Stop one from the Watching tab: it leaves the tab and the list.
-  await railTab(page, 'watching').click()
+  // Stop one from the Watching section: it leaves the section and the list, back under Not started.
   const last = railItem(page, ids.a)
   await last.hover()
   await last.getByTestId('org-watch-toggle').click()
   await expect(children).toHaveCount(1)
   await expect.poll(() => watchedAt(request, ids.a)).toBeNull()
+  await expect(taskRow(rail(page), ids.a, 'notstarted')).toBeVisible()
 
   // From the keyboard: a watched task in the list is an option; Delete stops watching it.
   const item_c = page.locator(`[data-testid="org-watched"][data-key="${NODE}"] [data-testid="org-watched-item"][data-task-id="${ids.c}"] [data-testid="org-watched-open"]`)
@@ -199,7 +204,8 @@ test('× in the list stops watching; a watch made elsewhere shows without a relo
   await item_c.focus()
   await page.keyboard.press('Delete')
   await expect(item_c).toHaveCount(0)
-  await expect(page.getByTestId('org-rail').getByTestId('org-task-empty')).toContainText('Nothing watched here')
+  // Nothing watched now: the Watching section is gone.
+  await expect(taskSection(rail(page), 'watching')).toHaveCount(0)
   await expect(page.locator(`[data-testid="org-watched"][data-key="${NODE}"]`)).toHaveCount(0)
   await expect.poll(() => watchedAt(request, ids.c)).toBeNull()
 })
@@ -212,12 +218,9 @@ test('a locked session panel hangs its task under the row with a lock; eye and l
   await expect(kept).toHaveCount(0)
 
   // Beside the Org page: open the task and lock its panel.
-  await openTasksBy(page, 'team')
+  // Its row in All tasks, or its card under Needs you once its turn ended (whichever its state draws).
   const side = page.getByTestId('org-side')
-  await expect(async () => {
-    await page.locator(`[data-testid="org-team-item"][data-task-id="${ids.d}"]`).click()
-    await expect(side).toHaveAttribute('data-session-id', ids.dSid, { timeout: 3_000 })
-  }).toPass({ timeout: 30_000 })
+  await openTaskFromRail(page, ids.d, () => expect(side).toHaveAttribute('data-session-id', ids.dSid, { timeout: 3_000 }))
   await side.locator('.session-panel-lock').click()
   await expect(side).toHaveClass(/is-locked/)
   await expect(kept).toHaveCount(1)

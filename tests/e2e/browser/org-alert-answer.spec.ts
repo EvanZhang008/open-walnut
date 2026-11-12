@@ -18,7 +18,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { showTasks } from './org-view-helpers'
+import { openSection, showTasks, taskRow } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -262,22 +262,19 @@ test('Snooze opens the date picker; a pick snoozes the task, which moves to Wait
   await page.unroute(`**/api/tasks/${id}`)
   await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.start_date).toBe(date)
   // A snoozed ask is Waiting / snoozed until then (the one user status, src/core/user-status.ts):
-  // it leaves Needs you, and the Waiting / snoozed tab lists it.
+  // it leaves Needs you, and the Waiting / snoozed section lists it.
   await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.state, { timeout: 30_000 }).toBe('waiting')
   await expect(row).toHaveCount(0)
-  const tabs = page.getByTestId('org-detail').getByTestId('org-task-tab')
-  // The click can land while the list redraws for the row that left: click until the tab is on.
-  const waitingTab = tabs.filter({ hasText: /^Waiting/ })
-  await expect(async () => {
-    await waitingTab.click()
-    await expect(waitingTab).toHaveAttribute('aria-selected', 'true', { timeout: 2_000 })
-  }).toPass({ timeout: 20_000 })
-  await expect(page.locator(`[data-testid="org-task-row"][data-task-id="${id}"]`)).toBeVisible()
+  const detail = page.getByTestId('org-detail')
+  // The click can land while the list redraws for the row that left: open it until it is open.
+  await expect(async () => { await openSection(detail, 'waiting') }).toPass({ timeout: 20_000 })
+  await expect(taskRow(detail, id, 'waiting')).toBeVisible()
   await page.getByTestId('org-rail').screenshot({ path: `test-results/org-alert-snoozed-${test.info().project.name}.png` })
-  // Its snooze taken off, it asks again.
+  // Its snooze taken off, it asks again: its card under Needs you (open), its row gone from Waiting.
   await request.patch(`/api/tasks/${id}`, { data: { start_date: null } })
-  await tabs.filter({ hasText: /^Needs you/ }).click()
+  await openSection(detail, 'needs')
   await expect(alertRow(page, id)).toBeVisible({ timeout: 30_000 })
+  await expect(taskRow(detail, id, 'waiting')).toHaveCount(0)
   await expect(alertRow(page, id).getByTestId('org-alert-snooze')).toHaveText(/^Snooze/)
 })
 

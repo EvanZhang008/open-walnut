@@ -7,10 +7,12 @@
  *   head     Tasks | Brief | Threads (a lead or Main keeps a Brief and Threads), each with its count or
  *            news dot; Fold on the Brief; widen (beside the chat) and close (2026-11-02, the user picked
  *            design 1 of the side-bar round: "1")
- *   Tasks    Status | Team | Board: the same work by status (below), by team (the node's teams and
- *            their live lines), or as the Board its lead keeps (when it keeps one)
- *   tabs     Watching (the tasks the user watches, Home's own list, of this node's work), then the home
- *            panel's four names with counts: Needs you, Working, Waiting / snoozed, Completed
+ *   Tasks    All tasks | Board: every task of the node's work in one list (below), or the Board its
+ *            lead keeps (when it keeps one). 2026-11-12, the user: "under tasks, just show all taks, and
+ *            then board"; the Status and Team views it replaces drew the same work twice.
+ *   sections Watching (the tasks the user watches, Home's own list, of this node's work), then the home
+ *            panel's names with counts: Needs you, Working, Waiting / snoozed, Not started, Completed;
+ *            each folds on its heading, kept per node (what waits and what is done start folded)
  *   Needs you  one row per ask, and per result or answer to look at (To read is no tab of its own,
  *              2026-11-03): what to do with it (Decide, Take a look, Review, Can close) and its summary
  *              first, its task and when it was checked, More for the detail, and the answer right
@@ -28,7 +30,7 @@
  * the row's own menus.
  */
 import '@/styles/org-rail.css';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { timeAgo } from '@/utils/time';
@@ -42,7 +44,7 @@ import { usePointerHold } from './hold-order';
 import { writeBriefFolded, type OrgTopView } from './org-brief-model';
 import type { BriefFreshness } from '@open-walnut/brief-fresh';
 import { WithdrawAnswerButton } from '@/components/tasks/AnsweredForLine';
-import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, TAB_DOT, stateTab, taskTabNote, taskTabNoteField, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_RAIL_TAB_LABELS, TAB_DOT, allTasksSections, sectionOpen, stateTab, taskTabNote, taskTabNoteField, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { useWatchToggle } from '@/components/tasks/WatchToggle';
 import * as ICONS from '@/components/common/Icons';
 import { snoozeTakesOff } from '@open-walnut/user-status';
@@ -68,10 +70,12 @@ export interface OrgAnswers {
 
 export { TAB_DOT };
 
-/** How the Tasks view draws the node's work: by status, by team, or as its lead's Board. */
-export const ORG_TASK_MODES = ['status', 'team', 'board'] as const;
+/** How the Tasks view draws the node's work: every task in one list, or as its lead's Board. A
+ *  'status' or 'team' an older build kept is no mode now, so that node opens on All tasks (and an
+ *  older build reading 'all' opens on its own default, Status). */
+export const ORG_TASK_MODES = ['all', 'board'] as const;
 export type OrgTaskMode = typeof ORG_TASK_MODES[number];
-const MODE_LABELS: Record<OrgTaskMode, string> = { status: 'Status', team: 'Team', board: 'Board' };
+const MODE_LABELS: Record<OrgTaskMode, string> = { all: 'All tasks', board: 'Board' };
 
 function ModeSwitch({ mode, modes, onPick }: { mode: OrgTaskMode; modes: readonly OrgTaskMode[]; onPick: (m: OrgTaskMode) => void }) {
   return (
@@ -96,27 +100,15 @@ const ICON_COLLAPSE = (
   </svg>
 );
 
-function TaskTabBar({ tabs, tab, onPick, approvals }: { tabs: OrgTaskTabs; tab: OrgRailTab; onPick: (tab: OrgRailTab) => void; approvals: number }) {
+/** A section's heading: its dot, name and count; a click folds it or opens it. */
+function SectionHead({ tab, count, open, onFlip }: { tab: OrgRailTab; count: number; open: boolean; onFlip: () => void }) {
   return (
-    <div className="org-task-tabs" role="tablist" aria-label="Tasks by status" data-testid="org-task-tabs">
-      {ORG_RAIL_TABS.map((t) => (
-        <button
-          key={t}
-          type="button"
-          role="tab"
-          aria-selected={tab === t}
-          className={`org-task-tab${tab === t ? ' is-on' : ''}`}
-          data-testid="org-task-tab"
-          data-tab={t}
-          onClick={() => onPick(t)}
-        >
-          {t === 'watching' ? <span className="org-task-tab-watch" aria-hidden="true">{ICONS.ICON_EYE}</span>
-            : t === 'notstarted' ? <span className="org-task-tab-watch" aria-hidden="true">{ICONS.ICON_NOT_STARTED}</span>
-            : <i style={{ background: TAB_DOT[t] }} />}
-          {ORG_RAIL_TAB_LABELS[t]}<span className="org-task-tab-count">{tabs[t].length + (t === 'needs' ? approvals : 0)}</span>
-        </button>
-      ))}
-    </div>
+    <button type="button" className="org-task-section-head" data-testid="org-task-section-head" data-tab={tab} aria-expanded={open} onClick={onFlip}>
+      {tab === 'watching' ? <span className="org-task-section-icon" aria-hidden="true">{ICONS.ICON_EYE}</span>
+        : tab === 'notstarted' ? <span className="org-task-section-icon" aria-hidden="true">{ICONS.ICON_NOT_STARTED}</span>
+        : <i style={{ background: TAB_DOT[tab] }} />}
+      {ORG_RAIL_TAB_LABELS[tab]}<span className="org-task-section-count">{count}</span>
+    </button>
   );
 }
 
@@ -137,19 +129,9 @@ export function OrgWatchToggle({ task, className = '' }: { task: Task; className
   );
 }
 
-const EMPTY: Record<OrgRailTab, string> = {
-  watching: 'Nothing watched here. Watch a task with the eye on its row to keep it in view, here and on Home.',
-  needs: 'Nothing needs you here.',
-  working: 'Nothing is working here.',
-  waiting: 'Nothing is waiting or snoozed here.',
-  notstarted: 'Every task here has started.',
-  done: 'Nothing completed in the last week.',
-};
-
-/** A tab other than Needs you: one row per task, its own line, when it last moved, its eye. On
+/** A section other than Needs you: one row per task, its own line, when it last moved, its eye. On
  *  Watching each row wears the dot and the line of its own state. */
 function TaskTabList({ tasks, tab, onOpen, now }: { tasks: readonly Task[]; tab: Exclude<OrgRailTab, 'needs'>; onOpen: (id: string) => void; now: number }) {
-  if (!tasks.length) return <p className="org-task-empty" data-testid="org-task-empty">{EMPTY[tab]}</p>;
   return (
     <ul className="org-task-list" data-testid="org-task-list" data-tab={tab}>
       {tasks.map((t) => {
@@ -304,7 +286,55 @@ function AskList({ alerts, tasks, vpOf, ownId, ownName, onOpen, onQuote, canQuot
   );
 }
 
-export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, tab, onTab, view, onView, keepsBrief, briefNew, threadsNew, threadsCount, onClose, mode, onMode, renderTeam, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, width }: {
+/** Every task of the node's work in one list, a section per state (allTasksSections). */
+function AllTasks({ tabs, alerts, approvals, flipped, onFlip, focus, onFocused, renderAsks, onOpenTask, now }: {
+  tabs: OrgTaskTabs;
+  alerts: readonly OrgAlertView[];
+  approvals: readonly Approval[];
+  flipped: readonly string[];
+  onFlip: (tab: OrgRailTab) => void;
+  focus: { tab: OrgRailTab; n: number } | null;
+  onFocused: () => void;
+  renderAsks: () => ReactNode;
+  onOpenTask: (id: string) => void;
+  now: number;
+}) {
+  const sections = useMemo(() => allTasksSections(tabs, alerts, approvals.length), [tabs, alerts, approvals.length]);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // A count clicked in the header: its section comes to the top of the list (the page opened it).
+  useEffect(() => {
+    if (!focus) return;
+    const el = bodyRef.current?.querySelector<HTMLElement>(`[data-testid="org-task-section"][data-tab="${focus.tab}"]`);
+    if (el && bodyRef.current) bodyRef.current.scrollTop += el.getBoundingClientRect().top - bodyRef.current.getBoundingClientRect().top;
+    onFocused();
+  }, [focus, onFocused]);
+  return (
+    <div ref={bodyRef} className="org-rail-body org-task-sections" data-testid="org-task-sections">
+      {sections.length === 0 && <p className="org-task-empty" data-testid="org-task-empty">Nothing open here.</p>}
+      {sections.map((sec) => {
+        const open = sectionOpen(sec.tab, flipped);
+        const count = sec.tasks.length + sec.alerts.length + (sec.tab === 'needs' ? approvals.length : 0);
+        return (
+          <section key={sec.tab} className="org-task-section" data-testid="org-task-section" data-tab={sec.tab} data-open={open ? '1' : '0'}>
+            <SectionHead tab={sec.tab} count={count} open={open} onFlip={() => onFlip(sec.tab)} />
+            {open && (sec.tab === 'needs' ? (<>
+              <ApprovalRows list={approvals} variant="org" />
+              {sec.alerts.length > 0 && renderAsks()}
+            </>) : (
+              <TaskTabList tasks={sec.tasks} tab={sec.tab} onOpen={onOpenTask} now={now} />
+            ))}
+          </section>
+        );
+      })}
+      {/* The eye was explained by an empty Watching tab; with no Watching section it is said here. */}
+      {sections.length > 0 && !sections.some((x) => x.tab === 'watching') && (
+        <p className="org-task-empty org-task-watch-hint" data-testid="org-task-watch-hint">Watch a task with the eye on its row to keep it at the top, here and on Home.</p>
+      )}
+    </div>
+  );
+}
+
+export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped, onFlip, focus, onFocused, view, onView, keepsBrief, briefNew, threadsNew, threadsCount, onClose, mode, onMode, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, width }: {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
@@ -313,8 +343,13 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, tab, on
   alerts: readonly OrgAlertView[];
   /** Approvals a script waits on that this node lists (approvalsForNode): first in Needs you. */
   approvals: readonly Approval[];
-  tab: OrgRailTab;
-  onTab: (tab: OrgRailTab) => void;
+  /** The sections the user folded or opened against their default, on this node. */
+  flipped: readonly string[];
+  onFlip: (tab: OrgRailTab) => void;
+  /** A section to bring into view (a count in the node's header was clicked); n tells clicks apart. */
+  focus: { tab: OrgRailTab; n: number } | null;
+  /** The section was brought into view: the request is spent (a later mount does not jump to it). */
+  onFocused: () => void;
   view: OrgTopView;
   onView: (view: OrgTopView) => void;
   keepsBrief: boolean;
@@ -323,10 +358,9 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, tab, on
   threadsNew: boolean;
   /** The threads his view shows (OrgThreads), for the tab's count. */
   threadsCount: number;
-  /** How Tasks draws the work, and the views it draws (renderBoard: null when the node keeps no Board). */
+  /** How Tasks draws the work, and the Board it draws (null when the node keeps no Board). */
   mode: OrgTaskMode;
   onMode: (mode: OrgTaskMode) => void;
-  renderTeam: () => ReactNode;
   renderBoard: (() => ReactNode) | null;
   /** Close this panel (the chat takes its room; the header brings it back). */
   onClose: () => void;
@@ -358,8 +392,8 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, tab, on
     return m;
   }, [row.kind, rows]);
   const brief = keepsBrief ? contact?.brief : undefined;
-  // A Board picked on a node that keeps none (any more) shows the work by status.
-  const shownMode: OrgTaskMode = mode === 'board' && !renderBoard ? 'status' : mode;
+  // A Board picked on a node that keeps none (any more) shows all its tasks.
+  const shownMode: OrgTaskMode = mode === 'board' && !renderBoard ? 'all' : mode;
   // Full screen is the same pop-up sheet a session panel opens into, and the same one state of the
   // tab (2026-11-02, the user: "that thread ... all full screens are that pop-up window"; it was a
   // widen beside the chat before): entering it here leaves a session's, a reload keeps it.
@@ -411,25 +445,18 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, tab, on
           <OrgThreads name={title} owner={contact} state={threads} tasks={tasks} onOpenTask={onOpenTask} onFollowUp={onThreadFollowUp} now={now} />
         </div>
       ) : (
-        <div className="org-task-view" data-testid="org-task-view" data-tab={tab} data-mode={shownMode}>
-          <ModeSwitch mode={shownMode} modes={renderBoard ? ORG_TASK_MODES : ORG_TASK_MODES.filter((m) => m !== 'board')} onPick={onMode} />
-          {shownMode === 'team' ? (
-            <div className="org-rail-body org-rail-team">{renderTeam()}</div>
-          ) : shownMode === 'board' && renderBoard ? (
+        <div className="org-task-view" data-testid="org-task-view" data-mode={shownMode}>
+          {/* A node with no Board has one way to draw its work: no switch. */}
+          {renderBoard && <ModeSwitch mode={shownMode} modes={ORG_TASK_MODES} onPick={onMode} />}
+          {shownMode === 'board' && renderBoard ? (
             <div className="org-rail-board" data-testid="org-rail-board">{renderBoard()}</div>
-          ) : (<>
-          <TaskTabBar tabs={tabs} tab={tab} onPick={onTab} approvals={approvals.length} />
-          <div className="org-rail-body">
-            {tab === 'needs' ? (<>
-              <ApprovalRows list={approvals} variant="org" />
-              {alerts.length > 0
-                ? <AskList alerts={alerts} tasks={tasks} vpOf={(id) => vpByTask.get(id)} ownId={contact?.id} ownName={title} onOpen={onOpenAlert} onQuote={onQuote} canQuote={canQuote} answers={answers} />
-                : approvals.length === 0 && <p className="org-task-empty" data-testid="org-task-empty">{EMPTY.needs}</p>}
-            </>) : (
-              <TaskTabList tasks={tabs[tab]} tab={tab} onOpen={onOpenTask} now={now} />
-            )}
-          </div>
-          </>)}
+          ) : (
+            <AllTasks
+              tabs={tabs} alerts={alerts} approvals={approvals} flipped={flipped} onFlip={onFlip} focus={focus} onFocused={onFocused}
+              renderAsks={() => <AskList alerts={alerts} tasks={tasks} vpOf={(id) => vpByTask.get(id)} ownId={contact?.id} ownName={title} onOpen={onOpenAlert} onQuote={onQuote} canQuote={canQuote} answers={answers} />}
+              onOpenTask={onOpenTask} now={now}
+            />
+          )}
         </div>
       )}
     </aside>

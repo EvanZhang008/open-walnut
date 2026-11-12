@@ -26,7 +26,7 @@ import path from 'node:path'
 import { expect, test, type APIRequestContext, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { homeColumns, loadHome, lockLeftmostPanel, seedColumns, setPanelMode } from './draft-helpers'
-import { openTasksBy } from './org-view-helpers'
+import { openTaskFromRail } from './org-view-helpers'
 import { holdPanelCountLock } from './panel-count-lock'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -244,20 +244,16 @@ test.describe('Org', () => {
   })
 
   const side = (page: Page) => page.getByTestId('org-side')
-  const teamItem = (page: Page, id: string) => page.locator(`[data-testid="org-team-item"][data-task-id="${id}"]`)
   async function openLead(page: Page): Promise<void> {
     await loadHome(page)
     await page.getByTestId('sidebar-org').click()
     await page.locator(`[data-testid="org-channel"][data-key="${rowKey}"]`).click()
     await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
-    await openTasksBy(page, 'team')
   }
-  /** Click a Team row and wait for the URL to open it (the list re-sorts as statuses move under load). */
-  async function openFromTeam(page: Page, id: string): Promise<void> {
-    await expect(async () => {
-      await teamItem(page, id).click()
-      await expect(page).toHaveURL(new RegExp(`open=task(%3A|:)${id}`), { timeout: 3_000 })
-    }).toPass({ timeout: 20_000 })
+  /** Open a task from the side bar's All tasks and wait for the URL to open it (the sections re-sort
+   *  as statuses move under load). */
+  async function openFromTasks(page: Page, id: string): Promise<void> {
+    await openTaskFromRail(page, id, () => expect(page).toHaveURL(new RegExp(`open=task(%3A|:)${id}`), { timeout: 3_000 }))
   }
   const stripTargets = (page: Page) => side(page).evaluateAll(
     (els) => els.map((el) => `${el.getAttribute('data-target')}${el.classList.contains('is-locked') ? '*' : ''}`),
@@ -267,12 +263,12 @@ test.describe('Org', () => {
     await page.setViewportSize({ width: 1600, height: 900 })
     await optIn(page)
     await openLead(page)
-    await teamItem(page, ids.alpha).click()
+    await openFromTasks(page, ids.alpha)
     await expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid)
     // The session panel beside the page carries the lock now.
     await side(page).locator('.session-panel-lock').click()
     await expect(side(page)).toHaveClass(/is-locked/)
-    await openFromTeam(page, ids.beta)
+    await openFromTasks(page, ids.beta)
     await expect(side(page)).toHaveCount(2, { timeout: 15_000 })
     const expected = [`task:${ids.beta}`, `task:${ids.alpha}*`]
     await expect.poll(() => stripTargets(page)).toEqual(expected)
@@ -283,9 +279,9 @@ test.describe('Org', () => {
     await page.screenshot({ path: `${SHOTS}/3-org-two-panels.png`, scale: 'css' })
 
     // Another task replaces the free panel, never the pin.
-    await openFromTeam(page, ids.alpha)
+    await openFromTasks(page, ids.alpha)
     await expect.poll(() => stripTargets(page)).toEqual([`task:${ids.alpha}*`])
-    await openFromTeam(page, ids.beta)
+    await openFromTasks(page, ids.beta)
     await expect.poll(() => stripTargets(page)).toEqual(expected)
     await expect.poll(() => savedField(page.request, 'open-walnut-layout:org-columns'), { timeout: 15_000 })
       .toContain(`{"id":"task:${ids.alpha}","locked":true}`)
@@ -297,7 +293,7 @@ test.describe('Org', () => {
       const fresh = await ctx.newPage()
       await openLead(fresh)
       await expect.poll(() => stripTargets(fresh), { timeout: 25_000 }).toEqual([`task:${ids.alpha}*`])
-      await openFromTeam(fresh, ids.beta)
+      await openFromTasks(fresh, ids.beta)
       await expect.poll(() => stripTargets(fresh)).toEqual(expected)
       // Reload: the place brings the free panel back beside the pin.
       await fresh.reload()

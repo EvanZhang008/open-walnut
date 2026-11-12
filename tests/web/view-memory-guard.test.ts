@@ -206,6 +206,7 @@ const PASSING: Record<string, string> = {
   'components/sessions/SessionUsageDialog.tsx#panel': 'a panel of the usage dialog',
   'components/tasks/FilterMenu.tsx#page': 'a level of the filter menu',
   'hooks/useReviewSidebar.ts#fullscreen': 'the question review blown up over the chat, an overlay',
+  'components/org/OrgNodeDetail.tsx#focusSection': 'a one-time scroll to the section a header count names, not a choice (the section\'s fold is kept as node.sectionFlips)',
   'pages/OrgPage.tsx#chartOpen': 'the org chart, a sheet over the page with a close of its own, opened on one node',
   'pages/MainPage.tsx#triagePanelOpen': 'one triage opened for one task (triageTaskId), a passing panel',
   'hooks/useThreadStack.ts#drawerMode': 'the question drawer, an overlay (per tab by spec C69)',
@@ -216,7 +217,8 @@ const PASSING: Record<string, string> = {
 /** The view choices the user named, and where each is kept now. */
 const KEPT: ReadonlyArray<{ file: string; state: string; key: RegExp; what: string }> = [
   { file: 'components/org/OrgNodeDetail.tsx', state: 'topPick', key: /usePageViewOf<OrgTopView>\('org', 'node\.view', row\.key,/, what: 'an Org node\'s Threads / Task / Brief view, per node' },
-  { file: 'components/org/OrgNodeDetail.tsx', state: 'keptTab', key: /usePageViewOf<KeptRailTab>\('org', 'node\.taskTab', row\.key,/, what: 'the Task view\'s tab, per node' },
+  { file: 'components/org/OrgNodeDetail.tsx', state: 'taskMode', key: /usePageViewOf<OrgTaskMode>\('org', 'node\.taskMode', row\.key, 'all',/, what: 'an Org node\'s Tasks drawn as All tasks or the Board, per node' },
+  { file: 'components/org/OrgNodeDetail.tsx', state: 'flipped', key: /usePageViewOf<string\[\]>\('org', 'node\.sectionFlips', row\.key,/, what: 'the All tasks sections folded or opened, per node' },
   // 2026-11-06, the user: "and can expand for more detail"; what was opened stays opened.
   { file: 'components/org/OrgChartVp.tsx', state: 'open', key: /usePageViewOf\('org', 'chart\.open', key, false, isBoolean\)/, what: 'an org chart card or project row opened, per card and per row' },
   { file: 'components/org/OrgThreads.tsx', state: 'showClosed', key: /usePageView\('org', 'threads\.showClosed'/, what: 'the week\'s closed threads shown' },

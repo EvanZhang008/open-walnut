@@ -45,16 +45,10 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 }
 .org-rail-icon:hover, .org-rail-icon:focus-visible { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
 .org-rail-icon[aria-pressed="true"] { color: var(--fg); }
-/* Tasks: by status, by team, or as the Board. */
+/* Tasks: all of them in one list, or as the Board. */
 .org-task-modes { flex: none; display: inline-flex; align-self: flex-start; gap: 2px; margin: 8px 10px 2px; padding: 2px; border-radius: 7px; background: color-mix(in srgb, var(--fg) 6%, transparent); }
 .org-task-modes button { border: 0; border-radius: 5px; padding: 2px 10px; background: transparent; color: var(--fg-secondary, var(--fg)); font: inherit; font-size: 12px; cursor: pointer; }
 .org-task-modes button.is-on { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
-/* Team in the side bar: the columns stack, one under the other, unless it is full screen. */
-.org-rail-team { padding: 8px 10px; }
-.org-rail-team .org-team { flex-direction: column; align-items: stretch; }
-.org-rail-team .org-team-col { flex: none; min-width: 0; }
-.org-rail.is-wide .org-rail-team .org-team-col { flex: 1 1 0; }
-.org-rail.is-wide .org-rail-team .org-team { flex-direction: row; align-items: flex-start; }
 /* The Board fills the side bar below the switch. */
 .org-rail-board { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 6px; border-top: 1px solid var(--border); }
 .org-rail-board > * { flex: 1; min-height: 0; }
@@ -66,16 +60,22 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-rail.is-side .org-brief-body { max-height: none; overflow: visible; }
 
 .org-task-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.org-task-tabs { flex: none; display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-.org-task-tab {
-  display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px;
-  border: 1px solid transparent; border-radius: 999px; background: transparent;
-  color: var(--fg-secondary, var(--fg)); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+/* All tasks: a section per state, its heading folding it. */
+.org-task-sections { padding-bottom: 8px; }
+.org-task-section + .org-task-section { border-top: 1px solid var(--border); }
+.org-task-section-head {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 7px 12px; border: 0; background: var(--bg); color: var(--fg); font: inherit; font-size: 12px;
+  font-weight: 600; text-align: left; cursor: pointer;
 }
-.org-task-tab i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-.org-task-tab:hover { background: var(--bg-secondary); }
-.org-task-tab.is-on { border-color: var(--border); background: var(--bg-secondary); color: var(--fg); font-weight: 600; }
-.org-task-tab-count { color: var(--fg-muted); font-weight: 400; }
+.org-task-section-head:hover { background: var(--bg-secondary); }
+.org-task-section-head i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+/* The chevron is drawn, so the heading's text is its name and count alone. */
+.org-task-section-head::before { content: '›' / ''; flex: none; width: 10px; color: var(--fg-muted); transition: transform 0.12s; }
+.org-task-section-head[aria-expanded="true"]::before { transform: rotate(90deg); }
+.org-task-section-icon { flex: none; display: inline-flex; color: var(--fg-muted); }
+.org-task-section-icon svg { width: 12px; height: 12px; }
+.org-task-section-count { color: var(--fg-muted); font-weight: 400; }
 .org-task-empty { margin: 0; padding: 8px 12px; font-size: 12px; color: var(--fg-muted); }
 
 /* Working / Waiting / Completed: one row per task, its own line under its name. */
@@ -177,9 +177,6 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-watch-toggle:hover { background: var(--bg-secondary); color: var(--fg); }
 .org-watch-toggle.is-on { color: var(--accent, #0a84ff); }
 .org-ask-tools .org-watch-toggle { width: 20px; height: 18px; padding: 0; }
-.org-task-tab-watch { flex: none; display: inline-flex; }
-.org-task-tab-watch svg { width: 12px; height: 12px; }
-.org-task-tab.is-on .org-task-tab-watch { color: var(--accent, #0a84ff); }
 /* Touch screens have no hover: the eye is always there. */
 @media (hover: none) { .org-watch-toggle { opacity: 1; } }
 

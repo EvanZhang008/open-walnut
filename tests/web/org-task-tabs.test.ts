@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest'
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import { buildChannels, type AlertProbe } from '../../web/src/components/org/org-channels-model.js'
-import { ORG_RAIL_TABS, ORG_TASK_TABS, ORG_TASK_TAB_LABELS, TAB_DOT, isKeptRailTab, orgTaskTabs, railTabShown, stateTab, taskTabNote } from '../../web/src/components/org/org-task-tabs.js'
+import { ORG_RAIL_TABS, ORG_TASK_TABS, ORG_TASK_TAB_LABELS, TAB_DOT, allTasksSections, isSectionFlips, orgTaskTabs, sectionFor, sectionOpen, stateTab, taskTabNote } from '../../web/src/components/org/org-task-tabs.js'
 import { STATUS_SECTION_LABELS } from '../../web/src/components/tasks/status-sections.js'
 
 const NOW = Date.UTC(2026, 9, 31, 12, 0)
@@ -46,12 +46,49 @@ describe('the Task view tabs', () => {
     expect(Object.keys(TAB_DOT)).not.toContain('read')
   })
 
-  it('a To read tab an older build kept opens as Needs you, as Pinned opens as Watching', () => {
-    expect(isKeptRailTab('read')).toBe(true)
-    expect(railTabShown('read')).toBe('needs')
-    expect(railTabShown('pinned')).toBe('watching')
-    expect(railTabShown('working')).toBe('working')
-    expect(isKeptRailTab('bogus')).toBe(false)
+  it('All tasks draws every tab as a section in the rail\'s order, empty ones left out', () => {
+    const tabs = orgTaskTabs(walnut, rows, tasks, NOW)
+    const secs = allTasksSections(tabs, tabs.needs)
+    const order = ORG_RAIL_TABS.filter((t) => secs.some((x) => x.tab === t))
+    expect(secs.map((x) => x.tab)).toEqual(order)
+    for (const x of secs) expect(x.tasks.length + x.alerts.length).toBeGreaterThan(0)
+    // Every card is under Needs you, and no task is drawn twice.
+    expect(secs.find((x) => x.tab === 'needs')?.alerts.length ?? 0).toBe(tabs.needs.length)
+    const ids = secs.flatMap((x) => x.tasks.map((t) => t.id))
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('a Needs you section with only approvals still shows; no work at all shows no section', () => {
+    const none = { watching: [], needs: [], working: [], waiting: [], notstarted: [], done: [] }
+    expect(allTasksSections(none, [])).toEqual([])
+    expect(allTasksSections(none, [], 2).map((x) => x.tab)).toEqual(['needs'])
+  })
+
+  it('a watched task shows once: Watching, else its ask\'s card, else Completed this week; an old finished one stays in Watching', () => {
+    const mk = (id: string, state: string, extra: Record<string, unknown> = {}) => ({ id, title: id, project: 'P', phase: state === 'done' ? 'COMPLETE' : 'IN_PROGRESS', user_status: { state }, ...extra }) as never
+    const w = mk('w', 'working', { watched_at: '2026-11-01T00:00:00Z' })
+    const asked = mk('asked', 'needs', { watched_at: '2026-11-01T00:00:00Z' })
+    const recent = mk('recent', 'done', { watched_at: '2026-11-01T00:00:00Z' })
+    const old = mk('old', 'done', { watched_at: '2026-11-01T00:00:00Z' })
+    const tabs = { watching: [w, asked, recent, old], needs: [], working: [w, asked], waiting: [], notstarted: [], done: [recent] }
+    const secs = allTasksSections(tabs, [{ taskId: 'asked' } as never])
+    const of = (tab: string) => secs.find((x) => x.tab === tab)?.tasks.map((t) => t.id) ?? []
+    expect(of('watching')).toEqual(['w', 'old'])
+    expect(of('working')).toEqual([])
+    expect(of('done')).toEqual(['recent'])
+    // A header count whose tasks are all watched leads to Watching; one with nothing drawn leads nowhere.
+    expect(sectionFor('working', secs)).toBe('watching')
+    expect(sectionFor('done', secs)).toBe('done')
+    expect(sectionFor('waiting', allTasksSections({ ...tabs, watching: [] }, []))).toBeNull()
+  })
+
+  it('what is in front of the user opens, what waits or is done folds, and a flip turns one over', () => {
+    expect(ORG_RAIL_TABS.filter((t) => sectionOpen(t, []))).toEqual(['watching', 'needs', 'working'])
+    expect(sectionOpen('done', ['done'])).toBe(true)
+    expect(sectionOpen('needs', ['needs'])).toBe(false)
+    expect(isSectionFlips(['done', 'waiting'])).toBe(true)
+    expect(isSectionFlips(['team'])).toBe(false)
+    expect(isSectionFlips('done')).toBe(false)
   })
 
   it('put each of a VP\'s tasks in the tab of its own status; a snoozed one waits, never needs you', () => {

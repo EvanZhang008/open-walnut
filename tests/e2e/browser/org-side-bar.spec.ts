@@ -9,13 +9,15 @@
  *     tabs; on its right the chat's status, the side bar's switch and the chat's kebab;
  *  2. the kebab holds Changed, Files, Terminal and Board: Files opens beside the chat (the chat
  *     stays), Board opens the side bar's Tasks on the lead's Board;
- *  3. the side bar's tabs: Tasks with its count, Brief, Threads; Tasks by Status, Team or Board,
- *     kept per node across a reload; a node with no Board offers no Board, in the side bar or the kebab;
+ *  3. the side bar's tabs: Tasks with its count, Brief, Threads; Tasks as All tasks or Board (two
+ *     ways only), kept per node across a reload, an older build's Status or Team opening All tasks;
+ *     All tasks is one list of sections, Watching / Needs you / Working open and the rest folded by
+ *     default, each fold kept per node; a node with no Board offers no Board, in the side bar or the kebab;
  *  4. widen: the side bar takes most of the node, the chat keeps its room beside it, no drag handle;
  *     back to its own width; kept per node across a reload;
  *  5. close and back from the header's switch, which is dotted while closed with news;
  *  6. a narrow window stacks the side bar above the chat, with no widen;
- *  7. an old link naming a tab (?tab=team) opens the side bar on Team, then lets go of it;
+ *  7. an old link naming a tab (?tab=team) opens the side bar on All tasks, then lets go of it;
  *  8. Quote on an ask in the side bar puts it into the chat beside it, focused;
  *  9. Minimize in the header puts the node's chat on the app's taskbar; its chip selects the node again.
  * The fixture is shared, so this file makes its own projects and removes what it made.
@@ -27,6 +29,7 @@ import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
 import { kebabRow } from './session-kebab-helpers'
+import { openAllSections, openSection, taskSection, type OrgSectionTab } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
@@ -253,31 +256,70 @@ test('the kebab\'s Open group holds Changed, Files, Terminal and Board: Files op
   await shot(page, 'board')
 })
 
-test('Tasks by Status, Team or Board, kept per node; a node with no Board offers none', async ({ page }) => {
+test('Tasks as All tasks or Board, kept per node; sections fold by default; an old Status or Team opens All tasks; a node with no Board offers none', async ({ page }) => {
   await isolateUiPrefs(page)
+  // What an older build kept: the lead left on Team, the plain lead on Status (once per tab, so the
+  // picks this spec makes survive its reload).
+  await page.addInitScript(([key, value]) => {
+    if (sessionStorage.getItem('pw-old-task-mode')) return
+    sessionStorage.setItem('pw-old-task-mode', '1')
+    try { localStorage.setItem(key, value) } catch { /* storage off */ }
+  }, ['open-walnut-view:org.node.taskMode', JSON.stringify([[rowKey(LED), 'team'], [rowKey(PLAIN), 'status']])] as const)
   await page.setViewportSize({ width: 1440, height: 900 })
   await loadHome(page)
   await openNode(page, LED)
   const detail = page.getByTestId('org-detail')
   await detail.getByTestId('org-top-task').click()
   await expect(detail.getByTestId('org-top-task')).toHaveText('Tasks2')
-  await detail.getByTestId('org-task-mode-team').click()
-  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'team')
-  await expect(detail.getByTestId('org-rail').getByTestId('org-team')).toBeVisible()
-  await expect(detail.getByTestId('org-rail').locator('[data-testid="org-team-item"]', { hasText: `Side work ${STAMP}` })).toBeVisible()
-  await shot(page, 'team')
+  // Two ways only (2026-11-12, the user: "under tasks, just show all taks, and then board").
+  await expect.poll(() => detail.getByTestId('org-task-modes').getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
+    .toEqual(['org-task-mode-all', 'org-task-mode-board'])
+  await expect(detail.getByTestId('org-task-modes').getByRole('button')).toHaveText(['All tasks', 'Board'])
+  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
+  await expect(detail.getByTestId('org-task-mode-all')).toHaveAttribute('aria-pressed', 'true')
+  await expect(detail.getByTestId('org-task-tabs')).toHaveCount(0)
+  await expect(detail.getByTestId('org-rail').getByTestId('org-team')).toHaveCount(0)
+  // One list: each section open or folded by its default (what is in front of the user now open,
+  // what waits and what is done folded). The team's work nobody started is under Not started, folded.
+  const OPEN_BY_DEFAULT = ['watching', 'needs', 'working']
+  const sections = detail.getByTestId('org-task-section')
+  await expect(taskSection(detail, 'notstarted')).toBeVisible({ timeout: 30_000 })
+  for (const tab of await sections.evaluateAll((els) => els.map((e) => e.getAttribute('data-tab') ?? ''))) {
+    const open = OPEN_BY_DEFAULT.includes(tab)
+    await expect(taskSection(detail, tab as OrgSectionTab), tab).toHaveAttribute('data-open', open ? '1' : '0')
+    await expect(taskSection(detail, tab as OrgSectionTab).getByTestId('org-task-section-head'), tab).toHaveAttribute('aria-expanded', String(open))
+  }
+  const sideWork = detail.getByTestId('org-rail').locator('[data-testid="org-task-row"]', { hasText: `Side work ${STAMP}` })
+  await expect(sideWork).toHaveCount(0)
+  await openSection(detail, 'notstarted')
+  await expect(sideWork).toBeVisible()
+  await shot(page, 'all-tasks')
+  // Board, kept across a reload; back on All tasks the opened section is still open.
+  await detail.getByTestId('org-task-mode-board').click()
+  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'board')
   await page.reload()
   await expect(detail).toHaveAttribute('data-key', rowKey(LED))
-  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'team')
-  await detail.getByTestId('org-task-mode-status').click()
-  await expect(detail.getByTestId('org-task-tabs')).toBeVisible()
+  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'board')
+  await detail.getByTestId('org-task-mode-all').click()
+  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
+  await expect(taskSection(detail, 'notstarted')).toHaveAttribute('data-open', '1')
+  await expect(sideWork).toBeVisible()
 
-  // The plain lead keeps no Board: Status and Team only, and no Board row in its kebab.
+  // The plain lead keeps no Board: All tasks only, with no switch (its old Status read as All tasks), and no Board
+  // row in its kebab.
   await page.locator(`[data-testid="org-channel"][data-key="${rowKey(PLAIN)}"]`).click()
   await expect(detail).toHaveAttribute('data-key', rowKey(PLAIN))
-  await expect(detail.getByTestId('org-task-mode-team')).toBeVisible()
-  await expect(detail.getByTestId('org-task-mode-board')).toHaveCount(0)
-  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'status')
+  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
+  // One way to draw its work, so no switch at all.
+  await expect(detail.getByTestId('org-task-modes')).toHaveCount(0)
+  // Folds are per node: the led node's opened Not started leaves the plain lead's sections at their
+  // defaults (its one task may have started by now, so read whichever sections it shows).
+  const plainSections = detail.getByTestId('org-task-section')
+  await expect(plainSections.first()).toBeVisible()
+  for (const sec of await plainSections.all()) {
+    const tab = await sec.getAttribute('data-tab')
+    await expect(sec).toHaveAttribute('data-open', ['watching', 'needs', 'working'].includes(tab ?? '') ? '1' : '0')
+  }
   const chat = detail.locator(`[data-testid="org-chat"] .session-panel[data-session-id="${ids.plainSid}"]`)
   await expect(chat).toBeVisible({ timeout: 30_000 })
   const menu = await openKebab(page)
@@ -393,27 +435,24 @@ test('full screen is the pop-up sheet with margins, kept across a reload; close 
 
   // A task opened from the sheet opens beside the page with the sheet gone, never under it.
   await detail.getByTestId('org-top-task').click()
-  await detail.getByTestId('org-task-mode-status').click()
+  await detail.getByTestId('org-task-mode-all').click()
   await detail.getByTestId('org-rail-fullscreen').click()
   await expect(rail).toHaveAttribute('data-fullscreen', '1')
-  const tabs = detail.locator('[data-testid="org-task-tab"]')
-  for (let i = 0; i < await tabs.count(); i++) {
-    await tabs.nth(i).click()
-    if (await detail.getByTestId('org-task-row').count()) break
-  }
+  await openAllSections(detail)
   await detail.getByTestId('org-task-row').first().click()
   await expect(rail).not.toHaveAttribute('data-fullscreen', '1')
   await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
   await expect(page.getByTestId('org-side')).toBeVisible()
 })
 
-test('a narrow window stacks the side bar above the chat, with no widen; a link naming Team opens it once', async ({ page }) => {
+test('a narrow window stacks the side bar above the chat, with no widen; a link naming Team opens All tasks once', async ({ page }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1440, height: 900 })
   await loadHome(page)
   await openNode(page, PLAIN)
   const detail = page.getByTestId('org-detail')
-  // An old link to the team: the side bar opens on Tasks by team, and the URL lets go of the tab.
+  // An old link to the team (a row's "Open tasks" still says team): the side bar opens on All tasks,
+  // and the URL lets go of the tab.
   await page.evaluate((key) => {
     const url = new URL(window.location.href)
     url.searchParams.set('node', key)
@@ -422,7 +461,8 @@ test('a narrow window stacks the side bar above the chat, with no widen; a link 
   }, rowKey(LED))
   await page.reload()
   await expect(detail).toHaveAttribute('data-key', rowKey(LED))
-  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'team')
+  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
+  await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
   await expect(page).not.toHaveURL(/tab=/)
 
   await page.setViewportSize({ width: 900, height: 900 })
@@ -453,7 +493,8 @@ test('Quote on an ask in the side bar puts it into the chat beside it', async ({
   await openNode(page, LED)
   const detail = page.getByTestId('org-detail')
   await detail.getByTestId('org-top-task').click()
-  await detail.getByTestId('org-task-mode-status').click()
+  await detail.getByTestId('org-task-mode-all').click()
+  await openSection(detail, 'needs')
   const row = detail.locator(`[data-testid="org-alert"][data-task-id="${id}"]`)
   await expect(row).toBeVisible({ timeout: 60_000 })
   const composer = detail.locator(`[data-testid="org-chat"] .session-panel[data-session-id="${ids.leadSid}"] .chat-input-textarea`)

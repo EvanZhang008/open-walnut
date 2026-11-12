@@ -50,7 +50,7 @@ import { ORG_TOP_DEFAULT, ORG_TOP_VIEWS, briefUnread, markBriefSeen, markThreads
 import { newsAt, sharedAnswers, threadCountLabel, threadCounts, type ThreadCounts } from '@open-walnut/thread-view';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
-import { ORG_TASK_TAB_LABELS, isKeptRailTab, orgTaskTabs, ownAskFirst, railTabShown, type KeptRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_TASK_TAB_LABELS, allTasksSections, isSectionFlips, orgTaskTabs, ownAskFirst, sectionFor, sectionOpen, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { stateCountLabel } from '@open-walnut/user-status';
 import type { ImageAttachment } from '@/api/chat';
 import {
@@ -239,13 +239,23 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const keepsBrief = !isRouter && (contact?.org_role === 'main' || contact?.org_role === 'lead'
     || (!!row.contactId && (row.kind === 'main' || row.isLead)));
   const topView: OrgTopView = keepsBrief ? topPick : 'task';
-  /** The Task view's tab: Needs you until the user picks another, then the one he left it on. */
-  const [keptTab, setTaskTab] = usePageViewOf<KeptRailTab>('org', 'node.taskTab', row.key, 'needs', isKeptRailTab);
-  const taskTab = railTabShown(keptTab);
-  /** Tasks by status, by team, or as the Board (2026-11-02: Team and Board went under Tasks). */
-  const [taskMode, setTaskMode] = usePageViewOf<OrgTaskMode>('org', 'node.taskMode', row.key, 'status', oneOf(ORG_TASK_MODES));
+  /** All tasks or the Board (2026-11-12, the user: "under tasks, just show all taks, and then board").
+   *  A node an older build left on Status or Team reads neither and opens on All tasks. */
+  const [taskMode, setTaskMode] = usePageViewOf<OrgTaskMode>('org', 'node.taskMode', row.key, 'all', oneOf(ORG_TASK_MODES));
+  /** The All tasks sections folded or opened against their default, per node. */
+  const [flipped, setFlipped] = usePageViewOf<string[]>('org', 'node.sectionFlips', row.key, [], isSectionFlips);
+  const flipSection = (t: OrgRailTab) => setFlipped((f) => (f.includes(t) ? f.filter((x) => x !== t) : [...f, t]));
+  const [focusSection, setFocusSection] = useState<{ tab: OrgRailTab; n: number } | null>(null);
   const tabs = useMemo(() => orgTaskTabs(row, rows, tasks, now), [row, rows, tasks, now]);
-  const openTab = (t: OrgTaskTab) => { setRailHidden(false); setTopPick('task'); setTaskMode('status'); setTaskTab(t); };
+  /** A count in the header: All tasks, with that section open and brought into view (its tasks may
+   *  all be watched, then Watching; a section not drawn is never flipped). */
+  const openTab = (t: OrgTaskTab) => {
+    setRailHidden(false); setTopPick('task'); setTaskMode('all');
+    const to = sectionFor(t, allTasksSections(tabs, alertsShown, approvals.length));
+    if (!to) return;
+    if (!sectionOpen(to, flipped)) flipSection(to);
+    setFocusSection({ tab: to, n: Date.now() });
+  };
   const brief = keepsBrief ? contact?.brief : undefined;
   const pickTop = (v: OrgTopView) => setTopPick(v);
   /** The panel above or beside the chat (Task, Brief, Threads) closed: the chat takes its room;
@@ -281,11 +291,13 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     }, 200);
   };
   /** The side bar on Tasks, drawn by `mode` (the Board: the one its lead keeps). */
-  const openTasks = (mode: OrgTaskMode) => { setRailHidden(false); setTopPick('task'); setTaskMode(mode === 'board' && hasBoard === false ? 'status' : mode); };
-  // A view the URL names (a row's "Open team", an old link to Board): the side bar opens on it, once.
+  const openTasks = (mode: OrgTaskMode) => { setRailHidden(false); setTopPick('task'); setTaskMode(mode === 'board' && hasBoard === false ? 'all' : mode); };
+  // A view the URL names (a row's "Open tasks", whose URL still says team, an old link to Board): the
+  // side bar opens on it, once.
   useEffect(() => {
     if (!initialTab) return;
-    if (initialTab === 'team' || initialTab === 'board') openTasks(initialTab);
+    if (initialTab === 'team') openTasks('all');
+    else if (initialTab === 'board') openTasks('board');
     onTabUsed(row.key);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per ask
   }, [initialTab]);
@@ -325,7 +337,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
    *  session's Inbox tab, anything else in its chat (this node's, or the task's beside the page). */
   const openAlert = (a: OrgAlertView) => {
     const own = a.taskId === row.contactId;
-    // The Board may still be loading (null): the side bar shows the work by status until it is known.
+    // The Board may still be loading (null): the side bar shows all its tasks until it is known.
     if (a.kind === 'needs' && a.source === 'choice' && hasBoard !== false && onContactBoard(a.taskId)) { openTasks('board'); return; }
     if (a.kind === 'needs' && a.source === 'letter' && !own) { onOpenTask(a.taskId, { inbox: true }); return; }
     if (own) {
@@ -404,7 +416,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     return approvalsForNode(pendingApprovals, row.kind, ids);
   }, [pendingApprovals, row.kind, row.contactId, tabs]);
 
-  /** The node's teams by the user's status, each with its line. */
+  /** The Inbox's teams by the user's status, each with its line (its page has no chat). */
   const renderTeam = () => (
     <TeamBoard
       columns={columns}
@@ -428,9 +440,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
 
   const rail = (
     <OrgTaskRail
-      row={row} rows={rows} tasks={tasks} tabs={tabs} alerts={alertsShown} approvals={approvals} tab={taskTab} onTab={setTaskTab}
+      row={row} rows={rows} tasks={tasks} tabs={tabs} alerts={alertsShown} approvals={approvals} flipped={flipped} onFlip={flipSection} focus={focusSection} onFocused={() => setFocusSection(null)}
       view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} threadsNew={threadsNew} threadsCount={threadsCount} onClose={() => setRailHidden(true)}
-      mode={taskMode} onMode={setTaskMode} renderTeam={renderTeam} renderBoard={hasBoard && row.contactId ? renderBoard : null} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
+      mode={taskMode} onMode={setTaskMode} renderBoard={hasBoard && row.contactId ? renderBoard : null} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
       threads={threads} onThreadFollowUp={followUp}
       contact={contact} title={title} onOpenAlert={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers}
       onOpenTask={openChip} now={now} placement={railSide ? 'side' : 'top'}
