@@ -271,3 +271,23 @@ test('picked rows land as tokens naming their source, and the model receives car
   await page.keyboard.press('Escape')
   await expect(raw).toHaveCount(0)
 })
+
+test('a source search that fails while the server restarts is asked again: its tab fills without retyping', async ({ page }) => {
+  test.setTimeout(120_000)
+  // 2026-11-12: a deploy restarted the server under an open picker; the Slack tab answered 404, then
+  // "Load failed", and said "Slack is not available right now" until the query was typed again.
+  let failed = 0
+  await page.route((url) => url.pathname === '/api/mention-sources/team-chat/search', async (route) => {
+    if (failed === 0) { failed += 1; return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"not_found"}' }) }
+    if (failed === 1) { failed += 1; return route.abort('connectionrefused') }
+    return route.continue()
+  })
+  const input = await openComposer(page)
+  await page.keyboard.type('@chat ali')
+  await expect(activeTab(page)).toHaveText('Chat')
+  await expect(page.locator(`${PALETTE} .mention-empty`).filter({ hasText: 'not available' })).toHaveCount(0)
+  await expect(selectedTitle(page)).toHaveText('Alice Chen', { timeout: 20_000 })
+  expect(failed).toBe(2)
+  await expect(page.locator(`${PALETTE} .mention-empty`).filter({ hasText: 'not available' })).toHaveCount(0)
+  await expect(input).toHaveValue('@chat ali')
+})

@@ -8,6 +8,11 @@
  * own TTL), so going back to a tab or retyping a query paints at once, while a long-lived
  * window still sees new mail and freshly edited notes. A source's own failure is an
  * answer (`error`), shown on its tab only.
+ *
+ * A request that fails outright (no answer, or a 404/5xx while the server restarts) is asked
+ * again a few times before the tab says the source is not available (2026-11-12: a deploy
+ * restarted the server under an open picker, and its Slack tab said "not available right
+ * now" until the query was typed again). The tab stays on its loading line meanwhile.
  */
 import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '@/api/client';
@@ -20,6 +25,8 @@ const SEARCH_DEBOUNCE_MS = 200;
 const SEARCH_TIMEOUT_MS = 10_000;
 const MEMO_CAP = 200;
 const MEMO_TTL_MS = 60_000;
+/** Waits before each new ask of a search that failed outright: about 15 s in all, a restart's length. */
+export const SEARCH_RETRY_STEPS_MS = [1_000, 2_000, 4_000, 8_000];
 
 let listMemo: { at: number; sources: MentionSourceInfo[] } | null = null;
 let listInFlight: Promise<MentionSourceInfo[]> | null = null;
@@ -100,6 +107,39 @@ export interface SourceSearchState {
 
 const EMPTY: SourceSearchState = { answers: new Map(), forQuery: '', loading: new Set() };
 
+const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) => {
+  if (signal.aborted) { resolve(); return; }
+  const timer = window.setTimeout(resolve, ms);
+  signal.addEventListener('abort', () => { window.clearTimeout(timer); resolve(); }, { once: true });
+});
+
+/**
+ * A failure a restart makes and that passes by itself: no connection, or the server answering 404 / 408 /
+ * 429 / 5xx while it starts or stops. A deadline is not one (the source is slow, asking again only waits
+ * longer), and neither is another 4xx (the same question gets the same answer).
+ */
+export function passingFailure(err: unknown): boolean {
+  if (err instanceof DOMException) return false;
+  if (err instanceof TypeError) return true;
+  const status = (err as { name?: string; status?: unknown } | null)?.name === 'ApiError' ? Number((err as { status?: unknown }).status) : NaN;
+  return status === 404 || status === 408 || status === 429 || status >= 500;
+}
+
+/** `searchSource`, asked again after each step of `SEARCH_RETRY_STEPS_MS` while it fails in a way that passes. */
+async function searchSourceRetrying(sourceId: string, q: string, limit: number, signal: AbortSignal): Promise<SourceAnswer> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await searchSource(sourceId, q, limit, signal);
+    } catch (err) {
+      const step = SEARCH_RETRY_STEPS_MS[attempt];
+      if (signal.aborted || step === undefined || !passingFailure(err)) throw err;
+      log.info('mention-sources', 'source search failed, asking again', { sourceId, q, attempt: attempt + 1, waitMs: step, error: err instanceof Error ? err.message : String(err) });
+      await pause(step, signal);
+      if (signal.aborted) throw err;
+    }
+  }
+}
+
 /**
  * Debounced search of several sources at once for one query. `sourceIds` empty yields the
  * idle state. Every source answers on its own: a slow one never holds the others' rows.
@@ -127,7 +167,7 @@ export function useSourceSearch(sourceIds: readonly string[], query: string, lim
     abortRef.current = controller;
     const timer = window.setTimeout(() => {
       for (const id of loading) {
-        searchSource(id, q, limit, controller.signal)
+        searchSourceRetrying(id, q, limit, controller.signal)
           .catch((err): SourceAnswer => {
             if (controller.signal.aborted) return { rows: [] };
             log.warn('mention-sources', 'source search failed', { sourceId: id, q, error: err instanceof Error ? err.message : String(err) });
