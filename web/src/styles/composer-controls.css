@@ -176,3 +176,16 @@
   text-align: right;
   min-width: 0;
 }
+
+/* The permission-mode menu: as compact as the model menu beside it, one line per
+   mode, only as wide as its longest name. */
+.session-control-menu.permission-mode-menu {
+  width: max-content;
+  min-width: 132px;
+  max-width: calc(100vw - 24px);
+  padding: 5px;
+}
+
+.permission-mode-menu .permission-mode-danger .permission-mode-name {
+  color: var(--warning, #e8833a);
+}

@@ -65,10 +65,18 @@ test('a running session: no shortcut hint, the pill opens a menu of every mode a
     await expect(menu).toBeVisible();
     await expect(pill).toHaveAttribute('aria-expanded', 'true');
     await expect(menu.getByRole('option')).toHaveCount(LABELS.length);
-    await expect(menu.locator('.session-control-option-name')).toHaveText(LABELS);
+    await expect(menu.locator('.permission-mode-name')).toHaveText(LABELS);
     await expect(menu.locator('[role="option"][aria-selected="true"]')).toHaveCount(1);
     await expect(menu.locator('[role="option"][data-mode="bypass"]')).toHaveAttribute('aria-selected', 'true');
     await fits(page, menu);
+    // Compact, like the model menu beside it: one line per mode, no wider than its names need.
+    const menuBox = (await menu.boundingBox())!;
+    expect(menuBox.width, 'the menu fits its content').toBeLessThan(200);
+    expect(menuBox.height, 'six one-line rows and a heading').toBeLessThan(240);
+    for (const row of await menu.getByRole('option').all()) {
+      expect((await row.boundingBox())!.height, 'a mode is one line').toBeLessThanOrEqual(32);
+      await expect(row).toHaveAttribute('title', /\S/);
+    }
     if (i === 0) {
       await fs_mkdir();
       await page.screenshot({ path: `${SHOTS}/1-session-menu.png` });

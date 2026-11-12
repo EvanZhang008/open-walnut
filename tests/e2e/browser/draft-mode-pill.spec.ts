@@ -84,7 +84,7 @@ test('1+2. the pill reads the launch default first in the row, its menu picks a 
   await modePill(panel).click()
   const menu = modeMenu(modePill(panel))
   await expect(menu).toBeVisible()
-  await expect(menu.locator('[role="option"] .session-control-option-name'))
+  await expect(menu.locator('[role="option"] .permission-mode-name'))
     .toHaveText(['Plan', 'Default', "Don't Ask", 'Accept', 'Auto', 'Bypass'])
   await expect(menu.locator('[role="option"][aria-selected="true"]')).toHaveAttribute('data-mode', 'bypass')
   await expect(modePill(panel), 'opening the menu does not switch the mode').toHaveAttribute('data-mode', 'bypass')

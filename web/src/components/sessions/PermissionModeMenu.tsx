@@ -95,31 +95,29 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
         data-composer-scope={triggerRef.current?.closest('.side-question-popover') ? 'side-question' : undefined}
         onPointerDown={(event) => event.stopPropagation()}
         onKeyDown={onMenuKey}
-        style={{ ...menuPlacementStyle(placement), bottom: 'auto', ...(placement ? { left: 'auto' } : {}), width: 'min(320px, calc(100vw - 24px))', zIndex: 10020 }}
+        style={{ ...menuPlacementStyle(placement), bottom: 'auto', ...(placement ? { left: 'auto' } : {}), zIndex: 10020 }}
       >
-        <div className="session-control-menu-title">{heading}</div>
+        <div className="model-picker-col-title">{heading}</div>
         {SESSION_MODES.map((option) => {
           const active = option.id === mode;
           return (
+            // One line per mode, the model menu's own row; what the mode does is the row's tooltip.
             <button
               key={option.id}
               type="button"
               role="option"
               aria-selected={active}
               data-mode={option.id}
-              className={`session-control-option${option.id === 'bypass' ? ' session-control-option-danger' : ''}`}
+              title={option.description}
+              className={`model-picker-row${active ? ' model-picker-row-active' : ''}${option.id === 'bypass' ? ' permission-mode-danger' : ''}`}
               onClick={() => {
                 setOpen(false);
                 triggerRef.current?.focus({ preventScroll: true });
                 if (!active) onPick(option.id);
               }}
             >
-              <span aria-hidden />
-              <span className="session-control-option-copy">
-                <span className="session-control-option-name">{option.label}</span>
-                <span className="session-control-option-description">{option.description}</span>
-              </span>
-              <span className="session-control-option-check" aria-hidden>{active ? '✓' : ''}</span>
+              <span className="model-picker-row-check" aria-hidden>{active ? '✓' : ''}</span>
+              <span className="model-picker-row-name permission-mode-name">{option.label}</span>
             </button>
           );
         })}
