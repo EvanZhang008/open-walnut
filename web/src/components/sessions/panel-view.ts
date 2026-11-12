@@ -46,6 +46,28 @@ export interface PanelViewRecord {
   tree?: TreeSplitRecord;
   /** The terminal shown under Changed / Files / Web, and its height in px (absent: not docked). */
   terminalDock?: TerminalDockRecord;
+  /** The chat's reading split (SessionReaderPane): open or not, which way, and the reading pane's share. */
+  reader?: ReaderSplitRecord;
+}
+
+export interface ReaderSplitRecord {
+  on: boolean;
+  /** `stack`: the reading pane above the chat (the default); `side`: left of it. */
+  orient?: 'stack' | 'side';
+  /** The reading pane's share of the chat column, 0.2 to 0.8. */
+  share?: number;
+}
+
+/** The reading pane's share kept in range (each pane keeps room to read). */
+export function clampReaderShare(v: number | undefined): number {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.min(0.8, Math.max(0.2, v)) : 0.5;
+}
+
+function isReaderSplit(v: unknown): v is ReaderSplitRecord {
+  if (!v || typeof v !== 'object') return false;
+  const r = v as Record<string, unknown>;
+  return typeof r.on === 'boolean' && (r.orient === undefined || r.orient === 'stack' || r.orient === 'side')
+    && optional(r.share, isNum);
 }
 
 export interface TerminalDockRecord {
@@ -63,6 +85,7 @@ function isTerminalDock(v: unknown): v is TerminalDockRecord {
 }
 
 const EMPTY: PanelViewRecord = { view: null };
+const NO_READER: ReaderSplitRecord = { on: false };
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -91,10 +114,11 @@ export function isPanelView(v: unknown): v is PanelViewRecord {
     && (r.letter === undefined || r.letter === null || isStr(r.letter))
     && (r.chatHidden === undefined || typeof r.chatHidden === 'boolean')
     && (r.tree === undefined || isTreeSplitRecord(r.tree))
-    && (r.terminalDock === undefined || isTerminalDock(r.terminalDock));
+    && (r.terminalDock === undefined || isTerminalDock(r.terminalDock))
+    && (r.reader === undefined || isReaderSplit(r.reader));
 }
 
-type Field = Exclude<keyof PanelViewRecord, 'chatHidden' | 'tree' | 'terminalDock'>;
+type Field = Exclude<keyof PanelViewRecord, 'chatHidden' | 'tree' | 'terminalDock' | 'reader'>;
 
 /** One field's setter over the record, `useState` style (a value or an updater). */
 function fieldSetter<K extends Field>(set: Dispatch<SetStateAction<PanelViewRecord>>, key: K): Dispatch<SetStateAction<NonNullable<PanelViewRecord[K]> | null>> {
@@ -131,8 +155,17 @@ export function usePanelView(place: string) {
       return next.on === cur.on && next.px === cur.px ? prev : { ...prev, terminalDock: next };
     });
   }, [setRecord]);
+  const setReaderSplit = useCallback((update: (prev: ReaderSplitRecord) => ReaderSplitRecord) => {
+    setRecord((prev) => {
+      const cur = prev.reader ?? { on: false };
+      const next = update(cur);
+      return next.on === cur.on && next.orient === cur.orient && next.share === cur.share ? prev : { ...prev, reader: next };
+    });
+  }, [setRecord]);
   return {
     activeView: record.view,
+    readerSplit: record.reader ?? NO_READER,
+    setReaderSplit,
     terminalDock: record.terminalDock ?? { on: false },
     setTerminalDock,
     fileViewTarget: record.file ?? null,

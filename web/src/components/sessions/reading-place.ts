@@ -75,24 +75,36 @@ function sessionPlaces(sessionId: string): Map<string, ReadingPlace> {
 const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 function persist(sessionId: string): void {
   clearTimeout(persistTimers.get(sessionId));
-  persistTimers.set(sessionId, setTimeout(() => {
-    persistTimers.delete(sessionId);
-    const m = places.get(sessionId);
-    if (!m) return;
-    try {
-      localStorage.setItem(STORE_PREFIX + sessionId, JSON.stringify(Object.fromEntries(m)));
-      // Newest last; past MAX_SESSIONS the oldest session's places go.
-      let ids: string[] = [];
-      try { const raw = JSON.parse(localStorage.getItem(INDEX_KEY) ?? '[]'); if (Array.isArray(raw)) ids = raw.filter((x): x is string => typeof x === 'string'); } catch { /* start over */ }
-      ids = [...ids.filter((x) => x !== sessionId), sessionId];
-      while (ids.length > MAX_SESSIONS) {
-        const old = ids.shift()!;
-        localStorage.removeItem(STORE_PREFIX + old);
-        places.delete(old);
-      }
-      localStorage.setItem(INDEX_KEY, JSON.stringify(ids));
-    } catch { /* full or off */ }
-  }, 400));
+  persistTimers.set(sessionId, setTimeout(() => writePlaces(sessionId), 400));
+}
+
+/**
+ * Writes now what waits to be written: a page leaving (a reload, a closed window) runs no
+ * timer, so a place the reader scrolled to in its last half second was lost (WebKit run of
+ * session-reader-split.spec.ts, 2026-11-12: a reload 0.5 s after a wheel came back one row up).
+ */
+export function flushPlaces(): void {
+  for (const sessionId of [...persistTimers.keys()]) writePlaces(sessionId);
+}
+
+function writePlaces(sessionId: string): void {
+  clearTimeout(persistTimers.get(sessionId));
+  persistTimers.delete(sessionId);
+  const m = places.get(sessionId);
+  if (!m) return;
+  try {
+    localStorage.setItem(STORE_PREFIX + sessionId, JSON.stringify(Object.fromEntries(m)));
+    // Newest last; past MAX_SESSIONS the oldest session's places go.
+    let ids: string[] = [];
+    try { const raw = JSON.parse(localStorage.getItem(INDEX_KEY) ?? '[]'); if (Array.isArray(raw)) ids = raw.filter((x): x is string => typeof x === 'string'); } catch { /* start over */ }
+    ids = [...ids.filter((x) => x !== sessionId), sessionId];
+    while (ids.length > MAX_SESSIONS) {
+      const old = ids.shift()!;
+      localStorage.removeItem(STORE_PREFIX + old);
+      places.delete(old);
+    }
+    localStorage.setItem(INDEX_KEY, JSON.stringify(ids));
+  } catch { /* full or off */ }
 }
 
 export function getPlace(sessionId: string, pageKey: string): ReadingPlace | undefined {
@@ -194,6 +206,12 @@ export function placeDrift(el: HTMLElement, place: ReadingPlace, boxId?: string)
  *  main conversation, so it shares Main's place with Tree Mode's Main page. */
 export function placeKeyOf(stackMode: boolean, currentKey: string): string {
   return stackMode ? currentKey : ROOT;
+}
+
+/** The reading pane's own place for a page (SessionReaderPane): kept apart from the
+ *  page's, so the pane and the chat under it each go back to where they were left. */
+export function readerPlaceKey(pageKey: string, reader: boolean): string {
+  return reader ? `${pageKey}@reader` : pageKey;
 }
 
 /** For tests: forget every place. */

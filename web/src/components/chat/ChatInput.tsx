@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, type KeyboardEvent, type DragEvent, type ClipboardEvent, type RefObject, useLayoutEffect } from 'react';
+import { ICON_READ_SPLIT } from '@/components/common/Icons';
 import { returnInsertsNewline } from './touch-return';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { searchCommands, getCommand } from '@/commands/index';
@@ -258,6 +259,10 @@ interface ChatInputProps {
   onCommand?: (cmd: SlashCommand, args?: string) => void;
   onStop?: () => void;
   onInterruptSend?: (text: string, images?: ImageAttachment[]) => void | Promise<boolean>;
+  /** The Send menu's "Send in split": called right before the message is sent as
+   *  usual (onSend), so the session's chat splits first and its reading pane keeps
+   *  what the reader sees now (reader-split.tsx). Absent: no such item. */
+  onSendInSplit?: () => void;
   onClearQueue?: () => void;
   disabled?: boolean;
   /**
@@ -432,7 +437,7 @@ interface ChatInputProps {
   promptRecallKey?: string;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, promptRecallKey }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, promptRecallKey }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -1142,6 +1147,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     }
   };
 
+  /** "Send in split" was pressed for the send on its way (handleSendInSplit). */
+  const splitSendRef = useRef(false);
   const sendNow = () => {
     const cur = liveText();
     // The message = the prose with each `@[label]` token swapped for its tag. A
@@ -1155,6 +1162,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     if (attachments.failed > 0) return;
     if (attachments.pending > 0) { setSendWhenReady('send'); return; }
     setSendWhenReady(false);
+    // Taken once here: a command the box runs itself is no send, and leaves no split behind.
+    const inSplit = splitSendRef.current;
+    splitSendRef.current = false;
 
     // The send waited for the dictation (useSendAfterDictation), so the mic is
     // idle here and its words are in the message; the discard is a no-op belt.
@@ -1188,7 +1198,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       }
     }
 
-    // Send as regular message (includes session slash commands)
+    // Send as regular message (includes session slash commands). A split send opens
+    // the reading pane first, on what the reader sees before the chat follows the send.
+    if (inSplit) onSendInSplit?.();
     dispatchSend(onSend, text, attachments.items);
   };
 
@@ -1876,13 +1888,22 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     autoSendRef.current[how]();
   }, [sendWhenReady, attachments.pending, attachments.failed, autoSendTick]);
   // Another draft in the box: what was waiting to send was the previous one's.
-  useEffect(() => { setSendWhenReady(false); }, [draftKey]);
-  const handleSend = sendGate.send;
-  const handleInterruptSend = interruptGate.send;
+  useEffect(() => { setSendWhenReady(false); splitSendRef.current = false; }, [draftKey]);
+  // A plain send is never a split one (a split send waiting on its words is cancelled by it).
+  const handleSend = () => { splitSendRef.current = false; sendGate.send(); };
+  const handleInterruptSend = () => { splitSendRef.current = false; interruptGate.send(); };
 
   const handleStop = () => {
     setSendMenuOpen(false);
     onStop?.();
+  };
+
+  // The split opens with the send itself (sendNow), never for a send that does not go:
+  // one waiting on its words or uploads opens it when it goes, a cancelled one never.
+  const handleSendInSplit = () => {
+    setSendMenuOpen(false);
+    splitSendRef.current = !sendGate.waiting;
+    sendGate.send();
   };
 
   const hasInput = !!(value.trim() || hasAttachments);
@@ -1910,7 +1931,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   }
   // The split-menu is only useful mid-turn with something composed (Interrupt & send /
   // Stop turn). When stop IS the primary button, the menu would be redundant.
-  const showSendMenu = !!isStreaming && !showStopPrimary && (!!onInterruptSend || !!onStop);
+  // "Send in split" is there whether or not a turn runs.
+  const showSendMenu = !showStopPrimary && ((!!isStreaming && (!!onInterruptSend || !!onStop)) || !!onSendInSplit);
 
   // The primary action, built once: the full controls row wraps it in the split
   // group (with the "▾" menu beside it), the compact one-liner puts it straight
@@ -2300,7 +2322,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
               </button>
               {sendMenuOpen && (
                 <div className="chat-send-menu" role="menu">
-                  {onInterruptSend && (
+                  {isStreaming && onInterruptSend && (
                     <button
                       className="chat-send-menu-item"
                       onClick={handleInterruptSend}
@@ -2314,7 +2336,22 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                       <span>Interrupt &amp; send</span>
                     </button>
                   )}
-                  {onStop && (
+                  {onSendInSplit && (
+                    <button
+                      className="chat-send-menu-item"
+                      onClick={handleSendInSplit}
+                      disabled={!canSend}
+                      {...dictationWaitProps(sendGate)}
+                      type="button"
+                      role="menuitem"
+                      data-testid="send-in-split"
+                      title="Send, and keep what you are reading on top while the answer comes below"
+                    >
+                      {ICON_READ_SPLIT}
+                      <span>Send in split</span>
+                    </button>
+                  )}
+                  {isStreaming && onStop && (
                     <button
                       className="chat-send-menu-item danger"
                       onClick={handleStop}

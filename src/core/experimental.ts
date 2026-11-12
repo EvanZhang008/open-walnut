@@ -6,6 +6,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'Show Working while any worker works, Waiting while all open workers wait, and To read when every worker has finished. Requests that need you keep priority.',
     default: false,
   },
+  {
+    id: 'chat_reading_split',
+    name: 'Reading split in session chats',
+    description: 'Read a message on top while you ask below: "Send in split" in the Send menu, and "Read in split" on a message (its hover strip and its right-click menu). The pane on top keeps its place while the chat below goes on.',
+    default: false,
+  },
 ] as const;
 
 export type ExperimentalFeatureId = typeof EXPERIMENTAL_FEATURES[number]['id'];

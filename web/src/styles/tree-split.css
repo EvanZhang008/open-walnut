@@ -182,23 +182,26 @@
 .tree-path-menu-title { flex: 1 1 auto; }
 .tree-path-menu-status { flex: none; color: var(--fg-muted); }
 
-/* The split */
-.session-panel-chat-col.is-tree-split {
+/* The split. The chat column as a grid is shared with the chat's reading
+   split (reader-split.css lays out its own rows). */
+.session-panel-chat-col:is(.is-tree-split, .has-reader) {
   display: grid !important;
-  grid-template-columns: var(--tree-cols, minmax(0, 1fr) minmax(0, 2fr));
-  /* chat bar, path bar, the sibling page (none: 0), the page, its composer */
-  grid-template-rows: auto auto minmax(0, var(--tree-sibling-top, 0fr)) minmax(0, 1fr) auto;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   position: relative;
 }
+.session-panel-chat-col.is-tree-split {
+  grid-template-columns: var(--tree-cols, minmax(0, 1fr) minmax(0, 2fr));
+  /* chat bar, path bar, the sibling page (none: 0), the page, its composer */
+  grid-template-rows: auto auto minmax(0, var(--tree-sibling-top, 0fr)) minmax(0, 1fr) auto;
+}
 /* Every child has its place: a child left to auto placement would open an
    implicit row under the composer. Anything besides the rows below (the
    task peek, a later overlay) covers the whole column, as it does unsplit. */
-.session-panel-chat-col.is-tree-split > * { grid-area: 1 / 1 / -1 / -1; }
-.session-panel-chat-col.is-tree-split > .session-chat-bar { grid-area: 1 / 1 / 2 / -1; }
+.session-panel-chat-col:is(.is-tree-split, .has-reader) > * { grid-area: 1 / 1 / -1 / -1; }
+.session-panel-chat-col:is(.is-tree-split, .has-reader) > .session-chat-bar { grid-area: 1 / 1 / 2 / -1; }
 .session-panel-chat-col.is-tree-split > .tree-path-bar { grid-area: 2 / 1 / 3 / -1; }
 .session-panel-chat-col.is-tree-split > .tree-split-left { grid-row: 3 / 6; }
 .session-panel-chat-col.is-tree-split > .tree-split-sibling { grid-row: 3; border-right: 0; }

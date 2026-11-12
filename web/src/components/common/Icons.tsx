@@ -240,3 +240,19 @@ export const ICON_SIDE_PANEL = <svg width="16" height="16" viewBox="0 0 24 24" f
 export const ICON_SKIP_BACK = <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.6"/><polyline points="2.5 2 2.5 5 5.5 5"/></svg>;
 /** Media skip: an arrow turning forward. */
 export const ICON_SKIP_FORWARD = <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 8a5 5 0 1 1-1.5-3.6"/><polyline points="13.5 2 13.5 5 10.5 5"/></svg>;
+
+/** The chat's reading split: two panes, one above the other. */
+export const ICON_READ_SPLIT = (
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="2.5" y="2.5" width="11" height="11" rx="1.6" />
+    <path d="M2.5 8h11" />
+  </svg>
+);
+
+/** Two panes side by side (the pane's switch to the other way). */
+export const ICON_READ_SIDE = (
+  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="2.5" y="2.5" width="11" height="11" rx="1.6" />
+    <path d="M8 2.5v11" />
+  </svg>
+);

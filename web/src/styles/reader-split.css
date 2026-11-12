@@ -1,0 +1,114 @@
+/* The chat's reading split (components/sessions/reader-split.tsx): the reading
+   pane above the chat (or left of it), a hairline divider, then the panel's own
+   timeline and composer. The column is a grid while it shows (the base rule is
+   shared with Tree Mode's split in tree-split.css); every child has its place.
+
+   The panel's header is a glass overlay. The reading pane is a flow child that
+   starts below it, as Tree Mode's path bar does, so its bar and its first line
+   are never under the glass; stacked, the chat below then needs no header room. */
+.session-panel-chat-col.has-reader > .session-panel-body { min-height: 0; min-width: 0; }
+.session-panel-chat-col.has-reader > .session-reader-pane,
+.session-panel-chat-col.is-reader-side > .session-reader-divider {
+  margin-top: var(--sp-first-flow-top, calc(var(--sp-header-h, 76px) + 2px));
+}
+.session-panel-split.is-changed-open .session-panel-chat-col.has-reader > :is(.session-reader-pane, .session-reader-divider),
+.session-panel-chat-col.has-reader.has-peek-bar > :is(.session-reader-pane, .session-reader-divider) { margin-top: 0; }
+.session-panel-chat-col.is-reader-stack > .session-panel-body {
+  --sp-header-h: 0px;
+  --sp-first-flow-top: 0px;
+}
+
+/* One above the other: bar, reading pane, divider, chat, composer. */
+.session-panel-chat-col.is-reader-stack {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(72px, var(--reader-a, 1fr)) 0 minmax(120px, var(--reader-b, 1fr)) auto;
+}
+.session-panel-chat-col.is-reader-stack > .session-reader-pane { grid-area: 2 / 1 / 3 / 2; }
+.session-panel-chat-col.is-reader-stack > .session-reader-divider { grid-area: 3 / 1 / 4 / 2; }
+.session-panel-chat-col.is-reader-stack > .session-panel-body { grid-area: 4 / 1 / 5 / 2; }
+.session-panel-chat-col.is-reader-stack > .session-panel-input { grid-area: 5 / 1 / 6 / 2; }
+
+/* Side by side: the reading pane left, full height; the chat and its composer right. */
+.session-panel-chat-col.is-reader-side {
+  grid-template-columns: minmax(240px, var(--reader-a, 1fr)) 0 minmax(320px, var(--reader-b, 1fr));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.session-panel-chat-col.is-reader-side > .session-reader-pane { grid-area: 2 / 1 / 4 / 2; }
+.session-panel-chat-col.is-reader-side > .session-reader-divider { grid-area: 2 / 2 / 4 / 3; }
+.session-panel-chat-col.is-reader-side > .session-panel-body { grid-area: 2 / 3 / 3 / 4; }
+.session-panel-chat-col.is-reader-side > .session-panel-input { grid-area: 3 / 3 / 4 / 4; }
+
+.session-reader-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+.session-reader-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  font-size: 12px;
+  line-height: 28px;
+  white-space: nowrap;
+}
+.session-reader-title { font-weight: 600; color: var(--fg); }
+.session-reader-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-muted);
+}
+.session-reader-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.session-reader-btn:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.14)); color: var(--fg); }
+.session-reader-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.session-reader-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.session-reader-body .session-history { flex: 1; overflow-y: auto; }
+
+/* The divider: a hairline with a comfortable grab zone that takes no layout space. */
+.session-reader-divider {
+  position: relative;
+  z-index: 3;
+  background: var(--border);
+  touch-action: none;
+}
+.is-reader-stack > .session-reader-divider { height: 1px; margin-top: -1px; cursor: row-resize; }
+.is-reader-side > .session-reader-divider { width: 1px; margin-left: -1px; cursor: col-resize; }
+.session-reader-divider::before {
+  content: '';
+  position: absolute;
+  inset: -5px 0;
+}
+.is-reader-side > .session-reader-divider::before { inset: 0 -5px; }
+.session-reader-divider:hover,
+.is-reader-dragging > .session-reader-divider { background: var(--accent); }
+.is-reader-dragging { user-select: none; }
+.is-reader-dragging.is-reader-stack { cursor: row-resize; }
+.is-reader-dragging.is-reader-side { cursor: col-resize; }

@@ -26,7 +26,7 @@
  * initial-load bottom pin and the forced load scrolls stand down (`held`).
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, type MutableRefObject, type RefObject } from 'react';
-import { applyPlace, getPlace, placeDrift, readPlace, setPlace, type ReadingPlace } from './reading-place';
+import { applyPlace, flushPlaces, getPlace, placeDrift, readPlace, setPlace, type ReadingPlace } from './reading-place';
 import { READER_SCROLL_EVENT } from './phone-session-layer';
 
 const RECORD_QUIET_MS = 150;
@@ -277,12 +277,16 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     };
     // Capture phase: before the click's own handler opens another page.
     const now = () => { if (dirty.current && !moved.current && !hold.current) record(); };
+    // A page leaving runs no timer: his last scroll is written before it goes (flushPlaces).
+    const leave = () => { if (recordTimer.current !== undefined && !moved.current) record(); flushPlaces(); };
+    window.addEventListener('pagehide', leave);
     el.addEventListener('scroll', onScroll, { passive: true });
     el.addEventListener('pointerdown', now, { capture: true, passive: true });
     el.addEventListener('keydown', now, { capture: true, passive: true });
     for (const t of BOX_INPUTS) el.addEventListener(t, onInput, { passive: true });
     for (const t of PAGE_INPUTS) document.addEventListener(t, onInput, { capture: true, passive: true });
     return () => {
+      window.removeEventListener('pagehide', leave);
       el.removeEventListener('scroll', onScroll);
       el.removeEventListener('pointerdown', now, { capture: true });
       el.removeEventListener('keydown', now, { capture: true });

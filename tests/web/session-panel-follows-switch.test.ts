@@ -119,6 +119,8 @@ describe('every surface that holds a session id stays on the task\'s current con
     // Not a task's engine-switchable conversation: a search ask, a fork tree, a side question.
     'web/src/components/tasks/AgentSearchFollowUp.tsx': null,
     'web/src/components/sessions/TreeSplitLeft.tsx': null,
+    // The reading split's pane reads the panel's own timeline (reader-split.tsx), never a session of its own.
+    'web/src/components/sessions/SessionReaderPane.tsx': null,
     'web/src/components/sessions/SideQuestionDrawer.tsx': null,
   };
   // Sends into a session by id outside useSessionSend: each sends once and closes (no bubble

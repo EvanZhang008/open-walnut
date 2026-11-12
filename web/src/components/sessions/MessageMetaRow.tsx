@@ -6,6 +6,7 @@ import { useSessionRewindApi } from '@/contexts/SessionRewindContext';
 import { timeAgo } from '@/utils/time';
 import { pinLabelFor } from '@/hooks/useSessionPins';
 import { ICON_PIN, ICON_PIN_FILLED } from './MessageActionIcons';
+import { ICON_READ_SPLIT, useSessionReader } from './reader-split';
 
 /** Tape-deck rewind: a bar the tape winds back TO, plus two left triangles.
  *  Deliberately NOT the circular counter-clockwise arrow that was here first —
@@ -60,6 +61,7 @@ export const MessageMetaRow = memo(function MessageMetaRow({
 }: MessageMetaRowProps) {
   const { isPinned, toggle } = useSessionPinsApi();
   const rewind = useSessionRewindApi();
+  const reader = useSessionReader();
   const pinned = isPinned(msgId);
   const canRewind = rewind.available && role === 'user' && !!msgId && UUID_RE.test(msgId);
 
@@ -67,6 +69,11 @@ export const MessageMetaRow = memo(function MessageMetaRow({
     e.stopPropagation();
     toggle({ msgId, role, text, timestamp });
   }, [toggle, msgId, role, text, timestamp]);
+
+  const onReadSplit = useCallback((e: React.MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    reader?.open(e.currentTarget.closest('.session-msg') ?? e.currentTarget);
+  }, [reader]);
 
   const onRewind = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -94,6 +101,18 @@ export const MessageMetaRow = memo(function MessageMetaRow({
           aria-pressed={pinned}
         >
           {pinned ? ICON_PIN_FILLED : ICON_PIN}
+        </button>
+      )}
+      {reader && hasText && (
+        <button
+          type="button"
+          className="msg-copy-btn msg-read-split-btn"
+          data-testid="msg-read-split"
+          onClick={onReadSplit}
+          title="Read this in a split: it stays on top while you ask below"
+          aria-label="Read this message in a split"
+        >
+          {ICON_READ_SPLIT}
         </button>
       )}
       {canRewind && (

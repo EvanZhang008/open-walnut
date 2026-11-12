@@ -21,12 +21,21 @@ export interface TimelineShare {
   get: () => SharedTimeline | null;
   set: (value: SharedTimeline) => void;
   subscribe: (fn: () => void) => () => void;
+  /**
+   * Where each sent message sits in the live stream (its queueId -> the stream's length
+   * when the publisher first drew it). Written by the publisher only. A reader that mounts
+   * after a reply streamed in (the reading pane re-landing, Tree Mode's left half on another
+   * page) would otherwise place the question after its own answer (2026-11-12, WebKit run of
+   * session-reader-split.spec.ts).
+   */
+  sentAt: Map<string, number>;
 }
 
 export function createTimelineShare(): TimelineShare {
   let value: SharedTimeline | null = null;
   const subs = new Set<() => void>();
   return {
+    sentAt: new Map(),
     get: () => value,
     set: (next) => {
       if (next === value) return;

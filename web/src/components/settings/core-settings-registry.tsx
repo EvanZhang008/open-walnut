@@ -359,7 +359,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     owner: 'walnut', id: 'experimental', label: 'Experimental', title: 'Experimental', group: 'configure',
     icon: 'bolt', tint: '#AF52DE',
     description: 'Optional behavior changes that stay off until you choose them.',
-    keywords: ['experimental', 'experiment', 'leader', 'worker', 'status'],
+    keywords: ['experimental', 'experiment', 'leader', 'worker', 'status', 'split', 'reading'],
     render: ({ config, saveSection }) => <ExperimentalSection config={config} onSave={saveSection} />,
   },
   // Diagnostics: read-mostly panels about what Walnut did, not knobs.

@@ -200,6 +200,11 @@ import { TreeSplitDivider } from './TreeSplitDivider';
 import { TreeSiblingDivider } from './TreeSiblingDivider';
 import { ThreadPathBar } from './ThreadPathBar';
 import { TreeSplitLeft } from './TreeSplitLeft';
+import { SessionReaderPane } from './SessionReaderPane';
+import { SessionReaderContext } from './reader-split';
+import { useReaderSplit } from './useReaderSplit';
+import { useExperimental } from '@/hooks/useExperimental';
+import { placeKeyOf } from './reading-place';
 import { TreeHalfContext, type TreeHalf } from './tree-half-context';
 import { pathBarHeading, pathBarLevelItems, pathBarSegments } from './tree-path-model';
 import { createTimelineShare } from './timeline-share';
@@ -2648,6 +2653,22 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     }
     applyOpenCollapse(activeView);
   }, [phoneWidth, activeView, applyOpenCollapse, isFullscreen, enterFullscreen]);
+  const readingSplitOn = useExperimental('chat_reading_split');
+  // The chat's reading split (reader-split.tsx): a desktop panel's own chat, never
+  // in Tree Mode (its pages are its own split, and the pane must not follow the
+  // panel to another page), a phone or the browser side panel's plain chat.
+  const reader = useReaderSplit({
+    sessionId,
+    offered: readingSplitOn && !treeMode && !phoneLayer && !phoneWidth && !plainChat && !inset && !!session && !treeGrid && !treeSplit.barShown,
+    record: panelView.readerSplit,
+    setRecord: panelView.setReaderSplit,
+    bodyRef,
+    colRef: chatColRef,
+    pageKey: placeKeyOf(threads.stack.enabled, threads.stack.api.currentKey),
+    onOpenedOnRow: requestComposerFocus,
+  });
+  const { open: openReader } = reader;
+  const sendInSplit = useCallback(() => openReader(), [openReader]);
   // Phone: the open column is a layer whose bar is the top bar (one bar, C64).
   const phoneBar = usePhoneLayerWithBar({
     id: `session:${sessionId}`,
@@ -3864,11 +3885,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
           )}
           <div
-            className={`session-panel-chat-col${peekShownId ? ' is-board-peek' : ''}${peekBarAlone ? ' has-peek-bar' : ''}${treeSplit.barShown ? ' has-tree-bar' : ''}${treeGrid ? ' is-tree-split' : ''}${treeSibling ? ' has-tree-sibling' : ''}`}
+            className={`session-panel-chat-col${peekShownId ? ' is-board-peek' : ''}${peekBarAlone ? ' has-peek-bar' : ''}${treeSplit.barShown ? ' has-tree-bar' : ''}${treeGrid ? ' is-tree-split' : ''}${treeSibling ? ' has-tree-sibling' : ''}${reader.colClass}`}
             data-time-view="chat"
             onClick={handleServiceLinkClick}
             ref={chatColCallbackRef}
-            style={chatColStyle}
+            style={reader.colVars ? { ...chatColStyle, ...reader.colVars } : chatColStyle}
           >
             {/* The chat's own segment of the full-width bar: the left view's
                 toolbar + this strip read as ONE bar split by the column divider,
@@ -3981,6 +4002,31 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               </MessageAboutContext.Provider>
               </IslandHostContext.Provider>
             )}
+            {reader.paneReady && (
+              <>
+                <IslandHostContext.Provider value={islandHost}>
+                <MessageAboutContext.Provider value={sessionTask?.org_role === 'main' || sessionTask?.org_role === 'lead'}>
+                  <SessionReaderPane
+                    history={leftHistory}
+                    historyKey={`${sessionId}:${rewindEpoch}:reader:${reader.land}`}
+                    orient={reader.orient}
+                    canSide={reader.canSide}
+                    onOrient={reader.setOrient}
+                    onClose={reader.close}
+                    takeLanding={reader.takeLanding}
+                  />
+                </MessageAboutContext.Provider>
+                </IslandHostContext.Provider>
+                <div
+                  className="session-reader-divider"
+                  data-testid="session-reader-divider"
+                  role="separator"
+                  aria-orientation={reader.orient === 'side' ? 'vertical' : 'horizontal'}
+                  title="Drag to resize, double-click to split in half"
+                  {...reader.divider}
+                />
+              </>
+            )}
         <div className="session-panel-body" ref={bodyRef}>
           {/* A transferred task names the other end in one quiet line (the header row is precious). */}
           <TransferLinks task={sessionTask} onOpenTask={chatTaskClick} className="xfer-links-panel" testId="session-transfer-links" />
@@ -3992,11 +4038,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           <IslandHostContext.Provider value={islandHost}>
           <MessageAboutContext.Provider value={sessionTask?.org_role === 'main' || sessionTask?.org_role === 'lead'}>
           <TreeHalfContext.Provider value={rightHalf}>
+          <SessionReaderContext.Provider value={reader.api}>
           <SessionChatHistory
             key={`${sessionId}:${rewindEpoch}`}
             sessionId={sessionId}
             emptyHistory={emptyHistory}
-            publishTimeline={treeGrid ? timelineShare : undefined}
+            publishTimeline={treeGrid || reader.shown ? timelineShare : undefined}
             engine={session?.engine}
             phase={taskPhase}
             initialPrompt={initialPromptText}
@@ -4034,6 +4081,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onQuoteInChat={quoteInChat}
             {...(plainChat ? { workingText: 'Walnut is thinking…' } : {})}
           />
+          </SessionReaderContext.Provider>
           </TreeHalfContext.Provider>
           </MessageAboutContext.Provider>
           </IslandHostContext.Provider>
@@ -4112,6 +4160,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             ) : composerPill}
             onSend={handleComposerSend}
             onInterruptSend={handleInterruptSend}
+            {...(reader.api && !reader.shown ? { onSendInSplit: sendInSplit } : {})}
             // Pending quotes and comments are a message by themselves.
             allowEmptySend={ownPendingComments.length > 0}
             onStop={handleStopTurn}

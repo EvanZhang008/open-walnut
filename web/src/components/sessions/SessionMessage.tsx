@@ -21,6 +21,7 @@ import { UserRowAttachmentsContext } from './user-row-attachments';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
 import { useSessionRewindApi } from '@/contexts/SessionRewindContext';
+import { useSessionReader } from './reader-split';
 import { pinLabelFor } from '@/hooks/useSessionPins';
 import { copyRichText, copyTextRobust } from '@/utils/clipboard';
 import { markdownToRichHtml } from '@/utils/markdown';
@@ -1449,6 +1450,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   const phone = usePhoneLayout();
   const pins = useSessionPinsApi();
   const rewind = useSessionRewindApi();
+  const reader = useSessionReader();
   const msgId = message.msgId ?? message.walnutMessageId;
   const rowMenuItems = (): ContextMenuItem[] => {
     // bodyText, not text: copying/pinning a turn must yield what the human typed,
@@ -1464,6 +1466,11 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
       {
         key: 'walnut-added', label: addedOpen ? 'Hide what Walnut added' : `Show what Walnut added (${addedCount})`,
         when: !!walnutAdded, onSelect: toggleAdded,
+      },
+      {
+        key: 'read-split', label: 'Read in split', when: !!reader && hasText,
+        title: 'This message stays on top while you ask below',
+        onSelect: () => reader?.open(contentRef.current ?? null),
       },
       { divider: true },
       {

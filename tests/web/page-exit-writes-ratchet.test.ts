@@ -32,6 +32,7 @@ const KNOWN: Record<string, 'client' | 'raw' | 'local'> = {
   'popout/useAskSnapshots.ts': 'local', // the side panel Ask's snapshot goes to the parent frame, its history to IndexedDB
   'popout/useHomeSnapshots.ts': 'local', // the first page's snapshot goes to the parent frame by postMessage
   'components/common/FileContentView.tsx': 'local', // the unsaved text goes to localStorage and the IndexedDB draft store
+  'components/sessions/useReadingPlace.ts': 'local', // the reading place it still owed goes to localStorage (reading-place.ts flushPlaces)
 }
 
 function walk(dir: string): string[] {

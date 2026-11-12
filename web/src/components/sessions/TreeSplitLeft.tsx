@@ -39,7 +39,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type Component
 import type { ImageAttachment } from '@/api/chat';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { MacAwayComposer } from '@/components/layout/AwayLine';
-import { SessionThreadsContext, useSessionThreadsApi, type SessionThreadsApi, type ThreadStackApi, type ThreadStackNav } from '@/contexts/SessionThreadsContext';
+import { SessionThreadsContext, passiveThreadsApi, useSessionThreadsApi, type SessionThreadsApi, type ThreadStackApi, type ThreadStackNav } from '@/contexts/SessionThreadsContext';
 import { SessionChatHistory } from './SessionChatHistory';
 import { PendingCommentsTray } from './PendingCommentsTray';
 import type { SessionPassageComment } from '@/types/session';
@@ -143,18 +143,10 @@ function usePinnedThreads(base: SessionThreadsApi, leftKey: string, rightKey: st
     },
   }), [base.stack, landings, path, leftKey, nav]);
   return useMemo<SessionThreadsApi>(() => ({
-    ...base,
-    stack,
+    ...passiveThreadsApi(base, stack),
     currentThreadKey: leftKey,
-    setTree: NOOP,
-    publishDerived: NOOP,
-    publishOpenCardKey: NOOP,
-    cardRequest: null,
     // A pin on this page lands here (the page beside the panel's own shows it).
     pinJump: base.pinJump,
-    headJump: null,
-    fileCardHost: null,
-    setFileCardHost: NOOP,
     sendToTarget: (text: string, images?: ImageAttachment[]) => base.sendToQuestion(leftKey, text, images),
   }), [base, stack, leftKey]);
 }

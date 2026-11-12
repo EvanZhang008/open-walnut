@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, useContext, memo, isValidElement, type ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, useContext, memo, isValidElement, type MutableRefObject, type ReactNode } from 'react';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { pageOfStreamBlock } from '@/utils/stream-block-page';
 import { useDraft } from '@/hooks/useDraft';
@@ -73,7 +73,7 @@ import { ThreadQuoteHead } from './ThreadQuoteHead';
 import { ThreadAskedFromList } from './ThreadAskedFromList';
 import { ThreadStackHeader } from './ThreadStackHeader';
 import { isSidePage, useTreeHalf } from './tree-half-context';
-import { placeKeyOf } from './reading-place';
+import { placeKeyOf, readerPlaceKey } from './reading-place';
 import { useReadingPlace } from './useReadingPlace';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
@@ -400,9 +400,21 @@ interface SessionChatHistoryProps {
   /** A second view of the session (the split's left half) reads them from here
    *  and fetches nothing itself (timeline-share.ts). */
   readTimeline?: TimelineShare;
+  /** The reading pane of the panel's split (SessionReaderPane): a second, passive view
+   *  of the same page that never follows the tail, keeps its own reading place, and
+   *  draws none of the panel-wide chrome. Needs `readTimeline`. */
+  readerPane?: boolean;
   /** The live turn's line in full, in place of "<engine> is working…" (a plain chat says "Walnut is thinking…"). */
   workingText?: string;
 }
+
+const NOOP_RELEASE = (): void => {};
+
+/** The reading pane's "at the bottom": always no, and nothing can make it yes. */
+const NEVER_AT_BOTTOM: MutableRefObject<boolean> = {
+  get current() { return false; },
+  set current(_v: boolean) { /* the reading pane never follows */ },
+};
 
 // Grouping semantics (task groups / consumed subagent lanes / hidden-parent
 // asymmetry) live in the pure module so the chat lab can replay production
@@ -667,7 +679,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys, unsentKeys };
 }
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, workingText, emptyHistory }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, readerPane, workingText, emptyHistory }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -1411,7 +1423,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // - User scrolls back to bottom (or clicks arrow): resume auto-scroll
   // ═══════════════════════════════════════════════════════════════════════════
 
-  const isAtBottom = useRef(true);
+  // The reading pane never follows the tail: to every follow path its box is
+  // never at the bottom, so new rows below leave what the reader reads in place.
+  const ownAtBottom = useRef(true);
+  const isAtBottom = readerPane ? NEVER_AT_BOTTOM : ownAtBottom;
   // Selection guard: every auto-scroll write shifts content under the cursor,
   // which mid-drag makes the browser extend the selection to the bottom (the
   // "select lines 2-10 but get 2-to-bottom" bug). All scroll paths consult
@@ -1703,7 +1718,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const treeHalf = useTreeHalf();
   const inTreeHalf = !!treeHalf && treeHalf.side !== 'only';
   // A page left of the panel's own (L, or M of three): it reads the panel's timeline.
-  const leftHalf = isSidePage(treeHalf);
+  const leftHalf = isSidePage(treeHalf) || !!readerPane;
   const hasQuestions = threadTree.threads.length > 1 || !!stack.pending || stack.draftPages.length > 0;
   const stackMode = threadsApi.viewMode === 'stack' && hasQuestions;
   /** Conversation Mode with questions: every turn in order, each question's
@@ -1727,12 +1742,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     setTruncationOffset((t) => (count > t ? count : t));
   }, []);
   const readingPlace = useReadingPlace({
-    sessionId, pageKey: placeKeyOf(stackMode, currentKey), view: stackMode ? 'stack' : 'linear',
+    sessionId, pageKey: readerPlaceKey(placeKeyOf(stackMode, currentKey), !!readerPane), view: stackMode ? 'stack' : 'linear',
     containerRef, isAtBottom, messages, renderNonce: `${messages.length}:${truncationOffset}`, widenWindow,
     loaded: !loading && !phase2Pending && messages.length > 0,
     older: (olderHidden > 0 || olderWindowed) && !olderUnavailable, loadOlder: loadFullHistory,
   });
-  const { release: releasePlace, carryRow: carryPlaceRow } = readingPlace;
+  // The reading pane never lets go of its place: a send, a bubble or "to the end"
+  // below is the chat's, and a release would write "at the bottom" under its key.
+  const { carryRow: carryPlaceRow } = readingPlace;
+  const releasePlace = readerPane ? NOOP_RELEASE : readingPlace.release;
   const placeHeldFn = useCallback(() => readingPlace.held.current, [readingPlace.held]);
   /** The page's landing is not the load's to make: a question page, or a kept place. */
   const landingOwnedRef = useRef(() => onQuestionPageRef.current || readingPlace.held.current);
@@ -3258,15 +3276,22 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // must not leave it pinned under the answer.
   const launchHead = deduped.filter(m => m.launch);
   const timelineOptimistic = launchHead.length > 0 ? deduped.filter(m => !m.launch) : deduped;
+  // A reader takes the publisher's anchor (timeline-share.ts sentAt): it may have mounted
+  // after the reply streamed in, when its own `blocks.length` is past the question's place.
   for (const msg of timelineOptimistic) {
     if (!blockIndexMap.current.has(msg.queueId)) {
-      blockIndexMap.current.set(msg.queueId, blocks.length);
+      blockIndexMap.current.set(msg.queueId, readTimeline?.sentAt.get(msg.queueId) ?? blocks.length);
     }
   }
   // Clean stale entries for messages no longer in optimistic state
   const dedupedIds = new Set(timelineOptimistic.map(m => m.queueId));
   for (const key of blockIndexMap.current.keys()) {
     if (!dedupedIds.has(key)) blockIndexMap.current.delete(key);
+  }
+  if (publishTimeline) {
+    const sentAt = publishTimeline.sentAt;
+    for (const [id, at] of blockIndexMap.current) if (!sentAt.has(id)) sentAt.set(id, at);
+    for (const id of sentAt.keys()) if (!dedupedIds.has(id)) sentAt.delete(id);
   }
 
   // ── Build interleaved timeline over VISIBLE blocks ──

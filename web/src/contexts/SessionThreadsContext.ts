@@ -280,6 +280,29 @@ const EMPTY: SessionThreadsApi = {
   canAsk: false,
 };
 
+/**
+ * The panel's question api for a second, passive timeline (a Tree Mode page
+ * beside the panel's own, the chat's reading pane): it reads the panel's pages
+ * and records nothing panel-wide (the tree, the derived states, the open card,
+ * the Files card host stay the panel timeline's). `stack` is the caller's
+ * read-only stack; a caller adds what its page does differently after it.
+ */
+export function passiveThreadsApi(base: SessionThreadsApi, stack: ThreadStackApi): SessionThreadsApi {
+  const noop = () => {};
+  return {
+    ...base,
+    stack,
+    setTree: noop,
+    publishDerived: noop,
+    publishOpenCardKey: noop,
+    cardRequest: null,
+    pinJump: null,
+    headJump: null,
+    fileCardHost: null,
+    setFileCardHost: noop,
+  };
+}
+
 export const SessionThreadsContext = createContext<SessionThreadsApi>(EMPTY);
 
 /**

@@ -58,7 +58,8 @@ describe('the left half reads the panel\'s timeline and fetches nothing', () => 
   });
 
   it('the panel publishes only while the left half shows, and passes the left half a stable history prop', () => {
-    expect(PANEL).toMatch(/publishTimeline=\{treeGrid \? timelineShare : undefined\}/);
+    // The chat's reading pane (reader-split.tsx) reads the same share while it shows.
+    expect(PANEL).toMatch(/publishTimeline=\{treeGrid \|\| reader\.shown \? timelineShare : undefined\}/);
     expect(PANEL).toMatch(/const leftHistory = useMemo\(/);
     expect(PANEL).toMatch(/history=\{leftHistory\}/);
   });
