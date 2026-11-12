@@ -53,7 +53,8 @@ describe('leak-audit.yml reads GitHub through gh_retry', () => {
   })
 
   it.each(ghLines.map((g) => [g.l, g] as const))('%s', (_l, { job, s, l }) => {
-    expect(l.startsWith('gh_retry ')).toBe(true)
+    // a read whose answer a variable takes, `x=$(gh_retry gh api ...)`, retries the same way
+    expect(l).toMatch(/(^|\$\()gh_retry /)
     expect(s.run).toContain('. scripts/lib/gh-retry.sh')
     // the job's checkout carries the helper (a sparse checkout names it)
     const co = jobs[job]!.steps!.find((x) => x.uses?.startsWith('actions/checkout@'))!

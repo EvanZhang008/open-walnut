@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { guardedPath } from '../setup/exec-guard-core.js'
 import { spawnSync } from 'node:child_process'
 import { parse as parseYaml } from 'yaml'
 
@@ -86,7 +87,7 @@ describe('leak-audit.yml', () => {
       const out = path.join(tmp, 'output'); fs.writeFileSync(out, '')
       const r = spawnSync('bash', ['-e', '-c', fetch.run!], {
         cwd: REPO, encoding: 'utf8',
-        env: { PATH: `${bin}:/usr/bin:/bin`, RUNNER_TEMP: tmp, GITHUB_OUTPUT: out, REPO: 'o/r', RUN_ID: '42', GH_TOKEN: 't', GH_RETRY_TRIES: '1' },
+        env: { PATH: guardedPath([bin], '/usr/bin:/bin'), RUNNER_TEMP: tmp, GITHUB_OUTPUT: out, REPO: 'o/r', RUN_ID: '42', GH_TOKEN: 't', GH_RETRY_TRIES: '1' },
       })
       const res = { status: r.status, stderr: r.stderr, output: fs.readFileSync(out, 'utf8'), calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '' }
       fs.rmSync(tmp, { recursive: true, force: true })
