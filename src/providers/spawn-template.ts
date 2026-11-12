@@ -160,6 +160,25 @@ export function buildRoutineSpawnTemplate(i: Omit<SpawnTemplateInputs, 'cwd' | '
 }
 
 /**
+ * Whether the daemon process already holds this template (push-probe-v1): this server
+ * restarted, so it does not know, and asks in about 100 bytes instead of sending about 200 KB
+ * (2026-11-12: each deploy sent both templates again on the new link, which the relay on the
+ * SSH path ended). A daemon without it, or a probe that fails, holds nothing: the push goes out.
+ */
+async function daemonHoldsTemplate(
+  host: { hasCapability(cap: string): boolean; send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> },
+  home: string, use: 'ask' | 'routine', hash: string,
+): Promise<boolean> {
+  if (!host.hasCapability('push-probe-v1')) return false
+  try {
+    const r = await host.send('leader.spawnTemplate', { home, use, probe: true, hash }, 15_000)
+    return r.ok === true && r.held === true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Push this Mac's routine template to a host's daemon (`leader.spawnTemplate
  * {use:'routine'}`, trusted socket, after leader.configure). Returns the template's
  * hash (its content without the build time), and sends nothing when that is
@@ -184,7 +203,8 @@ export async function pushRoutineSpawnTemplate(
   const { builtAt: _at, ...content } = template
   const hash = createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16)
   if (hash === o.unlessHash) return hash
-  const reply = await host.send('leader.spawnTemplate', { home: o.home, template, use: 'routine' }, 15_000)
+  if (await daemonHoldsTemplate(host, o.home, 'routine', hash)) return hash
+  const reply = await host.send('leader.spawnTemplate', { home: o.home, template, use: 'routine', hash }, 15_000)
   if (reply.ok !== true) throw new Error(String(reply.error ?? 'leader.spawnTemplate refused'))
   return hash
 }
@@ -217,7 +237,8 @@ export async function pushHostSpawnTemplate(
   const { builtAt: _at, ...content } = template
   const hash = createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16)
   if (hash === o.unlessHash) return { hash, sent: false }
-  const reply = await host.send('leader.spawnTemplate', { home: o.home, template }, 15_000)
+  if (await daemonHoldsTemplate(host, o.home, 'ask', hash)) return { hash, sent: false }
+  const reply = await host.send('leader.spawnTemplate', { home: o.home, template, hash }, 15_000)
   if (reply.ok !== true) throw new Error(String(reply.error ?? 'leader.spawnTemplate refused'))
   return { hash, sent: true }
 }

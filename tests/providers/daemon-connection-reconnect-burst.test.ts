@@ -85,7 +85,7 @@ const ALL_CAPS = [
 
 interface Sent { cmd: string; bytes: number; at: number; whole?: boolean }
 
-function host(caps = ALL_CAPS) {
+function host(caps = ALL_CAPS, opts: { holdsSkills?: boolean } = {}) {
   const conn = new DaemonConnection('devbox', { hostname: 'devbox' })
   const c = conn as unknown as Record<string, unknown>
   c._capabilities = caps
@@ -94,6 +94,7 @@ function host(caps = ALL_CAPS) {
     sent.push({ cmd, bytes: JSON.stringify(params).length, at: Date.now(), ...(cmd === 'host.slice' ? { whole: params.slice !== undefined } : {}) })
     // The daemon holds an older copy than every build (task churn), so the probe misses.
     if (cmd === 'host.slice') return params.slice === undefined ? { ok: true, have: false } : { ok: true, changed: true }
+    if (cmd === 'skills.sync' && params.probe === true) return { ok: true, held: opts.holdsSkills === true && params.hash === 'skills-1' }
     return { ok: true }
   })
   /** One link to the daemon process `instance` (its hello), up at the current clock. */
@@ -180,6 +181,30 @@ describe('a reconnect does not upload a burst in the link\'s first seconds', () 
     await vi.advanceTimersByTimeAsync(HOST_SLICE_FRESH_LINK_SETTLE_MS)
     await settle()
     expect(cmds(sent, start).filter((c) => c === 'host.slice:whole')).toHaveLength(1)
+  })
+
+  it('a server that restarted asks the same daemon process about the skills before sending them (push-probe-v1)', async () => {
+    // 2026-11-12: each deploy restarted the server, and each restart sent the skills again on the new link.
+    const held = host([...ALL_CAPS, 'push-probe-v1'], { holdsSkills: true })
+    held.linkUp('d-1')
+    await settle()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await settle()
+    const skills = held.sent.filter((s) => s.cmd === 'skills.sync')
+    expect(skills).toHaveLength(1)
+    expect(skills[0].bytes).toBeLessThan(200)
+    // A daemon that does not hold them (a new process, or its copy gone) is sent them after the probe.
+    const fresh = host([...ALL_CAPS, 'push-probe-v1'], { holdsSkills: false })
+    fresh.linkUp('d-2')
+    await settle()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await settle()
+    expect(fresh.sent.filter((s) => s.cmd === 'skills.sync').map((s) => s.bytes > 200 * KB)).toEqual([false, true])
+    // An older daemon (no push-probe-v1) is never asked: it is sent them, as before.
+    const old = host(ALL_CAPS)
+    old.linkUp('d-3')
+    await settle()
+    expect(old.sent.filter((s) => s.cmd === 'skills.sync').map((s) => s.bytes > 200 * KB)).toEqual([true])
   })
 
   it('a new daemon process gets the skills, the template and the manifests again', async () => {

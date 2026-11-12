@@ -324,6 +324,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // what a relay drops the SSH link on). Both twins. Optional: without it every
   // reconnect pushes the whole copy.
   'host-slice-probe-v1',
+  // 'push-probe-v1': `skills.sync {probe: true, hash}` and `leader.spawnTemplate {home, use,
+  // probe: true, hash}` ask whether this daemon process holds what the server would send, by
+  // the hash the server named when it sent it; answer `{held}`. A server that restarted sends
+  // the skills (about 360 KB) and each template (about 200 KB) again only when not held
+  // (2026-11-12: each deploy sent them again on the new link, and the relay ended it). A new
+  // process holds nothing. Both twins. Optional: without it each server start sends them.
+  'push-probe-v1',
   // 'host-slice-gz-v1': `host.slice {sliceGz}` carries the copy gzipped, base64 (about a
   // tenth of 1.5 MB). Whole copies were in flight in 74 of 95 deaths of the shared SSH
   // master (2026-10-30/31): a relay on the SSH path drops the link on an upload burst, and

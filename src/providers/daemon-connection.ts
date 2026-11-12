@@ -1825,6 +1825,17 @@ export class DaemonConnection {
         const { buildSkillSyncPayload } = await import('../core/skill-sync.js')
         const payload = await buildSkillSyncPayload()
         if (!payload || payload.hash === this.lastSkillSyncHash) return
+        // This server restarted (or the daemon did): ask before sending about 360 KB on the new
+        // link (push-probe-v1; 2026-11-12, each deploy sent them again and the relay ended it).
+        if (this.lastSkillSyncHash === null && this.hasCapability('push-probe-v1')) {
+          const instance = this._daemonInstanceId
+          const probe = await this.send('skills.sync', { probe: true, hash: payload.hash }).catch(() => null)
+          if (probe?.ok === true && probe.held === true && instance === this._daemonInstanceId) {
+            this.lastSkillSyncHash = payload.hash
+            log.session.info('DaemonConnection: walnut skills already held, not sent', { host: this.hostKey, hash: payload.hash })
+            return
+          }
+        }
         const reply = await this.send('skills.sync', {
           hash: payload.hash,
           // `skill` rides along for a daemon that predates the multi-skill
@@ -1957,10 +1968,13 @@ export class DaemonConnection {
     if (!this.hasCapability('replica-start-v1') || !this.hasCapability('clock-host-start-v1')) return false
     try {
       const { pushRoutineSpawnTemplate } = await import('./spawn-template.js')
+      const instance = this._daemonInstanceId
       const hash = await pushRoutineSpawnTemplate(
         { hasCapability: (cap) => this.hasCapability(cap), send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) },
         { home: WALNUT_HOME, hostKey: this.hostKey, unlessHash: this.routineTemplateHash },
       )
+      // Another daemon process answered the link meanwhile: it holds nothing of this push.
+      if (instance !== this._daemonInstanceId) return false
       this.routineTemplateHash = hash
       return hash !== null
     } catch (err) {

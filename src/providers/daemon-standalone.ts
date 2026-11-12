@@ -4991,13 +4991,29 @@ const hostStart = createHostStart({
  * `use: 'routine'` (clock-host-start-v1): the template a routine run starts from, kept
  * apart from the ask template.
  */
+/**
+ * The hash the server named with each template this process holds (push-probe-v1), per Walnut
+ * and use: a server that restarted asks `{probe: true, hash}` and sends the template (about
+ * 200 KB) only when this process does not hold it. A new process holds none. Keep in sync with
+ * daemon-source.ts.
+ */
+const heldTemplateHashes = new Map<string, string>()
+
 function cmdLeaderSpawnTemplate(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (!isServerClient(ws)) return sendError(ws, id, 'leader.spawnTemplate: the leader only')
   const home = typeof cmd.home === 'string' ? cmd.home : ''
   if (!home || gatewayClientHomes.get(ws) !== home) return sendError(ws, id, 'leader.spawnTemplate: send leader.configure for this Walnut first')
   if (cmd.use !== undefined && cmd.use !== 'ask' && cmd.use !== 'routine') return sendError(ws, id, 'leader.spawnTemplate: use must be ask or routine')
+  const use = cmd.use === 'routine' ? 'routine' : 'ask'
+  const key = JSON.stringify([home, use])
+  const hash = typeof cmd.hash === 'string' && cmd.hash.length > 0 && cmd.hash.length <= 128 ? cmd.hash : ''
+  if (cmd.probe === true) {
+    return sendOk(ws, id, { held: !!hash && heldTemplateHashes.get(key) === hash && hostStart.templateOf(home, use) !== null })
+  }
   try {
-    const t = hostStart.setTemplate(home, cmd.template, cmd.use === 'routine' ? 'routine' : 'ask')
+    const t = hostStart.setTemplate(home, cmd.template, use)
+    if (hash) heldTemplateHashes.set(key, hash)
+    else heldTemplateHashes.delete(key)
     sendOk(ws, id, { builtAt: t.builtAt })
   } catch (err) {
     sendError(ws, id, (err as Error).message)
@@ -8587,14 +8603,35 @@ function cmdTriggersAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 // sync with daemon-source.ts cmdSkillsSync.
 const SKILL_SYNC_MARKER = 'walnut-managed v1'
 
+/**
+ * The skills this process last wrote, by the hash the server named (push-probe-v1): a server
+ * that restarted asks `{probe: true, hash}` and sends the skills (about 360 KB) only when they
+ * are not held, or a canonical copy is gone from disk. A new process holds none. Keep in sync
+ * with daemon-source.ts.
+ */
+let heldSkills: { hash: string; entries: Array<{ name: string; body: string }> } | null = null
+
 function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const entries: Array<{ name: string; body: string }> = []
+  // Held: every canonical copy on disk is still what was sent. The engine links are then put
+  // right from those copies as a push would (an engine installed since, a link removed), and
+  // nothing more crosses the link.
+  let probeHeld = false
+  if (cmd.probe === true) {
+    const hash = typeof cmd.hash === 'string' ? cmd.hash : ''
+    const held = !!hash && heldSkills !== null && heldSkills.hash === hash && heldSkills.entries.every((e) => {
+      try { return fs.readFileSync(path.join(HOME_DIR, '.open-walnut', 'distributed-skills', e.name, 'SKILL.md'), 'utf-8') === e.body } catch { return false }
+    })
+    if (!held) return sendOk(ws, id, { held: false })
+    probeHeld = true
+    entries.push(...heldSkills!.entries)
+  }
   // A name becomes a directory and a symlink under the user's HOME, so it is
   // validated before any path is built from it.
   const namePattern = /^[a-z0-9][a-z0-9-]{0,63}$/
-  const requested = Array.isArray(cmd.skills)
+  const requested = probeHeld ? [] : Array.isArray(cmd.skills)
     ? (cmd.skills as unknown[])
     : [{ name: 'walnut', skill: cmd.skill }]
-  const entries: Array<{ name: string; body: string }> = []
   for (const raw of requested) {
     const item = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
     const name = typeof item.name === 'string' ? item.name : ''
@@ -8611,6 +8648,7 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
     return sendOk(ws, id, { applied: true, changed: false, skipped: 'non-prod' })
   }
   const wrote: string[] = []
+  let canonicalFailed = false
 
   // One skill's real copy plus its per-engine links. Every guard reads the
   // entry's own name, so two skills in one payload never touch each other.
@@ -8629,6 +8667,7 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
       }
     }
   } catch (err) {
+    canonicalFailed = true
     logMsg('warn', 'skills.sync: canonical write failed', { error: (err as Error).message })
   }
   // 2. engine links. An existing path is handled by ownership: a symlink
@@ -8684,6 +8723,10 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))
   }
   for (const entry of entries) syncSkill(entry.name, entry.body)
+  if (!probeHeld) {
+    heldSkills = typeof cmd.hash === 'string' && cmd.hash.length > 0 && cmd.hash.length <= 128 && !canonicalFailed
+      ? { hash: cmd.hash, entries } : null
+  }
   const walnutCanonicalDir = path.join(HOME_DIR, '.open-walnut', 'distributed-skills', 'walnut')
   // 2b. v2.0 migration: remove the marker'd SKILL.md that briefly lived in
   // the user's skill store (it shadowed the category sub-skills there); the
@@ -8727,6 +8770,7 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
     logMsg('warn', 'skills.sync: AGENTS.md fence removal failed', { error: (err as Error).message })
   }
   if (wrote.length > 0) logMsg('info', 'walnut skills distributed', { skills: entries.map((e) => e.name), wrote })
+  if (probeHeld) return sendOk(ws, id, { held: true, wrote })
   return sendOk(ws, id, { applied: true, changed: wrote.length > 0, wrote })
 }
 

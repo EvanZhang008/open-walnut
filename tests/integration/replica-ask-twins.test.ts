@@ -341,6 +341,39 @@ async function stdinOf(out: string, sid: string, text: string): Promise<void> {
 }
 
 for (const twin of ['source', 'standalone'] as const) {
+  // push-probe-v1 (2026-11-12): a server that restarted asks before it sends a template or
+  // the skills again, about 800 KB in all on the new link, which the relay on the SSH path ended.
+  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: what the daemon holds, asked instead of sent`, () => {
+    it('answers held for the template it was sent with that hash, on a new socket too, and for nothing else', async () => {
+      const d = await spawnDaemon(`${twin}-probe`, twin)
+      const m = mockFor(`${twin}-probe`)
+      let mac = await macConnects(d)
+      const probe = (use: 'ask' | 'routine', hash: string) => cmd(mac, { cmd: 'leader.spawnTemplate', home: HOME, use, probe: true, hash })
+      expect(await probe('ask', 'h-ask-1')).toMatchObject({ ok: true, held: false })
+      expect((await cmd(mac, { cmd: 'leader.spawnTemplate', home: HOME, template: template(m.mock, m.cwd), hash: 'h-ask-1' })).ok).toBe(true)
+      expect(await probe('ask', 'h-ask-1')).toMatchObject({ ok: true, held: true })
+      expect(await probe('ask', 'h-ask-2')).toMatchObject({ ok: true, held: false })
+      expect(await probe('routine', 'h-ask-1')).toMatchObject({ ok: true, held: false })
+      // The server restarts: a new socket, the same daemon process, still held.
+      mac.close()
+      await sleep(300)
+      mac = await macConnects(d)
+      expect(await probe('ask', 'h-ask-1')).toMatchObject({ ok: true, held: true })
+      // A push naming no hash holds none: an older server's push is never taken for held.
+      expect((await cmd(mac, { cmd: 'leader.spawnTemplate', home: HOME, template: template(m.mock, m.cwd) })).ok).toBe(true)
+      expect(await probe('ask', 'h-ask-1')).toMatchObject({ ok: true, held: false })
+      // Only the leader's socket asks: another Walnut's or an unconfigured one is refused.
+      const other = await connectWs(d.port)
+      try {
+        expect((await cmd(other, { cmd: 'leader.spawnTemplate', home: HOME, use: 'ask', probe: true, hash: 'h-ask-1' })).ok).toBe(false)
+      } finally { other.close() }
+      // The skills: this test daemon writes none (not the production dir), so none are held.
+      expect(await cmd(mac, { cmd: 'skills.sync', probe: true, hash: 'h-skills-1' })).toMatchObject({ ok: true, held: false })
+      mac.close()
+      await stopDaemon(d)
+    }, 60_000)
+  })
+
   describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: a new ask on the host while the Mac is away`, () => {
     it('starts from the template, its own walnut calls read and change its new task, everything is journaled, a message resumes it, and the Mac stops it after adoption', async () => {
       const d = await spawnDaemon(`${twin}-main`, twin)

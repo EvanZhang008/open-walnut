@@ -6286,13 +6286,24 @@ var hostStart = (__CREATE_HOST_START__)({
 
 // use: 'routine' (clock-host-start-v1): the template a routine run starts from, kept
 // apart from the ask template. Twin of daemon-standalone.ts.
+// The hash the server named with each template this process holds (push-probe-v1). Mirror daemon-standalone.ts.
+var heldTemplateHashes = new Map();
+
 function cmdLeaderSpawnTemplate(ws, id, cmd) {
   if (!isServerClient(ws)) return sendError(ws, id, 'leader.spawnTemplate: the leader only');
   var home = typeof cmd.home === 'string' ? cmd.home : '';
   if (!home || gatewayClientHomes.get(ws) !== home) return sendError(ws, id, 'leader.spawnTemplate: send leader.configure for this Walnut first');
   if (cmd.use !== undefined && cmd.use !== 'ask' && cmd.use !== 'routine') return sendError(ws, id, 'leader.spawnTemplate: use must be ask or routine');
+  var use = cmd.use === 'routine' ? 'routine' : 'ask';
+  var key = JSON.stringify([home, use]);
+  var hash = typeof cmd.hash === 'string' && cmd.hash.length > 0 && cmd.hash.length <= 128 ? cmd.hash : '';
+  if (cmd.probe === true) {
+    return sendOk(ws, id, { held: !!hash && heldTemplateHashes.get(key) === hash && hostStart.templateOf(home, use) !== null });
+  }
   try {
-    var t = hostStart.setTemplate(home, cmd.template, cmd.use === 'routine' ? 'routine' : 'ask');
+    var t = hostStart.setTemplate(home, cmd.template, use);
+    if (hash) heldTemplateHashes.set(key, hash);
+    else heldTemplateHashes.delete(key);
     sendOk(ws, id, { builtAt: t.builtAt });
   } catch (err) {
     sendError(ws, id, err.message);
@@ -9959,13 +9970,28 @@ function cmdTriggersAck(ws, id, cmd) {
 // Keep in sync with daemon-standalone.ts cmdSkillsSync.
 var SKILL_SYNC_MARKER = 'walnut-managed v1';
 
+// The skills this process last wrote, by the hash the server named (push-probe-v1). Mirror daemon-standalone.ts.
+var heldSkills = null;
+
 function cmdSkillsSync(ws, id, cmd) {
   var NL = String.fromCharCode(10);
+  var entries = [];
+  // Held: every canonical copy on disk is still what was sent; the engine links are put right
+  // from those copies, nothing more crosses the link. Mirror daemon-standalone.ts.
+  var probeHeld = false;
+  if (cmd.probe === true) {
+    var probeHash = typeof cmd.hash === 'string' ? cmd.hash : '';
+    var held = !!probeHash && heldSkills !== null && heldSkills.hash === probeHash && heldSkills.entries.every(function (e) {
+      try { return fs.readFileSync(path.join(HOME_DIR, '.open-walnut', 'distributed-skills', e.name, 'SKILL.md'), 'utf-8') === e.body; } catch (err) { return false; }
+    });
+    if (!held) return sendOk(ws, id, { held: false });
+    probeHeld = true;
+    for (var h = 0; h < heldSkills.entries.length; h++) entries.push(heldSkills.entries[h]);
+  }
   // A name becomes a directory and a symlink under the user's HOME, so it is
   // validated before any path is built from it.
   var namePattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
-  var requested = Array.isArray(cmd.skills) ? cmd.skills : [{ name: 'walnut', skill: cmd.skill }];
-  var entries = [];
+  var requested = probeHeld ? [] : Array.isArray(cmd.skills) ? cmd.skills : [{ name: 'walnut', skill: cmd.skill }];
   for (var r = 0; r < requested.length; r++) {
     var item = requested[r] && typeof requested[r] === 'object' ? requested[r] : {};
     var entryName = typeof item.name === 'string' ? item.name : '';
@@ -9982,6 +10008,7 @@ function cmdSkillsSync(ws, id, cmd) {
     return sendOk(ws, id, { applied: true, changed: false, skipped: 'non-prod' });
   }
   var wrote = [];
+  var canonicalFailed = false;
 
   // One skill's real copy plus its per-engine links. Every guard reads the
   // entry's own name, so two skills in one payload never touch each other.
@@ -10000,6 +10027,7 @@ function cmdSkillsSync(ws, id, cmd) {
       }
     }
   } catch (err) {
+    canonicalFailed = true;
     logMsg('warn', 'skills.sync: canonical write failed', { error: err.message });
   }
   // 2. engine links, by ownership: symlink already at canonical = no-op;
@@ -10048,6 +10076,10 @@ function cmdSkillsSync(ws, id, cmd) {
   if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'));
   }
   for (var s = 0; s < entries.length; s++) syncSkill(entries[s].name, entries[s].body);
+  if (!probeHeld) {
+    heldSkills = typeof cmd.hash === 'string' && cmd.hash.length > 0 && cmd.hash.length <= 128 && !canonicalFailed
+      ? { hash: cmd.hash, entries: entries } : null;
+  }
   var walnutCanonicalDir = path.join(HOME_DIR, '.open-walnut', 'distributed-skills', 'walnut');
   // 2b. v2.0 migration: remove the marker'd SKILL.md that briefly lived in
   // the user's skill store; the dir and every other entry stay. Drop the dir
@@ -10094,6 +10126,7 @@ function cmdSkillsSync(ws, id, cmd) {
       skills: entries.map(function (e) { return e.name; }), wrote: wrote,
     });
   }
+  if (probeHeld) return sendOk(ws, id, { held: true, wrote: wrote });
   return sendOk(ws, id, { applied: true, changed: wrote.length > 0, wrote: wrote });
 }
 
