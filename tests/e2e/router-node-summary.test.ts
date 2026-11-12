@@ -94,7 +94,9 @@ describe('the router node summary', () => {
     expect(stored && isHistoryStartupWindow(stored)).toBe(false);
     // Its own path proves there is no transcript, so no read searches every transcripts
     // folder for it (2026-11-11: that search took the prod router's page past 30 s).
-    const own = vi.spyOn(DaemonFileReader.prototype, 'ownSessionPath');
+    // The own-path stat itself is pinned in history-not-written.test.ts; here it proves absence, as
+    // on a machine whose transcripts root exists (a test HOME may have none, which proves nothing).
+    const own = vi.spyOn(DaemonFileReader.prototype, 'ownSessionPath').mockResolvedValue(null);
     const find = vi.spyOn(DaemonFileReader.prototype, 'findSessionPath');
     try {
       for (const query of ['', '?tail=400&turns=10', '?source=streams&tail=400&turns=10', '?since=0']) {
