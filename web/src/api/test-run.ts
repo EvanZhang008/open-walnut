@@ -80,3 +80,9 @@ export function forThisWindow<T extends { plugin_only?: string }>(task: T, label
   const { plugin_only: _owner, ...rest } = task;
   return rest as T;
 }
+
+/** A send from a test-run window carries its label (src/web/routes/session-chat.ts inSendTestRun). */
+export function withSendTestRun(payload: unknown, label: string | null = testRunLabel()): unknown {
+  if (!label || typeof payload !== 'object' || payload === null) return payload;
+  return { ...(payload as Record<string, unknown>), testRun: label };
+}

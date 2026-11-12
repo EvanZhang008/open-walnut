@@ -37,16 +37,6 @@ function connectWs(): Promise<WebSocket> {
   });
 }
 
-function waitForWsMessage(ws: WebSocket, timeoutMs = 3000): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('WS timeout')), timeoutMs);
-    ws.once('message', (data) => {
-      clearTimeout(timer);
-      resolve(JSON.parse(data.toString()));
-    });
-  });
-}
-
 /** The first frame for event `name`. Other events may arrive before it. */
 function waitForWsEvent(ws: WebSocket, name: string, timeoutMs = 3000): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
@@ -261,7 +251,8 @@ describe('Search E2E', () => {
 describe('WebSocket real-time E2E', () => {
   it('WS client receives task:created event when task created via REST', async () => {
     const ws = await connectWs();
-    const msgPromise = waitForWsMessage(ws);
+    // A person's create also moves Recent (recent:changed), which can reach the socket first.
+    const msgPromise = waitForWsEvent(ws, 'task:created');
 
     await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
@@ -306,8 +297,8 @@ describe('WebSocket real-time E2E', () => {
     const ws1 = await connectWs();
     const ws2 = await connectWs();
 
-    const msg1 = waitForWsMessage(ws1);
-    const msg2 = waitForWsMessage(ws2);
+    const msg1 = waitForWsEvent(ws1, 'task:created');
+    const msg2 = waitForWsEvent(ws2, 'task:created');
 
     await fetch(apiUrl('/api/tasks'), {
       method: 'POST',

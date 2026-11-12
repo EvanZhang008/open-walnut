@@ -25,6 +25,7 @@ import { getSideQuestion } from '../../core/side-questions.js'
 import { buildReferenceCards, appendReferenceCards, stripReferenceCards } from '../../core/sessions/reference-cards.js'
 import { saveImageToDisk, resolveImageRefs } from './images.js'
 import { log } from '../../logging/index.js'
+import { parseTestRunLabel, testRunMarkingEnabled, withTestRun } from '../../core/test-run.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
 import { readTeamConfig, findTeammateJsonlPaths, writeToInbox, extractTeamsFromLeadJsonl, findSubagentJsonlByPrompt, getLeadSessionJsonlPath, findAllSubagentJsonlsForAgent, readTeamConfigRemote, extractTeamsFromLeadJsonlRemote, readRemoteSubagentJsonls } from '../../core/team-reader.js'
 import { ActiveTabPoller, readFullFile, parseJsonlLines } from '../../providers/subagent-poller.js'
@@ -48,6 +49,22 @@ const V4_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 /**
  * Register session-chat RPC methods on the WebSocket handler.
  */
+
+/**
+ * A window under automation says its test run on each send, as its HTTP requests do with the
+ * header (web/src/api/ws.ts): the send runs in that test run's scope while it is handled, so it
+ * writes nothing of the person's (the Recent list, recent-task-touch.ts). A throwaway server ignores it.
+ */
+function inSendTestRun<T>(handler: (payload: unknown) => Promise<T>): (payload: unknown) => Promise<T> {
+  return async (payload) => {
+    const raw = typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>).testRun : undefined
+    const label = raw !== undefined && await testRunMarkingEnabled() ? parseTestRunLabel(raw) : undefined
+    if (!label) return handler(payload)
+    let open = true
+    try { return await withTestRun(label, () => handler(payload), () => open) } finally { open = false }
+  }
+}
+
 export function registerSessionChatRpc(): void {
   // Feeds `session:get-queue`'s launchPrompt field below.
   startLaunchPromptRegistry()
@@ -89,7 +106,7 @@ export function registerSessionChatRpc(): void {
     }, ['session-runner'], { source: 'web-ui' })
   })
 
-  registerMethod('session:send', async (payload: unknown) => {
+  registerMethod('session:send', inSendTestRun(async (payload: unknown) => {
     if (typeof payload !== 'object' || payload === null) {
       throw new Error('session:send requires an object payload')
     }
@@ -412,7 +429,7 @@ export function registerSessionChatRpc(): void {
       // current session (engine-switch.ts activeSessionFor), and the panel follows it there.
       ...(msg.sessionId && msg.sessionId !== data.sessionId ? { deliveredTo: msg.sessionId } : {}),
     }
-  })
+  }))
 
   registerMethod('session:interrupt', async (payload: unknown) => {
     if (typeof payload !== 'object' || payload === null) {

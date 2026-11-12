@@ -16,7 +16,7 @@
  */
 import { expect, test } from './shortcut-test-fixture';
 import { type APIRequestContext } from '@playwright/test';
-import { isolateUiPrefs, selectSection } from './todo-panel-helpers';
+import { isolateUiPrefs, openRecent, selectSection } from './todo-panel-helpers';
 
 async function createTask(
   request: APIRequestContext,
@@ -70,9 +70,9 @@ test('search filters the Pinned tiers and the Recent list like the Tasks list', 
   // search" proves nothing.
   await expect(focusCard(pinnedMatch)).toBeVisible({ timeout: 10_000 });
   await expect(focusCard(pinnedMiss)).toBeVisible();
-  // Recent lists what the person opened: open both, the way a task link does.
+  // Recent lists only what the person opened (a script's locate is no open): record both as theirs.
   for (const id of [recentMiss, recentMatch]) {
-    await page.evaluate((taskId) => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId } })), id);
+    await openRecent(page, id);
   }
   await selectSection(page, 'Recent');
   await expect(recentCard(recentMatch)).toBeVisible();
@@ -124,7 +124,7 @@ test('search filters the Pinned tiers and the Recent list like the Tasks list', 
   // all-task results fold it, Recent leaves it out (2026-11-07 verifier: rows 15 and 17 stayed).
   expect((await request.post(`/api/tasks/${recentMatch}/complete`)).ok()).toBe(true);
   const recentNear = await createTask(request, `Recent ${token}-other match`);
-  await page.evaluate((taskId) => window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId } })), recentNear);
+  await openRecent(page, recentNear);
   await expect(recentCard(recentNear)).toBeVisible({ timeout: 10_000 });
   await page.locator('#home-task-navigation .todo-search-input').click();
   await page.keyboard.type(`${token} match`);

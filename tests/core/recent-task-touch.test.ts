@@ -4,12 +4,14 @@ import fs from 'node:fs/promises';
 import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-recent-touch'));
 import { WALNUT_HOME, UI_PREFS_FILE } from '../../src/constants.js';
-import { recordRecentTaskTouch } from '../../src/core/recent-task-touch.js';
+import { recordRecentTaskTouch, recentTouchWait } from '../../src/core/recent-task-touch.js';
 import { RECENT_OPENED_KEY, parseRecentOpened } from '../../src/core/recent-opened-list.js';
 import { withTestRun } from '../../src/core/test-run.js';
 import { _resetTestRunPrefsForTest } from '../../src/core/test-run-prefs.js';
 import { PERSON_SEND_SOURCES, PERSON_START_SOURCES } from '../../src/core/sessions/send-sent-by.js';
 const read = async () => parseRecentOpened(JSON.parse(await fs.readFile(UI_PREFS_FILE, 'utf8'))[RECENT_OPENED_KEY].v);
+// The 1 s cap keeps a send fast; here every touch must land before the file is read (a loaded machine is slower).
+recentTouchWait.ms = 120_000;
 beforeEach(async () => { _resetTestRunPrefsForTest(); await fs.mkdir(WALNUT_HOME, { recursive: true }); });
 afterEach(async () => { await fs.rm(WALNUT_HOME, { recursive: true, force: true }); });
 describe('recent human touches', () => {

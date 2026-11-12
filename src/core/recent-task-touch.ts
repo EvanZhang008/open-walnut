@@ -2,11 +2,16 @@
 import { isPersonSource } from './sessions/send-sent-by.js';
 import { RECENT_OPENED_KEY } from './recent-opened-list.js';
 import { log } from '../logging/index.js';
+import { ambientTestRun } from './test-run.js';
+
+/** How long a create or send waits for its touch to save; tests that read the file right after wait it out. */
+export const recentTouchWait = { ms: 1000 };
 
 export function recordRecentTaskTouch(taskId: string | null | undefined, source: string | undefined, at = new Date().toISOString()): Promise<void> {
-  if (!taskId || !isPersonSource(source) || !Number.isFinite(Date.parse(at))) return Promise.resolve();
+  // A test run's create or send (an automated browser, a probe) is not the person's touch.
+  if (!taskId || !isPersonSource(source) || !Number.isFinite(Date.parse(at)) || ambientTestRun()) return Promise.resolve();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([saveTouch(taskId, source, at), new Promise<void>(resolve => { timer = setTimeout(resolve, 1000); })]).finally(() => clearTimeout(timer));
+  return Promise.race([saveTouch(taskId, source, at), new Promise<void>(resolve => { timer = setTimeout(resolve, recentTouchWait.ms); })]).finally(() => clearTimeout(timer));
 }
 
 async function saveTouch(taskId: string | null | undefined, source: string | undefined, at = new Date().toISOString()): Promise<void> {
@@ -24,6 +29,8 @@ async function saveTouch(taskId: string | null | undefined, source: string | und
 
 /** Message capture follows persistence in the background; the send never waits on preferences or a host. */
 export function noteRecentHumanMessage(sessionId: string, message: string, at: string): void {
+  // Read now, while the send is still in its test run's scope; the work below outlives it.
+  if (ambientTestRun()) return;
   void (async () => {
     if (!(await hasTypedWords(message))) return;
     const { getSessionByClaudeId } = await import('./session-tracker.js');

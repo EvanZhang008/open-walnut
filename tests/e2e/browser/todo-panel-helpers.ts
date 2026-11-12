@@ -365,7 +365,17 @@ export async function isolateUiPrefs(page: Page, opts: { newInstall?: boolean } 
 export async function seedRecentOpened(page: Page, ids: readonly string[]): Promise<void> {
   await page.evaluate((list) => {
     const now = Date.now();
-    localStorage.setItem('walnut-todo-recent-opened', JSON.stringify(list.map((id, i) => ({ id, at: new Date(now - i * 60_000).toISOString() }))));
+    localStorage.setItem('walnut-todo-recent-opened', JSON.stringify(list.map((id, i) => ({ id, at: new Date(now - i * 60_000).toISOString(), human: true }))));
     window.dispatchEvent(new Event('walnut:recent-opened'));
   }, [...ids]);
+}
+
+/** The person opens this task now: it goes on top of Recent (what a click on a task link records). */
+export async function openRecent(page: Page, id: string): Promise<void> {
+  await page.evaluate((taskId) => {
+    const prev = JSON.parse(localStorage.getItem('walnut-todo-recent-opened') ?? '[]') as Array<{ id: string }>;
+    const next = [{ id: taskId, at: new Date().toISOString(), human: true }, ...prev.filter((e) => e.id !== taskId)];
+    localStorage.setItem('walnut-todo-recent-opened', JSON.stringify(next));
+    window.dispatchEvent(new Event('walnut:recent-opened'));
+  }, id);
 }

@@ -10,6 +10,7 @@ import { getDeviceToken, renewalDue, renewSignIn, tokenExpired } from './device-
 import { getUnpairedState, noteAuthRefusal, subscribeUnpaired } from './unpaired';
 import { wsProtocolsFor } from '../../../src/lib/ws-bearer-protocol';
 import { mintOpId } from './op-id';
+import { withSendTestRun } from './test-run';
 import { leaderErrorMessage, WS_LEADER_AWAY, WS_LEADER_BACK } from './leader-presence';
 
 /** WebSocket frame types matching the server protocol. */
@@ -324,6 +325,8 @@ class WsClient {
   }
 
   sendRpc<T = unknown>(method: string, payload: unknown): Promise<T> {
+    // A test-run window says so on each send, as its HTTP requests do with the header.
+    if (method === 'session:send') payload = withSendTestRun(payload);
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         // Not open yet. Rather than fail (the cold-load race), buffer and flush

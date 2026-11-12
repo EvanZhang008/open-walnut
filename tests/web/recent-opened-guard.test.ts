@@ -20,6 +20,11 @@ describe('Recent human touches', () => {
     expect(read('src/core/session-message-queue.ts')).toContain("msg.sentBy === 'person' && !inherited")
     expect(read('src/core/session-message-queue.ts')).toContain('noteRecentHumanMessage(sessionId, opts?.recentText ?? message, msg.enqueuedAt)')
     expect(read('src/core/recent-task-touch.ts')).toContain('!isPersonSource(source)')
+    // A test run (an automated window, a probe) never writes the person's Recent (2026-11-11).
+    expect(read('src/core/recent-task-touch.ts')).toContain('|| ambientTestRun()) return Promise.resolve()')
+    expect(read('src/core/recent-task-touch.ts')).toContain('if (ambientTestRun()) return;')
+    expect(read('web/src/api/ws.ts')).toContain("if (method === 'session:send') payload = withSendTestRun(payload);")
+    expect(read('src/web/routes/session-chat.ts')).toContain("registerMethod('session:send', inSendTestRun(")
     expect(read('src/web/routes/ui-prefs.ts')).toContain('delete patch[RECENT_OPENED_KEY]')
   })
   it('a new task creation path must declare whether a person or automation owns it', () => {
