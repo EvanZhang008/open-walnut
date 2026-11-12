@@ -4292,6 +4292,8 @@ function dispatchCommand(ws, id, cmd) {
     case 'fs.resolvePath': return cmdFsResolvePath(ws, id, cmd);
     // Task directories (task-dir-v1); not bridge-reachable. Mirrors daemon-standalone.ts.
     case 'taskdir.ensure': return cmdTaskDirEnsure(ws, id, cmd);
+    // Read only (cli-holder-v1): who holds a session's transcript on this host. Mirrors daemon-standalone.ts.
+    case 'cli.holder': return cmdCliHolder(ws, id, cmd);
     case 'taskdir.list': return cmdTaskDirList(ws, id);
     case 'taskdir.remove': return cmdTaskDirRemove(ws, id, cmd);
     case 'taskdir.prune': return cmdTaskDirPrune(ws, id, cmd);
@@ -14132,6 +14134,25 @@ function cmdTaskDirEnsure(ws, id, cmd) {
   const dir = ensureTaskDirFor(cmd.taskId, cmd.home);
   if (!dir) return sendError(ws, id, 'taskdir.ensure: invalid taskId or the directory could not be made');
   sendOk(ws, id, { path: dir, root: TASK_DIR_ROOT });
+}
+
+// Whether a CLI of a session runs on this host, by the start's own claim rules (cli-holder-v1,
+// cli-owner-core.ts holderOf), and the Walnut the spawn journal says started it. Read only.
+// Keep in sync with daemon-standalone.ts.
+async function cmdCliHolder(ws, id, cmd) {
+  const sid = typeof cmd.sid === 'string' ? cmd.sid : '';
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(sid)) return sendError(ws, id, 'cli.holder: invalid sid');
+  try {
+    const holder = await cliOwner.holderOf(sid);
+    // Another daemon of this host may have journaled it since this one read the journal.
+    if (!journaledIds().has(sid)) journaledSids = null;
+    sendOk(ws, id, {
+      holder: holder ? Object.assign({ kind: holder.kind, pid: holder.pid }, holder.home ? { home: holder.home } : {}, holder.unrecorded ? { unrecorded: true } : {}) : null,
+      journaledHome: journaledHome(sid) || null,
+    });
+  } catch (err) {
+    sendError(ws, id, 'cli.holder: ' + (err && err.message));
+  }
 }
 
 async function cmdTaskDirList(ws, id) {

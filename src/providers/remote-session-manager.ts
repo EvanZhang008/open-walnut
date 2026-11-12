@@ -74,6 +74,22 @@ const SEND_BOOT_WAIT_CAPABILITY = 'send-boot-wait-v1'
 /** Every write into a CLI still booting waits through its boot (daemon-capabilities.ts). */
 const WRITE_BOOT_WAIT_CAPABILITY = 'write-boot-wait-v1'
 
+/** What a host's daemon says of who holds a session's transcript (cli-holder-v1). */
+export type CliHolderAnswer = { state: 'free'; journaledHome?: string } | { state: 'held' | 'unknown' | 'too-old'; detail?: string }
+
+/** Ask one daemon link `cli.holder` (core/sessions/org-own-folder.ts reads the answer). */
+export async function askCliHolder(conn: Pick<DaemonConnection, 'hasCapability' | 'send'>, sid: string): Promise<CliHolderAnswer> {
+  if (!conn.hasCapability('cli-holder-v1')) return { state: 'too-old' }
+  try {
+    const res = await conn.send('cli.holder', { sid }, 5_000) as { ok?: boolean; error?: string; holder?: { pid?: number; kind?: string } | null; journaledHome?: string | null }
+    if (res?.ok === false) return { state: 'unknown', detail: res.error }
+    if (res?.holder) return { state: 'held', detail: `${res.holder.kind ?? 'live'} pid ${res.holder.pid ?? '?'}` }
+    return { state: 'free', ...(res?.journaledHome ? { journaledHome: res.journaledHome } : {}) }
+  } catch (err) {
+    return { state: 'unknown', detail: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 export class RemoteSessionManager implements SessionManager {
   /** When this manager's CLI was spawned (ms; 0 = attached, not spawned here). */
   private _spawnedAtMs = 0
@@ -1315,6 +1331,19 @@ export class RemoteSessionManager implements SessionManager {
     } catch {
       return false
     }
+  }
+
+  /**
+   * cli-holder-v1, on the link this session starts through: whether any CLI of `sid` runs on the
+   * host (the start's own claim rules, a terminal's `claude -r` included) and which Walnut the
+   * spawn journal says started it. `too-old`: the daemon cannot say; `unknown`: no answer.
+   */
+  async cliHolder(sid: string): Promise<CliHolderAnswer> {
+    let conn: DaemonConnection
+    try { conn = await this.ensureConnected() } catch (err) {
+      return { state: 'unknown', detail: err instanceof Error ? err.message : String(err) }
+    }
+    return askCliHolder(conn, sid)
   }
 
   // ── Session Management ──

@@ -3120,21 +3120,14 @@ export class ClaudeCodeSession {
     // to avoid blocking on flaky connectivity.
     // False once the resume turned out to have no conversation to resume (below).
     let resumeNow = true
+    // Puts a VP's or lead's conversation back where it was when the start after its move fails.
+    let ownMoveUndo: (() => Promise<string>) | null = null
     const startSpawn = async (): Promise<{ pid: number | null; outputFile: string; fileSize: number } & SpawnLineOutcome> => {
       // Each pre-spawn step's ms, logged once before transport.start, so a slow
       // resume names the step it waited on (2026-11-08: 29 s, step unknown).
       const steps: Record<string, number> = {}
       let stepAt = Date.now()
       const stepDone = (name: string) => { const now = Date.now(); steps[name] = now - stepAt; stepAt = now }
-      // A VP or lead resumed outside its own folder moves there first, conversation and all,
-      // between its old process and this one (core/sessions/org-own-folder.ts). Before the cost
-      // read below, which reads the transcript where it is.
-      if (isResume && this.taskId) {
-        const { moveToOwnFolderBeforeSpawn } = await import('../core/sessions/org-own-folder.js')
-        const own = await moveToOwnFolderBeforeSpawn({ sessionId: resumeSessionId!, taskId: this.taskId, cwd: resolvedCwd, host })
-        if (own) { resolvedCwd = own; this._cwd = own }
-        stepDone('ownFolderMs')
-      }
       // The restored cost state is read from the transcript on its host, which can
       // be slow on a large one. Start it first and wait for it last, bounded, so it
       // never holds the spawn. A late answer seeds only this spawn's baseline, and
@@ -3258,6 +3251,21 @@ export class ClaudeCodeSession {
         }
       }
       stepDone('costStateMs')
+      // A VP or lead resumed outside its own folder moves there now, conversation and all,
+      // between its old process and this one (core/sessions/org-own-folder.ts): after every
+      // check that could refuse the start and the transcript's reads above, right before the
+      // start, which puts it back if the host refuses it (spawnPromise below).
+      if (isResume && resumeNow && this.taskId) {
+        const { moveToOwnFolderBeforeSpawn } = await import('../core/sessions/org-own-folder.js')
+        // Asked on the link this start goes through, so the answer is from the daemon that starts it.
+        const t = transport as { cliHolder?: (sid: string) => Promise<import('./remote-session-manager.js').CliHolderAnswer> }
+        const own = await moveToOwnFolderBeforeSpawn({
+          sessionId: resumeSessionId!, taskId: this.taskId, cwd: resolvedCwd, host,
+          cliHolder: t.cliHolder ? (sid) => t.cliHolder!(sid) : undefined,
+        })
+        if (own) { resolvedCwd = own.cwd; this._cwd = own.cwd; ownMoveUndo = own.undo ?? null }
+        stepDone('ownFolderMs')
+      }
       await this.applySpawnWalnutMount(args, profile, host)
       log.session.info('spawn: pre-spawn steps', {
         taskId: this.taskId, sessionId: tmpId, host: host ?? '__local__', resume: isResume && resumeNow,
@@ -3336,7 +3344,17 @@ export class ClaudeCodeSession {
     // spawn window waits for the transport instead of respawning over it. Settles
     // on both success and failure (a failed spawn must not wedge delivery forever).
     const consumedBeforeSpawn = this._consumedOffset
-    const spawnPromise = startSpawn()
+    const spawnPromise = startSpawn().catch(async (err: unknown) => {
+      // The start after a move to the node's own folder did not happen (the host refused it:
+      // another CLI holds the session, a stop came first): the conversation goes back.
+      const undo = ownMoveUndo
+      ownMoveUndo = null
+      if (undo) {
+        resolvedCwd = await undo().catch(() => resolvedCwd)
+        if (this._transport === transport) this._cwd = resolvedCwd
+      }
+      throw err
+    })
     this._spawnSettled = spawnPromise.then(() => {}, () => {})
       .finally(() => { this._spawnSettled = null })
 

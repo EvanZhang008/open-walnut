@@ -369,6 +369,32 @@ describe('against the real store', () => {
     expect(await inheritedLaunchPair(undefined, sibling)).toBeUndefined()
   })
 
+  it('a lead Walnut moved into its own directory hands its workers the folder it was moved from; one always there hands nothing (org-own-folder.ts)', async () => {
+    // 2026-11-12 review: the lead's session ran in the repository with no task.cwd and no project
+    // default, and its workers inherited the repository; after the move they would have taken
+    // their own task directories.
+    const { localTaskDirRoot } = await import('../../../src/core/sessions/task-dir-place.js')
+    const { updateSessionRecord } = await import('../../../src/core/session-tracker.js')
+    const path = await import('node:path')
+    const { task: lead } = await addTask({ title: 'Marina lead', project: 'marina', source: 'local', org_role: 'lead' } as Parameters<typeof addTask>[0])
+    const own = path.join(localTaskDirRoot(), lead.id)
+    const sid = `sid-${lead.id}`
+    await createSessionRecord(sid, lead.id, 'marina', own, { title: lead.title })
+    await updateSessionRecord(sid, { folderMoved: { from: '/repo/marina', to: own, at: new Date().toISOString(), by: 'walnut', why: 'own-folder' } })
+    const { task: sibling } = await addTask({ title: 'A worker', project: 'marina' })
+    expect(await inheritedLaunchPair(sid, sibling)).toEqual({ host: '', cwd: '/repo/marina' })
+    const caller = await resolveCallerPlacement(sid)
+    expect(await createTimeCwd({}, caller, decidePlacement({}, caller))).toBe('/repo/marina')
+
+    // A lead that always ran in its own directory: the worker takes its own (as today).
+    const { task: lead2 } = await addTask({ title: 'Acme lead', project: 'marina', source: 'local', org_role: 'lead' } as Parameters<typeof addTask>[0])
+    const sid2 = `sid-${lead2.id}`
+    await createSessionRecord(sid2, lead2.id, 'marina', path.join(localTaskDirRoot(), lead2.id), { title: lead2.title })
+    expect(await inheritedLaunchPair(sid2, sibling)).toEqual({ host: '' })
+    const caller2 = await resolveCallerPlacement(sid2)
+    expect(await createTimeCwd({}, caller2, decidePlacement({}, caller2))).toBeUndefined()
+  })
+
   it('drops the pair when the caller host is no longer configured', async () => {
     const { sid } = await seedCaller({ host: 'gone-host', cwd: '/home/me/repo' })
     const { task: sibling } = await addTask({ title: 'Sibling', project: 'marina' })

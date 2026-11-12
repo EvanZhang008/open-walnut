@@ -117,10 +117,14 @@ export async function resolveCallerPlacement(callerSid: string | undefined): Pro
   const caller = await resolveCaller(sid).catch(() => ({ kind: 'external' as const }));
   if (caller.kind !== 'session') return { kind: caller.kind === 'human' ? 'human' : 'external' };
   const record = caller.record;
+  // A VP or lead moved out of a repository into its own directory hands its workers the folder it
+  // was moved from, as it did while it ran there (org-own-folder.ts handedDownCwd).
+  const { handedDownCwd } = await import('./org-own-folder.js');
+  const cwd = handedDownCwd(record);
   const session: CallerSession = {
     id: record.claudeSessionId,
     host: normalizeHost(record.host),
-    ...(record.cwd ? { cwd: record.cwd } : {}),
+    ...(cwd ? { cwd } : {}),
   };
   if (!record.taskId) return { kind: 'untracked', session };
   const { getTask, listFolderLabels } = await import('../task-manager.js');

@@ -131,7 +131,7 @@ export async function prepareInboxItem(letterId: string, itemId: string, raw: un
       frozen.title = title;
       frozen.project = task?.project ?? project;
       const launchTask = task ?? ({ id: taskId, title, project, description: text } as CoreTask);
-      const launch = await resolveTaskLaunchReadOnly(launchTask, { taskIdPrefix: taskId, message: text, mode: 'default', source: 'human-inbox' });
+      const launch = await resolveTaskLaunchReadOnly(launchTask, { taskIdPrefix: taskId, message: text, mode: 'default', source: 'human-inbox' }, { preview: true });
       plan.launch = { host: launch.host || '__local__', cwd: launch.cwd, engine: launch.engine ?? 'claude', model: launch.model ?? 'default', mode: launch.mode ?? 'default' };
       launchFingerprint = fingerprint(plan.launch);
       if (!task) {

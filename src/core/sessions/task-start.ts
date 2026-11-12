@@ -27,6 +27,9 @@ export interface SessionStartParams {
    *  task's description or a "Working on task" line, which would start its work again. */
   idle?: boolean;
   cwd?: string;
+  /** The person picked `cwd` for this start (the draft's folder picker): a VP or lead keeps it
+   *  instead of its own task directory (org-own-folder.ts). A cwd without it is no choice. */
+  cwdChosen?: boolean;
   host?: string;
   model?: string;
   mode?: string;

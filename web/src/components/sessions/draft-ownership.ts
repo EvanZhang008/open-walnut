@@ -195,6 +195,7 @@ export function applyDraftPathPick(
     host: path.host,
     hostLabel: path.hostLabel,
     cwdPinned: true,
+    chosenCwd: path.cwd,
     userTouched: true,
     createCwd: path.createCwd === true,
     metaTouched: draft.metaTouched || launchDivergesFromDirMemory(meta, path.cwd, path.host),

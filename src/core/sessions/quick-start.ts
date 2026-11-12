@@ -67,6 +67,9 @@ export interface QuickStartParams {
    */
   hints?: import('../hints/hint-send.js').RequestedHints;
   cwd: string;
+  /** The person picked `cwd` (the draft's folder picker), not the task's or the last launch's
+   *  folder the client filled in: a VP or lead keeps only such a folder (org-own-folder.ts). */
+  cwdChosen?: boolean;
   host?: string;
   model?: string;
   mode?: string;
@@ -574,7 +577,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     if (!conversation) {
       // A VP or lead runs in its own task directory unless a person named this folder (org-own-folder.ts).
       const { ownFolderStartCwd } = await import('./org-own-folder.js');
-      const own = await ownFolderStartCwd(updatedTask, host, { cwd, callerSid: params.callerSid, source });
+      const own = await ownFolderStartCwd(updatedTask, host, { cwd, cwdChosen: params.cwdChosen, callerSid: params.callerSid, source });
       if (own?.kind === 'own') {
         const { ensureTaskDirOnHost } = await import('./task-dir-place.js');
         const made = await ensureTaskDirOnHost(updatedTask.id, host);

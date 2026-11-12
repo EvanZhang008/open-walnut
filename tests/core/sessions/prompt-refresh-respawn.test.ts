@@ -178,6 +178,15 @@ describe('a VP or lead still running in a repository (org-own-folder.ts)', () =>
     expect(h.deps.respawn).toHaveBeenCalledTimes(1)
     expect(h.deps.emitNote).toHaveBeenCalledWith(SID, 'mvm0n3bu-6910', expect.not.stringContaining('its own folder'))
   })
+
+  it('a respawn that changed neither the prompt nor the folder writes no note (never "lacked 0 KB")', async () => {
+    debt = 0
+    const h = harness({ folderDue: async () => true })
+    await h.pr.onTurnEnd(SID)
+    await h.fireAll()
+    expect(h.deps.respawn).toHaveBeenCalledTimes(1)
+    expect(h.deps.emitNote).not.toHaveBeenCalled()
+  })
 })
 
 describe('nothing is cut by the respawn', () => {

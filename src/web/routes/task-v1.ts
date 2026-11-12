@@ -557,6 +557,8 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         taskIdPrefix: id,
         message: str('message'),
         cwd: str('cwd'),
+        // The person picked that folder: a VP or lead keeps it instead of its own directory (org-own-folder.ts).
+        ...(b.cwd_chosen === true ? { cwdChosen: true } : {}),
         host: typeof b.host === 'string' ? b.host : undefined,
         model: str('model'),
         mode: str('mode'),

@@ -540,6 +540,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // while this machine's disk is low and tells an open task whose own folder is
   // over the limit (src/core/task-dir-size-notice.ts). Sidecar-gated in the source twin.
   'task-dir-sizes-v1',
+  // 'cli-holder-v1' — `cli.holder {sid}`: read only, whether a CLI of that session runs on
+  // this host by the same rules a start's claim uses (cli-owner-core.ts holderOf: the owner
+  // record judged against the process table, then a process-table scan for a CLI no record
+  // names, a terminal's `claude -r` included), and the Walnut the spawn journal says started
+  // it (`journaledHome`). The server asks it before moving a VP's or lead's conversation into
+  // its own task directory (core/sessions/org-own-folder.ts); without it nothing is moved.
+  'cli-holder-v1',
   // 'transcript-archive-v1' — the session history archive (transcript-archive.ts):
   // `transcript.archive {olderThanDays, dryRun?, budgetMs?}` compresses this host's
   // Claude Code sessions untouched that long (never one a live CLI holds) and

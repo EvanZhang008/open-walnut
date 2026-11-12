@@ -3844,6 +3844,10 @@ export interface SessionRecord {
   /** The folder a person named when starting this VP's or lead's session: kept by its later spawns,
    *  which otherwise move it to its own task directory (sessions/org-own-folder.ts). */
   cwdByPerson?: string;
+  /** The last move to its own task directory that failed for a lasting reason (a conflict, the
+   *  transcript missing, a daemon too old to say who holds it): no spawn tries it again for that
+   *  folder for a day (sessions/org-own-folder.ts). */
+  ownFolderMove?: { from: string; why: string; at: string };
   /** An engine switch started (or resumed) this session with no message: the context it carried,
    *  a hint block, rides the session's next message (sessions/engine-switch-io.ts). */
   switchContext?: { text: string; switchId: string; at: string };

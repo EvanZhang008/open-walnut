@@ -304,7 +304,8 @@ export class PromptRefreshRespawn {
       // Said only when the spawn really moved it (a host that did not answer leaves it in place).
       const after = folder ? await this.deps.getSession(sessionId) : null;
       const moved = !!after && !(await this.deps.folderDue(after, task));
-      this.deps.emitNote(sessionId, rec.taskId, promptRefreshNote(verdict.debtBytes, moved));
+      // Neither the prompt nor the folder changed (the move was left): nothing to tell.
+      if (moved || verdict.debtBytes > 0) this.deps.emitNote(sessionId, rec.taskId, promptRefreshNote(verdict.debtBytes, moved));
       log.session.info('prompt refresh: respawned on the current prompt', { sessionId, taskId: rec.taskId, ...base, folder, moved });
       return 'respawned';
     } catch (err) {

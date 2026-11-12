@@ -2678,6 +2678,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // Task directories (task-dir-v1). NOT in BRIDGE_ALLOWED_COMMANDS: removal
     // deletes host files, which the cloud bridge may never ask for.
     case 'taskdir.ensure': return cmdTaskDirEnsure(ws, id as number, cmd)
+    // Read only (cli-holder-v1): who holds a session's transcript on this host.
+    case 'cli.holder': return cmdCliHolder(ws, id as number, cmd)
     case 'taskdir.list': return cmdTaskDirList(ws, id as number)
     case 'taskdir.remove': return cmdTaskDirRemove(ws, id as number, cmd)
     case 'taskdir.prune': return cmdTaskDirPrune(ws, id as number, cmd)
@@ -6277,6 +6279,27 @@ function cmdTaskDirEnsure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   const dir = ensureTaskDir(TASK_DIR_ROOT, cmd.taskId, cmd.home)
   if (!dir) return sendError(ws, id, 'taskdir.ensure: invalid taskId or the directory could not be made')
   sendOk(ws, id, { path: dir, root: TASK_DIR_ROOT })
+}
+
+/**
+ * Whether a CLI of a session runs on this host, by the start's own claim rules (cli-holder-v1,
+ * cli-owner-core.ts holderOf), and the Walnut the spawn journal says started it. Read only.
+ * Keep in sync with daemon-source.ts.
+ */
+async function cmdCliHolder(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const sid = typeof cmd.sid === 'string' ? cmd.sid : ''
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(sid)) return sendError(ws, id, 'cli.holder: invalid sid')
+  try {
+    const holder = await cliOwner.holderOf(sid)
+    // Another daemon of this host may have journaled it since this one read the journal.
+    if (!journaledIds().has(sid)) journaledSids = null
+    sendOk(ws, id, {
+      holder: holder ? { kind: holder.kind, pid: holder.pid, ...(holder.home ? { home: holder.home } : {}), ...(holder.unrecorded ? { unrecorded: true } : {}) } : null,
+      journaledHome: journaledHome(sid) ?? null,
+    })
+  } catch (err) {
+    sendError(ws, id, `cli.holder: ${(err as Error).message}`)
+  }
 }
 
 async function cmdTaskDirList(ws: ServerWebSocket<WsData>, id: number) {

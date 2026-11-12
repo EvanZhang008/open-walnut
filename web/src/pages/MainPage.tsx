@@ -3057,6 +3057,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
       const settled = quickStartSession({
         cwd: qsp.cwd,
+        ...(qsp.cwdChosen ? { cwdChosen: true } : {}),
         host: qsp.host ?? undefined,
         message: text,
         images,
@@ -3272,6 +3273,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {
         cwd: draft.cwd, host: draft.host, hostLabel: draft.hostLabel,
         ...(draft.createCwd ? { createCwd: true } : {}),
+        // Picked in this draft's folder picker, and still the folder it launches in.
+        ...(draft.chosenCwd && draft.chosenCwd === draft.cwd ? { cwdChosen: true } : {}),
         ...(draft.intent ? { intent: draft.intent } : {}),
       },
       // A tier the app knows is gone (deleted custom tier) launches as Focus,

@@ -470,7 +470,7 @@ export interface ContactLaunch { cwd: string; host: string | null }
 export async function contactLaunch(task: Task): Promise<ContactLaunch | undefined> {
   try {
     const { resolveTaskLaunchReadOnly } = await import('../sessions/task-launch-plan.js');
-    const plan = await resolveTaskLaunchReadOnly(task, { taskIdPrefix: task.id, source: 'org-contact' });
+    const plan = await resolveTaskLaunchReadOnly(task, { taskIdPrefix: task.id, source: 'org-contact' }, { preview: true });
     return { cwd: plan.cwd, host: plan.host || null };
   } catch (err) {
     log.task.info('org: no launch place for contact', { taskId: task.id, error: err instanceof Error ? err.message : String(err) });

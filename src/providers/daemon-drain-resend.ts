@@ -67,7 +67,7 @@ export const RESEND_AFTER_LOST: Readonly<Record<string, string>> = {
   'changes.compute': 'read', 'changes.file': 'read', getState: 'read', status: 'read', list: 'read',
   'host.slice': 'read', 'host.vitals': 'read', 'host.facts': 'read', 'host.load': 'read',
   'exec.list': 'read', 'exec.read': 'read', 'jobs.status': 'read', 'net.status': 'read', 'server.status': 'read',
-  'replica.status': 'read', 'triggers.state.snapshot': 'read', 'taskdir.list': 'read', 'taskdir.sizes': 'read',
+  'replica.status': 'read', 'triggers.state.snapshot': 'read', 'taskdir.list': 'read', 'taskdir.sizes': 'read', 'cli.holder': 'read',
   'usage.scan': 'read', 'usage.sessionCost': 'read', 'usage.costState': 'read', 'usage.budget.get': 'read',
   'usage.budget.list': 'read', 'usage.codexOutside': 'read', 'net.identity': 'read', 'jobs.logs': 'read', 'host.preflight': 'read',
   'triggers.configure': 'the whole rule set, pushed again', 'hooks.configure': 'the whole rule set, pushed again',

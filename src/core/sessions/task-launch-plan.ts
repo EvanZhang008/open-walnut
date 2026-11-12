@@ -39,8 +39,12 @@ export function validateLaunchChoices(params: SessionStartParams): void {
   }
 }
 
-/** Same resolution as task_start, but without mkdir, claiming or writing anything. */
-export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStartParams) {
+/**
+ * Same resolution as task_start, but without mkdir, claiming or writing anything. `preview`: a
+ * plan shown before anything starts (the Org page's draft, an inbox action's plan), which never
+ * waits on a host link.
+ */
+export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStartParams, opts: { preview?: boolean } = {}) {
   if (params.startAttemptId || params.source === 'human-inbox') requireFrozenWorkspaceReady(task, params);
   validateLaunchChoices(params);
   if (params.callerSid) {
@@ -84,7 +88,7 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
   // A VP or lead runs in its own task directory, whatever the task or its project recorded,
   // unless a person named the folder for this start (org-own-folder.ts).
   const { ownFolderStartCwd } = await import('./org-own-folder.js');
-  const own = await ownFolderStartCwd(task, host, { ...params, workspace: wsPlace ?? params.workspace });
+  const own = await ownFolderStartCwd(task, host, { ...params, workspace: wsPlace ?? params.workspace }, opts);
   if (own?.kind === 'own') { cwd = own.cwd; createTaskDir = true; }
   // A named remote host with no folder of this task's there: the task's own directory on it.
   if (!cwd && onHost && host) {

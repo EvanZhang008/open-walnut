@@ -110,6 +110,10 @@ export interface DraftColumn {
   /** True once the user picked the path explicitly — a later async seed (e.g. a
    *  project's default dir) must not overwrite their choice. */
   cwdPinned?: boolean;
+  /** The folder the user picked in this draft's folder picker (applyDraftPathPick), never a
+   *  seed's: a launch whose `cwd` is still it says so (`cwdChosen`), and only such a folder keeps a
+   *  VP or lead outside its own task directory (server: sessions/org-own-folder.ts). */
+  chosenCwd?: string;
   /** Launch-memory switch for model / engine ONLY. True once the user picked the
    *  model or engine on the composer pills, or the picker confirmed a model/engine
    *  that differs from the folder's memory. Task fields (tier, priority, dates,

@@ -4,11 +4,14 @@
  * 2026-11-12, the user: the Walnut VP ran in the repository, so every request carried the
  * repository's instruction files (about 62K tokens).
  *
- * Pinned: a lead's start lands in its task directory although its project names a repository; a
- * person's own folder for a start is kept; a lead already running in a repository is moved by its
+ * Pinned: a lead's start lands in its task directory although its project names a repository, the
+ * board's ▶ (which sends the task's folder) included; a folder the person picked for a start
+ * (`cwd_chosen`) is kept; a lead already running in a repository is moved by its
  * post-compaction respawn even with its prompt current, keeping its conversation (`--resume`, the
  * transcript and its sidecar moved to the new folder's project dir), the record points there
- * (the task keeps its folder for its subtasks), and its next message says so once.
+ * (the task keeps its folder for its subtasks), and its next message says so once; a start the
+ * daemon refuses after the move puts the conversation back; a CLI of the session still running on
+ * the host (a terminal's `claude -r`) or another Walnut's session is never moved.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -76,6 +79,30 @@ async function startLead(id: string, body: Record<string, unknown> = {}): Promis
   return sid!
 }
 
+/** A lead started before this rule: running in the repository, no person's mark, the task names it. */
+async function leadInRepo(title: string): Promise<{ id: string; sid: string; from: string }> {
+  const id = await newLead(title)
+  const sid = await startLead(id, { cwd: repo, cwd_chosen: true })
+  await updateSessionRecord(sid, { cwdByPerson: undefined })
+  await updateTaskRaw(id, { cwd: repo })
+  const from = transcriptIn(repo, sid)
+  expect(existsSync(from), from).toBe(true)
+  return { id, sid, from }
+}
+
+/**
+ * The post-compaction respawn's verdict for this compaction. 'respawned' is written once the old
+ * CLI is stopped, before the new one's start reaches the daemon: wait for that start too.
+ */
+async function compactAndDecide(id: string, sid: string) {
+  const startsBefore = starts(sid).length
+  await updateSessionRecord(sid, { promptRefresh: undefined })
+  await sendMessageToSession(sid, '/compact', { source: 'ui', taskId: id })
+  const rec = await until('respawn decided', () => getSessionByClaudeId(sid), (r) => !!r?.promptRefresh, 40_000)
+  if (rec!.promptRefresh!.outcome === 'respawned') await until('respawn start sent', async () => starts(sid).length, (n) => n > startsBefore)
+  return rec
+}
+
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   process.env.WALNUT_PROMPT_REFRESH_QUIET_MS = '4000'
@@ -116,8 +143,8 @@ describe('a VP or lead runs in its own folder', () => {
 
   it('a lead already in a repository is moved by its post-compaction respawn, prompt current, conversation kept', async () => {
     const id = await newLead('Acme lead from before')
-    // A person names the repository for this start: kept for it (and, while marked, by its spawns).
-    const sid = await startLead(id, { cwd: repo })
+    // A person picks the repository for this start: kept for it (and, while marked, by its spawns).
+    const sid = await startLead(id, { cwd: repo, cwd_chosen: true })
     const rec0 = (await getSessionByClaudeId(sid))!
     expect(rec0.cwd).toBe(repo)
     expect(rec0.cwdByPerson).toBe(repo)
@@ -163,7 +190,7 @@ describe('a VP or lead runs in its own folder', () => {
 
   it('a person\'s own folder is kept by later spawns', async () => {
     const id = await newLead('Acme lead the user placed')
-    const sid = await startLead(id, { cwd: repo })
+    const sid = await startLead(id, { cwd: repo, cwd_chosen: true })
     const startsBefore = starts(sid).length
     await sendMessageToSession(sid, '/compact', { source: 'ui', taskId: id })
     const rec = await until('decided', () => getSessionByClaudeId(sid), (r) => !!r?.promptRefresh, 30_000)
@@ -171,4 +198,82 @@ describe('a VP or lead runs in its own folder', () => {
     expect(starts(sid).length).toBe(startsBefore)
     expect(rec!.cwd).toBe(repo)
   }, 120_000)
+
+  it('the board\'s ▶ sends the task\'s folder: no choice, the lead starts in its own directory; the draft\'s picked folder is kept', async () => {
+    const quick = async (id: string, extra: Record<string, unknown>) => {
+      const res = await req('POST', '/api/sessions/quick-start', { taskId: id, cwd: repo, message: 'big-context-turn:60000:1h', ...extra })
+      expect(res.status, JSON.stringify(res.json)).toBeLessThan(300)
+      const sid = await until('session', async () => (await getTask(id)).session_id, (s) => !!s)
+      return (await until('record', () => getSessionByClaudeId(sid!), (r) => !!r?.cwd))!
+    }
+    const played = await newLead('Acme lead started from the board')
+    await updateTaskRaw(played, { cwd: repo })
+    const rec = await quick(played, {})
+    expect(rec.cwd).toBe((await taskDirForHost(played, '__local__'))!)
+    expect(rec.cwdByPerson).toBeUndefined()
+
+    const picked = await newLead('Acme lead the user picked a folder for')
+    const rec2 = await quick(picked, { cwdChosen: true })
+    expect(rec2.cwd).toBe(repo)
+    expect(rec2.cwdByPerson).toBe(repo)
+  }, 120_000)
+
+  it('a start the daemon refuses after the move puts the conversation back where it was', async () => {
+    const { id, sid, from } = await leadInRepo('Acme lead whose respawn is refused')
+    const own = (await taskDirForHost(id, '__local__'))!
+    daemon.injectStartFault('mkfifo failed: no space left on device')
+    try {
+      const rec = await compactAndDecide(id, sid)
+      expect(rec!.promptRefresh!.outcome).toBe('respawned')
+      const moved = starts(sid).at(-1)!
+      // The refused start was asked in the node's own folder, then everything went back.
+      expect(moved.payload.cwd).toBe(own)
+      const back = await until('conversation back', () => getSessionByClaudeId(sid), (r) => r?.cwd === repo && !r.folderMoved && existsSync(from))
+      expect(back!.cwd).toBe(repo)
+    } finally {
+      daemon.injectStartFault(null)
+    }
+    expect(existsSync(from), from).toBe(true)
+    expect(existsSync(transcriptIn(own, sid))).toBe(false)
+  }, 150_000)
+
+  it('a CLI of the session still running on the host (a terminal\'s claude -r) is never moved under it', async () => {
+    const { id, sid, from } = await leadInRepo('Acme lead open in a terminal')
+    daemon.heldElsewhere.set(sid, 4242)
+    try {
+      const startsBefore = starts(sid).length
+      const decided = await compactAndDecide(id, sid)
+      // Respawned for the folder (the check asks the host three times), in the same folder.
+      expect(decided!.promptRefresh!.outcome).toBe('respawned')
+      expect(starts(sid).length).toBeGreaterThan(startsBefore)
+      const rec = (await until('respawned in place', () => getSessionByClaudeId(sid), (r) => r?.process_status === 'idle'))!
+      expect(rec.cwd).toBe(repo)
+      expect(rec.folderMoved).toBeUndefined()
+      expect(rec.ownFolderMove).toBeUndefined()
+      expect(existsSync(from)).toBe(true)
+      for (const s of starts(sid).slice(startsBefore)) expect(s.payload.cwd).toBe(repo)
+    } finally {
+      daemon.heldElsewhere.delete(sid)
+    }
+  }, 150_000)
+
+  it('a session another Walnut started is never moved, and is not tried again on every compaction', async () => {
+    const { id, sid, from } = await leadInRepo('Acme lead of another Walnut')
+    daemon.journaledHomes.set(sid, '/home/someone-else/.open-walnut')
+    try {
+      await compactAndDecide(id, sid)
+      const rec = (await until('respawned in place', () => getSessionByClaudeId(sid), (r) => r?.process_status === 'idle' && !!r.ownFolderMove))!
+      expect(rec.cwd).toBe(repo)
+      expect(rec.ownFolderMove).toMatchObject({ from: repo, why: 'other-walnut' })
+      expect(starts(sid).at(-1)!.payload.cwd).toBe(repo)
+      expect(existsSync(from)).toBe(true)
+      // The next compaction knows: not due, no respawn for the folder.
+      const after = starts(sid).length
+      const rec2 = await compactAndDecide(id, sid)
+      expect(rec2!.promptRefresh!.outcome).toBe('current')
+      expect(starts(sid).length).toBe(after)
+    } finally {
+      daemon.journaledHomes.delete(sid)
+    }
+  }, 150_000)
 })

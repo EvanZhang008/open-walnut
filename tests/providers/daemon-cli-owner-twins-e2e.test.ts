@@ -220,6 +220,34 @@ describe.each(PAIRS)('cli-owner-v1: $name', ({ a: twinA, b: twinB }) => {
     expect(received()).toEqual(['one', 'two', 'three'].map((content) => ({ pid: first.pid, content })))
   }, 180_000)
 
+  it('cli-holder-v1: any daemon of the host says which process holds a session and which Walnut started it', async () => {
+    newRoot()
+    const a = await boot(twinA, 'a')
+    const b = await boot(twinB, 'b')
+    const sid = 'abababab-0000-4000-8000-0000000000ab'
+    // Asked before anything ran: nobody, no journal line.
+    expect(await rpc(b, { cmd: 'cli.holder', sid })).toMatchObject({ ok: true, holder: null, journaledHome: null })
+    const first = await start(a, sid, '', { origin: { home: '/home/me/.open-walnut', task: 't-1' } })
+    track(first)
+    expect(first).toMatchObject({ ok: true })
+    expect(await waitFor(() => liveClis(sid).length === 1)).toBe(true)
+    // The other daemon answers from the same owner records and journal.
+    for (const d of [b, a]) {
+      const reply = await rpc(d, { cmd: 'cli.holder', sid })
+      expect(reply).toMatchObject({ ok: true, holder: { kind: 'live', pid: first.pid }, journaledHome: '/home/me/.open-walnut' })
+    }
+    expect(await send(a, sid, 'exit-now')).toMatchObject({ ok: true })
+    expect(await waitFor(() => liveClis(sid).length === 0)).toBe(true)
+    let free: Record<string, unknown> = {}
+    for (let i = 0; i < 50; i++) {
+      free = await rpc(b, { cmd: 'cli.holder', sid })
+      if (free.holder === null) break
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    expect(free).toMatchObject({ ok: true, holder: null, journaledHome: '/home/me/.open-walnut' })
+    expect(await rpc(b, { cmd: 'cli.holder', sid: '../etc' })).toMatchObject({ ok: false })
+  }, 180_000)
+
   it('two daemons starting one session at once start one CLI', async () => {
     newRoot()
     const a = await boot(twinA, 'a')

@@ -1240,6 +1240,10 @@ export interface QuickStartTaskMeta {
 
 export async function quickStartSession(opts: {
   cwd: string;
+  /** The person picked `cwd` in the draft's folder picker. Without it the folder is only one the
+   *  client filled in (the task's, the last launch's), which a VP or lead does not keep: it runs
+   *  in its own task directory (server: sessions/org-own-folder.ts). */
+  cwdChosen?: boolean;
   host?: string;
   message: string;
   model?: string;

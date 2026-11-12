@@ -76,10 +76,21 @@ describe('every session start decides a VP\'s or lead\'s folder through the one 
 
   it('the spawn itself moves a resumed VP or lead first, so Restart, a cold resume and the prompt respawn all do', () => {
     const runner = read('src/providers/claude-code-session.ts')
-    const spawn = runner.slice(runner.indexOf('const startSpawn = async'), runner.indexOf('const cwdCheck = await checkCwdExists(resolvedCwd'))
+    const spawn = runner.slice(runner.indexOf('const startSpawn = async'), runner.indexOf('const spawnPromise = startSpawn()'))
     expect(spawn).toMatch(/moveToOwnFolderBeforeSpawn\(/)
-    // Before the transcript is first read where it was (the cost state).
-    expect(spawn.indexOf('moveToOwnFolderBeforeSpawn(')).toBeLessThan(spawn.indexOf('readCostState('))
+    // Who holds the transcript is asked on the link this start goes through, not some pooled one.
+    expect(spawn).toMatch(/cliHolder: t\.cliHolder/)
+    // After every check that may refuse the start (stop fence, cwd, cost state, ACP), right
+    // before the daemon is asked to start it, so a refusal there costs no move.
+    expect(spawn.indexOf('moveToOwnFolderBeforeSpawn(')).toBeGreaterThan(spawn.indexOf("stepDone('costStateMs')"))
+    expect(spawn.indexOf('moveToOwnFolderBeforeSpawn(')).toBeLessThan(spawn.indexOf('transport.start('))
+    // A start the daemon then refuses puts the conversation back.
+    const after = runner.slice(runner.indexOf('const spawnPromise = startSpawn()'), runner.indexOf('const spawnPromise = startSpawn()') + 600)
+    expect(after).toMatch(/ownMoveUndo/)
+  })
+
+  it('a node\'s workers inherit the folder it was moved from, never its own directory', () => {
+    expect(body(read('src/core/sessions/caller-placement.ts'), /export async function resolveCallerPlacement/)).toMatch(/handedDownCwd\(record\)/)
   })
 
   /** Files that name an org role and a folder together, and why that is no folder decision of their own. */

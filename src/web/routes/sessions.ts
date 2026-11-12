@@ -768,6 +768,9 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       const updatedTask = await quickStartSession({
         message: sessionMessage, messagePrefix, cwd, host, model, mode: launchMode,
         ...(launchEffort ? { effort: launchEffort } : {}),
+        // The person picked this folder in the draft (its folder picker), not a folder the client
+        // filled in: only such a folder holds a VP or lead outside its own directory (org-own-folder.ts).
+        ...((req.body as { cwdChosen?: unknown }).cwdChosen === true ? { cwdChosen: true } : {}),
         ...(startedBySid ? { callerSid: startedBySid, ...(mode ? {} : { modeImplied: true }) } : {}),
         // Hints the first message asks for (the side panel's object-context), beside the words.
         ...(requestedHints ? { hints: requestedHints } : {}),

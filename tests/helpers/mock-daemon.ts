@@ -105,6 +105,10 @@ export class MockDaemon {
   private sessions = new Map<string, DaemonSession>()
   /** What getState's quiet check answers: true makes every session read busy (a turn open on the host). */
   notQuiet = false
+  /** cli.holder (cli-holder-v1): sessions another process holds on this host (a terminal's `claude -r`), by pid. */
+  heldElsewhere = new Map<string, number>()
+  /** cli.holder: the Walnut the spawn journal names for a session, by sid. */
+  journaledHomes = new Map<string, string>()
   /** The servers a session started (ports-v1): the real host scan, rooted at this mock's CLIs. */
   private ports = createDaemonPorts({
     agentPids: () => {
@@ -344,6 +348,14 @@ export class MockDaemon {
       case 'appendUserMarker': return this.cmdAppendUserMarker(ws, id, cmd)
       case 'stop': return this.cmdStop(ws, id, cmd)
       case 'status': return this.cmdStatus(ws, id, cmd)
+      // cli-holder-v1: a session this daemon runs, or one a test says another process holds.
+      case 'cli.holder': {
+        const sid = cmd.sid as string
+        const session = this.sessions.get(sid)
+        const held = this.heldElsewhere.get(sid)
+        const holder = session && session.exitCode === null ? { kind: 'live', pid: session.pid } : held ? { kind: 'live', pid: held, unrecorded: true } : null
+        return this.sendOk(ws, id, { holder, journaledHome: this.journaledHomes.get(sid) ?? null })
+      }
       // Only the memory-only read the prompt respawn's quiet check makes (remote-session-manager.ts
       // quietForRespawn); every other getState stays unknown here, as before.
       case 'getState': {

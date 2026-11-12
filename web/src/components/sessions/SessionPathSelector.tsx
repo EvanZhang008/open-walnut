@@ -48,6 +48,9 @@ export interface QuickStartPath {
   intent?: 'fix-walnut';
   /** User opted into "create & start": quick-start mkdirs the cwd first. */
   createCwd?: boolean;
+  /** The user picked this folder in the draft (not a seed, the task's folder or the last
+   *  launch's): sent as `cwdChosen` (server: sessions/org-own-folder.ts). */
+  cwdChosen?: boolean;
 }
 
 /** Task metadata of a launch (the draft row's meta). Applied to the new task on quick-start.
