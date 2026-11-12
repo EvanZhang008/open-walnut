@@ -155,8 +155,10 @@ describe('parseQuickTask with Jev (direct-API fast model: parallel merge)', () =
     });
     expect(parse.pinTier).toBe('icebox');
     const [, questions] = decideMock.mock.calls[0] as [string, Record<string, { criteria: Record<string, string> }>];
+    // The retired Parked tier (`wait`) is never offered: focus, satellite, custom tiers and none.
+    expect(Object.keys(questions.pinTier.criteria)).not.toContain('wait');
     expect(Object.keys(questions.pinTier.criteria)).toEqual(
-      expect.arrayContaining(['focus', 'satellite', 'wait', 'icebox', '__none__']),
+      expect.arrayContaining(['focus', 'satellite', 'icebox', '__none__']),
     );
   });
 

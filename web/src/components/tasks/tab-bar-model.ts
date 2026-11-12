@@ -21,7 +21,7 @@ export interface TabBarTab {
 }
 
 /** The tabs a bar nobody has customised leaves off: the tiers and Recent. */
-export const DEFAULT_HIDDEN_TABS: readonly string[] = ['focus', 'satellite', 'wait', 'recent'];
+export const DEFAULT_HIDDEN_TABS: readonly string[] = ['focus', 'satellite', 'recent'];
 
 /**
  * Where the bar is the page's only way into the tiers (the browser extension's first page, design
@@ -30,7 +30,7 @@ export const DEFAULT_HIDDEN_TABS: readonly string[] = ['focus', 'satellite', 'wa
  */
 export const WIDE_HIDDEN_TABS: readonly string[] = ['recent'];
 /** The tiers the wide bar brings back when the person's own choice left only All and Pinned. */
-const WIDE_FLOOR: readonly string[] = ['focus', 'satellite', 'wait'];
+const WIDE_FLOOR: readonly string[] = ['focus', 'satellite'];
 
 /**
  * The tabs a wide bar hides: the person's own choice (Home's, the same key), except that it never
@@ -49,7 +49,6 @@ const BUILT_IN: readonly Omit<TabBarTab, 'custom'>[] = [
   { id: 'pinned', label: 'Pinned', title: 'Pinned: tasks you pinned to keep in front of you' },
   { id: 'focus', label: 'Focus', title: 'Focus: the current sprint, finish these first' },
   { id: 'satellite', label: 'Satellite', title: 'Satellite: needs doing soon' },
-  { id: 'wait', label: 'Parked', title: 'Parked: pinned, but set aside for now' },
   { id: 'recent', label: 'Recent', title: 'Recent: tasks you opened lately' },
 ];
 
@@ -80,7 +79,7 @@ export function tabBarTabs(customTiers: readonly { id: string; label: string }[]
 export interface TabBarChoice {
   active: string;
   counts: Partial<Record<string, number>>;
-  /** Tasks a tab holds but hides by default (parked ones): a tab with only those is not empty. */
+  /** Tasks a tab holds but hides by default (WAITING ones): a tab with only those is not empty. */
   held?: Partial<Record<string, number>>;
   hidden: readonly string[];
   hideEmpty: boolean;
@@ -95,7 +94,7 @@ export function visibleTabBarTabs(tabs: readonly TabBarTab[], { active, counts, 
     // stays findable while empty; Recent fills itself as tasks are opened, so it stays
     // (empty, it says how: a first launch after it shipped has nothing opened yet).
     if (!hideEmpty || tab.id === 'all' || tab.id === 'pinned' || tab.id === 'recent' || tab.custom) return true;
-    // A tier whose tasks are all parked still has work in it: the tab stays, so the
+    // A tier whose tasks are all waiting (WAITING) still has work in it: the tab stays, so the
     // footer's "N waiting hidden" under it can be reached (2026-10-01).
     return (counts[tab.id] ?? 0) > 0 || (held?.[tab.id] ?? 0) > 0;
   });

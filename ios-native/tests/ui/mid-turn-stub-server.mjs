@@ -1799,7 +1799,11 @@ function seedPinnedBoard(as) {
 }
 
 function tierIds(split, tier) {
-  if (['focus', 'satellite', 'backlog', 'wait'].includes(tier)) return split[`${tier}_tasks`] ?? []
+  if (tier === 'satellite') {
+    const joined = new Set([...(split.satellite_tasks ?? []), ...(split.wait_tasks ?? []), ...(split.backlog_tasks ?? [])])
+    return split.pinned_tasks.filter(id => joined.has(id))
+  }
+  if (['focus', 'backlog', 'wait'].includes(tier)) return split[`${tier}_tasks`] ?? []
   return split.custom_tier_tasks?.[tier] ?? []
 }
 

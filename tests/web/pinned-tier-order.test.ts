@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { orderPinnedTier, type PinnedTierMode, type PinnedTierRow } from '../../web/src/utils/pinned-tier-order';
+import { displayPinTier, OFFERED_PIN_TIER_POLICY } from '../../src/core/types';
 
 const DIR = path.resolve(import.meta.dirname, '../fixtures/pinned-tier-order');
 const CASES = path.join(DIR, 'cases.json');
@@ -51,7 +52,11 @@ interface Run { project: string; folder: string | null; ids: string[] }
 interface View { ids: string[]; runs: Run[]; showDone: string[] }
 
 const fixture = JSON.parse(fs.readFileSync(CASES, 'utf8')) as Fixture;
-const BUILTIN = ['focus', 'satellite', 'backlog', 'wait'];
+const BUILTIN: string[] = OFFERED_PIN_TIER_POLICY.map(({ tier }) => tier);
+const tierOf = (task: FixtureTask, customIds: Set<string>) => {
+  const tier = displayPinTier(task.focus_tier);
+  return tier && (BUILTIN.includes(tier) || customIds.has(tier)) ? tier : 'satellite';
+};
 
 const isDone = (t: FixtureTask) => t.status === 'done' || t.phase === 'COMPLETE';
 
@@ -168,27 +173,26 @@ function computeExpected() {
   const tiers = [...BUILTIN, ...board.customTiers.map((t) => t.id)];
   const byId = new Map(board.tasks.map((t) => [t.id, t]));
   const nowMs = Date.parse(board.now);
-  // useFocusBar: pinned rows by pin_order, tier from focus_tier (unregistered → satellite).
+  // Display keeps legacy pins in Satellite without changing the server's split.
   const orderedPinned = board.tasks.filter((t) => t.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
-  const tierOf = (t: FixtureTask) => (t.focus_tier && (['focus', 'backlog', 'wait'].includes(t.focus_tier) || customIds.has(t.focus_tier)))
-    ? t.focus_tier : 'satellite';
+  const displayedTier = (task: FixtureTask) => tierOf(task, customIds);
   const views: Record<string, View> = {};
   for (const scope of [...tiers, 'all']) {
-    const scoped = orderedPinned.filter((t) => scope === 'all' || tierOf(t) === scope);
+    const scoped = orderedPinned.filter((t) => scope === 'all' || displayedTier(t) === scope);
     for (const mode of ['project', 'custom'] as PinnedTierMode[]) {
       // The console orders each tier on its own. The phone's `All` scope has no console
       // twin: its custom view is the tiers in turn, its project view runs the same rule
       // over every tier's rows in tier order (Focus, Satellite, …).
       const tierRows = (want: (t: FixtureTask) => boolean) => (scope === 'all' && mode === 'custom'
-        ? tiers.flatMap((tier) => orderPinnedTier(orderedPinned.filter((t) => tierOf(t) === tier && want(t)), mode, board.projectOrder))
+        ? tiers.flatMap((tier) => orderPinnedTier(orderedPinned.filter((t) => displayedTier(t) === tier && want(t)), mode, board.projectOrder))
         : orderPinnedTier(
-          (scope === 'all' ? tiers.flatMap((tier) => orderedPinned.filter((t) => tierOf(t) === tier)) : scoped).filter(want),
+          (scope === 'all' ? tiers.flatMap((tier) => orderedPinned.filter((t) => displayedTier(t) === tier)) : scoped).filter(want),
           mode, board.projectOrder,
         ));
       const open = tierRows((t) => !isDone(t));
       // The phone's `All` scope: its custom view is the tiers in turn, its project view
       // the tiers' rows concatenated in tier order (see above).
-      const rowsOf = (tier: string) => orderedPinned.filter((t) => tierOf(t) === tier);
+      const rowsOf = (tier: string) => orderedPinned.filter((t) => displayedTier(t) === tier);
       for (const date of ['all', 'now']) {
         const visibleTask = (t: FixtureTask) => date === 'all' || !deferred(t, board.tasks, nowMs);
         const ids = open.filter((id) => visibleTask(byId.get(id)!));
@@ -234,6 +238,18 @@ describe('pinned tier order (web ⇄ iOS parity fixture)', () => {
     expect([...customIds]).toEqual(Object.keys(split.custom_tier_tasks));
   });
 
+  it('legacy tiers share the Satellite display while the old wire buckets stay intact', () => {
+    const split = expected.board.split;
+    const satellite = expected.board.views['satellite/custom/all'].ids;
+    const byId = new Map(fixture.board.tasks.map((task) => [task.id, task]));
+    expect(split.wait_tasks.length).toBeGreaterThan(0);
+    expect(split.backlog_tasks.length).toBeGreaterThan(0);
+    for (const id of [...split.wait_tasks, ...split.backlog_tasks]) {
+      if (!isDone(byId.get(id)!)) expect(satellite).toContain(id);
+    }
+    expect(Object.keys(expected.board.views).some((key) => /^(wait|backlog)\//.test(key))).toBe(false);
+  });
+
   it('a new pin lands at the foot of its project group, not at the top', () => {
     const focus = expected.board.views['focus/project/all'];
     const run = focus.runs.find((r) => r.project === 'Orchard' && r.folder === null)!;
@@ -258,8 +274,9 @@ describe('pinned tier order (web ⇄ iOS parity fixture)', () => {
     // it takes part, which is exactly why the open rows are ordered on their own.
     const { board } = fixture;
     const pinned = board.tasks.filter((t) => t.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
-    const differs = (mode: PinnedTierMode) => BUILTIN.concat(board.customTiers.map((t) => t.id)).some((tier) => {
-      const rows = pinned.filter((t) => (t.focus_tier ?? 'satellite') === tier);
+    const customIds = new Set(board.customTiers.map((tier) => tier.id));
+    const differs = (mode: PinnedTierMode) => BUILTIN.concat([...customIds]).some((tier) => {
+      const rows = pinned.filter((t) => tierOf(t, customIds) === tier);
       const openIds = new Set(rows.filter((t) => !isDone(t)).map((t) => t.id));
       const together = orderPinnedTier(rows, mode, board.projectOrder).filter((id) => openIds.has(id));
       return together.join() !== orderPinnedTier(rows.filter((t) => !isDone(t)), mode, board.projectOrder).join();

@@ -42,7 +42,8 @@ final class BoardTierScopeTests: XCTestCase {
     //
     //   focus     → marina (f1, f3), acme (f2)
     //   satellite → zephyr (s1), Inbox (s2)
-    //   backlog   → marina (b1)
+    //   ct_later  → marina (b1), a custom tier ("Later"): the built-ins offered are only
+    //               Focus and Satellite, so the third tier of the fixture is a custom one
 
     private var fixtureTasks: [WalnutTask] {
         [
@@ -62,12 +63,15 @@ final class BoardTierScopeTests: XCTestCase {
 
     private var fixtureTierOf: [String: String] {
         ["f1": "focus", "f2": "focus", "f3": "focus",
-         "s1": "satellite", "s2": "satellite", "b1": "backlog"]
+         "s1": "satellite", "s2": "satellite", "b1": "ct_later"]
     }
 
     private var fixtureTierOrder: [String: [String]] {
-        ["focus": ["f1", "f2", "f3"], "satellite": ["s1", "s2"], "backlog": ["b1"]]
+        ["focus": ["f1", "f2", "f3"], "satellite": ["s1", "s2"], "ct_later": ["b1"]]
     }
+
+    /// The fixture's custom tier, registered on every assembly below.
+    private static let later = FocusTierInfo(id: "ct_later", label: "Later")
 
     private static let focusIds: Set<String> = ["f1", "f2", "f3"]
 
@@ -81,7 +85,7 @@ final class BoardTierScopeTests: XCTestCase {
     ) -> BoardAssembly {
         BoardModel.assemble(
             tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: tierOrder,
-            customTiers: customTiers, query: "", grouping: grouping,
+            customTiers: [Self.later] + customTiers, query: "", grouping: grouping,
             dateFilter: dateFilter, shownDoneTiers: shownDone, folders: folders,
             scope: scope, now: Self.now
         )
@@ -193,10 +197,10 @@ final class BoardTierScopeTests: XCTestCase {
         )
 
         // 3. Each heading's COUNT is that project's contribution to THIS tier, not a
-        //    board-wide project total: marina holds f1+f3 here and b1 in Backlog, so a
+        //    board-wide project total: marina holds f1+f3 here and b1 in Later, so a
         //    board-wide count would read 3.
         XCTAssertEqual(bands.first { $0.bandId == "proj:marina" }?.count, 2,
-            "marina's heading must count its FOCUS rows (f1, f3) — b1 is Backlog's")
+            "marina's heading must count its FOCUS rows (f1, f3) — b1 is Later's")
         XCTAssertEqual(bands.first { $0.bandId == "proj:acme" }?.count, 1)
         XCTAssertEqual(
             bands.reduce(0) { $0 + $1.count }, Self.focusIds.count,
@@ -216,14 +220,14 @@ final class BoardTierScopeTests: XCTestCase {
                 groupId: "g_docs", label: "Docs", memberIds: ["f3"], project: "marina",
                 parentId: "g_ship"
             ),
-            // A folder holding only a BACKLOG row: nothing for the Focus board to draw.
+            // A folder holding only a LATER row: nothing for the Focus board to draw.
             TaskFolder(groupId: "g_later", label: "Later", memberIds: ["b1"], project: "marina"),
         ])
         let bands = board(scope: "focus", grouping: .project, folders: folders)
 
         XCTAssertEqual(
             bands.map(\.bandId), ["proj:acme", "folder:g_ship", "folder:g_docs"],
-            "the tier's folders nest in pre-order, and Backlog's folder is not here"
+            "the tier's folders nest in pre-order, and Later's folder is not here"
         )
         XCTAssertEqual(bands.first { $0.bandId == "folder:g_ship" }?.nest?.depth, 1)
         XCTAssertEqual(bands.first { $0.bandId == "folder:g_docs" }?.nest?.depth, 2,
@@ -239,7 +243,7 @@ final class BoardTierScopeTests: XCTestCase {
     /// `focus` and `proj:marina` are different id spaces. That reasoning dies with the
     /// rail: the rail only ever holds tier ids now.
     func testSwitchingGroupingKeepsTheTierScope() {
-        for scope in ["focus", "satellite", "backlog"] {
+        for scope in ["focus", "satellite", "ct_later"] {
             let expected = Set(fixtureTierOf.filter { $0.value == scope }.map { $0.key })
             for grouping in BoardGrouping.allCases {
                 XCTAssertEqual(
@@ -255,7 +259,7 @@ final class BoardTierScopeTests: XCTestCase {
         // Said once more as the property itself: the POPULATION is grouping-independent
         // within a scope, which is the invariant the whole-board version of this case
         // (`testSwitchingGroupingNeverChangesThePopulation`) states one scope wider.
-        for scope in [nil, "focus", "satellite", "backlog"] as [String?] {
+        for scope in [nil, "focus", "satellite", "ct_later"] as [String?] {
             XCTAssertEqual(
                 rowIds(board(scope: scope, grouping: .tier)),
                 rowIds(board(scope: scope, grouping: .project)),
@@ -322,7 +326,7 @@ final class BoardTierScopeTests: XCTestCase {
                         // does carry are the board's tiers, in tier order.
                         XCTAssertEqual(
                             chips.compactMap(\.bandId),
-                            ["focus", "satellite", "backlog", "ct_deep"],
+                            ["focus", "satellite", "ct_later", "ct_deep"],
                             "\(state): the rail is not the tier rail"
                         )
                         XCTAssertNil(chips.first?.bandId, "\(state): All still leads")
@@ -362,7 +366,7 @@ final class BoardTierScopeTests: XCTestCase {
         XCTAssertEqual(chips.first?.count, 6, "All counts the whole pinned board")
         XCTAssertEqual(chips.first { $0.bandId == "focus" }?.count, 3)
         XCTAssertEqual(chips.first { $0.bandId == "satellite" }?.count, 2)
-        XCTAssertEqual(chips.first { $0.bandId == "backlog" }?.count, 1)
+        XCTAssertEqual(chips.first { $0.bandId == "ct_later" }?.count, 1)
     }
 
     /// The `Now` filter is a PER-ROW predicate on the row's own start date, so it
@@ -518,7 +522,7 @@ final class BoardTierScopeTests: XCTestCase {
     /// WHOLE board and the lit chip falls back to `All` — the bar and the rows agree.
     func testAnUnknownOrEmptyScopeFallsBackToTheWholeBoard() {
         let everything = rowIds(board(scope: nil, grouping: .tier))
-        for stale in ["ct_gone99", "wait", "proj:marina", "folder:g_docs", ""] {
+        for stale in ["ct_gone99", "wait", "backlog", "proj:marina", "folder:g_docs", ""] {
             for grouping in BoardGrouping.allCases {
                 XCTAssertEqual(
                     rowIds(board(scope: stale, grouping: grouping)), everything,
@@ -528,9 +532,8 @@ final class BoardTierScopeTests: XCTestCase {
                     "\(grouping.rawValue): \"\(stale)\" must read as All in the bar")
             }
         }
-        // A KNOWN tier with no rows is the same case: `wait` is a real built-in tier the
-        // fixture has no rows for, and it has no chip either.
-        XCTAssertNil(rail(grouping: .tier).first { $0.bandId == "wait" },
-            "an empty tier has no chip, for the same reason it has no heading")
+        // A retired built-in (`wait`, `backlog`: still stored, never offered) has no chip.
+        XCTAssertNil(rail(grouping: .tier).first { $0.bandId == "wait" || $0.bandId == "backlog" },
+            "a retired tier has no chip")
     }
 }

@@ -188,7 +188,8 @@ extension TasksStore {
     /// the pin landed ("Pinned · Focus") via the toast surface. Best-effort:
     /// failures only log — quick-add's task itself already exists.
     func applyPin(taskId: String, tier: String?) async {
-        let landed = tier ?? "satellite"
+        // Where the row is SHOWN; the wire below still takes `tier` as given.
+        let landed = PinTierPolicy.displayTier(tier) ?? PinTierPolicy.defaultTier
         taskTiers[taskId] = landed
         // Foot of the band, matching the server's pin_order = max + 1 (see
         // TasksStore.tierOrder) so the row doesn't hop once the split lands.

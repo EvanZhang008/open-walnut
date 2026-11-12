@@ -2,8 +2,8 @@
  * The rule helpers behind applyDraftParse (task fields: tier, priority, start/end,
  * due; the 'clear' revert of project/cwd), the ownership types, and the ledger's
  * suggestDiff. Kept apart so draft-column.ts stays readable; draft-column.ts
- * re-exports everything public, so import from there. Pure: imports only types
- * and the meta constants, so there is no runtime cycle with draft-column.ts.
+ * re-exports everything public, so import from there. Pure: imports only types,
+ * the meta constants and the tier fold, so there is no runtime cycle with draft-column.ts.
  *
  * The rules (spec: every decision Walnut made is visible):
  *  · A proposed value is written and badged (✦) unless a user or a seed owns the
@@ -18,6 +18,7 @@
 
 import type { QuickStartTaskMeta } from './SessionPathSelector';
 import { DEFAULT_META, TIER_OPTIONS } from './task-meta-constants';
+import { shownTier } from '@/api/focus';
 import type { QuickTaskParse } from '@/api/tasks';
 import type { DraftAiField, DraftColumn } from './draft-column';
 
@@ -86,7 +87,8 @@ export const DRAFT_TASK_FIELDS: readonly DraftTaskField[] = ['pinTier', 'priorit
 
 const BUILTIN_TIERS: ReadonlySet<string> = new Set(TIER_OPTIONS.map((t) => t.value));
 
-/** Default `tierKnown`: the four built-in tiers only. */
+/** Default `tierKnown`: the built-in tiers the board offers (Focus, Satellite) only. A
+ *  retired one (Parked) is folded to Satellite before it is asked (shownTier). */
 export function builtinTierKnown(id: string): boolean {
   return BUILTIN_TIERS.has(id);
 }
@@ -148,7 +150,9 @@ function opinionFor(
   field: DraftTaskField, parse: DraftParseInput, opts: ApplyDraftParseOpts,
 ): string | undefined | null {
   if (field === 'pinTier') {
-    const v = parse.pinTier?.trim();
+    // The server's parse may still name the retired Parked tier: it is proposed as Satellite,
+    // where the board draws it.
+    const v = shownTier(parse.pinTier?.trim());
     if (!v) return undefined;
     const known = (opts.tierKnown ?? builtinTierKnown)(v);
     if (known === 'unknown') return null;
@@ -309,7 +313,7 @@ export function suggestDiff(
 ): SuggestDiffEntry[] {
   const known = opts.tierKnown ?? builtinTierKnown;
   const { meta } = draft;
-  const tier = meta.pinTier;
+  const tier = shownTier(meta.pinTier);
   const chosen: Partial<Record<DraftAiField, string | undefined>> = {
     project: draft.project || undefined,
     cwd: draft.cwd || undefined,

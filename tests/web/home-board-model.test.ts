@@ -66,7 +66,7 @@ describe('Home board grouping', () => {
 
   it('offers empty custom tiers, Inbox and unpinned, but no hidden org or plugin tasks', () => {
     const columns = buildHomeBoard([task('inbox', { project: '' }), task('hidden', { plugin_only: 'plugin' }), task('vp', { org_role: 'lead' })], [{ id: 'ct_test', label: 'Release' }], 'pin');
-    expect(columns.map(c => c.id)).toEqual(['focus', 'satellite', 'wait', 'ct_test', 'unpinned']);
+    expect(columns.map(c => c.id)).toEqual(['focus', 'satellite', 'ct_test', 'unpinned']);
     expect(columns.find(c => c.id === 'ct_test')?.count).toBe(0);
     expect(columns.at(-1)?.projects[0].label).toBe('Inbox');
     expect(columns.at(-1)?.count).toBe(1);

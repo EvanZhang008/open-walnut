@@ -483,7 +483,7 @@ enum BoardModel {
     /// pinned id missing from every bucket is satellite by definition"), so a pin
     /// whose split has not landed yet lands in the band the split is about to put
     /// it in — the row does not visibly hop when the authoritative split arrives.
-    static let defaultTierId = "satellite"
+    static let defaultTierId = PinTierPolicy.defaultTier
 
     // MARK: - What is ON this board (the PINNED working set, and nothing else)
     //
@@ -514,10 +514,11 @@ enum BoardModel {
     ///     of the split (the `taskId → tier` map, or the per-tier order arrays).
     ///     Both are consulted because dropping an id one half names and the other
     ///     has not caught up with is exactly how a row goes missing.
-    ///   - knownTiers: the tier ids the board actually renders (built-ins plus the
-    ///     registered custom tiers). A tier id outside that set — a custom tier
-    ///     deleted while a task still pointed at it — folds to the default rather
-    ///     than naming a band nothing draws, which would drop the row silently.
+    ///   - knownTiers: the tier ids the board actually renders (`PinTierPolicy.choices`:
+    ///     Focus, Satellite and the registered custom tiers). A tier id outside that
+    ///     set (a custom tier deleted while a task still pointed at it, or a retired
+    ///     Backlog or Wait an older client wrote) folds to the default rather than
+    ///     naming a band nothing draws, which would drop the row silently.
     static func boardTier(
         pinned: Bool?, splitTier: String?, knownTiers: Set<String>
     ) -> String? {
@@ -993,9 +994,9 @@ enum BoardModel {
         now: Date = AppClock.now()
     ) -> BoardAssembly {
         let sessionOf = latestSessionByTask(sessions)
-        let tiers: [(id: String, label: String)] =
-            TasksStore.builtinTiers.map { ($0.id, $0.label) }
-            + customTiers.map { ($0.id, $0.label) }
+        // The bands the board draws: the one offer/display policy, so a retired tier
+        // has no band and its rows fold into Satellite through `boardTier`.
+        let tiers = PinTierPolicy.choices(custom: customTiers)
         let knownTiers = Set(tiers.map(\.id))
 
         // What the SPLIT says, from both of its halves at once. The order arrays
@@ -1046,8 +1047,8 @@ enum BoardModel {
             guard let tier = boardTier(
                 pinned: task.pinned, splitTier: splitTierOf[task.id], knownTiers: knownTiers
             ) else { continue }
-            // A WAITING task leaves the bands while `showWaiting` is off, in every tier
-            // the Parked shelf included, as on the console (its default Status is
+            // A WAITING task leaves the bands while `showWaiting` is off, in every tier,
+            // as on the console (its default Status is
             // TODO / IN_PROGRESS / NEED_ACTION). Kept aside for the Waiting / snoozed
             // section: it is in no band, no chip count and no fold. A session-only row
             // below never stands in for it, because the projection has the task.
@@ -1092,7 +1093,8 @@ enum BoardModel {
             // task is known-unpinned. Its own flag outranks a session's memory.
             guard !projectionIds.contains(taskId) else { continue }
             let tier = boardTier(
-                pinned: true, splitTier: splitTierOf[taskId] ?? session.focusTier,
+                pinned: true,
+                splitTier: splitTierOf[taskId] ?? PinTierPolicy.displayTier(session.focusTier),
                 knownTiers: knownTiers
             ) ?? defaultTierId
             rowById[taskId] = BoardRow(
@@ -1114,15 +1116,15 @@ enum BoardModel {
         // construction — feeding it the rendered bands is what turned it into a list of
         // projects and folders under `By project`.
         // The rows the Waiting / snoozed section holds instead of a band, per tier. A tier
-        // whose every row is there keeps its band and chip (the Parked shelf most of all),
+        // whose every row is there keeps its band and chip,
         // exactly like a tier of folded completions, so a reader scoped to it keeps the scope.
         //
         // Without the sections (a live query) that is the WAITING rows set aside above that
         // the query and date filter would show. With them it is every row the section draws:
         // the WAITING rows whatever their start date, and the rows "Now" defers because their
-        // start date is still to come. Counting only the admitted WAITING rows dropped the
-        // Parked chip whenever its tasks were snoozed to a later day, which is what a parked
-        // task usually is (2026-11-10: the demo's only Parked task starts on its ship day,
+        // start date is still to come. Counting only the admitted WAITING rows dropped a
+        // tier's chip whenever its tasks were snoozed to a later day, which is what a waiting
+        // task usually is (2026-11-10: the demo's only such task starts on its ship day,
         // always at least a day out, so its chip was missing on every day).
         let sectionsHoldRows = statusSections && query.isEmpty
         var waitingByTier: [String: Int] = [:]
@@ -1947,39 +1949,21 @@ enum BoardModel {
         return ids
     }
 
-    // MARK: - Tier tokens (move tier from the row's long-press menu)
+    // MARK: - Tier tokens (pin or move tier from a row's long-press menu)
 
-    /// One tier choice for a row.
+    /// One tier choice for a row. There is no Unpin token: a tap on the selected
+    /// tier unpins (`PinTierPolicy.writes`).
     struct TierToken: Identifiable, Equatable {
         let tierId: String
         let label: String
         let selected: Bool
-        /// The "Unpin" token — takes the task off the board entirely.
-        let isUnpin: Bool
-        var id: String { isUnpin ? "unpin" : tierId }
+        var id: String { tierId }
     }
 
-    /// What a tapped token should do. Returned rather than performed so the rule
-    /// is testable and the view stays a dumb caller.
-    enum TierAction: Equatable {
-        case setTier(String)
-        case unpin
-        /// The token that is already selected — spend no request on it.
-        case noop
-    }
-
-    static func tokens(current: String?, choices: [(id: String, label: String)]) -> [TierToken] {
-        var tokens = choices.map {
-            TierToken(tierId: $0.id, label: $0.label, selected: $0.id == current, isUnpin: false)
-        }
-        tokens.append(TierToken(tierId: "", label: "Unpin", selected: false, isUnpin: true))
-        return tokens
-    }
-
-    static func action(for token: TierToken, current: String?) -> TierAction {
-        if token.isUnpin { return current == nil ? .noop : .unpin }
-        if token.tierId == current { return .noop }
-        return .setTier(token.tierId)
+    /// The menu's tokens: one per offered choice, the `selected` one checked.
+    /// `selected` is `PinTierPolicy.selected` (nil = not pinned, so none is checked).
+    static func tokens(selected: String?, choices: [(id: String, label: String)]) -> [TierToken] {
+        choices.map { TierToken(tierId: $0.id, label: $0.label, selected: $0.id == selected) }
     }
 }
 

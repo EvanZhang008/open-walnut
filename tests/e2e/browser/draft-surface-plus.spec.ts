@@ -109,18 +109,18 @@ async function claimFolder(
 
 // ── 1. A single-tier tab has its own session "+" (GAP-1) ────────────────────
 
-test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async ({ page }) => {
+test('the Satellite tab carries a tier "+" that opens a draft preset to Satellite', async ({ page }) => {
   // The tier TABS were the gap: in the stacked All view each tier owns a sublabel
   // row that carries a "+", but a solo tier tab renders no sublabel (the tab itself
   // names the tier), so there was no route to a session from the tab a user
   // actually works in. The control now lives in that tab's view-mode bar.
   //
-  // WAIT, not Focus: every draft opens on Focus (there is no sticky tier pref to
+  // SATELLITE, not Focus: every draft opens on Focus (there is no sticky tier pref to
   // preset any more), so a Focus outcome could not tell "the seed was applied" from
-  // "it was already there". Wait is not the default, so a task landing in Wait can
-  // only mean the tab's own tier reached meta.pinTier.
+  // "it was already there". Satellite is not the default, so a task landing in Satellite
+  // can only mean the tab's own tier reached meta.pinTier.
   await page.setViewportSize({ width: 2400, height: 1000 })
-  await presetPanelView(page, { section: 'wait', project: '' })
+  await presetPanelView(page, { section: 'satellite', project: '' })
   await loadHome(page)
 
   // The bar exists BECAUSE this is a single-tier tab (the All view has none), so
@@ -149,7 +149,7 @@ test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async 
   // The menu closed behind the choice: it must not sit over the fresh column.
   await expect(page.getByTestId('plus-menu')).toHaveCount(0)
 
-  // The draft column draws NO tier control (the Focus / Satellite / Wait
+  // The draft column draws NO tier control (the tier picker
   // row was removed 2026-09-15), so the seed is invisible until it commits: and
   // nothing in the column may pretend otherwise.
   await expect(panel.locator('.pin-tier-options')).toHaveCount(0)
@@ -161,9 +161,9 @@ test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-01-tier-tab-plus.png`, fullPage: false })
 
   // THE assertion, read off the OUTCOME the user sees on the board: the task the
-  // seeded draft creates lands in Wait, not in the Focus default. Committed through
+  // seeded draft creates lands in Satellite, not in the Focus default. Committed through
   // "Save as todo" (needs no folder, spawns no CLI).
-  await expectSeededTierLands(page, panel, 'wait', `wait tab seed probe ${Date.now()}`)
+  await expectSeededTierLands(page, panel, 'satellite', `satellite tab seed probe ${Date.now()}`)
 })
 
 test('every built-in tier tab exposes its own "+" with its own tier', async ({ page }) => {
@@ -176,7 +176,7 @@ test('every built-in tier tab exposes its own "+" with its own tier', async ({ p
   await loadHome(page)
 
   for (const [section, label] of [
-    ['focus', 'Focus'], ['satellite', 'Satellite'], ['wait', 'Parked'],
+    ['focus', 'Focus'], ['satellite', 'Satellite'],
   ] as const) {
     const tab = page.locator('.todo-section-tabs [role="tab"]', { hasText: label }).first()
     await tab.click()
@@ -189,10 +189,11 @@ test('every built-in tier tab exposes its own "+" with its own tier', async ({ p
     expect(hovered, `the ${label} "+" was measured under the pointer`).toBe(false)
     expect(opacity, `the ${label} "+" is invisible at rest`).toBeGreaterThan(0.2)
     // `section` is the tier id the seed must carry, asserted through the label
-    // above, which tierDisplayLabel derives from exactly that id (`wait` is the one
-    // id whose label is a different word: Parked).
-    expect(section === 'wait' ? 'parked' : section).toBe(label.toLowerCase())
+    // above, which tierDisplayLabel derives from exactly that id.
+    expect(section).toBe(label.toLowerCase())
   }
+  // The retired Parked tier has no tab to carry a "+".
+  await expect(page.locator('.todo-section-tabs [role="tab"]', { hasText: 'Parked' })).toHaveCount(0)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-02-all-tier-tabs-plus.png`, fullPage: false })
 })

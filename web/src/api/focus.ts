@@ -1,10 +1,30 @@
 import { apiGet, apiPost, apiPut, apiDelete } from './client';
+import { DISPLAY_RETIRED_PIN_TIERS, OFFERED_PIN_TIER_POLICY, displayPinTier } from '@open-walnut/core';
 
-/** Built-in tiers. Custom tiers are ids of the form `ct_<8 chars>`. The
- *  retired Backlog tier (2026-08 to 2026-10) is 'wait' now: the server folds
- *  the old name on read and write, so no task object carries it any more. */
-export type BuiltinTier = 'focus' | 'satellite' | 'wait';
-export const BUILTIN_TIERS: readonly BuiltinTier[] = ['focus', 'satellite', 'wait'];
+/** Built-in tiers the board draws and offers. Custom tiers (a plugin's, such as a
+ *  Virtual Teammate's, included) are ids of the form `ct_<8 chars>`. */
+export type BuiltinTier = 'focus' | 'satellite';
+export const BUILTIN_TIERS: readonly BuiltinTier[] = ['focus', 'satellite'];
+
+/**
+ * Built-in tier ids the board no longer draws or offers (2026-11-11, the user: "just have 2
+ * focus, satellite, remove park"): Parked (`wait`) and Backlog, which the server folds into
+ * `wait`. One definition, the core's DISPLAY_RETIRED_PIN_TIERS. The server still stores and
+ * accepts them, so an older client, the phone app, a plugin or an agent may keep writing them;
+ * every web surface shows such a task in Satellite (`shownTier`) and offers neither. This is the
+ * WAITING phase's neighbour by name only: nothing here reads or changes a task's phase.
+ */
+export const RETIRED_TIERS: ReadonlySet<string> = DISPLAY_RETIRED_PIN_TIERS;
+
+export function isRetiredTier(tier: string | null | undefined): boolean {
+  return !!tier && RETIRED_TIERS.has(tier);
+}
+
+/** The tier a stored or proposed tier value is drawn in: a retired one reads Satellite. */
+export const shownTier = displayPinTier;
+
+/** The built-in tiers' policy lines (label, guidance) as the board offers them. */
+export const BOARD_TIER_POLICY = OFFERED_PIN_TIER_POLICY;
 
 /**
  * A tier is a built-in name or a custom tier id. The `string & {}` arm keeps
@@ -31,6 +51,8 @@ export interface FocusBarData {
   satellite_tasks: string[];
   /** Retired tier: always empty from a current server, folded into wait_tasks. */
   backlog_tasks?: string[];
+  /** Tasks stored in the retired Parked tier (`wait`). Still on the wire for older clients;
+   *  the web keeps the stored value and draws them in Satellite (RETIRED_TIERS). */
   wait_tasks: string[];
   /** Per custom-tier-id pinned task ids (pin order). Absent on old servers. */
   custom_tier_tasks?: Record<string, string[]>;

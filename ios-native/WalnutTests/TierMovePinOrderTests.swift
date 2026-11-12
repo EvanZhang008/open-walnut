@@ -12,10 +12,15 @@ final class TierMovePinOrderTests: XCTestCase {
     /// Pin order f1 s1 f2 s2 f3 s3: Focus and Satellite interleave.
     private let pinned = ["f1", "s1", "f2", "s2", "f3", "s3"]
 
-    private func split(focus: [String], satellite: [String], backlog: [String] = []) -> FocusTierResult {
+    /// A custom tier (a plugin's or one made on the desktop): the board's third band here.
+    private let later = FocusTierInfo(id: "ct_later", label: "Later")
+
+    private func split(
+        focus: [String], satellite: [String], later: [String] = [], backlog: [String] = []
+    ) -> FocusTierResult {
         FocusTierResult(
             pinnedTasks: pinned, focusTasks: focus, satelliteTasks: satellite,
-            backlogTasks: backlog, waitTasks: [], customTierTasks: [:]
+            backlogTasks: backlog, waitTasks: [], customTierTasks: later.isEmpty ? [:] : ["ct_later": later]
         )
     }
 
@@ -31,7 +36,7 @@ final class TierMovePinOrderTests: XCTestCase {
     private func rows(_ store: TasksStore, _ band: String) -> [String] {
         BoardModel.bands(
             tasks: store.tasks, sessions: [], tierOf: store.taskTiers,
-            tierOrder: store.taskTierOrder, customTiers: [], shownDoneTiers: [band]
+            tierOrder: store.taskTierOrder, customTiers: [later], shownDoneTiers: [band]
         ).first { $0.bandId == band }?.rows.map(\.id) ?? []
     }
 
@@ -90,11 +95,27 @@ final class TierMovePinOrderTests: XCTestCase {
     }
 
     func testAMoveIntoAnEmptyBandAndBack() async {
-        let (store, mock, gate) = board(answer: split(focus: ["f1", "f3"], satellite: ["s1", "s2", "s3"], backlog: ["f2"]))
-        let seen = await move("f2", to: "backlog", in: store, mock, gate)
+        let (store, mock, gate) = board(answer: split(focus: ["f1", "f3"], satellite: ["s1", "s2", "s3"], later: ["f2"]))
+        let seen = await move("f2", to: "ct_later", in: store, mock, gate)
         XCTAssertEqual(seen.optimistic, ["f2"])
         XCTAssertEqual(seen.answered, ["f2"])
         XCTAssertEqual(rows(store, "focus"), ["f1", "f3"])
+    }
+
+    /// An older caller may still write a retired tier. The wire carries it as asked, and
+    /// the row lands in Satellite by pin order, where the server's split will show it.
+    func testAMoveToARetiredTierLandsInSatelliteByPinOrder() async {
+        let (store, mock, gate) = board(answer: split(focus: ["f1", "f3"], satellite: ["s1", "s2", "s3"], backlog: ["f2"]))
+        let request = Task { await store.setTier(taskId: "f2", tier: "backlog") }
+        while mock.callCount("setTaskFocusTier") == 0 { await Task.yield() }
+        XCTAssertEqual(rows(store, "satellite"), ["s1", "f2", "s2", "s3"])
+        XCTAssertEqual(store.tierId(for: "f2"), "satellite")
+        XCTAssertEqual(mock.lastCall("setTaskFocusTier")?.args, ["f2", "backlog"], "the wire is unchanged")
+        gate.open()
+        let error = await request.value
+        XCTAssertNil(error)
+        XCTAssertEqual(rows(store, "satellite"), ["s1", "f2", "s2", "s3"], "the answer does not move it")
+        XCTAssertTrue(rows(store, "backlog").isEmpty, "no Backlog band is drawn")
     }
 
     /// A task pinned since the last split has no place in it yet: it is the newest

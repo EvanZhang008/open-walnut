@@ -219,7 +219,7 @@ test('the picker picks a folder and a host; tier and engine are in More and the 
   await expect(p.getByRole('group', { name: 'Host' })).toBeVisible()
   await expect(p.locator('.sps-host-filter-label')).toHaveText('Host')
   await expect(p.locator('.pin-tier-options, .provider-rail-item, .draft-more-btn')).toHaveCount(0)
-  await expect(p.getByRole('button', { name: /^(More|Claude|Codex|Focus|Satellite|Parked)$/ })).toHaveCount(0)
+  await expect(p.getByRole('button', { name: /^(More|Claude|Codex|Focus|Satellite)$/ })).toHaveCount(0)
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-picker.png`, clip: await p.boundingBox() ?? undefined })
   // A chip click hands the keys back to the search box (WebKit never focuses a
   // clicked button), so typing and Escape still reach the picker.
@@ -232,9 +232,11 @@ test('the picker picks a folder and a host; tier and engine are in More and the 
 
   const panel = page.locator('.main-page-session-column .draft-session-panel')
   const menu = await openDraftSettings(panel)
-  for (const tier of ['Focus', 'Satellite', 'Parked']) {
+  for (const tier of ['Focus', 'Satellite']) {
     await expect(menu.locator('.task-kebab-tier-btn', { hasText: tier })).toBeVisible()
   }
+  // The retired Parked tier is offered nowhere (2026-11-11).
+  await expect(menu.locator('.task-kebab-tier-btn', { hasText: 'Parked' })).toHaveCount(0)
   // A fresh draft still lands in Focus.
   await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Focus/)
   const menuBox = await menu.boundingBox()

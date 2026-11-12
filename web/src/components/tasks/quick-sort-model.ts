@@ -11,6 +11,7 @@ import { taskUserState } from '@/utils/session-status';
 import { parseDateLocal } from '@/components/common/DatePicker';
 import type { CustomTierDef } from '@/api/focus';
 import { boardMoveIds, homeBoardTier } from './home-board-model';
+import { shownTier } from '@/api/focus';
 import { resolveParentRef } from './task-tree-index';
 
 export type SortView = 'tasks' | 'projects';
@@ -65,7 +66,7 @@ export function taskAges(t: Task, now = Date.now()): TaskAges {
 /** The card's tags in plain words; a day or more only. */
 export function ageTags(tier: string, tierLabel: string, ages: TaskAges): { kind: 'tier' | 'idle'; text: string }[] {
   const n = (d: number) => `${d} ${d === 1 ? 'day' : 'days'}`;
-  const where = tier === 'unpinned' ? 'Unsorted' : tier === 'wait' ? 'Parked' : `In ${tierLabel}`;
+  const where = tier === 'unpinned' ? 'Unsorted' : `In ${tierLabel}`;
   // The same span twice reads as one fact: nothing happened since it landed there.
   if (ages.inTier >= 1 && ages.idle === ages.inTier) return [{ kind: 'idle', text: `${where}, no action for ${n(ages.idle)}` }];
   const tags: { kind: 'tier' | 'idle'; text: string }[] = [];
@@ -135,7 +136,8 @@ export interface QueueOptions {
 }
 
 function matches(t: Task, filter: SortFilter, custom: readonly CustomTierDef[], folders: ReadonlySet<string> | null | undefined, now: number, withProject = true): boolean {
-  if (filter.tiers.length && !filter.tiers.includes(homeBoardTier(t, custom))) return false;
+  // A filter kept from before Parked was retired names `wait`: it reads Satellite, its tasks' column.
+  if (filter.tiers.length && !filter.tiers.some((id) => shownTier(id) === homeBoardTier(t, custom))) return false;
   if (withProject && filter.project !== null && projectKey(t) !== filter.project) return false;
   if (folders && !(t.group_id && folders.has(t.group_id))) return false;
   return !filter.idleDays || taskAges(t, now).idle >= filter.idleDays;

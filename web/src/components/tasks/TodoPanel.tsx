@@ -172,7 +172,7 @@ import { inferTierDropProject, resolveMoveMigration, sourceDisplayName } from '.
 import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionTabs';
 import { DEFAULT_HIDDEN_TABS, allViews, tabBarTabs } from './tab-bar-model';
 import { FLAT_BATCH_KEY, FRESH_BATCH, LIST_BATCH, cutListBatch, isPastBatch, type ListBatchState } from './list-batch';
-import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
+import { BUILTIN_TIERS, isBuiltinTier, isRetiredTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useInlineTitleEdit } from './useInlineTitleEdit';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { openTaskOnHome } from '@/utils/open-session';
@@ -186,9 +186,9 @@ type Task = CoreTask & {
   is_blocked?: boolean;
 };
 
-/** A tier view (Focus, Satellite, Parked or a custom tier). */
+/** A tier view (Focus, Satellite or a custom tier). */
 function isTierSection(s: string): boolean {
-  return s === 'focus' || s === 'satellite' || s === 'wait' || s.startsWith('ct_');
+  return s === 'focus' || s === 'satellite' || s.startsWith('ct_');
 }
 
 /** Inline split-pane target. Project is the single grouping layer, so 'project' is
@@ -242,13 +242,14 @@ interface TodoPanelProps {
   onSetDate?: (taskId: string, date: string | null) => void;
   onSetStartDate?: (taskId: string, date: string | null) => void;
   pinnedTaskIds?: Set<string>;
+  /** Focus members. Satellite is every other pin outside a custom tier, so a pin stored in the
+   *  retired Parked tier (`wait`, RETIRED_TIERS) draws there. */
   focusTaskIds?: Set<string>;
-  waitTaskIds?: Set<string>;
   /** User-defined tier registry (Settings → Focus Tiers), registry order. */
   customTiers?: CustomTierDef[];
   /** False until the registry's first fetch resolves — gates stale-tab self-heal. */
   customTiersLoaded?: boolean;
-  /** Per custom-tier-id membership sets (mirrors focusTaskIds/waitTaskIds). */
+  /** Per custom-tier-id membership sets (mirrors focusTaskIds). */
   customTierIds?: Record<string, Set<string>>;
   /** When true, suppress opening the detail panel for the focused task (e.g. chat task-ref clicks). */
   suppressDetail?: boolean;
@@ -525,7 +526,7 @@ class TaskPointerSensor extends PointerSensor {
   }));
 }
 
-/** Human label for a tier value: a built-in's board label (`wait` reads Parked), a
+/** Human label for a tier value: a built-in's board label (a retired one reads Satellite), a
  *  custom id (`ct_*`) resolved through the registry. Same rule as MainPage.tierLabel. */
 function tierDisplayLabel(tier: string, customTiers?: CustomTierDef[]): string {
   return tierLabelOf(tier, customTiers);
@@ -604,9 +605,9 @@ function readSection(): TodoSection {
     // accepted here — the stale-tab effect in TodoPanel switches back to
     // 'focus' once the registry loads and the id isn't in it.
     if (v && ((TODO_SECTIONS as readonly string[]).includes(v) || v.startsWith('ct_'))) return v as TodoSection;
-    // The retired Backlog tab: its tasks are in Parked now, so that is where the
-    // view goes too.
-    if (v === 'backlog') return 'wait';
+    // The retired Parked tab (and Backlog before it): their tasks draw in Satellite now,
+    // so that is where the view goes too, and the kept choice says so from now on.
+    if (v && isRetiredTier(v)) { persistSection('satellite'); return 'satellite'; }
   } catch { /* ignore */ }
   return 'all';
 }
@@ -2171,7 +2172,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
       {isPinned && pinnedTier && (
         <span
           className={`todo-recent-tier-dot todo-tier-icon-${isBuiltinTier(pinnedTier) ? pinnedTier : 'custom'}`}
-          title={`Pinned \u2014 ${pinnedTierLabel ?? (pinnedTier === 'focus' ? 'Focus' : pinnedTier === 'wait' ? 'Parked' : 'Satellite')}`}
+          title={`Pinned \u2014 ${pinnedTierLabel ?? (pinnedTier === 'focus' ? 'Focus' : 'Satellite')}`}
         >
           {ICONS.tierIcon(pinnedTier)}
         </span>
@@ -2239,7 +2240,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionIds, openSessionTaskIds, openInWindowTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionIds, openSessionTaskIds, openInWindowTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
   const pinUndo = useTaskUndo();
   const pinBar = useFocusBarContextSafe();
   const pinIntoTier = useCallback((id: string, tier: FocusTier, order?: string[]) => {
@@ -2434,16 +2435,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [expandProject]);
   // Consume-once acknowledgment from the target InlineAdd (see its effect).
   const clearHeaderAddSignal = useCallback(() => setHeaderAddSignal(null), []);
-  // First visit (nothing stored) starts Parked folded: all three tiers are
-  // permanent rows now, and the "someday" one is the one a first look does not
-  // need open. Every other region stays expanded, and the first chevron click
-  // persists whatever the user actually wants.
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => {
-    try {
-      if (localStorage.getItem(LS_COLLAPSED_SECTIONS_KEY) === null) return new Set(['wait']);
-    } catch { /* storage disabled */ }
-    return readSetFromStorage(LS_COLLAPSED_SECTIONS_KEY);
-  });
+  // Every region starts expanded, and the first chevron click persists whatever the
+  // user actually wants. (A first visit used to start Parked folded; Parked is retired
+  // and its tasks draw in Satellite, so a stored 'wait' entry folds nothing.)
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_SECTIONS_KEY));
   // True while a search query is active (assigned during render below). A live
   // search force-expands every region, so chevron clicks are ignored — otherwise
   // a click on a visually-open header would silently flip the PERSISTED collapse
@@ -2485,7 +2480,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [customTiersLoaded, customTiersLive]);
 
   // ── Section tabs ──
-  // Which of Focus / Satellite / Parked / Recent / Tasks / Notes owns the panel
+  // Which of Focus / Satellite / a custom tier / Recent / Tasks / Notes owns the panel
   // right now ('all' = the legacy stacked view, kept for cross-tier drag).
   // `collapsedSections` is still the *within-a-view* chevron state; these two are
   // independent — in single-section mode the region renders regardless of its
@@ -2584,7 +2579,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Heals BOTH tab states directly (not via handleSectionChange, whose search-mode
   // branch would divert the persisted-tab heal into the ephemeral override and
   // leave the deleted ct_* id to resurface as an empty panel after the search).
+  // A retired tier's tab (Parked's `wait`, from a jump or a view kept before it was retired)
+  // goes to Satellite, where its tasks draw, without waiting for the registry.
   useEffect(() => {
+    if (isRetiredTier(activeSection)) { setActiveSection('satellite'); persistSection('satellite'); }
+    if (isRetiredTier(searchSection)) setSearchSection('satellite');
+    if (isRetiredTier(projectJump?.section)) setProjectJump((prev) => (prev ? { ...prev, section: 'satellite' } : prev));
     if (!customTiersLoaded || !customTiersLive) return;
     const isDeleted = (s: TodoSection | null) =>
       !!s && s.startsWith('ct_') && !customTiersLive.some((t) => t.id === s);
@@ -2704,7 +2704,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   /** True when `section` should be mounted: either we're in a stacked view that holds it or it IS the active tab. */
   const showSection = useCallback(
     (section: TodoSection) => (isAll && section !== 'recent')
-      || (isPinnedView && (section === 'focus' || section === 'satellite' || section === 'wait' || section.startsWith('ct_')))
+      || (isPinnedView && isTierSection(section))
       || effectiveSection === section,
     [isAll, isPinnedView, effectiveSection],
   );
@@ -2840,7 +2840,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     else el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, []);
 
-  // Scroll a pinned task into view inside the top Pinned region (Focus/Next/Satellite/Parked).
+  // Scroll a pinned task into view inside the top Pinned region (Focus/Satellite/custom tiers).
   // Separate from scrollToTask (which targets the lower .todo-panel-list) so the PIN region
   // jumps + highlights too — not just the list below. Double-RAF waits for tier re-render.
   const pinnedScrollRafRef = useRef<number>(0);
@@ -3020,9 +3020,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // unfolds projects is gated on !pinnedOnly, which is exactly the tier quick-add
       // case); expanding only touches the fold, never the tab, so the "pinnedOnly must
       // not switch tabs" rule stays intact. Only the task's own tier opens (below).
-      let tierKey = focusTaskIds?.has(focusedTaskId) ? 'focus'
-        : waitTaskIds?.has(focusedTaskId) ? 'wait'
-        : 'satellite';
+      let tierKey = focusTaskIds?.has(focusedTaskId) ? 'focus' : 'satellite';
       if (tierKey === 'satellite' && customTierIds) {
         for (const [tid, ids] of Object.entries(customTierIds)) {
           if (ids.has(focusedTaskId)) { tierKey = tid; break; }
@@ -3039,7 +3037,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         });
       }
       // Section tabs make "unmounted" a second way the target can be missing: a locate into
-      // Parked while the Focus tab is showing would scroll to nothing. The panel never changes
+      // Satellite while the Focus tab is showing would scroll to nothing. The panel never changes
       // the tab by itself (2026-11-04, the user: "keep in the same pin group, people can go to
       // all if they need, we don't auto go to all"): the stacked view, Pinned, the Tasks list
       // and the task's own tier tab show it; any other tab keeps the user where they are and
@@ -3265,7 +3263,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (t.status !== 'done' && t.phase !== 'COMPLETE') {
         let tier = 'satellite';
         if (focusTaskIds?.has(t.id)) tier = 'focus';
-        else if (waitTaskIds?.has(t.id)) tier = 'wait';
         else if (customTierIds) {
           for (const [tid, ids] of Object.entries(customTierIds)) {
             if (ids.has(t.id)) { tier = tid; break; }
@@ -3277,7 +3274,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         });
       }
     }
-  }, [tasks, pinnedTaskIds, focusTaskIds, waitTaskIds, customTierIds]);
+  }, [tasks, pinnedTaskIds, focusTaskIds, customTierIds]);
 
   // Active pinned-drag id — declared BEFORE every pinned render-model memo below so
   // they can freeze on it (useFrozenWhile) while a drag is live.
@@ -3347,7 +3344,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [graceAdditions]);
 
   const focusIdsWithGrace = useMemo(() => tierGraceUnion(focusTaskIds, 'focus'), [tierGraceUnion, focusTaskIds, recentTick]);
-  const waitIdsWithGrace = useMemo(() => tierGraceUnion(waitTaskIds, 'wait'), [tierGraceUnion, waitTaskIds, recentTick]);
   // Custom tiers: one grace-widened membership set per registered tier id.
   const customIdsWithGrace = useMemo(() => {
     const map: Record<string, Set<string>> = {};
@@ -3421,21 +3417,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [tasks, pinnedTaskIds, hiddenGroups, taskGroups]);
   const hiddenPinnedGroups = useFrozenWhile(hiddenPinnedGroupsLive, isPinnedDragActive);
 
-  // Split pinned into Focus / Satellite / Parked (id `wait`) / custom tiers
+  // Split pinned into Focus / Satellite / custom tiers
   const focusTasksLocal = useMemo(() => {
     if (focusIdsWithGrace.size === 0) return [];
     return pinnedTasks.filter((t) => focusIdsWithGrace.has(t.id));
   }, [pinnedTasks, focusIdsWithGrace]);
 
-  // Satellite = the default bucket: not focus/wait, not in any custom tier.
+  // Satellite = the default bucket: not focus, not in any custom tier (a pin stored in the
+  // retired Parked tier included).
   const satelliteTasksLocal = useMemo(() =>
-    pinnedTasks.filter((t) => !focusIdsWithGrace.has(t.id) && !waitIdsWithGrace.has(t.id) && !customMemberIds.has(t.id)),
-  [pinnedTasks, focusIdsWithGrace, waitIdsWithGrace, customMemberIds]);
-
-  const waitTasksLocal = useMemo(() => {
-    if (waitIdsWithGrace.size === 0) return [];
-    return pinnedTasks.filter((t) => waitIdsWithGrace.has(t.id));
-  }, [pinnedTasks, waitIdsWithGrace]);
+    pinnedTasks.filter((t) => !focusIdsWithGrace.has(t.id) && !customMemberIds.has(t.id)),
+  [pinnedTasks, focusIdsWithGrace, customMemberIds]);
 
   // Per custom tier: registry order defines section order; membership from grace sets.
   const customTasksLocal = useMemo(() => {
@@ -3451,12 +3443,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const getTier = useCallback((taskId: string): FocusTier | undefined => {
     if (!pinnedIdsWithGrace.has(taskId)) return undefined;
     if (focusIdsWithGrace.has(taskId)) return 'focus';
-    if (waitIdsWithGrace.has(taskId)) return 'wait';
     for (const [tid, ids] of Object.entries(customIdsWithGrace)) {
       if (ids.has(taskId)) return tid;
     }
     return 'satellite';
-  }, [pinnedIdsWithGrace, focusIdsWithGrace, waitIdsWithGrace, customIdsWithGrace]);
+  }, [pinnedIdsWithGrace, focusIdsWithGrace, customIdsWithGrace]);
 
   // Recent: the tasks the person opened lately, newest open first, in ONE flat list
   // (useRecentOpenedTasks; 2026-11-06, the user: "very simple flat list for recent"). Every
@@ -3509,7 +3500,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // loop enumerate built-ins + customTiers themselves (they need per-tier data,
   // not just keys). Keep the orders in sync if you reorder either list.
   const allTierKeys = useMemo<FocusTier[]>(
-    () => ['focus', 'satellite', 'wait', ...(customTiers ?? []).map((t) => t.id)],
+    () => [...BUILTIN_TIERS, ...(customTiers ?? []).map((t) => t.id)],
     [customTiers],
   );
   allTierKeysRef.current = allTierKeys;
@@ -3619,7 +3610,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [tierViewMode, tierSort, ordering?.projectOrder, separators, folderParents]);
   const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterForTier('focus', focusTasksLocal), [dragTierIds, focusTasksLocal, clusterForTier]);
   const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterForTier('satellite', satelliteTasksLocal), [dragTierIds, satelliteTasksLocal, clusterForTier]);
-  const waitIds_arr = useMemo(() => dragTierIds?.get('wait') ?? clusterForTier('wait', waitTasksLocal), [dragTierIds, waitTasksLocal, clusterForTier]);
   const customIds_arr = useMemo(() => {
     const map: Record<string, string[]> = {};
     for (const def of customTiers ?? []) {
@@ -3639,7 +3629,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Each tier's "A / B" rows (folderChains), published below where they are computed.
   const tierChainsRef = useRef<Map<string, Map<string, string[]>>>(new Map());
   useLayoutEffect(() => {
-    const tiers = new Set<string>(['focus', 'satellite', 'wait', ...(customTiers ?? []).map((d) => d.id)]);
+    const tiers = new Set<string>([...BUILTIN_TIERS, ...(customTiers ?? []).map((d) => d.id)]);
     const folderOf = (id: string) => folderOfTask.get(id);
     const pinnedCard = (id: string) => pinnedTaskMap.has(id);
     slotRulesRef.current = (tier) => tiers.has(tier) ? {
@@ -3825,7 +3815,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const tierArrays = new Map<FocusTier, string[]>();
     tierArrays.set('focus', clusterForTier('focus', focusTasksLocal));
     tierArrays.set('satellite', clusterForTier('satellite', satelliteTasksLocal));
-    tierArrays.set('wait', clusterForTier('wait', waitTasksLocal));
     for (const def of customTiers ?? []) {
       const tierTasks = customTasksLocal[def.id] ?? [];
       tierArrays.set(def.id, clusterForTier(def.id, tierTasks));
@@ -3902,7 +3891,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const pe = event.activatorEvent as PointerEvent | undefined;
       dragBus.begin({ kind: 'task', task: busTask }, pe?.clientX !== undefined ? { x: pe.clientX, y: pe.clientY } : undefined);
     }
-  }, [focusTasksLocal, satelliteTasksLocal, waitTasksLocal, customTiers, customTasksLocal, recentDraggableIds, pinnedTaskMap, clusterForTier, pinnedTaskIds, onUnpinTask, holdScrollAnchor, folderParents]);
+  }, [focusTasksLocal, satelliteTasksLocal, customTiers, customTasksLocal, recentDraggableIds, pinnedTaskMap, clusterForTier, pinnedTaskIds, onUnpinTask, holdScrollAnchor, folderParents]);
 
   // Shared live-drag tier accessors: dragTierIdsRef is the live state during a
   // drag with the frozen snapshot as fallback. `findTierOf` answers "which tier
@@ -3914,7 +3903,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, []);
   const setLiveArr = useCallback((tier: FocusTier, val: string[]) => {
     // COPY-ON-WRITE, not in-place .set(): the render-side memos (focusIds_arr /
-    // satelliteIds_arr / waitIds_arr / customIds_arr) key on this Map's IDENTITY.
+    // satelliteIds_arr / customIds_arr) key on this Map's IDENTITY.
     // The old three-ref model replaced each ref's array per write, so bumpDragTick's
     // re-render saw a new identity and recomputed; mutating one long-lived Map kept
     // the identity stable and froze the mid-drag cross-tier preview entirely.
@@ -5200,10 +5189,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       map.set(tier, set);
     };
-    add('focus', focusIds_arr); add('satellite', satelliteIds_arr); add('wait', waitIds_arr);
+    add('focus', focusIds_arr); add('satellite', satelliteIds_arr);
     for (const def of customTiers ?? []) add(def.id, customIds_arr[def.id] ?? []);
     return map;
-  }, [focusIds_arr, satelliteIds_arr, waitIds_arr, customIds_arr, customTiers, tierDisplayTaskIds, pinnedTaskMap]);
+  }, [focusIds_arr, satelliteIds_arr, customIds_arr, customTiers, tierDisplayTaskIds, pinnedTaskMap]);
   const labelProjects = useFrozenWhile(labelProjectsLive, isPinnedDragActive);
   // A tier's rows that pass the filters, plus the chips, lines and labels that still
   // head something visible.
@@ -5225,10 +5214,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const chains = folderChains(shownTierIds(arr, tier), folderOf, folderParents);
       if (chains.size > 0) map.set(tier, chains);
     };
-    add('focus', focusIds_arr); add('satellite', satelliteIds_arr); add('wait', waitIds_arr);
+    add('focus', focusIds_arr); add('satellite', satelliteIds_arr);
     for (const def of customTiers ?? []) add(def.id, customIds_arr[def.id] ?? []);
     return map;
-  }, [focusIds_arr, satelliteIds_arr, waitIds_arr, customIds_arr, customTiers, shownTierIds, pinnedTaskMap, folderParents]);
+  }, [focusIds_arr, satelliteIds_arr, customIds_arr, customTiers, shownTierIds, pinnedTaskMap, folderParents]);
   const tierChains = useFrozenWhile(tierChainsLive, isPinnedDragActive);
   useLayoutEffect(() => { tierChainsRef.current = tierChains; }, [tierChains]);
   // A tier's sortable ids as drawn: a chain's row is its top folder's chip alone.
@@ -5238,9 +5227,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   );
   const visibleFocusIds = useMemo(() => visibleTierIds(focusIds_arr, 'focus'), [focusIds_arr, visibleTierIds]);
   const visibleSatelliteIds = useMemo(() => visibleTierIds(satelliteIds_arr, 'satellite'), [satelliteIds_arr, visibleTierIds]);
-  const visibleWaitIds = useMemo(() => visibleTierIds(waitIds_arr, 'wait'), [waitIds_arr, visibleTierIds]);
   // Per-custom-tier render model: visible ids + display tasks + group meta in one
-  // memo (the built-ins keep their three separate memos; a custom tier bundles them
+  // memo (the built-ins keep their separate memos; a custom tier bundles them
   // because the set of tiers itself is dynamic).
   const customTierRender = useMemo(() => {
     const map: Record<string, { visibleIds: string[]; display: Task[]; groupMeta: Map<string, GroupRenderInfo> }> = {};
@@ -5252,15 +5240,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return map;
   }, [customTiers, customIds_arr, visibleTierIds, pinnedTaskMap, taskGroups, folderParents, tierChains]);
   // tier id → its visible render ids, for logic that must work for ANY tier
-  // (separator placement) instead of naming the three built-ins.
+  // (separator placement) instead of naming the built-ins.
   const tierIdsByTier = useMemo(() => {
     const map = new Map<string, string[]>();
     map.set('focus', visibleFocusIds);
     map.set('satellite', visibleSatelliteIds);
-    map.set('wait', visibleWaitIds);
     for (const def of customTiers ?? []) map.set(def.id, customTierRender[def.id]?.visibleIds ?? []);
     return map;
-  }, [visibleFocusIds, visibleSatelliteIds, visibleWaitIds, customTiers, customTierRender]);
+  }, [visibleFocusIds, visibleSatelliteIds, customTiers, customTierRender]);
   // The same map, frozen for the duration of a pinned drag. renderTierItems derives
   // the project label set (and its per-project counts) from HERE, never from the
   // arrays it walks: collapse-on-drag REMOVES a dragged folder's member ids from every
@@ -5280,10 +5267,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     () => visibleSatelliteIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
     [pinnedTaskMap, visibleSatelliteIds],
   );
-  const waitTasksDisplay = useMemo(
-    () => visibleWaitIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
-    [pinnedTaskMap, visibleWaitIds],
-  );
   const focusGroupMeta = useMemo(
     () => buildTierGroupMeta(focusTasksDisplay, taskGroups, chainedParents(folderParents, tierChains.get('focus'))),
     [focusTasksDisplay, taskGroups, folderParents, tierChains],
@@ -5291,10 +5274,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const satelliteGroupMeta = useMemo(
     () => buildTierGroupMeta(satelliteTasksDisplay, taskGroups, chainedParents(folderParents, tierChains.get('satellite'))),
     [satelliteTasksDisplay, taskGroups, folderParents, tierChains],
-  );
-  const waitGroupMeta = useMemo(
-    () => buildTierGroupMeta(waitTasksDisplay, taskGroups, chainedParents(folderParents, tierChains.get('wait'))),
-    [waitTasksDisplay, taskGroups, folderParents, tierChains],
   );
 
   // --- Parent-anchored sort with child grouping ---
@@ -7498,10 +7477,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // R3-02: a phone's first load paints only the spinner, nothing tappable that
   // the Needs-you strip and the rows would then push down under the thumb.
   const phoneFirstLoad = bannerInList && loading && tasks.length === 0;
-  const anyTierVisible = showSection('focus') || showSection('satellite') || showSection('wait')
+  const anyTierVisible = showSection('focus') || showSection('satellite')
     || (customTiers ?? []).some((t) => showSection(t.id));
   const recentVisible = showSection('recent');
-  // Section counts for the tab badges. `focus`/`satellite`/`wait`/`recent`
+  // Section counts for the tab badges. `focus`/`satellite`/`recent`
   // come from the already-computed display arrays, so the badges track exactly what
   // the tab would render (incl. project/filter scoping).
   const hits = (list: readonly Task[]) => (overrideOnlyIds.size === 0 ? list.length
@@ -7525,7 +7504,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const sectionCounts: Partial<Record<TodoSection, number>> = {
     focus: tierHits('focus', focusTasksDisplay),
     satellite: tierHits('satellite', satelliteTasksDisplay),
-    wait: tierHits('wait', waitTasksDisplay),
     recent: hits(visibleRecentTasks),
     // Real hits only: descendant CONTEXT rows never inflate the badge. A search
     // counts the rows it draws (folded Completed / Related rows wait), F06.
@@ -7534,9 +7512,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   for (const def of customTiers ?? []) {
     sectionCounts[def.id] = tierHits(def.id, customTierRender[def.id]?.display ?? []);
   }
-  sectionCounts.pinned = (sectionCounts.focus ?? 0) + (sectionCounts.satellite ?? 0) + (sectionCounts.wait ?? 0)
+  sectionCounts.pinned = (sectionCounts.focus ?? 0) + (sectionCounts.satellite ?? 0)
     + (customTiers ?? []).reduce((sum, def) => sum + (sectionCounts[def.id] ?? 0), 0);
-  // Parked pins a tier holds but hides by default: a tier with only those keeps its tab
+  // WAITING pins a tier holds but hides by default: a tier with only those keeps its tab
   // under "Hide empty tabs" (the footer's "N waiting hidden" needs the tab to be
   // reachable). Completed pins do not count; they accumulate forever.
   const sectionHeldCounts = useMemo((): Partial<Record<TodoSection, number>> => {
@@ -7545,7 +7523,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const parked = tasks.filter((t) => t.phase === 'WAITING' && pinnedTaskIds?.has(t.id) && !(t.group_id && hiddenGroups?.has(t.group_id)));
     if (parked.length === 0) return held;
     const tierSets: Array<[TodoSection, Set<string> | undefined]> = [
-      ['focus', focusTaskIds], ['wait', waitTaskIds],
+      ['focus', focusTaskIds],
       ...Object.entries(customTierIds ?? {}),
     ];
     for (const t of parked) {
@@ -7553,7 +7531,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       held[tier] = (held[tier] ?? 0) + 1;
     }
     return held;
-  }, [tasks, waitingRevealed, isSearchMode, pinnedTaskIds, focusTaskIds, waitTaskIds, customTierIds, hiddenGroups]);
+  }, [tasks, waitingRevealed, isSearchMode, pinnedTaskIds, focusTaskIds, customTierIds, hiddenGroups]);
   // One count for the filter row, every tab badge and the hit rows (4.6): real
   // hits only (no focus-override row, no descendant context rows). All counts
   // the list hits, which already hold every pin that passes the chips.
@@ -7611,8 +7589,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     openDisplay: () => homeFilters.setMenuOpen(true),
   }), [homeFilters, filterCount, archiveLoading, isSearchMode, effectiveSection, statusIsDefault, searchDoneCount, showDoneResults, toggleIncludeComplete, viewItemLabel]);
   const footerTasks = useMemo(() => footerScope(tasks, effectiveSection, {
-    pinned: pinnedTaskIds, focus: focusTaskIds, wait: waitTaskIds, custom: customTierIds,
-  }), [tasks, effectiveSection, pinnedTaskIds, focusTaskIds, waitTaskIds, customTierIds]);
+    pinned: pinnedTaskIds, focus: focusTaskIds, custom: customTierIds,
+  }), [tasks, effectiveSection, pinnedTaskIds, focusTaskIds, customTierIds]);
   // The status sections of this view: its own tasks (a tier's members, the pins, every
   // task), less the folders hidden from the tiers, by the chips with Status let go.
   const sectionScope = useMemo(() => {
@@ -7867,7 +7845,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     switch (tier) {
       case 'focus': return { def: { id: 'focus', label: 'Focus' }, visibleIds: visibleFocusIds, display: focusTasksDisplay, groupMeta: focusGroupMeta };
       case 'satellite': return { def: { id: 'satellite', label: 'Satellite' }, visibleIds: visibleSatelliteIds, display: satelliteTasksDisplay, groupMeta: satelliteGroupMeta };
-      case 'wait': return { def: { id: 'wait', label: 'Parked' }, visibleIds: visibleWaitIds, display: waitTasksDisplay, groupMeta: waitGroupMeta };
       default: {
         const def = (customTiers ?? []).find((d) => d.id === tier);
         const render = customTierRender[tier];
@@ -7896,7 +7873,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const tiersWithTasks = allTierKeys.filter((tier) => showSection(tier) && (tierSectionModel(tier)?.display.length ?? 0) > 0);
   // F08: a user who never picked a tier sees no tier name, also once a draft (which
   // lands in Focus) joins pins (which land in Satellite). A task in any other tier
-  // (Parked, a custom tier), alone or not, means the board has tiers on purpose: all
+  // (a custom tier), alone or not, means the board has tiers on purpose: all
   // keep headings.
   const headlessKey = useFrozenWhile<string>(
     !isStacked || tierUsed || tiersWithTasks.length === 0 ? ''
@@ -8126,7 +8103,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             // opening Waiting / snoozed under a full Focus tier left Working empty).
             style={!isStacked && !sectionsActive ? { flex: '1 1 auto' } : undefined}
           >
-          {/* PINNED section — Focus + Satellite + Parked sub-groups. In a single-tier
+          {/* PINNED section — Focus + Satellite + custom tier sub-groups. In a single-tier
               view the "Pinned" wrapper header is dropped (the tab already names the
               tier) and only that tier's subgroup renders. A pinned query condition
               routes every pin through the list, so the tier area steps aside. */}

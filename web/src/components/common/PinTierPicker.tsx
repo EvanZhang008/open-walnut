@@ -7,8 +7,7 @@
  * any stickiness; the quick-task panel deliberately has none.
  */
 
-import { PIN_TIER_POLICY } from '@open-walnut/core';
-import type { FocusTier } from '@/api/focus';
+import { BOARD_TIER_POLICY, shownTier, type FocusTier } from '@/api/focus';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 
 interface Props {
@@ -23,6 +22,8 @@ interface Props {
 export function PinTierPicker({ value, onChange, label, disabled }: Props) {
   // Safe variant: renders fine outside the FocusBarProvider (degrades to built-ins only).
   const customTiers = useFocusBarContextSafe()?.customTiers ?? [];
+  // A value in a retired tier (Parked) is drawn in Satellite, as the board draws it.
+  const current = shownTier(value);
   return (
     <div className="pin-tier-options" role="group" aria-label="Pin new task to tier">
       {label && <span className="pin-tier-label">{label}</span>}
@@ -30,8 +31,8 @@ export function PinTierPicker({ value, onChange, label, disabled }: Props) {
           independent pills: the tiers are mutually exclusive answers to the same
           question, and separate pills read as unrelated buttons. */}
       <div className="pin-tier-seg">
-        {PIN_TIER_POLICY.map((t) => {
-          const active = value === t.tier;
+        {BOARD_TIER_POLICY.map((t) => {
+          const active = current === t.tier;
           return (
             <button
               key={t.tier}
@@ -54,7 +55,7 @@ export function PinTierPicker({ value, onChange, label, disabled }: Props) {
           );
         })}
         {customTiers.map((ct) => {
-          const active = value === ct.id;
+          const active = current === ct.id;
           return (
             <button
               key={ct.id}

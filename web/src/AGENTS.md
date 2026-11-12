@@ -952,9 +952,17 @@ show inline after the open ones, other completed hits that show the query fold i
   call passes it (2026-11-12: a session reply's menu, "Read in split" included, never opened on a word); ratchet
   `tests/web/context-menu-press-selection-guard.test.ts`.
 - **The kebab is lean by default** (2026-09-10 user feedback: "too noisy"). No session-status row (clicking the task row opens its session), no unread row
-  (opening the task marks it read). Pin choices are compact buttons on the first level, never
-  a submenu (2026-11-10): Focus, Satellite, Parked and custom tiers, the current one marked,
-  plus Unpin beside them when pinned. Clicking the lit tier also unpins. Start/Due are collapsed `KebabDateRow`s whose calendar opens on click, the team actions sit behind one collapsed Team row (`TeamMenuItems`: Adopt / Release a worker / Leave leader), and
+  (opening the task marks it read). Pin choices sit on the first level as ONE row, never a
+  submenu (2026-11-11, the user: "not super super lot of line", "just have 2 focus, satellite,
+  remove park", "another click of the selected one is unpin"; `PinShortcutChoices.tsx`): "Pin to",
+  the shortcut chips (by default Focus and Satellite; they never wrap, they scroll sideways, a
+  long name ends in an ellipsis with the full name in its title), then More. Parked and an Unpin
+  button are offered nowhere there: clicking the lit tier unpins. Every other tier (custom and
+  plugin ones such as a Virtual Teammate's) sits in More's portalled flyout
+  (`.task-kebab-project-flyout`, one portal, its own Escape), the current one marked there and a
+  dot on More when it is hidden; the flyout's Customize view switches each tier on or off the
+  row (`usePageView('task-menu', 'pin-shortcuts')`, model `pin-shortcuts.ts`). Draft and batch
+  menus keep their one-row Pin choices. Start/Due are collapsed `KebabDateRow`s whose calendar opens on click, the team actions sit behind one collapsed Team row (`TeamMenuItems`: Adopt / Release a worker / Leave leader), and
   priority renders only when `ui.show_priority` is on (`useShowPriority`, Settings → Tasks;
   off by default and hidden on every surface, not just menus). Ratchets:
   `tests/web/task-kebab-lean.test.ts`, `tests/e2e/browser/kebab-menu-lean.spec.ts`.

@@ -14,6 +14,7 @@
 
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
 import { DEFAULT_META } from './task-meta-constants';
+import { isRetiredTier } from '@/api/focus';
 import {
   ASK_WALNUT_PROJECT, applyDraftParse, clearAiFields, launchDivergesFromDirMemory,
   projectForFolderPick, restoreMetaAfterWalnut,
@@ -341,13 +342,15 @@ export function fallbackLaunchMeta(
   return { ...meta, model: undefined };
 }
 
-/** The meta a launch sends: a tier the app knows is gone (a deleted custom tier)
- *  goes out as the default instead. Same object when nothing is replaced. */
+/** The meta a launch sends: a retired tier (Parked, in a draft open since before it was
+ *  retired) goes out as Satellite, where its tasks draw, and a tier the app knows is gone
+ *  (a deleted custom tier) as the default. Same object when nothing is replaced. */
 export function launchMetaFor(
   draft: DraftColumn,
   tierKnown: (id: string) => boolean | 'unknown',
 ): QuickStartTaskMeta {
   const tier = draft.meta.pinTier;
+  if (isRetiredTier(tier)) return { ...draft.meta, pinTier: 'satellite' };
   if (tier === undefined || tierKnown(tier) !== false) return draft.meta;
   return { ...draft.meta, pinTier: DEFAULT_META.pinTier };
 }

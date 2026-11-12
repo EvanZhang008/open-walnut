@@ -116,20 +116,20 @@ export async function showMoreUntil(scope: Locator, target: Locator, maxClicks =
 }
 
 /** A tab on the tab bar, by visible name. Projects is not a tab (it is picked from the Display menu). */
-export function sectionTab(page: Page, name: 'All' | 'Pinned' | 'Focus' | 'Satellite' | 'Parked' | 'Recent') {
+export function sectionTab(page: Page, name: 'All' | 'Pinned' | 'Focus' | 'Satellite' | 'Recent') {
   return page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
 }
 
 /** Section names to Display `data-view-option` keys. */
 const SECTION_KEYS: Record<string, string> = {
   All: 'all', Pinned: 'pinned', Focus: 'focus', Satellite: 'satellite',
-  Parked: 'wait', Recent: 'recent', Tasks: 'tasks',
+  Recent: 'recent', Tasks: 'tasks',
 }
 
 /** Switch the panel's view (no-op when it's already on it): the tab when the bar shows it, else the Display menu. */
 export async function selectSection(
   page: Page,
-  name: 'All' | 'Pinned' | 'Focus' | 'Satellite' | 'Parked' | 'Recent' | 'Tasks',
+  name: 'All' | 'Pinned' | 'Focus' | 'Satellite' | 'Recent' | 'Tasks',
 ): Promise<void> {
   if (name !== 'Tasks') {
     const tab = sectionTab(page, name)

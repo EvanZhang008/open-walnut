@@ -458,18 +458,20 @@ test('a pick that touches 20 or more tasks asks first, and Cancel writes nothing
   await boot(page)
   const header = projectHeader(page, project)
   await expect(header).toBeVisible({ timeout: 15_000 })
-  let menu = await openMenu(page, header, 'project-ctx-menu', 'Parked')
-  await pill(menu, 'Parked').click()
+  let menu = await openMenu(page, header, 'project-ctx-menu', 'Satellite')
+  // The retired Parked tier is no pill: Focus, Satellite and the custom tiers are.
+  await expect(pill(menu, 'Parked')).toHaveCount(0)
+  await pill(menu, 'Satellite').click()
   const modal = page.locator('.app-modal')
-  await expect(modal).toContainText('Pin 20 tasks to Parked?')
+  await expect(modal).toContainText('Pin 20 tasks to Satellite?')
   await modal.getByRole('button', { name: 'Cancel' }).click()
   await expect(modal).toHaveCount(0)
   expect((await tiers(ids)).every((t) => t === 'unpinned')).toBe(true)
 
-  menu = await openMenu(page, header, 'project-ctx-menu', 'Parked')
-  await pill(menu, 'Parked').click()
+  menu = await openMenu(page, header, 'project-ctx-menu', 'Satellite')
+  await pill(menu, 'Satellite').click()
   await page.locator('.app-modal').getByRole('button', { name: 'Pin' }).click()
-  await expect.poll(async () => (await tiers(ids)).every((t) => t === 'wait'), { timeout: 20_000 }).toBe(true)
+  await expect.poll(async () => (await tiers(ids)).every((t) => t === 'satellite'), { timeout: 20_000 }).toBe(true)
 })
 
 test('the pills stay inside the menu box, and the arrows plus Enter reach one', async ({ page }) => {
@@ -495,19 +497,19 @@ test('the pills stay inside the menu box, and the arrows plus Enter reach one', 
       viewport: frame.right <= innerWidth && frame.bottom <= innerHeight,
     }
   })
-  expect(fit.count).toBeGreaterThanOrEqual(3)
+  expect(fit.count).toBeGreaterThanOrEqual(2)
   expect(fit.inside).toBe(true)
   expect(fit.viewport).toBe(true)
   expect(fit.width).toBeLessThanOrEqual(560)
 
-  const parked = pill(menu, 'Parked')
-  for (let i = 0; i < 12 && !(await parked.evaluate((el) => el.classList.contains('focused'))); i += 1) {
+  const satellite = pill(menu, 'Satellite')
+  for (let i = 0; i < 12 && !(await satellite.evaluate((el) => el.classList.contains('focused'))); i += 1) {
     await page.keyboard.press('ArrowDown')
   }
-  await expect(parked).toHaveClass(/focused/)
+  await expect(satellite).toHaveClass(/focused/)
   await page.keyboard.press('Enter')
   await expect(menu).toHaveCount(0)
-  await expect.poll(() => tiers([a, b]), { timeout: 15_000 }).toEqual(['wait', 'wait'])
+  await expect.poll(() => tiers([a, b]), { timeout: 15_000 }).toEqual(['satellite', 'satellite'])
 })
 
 test('a menu with the Pinned pills is wide enough to keep them on one line, and wraps them inside the box when it cannot', async ({ page }) => {
@@ -518,8 +520,10 @@ test('a menu with the Pinned pills is wide enough to keep them on one line, and 
   const groupId = await createFolder([a, b], `Wide ${s}`)
   const custom = `Teammate ${s}`
   await createTier(custom)
+  // A second, short custom tier keeps four pills, as the board had with three built-in tiers.
+  await createTier(`Later ${s.slice(-4)}`)
 
-  // The built-in tiers plus one custom tier sit on one line, as they do in the task menu
+  // The two built-in tiers plus the custom tiers sit on one line, as they do in the task menu
   // (the shared 340px ceiling wrapped the custom one under them).
   await page.setViewportSize({ width: 1280, height: 800 })
   await boot(page)

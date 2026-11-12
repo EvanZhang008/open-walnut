@@ -139,7 +139,6 @@ export function footerScope(
   sets: {
     pinned?: ReadonlySet<string>;
     focus?: ReadonlySet<string>;
-    wait?: ReadonlySet<string>;
     custom?: Record<string, ReadonlySet<string>>;
   },
 ): readonly Task[] {
@@ -152,9 +151,8 @@ export function footerScope(
     switch (section) {
       case 'pinned': return true;
       case 'focus': return !!sets.focus?.has(id);
-      case 'wait': return !!sets.wait?.has(id);
       case 'satellite':
-        return !sets.focus?.has(id) && !sets.wait?.has(id) && !inCustom(id);
+        return !sets.focus?.has(id) && !inCustom(id);
       default: return !!sets.custom?.[section]?.has(id);
     }
   };

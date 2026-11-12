@@ -180,6 +180,8 @@ final class BoardStatusSectionsTests: XCTestCase {
 
     /// Watching follows the selected tier, including done and WAITING tasks. An unpinned
     /// watch is visible only on All. A watched task is in no other section or band.
+    /// `wWait` is stored in the retired Wait tier, as an older client may have left it: it
+    /// shows in Satellite, and a scope naming Wait has no chip, so it falls back to All.
     func testWatchingFollowsTheSelectedTierAndOwnsItsRows() {
         let tasks = [
             task("plain"),
@@ -201,9 +203,11 @@ final class BoardStatusSectionsTests: XCTestCase {
             XCTAssertEqual(Set(bandIds(b)), ["plain", "notWatched"])
             XCTAssertTrue(b.sections.needs.isEmpty && b.sections.waiting.isEmpty && b.sections.done.isEmpty)
             let satellite = board(tasks, tierOf: tierOf, grouping: grouping, scope: "satellite")
-            XCTAssertEqual(satellite.sections.watching.map(\.id), ["wOther"])
-            XCTAssertEqual(satellite.rail.first { $0.bandId == "satellite" }?.count, 1)
-            XCTAssertEqual(board(tasks, tierOf: tierOf, grouping: grouping, scope: "wait").sections.watching.map(\.id), ["wWait"])
+            XCTAssertEqual(satellite.sections.watching.map(\.id), ["wOther", "wWait"], "the old Wait task shows in Satellite")
+            XCTAssertEqual(satellite.rail.first { $0.bandId == "satellite" }?.count, 2)
+            XCTAssertFalse(satellite.rail.contains { $0.bandId == "wait" }, "no Parked chip")
+            let retired = board(tasks, tierOf: tierOf, grouping: grouping, scope: "wait")
+            XCTAssertNil(retired.scope, "a retired tier is no scope: the board falls back to All")
             let all = board(tasks, tierOf: tierOf, grouping: grouping)
             XCTAssertEqual(all.sections.watching.map(\.id),
                 ["wParked", "wNeeds", "wDone", "wUnpinned", "wPinned", "wOther", "wWait"])

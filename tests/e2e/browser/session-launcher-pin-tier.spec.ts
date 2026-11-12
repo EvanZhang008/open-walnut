@@ -30,7 +30,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { draftCwdPill, draftPanel, draftPanels, draftTaskMenu, openDraft, openDraftSettings } from './draft-helpers'
 
-const TIERS = ['Focus', 'Satellite', 'Parked'] as const
+const TIERS = ['Focus', 'Satellite'] as const
 
 /** One tier button of the open More menu (the label sits after an icon span). */
 const tierBtn = (menu: Locator, label: string): Locator =>
@@ -45,6 +45,8 @@ async function expectLitTier(panel: Locator, lit: (typeof TIERS)[number] | null)
     else await expect(tierBtn(menu, label)).not.toHaveAttribute('aria-pressed', 'true')
   }
   await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveCount(lit ? 1 : 0)
+  // The retired Parked tier is offered nowhere: Focus and Satellite are the built-in tiers.
+  await expect(tierBtn(menu, 'Parked')).toHaveCount(0)
   await panel.page().keyboard.press('Escape')
   await expect(draftTaskMenu(panel.page())).toHaveCount(0)
 }
@@ -106,8 +108,8 @@ test('launcher defaults to Focus, and a pick lasts exactly one launch', async ({
   await page.screenshot({ path: '/tmp/launcher-pin-tier/default-focus.png' })
 
   // The pick lands on THIS draft.
-  await pickTier(panel, 'Parked')
-  await expectLitTier(panel, 'Parked')
+  await pickTier(panel, 'Satellite')
+  await expectLitTier(panel, 'Satellite')
 
   // 2: THE regression guard. A fresh launcher is back on Focus — the previous
   // pick was for that launch, not a preference. This is the assertion that once
@@ -136,10 +138,9 @@ test('a tier picked in More rides the quick-start payload, through the folder pi
   await page.goto('/')
   const panel = await openDraft(page)
   // Picked BEFORE the folder: the folder pick must not write the tier back.
-  await pickTier(panel, 'Parked')
+  await pickTier(panel, 'Satellite')
   const payload = await launchAndCapture(page, panel, `pin tier pick probe ${Date.now()}`)
-  // Parked is the board's `wait` tier.
-  expect(payload.taskMeta?.pinTier).toBe('wait')
+  expect(payload.taskMeta?.pinTier).toBe('satellite')
 })
 
 /**

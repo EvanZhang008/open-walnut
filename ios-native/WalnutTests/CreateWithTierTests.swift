@@ -56,7 +56,7 @@ final class CreateWithTierTests: XCTestCase {
     // MARK: - Resolvability (rule 3: unknown tier ≠ silent Satellite)
 
     func testBuiltinsAndRegisteredCustomTiersResolve() {
-        let builtins = TasksStore.builtinTiers.map(\.id)
+        let builtins = PinTierPolicy.offeredBuiltins.map(\.id)
         let custom = ["ct_abc12345"]
         for id in builtins + custom {
             XCTAssertTrue(
@@ -69,7 +69,7 @@ final class CreateWithTierTests: XCTestCase {
     func testUnknownTierIsNotResolvableRatherThanDowngraded() {
         let choice = TaskPinChoice.tier("ct_deleted99")
         XCTAssertFalse(
-            choice.isResolvable(builtinIds: TasksStore.builtinTiers.map(\.id), customTierIds: []),
+            choice.isResolvable(builtinIds: PinTierPolicy.offeredBuiltins.map(\.id), customTierIds: []),
             "a stale custom tier must be reported, never quietly become Satellite"
         )
         // And it is NOT rewritten to something acceptable behind the scenes.
@@ -339,17 +339,19 @@ final class CreateWithTierTests: XCTestCase {
         let sessions = [
             makeSession(id: "s1", taskId: "t1", tier: "focus"),
             makeSession(id: "s2", taskId: "t2", tier: nil),       // satellite
-            makeSession(id: "s3", taskId: "t3", tier: "backlog"),
-            makeSession(id: "s4", taskId: "t4", tier: "wait"),
+            makeSession(id: "s3", taskId: "t3", tier: "ct_later"),
+            makeSession(id: "s4", taskId: "t4", tier: "wait"),    // retired: shown in Satellite
         ]
         let bands = BoardModel.bands(
             tasks: tasks, sessions: sessions,
-            tierOf: ["t1": "focus", "t2": "satellite", "t3": "backlog", "t4": "wait"],
-            tierOrder: ["focus": ["t1"], "satellite": ["t2"], "backlog": ["t3"], "wait": ["t4"]],
-            customTiers: []
+            tierOf: ["t1": "focus", "t2": "satellite", "t3": "ct_later", "t4": "wait"],
+            tierOrder: ["focus": ["t1"], "satellite": ["t2"], "ct_later": ["t3"], "wait": ["t4"]],
+            customTiers: [FocusTierInfo(id: "ct_later", label: "Later")]
         )
-        XCTAssertEqual(bands.map(\.bandId), ["focus", "satellite", "backlog", "wait"],
-            "all four tiers render, in the desktop reading order")
+        XCTAssertEqual(bands.map(\.bandId), ["focus", "satellite", "ct_later"],
+            "the two offered built-ins, then the custom tier; a retired tier draws no band")
+        XCTAssertTrue(bands.first { $0.bandId == "satellite" }?.rows.map(\.id).contains("t4") == true,
+            "a task stored in a retired tier stays on the board, in Satellite")
 
         for band in bands {
             XCTAssertNotNil(band.createSeed, "a tier band always offers a create ring")
@@ -368,7 +370,7 @@ final class CreateWithTierTests: XCTestCase {
     /// Each built-in tier's id is one the server accepts — otherwise a band's
     /// create ring would 400 on every use.
     func testBandTierIdsAreValidWireTiers() {
-        let builtins = TasksStore.builtinTiers.map(\.id)
+        let builtins = PinTierPolicy.offeredBuiltins.map(\.id)
         for tier in builtins {
             XCTAssertTrue(
                 TaskPinChoice.tier(tier).isResolvable(builtinIds: builtins, customTierIds: []),
@@ -385,17 +387,37 @@ final class CreateWithTierTests: XCTestCase {
         mock.gate = gate
         let store = TasksStore(transport: mock)
 
-        let work = Task { try await store.quickAdd("mid-flight", seed: .tier("backlog")) }
+        let work = Task { try await store.quickAdd("mid-flight", seed: .tier("focus")) }
         // Let the placeholder land while the create is suspended in the gate.
         try await Task.sleep(for: .milliseconds(60))
         let placeholder = store.tasks.first
         XCTAssertEqual(placeholder?.title, "mid-flight")
         XCTAssertEqual(placeholder?.pinned, true, "pinned from frame one")
-        XCTAssertEqual(store.tierId(for: placeholder?.id ?? ""), "backlog",
+        XCTAssertEqual(store.tierId(for: placeholder?.id ?? ""), "focus",
             "the row renders under the header it was typed in, immediately")
 
         gate.open()
         _ = try await work.value
+    }
+
+    /// An older seed (a quick-parse token, a plugin) may still name a retired tier. It goes on
+    /// the wire as typed, and the placeholder is drawn where the board will draw the task:
+    /// Satellite.
+    func testAQuickAddIntoARetiredTierIsShownInSatellite() async throws {
+        let mock = MockTaskTransport()
+        let gate = CheckedContinuationGate()
+        mock.gate = gate
+        let store = TasksStore(transport: mock)
+
+        let work = Task { try await store.quickAdd("old seed", seed: .tier("backlog")) }
+        try await Task.sleep(for: .milliseconds(60))
+        let placeholder = store.tasks.first
+        XCTAssertEqual(store.tierId(for: placeholder?.id ?? ""), "satellite")
+
+        gate.open()
+        _ = try await work.value
+        XCTAssertEqual(mock.calls.first { $0.name == "createTask" }?.args[5], "backlog",
+            "the wire keeps the tier the seed named")
     }
 
     // MARK: - Save as todo (the draft's other exit)
@@ -409,7 +431,7 @@ final class CreateWithTierTests: XCTestCase {
         XCTAssertTrue(pin.namesTier)
         XCTAssertEqual(pin.wireFocusTier, "focus")
         XCTAssertTrue(
-            pin.isResolvable(builtinIds: TasksStore.builtinTiers.map(\.id), customTierIds: []),
+            pin.isResolvable(builtinIds: PinTierPolicy.offeredBuiltins.map(\.id), customTierIds: []),
             "\(pin) would 400 on every Save as todo"
         )
     }

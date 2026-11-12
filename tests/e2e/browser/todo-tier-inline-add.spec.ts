@@ -40,7 +40,6 @@ test.describe.configure({ mode: 'serial' })
 const TIERS = [
   { tab: 'Focus' as const, zone: 'focus-drop-zone' },
   { tab: 'Satellite' as const, zone: 'satellite-drop-zone' },
-  { tab: 'Parked' as const, zone: 'wait-drop-zone' },
 ]
 
 /** The solo tier view's heading, which carries the tier's "+". */
@@ -52,7 +51,7 @@ const tierBar = (page: Page) => page.getByTestId('tier-view-bar')
  *  Creates are issued CONCURRENTLY: tasks.json writes serialize behind a write lock,
  *  so 3 sequential round-trips per card blew the 30s test budget on a loaded machine
  *  (the seed, not the product, was the slow part). */
-async function seedTier(page: Page, tier: 'focus' | 'satellite' | 'wait', n: number, stamp: number) {
+async function seedTier(page: Page, tier: 'focus' | 'satellite', n: number, stamp: number) {
   const ids = await Promise.all(
     Array.from({ length: n }, async (_, i) => {
       const res = await page.request.post('/api/tasks', {
@@ -140,13 +139,13 @@ test.describe('tier inline add', () => {
 
       // Server-side truth: the task exists AND is pinned in the right tier.
       const tiers = (await (await page.request.get('/api/focus/tasks')).json()) as {
-        focus_tasks: string[]; satellite_tasks: string[]; wait_tasks: string[]
+        focus_tasks: string[]; satellite_tasks: string[]
       }
       const created = ((await (await page.request.get('/api/tasks?fields=list')).json()) as
         { tasks: { id: string; title: string }[] }).tasks.find((t) => t.title === title)
       expect(created, 'created task must exist server-side').toBeTruthy()
       const inTier = {
-        Focus: tiers.focus_tasks, Satellite: tiers.satellite_tasks, Parked: tiers.wait_tasks,
+        Focus: tiers.focus_tasks, Satellite: tiers.satellite_tasks,
       }[tab]
       expect(inTier).toContain(created!.id)
 

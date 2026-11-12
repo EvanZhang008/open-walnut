@@ -9,43 +9,40 @@ import SwiftUI
 // draws ONE grouped properties list, and the rules that list follows live here
 // so WalnutTests can gate them without a simulator.
 //
-// The board rule is the load-bearing one: `PUT /focus/tasks/:id/tier` refuses a
-// task that is not pinned yet (400 "Task is not pinned"), so choosing a tier for
+// The board rule is the load-bearing one, and it is not this file's: what the
+// Pin row offers, which choice is checked and which writes a tap turns into are
+// `PinTierPolicy` (the one rule every tier menu reads). `PUT /focus/tasks/:id/tier`
+// refuses a task that is not pinned yet (400 "Task is not pinned"), so a tier for
 // an off-board task is TWO writes in order, and a fresh pin already lands in
-// `satellite` server-side — which is why picking Satellite from off the board is
-// a pin and nothing else (same rule quick-add's `applyPin` follows).
+// `satellite` server-side, which is why picking Satellite from off the board is a
+// pin and nothing else (same rule quick-add's `applyPin` follows). A tap on the
+// checked tier unpins; there is no "Not pinned" choice.
 
 /// Where a task sits on the pinned board. Pin state and tier as ONE value,
 /// because to the person editing it they are one question: where is this?
 enum TaskBoardPlacement: Equatable, Hashable {
     /// Not pinned — the task exists but is not on the board at all.
     case notOnBoard
-    /// Pinned into a built-in (`focus|satellite|backlog|wait`) or a registered
-    /// custom (`ct_*`) tier.
+    /// Pinned, shown in this tier: Focus, Satellite or a custom (`ct_*`) tier
+    /// (`PinTierPolicy.selected`; a retired or unknown tier reads Satellite).
     case tier(String)
+
+    /// The tier a picker checks, nil when not pinned.
+    var selectedTier: String? {
+        if case .tier(let tier) = self { return tier }
+        return nil
+    }
 }
 
-/// One pickable row of the Board menu.
+/// One pickable row of the Pin menu: a tier.
 struct TaskBoardOption: Equatable, Identifiable {
-    let placement: TaskBoardPlacement
+    let tierId: String
     let label: String
     let icon: String
     let isCurrent: Bool
 
     /// Stable key for SwiftUI identity. Tier ids are already `[a-z_]`/`ct_*`.
-    var id: String {
-        switch placement {
-        case .notOnBoard: return "none"
-        case .tier(let tier): return tier
-        }
-    }
-}
-
-/// One network write the Board row issues, in the order it must be issued.
-enum TaskBoardWrite: Equatable {
-    case pin
-    case unpin
-    case setTier(String)
+    var id: String { tierId }
 }
 
 /// Which control the Status row draws.
@@ -82,45 +79,33 @@ enum TaskDueQuickChoice: String, CaseIterable, Identifiable {
 }
 
 enum TaskPropertyLogic {
-    /// The tier a pinned task is in when the split has not said otherwise. Both
-    /// the server default for a new pin and what `TasksStore.tierBadge` shows.
-    static let defaultTier = "satellite"
-
-    /// Label for a tier the choices list does not carry: a `ct_*` id deleted on
-    /// the desktop since the registry was fetched. "Satellite" and not a raw id
-    /// because that is what the server normalizes a stale tier to on the next
-    /// split (see `TasksStore.setTier`) and what every other surface shows, so
-    /// no two surfaces disagree about the same row.
-    static let unknownTierLabel = "Satellite"
-
     static let notOnBoardLabel = "Not pinned"
 
     // MARK: - Board
 
-    /// Current placement from the two facts the store holds separately.
-    static func placement(pinned: Bool, tierId: String?) -> TaskBoardPlacement {
-        pinned ? .tier(tierId ?? defaultTier) : .notOnBoard
+    /// Current placement from the two facts the store holds separately, as shown.
+    static func placement(
+        pinned: Bool, tierId: String?, tierChoices: [(id: String, label: String)]
+    ) -> TaskBoardPlacement {
+        PinTierPolicy.selected(pinned: pinned, stored: tierId, offered: tierChoices)
+            .map(TaskBoardPlacement.tier) ?? .notOnBoard
     }
 
-    /// Every option the Board menu offers: off the board first, then the
-    /// built-ins and any custom tier, in `TasksStore.allTierChoices` order.
+    /// Every option the Pin menu offers: the tiers in `TasksStore.allTierChoices`
+    /// order, the current one checked. Off the board is no option of its own: a
+    /// tap on the checked tier is the unpin.
     static func boardOptions(
         tierChoices: [(id: String, label: String)], current: TaskBoardPlacement
     ) -> [TaskBoardOption] {
-        var options = [TaskBoardOption(
-            placement: .notOnBoard, label: notOnBoardLabel,
-            icon: "circle.dashed", isCurrent: current == .notOnBoard
-        )]
-        for choice in tierChoices {
-            options.append(TaskBoardOption(
-                placement: .tier(choice.id), label: choice.label,
-                icon: tierIcon(choice.id), isCurrent: current == .tier(choice.id)
-            ))
+        tierChoices.map { choice in
+            TaskBoardOption(
+                tierId: choice.id, label: choice.label,
+                icon: PinTierPolicy.icon(choice.id), isCurrent: current == .tier(choice.id)
+            )
         }
-        return options
     }
 
-    /// Right-hand value text for the Board row.
+    /// Right-hand value text for the Pin row.
     static func boardValueText(
         _ current: TaskBoardPlacement, tierChoices: [(id: String, label: String)]
     ) -> String {
@@ -128,34 +113,7 @@ enum TaskPropertyLogic {
         case .notOnBoard:
             return notOnBoardLabel
         case .tier(let tier):
-            return tierChoices.first(where: { $0.id == tier })?.label ?? unknownTierLabel
-        }
-    }
-
-    /// The writes a menu choice turns into, in order. Empty when the choice is
-    /// already the truth — a redundant PUT is a chance to fail for nothing.
-    static func writes(
-        for target: TaskBoardPlacement, current: TaskBoardPlacement
-    ) -> [TaskBoardWrite] {
-        guard target != current else { return [] }
-        switch (current, target) {
-        case (_, .notOnBoard):
-            return [.unpin]
-        case (.notOnBoard, .tier(let tier)):
-            // A fresh pin lands in `satellite`, so that one needs no tier PUT.
-            return tier == defaultTier ? [.pin] : [.pin, .setTier(tier)]
-        case (.tier, .tier(let tier)):
-            return [.setTier(tier)]
-        }
-    }
-
-    static func tierIcon(_ id: String) -> String {
-        switch id {
-        case "focus": return "scope"
-        case "satellite": return "circle.circle"
-        case "backlog": return "tray.full"
-        case "wait": return "pause.circle"
-        default: return "square.stack.3d.up"
+            return tierChoices.first(where: { $0.id == tier })?.label ?? "Satellite"
         }
     }
 

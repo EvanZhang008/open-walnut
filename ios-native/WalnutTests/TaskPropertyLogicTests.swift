@@ -13,17 +13,25 @@ import XCTest
 /// is pinned here rather than left to a view body nothing can run headless.
 final class TaskPropertyLogicTests: XCTestCase {
 
-    /// What `TasksStore.allTierChoices` answers on a box with one custom tier.
-    private let choices: [(id: String, label: String)] = [
-        ("focus", "Focus"), ("satellite", "Satellite"),
-        ("backlog", "Backlog"), ("wait", "Wait"),
-        ("ct_reading", "Reading"),
-    ]
+    /// What `TasksStore.allTierChoices` answers on a box with one custom tier: the two
+    /// offered built-ins, then the registry (`PinTierPolicy.choices`).
+    private let choices: [(id: String, label: String)] = PinTierPolicy.choices(custom: [
+        FocusTierInfo(id: "ct_reading", label: "Reading"),
+    ])
+
+    private func placed(pinned: Bool, tierId: String?) -> TaskBoardPlacement {
+        TaskPropertyLogic.placement(pinned: pinned, tierId: tierId, tierChoices: choices)
+    }
+
+    /// The writes a tap on an option makes, from the placement the menu shows.
+    private func writes(picking tier: String, from current: TaskBoardPlacement) -> [PinTierPolicy.Write] {
+        PinTierPolicy.writes(picking: tier, selected: current.selectedTier)
+    }
 
     // MARK: - Board value text
 
     func testBoardValueTextUnpinned() {
-        let placement = TaskPropertyLogic.placement(pinned: false, tierId: nil)
+        let placement = placed(pinned: false, tierId: nil)
         XCTAssertEqual(placement, .notOnBoard)
         XCTAssertEqual(
             TaskPropertyLogic.boardValueText(placement, tierChoices: choices),
@@ -35,7 +43,7 @@ final class TaskPropertyLogicTests: XCTestCase {
     /// server stores a satellite pin with NO tier (`TaskPinChoice` rule 2), so
     /// "no tier" must never render as "not on the board".
     func testBoardValueTextPinnedWithoutStoredTier() {
-        let placement = TaskPropertyLogic.placement(pinned: true, tierId: nil)
+        let placement = placed(pinned: true, tierId: nil)
         XCTAssertEqual(placement, .tier("satellite"))
         XCTAssertEqual(
             TaskPropertyLogic.boardValueText(placement, tierChoices: choices),
@@ -44,17 +52,15 @@ final class TaskPropertyLogicTests: XCTestCase {
     }
 
     func testBoardValueTextPinnedFocus() {
-        let placement = TaskPropertyLogic.placement(pinned: true, tierId: "focus")
         XCTAssertEqual(
-            TaskPropertyLogic.boardValueText(placement, tierChoices: choices),
+            TaskPropertyLogic.boardValueText(placed(pinned: true, tierId: "focus"), tierChoices: choices),
             "Focus"
         )
     }
 
     func testBoardValueTextCustomTierUsesItsLabel() {
-        let placement = TaskPropertyLogic.placement(pinned: true, tierId: "ct_reading")
         XCTAssertEqual(
-            TaskPropertyLogic.boardValueText(placement, tierChoices: choices),
+            TaskPropertyLogic.boardValueText(placed(pinned: true, tierId: "ct_reading"), tierChoices: choices),
             "Reading"
         )
     }
@@ -63,102 +69,101 @@ final class TaskPropertyLogicTests: XCTestCase {
     /// "Satellite" and never a raw id: that is what the server normalizes the
     /// stale tier to on the next split, so no two surfaces disagree.
     func testBoardValueTextUnknownCustomTierFallsBack() {
-        let placement = TaskPropertyLogic.placement(pinned: true, tierId: "ct_deleted")
-        XCTAssertEqual(
-            TaskPropertyLogic.boardValueText(placement, tierChoices: choices),
-            "Satellite"
-        )
+        let placement = placed(pinned: true, tierId: "ct_deleted")
+        XCTAssertEqual(placement, .tier("satellite"))
+        XCTAssertEqual(TaskPropertyLogic.boardValueText(placement, tierChoices: choices), "Satellite")
+    }
+
+    /// A task an older client, a plugin or an agent stored in a retired tier (Backlog,
+    /// Wait) reads Satellite, the band the board draws it in. Never "Parked".
+    func testARetiredStoredTierReadsSatellite() {
+        for retired in ["backlog", "wait"] {
+            let placement = placed(pinned: true, tierId: retired)
+            XCTAssertEqual(placement, .tier("satellite"), retired)
+            XCTAssertEqual(TaskPropertyLogic.boardValueText(placement, tierChoices: choices), "Satellite")
+            XCTAssertEqual(
+                TaskPropertyLogic.boardOptions(tierChoices: choices, current: placement)
+                    .filter(\.isCurrent).map(\.tierId),
+                ["satellite"]
+            )
+        }
     }
 
     func testPinListsAndCustomGroupsUseTheSamePlacement() {
         XCTAssertEqual(TaskFilter.sessions.title, "Pins")
-        let customChoices = choices + [("ct_helpers", "Virtual Teammate")]
-        let current = TaskPropertyLogic.placement(pinned: true, tierId: "ct_helpers")
+        let customChoices = PinTierPolicy.choices(custom: [
+            FocusTierInfo(id: "ct_reading", label: "Reading"),
+            FocusTierInfo(id: "ct_helpers", label: "Virtual Teammate"),
+        ])
+        let current = TaskPropertyLogic.placement(pinned: true, tierId: "ct_helpers", tierChoices: customChoices)
         XCTAssertEqual(TaskPropertyLogic.boardValueText(current, tierChoices: customChoices), "Virtual Teammate")
         XCTAssertEqual(
             TaskPropertyLogic.boardOptions(tierChoices: customChoices, current: current)
                 .filter(\.isCurrent).map(\.label),
             ["Virtual Teammate"]
         )
-        XCTAssertEqual(
-            TaskPropertyLogic.writes(for: current, current: .notOnBoard),
-            [.pin, .setTier("ct_helpers")]
-        )
-        XCTAssertEqual(TaskPropertyLogic.writes(for: .notOnBoard, current: current), [.unpin])
+        XCTAssertEqual(writes(picking: "ct_helpers", from: .notOnBoard), [.pin, .setTier("ct_helpers")])
+        XCTAssertEqual(writes(picking: "ct_helpers", from: current), [.unpin],
+            "a tap on the checked plugin tier unpins it")
     }
 
     // MARK: - Board options
 
-    func testBoardOptionsListOffBoardFirstThenEveryTier() {
+    /// The Pin menu lists the tiers and nothing else: no "Not pinned", no Unpin row,
+    /// no Backlog, no Wait / Parked.
+    func testBoardOptionsListEveryOfferedTierAndNothingElse() {
         let options = TaskPropertyLogic.boardOptions(
-            tierChoices: choices,
-            current: TaskPropertyLogic.placement(pinned: true, tierId: "backlog")
+            tierChoices: choices, current: placed(pinned: true, tierId: "ct_reading")
         )
-        XCTAssertEqual(
-            options.map(\.label),
-            ["Not pinned", "Focus", "Satellite", "Backlog", "Wait", "Reading"]
-        )
-        XCTAssertEqual(options.map(\.id), ["none", "focus", "satellite", "backlog", "wait", "ct_reading"])
-        XCTAssertEqual(options.filter(\.isCurrent).map(\.label), ["Backlog"])
+        XCTAssertEqual(options.map(\.label), ["Focus", "Satellite", "Reading"])
+        XCTAssertEqual(options.map(\.id), ["focus", "satellite", "ct_reading"])
+        XCTAssertEqual(options.filter(\.isCurrent).map(\.label), ["Reading"])
     }
 
-    func testBoardOptionsMarkOffBoardCurrentWhenUnpinned() {
+    func testBoardOptionsCheckNothingWhenUnpinned() {
         let options = TaskPropertyLogic.boardOptions(
-            tierChoices: choices,
-            current: TaskPropertyLogic.placement(pinned: false, tierId: nil)
+            tierChoices: choices, current: placed(pinned: false, tierId: nil)
         )
-        XCTAssertEqual(options.filter(\.isCurrent).map(\.label), ["Not pinned"])
+        XCTAssertTrue(options.filter(\.isCurrent).isEmpty)
     }
 
     /// A pinned-but-unmapped row checks Satellite, so the menu agrees with the
     /// value text next to it.
     func testBoardOptionsCheckSatelliteWhenPinnedWithoutStoredTier() {
         let options = TaskPropertyLogic.boardOptions(
-            tierChoices: choices,
-            current: TaskPropertyLogic.placement(pinned: true, tierId: nil)
+            tierChoices: choices, current: placed(pinned: true, tierId: nil)
         )
         XCTAssertEqual(options.filter(\.isCurrent).map(\.label), ["Satellite"])
     }
 
     // MARK: - Board choice → writes
 
-    func testNotOnBoardUnpinsOnly() {
-        XCTAssertEqual(
-            TaskPropertyLogic.writes(for: .notOnBoard, current: .tier("focus")),
-            [.unpin]
-        )
+    /// A tap on the checked tier is the unpin: there is no separate Unpin.
+    func testTappingTheCheckedTierUnpins() {
+        XCTAssertEqual(writes(picking: "focus", from: .tier("focus")), [.unpin])
+        XCTAssertEqual(writes(picking: "satellite", from: .tier("satellite")), [.unpin])
+        // A task stored in a retired tier is checked in Satellite, so that tap unpins it.
+        XCTAssertEqual(writes(picking: "satellite", from: placed(pinned: true, tierId: "wait")), [.unpin])
     }
 
     /// The tier endpoint refuses an unpinned task (400 "Task is not pinned"), so
     /// the pin has to go first and the order is load-bearing.
     func testTierFromOffBoardPinsThenSetsTier() {
-        XCTAssertEqual(
-            TaskPropertyLogic.writes(for: .tier("focus"), current: .notOnBoard),
-            [.pin, .setTier("focus")]
-        )
+        XCTAssertEqual(writes(picking: "focus", from: .notOnBoard), [.pin, .setTier("focus")])
     }
 
     /// A fresh pin already lands in `satellite` server-side, so that one choice
     /// is a pin and nothing else (same rule quick-add's `applyPin` follows).
     func testSatelliteFromOffBoardPinsOnly() {
-        XCTAssertEqual(
-            TaskPropertyLogic.writes(for: .tier("satellite"), current: .notOnBoard),
-            [.pin]
-        )
+        XCTAssertEqual(writes(picking: "satellite", from: .notOnBoard), [.pin])
     }
 
     func testTierWhilePinnedSetsTierOnly() {
         XCTAssertEqual(
-            TaskPropertyLogic.writes(for: .tier("ct_reading"), current: .tier("wait")),
+            writes(picking: "ct_reading", from: placed(pinned: true, tierId: "wait")),
             [.setTier("ct_reading")]
         )
-    }
-
-    /// Picking what is already true writes nothing: a redundant PUT is only a
-    /// chance to fail for nothing.
-    func testPickingTheCurrentPlacementWritesNothing() {
-        XCTAssertEqual(TaskPropertyLogic.writes(for: .tier("focus"), current: .tier("focus")), [])
-        XCTAssertEqual(TaskPropertyLogic.writes(for: .notOnBoard, current: .notOnBoard), [])
+        XCTAssertEqual(writes(picking: "focus", from: .tier("satellite")), [.setTier("focus")])
     }
 
     // MARK: - Status segments

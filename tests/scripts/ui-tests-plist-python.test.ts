@@ -54,6 +54,12 @@ describe('run-ui-tests.sh picks a python whose plistlib loads', () => {
     expect(pick()).toEqual({ out: 'PICKED=/usr/bin/python3\n', code: 0 })
   })
 
+  it('carries the isolated demo opt-in to the actual runner', () => {
+    const text = fs.readFileSync(RUN_UI, 'utf-8')
+    expect(text).toContain('[ "${WALNUT_UITEST_MAY_ERASE_APP_DATA:-}" = 1 ]')
+    expect(text).toContain("'WALNUT_UITEST_MAY_ERASE_APP_DATA'):")
+  })
+
   it('injects with the python it picked, never a bare python3', () => {
     const text = fs.readFileSync(RUN_UI, 'utf-8')
     expect(text).toMatch(/"\$PLIST_PY" - "\$XCTESTRUN"/)

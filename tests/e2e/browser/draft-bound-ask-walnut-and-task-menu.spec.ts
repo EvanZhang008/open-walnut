@@ -195,9 +195,11 @@ test('a bound draft\'s header ⋮ pins the REAL task without launching anything'
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/04-bound-draft-header.png` })
   await menu.screenshot({ path: `${SCREENSHOT_DIR}/04b-bound-draft-kebab-menu.png` })
 
-  await pin.getByTestId('kebab-pin-wait').click()
+  // The retired Parked tier is offered nowhere; Focus is the other built-in tier.
+  await expect(pin.getByTestId('kebab-pin-wait')).toHaveCount(0)
+  await pin.getByTestId('kebab-pin-focus').click()
   await expect(menu).toHaveCount(0)
-  await expectTaskInTier(page, taskId, 'wait')
+  await expectTaskInTier(page, taskId, 'focus')
   // Nothing launched, nothing created: the ⋮ is task settings, not Start.
   expect(seen).toEqual([])
   await expect(draftPanels(page)).toHaveCount(1)
@@ -205,7 +207,7 @@ test('a bound draft\'s header ⋮ pins the REAL task without launching anything'
   // Reopen: the menu reflects the write it just made.
   await kebab.click()
   const pinAgain = await openKebabGroup(page.locator('.task-kebab-menu'), 'kebab-group-pin')
-  await expect(pinAgain.locator('[data-testid^="kebab-pin-"][aria-pressed="true"]')).toHaveText(/Parked/)
+  await expect(pinAgain.locator('[data-testid^="kebab-pin-"][aria-pressed="true"]')).toHaveText(/Focus/)
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
 
@@ -224,7 +226,7 @@ test('a bound draft\'s header ⋮ pins the REAL task without launching anything'
   // Discard the draft; the task keeps its new tier and project.
   await panel.locator('.session-panel-close').click()
   await expect(draftPanels(page)).toHaveCount(0)
-  expect(await pinnedTierOf(page, taskId)).toBe('wait')
+  expect(await pinnedTierOf(page, taskId)).toBe('focus')
   expect((await fetchTask(page, taskId)).project).toBe('Ideas')
 })
 
@@ -267,11 +269,12 @@ test('a plain draft has no header ⋮; More ends the pills row, sets tier + unre
   await expect(menu).toHaveCount(0)
 
   // A tier pick is one synchronous meta write, so a Start right after it carries it.
-  await draftComposer(page).fill(`land in parked ${Date.now()}`)
+  await draftComposer(page).fill(`land in satellite ${Date.now()}`)
   await openDraftSettings(panel, 'more')
-  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Parked' }).click()
+  await expect(menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Parked' })).toHaveCount(0)
+  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Satellite' }).click()
   await expect(menu).toHaveCount(0)
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Parked/)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/)
   await expect(draftDecisionChip(panel, 'pinTier').locator('.draft-ai-badge')).toHaveCount(0)
   // More never lights up for edits: the edits are the chips.
   await expect(draftMoreButton(panel)).not.toHaveClass(/draft-more-btn-active/)
@@ -282,13 +285,13 @@ test('a plain draft has no header ⋮; More ends the pills row, sets tier + unre
   const payload = res.request().postDataJSON() as {
     taskMeta?: { pinTier?: string | null; unread?: boolean }; sessionId?: string
   }
-  expect(payload.taskMeta?.pinTier).toBe('wait')
+  expect(payload.taskMeta?.pinTier).toBe('satellite')
   expect(payload.taskMeta?.unread).toBeFalsy()
   const created = ((await res.json()) as { taskId: string }).taskId
 
   await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${payload.sessionId}"]`))
     .toBeVisible({ timeout: 30_000 })
-  await expectTaskInTier(page, created, 'wait')
+  await expectTaskInTier(page, created, 'satellite')
 })
 
 // ── 4. Ask Walnut tab, Fix Walnut, and the chat slot ──────────────────────────
@@ -325,9 +328,9 @@ test('the Ask Walnut tab gets a More-only row that never parses; Fix Walnut and 
   // A value set through More shows as a chip in the same row (W2).
   const menu = await openDraftSettings(panel, 'more')
   await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(0)
-  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Parked' }).click()
+  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Satellite' }).click()
   await expect(draftTaskMenu(page)).toHaveCount(0)
-  await expect(row.locator('.draft-decision-chip[data-field="pinTier"]')).toHaveText(/Parked/)
+  await expect(row.locator('.draft-decision-chip[data-field="pinTier"]')).toHaveText(/Satellite/)
   await expect(draftDecisionChip(panel, 'pinTier')).not.toHaveClass(/draft-decision-chip-ai/)
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/06-ask-walnut-more-row.png` })
   await panel.locator('.session-panel-close').click()
@@ -343,7 +346,8 @@ test('the Ask Walnut tab gets a More-only row that never parses; Fix Walnut and 
   await expect(fix).toBeVisible({ timeout: 20_000 })
   await expect(fix.locator('.draft-decision-chip, .draft-decision-row, .draft-walnut-meta-row')).toHaveCount(0)
   const fixMenu = await openDraftSettings(fix, 'more')
-  await expect(fixMenu.locator('.task-kebab-tier-btn').filter({ hasText: 'Parked' })).toBeVisible()
+  await expect(fixMenu.locator('.task-kebab-tier-btn').filter({ hasText: 'Satellite' })).toBeVisible()
+  await expect(fixMenu.locator('.task-kebab-tier-btn').filter({ hasText: 'Parked' })).toHaveCount(0)
   await expect(fixMenu.locator('[data-testid="draft-menu-project"]')).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(draftTaskMenu(page)).toHaveCount(0)

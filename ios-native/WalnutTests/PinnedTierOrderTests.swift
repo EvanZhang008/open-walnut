@@ -167,7 +167,11 @@ final class PinnedTierOrderTests: XCTestCase {
     /// them: the console's runs ARE the phone's bands, one to one.
     func testEveryTierModeAndDateShowsTheMacsOrder() throws {
         let board = try board()
-        XCTAssertEqual(board.views.count, 24, "6 scopes x 2 modes x 2 dates")
+        XCTAssertEqual(board.views.count, 16, "4 scopes (Focus, Satellite, Later, All) x 2 modes x 2 dates")
+        // The split still carries the retired Backlog and Wait buckets, as a server does for
+        // tasks an older client put there; the board shows them in Satellite, which is what
+        // the web fixture's Satellite views say too.
+        XCTAssertFalse(try load("expected.json", as: Expected.self).board.split.waitTasks?.isEmpty ?? true)
         for key in board.views.keys.sorted() {
             let view = try XCTUnwrap(board.views[key])
             let assembly = try assemble(board, key: key)
@@ -198,7 +202,7 @@ final class PinnedTierOrderTests: XCTestCase {
     /// The same rows reach both groupings, so switching the chip never loses a task.
     func testBothGroupingsDrawTheSameRows() throws {
         let board = try board()
-        for scope in ["focus", "satellite", "backlog", "wait", "ct_later", "all"] {
+        for scope in ["focus", "satellite", "ct_later", "all"] {
             for date in ["all", "now"] {
                 let tier = try assemble(board, key: "\(scope)/custom/\(date)")
                 let project = try assemble(board, key: "\(scope)/project/\(date)")

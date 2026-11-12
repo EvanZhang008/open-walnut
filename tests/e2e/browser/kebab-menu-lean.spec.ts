@@ -116,11 +116,12 @@ test('no unread row, no unpin row, no priority, dates collapsed until clicked', 
   // date"): the 3 built-ins Focus, Satellite and Parked, since 982af739 retired Backlog,
   // then any custom tier another spec left in the shared fixture; pinning is one click,
   // unpinning the same row.
-  const tiers = (await openKebabGroup(menu, 'kebab-group-pin')).locator('[data-testid^="kebab-pin-"]')
+  const tiers = (await openKebabGroup(menu, 'kebab-group-pin')).locator('.task-kebab-tier-options [data-testid^="kebab-pin-"]')
   // A row carries a check when it is the task's tier.
   await expect(tiers.nth(0)).toHaveText(/^Focus✓?$/)
   await expect(tiers.nth(1)).toHaveText(/^Satellite✓?$/)
-  await expect(tiers.nth(2)).toHaveText(/^Parked✓?$/)
+  await expect(tiers).toHaveCount(2)
+  await expect(menu.getByTestId('kebab-pin-wait')).toHaveCount(0)
 
   // Start and Due live in the Dates group (TaskMenuRows), closed until clicked.
   const toggles = (await openKebabGroup(menu, 'kebab-group-dates')).locator('.task-kebab-date-toggle')
@@ -154,7 +155,8 @@ test('the lit tier row is the pin: clicking it again unpins', async ({ page }) =
   const menu = await openRowKebab(page, task)
 
   await expect(menu.getByTestId('kebab-group-pin').locator('.task-kebab-group-toggle')).toHaveCount(0)
-  await expect(menu.getByTestId('kebab-unpin')).toBeVisible()
+  await expect(menu.getByTestId('kebab-unpin')).toHaveCount(0)
+  await expect(menu.getByTestId('kebab-pin-more')).toBeVisible()
   const lit = (await openKebabGroup(menu, 'kebab-group-pin')).locator('[data-testid^="kebab-pin-"][aria-pressed="true"]')
   await expect(lit).toHaveCount(1)
   await expect(lit).toHaveAttribute('title', /^Unpin from Focus/)

@@ -151,8 +151,10 @@ test('projects: a whole project to one tier, its own queue, and the view is kept
   const card = page.locator(`[data-sort-project="${other.toLowerCase()}"]`);
   await expect(card).toContainText('Project · 2 open');
   await expect(card).toContainText('Sort beta one');
-  await card.locator('[data-sort-tier="wait"]').click();
-  for (const id of [ids.b1, ids.b2]) await expect.poll(async () => tierOf(await read(request, id))).toBe('wait');
+  // The tiers on offer are Focus, Satellite and the custom ones: the retired Parked is not.
+  await expect(card.locator('[data-sort-tier="wait"]')).toHaveCount(0);
+  await card.locator('[data-sort-tier="focus"]').click();
+  for (const id of [ids.b1, ids.b2]) await expect.poll(async () => tierOf(await read(request, id))).toBe('focus');
   // Undo puts each task back in the tier it had, which differ (the first test moved one).
   await sort.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect.poll(async () => tierOf(await read(request, ids.b1))).toBe(before.b1);

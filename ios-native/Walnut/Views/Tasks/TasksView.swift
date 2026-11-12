@@ -709,12 +709,6 @@ struct TasksView: View {
                 )
             }
             Button {
-                togglePin(task)
-            } label: {
-                Label(task.pinned == true ? "Unpin" : "Pin",
-                      systemImage: task.pinned == true ? "pin.slash" : "pin")
-            }
-            Button {
                 toggleWatch(task)
             } label: {
                 let watched = BoardStatusSectionModel.isWatched(task)
@@ -728,25 +722,25 @@ struct TasksView: View {
                 Label(BoardBackgroundItem.label(inBackground: inBackground),
                       systemImage: BoardBackgroundItem.systemImage)
             }
-            // Tier mover (pinned rows only): mirrors the desktop focus bar's tier set —
-            // built-ins + custom tiers, optimistic.
-            if task.pinned == true {
-                Menu {
-                    let currentTier = tasks.tierId(for: task.id) ?? "satellite"
-                    ForEach(tasks.allTierChoices, id: \.id) { choice in
-                        Button {
-                            moveTier(task, tier: choice.id)
-                        } label: {
-                            if choice.id == currentTier {
-                                Label(choice.label, systemImage: "checkmark")
-                            } else {
-                                Text(choice.label)
-                            }
+            // Pin / tier move, the same menu a board row has (`PinTierPolicy`): Focus,
+            // Satellite and the custom tiers; a tier pins an unpinned task into it, the
+            // checked tier unpins. Optimistic via the store.
+            let selectedTier = tasks.selectedTier(for: task)
+            Menu {
+                ForEach(BoardModel.tokens(selected: selectedTier, choices: tasks.allTierChoices)) { token in
+                    Button {
+                        pickTier(token.tierId, for: task)
+                    } label: {
+                        if token.selected {
+                            Label(token.label, systemImage: "checkmark")
+                        } else {
+                            Text(token.label)
                         }
                     }
-                } label: {
-                    Label("Move to Tier", systemImage: "square.stack.3d.up")
                 }
+            } label: {
+                Label(PinTierPolicy.menuTitle(pinned: selectedTier != nil),
+                      systemImage: PinTierPolicy.menuIcon(pinned: selectedTier != nil))
             }
             // Local or the project's outside service (only in a project that syncs).
             TaskSyncMenu(task: task)
@@ -754,26 +748,6 @@ struct TasksView: View {
                 selected = task
             } label: {
                 Label("Details", systemImage: "info.circle")
-            }
-        }
-    }
-
-    /// Tier move from a row's context menu. Optimistic via the store.
-    private func moveTier(_ task: WalnutTask, tier: String) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        Task {
-            if let error = await tasks.setTier(taskId: task.id, tier: tier) {
-                toggleError = error
-            }
-        }
-    }
-
-    /// Pin/unpin from a row's context menu. Optimistic via the store.
-    private func togglePin(_ task: WalnutTask) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        Task {
-            if let error = await tasks.setPinned(task, pinned: !(task.pinned == true)) {
-                toggleError = error
             }
         }
     }
@@ -1148,34 +1122,19 @@ struct TasksView: View {
         return "Nothing pinned yet. Pin a task to keep it here."
     }
 
-    /// A tapped tier token. The DECISION is `BoardModel.action` (pure, tested);
-    /// this only performs it. A token that is already selected costs no request.
+    /// A tapped tier token on a board row. Session-only rows have no task to pin.
     private func pickTier(_ row: BoardRow, _ token: BoardModel.TierToken) {
         guard let task = row.task else { return }
-        let current = tasks.tierId(for: task.id)
-        switch BoardModel.action(for: token, current: current) {
-        case .noop:
-            return
-        case .setTier(let tier):
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            Task {
-                // A task that isn't pinned yet can't take a tier (the endpoint
-                // 400s), so the pin rides along — which is what the user meant
-                // by tapping a tier on an unpinned row.
-                if current == nil, let error = await tasks.setPinned(task, pinned: true) {
-                    toggleError = error
-                    return
-                }
-                if let error = await tasks.setTier(taskId: task.id, tier: tier) {
-                    toggleError = error
-                }
-            }
-        case .unpin:
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            Task {
-                if let error = await tasks.setPinned(task, pinned: false) {
-                    toggleError = error
-                }
+        pickTier(token.tierId, for: task)
+    }
+
+    /// A tapped tier in any of this page's tier menus. The DECISION (pin, move, or
+    /// unpin on the checked tier) is `PinTierPolicy.writes`, run by the store.
+    private func pickTier(_ tier: String, for task: WalnutTask) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task {
+            if let error = await tasks.pickTier(tier, for: task) {
+                toggleError = error
             }
         }
     }

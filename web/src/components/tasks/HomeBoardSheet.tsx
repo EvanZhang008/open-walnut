@@ -15,7 +15,7 @@ import { OptionPickerFlyout, useCursorFlyout } from './CursorFlyout';
 import { QuickSortView } from './QuickSortView';
 import { SnoozeDateFlyout, SnoozeFlyout, SnoozeRows } from './SnoozeChoices';
 import { isSnoozed, snoozeUntilText } from './quick-sort-model';
-import { boardMoveIds, buildHomeBoard, homeBoardTier, type BoardFamily, type HomeBoardColumn, type HomeBoardMode, type HomeBoardView } from './home-board-model';
+import { boardMoveIds, buildHomeBoard, homeBoardTier, pinBoardColumns, type BoardFamily, type HomeBoardColumn, type HomeBoardMode, type HomeBoardView } from './home-board-model';
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import '@/styles/home-board.css';
@@ -151,8 +151,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
   }, [dragging, fullscreen.isFullscreen]);
   const tierLabel = (task: Task) => {
     const tier = homeBoardTier(task, focus.customTiers);
-    const labels: Record<string, string> = { focus: 'Focus', satellite: 'Satellite', wait: 'Parked', unpinned: 'Unpinned' };
-    return focus.customTiers.find(c => c.id === tier)?.label ?? labels[tier] ?? tier;
+    return pinBoardColumns(focus.customTiers).find(c => c.id === tier)?.label ?? tier;
   };
   const columns = useMemo(() => fullscreen.isFullscreen && mode !== 'sort' ? buildHomeBoard(tasks, focus.customTiers, mode, query, doneLimit) : [], [fullscreen.isFullscreen, tasks, focus.customTiers, mode, query, doneLimit]);
   const families = useMemo(() => {
@@ -276,7 +275,7 @@ export function HomeBoardSheet({ onOpenTask }: { onOpenTask: (task: Task) => voi
   useEffect(() => { if (fullscreen.isFullscreen && mode === 'status' && query.trim()) ensureAllTasks(); }, [fullscreen.isFullscreen, mode, query, ensureAllTasks]);
   const byId = useMemo(() => new Map(tasks.map(t => [t.id, t])), [tasks]);
   const snoozedNow = useCallback((task: Task) => isSnoozed(task, byId, Date.now()), [byId]);
-  const sortTiers = useMemo(() => [{ id: 'focus', label: 'Focus' }, { id: 'satellite', label: 'Satellite' }, { id: 'wait', label: 'Parked' }, ...focus.customTiers.map(t => ({ id: t.id, label: t.label })), { id: 'unpinned', label: 'Unpinned' }], [focus.customTiers]);
+  const sortTiers = useMemo(() => pinBoardColumns(focus.customTiers), [focus.customTiers]);
   const boardMode: HomeBoardMode = mode === 'status' ? 'status' : 'pin';
   const snoozeFromMenu = (task: Task, date: string | null) => { update(task.id, { start_date: date ?? '' }); };
   const onSnoozeCard = (task: Task, origin: HTMLElement) => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
+import { shownTier } from '@/api/focus';
 import { useQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { QuickTaskConfirm, type ConfirmDraft, type ConfirmField } from './QuickTaskConfirm';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
@@ -164,7 +165,9 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       if (result.due_date && !edited.has('due')) { next.due = result.due_date; next.aiFields.add('due'); }
       if (result.start_date && !edited.has('start')) { next.start = result.start_date; next.aiFields.add('start'); }
       if (result.end_date && !edited.has('end')) { next.end = result.end_date; next.aiFields.add('end'); }
-      if (result.pinTier && !edited.has('pin')) { next.pin = result.pinTier; next.aiFields.add('pin'); }
+      // The parse may still name the retired Parked tier (the server's policy lists it for
+      // older clients): the board draws it in Satellite, so that is what the draft says and sends.
+      if (result.pinTier && !edited.has('pin')) { next.pin = shownTier(result.pinTier); next.aiFields.add('pin'); }
       if (result.priority && !edited.has('priority')) { next.priority = result.priority; next.aiFields.add('priority'); }
       const project = result.project?.trim();
       if (project && !edited.has('project')) {

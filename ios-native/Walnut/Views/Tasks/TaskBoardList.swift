@@ -197,7 +197,9 @@ struct TaskBoardList: View {
                     .modifier(BoardRowGestures(
                         row: row,
                         tierChoices: tierChoices,
-                        currentTier: row.task.flatMap { tierOf[$0.id] },
+                        selectedTier: row.task.flatMap {
+                            PinTierPolicy.selected(task: $0, tierOf: tierOf, offered: tierChoices)
+                        },
                         onToggleDone: { onToggleDone(row) },
                         onPickTier: { onPickTier(row, $0) },
                         onOpenSession: { onOpenSession(row) },
@@ -633,8 +635,6 @@ struct TaskBoardList: View {
         switch bandId {
         case "focus": return Color(red: 0.0, green: 0.48, blue: 1.0)
         case "satellite": return Color(red: 0.35, green: 0.34, blue: 0.84)
-        case "backlog": return Color(red: 0.19, green: 0.69, blue: 0.78)
-        case "wait": return Theme.warning
         default: return Theme.tint
         }
     }
@@ -728,7 +728,8 @@ private struct BoardHeadingFold: ViewModifier {
 struct BoardRowGestures: ViewModifier {
     let row: BoardRow
     let tierChoices: [(id: String, label: String)]
-    let currentTier: String?
+    /// `PinTierPolicy.selected`: the tier the row is shown in, nil when not pinned.
+    let selectedTier: String?
     let onToggleDone: () -> Void
     let onPickTier: (BoardModel.TierToken) -> Void
     let onOpenSession: () -> Void
@@ -783,14 +784,14 @@ struct BoardRowGestures: ViewModifier {
                               systemImage: BoardBackgroundItem.systemImage)
                     }
                 }
-                // Tier move — this is where the wrapping token row went. A menu
+                // Pin / tier move: this is where the wrapping token row went. A menu
                 // shows the same closed set without spending any row height, and
                 // it can't be clipped by anything at the row's trailing edge
                 // (which is what forced the inline version to wrap in the first
-                // place).
+                // place). The checked tier unpins on a second tap; no Unpin item.
                 if row.canRetier {
                     Menu {
-                        ForEach(BoardModel.tokens(current: currentTier, choices: tierChoices)) { token in
+                        ForEach(BoardModel.tokens(selected: selectedTier, choices: tierChoices)) { token in
                             Button {
                                 onPickTier(token)
                             } label: {
@@ -802,7 +803,9 @@ struct BoardRowGestures: ViewModifier {
                             }
                         }
                     } label: {
-                        Label("Move to Tier", systemImage: "square.stack.3d.up")
+                        let pinned = selectedTier != nil
+                        Label(PinTierPolicy.menuTitle(pinned: pinned),
+                              systemImage: PinTierPolicy.menuIcon(pinned: pinned))
                     }
                 }
                 // Local or the project's outside service (only in a project that syncs).

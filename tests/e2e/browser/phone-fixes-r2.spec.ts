@@ -33,7 +33,7 @@ async function bootHome(page: Page): Promise<string[]> {
       sessionStorage.setItem('phone-fixes-r2-seeded', '1')
       localStorage.setItem('open-walnut-home-chat-visible', 'false')
       localStorage.setItem('walnut-todo-quick-views-visible', 'true')
-      // Every tab on the bar (the default hides Focus, Satellite, Parked and Recent).
+      // Every tab on the bar (the default hides Focus, Satellite and Recent).
       localStorage.setItem('walnut-todo-tab-bar-hidden-tabs', '[]')
     } catch { /* storage off */ }
   })

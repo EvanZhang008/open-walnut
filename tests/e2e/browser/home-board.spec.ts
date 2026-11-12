@@ -5,6 +5,8 @@ import { keepTaskFramesTo } from './task-list-stub';
 
 const project = `Board acceptance ${Date.now().toString(36)}`;
 const made: string[] = [];
+/** The custom tier the separate-tier child sits in: a column of its own beside Focus and Satellite. */
+let separateTier = '';
 const ids = { leader: '', child: '', grandchild: '', crossChild: '', separateChild: '', other: '', spare: '' };
 async function create(request: APIRequestContext, title: string, fields: Record<string, unknown> = {}) {
   const response = await request.post('/api/tasks', { data: { title, project, source: 'local', pinned: true, focus_tier: 'focus', ...fields } });
@@ -34,11 +36,17 @@ test.beforeAll(async ({ request }) => {
   ids.child = await create(request, 'Board child', { parent_task_id: ids.leader });
   ids.grandchild = await create(request, 'Board grandchild', { parent_task_id: ids.child });
   ids.crossChild = await create(request, 'Board cross-project child', { project: `${project} other`, parent_task_id: ids.leader });
-  ids.separateChild = await create(request, 'Board separate-tier child', { parent_task_id: ids.leader, focus_tier: 'wait' });
+  const tier = await request.post('/api/focus/tiers', { data: { label: `Board shelf ${Date.now().toString(36)}` } });
+  expect(tier.ok(), await tier.text()).toBe(true);
+  separateTier = (await tier.json()).tier.id;
+  ids.separateChild = await create(request, 'Board separate-tier child', { parent_task_id: ids.leader, focus_tier: separateTier });
   ids.other = await create(request, 'Board other project', { project: `${project} other` });
   ids.spare = await create(request, 'Board unpinned', { pinned: false, focus_tier: null });
 });
-test.afterAll(async ({ request }) => { for (const id of made.reverse()) await request.delete(`/api/tasks/${id}?force=true`); });
+test.afterAll(async ({ request }) => {
+  for (const id of made.reverse()) await request.delete(`/api/tasks/${id}?force=true`);
+  if (separateTier) await request.delete(`/api/focus/tiers/${separateTier}`);
+});
 
 test('pin columns, project sections, deep family, retained view and popup margins', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -133,7 +141,7 @@ test('Move changes the tier for the whole visible family, not project or parent'
   expect(crossChild.focus_tier ?? 'satellite').toBe('satellite');
   expect(crossChild.project).toBe(`${project} other`);
   expect(crossChild.parent_task_id).toBe(ids.leader);
-  expect((await (await request.get(`/api/tasks/${ids.separateChild}`)).json()).task.focus_tier).toBe('wait');
+  expect((await (await request.get(`/api/tasks/${ids.separateChild}`)).json()).task.focus_tier).toBe(separateTier);
   expect((await (await request.get(`/api/tasks/${ids.other}`)).json()).task.focus_tier).toBe('focus');
   expect((await (await request.get(`/api/tasks/${ids.child}`)).json()).task.parent_task_id).toBe(ids.leader);
   await page.getByRole('button', { name: 'Move Board leader to pin tier', exact: true }).click();

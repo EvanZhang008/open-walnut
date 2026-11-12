@@ -657,10 +657,10 @@ final class DemoStoryTests: XCTestCase {
     // MARK: - The board
 
     /// The demo's board as the app first draws it (the default Now filter, the status
-    /// sections on) has a chip for every tier the sample data fills, on every hour of the
-    /// week: Focus, Satellite, Backlog and Parked. Parked's only task is snoozed to its ship
-    /// day, at least a day out, and a tier of snoozed rows keeps its chip (2026-11-10: the
-    /// chip was missing on every day, so the drawer's chip rail test could not find it).
+    /// sections on) has a chip for every tier it offers, on every hour of the week: Focus and
+    /// Satellite. The sample data still stores some tasks in the retired Backlog and Wait
+    /// tiers, as an older client may have; they show in Satellite, and no Backlog or Parked
+    /// chip comes back (2026-11-11, the two-tier board).
     func testTheDemoBoardHasAChipForEveryTierOnEveryHour() {
         for c in everyHourOfTheWeek {
             let tasks = seed(c).tasks
@@ -676,7 +676,8 @@ final class DemoStoryTests: XCTestCase {
                 customTiers: [], dateFilter: BoardFilterPrefs.defaultDateFilter,
                 statusSections: true, now: c.now
             )
-            XCTAssertEqual(board.rail.compactMap(\.bandId), ["focus", "satellite", "backlog", "wait"], label(c))
+            XCTAssertEqual(board.rail.compactMap(\.bandId), ["focus", "satellite"], label(c))
+            XCTAssertFalse(board.bands.contains { ["backlog", "wait"].contains($0.bandId) }, label(c))
         }
     }
 }

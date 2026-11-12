@@ -31,11 +31,12 @@ describe('the task panel changes the tab only where the user picks one', () => {
 
   it('no other path writes the tab state', () => {
     // Besides handleSectionChange: a tab the user picked inside a project jump, kept when the
-    // jump ends, and the stale custom tab's heal.
+    // jump ends, a retired built-in tab's compatible display, and the stale custom tab's heal.
     const writes = PANEL.split('\n').filter((line) => /setActiveSection\(/.test(line));
     expect(writes.map((l) => l.trim())).toEqual([
       'const keepPickedTab = (section: TodoSection) => { startTransition(() => setActiveSection(section)); persistSection(section); };',
       'startTransition(() => setActiveSection(section));',
+      "if (isRetiredTier(activeSection)) { setActiveSection('satellite'); persistSection('satellite'); }",
       "if (isDeleted(activeSection)) { setActiveSection('focus'); persistSection('focus'); }",
     ]);
     const kept = PANEL.split('\n').filter((line) => /keepPickedTab\(/.test(line) && !/const keepPickedTab/.test(line));

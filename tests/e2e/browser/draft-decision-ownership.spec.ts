@@ -90,7 +90,8 @@ test('a tier picked in the menu is FINAL against later parses, while the AI keep
   await expect(draftTaskMenu(page)).toHaveCount(0)
   await expectUserChip(panel, 'pinTier', 'Focus')
 
-  // The parse changes its mind about BOTH tier and priority.
+  // The parse changes its mind about BOTH tier and priority (to the retired `wait`, which an
+  // older model may still answer and the draft reads as Satellite).
   mock.set({ pinTier: 'wait', priority: 'important', due_date: due })
   await typeAndSettle(page, mock, 'fix the flaky login test by friday, important')
   await expectUserChip(panel, 'pinTier', 'Focus')
@@ -114,7 +115,8 @@ test('a field the newer trailing parse no longer proposes goes back to its defau
   const panel = await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
 
   await typeAndSettle(page, mock, 'wait on the vendor reply by friday')
-  await expectAiChip(panel, 'pinTier', 'Parked')
+  // A parse naming the retired `wait` tier (an older model's answer) reads as Satellite.
+  await expectAiChip(panel, 'pinTier', 'Satellite')
   await expectAiChip(panel, 'dueDate', `Due ${dayWords(4)}`)
 
   // Both legs answered ok and neither proposes anything: the AI withdrew both.
@@ -210,12 +212,12 @@ test('quick folders still apply their remembered model after AI writes and after
 
   // C11: a More edit of a task field is not a launch edit either.
   const menu = await openDraftSettings(panel, 'more')
-  await tierRow(menu, 'Parked').click()
-  await expectUserChip(panel, 'pinTier', 'Parked')
+  await tierRow(menu, 'Focus').click()
+  await expectUserChip(panel, 'pinTier', 'Focus')
   await draftQuickChipFor(panel, mcps).click()
   await expect(draftCwdPill(panel)).toContainText(basenameOf(mcps))
   await expect(draftModelPill(panel)).toHaveAttribute('data-model', 'haiku')
-  await expectUserChip(panel, 'pinTier', 'Parked')
+  await expectUserChip(panel, 'pinTier', 'Focus')
 })
 
 // ── C18 C19 C18b: a folder pick keeps every task field, whoever decided it ──
@@ -256,9 +258,9 @@ test('a More tier edit owns the tier only, and an AI due that landed while the p
 
   // C18: the tier is the user's from More; the due stays Walnut's.
   const menu = await openDraftSettings(panel, 'more')
-  await tierRow(menu, 'Parked').click()
+  await tierRow(menu, 'Satellite').click()
   await expect(draftTaskMenu(page)).toHaveCount(0)
-  await expectUserChip(panel, 'pinTier', 'Parked')
+  await expectUserChip(panel, 'pinTier', 'Satellite')
   await expectAiChip(panel, 'dueDate', `Due ${dayWords(3)}`)
 
   // C19: the next parse is slow and lands while the picker is open.
@@ -269,7 +271,7 @@ test('a More tier edit owns the tier only, and an AI due that landed while the p
   await page.waitForTimeout(2_900)
   await confirmPath(page, picker, `${fixtureRoot}/projects/mcps`)
 
-  await expectUserChip(panel, 'pinTier', 'Parked')
+  await expectUserChip(panel, 'pinTier', 'Satellite')
   await expectAiChip(panel, 'dueDate', `Due ${dayWords(5)}`)
   await page.screenshot({ path: `${SHOT_DIR}/c18-c19-folder-pick-keeps-fields.png` })
 })
@@ -460,30 +462,39 @@ test('a custom tier chip truncates a long label and keeps the full name in its t
 
 // ── C67: a tier "+" reusing a just-cleared draft never inherits AI leftovers ──
 
-test('a tier "+" that reuses a just-emptied draft lands on Inbox, no folder, and its own Parked chip', async ({ page }) => {
+test('a tier "+" that reuses a just-emptied draft lands on Inbox, no folder, and its own tier chip', async ({ page }) => {
   const project = await aiProjectWithFolder(page)
-  // The Parked header only mounts while Parked holds a pinned task.
-  const anchor = await page.request.post('/api/tasks', { data: { title: `decision anchor ${Date.now()}`, source: 'local', project: 'Work' } })
-  const anchorId = ((await anchor.json()) as { task: { id: string } }).task.id
-  await pinToTier(page, anchorId, 'wait')
-  const mock = await boot(page, { project: project.name, pinTier: 'satellite' })
-  const panel = await openDraft(page)
-  const model = await draftModelPill(panel).getAttribute('data-model')
-  await typeAndSettle(page, mock, 'tidy the marina backlog')
-  await expect(draftProjectPill(panel)).toHaveText(`Project: ${project.name}✦`)
+  // The "+" belongs to a custom tier, whose label differs from the parse's Satellite. A task
+  // pinned there keeps its header drawn.
+  const tierLabel = `Shelf ${Date.now() % 100_000}`
+  const made = await page.request.post('/api/focus/tiers', { data: { label: tierLabel } })
+  expect(made.ok(), await made.text()).toBe(true)
+  const tierId = ((await made.json()) as { tier: { id: string } }).tier.id
+  try {
+    const anchor = await page.request.post('/api/tasks', { data: { title: `decision anchor ${Date.now()}`, source: 'local', project: 'Work' } })
+    const anchorId = ((await anchor.json()) as { task: { id: string } }).task.id
+    await pinToTier(page, anchorId, tierId)
+    const mock = await boot(page, { project: project.name, pinTier: 'satellite' })
+    const panel = await openDraft(page)
+    const model = await draftModelPill(panel).getAttribute('data-model')
+    await typeAndSettle(page, mock, 'tidy the marina backlog')
+    await expect(draftProjectPill(panel)).toHaveText(`Project: ${project.name}✦`)
 
-  const sublabel = page.locator('.todo-pinned-sublabel[data-navigation-id="wait"]').first()
-  await expect(sublabel).toBeVisible({ timeout: 25_000 })
-  // Clear, then open from "+" BEFORE the 350ms clear debounce can fire.
-  await draftComposer(page).fill('')
-  await sublabel.hover()
-  await openSessionFromPlus(page, sublabel)
+    const sublabel = page.locator(`.todo-pinned-sublabel[data-navigation-id="${tierId}"]`).first()
+    await expect(sublabel).toBeVisible({ timeout: 25_000 })
+    // Clear, then open from "+" BEFORE the 350ms clear debounce can fire.
+    await draftComposer(page).fill('')
+    await sublabel.hover()
+    await openSessionFromPlus(page, sublabel)
 
-  await expect(draftPanels(page)).toHaveCount(1)
-  const reused = draftPanel(page)
-  await expect(draftProjectPill(reused)).toHaveCount(0)
-  await expect(draftCwdPill(reused)).toHaveText('Choose folder and host…')
-  await expectUserChip(reused, 'pinTier', 'Parked')
-  expect(await chipLabel(draftDecisionChip(reused, 'pinTier'))).toBe('Parked')
-  await expect(draftModelPill(reused)).toHaveAttribute('data-model', model ?? '')
+    await expect(draftPanels(page)).toHaveCount(1)
+    const reused = draftPanel(page)
+    await expect(draftProjectPill(reused)).toHaveCount(0)
+    await expect(draftCwdPill(reused)).toHaveText('Choose folder and host…')
+    await expectUserChip(reused, 'pinTier', tierLabel)
+    expect(await chipLabel(draftDecisionChip(reused, 'pinTier'))).toBe(tierLabel)
+    await expect(draftModelPill(reused)).toHaveAttribute('data-model', model ?? '')
+  } finally {
+    await page.request.delete(`/api/focus/tiers/${tierId}`).catch(() => undefined)
+  }
 })

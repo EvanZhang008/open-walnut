@@ -44,7 +44,6 @@ const base: FooterScopeInput = {
   activeProject: '',
   pinnedTaskIds: ids('f1', 'f2', 'f3', 'h1', 's1', 'b1', 'c1'),
   focusTaskIds: ids('f1', 'f2', 'f3', 'h1'),
-  waitTaskIds: ids('b1'),
   customTierIds: { ct_x: ids('c1') },
   customMemberIds: ids('c1'),
   hiddenGroups: ids('g'),
@@ -66,12 +65,12 @@ describe('footerStatusScope: tier tabs count their own tier', () => {
     expect(counts({ section: 'focus', hiddenGroups: undefined }).waiting).toBe(2);
   });
 
-  it('Satellite is pinned minus every other tier', () => {
-    expect(counts({ section: 'satellite' })).toEqual({ waiting: 1, completed: 0, wholeBoard: false });
+  it('Satellite is pinned minus Focus and the custom tiers, a pin stored in the retired Parked tier included', () => {
+    // b1 is stored focus_tier 'wait' (Parked, retired 2026-11-11): the board draws it in Satellite.
+    expect(counts({ section: 'satellite' })).toEqual({ waiting: 1, completed: 1, wholeBoard: false });
   });
 
-  it('Parked, a custom tier and the Pinned view', () => {
-    expect(counts({ section: 'wait' })).toEqual({ waiting: 0, completed: 1, wholeBoard: false });
+  it('a custom tier and the Pinned view', () => {
     expect(counts({ section: 'ct_x' })).toEqual({ waiting: 1, completed: 0, wholeBoard: false });
     expect(counts({ section: 'pinned' })).toEqual({ waiting: 3, completed: 2, wholeBoard: false });
   });

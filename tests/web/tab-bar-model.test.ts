@@ -18,8 +18,9 @@ const ids = (tabs: { id: string }[]) => tabs.map((tab) => tab.id)
 
 describe('tabBarTabs', () => {
   it('lists All, Pinned, the tiers, custom tiers before Recent, and neither Projects nor the Scratchpad', () => {
-    expect(ids(tabBarTabs(customs))).toEqual(['all', 'pinned', 'focus', 'satellite', 'wait', 'ct_a', 'ct_b', 'recent'])
-    expect(ids(tabBarTabs())).toEqual(['all', 'pinned', 'focus', 'satellite', 'wait', 'recent'])
+    // The retired Parked tier (`wait`) has no tab: its tasks draw in Satellite.
+    expect(ids(tabBarTabs(customs))).toEqual(['all', 'pinned', 'focus', 'satellite', 'ct_a', 'ct_b', 'recent'])
+    expect(ids(tabBarTabs())).toEqual(['all', 'pinned', 'focus', 'satellite', 'recent'])
     expect(tabBarTabs(customs).filter((tab) => tab.custom).map((tab) => tab.label)).toEqual(['Reading', 'Errands'])
   })
 })
@@ -35,8 +36,8 @@ describe('visibleTabBarTabs', () => {
   it('drops the tabs the user took off the bar', () => {
     expect(ids(visibleTabBarTabs(tabs, { active: 'all', counts: full, hidden: ['wait', 'ct_b', 'recent'], hideEmpty: false })))
       .toEqual(['all', 'pinned', 'focus', 'satellite', 'ct_a'])
-    // A hidden-list entry for a tab that no longer exists (the retired Backlog
-    // tier, still in an old browser's storage) is simply ignored.
+    // A hidden-list entry for a tab that no longer exists (the retired Backlog and
+    // Parked tiers, still in an old browser's storage) is simply ignored.
     expect(ids(visibleTabBarTabs(tabs, { active: 'all', counts: full, hidden: ['backlog'], hideEmpty: false }))).toEqual(ids(tabs))
   })
 
@@ -59,8 +60,8 @@ describe('visibleTabBarTabs', () => {
 
   it('always draws the tab the panel is on, hidden or empty', () => {
     // (Recent and the custom tiers stay while empty.)
-    expect(ids(visibleTabBarTabs(tabs, { active: 'wait', counts: { wait: 0 }, hidden: ['wait', 'all', 'pinned'], hideEmpty: true })))
-      .toEqual(['wait', 'ct_a', 'ct_b', 'recent'])
+    expect(ids(visibleTabBarTabs(tabs, { active: 'satellite', counts: { satellite: 0 }, hidden: ['satellite', 'all', 'pinned'], hideEmpty: true })))
+      .toEqual(['satellite', 'ct_a', 'ct_b', 'recent'])
   })
 
   it('highlights nothing on the Projects view, which is not a tab', () => {
@@ -125,7 +126,7 @@ describe('displayViewLayers', () => {
   it('puts only All and Pinned on the first layer by default, everything else in the second layer of the View page', () => {
     const { first, more } = displayViewLayers([], DEFAULT_HIDDEN_TABS)
     expect(ids(first)).toEqual(['all', 'pinned'])
-    expect(ids(more)).toEqual(['focus', 'satellite', 'wait', 'recent', 'tasks'])
+    expect(ids(more)).toEqual(['focus', 'satellite', 'recent', 'tasks'])
     expect(first.map((v) => `${v.label} ${v.title}`).join(' ')).not.toMatch(TIER_WORDS)
   })
 
@@ -133,7 +134,7 @@ describe('displayViewLayers', () => {
     const hidden = DEFAULT_HIDDEN_TABS.filter((id) => id !== 'focus')
     const { first, more } = displayViewLayers(customs, hidden)
     expect(ids(first)).toEqual(['all', 'pinned', 'focus', 'ct_a', 'ct_b'])
-    expect(ids(more)).toEqual(['satellite', 'wait', 'recent', 'tasks'])
+    expect(ids(more)).toEqual(['satellite', 'recent', 'tasks'])
   })
 
   it('caps the first layer so 30 custom tiers spill into the second layer of the View page, keeping menu order', () => {
@@ -141,7 +142,7 @@ describe('displayViewLayers', () => {
     const { first, more } = displayViewLayers(many, DEFAULT_HIDDEN_TABS)
     expect(first).toHaveLength(DISPLAY_FIRST_LAYER_LIMIT)
     expect(ids(first).slice(0, 3)).toEqual(['all', 'pinned', 'ct_0'])
-    expect(ids(more).slice(0, 4)).toEqual(['focus', 'satellite', 'wait', `ct_${DISPLAY_FIRST_LAYER_LIMIT - 2}`])
+    expect(ids(more).slice(0, 3)).toEqual(['focus', 'satellite', `ct_${DISPLAY_FIRST_LAYER_LIMIT - 2}`])
     expect(ids(more).slice(-2)).toEqual(['recent', 'tasks'])
     expect(first.length + more.length).toBe(allViews(many).length)
   })
@@ -157,7 +158,7 @@ describe('tabMenuGroups (the bar chevron menu)', () => {
   it('lists All, Pinned and Recent above the divider and every tier under More views', () => {
     const { top, tiers } = tabMenuGroups(tabBarTabs(customs))
     expect(ids(top)).toEqual(['all', 'pinned', 'recent'])
-    expect(ids(tiers)).toEqual(['focus', 'satellite', 'wait', 'ct_a', 'ct_b'])
+    expect(ids(tiers)).toEqual(['focus', 'satellite', 'ct_a', 'ct_b'])
     expect(top.map((t) => `${t.label} ${t.title}`).join(' ')).not.toMatch(TIER_WORDS)
     for (const tier of tiers) expect(tier.title).not.toBe('')
   })
@@ -168,7 +169,7 @@ describe('wideHidden: the extension\'s first page (review round 5, Opus #2)', ()
     expect(WIDE_HIDDEN_TABS).toEqual(['recent'])
     expect(wideHidden(WIDE_HIDDEN_TABS)).toEqual(['recent'])
     // Home's default (All and Pinned only) gets the tiers back on the wide bar.
-    expect(wideHidden(DEFAULT_HIDDEN_TABS)).toEqual(DEFAULT_HIDDEN_TABS.filter((id) => !['focus', 'satellite', 'wait'].includes(id)))
+    expect(wideHidden(DEFAULT_HIDDEN_TABS)).toEqual(DEFAULT_HIDDEN_TABS.filter((id) => !['focus', 'satellite'].includes(id)))
     // A choice that keeps three or more built-in tabs is the person's, as it stands.
     expect(wideHidden(['satellite', 'recent'])).toEqual(['satellite', 'recent'])
   })

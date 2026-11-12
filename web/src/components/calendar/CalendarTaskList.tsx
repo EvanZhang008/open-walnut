@@ -10,7 +10,7 @@ import { memo, useDeferredValue, useMemo } from 'react';
 import { usePersistentState, isString } from '@/hooks/usePersistentState';
 import { useDraggable } from '@dnd-kit/core';
 import type { Task } from '@open-walnut/core';
-import { PIN_TIER_POLICY } from '@open-walnut/core';
+import { BOARD_TIER_POLICY } from '@/api/focus';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
 import { useShowPriority } from '@/hooks/useShowPriority';
@@ -109,13 +109,11 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
     let remaining = unscheduled;
     if (focusBar) {
       const tierOrder: { key: string; label: string; tier: string; ids: string[] }[] = [
-        ...PIN_TIER_POLICY.map((p) => ({
+        ...BOARD_TIER_POLICY.map((p) => ({
           key: p.tier,
           label: p.label,
           tier: p.tier,
-          ids: p.tier === 'focus' ? focusBar.focusIds
-            : p.tier === 'satellite' ? focusBar.satelliteIds
-            : focusBar.waitIds,
+          ids: p.tier === 'focus' ? focusBar.focusIds : focusBar.satelliteIds,
         })),
         ...customTiers.map((ct) => ({
           key: ct.id,

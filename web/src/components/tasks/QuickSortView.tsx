@@ -34,7 +34,7 @@ interface Decision { key: string; outcome: string; label: string; write: Promise
 type Target = { kind: 'task'; item: SortItem } | { kind: 'project'; project: SortProject };
 
 const isView = (v: unknown): v is SortView => v === 'tasks' || v === 'projects';
-const tierClass = (id: string) => `tier-${['focus', 'satellite', 'wait', 'unpinned'].includes(id) ? id : 'custom'}`;
+const tierClass = (id: string) => `tier-${['focus', 'satellite', 'unpinned'].includes(id) ? id : 'custom'}`;
 
 const typing = (target: EventTarget | null) => !!(target as HTMLElement | null)?.closest?.('input, textarea, select, [contenteditable="true"]');
 /** Keys pressed in an open menu belong to it (its arrows walk its rows). */

@@ -66,6 +66,8 @@ test('literal hits lead and survive the server pass; loose hits fold into Relate
   const literalPlain = await createTask(request, `${token} rollout notes`);
   const strong = [await createTask(request, 'Dock schedule loop'), await createTask(request, 'Verify the audit log later')];
   const weak = await Promise.all(Array.from({ length: 6 }, (_, i) => createTask(request, `Loosely related chore ${i} ${Date.now()}`)));
+  // Pinned under the retired `wait` tier, as an older client may still store it: its pill
+  // reads Satellite.
   await pinTask(request, literalPinned, 'wait');
   // New tasks land in Satellite; this one is left unpinned so a row without a pill is covered.
   expect((await request.delete(`/api/focus/tasks/${literalPlain}`)).ok()).toBe(true);
@@ -110,7 +112,7 @@ test('literal hits lead and survive the server pass; loose hits fold into Relate
   await expect(page.locator('#home-task-navigation .todo-pinned-section')).toHaveCount(0);
   await expect(page.locator('#home-task-navigation .todo-tasks-header')).toHaveCount(0);
   const pinnedRow = page.locator(`.todo-search-results .todo-panel-item[data-task-id="${literalPinned}"]`);
-  await expect(pinnedRow.locator('.todo-search-tier-pill')).toHaveText('Parked');
+  await expect(pinnedRow.locator('.todo-search-tier-pill')).toHaveText('Satellite');
   await expect(page.locator(`.todo-search-results .todo-panel-item[data-task-id="${literalPlain}"] .todo-search-tier-pill`)).toHaveCount(0);
   const label = pinnedRow.locator('.todo-search-context-pill');
   // The whole project name is the label's text (cut off, it peeks in place on hover).

@@ -421,7 +421,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
   const focusTaskIdSet = useMemo(() => new Set(focusBar.focusIds), [focusBar.focusIds]);
-  const waitTaskIdSet = useMemo(() => new Set(focusBar.waitIds), [focusBar.waitIds]);
   const customTierIdSets = useMemo(() => {
     const map: Record<string, Set<string>> = {};
     for (const [tid, ids] of Object.entries(focusBar.customTierIds)) map[tid] = new Set(ids);
@@ -2348,7 +2347,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // A tier the registry no longer knows (a custom tier deleted in another
     // client since this one loaded it) is sent as a bare pin: the create then
     // lands in Satellite, the same degrade the Start path applies
-    // (quick-start.ts), instead of the 400 resolveNewTaskTier would answer.
+    // (quick-start.ts), instead of the 400 resolveNewTaskTier would answer. A retired
+    // tier (Parked) is not a built-in any more, so it degrades to Satellite the same way.
     const tierKnown = !!tier && (isBuiltinTier(tier) || focusBar.customTiers.some((t) => t.id === tier));
     const task = await create(
       {
@@ -3638,7 +3638,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSetTier={handleSetTier}
           pinnedTaskIds={pinnedTaskIdSet}
           focusTaskIds={focusTaskIdSet}
-          waitTaskIds={waitTaskIdSet}
           customTiers={focusBar.customTiers}
           customTiersLoaded={focusBar.customTiersLoaded}
           customTierIds={customTierIdSets}

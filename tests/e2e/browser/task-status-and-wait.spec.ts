@@ -14,8 +14,7 @@
  *     its board tier (Focus stays Focus). A message into the session moves it to
  *     In Progress, and the turn ends as Need Action like any other. Picking a
  *     status by hand ends it and drops the time.
- *  4. The TRIGGER pill is a plain trigger pill again (no SNOOZED mode); the
- *     board's `wait` tier reads "Parked".
+ *  4. The TRIGGER pill is a plain trigger pill again (no SNOOZED mode).
  *  5. "Something happens…" never asks the human to fill a form: it starts a
  *     message to the task's AI that names the skill (/walnut-trigger), and the AI
  *     writes the trigger and sets the task to Waiting. With a session it leads

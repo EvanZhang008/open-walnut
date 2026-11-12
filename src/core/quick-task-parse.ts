@@ -2,7 +2,7 @@ import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
 import { fastModelFor, fastModelRidesCli, fastCallText } from './cheap-model.js';
 import { getJevClient, readChoice, type JevClient } from './decision/jev-client.js';
-import { PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY, migrateFocusTier } from './types.js';
+import { OFFERED_PIN_TIER_POLICY, PIN_TIER_NONE_GUIDANCE, migrateFocusTier } from './types.js';
 import type { Config, CustomTierRecord, LegStatus, QuickTaskParse, QuickTaskParseLegs } from './types.js';
 
 export type { QuickTaskParse } from './types.js';
@@ -37,17 +37,19 @@ export interface QuickTaskParseOptions {
   customTiers?: CustomTierRecord[];
 }
 
-/** The pinTier rule, rendered from PIN_TIER_POLICY (plus the user's custom tiers)
- *  so the prompt can't drift from the tooltips the user reads in the picker. */
+/** The pinTier rule, rendered from OFFERED_PIN_TIER_POLICY (plus the user's custom tiers)
+ *  so the prompt can't drift from the tooltips the user reads in the picker. The retired
+ *  Parked tier (`wait`) is never recommended (2026-11-11): someday or blocked work is left
+ *  unpinned. A model that still answers `wait` is accepted below, for older prompts. */
 function buildPinTierRule(customTiers: CustomTierRecord[]): string {
   return [
     '- pinTier: which pinned tier the task belongs in. Judge it from the work itself — do NOT require the words "pin"/"focus".',
-    ...PIN_TIER_POLICY.map((p) => `  · ${p.tier} — ${p.guidance}`),
+    ...OFFERED_PIN_TIER_POLICY.map((p) => `  · ${p.tier} — ${p.guidance}`),
     ...customTiers.map((t) => `  · ${t.id} — user-defined tier "${t.label}". Pick it when the note explicitly names this tier (e.g. "icebox" → the tier labeled Icebox).`),
     `  · OMIT the field entirely — ${PIN_TIER_NONE_GUIDANCE}`,
-    '  Urgency signals (urgent/critical/asap/today/紧急/right now) point at focus; a CONCRETE due date inside the next ~7 days points at satellite even with no urgency word; "waiting on"/"blocked by"/等 and explicit someday/later wording (someday, backlog, 以后, 有空再) point at wait. An explicit "pin to X" always wins.',
-    '  Unpinned is still the DEFAULT for things not worth tracking in the pinned working set at all — wait is for set-aside work the user DOES want to keep visible.',
-    '  When a signal is AMBIGUOUS, answer with the weaker option: satellite rather than focus, and omission rather than wait. focus needs stated urgency and wait needs a stated blocker or explicit someday wording — claiming either without one is the most common mistake, and it is worse than saying nothing, because a surface that gets no tier applies its own default for work that is being started.',
+    '  Urgency signals (urgent/critical/asap/today/\u7d27\u6025/right now) point at focus; a CONCRETE due date inside the next ~7 days points at satellite even with no urgency word; "waiting on"/"blocked by"/\u7b49 and explicit someday/later wording (someday, backlog, \u4ee5\u540e, \u6709\u7a7a\u518d) mean OMIT the field: that work stays in the task list, unpinned. An explicit "pin to X" always wins.',
+    '  Unpinned is the DEFAULT for things not worth tracking in the pinned working set at all.',
+    '  When a signal is AMBIGUOUS, answer with the weaker option: satellite rather than focus. focus needs stated urgency; claiming it without one is the most common mistake, and it is worse than saying nothing, because a surface that gets no tier applies its own default for work that is being started.',
   ].join('\n');
 }
 
@@ -272,7 +274,7 @@ async function jevClassify(
   try {
     const customTiers = (opts.customTiers ?? []).filter((t) => t.id !== JEV_NONE);
     const pinTierCriteria: Record<string, string> = Object.fromEntries([
-      ...PIN_TIER_POLICY.map((p) => [p.tier, p.guidance]),
+      ...OFFERED_PIN_TIER_POLICY.map((p) => [p.tier, p.guidance]),
       ...customTiers.map((t) => [t.id, `The user's custom tier "${t.label}" — pick it when the note explicitly names this tier.`]),
       [JEV_NONE, PIN_TIER_NONE_GUIDANCE],
     ]);
@@ -289,7 +291,7 @@ async function jevClassify(
         // Carries the same overriding rules the LLM prompt enforces
         // (buildPinTierRule): without them Jev's confident "none" would veto an
         // EXPLICIT "pin to focus" in the note.
-        instructions: 'Which pinned tier does this task belong in? An explicit "pin to X" or a named tier in the note always wins: choose that tier. A concrete due date within the next ~7 days points at satellite even without urgency wording. Otherwise judge from the work itself; when a signal is ambiguous prefer the weaker option — focus needs stated urgency and wait needs a stated blocker.',
+        instructions: 'Which pinned tier does this task belong in? An explicit "pin to X" or a named tier in the note always wins: choose that tier. A concrete due date within the next ~7 days points at satellite even without urgency wording. Otherwise judge from the work itself; when a signal is ambiguous prefer the weaker option — focus needs stated urgency, and someday, later or blocked work is none (left unpinned).',
         criteria: pinTierCriteria,
       },
       priority: {
@@ -328,7 +330,8 @@ async function jevClassify(
     const out: JevQuickFields = {};
 
     // Accept only keys the question offered (the criteria maps ARE the accept
-    // list, so a new PIN_TIER_POLICY tier is offered and accepted in one place).
+    // list, so a new OFFERED_PIN_TIER_POLICY tier is offered and accepted in one place; the
+    // retired Parked tier is neither, here).
     const pin = confidentChoice(answers.pinTier);
     if (pin === JEV_NONE) out.pinTier = null;
     else if (pin && pin in pinTierCriteria) out.pinTier = pin;

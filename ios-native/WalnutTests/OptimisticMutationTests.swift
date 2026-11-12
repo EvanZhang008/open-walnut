@@ -272,7 +272,7 @@ final class OptimisticMutationTests: XCTestCase {
         let store = makeStore(mock)
         store.taskTiers = ["t1": "satellite"]
 
-        let failure = await store.setTier(taskId: "t1", tier: "wait")
+        let failure = await store.setTier(taskId: "t1", tier: "focus")
         XCTAssertEqual(failure, "Pin the task first, then choose a tier.")
         XCTAssertEqual(store.tierId(for: "t1"), "satellite", "failed move must revert the map")
     }

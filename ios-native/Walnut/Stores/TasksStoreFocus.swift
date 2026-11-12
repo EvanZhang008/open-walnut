@@ -3,9 +3,10 @@ import Foundation
 // MARK: - Focus tiers (phone mirror of the desktop focus bar's tier model)
 //
 // Web semantics (do not invent new tiers): every PINNED task lives in exactly
-// one tier — built-ins `focus` (current sprint), `satellite` (default),
-// `backlog` (someday), `wait` (parked), or a registered custom tier (`ct_*`).
-// The slim task projection carries `pinned` but not the tier, so the phone
+// one tier — built-ins `focus` (current sprint), `satellite` (default), or a
+// registered custom tier (`ct_*`). The retired `backlog` and `wait` are still
+// on the wire and still stored, and read as Satellite (`PinTierPolicy`, the one
+// rule for what is offered and shown). The slim task projection carries `pinned` but not the tier, so the phone
 // joins `GET /v1/focus/tasks` (id buckets) + `GET /v1/focus/tiers` (custom
 // labels) into `taskTiers`/`customTiers` on TasksStore. Tier moves ride
 // `PUT /v1/focus/tasks/:id/tier`, optimistic with rollback.
@@ -34,32 +35,24 @@ extension TasksStore {
     /// the registry does not, and `loadFocusTiers` already treats them that way.
     static let focusTiersCacheKey = "focus-tiers"
 
-    /// Built-in tier order + labels — mirrors the desktop reading order.
-    static let builtinTiers: [(id: String, label: String)] = [
-        ("focus", "Focus"), ("satellite", "Satellite"),
-        ("backlog", "Backlog"), ("wait", "Wait"),
-    ]
-
-    /// Tier id for a task ("satellite" when pinned but unmapped yet), nil when
-    /// not pinned. Reads the OBSERVED map so SwiftUI tracks it.
+    /// Tier id a task is SHOWN in, nil when not pinned or not mapped yet. Reads the
+    /// OBSERVED map so SwiftUI tracks it. Never a retired tier: the map is the display
+    /// view of the split (`tierMap`).
     func tierId(for taskId: String) -> String? {
         taskTiers[taskId]
     }
 
-    /// Human label for a tier id: built-ins, then the custom registry, then a
-    /// sensible fallback (never show a raw ct_* id).
+    /// Human label for a tier id (`PinTierPolicy.label`): a built-in, then the custom
+    /// registry, then Satellite. Never a raw ct_* id, never a retired tier's name.
     func tierLabel(for tierId: String) -> String {
-        if let builtin = Self.builtinTiers.first(where: { $0.id == tierId }) {
-            return builtin.label
-        }
-        return customTiers.first(where: { $0.id == tierId })?.label ?? "Satellite"
+        PinTierPolicy.label(for: tierId, custom: customTiers)
     }
 
     /// Tier badge text for a task row (nil = no badge: not pinned).
     func tierBadge(for task: WalnutTask) -> String? {
         guard task.pinned == true else { return nil }
         // Pinned but split not loaded yet → the server default.
-        return tierLabel(for: tierId(for: task.id) ?? "satellite")
+        return tierLabel(for: tierId(for: task.id) ?? PinTierPolicy.defaultTier)
     }
 
     /// Pure projection of the split into `tier id → ordered task ids`.
@@ -84,10 +77,12 @@ extension TasksStore {
             let explicit = Set(order.filter { $0.key != "satellite" }.flatMap(\.value))
             order["satellite"] = split.pinnedTasks.filter { !explicit.contains($0) }
         }
-        return order
+        // The retired buckets join Satellite in pin order: what the phone shows.
+        return PinTierPolicy.displayOrder(order, pinnedOrder: split.pinnedTasks)
     }
 
-    /// Pure join of the tier split + registry into the taskId → tier map.
+    /// Pure join of the tier split + registry into the taskId → tier map, as SHOWN:
+    /// a task stored in a retired tier maps to Satellite (`PinTierPolicy.displayMap`).
     /// Static so WalnutTests can gate it without a store or network.
     static func tierMap(from split: FocusTierResult) -> [String: String] {
         var map: [String: String] = [:]
@@ -101,7 +96,7 @@ extension TasksStore {
         }
         // Any pinned id missing from every bucket is satellite by definition.
         for id in split.pinnedTasks where map[id] == nil { map[id] = "satellite" }
-        return map
+        return PinTierPolicy.displayMap(map)
     }
 
     /// Fetch the tier split + custom registry. Best-effort: an old server
@@ -187,8 +182,11 @@ extension TasksStore {
     /// Move a pinned task to a tier — optimistic map write, PUT in the
     /// background, rollback + error message on failure. Returns nil on
     /// success (mirrors setPinned's contract).
-    func setTier(taskId: String, tier: String) async -> String? {
+    func setTier(taskId: String, tier requested: String) async -> String? {
         noteUserTouched(taskId)
+        // The wire takes what was asked for; the optimistic row goes where the next split
+        // will show it, so a retired tier written by an older caller lands in Satellite.
+        let tier = PinTierPolicy.displayTier(requested) ?? requested
         let original = taskTiers[taskId]
         taskTiers[taskId] = tier
         // Optimistic order: the row leaves its old band and joins the new one at
@@ -205,7 +203,7 @@ extension TasksStore {
             (taskTierOrder[tier] ?? []) + [taskId], pinnedOrder: pinnedOrder
         )
         do {
-            let split = try await transport.setTaskFocusTier(id: taskId, tier: tier)
+            let split = try await transport.setTaskFocusTier(id: taskId, tier: requested)
             guard isActive else { return nil }
             // Adopt the authoritative split (covers server-side self-healing
             // of stale custom-tier ids to satellite).
@@ -214,7 +212,8 @@ extension TasksStore {
         } catch {
             taskTiers[taskId] = original
             taskTierOrder = originalOrder
-            if let apiError = error as? APIError, apiError.code == "bad_request" {
+            if let apiError = error as? APIError, apiError.code == "bad_request",
+               apiError.localizedDescription.localizedCaseInsensitiveContains("Task is not pinned") {
                 return "Pin the task first, then choose a tier."
             }
             return error.localizedDescription
@@ -224,8 +223,9 @@ extension TasksStore {
     /// `ids` sorted the way the server sorts a band: by `pin_order`, read off the
     /// split's `pinned_tasks`. An id the split has not listed yet (a pin made since
     /// the last split) sorts last, in the order given, which is where its
-    /// `pin_order = max + 1` puts it.
-    static func inPinOrder(_ ids: [String], pinnedOrder: [String]) -> [String] {
+    /// `pin_order = max + 1` puts it. Pure, so nonisolated: `PinTierPolicy.displayOrder`
+    /// (not on the main actor) calls it too.
+    nonisolated static func inPinOrder(_ ids: [String], pinnedOrder: [String]) -> [String] {
         var rank: [String: Int] = [:]
         for (index, id) in pinnedOrder.enumerated() where rank[id] == nil { rank[id] = index }
         return ids.enumerated().sorted { a, b in
@@ -235,8 +235,41 @@ extension TasksStore {
         }.map(\.element)
     }
 
-    /// Every pickable tier for menus: built-ins first, then custom tiers.
+    /// Every pickable tier for menus and every band the board draws: Focus,
+    /// Satellite, then custom tiers (`PinTierPolicy.choices`).
     var allTierChoices: [(id: String, label: String)] {
-        Self.builtinTiers + customTiers.map { ($0.id, $0.label) }
+        PinTierPolicy.choices(custom: customTiers)
+    }
+
+    /// The tier a picker marks as current for `task` (nil = not pinned).
+    func selectedTier(for task: WalnutTask) -> String? {
+        PinTierPolicy.selected(task: task, tierOf: taskTiers, offered: allTierChoices)
+    }
+
+    /// A tap on `tier` in any tier picker: the writes `PinTierPolicy.writes` decides,
+    /// run in order and stopped at the first failure (a tier PUT after a failed pin
+    /// would 400 for the wrong reason). Returns nil on success, else the message to
+    /// show. `onPinnedChange` hears each pin or unpin that went through.
+    func pickTier(
+        _ tier: String, for task: WalnutTask, onPinnedChange: (Bool) -> Void = { _ in }
+    ) async -> String? {
+        let writes = PinTierPolicy.writes(picking: tier, selected: selectedTier(for: task))
+        var newlyPinned = false
+        for write in writes {
+            switch write {
+            case .pin, .unpin:
+                let pinned = write == .pin
+                if let failure = await setPinned(task, pinned: pinned) { return failure }
+                onPinnedChange(pinned)
+                newlyPinned = pinned
+            case .setTier(let target):
+                if let failure = await setTier(taskId: task.id, tier: target) {
+                    return newlyPinned
+                        ? "Pinned in Satellite, but could not move to the selected tier. \(failure)"
+                        : failure
+                }
+            }
+        }
+        return nil
     }
 }

@@ -496,15 +496,17 @@ test('turning the switch OFF mid-draft drops the AI chips at once, keeps a More-
   // Also LAST-group: it writes config through the real switch (afterEach restores).
   // The parse is mocked so the ON half has chips to take away.
   await page.setViewportSize({ width: 1280, height: 900 })
-  const parse = await mockQuickParse(page, { pinTier: 'satellite', due_date: isoDay(3) })
+  // The parse proposes Focus; the user's More pick below is Satellite (the draft opens on
+  // Focus, so picking Focus there would unpin).
+  const parse = await mockQuickParse(page, { pinTier: 'focus', due_date: isoDay(3) })
   const log = await captureDraftRequests(page, { blockQuickStart: true })
   await loadHome(page)
   const panel = await openDraftOnCwd(page, `${await discoverFixtureRoot()}/projects/walnut`)
 
   // OFF (the default): More still works, and its value is a chip without ✦.
   const menu = await openDraftSettings(panel, 'more')
-  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Parked' }).click()
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Parked/)
+  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Satellite' }).click()
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/)
   await draftComposer(page).fill('pair on the marina release notes by friday')
   await page.waitForTimeout(900)
   expect(parse.calls, 'off: nothing parsed').toHaveLength(0)
@@ -516,8 +518,8 @@ test('turning the switch OFF mid-draft drops the AI chips at once, keeps a More-
   await expect(on).toHaveAttribute('aria-checked', 'true')
   await page.keyboard.press('Escape')
   await expect(draftDecisionChip(panel, 'dueDate').locator('.draft-ai-badge')).toHaveCount(1, { timeout: 15_000 })
-  // The tier is the user's: the parse's Satellite does not replace it.
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Parked/)
+  // The tier is the user's: the parse's Focus does not replace it.
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/)
   await expect(draftDecisionChip(panel, 'pinTier').locator('.draft-ai-badge')).toHaveCount(0)
   await panel.screenshot({ path: `${SHOT_DIR}/06-on-ai-chips.png` })
 
@@ -526,14 +528,14 @@ test('turning the switch OFF mid-draft drops the AI chips at once, keeps a More-
   await off.click()
   await expect(off).toHaveAttribute('aria-checked', 'false')
   await expect(draftDecisionChip(panel, 'dueDate')).toHaveCount(0)
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Parked/)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/)
   await expect(draftDecisionChips(panel)).toHaveCount(1)
   await page.keyboard.press('Escape')
   await panel.screenshot({ path: `${SHOT_DIR}/07-off-ai-chips-gone.png` })
 
   await draftSend(panel).click()
   const body = await nthRequest(log, 'quickStart')
-  expect(body.taskMeta?.pinTier).toBe('wait')
+  expect(body.taskMeta?.pinTier).toBe('satellite')
   expect(body.taskMeta?.due_date).toBeUndefined()
   expect(body.taskMeta?.unread).toBeFalsy()
 })

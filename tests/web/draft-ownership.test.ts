@@ -67,9 +67,9 @@ describe('C45: the draft ledger fields are server ledger fields', () => {
 });
 
 describe('applyDraftParse: an AI field a newer parse drops goes back to its default', () => {
-  it('C14: tier Wait, then a trailing parse (classify ok) without a tier: back to Focus, no ✦', () => {
+  it('C14: tier Satellite (proposed under the retired Parked name), then a trailing parse (classify ok) without a tier: back to Focus, no ✦', () => {
     const first = applyDraftParse(draft(), { pinTier: 'wait', legs: OK }, noDefaults);
-    expect(first.meta.pinTier).toBe('wait');
+    expect(first.meta.pinTier).toBe('satellite');
     const out = applyDraftParse(first, { legs: OK }, noDefaults);
     expect(out.meta.pinTier).toBe('focus');
     expect(out.aiFields?.has('pinTier')).toBe(false);
@@ -165,7 +165,7 @@ describe('applyDraftParse: typing parses only add, the settled text may remove (
 
   it('an eager parse may still CHANGE an AI value', () => {
     const eager = applyDraftParse(draft(), { pinTier: 'satellite' }, noDefaults, { kind: 'eager' });
-    expect(applyDraftParse(eager, { pinTier: 'wait' }, noDefaults, { kind: 'eager' }).meta.pinTier).toBe('wait');
+    expect(applyDraftParse(eager, { pinTier: 'focus' }, noDefaults, { kind: 'eager' }).meta.pinTier).toBe('focus');
   });
 });
 
@@ -176,7 +176,8 @@ describe('applyDraftParse: owners, visibility and unknown tiers', () => {
       const out = applyDraftParse(d, { pinTier: 'wait', legs: OK }, noDefaults);
       expect(out.meta.pinTier).toBe('wait');
       expect(out.aiFields?.has('pinTier')).toBe(false);
-      expect(out.aiSuggested?.pinTier).toBe('wait');
+      // The retired Parked name is recorded as the Satellite it draws in.
+      expect(out.aiSuggested?.pinTier).toBe('satellite');
       // Nor reverted by a parse that stops proposing.
       expect(applyDraftParse(out, { legs: OK }, noDefaults).meta.pinTier).toBe('wait');
     }
@@ -285,16 +286,16 @@ describe("applyDraftParse kind 'clear': the text is gone, so are its decisions",
 describe('More: an edit owns that field only', () => {
   it('owns the edited field, drops its ✦, leaves metaTouched alone; the AI still writes the rest', () => {
     const ai = applyDraftParse(draft(), { pinTier: 'satellite', due_date: '2026-08-14', legs: OK }, noDefaults);
-    const edited = own.applyDraftTaskFieldEdit(ai, { pinTier: 'wait' });
-    expect(edited.meta.pinTier).toBe('wait');
+    const edited = own.applyDraftTaskFieldEdit(ai, { pinTier: 'focus' });
+    expect(edited.meta.pinTier).toBe('focus');
     expect(edited.fieldOwner).toEqual({ pinTier: 'user' });
     expect(aiOf(edited)).toEqual(['dueDate']);
     expect(edited.userTouched).toBe(true);
     expect(edited.metaTouched).toBeUndefined();
     const next = applyDraftParse(edited, { pinTier: 'wait', due_date: '2026-08-15', legs: OK }, noDefaults);
-    expect(next.meta.pinTier).toBe('wait');
+    expect(next.meta.pinTier).toBe('focus');
     expect(next.meta.dueDate).toBe('2026-08-15');
-    expect(next.aiSuggested?.pinTier).toBe('wait');
+    expect(next.aiSuggested?.pinTier).toBe('satellite');
   });
 
   it('an End edit keeps the start and makes the pair the user\'s; with no start it is a no-op', () => {
@@ -528,7 +529,7 @@ describe('rederiveDraftParse: settings that become known only ADD chips (C59)', 
     let d = applyDraftParse(draft(), { pinTier: 'wait', legs: OK }, noDefaults, { kind: 'eager' });
     d = applyDraftParse(d, { priority: 'important', legs: OK }, noDefaults, { kind: 'eager' });
     const out = own.rederiveDraftParse(d, noDefaults);
-    expect(out.meta.pinTier).toBe('wait');
+    expect(out.meta.pinTier).toBe('satellite');
     expect(own.rederiveDraftParse(draft(), noDefaults)).toEqual(draft());
   });
 
@@ -547,15 +548,20 @@ describe('tier resolution for chips, the ledger and the launch', () => {
     const loading = own.makeTierKnown([{ id: 'ct_aaaa0001' }], false);
     expect([loading('focus'), loading('ct_aaaa0001'), loading('bogus')]).toEqual([true, 'unknown', false]);
     const loaded = own.makeTierKnown([{ id: 'ct_aaaa0001' }], true);
-    expect([loaded('wait'), loaded('ct_aaaa0001'), loaded('ct_gone0002')]).toEqual([true, true, false]);
+    expect([loaded('satellite'), loaded('ct_aaaa0001'), loaded('ct_gone0002')]).toEqual([true, true, false]);
+    // The retired Parked tier is no built-in any more (it folds to Satellite before it is asked).
+    expect(loaded('wait')).toBe(false);
   });
 
   it('launchMetaFor: a tier known to be gone launches as Focus; others as-is (same object)', () => {
     const known = own.makeTierKnown([], true);
     const gone = draft({ meta: { ...draft().meta, pinTier: 'ct_gone0002' } });
     expect(own.launchMetaFor(gone, known).pinTier).toBe('focus');
-    const kept = draft({ meta: { ...draft().meta, pinTier: 'wait' } });
+    const kept = draft({ meta: { ...draft().meta, pinTier: 'satellite' } });
     expect(own.launchMetaFor(kept, known)).toBe(kept.meta);
+    // A draft open since before Parked was retired launches into Satellite, where its tasks draw.
+    const legacy = draft({ meta: { ...draft().meta, pinTier: 'wait' } });
+    expect(own.launchMetaFor(legacy, known).pinTier).toBe('satellite');
     const loading = own.makeTierKnown([], false);
     expect(own.launchMetaFor(gone, loading)).toBe(gone.meta);
     expect(suggestDiff(gone, { tierKnown: known })).toEqual([]);

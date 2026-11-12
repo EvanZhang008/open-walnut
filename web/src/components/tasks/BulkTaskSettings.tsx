@@ -18,6 +18,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { folderSubtreeIds } from '@/hooks/useTasks';
 import * as ICONS from '../common/Icons';
 import { TIER_COLORS, TIER_OPTIONS } from './TaskKebabMenu';
+import { isRetiredTier } from '@/api/focus';
 import { PluginFieldFlyout, readPluginFieldValue, usePluginTaskFields, type PluginTaskField } from './PluginFieldPicker';
 import { useCursorFlyout, type CursorPoint } from './CursorFlyout';
 import {
@@ -54,7 +55,9 @@ export function useBulkTaskSettings(): BulkTaskSettingsHandle {
   };
 
   const tierOptions = (): TierPillOption[] => [
-    ...TIER_OPTIONS.map((t) => ({ value: t.value, label: t.label, icon: t.icon, color: TIER_COLORS[t.value] })),
+    // The retired Parked tier is never offered (RETIRED_TIERS), whichever list carries it.
+    ...TIER_OPTIONS.filter((t) => !isRetiredTier(t.value))
+      .map((t) => ({ value: t.value, label: t.label, icon: t.icon, color: TIER_COLORS[t.value] })),
     ...(focusBar?.customTiers ?? []).map((ct) => ({
       value: ct.id, label: ct.label, icon: ICONS.ICON_TIER_CUSTOM, color: 'var(--tier-custom)',
     })),

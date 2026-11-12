@@ -270,9 +270,11 @@ test('plain note keeps Inbox defaults (no project, nothing pinned)', async ({ pa
   // Pinned area is always present, with nothing pressed when the AI suggested no tier.
   const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
   await expect(tiers).toBeVisible()
-  for (const label of ['Focus', 'Satellite', 'Parked']) {
+  for (const label of ['Focus', 'Satellite']) {
     await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
   }
+  // The retired Parked tier is offered nowhere (2026-11-11).
+  await expect(tiers.getByRole('button', { name: 'Parked' })).toHaveCount(0)
   await panel.locator('.qtc-confirm-title').press('Enter')
 
   const created = await waitForNewTask(request, rawTitle, existingIds)
@@ -348,9 +350,11 @@ test('clicking the pressed tier unpins before create', async ({ page, request })
   const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
   await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
   await tiers.getByRole('button', { name: 'Focus' }).click()
-  for (const label of ['Focus', 'Satellite', 'Parked']) {
+  for (const label of ['Focus', 'Satellite']) {
     await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
   }
+  // The retired Parked tier is offered nowhere (2026-11-11).
+  await expect(tiers.getByRole('button', { name: 'Parked' })).toHaveCount(0)
   await panel.locator('.qtc-confirm-primary').click()
 
   // The task is created (the composer's pin state is the composer's to assert;

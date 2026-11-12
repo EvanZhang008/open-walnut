@@ -200,7 +200,9 @@ struct BoardStatusSectionList: View {
         .modifier(BoardRowGestures(
             row: row,
             tierChoices: tierChoices,
-            currentTier: row.task.flatMap { tierOf[$0.id] },
+            selectedTier: row.task.flatMap {
+                PinTierPolicy.selected(task: $0, tierOf: tierOf, offered: tierChoices)
+            },
             onToggleDone: { actions.onToggleDone(row) },
             onPickTier: { actions.onPickTier(row, $0) },
             onOpenSession: { actions.onOpenSession(row) },

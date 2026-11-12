@@ -194,8 +194,9 @@ final class TasksStore {
     // phone joins the tier split endpoint by task id. Satellite entries are
     // explicit in the map so every pinned row resolves a label.
 
-    /// taskId → tier id ("focus" | "satellite" | "backlog" | "wait" | "ct_*")
-    /// for every currently pinned task.
+    /// taskId → tier id ("focus" | "satellite" | "ct_*") for every currently
+    /// pinned task, as SHOWN: a task stored in a retired tier reads "satellite"
+    /// (`PinTierPolicy`).
     var taskTiers: [String: String] = [:] {
         didSet { tiersGen &+= 1 }
     }

@@ -34,13 +34,14 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
-const TABS = ['All', 'Pinned', 'Focus', 'Satellite', 'Parked', 'Recent'] as const
+const TABS = ['All', 'Pinned', 'Focus', 'Satellite', 'Recent'] as const
 
 function tab(page: Page, name: (typeof TABS)[number]) {
   return page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
 }
 
-/** Seed pinned tasks across all three tiers so every tier tab has real content. */
+/** Seed pinned tasks across both tiers so every tier tab has real content. Two are stored
+ *  under the retired `wait` tier, as an older client may still write it: they read as Satellite. */
 async function seedPinnedTasks(page: Page, project = 'Work') {
   const stamp = Date.now()
   const seeds = ([['focus', 3], ['satellite', 2], ['wait', 2]] as const)
@@ -82,7 +83,7 @@ test.describe('todo panel section tabs', () => {
     // chip so no project scoping can filter the seed tasks out of the tiers.
     await selectProject(page, 'All')
 
-    // 1. all seven tabs present (the shortcut fixture keeps every tab on the bar, empty or
+    // 1. every built-in tab present (the shortcut fixture keeps every tab on the bar, empty or
     // not); All is its word plus the view's count (spec 4.6: the active tab's badge is the
     // same number as the filter row's count), and neither Projects nor the Scratchpad is a tab.
     for (const name of TABS) {
@@ -103,8 +104,8 @@ test.describe('todo panel section tabs', () => {
     await expect(page.locator('.todo-pinned-wrapper-solo')).toBeVisible()
     await expect(page.locator('[data-drop-zone="focus-drop-zone"]')).toBeVisible()
 
-    // Wait's drop zone belongs to a different tab: it must be gone from the DOM.
-    await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(0)
+    // Satellite's drop zone belongs to a different tab: it must be gone from the DOM.
+    await expect(page.locator('[data-drop-zone="satellite-drop-zone"]')).toHaveCount(0)
     // The stacked view's section headers are gone too (the tab strip names the section).
     await expect(page.locator(PINNED_HEADER)).toHaveCount(0)
     await expect(page.locator('.todo-tasks-header')).toHaveCount(0)
@@ -125,17 +126,21 @@ test.describe('todo panel section tabs', () => {
       expect(soloBox!.height).toBeGreaterThan(panelBox!.height * 0.5)
     }
 
-    // 2b. Wait tab: now Wait is mounted and Focus is not.
-    await tab(page, 'Parked').click()
-    await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(1)
+    // 2b. Satellite tab: now Satellite is mounted and Focus is not. The tasks stored under
+    // the retired `wait` tier are in it, and no Parked section is drawn.
+    await tab(page, 'Satellite').click()
+    await expect(page.locator('[data-drop-zone="satellite-drop-zone"]')).toHaveCount(1)
     await expect(page.locator('[data-drop-zone="focus-drop-zone"]')).toHaveCount(0)
+    await expect(page.locator('[data-drop-zone="satellite-drop-zone"]').getByText(/tabs probe wait 0 /).first()).toBeVisible()
+    await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(0)
 
     // 4. All tab: the stacked view is back: Pinned + Tasks headers both render.
     await tab(page, 'All').click()
     await expect(page.locator('.todo-tasks-header')).toHaveCount(1)
     await expect(page.locator(PINNED_HEADER).first()).toBeVisible()
     await expect(page.locator('[data-drop-zone="focus-drop-zone"]')).toHaveCount(1)
-    await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(1)
+    await expect(page.locator('[data-drop-zone="satellite-drop-zone"]')).toHaveCount(1)
+    await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(0)
     await expect(page.locator('.todo-pinned-wrapper-solo')).toHaveCount(0)
   })
 
@@ -143,12 +148,12 @@ test.describe('todo panel section tabs', () => {
     await page.goto('/')
     await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
 
-    await tab(page, 'Parked').click()
-    await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(1)
+    await tab(page, 'Satellite').click()
+    await expect(page.locator('[data-drop-zone="satellite-drop-zone"]')).toHaveCount(1)
 
     await page.reload()
     await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
-    await expect(tab(page, 'Parked')).toHaveAttribute('aria-selected', 'true')
+    await expect(tab(page, 'Satellite')).toHaveAttribute('aria-selected', 'true')
 
     // A panel that was left on the Notes tab opens on All; the Scratchpad lives in the rail now.
     await page.evaluate(() => localStorage.setItem('walnut-todo-active-section', 'notes'))
@@ -243,8 +248,11 @@ test.describe('todo panel section tabs', () => {
     await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true')
     await expect(page.locator('.home-navigation-scroll')).toHaveClass(/is-stacked/)
     await expect(page.locator('[data-drop-zone="focus-drop-zone"]')).toHaveCount(1)
-    await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(1)
-    await expect(page.locator('.todo-pinned-subgroup-heading .navigation-heading[data-navigation-id="focus"]')).toBeVisible()
+    await expect(page.locator('[data-drop-zone="satellite-drop-zone"]')).toHaveCount(1)
+    await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(0)
+    // Only Focus and Satellite hold tasks (the retired `wait` seeds read as Satellite) and no
+    // tier was ever picked here, so the pins sit under Pinned with no tier heading (F08).
+    await expect(page.locator('.todo-pinned-subgroup-heading')).toHaveCount(0)
     await expect(page.locator(PINNED_HEADER)).toHaveCount(1)
     await expect(page.locator('.todo-tasks-header')).toHaveCount(0)
     const firstCard = page.locator('.todo-pinned-section [data-task-id]').first()
@@ -275,7 +283,7 @@ test.describe('todo panel section tabs', () => {
     await expect(strip).not.toHaveClass(/is-roomy/)
     await expect(tab(page, 'Focus').locator('.todo-section-tab-label')).not.toBeVisible()
     await expect(tab(page, 'Pinned').locator('.todo-section-tab-label')).toBeVisible()
-    expect(JSON.parse(await page.evaluate(() => localStorage.getItem('walnut-todo-tab-bar-hidden-tabs') ?? '[]'))).toEqual(['wait', 'recent'])
+    expect(JSON.parse(await page.evaluate(() => localStorage.getItem('walnut-todo-tab-bar-hidden-tabs') ?? '[]'))).toEqual(['recent'])
   })
 
   test('the bar menu lists All, Pinned and Recent first and every tier under More views, each with its sentence', async ({ page }) => {
@@ -294,10 +302,12 @@ test.describe('todo panel section tabs', () => {
     expect(moreAt).toBeGreaterThan(0)
     expect(rows.slice(0, moreAt)).toEqual(['#Tabs', 'All', 'Pinned', 'Recent', '---'])
     const tiers = rows.slice(moreAt + 1, rows.indexOf('---', moreAt))
-    expect(tiers.slice(0, 3)).toEqual(['Focus', 'Satellite', 'Parked'])
+    expect(tiers.slice(0, 2)).toEqual(['Focus', 'Satellite'])
+    // The retired Parked tier is offered nowhere in the menu.
+    expect(rows).not.toContain('Parked')
     // The words above the divider never name a tier; every tier item explains itself on hover.
     expect(rows.slice(0, moreAt).join(' ')).not.toMatch(/focus|satellite|backlog|parked/i)
-    for (const name of ['Focus', 'Satellite', 'Parked']) {
+    for (const name of ['Focus', 'Satellite']) {
       const title = await menu.getByRole('menuitemcheckbox', { name, exact: true }).getAttribute('title')
       expect(title, name).toBeTruthy()
     }

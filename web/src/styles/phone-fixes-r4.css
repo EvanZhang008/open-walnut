@@ -21,7 +21,7 @@
 }
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  /* R3-03: a single-tier tab (Focus, Satellite, Parked, Recent) scrolls with
+  /* R3-03: a single-tier tab (Focus, Satellite, a custom tier, Recent) scrolls with
      the page, one scroller like Mail: the desktop's fill-and-scroll-inside
      chain (wrapper, section, subgroup, list) takes its natural height, so the
      rows run down to the footer with no blank band and no short inner box. */
@@ -60,7 +60,7 @@
 }
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  /* R3-04: a tier card row (Pinned, Focus, Satellite, Parked, Recent) reads
+  /* R3-04: a tier card row (Pinned, Focus, Satellite, a custom tier, Recent) reads
      like the tree rows (N2-14) and like Linear on iOS: line one is the phase
      circle, the title and the row's own buttons; line two holds what
      describes the task (Needs you, then the pills). Three pills on line one

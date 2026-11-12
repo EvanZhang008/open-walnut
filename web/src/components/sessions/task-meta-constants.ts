@@ -4,7 +4,7 @@
  */
 
 import type { TaskPriority } from '@open-walnut/core';
-import type { FocusTier } from '@/api/focus';
+import { shownTier, type FocusTier } from '@/api/focus';
 import type { QuickStartTaskMeta } from './SessionPathSelector';
 
 /** Quick-start defaults. Lives here (not in SessionPathSelector) so every
@@ -24,19 +24,20 @@ export const DEFAULT_META: QuickStartTaskMeta = {
   engine: undefined,     // the default engine (native Claude) unless the user picks another
 };
 
+/** The built-in tiers a draft or menu offers. The retired Parked tier (`wait`) is not one:
+ *  a task stored there draws in Satellite (RETIRED_TIERS in api/focus.ts). */
 export const TIER_OPTIONS: { value: FocusTier; label: string }[] = [
   { value: 'focus', label: 'Focus' },
   { value: 'satellite', label: 'Satellite' },
-  // id `wait`, labelled Parked: a board shelf, not the Waiting status.
-  { value: 'wait', label: 'Parked' },
 ];
 
-/** A tier value as the board names it: a built-in's label (`wait` reads Parked), a custom
- *  id through the registry when the caller has it, else the id capitalized. */
+/** A tier value as the board names it: a built-in's label (a retired one reads Satellite), a
+ *  custom id through the registry when the caller has it, else the id capitalized. */
 export function tierLabelOf(tier: string, customTiers?: ReadonlyArray<{ id: string; label: string }>): string {
   const custom = customTiers?.find((t) => t.id === tier);
   if (custom) return custom.label;
-  return TIER_OPTIONS.find((t) => t.value === tier)?.label ?? `${tier[0]?.toUpperCase() ?? ''}${tier.slice(1)}`;
+  const shown = shownTier(tier);
+  return TIER_OPTIONS.find((t) => t.value === shown)?.label ?? `${tier[0]?.toUpperCase() ?? ''}${tier.slice(1)}`;
 }
 
 /** The launcher's RETIRED sticky-tier pref (see freshLauncherMeta for why the
@@ -103,17 +104,16 @@ export function freshLauncherMeta(): QuickStartTaskMeta {
   return { ...DEFAULT_META };
 }
 
-// Keep in sync with TaskKebabMenu's TIER_COLORS: wait is amber (paused/blocked) —
-// a grey wait was indistinguishable from Satellite's grey at a glance.
+// Keep in sync with TaskKebabMenu's TIER_COLORS.
 export const TIER_COLORS: Record<FocusTier, string> = {
   focus: 'var(--accent)',
   satellite: 'var(--tier-satellite, #5856d6)',
-  wait: 'var(--tier-wait, #ff9f0a)',
 };
 
-/** Tier → color with a fallback for custom tier ids (all customs share one hue). */
+/** Tier → color (a retired tier wears Satellite's) with a fallback for custom tier ids
+ *  (all customs share one hue). */
 export function tierColor(tier: FocusTier): string {
-  return TIER_COLORS[tier] ?? 'var(--tier-custom)';
+  return TIER_COLORS[shownTier(tier)] ?? 'var(--tier-custom)';
 }
 
 export const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: string }[] = [

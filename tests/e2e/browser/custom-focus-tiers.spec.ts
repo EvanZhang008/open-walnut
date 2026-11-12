@@ -82,9 +82,11 @@ test('settings CRUD: create, rename, and the tier appears across the UI', async 
 
     // Built-ins render as read-only rows.
     const section = page.locator('#focus-tiers')
-    for (const builtin of ['Focus', 'Satellite', 'Parked']) {
+    for (const builtin of ['Focus', 'Satellite']) {
       await expect(section.locator('.focus-tiers-row', { hasText: builtin }).first()).toBeVisible()
     }
+    // The retired Parked tier has no row (2026-11-11).
+    await expect(section.locator('.focus-tiers-row', { hasText: /^Parked/ })).toHaveCount(0)
 
     // Create.
     await createTierViaUI(page, stamp)

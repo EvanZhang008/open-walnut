@@ -12,10 +12,17 @@ export interface BoardFamily { task: Task; children: BoardFamily[]; parent?: Tas
 export interface BoardProject { key: string; label: string; count: number; families: BoardFamily[] }
 export interface HomeBoardColumn { id: string; label: string; count: number; projects: BoardProject[] }
 
+/** The column a task sits in on the pin board: Focus, a registered custom tier, Unpinned, else
+ *  Satellite, which takes in a retired tier (Parked's `wait`, RETIRED_TIERS) as the list does. */
 export function homeBoardTier(task: Task, custom: readonly CustomTierDef[]): string {
   if (!task.pinned) return 'unpinned';
   const tier = task.focus_tier;
-  return tier === 'focus' || tier === 'wait' || custom.some(t => t.id === tier) ? tier! : 'satellite';
+  return tier === 'focus' || custom.some(t => t.id === tier) ? tier! : 'satellite';
+}
+
+/** The pin board's columns in order (the board, the Sort cards and the card labels read this). */
+export function pinBoardColumns(custom: readonly CustomTierDef[]): { id: string; label: string }[] {
+  return [{ id: 'focus', label: 'Focus' }, { id: 'satellite', label: 'Satellite' }, ...custom.map(t => ({ id: t.id, label: t.label })), { id: 'unpinned', label: 'Unpinned' }];
 }
 
 export function boardFamilyIds(family: BoardFamily): string[] {
@@ -47,7 +54,7 @@ export function buildHomeBoard(tasks: readonly Task[], custom: readonly CustomTi
   const visible = tasks.filter(t => !isHiddenFromTaskLists(t));
   const bucket = (t: Task) => mode === 'pin' ? homeBoardTier(t, custom) : shownState(taskUserState(t));
   const definitions = mode === 'pin'
-    ? [{ id: 'focus', label: 'Focus' }, { id: 'satellite', label: 'Satellite' }, { id: 'wait', label: 'Parked' }, ...custom.map(t => ({ id: t.id, label: t.label })), { id: 'unpinned', label: 'Unpinned' }]
+    ? pinBoardColumns(custom)
     : [{ id: 'needs', label: 'Needs you' }, { id: 'working', label: 'Working' }, { id: 'waiting', label: 'Waiting' }, { id: 'done', label: 'Done' }];
   const projectKey = (t: Task) => (t.project ?? '').trim().toLowerCase();
   const parentById = new Map<string, Task>();

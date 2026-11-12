@@ -64,7 +64,7 @@ async function firstLevel(menu: Locator): Promise<string[]> {
         const c = child as HTMLElement
         if (c.offsetParent === null && getComputedStyle(c).position !== 'fixed') continue
         if (c.matches('.task-kebab-divider')) continue
-        if (c.matches('.task-kebab-item, .task-kebab-tier, .task-kebab-panels, .task-kebab-section-label, .task-kebab-group-toggle, .task-kebab-status-toggle')) {
+        if (c.matches('.task-kebab-item, .task-kebab-tier, .task-pin-shortcuts, .task-kebab-panels, .task-kebab-section-label, .task-kebab-group-toggle, .task-kebab-status-toggle')) {
           out.push(c.innerText.replace(/\s+/g, ' ').trim())
           continue
         }
@@ -233,7 +233,7 @@ test('each group opens its rows in place, and the menu reopens with every group 
   const win = await openGroup(menu, 'session-kebab-window')
   await expect(win.locator('.task-kebab-item')).toContainText(['Open in new tab', 'Full screen'])
   const pin = await openGroup(menu, 'kebab-group-pin')
-  await expect(pin.locator('[data-testid^="kebab-pin-"]')).toContainText(['Focus', 'Satellite', 'Parked'])
+  await expect(pin.locator('.task-kebab-tier-options [data-testid^="kebab-pin-"]')).toContainText(['Focus', 'Satellite'])
   const copy = await openGroup(menu, 'session-kebab-copy-open')
   await expect(copy.locator('.task-kebab-item')).toContainText(['Open in VS Code', 'Copy folder path', 'Copy session ID', 'Copy resume command'])
   await expect(copy.getByTestId('session-kebab-meta')).toHaveCount(0)

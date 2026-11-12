@@ -41,8 +41,11 @@ import { presetPanelView } from './todo-panel-helpers'
 
 const SCREENSHOT_DIR = process.env.SEPARATOR_SHOT_DIR ?? '/tmp/walnut-separators'
 
-/** Own tier + own project: the pinned area is shared server state. */
-const TIER = 'wait' as const
+/** Own tier + own project: the pinned area is shared server state. The tier is a custom one
+ *  this file makes (it used the Parked tier, retired 2026-11-11, before), so no other spec's
+ *  pins land in it. */
+let TIER = ''
+const TIER_LABEL = 'Separator shelf'
 const PROJECT = 'SeparatorProj'
 
 // Round-trips queue behind the fixture's session health monitor on its seeded
@@ -50,6 +53,20 @@ const PROJECT = 'SeparatorProj'
 test.setTimeout(180_000)
 // Serial: every scenario reads and rewrites ONE global separator list.
 test.describe.configure({ mode: 'serial' })
+
+test.beforeEach(async ({ page }) => {
+  if (TIER) return
+  const res = await page.request.post('/api/focus/tiers', { data: { label: `${TIER_LABEL} ${Date.now()}` } })
+  expect(res.ok(), await res.text()).toBe(true)
+  TIER = ((await res.json()) as { tier: { id: string } }).tier.id
+})
+
+test.afterAll(async ({ playwright }) => {
+  if (!TIER) return
+  const api = await playwright.request.newContext({ baseURL: test.info().project.use.baseURL })
+  await api.delete(`/api/focus/tiers/${TIER}`).catch(() => {})
+  await api.dispose()
+})
 
 interface StoredSeparator {
   id: string

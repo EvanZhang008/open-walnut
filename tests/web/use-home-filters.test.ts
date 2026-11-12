@@ -163,7 +163,7 @@ describe('footerScope', () => {
   const a = mk(); const b = mk(); const c = mk(); const d = mk();
   const tasks = [a, b, c, d];
   const sets = {
-    pinned: new Set([a.id, b.id, c.id]), focus: new Set([a.id]), wait: new Set<string>(),
+    pinned: new Set([a.id, b.id, c.id]), focus: new Set([a.id]),
     custom: { ct_x: new Set([c.id]) },
   };
   it('scopes tiers and Pinned to their members, leaves All alone', () => {

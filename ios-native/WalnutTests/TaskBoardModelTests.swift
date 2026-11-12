@@ -15,6 +15,10 @@ final class TaskBoardModelTests: XCTestCase {
     /// day the suite happens to run.
     private static let now = WalnutTask.parseISO("2026-08-27T12:00:00Z")!
 
+    /// A custom tier, for cases that need a third band: Backlog and Wait are retired
+    /// built-ins (shown in Satellite, `PinTierPolicy`), so they draw no band of their own.
+    private static let later = FocusTierInfo(id: "ct_later", label: "Later")
+
     private func task(
         _ id: String, title: String = "a task", project: String = "",
         status: String = "todo", phase: String = "TODO", pinned: Bool? = true,
@@ -183,7 +187,10 @@ final class TaskBoardModelTests: XCTestCase {
             tierOrder: ["focus": ["f"], "satellite": ["s"], "backlog": ["b"], "wait": ["w"], "ct_abc12345": ["c"]],
             customTiers: [FocusTierInfo(id: "ct_abc12345", label: "Deep Work")]
         )
-        XCTAssertEqual(bands.map(\.bandId), ["focus", "satellite", "backlog", "wait", "ct_abc12345"])
+        // Backlog and Wait are retired: no band of their own, their rows read Satellite.
+        XCTAssertEqual(bands.map(\.bandId), ["focus", "satellite", "ct_abc12345"])
+        XCTAssertEqual(Set(bands.first { $0.bandId == "satellite" }?.rows.map(\.id) ?? []), ["s", "b", "w"],
+            "an old Backlog or Wait task stays on the board, in Satellite")
         XCTAssertEqual(bands.last?.label, "Deep Work", "a custom tier shows its label, never its ct_ id")
     }
 
@@ -247,9 +254,9 @@ final class TaskBoardModelTests: XCTestCase {
         let bands = BoardModel.bands(
             tasks: tasks, sessions: [],
             tierOf: ["f1": "focus", "f2": "focus", "s1": "satellite", "s2": "satellite",
-                     "b1": "backlog"],
-            tierOrder: ["focus": ["f1", "f2"], "satellite": ["s1", "s2"], "backlog": ["b1"]],
-            customTiers: []
+                     "b1": "ct_later"],
+            tierOrder: ["focus": ["f1", "f2"], "satellite": ["s1", "s2"], "ct_later": ["b1"]],
+            customTiers: [Self.later]
         )
         for band in bands {
             XCTAssertTrue(band.rows.allSatisfy { !$0.isDone },
@@ -462,7 +469,8 @@ final class TaskBoardModelTests: XCTestCase {
     /// Both halves of the split are read, because dropping an id one half names and
     /// the other has not caught up with is exactly how a row goes missing. The
     /// projection here says NOT pinned for `ordered` — the split's order array is the
-    /// only evidence of the pin, and it is enough.
+    /// only evidence of the pin, and it is enough. The array here is a retired tier's
+    /// (Backlog, as an older client wrote it), so the row is drawn in Satellite.
     func testEitherHalfOfTheTierSplitIsEnoughToPutARowOnTheBoard() {
         let bands = BoardModel.bands(
             tasks: [task("mapped", pinned: false), task("ordered", pinned: false)],
@@ -475,7 +483,8 @@ final class TaskBoardModelTests: XCTestCase {
             "a tier named by EITHER half of the split is a pin the board must honour"
         )
         XCTAssertEqual(bands.first(where: { $0.bandId == "focus" })?.rows.map(\.id), ["mapped"])
-        XCTAssertEqual(bands.first(where: { $0.bandId == "backlog" })?.rows.map(\.id), ["ordered"])
+        XCTAssertEqual(bands.first(where: { $0.bandId == "satellite" })?.rows.map(\.id), ["ordered"])
+        XCTAssertFalse(bands.contains { $0.bandId == "backlog" }, "a retired tier draws no band")
     }
 
     /// A tier id the board does not render (a custom tier deleted while a task still
@@ -875,10 +884,10 @@ final class TaskBoardModelTests: XCTestCase {
     func testABandHidingEveryRowKeepsItsHeadingAndItsRing() {
         let bands = BoardModel.bands(
             tasks: [task("d", status: "done", phase: "COMPLETE")], sessions: [],
-            tierOf: ["d": "backlog"], tierOrder: ["backlog": ["d"]], customTiers: [],
+            tierOf: ["d": "ct_later"], tierOrder: ["ct_later": ["d"]], customTiers: [Self.later],
             now: Self.now
         )
-        XCTAssertEqual(bands.map(\.bandId), ["backlog"])
+        XCTAssertEqual(bands.map(\.bandId), ["ct_later"])
         XCTAssertEqual(bands.first?.rows.count, 0)
         XCTAssertEqual(bands.first?.hiddenDone, 1)
         XCTAssertNotNil(bands.first?.createSeed,
@@ -889,13 +898,13 @@ final class TaskBoardModelTests: XCTestCase {
     /// `CreateWithTierTests` states from the create side, restated here now that
     /// the seed comes off the band instead of being rebuilt from its id.
     func testATierBandsCreateSeedNamesItsOwnTier() {
-        let ids = ["f", "s", "b", "w"]
-        let tiers = ["focus", "satellite", "backlog", "wait"]
+        let ids = ["f", "s", "c"]
+        let tiers = ["focus", "satellite", "ct_later"]
         let bands = BoardModel.bands(
             tasks: zip(ids, tiers).map { task($0.0) }, sessions: [],
             tierOf: Dictionary(uniqueKeysWithValues: zip(ids, tiers)),
             tierOrder: Dictionary(uniqueKeysWithValues: tiers.enumerated().map { ($0.element, [ids[$0.offset]]) }),
-            customTiers: [], now: Self.now
+            customTiers: [Self.later], now: Self.now
         )
         XCTAssertEqual(bands.map(\.bandId), tiers)
         for band in bands {
@@ -936,8 +945,8 @@ final class TaskBoardModelTests: XCTestCase {
             session("live", taskId: "loose", status: "running"),
             session("orphan", taskId: nil, status: "idle"),
         ]
-        let tierOf = ["filed": "focus", "done": "backlog"]
-        let tierOrder = ["focus": ["filed"], "backlog": ["done"]]
+        let tierOf = ["filed": "focus", "done": "ct_later"]
+        let tierOrder = ["focus": ["filed"], "ct_later": ["done"]]
 
         func rowIds(
             _ grouping: BoardGrouping, dateFilter: BoardDateFilter, query: String,
@@ -945,7 +954,7 @@ final class TaskBoardModelTests: XCTestCase {
         ) -> Set<String> {
             BoardModel.rowIds(BoardModel.bands(
                 tasks: tasks, sessions: sessions, tierOf: tierOf, tierOrder: tierOrder,
-                customTiers: [], query: query, grouping: grouping,
+                customTiers: [Self.later], query: query, grouping: grouping,
                 dateFilter: dateFilter,
                 // `done` is expanded in BOTH groupings (it is a tier band under one and a
                 // project band under the other), because the question here is the
@@ -953,7 +962,7 @@ final class TaskBoardModelTests: XCTestCase {
                 // the two groupings differ for a reason that has nothing to do with
                 // grouping, and a row folded on both would take `done` out of the case
                 // entirely.
-                shownDoneTiers: ["backlog", BoardModel.projectBandPrefix + "marina"],
+                shownDoneTiers: ["ct_later", BoardModel.projectBandPrefix + "marina"],
                 scope: scope,
                 now: Self.now
             ))
@@ -964,7 +973,8 @@ final class TaskBoardModelTests: XCTestCase {
         // every time.
         for dateFilter in BoardDateFilter.allCases {
             for query in ["", "marina", "a"] {
-                for scope in [nil, "focus", "backlog", "satellite"] as [String?] {
+                // `backlog` is a retired tier an older version may have stored as the scope.
+                for scope in [nil, "focus", "ct_later", "satellite", "backlog"] as [String?] {
                     XCTAssertEqual(
                         rowIds(.tier, dateFilter: dateFilter, query: query, scope: scope),
                         rowIds(.project, dateFilter: dateFilter, query: query, scope: scope),
@@ -1502,10 +1512,10 @@ final class TaskBoardModelTests: XCTestCase {
 
     // MARK: - Waiting rows, and where hidden work goes (the status sections)
 
-    /// A WAITING task leaves its tier's bands in every tier (the Parked shelf too) and both
-    /// groupings, and the chips stop counting it, as on the console (its default Status is
-    /// TODO / IN_PROGRESS / NEED_ACTION). `showWaiting` (on while a query is live) brings it
-    /// back into the bands.
+    /// A WAITING task leaves its tier's bands in every tier and both groupings, and the chips
+    /// stop counting it, as on the console (its default Status is TODO / IN_PROGRESS /
+    /// NEED_ACTION). `showWaiting` (on while a query is live) brings it back into the bands.
+    /// `p` and `pw` are stored in the retired Wait tier, so their chip is Satellite's.
     func testWaitingRowsLeaveEveryTierUnlessShown() {
         let tasks = [
             task("o", project: "acme"), task("w", project: "acme", phase: "WAITING"),
@@ -1522,6 +1532,7 @@ final class TaskBoardModelTests: XCTestCase {
         for grouping in [BoardGrouping.tier, .project] {
             let off = board(grouping, showWaiting: false)
             XCTAssertEqual(Set(off.bands.flatMap { $0.rows.map(\.id) }), ["o", "p"], "\(grouping)")
+            XCTAssertEqual(off.rail.map(\.id), ["__all__", "focus", "satellite"], "\(grouping)")
             XCTAssertEqual(off.rail.map(\.count), [2, 1, 1], "\(grouping)")
             XCTAssertFalse(off.sections.active, "no sections unless asked for")
 
@@ -1531,36 +1542,36 @@ final class TaskBoardModelTests: XCTestCase {
         }
     }
 
-    /// A tier whose every row is WAITING (the Parked shelf, typically) keeps its chip, so a
-    /// reader scoped to it keeps the scope, and its rows are drawn under Waiting / snoozed.
+    /// A tier whose every row is WAITING keeps its chip, so a reader scoped to it keeps the
+    /// scope, and its rows are drawn under Waiting / snoozed.
     func testATierOfOnlyWaitingRowsKeepsItsChipAndScope() {
         let tasks = [task("o", project: "acme"), task("pw", project: "marina", phase: "WAITING")]
-        let tierOf = ["o": "focus", "pw": "wait"]
-        let order = ["focus": ["o"], "wait": ["pw"]]
+        let tierOf = ["o": "focus", "pw": "ct_later"]
+        let order = ["focus": ["o"], "ct_later": ["pw"]]
         for grouping in [BoardGrouping.tier, .project] {
             let scoped = BoardModel.assemble(
                 tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order,
-                customTiers: [], grouping: grouping, scope: "wait", statusSections: true
+                customTiers: [Self.later], grouping: grouping, scope: "ct_later", statusSections: true
             )
-            XCTAssertTrue(scoped.rail.contains { $0.bandId == "wait" && $0.count == 0 }, "\(grouping)")
-            XCTAssertEqual(scoped.scope, "wait", "the stored scope survives \(grouping)")
+            XCTAssertTrue(scoped.rail.contains { $0.bandId == "ct_later" && $0.count == 0 }, "\(grouping)")
+            XCTAssertEqual(scoped.scope, "ct_later", "the stored scope survives \(grouping)")
             XCTAssertEqual(scoped.sections.waiting.map(\.id), ["pw"], "\(grouping)")
             XCTAssertTrue(scoped.bands.isEmpty, "Working holds nothing here (\(grouping))")
             // Scoped to another tier, the waiting tier adds no band and no waiting row.
             let focus = BoardModel.assemble(
                 tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order,
-                customTiers: [], grouping: grouping, scope: "focus", statusSections: true
+                customTiers: [Self.later], grouping: grouping, scope: "focus", statusSections: true
             )
             XCTAssertEqual(focus.bands.flatMap { $0.rows.map(\.id) }, ["o"], "\(grouping)")
-            XCTAssertFalse(focus.bands.contains { $0.bandId == "wait" }, "\(grouping)")
+            XCTAssertFalse(focus.bands.contains { $0.bandId == "ct_later" }, "\(grouping)")
             XCTAssertTrue(focus.sections.waiting.isEmpty, "\(grouping)")
         }
     }
 
     /// The same holds for a tier whose every row is SNOOZED: under Now a start date still to
     /// come puts a row under Waiting / snoozed, and its tier keeps its chip and scope whether
-    /// the row is WAITING or not, and however far out the date is (2026-11-10: the demo's
-    /// Parked chip was missing on every day, because its only task starts on a later day).
+    /// the row is WAITING or not, and however far out the date is (2026-11-10: a demo tier's
+    /// chip was missing on every day, because its only task starts on a later day).
     func testATierOfOnlySnoozedRowsKeepsItsChipAndScope() {
         let day: TimeInterval = 24 * 3600
         let aheads: [TimeInterval] = [60, 3 * 3600, day, 3 * day, 9 * day]
@@ -1571,35 +1582,35 @@ final class TaskBoardModelTests: XCTestCase {
                 task("s", title: "ship", project: "marina", start: start),
                 task("ws", title: "ship later", project: "marina", phase: "WAITING", start: start),
             ]
-            let tierOf = ["o": "focus", "s": "wait", "ws": "wait"]
-            let order = ["focus": ["o"], "wait": ["s", "ws"]]
+            let tierOf = ["o": "focus", "s": "ct_later", "ws": "ct_later"]
+            let order = ["focus": ["o"], "ct_later": ["s", "ws"]]
             func board(_ grouping: BoardGrouping, scope: String?, query: String = "") -> BoardAssembly {
                 BoardModel.assemble(
                     tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order,
-                    customTiers: [], query: query, grouping: grouping, dateFilter: .now,
+                    customTiers: [Self.later], query: query, grouping: grouping, dateFilter: .now,
                     scope: scope, statusSections: true, now: Self.now
                 )
             }
             for grouping in [BoardGrouping.tier, .project] {
                 let label = "\(grouping), \(Int(ahead))s ahead"
                 let whole = board(grouping, scope: nil)
-                XCTAssertEqual(whole.rail.map(\.id), ["__all__", "focus", "wait"], label)
+                XCTAssertEqual(whole.rail.map(\.id), ["__all__", "focus", "ct_later"], label)
                 XCTAssertEqual(whole.rail.map(\.count), [1, 1, 0], "a snoozed row is no open work (\(label))")
                 XCTAssertEqual(Set(whole.sections.waiting.map(\.id)), ["s", "ws"], label)
-                let scoped = board(grouping, scope: "wait")
-                XCTAssertEqual(scoped.scope, "wait", "the stored scope survives (\(label))")
+                let scoped = board(grouping, scope: "ct_later")
+                XCTAssertEqual(scoped.scope, "ct_later", "the stored scope survives (\(label))")
                 XCTAssertEqual(Set(scoped.sections.waiting.map(\.id)), ["s", "ws"], label)
                 XCTAssertTrue(scoped.bands.isEmpty, "Working holds nothing here (\(label))")
                 // A live query turns the sections off and shows its own results: nothing is
                 // drawn for the snoozed rows then, so they hold no band, as before.
-                XCTAssertFalse(board(grouping, scope: nil, query: "ship").rail.contains { $0.bandId == "wait" }, label)
+                XCTAssertFalse(board(grouping, scope: nil, query: "ship").rail.contains { $0.bandId == "ct_later" }, label)
             }
             // Under All a later start is ordinary open work: the row is in its band.
             let all = BoardModel.assemble(
                 tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order,
-                customTiers: [], dateFilter: .all, statusSections: true, now: Self.now
+                customTiers: [Self.later], dateFilter: .all, statusSections: true, now: Self.now
             )
-            XCTAssertTrue(all.rail.contains { $0.bandId == "wait" && $0.count == 1 })
+            XCTAssertTrue(all.rail.contains { $0.bandId == "ct_later" && $0.count == 1 })
         }
     }
 
@@ -2093,7 +2104,7 @@ final class TaskBoardModelTests: XCTestCase {
                             }
                             XCTAssertEqual(
                                 Set(scoped.bands.flatMap(\.rows).map(\.id)),
-                                ids.filter { splitTier[$0] == tier },
+                                ids.filter { PinTierPolicy.displayTier(splitTier[$0]) == tier },
                                 "\(state): scoping to \(tier) is not \(tier)'s own rows"
                             )
                             XCTAssertEqual(
@@ -2119,23 +2130,23 @@ final class TaskBoardModelTests: XCTestCase {
         func board(_ scope: String?, _ grouping: BoardGrouping) -> BoardAssembly {
             BoardModel.assemble(
                 tasks: [task("a"), task("b"), task("c")], sessions: [],
-                tierOf: ["a": "focus", "b": "backlog", "c": "backlog"],
-                tierOrder: ["focus": ["a"], "backlog": ["b", "c"]], customTiers: [],
+                tierOf: ["a": "focus", "b": "ct_later", "c": "ct_later"],
+                tierOrder: ["focus": ["a"], "ct_later": ["b", "c"]], customTiers: [Self.later],
                 grouping: grouping, scope: scope, now: Self.now
             )
         }
-        let narrowed = board("backlog", .tier)
-        XCTAssertEqual(narrowed.bands.map(\.bandId), ["backlog"])
+        let narrowed = board("ct_later", .tier)
+        XCTAssertEqual(narrowed.bands.map(\.bandId), ["ct_later"])
         XCTAssertEqual(narrowed.bands.first?.rows.map(\.id), ["b", "c"],
             "the rows are the tier's own, in pin order")
         XCTAssertEqual(narrowed.bands.first?.count, 2,
             "and the heading counts what it is showing, not the whole board")
-        XCTAssertEqual(narrowed.scope, "backlog", "the lit chip is the tier that is in force")
+        XCTAssertEqual(narrowed.scope, "ct_later", "the lit chip is the tier that is in force")
 
         // Same tier, other grouping: the population is identical and the rail is untouched.
-        let byProject = board("backlog", .project)
+        let byProject = board("ct_later", .project)
         XCTAssertEqual(Set(byProject.bands.flatMap(\.rows).map(\.id)), ["b", "c"])
-        XCTAssertEqual(byProject.scope, "backlog")
+        XCTAssertEqual(byProject.scope, "ct_later")
         XCTAssertEqual(byProject.rail.map(\.id), narrowed.rail.map(\.id))
     }
 
@@ -2143,11 +2154,11 @@ final class TaskBoardModelTests: XCTestCase {
         func board(_ scope: String?) -> BoardAssembly {
             BoardModel.assemble(
                 tasks: [task("a"), task("b")], sessions: [],
-                tierOf: ["a": "focus", "b": "backlog"],
-                tierOrder: ["focus": ["a"], "backlog": ["b"]], customTiers: [], scope: scope
+                tierOf: ["a": "focus", "b": "ct_later"],
+                tierOrder: ["focus": ["a"], "ct_later": ["b"]], customTiers: [Self.later], scope: scope
             )
         }
-        XCTAssertEqual(board(nil).bands.map(\.bandId), ["focus", "backlog"])
+        XCTAssertEqual(board(nil).bands.map(\.bandId), ["focus", "ct_later"])
         XCTAssertNil(board(nil).scope)
     }
 
@@ -2174,9 +2185,10 @@ final class TaskBoardModelTests: XCTestCase {
                 )
             }
             let whole = Set(board(nil).bands.flatMap(\.rows).map(\.id))
-            // `wait` is a real built-in tier with no rows here, so it is the "emptied under
-            // the reader" case; the rest are gone, never-existed, or a band id.
-            for stale in ["wait", "ct_gone99", BoardModel.projectBandPrefix + "marina", ""] {
+            // `wait` and `backlog` are retired tiers an older version may have stored as the
+            // scope (`b` is stored in Backlog and drawn in Satellite); the rest are gone,
+            // never-existed, or a band id.
+            for stale in ["wait", "backlog", "ct_gone99", BoardModel.projectBandPrefix + "marina", ""] {
                 XCTAssertEqual(
                     Set(board(stale).bands.flatMap(\.rows).map(\.id)), whole,
                     "\(grouping.rawValue): a scope of \(stale) must not empty the board"
@@ -2234,26 +2246,23 @@ final class TaskBoardModelTests: XCTestCase {
 
     // MARK: - Tier tokens → mutation
 
-    func testTokensCoverEveryChoicePlusUnpinAndMarkTheCurrentOne() {
-        let choices = TasksStore.builtinTiers.map { (id: $0.id, label: $0.label) }
-        let tokens = BoardModel.tokens(current: "backlog", choices: choices)
-        XCTAssertEqual(tokens.map(\.id), ["focus", "satellite", "backlog", "wait", "unpin"])
-        XCTAssertEqual(tokens.filter(\.selected).map(\.tierId), ["backlog"],
+    func testTokensCoverEveryOfferedChoiceAndMarkTheSelectedOne() {
+        let choices = PinTierPolicy.choices(custom: [FocusTierInfo(id: "ct_abc12345", label: "Deep Work")])
+        let tokens = BoardModel.tokens(selected: "satellite", choices: choices)
+        XCTAssertEqual(tokens.map(\.id), ["focus", "satellite", "ct_abc12345"],
+            "Focus, Satellite, then custom tiers: no Backlog, no Parked, no Unpin token")
+        XCTAssertEqual(tokens.filter(\.selected).map(\.tierId), ["satellite"],
             "exactly one token reads as selected")
-        XCTAssertEqual(tokens.last?.isUnpin, true)
-        XCTAssertEqual(tokens.last?.selected, false, "Unpin is an action, never a state")
     }
 
     func testAnUnpinnedRowHasNoSelectedToken() {
-        let tokens = BoardModel.tokens(
-            current: nil, choices: TasksStore.builtinTiers.map { (id: $0.id, label: $0.label) }
-        )
+        let tokens = BoardModel.tokens(selected: nil, choices: PinTierPolicy.offeredBuiltins)
         XCTAssertTrue(tokens.filter(\.selected).isEmpty)
     }
 
     func testTokenIdsAreAutomationSafe() {
         let tokens = BoardModel.tokens(
-            current: nil,
+            selected: nil,
             choices: [("focus", "Focus"), ("ct_abc12345", "Deep Work")]
         )
         for token in tokens {
@@ -2262,29 +2271,28 @@ final class TaskBoardModelTests: XCTestCase {
         }
     }
 
-    /// The whole mutation rule: a token maps to exactly one action, and the token
-    /// that is already selected costs no request.
-    func testTappingATierTokenMapsToTheRightMutation() {
-        let choices = TasksStore.builtinTiers.map { (id: $0.id, label: $0.label) }
-        let tokens = BoardModel.tokens(current: "focus", choices: choices)
+    /// The whole mutation rule from a row's menu: the selected token unpins (there is
+    /// no Unpin token), and another token moves the row there.
+    func testTappingATierTokenMapsToTheRightWrites() {
+        let choices = PinTierPolicy.choices(custom: [FocusTierInfo(id: "ct_abc12345", label: "Deep Work")])
+        let tokens = BoardModel.tokens(selected: "focus", choices: choices)
 
         let focus = tokens.first { $0.tierId == "focus" }!
-        XCTAssertEqual(BoardModel.action(for: focus, current: "focus"), .noop,
-            "tapping the tier you are already in must not spend a request")
-
-        let wait = tokens.first { $0.tierId == "wait" }!
-        XCTAssertEqual(BoardModel.action(for: wait, current: "focus"), .setTier("wait"))
-
-        let unpin = tokens.first(where: \.isUnpin)!
-        XCTAssertEqual(BoardModel.action(for: unpin, current: "focus"), .unpin)
-        XCTAssertEqual(BoardModel.action(for: unpin, current: nil), .noop,
-            "unpinning something that isn't pinned is nothing")
+        XCTAssertTrue(focus.selected)
+        XCTAssertEqual(PinTierPolicy.writes(picking: focus.tierId, selected: "focus"), [.unpin],
+            "tapping the tier you are in unpins")
+        for token in tokens where !token.selected {
+            XCTAssertEqual(PinTierPolicy.writes(picking: token.tierId, selected: "focus"),
+                           [.setTier(token.tierId)])
+        }
     }
 
-    func testTappingAnyTierOnAnUnpinnedRowSetsThatTier() {
-        for tier in ["focus", "satellite", "backlog", "wait", "ct_abc12345"] {
-            let token = BoardModel.TierToken(tierId: tier, label: tier, selected: false, isUnpin: false)
-            XCTAssertEqual(BoardModel.action(for: token, current: nil), .setTier(tier))
+    /// On an unpinned row a token pins into its tier: Satellite is where a fresh pin lands,
+    /// so it costs no tier write; any other tier is a pin, then the tier.
+    func testTappingATierOnAnUnpinnedRowPinsIntoIt() {
+        XCTAssertEqual(PinTierPolicy.writes(picking: "satellite", selected: nil), [.pin])
+        for tier in ["focus", "ct_abc12345"] {
+            XCTAssertEqual(PinTierPolicy.writes(picking: tier, selected: nil), [.pin, .setTier(tier)])
         }
     }
 
@@ -2515,9 +2523,10 @@ final class TaskBoardTierOrderTests: XCTestCase {
             custom: ["ct_abc12345": ["c1"]]
         ))
         XCTAssertEqual(order["focus"], ["f1", "f2"], "pin_order, verbatim")
-        XCTAssertEqual(order["satellite"], ["s1"])
-        XCTAssertEqual(order["backlog"], ["b1"])
-        XCTAssertEqual(order["wait"], ["w1"])
+        // Backlog and Wait are retired: their rows join Satellite where pin_order puts them.
+        XCTAssertEqual(order["satellite"], ["s1", "b1", "w1"])
+        XCTAssertNil(order["backlog"])
+        XCTAssertNil(order["wait"])
         XCTAssertEqual(order["ct_abc12345"], ["c1"])
     }
 
@@ -2551,19 +2560,19 @@ final class TaskBoardTierOrderTests: XCTestCase {
     /// it). `TierMovePinOrderTests` covers a move into the middle of a band.
     func testMovingATierPutsTheRowAtTheFootOfItsNewBand() async {
         let mock = MockTaskTransport()
-        // Server answers with the row already in wait, last.
+        // Server answers with the row already in Later, last.
         mock.tierSplitResult = FocusTierResult(
             pinnedTasks: ["x", "y", "moved"], focusTasks: ["x"],
-            satelliteTasks: [], backlogTasks: [], waitTasks: ["y", "moved"],
-            customTierTasks: [:]
+            satelliteTasks: [], backlogTasks: [], waitTasks: [],
+            customTierTasks: ["ct_later": ["y", "moved"]]
         )
         let store = TasksStore(transport: mock)
-        store.taskTiers = ["x": "focus", "y": "wait", "moved": "focus"]
-        store.taskTierOrder = ["focus": ["x", "moved"], "wait": ["y"]]
+        store.taskTiers = ["x": "focus", "y": "ct_later", "moved": "focus"]
+        store.taskTierOrder = ["focus": ["x", "moved"], "ct_later": ["y"]]
 
-        let error = await store.setTier(taskId: "moved", tier: "wait")
+        let error = await store.setTier(taskId: "moved", tier: "ct_later")
         XCTAssertNil(error)
-        XCTAssertEqual(store.taskTierOrder["wait"], ["y", "moved"], "joins the foot")
+        XCTAssertEqual(store.taskTierOrder["ct_later"], ["y", "moved"], "joins the foot")
         XCTAssertEqual(store.taskTierOrder["focus"], ["x"], "and leaves the old band")
     }
 
@@ -2572,13 +2581,13 @@ final class TaskBoardTierOrderTests: XCTestCase {
         mock.errorsByEndpoint["setTaskFocusTier"] = APIError.badResponse
         let store = TasksStore(transport: mock)
         store.taskTiers = ["moved": "focus"]
-        store.taskTierOrder = ["focus": ["moved"], "wait": []]
+        store.taskTierOrder = ["focus": ["moved"], "ct_later": []]
 
-        let error = await store.setTier(taskId: "moved", tier: "wait")
+        let error = await store.setTier(taskId: "moved", tier: "ct_later")
         XCTAssertNotNil(error)
         XCTAssertEqual(store.taskTiers["moved"], "focus", "the map rolls back")
         XCTAssertEqual(store.taskTierOrder["focus"], ["moved"], "and so does the order")
-        XCTAssertEqual(store.taskTierOrder["wait"], [])
+        XCTAssertEqual(store.taskTierOrder["ct_later"], [])
     }
 
     /// Create-at-foot, end to end through the store: a task born in a tier is in

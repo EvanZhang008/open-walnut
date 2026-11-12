@@ -200,18 +200,15 @@ export const ICON_TIER_FOCUS = <svg width="13" height="13" viewBox="0 0 24 24" f
 
 export const ICON_TIER_SATELLITE = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><circle cx="12" cy="12" r="5"/><path d="M3.3 16.8 A 10.5 10.5 0 0 1 12 1.8" opacity="0.55"/><circle cx="20" cy="17.5" r="2.8" fill="currentColor" stroke="none"/></svg>;
 
-// Parked (tier id `wait`): a parking sign. Not the hourglass, which is the
-// Waiting STATUS: a tier is a board shelf, and the two must never share a mark.
-export const ICON_TIER_WAIT = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M10 17 V7.5 h3 a3 3 0 0 1 0 6 h-3"/></svg>;
-
 // Custom (user-defined) tiers: a tagged bookmark: reads as "a shelf you made".
 export const ICON_TIER_CUSTOM = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3.5 h12 v17 l-6 -4.5 -6 4.5 z"/></svg>;
 
-/** Tier icon lookup: used by tier section headers, Recent pinned badges, and the kebab menu. Custom tier ids (ct_*) get the bookmark. */
+/** Tier icon lookup: used by tier section headers, Recent pinned badges, and the kebab menu.
+ *  Custom tier ids (ct_*) get the bookmark. Callers pass the tier a task is drawn in (tierOf,
+ *  shownTier), never a retired one such as Parked's `wait`. */
 export function tierIcon(tier: string): ReactNode {
   switch (tier) {
     case 'focus': return ICON_TIER_FOCUS;
-    case 'wait': return ICON_TIER_WAIT;
     case 'satellite': return ICON_TIER_SATELLITE;
     default: return ICON_TIER_CUSTOM;
   }

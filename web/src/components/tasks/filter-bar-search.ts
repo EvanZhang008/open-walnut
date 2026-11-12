@@ -51,7 +51,6 @@ const VIEW_WORDS: readonly { label: string; words: readonly string[] }[] = [
   { label: 'Pinned', words: ['pinned', 'pin'] },
   { label: 'Focus', words: ['focus'] },
   { label: 'Satellite', words: ['satellite'] },
-  { label: 'Parked', words: ['parked'] },
   { label: 'Focus', words: ['tier', 'tiers'] },
   { label: 'Recent', words: ['recent'] },
 ];

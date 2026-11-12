@@ -1,7 +1,7 @@
 /**
  * Home's task panel on the extension's first page (ExtHome loads this file lazily, so the composer
  * paints first): TodoPanel itself, on Home's task store and Focus bar, with the same tabs (All,
- * Focus, Satellite, Parked, the projects, More), search, Needs you rows and status, as on a desktop
+ * Focus, Satellite, the projects, More), search, Needs you rows and status, as on a desktop
  * however narrow the panel (PopoutExtPanel `markNotAPhone`). The tab picked is Home's own view memory (`usePageView('home',
  * ...)`): the panel and Home show the same tab.
  *
@@ -31,7 +31,6 @@ export default function ExtHomeTasks({ onOpen }: { onOpen: OpenTask }) {
   const ordering = useOrdering();
   const pinnedTaskIds = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
   const focusTaskIds = useMemo(() => new Set(focusBar.focusIds), [focusBar.focusIds]);
-  const waitTaskIds = useMemo(() => new Set(focusBar.waitIds), [focusBar.waitIds]);
   const customTierIds = useMemo(() => {
     const map: Record<string, Set<string>> = {};
     for (const [tid, ids] of Object.entries(focusBar.customTierIds)) map[tid] = new Set(ids);
@@ -75,7 +74,6 @@ export default function ExtHomeTasks({ onOpen }: { onOpen: OpenTask }) {
       onSetTier={focusBar.setTier}
       pinnedTaskIds={pinnedTaskIds}
       focusTaskIds={focusTaskIds}
-      waitTaskIds={waitTaskIds}
       customTiers={focusBar.customTiers}
       customTiersLoaded={focusBar.customTiersLoaded}
       customTierIds={customTierIds}

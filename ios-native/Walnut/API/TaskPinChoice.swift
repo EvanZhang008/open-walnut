@@ -33,8 +33,9 @@ enum TaskPinChoice: Equatable, Hashable {
     case unspecified
     /// Explicitly off the board (`pinned: false`).
     case notPinned
-    /// Born in this tier: a built-in (`focus` | `satellite` | `backlog` |
-    /// `wait`) or a registered custom tier id (`ct_*`).
+    /// Born in this tier: a built-in (`focus` | `satellite`) or a registered
+    /// custom tier id (`ct_*`). The retired `backlog` / `wait` still go out as
+    /// given (the server accepts them) and show as Satellite (`PinTierPolicy`).
     case tier(String)
 
     /// `pinned` for the create body; nil = omit the key.
@@ -60,9 +61,10 @@ enum TaskPinChoice: Equatable, Hashable {
     /// `satellite` stays `"satellite"` here even though the server stores
     /// nothing: that is exactly what `TasksStore.tierMap` derives for a pinned
     /// row in no explicit bucket, so the optimistic value and the reconciled
-    /// one agree instead of flickering (rule 2).
+    /// one agree instead of flickering (rule 2). A retired tier reads Satellite
+    /// for the same reason: that is where the next split shows it.
     var optimisticTier: String? {
-        if case .tier(let id) = self { return id }
+        if case .tier(let id) = self { return PinTierPolicy.displayTier(id) }
         return nil
     }
 
@@ -144,8 +146,7 @@ struct NewTaskSeed: Equatable, Identifiable {
         NewTaskSeed(project: header == inboxHeader ? "" : header, pin: .unspecified)
     }
 
-    /// A pin tier group's header (`focus` / `satellite` / `backlog` / `wait` /
-    /// `ct_*`). No project: a tier says where on the board, not which project.
+    /// A pin tier group's header (`focus` / `satellite` / `ct_*`). No project: a tier says where on the board, not which project.
     static func tier(_ id: String) -> NewTaskSeed {
         NewTaskSeed(project: "", pin: .tier(id))
     }

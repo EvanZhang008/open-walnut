@@ -36,9 +36,10 @@ final class FocusTierTests: XCTestCase {
         ))
         XCTAssertEqual(map["a"], "focus")
         XCTAssertEqual(map["b"], "satellite")
-        XCTAssertEqual(map["c"], "backlog")
-        XCTAssertEqual(map["d"], "wait")
+        XCTAssertEqual(map["c"], "satellite", "a task stored in the retired Backlog shows in Satellite")
+        XCTAssertEqual(map["d"], "satellite", "a task stored in the retired Wait shows in Satellite")
         XCTAssertEqual(map["e"], "ct_abc12345")
+        XCTAssertEqual(map.count, 5, "no old task drops off the board")
     }
 
     /// The server omits bucket arrays it considers empty (all-optional wire
@@ -63,8 +64,8 @@ final class FocusTierTests: XCTestCase {
         store.customTiers = [FocusTierInfo(id: "ct_abc12345", label: "Deep Work")]
         XCTAssertEqual(store.tierLabel(for: "focus"), "Focus")
         XCTAssertEqual(store.tierLabel(for: "satellite"), "Satellite")
-        XCTAssertEqual(store.tierLabel(for: "backlog"), "Backlog")
-        XCTAssertEqual(store.tierLabel(for: "wait"), "Wait")
+        XCTAssertEqual(store.tierLabel(for: "backlog"), "Satellite", "a retired tier reads where it shows")
+        XCTAssertEqual(store.tierLabel(for: "wait"), "Satellite")
         XCTAssertEqual(store.tierLabel(for: "ct_abc12345"), "Deep Work")
         // Unknown/stale ct id must never leak a raw id into the UI.
         XCTAssertEqual(store.tierLabel(for: "ct_deleted99"), "Satellite")
@@ -87,7 +88,7 @@ final class FocusTierTests: XCTestCase {
         store.customTiers = [FocusTierInfo(id: "ct_abc12345", label: "Deep Work")]
         XCTAssertEqual(
             store.allTierChoices.map(\.id),
-            ["focus", "satellite", "backlog", "wait", "ct_abc12345"]
+            ["focus", "satellite", "ct_abc12345"]
         )
     }
 

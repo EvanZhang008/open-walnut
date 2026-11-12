@@ -312,16 +312,42 @@ final class TasksDrawerUITests: XCTestCase {
     }
 
     func testThePinnedChipRailStaysVisibleAfterVerticalAndDiagonalDrags() throws {
-        let app = launchDemo()
+        // Two built-ins fit on a small phone; a real custom tier exercises overflow.
+        let environment = ProcessInfo.processInfo.environment
+        guard let server = environment["WALNUT_UITEST_SERVER"],
+              let url = URL(string: UITestLaunch.pairedServer(server)), url.host == "127.0.0.1",
+              let port = url.port, port != 3456, port != 3457,
+              let token = environment["WALNUT_UITEST_TOKEN"], !token.isEmpty,
+              let customTier = environment["WALNUT_UITEST_ROW_QUERY"], customTier.hasPrefix("ct_") else {
+            throw XCTSkip("requires the isolated Pin fixture with a custom tier")
+        }
+        let app = UITestLaunch.launch([
+            UITestLaunch.serverURLArgument, url.absoluteString, "-walnut.deviceToken", token,
+        ])
+        // View choices survive process launches; the preceding custom Pin walk left
+        // this board scoped to its two custom pins. Start the density walk in All.
+        let tasksTab = app.buttons["Tasks"]
+        XCTAssertTrue(tasksTab.waitForExistence(timeout: 30))
+        tasksTab.tap()
+        if !board(app).waitForExistence(timeout: 3) { app.buttons["tasks.menu"].tap() }
+        let allScope = app.buttons["board.chip.all"]
+        XCTAssertTrue(allScope.waitForExistence(timeout: 10))
+        if !allScope.isHittable {
+            let rail = app.buttons["board.chip.\(customTier)"]
+            rail.swipeRight()
+        }
+        allScope.tap()
         _ = try openBoard(app)
         let window = app.windows.firstMatch
         let filters = app.buttons["board.filters"]
         let all = app.buttons["board.chip.all"]
         XCTAssertTrue(filters.waitForExistence(timeout: 5))
         XCTAssertTrue(all.waitForExistence(timeout: 5))
-        for id in ["focus", "satellite", "wait"] {
+        for id in ["focus", "satellite", customTier] {
             XCTAssertTrue(app.buttons["board.chip.\(id)"].exists, "the fixture must include \(id) tasks")
         }
+        XCTAssertFalse(app.buttons["board.chip.wait"].exists)
+        XCTAssertFalse(app.buttons["board.chip.backlog"].exists)
         let inlineY = filters.frame.midY
         let listStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.7))
         listStart.press(forDuration: 0.05, thenDragTo: listStart.withOffset(CGVector(dx: 0, dy: -300)))
@@ -343,10 +369,10 @@ final class TasksDrawerUITests: XCTestCase {
             .withOffset(CGVector(dx: 230, dy: y))
         sideways.press(forDuration: 0.05, thenDragTo: sideways.withOffset(CGVector(dx: -180, dy: -12)))
         XCTAssertTrue(board(app).exists, "a diagonal rail drag closed the drawer")
-        let wait = app.buttons["board.chip.wait"]
-        XCTAssertTrue(wait.isHittable, "the rail no longer scrolls horizontally")
+        let custom = app.buttons["board.chip.\(customTier)"]
+        XCTAssertTrue(custom.isHittable, "the rail no longer scrolls horizontally")
         XCTAssertLessThan(app.buttons["board.chip.satellite"].frame.minX, satelliteBefore - 30)
-        XCTAssertEqual(wait.frame.midY, y, accuracy: 2)
+        XCTAssertEqual(custom.frame.midY, y, accuracy: 2)
         attach(app, "rail-diagonal")
         let reverse = window.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: 65, dy: y))

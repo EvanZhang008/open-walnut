@@ -26,7 +26,7 @@ for (const design of ['status', 'project'] as PanelDesign[]) {
     const custom = (await made1.json()).tier.id as string
     madeTiers.push(custom)
     const ids: Record<string, string> = {}
-    for (const tier of ['focus', 'satellite', 'wait', custom, 'unpinned']) {
+    for (const tier of ['focus', 'satellite', custom, 'unpinned']) {
       const res = await page.request.post('/api/tasks', { data: { title: `Tier watch ${tier} ${Date.now()}`, source: 'local' } })
       expect(res.ok()).toBe(true)
       const id = (await res.json()).task.id as string
@@ -42,7 +42,7 @@ for (const design of ['status', 'project'] as PanelDesign[]) {
     }
     await page.goto('/')
     const watching = statusSectionRows(page, 'watching')
-    const assertTier = async (name: 'Focus' | 'Satellite' | 'Parked' | 'custom', tier: string) => {
+    const assertTier = async (name: 'Focus' | 'Satellite' | 'custom', tier: string) => {
       if (name === 'custom') {
         const tab = page.locator('.todo-section-tabs [role="tab"]', { hasText: label }).first()
         await tab.click()
@@ -55,7 +55,6 @@ for (const design of ['status', 'project'] as PanelDesign[]) {
     }
     await assertTier('Focus', 'focus')
     await assertTier('Satellite', 'satellite')
-    await assertTier('Parked', 'wait')
     await assertTier('custom', custom)
     await assertTier('Focus', 'focus')
     const tab = page.locator('.todo-section-tab-focus')

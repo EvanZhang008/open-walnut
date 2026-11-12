@@ -3,7 +3,7 @@ import SwiftUI
 /// The session's linked-task row — a session IS a task, so every task
 /// capability is reachable in place: tap → the full TaskDetailSheet
 /// (status/priority/due/description/note/star/pin/delete), plus inline
-/// one-tap quick controls (todo↔done status circle, pin toggle).
+/// quick controls (todo↔done status circle, shared pin tier menu).
 ///
 /// Resolution: the LIVE row from TasksStore when present (the events feed
 /// updates it in place); otherwise a one-shot GET /v1/tasks/:id fallback for
@@ -108,21 +108,31 @@ struct SessionTaskRow: View {
     }
 
     private var pinToggle: some View {
-        Button {
-            togglePin()
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: task?.pinned == true ? "pin.fill" : "pin")
-                // WHERE it's pinned, not just that it is (focus tier label).
-                if task?.pinned == true,
-                   let store, let badge = task.flatMap({ store.tierBadge(for: $0) }) {
-                    Text(badge).font(.caption2.weight(.semibold))
+        let selected = task.flatMap { store?.selectedTier(for: $0) }
+        return Menu {
+            if let store {
+                ForEach(BoardModel.tokens(selected: selected, choices: store.allTierChoices)) { token in
+                    Button {
+                        pickTier(token.tierId)
+                    } label: {
+                        if token.selected { Label(token.label, systemImage: "checkmark") }
+                        else { Text(token.label) }
+                    }
                 }
             }
-            .foregroundStyle(task?.pinned == true ? Theme.tint : Color.secondary)
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: selected == nil ? "pin" : "pin.fill")
+                if let selected, let store {
+                    Text(store.tierLabel(for: selected)).font(.caption2.weight(.semibold))
+                }
+            }
+            .foregroundStyle(selected != nil ? Theme.tint : Color.secondary)
         }
         .buttonStyle(.plain)
-        .disabled((saving && !isLiveRow) || task == nil || store == nil)
+        .disabled(saving || task == nil || store == nil)
+        .accessibilityLabel("Pin")
+        .accessibilityValue(selected.flatMap { store?.tierLabel(for: $0) } ?? "Not pinned")
         .accessibilityIdentifier("session.task.pinToggle")
     }
 
@@ -146,16 +156,14 @@ struct SessionTaskRow: View {
         }
     }
 
-    private func togglePin() {
-        guard let store, let task else { return }
-        guard isLiveRow || !saving else { return }
+    private func pickTier(_ tier: String) {
+        guard let store, let task, !saving else { return }
         saving = true
         errorText = nil
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         Task {
             defer { saving = false }
-            let next = !(task.pinned == true)
-            if let message = await store.setPinned(task, pinned: next) {
+            if let message = await store.pickTier(tier, for: task) {
                 errorText = message
             } else if store.tasks.first(where: { $0.id == task.id }) == nil {
                 // Fallback rows aren't in the list — refetch the truth.

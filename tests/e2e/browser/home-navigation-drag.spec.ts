@@ -5,6 +5,12 @@ test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
 test.setTimeout(120_000);
 const SHOTS = '/tmp/walnut-home-navigation';
 
+/** Custom tiers this file made on the shared fixture server, removed after each test. */
+const madeTiers: string[] = [];
+test.afterEach(async ({ request }) => {
+  for (const id of madeTiers.splice(0)) await request.delete(`/api/focus/tiers/${id}`).catch(() => undefined);
+});
+
 async function drag(page: Page, source: Locator, target: Locator, cancel = false) {
   await source.scrollIntoViewIfNeeded();
   const start = await source.boundingBox();
@@ -40,11 +46,16 @@ async function drag(page: Page, source: Locator, target: Locator, cancel = false
 
 test('native reorder, drag cancellation, folded tiers, failure recovery and explicit unpin', async ({ page, baseURL }) => {
   await isolateUiPrefs(page);
-  await page.addInitScript(() => {
-    // Parked was folded earlier. Empty, it is not drawn until a drag needs it as a target.
-    if (localStorage.getItem('walnut-todo-collapsed-sections') === null) localStorage.setItem('walnut-todo-collapsed-sections', '["wait"]');
+  // The folded tier a drag opens: an empty custom tier (the board's third column now that the
+  // built-ins are Focus and Satellite), folded earlier.
+  const foldTier = await page.request.post('/api/focus/tiers', { data: { label: `Fold shelf ${test.info().project.name} ${test.info().repeatEachIndex}` } });
+  expect(foldTier.ok()).toBe(true);
+  const foldId: string = (await foldTier.json()).tier.id;
+  madeTiers.push(foldId);
+  await page.addInitScript((folded) => {
+    if (localStorage.getItem('walnut-todo-collapsed-sections') === null) localStorage.setItem('walnut-todo-collapsed-sections', JSON.stringify([folded]));
     if (localStorage.getItem('walnut-todo-tier-run-folds') === null) localStorage.setItem('walnut-todo-tier-run-folds', '[]');
-  });
+  }, foldId);
   const ids: string[] = [];
   for (const [i, tier] of ['focus', 'focus', 'satellite'].entries()) {
     const res = await page.request.post('/api/tasks', { data: { title: `Navigation drag ${i}`, project: i === 2 ? 'Other project' : 'Navigation project', source: 'local' } });
@@ -133,12 +144,15 @@ test('native reorder, drag cancellation, folded tiers, failure recovery and expl
   await page.unroute(`**/api/focus/tasks/${ids[0]}/tier`);
   await drag(page, card(), heading('focus'));
   await expectTier('focus');
-  await drag(page, card(), heading('wait'));
-  await expectTier('wait');
-  await expect(heading('wait').locator('.navigation-heading-open')).toHaveAttribute('aria-expanded', 'true');
+  await drag(page, card(), heading(foldId));
+  await expectTier(foldId);
+  await expect(heading(foldId).locator('.navigation-heading-open')).toHaveAttribute('aria-expanded', 'true');
+  // No Parked heading is drawn for the retired tier, folded or not.
+  await expect(heading('wait')).toHaveCount(0);
   const createdTier = await page.request.post('/api/focus/tiers', { data: { label: `Custom ${test.info().project.name} ${test.info().repeatEachIndex}` } });
   expect(createdTier.ok()).toBe(true);
   const customId = (await createdTier.json()).tier.id;
+  madeTiers.push(customId);
   await expect(heading(customId)).toBeVisible();
   await heading(customId).click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'New task', exact: true }).click();
@@ -149,7 +163,7 @@ test('native reorder, drag cancellation, folded tiers, failure recovery and expl
   await page.reload();
   await expect(heading(customId)).toBeVisible({ timeout: 30_000 });
   await expect(root.locator(`[data-drop-zone="${customId}-drop-zone"]`)).toContainText('Custom navigation task');
-  await expectTier('wait');
+  await expectTier(foldId);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-drag-final.png` });
   await card().scrollIntoViewIfNeeded();
   const box = (await card().boundingBox())!;

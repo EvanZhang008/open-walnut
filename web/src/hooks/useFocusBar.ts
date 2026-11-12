@@ -11,11 +11,11 @@ export interface UseFocusBarReturn {
   pinnedIds: string[];
   pinnedTasks: Task[];
   focusIds: string[];
+  /** Satellite holds every pin that is not in Focus or a registered custom tier, so a task
+   *  stored in a retired tier (Parked's `wait`, RETIRED_TIERS) is here too. */
   satelliteIds: string[];
-  waitIds: string[];
   focusTasks: Task[];
   satelliteTasks: Task[];
-  waitTasks: Task[];
   /** User-defined tiers (Settings → Focus Tiers), registry order. */
   customTiers: CustomTierDef[];
   /** False until the first registry fetch resolves. Consumers that self-heal
@@ -47,6 +47,8 @@ export interface UseFocusBarReturn {
   /** Remove a (temp or real) id's pin state — rollback path. */
   removeLocalPin: (taskId: string) => void;
   isPinned: (taskId: string) => boolean;
+  /** The tier a task is drawn in: 'focus', a registered custom tier id, else 'satellite'
+   *  (never a retired tier, whatever the task stores). */
   tierOf: (taskId: string) => FocusTier;
   visible: boolean;
   setVisible: (v: boolean) => void;
@@ -165,17 +167,15 @@ export function useFocusBar(): UseFocusBarReturn {
   const pinnedIds = useStableIds(useMemo(() => orderedPinned.map((t) => t.id), [orderedPinned]));
   const focusIds = useStableIds(useMemo(
     () => orderedPinned.filter((t) => t.focus_tier === 'focus').map((t) => t.id), [orderedPinned]));
-  // Satellite is the default tier: anything not a non-default built-in
-  // (focus/wait) and not in a REGISTERED custom tier falls here (incl. the
-  // retired 'next' value and ids of deleted custom tiers on legacy tasks)
-  // — mirrors server splitTiers().
+  // Satellite is the default tier: anything not in Focus and not in a REGISTERED
+  // custom tier falls here, which takes in the retired tiers (Parked's `wait`, which
+  // older clients and agents still write: RETIRED_TIERS), the retired 'next' value and
+  // ids of deleted custom tiers on legacy tasks. The stored value is kept as it is.
   const isSatellite = useCallback((t: Task) =>
-    !(t.focus_tier && (t.focus_tier === 'focus' || t.focus_tier === 'wait' || customIdSet.has(t.focus_tier))),
+    !(t.focus_tier && (t.focus_tier === 'focus' || customIdSet.has(t.focus_tier))),
   [customIdSet]);
   const satelliteIds = useStableIds(useMemo(
     () => orderedPinned.filter(isSatellite).map((t) => t.id), [orderedPinned, isSatellite]));
-  const waitIds = useStableIds(useMemo(
-    () => orderedPinned.filter((t) => t.focus_tier === 'wait').map((t) => t.id), [orderedPinned]));
   const customTierIds = useStableTierMap(useMemo(() => {
     const map: Record<string, string[]> = {};
     for (const def of customTiers) {
@@ -232,7 +232,7 @@ export function useFocusBar(): UseFocusBarReturn {
   //
   // DEFENSIVE: only rewrite focus_tier when the payload actually carries the tier
   // arrays. A pinned-only payload (e.g. a reorder response that forgot to include
-  // them) would otherwise treat focus/wait as empty and wipe every task's tier to
+  // them) would otherwise treat focus as empty and wipe every task's tier to
   // satellite — the "Focus tasks vanish after adding a task" bug. When the tier
   // split is absent we touch only pinned + pin_order and leave focus_tier intact.
   const applyFocusData = useCallback((data: Partial<focusApi.FocusBarData>) => {
@@ -243,6 +243,8 @@ export function useFocusBar(): UseFocusBarReturn {
     // members to satellite — keep each task's existing custom assignment then.
     const hasCustomSplit = data.custom_tier_tasks !== undefined;
     const focusSet = new Set(data.focus_tasks ?? []);
+    // The retired Parked tier is still on the wire: keep the value the server stores (the
+    // derivation above draws it in Satellite), so this page never rewrites it.
     const waitSet = new Set(data.wait_tasks ?? []);
     // Reverse lookup taskId → custom tier id from the per-tier arrays.
     const customOf = new Map<string, string>();
@@ -515,23 +517,21 @@ export function useFocusBar(): UseFocusBarReturn {
 
   const tierOf = useCallback((taskId: string): FocusTier => {
     if (focusIds.includes(taskId)) return 'focus';
-    if (waitIds.includes(taskId)) return 'wait';
     for (const [tierId, ids] of Object.entries(customTierIds)) {
       if (ids.includes(taskId)) return tierId;
     }
     return 'satellite';
-  }, [focusIds, waitIds, customTierIds]);
+  }, [focusIds, customTierIds]);
 
   // Resolved Task arrays (identity follows `tasks` — consumers needing stability
   // should key on the ID arrays, as FocusBarContext's memo does).
   const focusTasks = useMemo(() => orderedPinned.filter((t) => t.focus_tier === 'focus'), [orderedPinned]);
   const satelliteTasks = useMemo(() => orderedPinned.filter(isSatellite), [orderedPinned, isSatellite]);
-  const waitTasks = useMemo(() => orderedPinned.filter((t) => t.focus_tier === 'wait'), [orderedPinned]);
 
   return {
     pinnedIds, pinnedTasks: orderedPinned,
-    focusIds, satelliteIds, waitIds,
-    focusTasks, satelliteTasks, waitTasks,
+    focusIds, satelliteIds,
+    focusTasks, satelliteTasks,
     customTiers, customTiersLoaded, customTierIds,
     pin, unpin, reorder, setTier, setTierBulk,
     addLocalPin, replaceLocalPinId, removeLocalPin,

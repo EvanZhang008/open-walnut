@@ -78,21 +78,29 @@ test('pinned drag survives task-churn storm on a non-All chip (no React #185)', 
   test.setTimeout(90_000)
   const proj = `DragProj${Date.now().toString(36)}`
 
-  // Seed: one card per tier the drag crosses, plus pinned Satellite fillers the
-  // storm renames while the drag is live.
+  // Seed: one card per tier the drag crosses (the two built-ins and a custom tier of this
+  // spec's own: the Parked third tier was retired 2026-11-11), plus pinned Satellite fillers
+  // the storm renames while the drag is live.
+  const tierRes = await fetch(`${API}/api/focus/tiers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label: `Storm shelf ${Date.now().toString(36)}` }),
+  })
+  if (!tierRes.ok) throw new Error(`Tier create failed: ${tierRes.status} ${await tierRes.text()}`)
+  const customTier = ((await tierRes.json()) as { tier: { id: string } }).tier.id
   const focusTask = await createTaskViaApi('Storm focus', { project: proj })
   const satTask = await createTaskViaApi('Storm satellite', { project: proj })
-  const waitTask = await createTaskViaApi('Storm wait', { project: proj })
+  const shelfTask = await createTaskViaApi('Storm shelf', { project: proj })
   const fillers: string[] = []
   for (let i = 0; i < 8; i++) {
     const t = await createTaskViaApi(`Storm filler ${i}`, { project: proj })
     fillers.push(t.id)
   }
-  const seeded = [focusTask.id, satTask.id, waitTask.id, ...fillers]
+  const seeded = [focusTask.id, satTask.id, shelfTask.id, ...fillers]
   try {
     await pinTaskViaApi(focusTask.id, 'focus')
     await pinTaskViaApi(satTask.id, 'satellite')
-    await pinTaskViaApi(waitTask.id, 'wait')
+    await pinTaskViaApi(shelfTask.id, customTier)
     for (const id of fillers) await pinTaskViaApi(id, 'satellite')
 
     // Collect every signal the crash produced: React error boundary console lines
@@ -110,7 +118,7 @@ test('pinned drag survives task-churn storm on a non-All chip (no React #185)', 
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
-    // This spec drags ACROSS tiers (focus → satellite → wait), so all three must be
+    // This spec drags ACROSS tiers (focus → satellite → the custom tier), so all three must be
     // mounted at once — that's the "All" SECTION tab. A single-tier tab renders one
     // tier only, and there'd be no cross-tier target to drop on.
     await showAllSections(page)
@@ -118,14 +126,14 @@ test('pinned drag survives task-churn storm on a non-All chip (no React #185)', 
     await selectProject(page, proj)
 
     const tierScope = page.locator('#home-task-navigation .todo-pinned-section:not(.todo-pinned-section-recent)')
-    // Wait starts folded out of the box, and a folded tier draws no cards to hover.
-    const waitHeading = page.locator('#home-task-navigation [data-navigation-id="wait"] .navigation-heading-open')
-    if ((await waitHeading.getAttribute('aria-expanded')) !== 'true') await waitHeading.click()
+    // A folded tier draws no cards to hover: open the custom tier if it is folded.
+    const shelfHeading = page.locator(`#home-task-navigation [data-navigation-id="${customTier}"] .navigation-heading-open`)
+    if ((await shelfHeading.getAttribute('aria-expanded')) !== 'true') await shelfHeading.click()
     const focusCard = tierScope.locator(`[data-task-id="${focusTask.id}"]`)
     const satCard = tierScope.locator(`[data-task-id="${satTask.id}"]`)
-    const waitCard = tierScope.locator(`[data-task-id="${waitTask.id}"]`)
+    const shelfCard = tierScope.locator(`[data-task-id="${shelfTask.id}"]`)
     await expect(focusCard).toBeVisible({ timeout: 10_000 })
-    await expect(waitCard).toBeVisible()
+    await expect(shelfCard).toBeVisible()
     await expect(tierScope.locator(`[data-task-id="${fillers[fillers.length - 1]}"]`)).toBeVisible()
     const grip = focusCard.locator('.todo-pinned-title')
 
@@ -156,7 +164,7 @@ test('pinned drag survives task-churn storm on a non-All chip (no React #185)', 
       // scroller's edge auto-scrolls it.
       await hover(satCard)
       await page.waitForTimeout(1500)
-      await hover(waitCard)
+      await hover(shelfCard)
       await page.waitForTimeout(1500)
       await hover(satCard)
       await page.waitForTimeout(1500)
@@ -212,5 +220,6 @@ test('pinned drag survives task-churn storm on a non-All chip (no React #185)', 
       await fetch(`${API}/api/focus/tasks/${id}`, { method: 'DELETE' }).catch(() => {})
       await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' }).catch(() => {})
     }
+    await fetch(`${API}/api/focus/tiers/${customTier}`, { method: 'DELETE' }).catch(() => {})
   }
 })

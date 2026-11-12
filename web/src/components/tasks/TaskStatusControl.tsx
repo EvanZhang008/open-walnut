@@ -15,8 +15,7 @@
  * `wait_until` is the server's own clock on it: picking Waiting opens an "Until"
  * row under the options; the server fills 4 hours from now when none is named
  * (DEFAULT_WAIT_HOURS), the row sets another time or no time limit. A Waiting
- * task keeps its board tier; the Parked TIER is a shelf on the board, a
- * different thing. The task list hides Waiting tasks by default.
+ * task keeps its board tier (Focus, Satellite or a custom one). The task list hides Waiting tasks by default.
  *
  * Overlay rules (web/src/AGENTS.md): the badge's menu is placed by
  * useMenuPlacement, portalled to <body>, stops pointerdown (task rows are dnd

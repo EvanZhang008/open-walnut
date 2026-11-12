@@ -41,16 +41,20 @@ beforeAll(() => {
   g.window = dom.window;
   g.document = dom.document;
   g.Event = dom.window.Event;
+  const storage = new Map<string, string>();
+  g.localStorage = { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key), clear: () => storage.clear() };
   g.IS_REACT_ACT_ENVIRONMENT = true;
   g.requestAnimationFrame ??= (cb: (t: number) => void) => setTimeout(() => cb(0), 0);
   g.cancelAnimationFrame ??= (id: number) => clearTimeout(id);
   doc = dom.document as unknown as Document;
   win = dom.window as unknown as Window & typeof globalThis;
+  layoutStubs();
 });
 
 afterEach(async () => {
   if (root) { await act(async () => { root!.unmount(); }); root = null; }
   doc.body.innerHTML = '';
+  localStorage.clear();
 });
 
 type Props = Record<string, unknown>;
@@ -122,22 +126,41 @@ describe('first-level pin choices', () => {
   it('an isolated real-task menu uses the same atomic store write without an undo provider', async () => {
     pinContext.bar = { customTiers: [], setTierBulk: vi.fn() };
     const host = await mount({ task: { ...TASK, id: 'isolated-task' }, isPinned: false, isDone: false, ...spies(), part: 'pin', firstLevelPin: true });
-    await click(host.querySelector('[data-testid="kebab-pin-wait"]'));
-    expect(pinContext.bar.setTierBulk).toHaveBeenCalledWith(['isolated-task'], 'wait');
+    await click(host.querySelector('[data-testid="kebab-pin-satellite"]'));
+    expect(pinContext.bar.setTierBulk).toHaveBeenCalledWith(['isolated-task'], 'satellite');
   });
 
-  it('shows every built-in choice immediately, marks the current tier and offers Unpin', async () => {
+  it('shows two built-ins and unpins by pressing the selected tier, without Unpin', async () => {
     const s = spies();
     const host = await mount({ task: TASK, isPinned: true, pinnedTier: 'satellite', isDone: false, ...s, part: 'pin', firstLevelPin: true });
     expect(host.querySelector('.task-kebab-group-toggle')).toBeNull();
-    expect([...host.querySelectorAll('[data-testid^="kebab-pin-"]')].map((b) => b.textContent?.trim())).toEqual(['Focus', 'Satellite✓', 'Parked']);
+    expect([...host.querySelectorAll('.task-kebab-tier-options [data-testid^="kebab-pin-"]')].map((b) => b.textContent?.trim())).toEqual(['Focus', 'Satellite']);
     expect(host.querySelector('[aria-pressed="true"]')?.getAttribute('data-testid')).toBe('kebab-pin-satellite');
     expect(priorityBtns(host)).toHaveLength(0);
     await click(host.querySelector('[data-testid="kebab-pin-focus"]'));
     expect(s.onSetTier).toHaveBeenCalledWith('focus');
-    await click(host.querySelector('[data-testid="kebab-unpin"]'));
+    expect(host.querySelector('[data-testid="kebab-unpin"]')).toBeNull();
+    await click(host.querySelector('[data-testid="kebab-pin-satellite"]'));
     expect(s.onUnpinTask).toHaveBeenCalledTimes(1);
     expect(s.afterAction).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a hidden shortcut after the menu remounts and keeps it available in More', async () => {
+    const s = spies();
+    const props = { task: TASK, isPinned: true, pinnedTier: 'focus', isDone: false, ...s, part: 'pin', firstLevelPin: true };
+    let host = await mount(props);
+    await click(host.querySelector('[data-testid="kebab-pin-more"]'));
+    await click(doc.querySelector('[data-testid="kebab-pin-customize"]'));
+    await click(doc.querySelector('[data-testid="kebab-pin-show-focus"]'));
+    expect(host.querySelector('[data-testid="kebab-pin-focus"]')).toBeNull();
+    expect(s.onUnpinTask).not.toHaveBeenCalled();
+    await act(async () => { root!.unmount(); root = null; });
+    host = await mount(props);
+    expect(host.querySelector('[data-testid="kebab-pin-focus"]')).toBeNull();
+    await click(host.querySelector('[data-testid="kebab-pin-more"]'));
+    await click(doc.querySelector('[data-testid="kebab-pin-option-focus"]'));
+    expect(s.onUnpinTask).toHaveBeenCalledTimes(1);
+    expect(s.afterAction).toHaveBeenCalledTimes(1);
   });
 
   it('waits for a slow pin before setting the tier and closes immediately', async () => {
@@ -217,8 +240,8 @@ describe('TaskActionMenuItems with the draft props', () => {
       const s = spies();
       const host = await mount({ task: TASK, isPinned: false, pinnedTier, isDone: false, ...s, ...draftProps });
       expect(host.querySelectorAll('.task-kebab-tier-btn.active').length).toBe(0);
-      await click(tierBtn(host, 'Parked')!);
-      expect(s.onPinWithTier).toHaveBeenCalledWith('wait');
+      await click(tierBtn(host, 'Focus')!);
+      expect(s.onPinWithTier).toHaveBeenCalledWith('focus');
       await act(async () => { root!.unmount(); });
       root = null;
     }
@@ -566,7 +589,7 @@ describe('draft decision menu controller', () => {
     expect(tier.getAttribute('style')).toMatch(/--i:\s?0/);
     await render({ chips: chipsFor({ pinTier: 'wait', priority: 'immediate', dueDate: '2026-09-26' }, ['pinTier', 'priority', 'dueDate']) });
     expect(chipEl('pinTier')).toBe(tier);
-    expect(tier.textContent).toContain('Parked');
+    expect(tier.textContent).toContain('Satellite');
     expect(tier.getAttribute('style')).toMatch(/--i:\s?0/);
     expect(chipEl('priority').getAttribute('style')).toMatch(/--i:\s?0/);
     expect(chipEl('dueDate').getAttribute('style')).toMatch(/--i:\s?1/);

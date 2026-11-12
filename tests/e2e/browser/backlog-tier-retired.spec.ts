@@ -1,17 +1,17 @@
 /**
- * The Backlog pin tier is gone (2026-10): the board keeps Focus, Satellite and
- * Parked. What used to be filed in Backlog is Parked now, and every door the old
- * name still comes through (an older phone build moving a task, a launcher that
- * remembered the tab, a prompt that still says "backlog") lands in Parked instead
- * of erroring or vanishing.
+ * Retired pin tiers: Backlog (2026-10) and then Parked (2026-11-11, the user: "just have 2 focus,
+ * satellite, remove park"). The board keeps Focus, Satellite and the custom tiers. The server
+ * still files the old names (Backlog folds into `wait`, and `wait` is stored as it is) so an
+ * older phone build, a plugin or an agent keeps working, and every door the old names still
+ * come through (a move from an old client, a launcher that remembered the tab) lands in
+ * Satellite on the web instead of erroring or vanishing.
  *
- * Proven through the real fixture server and the real board: a task moved with
- * the retired name shows up under the Parked heading; no surface offers Backlog
- * any more (tab bar menu, Display's View page, the card's ⋮ tier row); a browser whose
- * stored tab was Backlog opens on Parked.
+ * Proven through the real fixture server and the real board: a task moved with a retired name
+ * is stored as `wait` and drawn in Satellite; no surface offers Backlog or Parked (tab bar menu,
+ * Display's View page, the card's ⋮ pin choices); a browser whose stored tab was Backlog or
+ * Parked opens on Satellite.
  */
 import { test, expect } from './shortcut-test-fixture'
-import { openKebabGroup } from './kebab-group-helpers'
 import { type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView, sectionTab } from './todo-panel-helpers'
 import { pinnedTierOf } from './draft-outcome-helpers'
@@ -30,7 +30,7 @@ test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
 })
 
-test('a move with the retired name lands in Parked, and the board draws it there', async ({ page }) => {
+test('a move with a retired name is stored as before, and the board draws it in Satellite', async ({ page }) => {
   const stamp = Date.now()
   const id = await createPinnedTask(page, `retired tier probe ${stamp}`)
 
@@ -46,38 +46,34 @@ test('a move with the retired name lands in Parked, and the board draws it there
   expect(stored.task.focus_tier).toBe('wait')
 
   await presetPanelView(page, { section: 'all', project: '' })
-  await page.addInitScript(() => {
-    // Parked starts folded on a first visit; open it so the card is drawn.
-    if (localStorage.getItem('walnut-todo-collapsed-sections') === null) localStorage.setItem('walnut-todo-collapsed-sections', '[]')
-  })
   await page.goto('/')
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
 
+  // Neither retired tier has a heading or a drop zone; the card is in Satellite's.
   const navigation = page.locator('#home-task-navigation')
-  const parked = navigation.locator('[data-navigation-id="wait"]')
-  await expect(parked).toBeVisible({ timeout: 20_000 })
-  await expect(parked).toContainText('Parked')
-  await expect(navigation.locator('[data-navigation-id="backlog"]')).toHaveCount(0)
-  await expect(navigation.locator('[data-drop-zone="backlog-drop-zone"]')).toHaveCount(0)
-  const card = navigation.locator(`[data-drop-zone="wait-drop-zone"] [data-task-id="${id}"]`)
+  for (const retired of ['backlog', 'wait']) {
+    await expect(navigation.locator(`[data-navigation-id="${retired}"]`)).toHaveCount(0)
+    await expect(navigation.locator(`[data-drop-zone="${retired}-drop-zone"]`)).toHaveCount(0)
+  }
+  const card = navigation.locator(`[data-drop-zone="satellite-drop-zone"] [data-task-id="${id}"]`)
   await card.scrollIntoViewIfNeeded()
-  await expect(card).toBeVisible()
-  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-parked-card.png`, clip: { x: 0, y: 0, width: 1100, height: 700 } })
+  await expect(card).toBeVisible({ timeout: 20_000 })
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-retired-card.png`, clip: { x: 0, y: 0, width: 1100, height: 700 } })
 
-  // The card's ⋮ Pin to group offers the three tiers and nothing called Backlog.
+  // The card's ⋮ pin choices light Satellite and offer neither retired tier.
   await card.hover()
   await card.getByRole('button', { name: 'More actions' }).click()
   const menu = page.locator('.task-kebab-menu:visible')
   await expect(menu).toBeVisible()
-  const pin = await openKebabGroup(menu, 'kebab-group-pin')
-  await expect(pin.locator('[data-testid^="kebab-pin-"]')).toHaveText([/Focus/, /Satellite/, /Parked/])
-  await expect(pin.locator('[data-testid^="kebab-pin-"][aria-pressed="true"]')).toHaveText(/Parked/)
+  await expect(menu.getByTestId('kebab-pin-satellite')).toHaveAttribute('aria-pressed', 'true')
+  for (const retired of ['backlog', 'wait']) await expect(menu.getByTestId(`kebab-pin-${retired}`)).toHaveCount(0)
+  await expect(menu).not.toContainText(/Parked|Backlog/)
   await menu.screenshot({ path: `${SHOTS}/${test.info().project.name}-kebab-tiers.png` })
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
 })
 
-test('no surface offers Backlog: the tab bar menu and the View menu list Focus, Satellite, Parked', async ({ page }) => {
+test('no surface offers Backlog or Parked: the tab bar menu and the View menu list Focus and Satellite', async ({ page }) => {
   await presetPanelView(page, { section: 'all', project: '' })
   await page.goto('/')
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
@@ -86,31 +82,34 @@ test('no surface offers Backlog: the tab bar menu and the View menu list Focus, 
   await bar.getByRole('button', { name: 'Tab bar options' }).click()
   const tabMenu = page.getByRole('menu', { name: 'Tab bar options' })
   const row = (name: string) => tabMenu.getByRole('menuitemcheckbox', { name, exact: true })
-  for (const name of ['Focus', 'Satellite', 'Parked']) await expect(row(name)).toHaveCount(1)
-  await expect(row('Backlog')).toHaveCount(0)
+  for (const name of ['Focus', 'Satellite']) await expect(row(name)).toHaveCount(1)
+  for (const name of ['Backlog', 'Parked']) await expect(row(name)).toHaveCount(0)
   await tabMenu.screenshot({ path: `${SHOTS}/${test.info().project.name}-tab-menu.png` })
   await page.keyboard.press('Escape')
   await expect(tabMenu).toHaveCount(0)
 
-  // The Display menu: the tiers are views on its View page, and Backlog is on neither page.
+  // The Display menu: the tiers are views on its View page, and the retired ones are on neither page.
   await openDisplayMenu(page)
   const panel = displayMenu(page)
-  await expect(panel.locator('[data-view-option="backlog"]')).toHaveCount(0)
+  for (const key of ['backlog', 'wait']) await expect(panel.locator(`[data-view-option="${key}"]`)).toHaveCount(0)
   const views = await openViewsPage(page)
-  for (const key of ['focus', 'satellite', 'wait']) await expect(views.locator(`.dm-view[data-view-option="${key}"]`)).toHaveCount(1)
-  await expect(panel.locator('[data-view-option="backlog"]')).toHaveCount(0)
+  for (const key of ['focus', 'satellite']) await expect(views.locator(`.dm-view[data-view-option="${key}"]`)).toHaveCount(1)
+  for (const key of ['backlog', 'wait']) await expect(panel.locator(`[data-view-option="${key}"]`)).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(panel).toHaveCount(0)
 })
 
-test('a browser whose stored tab was Backlog opens on Parked', async ({ page }) => {
-  const id = await createPinnedTask(page, `stored tab probe ${Date.now()}`)
-  const move = await page.request.put(`/api/focus/tasks/${id}/tier`, { data: { tier: 'wait' } })
-  expect(move.ok()).toBe(true)
-  // The fixture shows every tab on the bar, so the Parked tab is there to read.
-  await presetPanelView(page, { section: 'backlog', project: '' })
-  await page.goto('/')
-  await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
-  await expect(sectionTab(page, 'Parked')).toHaveAttribute('aria-selected', 'true', { timeout: 20_000 })
-  await expect(page.locator(`#home-task-navigation [data-drop-zone="wait-drop-zone"] [data-task-id="${id}"]`)).toBeVisible()
-})
+for (const stored of ['backlog', 'wait']) {
+  test(`a browser whose stored tab was the retired ${stored} tab opens on Satellite`, async ({ page }) => {
+    const id = await createPinnedTask(page, `stored tab probe ${stored} ${Date.now()}`)
+    // An old client's write: the task is stored in the retired tier.
+    const move = await page.request.put(`/api/focus/tasks/${id}/tier`, { data: { tier: 'wait' } })
+    expect(move.ok()).toBe(true)
+    await presetPanelView(page, { section: stored, project: '' })
+    await page.goto('/')
+    await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
+    await expect(sectionTab(page, 'Satellite')).toHaveAttribute('aria-selected', 'true', { timeout: 20_000 })
+    await expect(page.locator(`#home-task-navigation [data-drop-zone="satellite-drop-zone"] [data-task-id="${id}"]`)).toBeVisible()
+    expect(await page.evaluate(() => localStorage.getItem('walnut-todo-active-section'))).toBe('satellite')
+  })
+}

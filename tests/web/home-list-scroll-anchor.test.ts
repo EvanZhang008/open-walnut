@@ -28,9 +28,6 @@ const SCROLL_BOXES: Record<string, { anchored: string }> = {
   '.todo-panel-list': { anchored: 'panelListRef' },
   '.todo-pinned-wrapper': { anchored: 'pinnedWrapperRef' },
   '.todo-pinned-list-scroll': { anchored: 'listRef (each tier) and recentListRef (Recent)' },
-  // Matched by `tier-` but no Home list: the task menu's "Pin to" choices (b0265a78a), a fixed
-  // set of tier buttons that no live update adds rows to, so nothing lands above what is read.
-  '.task-kebab-pin-choices .task-kebab-tier-options': { anchored: 'none: a menu of tier buttons, no live rows' },
 };
 
 /** The declarations of every rule whose selector list names `selector` exactly. */

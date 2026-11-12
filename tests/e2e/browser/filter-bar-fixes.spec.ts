@@ -192,7 +192,8 @@ test('F10 + F11 + F12 + F13: the search keeps room; the menu stays on the panel;
   // The tabs kept on the bar above a hairline, every other view below it, Projects last.
   const kinds = await viewsPage(page).locator('.dm-view, .dm-flyout-sep')
     .evaluateAll((els) => els.map((e) => e.classList.contains('dm-flyout-sep') ? '|' : e.getAttribute('data-view-option')))
-  expect(kinds).toEqual(['all', 'pinned', '|', 'focus', 'satellite', 'wait', 'recent', 'tasks'])
+  // The retired Parked tier is no view (2026-11-11).
+  expect(kinds).toEqual(['all', 'pinned', '|', 'focus', 'satellite', 'recent', 'tasks'])
 })
 
 test('F22 + F36: a date pick is selected at once and closes the menu; the Projects view is named in the row', async ({ page }) => {

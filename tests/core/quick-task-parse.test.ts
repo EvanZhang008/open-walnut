@@ -10,7 +10,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 }));
 
 import { parseQuickTask, type QuickTaskParse } from '../../src/core/quick-task-parse.js';
-import { PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY } from '../../src/core/types.js';
+import { DISPLAY_RETIRED_PIN_TIERS, OFFERED_PIN_TIER_POLICY, PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY } from '../../src/core/types.js';
 
 function textResult(text: string) {
   return { content: [{ type: 'text', text }], stopReason: 'end_turn' };
@@ -326,14 +326,15 @@ describe('parseQuickTask', () => {
     expect(result.model).toBe('request-fast-model');
   });
 
-  // The pinTier rule is RENDERED from PIN_TIER_POLICY so the prompt and the
-  // picker tooltips can't drift. Assert the wiring (every tier's guidance
+  // The pinTier rule is RENDERED from OFFERED_PIN_TIER_POLICY so the prompt and the
+  // picker tooltips can't drift. Assert the wiring (every offered tier's guidance
   // reaches the prompt), not the prose — editing a guidance line is allowed.
   it('builds the pinTier rule from the shared tier policy', async () => {
     sendMessageMock.mockResolvedValue(textResult('{"title":"Pay invoice"}'));
     await parseQuickTask('pay invoice');
     const system = lastCall().system;
-    for (const entry of PIN_TIER_POLICY) {
+    expect(OFFERED_PIN_TIER_POLICY.map((entry) => entry.tier)).toEqual(['focus', 'satellite']);
+    for (const entry of OFFERED_PIN_TIER_POLICY) {
       expect(system).toContain(`· ${entry.tier} — ${entry.guidance}`);
     }
     // "leave it unpinned" is a real answer and must be spelled out, otherwise
@@ -344,9 +345,25 @@ describe('parseQuickTask', () => {
     expect(system).toContain('Judge it from the work itself');
   });
 
+  // The retired Parked tier (2026-11-11, "just have 2 focus, satellite, remove park") is never
+  // recommended: someday or blocked work is left unpinned. The policy and the wire keep it.
+  it('never recommends the retired Parked tier, though the policy and the wire keep it', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Pay invoice"}'));
+    await parseQuickTask('pay invoice');
+    const system = lastCall().system;
+    expect(PIN_TIER_POLICY.map((entry) => entry.tier)).toContain('wait');
+    for (const retired of DISPLAY_RETIRED_PIN_TIERS) {
+      expect(system).not.toContain(`· ${retired} —`);
+      expect(system).not.toMatch(new RegExp(`point at ${retired}\\b|${retired} is for|rather than ${retired}\\b`));
+    }
+    expect(system).not.toContain('Parked');
+    // Someday and blocked work: omit the field.
+    expect(system).toMatch(/someday\/later wording[^.]*mean OMIT the field/);
+  });
+
   // Custom tiers: pinTier accepts a registered ct_* id verbatim, normalizes a
   // label match to the id, and the prompt advertises each custom tier.
-  it('accepts the built-in wait tier verbatim', async () => {
+  it('still accepts the legacy wait tier verbatim (an older prompt or model answer)', async () => {
     sendMessageMock.mockResolvedValue(textResult(
       '{"title":"Sort receipts","pinTier":"wait"}',
     ));

@@ -239,7 +239,7 @@ test('the side panel opens on Chat: the side bar, the list filling the page, New
   // Never All and Pinned alone (review round 5, Opus #2): the tiers are there too.
   await expect(v.locator('.todo-section-tab').filter({ hasText: 'Pinned' })).toBeVisible()
   // (an empty tier hides, as on Home: this board's pinned tasks are in Satellite)
-  await expect(v.locator('.todo-section-tab').filter({ hasText: /Focus|Satellite|Parked/ }).first()).toBeVisible()
+  await expect(v.locator('.todo-section-tab').filter({ hasText: /Focus|Satellite/ }).first()).toBeVisible()
   await expect(v.locator('.todo-section-tabs-menu')).toContainText('More')
   const tabsY = (await v.locator('.ext-home-tasks .todo-section-tabs').boundingBox())!.y
   const searchY = (await v.locator('.ext-home-tasks .todo-search-input').boundingBox())!.y

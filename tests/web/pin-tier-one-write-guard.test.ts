@@ -18,8 +18,8 @@ describe('pin and tier writes do not race a timer', () => {
 
   it('real task menus use the atomic undoable pin action', () => {
     const menu = fs.readFileSync(path.join(root, 'components/tasks/TaskKebabMenu.tsx'), 'utf8')
-    expect(menu).toContain('undo.pinToTier(id, t.value)')
-    expect(menu).toContain('focusBar.setTierBulk([id], t.value)')
+    expect(menu).toContain('undo.pinToTier(id, value)')
+    expect(menu).toContain('focusBar.setTierBulk([id], value)')
     const undo = fs.readFileSync(path.join(root, 'undo/TaskUndoContext.tsx'), 'utf8')
     const body = undo.slice(undo.indexOf('const pinToTier ='), undo.indexOf('const unpin ='))
     expect(body).toContain('focusBar.setTierBulk([id], tier')

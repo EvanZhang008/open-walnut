@@ -87,17 +87,19 @@ test('a collapsed folder dragged into another tier stays there when the reorder 
   const m1 = await createTask('Folder member one', proj)
   const m2 = await createTask('Folder member two', proj)
   const sat = await createTask('Satellite resident', proj)
-  // A task in Parked means the board has tiers on purpose, so every tier keeps its
+  // A task in a custom tier means the board has tiers on purpose, so every tier keeps its
   // heading (with only Focus and Satellite in use they would sit headless under Pinned).
-  const parked = await createTask('Parked resident', proj)
-  const seeded = [m1, m2, sat, parked]
+  const shelfResident = await createTask('Shelf resident', proj)
+  const seeded = [m1, m2, sat, shelfResident]
   let gid = ''
+  let shelf = ''
   try {
+    ;({ tier: { id: shelf } } = await call<{ tier: { id: string } }>('POST', '/api/focus/tiers', { label: `Shelf ${proj}` }))
     ;({ group_id: gid } = await call<{ group_id: string }>('POST', '/api/tasks/groups', { task_ids: [m1, m2], label: `Seeds ${proj}` }))
     await pinInto(m1, 'focus')
     await pinInto(m2, 'focus')
     await pinInto(sat, 'satellite')
-    await pinInto(parked, 'wait')
+    await pinInto(shelfResident, shelf)
 
     const errors: string[] = []
     page.on('pageerror', (e) => errors.push(String(e).slice(0, 300)))
@@ -190,5 +192,6 @@ test('a collapsed folder dragged into another tier stays there when the reorder 
       await fetch(`${API}/api/focus/tasks/${id}`, { method: 'DELETE' }).catch(() => {})
       await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' }).catch(() => {})
     }
+    if (shelf) await fetch(`${API}/api/focus/tiers/${shelf}`, { method: 'DELETE' }).catch(() => {})
   }
 })

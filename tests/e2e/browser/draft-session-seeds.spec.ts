@@ -34,7 +34,7 @@
  * runs.
  */
 
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip, draftDecisionChips,
   draftPanel, draftPanels, draftProjectPill, loadHome, mockQuickParse, openDraft, openDraftOnCwd,
@@ -52,6 +52,22 @@ const SCREENSHOT_DIR = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-seeds'
 
 let fixtureRoot = ''
 test.beforeAll(async () => { fixtureRoot = await discoverFixtureRoot() })
+
+/** Custom tiers this file made; each test removes its own. */
+const madeTiers: string[] = []
+test.afterEach(async ({ request }) => {
+  for (const id of madeTiers.splice(0)) await request.delete(`/api/focus/tiers/${id}`).catch(() => {})
+})
+
+/** A custom tier of the test's own: a tier that is not the launcher default and always draws its
+ *  header (the third built-in this used, Parked, was retired 2026-11-11). */
+async function makeTier(page: Page, label: string): Promise<string> {
+  const res = await page.request.post('/api/focus/tiers', { data: { label } })
+  expect(res.ok(), await res.text()).toBe(true)
+  const id = ((await res.json()) as { tier: { id: string } }).tier.id
+  madeTiers.push(id)
+  return id
+}
 
 // A real CLI spawn (scenario 1's Start) plus round-trips that queue behind the
 // fixture's session health monitor on its seeded 500-session dataset — the same
@@ -162,19 +178,19 @@ test('pin-tier header "+" opens a draft whose task lands in that tier', async ({
   // + a dnd-kit drag surface — a "+" that doesn't stop those events folds the
   // section instead of opening a draft.
   //
-  // The tier picked is Parked: it is NOT the launcher default (every draft opens on
-  // Focus), so a task landing in Parked can only mean the seed was applied.
-  // A built-in tier header only renders while that tier holds a pinned task, so
-  // an anchor is pinned INTO Parked to make its header (and its "+") real.
+  // The tier picked is a custom tier of this test's own: it is NOT the launcher default
+  // (every draft opens on Focus), so a task landing in it can only mean the seed was applied.
+  // An anchor is pinned INTO it so its header (and its "+") has a card under it.
   const stamp = Date.now()
+  const tierLabel = `Seed shelf ${stamp}`
+  const tier = await makeTier(page, tierLabel)
   const taskRes = await page.request.post('/api/tasks', {
     data: { title: `tier-plus anchor ${stamp}`, source: 'local', project: 'Work' },
   })
   expect(taskRes.ok(), await taskRes.text()).toBe(true)
   const taskId = ((await taskRes.json()) as { task: { id: string } }).task.id
-  // An EMPTY built-in tier draws no header (home navigation), so the anchor sits
-  // in Parked itself; the seed is still read off the NEW task's tier.
-  await pinToTier(page, taskId, 'wait')
+  // The anchor sits in the tier itself; the seed is still read off the NEW task's tier.
+  await pinToTier(page, taskId, tier)
 
   await page.setViewportSize({ width: 2400, height: 1000 })
   await presetPanelView(page, { section: 'all', project: '' })
@@ -183,7 +199,7 @@ test('pin-tier header "+" opens a draft whose task lands in that tier', async ({
   const parse = await mockQuickParse(page, { pinTier: 'satellite' })
   await loadHome(page)
 
-  const sublabel = page.locator('.todo-pinned-sublabel[data-navigation-id="wait"]').first()
+  const sublabel = page.locator(`.todo-pinned-sublabel[data-navigation-id="${tier}"]`).first()
   await expect(sublabel).toBeVisible({ timeout: 25_000 })
   await sublabel.hover()
   const plus = plusControl(sublabel)
@@ -193,7 +209,7 @@ test('pin-tier header "+" opens a draft whose task lands in that tier', async ({
   // (which fetches the project detail for its default_cwd) this route must touch
   // nothing server-side at all — opening the menu included.
   // The tier's fold state before the click (home navigation may start it folded).
-  const zonesBefore = await page.locator('[data-drop-zone="wait-drop-zone"]').count()
+  const zonesBefore = await page.locator(`[data-drop-zone="${tier}-drop-zone"]`).count()
   const seen = watchForbiddenRequests(page)
   await openSessionFromPlus(page, sublabel)
 
@@ -202,15 +218,15 @@ test('pin-tier header "+" opens a draft whose task lands in that tier', async ({
   expect(seen, 'the tier "+" is a pure client-state route').toEqual([])
   // The click must NOT have reached the sublabel's own collapse handler — the tier's
   // task list is exactly as mounted as before (a fold toggle would flip its drop zone).
-  await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(zonesBefore)
+  await expect(page.locator(`[data-drop-zone="${tier}-drop-zone"]`)).toHaveCount(zonesBefore)
 
   // C17: the seed shows as a tier chip, WITHOUT ✦ (the user clicked the "+"),
   // and the old tier row stays gone.
   await expect(panel.locator('.pin-tier-options')).toHaveCount(0)
   const tierChip = draftDecisionChip(panel, 'pinTier')
-  await expect(tierChip).toHaveText(/Parked/)
+  await expect(tierChip).toHaveText(new RegExp(tierLabel))
   await expect(tierChip.locator('.draft-ai-badge')).toHaveCount(0)
-  await expect(tierChip).toHaveAttribute('title', 'Pinned tier: Parked. From the + on the Parked section. Click to change.')
+  await expect(tierChip).toHaveAttribute('title', `Pinned tier: ${tierLabel}. From the + on the ${tierLabel} section. Click to change.`)
   // The seed must NOT read as a user meta edit — `metaTouched` is also the
   // per-directory launch-memory switch, and latching it here would freeze the
   // model at whatever folder is picked first. Observable proxy: picking a folder
@@ -231,12 +247,12 @@ test('pin-tier header "+" opens a draft whose task lands in that tier', async ({
 
   // A parse that proposes another tier does not move the seed.
   await typeAndSettle(page, parse, `put this in satellite ${stamp}`)
-  await expect(tierChip).toHaveText(/Parked/)
+  await expect(tierChip).toHaveText(new RegExp(tierLabel))
   await expect(tierChip.locator('.draft-ai-badge')).toHaveCount(0)
 
   // THE assertion, read off the OUTCOME on the board: the task this draft creates
-  // lands in Parked, not in the Focus default.
-  await expectSeededTierLands(page, panel, 'wait', `parked header seed probe ${stamp}`)
+  // lands in the seeded tier, not in the Focus default.
+  await expectSeededTierLands(page, panel, tier, `tier header seed probe ${stamp}`)
 })
 
 test('a tier seed survives the folder picker (the pick a seeded draft must make before it can Start)', async ({ page }) => {
@@ -246,20 +262,20 @@ test('a tier seed survives the folder picker (the pick a seeded draft must make 
   // before Start silently put the task back in Focus — invisible now that the
   // column draws no tier. Same seed as above, plus the pick, same OUTCOME check.
   const stamp = Date.now()
+  const tier = await makeTier(page, `Picker shelf ${stamp}`)
   const taskRes = await page.request.post('/api/tasks', {
     data: { title: `tier-plus picker anchor ${stamp}`, source: 'local', project: 'Work' },
   })
   expect(taskRes.ok(), await taskRes.text()).toBe(true)
   const anchorId = ((await taskRes.json()) as { task: { id: string } }).task.id
-  // An EMPTY built-in tier draws no header (home navigation), so the anchor sits
-  // in Parked itself; the seed is still read off the NEW task's tier.
-  await pinToTier(page, anchorId, 'wait')
+  // The anchor sits in the tier itself; the seed is still read off the NEW task's tier.
+  await pinToTier(page, anchorId, tier)
 
   await page.setViewportSize({ width: 2400, height: 1000 })
   await presetPanelView(page, { section: 'all', project: '' })
   await loadHome(page)
 
-  const sublabel = page.locator('.todo-pinned-sublabel[data-navigation-id="wait"]').first()
+  const sublabel = page.locator(`.todo-pinned-sublabel[data-navigation-id="${tier}"]`).first()
   await expect(sublabel).toBeVisible({ timeout: 25_000 })
   await sublabel.hover()
   await openSessionFromPlus(page, sublabel)
@@ -273,7 +289,7 @@ test('a tier seed survives the folder picker (the pick a seeded draft must make 
   await pickDraftFolder(page, panel, cwd)
   await expect(draftCwdPill(panel)).toContainText(basenameOf(cwd))
 
-  await expectSeededTierLands(page, panel, 'wait', `parked seed after folder pick ${stamp}`)
+  await expectSeededTierLands(page, panel, tier, `tier seed after folder pick ${stamp}`)
 })
 
 // ── 3. AI backfill while typing (R9) ────────────────────────────────────────
@@ -311,8 +327,9 @@ test('typing back-fills the project pill and the tier chip with a ✦ badge, and
   expect(seed.ok(), await seed.text()).toBe(true)
 
   await page.setViewportSize({ width: 2400, height: 1000 })
-  // The stub ALSO answers with a tier that is not the default. Since the visible
-  // decisions slice it is applied AND shown as a ✦ tier chip the user can change.
+  // The stub ALSO answers with a tier that is not the default, under the retired Parked name a
+  // server prompt may still use: it is applied as Satellite (where the board draws it) AND
+  // shown as a ✦ tier chip the user can change.
   await stubParse(page, { title: 'ship the wallet flow', project: AI_PROJECT, pinTier: 'wait' })
   await loadHome(page)
 
@@ -331,9 +348,9 @@ test('typing back-fills the project pill and the tier chip with a ✦ badge, and
   // THE assertion: the project pill follows the suggestion and says WHO chose (✦).
   await expect(draftProjectPill(panel)).toHaveText(`Project: ${AI_PROJECT}✦`, { timeout: 10_000 })
   await expect(draftProjectPill(panel)).toHaveClass(/session-action-chip-ai/)
-  // The stub's Parked is applied, shown, and badged as Walnut's decision.
+  // The stub's tier is applied as Satellite, shown, and badged as Walnut's decision.
   await expect(panel.locator('.pin-tier-options')).toHaveCount(0)
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Parked/)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/)
   await expect(draftDecisionChip(panel, 'pinTier').locator('.draft-ai-badge')).toHaveCount(1)
   // The AI project drags its folder along (one gesture configures both, same rule
   // the quick chips follow) — and that folder is ✦ too, since nobody picked it.
@@ -376,12 +393,12 @@ test('typing back-fills the project pill and the tier chip with a ✦ badge, and
   expect(byField.get('project'), 'the overridden project suggestion is on record')
     .toMatchObject({ suggested: AI_PROJECT })
   expect(byField.get('project')?.chosen, 'Inbox won').toBeUndefined()
-  expect(byField.get('pinTier')).toMatchObject({ suggested: 'wait', chosen: 'wait' })
+  expect(byField.get('pinTier')).toMatchObject({ suggested: 'satellite', chosen: 'satellite' })
   // …and the task itself: the user's Inbox, and the tier the chip showed.
   const detail = (await (await page.request.get(`/api/tasks/${taskId}`)).json()) as
     { task?: { project?: string } }
   expect(detail.task?.project ?? '').toBe('')
-  await expectTaskInTier(page, taskId, 'wait')
+  await expectTaskInTier(page, taskId, 'satellite')
 })
 
 test('AI-suggested dates ride BOTH exits onto the task', async ({ page }) => {

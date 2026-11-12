@@ -34,7 +34,10 @@ final class BoardOrderParityUITests: XCTestCase {
         openTasks(app)
         try waitForBoard(app)
         setDate(app, "All")
-        for tier in ["focus", "satellite", "backlog", "wait", "ct_later", "all"] {
+        for retired in ["backlog", "wait"] {
+            XCTAssertFalse(app.buttons["board.chip.\(retired)"].exists, "a retired tier is still offered")
+        }
+        for tier in ["focus", "satellite", "ct_later", "all"] {
             selectTier(app, tier)
             for (grouping, key) in [("By project", "project"), ("Custom order", "custom")] {
                 setGrouping(app, grouping)

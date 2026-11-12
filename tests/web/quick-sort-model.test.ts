@@ -71,7 +71,7 @@ describe('Sort queue', () => {
     // A kept folder that was deleted matches nothing, never everything.
     expect(ids(buildSortQueue(tasks, [], f(), { now: NOW, folders: new Set() }))).toEqual([]);
     expect(ids(buildSortQueue(tasks, [], unsorted, { now: NOW, exclude: new Set(['loose']) }))).toEqual([]);
-    expect(tierCounts(tasks, [], f({ tiers: ['focus'] }), { now: NOW })).toEqual({ wait: 2, focus: 1, unpinned: 1 });
+    expect(tierCounts(tasks, [], f({ tiers: ['focus'] }), { now: NOW })).toEqual({ satellite: 2, focus: 1, unpinned: 1 });
   });
 
   it('carries the task\'s own words of now', () => {
@@ -100,7 +100,7 @@ describe('Sort ages', () => {
 
   it('reads as plain words per tier, a day or more only', () => {
     expect(ageTags('unpinned', 'Unpinned', { idle: 12, inTier: 40 }).map(t => t.text)).toEqual(['Unsorted for 40 days', 'No action for 12 days']);
-    expect(ageTags('wait', 'Parked', { idle: 1, inTier: 9 }).map(t => t.text)).toEqual(['Parked for 9 days', 'No action for 1 day']);
+    expect(ageTags('satellite', 'Satellite', { idle: 1, inTier: 9 }).map(t => t.text)).toEqual(['In Satellite for 9 days', 'No action for 1 day']);
     expect(ageTags('focus', 'Focus', { idle: 0, inTier: 2 }).map(t => t.text)).toEqual(['In Focus for 2 days']);
     expect(ageTags('focus', 'Focus', { idle: 0, inTier: 0 })).toEqual([]);
     expect(ageTags('unpinned', 'Unpinned', { idle: 237, inTier: 237 }).map(t => t.text)).toEqual(['Unsorted, no action for 237 days']);

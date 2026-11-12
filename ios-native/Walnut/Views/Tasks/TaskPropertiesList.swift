@@ -127,7 +127,7 @@ struct TaskPropertiesList: View {
     // MARK: - Board (pin + tier as one control)
 
     private var placement: TaskBoardPlacement {
-        TaskPropertyLogic.placement(pinned: task.pinned == true, tierId: tasks.tierId(for: task.id))
+        tasks.selectedTier(for: task).map(TaskBoardPlacement.tier) ?? .notOnBoard
     }
 
     private var boardRow: some View {
@@ -136,7 +136,7 @@ struct TaskPropertiesList: View {
                 tierChoices: tasks.allTierChoices, current: placement
             )) { option in
                 Button {
-                    choose(option.placement)
+                    choose(option.tierId)
                 } label: {
                     if option.isCurrent {
                         Label(option.label, systemImage: "checkmark")
@@ -156,27 +156,13 @@ struct TaskPropertiesList: View {
         .accessibilityIdentifier("task.prop.board")
     }
 
-    /// Run the writes the choice implies, in order, stopping at the first
-    /// failure (a tier PUT after a failed pin would 400 for the wrong reason).
-    private func choose(_ target: TaskBoardPlacement) {
-        let writes = TaskPropertyLogic.writes(for: target, current: placement)
-        guard !writes.isEmpty else { return }
+    /// A tapped tier: pin into it, move to it, or unpin when it is the checked one
+    /// (`PinTierPolicy.writes`, run by the store in order, stopped at the first failure).
+    private func choose(_ tier: String) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         Task {
-            for write in writes {
-                switch write {
-                case .pin, .unpin:
-                    if let failure = await tasks.setPinned(task, pinned: write == .pin) {
-                        reportError(failure)
-                        return
-                    }
-                    onPinnedChange(write == .pin)
-                case .setTier(let tier):
-                    if let failure = await tasks.setTier(taskId: task.id, tier: tier) {
-                        reportError(failure)
-                        return
-                    }
-                }
+            if let failure = await tasks.pickTier(tier, for: task, onPinnedChange: onPinnedChange) {
+                reportError(failure)
             }
         }
     }

@@ -161,6 +161,26 @@ export function migrateFocusTier<T extends string | undefined | null>(tier: T): 
   return RETIRED_PIN_TIERS[tier] ?? tier;
 }
 
+/**
+ * Built-in tier ids no surface offers or draws any more, though every reader, writer and the
+ * wire still accept and store them (2026-11-11, the user: "just have 2 focus, satellite, remove
+ * park", "make it backward compatible"): Parked (`wait`), plus every name RETIRED_PIN_TIERS
+ * folds into it. Older clients, the phone app, plugins and agents may keep writing `wait`, so
+ * PIN_TIER_POLICY, RETIRED_PIN_TIERS and migrateFocusTier keep it; only what is RECOMMENDED
+ * (the quick-task prompt and classifier) and what a board DRAWS read the two exports below.
+ * This is the board shelf, never the WAITING phase.
+ */
+export const DISPLAY_RETIRED_PIN_TIERS: ReadonlySet<string> = new Set(['wait', ...Object.keys(RETIRED_PIN_TIERS)]);
+
+/** The built-in tiers offered and recommended: PIN_TIER_POLICY less the display-retired ones. */
+export const OFFERED_PIN_TIER_POLICY: readonly PinTierPolicyEntry[] =
+  PIN_TIER_POLICY.filter((entry) => !DISPLAY_RETIRED_PIN_TIERS.has(entry.tier));
+
+/** The tier a stored or proposed tier is drawn in: a display-retired one reads Satellite. */
+export function displayPinTier<T extends string | undefined | null>(tier: T): T | 'satellite' {
+  return typeof tier === 'string' && DISPLAY_RETIRED_PIN_TIERS.has(tier) ? 'satellite' : tier;
+}
+
 // ── Session model registry ────────────────────────────────────────────────
 // Single source of truth for the set of selectable Claude Code session models.
 // Both backend (CLI --model mapping, web RPC allowlist) and frontend (picker,

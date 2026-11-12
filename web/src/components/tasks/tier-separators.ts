@@ -65,7 +65,7 @@ export type SeparatorMode = 'project' | 'custom';
 export interface TierSeparator {
   /** `sep_<random>` — stable across drags, so a move is an update not a re-create. */
   id: string;
-  /** 'focus' | 'satellite' | 'wait' | `ct_*`. */
+  /** 'focus' | 'satellite' | `ct_*` (a separator saved in the retired Parked tier keeps `wait`). */
   tier: string;
   mode: SeparatorMode;
   /** Optional heading text ("Now", "Next"…). A named line is a section heading;

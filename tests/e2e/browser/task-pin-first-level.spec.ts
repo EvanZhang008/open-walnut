@@ -14,7 +14,7 @@ async function openMenu(page: Page, id: string) {
   const menu = page.locator('.task-kebab-menu:visible')
   await expect(menu).toBeVisible()
   await expect(menu.getByTestId('kebab-group-pin').locator('.task-kebab-group-toggle')).toHaveCount(0)
-  for (const tier of ['focus', 'satellite', 'wait']) await expect(menu.getByTestId(`kebab-pin-${tier}`)).toBeVisible()
+  for (const tier of ['focus', 'satellite']) await expect(menu.getByTestId(`kebab-pin-${tier}`)).toBeVisible()
   return menu
 }
 
@@ -65,6 +65,7 @@ test('first-level pin choices switch tiers, unpin, undo and keep custom names in
     await page.keyboard.press('ControlOrMeta+z')
     menu = await openMenu(page, task.id)
     await expect(menu.getByTestId('kebab-unpin')).toHaveCount(0)
+    await expect(menu.locator('.task-kebab-tier-options [aria-pressed="true"]')).toHaveCount(0)
     await page.keyboard.press('Escape')
     // The server already applied the pin, but its answer is held from the browser.
     expect(await storedTier()).toBe('focus')
@@ -79,6 +80,7 @@ test('first-level pin choices switch tiers, unpin, undo and keep custom names in
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
     menu = await openMenu(page, task.id)
     await expect(menu.getByTestId('kebab-unpin')).toHaveCount(0)
+    await expect(menu.locator('.task-kebab-tier-options [aria-pressed="true"]')).toHaveCount(0)
     await page.keyboard.press('Escape')
     const pinAnswered = page.waitForResponse(response => response.url().endsWith('/api/focus/batch') && response.request().method() === 'POST')
     const undoAnswered = page.waitForResponse(response => response.url().endsWith(`/api/focus/tasks/${task.id}`) && response.request().method() === 'DELETE')
@@ -93,17 +95,21 @@ test('first-level pin choices switch tiers, unpin, undo and keep custom names in
     menu = await openMenu(page, task.id)
     await menu.getByTestId('kebab-pin-focus').click()
     await expect.poll(storedTier).toBe('focus')
-    for (const tier of ['wait', tierId, 'satellite']) {
+    for (const tier of [tierId, 'satellite']) {
       menu = await openMenu(page, task.id)
-      await expect(menu.locator('[data-testid^="kebab-pin-"][aria-pressed="true"]')).toHaveCount(1)
-      await menu.getByTestId(`kebab-pin-${tier}`).click()
+      await expect(menu.locator('.task-kebab-tier-options [aria-pressed="true"]')).toHaveCount(tier === tierId ? 1 : 0)
+      if (tier === tierId) {
+        await menu.getByTestId('kebab-pin-more').click()
+        await page.getByTestId('task-pin-flyout').getByTestId(`kebab-pin-option-${tier}`).click()
+      } else await menu.getByTestId(`kebab-pin-${tier}`).click()
       await expect.poll(storedTier).toBe(tier)
     }
     menu = await openMenu(page, task.id)
     await expect(menu.getByTestId('kebab-pin-satellite')).toHaveAttribute('aria-pressed', 'true')
     await fs.mkdir(SHOTS, { recursive: true })
     await menu.screenshot({ path: `${SHOTS}/first-level.png` })
-    await menu.getByTestId('kebab-unpin').click()
+    await expect(menu.getByTestId('kebab-unpin')).toHaveCount(0)
+    await menu.getByTestId('kebab-pin-satellite').click()
     await expect.poll(storedTier).toBeNull()
     await page.keyboard.press('ControlOrMeta+z')
     await expect.poll(storedTier).toBe('satellite')
@@ -114,7 +120,13 @@ test('first-level pin choices switch tiers, unpin, undo and keep custom names in
 
     await page.setViewportSize({ width: 800, height: 500 })
     menu = await openMenu(page, task.id)
-    await menu.getByTestId(`kebab-pin-${tierId}`).scrollIntoViewIfNeeded()
+    await menu.getByTestId('kebab-pin-more').click()
+    const flyout = page.getByTestId('task-pin-flyout')
+    await flyout.getByTestId(`kebab-pin-option-${tierId}`).scrollIntoViewIfNeeded()
+    const flyoutFit = await flyout.evaluate(el => { const box = el.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight })
+    expect(flyoutFit).toBe(true)
+    await page.keyboard.press('Escape')
+    await expect(flyout).toHaveCount(0)
     const fit = await menu.evaluate((el) => {
       const box = el.getBoundingClientRect()
       return { left: box.left >= 0, right: box.right <= innerWidth, top: box.top >= 0, bottom: box.bottom <= innerHeight, noHorizontalScroll: el.scrollWidth <= el.clientWidth + 1 }

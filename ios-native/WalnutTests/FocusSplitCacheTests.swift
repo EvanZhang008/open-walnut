@@ -58,8 +58,8 @@ final class FocusSplitCacheTests: XCTestCase {
         await reader.adoptCachedFocusSplit()
 
         XCTAssertEqual(reader.taskTiers["t-focus"], "focus")
-        XCTAssertEqual(reader.taskTiers["t-back"], "backlog")
-        XCTAssertEqual(reader.taskTiers["t-wait"], "wait")
+        XCTAssertEqual(reader.taskTiers["t-back"], "satellite", "an old Backlog task shows in Satellite")
+        XCTAssertEqual(reader.taskTiers["t-wait"], "satellite", "an old Wait task shows in Satellite")
         XCTAssertEqual(
             reader.taskTiers["t-custom"], "ct_reading",
             "a custom tier is the case the snake_case `custom_tier_tasks` key decodes"
@@ -95,10 +95,12 @@ final class FocusSplitCacheTests: XCTestCase {
             offline.tierId(for: $0)
         })
         XCTAssertEqual(
-            bands, ["focus", "satellite", "backlog", "wait", "ct_reading"],
+            bands, ["focus", "satellite", "ct_reading"],
             "this is the measured incident: without the cache every one of these answered "
-                + "nil, so the board drew ONE band"
+                + "nil, so the board drew ONE band (the retired Backlog and Wait show in Satellite)"
         )
+        XCTAssertEqual(offline.taskTierOrder["satellite"], ["t-sat", "t-back", "t-wait"],
+                       "the old Backlog and Wait tasks keep their pin order inside Satellite")
     }
 
     // MARK: - Custom tier LABELS are a second cache, and needed for the same reason
@@ -140,14 +142,14 @@ final class FocusSplitCacheTests: XCTestCase {
         let (mover, mock) = makeStore()
         mock.tierSplitResult = FocusTierResult(
             pinnedTasks: ["t-1"], focusTasks: [], satelliteTasks: [],
-            backlogTasks: ["t-1"], waitTasks: [], customTierTasks: [:]
+            backlogTasks: [], waitTasks: [], customTierTasks: ["ct_reading": ["t-1"]]
         )
-        _ = await mover.setTier(taskId: "t-1", tier: "backlog")
+        _ = await mover.setTier(taskId: "t-1", tier: "ct_reading")
 
         let (next, _) = makeStore()
         await next.adoptCachedFocusSplit()
         XCTAssertEqual(
-            next.taskTiers["t-1"], "backlog",
+            next.taskTiers["t-1"], "ct_reading",
             "`setTier` adopts its response through `adoptSplit` too, which is WHY the "
                 + "cache cannot lag a move the user made and then went offline with"
         )

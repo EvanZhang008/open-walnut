@@ -38,13 +38,15 @@ describe('Filter search words (F27)', () => {
     expect(hits).toContain('Date  Starting within 7 days');
   });
   it('view words get the open-Display hint instead of "no filter matches"', () => {
-    for (const [q, view] of [['focus', 'Focus'], ['tier', 'Focus'], ['pin', 'Pinned'], ['parked', 'Parked']] as const) {
+    for (const [q, view] of [['focus', 'Focus'], ['tier', 'Focus'], ['pin', 'Pinned']] as const) {
       const r = searchFilterDims(q, S0, lists);
       expect(r.viewHint, q).toBe(view);
     }
     expect(searchFilterDims('pinned', S0, lists).pinHint).toBe(true);
     expect(viewHintFor('fo')).toBeNull();
     expect(viewHintFor('garden')).toBeNull();
+    // The retired Parked view is no view to point at.
+    expect(viewHintFor('parked')).toBeNull();
   });
 });
 

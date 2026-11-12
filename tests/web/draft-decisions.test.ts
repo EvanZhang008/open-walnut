@@ -53,8 +53,8 @@ describe('tier chip', () => {
     expect(c.ariaLabel).toBe(c.title);
   });
 
-  it('each built-in tier reads its own label', () => {
-    for (const [tier, label] of [['focus', 'Focus'], ['satellite', 'Satellite'], ['wait', 'Parked']]) {
+  it('each built-in tier reads its own label; the retired Parked one reads Satellite', () => {
+    for (const [tier, label] of [['focus', 'Focus'], ['satellite', 'Satellite'], ['wait', 'Satellite']]) {
       expect(chip(draft({ pinTier: tier }, { ai: ['pinTier'] }), 'pinTier')!.label).toBe(label);
     }
   });
@@ -63,7 +63,7 @@ describe('tier chip', () => {
     const c = chip(draft({ pinTier: 'wait' }, { owner: { pinTier: 'seed' } }), 'pinTier')!;
     expect(c.ai).toBe(false);
     expect(c.source).toBe('seed');
-    expect(c.title).toBe('Pinned tier: Parked. From the + on the Parked section. Click to change.');
+    expect(c.title).toBe('Pinned tier: Satellite. From the + on the Satellite section. Click to change.');
   });
 
   it('a user tier says "Set by you."', () => {
@@ -78,8 +78,8 @@ describe('tier chip', () => {
     expect(chip(draft({ pinTier: 'focus' }, { owner: { dueDate: 'user' } }), 'pinTier')).toBeUndefined();
     // A non-default tier with no owner is still shown, as the default source.
     const c = chip(draft({ pinTier: 'wait' }), 'pinTier')!;
-    expect(c).toMatchObject({ key: 'Pinned:', label: 'Parked', source: 'default', ai: false });
-    expect(c.title).toBe('Pinned tier: Parked. Default for new tasks. Click to change.');
+    expect(c).toMatchObject({ key: 'Pinned:', label: 'Satellite', source: 'default', ai: false });
+    expect(c.title).toBe('Pinned tier: Satellite. Default for new tasks. Click to change.');
   });
 
   it('an explicitly unpinned tier shows no chip', () => {
@@ -213,17 +213,17 @@ describe('unread chip and order', () => {
   it('tier and priority name their field, so two chips never read as one value twice', () => {
     // When the Backlog tier existed, "someday: ..." decided tier Backlog AND
     // priority Backlog, and without the key the row showed two identical chips.
-    // The tier is Parked now; the key stays on both chips.
+    // Backlog and then Parked are retired (both read Satellite); the key stays on both chips.
     const d = draft(
       { pinTier: 'wait', priority: 'backlog', startDate: '2026-09-25', dueDate: '2026-09-26', unread: true },
       { ai: ['pinTier', 'priority', 'startDate', 'dueDate'], owner: { unread: 'user' } },
     );
     const byField = new Map(dec.draftDecisionChips(d, ctx()).map((c) => [c.field, c]));
-    expect(byField.get('pinTier')).toMatchObject({ key: 'Pinned:', label: 'Parked' });
+    expect(byField.get('pinTier')).toMatchObject({ key: 'Pinned:', label: 'Satellite' });
     expect(byField.get('priority')).toMatchObject({ key: 'Priority:', label: 'Backlog' });
-    // A draft still carrying the retired tier name reads as Parked, not as a removed tier.
+    // A draft still carrying a retired tier name reads as Satellite, not as a removed tier.
     const stale = draft({ pinTier: 'backlog' }, { ai: ['pinTier'] });
-    expect(dec.draftDecisionChips(stale, ctx()).find((c) => c.field === 'pinTier')).toMatchObject({ key: 'Pinned:', label: 'Parked' });
+    expect(dec.draftDecisionChips(stale, ctx()).find((c) => c.field === 'pinTier')).toMatchObject({ key: 'Pinned:', label: 'Satellite' });
     // Dates and unread already say their field in the label.
     for (const f of ['startDate', 'dueDate', 'unread'] as const) expect(byField.get(f)!.key).toBeUndefined();
     // Every tier branch keys the chip, custom and removed tiers included.

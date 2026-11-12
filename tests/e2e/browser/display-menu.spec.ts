@@ -145,7 +145,7 @@ test('one menu: the filter rows, then the display rows; the View page lists the 
   await expect(filterSearch(page)).toHaveAttribute('placeholder', 'Search views')
   const layers = await viewLayers(page)
   expect(layers.first).toEqual(['all', 'pinned'])
-  expect(layers.more.filter((k) => !k.startsWith('ct_'))).toEqual(['focus', 'satellite', 'wait', 'recent', 'tasks'])
+  expect(layers.more.filter((k) => !k.startsWith('ct_'))).toEqual(['focus', 'satellite', 'recent', 'tasks'])
   await expect(viewsPage(page).locator('.dm-flyout-sep')).toHaveCount(1)
   const titles = await viewsPage(page).locator('.dm-view').evaluateAll((els) => els.map((el) => el.getAttribute('title') ?? ''))
   expect(titles.every((t) => t !== '')).toBe(true)
@@ -217,15 +217,18 @@ test('a view picked on the View page switches the list and the tab bar, closes t
   // Projects is not a tab: nothing on the bar is selected.
   await expect(page.locator('.todo-section-tabs [role="tab"][aria-selected="true"]')).toHaveCount(0)
 
-  // Search on page one finds views as well as filter values: `View  Parked`, one click picks it.
+  // Search on page one finds views as well as filter values: `View  Satellite`, one click picks
+  // it. The retired Parked tier is no view any more, so its word finds none.
   await openDisplayMenu(page)
   await filterSearch(page).fill('Parked')
-  const hit = displayMenu(page).locator('.fb-hit[data-view-option="wait"]')
+  await expect(displayMenu(page).locator('.fb-hit[data-view-option]')).toHaveCount(0)
+  await filterSearch(page).fill('Satellite')
+  const hit = displayMenu(page).locator('.fb-hit[data-view-option="satellite"]')
   await expect(hit.locator('.fb-hit-dim')).toHaveText('View')
-  await expect(hit.locator('.fb-hit-value')).toHaveText('Parked')
+  await expect(hit.locator('.fb-hit-value')).toHaveText('Satellite')
   await hit.click()
   await expect(displayMenu(page)).toHaveCount(0)
-  await expect(tab(page, 'Parked')).toHaveAttribute('aria-selected', 'true')
+  await expect(tab(page, 'Satellite')).toHaveAttribute('aria-selected', 'true')
 
   // Back to All: the last row is Collapse all again and the View row says All.
   await pickView(page, 'all')

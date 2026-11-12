@@ -24,7 +24,7 @@ import { WebSocket } from 'ws'
 import { expect, test, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
-import { selectSection } from './todo-panel-helpers'
+import { selectSection, showMoreUntil } from './todo-panel-helpers'
 import { isolateUiPrefsContext, presetPanelDesign } from './status-section-helpers'
 import { sessionResultPhase } from '../../../src/core/phase'
 import { expectPanelRunning } from './session-header-labels-helpers'
@@ -455,18 +455,23 @@ test('red task rows stay current across tiers, reading races, and reconnects', a
   })
   await openHome(page)
   await expect.poll(() => sockets.length).toBe(1)
-  for (const [tier, index] of [['Focus', 6], ['Satellite', 26], ['Parked', 71], ['Parked', 94]] as const) {
+  // 71 and 94 are stored under the retired `wait` tier (an older client's value): they read as
+  // Satellite, the tier they are drawn in now.
+  for (const [tier, index] of [['Focus', 6], ['Satellite', 26], ['Satellite', 71], ['Satellite', 94]] as const) {
     const id = densityTaskIds[index]
     const update = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'NEED_ACTION', unread: true } })
     expect(update.ok()).toBe(true)
     await selectSection(page, tier)
-    const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${id}"]`)
+    const section = page.locator('.todo-pinned-section:not(.todo-pinned-section-recent)')
+    const card = section.locator(`[data-task-id="${id}"]`)
+    // Satellite holds its 50 tasks and the 34 legacy ones: a long tier may draw in batches.
+    await showMoreUntil(section, card)
     await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
     await expect(card.locator('.task-unread-dot')).toBeVisible()
     await card.locator('.todo-pinned-title').click()
     await expect(card.locator('.task-unread-dot')).toHaveCount(0)
     await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
-    await page.screenshot({ path: `${SCREENSHOT_DIR}/red-read-${tier.toLowerCase()}.png` })
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/red-read-${tier.toLowerCase()}-${index}.png` })
   }
 
   const id = densityTaskIds[6]

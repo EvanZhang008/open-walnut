@@ -15,7 +15,7 @@ import { DEFAULT_HIDDEN_TABS, ROOMY_TAB_LIMIT, WIDE_HIDDEN_TABS, tabBarTabs, tab
 /**
  * The todo panel's tab bar: one tab per view, the picked view owns the panel below.
  *
- * `all` is a real tab because cross-tier drag (Recent to Focus, Focus to Parked) needs the
+ * `all` is a real tab because cross-tier drag (Recent to Focus, Focus to Satellite) needs the
  * source and target regions mounted at the same time; `pinned` is every tier without the
  * project list; a single tier's tab is for working inside it. Width is the constraint (the
  * panel is often ~420px), so with more than a few tabs a tier tab is its icon + count and
@@ -27,15 +27,15 @@ import { DEFAULT_HIDDEN_TABS, ROOMY_TAB_LIMIT, WIDE_HIDDEN_TABS, tabBarTabs, tab
 /** A built-in section name, or a custom tier id (`ct_*`) acting as its own tab. */
 export type TodoSection = string;
 
-/** Every view the panel can be on. `tasks` (Projects) is picked from the Display menu, not a tab. */
-export const TODO_SECTIONS: readonly TodoSection[] = ['all', 'pinned', 'focus', 'satellite', 'wait', 'recent', 'tasks'];
+/** Every view the panel can be on. `tasks` (Projects) is picked from the Display menu, not a tab.
+ *  The retired Parked tab (`wait`) is none of them: a view kept on it opens Satellite. */
+export const TODO_SECTIONS: readonly TodoSection[] = ['all', 'pinned', 'focus', 'satellite', 'recent', 'tasks'];
 
 function icon(section: TodoSection): ReactNode {
   switch (section) {
     case 'pinned': return ICONS.ICON_PIN;
     case 'focus': return ICONS.ICON_TIER_FOCUS;
     case 'satellite': return ICONS.ICON_TIER_SATELLITE;
-    case 'wait': return ICONS.ICON_TIER_WAIT;
     case 'recent': return ICONS.ICON_SECTION_RECENT;
     default: return ICONS.ICON_TIER_CUSTOM;
   }
@@ -50,7 +50,7 @@ interface TodoSectionTabsProps {
   heldCounts?: Partial<Record<TodoSection, number>>;
   /** False while the tasks are still loading: every count reads 0 then, and no tab is empty yet. */
   countsReady?: boolean;
-  /** User-defined tiers: each gets its own tab between Parked and Recent. */
+  /** User-defined tiers: each gets its own tab between Satellite and Recent. */
   customTiers?: CustomTierDef[];
   /** The bar is always on where it is (the browser extension's first page): no "Show tab bar" switch. */
   fixed?: boolean;

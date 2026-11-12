@@ -52,13 +52,29 @@ test.describe('board entry points', () => {
       await expect(card(page, homeIds[0])).toBeVisible()
       expect(await page.locator('.todo-panel').innerText()).not.toMatch(TIER_WORDS)
       await expect(page.locator('.todo-pinned-sublabel')).toHaveCount(0)
-      // A task in Parked means the board has tiers on purpose: every tier names itself.
+      // A task in a custom tier means the board has tiers on purpose: every tier names itself.
+      // (The custom tier is made here and removed right after: an empty one still draws.)
+      const shelfLabel = `Shelf ${stamp}`
+      const shelf = await page.request.post('/api/focus/tiers', { data: { label: shelfLabel } })
+      expect(shelf.ok()).toBe(true)
+      const shelfId = ((await shelf.json()) as { tier: { id: string } }).tier.id
+      try {
+        expect((await page.request.post(`/api/focus/tasks/${homeIds[1]}`)).ok()).toBe(true)
+        expect((await page.request.put(`/api/focus/tasks/${homeIds[1]}/tier`, { data: { tier: shelfId } })).ok()).toBe(true)
+        await expect(page.locator('.todo-pinned-sublabel', { hasText: shelfLabel })).toBeVisible({ timeout: 15_000 })
+        await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Focus' })).toBeVisible()
+        expect((await page.request.delete(`/api/focus/tasks/${homeIds[1]}`)).ok()).toBe(true)
+      } finally {
+        await page.request.delete(`/api/focus/tiers/${shelfId}`).catch(() => undefined)
+      }
+      await expect(page.locator('.todo-pinned-sublabel')).toHaveCount(0, { timeout: 15_000 })
+      // A task stored under the retired `wait` tier (an older client) reads as Satellite, so
+      // the board still names no tier.
       expect((await page.request.post(`/api/focus/tasks/${homeIds[1]}`)).ok()).toBe(true)
       expect((await page.request.put(`/api/focus/tasks/${homeIds[1]}/tier`, { data: { tier: 'wait' } })).ok()).toBe(true)
-      await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Parked' })).toBeVisible({ timeout: 15_000 })
-      await expect(page.locator('.todo-pinned-sublabel', { hasText: 'Focus' })).toBeVisible()
+      await expect(card(page, homeIds[1])).toBeVisible({ timeout: 15_000 })
+      await expect(page.locator('.todo-pinned-sublabel')).toHaveCount(0)
       expect((await page.request.delete(`/api/focus/tasks/${homeIds[1]}`)).ok()).toBe(true)
-      await expect(page.locator('.todo-pinned-sublabel')).toHaveCount(0, { timeout: 15_000 })
       // Switching to a tier view marks the board as one that uses tiers; from then on
       // two tiers with tasks draw their headings. The pick on the View page closes the menu.
       await chooseDisplayOption(page, 'satellite')

@@ -228,18 +228,18 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await closeFilterMenu(page);
   await removeFilterChip(page, 'date');
   await expect(filterChip(page, 'date')).toHaveCount(0);
-  await chooseViewOption(page, 'wait');
-  await expect(page.getByTestId('tier-view-bar')).toContainText('Parked');
+  await chooseViewOption(page, 'satellite');
+  await expect(page.getByTestId('tier-view-bar')).toContainText('Satellite');
   await expect(heading(page, 'focus')).toHaveCount(0);
   await chooseDisplayOption(page, 'group', 'none');
   await closeViewMenu(page);
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-tier-view-modes') ?? '{}').wait)).toBe('custom');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-tier-view-modes') ?? '{}').satellite)).toBe('custom');
   await chooseViewOption(page, 'quick-views');
   await expect(page.locator('.todo-section-tabs')).toBeVisible();
   await chooseViewOption(page, 'quick-views');
   await expect(page.locator('.todo-section-tabs')).toHaveCount(0);
   await page.reload();
-  await expect(page.getByTestId('tier-view-bar')).toContainText('Parked', { timeout: 30_000 });
+  await expect(page.getByTestId('tier-view-bar')).toContainText('Satellite', { timeout: 30_000 });
   await chooseViewOption(page, 'all');
   await expect(heading(page, 'focus')).toBeAttached();
 
@@ -899,17 +899,17 @@ test('the calendar panel keeps an active draft and the homepage URL', async ({ p
 });
 
 test('the tab bar keeps the tabs the user picks, hides empty ones, and turns itself off', async ({ page, baseURL }) => {
-  // One Focus card and one Wait card, no custom tier: Satellite is empty. Routed, because
-  // the shared fixture holds whatever pins and tiers earlier specs left behind.
+  // One Focus card, no custom tier: Satellite is empty. Routed, because the shared fixture
+  // holds whatever pins and tiers earlier specs left behind.
   const now = new Date().toISOString();
   const task = (id: string, extra: Record<string, unknown> = {}) => ({
     id, title: `Tab pick ${id}`, project: 'Orchard', status: 'todo', phase: 'TODO', priority: 'none', source: 'local',
     created_at: now, updated_at: now, description: '', summary: '', note: '', subtasks: [], ...extra,
   });
-  await answerTaskList(page, () => [task('tabs-focus', { pinned: true, focus_tier: 'focus' }), task('tabs-wait', { pinned: true, focus_tier: 'wait' }), task('tabs-list')]);
+  await answerTaskList(page, () => [task('tabs-focus', { pinned: true, focus_tier: 'focus' }), task('tabs-list')]);
   await page.route('**/api/focus/tasks', async route => {
     if (route.request().method() !== 'GET') return route.continue();
-    await route.fulfill({ json: { pinned_tasks: ['tabs-focus', 'tabs-wait'], focus_tasks: ['tabs-focus'], satellite_tasks: [], wait_tasks: ['tabs-wait'], custom_tier_tasks: {} } });
+    await route.fulfill({ json: { pinned_tasks: ['tabs-focus'], focus_tasks: ['tabs-focus'], satellite_tasks: [], wait_tasks: [], custom_tier_tasks: {} } });
   });
   await page.route('**/api/focus/tiers', async route => {
     if (route.request().method() !== 'GET') return route.continue();
@@ -939,15 +939,17 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   const menu = page.getByRole('menu', { name: 'Tab bar options' });
   const row = (name: string) => menu.getByRole('menuitemcheckbox', { name, exact: true });
   for (const name of ['All', 'Pinned']) await expect(row(name)).toHaveAttribute('aria-checked', 'true');
-  for (const name of ['Focus', 'Satellite', 'Parked', 'Recent']) await expect(row(name)).toHaveAttribute('aria-checked', 'false');
-  // The retired Backlog tier has no switch: its tasks live in Parked now.
+  for (const name of ['Focus', 'Satellite', 'Recent']) await expect(row(name)).toHaveAttribute('aria-checked', 'false');
+  // The retired Backlog and Parked tiers have no switch: their tasks read as Satellite now.
   await expect(row('Backlog')).toHaveCount(0);
+  await expect(row('Parked')).toHaveCount(0);
   await expect(row('Hide empty tabs')).toHaveAttribute('aria-checked', 'true');
   await expect(row('Show tab bar')).toHaveAttribute('aria-checked', 'true');
   // The switches leave the menu open, so several can be flipped in a row. The tiers put back
-  // show once they hold a task; past three tabs only the active one keeps its name.
-  for (const name of ['Focus', 'Satellite', 'Parked']) await row(name).click();
-  await expect.poll(names).toEqual(['All', 'Pinned', 'Focus', 'Parked']);
+  // show once they hold a task (Recent always does); past three tabs only the active one keeps
+  // its name.
+  for (const name of ['Focus', 'Satellite', 'Recent']) await row(name).click();
+  await expect.poll(names).toEqual(['All', 'Pinned', 'Focus', 'Recent']);
   await expect(bar).not.toHaveClass(/is-roomy/);
   await expect(tab('Pinned').locator('.todo-section-tab-label')).not.toBeVisible();
   await row('Hide empty tabs').click();
@@ -961,13 +963,13 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   await expect(menu).toHaveCount(0);
 
   // The tab the panel is on stays while it is on it; right-clicking the bar opens the same menu.
-  await tab('Parked').click();
-  await tab('Focus').click({ button: 'right' });
-  await row('Parked').click();
+  await tab('Focus').click();
+  await tab('All').click({ button: 'right' });
+  await row('Focus').click();
   await page.keyboard.press('Escape');
-  await expect(tab('Parked')).toHaveAttribute('aria-selected', 'true');
+  await expect(tab('Focus')).toHaveAttribute('aria-selected', 'true');
   await tab('All').click();
-  await expect.poll(names).not.toContain('Parked');
+  await expect.poll(names).not.toContain('Focus');
 
   // The choices survive a reload.
   const kept = await names();
@@ -1065,9 +1067,10 @@ test('Locate from a session panel never changes the tab: a tab without the task 
   await tab('Focus').click();
   await locate.click();
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-locate-off-view-note.png`, clip: { x: 0, y: 0, width: 1280, height: 520 } });
-  await expect(note.getByTestId('todo-offview-show')).toHaveText('Show in Parked');
-  await askedThenShown('Focus', 'Parked');
-  await landedOn('Parked');
+  // The task is stored under the retired `wait` tier, which reads as Satellite.
+  await expect(note.getByTestId('todo-offview-show')).toHaveText('Show in Satellite');
+  await askedThenShown('Focus', 'Satellite');
+  await landedOn('Satellite');
   await tab('All').click();
   await locate.click();
   await landedOn('All');
@@ -1077,7 +1080,7 @@ test('Locate from a session panel never changes the tab: a tab without the task 
   // A tier the user took off the bar has no tab to open, so the note offers All.
   await tab('Focus').click();
   await bar.getByRole('button', { name: 'Tab bar options' }).click();
-  await page.getByRole('menu', { name: 'Tab bar options' }).getByRole('menuitemcheckbox', { name: 'Parked', exact: true }).click();
+  await page.getByRole('menu', { name: 'Tab bar options' }).getByRole('menuitemcheckbox', { name: 'Satellite', exact: true }).click();
   await page.keyboard.press('Escape');
   await locate.click();
   await expect(note.getByTestId('todo-offview-show')).toHaveText('Show in All');
@@ -1296,12 +1299,12 @@ test('a fold keeps the clicked row where it was, and a tier folds only its own p
     created_at: now, updated_at: now, description: '', summary: '', note: '', subtasks: [], ...extra,
   });
   const range = (prefix: string, n: number) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`);
-  // The same two projects in Focus, Satellite and Wait, a folder in Satellite, a folder with
+  // The same two projects in Focus, Satellite and a custom tier (Later), a folder in Satellite, a folder with
   // one member pinned in Focus and two in the list, and the list below.
   const tiers: Record<string, Array<[string, string]>> = {
     focus: [...range('fo', 8).map((id): [string, string] => [id, 'Orchard']), ['fs1', 'Orchard'], ...range('fm', 3).map((id): [string, string] => [id, 'Meadowlark'])],
     satellite: [...range('so', 2).map((id): [string, string] => [id, 'Orchard']), ...range('sg', 3).map((id): [string, string] => [id, 'Orchard']), ...range('sm', 3).map((id): [string, string] => [id, 'Meadowlark'])],
-    wait: [...range('wo', 6).map((id): [string, string] => [id, 'Orchard']), ...range('wm', 2).map((id): [string, string] => [id, 'Meadowlark'])],
+    ct_fold_later: [...range('wo', 6).map((id): [string, string] => [id, 'Orchard']), ...range('wm', 2).map((id): [string, string] => [id, 'Meadowlark'])],
   };
   const folderMembers = range('sg', 3);
   const spanMembers = ['fs1', 'lO1', 'lO2'];
@@ -1324,13 +1327,13 @@ test('a fold keeps the clicked row where it was, and a tier folds only its own p
     if (route.request().method() !== 'GET') return route.continue();
     const ids = (tier: string) => tiers[tier].map(([id]) => id);
     await route.fulfill({ json: {
-      pinned_tasks: [...ids('focus'), ...ids('satellite'), ...ids('wait')], focus_tasks: ids('focus'),
-      satellite_tasks: ids('satellite'), wait_tasks: ids('wait'), custom_tier_tasks: {},
+      pinned_tasks: [...ids('focus'), ...ids('satellite'), ...ids('ct_fold_later')], focus_tasks: ids('focus'),
+      satellite_tasks: ids('satellite'), wait_tasks: [], custom_tier_tasks: { ct_fold_later: ids('ct_fold_later') },
     } });
   });
   await page.route('**/api/focus/tiers', async route => {
     if (route.request().method() !== 'GET') return route.continue();
-    await route.fulfill({ json: { tiers: [] } });
+    await route.fulfill({ json: { tiers: [{ id: 'ct_fold_later', label: 'Later' }] } });
   });
   await boot(page, baseURL!);
   await expect(navigation(page).locator('[data-task-id="fo1"]')).toBeVisible({ timeout: 30_000 });
@@ -1488,7 +1491,7 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   // One column holds the fixture session whose task (pw-task-store-sync) the routes place: deep
-  // in Wait first, then in the Projects list. Every section starts open.
+  // in a custom tier (Later) first, then in the Projects list. Every section starts open.
   const located = 'pw-task-store-sync';
   await page.addInitScript(() => {
     sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id: 'pw-store-sync-session', locked: true }]));
@@ -1496,7 +1499,7 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
     sessionStorage.setItem('sticky-seeded', '1');
     localStorage.setItem('walnut-todo-collapsed-sections', '[]');
   });
-  let where = 'wait';
+  let where = 'ct_sticky_later';
   const now = new Date().toISOString();
   const task = (id: string, project: string, extra: Record<string, unknown> = {}) => ({
     id, title: `Sticky ${id}`, project, status: 'todo', phase: 'TODO', priority: 'none', source: 'local',
@@ -1507,7 +1510,7 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
   const tiers = (): Record<string, Array<[string, string]>> => ({
     focus: [...run(range('fo', 6), 'Orchard'), ...run(range('fm', 4), 'Meadowlark')],
     satellite: [...run(range('so', 8), 'Orchard'), ...run(range('sm', 30), 'Meadowlark')],
-    wait: [...run(range('wo', 6), 'Orchard'), ...(where === 'wait' ? run([located], 'Orchard') : []), ...run(range('wm', 4), 'Meadowlark')],
+    ct_sticky_later: [...run(range('wo', 6), 'Orchard'), ...(where === 'ct_sticky_later' ? run([located], 'Orchard') : []), ...run(range('wm', 4), 'Meadowlark')],
   });
   await answerTaskList(page, () => {
     const pinned = Object.entries(tiers()).flatMap(([tier, rows]) => rows.map(([id, project]) =>
@@ -1526,13 +1529,13 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
     if (route.request().method() !== 'GET') return route.continue();
     const ids = (tier: string) => tiers()[tier].map(([id]) => id);
     await route.fulfill({ json: {
-      pinned_tasks: [...ids('focus'), ...ids('satellite'), ...ids('wait')], focus_tasks: ids('focus'),
-      satellite_tasks: ids('satellite'), wait_tasks: ids('wait'), custom_tier_tasks: {},
+      pinned_tasks: [...ids('focus'), ...ids('satellite'), ...ids('ct_sticky_later')], focus_tasks: ids('focus'),
+      satellite_tasks: ids('satellite'), wait_tasks: [], custom_tier_tasks: { ct_sticky_later: ids('ct_sticky_later') },
     } });
   });
   await page.route('**/api/focus/tiers', async route => {
     if (route.request().method() !== 'GET') return route.continue();
-    await route.fulfill({ json: { tiers: [] } });
+    await route.fulfill({ json: { tiers: [{ id: 'ct_sticky_later', label: 'Later' }] } });
   });
   await boot(page, baseURL!);
   await expect(navigation(page).locator('[data-task-id="fo1"]')).toBeVisible({ timeout: 30_000 });
@@ -1603,15 +1606,15 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
   await scrollTo(card('sm7'), 200);
   expect(await stack()).toEqual(['pinned', 'satellite', 'label:Meadowlark']);
   // At the tier's end its heading is pushed up by its own box, never over the next tier.
-  await scrollTo(tier('wait'), 60);
+  await scrollTo(tier('ct_sticky_later'), 60);
   const push = await tier('satellite').evaluate(group => ({
     heading: Math.round(group.querySelector('.todo-pinned-subgroup-heading')!.getBoundingClientRect().bottom),
     group: Math.round(group.getBoundingClientRect().bottom),
   }));
   expect(push.heading).toBe(push.group);
-  expect(await offset(heading(page, 'wait'))).toBe(60);
+  expect(await offset(heading(page, 'ct_sticky_later'))).toBe(60);
   await scrollTo(card('wo6'), 150);
-  expect(await stack()).toEqual(['pinned', 'wait', 'label:Orchard']);
+  expect(await stack()).toEqual(['pinned', 'ct_sticky_later', 'label:Orchard']);
 
   // 3. In the Projects list: Projects, then the project.
   await scrollTo(card('lJ9'), 200);
@@ -1648,7 +1651,7 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
   await satOpen.click();
   await expect(card('so1')).toHaveCount(0);
   await settle();
-  expect([await offset(heading(page, 'satellite')), await offset(heading(page, 'wait'))]).toEqual([26, 26 + 26 + 24]);
+  expect([await offset(heading(page, 'satellite')), await offset(heading(page, 'ct_sticky_later'))]).toEqual([26, 26 + 26 + 24]);
   await satOpen.click();
   await expect(card('so1')).toBeVisible();
   await settle();
@@ -1674,7 +1677,7 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
   await settle();
   expect(await offset(header('Juniper'))).toBe(26);
 
-  // A drag's start redraws the pinned area (every tier becomes a drop target). With Wait's
+  // A drag's start redraws the pinned area (every tier becomes a drop target). With the Later tier's
   // heading stuck, the rows under the pointer stay put.
   const press = async (el: ReturnType<typeof card>) => {
     const box = (await el.boundingBox())!;
@@ -1685,12 +1688,12 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
   };
   const cancelDrag = async () => { await page.keyboard.press('Escape'); await page.mouse.up(); await settle(); };
   await scrollTo(card('wm3'), 300);
-  expect((await stack())[1]).toBe('wait');
-  const waitBefore = await offset(tier('wait'));
+  expect((await stack())[1]).toBe('ct_sticky_later');
+  const laterBefore = await offset(tier('ct_sticky_later'));
   await press(card('wm3'));
   await expect(page.locator('.todo-pinned-wrapper-dragging')).toHaveCount(1);
   await frames();
-  expect(await offset(tier('wait'))).toBe(waitBefore);
+  expect(await offset(tier('ct_sticky_later'))).toBe(laterBefore);
   await cancelDrag();
   await expect(page.locator('.todo-pinned-wrapper-dragging')).toHaveCount(0);
 
