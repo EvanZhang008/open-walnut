@@ -156,15 +156,18 @@ async function holdPosts(url: string): Promise<{ count: () => number; release: (
  */
 async function firstInRecent(id: string): Promise<void> {
   const v = askView(panel)
-  // The list may be left scrolled (an earlier test scrolls it), with the tabs under the composer:
-  // go back to its top first, as a person would before picking a tab.
-  await frame(panel).evaluate(() => {
-    const els = Array.from(document.querySelectorAll('.ext-home-tasks *')) as HTMLElement[]
-    const el = els.find((e) => e.scrollHeight > e.clientHeight + 20 && /(auto|scroll)/.test(getComputedStyle(e).overflowY))
-    if (el) el.scrollTop = 0
-  })
   const tab = v.locator('.todo-section-tab-recent')
-  await tab.click({ timeout: 20_000 })
+  // On this page Recent waits under More (tab-bar-model WIDE_HIDDEN_TABS): put it on the bar
+  // from there, as the person does, the first time.
+  if (await tab.count() === 0) {
+    await v.getByRole('button', { name: 'Tab bar options' }).click()
+    const row = v.getByRole('menu', { name: 'Tab bar options' }).getByRole('menuitemcheckbox', { name: 'Recent', exact: true })
+    await expect(row).toHaveAttribute('aria-checked', 'false')
+    await row.click()
+    await expect(row).toHaveAttribute('aria-checked', 'true')
+    await panel.keyboard.press('Escape')
+  }
+  await tab.click()
   await expect(tab).toHaveClass(/is-active/)
   await expect(v.locator('.todo-pinned-list-recent [data-task-id]').first()).toHaveAttribute('data-task-id', id, { timeout: 15_000 })
   const key = 'walnut-todo-recent-opened'
