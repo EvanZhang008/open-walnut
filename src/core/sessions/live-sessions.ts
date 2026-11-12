@@ -29,6 +29,8 @@
  */
 import os from 'node:os';
 import type { SessionRecord, Task } from '../types.js';
+import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js';
+import { semanticLaneDecision } from '../search/semantic-default.js';
 
 export const DEFAULT_IDLE_EXIT_MINUTES = 30;
 /** A just-ended turn keeps its process this long before the live limit may stop it: the status
@@ -52,16 +54,32 @@ function setting(v: unknown): number | null {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-/** The idle exit on this machine, in ms; null when off (setting 0). */
-export function localIdleExitMs(cfg: LiveSessionConfig | undefined): number | null {
-  const m = setting(cfg?.local_idle_exit_minutes) ?? DEFAULT_IDLE_EXIT_MINUTES;
+let isolatedCache: boolean | undefined;
+/** A server that is not the person's own (the test runner, an ephemeral child, a data home in a
+ *  temp or task dir, a fake HOME), by the rule every such switch reads. Its sessions are test
+ *  fakes, so the defaults (both sized by this machine) would make a test pass on a big machine and
+ *  fail on a small one (2026-11-12: a 4-core 16 GB CI runner got a limit of 6 and refused the 7th
+ *  session of tests/e2e/engine-split.test.ts). An explicit setting still applies there. */
+export function isolatedServer(): boolean {
+  if (isolatedCache === undefined) {
+    isolatedCache = !semanticLaneDecision({ env: { ...process.env, WALNUT_SEARCH_V2_SEMANTIC: undefined }, isEphemeral: IS_EPHEMERAL, walnutHome: WALNUT_HOME }).on;
+  }
+  return isolatedCache;
+}
+
+/** The idle exit on this machine, in ms; null when off (setting 0; no setting on an isolated server). */
+export function localIdleExitMs(cfg: LiveSessionConfig | undefined, isolated = isolatedServer()): number | null {
+  const set = setting(cfg?.local_idle_exit_minutes);
+  if (set === null && isolated) return null;
+  const m = set ?? DEFAULT_IDLE_EXIT_MINUTES;
   return m === 0 ? null : m * 60_000;
 }
 
-/** The live process limit on this machine; 0 = none. */
-export function localLiveLimit(cfg: LiveSessionConfig | undefined, memTotalBytes = os.totalmem()): number {
+/** The live process limit on this machine; 0 = none (also with no setting on an isolated server). */
+export function localLiveLimit(cfg: LiveSessionConfig | undefined, memTotalBytes = os.totalmem(), isolated = isolatedServer()): number {
   const set = setting(cfg?.local_live_limit);
   if (set !== null) return Math.floor(set);
+  if (isolated) return 0;
   if (cfg?.idle_timeout_minutes === 0) return 0;
   const byMem = memTotalBytes > 0 ? Math.floor(memTotalBytes / GB / LIVE_GB_PER_SESSION) : MIN_LIVE_LIMIT;
   return Math.min(MAX_LIVE_LIMIT, Math.max(MIN_LIVE_LIMIT, byMem));

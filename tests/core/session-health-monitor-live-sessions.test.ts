@@ -172,12 +172,18 @@ describe('idle exit on this machine', () => {
     expect(rec?.status_reason).toBe('idle_timeout');
   });
 
-  it('defaults to 30 minutes, and 0 turns it off (the plain idle timeout stays)', async () => {
-    sessionConfig = { local_live_limit: 0 };
+  it('a set 30 minutes stops at 30, no setting on a test server stops none, 0 turns it off (the plain idle timeout stays)', async () => {
+    sessionConfig = { local_idle_exit_minutes: 30, local_live_limit: 0 };
     const m31 = await seed('default-31', 31 * MIN);
     const m20 = await seed('default-20', 20 * MIN);
     await new SessionHealthMonitor().check();
     expect([stopped(m31), stopped(m20)]).toEqual([true, false]);
+
+    // The machine-sized defaults never apply on an isolated server (this runner).
+    sessionConfig = {};
+    const unset = await seed('unset-45', 45 * MIN);
+    await new SessionHealthMonitor().check();
+    expect(stopped(unset)).toBe(false);
 
     sessionConfig = { local_idle_exit_minutes: 0, local_live_limit: 0 };
     const off = await seed('off-45', 45 * MIN);

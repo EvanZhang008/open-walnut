@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_IDLE_EXIT_MINUTES, EVICT_MIN_QUIET_MS, evictionOrder, exitsLast, isLocalLiveProcess,
-  localIdleExitMs, localLiveLimit, mustStay, type LiveRunnerView,
+  localIdleExitMs, localLiveLimit, isolatedServer, mustStay, type LiveRunnerView,
 } from '../../../src/core/sessions/live-sessions.js';
 import { judgeHost } from '../../../src/core/hosts/placement.js';
 import type { HostLoad } from '../../../src/providers/host-facts-core.js';
@@ -15,20 +15,30 @@ const MIN = 60_000;
 
 describe('settings', () => {
   it('idle exit: default 30 minutes, a set value, 0 = off, junk = default', () => {
-    expect(localIdleExitMs(undefined)).toBe(DEFAULT_IDLE_EXIT_MINUTES * MIN);
-    expect(localIdleExitMs({ local_idle_exit_minutes: 15 })).toBe(15 * MIN);
-    expect(localIdleExitMs({ local_idle_exit_minutes: 0 })).toBeNull();
-    expect(localIdleExitMs({ local_idle_exit_minutes: -5 })).toBe(30 * MIN);
-    expect(localIdleExitMs({ local_idle_exit_minutes: 'x' as unknown as number })).toBe(30 * MIN);
+    expect(localIdleExitMs(undefined, false)).toBe(DEFAULT_IDLE_EXIT_MINUTES * MIN);
+    expect(localIdleExitMs({ local_idle_exit_minutes: 15 }, false)).toBe(15 * MIN);
+    expect(localIdleExitMs({ local_idle_exit_minutes: 0 }, false)).toBeNull();
+    expect(localIdleExitMs({ local_idle_exit_minutes: -5 }, false)).toBe(30 * MIN);
+    expect(localIdleExitMs({ local_idle_exit_minutes: 'x' as unknown as number }, false)).toBe(30 * MIN);
   });
 
   it('live limit: one per 2.4 GB of memory, 4 to 64; a set value wins; 0 = none', () => {
-    expect(localLiveLimit(undefined, 48 * GB)).toBe(20);
-    expect(localLiveLimit(undefined, 16 * GB)).toBe(6);
-    expect(localLiveLimit(undefined, 4 * GB)).toBe(4);
-    expect(localLiveLimit(undefined, 512 * GB)).toBe(64);
-    expect(localLiveLimit({ local_live_limit: 12 }, 48 * GB)).toBe(12);
-    expect(localLiveLimit({ local_live_limit: 0 }, 48 * GB)).toBe(0);
+    expect(localLiveLimit(undefined, 48 * GB, false)).toBe(20);
+    expect(localLiveLimit(undefined, 16 * GB, false)).toBe(6);
+    expect(localLiveLimit(undefined, 4 * GB, false)).toBe(4);
+    expect(localLiveLimit(undefined, 512 * GB, false)).toBe(64);
+    expect(localLiveLimit({ local_live_limit: 12 }, 48 * GB, false)).toBe(12);
+    expect(localLiveLimit({ local_live_limit: 0 }, 48 * GB, false)).toBe(0);
+  });
+
+  // Class guard: no test run's result may depend on the size of the machine it runs on. Under the
+  // test runner (an isolated server) neither default applies, whatever the memory; a set value does.
+  it('an isolated server (this test runner) takes neither default, on any machine', () => {
+    expect(isolatedServer()).toBe(true);
+    for (const mem of [4, 16, 48, 512]) expect(localLiveLimit(undefined, mem * GB)).toBe(0);
+    expect(localIdleExitMs(undefined)).toBeNull();
+    expect(localLiveLimit({ local_live_limit: 3 }, 16 * GB)).toBe(3);
+    expect(localIdleExitMs({ local_idle_exit_minutes: 15 })).toBe(15 * MIN);
   });
 });
 
