@@ -93,7 +93,8 @@ describe('dev-prod.sh launchd domain', () => {
     // The definition aside, each call is in an `if !` or has an `||`.
     const calls = code.filter((l) => /\bremove_launchd_job\b/.test(l) && !/^remove_launchd_job\(\) \{/.test(l))
     // The sixth: a session host refusal during readiness, before the same build is relaunched directly.
-    expect(calls.length).toBe(6)
+    // The seventh: a rollback whose host ended badly or wrote nothing, before it is relaunched directly.
+    expect(calls.length).toBe(7)
     for (const l of calls) expect(l).toMatch(/if ! remove_launchd_job; then|remove_launchd_job \|\| /)
     // The first, after the old job got its SIGTERM, starts the new server with nohup.
     const first = script.slice(script.indexOf('  if ! remove_launchd_job; then'))

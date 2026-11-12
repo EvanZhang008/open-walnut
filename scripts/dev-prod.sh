@@ -2080,10 +2080,11 @@ rollback_to_lkg() {
   # A host that already refused this deploy gets no second try.
   if (( ${host_retry_done:-0} )); then host_plain=1; fi
   local rb_ready=1 rb_base rb_halves=0
-  rb_base="$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+  # Defaults for what the deploy sets: a rollback, the last resort, never stops on a name.
+  rb_base="$(wc -c < "${SERVER_LOG:-/dev/null}" 2>/dev/null | tr -d '[:space:]' || echo 0)"
   launch_server "$lkg_path"
   host_plain=0
-  if (( use_launchd && ${#host_prefix[@]} > 0 )); then
+  if (( ${use_launchd:-0} )) && [[ -n "${host_prefix[*]+x}" ]] && (( ${#host_prefix[@]} > 0 )); then
     rb_ready=0
     for _ in $(seq 1 180); do
       rb_halves=$(( rb_halves + 1 ))
