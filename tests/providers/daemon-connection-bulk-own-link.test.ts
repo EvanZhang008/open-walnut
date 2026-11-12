@@ -19,7 +19,12 @@
  *   - O7: own connections that keep ending soon back off before they dial again;
  *   - O8: the host's whole read copy rides the bulk channel unbound (host-slice-unbound-v1),
  *     after leader.configure bound the session socket; its probe stays on the session link;
- *   - O9: a daemon that refuses leader.configure takes the copy bound, on the session link.
+ *   - O9: a daemon that refuses leader.configure takes the copy bound, on the session link;
+ *   - O10: on a paced connection, a read queued behind MB of upload parts waits for them to go up
+ *     and answers;
+ *   - O11: a read whose answer never comes fails alone while uploads still move on the channel:
+ *     the channel and the parts on it stay (2026-11-12: reads timed out behind 1 MB parts, each
+ *     timeout ended the channel and cut the part going up, over and over, and a move failed).
  * The mock forward is a TCP proxy to the mock daemon (no SSH in tests).
  */
 
@@ -30,6 +35,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { _setBulkForwardForTesting, type LaneForward } from '../../src/providers/stream-lane.js'
+import { pacedForward } from '../../src/providers/paced-forward.js'
 import { linkFailureKind } from '../../src/providers/link-failure.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
@@ -99,11 +105,11 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     await daemon.stop()
   })
 
-  async function connectWithForward(): Promise<void> {
+  async function connectWithForward(pace?: { bytesPerSec: number; burstBytes: number }): Promise<void> {
     _setBulkForwardForTesting(async () => {
       const f = await proxyForward(daemon.port)
       forwards.push(f)
-      return f
+      return pace ? pacedForward(f, pace) : f
     })
     conn = new DaemonConnection('bulk-own-host', TARGET)
     await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
@@ -231,6 +237,42 @@ describe('DaemonConnection: the bulk channel on a connection of its own', () => 
     const writes = daemon.getCommandHistoryFor('fs.write')
     expect(writes.map((w) => [w.payload.path, w.connIndex])).toEqual([['/tmp/small', 0], ['/tmp/big', 1]])
   })
+
+  it('O10: a read queued behind MB of paced upload parts waits for them and answers', async () => {
+    // 1 MB/s here stands for the relay's 20 KB/s: 3 MB ahead of a read with a 1 s window.
+    await connectWithForward({ bytesPerSec: 1024 * 1024, burstBytes: 32 * 1024 })
+    const file = path.join(os.tmpdir(), `bulk-own-q-${process.pid}-${Date.now()}.bin`)
+    fs.writeFileSync(file, Buffer.alloc(8 * 1024, 7))
+    try {
+      const part = 'A'.repeat(1024 * 1024)
+      // The mock answers a part it has no handler for with ok:false; what counts is that each is answered.
+      const parts = [0, 1, 2].map((i) => conn.send('fs.writePart', { path: '/tmp/q', offset: i * part.length, data: part }, 60_000))
+      const startedAt = Date.now()
+      const read = await conn.send('fs.readRange', { path: file, start: 0, length: 4096 }, 1_000)
+      expect(read.ok).toBe(true)
+      expect(Date.now() - startedAt).toBeGreaterThan(2_000)
+      await Promise.all(parts)
+      expect(forwards).toHaveLength(1)
+      expect(daemon.getCommandHistoryFor('fs.writePart')).toHaveLength(3)
+    } finally {
+      fs.rmSync(file, { force: true })
+    }
+  }, 20_000)
+
+  it('O11: a read whose answer never comes fails alone while uploads still move; the channel and its parts stay', async () => {
+    await connectWithForward({ bytesPerSec: 1024 * 1024, burstBytes: 32 * 1024 })
+    const part = 'A'.repeat(1024 * 1024)
+    const send = (i: number) => conn.send('fs.writePart', { path: '/tmp/q', offset: i * part.length, data: part }, 60_000)
+    const ahead = [0, 1].map(send)
+    daemon.swallowNextCommand('fs.readRange')
+    const read = conn.send('fs.readRange', { path: '/tmp/none', start: 0, length: 4096 }, 1_000)
+    // Parts behind it keep the channel busy past the read's last window.
+    const behind = [2, 3, 4, 5].map(send)
+    await expect(read).rejects.toThrow(/daemon command timeout: fs.readRange/)
+    await Promise.all([...ahead, ...behind])
+    expect(forwards).toHaveLength(1)
+    expect(daemon.getCommandHistoryFor('fs.writePart')).toHaveLength(6)
+  }, 30_000)
 
   it('O7: own connections that end soon after opening back off', async () => {
     await connectWithForward()

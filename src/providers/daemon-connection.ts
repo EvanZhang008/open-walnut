@@ -907,6 +907,10 @@ export class DaemonConnection {
   private bulkUpBase = 0
   private bulkUpSent: (() => number) | null = null
   private bulkUpBytes(): number { return this.bulkUpBase + (this.bulkUpSent?.() ?? 0) }
+  /** Request bytes written to the bulk socket on the current own connection (its pacer lets them up later). */
+  private bulkOwnWritten = 0
+  /** Bytes written to the own bulk connection that its pacer has not let go up yet: what a new request waits behind. */
+  private bulkQueuedUp(): number { return Math.max(0, this.bulkOwnWritten - (this.bulkUpBytes() - this.bulkUpBase)) }
   /** Own connections in a row that ended within BULK_OWN_MIN_LIFE_MS: the redial backs off. */
   private bulkShortLives = 0
   private bulkForwardOpenedAt = 0
@@ -2625,9 +2629,13 @@ export class DaemonConnection {
     let progressMark = progressNow()
     // On the paced bulk connection, this request's bytes (and those ahead of it) going up: the
     // window extends while they move, until the count passes this request's end (what was
-    // waiting to go up before it, itself, and the socket buffers between).
+    // waiting to go up before it, itself, and the socket buffers between). What waits ahead
+    // is counted from what was written, not guessed: 2026-11-12, a read queued behind three
+    // 1 MB parts at 20 KB/s timed out, ended the channel and cut the part going up, again and
+    // again, and a whole move to a dev host failed.
     let upMark = this.bulkUpBytes()
-    const upEnd = upMark + (bulkSocket?.bufferedAmount ?? 0) + message.length + DaemonConnection.UPLOAD_BUFFERS_BYTES
+    const upEnd = upMark + (ownBulk ? this.bulkQueuedUp() : 0) + (bulkSocket?.bufferedAmount ?? 0)
+      + message.length + DaemonConnection.UPLOAD_BUFFERS_BYTES
     // A main-socket reply on a link it shares with a bulk reply waits behind
     // that reply's bytes (one ssh stream): what the link brings is its line moving.
     let linkMark = this._heardBytes
@@ -2684,9 +2692,12 @@ export class DaemonConnection {
         // main WS immediately; the close handler schedules a redial.
         // Main-socket timeouts keep today's behavior (ping staleness owns main
         // liveness).
-        if (bulkSocket && this.bulkWs === bulkSocket && !DaemonConnection.BULK_WAITS.has(cmd)) {
+        // Bytes still moving on it, either way, say the socket is alive: this one command timed
+        // out (its reply is late), and ending the channel would cut the uploads going up on it.
+        const alive = arriving || (ownBulk && upNow - upMark >= DaemonConnection.PROGRESS_MIN_BYTES)
+        if (bulkSocket && this.bulkWs === bulkSocket && !DaemonConnection.BULK_WAITS.has(cmd) && !alive) {
           log.session.warn('DaemonConnection: bulk command timeout — terminating bulk channel', {
-            host: this.hostKey, cmd, traceId,
+            host: this.hostKey, cmd, traceId, waitedMs: Date.now() - startedAt, queuedUpKB: Math.round(this.bulkQueuedUp() / 1024),
           })
           try { bulkSocket.terminate() } catch {}
         }
@@ -2696,6 +2707,7 @@ export class DaemonConnection {
 
       this.pendingCommands.set(id, { resolve, reject, timer, cmd, startedAt, traceId, socket: sentOn, bulk: !!bulkSocket })
       if (!this.ownBulkSocket(sentOn)) this.mainSentByCmd.set(cmd, (this.mainSentByCmd.get(cmd) ?? 0) + message.length)
+      if (ownBulk) this.bulkOwnWritten += message.length
       sentOn.send(message)
     })
   }
@@ -7366,6 +7378,7 @@ export class DaemonConnection {
       // Kept monotonic across connections, so a mark taken on the last one still compares.
       this.bulkUpBase = this.bulkUpBytes()
       this.bulkUpSent = (fwd as { sentBytes?: () => number }).sentBytes ?? null
+      this.bulkOwnWritten = 0
       fwd.onExit((why) => {
         if (this.bulkForward !== fwd) return
         this.bulkForward = null
