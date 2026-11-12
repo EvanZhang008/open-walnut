@@ -123,9 +123,10 @@ export const moreMenu = (page: Page): Locator => page.getByRole('menu', { name: 
 /** The "More" row of an open "+" menu. */
 export const moreRow = (menu: Locator): Locator => menu.getByRole('menuitem', { name: 'More', exact: true })
 
-/** "+" -> More: Recall, the schedule shortcut and every caller-defined action
- *  (Latest update, Snooze until, Add a trigger, Engine settings, Transfer,
- *  Compact context, Main's quick actions) live in this flyout. Returns it. */
+/** "+" -> More: Recall and the caller-defined actions (Latest update, Engine
+ *  settings, Transfer, Compact context, Main's quick actions) live in this flyout.
+ *  Snooze until, Add a trigger and the no-task schedule shortcut are rows of the
+ *  "+" menu itself (openPlusMenu). Returns the flyout. */
 export async function openMoreMenu(panel: Locator): Promise<Locator> {
   const menu = await openPlusMenu(panel)
   await moreRow(menu).click()

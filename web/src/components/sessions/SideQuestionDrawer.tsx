@@ -37,6 +37,7 @@ import type { SessionEffort, SessionOutputMode } from '@open-walnut/core';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { ComposerModelPill } from '@/components/sessions/ComposerModelPill';
 import { OutputModePill } from '@/components/sessions/OutputModePill';
+import { PermissionModeMenu } from '@/components/sessions/PermissionModeMenu';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { SessionNotesBar, SessionNotesPill, useSessionNote } from '@/components/sessions/SessionNotes';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
@@ -395,7 +396,7 @@ export function SideQuestionDrawer({
         && target.closest('.chat-input-box') === rootRef.current.closest('.chat-input-box')) return;
       // Popups the thread body opens (Bash output, plan, quote pins) portal to
       // document.body: a click inside them must not read as "outside".
-      if (target.closest?.(`.plan-popup-overlay, .quote-pin-popover, .chat-plus-more-flyout[data-composer-scope="side-question"], ${SELECTION_BAR_LAYERS}`)) return;
+      if (target.closest?.(`.plan-popup-overlay, .quote-pin-popover, .chat-plus-more-flyout[data-composer-scope="side-question"], .permission-mode-menu[data-composer-scope="side-question"], ${SELECTION_BAR_LAYERS}`)) return;
       // Full screen: the backdrop click leaves full screen only (useFullscreen), as the panel's does.
       if (isFullscreen && target.closest?.('.open-walnut-fullscreen-backdrop')) return;
       closeDrawer();
@@ -508,17 +509,18 @@ export function SideQuestionDrawer({
     (enabledModes.indexOf(pillMode) + 1) % enabledModes.length
   ] ?? pillMode;
 
-  const cycleMode = useCallback(() => {
-    if (!activeThreadSid) { setNewThreadMode(nextPillMode); return; }
-    patchThreadRecord({ mode: nextPillMode });
-    updateSession(activeThreadSid, { mode: nextPillMode }).catch((err) => {
+  const pickMode = useCallback((next: SessionMode) => {
+    if (!activeThreadSid) { setNewThreadMode(next); return; }
+    patchThreadRecord({ mode: next });
+    updateSession(activeThreadSid, { mode: next }).catch((err) => {
       patchThreadRecord({ mode: pillMode });
-      log.warn('sideThreads', 'mode toggle failed', {
-        sessionId: activeThreadSid, mode: nextPillMode,
+      log.warn('sideThreads', 'mode change failed', {
+        sessionId: activeThreadSid, mode: next,
         error: err instanceof Error ? err.message : String(err),
       });
     });
-  }, [activeThreadSid, pillMode, nextPillMode, patchThreadRecord]);
+  }, [activeThreadSid, pillMode, patchThreadRecord]);
+  const cycleMode = useCallback(() => pickMode(nextPillMode), [pickMode, nextPillMode]);
 
   // Inject: flatten the thread's Q&A (TEXT parts only — no tool blocks, no
   // thinking) into the main composer through SessionPanel's prefill driver.
@@ -948,19 +950,12 @@ export function SideQuestionDrawer({
               onToggleMode={cycleMode}
               controlsSlot={(
                 <div className="session-mode-bar">
-                  <button
-                    className={`mode-toggle-pill${pillMode === 'plan' ? ' plan-active' : ''}`}
-                    onClick={cycleMode}
-                    type="button"
-                    title={activeThreadSid
-                      ? `Thread mode: ${pillMode}. Click or Shift+Tab to cycle → ${nextPillMode}`
-                      : `The new thread starts in ${pillMode}. Click or Shift+Tab to cycle → ${nextPillMode}`}
-                  >
-                    <span className="mode-toggle-pill-label">
-                      {MODE_LABELS[pillMode] ?? pillMode}
-                    </span>
-                    <span className="mode-toggle-pill-shortcut">{'⇧'}Tab</span>
-                  </button>
+                  <PermissionModeMenu
+                    mode={pillMode}
+                    onPick={pickMode}
+                    heading={activeThreadSid ? 'Thread mode' : 'The new thread starts in'}
+                    title={`${activeThreadSid ? 'Thread mode' : 'The new thread starts in'}: ${MODE_LABELS[pillMode] ?? pillMode}. Click to choose a mode; Shift+Tab steps to ${MODE_LABELS[nextPillMode] ?? nextPillMode}`}
+                  />
                   {/* Reply style. On a live thread it PATCHes that session like the
                       main composer's pill; before one exists the pick rides the
                       create request, so even the FIRST answer obeys it. */}

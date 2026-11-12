@@ -23181,13 +23181,11 @@ a.tag-chip:focus-visible,
 /* The row narrows (a ~280px row: the third of three columns on a 1280px window):
    "Todo" stands in for the words. Narrower still (~220px, the third of three on
    1100px): the glyph alone, a round button the size of the mic and the arrow
-   beside it, the words in its tooltip. The mode pill's "⇧Tab" hint goes first in
-   both tiers: the model label next to it is the control that would otherwise be
-   squeezed to nothing. Widths measured by tests/e2e/browser/draft-save-as-todo. */
+   beside it, the words in its tooltip. Widths measured by
+   tests/e2e/browser/draft-save-as-todo. */
 @container (max-width: 380px) {
   .draft-later-words { display: none; }
   .draft-later-short { display: inline; }
-  .draft-actions-bar .mode-toggle-pill-shortcut { display: none; }
 }
 @container (max-width: 250px) {
   .draft-later-short { display: none; }
@@ -23471,12 +23469,6 @@ a.tag-chip:focus-visible,
   font-family: 'SF Mono', Menlo, monospace;
   font-size: 11px;
   font-weight: 500;
-}
-
-.mode-toggle-pill-shortcut {
-  font-family: 'SF Mono', Menlo, monospace;
-  font-size: 9px;
-  opacity: 0.45;
 }
 
 /* Context-window usage % — pushed to the right edge of the quick-access row.

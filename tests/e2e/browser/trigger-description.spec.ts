@@ -19,7 +19,7 @@ import { test, expect } from './shortcut-test-fixture'
 import type { Locator, Page } from '@playwright/test'
 import { openDraft, draftPanel } from './draft-helpers'
 import {
-  startSessionAt, openPanels, openMoreMenu, composerTextarea, plusButton,
+  startSessionAt, openPanels, openPlusMenu, openMoreMenu, composerTextarea, plusButton,
 } from './engine-settings-popover-helpers'
 import { TRIGGER_ACTION_LABEL, TRIGGER_IDEAS } from '../../../web/src/components/sessions/trigger-picker-model'
 
@@ -213,9 +213,9 @@ test('the pill, the flyout and the Routines card say what each trigger does; the
 
 const PROMPT = 'Set up a trigger or cron job: '
 /**
- * The schedule shortcut sits in the "+" menu's More flyout (openMoreMenu) of a
- * composer with no task behind it (the Draft). A session with a task gets
- * "Add a trigger…" there instead (useTriggerPickerEntry, 2026-10-21): its
+ * The schedule shortcut sits on the "+" menu itself (openPlusMenu, not its More
+ * flyout) of a composer with no task behind it (the Draft). A session with a task
+ * gets "Add a trigger…" there instead (useTriggerPickerEntry, 2026-10-21): its
  * "On a schedule" idea goes in as plain words so the AI can pick a cron job.
  */
 const triggerRow = (menu: Locator): Locator =>
@@ -235,9 +235,10 @@ test('a task session sets up a schedule from "Add a trigger…"; a composer with
   const [panel] = await openPanels(page, [sid])
   const box = composerTextarea(panel)
 
-  // A session with a task: "Add a trigger…" replaces the shortcut row.
+  // A session with a task: "Add a trigger…" replaces the shortcut row, one click
+  // away on the "+" menu itself.
   await box.fill('tell me when the nightly build goes red')
-  const menu = await openMoreMenu(panel)
+  const menu = await openPlusMenu(panel)
   await expect(menu.getByRole('menuitem', { name: TRIGGER_ACTION_LABEL })).toBeVisible()
   await expect(triggerRow(menu)).toHaveCount(0)
   await shot(menu, 'plus-menu')
@@ -250,9 +251,12 @@ test('a task session sets up a schedule from "Add a trigger…"; a composer with
   await expect(box).toHaveValue(`${scheduleIdea.text}tell me when the nightly build goes red`)
   await box.fill('')
 
-  // The More flyout fits a short viewport too.
+  // The More flyout fits a short viewport too, and does not repeat the
+  // first-level rows.
   await page.setViewportSize({ width: 900, height: 420 })
   const shortMenu = await openMoreMenu(panel)
+  await expect(shortMenu.getByRole('menuitem', { name: TRIGGER_ACTION_LABEL })).toHaveCount(0)
+  await expect(triggerRow(shortMenu)).toHaveCount(0)
   const menuBox = await shortMenu.boundingBox()
   expect(menuBox).toBeTruthy()
   expect(menuBox!.y).toBeGreaterThanOrEqual(0)
@@ -266,7 +270,7 @@ test('a task session sets up a schedule from "Add a trigger…"; a composer with
   await expect(plusButton(draft)).toBeVisible()
   const draftBox = composerTextarea(draft)
   await draftBox.fill('watch the deploy')
-  const draftMenu = await openMoreMenu(draft)
+  const draftMenu = await openPlusMenu(draft)
   await expect(triggerRow(draftMenu)).toBeVisible()
   await expect(draftMenu.getByRole('menuitem', { name: TRIGGER_ACTION_LABEL })).toHaveCount(0)
   await triggerRow(draftMenu).click()
@@ -276,17 +280,17 @@ test('a task session sets up a schedule from "Add a trigger…"; a composer with
   expect(await caretAtEnd(draftBox)).toBe(true)
   await expect(draft.locator('.command-palette')).toHaveCount(0)
   // A second use does not stack the prefix.
-  await triggerRow(await openMoreMenu(draft)).click()
+  await triggerRow(await openPlusMenu(draft)).click()
   await expect(draftBox).toHaveValue(`${PROMPT}watch the deploy`)
   // A slash command stays first.
   await draftBox.fill('/compact consider the schedule')
-  await triggerRow(await openMoreMenu(draft)).click()
+  await triggerRow(await openPlusMenu(draft)).click()
   await expect(draftBox).toHaveValue('/compact \nSet up a trigger or cron job: consider the schedule')
-  await triggerRow(await openMoreMenu(draft)).click()
+  await triggerRow(await openPlusMenu(draft)).click()
   await expect(draftBox).toHaveValue('/compact \nSet up a trigger or cron job: consider the schedule')
   // An empty box gets the prefix, and typing goes on after it.
   await draftBox.fill('')
-  await triggerRow(await openMoreMenu(draft)).click()
+  await triggerRow(await openPlusMenu(draft)).click()
   await expect(draftBox).toHaveValue(PROMPT)
   await page.keyboard.type('run a report every weekday')
   await expect(draftBox).toHaveValue(`${PROMPT}run a report every weekday`)

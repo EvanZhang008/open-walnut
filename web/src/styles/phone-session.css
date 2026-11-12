@@ -663,11 +663,6 @@
     display: none;
   }
 
-  /* A touch screen has no Shift+Tab: the shortcut hint goes. */
-  .app-shell-navigation .mode-toggle-pill-shortcut {
-    display: none;
-  }
-
   .app-shell-navigation :is(.session-panel, .main-page-chat, .draft-session-panel) :is(
     .msg-copy-label, .msg-time, .mode-toggle-pill-label, .session-detail-model-pill, .composer-model-pill-short,
     .sfe-arrow, .session-diff-base-help, .session-diff-ai-toggle, .session-diff-commit-btn, .session-diff-ws-toggle,

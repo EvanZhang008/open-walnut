@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import { test, expect, type Page } from '@playwright/test'
 import { discoverFixtureRoot, draftPanel, loadHome, openDraftOnCwd } from './draft-helpers'
 import { isolateUiPrefs, openProjectDetails, presetPanelView } from './todo-panel-helpers'
+import { pickMode } from './permission-mode-helpers'
 
 const SHOTS = process.env.PLD_SHOT_DIR ?? '/tmp/project-launch-defaults/shots'
 
@@ -163,11 +164,11 @@ test("the task's own pick wins over the project's, and the draft says so", async
   const panel = await openDraftOnCwd(page, cwd)
   const modePill = panel.locator('.draft-mode-pill')
   await expect(modePill).toHaveAttribute('data-mode', 'accept')
-  // A click cycles from what the pill shows, and the mode is this task's own now.
-  await modePill.click()
-  await expect(modePill).not.toHaveAttribute('data-mode', 'accept')
+  // A pick from the pill's menu makes the mode this task's own.
+  const own = 'plan'
+  await pickMode(modePill, own)
+  await expect(modePill).toHaveAttribute('data-mode', own)
   await expect(modePill).toHaveAttribute('data-source', 'task')
-  const own = await modePill.getAttribute('data-mode')
 
   // The picker's note offers the way back to the project's values, and it works.
   await panel.locator('.draft-model-select').click()
@@ -180,8 +181,8 @@ test("the task's own pick wins over the project's, and the draft says so", async
   await expect(modePill).toHaveAttribute('data-mode', 'accept')
   await expect(modePill).toHaveAttribute('data-source', 'project')
   // Pick again: this task's own mode.
-  await modePill.click()
-  await expect(modePill).toHaveAttribute('data-mode', own!)
+  await pickMode(modePill, own)
+  await expect(modePill).toHaveAttribute('data-mode', own)
 
   const sent = page.waitForRequest((r) => r.url().includes('/api/sessions/quick-start') && r.method() === 'POST')
   const composer = draftPanel(page).locator('textarea.chat-input-textarea')

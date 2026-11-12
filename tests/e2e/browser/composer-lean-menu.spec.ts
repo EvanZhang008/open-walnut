@@ -30,7 +30,7 @@ async function fits(page: Page, menu: Locator) {
   }).toPass({ timeout: 3000 });
 }
 
-test('one Reference row, More flyout and direct Note/btw keep the main draft through repeated use', async ({ page }) => {
+test('one Reference row, Snooze and Add a trigger one click away, More flyout and direct Note/btw keep the main draft through repeated use', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await mockControlsSession(page, CTRL_SESSION);
@@ -46,9 +46,14 @@ test('one Reference row, More flyout and direct Note/btw keep the main draft thr
     await expect(mainMenu.getByRole('menuitem', { name: /@\s*Reference/, exact: true })).toHaveCount(1);
     await expect(mainMenu.locator('[data-add-control="note"], [data-add-control="btw"]')).toHaveCount(0);
     await expect(mainMenu.locator('[data-action-id="compact-context"]')).toHaveCount(0);
+    // The session has a task, so its two wait rows sit on the "+" menu itself, in this order.
+    await expect.poll(() => mainMenu.locator('[data-action-id]').evaluateAll(
+      (rows) => rows.map((row) => row.getAttribute('data-action-id')),
+    )).toEqual(['wait-until', 'trigger']);
     await mainMenu.getByRole('menuitem', { name: 'More', exact: true }).click();
     await expect(more).toBeVisible();
     await expect(more.getByRole('menuitem', { name: /Compact context/ })).toBeVisible();
+    await expect(more.locator('[data-action-id="wait-until"], [data-action-id="trigger"]')).toHaveCount(0);
     await fits(page, more);
     await expect(mainMenu).toBeVisible();
     // A disabled item is still readable and does not dismiss either layer.

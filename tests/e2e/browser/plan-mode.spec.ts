@@ -43,7 +43,7 @@ test('incomplete plan session shows Plan mode but does NOT show Execute button',
   const panel = await openSessionOnHome(page, 'pw-plan-session-incomplete')
 
   // The mode toggle pill reflects plan mode (it's still a plan session)
-  const modePill = panel.locator('.mode-toggle-pill')
+  const modePill = panel.locator('.mode-toggle-pill[aria-haspopup="listbox"]')
   await expect(modePill).toBeVisible({ timeout: 5000 })
   await expect(modePill).toHaveClass(/plan-active/)
 
@@ -55,7 +55,7 @@ test('normal session does NOT show Plan chip or Execute button', async ({ page }
   const panel = await openSessionOnHome(page, 'pw-normal-session')
 
   // Mode pill renders but is NOT in plan mode (bypass session)
-  const modePill = panel.locator('.mode-toggle-pill')
+  const modePill = panel.locator('.mode-toggle-pill[aria-haspopup="listbox"]')
   await expect(modePill).toBeVisible({ timeout: 5000 })
   await expect(modePill).not.toHaveClass(/plan-active/)
 

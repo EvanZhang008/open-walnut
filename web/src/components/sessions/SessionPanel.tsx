@@ -169,6 +169,7 @@ import type { SessionEffort } from '@open-walnut/core';
 import { minimizeHandler } from './panel-minimize';
 import { taskNeedsAction } from '@/utils/session-status';
 import { nextSessionControlValue, SessionControlPills, sessionModeLabel } from './SessionControlPills';
+import { PermissionModeMenu } from './PermissionModeMenu';
 import { useNotifications } from '@/contexts/notifications';
 import { useConfirm } from '@/hooks/useConfirm';
 import { setActiveSession } from '@/stores/active-session';
@@ -1961,6 +1962,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     }
     const waitUntil: PlusMenuAction = {
       id: 'wait-until',
+      level: 'menu',
       label: WAIT_UNTIL_LABEL,
       title: WAIT_UNTIL_TITLE,
       icon: WAIT_UNTIL_ICON,
@@ -2789,7 +2791,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     // is a separate flag meaning "plan was produced" and must not lock the toggle.
     const MODE_LABELS: Record<string, string> = SESSION_MODE_LABELS;
     const currentMode = session.mode || 'default';
-    const isPlan = currentMode === 'plan';
     const currentIdx = enabledModes.indexOf(currentMode);
     const nextMode = enabledModes[(currentIdx + 1) % enabledModes.length]!;
     const label = MODE_LABELS[currentMode] ?? currentMode;
@@ -2798,23 +2799,22 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         id: 'mode',
         name: 'Mode',
         priority: 1,
+        // Its pill opens a menu placed against it, so the overflow row pins it first.
+        anchored: true,
         node: engineUi.configModes ? (
           <SessionControlPills
             controls={sessionControls}
             setControl={setSessionControl}
             engineName={engineUi.displayName}
-            showModeShortcut
             showThoughtLevel={false}
           />
         ) : (
-          <button
-            className={`mode-toggle-pill${isPlan ? ' plan-active' : ''}`}
-            onClick={() => setModeOptimistic(nextMode)}
-            title={`Mode: ${currentMode}. Click or Shift+Tab to cycle → ${nextMode}`}
-          >
-            <span className="mode-toggle-pill-label">{label}</span>
-            <span className="mode-toggle-pill-shortcut">{'\u21E7'}Tab</span>
-          </button>
+          <PermissionModeMenu
+            mode={currentMode as NonNullable<SessionRecord['mode']>}
+            label={label}
+            onPick={setModeOptimistic}
+            title={`Mode: ${label}. Click to choose a mode; Shift+Tab in the box steps to ${MODE_LABELS[nextMode] ?? nextMode}`}
+          />
         ),
       },
       {

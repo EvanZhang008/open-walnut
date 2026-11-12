@@ -36,6 +36,7 @@ import path from 'node:path'
 import { askView, openPanel, selectText, startPanelLab, sw, type PanelLab } from './extension-panel-harness'
 import { holdVaultLock } from './vault-lock'
 import { ensureVaultSetUp } from './vault-session-helper'
+import { pickMode } from './permission-mode-helpers'
 
 test.describe.configure({ mode: 'serial' })
 // The key reads the fixture's vault; nothing here locks it or ends an unlock.
@@ -985,9 +986,9 @@ test('the popup opens on New task; a question there goes on in the side panel', 
   // were dropped on the way).
   const modePill = v.locator('[data-testid="ext-home-composer"] .is-plain-chat-pickers .draft-mode-pill')
   const modeBefore = await modePill.getAttribute('data-mode')
-  await modePill.click()
-  await expect(modePill).not.toHaveAttribute('data-mode', modeBefore ?? '')
-  const pickedMode = await modePill.getAttribute('data-mode')
+  const pickedMode = modeBefore === 'plan' ? 'auto' : 'plan'
+  await pickMode(modePill, pickedMode)
+  await expect(modePill).toHaveAttribute('data-mode', pickedMode)
   // So is the project picked here (2026-11-10: the popup's place goes with its question).
   const popProject = v.locator('[data-testid="ext-home-composer"] .draft-composer-bar .draft-project-chip')
   await popProject.click()

@@ -366,9 +366,8 @@
 .ext-home-composer .chat-input-box > .ext-home-pills, .ext-panel-chat .chat-input-box > .ext-home-pills { order: 2; display: flex; flex-direction: column; gap: 4px; padding: 0 10px 2px; }
 .ext-home-composer .chat-input-box > .chat-input-controls, .ext-panel-chat .chat-input-box > .chat-input-controls { order: 3; }
 /* The mode and model pills after the bar's own chips (2026-11-09: "why can't i choose model, and mode
-   etc"): one line, no Shift+Tab hint, and none on the docked one-line composer. */
+   etc"): one line, and none on the docked one-line composer. */
 .session-mode-bar.is-plain-chat-pickers { flex: 0 1 auto; flex-wrap: nowrap; min-width: 0; }
-.is-plain-chat-pickers .mode-toggle-pill-shortcut { display: none; }
 .ext-home-composer.is-docked .is-plain-chat-pickers { display: none; }
 /* Home's launch bar (Folder/Host, Project, More) over the grown composer only (2026-11-10, the user:
    "we need to be able to choose which folder"); docked, the composer stays one line. */

@@ -3,7 +3,7 @@ import { build } from 'esbuild'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { discoverFixtureRoot, loadHome, openDraftOnCwd } from './draft-helpers'
-import { startSessionAt, openPanels, composerTextarea, moreMenu, moreRow } from './engine-settings-popover-helpers'
+import { startSessionAt, openPanels, composerTextarea } from './engine-settings-popover-helpers'
 
 let script = ''
 
@@ -223,8 +223,8 @@ test('the schedule shortcut preserves a draft and asks which timing fits', async
   const input = await openComposer(page)
   await input.fill('Send me a summary when it is ready')
   await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
-  await moreRow(page.locator('.chat-plus-menu')).click()
-  await moreMenu(page).getByRole('menuitem', { name: 'Set up a trigger or cron job' }).click()
+  // The shortcut is a row of the "+" menu itself, not of its More flyout.
+  await page.locator('.chat-plus-menu[role=menu]').getByRole('menuitem', { name: 'Set up a trigger or cron job' }).click()
   await expect(input).toHaveValue('Set up a trigger or cron job: Send me a summary when it is ready')
   await expect(page.getByTestId('sent')).toHaveText('[]')
   await expect.poll(() => page.evaluate(() => localStorage.getItem('input-state:a')))

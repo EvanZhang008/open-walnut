@@ -30,7 +30,7 @@ import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { filterChip, removeFilterChip, setStatus } from './filter-bar-helpers'
 import { DRAFT_PANEL } from './draft-helpers'
 import { endRunningTurn, interruptTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, statusSection, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
-import { composerTextarea, openMoreMenu, openPanels } from './engine-settings-popover-helpers'
+import { composerTextarea, openPanels, openPlusMenu } from './engine-settings-popover-helpers'
 import { DEFAULT_WAIT_HOURS } from '../../../src/core/types'
 import { TRIGGER_ACTION_LABEL } from '../../../web/src/components/sessions/trigger-picker-model'
 import { openKebabGroup } from './kebab-group-helpers'
@@ -735,7 +735,7 @@ test('"Something happens…" on a task with no session opens a draft bound to it
   await shot(draft, 'draft-seeded', browserName)
 })
 
-test('"Snooze until something happens" leads the task session\'s composer, from the task menu and from "+" -> More', async ({ page, request, browserName }) => {
+test('"Snooze until something happens" leads the task session\'s composer, from the task menu and from the "+" menu', async ({ page, request, browserName }) => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'pw-wait-until-'))
   const started = await request.post('/api/sessions/quick-start', { data: { cwd, message: '' } })
   expect(started.ok(), await started.text()).toBeTruthy()
@@ -759,19 +759,20 @@ test('"Snooze until something happens" leads the task session\'s composer, from 
   await menu.getByTestId('task-wait-until').click()
   await expect(box).toHaveValue(`${PREFIX}ship it`)
 
-  // From the composer's "+" -> More flyout, next to "Add a trigger…" (trigger-picker-model.ts).
+  // From the composer's "+" menu itself (one click, not its More flyout), next to
+  // "Add a trigger…" (trigger-picker-model.ts).
   await box.fill('the build is green')
-  const more = await openMoreMenu(panel)
-  const row = more.getByRole('menuitem', { name: 'Snooze until something happens…' })
+  const plus = await openPlusMenu(panel)
+  const row = plus.locator('[data-action-id="wait-until"]')
   await expect(row).toBeVisible()
-  await expect(more.getByRole('menuitem', { name: TRIGGER_ACTION_LABEL })).toBeVisible()
-  await shot(more, 'plus-menu', browserName)
+  await expect(row).toHaveText(/Snooze until something happens…/)
+  await expect(plus.locator('[data-action-id="trigger"]')).toHaveText(new RegExp(TRIGGER_ACTION_LABEL))
+  await shot(plus, 'plus-menu', browserName)
   await row.click()
-  await expect(more).toBeHidden()
   await expect(page.locator('.chat-plus-menu')).toHaveCount(0)
   await expect(box).toHaveValue(`${PREFIX}the build is green`)
   await expect(box).toBeFocused()
-  await (await openMoreMenu(panel)).getByRole('menuitem', { name: 'Snooze until something happens…' }).click()
+  await (await openPlusMenu(panel)).locator('[data-action-id="wait-until"]').click()
   await expect(box).toHaveValue(`${PREFIX}the build is green`)
   await shot(panel.locator('.chat-input-container'), 'composer-seeded', browserName)
   await box.fill('')

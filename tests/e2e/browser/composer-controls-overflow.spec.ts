@@ -12,7 +12,10 @@ test('wide composer keeps only full model and mode inline; add menu holds reply 
   const panel = await openControlsSession(page, { narrow: false });
   expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
   await expect(overflowBtn(panel)).toHaveCount(0);
-  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeVisible();
+  // The full row: not condensed, so the model pill has no short form.
+  await expect(barOf(panel)).not.toHaveClass(/is-condensed/);
+  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-label')).toHaveText('Bypass');
+  await expect(controlOf(panel, 'model').locator('.composer-model-pill-short')).toHaveCount(0);
   await expect(controlOf(panel, 'model').locator('button')).toContainText('Fable');
   await expectSingleRow(panel);
 
@@ -35,14 +38,14 @@ test('wide composer keeps only full model and mode inline; add menu holds reply 
   await shootComposer(panel, 'wide-add-menu', 420);
 });
 
-test('narrow composer shows Bypass without shortcut and the short model name with its percentage', async ({ page }) => {
+test('narrow composer condenses the row: Bypass and the short model name with its percentage', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   await mockControlsSession(page, CTRL_FILLER);
   const panel = await openControlsSession(page, { narrow: true });
   await expect(controlOf(panel, 'model').locator('.session-detail-context-pct')).toContainText('45%');
   await expect.poll(() => rowState(panel).then((state) => state.visible)).toEqual(['mode', 'model']);
   await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-label')).toHaveText('Bypass');
-  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeHidden();
+  await expect(barOf(panel)).toHaveClass(/is-condensed/);
   // The family word, the percentage, nothing else: not the version, not the
   // 1M suffix, not the effort badge, and never the percentage alone.
   const model = controlOf(panel, 'model').locator('button');
@@ -101,7 +104,7 @@ test('a tighter column keeps the model name and drops the percentage, which come
   await page.setViewportSize({ width: 2200, height: 800 });
   await expect(model.locator('.composer-model-pill-short')).toHaveCount(0);
   await expect(model).toHaveText(/^Fable 5\.1 45% · High$/);
-  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeVisible();
+  await expect(barOf(panel)).not.toHaveClass(/is-condensed/);
 });
 
 test('reply style in add menu updates the session twice and keeps the menu label in sync', async ({ page }) => {

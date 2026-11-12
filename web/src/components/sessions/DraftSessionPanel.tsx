@@ -55,6 +55,7 @@ import { useModelOptions } from './path-selector/model-options';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { useClaudeLaunchMode } from '@/hooks/useClaudeLaunchMode';
 import { nextSessionMode } from './session-mode-cycle';
+import { PermissionModeMenu } from './PermissionModeMenu';
 import { DEFAULT_SESSION_MODE, SESSION_EFFORTS, SESSION_MODES, modelSupportsEffort, modelSupportsMaxEffort, modelSupportsXhighEffort, SESSION_MODE_LABELS, type SessionEffort, type SessionEngine, type SessionMode } from '@open-walnut/core';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useHostEngineAvailability } from '@/hooks/useHostEngineAvailability';
@@ -366,35 +367,34 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
 /**
  * DraftModePill — the permission mode the session will START in, in the same
  * spot and dress as a running session's mode pill (`.mode-toggle-pill`, Plan in
- * amber, "⇧Tab" hint). Before any pick it reads the launch default (Bypass),
- * because that is what the spawn does with no mode; a click or Shift+Tab steps
- * through the enabled cycle (Settings › Sessions). A user who starts a task
+ * amber). Before any pick it reads the launch default (Bypass), because that is
+ * what the spawn does with no mode; a click opens the mode menu and Shift+Tab
+ * steps through the enabled cycle (Settings › Sessions). A user who starts a task
  * could not see, let alone choose, whether it would run with full trust or in
  * Plan mode until the session was already up (2026-10-01).
  */
-function DraftModePill({ mode, onCycle, nextMode, source }: {
+function DraftModePill({ mode, onPick, nextMode, source }: {
   mode: SessionMode;
   nextMode: SessionMode;
-  onCycle: () => void;
+  onPick: (mode: SessionMode) => void;
   /** Where the mode comes from (its project's default, the global one): said in the title, and a
    *  project's default also on the pill. */
   source?: LaunchSourceRow;
 }) {
-  const label = (SESSION_MODE_LABELS as Record<string, string>)[mode] ?? mode;
+  const labels = SESSION_MODE_LABELS as Record<string, string>;
+  const label = labels[mode] ?? mode;
   const description = SESSION_MODES.find((m) => m.id === mode)?.description;
   return (
-    <button
-      type="button"
-      className={`mode-toggle-pill draft-mode-pill${mode === 'plan' ? ' plan-active' : ''}`}
+    <PermissionModeMenu
+      mode={mode}
+      onPick={onPick}
+      className="draft-mode-pill"
+      heading="This task starts in"
       data-mode={mode}
-      title={`Starts in ${label} mode${description ? ` (${description.toLowerCase()})` : ''}${source ? `: ${source.words.charAt(0).toLowerCase()}${source.words.slice(1)}` : ''}. Click or Shift+Tab to cycle → ${(SESSION_MODE_LABELS as Record<string, string>)[nextMode] ?? nextMode}`}
       data-source={source?.source}
       aria-label={`Permission mode: ${label}`}
-      onClick={onCycle}
-    >
-      <span className="mode-toggle-pill-label">{label}</span>
-      <span className="mode-toggle-pill-shortcut">{'⇧'}Tab</span>
-    </button>
+      title={`Starts in ${label} mode${description ? ` (${description.toLowerCase()})` : ''}${source ? `: ${source.words.charAt(0).toLowerCase()}${source.words.slice(1)}` : ''}. Click to choose a mode; Shift+Tab steps to ${labels[nextMode] ?? nextMode}`}
+    />
   );
 }
 
@@ -647,6 +647,9 @@ export function DraftSessionPanel({
       {...(ownOverProject ? { action: { label: 'Use project defaults', onClick: resetToProject } } : {})} />
   ) : undefined;
   const nextDraftMode = nextSessionMode(draftMode, enabledModes);
+  const pickDraftMode = useCallback((next: SessionMode) => {
+    if (showModePill) onModeChange?.(draft.id, next);
+  }, [showModePill, onModeChange, draft.id]);
   const cycleDraftMode = useCallback(() => {
     if (!showModePill) return;
     onModeChange?.(draft.id, nextDraftMode);
@@ -1140,7 +1143,7 @@ export function DraftSessionPanel({
             <>
               {composerBar}
               <div className="session-mode-bar draft-actions-bar is-plain-chat-pickers">
-                {showModePill && <DraftModePill mode={draftMode} nextMode={nextDraftMode} onCycle={cycleDraftMode} />}
+                {showModePill && <DraftModePill mode={draftMode} nextMode={nextDraftMode} onPick={pickDraftMode} />}
                 <DraftModelPill
                   meta={draft.meta}
                   onMetaChange={(updater) => onMetaChange(draft.id, updater)}
@@ -1157,7 +1160,7 @@ export function DraftSessionPanel({
                   The mode is the one launch choice that changes what the session
                   MAY do, so it is never hidden behind a menu. */}
               {showModePill && (
-                <DraftModePill mode={draftMode} nextMode={nextDraftMode} onCycle={cycleDraftMode}
+                <DraftModePill mode={draftMode} nextMode={nextDraftMode} onPick={pickDraftMode}
                   source={sourceRows?.find((r) => r.key === 'mode')} />
               )}
               {/* The model belongs with the message — same place a real session

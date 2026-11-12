@@ -24,6 +24,9 @@ export interface PlusMenuAction {
   icon?: ReactNode;
   /** A heading the row sits under, after the rows with none (Main's "Quick actions"). */
   group?: string;
+  /** 'menu': a row of the "+" menu itself (Evan, 2026-11-12: Snooze and Add a trigger
+   *  stay one click away). Absent: the row lives in the More flyout. */
+  level?: 'menu';
   onSelect: (ctx: PlusMenuActionContext) => void;
 }
 

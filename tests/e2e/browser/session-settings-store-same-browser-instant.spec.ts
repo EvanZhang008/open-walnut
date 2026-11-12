@@ -1,7 +1,7 @@
 /**
- * One browser, one session-settings store: pressing the composer's permission-mode
- * pill moves the pill AND every other surface showing that session before the
- * server has answered.
+ * One browser, one session-settings store: picking a mode from the composer's
+ * permission-mode pill moves the pill AND every other surface showing that
+ * session before the server has answered.
  *
  * Regression guarded (2026-09-03): the pill's optimistic update was DEAD CODE.
  * SessionPanel patched its private record copy (`setSession({ ...session, mode })`)
@@ -16,6 +16,7 @@
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { openChatOnLoad } from './draft-helpers'
+import { pickMode } from './permission-mode-helpers'
 
 // Both tests drive the same fixture session's mode; serial keeps the second from
 // starting on a mode the first left behind mid-flight.
@@ -33,10 +34,9 @@ async function openHomepageSession(page: Page) {
   const row = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(row).toBeVisible()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
-  // First kebab item = the session row (its label is live state, so positional).
-  // It is INERT until the row's task payload carries a session slot — the row can
-  // render from a slim list payload first — and an inert click leaves the menu
-  // open, so retry instead of assuming the first one lands.
+  // The title click is INERT until the row's task payload carries a session slot
+  // (the row can render from a slim list payload first), so retry instead of
+  // assuming the first one lands.
   for (let attempt = 0; attempt < 4; attempt++) {
     if (attempt > 0) await page.waitForTimeout(800)
     // Click the row's title: the task menu has no open-session row.
@@ -45,15 +45,14 @@ async function openHomepageSession(page: Page) {
       await panel.waitFor({ state: 'visible', timeout: 2500 })
       return { panel, row }
     } catch { /* fall through and retry */ }
-    if (await menu.count() > 0) await page.keyboard.press('Escape')
   }
-  throw new Error(`session column for ${SESSION_ID} never opened from the task row kebab`)
+  throw new Error(`session column for ${SESSION_ID} never opened from the task row`)
 }
 
 /** The permission-mode pill, not the reply-style one beside it: only the
- *  permission pill carries the ⇧Tab shortcut hint. */
+ *  permission pill opens a listbox (the reply-style pill toggles in place). */
 function modePill(panel: Locator): Locator {
-  return panel.locator('.session-mode-bar .mode-toggle-pill:has(.mode-toggle-pill-shortcut)').first()
+  return panel.locator('.session-mode-bar .mode-toggle-pill[aria-haspopup="listbox"]').first()
 }
 
 async function openTaskDetail(page: Page, row: Locator): Promise<Locator> {
@@ -105,8 +104,8 @@ async function pinLaneToFixtureSession(page: Page): Promise<void> {
 }
 
 test('the mode pill flips itself and the task detail rows before the PATCH is answered', async ({ page, request }) => {
-  // Deterministic start: the pill cycles Plan → Auto → Bypass, so the assertions
-  // below only hold from a known mode (and a re-run must not inherit the last).
+  // Deterministic start: the assertions below only hold from a known mode (and a
+  // re-run must not inherit the last).
   const reset = await request.patch(`/api/sessions/${SESSION_ID}`, { data: { mode: 'bypass' } })
   expect(reset.ok()).toBe(true)
 
@@ -133,9 +132,9 @@ test('the mode pill flips itself and the task detail rows before the PATCH is an
     await route.continue()
   })
 
-  // 1. The pill itself flips in the same frame (before the fix: frozen on Bypass
-  //    for the whole round-trip).
-  await pill.click()
+  // 1. The pill itself flips in the same frame as the pick (before the fix:
+  //    frozen on Bypass for the whole round-trip).
+  await pickMode(pill, 'plan')
   await expect(pill).toHaveText(/Plan/, { timeout: INSTANT_MS })
   expect(patchesAnswered).toBe(0)
 
@@ -192,13 +191,13 @@ test('the chat lane composer and the session column move together, both ways', a
   // Lane composer → session column. Before the shared store this direction had
   // no delivery path at all: LaneComposerControls patched a private record and
   // registered no listener, so the column stayed on Bypass indefinitely.
-  await lanePill.click()
+  await pickMode(lanePill, 'plan')
   await expect(lanePill).toHaveText(/Plan/, { timeout: INSTANT_MS })
   await expect(panelPill).toHaveText(/Plan/, { timeout: INSTANT_MS })
   expect(patchesAnswered).toBe(0)
 
-  // Session column → lane composer (the cycle is Plan → Auto → Bypass).
-  await panelPill.click()
+  // Session column → lane composer.
+  await pickMode(panelPill, 'auto')
   await expect(panelPill).toHaveText(/Auto/, { timeout: INSTANT_MS })
   await expect(lanePill).toHaveText(/Auto/, { timeout: INSTANT_MS })
   expect(patchesAnswered).toBe(0)

@@ -25,6 +25,7 @@ import path from 'node:path'
 import { askView, backToAsk, openPanel, openView, pageChip, passwordsView, selectText, startPanelLab, sw, tasksView, toAsk, pageShown, leaveOnAsk, type PanelLab } from './extension-panel-harness'
 import { ensureVaultSetUp, vaultSession, VAULT_MASTER } from './vault-session-helper'
 import { holdVaultLock, vaultExclusively } from './vault-lock'
+import { pickMode } from './permission-mode-helpers'
 
 test.describe.configure({ mode: 'serial' })
 // It needs its unlocks to hold on the shared fixture vault, where another file may end every unlock.
@@ -203,13 +204,13 @@ test('a question starts the conversation; its title takes the header', async () 
   await expect(v.getByTestId('ext-ask-title')).not.toHaveText('New quick question', { timeout: 30_000 })
   await expect(v.locator('.session-panel.is-plain-chat textarea')).toHaveAttribute('placeholder', 'Ask a follow-up…')
   // Its mode and model are picked here as in every composer (2026-11-09: "why can't i choose model,
-  // and mode etc"): a click on the mode pill moves the session's mode.
+  // and mode etc"): a pick from the mode pill's menu moves the session's mode.
   const pickers = v.locator('.session-panel.is-plain-chat .is-plain-chat-pickers')
   await expect(pickers.locator('.composer-model-pill')).toBeVisible()
-  const modePill = pickers.locator('.mode-toggle-pill').first()
+  const modePill = pickers.locator('.mode-toggle-pill[aria-haspopup="listbox"]').first()
   await expect(modePill).toBeVisible()
   const modeBefore = await modePill.innerText()
-  await modePill.click()
+  await pickMode(modePill, /plan/i.test(modeBefore) ? 'auto' : 'plan')
   await expect(modePill).not.toHaveText(modeBefore, { timeout: 10_000 })
   // The conversation's Continue list is gone: the chat has the panel.
   await expect(v.getByTestId('ext-continue')).toHaveCount(0)

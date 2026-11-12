@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test'
 import { openDraftOnCwd, draftPanel } from './draft-helpers'
 import { fixtureHome, lockUserSettingsFile, openSessionsSection } from './engine-settings-helpers'
 import { dropFakes } from './route-teardown'
+import { pickMode } from './permission-mode-helpers'
 
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1200, height: 800 } })
@@ -117,7 +118,7 @@ test('a draft previews the saved engine mode and still allows a session choice',
     await openDraftOnCwd(page, '/tmp')
     const pill = draftPanel(page).locator('.draft-mode-pill')
     await expect(pill).toHaveAttribute('data-mode', 'plan')
-    await pill.click()
+    await pickMode(pill, 'auto')
     await expect(pill).toHaveAttribute('data-mode', 'auto')
     await draftPanel(page).locator('.chat-input-textarea').focus()
     await page.keyboard.press('Shift+Tab')

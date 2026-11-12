@@ -49,6 +49,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { directControl } from './composer-controls-overflow-helpers'
+import { modeMenu, pickMode, type ModeId } from './permission-mode-helpers'
 
 const SCREENSHOT_DIR = process.env.SIDE_THREADS_SHOTS ?? '/tmp/side-threads'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -331,9 +332,17 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   const modePill = composer.locator('.mode-toggle-pill').first()
   await expect(modePill).toBeVisible()
   const modeBefore = await modePill.locator('.mode-toggle-pill-label').innerText()
+  // A click opens the mode menu (the current mode checked); a pick switches and
+  // closes it; picking the first mode again puts the pill back.
   await modePill.click()
+  const before = await modeMenu(modePill).locator('[role="option"][aria-selected="true"]').getAttribute('data-mode') as ModeId
+  expect(before).toBeTruthy()
+  await page.keyboard.press('Escape')
+  await expect(modeMenu(modePill)).toHaveCount(0)
+  await pickMode(modePill, before === 'plan' ? 'auto' : 'plan')
   await expect(modePill.locator('.mode-toggle-pill-label')).not.toHaveText(modeBefore)
-  await modePill.click()
+  await pickMode(modePill, before)
+  await expect(modePill.locator('.mode-toggle-pill-label')).toHaveText(modeBefore)
   // Output-mode (Rich/MD) pill — flips locally before a thread exists; the pick
   // rides the create request, so nothing is PATCHed against a session id that
   // has not been minted yet.

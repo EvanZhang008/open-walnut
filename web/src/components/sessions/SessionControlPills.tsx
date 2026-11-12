@@ -10,7 +10,6 @@ interface SessionControlPillsProps {
    *  Required, not defaulted: a missing prop must be a compile error, never a
    *  silent "Codex" heading on a gemini/opencode/goose/custom session. */
   engineName: string;
-  showModeShortcut?: boolean;
   /** false: the reasoning-effort select lives in the model picker's Effort
    *  column instead of a second pill beside the model pill. */
   showThoughtLevel?: boolean;
@@ -151,7 +150,6 @@ function ApprovalControlPills({
   controls,
   setControl,
   engineName,
-  showModeShortcut = false,
 }: SessionControlPillsProps) {
   const rootRef = useRef<HTMLSpanElement>(null);
   const [open, setOpen] = useState(false);
@@ -201,9 +199,6 @@ function ApprovalControlPills({
           <span className="mode-toggle-pill-label">
             {CHATGPT_MODE_WORDING[mode.currentValue]?.name ?? current?.name ?? mode.currentValue}
           </span>
-          {showModeShortcut && (
-            <span className="mode-toggle-pill-shortcut">{'⇧'}Tab</span>
-          )}
         </button>
         {open && (
           <span className="session-control-menu" role="listbox" aria-label={mode.name}>

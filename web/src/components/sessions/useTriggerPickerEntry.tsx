@@ -45,6 +45,7 @@ export function useTriggerPickerEntry(input: {
 
   const action = useMemo<PlusMenuAction | null>(() => (enabled && taskId ? {
     id: TRIGGER_ACTION_ID,
+    level: 'menu',
     label: TRIGGER_ACTION_LABEL,
     title: TRIGGER_ACTION_TITLE,
     icon: TRIGGER_ICON,

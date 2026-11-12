@@ -147,9 +147,12 @@ export async function rowState(panel: Locator): Promise<{ visible: string[]; hid
 export async function expectSingleRow(panel: Locator): Promise<void> {
   const state = await rowState(panel);
   expect(state.lines, `the controls wrapped onto ${state.lines} lines`).toBeLessThanOrEqual(1);
+  // No mic where the engine cannot record (Linux WebKit has no MediaRecorder):
+  // boundingBox() would wait for it until the test timed out.
+  const micButton = panel.locator('.chat-input-controls .mic-btn-wrapper');
   const [bar, mic] = await Promise.all([
     barOf(panel).boundingBox(),
-    panel.locator('.chat-input-controls .mic-btn-wrapper').first().boundingBox(),
+    (await micButton.count()) ? micButton.first().boundingBox() : null,
   ]);
   expect(bar).toBeTruthy();
   if (mic) expect(bar!.x + bar!.width, 'the controls row runs under the mic button').toBeLessThanOrEqual(mic.x + 1);

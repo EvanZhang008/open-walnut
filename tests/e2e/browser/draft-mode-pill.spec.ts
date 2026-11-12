@@ -6,11 +6,13 @@
  * first place the user could see or change that was the running session's pill.
  * The draft now draws the SAME `.mode-toggle-pill` a running session draws, first
  * in the composer's controls row, reading the launch default until a pick; a
- * click or Shift+Tab steps through the enabled cycle; the launch carries the pick.
+ * click opens the mode menu (every mode, the current one checked) and Shift+Tab
+ * steps through the enabled cycle; the launch carries the pick.
  *
  * Pinned here:
  *   1. default reads Bypass; it sits first in the row, the model select right after
- *   2. click and Shift+Tab cycle Plan → Auto → Bypass (Plan in its amber state)
+ *   2. the menu picks a mode (Plan in its amber state), and Shift+Tab cycles
+ *      Plan → Auto → Bypass
  *   3. a folder pick keeps the mode AND still applies the folder's remembered
  *      model (a mode pick never switches the launch memory off)
  *   4. the launch body names the picked mode, and the spawned session runs in it
@@ -18,7 +20,8 @@
  *   5. an untouched pill sends NO mode key (the payload is byte-identical to before)
  *   6. the Ask Walnut tab keeps the pill and its launch carries the mode
  *   7. a fork draft draws no pill (the fork route takes no mode; the sibling inherits)
- *   8. the cycle follows Settings › Sessions › Enabled Session Modes
+ *   8. the Shift+Tab cycle follows Settings › Sessions › Enabled Session Modes,
+ *      while the menu still offers every mode
  */
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
@@ -26,6 +29,7 @@ import {
   REAL_PANEL, captureDraftRequests, discoverFixtureRoot, draftComposer, draftPanel, draftPanels, draftQuickChipFor,
   draftSend, loadHome, nthRequest, openDraft, pickDraftFolder, rememberModelFor, seedColumns,
 } from './draft-helpers'
+import { modeMenu, pickMode } from './permission-mode-helpers'
 
 const SHOTS = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-mode-pill'
 
@@ -54,7 +58,7 @@ async function enableModes(page: Page, modes: string[]): Promise<void> {
   })
 }
 
-test('1+2. the pill reads the launch default first in the row, and click / Shift+Tab cycle it', async ({ page }) => {
+test('1+2. the pill reads the launch default first in the row, its menu picks a mode and Shift+Tab cycles it', async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 })
   await loadHome(page)
   const panel = await openDraft(page)
@@ -76,17 +80,27 @@ test('1+2. the pill reads the launch default first in the row, and click / Shift
   expect(model.x, 'both sit before the send arrow').toBeLessThan(send.x)
   await panel.locator('.session-panel-input').screenshot({ path: `${SHOTS}/1-default-bypass.png` })
 
-  // 2. Click: Plan (amber) → Auto → Bypass, the default cycle.
+  // 2. A click opens the menu: every mode, safest first, the current one checked.
   await modePill(panel).click()
+  const menu = modeMenu(modePill(panel))
+  await expect(menu).toBeVisible()
+  await expect(menu.locator('[role="option"] .session-control-option-name'))
+    .toHaveText(['Plan', 'Default', "Don't Ask", 'Accept', 'Auto', 'Bypass'])
+  await expect(menu.locator('[role="option"][aria-selected="true"]')).toHaveAttribute('data-mode', 'bypass')
+  await expect(modePill(panel), 'opening the menu does not switch the mode').toHaveAttribute('data-mode', 'bypass')
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  // A pick switches: Plan (amber), then Auto, then back to Bypass.
+  await pickMode(modePill(panel), 'plan')
   await expect(modePill(panel)).toHaveAttribute('data-mode', 'plan')
   await expect(modeLabel(panel)).toHaveText('Plan')
   await expect(modePill(panel)).toHaveClass(/plan-active/)
   await panel.locator('.session-panel-input').screenshot({ path: `${SHOTS}/2-plan.png` })
-  await modePill(panel).click()
+  await pickMode(modePill(panel), 'auto')
   await expect(modePill(panel)).toHaveAttribute('data-mode', 'auto')
   await expect(modeLabel(panel)).toHaveText('Auto')
   await expect(modePill(panel)).not.toHaveClass(/plan-active/)
-  await modePill(panel).click()
+  await pickMode(modePill(panel), 'bypass')
   await expect(modePill(panel)).toHaveAttribute('data-mode', 'bypass')
 
   // Shift+Tab from the composer, the running session's shortcut, and the caret stays.
@@ -109,7 +123,7 @@ test('3+4. a folder pick keeps the mode and its remembered model, and the launch
 
   // Pick the mode FIRST, then the folder: the pick must not have switched the
   // folder's launch memory off (that latch is model/engine only).
-  await modePill(panel).click()
+  await pickMode(modePill(panel), 'plan')
   await expect(modePill(panel)).toHaveAttribute('data-mode', 'plan')
   await draftQuickChipFor(panel, cwd).click()
   await expect(modelPill(panel)).toHaveAttribute('data-model', 'sonnet')
@@ -163,7 +177,7 @@ test('6. the Ask Walnut tab keeps the pill, and its launch carries the mode', as
   await askWalnutCard(page).click()
   await expect(askWalnutCard(page)).toHaveAttribute('aria-pressed', 'true')
   await expect(modePill(panel)).toBeVisible()
-  await modePill(panel).click()
+  await pickMode(modePill(panel), 'plan')
   await expect(modePill(panel)).toHaveAttribute('data-mode', 'plan')
   await panel.locator('.session-panel-input').screenshot({ path: `${SHOTS}/6-ask-walnut-plan.png` })
   await draftComposer(page).fill(`ask in plan mode ${Date.now()}`)
@@ -204,15 +218,20 @@ test('7b. an engine whose modes are its own config options (Codex, ACP) draws no
   await expect(modelPill(panel)).toBeVisible()
 })
 
-test('8. the cycle follows the enabled modes from Settings', async ({ page }) => {
+test('8. the Shift+Tab cycle follows the enabled modes from Settings', async ({ page }) => {
   await enableModes(page, ['plan', 'bypass'])
   await page.setViewportSize({ width: 1400, height: 900 })
   await loadHome(page)
   const panel = await openDraft(page)
   await expect(modePill(panel)).toHaveAttribute('data-mode', 'bypass')
-  await modePill(panel).click()
+  const composer = draftComposer(page)
+  await composer.click()
+  await composer.press('Shift+Tab')
   await expect(modePill(panel)).toHaveAttribute('data-mode', 'plan')
   // Auto is off the cycle here: Plan goes straight back to Bypass.
-  await modePill(panel).click()
+  await composer.press('Shift+Tab')
   await expect(modePill(panel)).toHaveAttribute('data-mode', 'bypass')
+  // The menu is a direct choice, not the cycle: it still offers a mode the cycle skips.
+  await pickMode(modePill(panel), 'auto')
+  await expect(modePill(panel)).toHaveAttribute('data-mode', 'auto')
 })

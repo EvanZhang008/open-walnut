@@ -57,10 +57,6 @@
   pointer-events: auto;
 }
 
-.composer-controls-bar.is-condensed [data-control-id='mode'] .mode-toggle-pill-shortcut {
-  display: none;
-}
-
 /* Condensed row: the pill is the model's short name plus, while the row has room
    for it, the context percentage (ComposerControlsBar decides; the pill renders
    what it is told). The name clips on its own, so a long custom model id cannot

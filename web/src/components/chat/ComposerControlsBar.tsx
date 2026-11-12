@@ -176,13 +176,9 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
       + Math.max(0, inline.length - 1) * ROW_GAP;
     const buttonWidth = buttonRef.current?.getBoundingClientRect().width || 22;
     // A control's short width before the condensed row has been measured once:
-    // the mode pill minus its shortcut, the model pill as one family word.
+    // the model pill as one family word.
     const assumedShort = (c: ComposerControl): number | undefined =>
-      c.id === 'mode' && bar.querySelector('[data-control-id="mode"] .mode-toggle-pill-shortcut')
-        ? Math.max(40, (widths.current.get(c.id) ?? 80) - 28)
-        : c.id === 'model'
-          ? ASSUMED_SHORT_MODEL_WIDTH
-          : widths.current.get(c.id);
+      c.id === 'model' ? ASSUMED_SHORT_MODEL_WIDTH : widths.current.get(c.id);
     const shortOf = (c: ComposerControl) => shortWidths.current.get(c.id) ?? assumedShort(c) ?? 64;
     const rowShort = inline.reduce((total, c) => total + shortOf(c), 0) + Math.max(0, inline.length - 1) * ROW_GAP;
     const detailTotal = inline.reduce((total, c) => total + (detailWidths.current.get(c.id) ?? 0), 0);

@@ -548,6 +548,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
   });
   const sendGroupRef = useRef<HTMLDivElement>(null);
   // The "+" button promises only an attachment until the caller adds rows.
+  // Caller rows: the few on the "+" menu itself, the rest in its More flyout.
+  const menuActions = (plusMenuActions ?? []).filter((a) => a.level === 'menu');
+  const moreActions = (plusMenuActions ?? []).filter((a) => a.level !== 'menu');
   const hasCallerRows = !!plusMenuActions?.length || !!plusMenuToggles?.length || !!addMenuControls?.ids.length;
   const plusLabel = plusButtonLabel(hasCallerRows);
   // Session control rows of the "+" menu: Reply style, plus Note and btw while a
@@ -803,6 +806,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
   const showQueue = isStreaming && (queueCount ?? 0) > 0 && !queueDismissed;
 
   const isSessionMode = !!(sessionCommands && searchSessionCommands);
+  // The schedule shortcut, where no "Add a trigger…" row stands in for it (no task).
+  const scheduleRow = !!isSessionMode && !plusMenuActions?.some((a) => a.id === 'trigger');
 
   // Slash command state
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -2160,7 +2165,38 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
                   )}
                 </>
               )}
-              {(promptRecallKey || isSessionMode || !!plusMenuActions?.length) && (
+              {/* Rows one click away (level 'menu'): the schedule shortcut where no task
+                  stands behind the composer, else Snooze and Add a trigger. */}
+              {(scheduleRow || !!menuActions.length) && (
+                <>
+                  {/* PlusMenuActionRows brings its own separator. */}
+                  {scheduleRow && <div className="chat-plus-menu-divider" role="separator" />}
+                  {scheduleRow && (
+                    <button
+                      className="chat-plus-menu-item"
+                      onClick={() => insertSchedulePrompt()}
+                      type="button"
+                      role="menuitem"
+                      title="Describe what to watch or run and when; choose a change-based trigger or a scheduled cron job"
+                    >
+                      <span className="chat-plus-menu-key" aria-hidden="true">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+                          <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                        </svg>
+                      </span>
+                      <span>Set up a trigger or cron job</span>
+                    </button>
+                  )}
+                  <PlusMenuActionRows
+                    actions={menuActions}
+                    onSelect={(action) => selectPlusMenuAction(
+                      action, plusBtnRef.current, () => setPlusOpen(false), plusBtnRef.current?.closest<HTMLElement>('.chat-input-box'),
+                    )}
+                  />
+                </>
+              )}
+              {(promptRecallKey || !!moreActions.length) && (
                 <ComposerMoreMenu>
                   {promptRecallKey && (() => {
                     const untouched = !!recallRef.current && recallRef.current.text === value && !hasAttachments;
@@ -2190,25 +2226,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
                       </button>
                     );
                   })()}
-                  {isSessionMode && !plusMenuActions?.some((a) => a.id === 'trigger') && (
-                    <button
-                      className="chat-plus-menu-item"
-                      onClick={() => insertSchedulePrompt()}
-                      type="button"
-                      role="menuitem"
-                      title="Describe what to watch or run and when; choose a change-based trigger or a scheduled cron job"
-                    >
-                      <span className="chat-plus-menu-key" aria-hidden="true">
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
-                          <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-                        </svg>
-                      </span>
-                      <span>Set up a trigger or cron job</span>
-                    </button>
-                  )}
                   <PlusMenuActionRows
-                    actions={plusMenuActions ?? []}
+                    actions={moreActions}
                     onSelect={(action) => selectPlusMenuAction(
                       action, plusBtnRef.current, () => setPlusOpen(false), plusBtnRef.current?.closest<HTMLElement>('.chat-input-box'),
                     )}
