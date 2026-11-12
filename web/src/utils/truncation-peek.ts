@@ -102,6 +102,16 @@ const MAX_ROW_HOSTS = 4;
 /** A row's own buttons (its ⋮ menu, Start, Close): over one the row keeps quiet, so the button shows. */
 const CONTROL = 'button, a[href], [role="button"], [role="menuitem"], [role="checkbox"], input, select, textarea, summary';
 
+/**
+ * The row's own control under `target`, if any. A control that reads as part of the row's text
+ * (its project name, which filters on click) carries `data-peek-through`, so the row still
+ * expands over it; the row itself is never its own control.
+ */
+function rowControl(target: Element): Element | null {
+  const c = target.closest(CONTROL);
+  return c && !c.matches('[data-peek-row], [data-peek-through]') ? c : null;
+}
+
 function isTruncating(cs: CSSStyleDeclaration): boolean {
   return cs.textOverflow === 'ellipsis' || (!!cs.webkitLineClamp && cs.webkitLineClamp !== 'none');
 }
@@ -131,8 +141,8 @@ export function peekTargetOf(target: EventTarget | null): { key: Element; hosts:
   if (row) {
     const hosts = cutTextsIn(row);
     if (hosts.length) {
-      const control = target.closest(CONTROL);
-      const onOwnButton = control && control !== row && row.contains(control) && !hosts.some((h) => control.contains(h) || h.contains(control));
+      const control = rowControl(target);
+      const onOwnButton = control && row.contains(control) && !hosts.some((h) => control.contains(h) || h.contains(control));
       if (!onOwnButton) return { key: row, hosts };
       // A button of the row with cut text of its own (past the row's first few) still peeks that text.
       const own = findCutText(target);
@@ -276,7 +286,7 @@ function onOver(e: PointerEvent): void {
   if (e.pointerType === 'touch' || e.buttons !== 0) { hidePeek(); return; }
   // Still on the row that peeks, off its own buttons: nothing to scan again.
   const target = e.target instanceof Element ? e.target : null;
-  const sameRow = active && target && active.key.matches(PEEK_ROW_SELECTOR) && target.closest(PEEK_ROW_SELECTOR) === active.key && !target.closest(CONTROL)?.matches(':not([data-peek-row])');
+  const sameRow = active && target && active.key.matches(PEEK_ROW_SELECTOR) && target.closest(PEEK_ROW_SELECTOR) === active.key && !rowControl(target);
   if (active && target && (sameRow || active.key === target || (active.hosts.length === 1 && active.hosts[0].contains(target)))) {
     active.titles.push(...takeTitles(target));
     return;

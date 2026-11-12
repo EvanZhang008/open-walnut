@@ -21,6 +21,8 @@ export const RowProjectName = memo(function RowProjectName({ project, className,
       type="button"
       className={`${className} row-project-link`}
       data-testid="row-project-link"
+      // Part of the row's text: the row still expands with the pointer on it (utils/truncation-peek.ts).
+      data-peek-through=""
       data-project={project}
       title={`Show every task in ${name}`}
       onClick={(e) => { e.stopPropagation(); onFilter(project); }}

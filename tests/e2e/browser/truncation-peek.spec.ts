@@ -192,6 +192,14 @@ test('a task row expands as a whole: the pointer anywhere on a status row shows 
   const cardBox = (await card.boundingBox())!
   expect(await titlesAt(page, cardBox.x + at.x, cardBox.y + at.y)).toEqual([])
 
+  // The project name filters on click, yet reads as the row's text: the row still expands on it.
+  const project = card.getByTestId('row-project-link')
+  if (await project.count()) {
+    await project.hover()
+    await expect(pill(page)).toHaveCount(1)
+    await expect(pill(page)).toHaveText(full)
+  }
+
   // The row's own ⋮ shows itself: over it there is no pill, and its title is back.
   if (await kebab.count()) {
     await kebab.hover()
