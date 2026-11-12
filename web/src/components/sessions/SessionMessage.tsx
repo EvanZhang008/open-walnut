@@ -1444,7 +1444,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
    * hover — plus the message id, which is what you need when tracing one message
    * through the logs. Selecting text first still yields the browser's own menu.
    */
-  const rowMenu = useContextMenu<void>();
+  const rowMenu = useContextMenu<void>({ ignorePressSelection: true });
   // A phone has no hover: one quiet "Message actions" button opens this row's
   // menu (copy, pin, rewind) instead of an MD / Rich / pin / time strip under
   // every bubble (N8), which doubled each short message's height.

@@ -152,7 +152,10 @@ test.describe('Reading split', () => {
     // 3. Right-click another message below: the pane lands there.
     const other = row(mainBody(panel), 227)
     await centreInHistory(page, mainBody(panel), other, { at: 0.5, tolerance: 60 })
-    await other.locator('.session-msg-content').first().click({ button: 'right' })
+    // On a word: WebKit (the Mac app) selects the word under a right-press first, and the row's menu
+    // must still open (useContextMenu ignorePressSelection).
+    await other.locator('.session-msg-content p').first().click({ button: 'right', position: { x: 12, y: 8 } })
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? ''), 'the menu opened over no lit selection').toBe('')
     await page.getByRole('menuitem', { name: 'Read in split' }).click()
     expect((await settled(page, readerBody(panel))).id).toBe(replyUuid(227))
     // The re-landed pane mounted after the reply streamed in: the question still sits above its answer.

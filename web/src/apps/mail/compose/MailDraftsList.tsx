@@ -23,7 +23,7 @@ export function MailDraftsList({ drafts, openDraftId, loading }: Props) {
   // These rows carry `mail-row` and look exactly like message rows, so they owe the same gesture: the
   // shared primitive, the shared native-menu rules, and a heading naming the draft (the menu covers the
   // row it is about). See `mail-draft-context-items.ts` for why the items are not the message menu's.
-  const menu = useContextMenu<MailDraftDto>();
+  const menu = useContextMenu<MailDraftDto>({ ignorePressSelection: true });
   if (drafts.length === 0) {
     return (
       <p className="mail-pane-empty" data-testid="mail-drafts-empty">

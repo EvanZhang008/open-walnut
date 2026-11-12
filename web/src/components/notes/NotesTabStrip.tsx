@@ -63,7 +63,7 @@ export function NotesTabStrip({
   onCloseOthers, onCloseAll, onLocate, onOpenInNewWindow, isFavorite, onToggleFavorite,
 }: NotesTabStripProps) {
   const activeRef = useRef<HTMLDivElement>(null);
-  const menu = useContextMenu<OpenTab>();
+  const menu = useContextMenu<OpenTab>({ ignorePressSelection: true });
 
   // Keep the active tab visible when activated (the strip scrolls horizontally on overflow).
   useEffect(() => {

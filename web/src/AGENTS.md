@@ -948,7 +948,9 @@ show inline after the open ones, other completed hits that show the query fold i
 - **A ContextMenu hook on a row whose text is selectable passes `ignorePressSelection: true`.** WebKit (the
   Mac app) selects the word under a right-press before `contextmenu` fires, and without the flag that
   selection hands the gesture to the native menu: the folder menu never opened on a right-click on its name
-  (Chromium does not pre-select, so only the WebKit run of `folder-collapse-menu.spec.ts` caught it).
+  (Chromium does not pre-select, so only the WebKit run of `folder-collapse-menu.spec.ts` caught it). Every
+  call passes it (2026-11-12: a session reply's menu, "Read in split" included, never opened on a word); ratchet
+  `tests/web/context-menu-press-selection-guard.test.ts`.
 - **The kebab is lean by default** (2026-09-10 user feedback: "too noisy"). No session-status row (clicking the task row opens its session), no unread row
   (opening the task marks it read). Pin choices are compact buttons on the first level, never
   a submenu (2026-11-10): Focus, Satellite, Parked and custom tiers, the current one marked,

@@ -1041,7 +1041,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
    * A right-click ON a text selection still gets the native menu (Copy / Look Up
    * / Translate act on the chosen characters) — see utils/context-menu.ts.
    */
-  const msgMenu = useContextMenu<void>();
+  const msgMenu = useContextMenu<void>({ ignorePressSelection: true });
   const copyableText = useMemo(() => {
     if (content && content.trim()) return content;
     // Assistant messages carry their prose in text blocks, not `content`.

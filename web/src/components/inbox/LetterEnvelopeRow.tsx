@@ -45,7 +45,7 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
   const answered = letter.answered;
   // Right-click = the row's own buttons without hunting for them, plus the two
   // ids you need when following a letter into the logs or a session.
-  const menu = useContextMenu<void>();
+  const menu = useContextMenu<void>({ ignorePressSelection: true });
   const menuItems = (): ContextMenuItem[] => [
     { key: 'open', label: 'Open', onSelect: onOpen },
     { divider: true },
