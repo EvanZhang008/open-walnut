@@ -160,7 +160,7 @@ export function overflowFileOf(id: PromptBlockId, rest: string, scope?: string):
 
 /** A scope as a file name may carry it: lowercase letters, digits and single dashes. */
 function scopeKey(scope: string | undefined): string {
-  return (scope ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24)
+  return (scope ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 24).replace(/^-+|-+$/g, '')
 }
 
 const WALNUT_FILE_RE = /^([a-z]+(?:-[a-z]+)*)(?:--([a-z0-9]+(?:-[a-z0-9]+)*))?(?:\.[0-9a-f]{8})?\.md$/

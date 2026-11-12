@@ -280,3 +280,14 @@ describe('an id that is no task id never costs a session its context', () => {
     expect(ctx.systemPrompt).toContain('Daily digest')
   })
 })
+
+describe('an overflow file name always parses back as Walnut\'s', () => {
+  it('a long agent id cut at a dash still yields a name the folder knows', async () => {
+    const { overflowFileOf, walnutFileKey } = await import('../../../src/core/sessions/prompt-blocks.js')
+    // 23 characters, then a dash at the 24th: the cut used to leave the dash at the end.
+    for (const scope of ['abcdefghijklmnopqrstuvw-xyz', 'my very long agent name here', '--x--', 'Mentor']) {
+      const name = overflowFileOf('agent-context' as never, 'the rest', scope)
+      expect(walnutFileKey(name), name).not.toBeNull()
+    }
+  })
+})
