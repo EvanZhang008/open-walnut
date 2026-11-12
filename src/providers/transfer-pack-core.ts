@@ -79,6 +79,9 @@ export interface PackMeta {
   upstreamUrl?: string
   /** Commits in repo.bundle (HEAD past its base). */
   ahead?: number
+  /** Packed with `paths` on a branch other than the checkout's default one: how many commits it
+   *  has past that branch here (only when it has some; 'task-move-base-v1'). */
+  branchAhead?: { of: string; ahead: number }
   /** A whole repository's pack: what its uncommitted and untracked files were (workPrint), so a
    *  move back can tell the copy left here is unchanged since ('task-move-into-v1'). */
   print?: string
@@ -102,7 +105,10 @@ export interface PackReply { outDir: string; meta: PackMeta; files: PackFile[] }
 
 /** `transfer.scan {dir, maxDepth?}` ('task-move-v1'): what a task directory holds. */
 /** `transfer.recent` ('task-move-base-v1'): commits near each repository's HEAD here. */
-export interface RecentReply { roots: Array<{ root: string; commits: string[] }> }
+export interface RecentReply {
+  /** `holds`: with `contains`, whether this root has that commit (a bundle based on it fetches there). */
+  roots: Array<{ root: string; commits: string[]; holds?: boolean }>
+}
 
 export interface ScanReply {
   dir: string
@@ -428,12 +434,29 @@ export function createTransferPack(deps: TransferPackDeps) {
   }
 
   /**
+   * How many commits `branch` has past the checkout's default branch (origin/HEAD's name, else main
+   * or master), when it is another branch and has some; null otherwise.
+   */
+  async function aheadOfDefault(root: string, branch: string): Promise<{ of: string; ahead: number } | null> {
+    var named = text(await git(root, ['symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD'])).replace(/^origin\//, '')
+    var candidates = named ? [named] : ['main', 'master']
+    for (var i = 0; i < candidates.length; i++) {
+      if ((await git(root, ['rev-parse', '-q', '--verify', 'refs/heads/' + candidates[i]])).code !== 0) continue
+      if (candidates[i] === branch) return null
+      var n = Number(text(await git(root, ['rev-list', '--count', 'refs/heads/' + candidates[i] + '..HEAD'])))
+      return isFinite(n) && n > 0 ? { of: candidates[i], ahead: n } : null
+    }
+    return null
+  }
+
+  /**
    * Of `haves` (commits the target holds), the one HEAD builds on with the fewest commits after
    * it, and that count; null when HEAD builds on none of them (or this host lacks them all).
    */
-  async function nearestHave(root: string, haves: string[]): Promise<{ sha: string; ahead: number } | null> {
+  async function nearestHave(root: string, haves: string[], startedAt: number): Promise<{ sha: string; ahead: number } | null> {
     var best: { sha: string; ahead: number } | null = null
-    for (var i = 0; i < haves.length; i++) {
+    // Its looks share the pack's budget (PACK_BUDGET_MS): past a third of it, the best so far.
+    for (var i = 0; i < haves.length && now() - startedAt < PACK_BUDGET_MS / 3; i++) {
       if ((await git(root, ['merge-base', '--is-ancestor', haves[i], 'HEAD'])).code !== 0) continue
       var ahead = Number(text(await git(root, ['rev-list', '--count', 'HEAD', '^' + haves[i]])))
       if (isFinite(ahead) && (!best || ahead < best.ahead)) best = { sha: haves[i], ahead: ahead }
@@ -542,11 +565,17 @@ export function createTransferPack(deps: TransferPackDeps) {
       meta.limited.files = await packedFiles(root, rode, !!head, hashedBefore, ownBefore)
     }
     if (!onlySet && head) meta.print = await workPrint(root, outDir)
+    if (onlySet && head && branch) {
+      var ahead0 = await aheadOfDefault(root, branch)
+      if (ahead0) meta.branchAhead = ahead0
+    }
     meta.dirty = onlySet ? written.indexOf('changes.patch') >= 0 || u.files.length > 0 : !!tracked || u.files.length > 0
 
-    // A probe that would never use a whole history (`noFullBundle`) skips it.
-    // `noBundle` ('task-move-base-v1'): what it is and its own files only, never its commits.
-    if (head && !headOnRemote && !bundleOpts.noBundle && !(noFullBundle && !portable && !bundleOpts.haves.length)) {
+    // `noBundle` ('task-move-base-v1'): what it is and its own files only, never its commits. A
+    // probe (`noFullBundle`) of a repository no other host can clone bundles only from a commit the
+    // target holds, never the whole history.
+    var near = head && !headOnRemote && !bundleOpts.noBundle && bundleOpts.haves.length ? await nearestHave(root, bundleOpts.haves, bundleOpts.startedAt) : null
+    if (head && !headOnRemote && !bundleOpts.noBundle && !(noFullBundle && !portable && !near)) {
       var base: string | null = null
       var fromTarget = false
       // A remote no other host can reach is no base: the bundle then carries every commit.
@@ -557,7 +586,6 @@ export function createTransferPack(deps: TransferPackDeps) {
       // A commit the target holds is the better base when fewer commits follow it (2026-11-12: this
       // host's main reaches no remote as the same commits, so a base from the remote was 2,240
       // commits back while the target's checkout, which follows this host's main, held all but a few).
-      var near = bundleOpts.haves.length ? await nearestHave(root, bundleOpts.haves) : null
       if (near) {
         var viaBase = base ? Number(text(await git(root, ['rev-list', '--count', 'HEAD', '^' + base]))) : Infinity
         if (!(viaBase <= near.ahead)) { base = near.sha; fromTarget = true }
@@ -1127,6 +1155,7 @@ export function createTransferPack(deps: TransferPackDeps) {
    */
   async function recent(cmd: Record<string, unknown>): Promise<RecentReply> {
     var roots = Array.isArray(cmd.roots) ? cmd.roots.filter(function (r): r is string { return typeof r === 'string' && deps.path.isAbsolute(r) }).slice(0, 8) : []
+    var contains = typeof cmd.contains === 'string' && /^[0-9a-f]{40}$/.test(cmd.contains) ? cmd.contains : ''
     var out: RecentReply['roots'] = []
     for (var i = 0; i < roots.length; i++) {
       var isDir = await deps.fs.promises.stat(roots[i]).then(function (st) { return st.isDirectory() }, function () { return false })
@@ -1134,7 +1163,9 @@ export function createTransferPack(deps: TransferPackDeps) {
       var all = r ? text(r).split('\n').filter(function (l) { return /^[0-9a-f]{40}$/.test(l) }) : []
       var picks: string[] = []
       for (var k = 0; k < all.length; k = k === 0 ? 1 : k * 2) picks.push(all[k])
-      out.push({ root: roots[i], commits: picks })
+      var entry: RecentReply['roots'][number] = { root: roots[i], commits: picks }
+      if (contains) entry.holds = isDir && (await git(roots[i], ['cat-file', '-e', contains + '^{commit}'])).code === 0
+      out.push(entry)
     }
     return { roots: out }
   }

@@ -16,12 +16,12 @@ import crypto from 'node:crypto'
 import { log } from '../../logging/index.js'
 import { DaemonNeedsUpgradeError } from '../daemon-file-reader.js'
 import { TRANSCRIPT_FIND_DEPTH } from '../claude-config-dir.js'
-import type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile } from '../../providers/transfer-pack-core.js'
+import type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile, RecentReply } from '../../providers/transfer-pack-core.js'
 import type { WritePartReply, ReachReply, FetchReply, FetchFileResult } from '../../providers/transfer-core.js'
 import type { HostFacts, HostLoad, ModelEndpointProbe } from '../../providers/host-facts-core.js'
 import { MAX_UPLOAD_FRAME_BYTES } from '../../providers/ssh-upload-budget.js'
 import { linkFailureKind } from '../../providers/link-failure.js'
-import { awaitLink, awakeStopwatch, currentLinkWait, linkPollMs } from './link-wait.js'
+import { DIAL_WAIT_MS, awaitLink, awakeStopwatch, currentLinkWait, linkPollMs } from './link-wait.js'
 import { partRetry } from './part-retry.js'
 import { interruptedByShutdown, isServerStopping } from '../server-stopping.js'
 
@@ -44,7 +44,6 @@ const PACK_RPC_MS = 10 * 60_000
 const PART_RPC_MS = 60_000
 const READ_RPC_MS = 60_000
 const FACTS_RPC_MS = 20_000
-const DIAL_WAIT_MS = 20_000
 /** fs.readRange and fs.writePart both stop at 4 MB per call. */
 const MAX_CHUNK_BYTES = 4 * 1024 * 1024
 
@@ -216,16 +215,25 @@ export function scanWorkDir(host: string, dir: string): Promise<ScanReply> {
 export const TASK_MOVE_BASE_CAPABILITY = 'task-move-base-v1'
 
 /**
- * The commits each repository at `roots` on `host` holds near its HEAD ('task-move-base-v1'), or
- * null from a daemon without it. A move bundles only what follows the newest of them.
+ * The commits each repository at `roots` on `host` holds near its HEAD ('task-move-base-v1'), and
+ * with `contains` whether each holds that commit; null from a daemon without it. A move bundles
+ * only what follows the newest of them.
  */
-export async function recentCommits(host: string, roots: string[]): Promise<Map<string, string[]> | null> {
-  if (!roots.length) return new Map()
+export async function recentCommits(host: string, roots: string[], contains?: string): Promise<RecentReply['roots'] | null> {
+  if (!roots.length) return []
   try {
-    const r = await call<{ roots?: Array<{ root: string; commits: string[] }> }>(host, TASK_MOVE_BASE_CAPABILITY, 'transfer.recent', { roots }, READ_RPC_MS)
-    return new Map((r.roots ?? []).map((x) => [x.root, Array.isArray(x.commits) ? x.commits : []]))
+    const r = await call<Partial<RecentReply>>(host, TASK_MOVE_BASE_CAPABILITY, 'transfer.recent', { roots, ...(contains ? { contains } : {}) }, READ_RPC_MS)
+    return (r.roots ?? []).map((x) => ({ ...x, commits: Array.isArray(x.commits) ? x.commits : [] }))
   } catch (err) {
     if (err instanceof DaemonNeedsUpgradeError) return null
+    throw err
+  }
+}
+
+/** The host's daemon packs with `haves` and `noBundle` ('task-move-base-v1'). Offline throws. */
+export async function hostHasMoveBase(host: string): Promise<boolean> {
+  try { await connectionFor(host, TASK_MOVE_BASE_CAPABILITY); return true } catch (err) {
+    if (err instanceof DaemonNeedsUpgradeError) return false
     throw err
   }
 }

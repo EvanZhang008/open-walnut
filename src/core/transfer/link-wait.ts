@@ -51,8 +51,8 @@ export function awakeStopwatch(jumpMs = Infinity, jumpCountMs = 0): { ms(): numb
 
 /** A poll of awaitLink later than this (a poll is pollMs, then one dial) was a sleep: it counts as one poll and one dial. */
 const POLL_JUMP_MS = 2 * 60_000
-/** The longest a dial for a link waits (the transport's own dial wait). */
-const DIAL_WAIT_MS = 20_000
+/** The longest the transport (daemon-transfer-client.ts) waits for one dial of a link; defined here, where both read it. */
+export const DIAL_WAIT_MS = 20_000
 
 /** Test-only: how often a wait looks again (null: the default). */
 export function __setLinkWaitPollForTesting(ms: number | null): void { pollMs = ms ?? 2_000 }

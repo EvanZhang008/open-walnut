@@ -50,7 +50,7 @@ export function earlierPiece(opts: {
 /** What the copy at `dest` on `host` holds now, its HEAD and print as its own daemon reads them, or undefined. */
 export async function copyNow(client: typeof import('./daemon-transfer-client.js'), host: string, dest: string, outDir: string): Promise<{ head: string; print: string } | undefined> {
   try {
-    const r = await client.packWorkspace(host, { cwd: dest, outDir, noFullBundle: true });
+    const r = await client.packWorkspace(host, { cwd: dest, outDir, noFullBundle: true, noBundle: true });
     return r.meta.kind === 'git' && r.meta.head && r.meta.print ? { head: r.meta.head, print: r.meta.print } : undefined;
   } catch (err) {
     if (interruptedByShutdown(err)) throw err;

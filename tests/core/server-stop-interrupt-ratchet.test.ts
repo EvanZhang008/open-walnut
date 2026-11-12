@@ -206,8 +206,9 @@ describe('a long transfer waits out a dropped link', () => {
   /** Each file that calls a long transfer step, its count, and how a dropped link is handled there. */
   const CALLERS: Record<string, { count: number; way: string }> = {
     'src/core/sessions/engine-switch.ts': { count: 1, way: 'task_move: runEngineSwitch runs a move under the link wait up to its start' },
-    'src/core/transfer/task-work.ts': { count: 7, way: 'inside moveWork, which moveTaskWork runs under withLinkWait' },
+    'src/core/transfer/task-work.ts': { count: 6, way: 'inside moveWork, which moveTaskWork runs under withLinkWait' },
     'src/core/transfer/move-resume.ts': { count: 1, way: 'copyNow, the probe pack, called from moveWork only' },
+    'src/core/transfer/target-base.ts': { count: 3, way: 'packAgainstTarget: called from moveWork (under withLinkWait) and from start-placement\'s setUpOn (its own deadline)' },
     'src/core/transfer/workspace.ts': { count: 4, way: 'moveWorkspace runs under withLinkWait; copyPack is called from waits only (and start-placement)' },
     'src/core/transfer/transfer.ts': { count: 2, way: 'task_transfer: the transcript relay runs under withLinkWait, the workspace through moveWorkspace' },
     'src/core/sessions/start-placement.ts': { count: 3, way: 'a first start placed on another host: its own deadline (a start never hangs; task-start.ts runs it under noLinkWait), then it starts where the folder is' },

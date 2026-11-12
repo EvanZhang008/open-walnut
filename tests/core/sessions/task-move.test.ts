@@ -52,6 +52,10 @@ const W = vi.hoisted(() => {
     history: {} as Record<string, Array<Record<string, unknown>>>,
     /** The Changed tab's groups for the old session. */
     changes: [] as Array<{ repoRoot: string; label: string; kind: string; files: Array<Record<string, unknown> & { relPath: string }> }>,
+    /** The Changed tab's list cannot be read (a timeout). */
+    changesFail: false,
+    /** Every transfer.pack the daemons ran: where, and with which of the base options. */
+    packs: [] as Array<{ cwd: string; haves: boolean; noBundle: boolean }>,
   };
 });
 
@@ -129,7 +133,10 @@ vi.mock('../../../src/core/sessions/session-lifecycle.js', () => ({
 }));
 vi.mock('../../../src/core/session-changes.js', () => ({
   // The Changed tab's list for the old session (none by default: it changed nothing in the shared checkout).
-  computeSessionChanges: async () => ({ sessionId: 'x', groups: W.changes, fileCount: W.changes.length }),
+  computeSessionChanges: async () => {
+    if (W.changesFail) throw new Error('reading the changes timed out');
+    return { sessionId: 'x', groups: W.changes, fileCount: W.changes.length };
+  },
 }));
 vi.mock('../../../src/core/sessions/task-start.js', () => ({
   startSessionForTask: async (params: Record<string, unknown>) => {
@@ -208,7 +215,7 @@ function daemonFor(host: string): TransferConn {
     hasCapability: () => true,
     send: async (cmd, p) => {
       switch (cmd) {
-        case 'transfer.pack': return answer(() => pack.pack(p));
+        case 'transfer.pack': W.packs.push({ cwd: String(p.cwd), haves: Array.isArray(p.haves), noBundle: p.noBundle === true }); return answer(() => pack.pack(p));
         case 'transfer.scan': return answer(() => pack.scan(p));
         case 'transfer.apply': return W.failApply ? { ok: false, error: 'clone: the network is down', code: 'apply_failed' } : answer(() => pack.apply(p));
         case 'transfer.clear': return answer(() => pack.clear(p));
@@ -280,7 +287,7 @@ beforeEach(async () => {
   for (const h of Object.values(W.homes)) { fs.rmSync(h, { recursive: true, force: true }); fs.mkdirSync(h, { recursive: true }); }
   W.owner.clear(); W.stopRefused.clear(); W.stopsAtStart.length = 0;
   __setOwnerViewForTesting(async (rec) => W.owner.get(rec.claudeSessionId) ?? null);
-  W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.stopAtStart = false; W.history = {}; W.changes = []; W.gate = null; W.failList = false; W.failApply = false;
+  W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.stopAtStart = false; W.history = {}; W.changes = []; W.changesFail = false; W.packs = []; W.gate = null; W.failList = false; W.failApply = false;
   await mutateStore((st) => { st.queues = {}; }, false, true);
   __setTransferConnectionResolverForTesting(async (host) => (W.homes[host] ? [daemonFor(host)] : []));
   // Each host's daemon answers fs.stat for its own folders only (both live on this machine).
@@ -392,7 +399,7 @@ describe('task_move', () => {
     // Never another writer's files.
     expect(fs.readFileSync(path.join(shared, 'a.txt'), 'utf8')).toBe('FOREIGN edit\n');
     expect(fs.existsSync(path.join(shared, 'foreign.txt'))).toBe(true);
-    expect(said).toMatch(/Left on the old host: 2 changed files .* that this task did not change \((a\.txt, foreign\.txt|foreign\.txt, a\.txt)\)/);
+    expect(said).toMatch(/Left on the old host: 2 changed files .* that this task's edit tools did not write \((a\.txt, foreign\.txt|foreign\.txt, a\.txt)\)/);
     expect((await getSessionByClaudeId(sid))?.archived).toBe(true);
   }, 120_000);
 
@@ -413,7 +420,8 @@ describe('task_move', () => {
     expect(W.starts[0]).toMatchObject({ cwd: destTaskDir });
     expect(fs.readdirSync(destTaskDir).filter((n) => n.startsWith('marina'))).toEqual([]);
     const said = res.moved!.join('\n');
-    expect(said).toMatch(/: a shared checkout; the session changed no file there, so nothing of it was copied \(its commits are shared, never the task's\)\. The session continues in the task directory; .*cloud-workplace\/marina is cloud's own checkout of it\./);
+    // What changed there by command or by another session is named, not passed over in silence.
+    expect(said).toMatch(/: a shared checkout; the session changed no file there with its edit tools; the 2 files changed there \((a\.txt, foreign\.txt|foreign\.txt, a\.txt)\) stayed: a change made by a command or by another session does not ride\. Nothing of it was copied \(its commits are shared, never the task's\)\. The session continues in the task directory; .*cloud-workplace\/marina is cloud's own checkout of it\./);
     // No bundle was ever made for it, on either host.
     const bundles = (dir: string) => (fs.existsSync(dir) ? execFileSync('find', [dir, '-name', 'repo.bundle*'], { encoding: 'utf8' }).trim() : '');
     expect(bundles(W.homes.__local__)).toBe('');
@@ -476,6 +484,90 @@ describe('task_move', () => {
     const header = fs.readFileSync(bundles.at(-1)!).subarray(0, 600).toString('latin1').split('\n\n')[0]!
     expect(header).toContain(head)
     expect(header.split('\n').filter((l) => l.startsWith('-')).map((l) => l.slice(1, 41))).toEqual([sharedHead])
+  }, 120_000);
+
+  it('a shared checkout whose session changes cannot be read stops the move while files there changed, and moves when none did', async () => {
+    const { taskId, clone } = await taskInSharedCheckout();
+    fs.rmSync(path.dirname(clone), { recursive: true, force: true });
+    W.changesFail = true;
+    await expect(requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' }))
+      .rejects.toThrow(/could not be read in time, and 2 files changed there \((a\.txt, foreign\.txt|foreign\.txt, a\.txt)\): nothing moved, so none of it is lost\. Try the move again/);
+    expect(W.starts).toHaveLength(0);
+    expect((await getTask(taskId)).session_ids ?? []).toContain('mac-sid');
+    // Nothing changed there: nothing can be lost, the move goes on and says what it could not read.
+    git(shared, ['checkout', '-q', '--', 'a.txt']);
+    fs.rmSync(path.join(shared, 'foreign.txt'));
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+    expect(res).toMatchObject({ state: 'done', host: 'cloud' });
+    expect(res.moved!.join('\n')).toMatch(/: a shared checkout; which files the session changed there could not be read, and none changed there\. Nothing of it was copied/);
+  }, 120_000);
+
+  it('a session\'s own branch in a shared checkout, ahead of its main, rides with its commits (made by command)', async () => {
+    const { taskId, clone } = await taskInSharedCheckout();
+    fs.rmSync(path.dirname(clone), { recursive: true, force: true });
+    git(shared, ['stash', '-q', '--include-untracked']);
+    git(shared, ['checkout', '-q', '-b', 'fix/parser']);
+    for (const i of [1, 2]) {
+      write(path.join(shared, `fix${i}.txt`), `fix ${i}\n`);
+      git(shared, ['add', `fix${i}.txt`]);
+      git(shared, ['commit', '-q', '-m', `fix ${i}`]);
+    }
+    git(shared, ['stash', 'pop', '-q']);
+    // The session committed by command: its edit tools' record names no file.
+    W.changes = [];
+
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+
+    expect(res).toMatchObject({ state: 'done', host: 'cloud' });
+    const dest = `${W.homes.cloud}/tasks/${taskId}/marina`;
+    expect(W.starts[0]).toMatchObject({ cwd: dest });
+    expect(git(dest, ['rev-parse', 'HEAD'])).toBe(git(shared, ['rev-parse', 'HEAD']));
+    expect(git(dest, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('fix/parser');
+    expect(fs.readFileSync(`${dest}/fix2.txt`, 'utf8')).toBe('fix 2\n');
+    // Never another writer's work in progress.
+    expect(fs.readFileSync(`${dest}/a.txt`, 'utf8')).toBe('a1\n');
+    expect(fs.existsSync(`${dest}/foreign.txt`)).toBe(false);
+    const said = res.moved!.join('\n');
+    expect(said).toContain('2 commits no remote has');
+    expect(said).toMatch(/the session's branch fix\/parser rode with its 2 commits past main/);
+  }, 120_000);
+
+  it('the target\'s checkout under another folder name is the base, found by its URL, with no second pack', async () => {
+    const { taskId, clone: first } = await taskInSharedCheckout();
+    // The task's clone and the cloud's checkout have different names, neither the URL's (a Mac's
+    // walnut against a dev host's open-walnut): only the URL ties them.
+    const clone = path.join(path.dirname(first), 'parser-work');
+    fs.renameSync(first, clone);
+    // The cloud keeps its checkout of marina as open-marina; it follows the shared main.
+    const renamed = path.join(path.dirname(targetBase), 'open-marina');
+    fs.renameSync(targetBase, renamed);
+    await recordRepoPath('cloud', repoKey(URL, 'marina'), renamed);
+    for (const i of [1, 2, 3]) {
+      write(path.join(shared, `c${i}.txt`), `shared ${i}\n`);
+      git(shared, ['add', `c${i}.txt`]);
+      git(shared, ['commit', '-q', '-m', `shared commit ${i}`]);
+    }
+    git(renamed, ['fetch', '-q', shared, 'main']);
+    git(renamed, ['reset', '-q', '--hard', 'FETCH_HEAD']);
+    const sharedHead = git(shared, ['rev-parse', 'HEAD']);
+    git(clone, ['stash', '-q', '--include-untracked']);
+    git(clone, ['fetch', '-q', 'origin']);
+    git(clone, ['rebase', '-q', 'origin/main']);
+    git(clone, ['stash', 'pop', '-q']);
+    const head = git(clone, ['rev-parse', 'HEAD']);
+
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+
+    expect(res).toMatchObject({ state: 'done', host: 'cloud' });
+    const dest = `${W.homes.cloud}/tasks/${taskId}/parser-work`;
+    expect(git(dest, ['rev-parse', 'HEAD'])).toBe(head);
+    expect(res.moved!.join('\n')).toContain('1 commit no remote has');
+    expect(fs.readFileSync(`${dest}/.git/objects/info/alternates`, 'utf8').trim()).toBe(`${renamed}/.git/objects`);
+    // A look at what the clone is, then one pack based on the cloud's commit: never a second one.
+    expect(W.packs.filter((p) => p.cwd === clone)).toEqual([{ cwd: clone, haves: false, noBundle: true }, { cwd: clone, haves: true, noBundle: false }]);
+    const bundles = execFileSync('find', [W.root, '-name', 'repo.bundle'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+    const prereqs = bundles.flatMap((b) => fs.readFileSync(b).subarray(0, 600).toString('latin1').split('\n\n')[0]!.split('\n').filter((l) => l.startsWith('-')).map((l) => l.slice(1, 41)));
+    expect(prereqs).toEqual([sharedHead]);
   }, 120_000);
 
   it('placement: a first start on an overloaded Mac goes to the cloud host, in the task directory, from the cloud\'s own checkout', async () => {
@@ -560,6 +652,40 @@ describe('task_move', () => {
       } finally {
         delete process.env.WALNUT_PLACE_SETUP_MS;
       }
+    } finally {
+      __setHostLoadProberForTesting(null);
+    }
+  }, 120_000);
+
+  it('placement: a first start in a shared checkout ahead of every remote carries only what the cloud\'s checkout lacks (2026-11-12)', async () => {
+    const { taskId, clone } = await taskInSharedCheckout();
+    fs.rmSync(path.dirname(clone), { recursive: true, force: true });
+    // The shared main is three commits past every remote; the cloud's checkout holds two of them.
+    for (const i of [1, 2, 3]) {
+      write(path.join(shared, `c${i}.txt`), `shared ${i}\n`);
+      git(shared, ['add', `c${i}.txt`]);
+      git(shared, ['commit', '-q', '-m', `shared commit ${i}`]);
+    }
+    const cloudHas = git(shared, ['rev-parse', 'HEAD~1']);
+    git(targetBase, ['fetch', '-q', shared, 'main']);
+    git(targetBase, ['reset', '-q', '--hard', cloudHas]);
+    const now = new Date().toISOString();
+    const GB = 1024 ** 3;
+    __setHostLoadProberForTesting(async (host) => (host === '__local__'
+      ? { cpus: 14, load: [600, 500, 400], cpuBusy: 0.6, memTotalBytes: 48 * GB, memAvailBytes: 2 * GB, diskPath: '/', diskFreeBytes: 20 * GB, diskTotalBytes: 1000 * GB, at: now }
+      : { cpus: 48, load: [3, 3, 3], cpuBusy: 0.05, memTotalBytes: 192 * GB, memAvailBytes: 150 * GB, diskPath: '/', diskFreeBytes: 2000 * GB, diskTotalBytes: 3000 * GB, at: now }));
+    cloudClaude({});
+    try {
+      const launch = { host: '', cwd: shared, message: 'Make the parser faster.' };
+      const placed = await placeStartByLoad(await getTask(taskId), {}, launch, 'claude');
+      const dest = `${W.homes.cloud}/tasks/${taskId}/marina`;
+      expect(placed).toMatchObject({ host: 'cloud', moved: true, cwd: dest, setUp: true });
+      expect(git(dest, ['rev-parse', 'HEAD'])).toBe(git(shared, ['rev-parse', 'HEAD']));
+      // The probe carried no commit; the one pack after the choice is based on the cloud's commit.
+      expect(W.packs.map((p) => [p.haves, p.noBundle])).toEqual([[false, true], [true, false]]);
+      const bundles = execFileSync('find', [W.root, '-name', 'repo.bundle'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+      const prereqs = bundles.flatMap((b) => fs.readFileSync(b).subarray(0, 600).toString('latin1').split('\n\n')[0]!.split('\n').filter((l) => l.startsWith('-')).map((l) => l.slice(1, 41)));
+      expect(prereqs).toEqual([cloudHas]);
     } finally {
       __setHostLoadProberForTesting(null);
     }

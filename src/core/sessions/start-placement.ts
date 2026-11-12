@@ -123,16 +123,19 @@ export async function placeStartByLoad(
   if (inside.length && await isOwnDir()) inside = [];
   const paths = namedPaths(text, (p) => !inside.includes(p), { cwd: launch.cwd });
   let left: Promise<string[]> | undefined;
+  let probedRel: string[] = [];
   const probeSource = async (): Promise<PackReply | null> => {
     if (probe !== undefined) return probe;
     try {
       const client = await import('../transfer/daemon-transfer-client.js');
       const { transfersDir } = await import('../transfer/workspace.js');
-      const pack = (paths: string[]) => within(client.packWorkspace(sourceHost, { cwd: launch.cwd, outDir: `${transfersDir(sourceHost)}/${moveId}/0/pack`, paths, noFullBundle: true }), deadline, 'reading the folder');
+      // What the folder is and the files the task names, never its commits (a shared checkout's
+      // are shared): the commits ride once the target is known, based on what it holds (setUpOn).
+      const pack = (paths: string[]) => within(client.packWorkspace(sourceHost, { cwd: launch.cwd, outDir: `${transfersDir(sourceHost)}/${moveId}/0/pack`, paths, noFullBundle: true, noBundle: true }), deadline, 'reading the folder');
       probe = await pack([]);
       const root = probe.meta.root.replace(/\/+$/, '');
-      const rel = inside.map((p) => repoRel(p, root, launch.cwd, probe!.meta.relCwd ?? '')).filter((r): r is string => !!r);
-      if (probe.meta.kind === 'git' && rel.length) probe = await pack(rel);
+      probedRel = inside.map((p) => repoRel(p, root, launch.cwd, probe!.meta.relCwd ?? '')).filter((r): r is string => !!r);
+      if (probe.meta.kind === 'git' && probedRel.length) probe = await pack(probedRel);
     } catch (err) {
       log.session.info('placement: the folder could not be read for a move', { taskId: task.id, cwd: launch.cwd, error: err instanceof Error ? err.message : String(err) });
       probe = null;
@@ -222,7 +225,7 @@ export async function placeStartByLoad(
   }
   const p = (await probeSource())!;
   const setupBy = decision.forFiles ? Math.max(deadline, Date.now() + filesSetupBudgetMs()) : deadline;
-  const setup = await within(setUpOn(task, p, sourceHost, target, moveId), setupBy, 'setting the repository up').catch((err: unknown) => {
+  const setup = await within(setUpOn(task, p, sourceHost, target, moveId, { cwd: launch.cwd, rel: probedRel }), setupBy, 'setting the repository up').catch((err: unknown) => {
     log.session.warn('placement: the repository could not be prepared in time; the start stays', { taskId: task.id, target, error: err instanceof Error ? err.message : String(err) });
     return null;
   });
@@ -254,6 +257,28 @@ export async function placeStartByLoad(
     launch.message,
   ].join('\n');
   return { host: decision.host, from: decision.from, moved: true, reason: decision.reason, cwd: setup.cwd, setUp: setup.setUp };
+}
+
+/**
+ * The probe again with the commits no remote has: the bundle based on what the target's checkout
+ * holds, else on the remote as before. The probe itself carried none (noBundle).
+ */
+async function packedFor(probe: PackReply, sourceHost: string, target: string, moveId: string, again: { cwd: string; rel: string[] }): Promise<PackReply> {
+  const m = probe.meta;
+  // No commit to carry, or an older daemon that bundled anyway (it ignores noBundle).
+  if (m.kind !== 'git' || !m.head || m.headOnRemote || m.bundle) return probe;
+  const client = await import('../transfer/daemon-transfer-client.js');
+  const { transfersDir } = await import('../transfer/workspace.js');
+  const { readHostProfile } = await import('../hosts/host-profile.js');
+  const { cloneUrlOf } = await import('../transfer/task-work.js');
+  const { packAgainstTarget, setUpFrom } = await import('../transfer/target-base.js');
+  const profile = await readHostProfile(target).catch(() => null);
+  let n = 1;
+  const outDir = () => `${transfersDir(sourceHost)}/${moveId}/${n++}/pack`;
+  return packAgainstTarget(
+    { client, sourceHost, targetHost: target, roots: setUpFrom({ root: m.root, url: cloneUrlOf(m) }, profile), againDir: outDir },
+    { cwd: again.cwd, outDir: outDir(), paths: again.rel, noFullBundle: true },
+  );
 }
 
 /**
@@ -318,7 +343,9 @@ async function checkoutOn(host: string, p: PackReply): Promise<string | null> {
   return (await pathsOnHost(host, [`${known.replace(/\/+$/, '')}/.git`]))?.present.length ? known : null;
 }
 
-async function setUpOn(task: Task, p: PackReply, sourceHost: string, target: string, moveId: string): Promise<{ cwd: string; dest: string; setUp: boolean; steps?: string }> {
+async function setUpOn(task: Task, probe: PackReply, sourceHost: string, target: string, moveId: string, again: { cwd: string; rel: string[] }): Promise<{ cwd: string; dest: string; setUp: boolean; steps?: string }> {
+  // The commits HEAD needs there ride now, from a commit the target's checkout holds (target-base.ts).
+  const p = await packedFor(probe, sourceHost, target, moveId, again);
   const { ensureTaskDirOnHost } = await import('./task-dir-place.js');
   const made = await ensureTaskDirOnHost(task.id, target);
   if ('error' in made) throw new Error(made.error);

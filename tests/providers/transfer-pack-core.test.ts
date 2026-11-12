@@ -354,6 +354,48 @@ describe('transfer.pack: a base the target holds (task-move-base-v1)', () => {
       { root: path.join(tmp, 'gone'), commits: [] },
     ])
   })
+  it('transfer.recent with contains says whether each root holds that commit', async () => {
+    const a = ahead('recent-contains')
+    const other = dir('recent-other')
+    git(other, ['init', '-q'])
+    git(other, ['commit', '-q', '--allow-empty', '-m', 'elsewhere'])
+    const r = await packer.recent({ roots: [a.work, other, path.join(tmp, 'gone')], contains: a.pushed })
+    expect(r.roots.map((x) => x.holds)).toEqual([true, false, false])
+  })
+
+  it('a probe (noFullBundle) of a repository no host can clone bundles only from a commit the target holds', async () => {
+    const root = dir('probe-local')
+    const work = path.join(root, 'work')
+    fs.mkdirSync(work)
+    git(work, ['init', '-q'])
+    git(work, ['commit', '-q', '--allow-empty', '-m', 'one'])
+    const one = git(work, ['rev-parse', 'HEAD'])
+    git(work, ['commit', '-q', '--allow-empty', '-m', 'two'])
+    const missed = await packer.pack({ cwd: work, outDir: path.join(root, 'out1'), noFullBundle: true, haves: ['e'.repeat(40)] })
+    expect(missed.meta.bundle).toBeNull()
+    expect(missed.files.map((f) => f.name)).toEqual(['meta.json'])
+    const hit = await packer.pack({ cwd: work, outDir: path.join(root, 'out2'), noFullBundle: true, haves: [one] })
+    expect(hit.meta).toMatchObject({ bundle: { base: one, from: 'target' }, ahead: 1 })
+  })
+
+  it('a shared checkout\'s pack (paths) says how far its own branch is past the default one', async () => {
+    const a = ahead('branch-ahead')
+    git(a.work, ['checkout', '-q', '-b', 'fix/it'])
+    git(a.work, ['commit', '-q', '--allow-empty', '-m', 'mine 1'])
+    git(a.work, ['commit', '-q', '--allow-empty', '-m', 'mine 2'])
+    const r = await packer.pack({ cwd: a.work, outDir: path.join(a.root, 'out1'), paths: [], noBundle: true })
+    expect(r.meta.branchAhead).toEqual({ of: 'main', ahead: 2 })
+    // On the default branch, or a branch with nothing past it: none.
+    git(a.work, ['checkout', '-q', 'main'])
+    expect((await packer.pack({ cwd: a.work, outDir: path.join(a.root, 'out2'), paths: [], noBundle: true })).meta.branchAhead).toBeUndefined()
+    git(a.work, ['checkout', '-q', '-b', 'fresh'])
+    expect((await packer.pack({ cwd: a.work, outDir: path.join(a.root, 'out3'), paths: [], noBundle: true })).meta.branchAhead).toBeUndefined()
+    // The remote's default branch name wins when it is known.
+    git(a.work, ['checkout', '-q', 'fix/it'])
+    git(a.work, ['branch', '-q', 'trunk', 'main'])
+    git(a.work, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk'])
+    expect((await packer.pack({ cwd: a.work, outDir: path.join(a.root, 'out4'), paths: [], noBundle: true })).meta.branchAhead).toEqual({ of: 'trunk', ahead: 2 })
+  })
 })
 
 describe('transfer.pack: the bundle deadline (bundleMs)', () => {

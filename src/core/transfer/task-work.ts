@@ -27,7 +27,8 @@ import type { PackedFile, PackMeta, PackReply, ScanReply } from './daemon-transf
 import { readHostProfile, repoKey } from '../hosts/host-profile.js';
 import { interruptedByShutdown } from '../server-stopping.js';
 import { copyNow, earlierPiece } from './move-resume.js';
-import { baseMissing, setUpFrom, targetCommits, targetRoots } from './target-base.js';
+import { packAgainstTarget, setUpFrom } from './target-base.js';
+import { ownFiles } from './own-files.js';
 
 export interface WorkPiece {
   kind: 'repo' | 'files' | 'checkout';
@@ -52,8 +53,6 @@ export interface MovedPiece {
   untracked?: number;
   /** Files of a shared checkout that are not this task's and stayed. */
   leftOut?: { count: number; sample: string[] };
-  /** The session's own files there could not be read: only the committed state rode. */
-  ownUnknown?: boolean;
   bytes: number;
   error?: string;
   /** The new session's steps when the target did not set it up. */
@@ -94,7 +93,6 @@ export class TaskWorkError extends Error {
 }
 
 const MAX_LOOSE_BYTES = 200 * 1024 * 1024;
-const CHANGES_DEADLINE_MS = 60_000;
 
 /** Two remote URLs of one repository (ssh and https spellings, `.git`, credentials). */
 export function sameRepoUrl(a: string | undefined, b: string | undefined): boolean {
@@ -128,50 +126,6 @@ function inside(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.posix.isAbsolute(rel));
 }
 
-/**
- * Files the session changed under `repoRoot`, repo-relative, and for each one whose whole
- * history the session's record holds, the sha256 of the file when the session first touched
- * it (`before`): the clear after a move takes a file back only when that equals HEAD, so no
- * other writer's edit sits under the session's. null when the list is unknown.
- */
-async function ownFiles(session: SessionRecord, repoRoot: string, host: string): Promise<{ paths: string[]; before: Record<string, string> } | null> {
-  try {
-    const { computeSessionChanges } = await import('../session-changes.js');
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const res = await Promise.race([
-      computeSessionChanges(session.claudeSessionId, session.cwd ?? undefined, host === LOCAL_HOST ? undefined : host, session.outputFile ?? undefined),
-      new Promise<null>((r) => { timer = setTimeout(() => r(null), CHANGES_DEADLINE_MS); timer.unref?.(); }),
-    ]);
-    if (timer) clearTimeout(timer);
-    if (!res) return null;
-    const out = new Set<string>();
-    const before: Record<string, string> = {};
-    const { createHash } = await import('node:crypto');
-    const sha = (t: string) => createHash('sha256').update(t, 'utf8').digest('hex');
-    const until = Date.now() + CHANGES_DEADLINE_MS;
-    for (const g of res.groups) {
-      if (g.repoRoot.replace(/\/+$/, '') !== repoRoot.replace(/\/+$/, '')) continue;
-      for (const f of g.files) {
-        if (f.relPath) out.add(f.relPath);
-        if (f.oldRelPath) out.add(f.oldRelPath);
-        // A rename, or a record that could not be rebuilt whole, never clears.
-        if (!f.relPath || f.oldRelPath || f.status === 'renamed') continue;
-        let full: { before: string; partial: boolean } | null = res.light ? null : f;
-        if (!full && f.filePath && Date.now() < until && Object.keys(before).length < 200) {
-          const { fetchSessionFileChangeViaDaemon } = await import('../session-changes.js');
-          full = (await fetchSessionFileChangeViaDaemon(session.claudeSessionId, session.cwd ?? undefined, host === LOCAL_HOST ? undefined : host, f.filePath).catch(() => null))?.file ?? null;
-        }
-        if (full && !full.partial && typeof full.before === 'string') before[f.relPath] = sha(full.before);
-      }
-    }
-    return { paths: [...out], before };
-  } catch (err) {
-    // This server is stopping: the move pauses (an unknown list would carry only the committed state).
-    if (interruptedByShutdown(err)) throw err;
-    log.session.info('task move: the session\'s own changes could not be read', { sessionId: session.claudeSessionId, error: err instanceof Error ? err.message : String(err) });
-    return null;
-  }
-}
 
 /**
  * Names under the target task dir. A piece's top folder never reuses a name the target
@@ -257,17 +211,16 @@ async function moveWork(opts: MoveTaskWorkOptions): Promise<MovedWork> {
   const outDir = (n: number) => `${transfersDir(sourceHost)}/${moveId}/${n}/pack`;
   let n = 0;
   const profile = await readHostProfile(targetHost).catch(() => null);
-  // A repository's pack bundles only the commits the target's copy of it lacks (target-base.ts).
-  const packAgainstTarget = async (opts: Parameters<typeof client.packWorkspace>[1], folder: string, intoDest?: string): Promise<PackReply> => {
-    const commits = targetMoves ? await targetCommits(client, targetHost, targetRoots(profile, folder, intoDest ? [intoDest] : [])) : null;
-    const pack = await client.packWorkspace(sourceHost, { ...opts, ...(commits?.haves.length ? { haves: commits.haves } : {}) });
-    const from = setUpFrom(pack.meta, profile, pack.meta.kind === 'git' ? cloneUrlOf(pack.meta) : undefined, intoDest);
-    return baseMissing(pack.meta, commits, from) ? client.packWorkspace(sourceHost, { ...opts, outDir: outDir(n++) }) : pack;
-  };
+  // A repository's pack bundles only the commits the copies it may be set up from on the target
+  // lack (target-base.ts); a look at what it is (meta only) names those copies by its URL.
+  const sourceBase = targetMoves && await client.hostHasMoveBase(sourceHost).catch(() => false);
+  const against = (roots: Array<string | undefined>) => ({ client, sourceHost, targetHost, roots: targetMoves ? roots : [], againDir: () => outDir(n++) });
+  const rootsOf = (meta: PackMeta, intoDest?: string) => meta.kind === 'git' && meta.head && !meta.headOnRemote ? setUpFrom({ root: meta.root, url: cloneUrlOf(meta) }, profile, intoDest) : [];
   for (const repo of scan?.repos ?? []) {
     const want = repo.rel || path.posix.basename(repo.root);
     const intoDest = canInto && present.has(want.split('/')[0]!) ? `${targetTaskDir}/${want}` : undefined;
-    const pack = await packAgainstTarget({ cwd: repo.root, outDir: outDir(n++) }, path.posix.basename(repo.root), intoDest);
+    const look = sourceBase ? await client.packWorkspace(sourceHost, { cwd: repo.root, outDir: outDir(n++), paths: [], noBundle: true, noFullBundle: true }) : null;
+    const pack = await packAgainstTarget(against(look ? rootsOf(look.meta, intoDest) : []), { cwd: repo.root, outDir: outDir(n++) });
     const m = pack.meta;
     const own = !!m.dirty || (!!m.head && !m.headOnRemote) || !!m.noCommits || !cloneUrlOf(m);
     // The session's own folder always goes: it is where the work continues.
@@ -288,25 +241,38 @@ async function moveWork(opts: MoveTaskWorkOptions): Promise<MovedWork> {
   const notes: string[] = [];
   const clearable: MovedWork['clearable'] = [];
   if (!cwdPiece && cwd && !(sourceTaskDir && inside(cwd, sourceTaskDir))) {
-    // What it is only: never its commits (older daemons ignore noBundle and bundle anyway).
-    const probe = await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), paths: [], noBundle: true });
+    // What it is only, never its commits: noBundle, and noFullBundle for an older daemon that ignores it.
+    const probe = await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), paths: [], noBundle: true, noFullBundle: true });
     relCwd = probe.meta.relCwd ?? '';
     if (probe.meta.kind === 'git') {
+      const root = probe.meta.root;
       const same = packed.find((p) => p.pack.meta.kind === 'git' && (sameRepoUrl(cloneUrlOf(p.pack.meta), cloneUrlOf(probe.meta))
-        || p.pack.meta.remotes?.some((r) => r.url.replace(/\/+$/, '') === probe.meta.root)));
-      const mine = await ownFiles(session, probe.meta.root, sourceHost);
-      if (same && (!mine || mine.paths.length === 0)) cwdPiece = same; // The task directory's clone of it: the session continues there.
-      else if (!mine || mine.paths.length === 0) {
+        || p.pack.meta.remotes?.some((r) => r.url.replace(/\/+$/, '') === root)));
+      const mine = await ownFiles(session, root, sourceHost);
+      const own = mine?.paths ?? [];
+      // Files changed there that the session's edit tools did not write: by command, or another session's.
+      const lim = probe.meta.limited;
+      const others = lim ? lim.leftOutTracked + lim.leftOutUntracked : 0;
+      const sample = lim?.leftOut.length ? ` (${lim.leftOut.slice(0, 3).join(', ')}${others > 3 ? ', ...' : ''})` : '';
+      // A branch of its own there, ahead of the checkout's default one: its commits are the task's.
+      const branch = probe.meta.branchAhead;
+      if (!mine && others > 0) {
+        throw new TaskWorkError(`Which files the session changed in ${root} could not be read in time, and ${others} file${others === 1 ? '' : 's'} changed there${sample}: nothing moved, so none of it is lost. Try the move again`, 503, 'changes_unread');
+      }
+      if (same && !own.length && !branch) cwdPiece = same; // The task directory's clone of it: the session continues there.
+      else if (!own.length && !branch) {
         // A shared checkout's commits and branch are shared state, never this task's (2026-11-12: a
         // move shipped 2,240 commits of the shared main): with no file of its own there, nothing rides.
-        const known = profile?.observed.repoPaths[repoKey(cloneUrlOf(probe.meta), path.posix.basename(probe.meta.root))]?.path;
-        notes.push(`${probe.meta.root}: a shared checkout; ${mine ? 'the session changed no file there' : 'which files the session changed there could not be read'}, so nothing of it was copied (its commits are shared, never the task's). The session continues in the task directory${known ? `; ${known} is ${targetHost === LOCAL_HOST ? 'this Mac' : targetHost}'s own checkout of it` : ''}.`);
+        const known = setUpFrom({ root, url: cloneUrlOf(probe.meta) }, profile)[0];
+        const left = others ? `; the ${others} file${others === 1 ? '' : 's'} changed there${sample} stayed: a change made by a command or by another session does not ride` : '';
+        notes.push(`${root}: a shared checkout; ${mine ? 'the session changed no file there with its edit tools' : 'which files the session changed there could not be read, and none changed there'}${left}. Nothing of it was copied (its commits are shared, never the task's). The session continues in the task directory${known ? `; ${known} is ${targetHost === LOCAL_HOST ? 'this Mac' : targetHost}'s own checkout of it` : ''}.`);
       } else {
-        // Only the files this session changed there, on the commit they build on: a bundle of just
-        // what the target's copy lacks of it.
-        const pack = await packAgainstTarget({ cwd, outDir: outDir(n++), paths: mine.paths, ownBefore: mine.before }, path.posix.basename(probe.meta.root));
-        cwdPiece = { piece: { kind: 'checkout', source: probe.meta.root, rel: nameFor(path.posix.basename(probe.meta.root)) }, pack };
-        if (pack.meta.limited?.files?.length) clearable.push({ root: probe.meta.root, files: pack.meta.limited.files, backupFrom: pack.outDir, leftUntracked: pack.meta.untracked?.skippedCount ?? 0 });
+        // The files this session changed there and its own branch's commits, on a commit the
+        // target holds: a bundle of just what the target's copy lacks.
+        const pack = await packAgainstTarget(against(rootsOf(probe.meta)), { cwd, outDir: outDir(n++), paths: own, ...(mine ? { ownBefore: mine.before } : {}) });
+        cwdPiece = { piece: { kind: 'checkout', source: root, rel: nameFor(path.posix.basename(root)) }, pack };
+        if (pack.meta.limited?.files?.length) clearable.push({ root, files: pack.meta.limited.files, backupFrom: pack.outDir, leftUntracked: pack.meta.untracked?.skippedCount ?? 0 });
+        if (branch) notes.push(`${root}: the session's branch ${probe.meta.branch} rode with its ${branch.ahead} commit${branch.ahead === 1 ? '' : 's'} past ${branch.of}.`);
         packed.push(cwdPiece);
       }
     } else if (unmovableFolder(probe.meta.root)) {
@@ -503,9 +469,7 @@ export function describeMovedWork(pieces: readonly MovedPiece[], cleanRepos: Mov
     if (p.intoRefused) lines.push(`  ${p.intoRefused.dest} stayed as it was (${p.intoRefused.why}); this work is in ${p.dest}.`);
     if (p.leftOut) {
       const sample = `${p.leftOut.sample.slice(0, 5).join(', ')}${p.leftOut.count > 5 ? ', …' : ''}`;
-      lines.push(p.ownUnknown
-        ? `  Left on the old host: ${p.leftOut.count} uncommitted file${p.leftOut.count === 1 ? '' : 's'} in ${p.source}; Walnut could not read which of them this task changed, so only the committed state moved (${sample}).`
-        : `  Left on the old host: ${p.leftOut.count} changed file${p.leftOut.count === 1 ? '' : 's'} in ${p.source} that this task did not change (${sample}).`);
+      lines.push(`  Left on the old host: ${p.leftOut.count} changed file${p.leftOut.count === 1 ? '' : 's'} in ${p.source} that this task's edit tools did not write (${sample}).`);
     }
   }
   for (const r of cleanRepos) lines.push(`${r.source}: not copied, nothing in it a remote lacks${r.url ? ` (clone ${r.url} when needed)` : ''}.`);

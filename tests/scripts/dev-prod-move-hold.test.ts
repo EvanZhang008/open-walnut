@@ -70,7 +70,7 @@ describe('dev-prod.sh holds the stop for a move that started during the build', 
     marker(dir, 'mvtask-long', Math.floor(Date.now() / 1000) + 600)
     const r = await bash('dq_hold_moves; echo STOPS', { WALNUT_DEPLOY_MOVES_DIR_TEST: dir, WALNUT_DEPLOY_MOVE_HOLD_SECS: '3' })
     expect(r.code, r.out).toBe(0)
-    expect(r.ms).toBeGreaterThanOrEqual(2_900)
+    expect(r.ms).toBeGreaterThanOrEqual((3 - 1) * 1_000) // date +%s counts whole seconds
     expect(r.ms).toBeLessThan(20_000)
     expect(r.out).toMatch(/the move \(task mvtask-long \(move to cloud\)\) still runs at the end of its 3s hold: production stops, and the move runs again after the restart\nSTOPS\n$/)
   }, 60_000)
