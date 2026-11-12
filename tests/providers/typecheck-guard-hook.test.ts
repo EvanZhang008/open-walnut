@@ -10,7 +10,7 @@
  * MACHINE SAFETY: the hook only reads its stdin and the process table; the one
  * process started here is a sleeping script named tsc, stopped by its own pid.
  */
-import { describe, it, expect, afterAll } from 'vitest'
+import { describe, it, expect, afterAll, vi } from 'vitest'
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -226,8 +226,10 @@ describe('the real process table', () => {
     const script = path.join(bin, 'tsc'); fs.writeFileSync(script, 'setTimeout(() => {}, 60000)\n')
     const child = spawn(process.execPath, [script], { stdio: 'ignore' })
     try {
-      await new Promise((r) => setTimeout(r, 300))
-      const shown = execFileSync('ps', ['-o', 'command=', '-p', String(child.pid)], { encoding: 'utf8' }).trim()
+      // Wait until ps shows the child running the script (the exec lands a moment after spawn).
+      const psCommand = () => { try { return execFileSync('ps', ['-o', 'command=', '-p', String(child.pid)], { encoding: 'utf8' }).trim() } catch { return '' } }
+      await vi.waitFor(() => expect(psCommand()).toContain(script), { timeout: 10_000, interval: 50 })
+      const shown = psCommand()
       expect(path.basename(shown.split(/\s+/)[0])).toMatch(/^(node|bun|nodejs)$/)
       const r = run(SHELLS[0], 'tsc --noEmit', null, { WALNUT_TYPECHECK_ROOT_PID: String(process.pid), WALNUT_TYPECHECK_MAX: '0' })
       expect(r.reason).toContain(`pid ${child.pid}`)
