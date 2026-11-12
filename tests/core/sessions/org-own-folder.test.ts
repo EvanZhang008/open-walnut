@@ -169,6 +169,7 @@ describe('ownFolderMoveDecision', () => {
     ['a test server on a copy of the data', { task: lead, record: rec, ownDir: OWN, ephemeral: true }, 'ephemeral'],
     ['already in its folder', { task: lead, record: { ...rec, cwd: `${OWN}/` }, ownDir: OWN }, 'already-own'],
     ['a folder a person picked', { task: lead, record: { ...rec, cwdByPerson: '/repo' }, ownDir: OWN }, 'person-chose'],
+    ['a start in the task\'s isolated workspace', { task: { ...lead, workspace: { anchor: '/repo', root: '/ws/lead-1' } }, record: { ...rec, cwd: '/ws/lead-1/app' }, ownDir: OWN }, 'workspace'],
     ['a fork (side question)', { task: lead, record: rec, ownDir: OWN, fork: true }, 'fork'],
     ['a lane session', { task: lead, record: { ...rec, lane: 'side' }, ownDir: OWN }, 'fork'],
     ['an ACP engine', { task: lead, record: { ...rec, engine: 'codex' as const }, ownDir: OWN }, 'not-claude-code'],
@@ -190,6 +191,10 @@ describe('ownFolderMoveDecision', () => {
     ['a failure for another folder', { ...rec, ownFolderMove: { from: '/elsewhere', why: 'move-failed', at: ago(60_000) } }],
   ])('%s does not hold it back', (_name, record) => {
     expect(ownFolderMoveDecision({ task: lead, record, ownDir: OWN, now: NOW })).toEqual({ move: true })
+  })
+  it('a workspace does not keep a session that runs in the repository it was made from', () => {
+    const task = { ...lead, workspace: { anchor: '/repo', root: '/ws/lead-1' } }
+    expect(ownFolderMoveDecision({ task: task as never, record: rec, ownDir: OWN, now: NOW })).toEqual({ move: true })
   })
 })
 

@@ -151,9 +151,16 @@ function backoffOf(why: string): number {
   return LASTING.has(why) ? MOVE_RETRY_MS : TRANSIENT_RETRY_MS
 }
 
+/** Inside the workspace's own isolated folder (its root), not the repository it was made from (its anchor). */
+function inWorkspaceRoot(ws: Pick<NonNullable<Task['workspace']>, 'root'> | undefined, cwd: string): boolean {
+  const root = ws?.root ? trimSlash(ws.root) : ''
+  const at = trimSlash(cwd)
+  return !!root && (at === root || at.startsWith(root + '/'))
+}
+
 /** Whether a spawn of this session moves it to its node's own folder first. Pure; exported for tests. */
 export function ownFolderMoveDecision(input: {
-  task: Pick<Task, 'org_role' | 'phase'> | null
+  task: Pick<Task, 'org_role' | 'phase' | 'workspace'> | null
   record: DecisionRecord | null
   ownDir: string | null
   /** The spawn forks the conversation (a side question): the source transcript stays. */
@@ -173,6 +180,8 @@ export function ownFolderMoveDecision(input: {
   if (!record.cwd) return { move: false, why: 'no-cwd' }
   if (trimSlash(record.cwd) === trimSlash(ownDir)) return { move: false, why: 'already-own' }
   if (record.cwdByPerson && trimSlash(record.cwdByPerson) === trimSlash(record.cwd)) return { move: false, why: 'person-chose' }
+  // A start in the task's isolated workspace keeps that folder (task-launch-plan.ts, quick-start.ts), so its resumes do too.
+  if (inWorkspaceRoot(task?.workspace, record.cwd)) return { move: false, why: 'workspace' }
   const held = record.heldElsewhere ? Date.parse(record.heldElsewhere.at) : NaN
   if (now - held < HELD_ELSEWHERE_MS) return { move: false, why: 'held-elsewhere' }
   const failed = record.ownFolderMove
