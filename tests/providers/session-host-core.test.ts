@@ -149,6 +149,30 @@ describe('mergeSessionHostApprovals', () => {
     expect(merged[0]).toBe(server);
   });
 
+  // Every deploy approves its self-test, smoke boot and plugin check too (scripts/dev-prod.sh,
+  // host_prefix_for --once). A run of deploys and rehearsals must never push out the live
+  // server or daemon, which launchd relaunches with their approved argv.
+  it('a full manifest drops the oldest one-shot approvals first, never the live server or daemon', () => {
+    const once = (i: number) => ({ argv: [`/stage/${i}/walnut`, '__selftest'], files: [], once: true });
+    const existing = [...Array.from({ length: 10 }, (_, i) => once(i)), daemon, server, ...Array.from({ length: 10 }, (_, i) => once(10 + i))];
+    const next = once(99);
+    const merged = mergeSessionHostApprovals(next, existing, all);
+    expect(merged).toHaveLength(SESSION_HOST_MAX_COMMANDS);
+    expect(merged[0]).toBe(next);
+    expect(merged).toContain(daemon);
+    expect(merged).toContain(server);
+    // The newest one-shots stay, the oldest went.
+    expect(merged).toContain(existing[0]);
+    expect(merged).not.toContain(existing[existing.length - 1]);
+  });
+
+  it('carries the one-shot mark through the manifest, and reads its absence as a long-lived approval', () => {
+    const shot = { argv: ['/stage/a/walnut', '__plugin-check', '--dir', '/p'], files: [], once: true };
+    const text = buildSessionHostManifest([shot, server]);
+    expect(JSON.parse(text).commands[1]).toEqual({ argv: server.argv, files: server.files });
+    expect(parseSessionHostManifest(text)).toEqual([shot, server]);
+  });
+
   it('round-trips through the manifest the host reads', () => {
     const text = buildSessionHostManifest(mergeSessionHostApprovals(daemon, [server], all));
     expect(parseSessionHostManifest(text)).toEqual([daemon, server]);

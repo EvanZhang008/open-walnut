@@ -74,6 +74,12 @@ export interface SessionHostCommand {
   argv: readonly string[];
   /** Payload files whose contents the host re-verifies before exec. */
   files?: readonly SessionHostFile[];
+  /**
+   * A command run once and done (a deploy's self-test, smoke boot, plugin check),
+   * never relaunched: the first to go when the manifest is full. The host reads
+   * only argv and files, so the mark is invisible to it.
+   */
+  once?: boolean;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -114,7 +120,7 @@ export function buildSessionHostManifest(commands: readonly SessionHostCommand[]
       }
       return { path: filePath, sha256: file.sha256 };
     });
-    return { argv, files };
+    return command.once ? { argv, files, once: true } : { argv, files };
   });
   return `${JSON.stringify({ version: 1, commands: body }, null, 2)}\n`;
 }
@@ -139,18 +145,22 @@ export function parseSessionHostManifest(text: string): SessionHostCommand[] {
     const okFiles = files.every((f) => typeof f?.path === 'string' && f.path.startsWith('/')
       && typeof f?.sha256 === 'string' && HEX64.test(f.sha256));
     if (!okFiles) continue;
-    out.push({ argv: argv as string[], files: files as SessionHostFile[] });
+    const once = (command as { once?: unknown }).once === true;
+    out.push(once ? { argv: argv as string[], files: files as SessionHostFile[], once } : { argv: argv as string[], files: files as SessionHostFile[] });
   }
   return out;
 }
 
 /**
- * How many approved commands a manifest keeps. Each Walnut build approves two
- * (the server a deploy launches through the host, and the daemon that server
- * starts), and the previous build's pair is still needed until its processes
- * are gone; the cap keeps a run of deploys from piling up approvals.
+ * How many approved commands a manifest keeps. Each deploy approves five: its
+ * self-test, smoke boot and plugin check (every run of the file goes through the
+ * host, scripts/dev-prod.sh host_prefix_for), the server it launches, and the
+ * daemon that server starts. The previous build's server and daemon are still
+ * needed until its processes are gone, so the cap leaves room for two deploys
+ * and a few failed ones; a deploy that failed removes its stage, which drops its
+ * approvals at the next write.
  */
-export const SESSION_HOST_MAX_COMMANDS = 8;
+export const SESSION_HOST_MAX_COMMANDS = 16;
 
 function sameArgv(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((word, i) => word === b[i]);
@@ -159,7 +169,9 @@ function sameArgv(a: readonly string[], b: readonly string[]): boolean {
 /**
  * The manifest after approving `next`: it first, then every other approval
  * whose payload files are all still on disk (`stillThere`), newest first, at
- * most SESSION_HOST_MAX_COMMANDS. Approving one command must never revoke
+ * most SESSION_HOST_MAX_COMMANDS; when there are more, the oldest `once`
+ * approvals go first, so a run of deploys and rehearsals never pushes out the
+ * server or daemon launchd relaunches. Approving one command must never revoke
  * another that is still in use: the deploy's server and the daemon it starts
  * both run under the host, and launchd relaunches the server (KeepAlive) with
  * the argv the deploy approved, long after the server approved its daemon.
@@ -171,8 +183,11 @@ export function mergeSessionHostApprovals(
   existing: readonly SessionHostCommand[],
   stillThere: (command: SessionHostCommand) => boolean,
 ): SessionHostCommand[] {
-  const kept = existing.filter((c) => !sameArgv(c.argv, next.argv) && stillThere(c));
-  return [next, ...kept].slice(0, SESSION_HOST_MAX_COMMANDS);
+  const all = [next, ...existing.filter((c) => !sameArgv(c.argv, next.argv) && stillThere(c))];
+  for (let i = all.length - 1; all.length > SESSION_HOST_MAX_COMMANDS && i > 0; i--) {
+    if (all[i]!.once) all.splice(i, 1);
+  }
+  return all.slice(0, SESSION_HOST_MAX_COMMANDS);
 }
 
 /** The argv that runs `program args…` under Walnut's identity. */

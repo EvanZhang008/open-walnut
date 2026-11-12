@@ -1,6 +1,8 @@
 /**
- * `walnut __session-host-approve -- <program> [args...]`: the deploy's way to run
- * the production server under Walnut.app (scripts/dev-prod.sh, launchd_job_argv).
+ * `walnut __session-host-approve [--once] -- <program> [args...]`: the deploy's way
+ * to run the compiled file under Walnut.app (scripts/dev-prod.sh, host_prefix_for):
+ * the production server, and with `--once` a run that ends by itself (the
+ * self-test, the smoke boot, the plugin check).
  *
  * Approves the command in the session host's manifest and prints the host
  * executable on stdout, exit 0. When the server cannot run under the host (no
@@ -11,11 +13,13 @@
 import { approveUnderSessionHost } from './session-host.js';
 
 export async function runSessionHostApprove(args: readonly string[]): Promise<number> {
-  if (args[0] !== '--' || args.length < 2) {
-    process.stderr.write('usage: walnut __session-host-approve -- /absolute/program [args...]\n');
+  const once = args[0] === '--once';
+  const rest = once ? args.slice(1) : args;
+  if (rest[0] !== '--' || rest.length < 2) {
+    process.stderr.write('usage: walnut __session-host-approve [--once] -- /absolute/program [args...]\n');
     return 2;
   }
-  const result = await approveUnderSessionHost(args.slice(1));
+  const result = await approveUnderSessionHost(rest.slice(1), { once });
   if (result.ok) {
     process.stdout.write(`${result.executable}\n`);
     return 0;

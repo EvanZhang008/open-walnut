@@ -40,7 +40,8 @@ describe('dev-prod staged boot', () => {
     // Every boot rides the staged path: the server, the smoke boot, the selftest.
     expect(script).toMatch(/launch_server "\$SERVER_FILE"/)
     expect(script).toMatch(/smoke_argv=\(WALNUT_RUNTIME_DIR="\$SMOKE_TMP\/runtime" "\$SERVER_FILE"\)/)
-    expect(script).toMatch(/"\$\{smoke_argv\[@\]\}" web --port "\$smoke_port"/)
+    // The env word, then Walnut.app's session host when it approved the run, then the file.
+    expect(script).toMatch(/"\$\{smoke_argv\[@\]:0:1\}" \$\{host_prefix\[@\]\+"\$\{host_prefix\[@\]\}"\} "\$\{smoke_argv\[@\]:1\}" web --port "\$smoke_port"/)
     expect(script).toMatch(/"\$SERVER_FILE" __selftest/)
     // The file's runtime tree is unpacked into the stage, not the data home.
     expect(script).toMatch(/WALNUT_RUNTIME_DIR="\$STAGE_DIR\/runtime"/)

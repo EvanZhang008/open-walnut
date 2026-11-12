@@ -202,6 +202,21 @@ describe('host.facts capabilities (host-caps-v1)', () => {
       expect(text).not.toContain('disabled-mcp')
       expect(text).not.toContain('project-only')
     })
+
+    // 2026-11-12: a smoke boot's daemon, run from the land queue with no app responsible for it,
+    // probed 169.254.169.254 and macOS asked "Allow walnut-darwin-arm64 to find devices on local
+    // networks?" for its stage path. A Mac never sends that request; github is still asked.
+    it(`${label}: a Mac never asks the link-local cloud metadata address, and reads as no cloud VM`, async () => {
+      calls.length = 0
+      const r = await factory({
+        fs, os, execFile: macExec, http: imds, https: fakeHttp(() => ({ status: 301, body: '' })),
+        env: { PATH: bin }, home: home(`mac-imds-${label}`), platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500, totalMs: 5000 },
+      }).facts({})
+      expect(r.cloud).toEqual({ imds: false })
+      expect(r.internet).toEqual({ github: true })
+      expect(calls.filter((c) => c.includes('169.254.169.254'))).toEqual([])
+      expect(calls).toContain('HEAD github.com/')
+    })
   }
 
   it('servers offered to other hosts (local/host-mcp.json) come first, marked, with their one word; values stay home', async () => {

@@ -225,6 +225,19 @@ describe.skipIf(!hasSwift)('running an approved command', () => {
     expect(seen.leakedHostMarker).toBeNull();
   }, 60_000);
 
+  // A deploy approves its self-test, smoke boot and plugin check as one-shot runs (`once` on the
+  // manifest entry, scripts/dev-prod.sh host_prefix_for --once): the real host runs one, and the
+  // long-lived approval beside it.
+  it('runs a one-shot approval, and keeps running the long-lived one beside it', async () => {
+    await approveSessionHostCommand(manifest, [process.execPath, payload, '0']);
+    await approveSessionHostCommand(manifest, [process.execPath, payload, '0', 'once'], { once: true });
+    expect(JSON.parse(fs.readFileSync(manifest, 'utf8')).commands[0].once).toBe(true);
+    for (const argv of [[payload, '0', 'once'], [payload, '0']]) {
+      const result = runHost(sessionHostArgv(executable, process.execPath, argv));
+      expect(result.status, result.stderr).toBe(0);
+    }
+  }, 60_000);
+
   it('makes the app responsible for the payload AND for its grandchildren', async () => {
     // The mechanism the whole feature rests on. Without the disclaimed re-exec the
     // payload would inherit THIS test process's responsible process, which is the
@@ -284,8 +297,9 @@ describe.skipIf(!hasSwift)('refusals', () => {
   it('runs nothing that is not in the manifest', async () => {
     // Otherwise the app is a tool for running anything under a granted identity,
     // which any other program on the machine could pick up and use.
+    // Approvals of other commands stay (mergeSessionHostApprovals), so the refused argv is one no test approves.
     await approveSessionHostCommand(manifest, [process.execPath, payload, '0']);
-    const result = runHost(sessionHostArgv(executable, process.execPath, [payload, '7']));
+    const result = runHost(sessionHostArgv(executable, process.execPath, [payload, '7', 'never-approved']));
     expect(result.status).toBe(SESSION_HOST_REFUSAL_STATUS);
     expect(result.stderr).toMatch(/not approved/);
   }, 60_000);
@@ -342,12 +356,16 @@ describe.skipIf(!hasSwift)('approving a launch', () => {
     expect(written.commands[0].argv).toEqual([process.execPath, payload, '--start']);
   }, 60_000);
 
-  it('replaces the previous approval instead of accumulating', async () => {
+  // The deploy's server and the daemon it starts both run under the host, so approving one
+  // never revokes the other; approving the same argv again replaces it, never a second entry.
+  it('keeps other approvals, newest first, and lists the same argv once', async () => {
     await approveSessionHostCommand(manifest, [process.execPath, payload, '1']);
     await approveSessionHostCommand(manifest, [process.execPath, payload, '2']);
-    const written = JSON.parse(await fsp.readFile(manifest, 'utf8'));
-    expect(written.commands).toHaveLength(1);
-    expect(written.commands[0].argv).toEqual([process.execPath, payload, '2']);
+    await approveSessionHostCommand(manifest, [process.execPath, payload, '1']);
+    const argvs = JSON.parse(await fsp.readFile(manifest, 'utf8')).commands.map((c: { argv: string[] }) => c.argv.join(' '));
+    expect(argvs[0]).toBe([process.execPath, payload, '1'].join(' '));
+    expect(argvs[1]).toBe([process.execPath, payload, '2'].join(' '));
+    expect(argvs.filter((a: string) => a === [process.execPath, payload, '1'].join(' '))).toHaveLength(1);
   }, 60_000);
 
   it('creates the manifest directory it needs, at 0700', async () => {

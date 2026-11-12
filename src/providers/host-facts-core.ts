@@ -562,10 +562,15 @@ export function createHostFacts(deps: HostFactsDeps) {
       // A macOS shim waits for its tools check first, so it gets two probe windows.
       tasks.push(probe(function () { return toolVersion(tool[0], tool[1]) }, PROBE_MS * 2 + 200, function (v) { out.tools[tool[0]] = v }))
     })
-    if (network) {
-      tasks.push(probe(cloud, IMDS_MS * 2 + 300, function (v) { out.cloud = v }))
-      tasks.push(probe(github, PROBE_MS, function (v) { out.internet = { github: v } }))
-    }
+    // Never on macOS, CDK's own EC2 rule (aws-target.ts detectEc2): 169.254.169.254 is a
+    // link-local address, so to macOS the request is local network access, asked of the
+    // user for the program's path whenever no app is responsible for this daemon
+    // (2026-11-12: a deploy's smoke boot, run from the land queue, asked "Allow
+    // walnut-darwin-arm64 to find devices on local networks?" for its stage). The answer
+    // is the one a Mac's probe always gave.
+    if (network && deps.platform === 'darwin') out.cloud = { imds: false }
+    else if (network) tasks.push(probe(cloud, IMDS_MS * 2 + 300, function (v) { out.cloud = v }))
+    if (network) tasks.push(probe(github, PROBE_MS, function (v) { out.internet = { github: v } }))
     await within(Promise.all(tasks), TOTAL_MS, undefined)
     out.probedAt = new Date(now()).toISOString()
     // A probe still running past the budget must not change the answer already sent.

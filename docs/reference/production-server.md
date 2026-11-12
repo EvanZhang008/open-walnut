@@ -203,12 +203,14 @@ commit; a failed sibling only warns, a failed file for this machine aborts befor
 files are staged as `<stage>/dist-bin/walnut-<target>`, where host servers pick the siblings up
 (`path.dirname(process.execPath)`). `walnut __selftest` runs first (it also unpacks the runtime
 tree into `<stage>/runtime/<build>`, on the temp volume, never the data home), then the smoke
-boot runs `<file> web` with its own data, daemon and runtime dirs. The launchd job runs the file
-directly, under Walnut.app's session host on a Mac that has the app (`session_host_prefix`; the
-file approves its own argv with `__session-host-approve`), because macOS keys an unbundled
-program's Local Network choice on its path and Mach-O UUID, and each stage path asked again
-(2026-11-04); a rollback runs it without the host, and every darwin file carries a fixed UUID and
-identifier, checked before the kill (`scripts/lib/macho-identity.mjs`,
+boot runs `<file> web` with its own data, daemon and runtime dirs. Every run of the file (the
+self-test, the smoke boot, the plugin check, the launchd job, a rollback) goes under Walnut.app's
+session host on a Mac that has the app (`host_prefix_for`; the file approves each argv with
+`__session-host-approve`), because macOS keys an unbundled program's Local Network choice on its
+path and Mach-O UUID, and each stage path asked again (2026-11-04; 2026-11-12 from the land queue,
+whose smoke boot and rollback still ran the file on its own); only the host's refusal (exit 125)
+runs it directly, `tests/scripts/dev-prod-file-runs-under-host.test.ts` fails on a run that skips
+the host, and every darwin file carries a fixed UUID and identifier, checked before the kill (`scripts/lib/macho-identity.mjs`,
 `docs/reference/macos-session-identity.md`); the LKG holds `dist-bin/` and `runtime/`, and a rollback starts the last good build's
 file, from a fresh stage cloned from the LKG (`open-walnut-stage.rollback.*`), never from
 the LKG itself, and a snapshot never replaces an LKG a process still runs from: the next good

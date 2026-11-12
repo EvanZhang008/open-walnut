@@ -74,6 +74,7 @@ async function hashFile(target: string): Promise<string> {
 export async function approveSessionHostCommand(
   manifest: string,
   argv: readonly string[],
+  opts: { once?: boolean } = {},
 ): Promise<void> {
   const files: SessionHostFile[] = [];
   for (const word of argv) {
@@ -93,7 +94,7 @@ export async function approveSessionHostCommand(
     for (const file of existing.flatMap((c) => c.files ?? [])) {
       if (await fsp.stat(file.path).then((s) => s.isFile(), () => false)) present.add(file.path);
     }
-    const commands = mergeSessionHostApprovals({ argv, files }, existing,
+    const commands = mergeSessionHostApprovals(opts.once ? { argv, files, once: true } : { argv, files }, existing,
       (c) => (c.files ?? []).every((f) => present.has(f.path)));
     const temp = `${manifest}.tmp-${process.pid}`;
     await fsp.writeFile(temp, buildSessionHostManifest(commands), { mode: 0o600 });
@@ -117,7 +118,7 @@ export async function approveSessionHostCommand(
  * to find devices on local networks?" again. Under the host the responsible
  * program is Walnut.app, whose one choice holds for every build.
  */
-export async function approveUnderSessionHost(argv: readonly string[]): Promise<
+export async function approveUnderSessionHost(argv: readonly string[], opts: { once?: boolean } = {}): Promise<
   { ok: true; executable: string; app: string } | { ok: false; reason: SessionHostUnavailable | 'bad_argv'; detail?: string }
 > {
   if (argv.length === 0 || !path.isAbsolute(argv[0]!)) return { ok: false, reason: 'bad_argv', detail: 'argv[0] must be an absolute path' };
@@ -132,7 +133,7 @@ export async function approveUnderSessionHost(argv: readonly string[]): Promise<
     return { ok: false, reason: 'unsupported_app', detail: `${installed.app} predates ${SESSION_HOST_FLAG}` };
   }
   try {
-    await approveSessionHostCommand(sessionHostManifestPath(home), argv);
+    await approveSessionHostCommand(sessionHostManifestPath(home), argv, opts);
   } catch (err) {
     return { ok: false, reason: 'unsupported_app', detail: `could not approve the launch: ${err instanceof Error ? err.message : String(err)}` };
   }

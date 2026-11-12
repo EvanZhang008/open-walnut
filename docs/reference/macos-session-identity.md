@@ -107,13 +107,24 @@ with no bundle, macOS keeps the answer under the program's **path** and its Mach
 path connected; another UUID at that path was refused; the code hash is not
 compared).
 
-- **A server Walnut.app started, or one `scripts/dev-prod.sh` deployed, runs under
-  Walnut.app**, so its one Local Network choice holds for every build. The deploy puts
-  `Walnut --session-host --` in front of the compiled file in its launchd job, after
-  the file approves its own command line (`walnut __session-host-approve`). Before
-  this, launchd ran the file from each deploy's new stage directory, and every
-  deploy asked about `walnut-darwin-arm64` again. A rollback, or
-  `WALNUT_SESSION_HOST=0`, runs the file directly.
+- **Every run of the compiled file a deploy makes goes through Walnut.app**, so the
+  one Local Network choice for Walnut holds for every build, whoever runs the deploy.
+  `scripts/dev-prod.sh` puts `Walnut --session-host --` in front of the file for its
+  self-test, its smoke boot (and so the daemon that boot starts), its plugin check, the
+  server's launchd job and a rollback, each after the file approves that exact command
+  line (`walnut __session-host-approve`, `host_prefix_for`). Only the host's own
+  refusal (exit 125), no Walnut.app, or `WALNUT_SESSION_HOST=0` runs the file directly.
+  Before this, launchd ran the server from each deploy's new stage directory, and every
+  deploy asked about `walnut-darwin-arm64` again (2026-11-04); then the smoke boot and a
+  rollback still ran straight from the file, which a deploy from a Walnut session hid
+  (macOS holds Walnut.app responsible for a session's processes) and a deploy from the
+  land queue, a launchd agent that answers for itself, did not (2026-11-12).
+  `tests/scripts/dev-prod-file-runs-under-host.test.ts` fails on a run that skips it.
+- **No Walnut program on a Mac reaches the local network on its own.** The daemon's host
+  facts never ask the cloud metadata address 169.254.169.254 on macOS (CDK's own rule:
+  a Mac is not an EC2 instance it probes), which was the request that made a smoke boot's
+  daemon ask. The same test lists every local-network address in `src/` with why it never
+  makes a Mac program ask.
 - **Every darwin file Walnut builds carries a fixed UUID and signing identifier**
   (`dev.openwalnut.walnut`, `dev.openwalnut.session-daemon`;
   `scripts/lib/macho-identity.mjs`). bun gives each file it compiles the UUID of

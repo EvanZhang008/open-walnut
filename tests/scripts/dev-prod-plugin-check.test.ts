@@ -108,12 +108,22 @@ async function prodServer(states: Record<string, string> | null): Promise<{ port
   return { port, close }
 }
 
+/** One function of dev-prod.sh, as written there. */
+function shellFn(name: string): string {
+  const m = new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?^\\}\\n`, 'm').exec(fs.readFileSync(path.join(REPO, 'scripts', 'dev-prod.sh'), 'utf8'))
+  if (!m) throw new Error(`no function ${name} in dev-prod.sh`)
+  return m[0]
+}
+
 async function runGate(dataHome: string, states: Record<string, string> | null, extra: string[] = []) {
   const prod = await prodServer(states)
   const tmp = fs.mkdtempSync(path.join(root, 'tmp-'))
   try {
     const r = await bash([
       'smoke_cleanup() { :; }; scratch_cleanup() { :; }; stage_cleanup() { :; }; release_lock() { :; }',
+      // The block runs the file under Walnut.app's session host when it can approve itself; this
+      // stand-in cannot (exit 99), so it runs directly, as on a Mac without the app.
+      shellFn('host_prefix_for'), shellFn('kill_with_children'),
       `REHEARSAL_HOME='${dataHome}'`,
       `PORT=${prod.port}`,
       `SERVER_FILE='${path.join(root, 'walnut-file')}'`,
@@ -238,7 +248,8 @@ describe('dev-prod.sh plugin load check: placement and isolation', () => {
     expect(block).toMatch(/OPEN_WALNUT_HOME="\$PLUGIN_CHECK_TMP\/home"/)
     expect(block).toMatch(/WALNUT_DAEMON_DIR="\$PLUGIN_CHECK_TMP\/daemon"/)
     expect(block).toMatch(/WALNUT_RUNTIME_DIR="\$PLUGIN_CHECK_TMP\/runtime"/)
-    expect(block).toMatch(/"\$SERVER_FILE" __plugin-check --dir "\$PLUGINS_DIR"/)
+    expect(block).toMatch(/plugin_check_args=\(--dir "\$PLUGINS_DIR"/)
+    expect(block).toMatch(/"\$SERVER_FILE" __plugin-check "\$\{plugin_check_args\[@\]\}"/)
     // Not named open-walnut-*: resolveOpenWalnutHome would revert it to the real data home.
     expect(block).toContain('walnut-plugincheck.XXXXXX')
     // bash 3.2 under set -u: an empty array expands only through the + form.

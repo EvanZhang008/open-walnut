@@ -65,7 +65,10 @@ describe('dev-prod.sh smoke boot ordering', () => {
     expect(selftest).toBeLessThan(smoke)
     expect(script.slice(failed, smoke)).toMatch(/exit 1/)
     // Isolated like the smoke boot: its own home and daemon dir.
-    const block = script.slice(script.lastIndexOf('SELFTEST_TMP="$(mktemp -d', selftest), selftest)
+    // The run itself: selftest_run, which goes through the session host when it can.
+    const runAt = indexOfOrFail('selftest_run() {')
+    const block = script.slice(runAt, script.indexOf('\n  }\n', runAt))
+    expect(block).toMatch(/\$\{host_prefix\[@\]\+"\$\{host_prefix\[@\]\}"\} \\\n\s*"\$SERVER_FILE" __selftest/)
     expect(block).toMatch(/OPEN_WALNUT_HOME="\$SELFTEST_TMP\/home"/)
     expect(block).toMatch(/WALNUT_DAEMON_DIR="\$SELFTEST_TMP\/daemon"/)
     // BUN_BE_BUN=1 would make the file run as the bun CLI, and the selftest pass on bun's own exit code.

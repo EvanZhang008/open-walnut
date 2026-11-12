@@ -933,6 +933,86 @@ set_server_argv() {
   fi
 }
 
+# ── Every run of a compiled file goes through Walnut.app ────────────────────
+# `host_prefix_for [--once] <walnut file> [args...]` approves `<file> args...` in the session
+# host's manifest and sets the global array host_prefix to (<Walnut.app executable>
+# --session-host --), to go between a run's env assignments and the file. Empty
+# (the file then runs as its own program) off macOS, with WALNUT_SESSION_HOST=0,
+# with no Walnut.app that knows the flag, for a file too old to approve itself, or
+# when the approval takes over 60 s (a Mac at a load of 150 starts the file slowly); host_why says which. host_env holds the
+# VAR=value words the approval runs with (the file's runtime dir, a rehearsal's
+# home), never put on the approved command.
+#
+# Why every run, not only the server's (2026-11-12, the user: "every day bro"): a
+# darwin file macOS holds responsible for itself is its own program to Local Network
+# privacy, keyed on its path, and every deploy's stage is a new path. The deploy ran
+# the selftest, the smoke boot (and the daemon it starts), the plugin check and a
+# rollback straight from the file. That was harmless while deploys ran inside a
+# Walnut session, whose processes macOS holds Walnut.app responsible for; from the
+# land queue (a launchd agent, its own responsible program) the smoke boot's daemon
+# probed the cloud metadata address 169.254.169.254 and macOS asked "Allow
+# walnut-darwin-arm64 to find devices on local networks?" for that stage. Under the
+# host the responsible program is Walnut.app, whoever runs the deploy.
+# tests/scripts/dev-prod-file-runs-under-host.test.ts fails on a run of a compiled
+# file in this script that does not go through it.
+host_prefix_for() {
+  host_prefix=()
+  host_why=""
+  if [[ "$(uname -s)" != "Darwin" ]]; then host_why="not macOS"; return 0; fi
+  if [[ "${WALNUT_SESSION_HOST:-1}" == "0" ]]; then host_why="WALNUT_SESSION_HOST=0"; return 0; fi
+  local once=() file out="" rc=0 waited=0 apid outf errf
+  # --once: a run that ends by itself, the first approval to go when the manifest is full.
+  if [[ "${1:-}" == "--once" ]]; then once=(--once); shift; fi
+  file="$1"
+  shift
+  outf="$(mktemp "${TMPDIR:-/tmp}/walnut-host-approve.XXXXXX")" || { host_why="no temp file"; return 0; }
+  # Its words go to the deploy's stderr, never into the server log: the readiness
+  # loop reads any new byte there as the new server's first output.
+  errf="$outf.err"
+  # runs-plain: the approval itself, which must run before the host can; it opens no connection and ends within 60 s.
+  env -u BUN_BE_BUN -u WALNUT_RUNTIME_DIR ${host_env[@]+"${host_env[@]}"} \
+    "$file" __session-host-approve ${once[@]+"${once[@]}"} -- "$file" "$@" \
+    </dev/null >"$outf" 2>"$errf" &
+  apid=$!
+  while kill -0 "$apid" 2>/dev/null && (( waited < 120 )); do sleep 0.5; waited=$(( waited + 1 )); done
+  if kill -0 "$apid" 2>/dev/null; then
+    kill -9 "$apid" 2>/dev/null || true
+    rc=124
+  fi
+  wait "$apid" 2>/dev/null || rc=$?
+  out="$(head -n 1 "$outf" 2>/dev/null || true)"
+  if [[ -s "$errf" ]]; then sed 's/^/  /' "$errf" | head -n 5 >&2 || true; fi
+  rm -f "$outf" "$errf"
+  if (( rc == 0 )) && [[ "$out" == /*/Walnut.app/Contents/MacOS/Walnut && -x "$out" ]]; then
+    host_prefix=("$out" --session-host --)
+  else
+    host_why="session host not used, status $rc"
+  fi
+}
+
+# `kill_with_children <signal> <pid>`: signal a run started through the host and the
+# two generations under it (the host's disclaimed second generation, then the file),
+# children first. A SIGKILL is never forwarded the way the host forwards SIGTERM,
+# so a forced end of the host alone would leave the file running. Read from the
+# process table by parent pid, never by name; pid <= 1 is never signalled.
+kill_with_children() {
+  local sig="$1" root="$2" gen kids="" next="" p
+  [[ "$root" =~ ^[0-9]+$ ]] && (( 10#$root > 1 )) || return 0
+  gen="$root"
+  for _ in 1 2; do
+    next=""
+    for p in $gen; do
+      next="$next $(ps -A -o pid= -o ppid= 2>/dev/null | awk -v pp="$p" '$2 == pp { print $1 }' || true)"
+    done
+    kids="$next $kids"
+    gen="$next"
+  done
+  for p in $kids "$root"; do
+    [[ "$p" =~ ^[0-9]+$ ]] && (( 10#$p > 1 )) || continue
+    kill "-$sig" "$p" 2>/dev/null || true
+  done
+}
+
 # ── Self-test of the compiled file ──────────────────────────────────────────
 # `walnut __selftest` checks the parts of the file a server boot does not reach
 # on a fresh machine (SQLite on bun, the worker threads, the tokenizer, the
@@ -942,11 +1022,26 @@ if [[ "${WALNUT_DEVPROD_SKIP_SELFTEST:-0}" != "1" ]]; then
   SELFTEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/walnut-selftest.XXXXXX")"
   mkdir -p "$SELFTEST_TMP/home" "$SELFTEST_TMP/daemon"
   echo "Self-testing $SERVER_FILE."
-  if ! env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u BUN_BE_BUN \
-    OPEN_WALNUT_HOME="$SELFTEST_TMP/home" \
-    WALNUT_DAEMON_DIR="$SELFTEST_TMP/daemon" \
-    WALNUT_RUNTIME_DIR="$STAGE_DIR/runtime" \
-    "$SERVER_FILE" __selftest; then
+  host_env=(WALNUT_RUNTIME_DIR="$STAGE_DIR/runtime")
+  host_prefix_for --once "$SERVER_FILE" __selftest
+  selftest_run() {
+    env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u BUN_BE_BUN \
+      OPEN_WALNUT_HOME="$SELFTEST_TMP/home" \
+      WALNUT_DAEMON_DIR="$SELFTEST_TMP/daemon" \
+      WALNUT_RUNTIME_DIR="$STAGE_DIR/runtime" \
+      ${host_prefix[@]+"${host_prefix[@]}"} \
+      "$SERVER_FILE" __selftest
+  }
+  selftest_rc=0
+  selftest_run || selftest_rc=$?
+  if (( selftest_rc == 125 && ${#host_prefix[@]} > 0 )); then
+    # 125 is the session host's own refusal, never the self-test's verdict.
+    echo "Walnut.app's session host refused the self-test (exit 125); running it directly." >&2
+    host_prefix=()
+    selftest_rc=0
+    selftest_run || selftest_rc=$?
+  fi
+  if (( selftest_rc != 0 )); then
     rm -rf "$SELFTEST_TMP" "$STAGE_DIR" 2>/dev/null || true
     echo "Self-test FAILED: the compiled file is broken; deploy aborted, production server on :$PORT untouched." >&2
     exit 1
@@ -983,7 +1078,7 @@ smoke_cleanup() {
       sleep 0.5
     done
     if kill -0 "$SMOKE_PID" 2>/dev/null; then
-      kill -9 "$SMOKE_PID" 2>/dev/null || true
+      kill_with_children 9 "$SMOKE_PID"
     fi
   fi
   SMOKE_PID=""
@@ -1042,17 +1137,38 @@ if [[ "${WALNUT_DEVPROD_SKIP_SMOKE:-0}" != "1" ]]; then
     if [[ "$REHEARSAL" == "1" && "${WALNUT_DEVPROD_REHEARSAL_FAIL_SMOKE:-0}" == "1" ]]; then
       smoke_argv=(/bin/sh -c 'echo "rehearsal: forced smoke failure" >&2; exit 3' rehearsal-smoke)
     fi
-    env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u WALNUT_RUNTIME_DIR -u BUN_BE_BUN \
-      OPEN_WALNUT_HOME="$SMOKE_TMP/home" \
-      WALNUT_DAEMON_DIR="$SMOKE_TMP/daemon" \
-      WALNUT_DISABLE_SEARCH=1 \
-      WALNUT_DAEMON_HEARTBEAT_MS=2000 \
-      "${smoke_argv[@]}" web --port "$smoke_port" \
-      >>"$SMOKE_LOG" 2>&1 &
-    SMOKE_PID=$!
+    # Under Walnut.app like every run of the file (host_prefix_for), so the smoke
+    # server and the daemon it starts are never their own program to macOS.
+    host_prefix=()
+    if [[ "${smoke_argv[1]:-}" == "$SERVER_FILE" ]]; then
+      host_env=("${smoke_argv[0]}")
+      host_prefix_for --once "$SERVER_FILE" web --port "$smoke_port"
+    fi
+    smoke_start() {
+      env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u WALNUT_RUNTIME_DIR -u BUN_BE_BUN \
+        OPEN_WALNUT_HOME="$SMOKE_TMP/home" \
+        WALNUT_DAEMON_DIR="$SMOKE_TMP/daemon" \
+        WALNUT_DISABLE_SEARCH=1 \
+        WALNUT_DAEMON_HEARTBEAT_MS=2000 \
+        "${smoke_argv[@]:0:1}" ${host_prefix[@]+"${host_prefix[@]}"} "${smoke_argv[@]:1}" web --port "$smoke_port" \
+        >>"$SMOKE_LOG" 2>&1 &
+      SMOKE_PID=$!
+    }
+    smoke_start
     smoke_ok=0
     for _ in $(seq 1 $(( SMOKE_SECS * 2 ))); do
       if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
+        smoke_rc=0
+        wait "$SMOKE_PID" 2>/dev/null || smoke_rc=$?
+        # Reaped: the pid is free for the system to reuse, so cleanup must not signal it.
+        SMOKE_PID=""
+        if (( smoke_rc == 125 && ${#host_prefix[@]} > 0 )); then
+          # The session host's own refusal, not the build's: boot it directly.
+          echo "Walnut.app's session host refused the smoke boot (exit 125); booting it directly." >&2
+          host_prefix=()
+          smoke_start
+          continue
+        fi
         break
       fi
       if curl --connect-timeout 1 --max-time 2 -sf \
@@ -1114,7 +1230,7 @@ PLUGIN_CHECK_TMP=""
 PLUGIN_CHECK_PID=""
 plugin_check_cleanup() {
   if [[ -n "$PLUGIN_CHECK_PID" ]] && kill -0 "$PLUGIN_CHECK_PID" 2>/dev/null; then
-    kill -9 "$PLUGIN_CHECK_PID" 2>/dev/null || true
+    kill_with_children 9 "$PLUGIN_CHECK_PID"
   fi
   PLUGIN_CHECK_PID=""
   if [[ -n "$PLUGIN_CHECK_TMP" ]]; then
@@ -1147,15 +1263,22 @@ if [[ "${WALNUT_DEVPROD_SKIP_PLUGIN_CHECK:-0}" != "1" && -d "$PLUGINS_DIR" ]]; t
     echo "Plugin check: no answer from :$PORT/api/plugin-runtime, so a plugin that fails here only warns." >&2
   fi
   echo "Plugin check: loading the plugins in $PLUGINS_DIR with the new build (load only, nothing activated)."
-  env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u WALNUT_RUNTIME_DIR -u BUN_BE_BUN \
-    OPEN_WALNUT_HOME="$PLUGIN_CHECK_TMP/home" \
-    WALNUT_DAEMON_DIR="$PLUGIN_CHECK_TMP/daemon" \
-    WALNUT_RUNTIME_DIR="$PLUGIN_CHECK_TMP/runtime" \
-    WALNUT_DISABLE_SEARCH=1 \
-    "$SERVER_FILE" __plugin-check --dir "$PLUGINS_DIR" ${plugin_prod_args[@]+"${plugin_prod_args[@]}"} \
-    --deadline-ms "$(( PLUGIN_CHECK_SECS * 1000 ))" \
-    >"$PLUGIN_CHECK_TMP/out.log" 2>&1 &
-  PLUGIN_CHECK_PID=$!
+  plugin_check_args=(--dir "$PLUGINS_DIR" ${plugin_prod_args[@]+"${plugin_prod_args[@]}"}
+    --deadline-ms "$(( PLUGIN_CHECK_SECS * 1000 ))")
+  host_env=(WALNUT_RUNTIME_DIR="$PLUGIN_CHECK_TMP/runtime")
+  host_prefix_for --once "$SERVER_FILE" __plugin-check "${plugin_check_args[@]}"
+  plugin_check_start() {
+    env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u WALNUT_RUNTIME_DIR -u BUN_BE_BUN \
+      OPEN_WALNUT_HOME="$PLUGIN_CHECK_TMP/home" \
+      WALNUT_DAEMON_DIR="$PLUGIN_CHECK_TMP/daemon" \
+      WALNUT_RUNTIME_DIR="$PLUGIN_CHECK_TMP/runtime" \
+      WALNUT_DISABLE_SEARCH=1 \
+      ${host_prefix[@]+"${host_prefix[@]}"} \
+      "$SERVER_FILE" __plugin-check "${plugin_check_args[@]}" \
+      >"$PLUGIN_CHECK_TMP/out.log" 2>&1 &
+    PLUGIN_CHECK_PID=$!
+  }
+  plugin_check_start
   # Its own deadline answers 2; this bound (15 s past it) only catches a process
   # that never got as far as setting one.
   plugin_rc=124
@@ -1163,6 +1286,14 @@ if [[ "${WALNUT_DEVPROD_SKIP_PLUGIN_CHECK:-0}" != "1" && -d "$PLUGINS_DIR" ]]; t
     if ! kill -0 "$PLUGIN_CHECK_PID" 2>/dev/null; then
       plugin_rc=0
       wait "$PLUGIN_CHECK_PID" || plugin_rc=$?
+      PLUGIN_CHECK_PID=""
+      if (( plugin_rc == 125 && ${#host_prefix[@]} > 0 )); then
+        echo "Walnut.app's session host refused the plugin check (exit 125); running it directly." >&2
+        host_prefix=()
+        plugin_rc=124
+        plugin_check_start
+        continue
+      fi
       break
     fi
     sleep 0.5
@@ -1292,6 +1423,20 @@ remove_launchd_job() {
   done
   return 0
 }
+
+# The new server's command is approved now, while the old server still serves, so
+# the approval (up to 60 s on a loaded Mac) adds nothing to the time :$PORT is dark.
+preapproved_file=""
+preapproved_prefix=()
+preapproved_why=""
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  set_server_argv "$SERVER_FILE"
+  host_env=("${server_argv[@]:0:$(( ${#server_argv[@]} - 1 ))}")
+  host_prefix_for "$SERVER_FILE" web --port "$PORT"
+  preapproved_file="$SERVER_FILE"
+  preapproved_prefix=(${host_prefix[@]+"${host_prefix[@]}"})
+  preapproved_why="$host_why"
+fi
 
 use_launchd=0
 if [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null 2>&1; then
@@ -1619,40 +1764,29 @@ launchd_job_argv() {
 # Every deploy's new stage path asked "Allow walnut-darwin-arm64 to find devices on local
 # networks?" again. Under the host the responsible program is Walnut.app, whose one choice holds
 # for every build. The file approves its own command line (`__session-host-approve`, the same
-# manifest the daemon's launch uses, other approvals kept) within 20 s, or the job runs it
+# manifest the daemon's launch uses, other approvals kept) within 60 s, or the job runs it
 # directly as before. A host that refuses the command anyway (exit 125: an older Walnut
 # rewrote the manifest, the app moved) is caught by the readiness loop
 # (session_host_refused), which relaunches the same build directly.
 session_host_prefix() {
   host_prefix=()
   [[ "$(uname -s)" == "Darwin" ]] || return 0
-  if [[ "${WALNUT_SESSION_HOST:-1}" == "0" || "${host_plain:-0}" == "1" ]]; then
-    echo "Server runs as its own program ($([[ "${host_plain:-0}" == "1" ]] && echo rollback || echo WALNUT_SESSION_HOST=0))."
+  if [[ "${host_plain:-0}" == "1" ]]; then
+    echo "Server runs as its own program (Walnut.app's session host refused it)."
     return 0
   fi
-  local file="$1" out="" rc=0 waited=0 apid outf errf last=$(( ${#server_argv[@]} - 1 ))
-  outf="$(mktemp "${TMPDIR:-/tmp}/walnut-host-approve.XXXXXX")" || return 0
-  # Its words go to the deploy's stderr, never into the server log: the readiness
-  # loop reads any new byte there as the new server's first output.
-  errf="$outf.err"
-  env -u BUN_BE_BUN -u WALNUT_RUNTIME_DIR "${server_argv[@]:0:$last}" \
-    "$file" __session-host-approve -- "$file" web --port "$PORT" \
-    </dev/null >"$outf" 2>"$errf" &
-  apid=$!
-  while kill -0 "$apid" 2>/dev/null && (( waited < 40 )); do sleep 0.5; waited=$(( waited + 1 )); done
-  if kill -0 "$apid" 2>/dev/null; then
-    kill -9 "$apid" 2>/dev/null || true
-    rc=124
-  fi
-  wait "$apid" 2>/dev/null || rc=$?
-  out="$(head -n 1 "$outf" 2>/dev/null || true)"
-  if [[ -s "$errf" ]]; then sed 's/^/  /' "$errf" | head -n 5 >&2 || true; fi
-  rm -f "$outf" "$errf"
-  if (( rc == 0 )) && [[ "$out" == /*/Walnut.app/Contents/MacOS/Walnut && -x "$out" ]]; then
-    host_prefix=("$out" --session-host --)
-    echo "Server runs under ${out%/Contents/MacOS/Walnut}: macOS asks for Walnut.app's permissions, once."
+  if [[ -n "${preapproved_file:-}" && "$1" == "$preapproved_file" ]]; then
+    host_prefix=(${preapproved_prefix[@]+"${preapproved_prefix[@]}"})
+    host_why="$preapproved_why"
   else
-    echo "Server runs as its own program (session host not used, status $rc); macOS may ask again for its local network access."
+    local last=$(( ${#server_argv[@]} - 1 ))
+    host_env=("${server_argv[@]:0:$last}")
+    host_prefix_for "$1" web --port "$PORT"
+  fi
+  if (( ${#host_prefix[@]} > 0 )); then
+    echo "Server runs under ${host_prefix[0]%/Contents/MacOS/Walnut}: macOS asks for Walnut.app's permissions, once."
+  else
+    echo "Server runs as its own program ($host_why); macOS may ask again for its local network access."
   fi
 }
 
@@ -1786,6 +1920,7 @@ launch_server() {
     # this script runs in may be a build clone deleted when it ends, and every
     # child of the server would inherit it (2026-11-03: the voice model's Python
     # died with FileNotFoundError in a server started here).
+    # runs-plain: the path off macOS; on macOS only when launchd cannot load or keep the job (a stuck label, a failed submit), where serving comes first.
     nohup /bin/sh -c 'cd "$1" && shift && exec "$@"' open-walnut "$SERVE_ROOT" \
       env -u OPEN_WALNUT_EPHEMERAL \
       -u OPEN_WALNUT_HOME \
@@ -1806,6 +1941,14 @@ launch_server() {
 # Its one caller holds use_launchd=1 (macOS only).
 session_host_refused() {
   launchctl print "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" 2>/dev/null | grep -q 'last exit code = 125'
+}
+
+# Whether the job's last run ended any way but a clean exit: a non-zero status
+# (the host's refusal included) or a signal. A job still in its first run has
+# neither line. Its one caller holds use_launchd=1 (macOS only).
+launchd_job_ended_badly() {
+  launchctl print "$LAUNCHD_DOMAIN/$LAUNCH_LABEL" 2>/dev/null \
+    | grep -q -E 'last exit code = [1-9]|last terminating signal'
 }
 
 # Bounded /api/config poll used by the rollback path (the primary readiness
@@ -1931,12 +2074,40 @@ rollback_to_lkg() {
     echo "Could not stage the last-known-good build; starting it from $lkg itself." >&2
   fi
   echo "Rolling back to the last-known-good file: $lkg_path" >&2
-  # Straight from the file, never through the session host: whatever failed
-  # this deploy may have been the host, and a rollback must serve.
-  host_plain=1
+  # Under Walnut.app like every run of the file (2026-11-11: a rollback that ran
+  # straight from its stage asked for local network access again). A rollback
+  # must serve, so a host that refuses it is left at once for the file itself.
+  # A host that already refused this deploy gets no second try.
+  if (( ${host_retry_done:-0} )); then host_plain=1; fi
+  local rb_ready=1 rb_base rb_halves=0
+  rb_base="$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)"
   launch_server "$lkg_path"
   host_plain=0
-  if wait_for_config_ready 90; then
+  if (( use_launchd && ${#host_prefix[@]} > 0 )); then
+    rb_ready=0
+    for _ in $(seq 1 180); do
+      rb_halves=$(( rb_halves + 1 ))
+      if curl --connect-timeout 1 --max-time 2 -sf "http://localhost:$PORT/api/config" >/dev/null 2>&1; then
+        rb_ready=2
+        break
+      fi
+      # Whatever failed this deploy may have been the host: a refusal (125), a host
+      # that died some other way, or one that wrote nothing in 15 s leaves it for
+      # the file itself, so a rollback still serves.
+      if launchd_job_ended_badly || { (( rb_halves == ${FIRSTLOG_SECS:-15} * 2 )) \
+        && [[ "$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)" == "$rb_base" ]]; }; then
+        echo "The rollback server did not come up under Walnut.app's session host; starting it directly." >&2
+        remove_launchd_job || true
+        host_plain=1
+        launch_server "$lkg_path"
+        host_plain=0
+        rb_ready=1
+        break
+      fi
+      sleep 0.5
+    done
+  fi
+  if (( rb_ready == 2 )) || { (( rb_ready == 1 )) && wait_for_config_ready 90; }; then
     echo "Rollback server is serving on :$PORT (this deploy itself still failed)." >&2
   else
     echo "Rollback server not ready after 90s; left running in case it settles late." >&2

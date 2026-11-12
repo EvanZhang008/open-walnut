@@ -53,7 +53,7 @@ function run(bash: string, f: ReturnType<typeof fixture>, extra = ''): { prefix:
     'uname() { echo Darwin; }',
     `PORT=3456; LAUNCH_LABEL=com.example.prod; SERVE_ROOT='${f.dir}'; SERVER_LOG='${f.dir}/server.log'; REHEARSAL=0`,
     extra,
-    fn('set_server_argv'), fn('launchd_job_argv'), fn('session_host_prefix'),
+    fn('host_prefix_for'), fn('set_server_argv'), fn('launchd_job_argv'), fn('session_host_prefix'),
     `set_server_argv '${f.file}'`,
     `session_host_prefix '${f.file}'`,
     'launchd_job_argv',
@@ -96,7 +96,7 @@ describe('dev-prod.sh: the server runs under the session host', () => {
       fs.rmSync(f.dir, { recursive: true, force: true })
     })
 
-    it(`a rollback and WALNUT_SESSION_HOST=0 never ask the file (${bash})`, () => {
+    it(`a relaunch after the host refused, and WALNUT_SESSION_HOST=0, never ask the file (${bash})`, () => {
       for (const extra of ['host_plain=1', 'export WALNUT_SESSION_HOST=0']) {
         const f = fixture(0)
         const { prefix } = run(bash, f, extra)
@@ -131,8 +131,105 @@ describe('dev-prod.sh: the server runs under the session host', () => {
     expect(fn('session_host_prefix')).not.toMatch(/SERVER_LOG/)
   })
 
-  it('the launchd path asks for the host and the rollback launches plain', () => {
+  it('the launchd path asks for the host', () => {
     expect(fn('launch_server')).toMatch(/if \(\( use_launchd \)\); then\n\s*session_host_prefix "\$1"/)
-    expect(fn('rollback_to_lkg')).toMatch(/host_plain=1\n\s*launch_server "\$lkg_path"\n\s*host_plain=0/)
   })
+
+  // 2026-11-11: a rollback launched straight from its stage asked for local network access again.
+  // Now it runs under the host, and anything the host does wrong leaves it for the file itself.
+  for (const bash of bashes()) {
+    it(`a rollback runs under the host, and a host that fails it in any way relaunches the last good file directly (${bash})`, () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-rb-'))
+      const go = (o: { endedBadly?: boolean; serves?: boolean; writes?: boolean; refusedBefore?: boolean }) => spawnSync(bash, ['-c', [
+        'set -euo pipefail',
+        `PORT=3456; LKG_DIR='${dir}/lkg'; REPO_ROOT='${dir}'; BUN_BIN=true; HOME='${dir}'; use_launchd=1; FIRSTLOG_SECS=1`,
+        `SERVER_LOG='${dir}/server.log'; : > "$SERVER_LOG"; host_retry_done=${o.refusedBefore ? 1 : 0}`,
+        `lkg_file() { echo '${dir}/lkg/dist-bin/walnut-darwin-arm64'; }`,
+        `stage_lkg_for_rollback() { echo '${dir}/rb'; }`,
+        'launch_server() { echo "LAUNCH:plain=${host_plain:-0}"; if [ "${host_plain:-0}" = 1 ]; then host_prefix=(); else host_prefix=(/A/Walnut.app/Contents/MacOS/Walnut --session-host --); fi; ' +
+          (o.writes ? 'echo booting >> "$SERVER_LOG"; ' : '') + '}',
+        `launchd_job_ended_badly() { ${o.endedBadly ? 'return 0' : 'return 1'}; }`,
+        `curl() { ${o.serves ? 'return 0' : 'return 1'}; }`,
+        'sleep() { :; }', 'seq() { echo 1 2 3 4 5 6; }',
+        'remove_launchd_job() { echo REMOVED; }',
+        'wait_for_config_ready() { echo WAITED; return 0; }',
+        fn('rollback_to_lkg'), 'rollback_to_lkg',
+      ].join('\n')], { encoding: 'utf8' })
+      const lines = (r: ReturnType<typeof go>) => { expect(r.status, r.stderr).toBe(0); return r.stdout.trim().split('\n') }
+      const toPlain = ['LAUNCH:plain=0', 'REMOVED', 'LAUNCH:plain=1', 'WAITED']
+      expect(lines(go({ endedBadly: true, writes: true }))).toEqual(toPlain)
+      expect(lines(go({ writes: false }))).toEqual(toPlain) // a host that never wrote a byte
+      expect(lines(go({ serves: true }))).toEqual(['LAUNCH:plain=0'])
+      const slow = go({ writes: true })
+      expect(lines(slow)).toEqual(['LAUNCH:plain=0'])
+      expect(slow.stderr).toMatch(/not ready after 90s; left running/)
+      expect(lines(go({ refusedBefore: true }))).toEqual(['LAUNCH:plain=1', 'WAITED'])
+      fs.rmSync(dir, { recursive: true, force: true })
+    })
+
+    it(`reads a job that ended badly from launchd: a non-zero exit or a signal, never a first run or a clean exit (${bash})`, () => {
+      const probe = (state: string) => spawnSync(bash, ['-c', [
+        'set -euo pipefail', 'LAUNCHD_DOMAIN=gui/501; LAUNCH_LABEL=com.example.prod',
+        `launchctl() { printf 'gui/501/x = {\n\tstate = waiting\n${state}}\n'; }`,
+        fn('launchd_job_ended_badly'), 'if launchd_job_ended_badly; then echo BAD; else echo FINE; fi',
+      ].join('\n')], { encoding: 'utf8' }).stdout.trim()
+      expect(probe('\tlast exit code = 125\n')).toBe('BAD')
+      expect(probe('\tlast exit code = 1\n')).toBe('BAD')
+      expect(probe('\tlast terminating signal = Killed: 9\n')).toBe('BAD')
+      expect(probe('\tlast exit code = 0\n')).toBe('FINE')
+      expect(probe('\tlast exit code = (never exited)\n')).toBe('FINE')
+      expect(probe('')).toBe('FINE')
+    })
+  }
+
+  it('the server is approved before the old one is stopped, and its launch reuses that approval', () => {
+    const preapprove = script.indexOf('host_prefix_for "$SERVER_FILE" web --port "$PORT"')
+    expect(preapprove).toBeGreaterThan(0)
+    expect(preapprove).toBeLessThan(script.indexOf('existing_pids="$(listener_pids)"'))
+    expect(preapprove).toBeLessThan(script.indexOf('\nuse_launchd=0\n'))
+    expect(fn('session_host_prefix')).toMatch(/"\$1" == "\$preapproved_file"/)
+  })
+
+  for (const bash of bashes()) {
+    it(`approves exactly the argv each run gives the host, with its runtime dir (${bash})`, () => {
+      const f = fixture(0)
+      const r = spawnSync(bash, ['-c', [
+        'set -euo pipefail', 'uname() { echo Darwin; }', fn('host_prefix_for'),
+        `host_env=(WALNUT_RUNTIME_DIR='${f.dir}/plugincheck/runtime')`,
+        `host_prefix_for --once '${f.file}' __plugin-check --dir '${f.dir}/plugins' --deadline-ms 120000`,
+        'printf "PREFIX:%s\\n" ${host_prefix[@]+"${host_prefix[@]}"}',
+      ].join('\n')], { encoding: 'utf8', env: { ...process.env, TMPDIR: f.dir } })
+      expect(r.status, r.stderr).toBe(0)
+      expect(r.stdout.split('\n').filter((l) => l.startsWith('PREFIX:')).map((l) => l.slice(7))).toEqual([f.host, '--session-host', '--'])
+      expect(fs.readFileSync(f.log, 'utf8').split('\n')).toEqual([
+        '__session-host-approve', '--once', '--', f.file, '__plugin-check', '--dir', `${f.dir}/plugins`, '--deadline-ms', '120000',
+        `RT=${f.dir}/plugincheck/runtime`, '',
+      ])
+      fs.rmSync(f.dir, { recursive: true, force: true })
+    })
+
+    it(`kill_with_children ends the host and both generations under it, and never pid 1 (${bash})`, () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-kill-'))
+      // A stand-in for host gen1 -> gen2 -> the file: three sleeping shells, each the parent of the next.
+      const r = spawnSync(bash, ['-c', [
+        fn('kill_with_children'),
+        `/bin/sh -c '/bin/sh -c "/bin/sleep 60 & echo \$! > ${dir}/g3; wait" & echo $! > ${dir}/g2; wait' &`,
+        'root=$!', `while [ ! -s ${dir}/g3 ]; do /bin/sleep 0.1; done`,
+        `g2=$(cat ${dir}/g2); g3=$(cat ${dir}/g3)`,
+        'kill_with_children 9 "$root"', '/bin/sleep 0.3',
+        'for p in "$root" "$g2" "$g3"; do if kill -0 "$p" 2>/dev/null; then echo "ALIVE:$p"; kill -9 "$p" 2>/dev/null; fi; done',
+        'echo DONE',
+      ].join('\n')], { encoding: 'utf8', timeout: 20_000 })
+      expect(r.stdout, r.stderr).toMatch(/DONE/)
+      expect(r.stdout).not.toMatch(/ALIVE/)
+      // The input floor, with kill and ps stubbed so nothing real is ever signalled.
+      const floor = spawnSync(bash, ['-c', [
+        'kill() { echo "KILL $*"; }', 'ps() { printf "  5 1\\n  6 0\\n"; }', fn('kill_with_children'),
+        'kill_with_children 9 1', 'kill_with_children 9 0', 'kill_with_children 9 not-a-pid', 'kill_with_children 9 ""',
+        'echo END',
+      ].join('\n')], { encoding: 'utf8' })
+      expect(floor.stdout.trim()).toBe('END')
+      fs.rmSync(dir, { recursive: true, force: true })
+    })
+  }
 })
