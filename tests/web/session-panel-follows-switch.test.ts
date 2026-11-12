@@ -139,7 +139,10 @@ describe('every surface that holds a session id stays on the task\'s current con
 
   it('every send by session id is the composer hook (which follows) or a one-shot sender', () => {
     const found = files.filter((f) => /['"]session:send['"]/.test(fs.readFileSync(f, 'utf8'))).map(rel).sort();
-    expect(found).toEqual([...ONE_SHOT_SENDERS, 'web/src/hooks/useSessionSend.ts'].sort());
+    // ws.ts is the transport, not a sender: it only adds a test-run window's label to every send.
+    expect(found).toEqual([...ONE_SHOT_SENDERS, 'web/src/hooks/useSessionSend.ts', 'web/src/api/ws.ts'].sort());
+    expect(read('web/src/api/ws.ts').match(/['"]session:send['"]/g)).toHaveLength(1);
+    expect(read('web/src/api/ws.ts')).toContain("if (method === 'session:send') payload = withSendTestRun(payload);");
   });
 
   it('the server never lets a replaced session take a message', () => {
