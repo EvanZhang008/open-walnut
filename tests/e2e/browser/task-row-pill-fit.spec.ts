@@ -12,7 +12,9 @@
  *   - a roomy column keeps every word (and the Leader count);
  *   - a pill that arrives after the row drew (the triggers load late) is a letter at once;
  *   - folding gives the title real room;
- *   - widening or narrowing the column flips the rows live, no reload.
+ *   - widening or narrowing the column flips the rows live, no reload;
+ *   - the Worker pill names its leader after the word or letter (2026-11-11: "W · leader"),
+ *     in both column widths.
  * Both surfaces: the Focus/pinned card and the list row.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
@@ -66,8 +68,11 @@ async function pillLook(host: Locator, testId: string) {
   return host.getByTestId(testId).first().evaluate((el) => {
     const long = el.querySelector('.task-pill-long') as HTMLElement
     const letter = getComputedStyle(el, '::after').content.replace(/^"|"$/g, '')
+    // The Worker pill also carries its leader's title after the word.
+    const parent = el.querySelector('[data-testid="worker-parent-title"]') as HTMLElement | null
     return {
-      text: el.textContent?.trim() ?? '',
+      text: (el.textContent ?? '').replace(parent?.textContent ?? '', '').trim(),
+      parent: parent && getComputedStyle(parent).display !== 'none' ? parent.textContent?.trim() ?? '' : '',
       wordDrawn: getComputedStyle(long).display !== 'none',
       letter: letter === 'none' || letter === 'normal' ? '' : letter,
       borderStyle: getComputedStyle(el).borderTopStyle,
@@ -98,10 +103,12 @@ test.afterEach(async () => {
 interface Fixture {
   lone: string; loneTrigger: string; tagWorker: string; workerTrigger: string
   tagWorkerTrigger: string; leaderTrigger: string; allPaused: string; mixedPaused: string
+  leaderTitle: string
 }
 
 async function seed(project: string, stamp: string, pinned: boolean): Promise<Fixture> {
-  const leader = await createTask(`Fit leader ${stamp}`, { project, pinned })
+  const leaderTitle = `Fit leader ${stamp}`
+  const leader = await createTask(leaderTitle, { project, pinned })
   const mk = (label: string, extra: Record<string, unknown> = {}) =>
     createTask(`Fit ${label} ${stamp}`, { project, pinned, ...extra })
   const lone = await mk('lone worker', { parent_task_id: leader })
@@ -122,7 +129,7 @@ async function seed(project: string, stamp: string, pinned: boolean): Promise<Fi
   await armTrigger(allPaused, `fit ${stamp} ap2`, false)
   await armTrigger(mixedPaused, `fit ${stamp} mp1`)
   await armTrigger(mixedPaused, `fit ${stamp} mp2`, false)
-  return { lone, loneTrigger, tagWorker, workerTrigger, tagWorkerTrigger, leaderTrigger, allPaused, mixedPaused }
+  return { lone, loneTrigger, tagWorker, workerTrigger, tagWorkerTrigger, leaderTrigger, allPaused, mixedPaused, leaderTitle }
 }
 
 async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f: Fixture, shotName: string, browserName: string) {
@@ -139,7 +146,7 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
   await expect(page.locator('.home-navigation-scroll').first()).toHaveAttribute('data-row-fit', 'tight')
 
   // A lone pill is a letter too: the whole column folds, never row by row.
-  expect(await pillLook(row(f.lone), 'subtask-pill'), 'lone Worker @306').toMatchObject({ text: 'Worker', wordDrawn: false, letter: 'W' })
+  expect(await pillLook(row(f.lone), 'subtask-pill'), 'lone Worker @306').toMatchObject({ text: 'Worker', parent: f.leaderTitle, wordDrawn: false, letter: 'W' })
   expect(await pillLook(row(f.loneTrigger), 'task-trigger-pill'), 'lone TRIGGER @306').toMatchObject({ text: 'Trigger', wordDrawn: false, letter: 'T' })
 
   // Every pill the column draws, seeded or not, is a letter with its word hidden. A pull request
@@ -188,7 +195,10 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
     expect(foldedTitle, 'wrapped metadata leaves the whole content width for the title').toBeGreaterThanOrEqual(available - 2)
     expect(Math.abs(foldedTitle - wordyTitle), 'metadata labels never squeeze the title').toBeLessThan(2)
   } else {
-    expect(foldedTitle - wordyTitle, 'folding the pills gives the title room').toBeGreaterThan(25)
+    // The Worker pill also names its leader, so at 306px it sits at its own minimum width in
+    // both fits; the room comes from the pills beside it (TRIGGER to T alone gives ~25px).
+    expect(foldedTitle - wordyTitle, 'folding the pills gives the title room').toBeGreaterThan(12)
+    expect(foldedTitle, 'the folded card keeps the start of its title').toBeGreaterThan(40)
   }
 
   // Dashed only when EVERY trigger is off; solid while any polls; never a count or PAUSED.
@@ -208,7 +218,7 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
   // ── Widening flips the rows live: every word is back, the Leader count too.
   await setColumnWidth(page, 640)
   await expect(page.locator('.home-navigation-scroll').first()).toHaveAttribute('data-row-fit', 'roomy')
-  expect(await pillLook(row(f.tagWorkerTrigger), 'subtask-pill'), 'Worker @640').toMatchObject({ text: 'Worker', wordDrawn: true, letter: '' })
+  expect(await pillLook(row(f.tagWorkerTrigger), 'subtask-pill'), 'Worker @640').toMatchObject({ text: 'Worker', parent: f.leaderTitle, wordDrawn: true, letter: '' })
   expect(await pillLook(row(f.tagWorkerTrigger), 'task-trigger-pill'), 'TRIGGER @640').toMatchObject({ text: 'Trigger', wordDrawn: true, letter: '' })
   expect(await pillLook(row(f.leaderTrigger), 'leader-pill'), 'Leader @640').toMatchObject({ wordDrawn: true, letter: '' })
   expect((await pillLook(row(f.leaderTrigger), 'leader-pill')).text).toMatch(/^Leader · \d+$/)

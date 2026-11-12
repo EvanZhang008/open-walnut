@@ -330,10 +330,13 @@
 .worker-team-flyout .leader-sub-row.is-self .leader-sub-title { font-weight: 600; }
 .worker-team-flyout .leader-subtasks-list + .leader-subtasks-title { margin-top: 4px; }
 
-/* The parent fits beside Worker and gives its room back before the row's time or actions. */
+/* The parent fits beside Worker and gives its room back before the row's time or actions.
+   Squeezed below the word plus the parent's minimum, the pill clips its parent instead of
+   running it under the next pill. */
 .task-team-pill.todo-item-subtask-pill {
   flex: 0 1 auto;
   min-width: 64px;
+  overflow: hidden;
   max-width: 152px;
   gap: 4px;
 }
