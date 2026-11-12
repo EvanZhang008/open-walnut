@@ -400,7 +400,7 @@ describe('a later update while the probation runs', () => {
     const runner = extraPids[extraPids.length - 1]
     // Its own look found nothing (no probation yet): it waits for the lock in its snapshot.
     // `-A -o ppid= -o args=` reads the same on GNU and BSD ps; `--ppid` is GNU only, so a Mac never saw the wait.
-    const waitsForLock = () => (spawnSync('ps', ['-A', '-o', 'ppid=', '-o', 'args='], { encoding: 'utf8' }).stdout ?? '').split('\n')
+    const waitsForLock = () => (spawnSync('ps', ['-A', '-o', 'ppid=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout ?? '').split('\n')
       .some((l) => { const m = /^\s*(\d+)\s+(.*)$/.exec(l); return !!m && m[1] === String(runner) && m[2].trim() === 'sleep 1' })
     await vi.waitFor(() => expect(waitsForLock()).toBe(true), { timeout: 30_000, interval: 100 })
     // The holder starts the probation (its end written), then lets go.

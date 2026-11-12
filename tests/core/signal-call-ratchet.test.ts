@@ -122,6 +122,9 @@ const SESSION_STORE_BUDGET: Record<string, number> = {
 const INDIRECT_SIGNAL_BUDGET: Record<string, number> = {
   // `kill -TERM "$PID"` on the daemon in its own dir, after `ps` proved the pid's command and start time
   'src/providers/daemon-start-cmd.ts': 1,
+  // the type check guard's refusal names `kill <pid>` as the session's way out: words for the model about the one
+  // type check it proved is the session's own (a child of its CLI pid); the hook itself signals nothing
+  'src/providers/typecheck-guard-hook.ts': 1,
   // `kill "$p"` (then -9) on the trial daemon it started itself: `$!` of its own background job, in its throwaway dir, only while it has not exited
   'src/providers/daemon-trial-cmd.ts': 1,
   // the update runner's watch: `kill -TERM`/`-KILL "$cp"` on the try it started itself (`$!`) once it ran past
