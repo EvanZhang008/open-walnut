@@ -316,6 +316,33 @@ for (const variant of ['info', 'error'] as const) {
   });
 }
 
+// A reply the reader watched stream keeps its row after the turn ends; the short words on
+// the way to it stay in the fold, saved as they were live (2026-11-12: they showed again).
+test('words before a step stay folded when the answer the reader watched stream is saved', async ({ page }) => {
+  const words: Row = { role: 'assistant', text: 'MX_LEAD let me check.', msgId: 'mx-lead', timestamp: at(20), tools: [{ name: 'Bash', toolUseId: 'mx-t1', input: { command: 'sample-cmd --one' }, result: 'ok' }] };
+  const messages: Row[] = [...PRIOR, ASK];
+  await mockSession(page, messages, 'running', { blocks: [], isStreaming: true });
+  const history = await open(page);
+  await waitForWs(page);
+  await waitForStream(page);
+  await page.waitForTimeout(300);
+  await injectEvent(page, 'session:text-delta', { sessionId: MOCK_SESSION_ID, delta: 'MX_LEAD let me check.', msgId: 'mx-lead' });
+  await injectEvent(page, 'session:tool-use', { sessionId: MOCK_SESSION_ID, toolName: 'Bash', toolUseId: 'mx-t1', input: { command: 'sample-cmd --one' }, msgId: 'mx-lead' });
+  await injectEvent(page, 'session:tool-result', { sessionId: MOCK_SESSION_ID, toolUseId: 'mx-t1', result: 'ok' });
+  await injectEvent(page, 'session:text-delta', { sessionId: MOCK_SESSION_ID, delta: 'MX_FINAL all done.', msgId: 'mx-fin' });
+  await expect(history).toContainText('MX_FINAL', { timeout: 10000 });
+  const lead = history.getByText('MX_LEAD let me check.');
+  await expect(lead).toBeHidden();
+  messages.push(words, FINAL);
+  await setMockStream(page, { blocks: [], isStreaming: false });
+  await injectEvent(page, 'session:result', { sessionId: MOCK_SESSION_ID, result: 'done', isError: false });
+  await injectEvent(page, 'session:batch-completed', { sessionId: MOCK_SESSION_ID, count: 1 });
+  await page.waitForTimeout(1200);
+  await expect(history.locator('[data-testid="turn-fold"]')).toHaveCount(1);
+  await expect(lead).toBeHidden();
+  await expect(history.getByText('MX_FINAL all done.')).toBeVisible();
+});
+
 test('long words in the middle of a turn are read, not folded', async ({ page }) => {
   const long = 'MX_LONG here is what I found:\n\n- first finding\n- second finding\n- third finding\n- fourth finding';
   const rows: Row[] = [KINDS.command(1).row, { role: 'assistant', text: long, msgId: 'mx-m2', timestamp: at(22) }, KINDS.edit(3).row];

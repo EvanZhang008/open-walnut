@@ -101,15 +101,17 @@ async function startSampler(page: Page) {
       if (!w.__disclosureSampling) return;
       const h = document.querySelector('.main-page-session-column .session-history') ?? document.querySelector('.session-history');
       const text = (h as HTMLElement | null)?.innerText ?? '';
-      const runs = Array.from(h?.querySelectorAll('.tool-run-row') ?? []).filter((r) => (r.textContent ?? '').includes('echo alpha'));
+      // The turn's one fold holding the calls (2026-11-12: every step before the answer is one
+      // fold; it was the calls' own "Ran 2 commands" run row).
+      const runs = Array.from(h?.querySelectorAll('[data-testid="turn-fold"]') ?? []).filter((r) => (r.textContent ?? '').includes('echo alpha'));
       w.__disclosureFrames.push({
         outputs: (text.match(/alpha-out/g) ?? []).length,
         runs: runs.length,
-        runOpen: runs.length === 1 && !!runs[0].querySelector(':scope > .tool-run-body'),
+        runOpen: runs.length === 1 && !!runs[0].querySelector(':scope > .process-fold-body'),
         diffBodies: h?.querySelectorAll('.edit-diff-body').length ?? 0,
         editCards: Array.from(h?.querySelectorAll('.chat-tool-block-name') ?? []).filter((e) => e.textContent === 'Edit').length,
-        // Every row that names the Edit, folded or not: a second copy shows here.
-        editRuns: Array.from(h?.querySelectorAll('.tool-run-label') ?? []).filter((e) => /edited a file/i.test(e.textContent ?? '')).length,
+        // Every card of the Edit, in the fold or not: a second copy shows here.
+        editRuns: Array.from(h?.querySelectorAll('.chat-tool-block') ?? []).filter((e) => !e.parentElement?.closest('.chat-tool-block') && (e.textContent ?? '').includes('a.ts')).length,
       });
       requestAnimationFrame(tick);
     };
@@ -147,15 +149,17 @@ test('an opened run, an opened card and a folded diff stay as the reader left th
   const history = page.locator('.main-page-session-column .session-history').first();
   await expect(history).toContainText('Starting.');
 
+  // The CLI names each call's message (its saved row's msgId), so the fold keeps its key.
   for (const t of [toolA, toolB, toolE]) {
-    await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: t.name, toolUseId: t.toolUseId, input: t.input, taskId: 'pw-task-001' });
+    await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: t.name, toolUseId: t.toolUseId, input: t.input, taskId: 'pw-task-001', msgId: 'msg-d-t1' });
     await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: t.toolUseId, result: t.result, taskId: 'pw-task-001' });
   }
-  const liveRun = history.locator('.session-live-row .tool-run-row').filter({ hasText: /^Ran 2 commands/ });
+  // The turn's one fold (it was the calls' "Ran 2 commands" run row before 2026-11-12).
+  const liveRun = history.locator('[data-testid="turn-fold"]').last();
   await expect(liveRun).toHaveCount(1);
 
-  // The reader opens the run, opens the first command, folds the diff.
-  await liveRun.locator('.tool-run-toggle').click();
+  // The reader opens the fold, opens the first command, folds the diff.
+  await liveRun.locator(':scope > .tool-run-toggle').click();
   // Live, the Edit is the diff its saved row draws.
   await expect(liveRun.locator('.edit-diff-body')).toHaveCount(1);
   await liveRun.locator('.chat-tool-block-header', { hasText: 'echo alpha' }).click();
@@ -177,13 +181,13 @@ test('an opened run, an opened card and a folded diff stay as the reader left th
   await injectEvent(page, 'session:batch-completed', { sessionId: SESSION_ID, count: 1 });
   await midRead;
   // The saved run took over: no live copy of it is left.
-  await expect(history.locator('.session-live-row .tool-run-row').filter({ hasText: 'echo alpha' })).toHaveCount(0);
+  await expect(history.locator('.session-live-row [data-testid="turn-fold"]').filter({ hasText: 'echo alpha' })).toHaveCount(0);
   await expect(history.getByText(midText)).toHaveCount(1);
   await page.waitForTimeout(400);
   await history.screenshot({ path: test.info().outputPath('after-mid-turn-save.png') });
 
   // The turn goes on, then ends.
-  await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: 'Bash', toolUseId: toolC.toolUseId, input: toolC.input, taskId: 'pw-task-001' });
+  await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: 'Bash', toolUseId: toolC.toolUseId, input: toolC.input, taskId: 'pw-task-001', msgId: 'msg-d-t2' });
   await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: toolC.toolUseId, result: toolC.result, taskId: 'pw-task-001' });
   await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: 'All checks pass.', msgId: 'msg-d-reply' });
   await page.waitForTimeout(300);
@@ -202,8 +206,8 @@ test('an opened run, an opened card and a folded diff stay as the reader left th
   expect(bad.slice(0, 5), `frames where the run, the card or the diff changed (of ${frames.length})`).toEqual([]);
 
   // The finished turn reads as the reader left it.
-  const savedRun = history.locator('.tool-run-row').filter({ hasText: 'echo alpha' });
-  await expect(savedRun.locator(':scope > .tool-run-body')).toHaveCount(1);
+  const savedRun = history.locator('[data-testid="turn-fold"]').filter({ hasText: 'echo alpha' });
+  await expect(savedRun.locator(':scope > .process-fold-body')).toHaveCount(1);
   await expect(savedRun).toContainText('alpha-out');
   await expect(savedRun.locator('.edit-diff-body')).toHaveCount(0);
   await expect(history).toContainText('All checks pass.');

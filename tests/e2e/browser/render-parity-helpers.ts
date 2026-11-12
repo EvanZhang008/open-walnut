@@ -56,7 +56,10 @@ export async function snapReply(page: Page, marker: string): Promise<ReplySnap> 
     const rr = root.getBoundingClientRect();
     const elems: ElemSnap[] = [];
     const walk = (el: Element, path: string) => {
-      const r = el.getBoundingClientRect();
+      // An element not drawn (display: none) has no box: its zero rect measured against the
+      // root's would read the scroll position, which is no change in the reply.
+      const drawn = el.getClientRects().length > 0;
+      const r = drawn ? el.getBoundingClientRect() : rr;
       const cs = getComputedStyle(el);
       const style: Record<string, string> = {};
       for (const p of props) style[p] = cs.getPropertyValue(p);

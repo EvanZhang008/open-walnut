@@ -45,6 +45,9 @@ export interface TurnShape {
   kind: TurnKind;
   /** The answer row, for `answered`; -1 otherwise. */
   answer: number;
+  /** A caller's: an answered turn it shows `open` (a reply the reader watched stream keeps its
+   *  row): its last row with calls before the answer, so the words up to there still fold. */
+  watchedStepsTo?: number;
 }
 
 export interface TurnShapeOptions {

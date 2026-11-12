@@ -109,6 +109,14 @@ const base = Array.from({ length: 60 }, (_, i) => ({
   timestamp: new Date(1700000000000 + i * 1000).toISOString(),
 }));
 const STREAM_COUNT = 120;
+/** The same paragraphs past narration's length (fold-rows.ts isNarration): read, never folded,
+ *  even with a step after them (2026-11-12: every short line before a step folds). */
+const streamedLong = Array.from({ length: STREAM_COUNT }, (_, i) => ({
+  role: 'assistant',
+  text: `streamed paragraph ${i} — ${'analysis output line with plenty of words to take vertical space. '.repeat(7)}`,
+  msgId: `turn-${i}`,
+  timestamp: new Date(1700001000000 + i * 1000).toISOString(),
+}));
 const streamed = Array.from({ length: STREAM_COUNT }, (_, i) => ({
   role: 'assistant',
   text: `streamed paragraph ${i} — ${'analysis output line with plenty of words to take vertical space. '.repeat(4)}`,
@@ -166,14 +174,14 @@ const peerNote = {
 /** A reader scrolled up mid-turn through the turn's end: STREAM_COUNT paragraphs
  *  stream (then `tail`'s tool call), the reader wheels up to mid-container, and
  *  the archive flushes the turn. `lead` rows open the turn in history. */
-async function readerThroughAbsorption(page: Page, tail: readonly unknown[], lead: readonly unknown[] = []) {
+async function readerThroughAbsorption(page: Page, tail: readonly unknown[], lead: readonly unknown[] = [], paras = streamed) {
   // 120 streamed paragraphs and a turn end: well past 30 s on a loaded machine.
   test.setTimeout(60_000);
   let flushed = false;
   await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
     const url = new URL(route.request().url());
     const since = url.searchParams.get('since');
-    const full = flushed ? [...base, ...lead, ...streamed, ...tail] : [...base, ...lead];
+    const full = flushed ? [...base, ...lead, ...paras, ...tail] : [...base, ...lead];
     if (since !== null) {
       const n = Number(since);
       return route.fulfill({ json: { messages: full.slice(n), cursor: full.length, delta: true, total: full.length } });
@@ -189,7 +197,7 @@ async function readerThroughAbsorption(page: Page, tail: readonly unknown[], lea
 
   // ── Turn streams 120 paragraphs ──
   for (let i = 0; i < STREAM_COUNT; i++) {
-    await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: streamed[i].text, msgId: `turn-${i}` });
+    await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: paras[i].text, msgId: `turn-${i}` });
   }
   if (tail.length > 0) {
     await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: 'Bash', toolUseId: END_TOOL_ID, input: { command: 'ls' } });
@@ -333,7 +341,8 @@ test.describe('Scroll teleport on turn-end absorption', () => {
     // Nothing folds here, but each persisted row carries its action row, which
     // the stream block it replaces did not: measured 2026-10-30, the reader went
     // from paragraph 34 to 22 with scrollTop unchanged. Their row is held instead.
-    await readerThroughAbsorption(page, [endTool]);
+    // Paragraphs past narration's length, so nothing folds before the call (2026-11-12).
+    await readerThroughAbsorption(page, [endTool], [], streamedLong);
   });
 
   test('reader scrolled up mid-turn is not moved when the fold already drawn grows over their rows', async ({ page }) => {

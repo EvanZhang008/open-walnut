@@ -3982,10 +3982,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return injectedContextKind(part.m);
   };
   const isContextPart = (part: HistoryPart) => contextKindOf(part) !== null;
+  // A saved row that draws a reply still streaming (replyTextOverlay): the answer on its
+  // way, never a step, though its saved form holds only reasoning so far (2026-11-12: a
+  // history read mid-reply folded it, and the streaming words with it, out of sight).
+  const drawsStreamingReply = (part: HistoryPart): boolean => part.kind === 'msg' && !part.stream && !part.toolsAfter
+    && !!part.m.msgId && replyTextOverlay.has(part.m.msgId);
   /** Reasoning alone, a "Thinking ›" row: no words, no tools. */
   const isThinkingPart = (part: HistoryPart): boolean => part.kind === 'msg' && part.m.role === 'assistant'
     && part.globalIndex !== forkBoundaryIndex && !gapAt.has(part.globalIndex)
-    && !(part.m.text ?? '').trim() && (part.m.tools?.length ?? 0) === 0 && !!(part.m.thinking ?? '').trim();
+    && !(part.m.text ?? '').trim() && (part.m.tools?.length ?? 0) === 0 && !!(part.m.thinking ?? '').trim()
+    && !drawsStreamingReply(part);
   /** The no-action line and nothing else (reasoning allowed): the turn needed nothing. */
   const isAckPart = (part: HistoryPart): boolean => {
     if (part.kind !== 'msg' || part.m.role !== 'assistant' || part.globalIndex === forkBoundaryIndex || gapAt.has(part.globalIndex)) return false;
@@ -4101,7 +4107,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       settledShapes.current = new Map(shapes.map((t) => [keyOf(t), t.kind]));
       const last = shapes[li];
       const answerId = last && last.kind === 'answered' ? messages[last.answer]?.msgId : undefined;
-      if (answerId && watchedReplies.current.ids.has(answerId)) shapes[li] = { ...last, kind: 'open', answer: -1 };
+      // `watchedStepsTo`: its last row with calls before the answer. Words up to there folded
+      // while it streamed (a step came after them) and stay in the fold; words after the last
+      // step showed live and still show (2026-11-12: the folded ones showed once it ended).
+      if (answerId && watchedReplies.current.ids.has(answerId)) {
+        let stepsTo = -1;
+        const rows = last.rows ?? Array.from({ length: last.answer - Math.max(last.start, 0) }, (_, k) => Math.max(last.start, 0) + k);
+        for (const g of rows) if (g < last.answer && (messages[g].tools?.length ?? 0) > 0) stepsTo = g;
+        shapes[li] = { ...last, kind: 'open', answer: -1, watchedStepsTo: stepsTo };
+      }
       return shapes;
     }
     const last = shapes[li];
@@ -5519,7 +5533,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   };
   /** A step of the work (fold-rows.ts) that no Asked-from list hangs off. */
   const rowRoleOf = ({ part, i }: Item): RowRole => {
-    if (askedAfter.has(i)) return 'reads';
+    if (askedAfter.has(i) || drawsStreamingReply(part)) return 'reads';
     const kind = msgKindOf(part);
     // Claude Code's own error reply is how a turn ended: it reads, never one step folded away.
     if (kind === 'system') return rowsOf(part).every((m) => !m.cliError && SYSTEM_VARIANT_ROLE[m.systemVariant ?? 'none'] === 'step') ? 'step' : 'reads';
@@ -5576,8 +5590,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       afterPerson: !!t && personAt.has(t) && g >= personAt.get(t)!,
       narration: isWordsPart(item.part) && isNarration((item.part as Extract<HistoryPart, { kind: 'msg' }>).m.text ?? ''),
       // Only the turn running now has words on the way; a finished turn's last words show.
-      beforeEnd: !!t && t === newestTurn && isStreaming
-        && (g < lastRowOfTurn(t) || (liveTailStart >= 0 && (leadingGroup?.members.length ?? 0) > 0)),
+      beforeEnd: !!t && ((t === newestTurn && isStreaming
+        && (g < lastRowOfTurn(t) || (liveTailStart >= 0 && (leadingGroup?.members.length ?? 0) > 0)))
+        || (t.watchedStepsTo !== undefined && g <= t.watchedStepsTo)),
     });
     // A finished turn that came to an error line ends there: that line is what the
     // person has to act on, so it shows under the turn's fold as an answer would.
