@@ -142,6 +142,39 @@ test.describe('no quote without asking', () => {
     await expect(chip(panel)).toHaveCount(0)
   })
 
+  test('a right-click inside the frame after × keeps its menu', async ({ page }) => {
+    const panel = await open(page)
+    const at = await markPoint(panel, page)
+    await page.mouse.click(at.x, at.y, { button: 'right' })
+    const menu = page.locator('[data-testid="thread-mark-menu"]')
+    await menu.getByRole('menuitem', { name: 'Quote in chat' }).click()
+    await expect(chip(panel)).toContainText('Replying in')
+    // × asks for the caret in the composer, which looks again on the next frame. A right-click
+    // before that frame (a loaded machine: 2 of 4 WebKit runs of the test above, 2026-11-12) opened
+    // the menu, the look took focus back, and the menu closed under the pointer. Sent by script,
+    // so it lands inside that frame on any machine.
+    const seen = await page.evaluate(async ({ x, y }) => {
+      const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
+      const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()))
+      const open = () => document.querySelector('[data-testid="thread-mark-menu"]')
+      document.querySelector<HTMLElement>('[data-testid="composer-thread-target-clear"]')!.click()
+      await settle()
+      const composerHadIt = !!document.activeElement?.matches('.chat-input-textarea')
+      const target = document.elementFromPoint(x, y)!
+      const at = { bubbles: true, cancelable: true, composed: true, button: 2, buttons: 2, clientX: x, clientY: y }
+      target.dispatchEvent(new PointerEvent('pointerdown', { ...at, pointerType: 'mouse', isPrimary: true }))
+      target.dispatchEvent(new MouseEvent('contextmenu', at))
+      await settle()
+      const opened = !!open()
+      for (let i = 0; i < 4; i++) await frame()
+      return { composerHadIt, opened, stillOpen: !!open(), focusInMenu: !!open()?.contains(document.activeElement) }
+    }, at)
+    expect(seen).toEqual({ composerHadIt: true, opened: true, stillOpen: true, focusInMenu: true })
+    await menu.getByRole('menuitem', { name: 'Open question' }).click()
+    await expect(card(panel).locator('.thread-card-title')).toHaveText(MAP_TITLES.Q4)
+    await expect(chip(panel)).toHaveCount(0)
+  })
+
   test('× on a quoted Ask that left the path drops it everywhere; a fast × keeps the words in the main draft only', async ({ page }) => {
     const panel = await open(page)
     const phrase = MAP_PASSAGES.Q5.slice(0, 30)

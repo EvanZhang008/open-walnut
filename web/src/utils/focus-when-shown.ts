@@ -9,14 +9,38 @@ import { useEffect, useRef } from 'react';
  * on a loaded machine, so a frame count is no budget); at the end it focuses the box anyway, as
  * before this waited. The first try is at once, so a box already on screen has the caret in the
  * frame it first paints. Returns the cancel.
+ *
+ * The person's own next press ends the request, whether it is still retrying or only waiting for
+ * its one look on the next frame: from then on focus is theirs to place (`onPressed` hears it). A
+ * key does not: typed while the caret is still nowhere, it is the very key the box is wanted for. Without that a retry
+ * took the caret back from whatever they reached for. 2026-11-12: × on the composer's question chip
+ * asks for the caret, and a right-click on a mark inside the next frame (a loaded machine) opened
+ * the mark's menu, which took focus; the look on the next frame put it back in the composer, and the
+ * menu, which closes when focus leaves it, was gone before its item could be clicked.
  */
 export function focusWhenShown(
   get: () => HTMLTextAreaElement | HTMLInputElement | null,
   onFocused?: (el: HTMLTextAreaElement | HTMLInputElement) => void,
   maxMs = 3000,
+  onPressed?: () => void,
 ): () => void {
   const until = Date.now() + maxMs;
   let raf = 0;
+  let pending = true;
+  // A press already on its way when the request began (asked from a window-capture handler of
+  // that press) still reaches the document after it: it is the ask, not the person's next move.
+  const askedAt = performance.now();
+  const stop = () => {
+    if (!pending) return;
+    pending = false;
+    cancelAnimationFrame(raf);
+    document.removeEventListener('pointerdown', onPress, true);
+  };
+  const onPress = (e: Event) => {
+    if (e.timeStamp < askedAt) return;
+    stop();
+    onPressed?.();
+  };
   const attempt = (first = false) => {
     const el = get();
     const last = Date.now() >= until;
@@ -27,14 +51,18 @@ export function focusWhenShown(
         // The first try runs inside the commit, before the rest of its effects: one of them may
         // still take focus (the old first try ran a frame later, after all of them), so look once
         // more on the next frame and keep trying if the box lost it.
-        if (first && !last) raf = requestAnimationFrame(() => { if (document.activeElement !== get()) attempt(); });
+        if (first && !last) raf = requestAnimationFrame(() => { if (document.activeElement !== get()) attempt(); else stop(); });
+        else stop();
         return;
       }
     }
-    if (!last) raf = requestAnimationFrame(() => attempt());
+    if (last) stop();
+    else raf = requestAnimationFrame(() => attempt());
   };
+  // Capture phase, on the document: heard before any handler below can move focus.
+  document.addEventListener('pointerdown', onPress, true);
   attempt(true);
-  return () => cancelAnimationFrame(raf);
+  return stop;
 }
 
 /**
@@ -68,6 +96,10 @@ export function useFocusRequest(
       live.current.onFocused?.(el);
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => { settled = true; });
+    }, undefined, () => {
+      // The person pressed somewhere first: the request is answered by them, never asked again.
+      done.current = request;
+      settled = true;
     });
     return () => {
       cancel();

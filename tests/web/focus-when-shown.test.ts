@@ -9,7 +9,17 @@ import { focusWhenShown } from '../../web/src/utils/focus-when-shown'
 
 let now = 0
 let frames: Array<() => void> = []
-const doc = { activeElement: null as unknown }
+type Listener = (e: { type: string; timeStamp: number }) => void
+const listeners = new Map<string, Set<Listener>>()
+const doc = {
+  activeElement: null as unknown,
+  addEventListener(type: string, f: Listener) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type)!.add(f) },
+  removeEventListener(type: string, f: Listener) { listeners.get(type)?.delete(f) },
+}
+/** The person's own input reaching the document (a press, a key). */
+function input(type: 'pointerdown' | 'keydown', timeStamp = performance.now()): void {
+  for (const f of [...(listeners.get(type) ?? [])]) f({ type, timeStamp })
+}
 
 function tick(ms: number): void {
   for (let t = 0; t < ms; t += 16) {
@@ -36,6 +46,7 @@ beforeEach(() => {
   now = 0
   frames = []
   doc.activeElement = null
+  listeners.clear()
   vi.spyOn(Date, 'now').mockImplementation(() => now)
   vi.stubGlobal('document', doc)
   let id = 0
@@ -88,6 +99,81 @@ describe('focusWhenShown', () => {
     tick(16)
     expect(doc.activeElement).toBe(el)
     expect(placed).toHaveBeenCalledTimes(2)
+  })
+
+  it('leaves focus where the person put it when they press before the next frame', () => {
+    // 2026-11-12: x on the composer's question chip asked for the caret, and a right-click inside the
+    // next frame opened a mark's menu, which took focus; the look on the next frame took it back and
+    // the menu, which closes when focus leaves it, was gone.
+    const { el, show } = box()
+    const menu = box()
+    show()
+    menu.show()
+    const pressed = vi.fn()
+    focusWhenShown(() => el, undefined, 3000, pressed)
+    expect(doc.activeElement).toBe(el)
+    input('pointerdown')
+    menu.el.focus()
+    tick(64)
+    expect(doc.activeElement).toBe(menu.el)
+    expect(pressed).toHaveBeenCalledTimes(1)
+  })
+
+  it('a key typed while the caret is still nowhere does not end the wait: it is the key the box is for', () => {
+    const { el, show } = box()
+    const placed = vi.fn()
+    focusWhenShown(() => el, placed)
+    tick(100)
+    input('keydown')
+    show()
+    tick(32)
+    expect(doc.activeElement).toBe(el)
+    expect(placed).toHaveBeenCalled()
+  })
+
+  it('the press that asked for the caret (still on its way to the document) does not end the request', () => {
+    // Asked from a window-capture pointerdown handler: the same press then reaches the document's
+    // capture listeners, after the request began.
+    const { el, show } = box()
+    const pressAt = performance.now()
+    const placed = vi.fn()
+    focusWhenShown(() => el, placed)
+    input('pointerdown', pressAt - 1)
+    tick(100)
+    show()
+    tick(32)
+    expect(doc.activeElement).toBe(el)
+    expect(placed).toHaveBeenCalled()
+  })
+
+  it('a press while it still waits for a hidden box ends the wait', () => {
+    const { el, show } = box()
+    const other = box()
+    other.show()
+    const placed = vi.fn()
+    focusWhenShown(() => el, placed)
+    tick(200)
+    input('pointerdown')
+    other.el.focus()
+    show()
+    tick(500)
+    expect(doc.activeElement).toBe(other.el)
+    expect(placed).not.toHaveBeenCalled()
+  })
+
+  it('lets go of the document once it is done', () => {
+    const { el, show } = box()
+    show()
+    focusWhenShown(() => el)
+    tick(16)
+    expect(listeners.get('pointerdown')?.size ?? 0).toBe(0)
+    const hidden = box()
+    focusWhenShown(() => hidden.el, undefined, 100)
+    tick(200)
+    expect(listeners.get('pointerdown')?.size ?? 0).toBe(0)
+    const cancel = focusWhenShown(() => box().el)
+    cancel()
+    expect(listeners.get('pointerdown')?.size ?? 0).toBe(0)
   })
 
   it('tries one last time at the deadline, and a cancel stops it', () => {
