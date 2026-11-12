@@ -177,8 +177,21 @@ test.describe('Reading split', () => {
     expect(grown.height - before.height).toBeGreaterThan(80)
 
     // 5. Side by side, then a reload keeps it all.
+    const beforeTurn = await settled(page, readerBody(panel))
     await panel.getByTestId('session-reader-orient').click()
     await expect(readerPane(panel)).toHaveClass(/is-side/)
+    // The narrower pane rewraps its text; the message being read stays on screen in it (at its
+    // top unless the pane, taller side by side, reaches the end of this short fixture).
+    await settled(page, readerBody(panel))
+    const turned = await readerBody(panel).locator('.session-history').evaluate((el, id) => {
+      const box = el.getBoundingClientRect()
+      const r = el.querySelector(`[data-message-id="${id}"]`)?.getBoundingClientRect()
+      return r ? { top: Math.round(r.top - box.top), bottom: Math.round(r.bottom - box.top), height: Math.round(box.height), fromBottom: Math.round(el.scrollHeight - el.clientHeight - el.scrollTop) } : null
+    }, beforeTurn.id)
+    expect(turned, 'the message being read is still drawn').not.toBeNull()
+    expect(turned!.top, 'turning the split keeps the message being read on screen').toBeGreaterThanOrEqual(-4)
+    expect(turned!.top).toBeLessThan(turned!.height - 20)
+    if (turned!.fromBottom > 4) expect(turned!.top, 'not at the end: at the top').toBeLessThanOrEqual(12)
     const side = (await readerPane(panel).boundingBox())!
     const sideBody = (await mainBody(panel).boundingBox())!
     expect(sideBody.x).toBeGreaterThan(side.x + side.width - 4)

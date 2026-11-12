@@ -178,6 +178,13 @@ describe('reading split: ratchets', () => {
     expect(history).toMatch(/if \(publishTimeline\) \{\s*const sentAt = publishTimeline\.sentAt;/)
   })
 
+  it('turning the split lands the pane again on what it showed (its width changes, its text rewraps)', () => {
+    const split = read('components/sessions/useReaderSplit.ts')
+    const fn = split.slice(split.indexOf('const setOrient = useCallback'), split.indexOf('const share = clampReaderShare'))
+    expect(fn).toMatch(/readerPlaceFrom\(box\)/)
+    expect(fn).toMatch(/landing\.current = \{ pageKey, place \};\s*setLand\(\(n\) => n \+ 1\);/)
+  })
+
   it('never offered in Tree Mode (its pages are their own split)', () => {
     expect(read('components/sessions/SessionPanel.tsx')).toMatch(/offered: readingSplitOn && !treeMode && /)
   })
