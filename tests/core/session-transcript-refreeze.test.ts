@@ -117,3 +117,35 @@ describe('transcript sweep re-freeze', () => {
     expect(reads.mock.calls.filter(([p]) => String(p).includes(sid)).length).toBe(first)
   })
 })
+
+// 2026-11-12: the Mac's first sweep after a reboot built a clouddev session it could not read yet
+// as empty and wrote that over its saved copy; task_history serves that copy when the live read
+// is slow, so the task then read as having no conversation at all.
+describe('transcript sweep of a live session', () => {
+  async function seedLive(sid: string, withJsonl: boolean): Promise<void> {
+    await createSessionRecord(sid, '', '', CWD, { title: 'Live', initialProcessStatus: 'idle' })
+    await fs.mkdir(path.dirname(jsonlPath(sid)), { recursive: true })
+    if (withJsonl) await fs.writeFile(jsonlPath(sid), [line('user', 'go on'), line('assistant', 'Working on it.')].join('\n') + '\n')
+  }
+
+  it('never replaces a saved copy that has rows with an empty read, and updates it once the read works', async () => {
+    const sid = 'sess-live-empty-read'
+    await seedLive(sid, false)
+    await writeTranscriptCache(sid, {
+      version: 1, sessionId: sid, exportedAt: '2026-01-01T00:00:00.000Z', truncated: false,
+      messages: [{ role: 'user', text: 'the saved copy', timestamp: '2026-01-01T00:00:00.000Z' }],
+    })
+    await sweep()
+    expect((await readSessionTranscript(sid))!.messages.map((m) => m.text)).toEqual(['the saved copy'])
+    await fs.writeFile(jsonlPath(sid), [line('user', 'go on'), line('assistant', 'Working on it.')].join('\n') + '\n')
+    await sweep()
+    expect((await readSessionTranscript(sid))!.messages.map((m) => m.text)).toEqual(['go on', 'Working on it.'])
+  })
+
+  it('still exports an empty live session that has no saved copy', async () => {
+    const sid = 'sess-live-empty-new'
+    await seedLive(sid, false)
+    await sweep()
+    expect((await readSessionTranscript(sid))!.messages).toEqual([])
+  })
+})

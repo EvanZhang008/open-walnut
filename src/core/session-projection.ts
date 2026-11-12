@@ -1087,6 +1087,15 @@ export async function exportSessionTranscripts(): Promise<number> {
       }
       try {
         const transcript = await buildSessionTranscript(s.id)
+        // A live session's empty build never replaces a saved copy with rows in it: the
+        // builder answers empty for a host it cannot read yet (2026-11-12, the Mac's first
+        // sweep after a reboot emptied a 91 MB clouddev session's copy, and task_history,
+        // which serves that copy when the live read is slow, then showed nothing).
+        if (alive && transcript.messages.length === 0
+          && (parseTranscript(await readTranscriptCache(s.id))?.messages.length ?? 0) > 0) {
+          log.session.debug('transcript export kept the saved copy over an empty read', { sessionId: s.id })
+          continue
+        }
         await writeTranscriptCache(s.id, transcript)
         if (legacy) await writeJsonFile(path.join(SESSION_TRANSCRIPTS_DIR, `${s.id}.json`), transcript)
         pushProjectionToCloud('transcript-upsert', { sid: s.id, data: transcript })
