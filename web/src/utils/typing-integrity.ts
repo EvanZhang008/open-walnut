@@ -15,7 +15,8 @@
  *              the line names that code too
  *   offBox     the key landed outside every text box within 2 s of typing in one: the box
  *              lost the caret mid-word (a re-mount, a disable, a focus move); the line names
- *              what took it (the element that got focus)
+ *              what took it (the element that got focus) and why the box lost it: replaced,
+ *              disabled, read-only, hidden or inert, a person's click, or the code that blurred it
  *
  * One `[perf] typing integrity` line per 30 s window that lost anything, and one every
  * 5 minutes of typing otherwise, so a good baseline sits beside a bad one in the log.
@@ -164,6 +165,23 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
   /** The box typed in last: gone from the page means it was replaced under the person. */
   let lastBox: Element | null = null;
   const preventers = new WeakMap<Event, string>();
+  /** The person's last press: a key after it outside the box is their choice, not a loss. */
+  let lastPressAt = -Infinity;
+  /** The last time a text box lost the caret to nothing, and the code that did it. */
+  let lastBlur: { at: number; by: string } | null = null;
+  /** Why the box typed in last no longer holds the caret. */
+  const whyOff = (): string => {
+    const b = lastBox as HTMLTextAreaElement | null;
+    if (!b) return '';
+    if (!b.isConnected) return ' (box replaced)';
+    if (b.disabled) return ' (box disabled)';
+    if (b.readOnly) return ' (box read-only)';
+    if (b.closest?.('[inert]')) return ' (box inert)';
+    if (b.getClientRects && b.getClientRects().length === 0) return ' (box hidden)';
+    if (lastPressAt >= lastTypedAt) return ' (after a click)';
+    if (lastBlur && lastBlur.at >= lastTypedAt) return ` (blurred by ${lastBlur.by || 'the engine'})`;
+    return ' (box kept)';
+  };
 
   const flush = (t: number) => {
     if (w.keys >= MIN_KEYS_FOR_REPORT) {
@@ -209,7 +227,7 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
     const rescued = !isTextBox(k.target) && isTextBox(doc.activeElement);
     if (!isTextBox(k.target) && !rescued) {
       // Typing went on, but the caret is no longer in a box.
-      if (t - lastTypedAt < OFF_BOX_MS) { w.offBox++; note(w.offBoxAt, `${describe(doc.activeElement)}${lastBox && !lastBox.isConnected ? ' (box replaced)' : ''}`); }
+      if (t - lastTypedAt < OFF_BOX_MS) { w.offBox++; note(w.offBoxAt, `${describe(doc.activeElement)}${whyOff()}`); }
       return;
     }
     const box = (rescued ? doc.activeElement : k.target) as EventTarget;
@@ -263,12 +281,26 @@ export function initTypingIntegrity(overrides: Partial<TypingIntegrityDeps> = {}
   // A test browser reads the running window (tests/e2e/browser/composer-fast-typing.spec.ts).
   const probe = win as Window & { __walnutTypingIntegrity?: () => IntegrityWindow };
   if ((win.navigator as Navigator | undefined)?.webdriver) probe.__walnutTypingIntegrity = () => { tick(deps.now()); return sumWindows(flushed, w); };
+  const onPress = () => { lastPressAt = deps.now(); };
+  const onFocusOut = (e: Event) => {
+    const f = e as FocusEvent;
+    if (f.target !== lastBox || f.relatedTarget) return;
+    // Past this listener's own frame (named or minified), what is left is the code that blurred.
+    const frames = (new Error().stack ?? '').split('\n').filter((l) => l.trim() && !/^Error\b/.test(l.trim()));
+    lastBlur = { at: deps.now(), by: frames.length > 1 ? callerOf(frames.slice(1).join('\n')) : '' };
+  };
   doc.addEventListener('keydown', onKeyCapture, true);
   doc.addEventListener('input', onInput, true);
+  doc.addEventListener('pointerdown', onPress, true);
+  doc.addEventListener('mousedown', onPress, true);
+  doc.addEventListener('focusout', onFocusOut, true);
   const timer = win.setInterval(() => tick(deps.now()), SETTLE_MS);
   return () => {
     doc.removeEventListener('keydown', onKeyCapture, true);
     doc.removeEventListener('input', onInput, true);
+    doc.removeEventListener('pointerdown', onPress, true);
+    doc.removeEventListener('mousedown', onPress, true);
+    doc.removeEventListener('focusout', onFocusOut, true);
     win.clearInterval(timer);
     if (EventProto && realPrevent) EventProto.preventDefault = realPrevent;
     if (AreaProto && desc) Object.defineProperty(AreaProto, 'value', desc);

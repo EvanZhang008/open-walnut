@@ -18,6 +18,13 @@
  *   a box replaced under the caret             a composer removed and put back while the person
  *                                              types (the 2026-11-11 record: 3 keys on the page
  *                                              body): the keys after it go into the new box
+ *   a box that stays but loses the caret       the 2026-11-12 record: 3 to 8 keys on the body
+ *                                              after a send, the box still there. Every way code
+ *                                              takes the caret from a box it keeps (a blur(), a
+ *                                              neighbour that took focus and went away, a focus
+ *                                              moved to the body) gives it back at the next key;
+ *                                              a person's click keeps their choice, and a box
+ *                                              that cannot take text is named in the record
  *   the record itself                          a handler that eats every 10th key and code that
  *                                              cuts what was just typed are both caught, with
  *                                              the code that did it named, so the record a
@@ -164,6 +171,82 @@ test('keys typed after the composer is replaced under the caret go into the new 
   const after = await integrity(page)
   expect({ rescued: after.rescued - before.rescued, offBox: after.offBox - before.offBox, dropped: after.dropped - before.dropped })
     .toEqual({ rescued: 1, offBox: 0, dropped: 0 })
+})
+
+/** Ways code takes the caret from a composer it keeps on the page; each leaves it on the body
+ *  (run in the page by name, so the page's script policy never sees generated code). */
+const CARET_TAKERS = ['a blur()', 'a neighbour that took focus and went away', 'a focus moved to the body'] as const
+type Taker = typeof CARET_TAKERS[number] | 'a disable'
+
+async function typedThenLost(page: Page, way: Taker): Promise<{ box: Locator; before: Integrity }> {
+  await seedColumns(page, ['pw-normal-session'])
+  await loadHome(page)
+  const box = page.locator(`${REAL_PANEL} textarea.chat-input-textarea`).first()
+  await expect(box).toBeVisible({ timeout: 30_000 })
+  await box.click()
+  await box.fill('')
+  await page.keyboard.type('hello ', { delay: 0 })
+  const before = await integrity(page)
+  const onBody = await box.evaluate((el: HTMLTextAreaElement, w: string) => {
+    if (w === 'a blur()') el.blur()
+    else if (w === 'a neighbour that took focus and went away') {
+      const b = document.createElement('button')
+      el.parentElement!.appendChild(b)
+      b.focus()
+      b.remove()
+    } else if (w === 'a focus moved to the body') { el.blur(); document.body.focus() }
+    else if (w === 'a disable') { el.disabled = true; el.blur() }
+    return document.activeElement === document.body || document.activeElement === null
+  }, way)
+  expect(onBody).toBe(true)
+  return { box, before }
+}
+
+for (const way of CARET_TAKERS) {
+  test(`keys typed after ${way} took the caret go back into the composer`, async ({ page }) => {
+    test.setTimeout(120_000)
+    const { box, before } = await typedThenLost(page, way)
+    await page.keyboard.type('world', { delay: 0 })
+    await expect(box).toHaveValue('hello world')
+    await page.waitForTimeout(1_200)
+    const after = await integrity(page)
+    expect({ rescued: after.rescued - before.rescued, offBox: after.offBox - before.offBox, dropped: after.dropped - before.dropped })
+      .toEqual({ rescued: 1, offBox: 0, dropped: 0 })
+  })
+}
+
+test('a person who clicks away after typing keeps the caret where they put it', async ({ page }) => {
+  test.setTimeout(120_000)
+  await seedColumns(page, ['pw-normal-session'])
+  await loadHome(page)
+  const box = page.locator(`${REAL_PANEL} textarea.chat-input-textarea`).first()
+  await expect(box).toBeVisible({ timeout: 30_000 })
+  await box.click()
+  await box.fill('')
+  await page.keyboard.type('hello ', { delay: 0 })
+  // A press on a part of the page that takes no focus: the caret leaves the box by their hand.
+  await page.evaluate(() => {
+    const pad = document.createElement('div')
+    pad.id = 'pw-pad'
+    Object.assign(pad.style, { position: 'fixed', left: '0', top: '0', width: '40px', height: '40px', zIndex: '99999' })
+    document.body.appendChild(pad)
+  })
+  await page.locator('#pw-pad').click()
+  await page.evaluate(() => { if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) document.activeElement.blur() })
+  await page.keyboard.type('x', { delay: 0 })
+  await expect(box).toHaveValue('hello ')
+  const after = await integrity(page)
+  expect(after.offBoxAt.some((at) => at.includes('(after a click)'))).toBe(true)
+})
+
+test('the typing record names a composer that lost the caret and cannot take it back', async ({ page }) => {
+  test.setTimeout(120_000)
+  const { box, before } = await typedThenLost(page, 'a disable')
+  await page.keyboard.type('world', { delay: 0 })
+  await expect(box).toHaveValue('hello ')
+  const after = await integrity(page)
+  expect(after.offBox - before.offBox).toBe(5)
+  expect(after.offBoxAt.some((at) => at.includes('(box disabled)'))).toBe(true)
 })
 
 test('the typing record names a handler that eats keys and code that cuts typed text', async ({ page }) => {

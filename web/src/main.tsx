@@ -173,7 +173,7 @@ function bootApp(): void {
   // Where a typed key went when it did not reach its box (prevented, dropped, overwritten,
   // or typed after the box lost the caret), with the code that did it.
   // First, so a key it moves into a replaced composer reaches the typing record as that box's key.
-  initComposerCaretKeep({ restored: (via, key) => log.info('composer', 'caret given back to a replaced composer', { via, draftKey: key }) });
+  initComposerCaretKeep({ restored: (via, key, kept) => log.info('composer', kept ? 'caret given back to the composer that lost it' : 'caret given back to a replaced composer', { via, draftKey: key }) });
   initTypingIntegrity();
   // How much the page holds, every 5 min while visible, beside the Mac app's memory lines.
   initPageVitals();
