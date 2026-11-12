@@ -165,6 +165,32 @@ describe('memory folder', () => {
     expect((await listMemoryFiles(null)).length).toBe(1)
   })
 
+  it('a stale pointer of one console agent never reads another agent\'s file of the same block', async () => {
+    const mentor = capBlock('agent-context', `${para(400, 'mentor context')}\n\n`, 'mentor').overflow!
+    const other = capBlock('agent-context', `${para(400, 'reviewer context')}\n\n`, 'reviewer').overflow!
+    expect(mentor.file).toMatch(/^agent-context--mentor\.[0-9a-f]{8}\.md$/)
+    await writeOverflows(null, 'persona', [mentor, other])
+    const read = await readMemoryFile('t7', 'agent-context--mentor.0badc0de.md')
+    expect(read).toMatchObject({ name: mentor.file, replaces: 'agent-context--mentor.0badc0de.md' })
+    expect(read.text).toContain('mentor context')
+    await expect(readMemoryFile('t7', 'agent-context--nobody.0badc0de.md')).rejects.toMatchObject({ code: 'not_found' })
+  })
+
+  it('a persona file is never composed for: regenerate runs only for a block of the session context', async () => {
+    let calls = 0
+    const regenerate = async () => { calls += 1; return [] }
+    await expect(readMemoryFile('t8', 'skills-index--general.12345678.md', { regenerate })).rejects.toMatchObject({ code: 'not_found' })
+    expect(calls).toBe(0)
+    await expect(readMemoryFile('t8', 'fleet.12345678.md', { regenerate })).rejects.toMatchObject({ code: 'not_found' })
+    expect(calls).toBe(1)
+  })
+
+  it('writes of notes at once never pass the 20-note limit', async () => {
+    const results = await Promise.allSettled(Array.from({ length: 26 }, (_, i) => writeOwnNote('t9', `n${i}.md`, 'x')))
+    expect(results.filter((r) => r.status === 'fulfilled').length).toBe(20)
+    expect((await listMemoryFiles('t9')).filter((f) => !f.walnut && !f.shared).length).toBe(20)
+  })
+
   it('every delete path takes the task\'s folder with it (deleteTask, deleteTasksByIds the test-run sweep uses, deleteTasksBulk)', async () => {
     const tm = await import('../../../src/core/task-manager.js')
     const made = await Promise.all(['one', 'two', 'three'].map((t) => tm.addTask({ title: `Folder ${t}`, project: 'Acme' } as never)))
@@ -228,18 +254,29 @@ describe('a running session spawned before the caps', () => {
     }
   }
 
-  for (const role of ['main', 'lead', 'worker'] as const) {
+  for (const role of ['main', 'lead', 'worker', 'ask'] as const) {
     it(`${role}: is told nothing, its session context is the one it holds`, () => {
       const task = FIXTURE_TASKS[role] as never
       expect(defaultInstructions(task)).toBe(before(role))
       expect(promptDebtBytes({ appliedAppendSystemPrompt: before(role) }, task)).toBe(0)
     })
   }
+})
 
-  it('an ask: is told only the routing rules, which moved from its persona into its session context', () => {
-    const task = FIXTURE_TASKS.ask as never
-    const debt = promptDebtBytes({ appliedAppendSystemPrompt: before('ask') }, task)
-    expect(debt).toBeGreaterThan(0)
-    expect(debt).toBeLessThan(2_800)
+describe('an id that is no task id never costs a session its context', () => {
+  // clock-placement.ts builds a routine's context for its placeholder before the run has a task.
+  const TOKEN = '__WALNUT_ROUTINE_TASK_ID__'
+
+  it('lists the shared files alone, and the session context builds', async () => {
+    await writeOverflows(null, 'persona', [{ id: 'standing-memory', file: 'standing-memory.md', title: 'x', part: 'persona', text: 'Shared.', chars: 7 }])
+    const files = await listMemoryFiles(TOKEN)
+    expect(files.map((f) => f.name)).toContain('standing-memory.md')
+    expect(files.every((f) => f.shared)).toBe(true)
+    await writeOverflows(TOKEN, 'context', [])
+    const { buildSessionContext } = await import('../../../src/core/sessions/session-context.js')
+    const now = new Date().toISOString()
+    const task = { id: TOKEN, title: 'Daily digest', project: 'Routines', phase: 'TODO', created_at: now, updated_at: now } as never
+    const ctx = await buildSessionContext(TOKEN, undefined, undefined, { task })
+    expect(ctx.systemPrompt).toContain('Daily digest')
   })
 })

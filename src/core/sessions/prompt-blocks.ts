@@ -146,19 +146,35 @@ export function promptBlock(id: PromptBlockId): PromptBlockDef {
 }
 
 /**
- * The folder file a block's moved rest is written to: `<block>.<hash of the rest>.md`. The hash
- * keeps two texts of one block apart in one folder (the persona's blocks go to the shared folder,
- * where the Personal AI and Mentor, or a lane with USER.md and one without, would otherwise
- * overwrite each other), and the name in the pointer is the exact text that pointer cut.
+ * The folder file a block's moved rest is written to: `<block>[--<scope>].<hash of the rest>.md`.
+ * The hash keeps two texts of one block apart in one folder, and the name in the pointer is the
+ * exact text that pointer cut. The scope is the console agent a persona belongs to: the persona's
+ * blocks go to the shared folder, where the Personal AI's and Mentor's would otherwise be taken for
+ * versions of one another (memory-folder.ts answers a pointer to a gone version with the current
+ * file of the same block and scope).
  */
-export function overflowFileOf(id: PromptBlockId, rest: string): string {
-  return `${id}.${createHash('sha1').update(rest).digest('hex').slice(0, 8)}.md`
+export function overflowFileOf(id: PromptBlockId, rest: string, scope?: string): string {
+  const s = scopeKey(scope)
+  return `${id}${s ? `--${s}` : ''}.${createHash('sha1').update(rest).digest('hex').slice(0, 8)}.md`
 }
+
+/** A scope as a file name may carry it: lowercase letters, digits and single dashes. */
+function scopeKey(scope: string | undefined): string {
+  return (scope ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24)
+}
+
+const WALNUT_FILE_RE = /^([a-z]+(?:-[a-z]+)*)(?:--([a-z0-9]+(?:-[a-z0-9]+)*))?(?:\.[0-9a-f]{8})?\.md$/
 
 /** A file Walnut owns in a memory folder, and which block (a node's own note may not take such a name). */
 export function walnutFolderBlock(name: string): PromptBlockId | null {
-  const m = /^([a-z-]+)(?:\.[0-9a-f]{8})?\.md$/.exec(name)
+  const m = WALNUT_FILE_RE.exec(name)
   return m && BY_ID.has(m[1]!) ? m[1]! : null
+}
+
+/** The block and scope of a Walnut file name ('' scope for a task's own), or null. */
+export function walnutFileKey(name: string): { block: PromptBlockId; scope: string } | null {
+  const m = WALNUT_FILE_RE.exec(name)
+  return m && BY_ID.has(m[1]!) ? { block: m[1]!, scope: m[2] ?? '' } : null
 }
 
 /**
@@ -205,7 +221,7 @@ export const byteLength = (s: string): number => Buffer.byteLength(s, 'utf8')
 /** How caps and budgets measure (see the header). */
 export const charLength = (s: string): number => s.length
 
-/** The pointer line's opening words: instruction-diff and tests know a pointer by them. */
+/** The pointer line's opening words: how a pointer is known in a prompt (the tests read it). */
 export const POINTER_OPENING = '(Walnut moved the rest of this section to your memory folder'
 
 /** Headings found in the moved text, for the pointer: a short index of what moved. */
@@ -221,8 +237,8 @@ function headingsOf(rest: string): string {
   return ` (${out})`
 }
 
-export function pointerLine(def: PromptBlockDef, rest: string, opts: { short?: boolean } = {}): string {
-  const file = overflowFileOf(def.id, rest)
+export function pointerLine(def: PromptBlockDef, rest: string, opts: { short?: boolean; scope?: string } = {}): string {
+  const file = overflowFileOf(def.id, rest, opts.scope)
   const holds = def.holds && !opts.short ? `: ${def.holds}` : ''
   return `${POINTER_OPENING} as ${file}, ${charLength(rest).toLocaleString('en-US')} characters${holds}${opts.short ? '' : headingsOf(rest)}. `
     + `Read it with agent_memory_read {"file":"${file}"} before you act on that part.)`
@@ -244,7 +260,7 @@ const warnedOver = new Set<string>()
  * `list` block; a `list` block over its cap is its head and a pointer to the moved rest (see
  * the header). Pure, apart from the one log line for a rule block over its cap.
  */
-export function capBlock(id: PromptBlockId, text: string): CapResult {
+export function capBlock(id: PromptBlockId, text: string, scope?: string): CapResult {
   const def = promptBlock(id)
   if (!text || charLength(text) <= def.cap) return { text, overflow: null }
   if (def.kind !== 'list') {
@@ -262,13 +278,13 @@ export function capBlock(id: PromptBlockId, text: string): CapResult {
   for (let i = points.length - 1; i >= 0; i--) {
     const h = body.slice(0, points[i]).trimEnd()
     const r = body.slice(points[i]).trim()
-    if (charLength(h) + 1 + charLength(pointerLine(def, r)) + charLength(trail) <= def.cap) { head = h; rest = r; break }
+    if (charLength(h) + 1 + charLength(pointerLine(def, r, { scope })) + charLength(trail) <= def.cap) { head = h; rest = r; break }
   }
   // No cut leaves room: the whole block moves, under the shortest pointer.
-  const pointer = head ? pointerLine(def, rest) : pointerLine(def, rest, { short: true })
+  const pointer = pointerLine(def, rest, { scope, short: !head })
   return {
     text: `${head ? `${head}\n` : ''}${pointer}${trail}`,
-    overflow: { id: def.id, file: overflowFileOf(def.id, rest), title: def.title, part: def.part, text: rest, chars: charLength(rest) },
+    overflow: { id: def.id, file: overflowFileOf(def.id, rest, scope), title: def.title, part: def.part, text: rest, chars: charLength(rest) },
   }
 }
 
@@ -286,13 +302,13 @@ export class PromptComposer {
    * `uncapped`: every block whole (a prompt read where no memory folder can be: the companion,
    * the personas copy a host replica reads). The rollback switch (promptRollback) is uncapped too.
    */
-  constructor(private readonly opts: { uncapped?: boolean } = {}) {
+  constructor(private readonly opts: { uncapped?: boolean; scope?: string } = {}) {
     if (promptRollback()) this.opts = { ...opts, uncapped: true }
   }
 
   add(id: PromptBlockId, text: string | undefined | null): this {
     if (!text) { promptBlock(id); return this }
-    const r = this.opts.uncapped ? (promptBlock(id), { text, overflow: null }) : capBlock(id, text)
+    const r = this.opts.uncapped ? (promptBlock(id), { text, overflow: null }) : capBlock(id, text, this.opts.scope)
     this.blocks.push({ id, text: r.text, chars: charLength(r.text), bytes: byteLength(r.text), capped: !!r.overflow })
     if (r.overflow) this.overflows.push(r.overflow)
     return this
@@ -310,6 +326,7 @@ export class PromptComposer {
  * the spawn to these two functions.
  */
 export const TASK_CONTEXT_SEPARATOR = '\n\n---\n\n## Task Context\n\n'
+
 
 /** A caller's own prompt, then Walnut's session context under its heading; either alone as it is. */
 export function joinCallerAndContext(callerPrompt: string | undefined, context: string): string {

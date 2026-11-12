@@ -524,7 +524,8 @@ export async function composeSessionContext(
     // Which machines it can use and what each can do (hosts/fleet-prompt.ts): state, never waits on a host.
     import('../hosts/fleet-prompt.js').then((m) => m.buildFleetPromptLine(host), () => ''),
     // The node's own notes in its memory folder (memory-folder.ts): their names, read on demand.
-    found ? import('./memory-folder.js').then(async (m) => m.ownNotesIndexLine(await m.listMemoryFiles(found!.id)), () => '') : Promise.resolve(''),
+    // Never costs the session its context: any failure (a placeholder id, a folder it cannot read) is no line.
+    found ? import('./memory-folder.js').then(async (m) => m.ownNotesIndexLine(await m.listMemoryFiles(found!.id))).catch(() => '') : Promise.resolve(''),
   ])
   // The copy composePrompt reads: as on disk now, not as at the last read.
   await Promise.all([refreshUserProfile(), refreshReplyLanguage()])
@@ -644,9 +645,8 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
   c.add('own-notes', promptRollback() ? '' : state.ownNotes)
   // An org node (see 2d): the main agent, or a project's lead.
   for (const [id, text] of task ? orgRoleParts(task) : []) c.add(id, text)
-  // An ask (the dispatcher) routes work too: one copy here, none in its persona (profiles.ts).
-  // (Under the rollback switch the ask's persona carries its own copy, as before.)
-  if (task && !mainAgent && !projectLead && ask && !promptRollback()) c.add('task-routing', TASK_ROUTING_CONTRACT + '\n\n')
+  // An ask routes work too: its routing rules ride its persona (profiles.ts addSessionRules), so a
+  // session minted before and after the prompt caps reads the same session context.
   c.add('core-instructions', task ? orgInstructionsLine(task) : '')
   c.add('tools', 'This session is how that task runs, so the task id is how everything '
     + 'else addresses your work. '

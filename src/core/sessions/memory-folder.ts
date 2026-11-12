@@ -26,7 +26,8 @@ import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { isCompanion } from '../server-role.js'
 import { randomUUID } from 'node:crypto'
-import { byteLength, promptBlock, walnutFolderBlock, type PromptOverflow, type PromptPart } from './prompt-blocks.js'
+import { withFileLock } from '../../utils/file-lock.js'
+import { byteLength, promptBlock, walnutFileKey, walnutFolderBlock, type PromptOverflow, type PromptPart } from './prompt-blocks.js'
 
 export const SHARED_FOLDER = '_shared'
 export const MEMORY_FILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,62}\.md$/
@@ -127,10 +128,20 @@ async function listDir(dir: string, shared: boolean): Promise<MemoryFileInfo[]> 
   return out
 }
 
-/** The task's files, then the shared ones it does not shadow. */
+/** A folder key memoryFolderOf takes ('' for one it refuses: a placeholder, a path). */
+const ownFolder = (taskId: string | null | undefined): string => {
+  try { return taskId ? memoryFolderOf(taskId) : '' } catch { return '' }
+}
+
+/**
+ * The task's files, then the shared ones it does not shadow. An id that is no task id (a routine's
+ * placeholder, 2026-11-12 review: it threw here and cost every routine run its session context)
+ * has no folder of its own: the shared files alone.
+ */
 export async function listMemoryFiles(taskId?: string | null): Promise<MemoryFileInfo[]> {
   if (isCompanion()) return []
-  const own = taskId ? await listDir(memoryFolderOf(taskId), false) : []
+  const dir = ownFolder(taskId)
+  const own = dir ? await listDir(dir, false) : []
   const names = new Set(own.map((f) => f.name))
   const shared = (await listDir(memoryFolderOf(null), true)).filter((f) => !names.has(f.name))
   return [...own, ...shared]
@@ -147,49 +158,59 @@ export interface MemoryFileRead {
 }
 
 /**
- * `regenerate`: what the task's prompt moves now, for a Walnut file not written yet. A pointer can
- * reach a session before its file does (the instruction notice tells a running session the new
- * pointer, a compaction hook restates it), so a miss writes it from the current text. A pointer to
- * a version of a block that is gone (its text changed and the old file was swept) is answered with
- * the block's current file, saying so, never with not found.
+ * A file of the task's folder, else the shared one. On a miss, and only for a block of the session
+ * context, `regenerate` gives what the task's prompt moves now (its session context composed from
+ * a spawn's inputs), and the file is written from it. A pointer to a version of a block that is
+ * gone (its text changed and the old file was swept) is answered with the current file of the same
+ * block and scope (a persona's console agent), saying so, never with not found.
  */
 export async function readMemoryFile(
   taskId: string | null | undefined, name: string, opts: { regenerate?: () => Promise<readonly PromptOverflow[]> } = {},
 ): Promise<MemoryFileRead> {
   const n = checkName(name)
-  const block = walnutFolderBlock(n)
-  let current: readonly PromptOverflow[] | null = null
-  if (taskId && opts.regenerate && block && !isCompanion()) {
-    const file = path.join(memoryFolderOf(taskId), n)
-    if (!(await fsp.stat(file).catch(() => null))) {
-      current = await opts.regenerate().catch(() => [])
-      const o = current.find((x) => x.file === n)
-      if (o) await writeIfChanged(file, overflowFileText(o)).catch(() => false)
-    }
-  }
   const found = await readFrom(taskId, n)
   if (found) return found
-  if (block) {
-    // Another version of the same block: the one the current prompt names, else the newest on disk.
-    const now = current?.find((x) => x.id === block)
-    if (now && taskId && !isCompanion()) {
-      await writeIfChanged(path.join(memoryFolderOf(taskId), now.file), overflowFileText(now)).catch(() => false)
-      const read = await readFrom(taskId, now.file)
-      if (read) return { ...read, replaces: n }
-    }
-    for (const f of (await listMemoryFiles(taskId)).filter((x) => walnutFolderBlock(x.name) === block).sort((a, b) => b.at.localeCompare(a.at))) {
-      const read = await readFrom(taskId, f.name)
-      if (read) return { ...read, replaces: n }
-    }
+  const key = walnutFileKey(n)
+  if (!key) throw notFound(n)
+  // Only a block of the session context is the task's to write again: a persona's file is the
+  // shared folder's, written by the persona's own builder.
+  const own = taskId && !isCompanion() && promptBlock(key.block).part === 'context' ? ownFolder(taskId) : ''
+  const current = own && opts.regenerate ? await opts.regenerate().catch(() => [] as readonly PromptOverflow[]) : []
+  const exact = current.find((x) => x.file === n)
+  if (exact) {
+    await writeIfChanged(path.join(own, n), overflowFileText(exact)).catch(() => false)
+    const read = await readFrom(taskId, n)
+    if (read) return read
   }
-  throw new MemoryFolderError('not_found', 404, isCompanion()
+  // Another version of the same block and scope: the one the current prompt names, else the newest on disk.
+  const now = current.find((x) => sameKey(x.file, key))
+  if (now) {
+    await writeIfChanged(path.join(own, now.file), overflowFileText(now)).catch(() => false)
+    const read = await readFrom(taskId, now.file)
+    if (read) return { ...read, replaces: n }
+  }
+  for (const f of (await listMemoryFiles(taskId)).filter((x) => sameKey(x.name, key)).sort((a, b) => b.at.localeCompare(a.at))) {
+    const read = await readFrom(taskId, f.name)
+    if (read) return { ...read, replaces: n }
+  }
+  throw notFound(n)
+}
+
+const sameKey = (name: string, key: { block: string; scope: string }): boolean => {
+  const k = walnutFileKey(name)
+  return !!k && k.block === key.block && k.scope === key.scope
+}
+
+function notFound(n: string): MemoryFolderError {
+  return new MemoryFolderError('not_found', 404, isCompanion()
     ? `No file "${n}" here: memory folders are kept on the main computer, so read it while that computer is on.`
     : `No file "${n}" in this memory folder. agent_memory_read with no file lists what there is; a file Walnut `
       + 'moved there is written when a session of the task starts, and replaced when the moved text changes.')
 }
 
 async function readFrom(taskId: string | null | undefined, n: string): Promise<MemoryFileRead | null> {
-  const dirs: Array<[string, boolean]> = [...(taskId ? [[memoryFolderOf(taskId), false] as [string, boolean]] : []), [memoryFolderOf(null), true]]
+  const own = ownFolder(taskId)
+  const dirs: Array<[string, boolean]> = [...(own ? [[own, false] as [string, boolean]] : []), [memoryFolderOf(null), true]]
   for (const [dir, shared] of dirs) {
     const file = path.join(dir, n)
     const text = await fsp.readFile(file, 'utf-8').catch(() => null)
@@ -207,6 +228,7 @@ export async function removeMemoryFolder(taskId: string): Promise<void> {
   try { dir = memoryFolderOf(taskId) } catch { return }
   if (path.basename(dir) === SHARED_FOLDER) return
   await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
+  await fsp.rm(`${dir}.notes.lock`, { recursive: true, force: true }).catch(() => {})
 }
 
 /** A node's own note: written whole; `content: ""` removes it. Walnut's file names are refused. */
@@ -221,16 +243,20 @@ export async function writeOwnNote(taskId: string, name: string, content: string
   }
   const dir = memoryFolderOf(taskId)
   const file = path.join(dir, n)
-  if (!content.trim()) {
-    await fsp.rm(file, { force: true })
-    return { name: n, bytes: 0, removed: true, count: (await listDir(dir, false)).filter((f) => !f.walnut).length }
-  }
-  const mine = (await listDir(dir, false)).filter((f) => !f.walnut)
-  if (!mine.some((f) => f.name === n) && mine.length >= OWN_NOTE_FILES_MAX) {
-    throw new MemoryFolderError('too_many_notes', 409, `This folder already holds ${OWN_NOTE_FILES_MAX} notes of yours: merge or remove one (content "") first.`)
-  }
-  await writeIfChanged(file, content.endsWith('\n') ? content : `${content}\n`)
-  return { name: n, bytes: byteLength(content), removed: false, count: mine.length + (mine.some((f) => f.name === n) ? 0 : 1) }
+  // Under the folder's lock: two writes at once must not both pass the count and leave one note too many.
+  await fsp.mkdir(path.dirname(dir), { recursive: true })
+  return withFileLock(`${dir}.notes`, async () => {
+    if (!content.trim()) {
+      await fsp.rm(file, { force: true })
+      return { name: n, bytes: 0, removed: true, count: (await listDir(dir, false)).filter((f) => !f.walnut).length }
+    }
+    const mine = (await listDir(dir, false)).filter((f) => !f.walnut)
+    if (!mine.some((f) => f.name === n) && mine.length >= OWN_NOTE_FILES_MAX) {
+      throw new MemoryFolderError('too_many_notes', 409, `This folder already holds ${OWN_NOTE_FILES_MAX} notes of yours: merge or remove one (content "") first.`)
+    }
+    await writeIfChanged(file, content.endsWith('\n') ? content : `${content}\n`)
+    return { name: n, bytes: byteLength(content), removed: false, count: mine.length + (mine.some((f) => f.name === n) ? 0 : 1) }
+  })
 }
 
 /** The always-loaded index of a node's own notes ('' with none): names and sizes only, read on demand. */

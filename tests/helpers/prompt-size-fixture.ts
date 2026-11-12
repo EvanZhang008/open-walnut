@@ -99,7 +99,8 @@ export interface ComposedRolePrompt {
 /**
  * The whole appended prompt of one kind of session, persona and session context, joined as the
  * spawn joins them (prompt-blocks.ts joinAppendedPrompt, which claude-code-session.ts calls).
- * Main and an ask carry the Personal AI persona; a lead and a worker carry only Walnut's context.
+ * Main and an ask carry the Personal AI persona (Main's leaves the routing rules to its role, an
+ * ask's keeps them); a lead and a worker carry only Walnut's context.
  */
 export async function composeRolePrompt(
   role: PromptRole, opts: { uncapped?: boolean; memoryMd?: string; task?: Record<string, unknown> } = {},
@@ -115,7 +116,7 @@ export async function composeRolePrompt(
   let text = context.text()
   if (role === 'main' || role === 'ask') {
     const persona = personalAiPersona('Avery', formatSessionSkillsPrompt(fixtureSkills()),
-      laneMemoryContextOf((opts.memoryMd ?? fixtureMemoryMd()).trim(), ''), { withSessionContext: true, uncapped: opts.uncapped })
+      laneMemoryContextOf((opts.memoryMd ?? fixtureMemoryMd()).trim(), ''), { withSessionContext: true, routingInContext: role === 'main', uncapped: opts.uncapped })
     text = joinAppendedPrompt([persona.systemPrompt, text])
     blocks.unshift(...persona.blocks.map((b) => ({ id: b.id, chars: b.chars, bytes: b.bytes, capped: b.capped })))
     overflows.unshift(...persona.overflows.map((o) => ({ id: o.id, chars: o.chars, text: o.text })))

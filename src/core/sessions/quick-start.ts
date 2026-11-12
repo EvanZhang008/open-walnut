@@ -449,8 +449,13 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     const { getConfig } = await import('../config-manager.js');
     const { buildLaneProfile } = await import('./personal-ai-lane.js');
     // USER.md rides the session context where the engine takes one; elsewhere the prefix carries it.
+    // Main's and a lead's session context carries the routing rules (their role); an ask's does not.
+    const orgNode = existingTaskId
+      ? await (await import('../task-manager.js')).getTask(existingTaskId).then((t) => t.org_role === 'main' || t.org_role === 'lead', () => false)
+      : false;
     const built = await buildLaneProfile(await getConfig(), askAgent.id, {
       userInSessionContext: engineCaps(engine).walnutSessionContext,
+      routingInSessionContext: engineCaps(engine).walnutSessionContext && orgNode,
       compactSkills: isAcpEngine(engine),
     });
     if (isAcpEngine(engine)) {

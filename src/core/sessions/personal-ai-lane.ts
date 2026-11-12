@@ -31,7 +31,7 @@ import { getSessionByLane, createSessionRecord } from '../session-tracker.js';
 // One source of truth for the seed's header: the store renders the block, this
 // module splices it into the spawn prompt and has to find it again on a repair.
 import { CONVERSATION_SEED_HEADER, clipRenderedSeed } from '../chat-history.js';
-import { GLOBAL_MEMORY_HEADING, personaBuiltBesideSessionContext, personalAiPersona, consoleAgentPersona, mergeProfiles, walnutMcpProfile } from './profiles.js';
+import { GLOBAL_MEMORY_HEADING, TASK_ROUTING_OPENING, personaBuiltBesideSessionContext, personaLeftRoutingOut, personalAiPersona, consoleAgentPersona, mergeProfiles, walnutMcpProfile } from './profiles.js';
 import { promptRollback } from './prompt-blocks.js';
 
 const LANE_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -435,6 +435,11 @@ export async function buildLaneProfile(
      */
     userInSessionContext?: boolean;
     /**
+     * That session context carries the routing rules too (Main's and a lead's role does, an ask's
+     * does not), so the persona leaves them out as well. Positive evidence only (contextHoldsRouting).
+     */
+    routingInSessionContext?: boolean;
+    /**
      * Every block whole, nothing moved to a memory folder: for a prompt read where the Mac's
      * folder cannot be (the companion, the personas copy a host replica starts an ask from
      * while the Mac is away). Also on the companion itself.
@@ -471,6 +476,7 @@ export async function buildLaneProfile(
   // background agent by design and its persona builds exactly the same way.
   let profile;
   const withSessionContext = !!opts?.userInSessionContext;
+  const routingInContext = withSessionContext && !!opts?.routingInSessionContext;
   const { isCompanion } = await import('../server-role.js');
   const uncapped = !!opts?.uncapped || isCompanion();
   if (persona) {
@@ -478,14 +484,14 @@ export async function buildLaneProfile(
   } else {
     let built;
     if (agentId === 'general') {
-      built = personalAiPersona(config.user?.name ?? 'the user', skillsIndex, memoryContext, { withSessionContext, uncapped });
+      built = personalAiPersona(config.user?.name ?? 'the user', skillsIndex, memoryContext, { withSessionContext, routingInContext, uncapped });
     } else {
       const { getAgent } = await import('../agent-registry.js');
       const agentDef = await getAgent(agentId);
       if (!agentDef) throw new Error(`Agent '${agentId}' not found`);
       const { loadContextSources } = await import('../context-sources.js');
       const contextBlock = await loadContextSources(agentDef, {}).catch(() => '');
-      built = consoleAgentPersona(agentDef, skillsIndex, contextBlock, { withSessionContext, uncapped });
+      built = consoleAgentPersona(agentDef, skillsIndex, contextBlock, { withSessionContext, routingInContext, uncapped });
     }
     // What a cap moved (the skills index, the standing memory) is the same for every session:
     // the shared memory folder, which every node's agent_memory_read falls back to.
@@ -615,6 +621,21 @@ export function hasWalnutContext(
   return personaBuiltBesideSessionContext(record.profile?.systemPrompt);
 }
 
+/**
+ * Whether that session context carries the routing rules, so the persona may leave them out too
+ * (2026-11-12 review: an ask minted before the caps holds them in its persona only, and a repair
+ * that dropped them there left a cold resume with them in neither half). Positive evidence, like
+ * hasWalnutContext: the stored spawn prompt holds them, or, with none stored yet, the persona the
+ * mint stamped left them out.
+ */
+export function contextHoldsRouting(
+  record: { appliedAppendSystemPrompt?: string | null; profile?: { systemPrompt?: string } | null },
+): boolean {
+  const applied = record.appliedAppendSystemPrompt;
+  if (typeof applied === 'string') return applied.includes(TASK_ROUTING_OPENING);
+  return personaLeftRoutingOut(record.profile?.systemPrompt);
+}
+
 /** Last drift-repair attempt per session — the check reads skills + memory
  *  files, so once per TTL per session is plenty (a lane re-resolves every turn;
  *  this is the equivalent budget for quick-start walnut sessions). */
@@ -658,7 +679,8 @@ export async function refreshWalnutSessionProfile(sessionId: string): Promise<vo
     // USER.md rides the session context when this session has Walnut's (an adopted AI search has none).
     const { WALNUT_PROMPT_MARK } = await import('./session-context.js');
     const userInSessionContext = hasWalnutContext(record, WALNUT_PROMPT_MARK);
-    let { profile } = await buildLaneProfile(await getConfig(), task.agent_id || 'general', { userInSessionContext });
+    const routingInSessionContext = userInSessionContext && contextHoldsRouting(record);
+    let { profile } = await buildLaneProfile(await getConfig(), task.agent_id || 'general', { userInSessionContext, routingInSessionContext });
     // An ask on another host (WP12: started there while the Mac was away) takes no walnut
     // MCP mount, as no session this Mac runs on a remote host does: its walnut tools are
     // the `walnut` CLI there, which the host's daemon points at its gateway socket. This
@@ -820,7 +842,8 @@ async function resolveLane(
       // A prompt not stored yet (the spawn persists it a moment later) is read as the mint built it
       // (hasWalnutContext), or the repair would flip the persona between its two forms.
       const userInSessionContext = !!existing.taskId && hasWalnutContext(existing, WALNUT_PROMPT_MARK);
-      const { profile, effort } = await buildLaneProfile(config, agentId, { userInSessionContext });
+      const routingInSessionContext = userInSessionContext && contextHoldsRouting(existing);
+      const { profile, effort } = await buildLaneProfile(config, agentId, { userInSessionContext, routingInSessionContext });
       // PERSONA halves only. The record's prompt also carries the mint-time
       // conversation seed, which is a frozen snapshot: comparing whole prompts
       // would differ on every turn (the conversation grew) and rewrite the

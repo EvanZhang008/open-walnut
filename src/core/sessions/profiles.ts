@@ -105,16 +105,18 @@ const PERSONA_PRECEDENCE_OPENING = '## Persona override'
  * which can change name/format outside our control.
  *
  * `withSessionContext`: Walnut's session context rides beside this persona (a task session on
- * the native engine), and it carries where work lives, the charter and the routing rules: the
- * persona leaves them out (one copy per prompt). Every block is held to its cap (prompt-blocks.ts);
- * what a cap moved is in `overflows`, for the caller to write to the memory folder.
+ * the native engine), and it carries where work lives and the charter: the persona leaves them
+ * out (one copy per prompt). The routing rules leave too only with `routingInContext`: the
+ * session context of Main and a lead carries them (their role), an ask's does not. Every block is
+ * held to its cap (prompt-blocks.ts); what a cap moved is in `overflows`, for the caller to write
+ * to the memory folder.
  */
 export function personalAiPersona(
-  name: string, skillsIndex?: string, memoryContext?: string, opts: { withSessionContext?: boolean; uncapped?: boolean } = {},
+  name: string, skillsIndex?: string, memoryContext?: string, opts: PersonaOpts = {},
 ): ComposedPersona {
-  const c = new PromptComposer(opts)
+  const c = new PromptComposer({ ...opts, scope: 'general' })
     .add('persona', `${personaPrecedenceHeader()}\n\n${buildRoleSection(name, { withSessionContext: true })}\n\n`)
-  if (!besideSessionContext(opts)) addSessionRules(c)
+  addSessionRules(c, opts)
   const memory = splitStandingMemory(memoryContext)
   c.add('standing-user', blockOf(memory.head)).add('standing-memory', blockOf(memory.memory)).add('skills-index', blockOf(skillsIndex))
   return { systemPrompt: c.text().trimEnd(), overflows: c.overflows, blocks: c.blocks }
@@ -131,10 +133,13 @@ function splitStandingMemory(text: string | undefined): { head: string; memory: 
   return at < 0 ? { head: t, memory: '' } : { head: t.slice(0, at), memory: t.slice(at + 2) }
 }
 
+/** How a persona is built: beside which session context, and whether a cap may cut it. */
+export type PersonaOpts = { withSessionContext?: boolean; routingInContext?: boolean; uncapped?: boolean }
+
 /** A persona as built: its prompt, the blocks it is made of, and what their caps moved. */
 export type ComposedPersona = { systemPrompt: string; overflows: PromptOverflow[]; blocks: ComposedBlock[] }
 
-export function personalAiProfile(name: string, skillsIndex?: string, memoryContext?: string, opts: { withSessionContext?: boolean } = {}): SessionProfile {
+export function personalAiProfile(name: string, skillsIndex?: string, memoryContext?: string, opts: PersonaOpts = {}): SessionProfile {
   return mergeProfiles(
     { systemPrompt: personalAiPersona(name, skillsIndex, memoryContext, opts).systemPrompt, systemPromptMode: 'append' },
     walnutMcpProfile(),
@@ -159,11 +164,27 @@ const TEAM_CHARTER_OPENING = TEAM_CHARTER.split('\n').find((l) => l.length > 40)
 /** A block of the persona after its head ('' when there is none). */
 const blockOf = (text: string | undefined): string => (text?.trim() ? `${text.trim()}\n\n` : '')
 
-/** The rules Walnut's session context carries, for a persona that rides without it (an ACP engine, a taskless lane). */
-function addSessionRules(c: PromptComposer): PromptComposer {
-  return c.add('where-work-lives', `${WORK_PLACE_RULE}\n\n`).add('how-we-work', `${TEAM_CHARTER}\n\n`)
-    .add('task-routing', `${TASK_ROUTING_CONTRACT}\n\n`)
+/**
+ * The rules a session context may carry, each where the session context does not: all three for a
+ * persona that rides without one (an ACP engine, a taskless lane, an adopted AI search), the
+ * routing rules alone beside an ask's context (only Main's and a lead's carry them).
+ */
+function addSessionRules(c: PromptComposer, opts: PersonaOpts): PromptComposer {
+  const beside = besideSessionContext(opts)
+  if (!beside) c.add('where-work-lives', `${WORK_PLACE_RULE}\n\n`).add('how-we-work', `${TEAM_CHARTER}\n\n`)
+  if (!beside || !opts.routingInContext) c.add('task-routing', `${TASK_ROUTING_CONTRACT}\n\n`)
+  return c
 }
+
+/**
+ * Whether a stored persona left the routing rules out (it was built beside a session context
+ * that carries them): read back like personaBuiltBesideSessionContext. Only a Walnut persona answers yes.
+ */
+export function personaLeftRoutingOut(systemPrompt: string | undefined): boolean {
+  return personaBuiltBesideSessionContext(systemPrompt) && !systemPrompt!.includes(TASK_ROUTING_OPENING)
+}
+/** The routing rules' first sentence, how a prompt is known to hold them. */
+export const TASK_ROUTING_OPENING = TASK_ROUTING_CONTRACT.split('\n').find((l) => l.length > 40)!
 
 /**
  * Lane profile for a NON-general console agent (mentor, note-agent, custom
@@ -175,13 +196,13 @@ export function consoleAgentPersona(
   agentDef: { id: string; name: string; system_prompt?: string },
   skillsIndex?: string,
   contextBlock?: string,
-  opts: { withSessionContext?: boolean; uncapped?: boolean } = {},
+  opts: PersonaOpts = {},
 ): ComposedPersona {
   const persona = agentDef.system_prompt?.trim() || `You are ${agentDef.name}.`
-  const c = new PromptComposer(opts)
+  const c = new PromptComposer({ ...opts, scope: agentDef.id })
     .add('agent-persona', `${personaPrecedenceHeader()}\n\n${persona}\n\n`)
     .add('persona', `${buildWorkModesSection({ withSessionContext: true })}\n\n`)
-  if (!besideSessionContext(opts)) addSessionRules(c)
+  addSessionRules(c, opts)
   c.add('agent-context', blockOf(contextBlock)).add('skills-index', blockOf(skillsIndex))
   return { systemPrompt: c.text().trimEnd(), overflows: c.overflows, blocks: c.blocks }
 }
@@ -190,7 +211,7 @@ export function consoleAgentProfile(
   agentDef: { id: string; name: string; system_prompt?: string },
   skillsIndex?: string,
   contextBlock?: string,
-  opts: { withSessionContext?: boolean } = {},
+  opts: PersonaOpts = {},
 ): SessionProfile {
   return mergeProfiles(
     { systemPrompt: consoleAgentPersona(agentDef, skillsIndex, contextBlock, opts).systemPrompt, systemPromptMode: 'append' },

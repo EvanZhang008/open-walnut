@@ -29,9 +29,10 @@ import { currentUserProfile } from './user-profile-context.js';
 import { isFollower } from '../server-role.js';
 import { isOrgNode } from '../org/org-enabled.js';
 import { ONE_HOUR_MS, type PromptCacheFacts } from './prompt-cache.js';
+import { TASK_CONTEXT_SEPARATOR } from './prompt-blocks.js';
 
-/** How the session start joins a caller's own prompt and Walnut's (claude-code-session.ts handleStart). */
-export const TASK_CONTEXT_JOIN = '\n\n---\n\n## Task Context\n\n';
+/** How the session start joins a caller's own prompt and Walnut's: the one separator (prompt-blocks.ts joinCallerAndContext). */
+export const TASK_CONTEXT_JOIN = TASK_CONTEXT_SEPARATOR;
 /** The spawn argv's prompt cap (claude-code-session.ts): a larger prompt is never stored, so never replayed. */
 const PROMPT_MAX_BYTES = 65_536;
 
