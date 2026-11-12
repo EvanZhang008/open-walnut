@@ -477,8 +477,8 @@ export async function buildLaneProfile(
   let profile;
   const withSessionContext = !!opts?.userInSessionContext;
   const routingInContext = withSessionContext && !!opts?.routingInSessionContext;
-  const { isCompanion } = await import('../server-role.js');
-  const uncapped = !!opts?.uncapped || isCompanion();
+  const { isFollower } = await import('../server-role.js');
+  const uncapped = !!opts?.uncapped || isFollower();
   if (persona) {
     profile = mergeProfiles({ systemPrompt: persona.systemPrompt, systemPromptMode: persona.systemPromptMode }, walnutMcpProfile())!;
   } else {

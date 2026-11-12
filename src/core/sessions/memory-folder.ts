@@ -17,14 +17,14 @@
  * Why not agentMemoryDir (constants.ts): that is per console AGENT (Personal AI, Mentor, ...), with
  * the global MEMORY.md / USER.md inside; a node is a task, so its folder is keyed like its own
  * MEMORY.md, Board and skills (agent-skills/<taskId>.json). A read looks in the task's folder, then
- * in _shared. Only the primary writes (the companion and replicas read nothing here: the folder is
+ * in _shared. Only the primary writes (a replica, the companion included, reads nothing here: the folder is
  * the Mac's, like Threads and agent skills).
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { isCompanion } from '../server-role.js'
+import { isFollower } from '../server-role.js'
 import { randomUUID } from 'node:crypto'
 import { withFileLock } from '../../utils/file-lock.js'
 import { byteLength, promptBlock, walnutFileKey, walnutFolderBlock, type PromptOverflow, type PromptPart } from './prompt-blocks.js'
@@ -85,7 +85,7 @@ export const WALNUT_FILE_KEEP_MS = 7 * 24 * 3_600_000
  * for WALNUT_FILE_KEEP_MS. Best effort per file: never throws (the prompt's pointer still says what moved).
  */
 export async function writeOverflows(taskId: string | null | undefined, part: PromptPart, overflows: readonly PromptOverflow[]): Promise<void> {
-  if (isCompanion()) return
+  if (isFollower()) return
   const who = taskId || SHARED_FOLDER
   let dir: string
   try { dir = memoryFolderOf(taskId) } catch { return }
@@ -139,7 +139,7 @@ const ownFolder = (taskId: string | null | undefined): string => {
  * has no folder of its own: the shared files alone.
  */
 export async function listMemoryFiles(taskId?: string | null): Promise<MemoryFileInfo[]> {
-  if (isCompanion()) return []
+  if (isFollower()) return []
   const dir = ownFolder(taskId)
   const own = dir ? await listDir(dir, false) : []
   const names = new Set(own.map((f) => f.name))
@@ -174,7 +174,7 @@ export async function readMemoryFile(
   if (!key) throw notFound(n)
   // Only a block of the session context is the task's to write again: a persona's file is the
   // shared folder's, written by the persona's own builder.
-  const own = taskId && !isCompanion() && promptBlock(key.block).part === 'context' ? ownFolder(taskId) : ''
+  const own = taskId && !isFollower() && promptBlock(key.block).part === 'context' ? ownFolder(taskId) : ''
   const current = own && opts.regenerate ? await opts.regenerate().catch(() => [] as readonly PromptOverflow[]) : []
   const exact = current.find((x) => x.file === n)
   if (exact) {
@@ -202,7 +202,7 @@ const sameKey = (name: string, key: { block: string; scope: string }): boolean =
 }
 
 function notFound(n: string): MemoryFolderError {
-  return new MemoryFolderError('not_found', 404, isCompanion()
+  return new MemoryFolderError('not_found', 404, isFollower()
     ? `No file "${n}" here: memory folders are kept on the main computer, so read it while that computer is on.`
     : `No file "${n}" in this memory folder. agent_memory_read with no file lists what there is; a file Walnut `
       + 'moved there is written when a session of the task starts, and replaced when the moved text changes.')
@@ -223,7 +223,7 @@ async function readFrom(taskId: string | null | undefined, n: string): Promise<M
 
 /** Remove a task's memory folder (the task was deleted). Never the shared folder. */
 export async function removeMemoryFolder(taskId: string): Promise<void> {
-  if (isCompanion() || !taskId.trim()) return
+  if (isFollower() || !taskId.trim()) return
   let dir: string
   try { dir = memoryFolderOf(taskId) } catch { return }
   if (path.basename(dir) === SHARED_FOLDER) return
@@ -233,7 +233,7 @@ export async function removeMemoryFolder(taskId: string): Promise<void> {
 
 /** A node's own note: written whole; `content: ""` removes it. Walnut's file names are refused. */
 export async function writeOwnNote(taskId: string, name: string, content: string): Promise<{ name: string; bytes: number; removed: boolean; count: number }> {
-  if (isCompanion()) throw new MemoryFolderError('not_supported_cloud', 501, 'Memory folder files are written on the primary box')
+  if (isFollower()) throw new MemoryFolderError('not_supported_cloud', 501, 'Memory folder files are written on the primary box')
   const n = checkName(name)
   if (walnutFolderBlock(n)) {
     throw new MemoryFolderError('walnut_file', 409, `"${n}" is Walnut's own file (the rest of a prompt section); pick another name for your note.`)
