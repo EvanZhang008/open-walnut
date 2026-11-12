@@ -440,7 +440,7 @@ export function ApprovalPrompts() {
                 <div key={card.id} className={`approval-card approval-card-line${phone ? ' approval-card-tap' : ''}${armedId === card.id ? '' : ' approval-card-arming'}`} data-approval-id={card.id} data-testid="approval-card"
                   onClick={phone ? () => openApproval(card.id) : undefined}>
                   <button type="button" className="approval-line-open" data-testid="approval-what" onClick={() => openApproval(card.id)}
-                    title={waiting.length > 1 ? waitingWords(waiting.length) : 'Open the request'}>
+                    title={`${card.what}${waiting.length > 1 ? ` (${waitingWords(waiting.length)})` : ''}: open the request`}>
                     <span className="approval-kicker">Approve?</span>
                     <span className="approval-line-what">{card.what}</span>
                     {phone && <span className="approval-row-open" aria-hidden="true">Open ›</span>}

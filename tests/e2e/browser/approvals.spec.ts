@@ -385,9 +385,8 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   await card3.getByTestId('approval-minimize').click()
   await expect(card3).toHaveClass(/approval-card-line/)
   // Two lines where they fit; in this narrow column (Settings' nav) the buttons take a third line
-  // rather than sit over the time (2026-11-06: "9:56 le" cut under Deny in the Org list), and the
-  // sentence may take two lines of its own (2026-11-12 review: one line hid what it asks).
-  await expect.poll(async () => Math.round((await card3.boundingBox())!.height)).toBeLessThanOrEqual(110)
+  // rather than sit over the time (2026-11-06: "9:56 le" cut under Deny in the Org list).
+  await expect.poll(async () => Math.round((await card3.boundingBox())!.height)).toBeLessThanOrEqual(90)
   expect(await card3.evaluate((el) => {
     const c = el.querySelector('.approval-clock')!.getBoundingClientRect()
     return [...el.querySelectorAll('.approval-actions .approval-btn')].every((b) => {

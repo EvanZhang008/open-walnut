@@ -387,11 +387,8 @@
   text-align: left;
   cursor: pointer;
 }
-/* Up to two lines of the sentence, then "…": a title cut at one line hid what it asks. */
-.approval-line-what {
-  flex: 1 1 0; min-width: 0; font-weight: 600; overflow: hidden; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
-}
+/* One line, the whole sentence on hover and in the dialog: the line card is the small form. */
+.approval-line-what { flex: 1 1 0; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Second line: how many and the time, then the buttons. */
 /* Never narrower than a short name and its time: in a narrow column (the Org list) the buttons
    wrap under it instead of cutting the time to "9:56 le". */
