@@ -207,8 +207,9 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     // out yet" (which shows every control and lets the buttons crush them).
     const shown = shapeIn(roomFolded > 0 ? Math.max(1, roomFolded - directRoom) : roomFolded - directRoom);
     const foldedShape = directRoom > 0 ? shapeIn(roomFolded) : shown;
-    // A row with no room yet (not laid out, or hidden) folds nothing: its shape there means "show all".
-    const fold = directRoom > 0 && roomFolded > 0 && foldDirectButtons(shown, foldedShape);
+    // A row with no room (not laid out yet, or hidden for a moment by a reflow) decides
+    // nothing: its shape there means "show all", so the buttons keep where they are.
+    const fold = roomFolded > 0 ? directRoom > 0 && foldDirectButtons(shown, foldedShape) : folded;
     const next = fold ? foldedShape : shown;
     setFolded((prev) => prev === fold ? prev : fold);
     setCondensed((prev) => prev === next.compact ? prev : next.compact);
