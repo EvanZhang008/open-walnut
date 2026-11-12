@@ -1,6 +1,6 @@
-import { isCompanion } from '../server-role.js'
 import { log } from '../../logging/index.js'
 import { voiceArchive, voiceAsr, voiceRecordingId, type VoiceArchiveStore } from './voice-archive.js'
+import { hasCapability } from '../capabilities.js'
 
 const HOP_TIMEOUT_MS = 10_000
 const COPY_TIMEOUT_MS = 120_000
@@ -137,7 +137,7 @@ export function replicateUnlessSilent(raw: string, silenceMs: number, store: Voi
 }
 
 export function deferVoiceReplication(id?: string): void {
-  if (!isCompanion()) return
+  if (!hasCapability('public-door')) return
   void tracked(new Promise<void>((resolve) => setImmediate(() => {
     let work: Promise<void>
     try { work = id ? replicateVoiceRecording(id).then(() => {}) : retryVoiceArchives() } catch (error) { work = Promise.reject(error) }
@@ -219,7 +219,7 @@ function onPrimaryConnected(): void {
 }
 
 export function startVoiceArchiveReplication(): Promise<void> {
-  if (!isCompanion()) return Promise.resolve()
+  if (!hasCapability('public-door')) return Promise.resolve()
   starting ??= (async () => {
     const { addPrimaryBridgeConnectedHandler, addPrimaryBridgeActivityHandler } = await import('../../web/ws/bridge-registry.js')
     const connected = addPrimaryBridgeConnectedHandler(onPrimaryConnected)

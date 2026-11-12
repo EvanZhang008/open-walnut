@@ -36,14 +36,24 @@ struct ServerStatus: Codable, Equatable {
     let lastSyncAt: String?
     let bridgeHosts: [BridgeHost]?
     let cloudChat: CloudChat?
+    /// What the server is, in its own words (additive, see ServerFacts.swift). nil = an
+    /// older server that does not say; read through `isReplica`, `isOnCloud`, `leaderReach`.
+    let role: Role?
+    let placement: Placement?
+    /// The server's capabilities (`public-door`, `bridge-door`, `cloud-exec`, `backup-leader`).
+    /// The wire key is `serverCapabilities`: `capabilities` on /status is the v1 feature list.
+    let serverCapabilities: [String]?
+    let leader: LeaderPresence?
 
     private enum CodingKeys: String, CodingKey {
         case mode, cloud, version, serverTime, lastSyncAt, bridgeHosts, cloudChat
+        case role, placement, serverCapabilities, leader
     }
 
     init(mode: Mode, cloud: Bool, version: String, serverTime: String,
          lastSyncAt: String? = nil, bridgeHosts: [BridgeHost]? = nil,
-         cloudChat: CloudChat? = nil) {
+         cloudChat: CloudChat? = nil, role: Role? = nil, placement: Placement? = nil,
+         serverCapabilities: [String]? = nil, leader: LeaderPresence? = nil) {
         self.mode = mode
         self.cloud = cloud
         self.version = version
@@ -51,6 +61,10 @@ struct ServerStatus: Codable, Equatable {
         self.lastSyncAt = lastSyncAt
         self.bridgeHosts = bridgeHosts
         self.cloudChat = cloudChat
+        self.role = role
+        self.placement = placement
+        self.serverCapabilities = serverCapabilities
+        self.leader = leader
     }
 
     /// Lenient on the additive fields only: `mode`/`cloud`/`version` stay
@@ -68,6 +82,12 @@ struct ServerStatus: Codable, Equatable {
         // An unknown value from a newer server reads as "does not say", never as
         // a failed probe.
         cloudChat = try? c.decodeIfPresent(CloudChat.self, forKey: .cloudChat)
+        // The server facts: each one alone, so one a newer server words differently
+        // reads as "does not say" and never fails the probe.
+        role = try? c.decodeIfPresent(Role.self, forKey: .role)
+        placement = try? c.decodeIfPresent(Placement.self, forKey: .placement)
+        serverCapabilities = try? c.decodeIfPresent([String].self, forKey: .serverCapabilities)
+        leader = try? c.decodeIfPresent(LeaderPresence.self, forKey: .leader)
     }
 }
 
@@ -1437,10 +1457,38 @@ enum APIError: Error, LocalizedError {
     var isConflict: Bool { code == "conflict" }
     /// 503 — the task projection hasn't synced yet on a fresh companion.
     var isUnavailable: Bool { code == "unavailable" }
-    /// 503 — a replica (the cloud companion, a host's Walnut server) could not get from the Mac what only the Mac keeps (Threads) just now.
-    var isPrimaryOnly: Bool { code == "primary_only" }
     /// 503 — the primary box (this session's host) has no live bridge right now.
     var isBridgeOffline: Bool { code == "bridge_offline" }
     /// 409 — the session's CLI process is gone; can't accept new messages.
     var isSessionDead: Bool { code == "session_dead" }
+
+    // MARK: The Mac is not answering the server the phone talks to
+
+    /// The refusals that mean "this needs your Mac, and it is not answering this server
+    /// right now", so the same request may go through once it is back: any replica's
+    /// 503 `needs_leader` (the Walnut server on a host, a newer cloud companion), and the
+    /// older codes the cloud companion still sends for it (`bridge_offline`,
+    /// `primary_only`, `primary_unreachable`). The one check every retry and
+    /// "try again" path reads, so a new code joins here and nowhere else.
+    static let leaderAwayCodes: Set<String> = ["needs_leader", "bridge_offline", "primary_only", "primary_unreachable"]
+
+    static func isLeaderUnreachableForNow(code: String?) -> Bool {
+        code.map { leaderAwayCodes.contains($0) } ?? false
+    }
+
+    /// See `leaderAwayCodes`. `needs_leader` counts only as the 503 the server always
+    /// sends it with; another status under that code is some other refusal.
+    var isLeaderUnreachableForNow: Bool {
+        guard case .server(let status, let code, _, _, _) = self else { return false }
+        if code == "needs_leader" { return status == 503 }
+        return Self.isLeaderUnreachableForNow(code: code)
+    }
+
+    /// Any refusal because the work needs the Mac and this server cannot reach it: the
+    /// codes above, plus an older companion's `not_supported_cloud` and
+    /// `images_not_supported_cloud` (501s: the route never runs on that box, so they are
+    /// explained, never retried).
+    var isLeaderUnreachable: Bool {
+        isLeaderUnreachableForNow || code == "not_supported_cloud" || code == "images_not_supported_cloud"
+    }
 }

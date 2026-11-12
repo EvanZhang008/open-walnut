@@ -520,10 +520,10 @@ taskV1Router.put('/tasks/:id/report', async (req: Request, res: Response, next: 
 
 taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // Class C on a REPLICA: the cloud box has no session-runner/daemon, so the
-    // SESSION_START emit would be a silent 200 no-op. POST /sessions already
-    // relays launches over the bridge — point callers there.
-    if (CLOUD_MODE) {
+    // Class C on a REPLICA: a replica does not run the leader's session starts, so
+    // the SESSION_START emit would be a silent 200 no-op. POST /sessions reaches the
+    // leader (the companion relays it over the bridge): point callers there.
+    if (role() === 'replica') {
       sendError(res, 501, 'not_supported_cloud',
         'Starting a session for a task runs on the primary box only — use POST /api/v1/sessions, which relays over the bridge')
       return

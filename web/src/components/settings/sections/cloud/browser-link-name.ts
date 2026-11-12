@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { apiGet } from '@/api/client';
 import { useEvent } from '@/hooks/useWebSocket';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import type { ExposeResponse } from './browser-access-status';
 
 export const BROWSER_LINK_TITLE = 'Browser link';
@@ -59,8 +59,8 @@ function refresh(): Promise<void> {
 
 /** The browser link's name, read once per page and again when a plugin or the link changes. */
 export function useBrowserLinkName(): BrowserLinkName {
-  // A cloud companion is reached through its own address; its browser link pages are the Mac's.
-  const replica = useIsCloudReplica();
+  // A replica answering without the Mac has no browser link of its own: those pages are the Mac's.
+  const replica = useIsReplicaServer();
   const [name, setName] = useState(shared);
   useEffect(() => {
     if (replica) return;

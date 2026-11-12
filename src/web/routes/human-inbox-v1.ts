@@ -41,6 +41,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion, isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
 import {
@@ -256,8 +257,8 @@ humanInboxV1Router.post('/human-inbox', async (req: Request, res: Response, next
  */
 humanInboxV1Router.post('/human-inbox/body', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) {
-      // Letters live on the primary, and a ref names a file on THIS box's disk.
+    if (isFollower()) {
+      // Letters live on the leader, and a ref names a file on THIS box's disk.
       // Rather than invent a replica→primary push for a case no surface has (a
       // phone does not author 100MB letters), say so precisely.
       sendError(res, 501, 'not_supported_cloud',
@@ -425,7 +426,6 @@ humanInboxV1Router.post('/human-inbox/:id/settle', async (req: Request, res: Res
     const id = letterId(req)
     const sid = callerSid(req)
     // The companion relays to the Mac; a host replica's front forwards the route there itself.
-    const { isCompanion } = await import('../../core/server-role.js')
     if (isCompanion()) {
       await relayControlAction(res, 'server.human-inbox.settle', SERVER_RELAY_SID, { ...b, id, ...(sid ? { callerSid: sid } : {}) }, 200)
       return

@@ -46,7 +46,7 @@ import type { HumanInboxAnsweredEvent } from '../event-types.js'
 import { getConfig, updatePluginConfig } from '../config-manager.js'
 import { emitConfigChanged } from '../config-broadcast.js'
 import { getVersion } from '../version.js'
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { WALNUT_HOME } from '../../constants.js'
 import { isFollower } from '../server-role.js'
 import { createPluginMacos } from './plugin-macos.js'
 import { createPluginMcp } from './plugin-mcp.js'
@@ -607,7 +607,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
   /** Folder writes are primary-only: a replica's own store is replaced by the next projection
    *  import, and its outbox forwards single-task updates, not these batches. */
   const assertPrimaryWrite = (call: string): void => {
-    if (CLOUD_MODE) throw new Error(`${call} is not available on a replica; the primary Walnut owns the board.`)
+    if (isFollower()) throw new Error(`${call} is not available on a replica; the primary Walnut owns the board.`)
   }
 
   // Declared as consts, not methods on the bag: a plugin may destructure
@@ -649,7 +649,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     walnutVersion: getVersion(),
     // A plugin that owns an outside account has to know which box it is on: two Walnuts
     // polling one mailbox double every fetch and every write.
-    replica: CLOUD_MODE,
+    replica: isFollower(),
     // A test run's request (x-walnut-test-run, an automated browser): an op that changes the
     // person's Mac or a timer of the plugin's refuses it (2026-11-02: a test run's focus block).
     testRun: () => ambientTestRun(),
@@ -885,7 +885,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       },
       async run(alias: string, input: { script: string; args?: string[]; timeoutMs?: number; maxOutputBytes?: number }) {
         // A replica has no ssh of its own to the user's hosts; it reaches them through daemons.
-        if (CLOUD_MODE) throw new Error('hosts.run is not available on a replica.')
+        if (isFollower()) throw new Error('hosts.run is not available on a replica.')
         const { runOnPluginHost } = await import('./plugin-hosts.js')
         return runOnPluginHost(alias, input)
       },

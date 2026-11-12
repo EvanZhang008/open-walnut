@@ -18,6 +18,7 @@ import crypto from 'node:crypto'
 import path from 'node:path'
 import fsp from 'node:fs/promises'
 import { CLOUD_MODE, REMOTE_IMAGES_DIR } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 
 export const mediaV1Router = Router()
@@ -115,11 +116,11 @@ mediaV1Router.get('/media', async (req: Request, res: Response, next: NextFuncti
       if (st.isFile() && st.size <= MAX_FILE_SIZE) buffer = await fsp.readFile(filePath)
     } catch { /* not local — try the session's host below */ }
 
-    // 1b. Primary: a mirror slot the history rewrite just handed out may still be
+    // 1b. Leader: a mirror slot the history rewrite just handed out may still be
     //     downloading. Wait for its bytes, same as local-image.ts, and then skip
-    //     step 2: it would ask the host for this LOCAL path.
+    //     step 2: it would ask the host for this LOCAL path. A replica mirrors nothing.
     let waitedOnPending = false
-    if (!buffer && !CLOUD_MODE) {
+    if (!buffer && !isFollower()) {
       const { isMirrorPath, hasPendingMirror, awaitPendingMirror } = await import('../../core/remote-image-mirror.js')
       waitedOnPending = isMirrorPath(filePath) && hasPendingMirror(filePath)
       if (waitedOnPending) buffer = await awaitPendingMirror(filePath)

@@ -18,7 +18,7 @@
  * every vault route.
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { isFollower, role } from '../../core/server-role.js'
+import { isFollower } from '../../core/server-role.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
@@ -34,7 +34,7 @@ function header(req: Request, name: string): string | undefined {
 
 function here(res: Response): boolean {
   res.setHeader('Cache-Control', 'no-store')
-  if (role() !== 'leader' || isFollower()) {
+  if (isFollower()) {
     res.status(503).json({ error: 'Passwords are kept on your Mac and open only from it, its own network or Tailscale.', code: 'vault_not_here' })
     return false
   }

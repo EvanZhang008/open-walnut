@@ -23,7 +23,8 @@ import { getConfig } from '../../core/config-manager.js'
 import { hostEntryOf } from '../../replica/self-host.js'
 import { getFrequentDirs } from '../../core/frequent-dirs.js'
 import { recordMentionDir, getMentionDirs } from '../../core/mention-dirs.js'
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { WALNUT_HOME } from '../../constants.js'
+import { runsSessions } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { parsePathRef, isUnsafePathRef } from '../../providers/path-ref-parse.js'
 import { HOST_RECONNECTING, HostReconnectingError, boundHostRead } from '../../core/hosts/remote-read-bound.js'
@@ -461,9 +462,8 @@ export async function linkPathsStat(rawPaths: readonly unknown[], rawHost: strin
   const paths = [...new Set(rawPaths.filter((p): p is string => typeof p === 'string' && p.length > 0 && p.length <= 1024))].slice(0, EXISTS_MAX)
   const exists: Record<string, boolean> = {}
   const sizes: Record<string, number> = {}
-  // The companion's own disk is not where a "local" session's files are (the Mac's are).
-  const { placement } = await import('../../core/server-role.js')
-  if (paths.length === 0 || (!host && placement() === 'cloud')) return { exists, sizes }
+  // A box where no session runs (the companion) holds no "local" session's files (the Mac's are).
+  if (paths.length === 0 || (!host && !runsSessions())) return { exists, sizes }
   const { assertPathAllowed } = await import('./file-content.js')
   const allowed: { raw: string; filePath: string }[] = []
   for (const raw of paths) {
@@ -942,7 +942,8 @@ const REVEAL_APP_DENY_EXTS = new Set([
 
 filesRouter.post('/reveal', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) { res.status(400).json({ error: 'Not available in cloud mode' }); return }
+    // A box where no session runs (the companion) has no desktop of the person's to open.
+    if (!runsSessions()) { res.status(400).json({ error: 'Not available in cloud mode' }); return }
     if (process.platform !== 'darwin') { res.status(400).json({ error: 'Only supported on macOS' }); return }
     const { path: rawPath, mode, host } = req.body ?? {}
     if (typeof host === 'string' && host && host !== '__local__') {

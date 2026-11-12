@@ -16,6 +16,7 @@
 import { Router } from 'express'
 import { randomBytes } from 'node:crypto'
 import { CLOUD_MODE } from '../../constants.js'
+import { hasCapability } from '../../core/capabilities.js'
 import { getConfig } from '../../core/config-manager.js'
 import { buildHostStatus, listStatusHosts, type HostStatus } from '../../core/hosts/host-status.js'
 import { checkHostNow, configHostDef, connectHostNow, hostStatusFrame } from '../../core/hosts/host-connect-action.js'
@@ -69,7 +70,7 @@ hostsRouter.get('/:host/status', async (req, res, next) => {
     res.status(400).json({ error: 'Invalid host alias' })
     return
   }
-  if (!CLOUD_MODE) {
+  if (!hasCapability('bridge-door')) {
     res.status(409).json({ error: 'Outbound host status is served by the cloud companion' })
     return
   }
@@ -142,8 +143,9 @@ hostsRouter.post('/:host/found-answer', async (req, res, next) => {
 hostsRouter.get('/:host/ssh-key', async (req, res, next) => {
   try {
     const host = typeof req.params.host === 'string' ? req.params.host.trim() : ''
-    const { isCompanion } = await import('../../core/server-role.js')
-    if (isCompanion() || !host) {
+    // A replica's own ssh key is not the Mac's (the Mac answers this read while it is there).
+    const { isFollower } = await import('../../core/server-role.js')
+    if (isFollower() || !host) {
       res.json({ key: null })
       return
     }

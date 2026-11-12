@@ -36,6 +36,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { attachSse, emitSse, sseConnCount, type SseAudience } from '../sse-channels.js'
 import { ambientTestRun, isTestRunTask, phoneListedTasks, unmarkForTestViewer } from '../../core/test-run.js'
@@ -140,7 +141,8 @@ function forwardToBridge(event: string, data: unknown): void {
 }
 
 /**
- * Awaitable single-frame push down the SAME `mobile-event` lane (primary only).
+ * Awaitable single-frame push down the SAME `mobile-event` lane (the leader only:
+ * a replica never pushes frames as if it were the Mac, whatever daemon link it has).
  * Split out of forwardToBridge so other producers on this box can push their own
  * frame kinds through the one transport that already exists (chat-turn-relay's
  * downlink) and see whether it landed. Resolves false when there is no lane
@@ -148,7 +150,7 @@ function forwardToBridge(event: string, data: unknown): void {
  * downlink is a normal, degradable state, not an error.
  */
 export async function forwardMobileEventToBridge(kind: string, data: unknown): Promise<boolean> {
-  if (CLOUD_MODE) return false
+  if (isFollower()) return false
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
   const conn = getConnectedDaemonConnection('__local__')
   if (!conn || !conn.hasCapability('mobile-event')) return false
@@ -161,7 +163,7 @@ export async function forwardMobileEventToBridge(kind: string, data: unknown): P
  *  companion's phones are people's, so the bridge never carries those. */
 function emitFeedEvent(event: string, data: unknown, audience: SseAudience = 'all'): void {
   fanOut(event, data, audience)
-  if (!CLOUD_MODE && audience !== 'test-viewers') forwardToBridge(event, bridgeCopy(event, data))
+  if (!isFollower() && audience !== 'test-viewers') forwardToBridge(event, bridgeCopy(event, data))
 }
 
 /**
@@ -178,13 +180,13 @@ function bridgeCopy(event: string, data: unknown): unknown {
 
 /**
  * True when someone can consume a feed event right now: a local SSE
- * subscriber, or (primary only) a bridge-connected daemon that relays to the
+ * subscriber, or (the leader only) a bridge-connected daemon that relays to the
  * cloud companion. When false, the projection read behind a session-upsert is
  * pure waste — the next snapshot covers any gap.
  */
 async function hasFeedConsumers(): Promise<boolean> {
   if (sseConnCount(EVENTS_CHANNEL) > 0) return true
-  if (CLOUD_MODE) return false
+  if (isFollower()) return false
   try {
     const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
     const conn = getConnectedDaemonConnection('__local__')

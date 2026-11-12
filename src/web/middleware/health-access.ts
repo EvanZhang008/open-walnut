@@ -33,6 +33,7 @@
 
 import type { Request, Response, NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { HEALTH_LOCAL_ONLY_MESSAGE, LOCAL_ORIGIN } from '../../lib/caller-origin.js'
 
@@ -70,7 +71,7 @@ export function phoneOrThisMachineGuard(area: string, localOnlyMessage: string, 
   }
   return function requirePhoneOrThisMachine(req: Request, res: Response, next: NextFunction): void {
     if (isOnBehalfOfRemote(req)) { refuseV1(req, res, 'on-behalf-of', localOnlyMessage); return }
-    if (!CLOUD_MODE && classifyLocalRequest(req).trusted) { next(); return }
+    if (!isFollower() && classifyLocalRequest(req).trusted) { next(); return }
     if ((req as Request & { deviceName?: string }).deviceName) { next(); return }
     refuseV1(req, res, 'not-a-device-token', deviceOnlyMessage)
   }

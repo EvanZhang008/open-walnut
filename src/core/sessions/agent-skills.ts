@@ -23,7 +23,7 @@ import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { screenDocumentForPrompt, screenSkillWrite } from '../memory-safety.js';
-import { isCompanion } from '../server-role.js';
+import { isFollower } from '../server-role.js';
 import type { AgentMemoryWriter } from './agent-memory.js';
 
 export type AgentSkillScope = 'own' | 'org';
@@ -75,7 +75,7 @@ function normalize(raw: unknown): AgentSkillsFile {
 }
 
 export async function listAgentSkills(scope: AgentSkillScope, taskId: string): Promise<AgentSkill[]> {
-  if (isCompanion()) return [];
+  if (isFollower()) return [];
   return normalize(await readJsonFile<unknown>(fileOf(scope, taskId), null)).skills;
 }
 
@@ -119,7 +119,7 @@ export async function writeAgentSkill(
   scope: AgentSkillScope, taskId: string, input: AgentSkillWrite,
   stamp: { by: AgentMemoryWriter; by_name?: string } | null, nowIso = new Date().toISOString(),
 ): Promise<{ skill: AgentSkill; created: boolean; count: number }> {
-  if (isCompanion()) throw new AgentSkillError('not_supported_cloud', 501, 'Skills are kept on the primary; this server holds no copy.');
+  if (isFollower()) throw new AgentSkillError('not_supported_cloud', 501, 'Skills are kept on the primary; this server holds no copy.');
   const name = input.name.trim();
   if (!AGENT_SKILL_NAME_RE.test(name)) {
     throw new AgentSkillError('bad_request', 400, `Invalid skill name "${input.name}": lowercase letters, digits and dashes, at most 48, starting with a letter or digit.`);
@@ -180,7 +180,7 @@ export async function writeAgentSkill(
 }
 
 export async function deleteAgentSkill(scope: AgentSkillScope, taskId: string, name: string): Promise<boolean> {
-  if (isCompanion()) throw new AgentSkillError('not_supported_cloud', 501, 'Skills are kept on the primary; this server holds no copy.');
+  if (isFollower()) throw new AgentSkillError('not_supported_cloud', 501, 'Skills are kept on the primary; this server holds no copy.');
   let removed = false;
   await updateJsonFile<unknown>(fileOf(scope, taskId), null, (raw) => {
     const file = normalize(raw);

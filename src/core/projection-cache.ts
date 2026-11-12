@@ -29,9 +29,10 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { PROJECTION_CACHE_DIR, TRANSCRIPT_CACHE_DIR, CLOUD_MODE, WALNUT_HOME } from '../constants.js';
+import { PROJECTION_CACHE_DIR, TRANSCRIPT_CACHE_DIR, WALNUT_HOME } from '../constants.js';
 import { writeJsonFile } from '../utils/fs.js';
 import { log } from '../logging/index.js';
+import { isFollower } from './server-role.js';
 import * as ingest from './cloud-ingest.js';
 import {
   INGEST_LANE, SELF_HEAL_INTERVAL_MS, alreadyHeld, forgetDelivery, noteUnread, preparePush, rememberDelivery, unreadResting,
@@ -262,7 +263,8 @@ export async function pushProjectionToCloudNow(
   payload: unknown,
   opts?: { bridgeConnId?: () => Promise<string | null> },
 ): Promise<ProjectionPushOutcome> {
-  if (CLOUD_MODE) return 'skipped'; // cloud is the receiver, never the pusher
+  // Only the leader pushes: the companion receives, and a host replica has its own copy route.
+  if (isFollower()) return 'skipped';
   // The replica said it does not read this (its sessions copy serves its readers):
   // not sent on either lane, and not even serialized, until the rest ends.
   if (unreadResting(pushKey(kind, payload))) return 'unchanged';

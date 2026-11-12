@@ -1505,7 +1505,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   // Confirm rollback protection before any isolated work can start; an empty registry stamps nothing.
-  if (!isHostReplica() && !isCompanion()) {
+  if (role() === 'leader') {
     const { readRouterAreas, ensureAreasDataVersion } = await import('../core/router/areas.js')
     if ((await readRouterAreas(WALNUT_HOME)).areas.length > 0) await ensureAreasDataVersion(WALNUT_HOME)
   }
@@ -2113,7 +2113,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // a companion never drains, an ephemeral server only what it queued itself.
     // A message lined up for after a running turn goes out when that turn ends (src/core/sessions/queue-after-turn.ts).
     if (role() === 'leader') void import('../core/sessions/queue-after-turn.js').then((m) => m.startQueueAfterTurn()).catch(() => {})
-    if (role() === 'leader') void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: IS_EPHEMERAL, cloud: isCompanion() })).catch(() => {})
+    if (role() === 'leader') void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: IS_EPHEMERAL })).catch(() => {})
     // A status answer a turn end missed is asked again while its session is alive (src/core/sessions/status-reconcile.ts).
     if (role() === 'leader') void import('../core/sessions/status-reconcile.js').then((m) => m.startStatusReconcile()).catch(() => {})
     // An idle Claude Code session near where it compacts by itself is compacted shortly before its
@@ -2294,7 +2294,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     app.use('/api/devices', browserCodeRouter)
     // A browser renews its sign-in here (routes/browser-sign-in.ts): on the primary only
     // (a host replica forwards it to the Mac before it reaches this app).
-    if (!isCompanion() && !isHostReplica()) {
+    if (role() === 'leader') {
       const { browserRefreshRouter, browserSignInsRouter } = await import('./routes/browser-sign-in.js')
       app.use('/api/auth/browser', browserRefreshRouter)
       app.use('/api/devices', browserSignInsRouter)
@@ -4042,7 +4042,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           pushDaemonHooksToAllHosts()
         }).catch(() => {})
       }, { global: true, interest: ['config:changed'] })
-      log.web.info('hook dispatcher initialized', { cloudMode: isCompanion() })
+      log.web.info('hook dispatcher initialized', { cloudMode: isCompanion(), role: role() })
     }
   } catch (err) {
     log.web.error('hook dispatcher init failed — session triage and lifecycle hooks will NOT fire', {
@@ -4635,7 +4635,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     unsubscribeHostPhase = () => { offBeforeCertExpiry?.(); offCertExpiryAlert() }
 
     const warmupGate = hostWarmupGateReason({
-      cloudMode: isCompanion(), ephemeral: isEphemeral, env: process.env, config: await getConfig(),
+      // Inside the leader-only host-wiring block: never the companion.
+      cloudMode: false, ephemeral: isEphemeral, env: process.env, config: await getConfig(),
     })
     // The replica check on a real dev box warms its one isolated host as a real server would,
     // and no other (providers/ephemeral-replica-host.ts).
@@ -6215,7 +6216,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
     await cronService.start()
     // The routers' wakes follow their tasks once the engine and the router:pending template are up (core/router/wake.ts).
-    if (!IS_EPHEMERAL && !isCompanion()) {
+    if (!IS_EPHEMERAL && role() === 'leader') {
       const { reconcileRouterWakes, routerWakeRegistered } = await import('../core/router/wake.js')
       void reconcileRouterWakes({ isLive: routerWakeRegistered }).catch((err) => {
         log.cron.warn('router wakes not reconciled', { error: err instanceof Error ? err.message : String(err) })

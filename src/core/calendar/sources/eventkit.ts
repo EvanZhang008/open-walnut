@@ -12,7 +12,6 @@
  */
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { CLOUD_MODE } from '../../../constants.js';
 import { log } from '../../../logging/index.js';
 import {
   ensureHelper, existingHelperBinary, helperFailure, nativeHelpersAllowed, olderHelperGenerations,
@@ -35,6 +34,7 @@ import type {
   // plugin's contract now, and this file is one implementation of its `CalendarSource`.
   // Erased at build time, so core keeps no runtime dependency on a plugin.
 } from '../../../integrations/calendar/types.js';
+import { followerName, isFollower } from '../../server-role.js';
 
 const execFileAsync = promisify(execFile);
 // v2: helper re-execs with TCC responsibility disclaimed and carries its own
@@ -297,7 +297,7 @@ async function standInWhileCurrentUnasked(current: CalendarCommand, currentIsApp
  * running the real Walnut.app would put the same dialog on the user's screen.
  */
 async function currentCommand(): Promise<CalendarCommand | null> {
-  if (process.platform === 'darwin' && !CLOUD_MODE && nativeHelpersAllowed()) {
+  if (process.platform === 'darwin' && !isFollower() && nativeHelpersAllowed()) {
     const found = await findDesktopAppWith(CALENDAR_BRIDGE_FLAG);
     if (found) {
       currentRoute = { kind: 'app', app: found.app };
@@ -696,8 +696,8 @@ export function createEventKitSource(): CalendarSource {
     id: 'eventkit',
 
     available(): { ok: boolean; reason?: CalendarSourceReason; message?: string } {
-      if (CLOUD_MODE) {
-        return { ok: false, reason: 'cloud', message: 'macOS calendars are not reachable from the cloud companion.' };
+      if (isFollower()) {
+        return { ok: false, reason: 'cloud', message: `macOS calendars are not reachable from ${followerName().replace(/^The /, 'the ')}.` };
       }
       if (process.platform !== 'darwin') {
         return { ok: false, reason: 'not-configured', message: 'EventKit calendars require macOS.' };

@@ -17,11 +17,11 @@
  */
 
 import crypto from 'node:crypto'
-import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { isDeviceCopyId } from '../../host-server/device-copy.js'
 import type { ReplicaTarget } from './replica-targets.js'
 import { noteKindRound } from './replica-status.js'
+import { isFollower } from '../server-role.js'
 
 const TICK_MS = 30_000
 const SWEEP_MS = 10 * 60_000
@@ -177,7 +177,7 @@ export function syncDeviceReplica(deps?: DeviceReplicaDeps): Promise<DeviceRepli
 
 /** Primary only: a first round after boot, the 30 s tick, a round at once after a removal, the sweep. */
 export function startDeviceReplicaSync(deps?: DeviceReplicaDeps): { stop: () => void } {
-  if (CLOUD_MODE) return { stop: () => {} }
+  if (isFollower()) return { stop: () => {} }
   let stopped = false
   halted = false
   const round = (): void => { if (!stopped) void syncDeviceReplica(deps) }

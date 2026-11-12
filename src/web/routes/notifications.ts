@@ -10,7 +10,9 @@
  *
  * On the cloud companion the Mac owns the feed (stage 4d): the read and both
  * mutators go to the Mac, and the read answers from what the box has while the
- * Mac does not answer (core/notifications/companion-feed.ts).
+ * Mac does not answer (core/notifications/companion-feed.ts). A host replica
+ * reaches the read only while the Mac is away (its front forwards it otherwise):
+ * it answers the Mac's feed from the copy it keeps, with its own newer cards.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -20,7 +22,7 @@ import {
   type NotificationRecord,
 } from '../../core/notifications/store.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
-import { CLOUD_MODE, LOG_DIR, WALNUT_HOME, WALNUT_PACKAGE_ROOT, WALNUT_REPO_URL } from '../../constants.js'
+import { LOG_DIR, WALNUT_HOME, WALNUT_PACKAGE_ROOT, WALNUT_REPO_URL } from '../../constants.js'
 import { ensureWalnutSource, WalnutSourceError } from '../../core/self-repair/walnut-source.js'
 import { buildNotificationFixMessage, fixTaskTitle } from '../../core/self-repair/fix-briefing.js'
 import {
@@ -30,7 +32,7 @@ import {
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
 import { listTasksByIds } from '../../core/task-manager.js'
 import { getVersion } from '../../core/version.js'
-import { isCompanion } from '../../core/server-role.js'
+import { isCompanion, isFollower } from '../../core/server-role.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { log } from '../../logging/index.js'
 
@@ -62,9 +64,11 @@ function sanitizeBody(body?: string): string | undefined {
 notificationsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     // The companion: the Mac's feed, or what the box has (`offline`) while it is away.
+    // A host replica: the Mac's feed from its copy. The Mac: its own store.
     const { feed, unreadCount, offline } = isCompanion()
       ? await (await import('../../core/notifications/companion-feed.js')).companionFeed()
-      : { ...(await listNotifications()), offline: undefined }
+      : isFollower() ? await replicaAwayFeed()
+        : { ...(await listNotifications()), offline: undefined }
     // `detail` (the raw technical line behind an error card's Details toggle)
     // gets the SAME treatment as body — it is written by the same producers and
     // read by the same UI, so an uncapped one would be the hole the cap exists
@@ -78,6 +82,21 @@ notificationsRouter.get('/', async (_req: Request, res: Response, next: NextFunc
     next(err)
   }
 })
+
+/**
+ * A host replica's feed while the Mac is away: the Mac's cards from the
+ * `notifications` copy, with this box's own cards the copy does not name yet
+ * (or newer ones), marked `offline`. No copy yet: the box's own cards alone.
+ */
+async function replicaAwayFeed(): Promise<{ feed: NotificationRecord[]; unreadCount: number; offline: true }> {
+  const [{ readNotificationsCopy }, { awayFeed }] = await Promise.all([
+    import('../../core/replication/kinds/notifications.js'),
+    import('../../core/notifications/companion-feed.js'),
+  ])
+  const [copied, own] = await Promise.all([readNotificationsCopy(), listNotifications()])
+  const feed = copied ? awayFeed(copied.feed, copied.asOf, own.feed, new Set(), new Set()) : own.feed
+  return { feed, unreadCount: feed.filter((n) => !n.read).length, offline: true }
+}
 
 type CompanionFeed = typeof import('../../core/notifications/companion-feed.js')
 
@@ -192,8 +211,8 @@ notificationsRouter.post('/fix', async (req: Request, res: Response, next: NextF
       res.status(400).json({ error: 'system must be backup or search' })
       return
     }
-    if (CLOUD_MODE) {
-      res.status(409).json({ error: 'Repairs start on the primary console, not on a cloud replica.' })
+    if (isFollower()) {
+      res.status(409).json({ error: 'Repairs start on the primary console, not on a replica.' })
       return
     }
     if (system !== undefined) {

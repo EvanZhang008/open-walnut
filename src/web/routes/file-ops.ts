@@ -57,7 +57,7 @@ import {
 import { createFileReader } from '../../core/session-file-reader.js'
 import { hostDisplayNameFor } from '../../core/hosts/host-display-name.js'
 import { hostTermsAtExit } from '../middleware/host-terms-at-exit.js'
-import { CLOUD_MODE } from '../../constants.js'
+import { confinesLocalFiles } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 
 export type FileOpName = 'mkdir' | 'create' | 'rename' | 'duplicate' | 'delete'
@@ -339,7 +339,7 @@ function prepare(input: FileOpInput): PreparedOp {
   // exec host, but the cloud box is a PUBLIC relay and handing a paired device
   // "delete any file on the Mac" has no user-facing purpose worth that blast
   // radius. The Mac (and any self-hosted primary) is where this belongs.
-  if (CLOUD_MODE) {
+  if (confinesLocalFiles()) {
     throw new FileOpError('forbidden', 'Changing files is not available in cloud mode')
   }
 

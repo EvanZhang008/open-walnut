@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { NOTES_DIR, CLOUD_MODE } from '../constants.js'
+import { NOTES_DIR } from '../constants.js'
 import { ensureHelper, type HelperSpec } from './helper-build.js'
 import { log } from '../logging/index.js'
 import {
@@ -26,6 +26,7 @@ import {
   deleteAttachmentText,
   listAttachmentMeta,
 } from './notes-index.js'
+import { isFollower } from './server-role.js'
 
 const EXTRACTABLE = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.heic', '.tiff', '.gif'])
 /** Attachments larger than this are skipped (huge scans stall the queue). */
@@ -203,7 +204,7 @@ export async function backfillAttachments(): Promise<{ queued: number; total: nu
 
 /** Kick the backfill once per process, deferred off the boot path. */
 export function startAttachmentBackfill(delayMs = 60_000): void {
-  if (backfillStarted || CLOUD_MODE || process.platform !== 'darwin') return
+  if (backfillStarted || isFollower() || process.platform !== 'darwin') return
   backfillStarted = true
   const timer = setTimeout(() => {
     void backfillAttachments().catch((err) => {

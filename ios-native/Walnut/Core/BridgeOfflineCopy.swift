@@ -1,7 +1,8 @@
 import Foundation
 
-/// The one sentence every surface shows when the cloud replica could not reach the
-/// primary box (`bridge_offline`).
+/// The one sentence every surface shows when a replica could not reach the primary box:
+/// the cloud companion's `bridge_offline`, or any replica's `needs_leader`
+/// (`APIError.isLeaderUnreachableForNow`).
 ///
 /// This is deliberately the ONLY branch lifted out of the four error ladders that
 /// print it (`NewSessionSheet.createErrorMessage`,
@@ -30,14 +31,19 @@ enum BridgeOfflineCopy {
     static let fallback =
         "The primary box isn't reachable from the cloud right now. Try again when it reconnects."
 
+    /// The stand-in for a replica that is not the cloud box (`needs_leader`): no "cloud".
+    static let leaderFallback =
+        "Your Mac isn't answering right now. Try again when it's back."
+
     /// The server's own sentence when it sent one, the fixed sentence otherwise.
     ///
     /// Whitespace is absence, not content: presence is decided AFTER trimming, or a
     /// message of two spaces paints an error row with nothing in it. Real content
     /// keeps its text and loses only the surrounding noise.
-    static func message(serverMessage: String?) -> String {
+    static func message(serverMessage: String?, code: String? = nil) -> String {
         let trimmed = (serverMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? fallback : trimmed
+        guard trimmed.isEmpty else { return trimmed }
+        return code == "needs_leader" ? leaderFallback : fallback
     }
 
     /// The same answer, read straight off the error's own `.server` payload.
@@ -49,7 +55,7 @@ enum BridgeOfflineCopy {
     /// decorated text into this row. Any error that is not `.server` carries no
     /// server sentence at all, which is exactly the fallback.
     static func message(_ error: APIError) -> String {
-        guard case .server(_, _, let sentence, _, _) = error else { return fallback }
-        return message(serverMessage: sentence)
+        guard case .server(_, let code, let sentence, _, _) = error else { return fallback }
+        return message(serverMessage: sentence, code: code)
     }
 }

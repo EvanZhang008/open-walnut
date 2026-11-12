@@ -345,6 +345,17 @@ path on the companion".
 `mode` is `REPLICA` on a cloud box today; when the reverse-WS bridge to the
 primary lands (Phase 2), a bridged cloud box will report `LIVE`.
 
+`role`, `placement`, `serverCapabilities`, `leader` (additive, 2026-11-11; also on
+`GET /api/config`, `src/web/server-facts.ts`): what this server is, so a client stops
+inferring it from `mode` and `cloud`, which stay unchanged for older clients.
+`role` is `leader` (the Mac) or `replica` (the cloud companion and a host's server alike);
+`placement` is `mac`, `host` or `cloud`; `serverCapabilities` lists the doors and jobs the
+box offers (`public-door`, `bridge-door`, `cloud-exec`, `backup-leader`; empty on the Mac
+and on a host replica; named apart from `capabilities`, the v1 feature list above);
+`leader` is `{answers, why, since}`, whether the Mac answers this replica now (on the Mac
+`{answers: true, why: "leader"}`). A host replica answering alone now says `mode: "REPLICA"`
+too (it said `LIVE`). Read them as optional: an older server omits them.
+
 `cloudChat` (additive, 2026-09, REPLICA only): `"available"` or `"unavailable"`.
 It says whether the cloud companion can answer a chat turn by itself when the
 primary is provably unreachable (see "When the primary cannot be reached, the

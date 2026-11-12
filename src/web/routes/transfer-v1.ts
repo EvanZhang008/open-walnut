@@ -17,7 +17,7 @@ import { TransferError, transferOptions, LOCAL_HOST, normalizeHost } from '../..
 import type { HostKind } from '../../core/hosts/host-profile.js'
 import type { SessionEffort, SessionEngine, SessionMode } from '../../core/types.js'
 import type { TransferJob } from '../../core/transfer/transfer-jobs.js'
-import { placement } from '../../core/server-role.js'
+import { isFollower } from '../../core/server-role.js'
 import { missingIsNull } from '../../lib/id-ref.js'
 
 export const transferV1Router = Router()
@@ -102,12 +102,12 @@ function sendJob(res: Response, job: TransferJob): void {
 
 /**
  * A transfer moves files between the Mac's daemons and writes the Mac's task
- * store, so the companion never runs one itself. (A host replica forwards every
+ * store, so no replica runs one itself. (A host replica's front forwards every
  * write to the Mac by its route table's default, and answers needs_leader while
- * the Mac is away.)
+ * the Mac is away; this refusal is the backstop.)
  */
 transferV1Router.use(['/tasks/:id/transfer', '/hosts/:host/profile'], (req: Request, res: Response, next: NextFunction) => {
-  if (req.method === 'GET' || placement() !== 'cloud') { next(); return }
+  if (req.method === 'GET' || !isFollower()) { next(); return }
   res.status(501).json({ error: 'Transfers and host profile changes run on your Mac only', code: 'not_supported_cloud' })
 })
 

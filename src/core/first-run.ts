@@ -52,9 +52,9 @@ export function isFirstRunStep(value: unknown): value is FirstRunStep {
   return typeof value === 'string' && (FIRST_RUN_STEPS as readonly string[]).includes(value)
 }
 
-/** May this server stamp a fresh config? */
-export function firstRunStampAllowed(env: NodeJS.ProcessEnv = process.env, cloudMode = false): boolean {
-  if (cloudMode) return false
+/** May this server stamp a fresh config? Never a replica: the questions are the leader's. */
+export function firstRunStampAllowed(env: NodeJS.ProcessEnv = process.env, follower = false): boolean {
+  if (follower) return false
   if (env.WALNUT_FIRST_RUN_SETUP === '0') return false
   return !underTestRunner(env) || env.WALNUT_FIRST_RUN_SETUP === '1'
 }

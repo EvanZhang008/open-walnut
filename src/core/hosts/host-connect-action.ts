@@ -29,6 +29,7 @@ import {
 import { maybeStartFixtureAutofix } from './host-fixture-autofix.js'
 import { CLOUD_BOX_HOST_ALIAS, cloudBoxRefusal } from './cloud-box-host.js'
 import { linkTarget } from './link.js'
+import { isFollower } from '../server-role.js'
 
 export type ConfigHostDef = HostDef & { shell_setup?: string }
 
@@ -112,7 +113,7 @@ function withinDeadline(attempt: Promise<unknown>, ms: number): Promise<ConnectO
  */
 export async function connectHostNow(host: string, opts: { deadlineMs?: number; agents?: boolean } = {}): Promise<ConnectNowResult> {
   if (!host || host === '__local__') return refuse(400, 'host is required')
-  if (CLOUD_MODE) return refuse(409, 'a cloud replica cannot connect to hosts; run this on the primary')
+  if (isFollower()) return refuse(409, 'a cloud replica cannot connect to hosts; run this on the primary')
   const def = await configHostDef(host)
   if (!def) return refuse(404, `Unknown host: ${host}`)
   // A found host waits for the person's yes on Remote Hosts (found-hosts.ts): no dial before it.

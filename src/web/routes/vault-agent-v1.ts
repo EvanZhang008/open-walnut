@@ -22,7 +22,7 @@
  * never carries `/vault` (v1-forward/policy.ts) and a follower holds no vault.
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { isFollower, role } from '../../core/server-role.js'
+import { isFollower } from '../../core/server-role.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
@@ -45,7 +45,7 @@ function param(v: unknown): string {
 
 function here(res: Response): boolean {
   res.setHeader('Cache-Control', 'no-store')
-  if (role() !== 'leader' || isFollower()) {
+  if (isFollower()) {
     res.status(503).json({ error: 'Passwords are kept on the Mac, which does not answer right now.', code: 'vault_not_here' })
     return false
   }

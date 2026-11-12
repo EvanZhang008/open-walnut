@@ -13,7 +13,7 @@
  * every few minutes, so a companion that hangs costs nothing but a stale answer.
  */
 
-import { CLOUD_MODE, IS_EPHEMERAL } from '../../constants.js'
+import { IS_EPHEMERAL } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import {
   CLOUD_BOX_EXEC_OFF,
@@ -26,6 +26,7 @@ import {
   type CloudBoxCapability,
   type CloudBoxState,
 } from './cloud-box-host.js'
+import { isFollower } from '../server-role.js'
 
 const PROBE_INTERVAL_MS = 5 * 60_000
 const PROBE_TIMEOUT_MS = 5_000
@@ -165,7 +166,7 @@ async function refreshInner(): Promise<CloudBoxState | null> {
 
 /** Re-read the pairing and re-probe the companion. Single-flight; never rejects. */
 export function refreshCloudBoxHost(): Promise<CloudBoxState | null> {
-  if (CLOUD_MODE) return Promise.resolve(null)
+  if (isFollower()) return Promise.resolve(null)
   if (inFlight) return inFlight
   inFlight = refreshInner().catch(() => getCloudBoxState()).finally(() => { inFlight = null })
   return inFlight
@@ -177,7 +178,7 @@ export function refreshCloudBoxHost(): Promise<CloudBoxState | null> {
  * probe to the background: a slow companion must never delay startup.
  */
 export async function startCloudBoxHost(): Promise<void> {
-  if (CLOUD_MODE) return
+  if (isFollower()) return
   stopCloudBoxHost()
   const { pairing } = await applyPairing()
   if (pairing) void probeAndApply(pairing).catch(() => { /* logged inside */ })

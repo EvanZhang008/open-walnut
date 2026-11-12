@@ -9,6 +9,7 @@ import { isOnThisMachine } from './expose.js'
 import { log } from '../../logging/index.js'
 import { getConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { validateBearerCredential } from '../middleware/auth.js'
 import { createDesktopUpdateCache, EMPTY_DESKTOP_UPDATE, type DesktopUpdateAnswer } from './desktop-update-cache.js'
 import { getBuildInfo } from '../../lib/build-info.js'
@@ -184,7 +185,7 @@ const LOCAL_CHECK_DEADLINE_MS = 14_000
 // (the banner's 15s timer) is answered from a result under 10s old, so several
 // open windows share one probe; a click always asks.
 systemRouter.post('/local-claude/check', async (req, res) => {
-  if (CLOUD_MODE) { res.status(404).json({ error: 'not available on a cloud companion' }); return }
+  if (isFollower()) { res.status(404).json({ error: 'not available on a cloud companion' }); return }
   const { refreshLocalClaude, getLocalClaude } = await import('../../core/hosts/local-readiness.js')
   const poll = (req.body as { poll?: unknown } | undefined)?.poll === true
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -198,7 +199,7 @@ systemRouter.post('/local-claude/check', async (req, res) => {
 // POST /api/system/local-claude/fix { kind }: the banner's one-click install or
 // update for one problem. Answers at once; progress arrives on system:health.
 systemRouter.post('/local-claude/fix', async (req, res) => {
-  if (CLOUD_MODE) { res.status(404).json({ error: 'not available on a cloud companion' }); return }
+  if (isFollower()) { res.status(404).json({ error: 'not available on a cloud companion' }); return }
   const { startLocalClaudeFix, getLocalClaude } = await import('../../core/hosts/local-readiness.js')
   const kind = (req.body as { kind?: unknown } | undefined)?.kind
   const started = startLocalClaudeFix(typeof kind === 'string' ? kind : '')

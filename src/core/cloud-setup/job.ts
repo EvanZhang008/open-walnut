@@ -18,7 +18,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { emitSse } from '../../web/sse-channels.js'
 import { DEFAULT_ENGINE, isKnownEngine } from '../agents/engine-registry.js'
@@ -39,6 +39,7 @@ import {
 import { getDriver } from './providers/index.js'
 import { CloudSetupCancelled, sslipHostname, stepRunners, type StepContext } from './steps.js'
 import { DEFAULT_BEDROCK_REGION, isValidBedrockRegion } from './user-data.js'
+import { isFollower } from '../server-role.js'
 
 /** SSE channel key — the web wizard subscribes here. */
 export const CLOUD_SETUP_SSE_CHANNEL = 'cloud-setup'
@@ -629,7 +630,7 @@ export async function cancelCloudSetupJob(): Promise<CloudSetupJobState | null> 
 let resumed = false
 
 export async function resumeCloudSetupJobIfAny(): Promise<void> {
-  if (CLOUD_MODE) return // Mac-side feature: the companion never sets one up
+  if (isFollower()) return // Mac-side feature: no replica ever sets one up
   if (resumed) return
   resumed = true
   const runnerBefore = active

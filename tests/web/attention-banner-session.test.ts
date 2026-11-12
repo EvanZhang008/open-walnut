@@ -30,7 +30,7 @@ vi.mock('@/api/hosts', () => ({
   fetchHostStatus: () => api.fetchHostStatus(), connectHost: () => api.connectHost(), checkHostReadiness: () => api.checkHostReadiness(),
 }))
 vi.mock('@/api/ws', () => ({ wsClient: { state: 'connected', onEvent() {}, offEvent() {} } }))
-vi.mock('@/hooks/useIsCloudReplica', () => ({ useIsCloudReplica: () => false }))
+vi.mock('@/hooks/useServerRole', () => ({ useIsReplicaServer: () => false }))
 vi.mock('@/utils/local-claude-recheck', () => ({ recheckLocalClaudeNow: async () => {} }))
 const nav = vi.hoisted(() => ({ order: [] as string[], openHostSettings: null as unknown as ReturnType<typeof import('vitest').vi.fn> }))
 vi.mock('@/utils/host-settings-nav', async () => {

@@ -11,7 +11,7 @@
  */
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { SettingsSection } from '../../SettingsSection';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer, useServerCapability } from '@/hooks/useServerRole';
 import { DEVICES_TAB, WAY_PANES, type PhonesCloudTab } from '../../settings-way-panes';
 import { useBrowserLinkName } from './browser-link-name';
 import { useDevicesData, useExposeStatus, type DeviceEntry } from './useDevicesData';
@@ -48,7 +48,8 @@ let lastTabs: TabView[] | null = null;
 
 /** What the bar and the intros say, from the same reads the Devices tab makes (shared in flight). */
 export function usePhonesCloudView(): PhonesCloudView {
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
+  const publicDoor = useServerCapability('public-door');
   const { devices, cloudDevices, targets, listState, tailscale, tailscaleStale, tailscaleAt, cloudError, cloudUnpaired, cloudWithheld, settled } = useDevicesData({ replica });
   const expose = useExposeStatus(replica);
   const linkName = useBrowserLinkName();
@@ -85,8 +86,9 @@ export function usePhonesCloudView(): PhonesCloudView {
     what: DEVICES_INTRO.what,
     useWhen: DEVICES_INTRO.useWhen,
   };
-  // A companion's own console has no Tailscale or browser link to set up (those panes need the primary).
-  const shown = replica ? ways.filter((w) => w.id === 'cloud') : ways;
+  // A replica's own console has no Tailscale or browser link to set up (those panes need the Mac);
+  // it shows its own public address only when it has one (the companion's public door).
+  const shown = replica ? ways.filter((w) => w.id === 'cloud' && publicDoor) : ways;
   let landed = replica ? (listState === 'loading' ? null : 'devices') : landingWay({ listState, cloudError }, ways);
   // Devices only because Tailscale's first probe has not answered yet: wait for it (a few seconds at most).
   if (landed === 'devices' && !settled) landed = null;

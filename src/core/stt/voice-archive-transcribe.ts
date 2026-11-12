@@ -1,4 +1,3 @@
-import { isCompanion } from '../server-role.js'
 import { voiceArchive, VoiceArchiveError, voiceAsr, type VoiceAsr, type VoiceRecord } from './voice-archive.js'
 import { deferVoiceReplication, replicateUnlessSilent, replicateVoiceRecording, voicePrimaryAction, VOICE_TRANSCRIBE_TIMEOUT_MS } from './voice-archive-replication.js'
 import { dropLive, finishLive, hasLiveTake, takeLiveStats, type LiveTranscribe } from './live-transcript.js'
@@ -7,12 +6,13 @@ import { cafToWav, cafDataLayout } from './caf-to-wav.js'
 import { isConformingWav } from './audio-convert.js'
 import { wavPcm } from './wav-segment.js'
 import { voiceOffHere } from './voice-here.js'
+import { hasCapability } from '../capabilities.js'
 
 export interface VoiceTranscript { text: string; via?: string; recordingId: string; primarySaved?: boolean; storage: 'companion' | 'primary'; asr?: VoiceAsr }
 const reply = (record: VoiceRecord): VoiceTranscript => ({ text: record.text ?? '', via: record.via, recordingId: record.id, primarySaved: record.primarySaved, storage: record.storage, ...(record.asr ? { asr: record.asr } : {}) })
 const pending = new Map<string, Promise<VoiceTranscript>>()
-/** The companion: the Mac transcribes while it answers, this box's engine when it does not. */
-const FOLLOWER = isCompanion()
+/** A box with the public door (the companion): the Mac transcribes while it answers, this box's engine when it does not. */
+const FOLLOWER = hasCapability('public-door')
 /** A copy hop the Mac leaves unanswered this long means it is gone, when this box can do the work. */
 export const MAC_SILENCE_MS = 2_500
 /** The pause between two checks that the Mac transcribing a take is still there. */

@@ -74,12 +74,12 @@ function pathOrigin(p: string): 'mac' | 'linux' | null {
  */
 async function otherHosts(sessionHost: string | undefined, p: string): Promise<Array<{ key?: string; name: string }>> {
   const config = await getConfig()
-  const { placement } = await import('../../core/server-role.js')
+  const { runsSessions } = await import('../../core/server-role.js')
   const remotes = Object.entries(config.hosts ?? {})
     .filter(([key, def]) => key !== sessionHost && def?.hostname && def.enabled !== false)
     .map(([key, def]) => ({ key, name: hostDisplayName(key, def.label) }))
-  // The companion's own disk is not the Mac's (linkPathsExist answers nothing there anyway).
-  const local = sessionHost && placement() !== 'cloud' ? [{ name: LOCAL_NAME }] : []
+  // A box where no session runs (the companion) holds none of their files (linkPathsExist answers nothing there anyway).
+  const local = sessionHost && runsSessions() ? [{ name: LOCAL_NAME }] : []
   const localIsMac = os.platform() === 'darwin'
   const origin = pathOrigin(p)
   const localFirst = origin === null || (origin === 'mac') === localIsMac

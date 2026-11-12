@@ -10,7 +10,7 @@
  *   GET  /hosts/load       { hosts: [...] } each host's numbers, whether it is over a cap and why
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { placement } from '../../core/server-role.js'
+import { isFollower } from '../../core/server-role.js'
 import type { SessionEngine, Task } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 
@@ -34,7 +34,7 @@ function sendError(res: Response, err: unknown, next: NextFunction): void {
 }
 
 taskMoveV1Router.use('/tasks/:id/move', (req: Request, res: Response, next: NextFunction) => {
-  if (placement() !== 'cloud') { next(); return }
+  if (!isFollower()) { next(); return }
   res.status(501).json({ error: 'A move runs on your Mac only', code: 'not_supported_cloud' })
 })
 

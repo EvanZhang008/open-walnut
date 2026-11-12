@@ -20,8 +20,8 @@
  * 6-connection pool into app-wide fake timeouts. This route answers degraded,
  * never late.
  *
- * Read-only, so it still serves in CLOUD_MODE — `assertPathAllowed` already
- * confines what a cloud box may read locally, and remote paths execute on the
+ * Read-only, so it still serves on a box that is not the user's own machine: `assertPathAllowed`
+ * already confines what such a box may read locally, and remote paths execute on the
  * target host's daemon.
  */
 
@@ -29,7 +29,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import path from 'node:path'
 import { assertPathAllowed, isSecretPath, FileContentError } from './file-content.js'
 import { isSecretForMutation } from './file-ops.js'
-import { CLOUD_MODE } from '../../constants.js'
+import { confinesLocalFiles } from '../../core/server-role.js'
 import { createFileReader } from '../../core/session-file-reader.js'
 import type { DaemonFileReader } from '../../core/daemon-file-reader.js'
 import { DaemonNeedsUpgradeError } from '../../core/daemon-file-reader.js'
@@ -83,7 +83,7 @@ function deadline(ms: number): { promise: Promise<'timeout'>; cancel: () => void
  */
 function assertHistoryAllowed(rawPath: unknown, host: string | undefined) {
   const resolved = assertPathAllowed(rawPath, host, 'read')
-  const cloudDenied = !resolved.isRemote && CLOUD_MODE && isSecretPath(resolved.filePath)
+  const cloudDenied = !resolved.isRemote && confinesLocalFiles() && isSecretPath(resolved.filePath)
   if (cloudDenied || isSecretForMutation(resolved.filePath)) {
     throw new FileContentError('Path not permitted', 403)
   }

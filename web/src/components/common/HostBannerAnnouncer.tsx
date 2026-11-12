@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { hostDotOf, hostProblemOf, hostReadySentence } from '@open-walnut/host-problem';
 import { serverNow, useAllHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { nextBanner } from '@/utils/attention-banner-model';
 import { getHostDismissed, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
 import { subscribeHostActionEvents } from '@/utils/host-action-store';
@@ -24,7 +24,7 @@ export function HostBannerAnnouncer() {
   const statuses = useAllHostStatus();
   const hydration = useHostStatusHydration();
   const dismissed = useSyncExternalStore(subscribeHostDismissed, getHostDismissed);
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const engaged = useUserEngagedHosts();
   const [message, setMessage] = useState('');
   const seen = useRef<Map<string, string[]> | null>(null);

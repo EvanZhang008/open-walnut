@@ -11,14 +11,15 @@ import { Router } from 'express'
 import { getConfig } from '../../core/config-manager.js'
 import { modifyConfigDoc } from '../../core/config-store.js'
 import { isFirstRunStep, pendingFirstRunSteps, recordFirstRunAnswer } from '../../core/first-run.js'
-import { isCompanion, isHostReplicaProgram } from '../../core/server-role.js'
+import { isFollower } from '../../core/server-role.js'
 import { emitSettingsConfigChanged } from '../../core/config-broadcast.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { log } from '../../logging/index.js'
 
 export const firstRunRouter = Router()
 
-const asksNothing = (): boolean => isCompanion() || isHostReplicaProgram()
+// A replica (the companion, a host's server) asks nothing: first-run is the Mac's.
+const asksNothing = (): boolean => isFollower()
 
 firstRunRouter.get('/', async (_req, res, next) => {
   try {

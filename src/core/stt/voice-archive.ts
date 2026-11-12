@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
-import { isCompanion } from '../server-role.js'
 import { withFileLock } from '../../utils/file-lock.js'
+import { hasCapability } from '../capabilities.js'
 
 export const VOICE_CHUNK_BYTES = 256 * 1024
 export const VOICE_MAX_CHUNK_BYTES = 512 * 1024
@@ -105,7 +105,7 @@ async function durableWrite(file: string, bytes: Buffer | string): Promise<void>
 export class VoiceArchiveStore {
   readonly root: string
   private readonly locks = new Map<string, Promise<unknown>>()
-  constructor(home: string = WALNUT_HOME, readonly cloud = isCompanion()) { this.root = join(home, 'voice-archive') }
+  constructor(home: string = WALNUT_HOME, readonly cloud = hasCapability('public-door')) { this.root = join(home, 'voice-archive') }
   private dir(id: string): string { return join(this.root, voiceRecordingId(id)) }
   private async prepare(id: string): Promise<void> {
     await mkdir(this.root, { recursive: true, mode: 0o700 })

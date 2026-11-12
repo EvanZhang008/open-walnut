@@ -10,11 +10,11 @@
  * daemon on every run. Arming one goes through POST /routines/trigger with
  * `template` + `params`, like every other trigger.
  *
- * A cloud companion runs no plugin templates (the plugins that own the data run
+ * A replica (the companion or a host) runs no plugin templates (the plugins that own the data run
  * on the primary), so it lists none; a create still relays to the primary.
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { placement } from '../../core/server-role.js'
+import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { requestOrigin } from '../middleware/request-origin.js'
@@ -36,7 +36,7 @@ async function answerError(res: Response, err: unknown): Promise<boolean> {
 
 triggerTemplatesV1Router.get('/trigger-templates', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    if (placement() === 'cloud') {
+    if (isFollower()) {
       res.json({ templates: [] })
       return
     }
@@ -63,8 +63,8 @@ triggerTemplatesV1Router.post('/trigger-templates/:id/check', async (req: Reques
   const id = templateId(req)
   const started = Date.now()
   try {
-    if (placement() === 'cloud') {
-      // The plugins run on the primary; a check reaching a leading companion
+    if (isFollower()) {
+      // The plugins run on the primary; a check reaching a replica
       // waits for it (the CLI keeps the cursor on a 503), never "no such template".
       sendError(res, 503, 'unavailable', 'trigger templates run on the primary Walnut, which is away')
       return

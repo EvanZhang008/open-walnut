@@ -89,7 +89,7 @@ final class OrgThreadsStore {
             let read: OrgThreadsRead
             do {
                 read = try await self.read()
-            } catch let first as APIError where first.isPrimaryOnly {
+            } catch let first as APIError where first.isLeaderUnreachableForNow {
                 // A refresh needs the same reconnect window as a first read, even with threads on screen.
                 read = try await retryUnavailable(gen: gen)
             }
@@ -126,7 +126,7 @@ final class OrgThreadsStore {
         for wait in [2_000, 8_000, 8_000] {
             try await Task.sleep(for: .milliseconds(wait))
             guard gen == generation else { throw CancellationError() }
-            do { return try await read() } catch let e as APIError where e.isPrimaryOnly {
+            do { return try await read() } catch let e as APIError where e.isLeaderUnreachableForNow {
                 lastError = e
             }
         }
@@ -178,7 +178,7 @@ final class OrgThreadsStore {
 
     /// What a failed list read says, by what the page still shows.
     nonisolated static func readError(hasThreads: Bool, fromCache: Bool, cause: APIError? = nil) -> String {
-        if let cause, cause.isPrimaryOnly {
+        if let cause, cause.isLeaderUnreachableForNow {
             let kept = hasThreads ? " The threads shown here have not been refreshed." : ""
             return "\(unreachableSentence(cause))\(kept) It will try again automatically."
         }

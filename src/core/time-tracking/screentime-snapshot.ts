@@ -24,6 +24,7 @@
 
 import { getConfig } from '../config-manager.js';
 import { log } from '../../logging/index.js';
+import { role } from '../server-role.js';
 import { localDateKey, recentDateKeys } from './rollup.js';
 import {
   probeScreenTimeAccess, readScreenTime,
@@ -146,7 +147,8 @@ async function screenTimeEnabled(): Promise<boolean> {
  * deferred off the boot path so a cold helper compile never delays startup.
  */
 export function startScreenTimeSnapshots(): void {
-  if (timer || process.platform !== 'darwin') return;
+  // Only the leader snapshots: a replica on a Mac host would read that Mac's Screen Time.
+  if (timer || process.platform !== 'darwin' || role() !== 'leader') return;
   const tick = async (): Promise<void> => {
     let delay = SNAPSHOT_INTERVAL_MS;
     try {

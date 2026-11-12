@@ -23,10 +23,10 @@
  *        check_default, words, ai, ai_rule, ai_rule_default, icon_url? }] }
  *        Every loaded task provider and its rules (provider-rules.ts), defaults filled in.
  *
- * Writes answer 501 on the cloud companion: the primary owns task sources.
+ * Writes answer 501 on a replica (the companion or a host): the primary owns task sources.
  */
 import { Router, type Request, type Response } from 'express'
-import { placement } from '../../core/server-role.js'
+import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
@@ -49,7 +49,7 @@ function route(fn: (req: Request, res: Response) => Promise<void>) {
 }
 
 function refuseOnReplica(): void {
-  if (placement() === 'cloud') throw new RouteError(501, 'not_supported_cloud', 'Task sources are changed on the primary box')
+  if (isFollower()) throw new RouteError(501, 'not_supported_cloud', 'Task sources are changed on the primary box')
 }
 
 async function viewOf(taskId: string) {

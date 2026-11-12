@@ -17,7 +17,8 @@ import {
   fetchBuildInfo,
   fetchCanRevealLocalFiles,
   fetchInstallDir,
-  fetchIsCloudReplica,
+  fetchServerRole,
+  roleFactsOf,
   fetchNotesDir,
   fetchSelfRepair,
   invalidateSelfRepair,
@@ -43,7 +44,7 @@ describe('shared GET /api/config', () => {
   it('serves every helper from one request', async () => {
     mocks.apiGet.mockResolvedValue(facts)
     const answers = await Promise.all([
-      fetchInstallDir(), fetchSelfRepair(), fetchNotesDir(), fetchCanRevealLocalFiles(), fetchIsCloudReplica(), fetchBuildInfo(),
+      fetchInstallDir(), fetchSelfRepair(), fetchNotesDir(), fetchCanRevealLocalFiles(), fetchServerRole().then((r) => r.replica), fetchBuildInfo(),
     ])
     expect(answers).toEqual(['/src/walnut', facts.selfRepair, '/notes', true, false, build])
     expect(await fetchInstallDir()).toBe('/src/walnut')
@@ -60,7 +61,7 @@ describe('shared GET /api/config', () => {
 
   it('a failed fetch resolves every fallback and the next call retries', async () => {
     mocks.apiGet.mockRejectedValueOnce(new Error('offline'))
-    expect(await Promise.all([fetchInstallDir(), fetchCanRevealLocalFiles(), fetchIsCloudReplica(), fetchBuildInfo()]))
+    expect(await Promise.all([fetchInstallDir(), fetchCanRevealLocalFiles(), fetchServerRole().then((r) => r.replica), fetchBuildInfo()]))
       .toEqual([null, false, false, null])
     mocks.apiGet.mockResolvedValue(facts)
     expect(await fetchInstallDir()).toBe('/src/walnut')
@@ -69,7 +70,7 @@ describe('shared GET /api/config', () => {
 
   it('missing fields read as their fallbacks', async () => {
     mocks.apiGet.mockResolvedValue({})
-    expect(await Promise.all([fetchInstallDir(), fetchSelfRepair(), fetchNotesDir(), fetchCanRevealLocalFiles(), fetchIsCloudReplica(), fetchBuildInfo()]))
+    expect(await Promise.all([fetchInstallDir(), fetchSelfRepair(), fetchNotesDir(), fetchCanRevealLocalFiles(), fetchServerRole().then((r) => r.replica), fetchBuildInfo()]))
       .toEqual([null, null, null, false, false, null])
   })
 
@@ -81,5 +82,45 @@ describe('shared GET /api/config', () => {
     mocks.apiGet.mockResolvedValueOnce({ ...facts, selfRepair: cloned })
     expect(await fetchSelfRepair()).toEqual(cloned)
     expect(mocks.apiGet).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('roleFactsOf: role and capabilities, read from `cloud` on an older server', () => {
+  const all = ['public-door', 'bridge-door', 'cloud-exec', 'backup-leader']
+  it('the Mac: the leader, no capabilities', () => {
+    expect(roleFactsOf({ cloud: false, role: 'leader' })).toEqual({ replica: false, capabilities: [] })
+  })
+  it('a host replica answering alone: a replica, no capabilities', () => {
+    expect(roleFactsOf({ cloud: false, role: 'replica', serverCapabilities: [] })).toEqual({ replica: true, capabilities: [] })
+    expect(roleFactsOf({ cloud: false, role: 'replica' })).toEqual({ replica: true, capabilities: [] })
+  })
+  it('the companion names its own capabilities', () => {
+    expect(roleFactsOf({ cloud: true, role: 'replica', serverCapabilities: ['public-door'] })).toEqual({ replica: true, capabilities: ['public-door'] })
+  })
+  it('an older companion (only `cloud`, or `role` with no capabilities) offers all four', () => {
+    expect(roleFactsOf({ cloud: true })).toEqual({ replica: true, capabilities: all })
+    expect(roleFactsOf({ cloud: true, role: 'replica' })).toEqual({ replica: true, capabilities: all })
+  })
+  it('an older Mac or no answer: the leader', () => {
+    expect(roleFactsOf({})).toEqual({ replica: false, capabilities: [] })
+    expect(roleFactsOf(null)).toEqual({ replica: false, capabilities: [] })
+  })
+  it('fetchServerRole reads the shared answer', async () => {
+    mocks.apiGet.mockResolvedValue({ ...facts, cloud: true })
+    expect(await fetchServerRole()).toEqual({ replica: true, capabilities: all })
+  })
+})
+
+describe('the web reads the same field names the server sends', () => {
+  it('every key of src/web/server-facts.ts ServerFacts is declared on the web config facts', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const root = path.resolve(import.meta.dirname, '..', '..')
+    const server = fs.readFileSync(path.join(root, 'src/web/server-facts.ts'), 'utf8')
+    const web = fs.readFileSync(path.join(root, 'web/src/api/config.ts'), 'utf8')
+    const body = /export interface ServerFacts \{([\s\S]*?)\n\}/.exec(server)?.[1] ?? ''
+    const keys = [...body.matchAll(/^\s*(\w+):/gm)].map((m) => m[1])
+    expect(keys).toEqual(expect.arrayContaining(['role', 'placement', 'serverCapabilities', 'leader']))
+    for (const k of ['role', 'placement', 'serverCapabilities']) expect(web).toMatch(new RegExp(`\\n\\s*${k}\\?:`))
   })
 })

@@ -7,7 +7,7 @@
  * syncCompanionHostReplica). Primary only: the companion pushes no copies.
  */
 
-import { CLOUD_MODE } from '../constants.js'
+import { isFollower } from './server-role.js'
 
 const DEBOUNCE_MS = 3_000
 const SWEEP_MS = 5 * 60_000
@@ -15,7 +15,7 @@ const FIRST_ROUND_MS = 20_000
 const SUBSCRIBER = 'host-replica-sync'
 
 export function startHostReplicaSync(): { stop: () => void } {
-  if (CLOUD_MODE) return { stop: () => {} }
+  if (isFollower()) return { stop: () => {} }
   let timer: ReturnType<typeof setTimeout> | null = null
   let stopped = false
   const push = (): void => {

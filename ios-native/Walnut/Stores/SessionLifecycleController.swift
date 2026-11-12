@@ -279,11 +279,10 @@ final class SessionLifecycleController {
     /// Honest copy for the Wave-1 failure ladder (mirrors SessionControlsSheet).
     static func friendlyError(_ error: Error) -> String {
         guard let apiError = error as? APIError else { return error.localizedDescription }
+        if apiError.isLeaderUnreachableForNow { return BridgeOfflineCopy.message(apiError) }
         switch apiError.code {
         case "session_control_needs_upgrade":
             return "Your primary box is upgrading for mobile session control. Try again in a minute."
-        case "bridge_offline":
-            return BridgeOfflineCopy.message(apiError)
         case "cron_owner":
             return "This session owns scheduled routines. Force-terminate to stop it anyway."
         case "not_found":

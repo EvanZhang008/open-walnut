@@ -29,6 +29,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion, isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
@@ -42,9 +43,9 @@ const SERVER_RELAY_SID = '__server__'
 /** A phone reads the rules at launch: a slow bridge must not hold its pills for 30s. */
 const TAG_DISPLAY_RELAY_TIMEOUT_MS = 8_000
 
-/** Registry writes have no replica→primary write-back — refuse loudly on cloud. */
+/** Registry writes have no replica→primary write-back: refuse loudly on any replica. */
 function replicaRefused(res: Response, what: string): boolean {
-  if (!CLOUD_MODE) return false
+  if (!isFollower()) return false
   sendError(res, 501, 'not_supported_cloud', `${what} runs on the primary box only (no replica write-back channel)`)
   return true
 }
@@ -179,13 +180,13 @@ taskExtrasV1Router.get('/tasks/enriched', async (_req: Request, res: Response, n
 // paths must never be shadowed by an /:id route — this router has none.
 
 // GET /api/v1/tasks/groups — all groups with labels + hidden flag + member ids.
-// REPLICA: its rows are built from the slim projection, which carries no
+// The companion: its rows are built from the slim projection, which carries no
 // group_id, so its own store knows no folder membership. It serves the listing
 // the primary pushes on its task projection (`groups`), and its own store only
-// when the primary predates that.
+// when the primary predates that. A host replica reads its own task copy.
 taskExtrasV1Router.get('/tasks/groups', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) {
+    if (isCompanion()) {
       const { readTaskProjection } = await import('../../core/task-projection.js')
       const pushed = (await readTaskProjection().catch(() => null))?.groups
       if (Array.isArray(pushed)) {

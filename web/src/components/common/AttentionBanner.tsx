@@ -24,7 +24,7 @@ import { useCallback, useId, useLayoutEffect, useRef, useState, useSyncExternalS
 import { useNavigate } from 'react-router-dom';
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { serverNow, useAllHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { HOST_SUBHEAD, HOST_TITLE, READY_HOLD_MS, activeHiddenIds, nextBanner, type BannerRow } from '@/utils/attention-banner-model';
 import {
@@ -142,7 +142,7 @@ export function AttentionBanner({
   const allStatuses = useAllHostStatus();
   const hydration = useHostStatusHydration();
   const dismissed = useSyncExternalStore(subscribeHostDismissed, getHostDismissed);
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const userRetrying = useUserRetryingHosts();
   const engaged = useUserEngagedHosts();
   const gateHosts = useGateBarHosts();

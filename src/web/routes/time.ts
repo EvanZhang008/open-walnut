@@ -26,7 +26,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
-import { CLOUD_MODE } from '../../constants.js';
+import { isFollower, role } from '../../core/server-role.js';
 import { log } from '../../logging/index.js';
 import {
   attachTaskIdsBounded, deadline, emitTimeBanked,
@@ -72,7 +72,8 @@ const MAX_TITLE_LOOKUPS = 200;
 
 /** Start the collectors. Idempotent; safe to call on every server boot. */
 export function startTimeTracking(): void {
-  if (CLOUD_MODE) return; // a replica has no local sessions and no local store
+  // Only the leader collects: a replica (the companion, a host replica) has no store of the person's time.
+  if (role() !== 'leader') return;
   startAgentTimeCollector();
   // Warm the rollup off the request path so the first /summary is already hot.
   void hydrate();
@@ -93,7 +94,7 @@ export function startTimeTracking(): void {
  * subscription is the part that matters: a mid-tick `session:result` after
  * shutdown would otherwise bank time into a torn-down store (and a test's next
  * startServer() would inherit the previous run's rollup).
- * Unconditional — cheap, and correct even if CLOUD_MODE flipped since boot.
+ * Unconditional: cheap, and correct whatever role this server booted in.
  */
 export function stopTimeTracking(): void {
   stopAgentTimeCollector();
@@ -119,7 +120,7 @@ export function stopTimeTracking(): void {
 // behind the response.
 timeRouter.post('/heartbeats', async (req: Request, res: Response) => {
   try {
-    if (CLOUD_MODE) {
+    if (isFollower()) {
       res.status(501).json({ error: 'not_supported_cloud', message: 'time tracking lives on the primary box only' });
       return;
     }
@@ -160,7 +161,7 @@ timeRouter.post('/heartbeats', async (req: Request, res: Response) => {
 
 // GET /api/time/summary?days=N — the whole panel in one round trip.
 timeRouter.get('/summary', async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'time tracking lives on the primary box only' });
     return;
   }
@@ -225,7 +226,7 @@ export interface DayBlocksResponse extends DayBlocks {
 }
 
 timeRouter.get('/blocks', async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'time tracking lives on the primary box only' });
     return;
   }
@@ -351,7 +352,7 @@ function helperReason(): HelperUnavailable | undefined {
 let lastKnownOutsideEnabled = false;
 
 timeRouter.get('/apps', async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'outside activity is sampled on the primary box only' });
     return;
   }
@@ -431,7 +432,7 @@ export interface DayAppsBlocksResponse {
 // intervals for the timeline. Walnut's own time is excluded (the attention lanes
 // already draw it); a browser is one row, its sites stay the Apps tab's detail.
 timeRouter.get('/apps/blocks', async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'outside activity is sampled on the primary box only' });
     return;
   }
@@ -488,7 +489,7 @@ async function buildAppsBlocks(date: string): Promise<DayAppsBlocksResponse> {
 // immediately. An explicit { enabled } in the body wins, so a UI that fires twice
 // cannot flip twice.
 timeRouter.post('/apps/toggle', async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'outside activity is sampled on the primary box only' });
     return;
   }
@@ -641,7 +642,7 @@ async function screenTimeAccess(enabled: boolean): Promise<AccessAnswer> {
 }
 
 timeRouter.get('/screentime', async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'Screen Time is read on the primary box only' });
     return;
   }
@@ -734,7 +735,7 @@ async function buildScreenTime(date: string, refresh: boolean): Promise<ScreenTi
 // Either switch, or both. An explicit boolean wins so a double-fired UI cannot
 // flip twice; omitting both flips `enabled`, which is what a plain switch sends.
 timeRouter.post('/screentime/toggle', async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'Screen Time is read on the primary box only' });
     return;
   }
@@ -802,7 +803,7 @@ timeRouter.post('/screentime/toggle', async (req: Request, res: Response) => {
 // The one place waiting is right: the user just granted the permission and wants
 // to see whether it worked. Bounded, and it answers with the outcome either way.
 timeRouter.post('/screentime/refresh', async (_req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'Screen Time is read on the primary box only' });
     return;
   }

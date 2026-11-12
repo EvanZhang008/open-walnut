@@ -31,11 +31,11 @@ import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { log } from '../../logging/index.js'
 import { MAX_KEY_LEN, machineLocalKey, syncableKey } from '../../core/ui-prefs-keys.js'
 import { RECENT_OPENED_KEY, UNION_PREF_KEYS, mergeRecentOpened, parseRecentOpened } from '../../core/recent-opened-list.js'
-import { isCompanion, isHostReplicaProgram } from '../../core/server-role.js'
+import { isCompanion, isFollower, isHostReplicaProgram } from '../../core/server-role.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
-import { KIND_NOT_COPIED, COPY_AS_OF_HEADER, copyKindAsOf } from '../../core/replication/kinds/gate.js'
+import { KIND_NOT_COPIED, COPY_AS_OF_HEADER, copyKindAsOf, keepsCopies } from '../../core/replication/kinds/gate.js'
 
 import { routeSource } from '../../core/sessions/send-sent-by.js'
 
@@ -166,23 +166,18 @@ uiPrefsRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
   try {
     // Turned off for this replica (Settings): the Mac's prefs alone, never this box's own file.
     await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('prefs')
-    // The companion answers the Mac's prefs once it holds the copy (before: its own file).
-    if (isCompanion()) {
+    // A replica answers the Mac's prefs from its copy (core/replication/kinds/prefs.ts): the
+    // companion once a round landed (before: its own file), a host replica always.
+    if (keepsCopies('prefs')) {
       const asOf = await copyKindAsOf('prefs')
-      const prefs = asOf === null ? null : await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy()
+      const prefs = isHostReplicaProgram() || asOf !== null ? await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy() : null
       if (prefs) {
-        res.setHeader(COPY_AS_OF_HEADER, String(asOf))
+        if (asOf !== null) res.setHeader(COPY_AS_OF_HEADER, String(asOf))
         res.json({ prefs: onlyAskedKey(req, withTestRunWrites(prefs)) })
         return
       }
-    }
-    // A host replica holds the Mac's prefs as a copy (core/replication/kinds/prefs.ts).
-    if (isHostReplicaProgram()) {
-      const prefs = await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy()
       // No copy yet (or the host turned it off): not "no prefs", which a client would merge as such.
-      if (!prefs) throw new NeedsLeaderError(KIND_NOT_COPIED)
-      res.json({ prefs: onlyAskedKey(req, withTestRunWrites(prefs)) })
-      return
+      if (isHostReplicaProgram()) throw new NeedsLeaderError(KIND_NOT_COPIED)
     }
     if (!req.query.key || req.query.key === RECENT_OPENED_KEY) await ensureHumanRecent()
     const prefs = await loadPrefs()
@@ -202,7 +197,8 @@ const HUMAN_BACKUP_KEY = 'walnut-todo-recent-before-human'
 async function ensureHumanRecent(): Promise<void> {
   if (ambientTestRun() !== undefined || humanRecentReady) return
   const prefs = await loadPrefs()
-  if (isCompanion() || isHostReplicaProgram()) return
+  // A replica's own file is never the person's: the Mac recovers its own history.
+  if (isFollower()) return
   if (Number(prefs[HUMAN_SINCE_KEY]?.v) > 0) { humanRecentReady = true; return }
   const { recentTouchHistory } = await import('../../core/recent-touch-history.js')
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -249,7 +245,7 @@ uiPrefsRouter.put('/', async (req: Request, res: Response, next: NextFunction) =
     delete patch[HUMAN_BACKUP_KEY]
     const recent = patch[RECENT_OPENED_KEY]
     if (typeof recent?.v === 'string') {
-      const sourcePrefs = isCompanion() || isHostReplicaProgram()
+      const sourcePrefs = isFollower()
         ? await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy() : await loadPrefs()
       const since = Number(sourcePrefs?.[HUMAN_SINCE_KEY]?.v ?? Infinity)
       const phone = !!(req as Request & { deviceName?: string }).deviceName && /^Walnut\/[^ ]+ .*CFNetwork\//.test(String(req.headers['user-agent'] ?? ''))
@@ -262,12 +258,12 @@ uiPrefsRouter.put('/', async (req: Request, res: Response, next: NextFunction) =
       res.json({ ok: true })
       return
     }
-    // The copy is the Mac's: a layout change made here waits for it.
-    if (isHostReplicaProgram()) throw new NeedsLeaderError('prefs_writes_need_mac')
     if (isCompanion()) {
       res.json(await putOnMac(patch as Record<string, unknown>))
       return
     }
+    // The copy is the Mac's: a layout change made on another replica waits for it.
+    if (isFollower()) throw new NeedsLeaderError('prefs_writes_need_mac')
     res.json(await mergeUiPrefs(patch))
   } catch (err) {
     if (err instanceof UiPrefsInputError) {

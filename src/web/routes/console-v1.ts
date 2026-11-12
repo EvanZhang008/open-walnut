@@ -23,6 +23,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion, isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
@@ -119,7 +120,7 @@ consoleV1Router.get('/config', async (_req: Request, res: Response, next: NextFu
     const mem = process.memoryUsage()
     res.json({
       config,
-      cloud: CLOUD_MODE,
+      cloud: isCompanion(),
       processNice,
       memory: {
         rssMb: Math.round(mem.rss / 1048576),
@@ -147,11 +148,11 @@ function parseTok(raw: unknown): string | undefined {
 }
 
 // GET /api/v1/usage/overview — every aggregate under one cross-filter, in one
-// call (the composite endpoint the web dashboard uses). REPLICA: 501 — the
-// usage DB lives on the primary.
+// call (the composite endpoint the web dashboard uses). Any replica: 501, the
+// usage DB lives on the leader.
 consoleV1Router.get('/usage/overview', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) {
+    if (isFollower()) {
       sendError(res, 501, 'not_supported_cloud', 'Usage tracking lives on the primary box only')
       return
     }

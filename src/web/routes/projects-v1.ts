@@ -32,6 +32,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
@@ -130,7 +131,7 @@ projectsV1Router.post('/projects', async (req: Request, res: Response, next: Nex
 // case-insensitive). REPLICA: 501 — see the header comment.
 projectsV1Router.patch('/projects/:name', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) {
+    if (isFollower()) {
       sendError(res, 501, 'not_supported_cloud', 'Project rename runs on the primary box only (the registry has no replica write-back channel)')
       return
     }
@@ -159,7 +160,7 @@ projectsV1Router.patch('/projects/:name', async (req: Request, res: Response, ne
 // REPLICA: 501 — see the header comment.
 projectsV1Router.delete('/projects/:name', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) {
+    if (isFollower()) {
       sendError(res, 501, 'not_supported_cloud', 'Project delete runs on the primary box only (cascade needs the primary\'s provider plugins)')
       return
     }
@@ -227,7 +228,7 @@ projectsV1Router.get('/projects/:name/metadata', async (req: Request, res: Respo
 // rename/delete above).
 projectsV1Router.put('/projects/:name/metadata', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) {
+    if (isFollower()) {
       sendError(res, 501, 'not_supported_cloud', 'Project settings live in the primary box\'s registry (no replica write-back channel)')
       return
     }
@@ -269,7 +270,7 @@ projectsV1Router.put('/projects/:name/metadata', async (req: Request, res: Respo
 // unavailable) → 422.
 projectsV1Router.post('/projects/:name/summary/regenerate', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) {
+    if (isFollower()) {
       sendError(res, 501, 'not_supported_cloud', 'Project summaries are generated on the primary box (model + registry write)')
       return
     }

@@ -67,8 +67,13 @@ export function tunnelDaemonDirRefusal(dir: string, replicaDaemonDir: string): s
 /** What the tunnel daemon is started with, on top of the replica's own env. */
 export function tunnelDaemonEnv(dir: string): Record<string, string | undefined> {
   return {
-    // Its CLIs work for the Mac: nothing in them may believe it is the replica.
+    // Its CLIs work for the Mac: nothing in them may believe it is the replica,
+    // so every role fact of the box goes (a cloud placement without the cloud
+    // flag would even refuse to boot).
     WALNUT_CLOUD_MODE: undefined,
+    WALNUT_ROLE: undefined,
+    WALNUT_PLACEMENT: undefined,
+    WALNUT_CAPABILITIES: undefined,
     // An explicit streams dir: an inherited WALNUT_STREAMS_DIR (the replica's
     // own daemon's, in tests) must not be shared.
     WALNUT_STREAMS_DIR: tunnelStreamsDir(dir),

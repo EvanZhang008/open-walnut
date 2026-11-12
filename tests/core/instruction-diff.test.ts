@@ -7,10 +7,11 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-instruction-diff'))
-const role = vi.hoisted(() => ({ companion: false }))
+const role = vi.hoisted(() => ({ companion: false, follower: false }))
 vi.mock('../../src/core/server-role.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/core/server-role.js')>()),
   isCompanion: () => role.companion,
+  isFollower: () => role.follower,
 }))
 import { USER_FILE, WALNUT_HOME } from '../../src/constants.js'
 import { defaultInstructions, type InstructionTask } from '../../src/core/sessions/session-context.js'
@@ -496,15 +497,17 @@ describe('the reply language is a block: a change, a restore and a clear all rea
     expect(dueChanges(fr, fr, new Set(), {})).toBeNull()
   })
 
-  it('on the companion, whose config copy has no Reply language, a session is never told the line is gone', () => {
+  it('on a replica (the companion or a host replica), whose config copy has no Reply language, a session is never told the line is gone', () => {
     _resetReplyLanguageForTesting('Answer in French.')
     const before = defaultInstructions(task)
     _resetReplyLanguageForTesting()
     try {
-      role.companion = true
+      Object.assign(role, { companion: true, follower: true })
       expect(instructionNoticeFor({ appliedAppendSystemPrompt: before }, task)).toBeNull()
-      role.companion = false
+      Object.assign(role, { companion: false, follower: true })
+      expect(instructionNoticeFor({ appliedAppendSystemPrompt: before }, task)).toBeNull()
+      Object.assign(role, { companion: false, follower: false })
       expect(instructionNoticeFor({ appliedAppendSystemPrompt: before }, task)).toContain('none of its lines apply any more')
-    } finally { role.companion = false }
+    } finally { Object.assign(role, { companion: false, follower: false }) }
   })
 })

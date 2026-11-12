@@ -9,7 +9,8 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { hasCapability } from '../../core/capabilities.js'
+import { isCompanion } from '../../core/server-role.js'
 import { classifyRelayReply, driveControlRelay, sendRelayReplyError, sendV1Error as sendError } from './v1-control-relay.js'
 
 /**
@@ -20,7 +21,8 @@ import { classifyRelayReply, driveControlRelay, sendRelayReplyError, sendV1Error
 export async function sessionHostName(sessionId: string): Promise<string | null> {
   try {
     const { cloudSessionHostName } = await import('../../core/sessions/cloud-session-host.js')
-    if (CLOUD_MODE) {
+    // The companion reads the session list the Mac pushes; every other server its own session store.
+    if (isCompanion()) {
       const { readSessionProjection } = await import('../../core/session-projection.js')
       const row = (await readSessionProjection())?.sessions.find((r) => r.id === sessionId)
       return row ? cloudSessionHostName({ host: row.host === '' ? '__local__' : row.host, hostLabel: row.host_label }) : null
@@ -102,6 +104,8 @@ export async function cloudTerminate(res: Response, sessionId: string, force: bo
  * null: relay to the Mac as before. Never throws.
  */
 export async function leadHostOf(sessionId: string) {
+  // Only a box with the backup-leader capability ever leads a host (getBackupLeader says the same).
+  if (!hasCapability('backup-leader')) return null
   try {
     const { getHostSessionControl } = await import('../../core/leader/host-session-control.js')
     const control = getHostSessionControl()

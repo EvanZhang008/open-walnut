@@ -34,7 +34,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { requestOrigin } from '../middleware/request-origin.js'
@@ -109,7 +109,7 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
   await guard(res, next, 'POST /actions/invoke', async () => {
     const b = body(req)
     const tool = typeof b.tool === 'string' ? b.tool.trim() : ''
-    if (CLOUD_MODE) {
+    if (isFollower()) {
       refuse(res, 501, 'not_supported_cloud', 'Action cards run on the primary box only', tool)
       return
     }

@@ -19,7 +19,7 @@ import { getContextWindowSize } from '../../model/model.js'
 import { getLastTurnTokens, getLaneWindow } from '../agent-turn-queue.js'
 import { log } from '../../logging/index.js'
 import { isCompactionInProgress, triggerBackgroundCompaction } from '../background-compaction.js'
-import { isCompanion } from '../../core/server-role.js'
+import { isCompanion, isFollower } from '../../core/server-role.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 
 export const chatHistoryRouter = Router()
@@ -130,13 +130,13 @@ export async function computeChatStats(
 }
 
 /**
- * On the cloud companion: a clear or a compaction rewrites the Mac's conversation (and a
- * clear retires the Mac's lane, which only the Mac can stop), and neither merges with what
- * the Mac did since, so it waits for the Mac. The phone's v1 routes reach the Mac while it
+ * On a replica: a clear or a compaction rewrites the Mac's conversation (and a clear
+ * retires the Mac's lane, which only the Mac can stop), and neither merges with what the
+ * Mac did since, so it waits for the Mac. The phone's v1 routes reach the Mac while it
  * answers; this box's own routes never write the file git sync used to carry.
  */
 export function companionChatChangeRefusal(): NeedsLeaderError | null {
-  return isCompanion() ? new NeedsLeaderError('chat_changes_need_mac', 'Clearing or compacting a chat is done on your Mac, which is not answering right now.') : null
+  return isFollower() ? new NeedsLeaderError('chat_changes_need_mac', 'Clearing or compacting a chat is done on your Mac, which is not answering right now.') : null
 }
 
 // GET /api/chat/history?page=1&pageSize=100&agentId=general
@@ -145,6 +145,8 @@ chatHistoryRouter.get('/history', async (req: Request, res: Response, next: Next
     const page = req.query.page ? parseInt(req.query.page as string, 10) : 1
     const pageSize = req.query.pageSize ? parseInt(req.query.pageSize as string, 10) : 100
     const { agentId, conversationId } = await resolveChatRef(req)
+    // The companion's own turns live in its chat outbox (companion-chat-turns.ts); a host
+    // replica holds no conversation bodies and its front answers needs-leader for this read.
     if (isCompanion()) {
       // The Mac's copy, this box's own turns on the tail; a chat the copy does not hold needs the Mac.
       const { listConversations } = await import('../../core/conversations.js')

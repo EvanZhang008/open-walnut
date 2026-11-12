@@ -24,7 +24,7 @@ import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
 import { AddHostButton } from './AddHostMenu';
 import { ADD_SSH_HOST_EVENT, JOIN_HOST_EVENT, openFirstRunHosts, takeAddSshRequest } from '@/api/first-run';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { RemoteHostSshRow } from './RemoteHostSshRow';
 import { HostJoinClosed, HostJoinError, HostJoinLink, HostJoinMaking } from './HostJoinLink';
 import { NetMachineRow } from './NetMachineRow';
@@ -62,7 +62,7 @@ export function RemoteHostsSection(props: Props) {
 }
 
 function RemoteHostsBody({ config, onSave, store }: Props & { store: ReturnType<typeof createRowStore> }) {
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const network = useHostNetwork(config.hosts);
   const machineName = useHostDisplayLabels();
   const netAliases = Object.fromEntries(Object.entries(config.hosts ?? {}).filter(([, h]) => h.transport === 'net').map(([alias]) => [alias, machineName(alias)]));

@@ -13,8 +13,9 @@
 import Database, { type Database as DatabaseType } from '../../lib/sqlite.js'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { WALNUT_HOME } from '../../constants.js'
 import { reopenIfWiped } from '../../lib/sqlite-wiped.js'
+import { isFollower } from '../server-role.js'
 
 export function placesDir(): string {
   return path.join(WALNUT_HOME, 'places')
@@ -70,12 +71,12 @@ export class PlacesStoreUnavailable extends Error {
 }
 
 export function placesStoreExists(): boolean {
-  return !CLOUD_MODE && fs.existsSync(placesDbPath())
+  return !isFollower() && fs.existsSync(placesDbPath())
 }
 
 /** The shared handle, opened lazily. Throws on a replica: it keeps nothing. */
 export function getPlacesDb(): DatabaseType {
-  if (CLOUD_MODE) throw new PlacesStoreUnavailable('places live on the primary box only')
+  if (isFollower()) throw new PlacesStoreUnavailable('places live on the primary box only')
   if (db) {
     db = reopenIfWiped(placesDbPath(), db, openPlacesDb, (old) => old.close())
     return db

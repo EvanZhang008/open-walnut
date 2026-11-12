@@ -28,7 +28,6 @@
  * on the request skips exactly those two.
  */
 
-import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import {
   BLOCKING_READINESS_KINDS, HOST_REMOVED_NOTE, OVERRIDABLE_KINDS, REMOTE_OFF_NOTE, hostFailureHeadline, hostGateBody,
@@ -38,6 +37,7 @@ import { foundHostWaitingNote, foundHostWaits } from '../hosts/found-hosts.js'
 import type { HostReadiness } from '../hosts/host-readiness.js'
 import type { HostStatus } from '../hosts/host-status.js'
 import type { ConfigHostDef, ConnectNowResult } from '../hosts/host-connect-action.js'
+import { isFollower } from '../server-role.js'
 
 /** The fresh redial a human Start makes for a failed host; the whole gate stays under ~22s (C47). */
 export const GATE_CONNECT_DEADLINE_MS = 20_000
@@ -114,7 +114,7 @@ async function defaultDeps(): Promise<HostStartGateDeps> {
       const catalog = await getHostModelCatalog(host).catch(() => null)
       return catalog?.models.find((m) => m.value === 'default')?.resolvedModel || undefined
     },
-    cloudMode: CLOUD_MODE,
+    cloudMode: isFollower(),
   }
 }
 

@@ -3,7 +3,7 @@
  */
 
 import { generateId } from '../../utils/format.js';
-import { isCompanion } from '../server-role.js';
+import { isFollower } from '../server-role.js';
 import type {
   CronJob,
   CronJobCreate,
@@ -19,22 +19,22 @@ import { syncExecutorFields } from './executor-compat.js';
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000; // 2 hours
 
-// ── CLOUD_MODE cron allowlist ──
+// ── Replica cron allowlist ──
 
 /** Infra jobs allowed to run on the cloud companion: git-sync + backup. */
 const CLOUD_ALLOWED_JOB_RE = /git[-_ ]?sync|backup/i;
 
 /**
- * CLOUD_MODE guard: on the cloud companion only infra jobs (git-sync /
+ * Replica guard: on a replica (the cloud companion; a host replica runs no cron at all) only infra jobs (git-sync /
  * backup-related) may run — business crons (daily summaries, agent jobs)
  * would double-run with the primary box since cron-jobs.json syncs via git.
  * Matched against job name, tag, and initProcessor.actionId. Applied at
  * due-job SELECTION (not execution) so skipped jobs never write job state
  * (a terminal result here would e.g. disable one-shot jobs the primary box
- * still needs to run). `cloudMode` is a parameter for direct unit testing.
+ * still needs to run). `follower` is a parameter for direct unit testing.
  */
-export function cloudModeSkipsJob(job: CronJob, cloudMode: boolean = isCompanion()): boolean {
-  if (!cloudMode) return false;
+export function cloudModeSkipsJob(job: CronJob, follower: boolean = isFollower()): boolean {
+  if (!follower) return false;
   const tag = (job as { tag?: string }).tag ?? '';
   return !(
     CLOUD_ALLOWED_JOB_RE.test(job.name)

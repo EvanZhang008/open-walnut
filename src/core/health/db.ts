@@ -14,9 +14,10 @@ import Database, { type Database as DatabaseType } from '../../lib/sqlite.js'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { WALNUT_HOME } from '../../constants.js'
 import { reopenIfWiped } from '../../lib/sqlite-wiped.js'
 import { log } from '../../logging/index.js'
+import { isFollower } from '../server-role.js'
 
 export function healthDir(): string {
   return path.join(WALNUT_HOME, 'health')
@@ -124,7 +125,7 @@ export class HealthStoreUnavailable extends Error {
 
 /** The shared handle, opened lazily. Throws on a replica: it keeps nothing. */
 export function getHealthDb(): DatabaseType {
-  if (CLOUD_MODE) throw new HealthStoreUnavailable('health data lives on the primary box only')
+  if (isFollower()) throw new HealthStoreUnavailable('health data lives on the primary box only')
   if (db) {
     db = reopenIfWiped(healthDbPath(), db, openHealthDb, (old) => old.close())
     return db

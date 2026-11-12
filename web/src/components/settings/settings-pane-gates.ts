@@ -8,9 +8,9 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { fetchMacAccess, peekMacAccess } from '@/api/config'
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica'
+import { useIsReplicaServer } from '@/hooks/useServerRole'
 
-/** `primary`: the console of the Mac itself, never the cloud companion's (Tailscale, a browser link). */
+/** `primary`: the console of the Mac itself (Tailscale, a browser link), never a replica answering without it. */
 export type SettingsPaneGate = 'mac-access' | 'primary'
 
 type GateState = Readonly<Record<'mac-access', boolean | null>>
@@ -29,7 +29,7 @@ export function closedGates(state: GateState, replica = false): ReadonlySet<Sett
 export function useClosedPaneGates(): ReadonlySet<SettingsPaneGate> {
   const [state, setState] = useState<GateState>(peekGates)
   // Unknown reads as the Mac (false), so the Mac never loses an entry to a slow answer.
-  const replica = useIsCloudReplica()
+  const replica = useIsReplicaServer()
   useEffect(() => {
     let live = true
     void fetchMacAccess().then((macAccess) => {

@@ -5,7 +5,7 @@ import type { ImageAttachment } from './chat';
 import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
 import type { HostStatus } from './hosts';
-import { fetchIsCloudReplica } from './config';
+import { serverRoleNow } from './server-role';
 import { getAllHostStatus } from '@/hooks/useHostStatus';
 import { NO_PREWARM_KINDS, isConnectingPhaseWire, type HostGateBody, type HostGateCode } from '@open-walnut/host-problem';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
@@ -1184,7 +1184,7 @@ export function prewarmWorkingDirs(result: WorkingDirsResult, opts?: { replica?:
   const candidates = hostsToPrewarm(result, _prewarmedHosts);
   if (candidates.length === 0) return;
   const configured = Array.isArray(result.hosts) ? new Set(result.hosts.map((h) => h.alias)) : undefined;
-  const replicaP = opts?.replica !== undefined ? Promise.resolve(opts.replica) : fetchIsCloudReplica().catch(() => false);
+  const replicaP = opts?.replica !== undefined ? Promise.resolve(opts.replica) : serverRoleNow().then((r) => r.replica, () => false);
   void replicaP.then((replica) => {
     for (const [host, cwd] of prewarmTargets(candidates, getAllHostStatus(), replica, configured)) {
       if (_prewarmedHosts.has(host)) continue;

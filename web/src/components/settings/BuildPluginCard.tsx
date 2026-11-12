@@ -6,14 +6,15 @@
  *
  * Shared by the Plugins section (Settings) and /plugins/new. The manual path
  * stays one line below (the command itself), per the house rule that every
- * AI flow keeps a direct manual route. On a cloud replica the action hides:
- * a replica has no CLI and no daemon, so "Build it" there would mint a task
- * plus a session that can never run.
+ * AI flow keeps a direct manual route. On a replica answering without the Mac
+ * the action hides: the build is the Mac's work, so "Build it" there would mint
+ * a task plus a session that can never run.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { quickStartSession } from '@/api/sessions'
-import { fetchInstallDir, fetchIsCloudReplica } from '@/api/config'
+import { fetchInstallDir } from '@/api/config'
+import { useIsReplicaServer } from '@/hooks/useServerRole'
 import { openSessionOnHome } from '@/utils/open-session'
 import { SettingsGroup, SettingsRow } from './SettingsSection'
 import { SettingsButton } from './inputs/SettingsButton'
@@ -37,10 +38,10 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
   const { text: request, setText: setRequest } = draft
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [cloud, setCloud] = useState(false)
+  // A replica answering without the Mac has no build to start here.
+  const replica = useIsReplicaServer()
   const requestRef = useRef<HTMLInputElement | null>(null)
   const mic = useRef<BoxMicHandle | null>(null)
-  useEffect(() => { void fetchIsCloudReplica().then(setCloud) }, [])
 
   const start = async () => {
     if (busy) return
@@ -90,11 +91,11 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
         htmlFor="build-plugin-request"
         wide
         className="settings-row-stacked"
-        help={cloud
+        help={replica
           ? 'Building needs the Mac console; this replica can only browse.'
           : 'An AI session builds it, and it appears in your sidebar as it takes shape.'}
         error={error ?? undefined}
-        control={cloud ? undefined : (
+        control={replica ? undefined : (
           <span className="settings-addons-inline build-plugin-form">
             <MicField
               inline

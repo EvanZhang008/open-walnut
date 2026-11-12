@@ -19,8 +19,9 @@ import { execFile, spawn } from 'node:child_process'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
-import { CLOUD_MODE, IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
+import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
+import { role } from '../server-role.js'
 import { callAppSet, createLogFolder, parseAssertionsNow, type OpenCall, type Span } from './calls.js'
 import { appendCallLines, callLine, coverageLines } from './calls-store.js'
 
@@ -218,7 +219,9 @@ export function backfillCalls(): Promise<BackfillOutcome> {
 
 /** Start both feeds. Idempotent; each tick checks the config, so enabling later needs no restart. */
 export function startCallsCollector(): void {
-  if (liveTimer || process.platform !== 'darwin' || CLOUD_MODE || IS_EPHEMERAL) return
+  // Only the leader reads its Mac's calls: a replica (the companion, a host replica on a
+  // Mac host) would collect that machine's calls under the owner's switches.
+  if (liveTimer || process.platform !== 'darwin' || role() !== 'leader' || IS_EPHEMERAL) return
   const tickLive = async (): Promise<void> => {
     try { await liveTick() } catch { /* the next tick tries again */ }
     if (liveTimer) { liveTimer = setTimeout(() => { void tickLive() }, LIVE_EVERY_MS); liveTimer.unref?.() }

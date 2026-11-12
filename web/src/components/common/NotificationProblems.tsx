@@ -22,7 +22,7 @@ import { WarningTriangleIcon } from './PhoneIcons';
 import { useNavigate } from 'react-router-dom';
 import type { DaemonHealth, SystemHealth } from '@/hooks/useSystemHealth';
 import { serverNow, useAllHostStatus } from '@/hooks/useHostStatus';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { fetchConfig } from '@/api/config';
 import { hostRowFor, type BannerRow } from '@/utils/attention-banner-model';
 import { getHostDismissed, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
@@ -62,7 +62,7 @@ export interface ProblemHost { alias: string; row: BannerRow }
  */
 export function useProblemHosts(daemons: DaemonHealth[] | undefined, disabled: ReadonlySet<string>): ProblemHost[] {
   const statuses = useAllHostStatus();
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const userRetrying = useUserRetryingHosts();
   const engaged = useUserEngagedHosts();
   const dismissed = useSyncExternalStore(subscribeHostDismissed, getHostDismissed, getHostDismissed);

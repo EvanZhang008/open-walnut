@@ -282,11 +282,10 @@ struct RoutinesView: View {
     /// Honest copy for the cloud-relay failure ladder (same as session controls).
     static func friendlyError(_ error: Error) -> String {
         guard let apiError = error as? APIError else { return error.localizedDescription }
+        if apiError.isLeaderUnreachableForNow { return BridgeOfflineCopy.message(apiError) }
         switch apiError.code {
         case "session_control_needs_upgrade":
             return "Your primary box is upgrading for mobile routines. Try again in a minute."
-        case "bridge_offline":
-            return BridgeOfflineCopy.message(apiError)
         case "not_found":
             return "This routine no longer exists on the server."
         case "internal" where apiError.localizedDescription.contains("not running"):

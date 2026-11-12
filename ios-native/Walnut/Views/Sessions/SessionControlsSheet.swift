@@ -305,11 +305,10 @@ struct SessionControlsSheet: View {
     /// Honest copy for the cloud-relay failure ladder + control errors.
     static func friendlyControlError(_ error: Error) -> String {
         guard let apiError = error as? APIError else { return error.localizedDescription }
+        if apiError.isLeaderUnreachableForNow { return BridgeOfflineCopy.message(apiError) }
         switch apiError.code {
         case "session_control_needs_upgrade":
             return "Your primary box's daemon is upgrading for mobile session control. Try again in a minute."
-        case "bridge_offline":
-            return BridgeOfflineCopy.message(apiError)
         case "conflict":
             return apiError.localizedDescription // e.g. unsupported effort level
         case "not_found":

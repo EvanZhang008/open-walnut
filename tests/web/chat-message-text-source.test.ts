@@ -42,7 +42,7 @@ vi.mock('@/api/config', async (orig) => ({
   fetchNotesDir: async () => null,
   fetchCanRevealLocalFiles: async () => false,
   fetchMacAccess: async () => null,
-  fetchIsCloudReplica: async () => false,
+  fetchServerRole: async () => ({ replica: false, capabilities: [] }),
   fetchBuildInfo: async () => null,
 }))
 

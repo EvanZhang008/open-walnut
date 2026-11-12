@@ -16,7 +16,7 @@ import {
   HOST_READY_HOLD_MS, hostActionsFor, hostReadySentence, REMOTE_OFF_NOTE, HOST_REMOVED_NOTE,
   type HostActionId, type HostDot, type HostProblem,
 } from '@open-walnut/host-problem';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { seedHostStatus, serverNow, useHostStatus } from '@/hooks/useHostStatus';
 import { answerFoundHost } from '@/api/hosts';
 import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT, type HostActions } from '@/hooks/useHostActions';
@@ -229,7 +229,7 @@ function useRelist(live: HostLiveState | undefined, path: string | undefined, no
 export function HostNote({ hostKey, label, live, path, dot, onRelist, onOpenSettings }: HostNoteProps) {
   const status = useHostStatus(hostKey);
   const actions = useHostActions(hostKey);
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const current = pickerNoteOf({ host: hostKey, label, status, live, path, now: serverNow() });
   const relist = () => onRelist(hostKey);
   const relisting = useRelist(live, path, current, relist);

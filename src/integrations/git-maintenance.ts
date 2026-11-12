@@ -35,7 +35,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { WALNUT_HOME, CLOUD_MODE } from '../constants.js';
+import { WALNUT_HOME } from '../constants.js';
 import { bootPolicy } from '../core/boot-policy.js';
 import {
   execGitGroup,
@@ -47,6 +47,7 @@ import {
   type RepoSizeVerdict,
 } from './git-sync.js';
 import { log } from '../logging/index.js';
+import { hasCapability } from '../core/capabilities.js';
 
 /** Run at most once per this many days (unless the size trigger fires). */
 export const MAINTENANCE_INTERVAL_DAYS = 7;
@@ -507,7 +508,7 @@ export async function maintainRepo(
 
 /** The bare hub repo dir on a cloud box, or null elsewhere (mirrors git-http.ts). */
 export function hubRepoDir(): string | null {
-  if (!CLOUD_MODE) return null;
+  if (!hasCapability('bridge-door')) return null;
   const root = process.env.WALNUT_GIT_HUB_DIR ?? '/var/lib/walnut/git';
   const repo = path.join(root, 'walnut-data.git');
   try {
@@ -632,7 +633,7 @@ export function startGitMaintenance(
         });
       }
     }
-    if (CLOUD_MODE) {
+    if (hasCapability('bridge-door')) {
       try { sweepDeployBundles(); } catch { /* best-effort */ }
     }
     return results;

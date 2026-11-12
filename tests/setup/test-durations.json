@@ -55,7 +55,7 @@
   "tests/core/boards/board-store.test.ts": 1527,
   "tests/core/boards/board-team.test.ts": 431,
   "tests/core/boards/open-choice.test.ts": 430,
-  "tests/core/boot-policy-ratchet.test.ts": 2501,
+  "tests/core/companion-is-a-replica-ratchet.test.ts": 2501,
   "tests/core/boot-policy.test.ts": 1065,
   "tests/core/bounded-memory.test.ts": 3091,
   "tests/core/browser-control/browser-cli.test.ts": 221,

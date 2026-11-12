@@ -32,7 +32,7 @@ import { browserKindFromUserAgent, numberedDeviceName } from '../../core/browser
 import { LOCAL_ACTOR } from '../../core/device-actor.js'
 import { clearAuthFailures, isAuthRateLimited, recordAuthFailure } from '../middleware/auth-rate-limit.js'
 import { getExposeRuntime } from '../expose-runtime.js'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { getConfig } from '../../core/config-manager.js'
 import { getHostServerManager } from '../../core/host-server/index.js'
 import { isPersonAtThisMachine } from './expose.js'
@@ -69,7 +69,8 @@ const withCode = (url: string, code: string) => `${url.replace(/\/+$/, '')}/#pai
  *  minted here works there: a host server forwards sign-in to this Mac, and keeps a copy
  *  of the signed-in browsers for when it is away. */
 async function hostAddresses(code: string): Promise<SignInAddress[]> {
-  if (CLOUD_MODE) return []
+  // Only the leader keeps servers on its hosts.
+  if (isFollower()) return []
   const manager = getHostServerManager()
   if (!manager) return []
   const hosts = (await getConfig()).hosts ?? {}

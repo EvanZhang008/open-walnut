@@ -1,6 +1,6 @@
 /**
  * /api/devices/tailscale: the guided "Reach Walnut from anywhere" card in
- * Settings, Phones & Cloud. Primary only (a cloud companion has nothing to
+ * Settings, Phones & Cloud. Primary only (a replica, the companion or a host, has nothing to
  * install and no tailnet of its own): 404 there.
  *
  *   GET  /            this Mac on the tailnet, its peers and the install job
@@ -20,7 +20,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { tailscaleDetail } from '../../core/tailnet.js'
 import { openTailscaleApp, startTailscaleInstall, tailscaleInstallState } from '../../core/tailscale-install.js'
 import { log } from '../../logging/index.js'
@@ -41,7 +41,7 @@ function requireLocalConsole(req: Request, res: Response, next: NextFunction): v
 }
 
 devicesTailscaleRouter.use((req: Request, res: Response, next: NextFunction) => {
-  if (!CLOUD_MODE) return next()
+  if (!isFollower()) return next()
   // Only this router's own three answers are refused; anything else under the
   // path (a device that happens to be named "tailscale") goes on to devicesRouter.
   if (OWN_ROUTES.has(`${req.method} ${req.path}`)) {

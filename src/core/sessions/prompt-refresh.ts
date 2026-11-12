@@ -26,7 +26,7 @@ import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { WALNUT_PROMPT_MARK, defaultInstructions } from './session-context.js';
 import { dueChanges, parseInstructions, renderDue } from './instruction-diff.js';
 import { currentUserProfile } from './user-profile-context.js';
-import { isCompanion, isFollower } from '../server-role.js';
+import { isFollower } from '../server-role.js';
 import { isOrgNode } from '../org/org-enabled.js';
 import { ONE_HOUR_MS, type PromptCacheFacts } from './prompt-cache.js';
 
@@ -114,7 +114,7 @@ export function promptRefreshable(record: Pick<RefreshRecord, 'taskId' | 'lane' 
   if (process.env.WALNUT_PROMPT_REFRESH === '0') return false;
   if (!record.taskId || record.lane || isAcpEngine(resolveEngine(record.engine))) return false;
   // A replica builds a thinner prompt (no Reply language, no fleet line): the Mac's stays.
-  return !isCompanion() && !isFollower();
+  return !isFollower();
 }
 
 /**

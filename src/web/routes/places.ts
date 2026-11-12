@@ -12,7 +12,7 @@
  */
 
 import { Router, type Request, type Response } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { PLACES_LOCAL_ONLY_MESSAGE } from '../../lib/caller-origin.js'
 import { thisMachineGuard } from '../middleware/health-access.js'
@@ -30,7 +30,7 @@ type Reader = (req: Request, places: typeof import('../../core/places/index.js')
 
 function route(name: string, empty: () => Record<string, unknown>, read: Reader) {
   return async (req: Request, res: Response): Promise<void> => {
-    if (CLOUD_MODE) {
+    if (isFollower()) {
       res.status(501).json({ error: 'not_supported_cloud', message: 'Places data lives on the primary box only' })
       return
     }
@@ -60,7 +60,7 @@ placesRouter.get('/status', route('status', () => ({}), (_req, places) =>
 // POST /api/places/labels { label, kind?, visit_id? | place?, radius_m?, remove? }: the
 // user's own name for a place (labels.ts). Answers the label without its point.
 placesRouter.post('/labels', async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'Places data lives on the primary box only' })
     return
   }

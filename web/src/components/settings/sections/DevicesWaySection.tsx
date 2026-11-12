@@ -7,7 +7,7 @@
  */
 import { useNavigate } from 'react-router-dom';
 import { SettingsGroup, SettingsEmpty } from '../SettingsSection';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { RemoteAccessCard } from './cloud/RemoteAccessCard';
 import { BrowserAccessGroup } from './cloud/BrowserAccessGroup';
 import { requestPairTarget, useDevicesData } from './cloud/useDevicesData';
@@ -37,11 +37,11 @@ function TailscaleSteps() {
 }
 
 export function DevicesWaySection({ way }: { way: SubWay }) {
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   return (
     <PhonesCloudTabPane tab={WAY_PANES[way]}>
       {replica ? (
-        // A companion is reached through its own address: nothing to set up from here.
+        // A replica answering without the Mac: these ways are set up on the Mac.
         <SettingsGroup>
           <SettingsEmpty>This is set up on the Mac itself; open these settings there.</SettingsEmpty>
         </SettingsGroup>

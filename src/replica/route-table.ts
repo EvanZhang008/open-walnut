@@ -157,10 +157,34 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   // A signed-in browser's cookie is this address's (routes/browser-session.ts): set and
   // read here, against this replica's device copy, the Mac answering or not.
   { method: 'GET', pattern: '/api/devices/browser-session', cls: 'local' },
+  // Reads only the Mac can answer: run here while it is away, each would answer 200
+  // with this replica's own (empty or wrong) facts in the Mac's place.
+  //   who leads the hosts (this replica would call itself the primary)
+  { method: 'GET', pattern: '/api/leader', away: 'needs-leader', why: 'fleet_needs_mac' },
+  //   every host's connect state (this replica has no ssh pool: every host would read idle),
+  //   and the key the Mac signs in to a host with (not this replica's own)
+  { method: 'GET', pattern: '/api/hosts/status', away: 'needs-leader', why: 'fleet_needs_mac' },
+  { method: 'GET', pattern: '/api/hosts/:host/ssh-key', away: 'needs-leader', why: 'other_hosts_need_mac' },
+  //   the addresses a phone reaches the Mac at (this replica would list its own)
+  { method: 'GET', pattern: '/api/v1/routes', away: 'needs-leader', why: 'needs_mac' },
+  //   a row's full text, read from the Mac's session transcript
+  { method: 'GET', pattern: '/api/v1/activity/detail', away: 'needs-leader', why: 'needs_mac' },
+  //   a phone's push registration (this replica's own rows would say "not registered")
+  { method: 'GET', pattern: '/api/push/status', away: 'needs-leader', why: 'needs_mac' },
+  //   the notification feed: the console's read answers from the Mac's `notifications` copy
+  //   (routes/notifications.ts); the phone's twin still reads this replica's own store, so it
+  //   needs the Mac until it reads the copy too (kinds/notifications.ts readNotificationsCopy)
+  { method: 'GET', pattern: '/api/notifications', away: 'read' },
+  { method: 'GET', pattern: '/api/v1/notifications', away: 'needs-leader', why: 'needs_mac' },
+  //   paired devices and pairing targets, and the Mac's Tailscale card
+  { method: 'GET', pattern: '/api/devices', away: 'needs-leader', why: 'needs_mac' },
+  { method: 'GET', pattern: '/api/devices/tailscale', away: 'needs-leader', why: 'needs_mac' },
   // The terminal is a /ws RPC the Mac serves (section 3).
   // Plugin routes are the leader's by prefix (their credentials stay on the Mac;
   // plugins do not load on a replica, so even their reads need it).
   { method: '*', pattern: '/api/plugins/*', cls: 'leader', away: 'needs-leader', why: 'plugins_need_mac' },
+  { method: '*', pattern: '/api/plugin-runtime/*', cls: 'leader', away: 'needs-leader', why: 'plugins_need_mac' },
+  { method: '*', pattern: '/api/plugin-updates/*', cls: 'leader', away: 'needs-leader', why: 'plugins_need_mac' },
   // WP10: the writes a person makes while the Mac is away, journaled by this host's
   // daemon through the write port (write-port.ts; the handlers: away-writes.ts,
   // which names the same paths). Each row is exact. Every other task and session

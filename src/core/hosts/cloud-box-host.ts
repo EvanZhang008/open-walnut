@@ -127,8 +127,8 @@ export function cloudBoxHostDef(s: CloudBoxState): CloudBoxHostDef {
  * replica itself: the box does not dial its own tunnel. A user entry that
  * happens to use the alias is replaced, because the alias is reserved.
  */
-export function injectCloudBoxHost(config: { hosts?: Record<string, unknown> }, cloudMode: boolean): void {
-  if (cloudMode || !state) return
+export function injectCloudBoxHost(config: { hosts?: Record<string, unknown> }, follower: boolean): void {
+  if (follower || !state) return
   config.hosts = { ...(config.hosts ?? {}), [CLOUD_BOX_HOST_ALIAS]: cloudBoxHostDef(state) }
 }
 

@@ -80,7 +80,7 @@ final class GlobalSearchModel {
                 self.response = answer
                 self.searchedQuery = query
                 self.unavailableNotice = nil
-            } catch let error as APIError where error.isNotSupportedCloud {
+            } catch let error as APIError where error.isLeaderUnreachable {
                 guard mine == self.generation else { return }
                 self.unavailableNotice = "Search needs your Mac online. Notes search still works."
             } catch {

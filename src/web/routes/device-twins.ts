@@ -20,7 +20,7 @@
  */
 
 import crypto from 'node:crypto'
-import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { readDeviceRegistry, type DeviceRecord } from '../../core/device-auth.js'
 import { hasOwnerRights } from '../../core/device-actor.js'
@@ -247,7 +247,7 @@ export async function adoptOnPrimary(record: DeviceRecord): Promise<PrimaryAnswe
   // (Ownership compares records by identity, so look it up in the same read.)
   const reg = await readDeviceRegistry()
   const self = reg.devices.find((d) => d.tokenHash === hash)
-  if (self && hasOwnerRights(reg, self, CLOUD_MODE)) return NO_PRIMARY_ANSWER
+  if (self && hasOwnerRights(reg, self, isCompanion())) return NO_PRIMARY_ANSWER
   const hit = primaryTwins.get(hash)
   if (hit && Date.now() < hit.expiresAt) return hit.answer
   return dedupe(hash, async (): Promise<PrimaryAnswer> => {
@@ -283,11 +283,11 @@ let removeRetryMs = REMOVE_RETRY_MS
  * in between leaves the copy (said in the log line of each failed try).
  */
 async function removeTwin(hash: string, attempt = 1): Promise<void> {
-  const done = CLOUD_MODE ? await revokeOnPrimary(hash) : await unadoptOnCloud(hash)
+  const done = isCompanion() ? await revokeOnPrimary(hash) : await unadoptOnCloud(hash)
   if (done) return
   if (attempt >= REMOVE_TRIES) {
     log.web.error('devices: gave up removing the other box\'s copy of a revoked pairing; its token still works there until it is removed there', {
-      tries: attempt, other: CLOUD_MODE ? 'primary' : 'cloud',
+      tries: attempt, other: isCompanion() ? 'primary' : 'cloud',
     })
     return
   }
@@ -324,7 +324,7 @@ export async function revokeAdoptionTwin(tokenHash: string): Promise<void> {
  */
 export async function removeTwinOnce(tokenHash: string): Promise<boolean> {
   try {
-    return CLOUD_MODE ? await revokeOnPrimary(tokenHash) : await unadoptOnCloud(tokenHash)
+    return isCompanion() ? await revokeOnPrimary(tokenHash) : await unadoptOnCloud(tokenHash)
   } catch (err) {
     log.web.warn('devices: removing the other box\'s copy of a pairing failed', { error: errorText(err) })
     return false

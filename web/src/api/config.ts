@@ -66,10 +66,16 @@ interface ServerFacts {
   canRevealLocalFiles?: boolean;
   /** /api/permissions has a report here (a Mac console); absent on an older server. */
   macAccess?: boolean;
+  /** Kept for older clients: true on the cloud companion. Read role and capabilities instead. */
   cloud?: boolean;
   /** Which server answered: the Mac (leader, mac), the companion (replica, cloud) or a host replica (replica, host). */
   role?: 'leader' | 'replica';
   placement?: 'mac' | 'host' | 'cloud';
+  /**
+   * The doors and jobs this server offers (src/core/capabilities.ts, sent as `serverCapabilities`
+   * by src/web/server-facts.ts); absent on an older server.
+   */
+  serverCapabilities?: string[];
   build?: BuildInfo | null;
 }
 
@@ -151,17 +157,47 @@ export function peekMacAccess(): boolean | null {
   return typeof _facts?.macAccess === 'boolean' ? _facts.macAccess : null;
 }
 
+/** A capability a server may offer (src/core/capabilities.ts). */
+export type ServerCapability = 'public-door' | 'bridge-door' | 'cloud-exec' | 'backup-leader';
+
+/** What an older companion offered before it named its capabilities: all of them. */
+const COMPANION_CAPABILITIES: readonly ServerCapability[] = ['public-door', 'bridge-door', 'cloud-exec', 'backup-leader'];
+
 /**
- * Whether this server is a cloud replica (WALNUT_CLOUD_MODE=1). A replica has
- * no CLI and no local daemon, so surfaces that would start local work (e.g.
- * "Build a plugin") hide their action and point at the Mac instead. Errors
- * resolve false so the primary console never loses the affordance to a flaky fetch.
- * `strict: true` rejects instead, for a caller that caches the answer and must
- * not cache a failure as "not a replica" (useIsCloudReplica).
+ * Who answered GET /api/config: a replica (its leader is elsewhere) or the leader, and
+ * what it offers. A host replica forwards this route to the Mac while the Mac answers,
+ * so `replica` is true there only while the replica answers alone; the companion
+ * answers it itself, so it reads replica always, as it did when the web asked `cloud`.
  */
-export function fetchIsCloudReplica(opts?: { strict?: boolean }): Promise<boolean> {
-  if (opts?.strict) return serverFacts().then(f => f.cloud === true);
-  return selectFact(f => f.cloud === true, false);
+export interface ServerRoleFacts {
+  replica: boolean;
+  capabilities: readonly string[];
+}
+
+const LEADER_ROLE_FACTS: ServerRoleFacts = Object.freeze({ replica: false, capabilities: Object.freeze([]) as readonly string[] });
+
+/** Read the facts; a server older than `role` or `serverCapabilities` is read from `cloud`. */
+export function roleFactsOf(f: Pick<ServerFacts, 'cloud' | 'role' | 'serverCapabilities'> | null | undefined): ServerRoleFacts {
+  if (!f) return LEADER_ROLE_FACTS;
+  const replica = f.role === 'replica' || f.role === 'leader' ? f.role === 'replica' : f.cloud === true;
+  const capabilities = Array.isArray(f.serverCapabilities)
+    ? f.serverCapabilities.filter((c): c is string => typeof c === 'string')
+    : f.cloud === true ? COMPANION_CAPABILITIES : [];
+  return { replica, capabilities };
+}
+
+/**
+ * The server's role as of now: the shared GET (dropped on every reconnect), never the
+ * page-lifetime facts above, because a host replica's answer changes when it hands the
+ * page over (4001/4002) without a reload. `fresh` drops a shared answer first.
+ * Errors resolve the leader's facts so the Mac never loses an affordance to a flaky
+ * fetch; `strict: true` rejects instead, for a caller that keeps the answer
+ * (api/server-role.ts) and must not keep a failure as "the leader".
+ */
+export function fetchServerRole(opts?: { strict?: boolean; fresh?: boolean }): Promise<ServerRoleFacts> {
+  if (opts?.fresh) invalidateSharedGet(CONFIG_URL);
+  const p = fetchConfigResponse<ServerFacts>().then(roleFactsOf);
+  return opts?.strict ? p : p.catch(() => LEADER_ROLE_FACTS);
 }
 
 /** Build identity for the Settings footer line. */

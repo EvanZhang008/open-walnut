@@ -37,7 +37,9 @@ import { CLOUD_MODE, LOG_DIR, NOTES_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { answerJoin, closeJoin, joinedReceiptOf, offerJoin, openJoin, type JoinOffer } from './api-v1-join.js'
 import { listConversations, createConversation } from '../../core/conversations.js'
-import { followerKind, isCompanion } from '../../core/server-role.js'
+import { followerKind, isCompanion, isFollower } from '../../core/server-role.js'
+import { hasCapability } from '../../core/capabilities.js'
+import { serverFacts } from '../server-facts.js'
 import { enqueueAgentTurn, getQueueStatus } from '../agent-turn-queue.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
@@ -184,57 +186,64 @@ apiV1Router.post('/devices/self', async (req: Request, res: Response, next: Next
 const V1_CAPABILITIES: readonly string[] = ['asks', 'host-exec-pinned-v1']
 
 apiV1Router.get('/status', async (_req: Request, res: Response) => {
-  // mode: LIVE = talking to the primary (Mac at home); REPLICA = the cloud
-  // companion serving synced data. Per-session talk capability is signalled by
-  // bridgeHosts (additive) — daemons dial the cloud box directly, so a REPLICA
-  // can still relay sends/streams for hosts listed there.
+  // mode: LIVE = talking to the leader (the Mac); REPLICA = a replica answering
+  // from its copies (the cloud companion, or a host replica while the Mac is away:
+  // while the Mac answers, a host replica forwards this read to it).
+  // Per-session talk capability is signalled by bridgeHosts (additive) on a box
+  // daemons dial into, so it can still relay sends/streams for hosts listed there.
   let lastSyncAt: string | null = null
   // The ASYNC twin: the phone polls this route, and the sync variant spawns two
   // blocking `git` children whenever its 30s cache is cold — one of those freezes
   // every other route with it.
   try { lastSyncAt = await getLastSyncAtAsync() } catch { /* git unavailable — omit */ }
+  const bridgeDoor = hasCapability('bridge-door')
+  const execCap = hasCapability('cloud-exec')
   let bridgeHostsList: Array<{ hostAlias: string; since: number }> | undefined
-  if (CLOUD_MODE) {
+  if (bridgeDoor) {
     try {
       const { bridgeHosts } = await import('../ws/bridge-registry.js')
       bridgeHostsList = bridgeHosts().map((b) => ({ hostAlias: b.hostAlias, since: b.since }))
     } catch { /* registry unavailable — omit */ }
   }
-  // Can this companion RUN sessions itself (cloud.exec), and if not, why? A
-  // feature that is off because nobody configured it and one that is off because
-  // its config is unusable are different problems, and only the box knows which.
-  let cloudExec: Record<string, unknown> | undefined
-  if (CLOUD_MODE) {
+  // Can this box RUN sessions itself (cloud.exec), and if not, why? A feature
+  // that is off because nobody configured it and one that is off because its
+  // config is unusable are different problems, and only the box knows which.
+  // Read whenever the box has either door it decides (cloud exec, the daemon tunnel).
+  let exec: Record<string, unknown> | undefined
+  if (bridgeDoor || execCap) {
     try {
       const { cloudExecStatus } = await import('../../core/cloud-exec.js')
       const { getConfig } = await import('../../core/config-manager.js')
-      cloudExec = cloudExecStatus(await getConfig(), true) as unknown as Record<string, unknown>
+      exec = cloudExecStatus(await getConfig(), execCap) as unknown as Record<string, unknown>
     } catch { /* config unreadable — omit rather than claim a posture */ }
   }
+  const cloudExec = execCap ? exec : undefined
   // Can the paired Mac host its own sessions here through /daemon-tunnel? The
   // key's PRESENCE is the capability (an older build lacks the route), and
   // `enabled` follows the same operator switch as cloud exec. The Mac reads it
   // to show or grey its "Cloud" host (core/hosts/cloud-box-probe.ts).
-  const daemonTunnel = CLOUD_MODE
-    ? (cloudExec
-      ? { enabled: cloudExec.enabled === true, ...(cloudExec.enabled === true ? {} : { reason: cloudExec.reason }) }
+  const daemonTunnel = bridgeDoor
+    ? (exec
+      ? { enabled: exec.enabled === true, ...(exec.enabled === true ? {} : { reason: exec.reason }) }
       : { enabled: false, reason: 'config_unreadable' })
     : undefined
-  // Could this companion answer a text chat turn itself when the primary is
-  // provably unreachable? The fallback's own predicate (cloudChatCapability), so
-  // what the phone is told and what a turn then does cannot disagree.
+  // Could this box answer a text chat turn itself when the leader is provably
+  // unreachable? The fallback's own predicate (cloudChatCapability), so what the
+  // phone is told and what a turn then does cannot disagree.
   let cloudChat: 'available' | 'unavailable' | undefined
-  if (CLOUD_MODE) {
+  if (execCap) {
     try {
       cloudChat = (await cloudChatCapability()).kind === 'run' ? 'available' : 'unavailable'
     } catch { /* cannot tell: omit rather than guess */ }
   }
   res.json({
-    mode: CLOUD_MODE ? 'REPLICA' : 'LIVE',
-    cloud: CLOUD_MODE,
+    mode: isFollower() ? 'REPLICA' : 'LIVE',
+    cloud: isCompanion(),
     version: getVersion(),
     serverTime: new Date().toISOString(),
     capabilities: V1_CAPABILITIES,
+    // What this server is, so a client stops inferring it from `cloud` and `mode` (additive).
+    ...serverFacts(),
     ...(lastSyncAt ? { lastSyncAt } : {}),
     ...(bridgeHostsList ? { bridgeHosts: bridgeHostsList } : {}),
     ...(cloudExec ? { cloudExec } : {}),
@@ -249,7 +258,7 @@ apiV1Router.get('/status', async (_req: Request, res: Response) => {
 // immediate re-poll instead of the last timer tick. Additive; REPLICA-only
 // content (a LIVE box answers healthy with a note).
 apiV1Router.get('/canary', async (req: Request, res: Response) => {
-  if (!CLOUD_MODE) {
+  if (!hasCapability('cloud-exec')) {
     res.json({ healthy: true, note: 'primary box — sends are local, no relay path to monitor' })
     return
   }
@@ -965,7 +974,7 @@ async function laneMessagesForConversation(
   // (relayMessagesToPrimary). Structural guard, not just a caller convention: a
   // replica answering here would report "no lane" for every web-sent
   // conversation, which is exactly the empty-history bug.
-  if (CLOUD_MODE) return null
+  if (isFollower()) return null
   const bail = deadline(LANE_TRANSCRIPT_DEADLINE_MS)
   try {
     const { personalAiLaneKey } = await import('../../core/sessions/personal-ai-lane.js')
@@ -1015,7 +1024,7 @@ async function laneMessagesForConversation(
 async function chatEarlierThanSession(
   sessionId: string,
 ): Promise<{ agentId: string; conversationId: string; messages: ApiV1Message[] } | 'degraded' | null> {
-  if (CLOUD_MODE) return null
+  if (isFollower()) return null
   const { getSessionByClaudeId, listSessionsByLane } = await import('../../core/session-tracker.js')
   const { parseLaneKey } = await import('../../core/sessions/personal-ai-lane.js')
   const record = await getSessionByClaudeId(sessionId)
@@ -3839,7 +3848,7 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
     // alias by unionOwnedSessions: their stored host is '', which downstream
     // means "the primary box" and would route their sends to the wrong machine.
     let ownRows: Array<Record<string, unknown> & { id: string }> = []
-    if (CLOUD_MODE) {
+    if (hasCapability('cloud-exec')) {
       try {
         const { cloudExecActive } = await import('../../core/cloud-owned-session.js')
         if (await cloudExecActive()) {

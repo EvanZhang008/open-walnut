@@ -1,5 +1,5 @@
 import { log } from '../logging/index.js';
-import { CLOUD_MODE, CONFIG_FILE, WALNUT_HOME } from '../constants.js';
+import { CONFIG_FILE, WALNUT_HOME } from '../constants.js';
 import {
   VALID_PRIORITIES,
   type Config,
@@ -11,7 +11,7 @@ import { KNOWN_PROVIDERS } from '../model/providers/defaults.js';
 import { scanSshConfig } from './ssh-config-scanner.js';
 import { realSshReachAllowed } from '../lib/real-ssh-guard.js';
 import { injectCloudBoxHost, withoutCloudBoxHost } from './hosts/cloud-box-host.js';
-import { isCompanion, isHostReplicaProgram } from './server-role.js';
+import { isFollower, isHostReplicaProgram } from './server-role.js';
 import { COMPANION_ALIAS, migrateLegacyCompanionKeep } from './replication/companion-keep.js';
 import { applyFoundHostAnswers, askingAboutFoundHosts, mergeFoundHosts } from './hosts/found-hosts.js';
 import { noteRequestTagConfig } from './sessions/request-tag.js';
@@ -250,7 +250,7 @@ export async function getConfig(): Promise<Config> {
     await mergeSshDiscoveredHosts(config);
     // The paired cloud box, reached over the daemon tunnel (in memory only:
     // saveConfig / updateConfig strip it again, see withoutCloudBoxHost).
-    injectCloudBoxHost(config, CLOUD_MODE);
+    injectCloudBoxHost(config, isFollower());
     // A backup answering for a file that does not parse runs the system on the
     // last good settings, but says nothing about what the user's newest text
     // holds: a caller that acts on something being absent must not act on it.
@@ -543,7 +543,7 @@ export async function seedConfigDefaults(): Promise<void> {
   await migrateConfigFileToProjectOnly();
   // A fresh install (nothing stored yet, and no one's work in the data home) asks the
   // first-run questions (core/first-run.ts). Read before the lock: the check is async.
-  const mayStamp = firstRunStampAllowed(process.env, isCompanion()) && !(await homeHoldsWork(WALNUT_HOME));
+  const mayStamp = firstRunStampAllowed(process.env, isFollower()) && !(await homeHoldsWork(WALNUT_HOME));
   try {
     await modifyConfigDoc((existing) => {
       const stamped = mayStamp && stampFirstRun(existing);

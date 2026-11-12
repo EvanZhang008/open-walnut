@@ -6,7 +6,7 @@ import { useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 import { SparklesIcon } from '@/components/icons/SparklesIcon';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { log } from '@/utils/log';
 import { mainQuickPlusRows } from './main-quick-plus-rows';
 
@@ -22,7 +22,7 @@ export function useMainQuickPlusActions(
   blocked?: string,
 ): PlusMenuAction[] {
   // Main lives with the primary: a replica cannot reach it.
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const mainId = task?.org_role === 'main' ? task.id : null;
   return useMemo(() => mainQuickPlusRows({
     mainId, replica, waitsOnUser, send, ...(blocked ? { blocked } : {}),

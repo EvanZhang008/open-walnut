@@ -18,7 +18,7 @@
  */
 
 import { Router, type Request, type Response } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { collectDiagnostics, type CollectOptions, type DiagnosticsReport } from '../../core/diagnostics/doctor.js'
 import { hostsSection, redactDiagnostics, renderDiagnosticsText } from '../../core/diagnostics/render.js'
 import { getWebAssetsReport } from './config.js'
@@ -28,14 +28,15 @@ import { isLocalOrigin } from '../../lib/caller-origin.js'
 
 /**
  * The facts only the server knows: the terminal's dtach answer and the served
- * web app. A replica keeps the read-only dtach probe: it must never install or
- * compile anything on the cloud box from a diagnostics request.
+ * web app. A replica (the cloud companion, a host replica) runs no dtach probe:
+ * resolving dtach may install or compile it, and a diagnostics request must never
+ * do that on a box the Mac does not own.
  */
-export function serverDiagnosticsOptions(cloudMode: boolean = CLOUD_MODE): CollectOptions {
+export function serverDiagnosticsOptions(replica: boolean = isFollower()): CollectOptions {
   return {
     collector: 'server',
     probes: {
-      ...(cloudMode ? {} : {
+      ...(replica ? {} : {
         dtach: async () => {
           // The terminal's own resolution (cached for the process once it succeeds).
           const { resolveLocalDtach, describeResolution } = await import('../terminal/dtach-provision.js')
@@ -50,14 +51,14 @@ export function serverDiagnosticsOptions(cloudMode: boolean = CLOUD_MODE): Colle
 }
 
 /**
- * Raw output only on a primary, for a request this machine trusts (local-trust.ts:
+ * Raw output only on the leader, for a request this machine trusts (local-trust.ts:
  * a loopback socket, no proxy header, its own Host and Origin) that also acts for
  * a caller on this Mac (request-origin.ts). The socket alone is not enough: a
  * tunnel arrives on loopback, and so does a self-call this server makes for a
  * remote host session or a paired client, which says so in x-walnut-origin.
  */
-export function rawAllowed(req: Request, cloudMode: boolean = CLOUD_MODE): boolean {
-  return !cloudMode && isLocalOrigin(requestOrigin(req))
+export function rawAllowed(req: Request, replica: boolean = isFollower()): boolean {
+  return !replica && isLocalOrigin(requestOrigin(req))
 }
 
 function flag(value: unknown, fallback: boolean): boolean {

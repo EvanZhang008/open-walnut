@@ -1564,7 +1564,8 @@ final class SessionConversationStore {
             }
             // Two shapes ride the same ladder, for the same reason — nothing is
             // wrong with the message and the condition clears on its own:
-            //  - 503 bridge_offline: the host's bridge is down right now.
+            //  - 503 bridge_offline / needs_leader: the host's bridge, or the Mac, is
+            //    not answering right now (APIError.isLeaderUnreachableForNow).
             //  - a TRANSPORT failure (timeout / connection lost): the request
             //    never got an answer. This was the 2026-08-20 gap — the phone
             //    abandoned two 30s POSTs mid-outage and jumped straight to the
@@ -1573,7 +1574,7 @@ final class SessionConversationStore {
             //    retry only because the bubble's `qm-*` id makes the send
             //    idempotent end-to-end (see SendRetryPolicy).
             if retryable {
-                if (error as? APIError)?.isBridgeOffline == true {
+                if (error as? APIError)?.isLeaderUnreachableForNow == true {
                     noteBridgeDown()
                 }
                 // Retryable: ride it out on the backoff ladder rather than
@@ -2983,8 +2984,8 @@ extension SessionConversationStore {
     /// A stop failed: the sentence says what to do, never a status code.
     static func stopFailureText(_ error: Error) -> String {
         guard let apiError = error as? APIError else { return error.localizedDescription }
+        if apiError.isLeaderUnreachableForNow { return "Can't reach your Mac to stop it. Try again in a moment." }
         switch apiError.code {
-        case "bridge_offline": return "Can't reach your Mac to stop it. Try again in a moment."
         case "not_found": return "This session no longer exists on the server."
         case "session_control_needs_upgrade":
             return "Your Mac needs a Walnut update before this phone can stop a turn."

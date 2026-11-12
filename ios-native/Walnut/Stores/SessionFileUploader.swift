@@ -124,14 +124,13 @@ enum SessionFileUploader {
         return false
     }
 
-    /// The answers a chunk retry can fix: no answer, the bridge down, a hop's
-    /// 502/504, and a 503 that says the machine behind the server is away for now
-    /// (`needs_leader`: the companion answers while the Mac is away and cannot
-    /// take the write; `host_reconnecting`: the host's link is coming back).
+    /// The answers a chunk retry can fix: no answer, the Mac away for now (a send's
+    /// own rule, `SendRetryPolicy.isRetryable`: `needs_leader`, `bridge_offline`), a
+    /// hop's 502/504, and a 503 `host_reconnecting` (the host's link is coming back).
     static func clearsOnItsOwn(_ error: Error) -> Bool {
         if SendRetryPolicy.isRetryable(error) { return true }
         if case .server(let status, let code, _, _, _) = error as? APIError {
-            if status == 503, code == "needs_leader" || code == "host_reconnecting" { return true }
+            if status == 503, code == "host_reconnecting" { return true }
             return status == 504 || (status == 502 && code == "upload_failed") || code == "primary_timeout"
         }
         return false

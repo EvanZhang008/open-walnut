@@ -18,7 +18,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { sendError } from './cloud-send-words.js'
 import { EventNames, bus } from '../../core/event-bus.js'
 import { getConfig } from '../../core/config-manager.js'
@@ -99,7 +99,7 @@ hintsV1Router.post('/hints/context', (req: Request, res: Response) => {
 
 hintsV1Router.put('/hints/:kind', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) return sendError(res, 501, 'not_supported_cloud', 'Message hints are changed on the primary box')
+    if (isFollower()) return sendError(res, 501, 'not_supported_cloud', 'Message hints are changed on the primary box')
     const kind = String(req.params.kind ?? '')
     let patch: MessageHintSettings
     try {
@@ -123,7 +123,7 @@ hintsV1Router.put('/hints/:kind', async (req: Request, res: Response, next: Next
 
 hintsV1Router.delete('/hints/:kind', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) return sendError(res, 501, 'not_supported_cloud', 'Message hints are changed on the primary box')
+    if (isFollower()) return sendError(res, 501, 'not_supported_cloud', 'Message hints are changed on the primary box')
     const kind = String(req.params.kind ?? '')
     const cfg = await getConfig().catch(() => null)
     const before = findHint(cfg, kind)

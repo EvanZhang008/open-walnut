@@ -50,9 +50,9 @@ import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
-import { isCompanion } from '../server-role.js'
 import { log } from '../../logging/index.js'
 import { writeJsonFile } from '../../utils/fs.js'
+import { hasCapability } from '../capabilities.js'
 
 /** `pairingHash`: the revoked pairing's token hash, so a drain can tell whether the revoke landed. */
 export type RevokeStep =
@@ -319,7 +319,7 @@ export function startRevokeQueue(): { stop: () => void } {
   timer.unref?.()
   let unhook: (() => void) | null = null
   let stopped = false
-  if (isCompanion()) {
+  if (hasCapability('public-door')) {
     void (async () => {
       try {
         const { addPrimaryBridgeConnectedHandler } = await import('../../web/ws/bridge-registry.js')

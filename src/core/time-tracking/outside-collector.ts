@@ -16,12 +16,13 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { CLOUD_MODE, IS_EPHEMERAL } from '../../constants.js';
+import { IS_EPHEMERAL } from '../../constants.js';
 import {
   clearFailedHelper, ensureHelper, helperFailure, resetHelperBuilds,
   type HelperSpec, type HelperUnavailable,
 } from '../helper-build.js';
 import { log } from '../../logging/index.js';
+import { role } from '../server-role.js';
 import { localDateKey } from './rollup.js';
 import { recordOutside, type OutsideRecord } from './outside-store.js';
 import { noteOutsideAttention, resetPresenceEvents } from './presence-events.js';
@@ -272,7 +273,8 @@ async function outsideEnabled(): Promise<boolean> {
  * a first start is still resolving) is a no-op.
  */
 export async function startOutsideCollector(): Promise<void> {
-  if (process.platform !== 'darwin' || CLOUD_MODE) return;
+  // Only the leader samples: a replica on a Mac host would watch that Mac with the owner's switches.
+  if (process.platform !== 'darwin' || role() !== 'leader') return;
   // An ephemeral server (tests, `dev:ephemeral`, demos) seeds the real config into
   // a throwaway data dir, so it would inherit `enabled: true` and spawn its own
   // sampler — N dev servers meant N helper pairs on the machine, each firing Apple

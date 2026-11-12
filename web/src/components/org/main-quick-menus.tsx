@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { SparklesIcon } from '@/components/icons/SparklesIcon';
 import type { ProjectMenuExtra } from '@/components/tasks/ProjectHeaderMenus';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { log } from '@/utils/log';
 import { askMain, type AskMainResult } from './ask-main';
 import { MAIN_QUICK_ACTIONS_NOTE, quickActionMessage, quickActionsFor, type MainQuickActionId } from './main-quick-actions';
@@ -28,7 +28,7 @@ export function useAskMainAbout(onSent: (result: AskMainResult) => void): {
   itemsFor: (project: string) => ProjectMenuExtra[];
   status: ReactNode;
 } {
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const [state, setState] = useState<AskState>({ kind: 'idle' });
   const inFlight = useRef(false);
   const mounted = useRef(true);

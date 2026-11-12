@@ -34,12 +34,13 @@
 import fs from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { CLOUD_MODE, TMP_DIR, WALNUT_HOME } from '../../constants.js'
+import { TMP_DIR, WALNUT_HOME } from '../../constants.js'
 import { createSubsystemLogger } from '../../logging/subsystem.js'
 import type { PluginStorageDeclaration } from '../integration-types.js'
 import type { Disposable } from './disposable.js'
 import { SYNCED_FILE_EXTENSIONS, SYNCED_FILE_MAX_BYTES, SYNCED_FILES_DIR, SYNCED_REFUSED_FOLDERS } from './plugin-file-rules.js'
 import { PluginStorage } from './plugin-storage.js'
+import { isFollower } from '../server-role.js'
 
 export { SYNCED_FILE_EXTENSIONS, SYNCED_FILE_MAX_BYTES }
 /** A plugin's synced area in all, unless its manifest asks for more. */
@@ -226,7 +227,7 @@ export class SyncedFileArea implements Disposable {
     this.dir = options.root ?? syncedFilesRoot(options.pluginId)
     this.pendingRoot = options.pendingRoot ?? syncedPendingRoot(options.pluginId)
     this.cap = options.cap
-    this.replica = options.replica ?? CLOUD_MODE
+    this.replica = options.replica ?? isFollower()
     this.intervalMs = options.publishIntervalMs ?? SYNCED_PUBLISH_INTERVAL_MS
     this.minDelayMs = options.minDelayMs ?? SYNCED_PUBLISH_MIN_DELAY_MS
     this.now = options.now ?? Date.now

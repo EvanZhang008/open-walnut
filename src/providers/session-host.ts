@@ -25,7 +25,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { CLOUD_MODE, IS_EPHEMERAL } from '../constants.js';
+import { IS_EPHEMERAL } from '../constants.js';
 import { log } from '../logging/index.js';
 import { withFileLock } from '../utils/file-lock.js';
 import { findDesktopApp, findDesktopAppWith, realHome } from './desktop-app.js';
@@ -42,6 +42,7 @@ import {
   type SessionHostIdentity,
   type SessionHostUnavailable,
 } from './session-host-core.js';
+import { isFollower } from '../core/server-role.js';
 
 async function hashFile(target: string): Promise<string> {
   const hash = createHash('sha256');
@@ -121,7 +122,7 @@ export async function approveUnderSessionHost(argv: readonly string[]): Promise<
 > {
   if (argv.length === 0 || !path.isAbsolute(argv[0]!)) return { ok: false, reason: 'bad_argv', detail: 'argv[0] must be an absolute path' };
   if (process.platform !== 'darwin') return { ok: false, reason: 'not_macos' };
-  if (CLOUD_MODE) return { ok: false, reason: 'cloud' };
+  if (isFollower()) return { ok: false, reason: 'cloud' };
   if (process.env.WALNUT_SESSION_HOST === '0') return { ok: false, reason: 'disabled' };
   const home = realHome();
   if (!home) return { ok: false, reason: 'not_installed', detail: 'no passwd home for this user' };
@@ -161,7 +162,7 @@ export async function readSessionHostIdentity(executable: string): Promise<Sessi
 function blockedHere(input: { daemonDir: string; prodDaemonDir: string }): SessionHostUnavailable | null {
   return sessionHostUnavailableReason({
     platform: process.platform,
-    cloudMode: CLOUD_MODE,
+    cloudMode: isFollower(),
     ephemeral: IS_EPHEMERAL,
     daemonDir: input.daemonDir,
     prodDaemonDir: input.prodDaemonDir,

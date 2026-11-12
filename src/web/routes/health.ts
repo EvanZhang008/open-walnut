@@ -18,7 +18,7 @@
 
 import fs from 'node:fs'
 import { Router, type Request, type Response } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { requireThisMachine } from '../middleware/health-access.js'
 import { GENERIC_CHARACTERISTICS } from '../../core/health/catalog.js'
@@ -88,7 +88,8 @@ type Reader = (req: Request) => Promise<Record<string, unknown>>
 
 function route(name: string, empty: () => Record<string, unknown>, read: Reader) {
   return async (req: Request, res: Response): Promise<void> => {
-    if (CLOUD_MODE) {
+    // A replica stores no Apple Health data (it is kept on the Mac).
+    if (isFollower()) {
       res.status(501).json({ error: 'not_supported_cloud', message: 'Apple Health data lives on the primary box only' })
       return
     }

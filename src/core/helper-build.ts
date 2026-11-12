@@ -85,8 +85,9 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CLOUD_MODE, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js';
+import { IS_EPHEMERAL, WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
+import { isFollower } from './server-role.js';
 
 /**
  * Why this box cannot have a given helper. Null means fine, or not tried yet.
@@ -385,7 +386,7 @@ export function ensureHelper(spec: HelperSpec, sourceFile: string): Promise<stri
 }
 
 async function buildHelper(spec: HelperSpec, sourceFile: string): Promise<BuildOutcome> {
-  if (process.platform !== 'darwin' || CLOUD_MODE) return { bin: null, reason: 'not_macos' };
+  if (process.platform !== 'darwin' || isFollower()) return { bin: null, reason: 'not_macos' };
   // Before the cache lookup on purpose: even a helper that already sits in this temp
   // dir must not run, because running it is what asks the user for the permission.
   if (!nativeHelpersAllowed()) {

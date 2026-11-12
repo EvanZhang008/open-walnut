@@ -17,7 +17,7 @@ import {
   type HostGateBody, type HostGateCode, type HostProblem,
 } from '@open-walnut/host-problem';
 import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { markGateBarShown } from '@/utils/host-gate-shown';
 import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT } from '@/hooks/useHostActions';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
@@ -66,7 +66,7 @@ export function HostGateErrorBar({ gate, draftHost, label, onClear, onStartAnywa
   const alias = gate.body.host;
   const status = useHostStatus(alias);
   const actions = useHostActions(alias);
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const [readyUntil, setReadyUntil] = useState<number | null>(null);
   // While this bar speaks for the host, the compact banner above it stays quiet about it.
   useEffect(() => markGateBarShown(alias), [alias]);

@@ -15,8 +15,8 @@
  * saved, and the companion's own quick re-drains and sweep still run.
  */
 
-import { CLOUD_MODE } from '../constants.js'
 import { log } from '../logging/index.js'
+import { isFollower } from './server-role.js'
 
 /** The mobile-event kind the companion's events-v1 allowlist routes to the send queue. */
 export const SEND_PATH_READY_KIND = 'send-path-ready'
@@ -44,6 +44,6 @@ async function announce(host: string): Promise<void> {
 export function startSendPathAnnouncements(
   onHostConnected: (cb: (hostKey: string) => void) => () => void,
 ): () => void {
-  if (CLOUD_MODE) return () => {}
+  if (isFollower()) return () => {}
   return onHostConnected((hostKey) => { void announce(hostKey).catch(() => {}) })
 }

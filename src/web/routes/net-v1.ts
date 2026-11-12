@@ -24,7 +24,8 @@
 import fs from 'node:fs'
 import crypto from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { isCompanion } from '../../core/server-role.js'
+// The host network's door is the public door's (core/boot-policy.ts row host-network-door).
+import { bootPolicy } from '../../core/boot-policy.js'
 import { log } from '../../logging/index.js'
 import {
   NetStoreError, inviteStatus, cancelInvite, isMember, listMembers, makeInvite, peekInvite, redeemInvite, removeMember, restoreHostMember, setMacMember, validNetId,
@@ -94,7 +95,7 @@ async function owner(req: Request): Promise<{ ok: true } | { ok: false; status: 
 function guard(fn: (req: Request, res: Response) => Promise<void>, opts: { ownerOnly: boolean }) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!isCompanion()) return fail(res, 404, 'not_companion', 'The host network is kept by the cloud companion')
+      if (!bootPolicy('host-network-door')) return fail(res, 404, 'not_companion', 'The host network is kept by the cloud companion')
       if (opts.ownerOnly) {
         const o = await owner(req)
         if (!o.ok) return fail(res, o.status, o.code, o.error)
@@ -226,7 +227,7 @@ netV1Router.post('/net/relay-access', guard(async (req, res) => {
  */
 async function joinPage(req: Request, res: Response, next: NextFunction, windows: boolean): Promise<void> {
   try {
-    if (!isCompanion()) return next()
+    if (!bootPolicy('host-network-door')) return next()
     // A refusal is a script that says why, sent as 200: `curl -f` prints only its own
     // error for any other status, and the user would never read the reason. In PowerShell
     // it writes and stops without `exit`, which would close the user's window.

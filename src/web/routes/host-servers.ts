@@ -16,7 +16,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { getConfig, updateHostServerConfig } from '../../core/config-manager.js'
 import { MaskedValueError, maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { listExposeProviders } from '../../core/expose/registry.js'
@@ -64,7 +64,7 @@ async function hostEntry(hostKey: string) {
 }
 
 hostServersRouter.use((_req, res, next) => {
-  if (CLOUD_MODE) { res.status(404).json({ error: 'not_found' }); return }
+  if (isFollower()) { res.status(404).json({ error: 'not_found' }); return }
   next()
 })
 

@@ -34,6 +34,10 @@
  *  - API keys are made and removed by this machine itself, or on a companion by
  *    the device with the owner's rights (apiKeyDecision); a key belongs to the
  *    device that made it and stops working when that device's pairing goes.
+ *
+ * `pairsHere` in these rules: this server keeps its own pairing registry away from the
+ * Mac, with its own recorded owner (the companion: callers pass isCompanion(), a stored
+ * fact of that registry, never a capability that a box could turn off).
  */
 
 import { isBrowserSignInRecord, isPhoneRecord, recordForToken, tokenMatchesHash, type CompanionOwner, type DeviceRecord, type DeviceRegistry } from './device-store.js'
@@ -77,15 +81,15 @@ const API_KEY_CANNOT_PAIR = 'An API key cannot pair, re-pair or remove devices.'
 export const SELF_CALL_CANNOT_PAIR = 'Only this Mac itself can pair new devices, in Settings › Phones & Cloud on this Mac.'
 
 /** The sentence a caller hears when it may not remove or re-pair `name`. */
-export function deviceChangeRefusal(name: string, cloudMode: boolean): string {
-  return cloudMode
+export function deviceChangeRefusal(name: string, pairsHere: boolean): string {
+  return pairsHere
     ? `Only ${name} itself or the Mac this cloud companion belongs to can remove or re-pair ${name}.`
     : `Only ${name} itself or this Mac can remove or re-pair ${name}.`
 }
 
 /** Said when a paired caller asks to add, re-pair or remove a computer's connection (a machine credential). */
-export function machineTargetRefusal(name: string, cloudMode: boolean): string {
-  return cloudMode
+export function machineTargetRefusal(name: string, pairsHere: boolean): string {
+  return pairsHere
     ? `Only the Mac this cloud companion belongs to can add or remove ${name}.`
     : `Only this Mac itself can add or remove ${name}.`
 }
@@ -124,9 +128,9 @@ export function ownsMachineCredentials(devices: readonly DeviceRecord[], device:
  * machine credentials here, as builds from before owners were recorded decided.
  * Never a phone, whatever the file says.
  */
-export function hasOwnerRights(reg: DeviceRegistry, device: DeviceRecord, cloudMode: boolean): boolean {
+export function hasOwnerRights(reg: DeviceRegistry, device: DeviceRecord, pairsHere: boolean): boolean {
   if (device.kind === 'machine' || isPhoneRecord(device) || isBrowserSignInRecord(device)) return false
-  const recorded = cloudMode ? ownerRecord(reg) : undefined
+  const recorded = pairsHere ? ownerRecord(reg) : undefined
   return recorded ? recorded === device : ownsMachineCredentials(reg.devices, device)
 }
 
@@ -170,7 +174,7 @@ export function deviceChangeDecision(
   actor: DeviceActor,
   change: DeviceChange,
   name: string,
-  cloudMode: boolean,
+  pairsHere: boolean,
 ): DeviceChangeDecision {
   if ('local' in actor) return { ok: true, by: 'local' }
   if ('apiKey' in actor) return refuse(403, 'api_key_cannot_pair', API_KEY_CANNOT_PAIR)
@@ -178,18 +182,18 @@ export function deviceChangeDecision(
   if ('onBehalfOf' in actor) {
     return change === 'create'
       ? refuse(403, 'device_change_refused', SELF_CALL_CANNOT_PAIR)
-      : refuse(403, 'device_change_refused', deviceChangeRefusal(name, cloudMode))
+      : refuse(403, 'device_change_refused', deviceChangeRefusal(name, pairsHere))
   }
   const me = recordForToken(reg.devices, actor.token)
   const target = reg.devices.find((d) => d.name === name)
-  if (target?.kind === 'machine') return refuse(403, 'device_change_refused', machineTargetRefusal(name, cloudMode))
+  if (target?.kind === 'machine') return refuse(403, 'device_change_refused', machineTargetRefusal(name, pairsHere))
   if (me && me.kind !== 'machine' && change === 'create') {
     if (isPhoneRecord(me)) return refuse(403, 'phone_cannot_pair', PHONE_CANNOT_PAIR)
     return isBrowserSignInRecord(me) ? refuse(403, 'browser_cannot_pair', BROWSER_CANNOT_PAIR) : { ok: true, by: 'new' }
   }
   if (me && target && me === target) return { ok: true, by: 'self' }
-  if (me && target && hasOwnerRights(reg, me, cloudMode)) return { ok: true, by: 'owner' }
-  return refuse(403, 'device_change_refused', deviceChangeRefusal(name, cloudMode))
+  if (me && target && hasOwnerRights(reg, me, pairsHere)) return { ok: true, by: 'owner' }
+  return refuse(403, 'device_change_refused', deviceChangeRefusal(name, pairsHere))
 }
 
 /** Said to a caller that asked this Mac to change devices on its cloud companion. */
@@ -231,11 +235,11 @@ export type ApiKeyDecision = { ok: true; deviceId?: string } | { ok: false; refu
  * bound to the owner's id, device-auth.ts apiKeyMaker). Never a phone, another
  * device, or a key.
  */
-export function apiKeyDecision(reg: DeviceRegistry, actor: DeviceActor, cloudMode: boolean): ApiKeyDecision {
+export function apiKeyDecision(reg: DeviceRegistry, actor: DeviceActor, pairsHere: boolean): ApiKeyDecision {
   if ('local' in actor) return { ok: true }
   const me = 'token' in actor ? recordForToken(reg.devices, actor.token) : undefined
-  if (cloudMode && me?.id && !isPhoneRecord(me) && hasOwnerRights(reg, me, cloudMode)) return { ok: true, deviceId: me.id }
-  const sentence = cloudMode
+  if (pairsHere && me?.id && !isPhoneRecord(me) && hasOwnerRights(reg, me, pairsHere)) return { ok: true, deviceId: me.id }
+  const sentence = pairsHere
     ? 'Only the Mac this cloud companion belongs to can create or remove API keys.'
     : 'Only this Mac itself can create or remove API keys.'
   return { ok: false, refusal: new DeviceChangeRefused(403, 'api_keys_refused', sentence) }

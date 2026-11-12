@@ -18,7 +18,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { MaskedValueError, maskSecretShapes, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { getExposeProvider, listExposeProviders } from '../../core/expose/registry.js'
@@ -40,7 +40,7 @@ const MAX_OPTION_LENGTH = 200
  * Retry). A paired device, a session on another host and a replica stay out.
  */
 export function isOnThisMachine(req: Request): boolean {
-  if (CLOUD_MODE) return false
+  if (isFollower()) return false
   return isLocalOrigin(requestOrigin(req))
 }
 

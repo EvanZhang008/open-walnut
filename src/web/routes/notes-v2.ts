@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { PARTIAL_SEARCH, replicaNotesReads } from '../../replica/notes-routes.js'
 import { companionNoteWrites } from '../../replica/companion-note-writes.js'
-import { NOTES_DIR, CLOUD_MODE } from '../../constants.js'
+import { NOTES_DIR } from '../../constants.js'
 import { companionSearchReady } from '../../core/search/companion-ready.js'
 import { isFollower } from '../../core/server-role.js'
 import { computeContentHash } from '../../utils/file-ops.js'
@@ -469,10 +469,10 @@ notesV2Router.get('/attachment', async (req: Request, res: Response, next: NextF
 // resolves and returns the absolute path (for Copy path — clipboard lives in
 // the browser). Path is vault-contained (resolveSafePath /
 // resolveAttachmentPath) — never arbitrary.
-// Local-only: rejected in cloud mode where there's no desktop to open into.
+// Local-only: rejected on any replica, where there's no desktop of the person's to open into.
 notesV2Router.post('/reveal', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) { res.status(400).json({ error: 'Not available in cloud mode' }); return }
+    if (isFollower()) { res.status(400).json({ error: 'Not available in cloud mode' }); return }
     const { path: notePath, mode } = req.body ?? {}
     if (typeof notePath !== 'string' || !['finder', 'app', 'vscode', 'path'].includes(mode)) {
       res.status(400).json({ error: 'path and mode (finder|app|vscode|path) are required' })

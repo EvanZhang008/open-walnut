@@ -749,7 +749,7 @@ struct NewSessionChatView: View {
             DiskCache.save(opts, key: Self.optionsCacheKey)
             apply(opts)
         } catch let APIError.server(_, code, msg, _, _)
-            where code == "session_launch_needs_upgrade" || code == "bridge_offline" {
+            where code == "session_launch_needs_upgrade" || APIError.isLeaderUnreachableForNow(code: code) {
             // Self-healing relay states: keep the cached form usable, say the
             // honest thing only when nothing is on screen.
             if options == nil { loadFailed = msg }

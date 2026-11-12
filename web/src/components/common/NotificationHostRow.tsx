@@ -21,7 +21,7 @@ import { useRef, type ReactNode } from 'react';
 import { BANNER_READINESS_KINDS, firstSentence, hostConnectedWords, hostFlapOf, hostProblemOf } from '@open-walnut/host-problem';
 import type { DaemonHealth } from '@/hooks/useSystemHealth';
 import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { hostStatusText, isHostConnecting } from '@/utils/host-connect';
 import { hostRowFor, type BannerRow } from '@/utils/attention-banner-model';
 import { useUserRetryingHosts } from '@/utils/host-user-retrying';
@@ -92,7 +92,7 @@ export interface NotificationHostRowProps {
 
 export function NotificationHostRow({ daemon, disabled, onOpenSettings, onNavigate }: NotificationHostRowProps): ReactNode {
   const status = useHostStatus(daemon.host);
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const userRetrying = useUserRetryingHosts();
   // The row this host showed last here: through an attempt it stays, reading the attempt (G9).
   const prev = useRef<BannerRow | null>(null);

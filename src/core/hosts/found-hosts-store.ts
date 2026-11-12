@@ -121,11 +121,9 @@ async function defaultDeps(): Promise<SettleFoundHostsDeps> {
   }
 }
 
-/** Should this process decide found hosts? Only the server that owns config.yaml. */
+/** Should this process decide found hosts? Only the leader, the server that owns config.yaml. */
 export async function settlesFoundHosts(): Promise<boolean> {
-  const { isCompanion, isHostReplicaProgram } = await import('../server-role.js')
-  if (isCompanion()) return false
-  return !isHostReplicaProgram()
+  return !(await import('../server-role.js')).isFollower()
 }
 
 /** What Walnut recorded about hosts. Throws when a store cannot be read (the caller then decides nothing). */
@@ -211,7 +209,7 @@ export type AnswerFoundHostResult =
  */
 export async function answerFoundHost(host: string, answer: unknown): Promise<AnswerFoundHostResult> {
   if (answer !== 'yes' && answer !== 'not_now') return { ok: false, status: 400, error: 'answer is "yes" or "not_now"', code: 'bad_answer' }
-  if ((await import('../server-role.js')).isCompanion()) return { ok: false, status: 409, error: 'Answer this on the computer that keeps the hosts.', code: 'not_here' }
+  if ((await import('../server-role.js')).isFollower()) return { ok: false, status: 409, error: 'Answer this on the computer that keeps the hosts.', code: 'not_here' }
   const { getConfig, migrateStoredConfig } = await import('../config-manager.js')
   const hosts = (await getConfig()).hosts ?? {}
   const def = Object.hasOwn(hosts, host) ? hosts[host] as FoundHostRow | undefined : undefined

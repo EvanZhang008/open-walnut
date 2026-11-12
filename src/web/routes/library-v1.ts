@@ -42,7 +42,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { SKILL_READ_ONLY_INSTALL } from '../../core/skill-errors.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
@@ -57,7 +57,7 @@ const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]*$/
 
 /** Agent writes land in machine-local config.yaml — refuse loudly on a REPLICA. */
 function agentWriteRefused(res: Response): boolean {
-  if (!CLOUD_MODE) return false
+  if (!isFollower()) return false
   sendError(res, 501, 'not_supported_cloud', 'Agent definitions live in the primary box\'s machine-local config (no replica write-back channel)')
   return true
 }

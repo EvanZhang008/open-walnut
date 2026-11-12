@@ -568,6 +568,33 @@ invariant.
 a stand-in via `requestedPath`. A dead-end error message in a file tree is a bug, not a
 diagnosis: degrade to the nearest existing directory plus "couldn't find X".
 
+### The cloud companion is a replica with capabilities, nothing more
+
+(2026-11-11, the user, translated: "the cloud companion has nothing special, it is just a replica server
+plus a public capability ... we must not maintain a pile of logic", then "it cannot go wrong next time".)
+A Walnut server is the **leader** (the Mac) or a **replica**. The cloud companion is a replica like
+the server on any host; what it offers on top is a set of **capabilities**, each a flag the box turns
+on (`src/core/capabilities.ts`: `public-door` phones pair, push and voice reach it from the internet;
+`bridge-door` daemons dial in; `cloud-exec` its own sessions; `backup-leader` it may stand in for the
+Mac). Walnut keeps ONE replica logic, never a second one for the companion:
+
+- **Never ask "am I the companion".** No new `CLOUD_MODE`, `process.env.WALNUT_CLOUD_MODE`,
+  `isCompanion()`, `followerKind() === 'companion'` or `placement() === 'cloud'` in a feature, on the
+  server or in a client. Ask what you mean instead: `isFollower()` / `role()` (this server is a
+  replica, its leader is elsewhere), `leaderAnswers()` (the leader answers now), `hasCapability(<name>)`
+  or a `bootPolicy` row (this box offers that door or job). A new optional feature of one box is a new
+  capability in `capabilities.ts`, on by default only where it ran before.
+- **Clients read the same way**: the web and the phone read `role`, `placement` and `capabilities` from
+  `GET /api/config` and `GET /api/v1/status` (and the leader presence headers), never `cloud: true` or
+  `mode: 'REPLICA'` as "this is the companion"; those two fields stay only for older clients.
+- **What may still differ is the link**: how a replica reaches the Mac (the bridge sockets for the
+  companion, its daemon link for a host). That lives in the link and front modules, not in features.
+- **The ratchet** `tests/core/companion-is-a-replica-ratchet.test.ts` counts every such read per file
+  in `src/`, `web/src/` and `ios-native/`, with why each one is still there (the companion's own front
+  and queues, which plan slice 5b of `docs/plan/walnut-companion-unified-replica.md` removes, a stored
+  value that names the companion, a fact a client is told). A new read fails it; a count may only
+  fall. Do not raise a row: convert the read.
+
 ### Remote Session Daemon (resilience model)
 
 **Topology:** walnut (Mac) ←ssh tunnel→ daemon (remote bun binary) ←spawn→ `claude -p` CLI. Goal: tunnel/daemon crashes don't lose sessions.
@@ -732,8 +759,9 @@ Consequences to keep in mind: killing a process is *never* a reliable way to sto
 
 The product is FOUR surfaces sharing one core: the **web console** (Mac,
 :3456), the **iOS app** (`ios-native/`, SwiftUI, talks the frozen `/api/v1`),
-the **cloud companion** (an EC2 instance you deploy, `WALNUT_CLOUD_MODE=1`
-REPLICA — same codebase, proxies to daemons over the `/bridge` WS), and the
+the **cloud companion** (an EC2 instance you deploy: a replica with capabilities, the same
+replica program as a host's, its daemons dialing in over the `/bridge` WS; see "The cloud companion
+is a replica with capabilities" above), and the
 **session daemon** (bun/node twins deployed to every exec host — Mac local +
 remote dev boxes — owning `claude` CLI processes so they survive tunnel/Mac
 death).

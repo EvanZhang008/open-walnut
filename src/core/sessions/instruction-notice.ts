@@ -36,7 +36,7 @@ import {
   noticeToldGeneration,
 } from './instruction-notice-flight.js';
 import { log } from '../../logging/index.js';
-import { isCompanion } from '../server-role.js';
+import { isFollower } from '../server-role.js';
 import { heldStatement, hookStatementVoid, statementBoundary } from './hook-statement.js';
 import { parseHinted } from '../hints/hint-format.js';
 import { isEnvelopeOnly, parseSessionEnvelopes } from '../../lib/history-session-envelope.js';
@@ -116,9 +116,9 @@ function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolea
   // Lines of USER.md past its budget are still the user's rules: never told as removed.
   const cut = currentUserProfile().cut;
   const found = dueChanges(current, parsedPrompt, told, views, cut?.length ? { 'user-profile': new Set(cut) } : {});
-  // The companion's copy of the config has no Reply language (config-allowlist.ts): there it is
+  // A replica's copy of the config has no Reply language (config-allowlist.ts): there it is
   // unknown, not gone, so a session it leads is never told the language rule stopped applying.
-  const due = found && isCompanion() ? { ...found, gone: found.gone.filter((g) => g.id !== 'reply-language') } : found;
+  const due = found && isFollower() ? { ...found, gone: found.gone.filter((g) => g.id !== 'reply-language') } : found;
   if (!due || (!due.plain.length && !due.blocks.length && !due.gone.length)) return null;
   // Walnut's own wording waits out the gap; a change to the user's profile or a role's
   // instructions (the user's or an agent's words for this session) goes at once, with the rest.

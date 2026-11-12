@@ -23,7 +23,7 @@ import type { HostActions } from '../../web/src/hooks/useHostActions'
 
 let clock = 1_000_000
 vi.mock('@/hooks/useHostStatus', () => ({ serverNow: () => clock }))
-vi.mock('@/api/config', () => ({ fetchIsCloudReplica: async () => false }))
+vi.mock('@/api/config', () => ({ fetchServerRole: async () => ({ replica: false, capabilities: [] }) }))
 
 const { RemoteHostReadiness, agoText } = await import('../../web/src/components/settings/sections/RemoteHostReadiness')
 const { FIX_NOTE_MS } = await import('../../web/src/utils/host-readiness')

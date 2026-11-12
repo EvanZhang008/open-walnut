@@ -17,13 +17,13 @@ import { hostProblemOf } from '@open-walnut/host-problem';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { RemoteHostReadiness } from './RemoteHostReadiness';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import '@/styles/host-picker-settings.css';
 
 export function RemoteHostDetail({ alias, name }: { alias: string; name?: string }) {
   const status = useHostStatus(alias);
   const actions = useHostActions(alias);
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const label = status?.label || name || alias;
   const problem = hostProblemOf(status, { replica });
 

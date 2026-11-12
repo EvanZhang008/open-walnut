@@ -9,11 +9,12 @@ import SwiftUI
 ///    per-session fact (`host::cwd`, empty host = the primary box, the Mac) and it
 ///    is PICKED at creation time (NewSessionChatView). Once the CLI is up it cannot
 ///    move, so in a live session's composer it is provenance, not a control.
-///  - **The main agent** runs wherever the box that answers runs. On the primary
-///    (`mode: LIVE`) that is the Mac. On the cloud companion (`mode: REPLICA`) the
-///    turn is RELAYED to the Mac whenever the Mac is reachable, so the Mac still
-///    answers; only when the Mac is out of reach can the cloud box answer on its
-///    own, and only if it has an engine for that (`cloudChat`).
+///  - **The main agent** runs wherever the box that answers runs. On the leader
+///    (the Mac) that is the Mac. On a replica (the cloud companion, or the Walnut
+///    server on a host) the turn is RELAYED to the Mac whenever the Mac is reachable,
+///    so the Mac still answers; only when the Mac is out of reach can the cloud box
+///    answer on its own, and only if it has an engine for that (`cloudChat`). A host
+///    replica has none: it refuses the turn until the Mac is back.
 ///
 /// THE RULE THE COPY FOLLOWS: the headline names the machine that computes the
 /// reply, never the network path. "Cloud · Mac connected" read as "it runs on the
@@ -44,28 +45,37 @@ enum ComposerHostProvenance {
         /// No status yet; `online` says whether the transport is up.
         case connecting
         /// The transport to the server is down.
-        case offline(ServerStatus.Mode?)
-        /// The Mac answers. `viaCloud` = reached through the cloud relay.
-        case mac(viaCloud: Bool)
-        /// A replica too old to report the Mac's bridge: the relay will TRY the Mac.
+        case offline(Server?)
+        /// The Mac answers. `relayed` = reached through a replica.
+        case mac(relayed: Bool)
+        /// A replica too old to say whether it reaches the Mac: the relay will TRY the Mac.
         case macUnknown
         /// The Mac is out of reach from the cloud companion; `cloudChat` is what
         /// the companion says about answering on its own (nil = it does not say).
         case macOffline(cloudChat: ServerStatus.CloudChat?)
+        /// The Mac is out of reach from the Walnut server on a host, which cannot
+        /// answer a chat turn itself.
+        case macOfflineFromHost
+    }
+
+    /// Which kind of server the phone talks to, by the server's own facts when it sends them.
+    enum Server: Equatable {
+        case mac, cloud, host
+
+        init(_ status: ServerStatus) {
+            self = !status.isReplica ? .mac : (status.isOnCloud ? .cloud : .host)
+        }
     }
 
     static func verdict(status: ServerStatus?, online: Bool) -> ChatVerdict {
         guard let status else { return online ? .connecting : .offline(nil) }
-        guard online else { return .offline(status.mode) }
-        switch status.mode {
-        case .live:
-            return .mac(viaCloud: false)
-        case .replica:
-            switch primaryReachability(status) {
-            case .reachable: return .mac(viaCloud: true)
-            case .unknown: return .macUnknown
-            case .offline: return .macOffline(cloudChat: status.cloudChat)
-            }
+        let server = Server(status)
+        guard online else { return .offline(server) }
+        if server == .mac { return .mac(relayed: false) }
+        switch primaryReachability(status) {
+        case .reachable: return .mac(relayed: true)
+        case .unknown: return .macUnknown
+        case .offline: return server == .cloud ? .macOffline(cloudChat: status.cloudChat) : .macOfflineFromHost
         }
     }
 
@@ -77,6 +87,7 @@ enum ComposerHostProvenance {
             case .connecting: return "Connecting…"
             case .offline: return "Offline"
             case .mac, .macUnknown: return "Mac"
+            case .macOfflineFromHost: return "Mac offline"
             case .macOffline(let cloudChat):
                 // Only a box that SAYS it can answer gets the Cloud headline.
                 return cloudChat == .available ? "Cloud" : "Mac offline"
@@ -94,16 +105,20 @@ enum ComposerHostProvenance {
             switch Self.verdict(status: status, online: online) {
             case .connecting:
                 return nil
-            case .offline(let mode):
-                switch mode {
-                case .live: return "Your Mac isn't responding right now."
-                case .replica: return "The cloud relay to your Mac isn't responding right now."
+            case .offline(let server):
+                switch server {
+                case .mac: return "Your Mac isn't responding right now."
+                case .cloud: return "The cloud relay to your Mac isn't responding right now."
+                case .host: return "The Walnut server between this phone and your Mac isn't responding right now."
                 case nil: return "Can't reach Walnut right now. Reconnecting."
                 }
             case .mac, .macUnknown:
                 // Healthy: the machine's name is the whole story. The relay path is
                 // not the user's business (2026-10-03: "Mac or Cloud, no more words").
                 return nil
+            case .macOfflineFromHost:
+                // The host replica refuses the turn (503 needs_leader); nothing answers it.
+                return "Your Mac isn't answering, so new messages can't go out until it's back."
             case .macOffline(let cloudChat):
                 switch cloudChat {
                 case .available:
@@ -132,8 +147,9 @@ enum ComposerHostProvenance {
         case .chat(let status, let online):
             switch Self.verdict(status: status, online: online) {
             case .connecting: return "arrow.triangle.2.circlepath"
-            case .offline(let mode): return mode == .live ? "laptopcomputer.slash" : "wifi.slash"
+            case .offline(let server): return server == .mac ? "laptopcomputer.slash" : "wifi.slash"
             case .mac, .macUnknown: return "laptopcomputer"
+            case .macOfflineFromHost: return "laptopcomputer.slash"
             case .macOffline(let cloudChat): return cloudChat == .available ? "cloud" : "laptopcomputer.slash"
             }
         case .session(let hostAlias, _):
@@ -148,28 +164,21 @@ enum ComposerHostProvenance {
         case .chat(let status, let online):
             switch Self.verdict(status: status, online: online) {
             case .connecting, .mac, .macUnknown: return false
-            case .offline, .macOffline: return true
+            case .offline, .macOffline, .macOfflineFromHost: return true
             }
         case .session:
             return false
         }
     }
 
-    // MARK: - Primary reachability (REPLICA only)
+    // MARK: - Primary reachability (replicas only)
 
-    enum PrimaryReachability { case reachable, offline, unknown }
+    typealias PrimaryReachability = ServerStatus.LeaderReach
 
-    /// Is the primary box's daemon dialled into this cloud companion?
-    ///
-    /// `bridgeHosts` is ADDITIVE and only present on a REPLICA (see the /status
-    /// route). The primary's own bridge registers under the reserved alias
-    /// `__local__`, so its presence is the one honest signal that the Mac is
-    /// currently reachable from the cloud. An ABSENT `bridgeHosts` key means the
-    /// server is too old to say (`.unknown`) — distinct from an empty list, which
-    /// means it can say and the answer is "nothing is connected".
+    /// Does this replica reach the Mac right now? The server's own `leader.answers`
+    /// when it sends it, else the companion's bridge list (see `ServerStatus.leaderReach`).
     static func primaryReachability(_ status: ServerStatus) -> PrimaryReachability {
-        guard let bridgeHosts = status.bridgeHosts else { return .unknown }
-        return bridgeHosts.contains { $0.hostAlias == "__local__" } ? .reachable : .offline
+        status.leaderReach
     }
 }
 

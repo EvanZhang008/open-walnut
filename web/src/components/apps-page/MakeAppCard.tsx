@@ -7,12 +7,13 @@
  * The by-hand route shows the scaffold command that works today: the plugin tools
  * are not on npm yet, so it runs from a clone of open-walnut.
  *
- * A cloud replica has no CLI and no daemon, so it gets no Build button there.
+ * A replica answering without the Mac gets no Build button: the build is the Mac's work.
  */
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { quickStartSession } from '@/api/sessions'
-import { fetchInstallDir, fetchIsCloudReplica } from '@/api/config'
+import { fetchInstallDir } from '@/api/config'
+import { useSettledServerRole } from '@/hooks/useServerRole'
 import { openSessionOnHome } from '@/utils/open-session'
 import { copyTextRobust } from '@/utils/clipboard'
 import { BUILD_CWD, buildPrompt } from '@/components/settings/build-plugin-prompt'
@@ -41,13 +42,11 @@ export function MakeAppCard() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Unknown until the server answers: no Build form flashes up on a replica.
-  const [cloud, setCloud] = useState<boolean | null>(null)
+  const role = useSettledServerRole()
+  const replica = role === null ? null : role.replica
   const [copied, setCopied] = useState(false)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  useEffect(() => {
-    void fetchIsCloudReplica().then(setCloud, () => setCloud(false))
-    return () => clearTimeout(copiedTimer.current)
-  }, [])
+  useEffect(() => () => clearTimeout(copiedTimer.current), [])
 
   const start = async () => {
     if (busy || !request.trim()) return
@@ -91,11 +90,11 @@ export function MakeAppCard() {
         Describe an app in one sentence
       </h3>
       <p className="apps-make-sub">
-        {cloud === true
+        {replica === true
           ? 'Building needs the Mac console; this replica can only browse.'
           : 'A Walnut session writes it as a plugin and loads it into your sidebar while you watch.'}
       </p>
-      {cloud === false && (
+      {replica === false && (
         <>
           <form
             className="apps-make-ask"

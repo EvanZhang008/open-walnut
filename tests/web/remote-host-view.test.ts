@@ -24,7 +24,7 @@ vi.mock('@/hooks/useHostStatus', () => ({
   seedHostStatus: () => {},
 }))
 vi.mock('@/api/hosts', () => ({ connectHost: async () => current, checkHostReadiness: async () => current }))
-vi.mock('@/api/config', () => ({ fetchIsCloudReplica: async () => replica }))
+vi.mock('@/api/config', () => ({ fetchServerRole: async () => ({ replica, capabilities: [] }) }))
 
 const { RemoteHostDetail } = await import('../../web/src/components/settings/sections/RemoteHostStatus')
 const { useLinkedHostRow } = await import('../../web/src/components/settings/sections/useLinkedHostRow')
@@ -155,7 +155,7 @@ describe('test server and replica (C24, C25)', () => {
   })
 })
 
-// Mounted after the replica test: useIsCloudReplica keeps the first answer it read.
+// Mounted after the replica test: the server role store keeps the first answer it read.
 describe('what a finished fix did', () => {
   // 2026-11-05 review: a finished install stayed on the row as a fourth status line for 15
   // minutes. The row says it for ROW_FIX_NOTE_MS (the receipt); Details keep it the 15 minutes.

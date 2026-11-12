@@ -37,8 +37,9 @@ struct OrgOpenNotice: Equatable, Identifiable {
 
     /// The words for a failed open. A task that is gone is not a network problem.
     static func failure(_ name: String, _ error: Error) -> String {
-        if case APIError.server(let status, _, _, _, _) = error {
-            if status == 501 { return "\(name) can be started only while your Mac is online." }
+        if let api = error as? APIError, case .server(let status, _, _, _, _) = api {
+            // A 501 from an older companion, or any replica's "this needs your Mac".
+            if status == 501 || api.isLeaderUnreachable { return "\(name) can be started only while your Mac is online." }
             if status == 404 { return missingChat }
         }
         return "Couldn't reach \(name): \(error.localizedDescription)"

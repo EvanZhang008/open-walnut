@@ -23,12 +23,12 @@
  * other — unpinning removes it from a board view, nothing else.
  */
 
-import { CLOUD_MODE } from '../constants.js';
 import { getConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { getPinnedTasks, updateTasksBulk } from './task-manager.js';
 import type { Task } from './types.js';
+import { isFollower } from './server-role.js';
 
 /**
  * Days a finished pin stays on the board. 3 is the shortest window that still
@@ -227,8 +227,8 @@ export async function sweepPinRetirement(
 ): Promise<PinRetirementReport> {
   const days = opts.days ?? resolvePinRetirementDays(await getConfig().catch(() => null));
   if (!Number.isFinite(days) || days <= 0) return emptyReport(days);
-  if (CLOUD_MODE) {
-    log.task.debug('pin retirement: skipped on cloud replica (primary owns task writes)');
+  if (isFollower()) {
+    log.task.debug('pin retirement: skipped on a replica (primary owns task writes)');
     return { ...emptyReport(days), disabled: false };
   }
 

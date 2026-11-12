@@ -5,12 +5,12 @@
  * Mac it would stand in for, never on the companion's own console.
  */
 import type { Config } from '@open-walnut/core';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { BackupLeaderGroup } from './BackupLeaderGroup';
 import { CompanionKeepGroup } from './CompanionKeepGroup';
 
 export function CloudWayExtras({ config, onSave }: { config: Config; onSave: (partial: Partial<Config>) => Promise<void> }) {
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   if (replica) return null;
   return (
     <div className="devices-way-panel" id="devices-way-panel-cloud" data-testid="devices-way-panel-cloud">

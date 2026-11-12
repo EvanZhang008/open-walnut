@@ -10,7 +10,7 @@
  */
 
 import { Router, type Request, type Response } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { dayBoundsMs, localDateKey } from '../../core/time-tracking/index.js'
 import { shiftDateKey } from '../../core/time-tracking/rollup.js'
@@ -34,7 +34,7 @@ const q = (req: Request, name: string): string | undefined => {
 }
 
 timeTimelineRouter.get('/timeline', thisMachineGuard('time timeline', TIMELINE_LOCAL_ONLY_MESSAGE), async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'the timeline is built on the primary box only' })
     return
   }
@@ -103,7 +103,7 @@ const MAX_EVENT_ID = 200
 // POST /api/time/meetings/attendance { event_id, attended: true | false | null }
 // The user's own answer for one meeting occurrence; null clears it. Kept on this Mac.
 timeTimelineRouter.post('/meetings/attendance', thisMachineGuard('meeting attendance', TIMELINE_LOCAL_ONLY_MESSAGE), async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'meeting answers are kept on the primary box only' })
     return
   }
@@ -127,7 +127,7 @@ timeTimelineRouter.post('/meetings/attendance', thisMachineGuard('meeting attend
 
 // POST /api/time/meetings/ignore { patterns: string[] }  replaces time.meetings.ignore.
 timeTimelineRouter.post('/meetings/ignore', async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'settings are changed on the primary box' })
     return
   }

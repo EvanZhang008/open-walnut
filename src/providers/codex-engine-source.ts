@@ -42,8 +42,8 @@ export function withCopiedEngines(own: Record<string, unknown>, copy: Record<str
 export async function codexWalnutConfig(): Promise<Record<string, unknown>> {
   const { getConfig } = await import('../core/config-manager.js')
   const own = (await getConfig()) as unknown as Record<string, unknown>
-  const { placement } = await import('../core/server-role.js')
-  if (placement() === 'mac') return own
+  const { isFollower } = await import('../core/server-role.js')
+  if (!isFollower()) return own
   const { readConfigCopy } = await import('../core/replication/kinds/config.js')
   return withCopiedEngines(own, await readConfigCopy())
 }

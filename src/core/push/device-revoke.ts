@@ -23,10 +23,10 @@
  * a pairing that went while the write was on its way (web/routes/push.ts).
  */
 
-import { isCompanion } from '../server-role.js'
 import { log } from '../../logging/index.js'
 import { revokeDevicePushTokens, takeBackPushToken } from './registry.js'
 import { pushClaimOfPairingHash } from './claims.js'
+import { hasCapability } from '../capabilities.js'
 
 /** Relay actions ignore sessionId; the same placeholder as the other server relays. */
 const SERVER_RELAY_SID = '__server__'
@@ -86,7 +86,7 @@ async function revokeOnce(name: string, revokedAtMs: number): Promise<PushRevoke
       device: name, error: localFailure,
     })
   }
-  if (!isCompanion()) {
+  if (!hasCapability('public-door')) {
     return { removed, relayed: false, ...(localFailure ? { pending: localFailure, retry: true, pendingWhere: 'here' } : {}) }
   }
 
@@ -149,7 +149,7 @@ async function liveClaimsOf(name: string): Promise<string[]> {
 
 async function takeBackOnce(t: PushTakeBack): Promise<PushRevokeOutcome> {
   const liveClaims = await liveClaimsOf(t.name)
-  if (!isCompanion()) {
+  if (!hasCapability('public-door')) {
     // The rows are here (a take-back queued before this box stopped being a companion).
     try {
       return { removed: (await takeBackPushToken(t.name, t.tokenSha, liveClaims)).removed, relayed: false }

@@ -18,7 +18,7 @@
  */
 
 import { Router, type Request, type Response } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import {
   dayBoundsMs, localDateKey, outsideDayRecords, readDayRecords, recentDateKeys, TIME_KINDS,
@@ -181,7 +181,7 @@ async function taskMeta(ids: string[]): Promise<Map<string, ReportTaskMeta>> {
 }
 
 timeReportRouter.get('/report', async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'time tracking lives on the primary box only' })
     return
   }
@@ -268,7 +268,7 @@ timeReportRouter.get('/work-hours', async (_req: Request, res: Response) => {
 })
 
 timeReportRouter.post('/work-hours', async (req: Request, res: Response) => {
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     res.status(501).json({ error: 'not_supported_cloud', message: 'settings are changed on the primary box' })
     return
   }

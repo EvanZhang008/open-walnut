@@ -18,7 +18,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { getInstanceId, readDeviceRegistry } from '../../core/device-auth.js'
 import { deviceChangeDecision } from '../../core/device-actor.js'
@@ -46,7 +46,7 @@ deviceAdoptionRouter.post('/adopt', async (req: Request, res: Response, next: Ne
       platform: body.platform,
       info: body.info,
       // On the companion the pairing comes from the primary, and the other way round.
-      adoptedFrom: CLOUD_MODE ? 'primary' : 'cloud',
+      adoptedFrom: isCompanion() ? 'primary' : 'cloud',
     }, { by: actorOf(req) })
     res.json({ name: out.name, instance: await getInstanceId(), adopted: out.adopted })
   } catch (err) {
@@ -57,7 +57,7 @@ deviceAdoptionRouter.post('/adopt', async (req: Request, res: Response, next: Ne
 
 deviceAdoptionRouter.post('/unadopt', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const decision = deviceChangeDecision(await readDeviceRegistry(), actorOf(req), 'create', '', CLOUD_MODE)
+    const decision = deviceChangeDecision(await readDeviceRegistry(), actorOf(req), 'create', '', isCompanion())
     if (!decision.ok) throw decision.refusal
     // Same as any revoke: the pushes stop too (they may live on the primary).
     const { name, refused, push } = await revokeAdopted((req.body as Record<string, unknown> | undefined)?.token_hash)

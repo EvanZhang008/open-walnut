@@ -5,9 +5,9 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { bus, EventNames } from '../../core/event-bus.js'
-import { isHostReplicaProgram } from '../../core/server-role.js'
+import { isCompanion, isFollower, isHostReplicaProgram } from '../../core/server-role.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
-import { KIND_NOT_COPIED } from '../../core/replication/kinds/gate.js'
+import { COPY_AS_OF_HEADER, KIND_NOT_COPIED } from '../../core/replication/kinds/gate.js'
 import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
 import { ambientTestRun } from '../../core/test-run.js'
 
@@ -36,13 +36,20 @@ async function canonicalProjectName(name: string): Promise<string> {
 
 /**
  * The favorites a GET answers (this route and the phone's GET /api/v1/favorites).
- * A host replica holds the Mac's favorites in its prefs copy
- * (core/replication/kinds/prefs.ts); with no copy yet (or the host turned it
- * off) it answers needs_leader kind_not_copied, never "no favorites".
+ * A replica holds the Mac's favorites in its prefs copy (core/replication/kinds/prefs.ts),
+ * never in its own config.yaml (machine-local, no sync carries it). With no copy yet, a
+ * host replica answers needs_leader kind_not_copied, never "no favorites"; the companion
+ * answers its own config as before the copy existed (a Mac too old to send it).
+ * `asOf`: when the copy's rows were the Mac's (the x-walnut-copy-as-of header), null off a copy.
  */
-export async function readFavorites(): Promise<Favorites> {
+export async function readFavoritesAsOf(): Promise<{ favorites: Favorites; asOf: number | null }> {
+  const { favorites, asOf } = await readUserFavorites()
   // A test run reads the user's favorites with its own changes on top (test-run-prefs.ts).
-  return withTestRunFavorites(await readUserFavorites())
+  return { favorites: withTestRunFavorites(favorites), asOf }
+}
+
+export async function readFavorites(): Promise<Favorites> {
+  return (await readFavoritesAsOf()).favorites
 }
 
 interface Favorites { projects: string[]; notes: string[] }
@@ -64,7 +71,7 @@ export function withTestRunFavorites(f: Favorites): Favorites {
 /** Apply `edit` to the favorites this request writes: a test run's changes, else config.yaml. */
 export async function editFavorites(edit: (f: Favorites) => void): Promise<Favorites> {
   if (ambientTestRun()) {
-    const now = withTestRunFavorites(await readUserFavorites())
+    const now = withTestRunFavorites((await readUserFavorites()).favorites)
     const next: Favorites = { projects: [...now.projects], notes: [...now.notes] }
     edit(next)
     const own = testRunPrefsWrite<FavoritesChanges>('favorites', () => ({ projects: new Map(), notes: new Map() }))!
@@ -77,6 +84,8 @@ export async function editFavorites(edit: (f: Favorites) => void): Promise<Favor
     for (const n of next.notes) if (!now.notes.includes(n)) own.notes.set(n, true)
     return next
   }
+  // A replica's favorites are the Mac's copy: a change made here waits for the Mac.
+  if (isFollower()) throw new NeedsLeaderError('prefs_writes_need_mac')
   const config = await getConfig()
   if (!config.favorites) config.favorites = {}
   const f: Favorites = { projects: [...(config.favorites.projects ?? [])], notes: [...(config.favorites.notes ?? [])] }
@@ -88,28 +97,74 @@ export async function editFavorites(edit: (f: Favorites) => void): Promise<Favor
   return f
 }
 
-async function readUserFavorites(): Promise<Favorites> {
+async function readUserFavorites(): Promise<{ favorites: Favorites; asOf: number | null }> {
+  const gate = await import('../../core/replication/kinds/gate.js')
   // Turned off for this replica (Settings): the Mac's favorites alone, never this box's config.
-  await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('prefs')
-  if (isHostReplicaProgram()) {
-    const fav = await (await import('../../core/replication/kinds/prefs.js')).readFavoritesCopy()
-    if (!fav) throw new NeedsLeaderError(KIND_NOT_COPIED)
-    return { projects: fav.projects ?? [], notes: fav.notes ?? [] }
+  await gate.assertCopyKept('prefs')
+  if (gate.keepsCopies('prefs')) {
+    const asOf = await gate.copyKindAsOf('prefs')
+    // The companion's copy counts once a round landed; a host replica's copy file is the copy.
+    const fav = isHostReplicaProgram() || asOf !== null ? await (await import('../../core/replication/kinds/prefs.js')).readFavoritesCopy() : null
+    if (fav) return { favorites: { projects: fav.projects ?? [], notes: fav.notes ?? [] }, asOf }
+    if (isHostReplicaProgram()) throw new NeedsLeaderError(KIND_NOT_COPIED)
   }
   const config = await getConfig()
-  return { projects: config.favorites?.projects ?? [], notes: config.favorites?.notes ?? [] }
+  return { favorites: { projects: config.favorites?.projects ?? [], notes: config.favorites?.notes ?? [] }, asOf: null }
 }
 
-// A host replica's favorites are the Mac's copy: every change waits for the Mac.
-favoritesRouter.use((req: Request, _res: Response, next: NextFunction) => {
-  if (isHostReplicaProgram() && req.method !== 'GET' && req.method !== 'HEAD') return next(new NeedsLeaderError('prefs_writes_need_mac'))
-  next()
+/**
+ * A console write on a replica: the Mac's favorites, so it is the Mac's to make. The companion
+ * carries it to the Mac's phone twin (same write, same answer) over its bridge; a host replica's
+ * front already forwards it while the Mac answers, so here it only waits (needs_leader).
+ * A test run's write stays its own (editFavorites).
+ */
+favoritesRouter.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || !isFollower() || ambientTestRun()) return next()
+  if (!isCompanion()) return next(new NeedsLeaderError('prefs_writes_need_mac'))
+  writeOnMac(req, res).catch(next)
 })
+
+/** One bridge frame carries the write: a body larger than this is refused, never sent. */
+const MAX_RELAYED_BYTES = 64 * 1024
+
+async function writeOnMac(req: Request, res: Response): Promise<void> {
+  const body = req.body && typeof req.body === 'object' && Object.keys(req.body).length ? Buffer.from(JSON.stringify(req.body), 'utf8') : null
+  if (body && body.byteLength > MAX_RELAYED_BYTES) { res.status(413).json({ error: 'favorites change too large to send to the Mac' }); return }
+  const { callPrimaryControl } = await import('./v1-control-relay.js')
+  const r = await callPrimaryControl('server.http', '__server__', {
+    method: req.method,
+    url: req.originalUrl.replace(/^\/api\/favorites/, '/api/v1/favorites'),
+    headers: body ? { 'content-type': 'application/json' } : {},
+    timeoutMs: 13_000,
+    ...(body ? { data: body.toString('base64'), size: body.byteLength } : {}),
+  }, 15_000)
+  if (!r.ok) {
+    // Went out and got no answer: the Mac may hold it already, so the client must not retry blindly.
+    // A 504 the relay answered (the Mac's own route ran past its time) is the same unanswered write.
+    if ((r.failure.kind === 'bridge_offline' && !r.failure.notSent) || (r.failure.kind === 'error' && r.failure.status === 504)) {
+      res.status(504).json({ error: { code: 'primary_timeout', sent: true, message: 'Your Mac did not answer in time. It may have applied this change: check before you try again.' } })
+      return
+    }
+    // The relay answered with its own error: pass it on as it is, never as "wait for the Mac".
+    if (r.failure.kind === 'error') {
+      res.status(r.failure.status).json({ error: { code: r.failure.code, message: r.failure.message } })
+      return
+    }
+    // Never sent, or the Mac is too old for the relay: nothing was applied, so the client may retry.
+    throw new NeedsLeaderError('prefs_writes_need_mac')
+  }
+  const out = r.result as { status?: unknown; data?: unknown }
+  const status = typeof out.status === 'number' && out.status >= 100 && out.status < 600 ? out.status : 502
+  res.status(status).type('application/json').setHeader('X-Walnut-Answered-By', 'primary')
+  res.end(typeof out.data === 'string' ? Buffer.from(out.data, 'base64') : Buffer.alloc(0))
+}
 
 // GET /api/favorites
 favoritesRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await readFavorites())
+    const { favorites, asOf } = await readFavoritesAsOf()
+    if (asOf !== null) res.setHeader(COPY_AS_OF_HEADER, String(asOf))
+    res.json(favorites)
   } catch (err) {
     next(err)
   }

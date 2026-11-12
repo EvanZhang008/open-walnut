@@ -388,7 +388,8 @@ struct NewSessionSheet: View {
             DiskCache.remove(key: Self.optionsCacheKey)
             startBlockedReason = nil
             loadFailed = "This cloud companion is too old to create sessions. Update it, or connect the app to your primary box directly."
-        } catch let APIError.server(_, code, msg, _, _) where code == "session_launch_needs_upgrade" || code == "bridge_offline" {
+        } catch let APIError.server(_, code, msg, _, _)
+            where code == "session_launch_needs_upgrade" || APIError.isLeaderUnreachableForNow(code: code) {
             // Transient/self-healing cloud-relay states: the daemon upgrades
             // on the next primary reconnect / the bridge redials. Keep the
             // cache (the form is valid once the relay recovers) and say so:
@@ -480,8 +481,8 @@ struct NewSessionSheet: View {
             return "This cloud companion is too old to create sessions. Update it, or connect directly to your primary box."
         case "session_launch_needs_upgrade":
             return "Your primary box's daemon needs an update for mobile session launch. It updates automatically on its next reconnect. Try again in a minute."
-        case "bridge_offline":
-            return BridgeOfflineCopy.message(serverMessage: serverMessage)
+        case _ where APIError.isLeaderUnreachableForNow(code: code):
+            return BridgeOfflineCopy.message(serverMessage: serverMessage, code: code)
         default:
             // Validation 4xx from the primary: its text IS the user-facing answer.
             return serverMessage ?? ""

@@ -141,8 +141,9 @@ struct ContentActionButtons: View {
     static func failureWords(_ action: String, _ error: Error) -> String {
         // The server may have sent it before the answer was lost: say so, or a retry sends it twice.
         if action == "Talk to CEO", Self.timedOut(error) { return timedOutWords }
-        if case APIError.server(let status, _, _, _, _) = error {
-            if status == 501 { return "\(action) works only while your Mac is online." }
+        if let api = error as? APIError, case .server(let status, _, _, _, _) = api {
+            // A 501 from an older companion, or any replica's "this needs your Mac".
+            if status == 501 || api.isLeaderUnreachable { return "\(action) works only while your Mac is online." }
             if status == 404 { return "\(action) needs a newer Walnut on your Mac." }
         }
         return "\(action) failed: \(error.localizedDescription)"

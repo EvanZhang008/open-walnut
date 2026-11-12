@@ -53,10 +53,12 @@ extension LetterReplyStore {
         case .notConfigured:
             return Failure(sentence: "This phone is not paired with Walnut yet.", mayHaveArrived: false)
         case .server(let status, let code, let message, _, _):
-            if apiError.isBridgeOffline {
+            if apiError.isLeaderUnreachableForNow {
+                // A replica's needs_leader refuses before anything is sent; only the
+                // companion's bridge_offline can follow a relay that went out.
                 return Failure(
                     sentence: "Your Mac is not connected to Walnut right now. Your reply is kept here; Retry when it is back.",
-                    mayHaveArrived: !provablyUnsentBridgeSentences.contains { message.hasPrefix($0) }
+                    mayHaveArrived: apiError.isBridgeOffline && !provablyUnsentBridgeSentences.contains { message.hasPrefix($0) }
                 )
             }
             // The route's own deadline. Its message names the route and the

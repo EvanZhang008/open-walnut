@@ -15,7 +15,7 @@
  */
 
 import { Router, type Request, type Response } from 'express';
-import { CLOUD_MODE } from '../../constants.js';
+import { isFollower } from '../../core/server-role.js';
 import { log } from '../../logging/index.js';
 import {
   cleanId, deadline, getTaskIndex, hydrate, isHistoryRead, ledgerTaskOverlay, localDateKey, sessionTimeView,
@@ -64,7 +64,7 @@ async function answer<T>(res: Response, what: string, build: () => Promise<T>, p
 
 /** False on a replica (501 sent); the store and the collectors live on the primary only. */
 function primaryOnly(res: Response): boolean {
-  if (!CLOUD_MODE) return true;
+  if (!isFollower()) return true;
   res.status(501).json({ error: 'not_supported_cloud', message: 'time tracking lives on the primary box only' });
   return false;
 }

@@ -150,13 +150,13 @@ function expandRoot(root: string, home: string): string {
 }
 
 /**
- * Read the effective cloud-exec config. `cloudMode` is a parameter (not the
- * CLOUD_MODE import) so the whole module stays pure and unit-testable without
- * an env dance — callers pass the constant.
+ * Read the effective cloud-exec config. `execCap` is a parameter (not a
+ * capability read) so the whole module stays pure and unit-testable without
+ * an env dance: callers pass hasCapability('cloud-exec') (the companion's door).
  */
 export function readCloudExecConfig(
   config: Pick<Config, 'cloud'> | undefined,
-  cloudMode: boolean,
+  execCap: boolean,
   home: string = os.homedir(),
 ): CloudExecConfig {
   const raw = config?.cloud?.exec;
@@ -173,7 +173,7 @@ export function readCloudExecConfig(
     ? maxRaw
     : CLOUD_EXEC_DEFAULT_MAX_SESSIONS;
   return {
-    enabled: cloudMode && raw?.enabled === true && cwdRoots.length > 0,
+    enabled: execCap && raw?.enabled === true && cwdRoots.length > 0,
     cwdRoots,
     maxSessions,
   };
@@ -182,13 +182,13 @@ export function readCloudExecConfig(
 /** Diagnostic form of the above — the `/api/v1/status` payload. */
 export function cloudExecStatus(
   config: Pick<Config, 'cloud'> | undefined,
-  cloudMode: boolean,
+  execCap: boolean,
   home: string = os.homedir(),
 ): CloudExecStatus {
-  if (!cloudMode) return { enabled: false, reason: 'not_cloud_mode' };
+  if (!execCap) return { enabled: false, reason: 'not_cloud_mode' };
   const raw = config?.cloud?.exec;
   if (raw?.enabled !== true) return { enabled: false, reason: 'not_enabled' };
-  const resolved = readCloudExecConfig(config, cloudMode, home);
+  const resolved = readCloudExecConfig(config, execCap, home);
   if (resolved.cwdRoots.length === 0) {
     const declared = Array.isArray(raw.cwd_roots) ? raw.cwd_roots.length : 0;
     // Distinguish "you forgot the roots" from "your roots were unusable" —
@@ -249,11 +249,11 @@ export function resolveLaunchTarget(
   host: string | undefined,
   cwd: string,
   config: Pick<Config, 'cloud'> | undefined,
-  cloudMode: boolean,
+  execCap: boolean,
   home: string = os.homedir(),
 ): CloudExecTarget {
   if (host !== CLOUD_HOST_ALIAS) return { kind: 'relay' };
-  const status = cloudExecStatus(config, cloudMode, home);
+  const status = cloudExecStatus(config, execCap, home);
   if (!status.enabled) {
     return {
       kind: 'refused',
@@ -261,7 +261,7 @@ export function resolveLaunchTarget(
       message: cloudExecRefusalMessage(status.reason ?? 'not_enabled'),
     };
   }
-  const { cwdRoots } = readCloudExecConfig(config, cloudMode, home);
+  const { cwdRoots } = readCloudExecConfig(config, execCap, home);
   if (!isCwdWithinRoots(cwd, cwdRoots, home)) {
     return {
       kind: 'refused',
@@ -306,10 +306,10 @@ export function launchHostForCore(host: string | undefined): string | undefined 
 /** The launcher's host row for this box, or null when it can't execute. */
 export function cloudExecHostEntry(
   config: Pick<Config, 'cloud'> | undefined,
-  cloudMode: boolean,
+  execCap: boolean,
   home: string = os.homedir(),
 ): { alias: string; label: string } | null {
-  if (!readCloudExecConfig(config, cloudMode, home).enabled) return null;
+  if (!readCloudExecConfig(config, execCap, home).enabled) return null;
   return { alias: CLOUD_HOST_ALIAS, label: CLOUD_HOST_LABEL };
 }
 
@@ -328,10 +328,10 @@ export function cloudExecHostEntry(
  */
 export function launchOptionsWhenPrimaryOffline(
   config: Pick<Config, 'cloud'> | undefined,
-  cloudMode: boolean,
+  execCap: boolean,
   home: string = os.homedir(),
 ): { hosts: Array<{ alias: string; label: string }>; dirs: never[]; primaryOffline: true; degraded: true } | null {
-  const entry = cloudExecHostEntry(config, cloudMode, home);
+  const entry = cloudExecHostEntry(config, execCap, home);
   if (!entry) return null;
   return { hosts: [entry], dirs: [], primaryOffline: true, degraded: true };
 }
@@ -380,11 +380,11 @@ export function reservedHostAliasConflicts(aliases: Iterable<string>): string[] 
  */
 export function cloudSessionLimits(
   config: Pick<Config, 'cloud' | 'session_limits'> | undefined,
-  cloudMode: boolean,
+  execCap: boolean,
   home: string = os.homedir(),
 ): Record<string, number> {
   const limits = { ...(config?.session_limits ?? {}) };
-  const exec = readCloudExecConfig(config, cloudMode, home);
+  const exec = readCloudExecConfig(config, execCap, home);
   if (!exec.enabled) return limits;
   // The cloud box spawns through its LOCAL daemon, so the limit the tracker
   // consults is the 'local' key — the alias is edge-only (launchHostForCore).

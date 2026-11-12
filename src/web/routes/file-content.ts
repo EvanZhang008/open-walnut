@@ -25,7 +25,8 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import { createFileReader } from '../../core/session-file-reader.js'
 import type { DaemonFileReader } from '../../core/daemon-file-reader.js'
-import { CLOUD_MODE, WALNUT_HOME, NOTES_DIR, MEMORY_DIR } from '../../constants.js'
+import { WALNUT_HOME, NOTES_DIR, MEMORY_DIR } from '../../constants.js'
+import { confinesLocalFiles } from '../../core/server-role.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { computeContentHash } from '../../utils/file-ops.js'
 import { withUserFileLock } from '../../utils/user-file-lock.js'
@@ -427,8 +428,8 @@ export function assertPathAllowed(
   if (!isRemote && !path.isAbsolute(filePath)) {
     throw new FileContentError('Path must be absolute', 400)
   }
-  if (!isRemote && CLOUD_MODE) {
-    // Cloud box: confine local reads to safe roots and never serve secret files.
+  if (!isRemote && confinesLocalFiles()) {
+    // A box that is not the user's own machine (confinesLocalFiles): confine local reads to safe roots and never serve secret files.
     if (isSecretPath(filePath) || !cloudLocalReadAllowed(filePath)) {
       throw new FileContentError('Path not permitted', 403)
     }

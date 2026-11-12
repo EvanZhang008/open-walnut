@@ -7,11 +7,11 @@
  */
 
 import fs from 'node:fs'
-import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { closeHealthDb, healthDbPath } from './db.js'
 import { resetMaterializeQueue, resumeMaterialize } from './materialize.js'
 import { disarmMissingCheck, startSleepReadyTimer } from './sleep-ready.js'
+import { isFollower } from '../server-role.js'
 
 export { HEALTH_MAX_ITEMS_PER_SYNC, HEALTH_MAX_SYNC_BYTES, HEALTH_METRICS, SLEEP_CODES } from './catalog.js'
 export { ingestHealthSync, type HealthSyncOutcome } from './ingest.js'
@@ -26,7 +26,7 @@ export { sanitizeHealthSync } from './sanitize.js'
  * drain any date a previous process committed as stale but never recomputed.
  */
 export function startHealth(): void {
-  if (CLOUD_MODE || !fs.existsSync(healthDbPath())) return
+  if (isFollower() || !fs.existsSync(healthDbPath())) return
   startSleepReadyTimer()
   try { resumeMaterialize() } catch (err) {
     log.web.warn('health: could not resume pending recomputes', { error: err instanceof Error ? err.message : String(err) })

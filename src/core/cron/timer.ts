@@ -747,7 +747,7 @@ export function findDueJobs(state: CronServiceState): CronJob[] {
     if (!(typeof next === 'number' && now >= next)) return false;
     if (replayGuardBlocks(state, j, now)) return false;
     if (cloudModeSkipsJob(j)) {
-      state.deps.log.info('cloud mode: skipping non-allowlisted cron job', { jobId: j.id, jobName: j.name });
+      state.deps.log.info('replica: skipping non-allowlisted cron job', { jobId: j.id, jobName: j.name });
       return false;
     }
     return true;
@@ -903,7 +903,7 @@ export function findMissedJobs(state: CronServiceState): CronJob[] {
     if (!(typeof next === 'number' && now >= next)) return false;
     if (replayGuardBlocks(state, j, now)) return false;
     if (cloudModeSkipsJob(j)) {
-      state.deps.log.info('cloud mode: skipping non-allowlisted missed cron job', { jobId: j.id, jobName: j.name });
+      state.deps.log.info('replica: skipping non-allowlisted missed cron job', { jobId: j.id, jobName: j.name });
       return false;
     }
     return true;

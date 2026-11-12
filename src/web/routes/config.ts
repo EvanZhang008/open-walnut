@@ -7,8 +7,9 @@ import { validExperimentalFlags } from '../../core/experimental.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import path from 'node:path'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
-import { CLOUD_MODE, WALNUT_INSTALL_DIR, NOTES_DIR } from '../../constants.js'
-import { isHostReplicaProgram, placement, role } from '../../core/server-role.js'
+import { WALNUT_INSTALL_DIR, NOTES_DIR } from '../../constants.js'
+import { isCompanion, isFollower, isHostReplicaProgram, placement, role } from '../../core/server-role.js'
+import { serverFacts } from '../server-facts.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 import { VALID_PRIORITIES } from '../../core/types.js'
 import { log } from '../../logging/index.js'
@@ -84,8 +85,8 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
       ? envBearerToken.slice(0, 8) + '••••••••' + envBearerToken.slice(-4)
       : undefined
     // installDir: Walnut's own source checkout (null on npm installs / cloud
-    // bundles) — drives the "Fix Walnut" quick-start button. Cloud replicas
-    // proxy sessions to daemons elsewhere, so a local path would be wrong there.
+    // bundles) — drives the "Fix Walnut" quick-start button. A replica's own
+    // paths are not the Mac's, so a local path would be wrong there.
     // notesDir: the vault root — cwd for "Start Claude Code session" launched
     // from the /notes page. Local-only for the same reason as installDir.
     // processNice: >0 means the server inherited a positive nice (launched from
@@ -108,10 +109,11 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
       uptimeSec: Math.round(process.uptime()),
     }
     // canRevealLocalFiles: whether POST /api/files/reveal can hand a path to the
-    // desktop (`open`) — macOS console only, never a cloud replica. The UI hides
+    // desktop (`open`): the Mac's console only, never a replica (its desktop is not
+    // the person's). The UI hides
     // its "Reveal in Finder / Open in default app" items when false instead of
     // offering menu entries that always 400.
-    const canRevealLocalFiles = !CLOUD_MODE && process.platform === 'darwin'
+    const canRevealLocalFiles = role() === 'leader' && process.platform === 'darwin'
     // macAccess: whether /api/permissions has a report here (a Mac console). Settings
     // lists its macOS Access pane only then, never as an entry that opens nothing.
     const macAccess = permissionsApplicable()
@@ -149,7 +151,7 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // that run here, so the console tells a session here from one on the Mac. Absent
     // everywhere else (the Mac, the companion): their answer is unchanged.
     const replicaHostKey = role() === 'replica' && placement() === 'host' ? (process.env.WALNUT_HOST_KEY ?? '').trim() : ''
-    res.json({ config: configForClients(experimentalConfigView(shown)), ...(configCopied === undefined ? {} : { configCopied }), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, loginSession: (await import('../../core/login-session.js')).loginSessionState(), canRevealLocalFiles, macAccess, remoteIdUniquenessGaps, cloud: CLOUD_MODE, role: role(), placement: placement(), webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
+    res.json({ config: configForClients(experimentalConfigView(shown)), ...(configCopied === undefined ? {} : { configCopied }), envTokenHint, installDir: isFollower() ? null : WALNUT_INSTALL_DIR, notesDir: isFollower() ? null : NOTES_DIR, processNice, memory, loginSession: (await import('../../core/login-session.js')).loginSessionState(), canRevealLocalFiles, macAccess, remoteIdUniquenessGaps, cloud: isCompanion(), ...serverFacts(), webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
   } catch (err) {
     next(err)
   }

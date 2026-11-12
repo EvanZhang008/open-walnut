@@ -31,7 +31,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { CLOUD_MODE, WALNUT_HOME } from '../constants.js';
+import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import { findDesktopAppWith } from '../providers/desktop-app.js';
 import {
@@ -42,6 +42,7 @@ import {
   type HelperSpec,
   type HelperUnavailable,
 } from './helper-build.js';
+import { isFollower } from './server-role.js';
 
 /** Must match desktop/ReaderBridge.swift (a test reads both). */
 export const READER_BRIDGE_FLAG = '--reader-bridge';
@@ -82,7 +83,7 @@ export interface ReaderRoute {
  * (see readerUnavailable()). Resolving the helper route may compile it once.
  */
 export async function readerRoute(): Promise<ReaderRoute | null> {
-  if (process.platform === 'darwin' && !CLOUD_MODE && nativeHelpersAllowed()) {
+  if (process.platform === 'darwin' && !isFollower() && nativeHelpersAllowed()) {
     const found = await findDesktopAppWith(READER_BRIDGE_FLAG);
     if (found) return { kind: 'app', cmd: [found.executable, READER_BRIDGE_FLAG], grantTarget: found.app };
   }
@@ -96,7 +97,7 @@ export async function readerRoute(): Promise<ReaderRoute | null> {
  * program to grant does not pay a first-run compile.
  */
 export async function readerGrantApp(): Promise<string | null> {
-  if (process.platform !== 'darwin' || CLOUD_MODE || !nativeHelpersAllowed()) return null;
+  if (process.platform !== 'darwin' || isFollower() || !nativeHelpersAllowed()) return null;
   return (await findDesktopAppWith(READER_BRIDGE_FLAG))?.app ?? null;
 }
 

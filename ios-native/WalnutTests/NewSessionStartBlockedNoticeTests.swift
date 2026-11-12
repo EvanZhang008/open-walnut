@@ -152,7 +152,7 @@ final class NewSessionStartBlockedNoticeTests: XCTestCase {
     /// perfectly reasonable line of code, which is why it needs a ratchet.
     func testRelayFailureIsRecordedEvenWhenCachedOptionsExist() throws {
         let source = try loadOptionsSource()
-        guard let branch = source.range(of: "code == \"session_launch_needs_upgrade\" || code == \"bridge_offline\""),
+        guard let branch = source.range(of: "code == \"session_launch_needs_upgrade\" || APIError.isLeaderUnreachableForNow(code: code)"),
               let nextCatch = source.range(of: "} catch", range: branch.upperBound..<source.endIndex)
         else { return XCTFail("the relay-failure catch branch is no longer recognisable") }
         let body = source[branch.upperBound..<nextCatch.lowerBound]

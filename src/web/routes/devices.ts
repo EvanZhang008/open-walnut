@@ -21,7 +21,8 @@ import { CLOUD_LIST_WITHHELD, DeviceChangeRefused, LOCAL_ACTOR, cloudRelayDecisi
 import { CLOUD_UNPAIRED_SENTENCE, isCloudUnpaired, markCloudUnpaired } from '../../core/cloud-unpaired.js'
 import { getPairingTargets, getCloudPairingEndpoint } from '../../core/pairing-targets.js'
 import { tailscaleSummary } from '../../core/tailnet.js'
-import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion, isFollower } from '../../core/server-role.js'
+import { hasCapability } from '../../core/capabilities.js'
 import { log } from '../../logging/index.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { pageIsSecure, refreshCookieHeaders } from '../middleware/device-cookie.js'
@@ -42,14 +43,14 @@ export const devicesRouter = Router()
  * ORIGINAL caller's class in x-walnut-origin (src/lib/caller-origin.ts), and one
  * made for a session on another exec host or for a paired client is that
  * caller, never this Mac (request-origin.ts: the header only lowers trust).
- * Never this Mac on a companion, whose public traffic reaches it through a
- * local proxy. Else the paired device whose bearer token the auth middleware
+ * Never this Mac on a replica (the Mac is elsewhere; the companion's public
+ * traffic reaches it through a local proxy). Else the paired device whose bearer token the auth middleware
  * accepted, else an API key (or a bearer the rules do not know). A self-call
  * for a caller off this Mac that carries no credential is its origin alone.
  */
 export function actorOf(req: Request): DeviceActor {
   const origin = requestOrigin(req)
-  if (!CLOUD_MODE && isLocalOrigin(origin)) return LOCAL_ACTOR
+  if (!isFollower() && isLocalOrigin(origin)) return LOCAL_ACTOR
   const r = req as Request & { deviceName?: string; apiKeyName?: string }
   const header = req.headers.authorization
   if (r.deviceName && header?.startsWith('Bearer ')) return { token: header.slice(7) }
@@ -343,22 +344,24 @@ function requestPort(req: Request): number {
 devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const origin = `${req.protocol}://${req.get('host') ?? ''}`
-    const targets = CLOUD_MODE
+    // A box with a public door is its own pairing target; another replica has none
+    // (pairing is the Mac's), and the Mac lists its LAN, tailnet and cloud.
+    const targets = hasCapability('public-door')
       ? [{ kind: 'cloud' as const, origin, label: 'This server', remoteMint: false }]
-      : liveTargets(await getPairingTargets(origin, requestPort(req)))
+      : isFollower() ? [] : liveTargets(await getPairingTargets(origin, requestPort(req)))
     // Cloud-paired devices live in the cloud's auth.json — fetch them so the
     // console can list and revoke them (a down cloud must not break the local
     // list, and says why its half is missing).
     // The cloud half is this Mac's view on its companion (its own token there):
     // for this Mac itself only, like every other relay (cloudRelayAllowed).
-    const macServer = !CLOUD_MODE
+    const macServer = !isFollower()
     const relayed = macServer && cloudRelayDecision([], actorOf(req), 'list').ok
     const cloud = relayed ? await listCloudDevices() : { devices: [] } as CloudDeviceList
     // A caller off this Mac reads an empty cloud half as "no companion": say it is withheld,
     // but only when there is a Cloud target to withhold (liveTargets already dropped a self-unpaired one).
     const withheld = macServer && !relayed && targets.some((t) => t.kind === 'cloud')
     // On the companion, its owner is the Mac it belongs to (recorded, else the one owning its machine credentials).
-    const owner = CLOUD_MODE ? companionOwnerRecord(await readDeviceRegistry()) : undefined
+    const owner = isCompanion() ? companionOwnerRecord(await readDeviceRegistry()) : undefined
     const macs = new Set(owner ? [owner.name] : [])
     // Only real, QR-pairable devices reach the console. Daemon bridge
     // credentials (kind:'machine' / the legacy `bridge-*` names) are plumbing —
@@ -369,11 +372,11 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
     // "device", but only some are phones — this Mac's own cloud credential and
     // the iOS simulator sit in the same list, and rendering all three
     // identically read as "3 phones I don't own" (reported 2026-07-29).
-    const tailscale = CLOUD_MODE ? null : await tailscaleSummary()
+    const tailscale = isFollower() ? null : await tailscaleSummary()
     if (tailscale) void keepTailscale(tailscale)
     // While the first probe after a restart is still out, the last one it gave, marked with its time.
-    // The companion never probes, so it never kept one either.
-    const keptTailscale = tailscale ? null : await lastTailscale()
+    // A replica never probes, so it shows none it may have kept either.
+    const keptTailscale = tailscale || isFollower() ? null : await lastTailscale()
     // This Mac's own row is the cloud record its token matched, as the
     // companion says: never a name guess, and never a local lookup.
     // Other Macs are their own kind too (roleOf): no phone wording, no QR.
@@ -387,8 +390,8 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
       ...(cloud.refused ? { cloudRefused: true } : {}),
       ...(withheld ? { cloudWithheld: CLOUD_LIST_WITHHELD } : {}),
       // On the companion: which record the caller is (the Mac reads it, above).
-      ...(CLOUD_MODE ? { caller: await callerRecordName(req) } : {}),
-      targets: targets.filter((t) => CLOUD_MODE || relayed || t.kind !== 'cloud').map(({ kind, origin: o, label }) => ({ kind, origin: o, label })),
+      ...(isCompanion() ? { caller: await callerRecordName(req) } : {}),
+      targets: targets.filter((t) => hasCapability('public-door') || relayed || t.kind !== 'cloud').map(({ kind, origin: o, label }) => ({ kind, origin: o, label })),
       // So the console can say "install Tailscale" when no tailnet target exists.
       // Absent = say nothing: on a companion, and while the first probe is still out.
       ...(tailscale ? { tailscale } : keptTailscale ? { tailscale: keptTailscale.value, tailscaleStale: true, tailscaleAt: keptTailscale.at } : {}),
@@ -421,12 +424,12 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
     // On the companion a name that already is a machine credential stays one:
     // a "re-pair" of it (replace:true, no kind) goes through the machine rules
     // too, or it would be a way around them.
-    const existingMachine = CLOUD_MODE && req.body?.kind !== 'machine'
+    const existingMachine = hasCapability('bridge-door') && req.body?.kind !== 'machine'
       && (await listDeviceRecords()).some((d) => d.name === name && d.kind === 'machine')
     const kind = req.body?.kind === 'machine' || existingMachine ? 'machine' as const : undefined
-    const wantsCloud = req.body?.target === 'cloud' && !CLOUD_MODE
+    const wantsCloud = req.body?.target === 'cloud' && !isFollower()
     const bridgeScope = req.body?.bridge_scope
-    if (bridgeScope !== undefined && (bridgeScope !== 'status-only' || kind !== 'machine' || !CLOUD_MODE)) {
+    if (bridgeScope !== undefined && (bridgeScope !== 'status-only' || kind !== 'machine' || !hasCapability('bridge-door'))) {
       res.status(400).json({ error: 'bridge_scope requires a status-only machine credential on the companion' })
       return
     }
@@ -454,15 +457,15 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
     // machine's LAN IP (a QR carrying `localhost` points the phone at itself).
     const consoleOrigin = `${req.protocol}://${req.get('host') ?? ''}`
     // `target: 'lan' | 'tailnet'` picks that address for the QR when this Mac has it.
-    const localTargets = CLOUD_MODE ? [] : liveTargets(await getPairingTargets(consoleOrigin, requestPort(req)))
-    const target = CLOUD_MODE
+    const localTargets = isFollower() ? [] : liveTargets(await getPairingTargets(consoleOrigin, requestPort(req)))
+    const target = hasCapability('public-door')
       ? { origin: consoleOrigin, kind: 'cloud' as const }
       : localTargets.find((t) => t.kind === req.body?.target) ?? localTargets[0]
     // No reachable address (no LAN, no cloud)? Emit the URI WITHOUT `server=`
     // so the app asks for the address. A loopback `server=` is worse than
     // none: it silently points the phone at itself.
     const by = actorOf(req)
-    if (kind === 'machine' && CLOUD_MODE) {
+    if (kind === 'machine' && hasCapability('bridge-door')) {
       // Machine credentials open /bridge and /daemon-tunnel on this box: only
       // the companion's owner may mint or rotate one (machine-credentials.ts).
       const minted = await mintMachineCredential(name, { by, replace, proof: machineProof(req), bridgeScope })
@@ -496,7 +499,7 @@ devicesRouter.post('/', async (req: Request, res: Response, next: NextFunction) 
 // missing, 403/409 refused.
 devicesRouter.post('/:name/adopt', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (!CLOUD_MODE) { res.status(404).json({ error: 'Not found' }); return }
+    if (!hasCapability('bridge-door')) { res.status(404).json({ error: 'Not found' }); return }
     const outcome = await adoptMachineCredential(String(req.params.name ?? ''), { by: actorOf(req), proof: machineProof(req) })
     if (outcome === 'missing') { res.status(404).json({ error: `Device "${String(req.params.name)}" not found` }); return }
     res.json({ ok: true, outcome })
@@ -511,7 +514,7 @@ devicesRouter.post('/:name/adopt', async (req: Request, res: Response, next: Nex
 devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const name = String(req.params.name ?? '')
-    if (req.query.target === 'cloud' && !CLOUD_MODE) {
+    if (req.query.target === 'cloud' && !isFollower()) {
       if (!await cloudRelayAllowed(req, res, 'revoke')) return
       const cloud = getCloudPairingEndpoint()
       if (!cloud) {
@@ -559,7 +562,7 @@ devicesRouter.delete('/:name', async (req: Request, res: Response, next: NextFun
     }
     const by = actorOf(req)
     try {
-      if (CLOUD_MODE && (await listDeviceRecords()).some((d) => d.name === name && d.kind === 'machine')) {
+      if (hasCapability('bridge-door') && (await listDeviceRecords()).some((d) => d.name === name && d.kind === 'machine')) {
         // A machine credential: only the companion's owner may revoke it.
         if (!await revokeMachineCredential(name, { by, proof: machineProof(req) })) {
           res.status(404).json({ error: `Device "${name}" not found` })

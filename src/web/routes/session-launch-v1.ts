@@ -47,6 +47,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { hasCapability } from '../../core/capabilities.js'
 // The 503 sentence lives in its own module because the control routes answer the
 // same outage and must not drift from this wording.
 import { bridgeOfflineMessage } from './bridge-offline-copy.js'
@@ -308,7 +309,7 @@ async function cloudExecEntry(): Promise<{ alias: string; label: string } | null
       import('../../core/cloud-exec.js'),
       import('../../core/config-manager.js'),
     ])
-    return cloudExecHostEntry(await getConfig(), CLOUD_MODE)
+    return cloudExecHostEntry(await getConfig(), hasCapability('cloud-exec'))
   } catch {
     return null
   }
@@ -347,7 +348,7 @@ sessionLaunchV1Router.get('/sessions/launch-options', async (_req: Request, res:
       // a silent fallback: the user still picks the host.
       const { launchOptionsWhenPrimaryOffline } = await import('../../core/cloud-exec.js')
       const { getConfig } = await import('../../core/config-manager.js')
-      const degraded = launchOptionsWhenPrimaryOffline(await getConfig(), CLOUD_MODE)
+      const degraded = launchOptionsWhenPrimaryOffline(await getConfig(), hasCapability('cloud-exec'))
       if (degraded) {
         log.web.info('launch-options: primary offline, offering cloud exec host')
         res.status(200).json(degraded)

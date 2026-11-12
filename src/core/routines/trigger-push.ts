@@ -119,8 +119,8 @@ export async function compileTriggersForHost(
   // Clock routines whose work runs on this host (clock-routine-v1). Placement
   // writes the handover under the cron lock BEFORE this set goes out.
   // Only the Mac hands clocks out; any other server pushes its checks alone.
-  const { placement } = await import('../server-role.js');
-  if (placement() !== 'mac') return compileTriggerDefs(jobs, host);
+  const { isFollower } = await import('../server-role.js');
+  if (isFollower()) return compileTriggerDefs(jobs, host);
   const { placeClocksForHost, noteWatchedTasks } = await import('./clock-placement.js');
   noteWatchedTasks(jobs);
   const clocks = await placeClocksForHost(service, host, jobs, opts.clock ?? 'unknown', undefined, { fresh: opts.fresh === true, hostStart: opts.hostStart === true });

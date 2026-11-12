@@ -620,7 +620,7 @@ final class ComposerControlsModel {
         case .network, .rateLimited:
             return .unreachable
         case .server(let status, let code, _, _, _):
-            if code == "primary_unreachable" || code == "bridge_offline" { return .unreachable }
+            if APIError.isLeaderUnreachableForNow(code: code) { return .unreachable }
             return status >= 500 ? .unreachable : .unusable
         case .cancelled, .unauthorized, .badResponse, .notConfigured:
             return .unusable
@@ -1172,8 +1172,8 @@ final class ComposerControlsModel {
         switch api {
         case .network: return .unreachable
         case .server(let status, let code, _, _, _):
+            if APIError.isLeaderUnreachableForNow(code: code) { return .unreachable }
             switch code {
-            case "primary_unreachable", "bridge_offline": return .unreachable
             case "unknown_model": return .rejected
             case "lane_engine": return .laneEngine
             default: break

@@ -47,6 +47,7 @@ import path from 'node:path';
 import { CLOUD_MODE, WALNUT_HOME } from '../constants.js';
 import { writeJsonFile } from '../utils/fs.js';
 import { log } from '../logging/index.js';
+import { isFollower } from './server-role.js';
 
 export const CLOUD_CHAT_OUTBOX_DIR = path.join(WALNUT_HOME, 'cache', 'cloud-chat-outbox');
 
@@ -356,7 +357,7 @@ export async function handlePrimaryChatAdopt(p: Record<string, unknown>): Promis
   // its own loopback daemon, so a local client of that daemon can reach this
   // action here too; writing the file on this box would break that rule. 503,
   // never 400: a flush that somehow reached a replica must KEEP its entry.
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     throw new CloudTurnAdoptError(
       'server.chat.adopt runs only on the primary; this box is a cloud replica and never writes conversation files',
       503,

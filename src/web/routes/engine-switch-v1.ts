@@ -14,7 +14,7 @@
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isKnownEngine } from '../../core/agents/engine-registry.js'
-import { placement } from '../../core/server-role.js'
+import { isFollower } from '../../core/server-role.js'
 import type { SessionEffort, SessionEngine, SessionMode, SessionRecord } from '../../core/types.js'
 import { missingIsNull } from '../../lib/id-ref.js'
 
@@ -89,7 +89,7 @@ engineSwitchV1Router.get('/tasks/:id/sessions', async (req: Request, res: Respon
 })
 
 engineSwitchV1Router.use('/tasks/:id/switch-engine', (req: Request, res: Response, next: NextFunction) => {
-  if (placement() !== 'cloud') { next(); return }
+  if (!isFollower()) { next(); return }
   res.status(501).json({ error: 'An engine switch runs on your Mac only', code: 'not_supported_cloud' })
 })
 

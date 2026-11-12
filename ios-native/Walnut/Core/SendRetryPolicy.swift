@@ -94,7 +94,8 @@ enum SendRetryPolicy {
     /// 500 might mean something else broke).
     ///
     /// Two classes qualify:
-    ///  - 503 `bridge_offline` — the host's bridge is down right now.
+    ///  - 503 `bridge_offline` (the cloud companion) or `needs_leader` (any replica):
+    ///    the Mac, or the host's bridge, is not answering right now.
     ///  - a transport failure with NO response at all (timeout, connection
     ///    lost, TLS handshake). Field evidence 2026-08-20: during a ~7-minute
     ///    bridge outage the app's two POSTs hit its own 30s URLSession timeout,
@@ -105,7 +106,7 @@ enum SendRetryPolicy {
     ///    bubble carries ONE stable `qm-*` id across every attempt.
     static func isRetryable(_ error: Error) -> Bool {
         if let apiError = error as? APIError {
-            if apiError.isBridgeOffline { return true }
+            if apiError.isLeaderUnreachableForNow { return true }
             if case .network(let underlying) = apiError {
                 return isRetryableTransport(underlying as NSError)
             }

@@ -41,7 +41,7 @@ import { isOnBehalfOfRemote, requestOrigin } from '../middleware/request-origin.
 import { classifyLocalRequest } from '../middleware/local-trust.js'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
-import { isFollower, role } from '../../core/server-role.js'
+import { isFollower } from '../../core/server-role.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { onCredentialsRevoked } from '../../core/device-auth.js'
 import { currentExposeStatus } from '../../core/expose/status.js'
@@ -70,7 +70,7 @@ function param(v: unknown): string {
  */
 export function gate(req: Request, res: Response, readStatus = false): boolean {
   res.setHeader('Cache-Control', 'no-store')
-  if (role() !== 'leader' || isFollower()) {
+  if (isFollower()) {
     res.status(503).json({ error: 'Passwords are kept on your Mac and open only from it, its own network or Tailscale.', code: 'vault_not_here' })
     return false
   }

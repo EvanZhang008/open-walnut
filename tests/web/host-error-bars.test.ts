@@ -25,7 +25,7 @@ vi.mock('@/hooks/useHostStatus', () => ({
   serverNow: () => 1_900_000_000_000,
   seedHostStatus: () => {},
 }))
-vi.mock('@/hooks/useIsCloudReplica', () => ({ useIsCloudReplica: () => state.replica }))
+vi.mock('@/hooks/useServerRole', () => ({ useIsReplicaServer: () => state.replica }))
 vi.mock('@/api/hosts', () => ({ connectHost: async () => state.current, checkHostReadiness: async () => state.current }))
 vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
 

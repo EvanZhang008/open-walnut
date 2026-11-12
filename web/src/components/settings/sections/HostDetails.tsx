@@ -20,7 +20,7 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { FleetHost } from '@/api/hosts-fleet';
 import { useHostStatus } from '@/hooks/useHostStatus';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { hostProblemOf } from '@open-walnut/host-problem';
 import { isLive, systemLine } from './host-fleet-dashboard-model';
 import { FleetFacts, FleetProblems, FleetVitals, type SystemLine } from './HostFleetVitals';
@@ -102,7 +102,7 @@ function SystemOnly({ system }: { system?: SystemLine }) {
 
 function DetailsBody({ alias, name, card, now, linked, kind, rowProblem, system, profileBlock, profileSummary, onClose }: Props & { system?: SystemLine; profileBlock?: () => ReactNode; profileSummary?: string }) {
   const status = useHostStatus(alias);
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const local = kind === 'local';
   const live = !!card && isLive(card);
   // The problem the row already names is not said again here: the row says which (its rule decides,

@@ -21,9 +21,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { gitChildEnv } from '../../lib/git-env.js';
-import { CLOUD_MODE, WALNUT_INSTALL_DIR, WALNUT_REPO_URL } from '../../constants.js';
+import { WALNUT_INSTALL_DIR, WALNUT_REPO_URL } from '../../constants.js';
 import { getConfig } from '../config-manager.js';
 import { log } from '../../logging/index.js';
+import { isFollower } from '../server-role.js';
 
 export type WalnutSourceKind =
   /** The checkout the running server was built from. */
@@ -122,7 +123,7 @@ export function hasGit(): Promise<boolean> {
 
 export async function getSelfRepairStatus(): Promise<SelfRepairStatus> {
   const base = { cloneDir: defaultCloneDir(), repoUrl: WALNUT_REPO_URL };
-  if (CLOUD_MODE) return { ...base, available: false, source: null, reason: 'cloud' };
+  if (isFollower()) return { ...base, available: false, source: null, reason: 'cloud' };
   const source = await resolveWalnutSource();
   if (source) return { ...base, available: true, source };
   // Something else already lives at the clone path: never clone over it.

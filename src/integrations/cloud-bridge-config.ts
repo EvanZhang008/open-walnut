@@ -23,11 +23,12 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { WALNUT_HOME, CLOUD_MODE } from '../constants.js'
+import { WALNUT_HOME } from '../constants.js'
 import { getCloudRemoteCredentialsAsync } from './git-sync.js'
 import { getConfig } from '../core/config-manager.js'
 import { MACHINE_PROOF_HEADER } from '../core/device-actor.js'
 import { log } from '../logging/index.js'
+import { isFollower } from '../core/server-role.js'
 
 export interface BridgeConfigPayload {
   enabled: boolean
@@ -255,7 +256,7 @@ export async function recoverMachineToken(
   deadToken: string,
   cloud: { domain: string; token: string; secure: boolean },
 ): Promise<'reminted' | 'conflict' | 'failed'> {
-  if (CLOUD_MODE) return 'failed'
+  if (isFollower()) return 'failed'
   const deviceName = bridgeDeviceName(hostAlias)
   const cache = await readTokenCache()
   if (cache[deviceName] && cache[deviceName] !== deadToken) return 'reminted'
@@ -324,7 +325,7 @@ const lastTokenProbeAt = new Map<string, number>()
  * host and re-mints on a 401. True = the cache holds a new token (push again).
  */
 export async function revalidateBridgeToken(hostAlias: string): Promise<boolean> {
-  if (CLOUD_MODE) return false
+  if (isFollower()) return false
   const deviceName = bridgeDeviceName(hostAlias)
   const last = lastTokenProbeAt.get(deviceName)
   if (last !== undefined && Date.now() - last < TOKEN_PROBE_MIN_INTERVAL_MS) return false
@@ -356,7 +357,7 @@ export function resetMachineTokenStateForTest(): void {
 export async function getPrimaryMachineToken(
   cloud: { domain: string; token: string; secure: boolean },
 ): Promise<string | null> {
-  if (CLOUD_MODE) return null
+  if (isFollower()) return null
   return ensureMachineToken('__local__', cloud)
 }
 
@@ -367,7 +368,7 @@ export async function getPrimaryMachineToken(
  * `cloud_bridge.url` overrides the derived endpoint.
  */
 export async function getBridgeConfigForHost(hostAlias: string): Promise<BridgeConfigPayload> {
-  if (CLOUD_MODE) return { enabled: false }
+  if (isFollower()) return { enabled: false }
   const cfg = await getConfig()
   if (cfg.cloud_bridge?.enabled === false) return { enabled: false }
 

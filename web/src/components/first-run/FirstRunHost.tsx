@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
 import {
@@ -21,7 +21,7 @@ import { FirstRunDialog, type FirstRunMode } from './FirstRunDialog';
 interface Open { steps: FirstRunStep[]; mode: FirstRunMode }
 
 export function FirstRunHost() {
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const navigate = useNavigate();
   const [open, setOpen] = useState<Open | null>(null);
   const openRef = useRef<Open | null>(null);

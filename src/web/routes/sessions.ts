@@ -4,7 +4,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
-import { role } from '../../core/server-role.js'
+import { isFollower, role } from '../../core/server-role.js'
 import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, isHistoryUserTurn, isQuestionTurnRow, mainLineRows, questionTurnIds, type HistoryQuestionAnchor, type HistoryRowIds, type HistoryTurnRow } from '../../lib/history-turn-window.js'
 import {
   emitSessionStatusChanged,
@@ -74,7 +74,7 @@ import {
   getSubagentHistoryPayload, executeCompactSession,
 } from '../../core/sessions/session-extras.js'
 import { filterSessionsByQuery, sessionSearchTaskName } from '../../core/session-search.js'
-import { CLOUD_MODE, LOG_DIR, QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
+import { LOG_DIR, QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 import { ensureWalnutSource, isWalnutCheckout, WalnutSourceError } from '../../core/self-repair/walnut-source.js'
 import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine, resolveEngine } from '../../core/agents/engine-registry.js'
 import type { FallbackDecision } from '../../core/agents/fallback-engine.js'
@@ -649,9 +649,10 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // and no source lookup; any other folder is replaced by the source the server
     // knows, which on an npm install means cloning upstream first (minutes, once;
     // concurrent Starts share the clone). A remote-host repair keeps the client's
-    // folder: no local check can say what lives on another machine. Before the
-    // images are written, so a refused repair leaves nothing behind.
-    if (intent === 'fix-walnut' && !host && (CLOUD_MODE || !isWalnutCheckout(cwd))) {
+    // folder: no local check can say what lives on another machine. A replica's disk
+    // is never the client's folder. Before the images are written, so a refused
+    // repair leaves nothing behind.
+    if (intent === 'fix-walnut' && !host && (isFollower() || !isWalnutCheckout(cwd))) {
       try {
         cwd = (await ensureWalnutSource()).source.dir
       } catch (err) {

@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { REMOTE_OFF_NOTE, hostProblemOf, type HostProblem } from '@open-walnut/host-problem';
 import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
 import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT } from '@/hooks/useHostActions';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
 import { HostCommands } from '@/components/hosts/HostCommands';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
@@ -45,7 +45,7 @@ export function SessionHostErrorText({ host, label, reconnecting, fallback }: {
 }) {
   const status = useHostStatus(host);
   const actions = useHostActions(host);
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const l = status?.label || label || host;
   const p = hostProblemOf(status, { replica });
   if (p?.type === 'connect') {
@@ -163,7 +163,7 @@ export function hostSitsIdle(status: { connected?: boolean; phase?: string; remo
  */
 export function SessionHostDownBanner({ host, label }: { host: string; label: string }) {
   const status = useHostStatus(host);
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const p = hostProblemOf(status, { replica });
   const idle = hostSitsIdle(status, p);
   const down = (!!p && (p.type === 'connect' || p.type === 'reconnecting' || p.type === 'off')) || idle;

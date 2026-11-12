@@ -539,10 +539,10 @@ extension SessionConversationStore {
     /// A queue write failed: the sentence says what to do, never a status code.
     static func queueFailureText(_ error: Error) -> String {
         guard let apiError = error as? APIError else { return error.localizedDescription }
+        if apiError.isLeaderUnreachableForNow { return "Can't reach your Mac right now. Try again in a moment." }
+        if apiError.isLeaderUnreachable { return "Send now needs your Mac online." }
         switch apiError.code {
-        case "bridge_offline": return "Can't reach your Mac right now. Try again in a moment."
         case "not_found": return "This session no longer exists on the server."
-        case "not_supported_cloud": return "Send now needs your Mac online."
         default: return SessionControlsSheet.friendlyControlError(error)
         }
     }

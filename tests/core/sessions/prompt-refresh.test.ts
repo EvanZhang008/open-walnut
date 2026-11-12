@@ -17,6 +17,7 @@ const role = vi.hoisted(() => ({ companion: false }))
 vi.mock('../../../src/core/server-role.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/core/server-role.js')>()),
   isCompanion: () => role.companion,
+  isFollower: () => role.companion, // the companion is a replica
 }))
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { addTask } from '../../../src/core/task-manager.js'

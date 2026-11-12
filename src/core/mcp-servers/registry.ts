@@ -5,11 +5,11 @@
  */
 
 import { bus } from '../event-bus.js'
-import { CLOUD_MODE } from '../../constants.js'
 import { createSubsystemLogger } from '../../logging/index.js'
 import { getVersion } from '../version.js'
 import { McpConnection, resolveDefinition } from './connection.js'
 import { MCP_SERVER_NAME, MCP_STATUS_EVENT, type McpServerDefinition, type McpServerStatus } from './types.js'
+import { isFollower } from '../server-role.js'
 
 const log = createSubsystemLogger('mcp')
 const servers = new Map<string, McpConnection>()
@@ -47,7 +47,7 @@ export function registerMcpServer(owner: string, def: McpServerDefinition): { di
   const connection = new McpConnection(resolveDefinition(def), owner, {
     onStatus: () => { if (servers.get(def.name) === connection) announce(def.name) },
     log,
-    replica: CLOUD_MODE,
+    replica: isFollower(),
     clientVersion: getVersion(),
   })
   servers.set(def.name, connection)

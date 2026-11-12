@@ -39,6 +39,7 @@
 import { routeSource } from '../../core/sessions/send-sent-by.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
@@ -121,7 +122,11 @@ sessionExtrasV1Router.get('/sessions/recent', async (req: Request, res: Response
   try {
     const limit = Math.min(Math.max(parseInt(String(req.query.limit), 10) || 10, 1), 100)
     const { readSessionProjectionWithAsOf, exportSessionProjection } = await import('../../core/session-projection.js')
-    if (!CLOUD_MODE) {
+    // Every server but the companion builds the list from its own session store (a host
+    // replica from its copy; only the leader pushes it on, projection-cache.ts). The
+    // companion reads the pushed file instead, so a follower check here would leave a
+    // host replica serving a stale file.
+    if (!isCompanion()) {
       await exportSessionProjection().catch(() => { /* serve last good file below */ })
     }
     // The companion: from its copy of the Mac's sessions once held (stage 2c).

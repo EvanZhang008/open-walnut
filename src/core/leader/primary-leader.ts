@@ -13,9 +13,10 @@
  *     the companion still sends from its old lead is refused.
  */
 
-import { CLOUD_MODE, IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
+import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { LEADER_HEARTBEAT_KIND, LEADER_HEARTBEAT_MS, LEADER_RESTART_GRACE_MS, type LeaderHeartbeatFrame } from './protocol.js'
+import { isFollower } from '../server-role.js'
 
 export interface HostLeaderState {
   epoch: number
@@ -30,7 +31,7 @@ const hostState = new Map<string, HostLeaderState>()
 
 /** Whether the companion may lead while this box is away (config, default on). */
 export async function backupLeaderAllowed(): Promise<boolean> {
-  if (CLOUD_MODE) return false
+  if (isFollower()) return false
   // A test server over copied data never lets anything lead the user's hosts;
   // a test that builds its own companion says so explicitly.
   if (IS_EPHEMERAL) return process.env.WALNUT_EPHEMERAL_BACKUP_LEADER === '1'
@@ -57,7 +58,7 @@ async function heartbeatFrame(restartingMs?: number): Promise<LeaderHeartbeatFra
 
 /** One heartbeat down the bridge. False when there is no bridge lane right now. */
 export async function sendLeaderHeartbeat(restartingMs?: number): Promise<boolean> {
-  if (CLOUD_MODE) return false
+  if (isFollower()) return false
   const { forwardMobileEventToBridge } = await import('../../web/routes/events-v1.js')
   return forwardMobileEventToBridge(LEADER_HEARTBEAT_KIND, await heartbeatFrame(restartingMs))
 }
@@ -65,7 +66,7 @@ export async function sendLeaderHeartbeat(restartingMs?: number): Promise<boolea
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 
 export function startLeaderHeartbeat(): { stop: () => void } {
-  if (CLOUD_MODE) return { stop: () => {} }
+  if (isFollower()) return { stop: () => {} }
   const n = Number(process.env.WALNUT_LEADER_HEARTBEAT_MS)
   const every = Number.isFinite(n) && n >= 100 ? Math.floor(n) : LEADER_HEARTBEAT_MS
   const beat = () => { void sendLeaderHeartbeat().catch(() => { /* the next one lands */ }) }
@@ -82,7 +83,7 @@ export function startLeaderHeartbeat(): { stop: () => void } {
  * a shutdown never waits on a slow bridge.
  */
 export async function announceLeaderRestart(maxWaitMs = 1_500): Promise<void> {
-  if (CLOUD_MODE) return
+  if (isFollower()) return
   if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null }
   await Promise.race([
     sendLeaderHeartbeat(LEADER_RESTART_GRACE_MS).catch(() => false),
@@ -96,7 +97,7 @@ export async function announceLeaderRestart(maxWaitMs = 1_500): Promise<void> {
  * once, not on the next reconnect. Returns the stop.
  */
 export function watchBackupLeaderSetting(): () => void {
-  if (CLOUD_MODE) return () => {}
+  if (isFollower()) return () => {}
   const name = 'leader-backup-setting'
   let last: boolean | null = null
   void backupLeaderAllowed().then((v) => { if (last === null) last = v })

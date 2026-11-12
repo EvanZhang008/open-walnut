@@ -22,7 +22,7 @@ import type { FleetHost } from '@/api/hosts-fleet';
 import { serverNow, useHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
 import { useHostActions } from '@/hooks/useHostActions';
 import { useServerTick } from '@/hooks/useServerTick';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { formatElapsed, hostStatusText } from '@/utils/host-connect';
 import { FIX_NOTE_MS, hostReadinessProblems } from '@/utils/host-readiness';
 import { useFixNotes } from '@/hooks/useFixNotes';
@@ -101,7 +101,7 @@ export function useLinkedHostRow({ alias, name, enabled, saved, card, now, boot,
   const status = useHostStatus(alias);
   const hydration = useHostStatusHydration();
   const actions = useHostActions(alias);
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const label = status?.label || name;
   const hydrating = hydration === 'never' || hydration === 'pending';
   const problem = hostProblemOf(status, { replica });

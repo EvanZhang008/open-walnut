@@ -18,7 +18,7 @@ import { browserRowLabels } from './browser-labels';
 import { usePairDevice, type PairTargetKind } from './cloud/usePairDevice';
 import { clearRequestedPairTarget, peekRequestedPairTarget, useDevicesData, type DeviceEntry } from './cloud/useDevicesData';
 import { bestOfferedKind, preferredKind } from './cloud/pair-targets';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { CLOUD_CHANGE_CLIENT_TIMEOUT_MS } from './cloud/cloud-change-timeout';
@@ -60,7 +60,7 @@ interface QrDialogState {
  * can reach right now: a Wi-Fi QR scanned over cellular never connects at all.
  */
 export function DevicesSection() {
-  const replica = useIsCloudReplica();
+  const replica = useIsReplicaServer();
   const tabView = usePhonesCloudView();
   const [target, setTarget] = useState<TargetKind>('lan');
   // "Use the tailnet address" on the Tailscale sub-page: picked here once the list offers it.

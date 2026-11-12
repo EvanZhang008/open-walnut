@@ -35,7 +35,8 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { log } from '../logging/index.js'
-import { CLOUD_MODE, DAEMON_BINARIES_DIR } from '../constants.js'
+import { DAEMON_BINARIES_DIR } from '../constants.js'
+import { isFollower } from '../core/server-role.js'
 
 export const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-standalone.ts',
@@ -499,7 +500,7 @@ export function verifyDaemonBinaryVersion(): boolean {
   // Mac/remote daemons over the /bridge WS. The guard protects nothing here,
   // and its rebuild path needs bun + the full source tree, neither of which is
   // guaranteed on the cloud box. Skip it entirely.
-  if (CLOUD_MODE) {
+  if (isFollower()) {
     log.session.info('cloud mode: skipping daemon binary version check (no local daemon deploys)')
     return true
   }

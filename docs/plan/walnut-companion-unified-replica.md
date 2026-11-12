@@ -1045,6 +1045,41 @@ After 5a the ratchet lists 313 raw reads in 116 files (348 in 133 before): 213 i
   `src/providers` and the middleware, until the ratchet keeps only `constants.ts`
   and the capability defaults.
 
+### 5b, first part (2026-11-11): the rule, the ratchet, and every check that was not the front
+
+The user, 2026-11-11: the companion is a replica plus capabilities, one logic, never a pile of
+companion-only branches. The rule now sits in AGENTS.md ("The cloud companion is a replica with
+capabilities") and `tests/core/companion-is-a-replica-ratchet.test.ts` replaced the boot policy
+ratchet. It counts every way code asks "is this the companion" (a raw `CLOUD_MODE` read,
+`isCompanion()`, `followerKind() === 'companion'`, `placement() === 'cloud'`) per file in `src/`,
+and fails on any such read in `web/src` outside `api/config.ts` or in the phone outside its
+decoder. At d6ad406b8 the server had 466 such checks in 180 files; after this part, 288 in 108.
+
+Converted: every check that meant a door or a job became `hasCapability()` (device pairing and
+revokes, voice archive, machine credentials, the canary, the box's own sessions, the hub upkeep);
+every check that meant "my leader is elsewhere" became `isFollower()` / `role()` where a host
+replica takes the same path. Clients read the new `role`, `placement`, `serverCapabilities` and
+`leader` fields (`src/web/server-facts.ts`): the web through `web/src/api/server-role.ts`, the
+phone through `ios-native/Walnut/API/ServerFacts.swift`, and every refusal the phone handles treats
+`needs_leader` like the companion's own codes.
+
+Host replica bugs this found and fixed: it started the Mac's time collectors, ran the diagnostics
+dtach probe, built a host server manager, could push a session projection and phone feed frames as
+the Mac, said `mode: LIVE`, `/api/leader` `role: primary`, and answered 200 from its own empty stores
+for devices, Tailscale, push status, notifications, hosts, ssh key, plugin runtime and updates,
+routes and activity detail while the Mac was away (now `needs_leader` rows, or the Mac's copy for
+notifications). On the companion, favorites written in its console never reached the Mac (they
+now relay to the Mac's route).
+
+What the ratchet still lists, each with its reason: the companion's own front (relays over the
+bridge, this slice's remaining work), its offline queues (stage 3, for an older Mac), its copies
+read in process (stages 2 and 4), the pairing values that name it (kept for phones paired there),
+and 13 sites where `isFollower()` would send a host replica into a companion-only path. Gaps a
+host replica still has that the companion covers: stopping a session on its own host, held queue
+rows and message status for sends it journaled, session metadata edits, inbox writes, voice
+fallback; and the companion's 501 on board, folder and leader writes while away, which a host
+replica journals.
+
 ## Security
 
 - Only the Mac's own machine credential reaches `/bridge/build` and `/bridge/journal`

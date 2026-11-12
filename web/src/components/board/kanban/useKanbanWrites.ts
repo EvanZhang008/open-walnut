@@ -9,7 +9,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiPatch, apiPost, apiPut } from '@/api/client';
-import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useIsReplicaServer } from '@/hooks/useServerRole';
+import { useLeaderPresence } from '@/hooks/useLeaderPresence';
 import { log } from '@/utils/log';
 import { autoLaneKind, firstLaneOfKind, type BoardCard, type BoardLane } from '../../../../../src/core/boards/board-lanes';
 import { boardErrorMessage, boardPath } from '../useTaskBoard';
@@ -57,7 +58,7 @@ export interface KanbanWrites {
   api: KanbanWriteApi;
   overlays: OverlayMap;
   pending: readonly PendingAdd[];
-  /** The server answered 501 (a replica): every write control is off. */
+  /** A replica answers without the Mac, or a write was refused 501 or 503 needs_leader: every write control is off. */
   readOnly: boolean;
 }
 
@@ -69,6 +70,15 @@ function errorOf(err: unknown): { status: number; code: string; body: Record<str
     return { status: err.status, code: typeof e?.code === 'string' ? e.code : '', body };
   }
   return { status: 0, code: '', body: {} };
+}
+
+/**
+ * A write this server will not take: 501 (a replica without the route), or 503
+ * needs_leader (a host replica while the Mac is away): every other write would fail too.
+ */
+export function refusesWrites(err: unknown): boolean {
+  const e = errorOf(err);
+  return e.status === 501 || (e.status === 503 && e.code === 'needs_leader');
 }
 
 /** The request, or a timeout error after 15s (counted as a failure). */
@@ -83,16 +93,19 @@ const quote = (title: string) => `"${title.length > 60 ? `${title.slice(0, 59)}â
 
 export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
   const { ownerId } = deps;
-  const replica = useIsCloudReplica();
-  const [notImplemented, setNotImplemented] = useState(false);
-  const readOnly = replica || notImplemented;
+  const replica = useIsReplicaServer();
+  const [refused, setRefused] = useState(false);
+  // A needs_leader refusal lasts until the Mac answers again.
+  const leaderAnswers = useLeaderPresence().answers;
+  useEffect(() => { if (leaderAnswers) setRefused(false); }, [leaderAnswers]);
+  const readOnly = replica || refused;
   const [overlays, setOverlays] = useState<OverlayMap>(() => new Map());
   const [pending, setPending] = useState<PendingAdd[]>([]);
   const seq = useRef(0);
   const d = useRef(deps);
   d.current = deps;
   const base = boardPath(ownerId);
-  useEffect(() => { setOverlays(new Map()); setPending([]); setNotImplemented(false); }, [ownerId]);
+  useEffect(() => { setOverlays(new Map()); setPending([]); setRefused(false); }, [ownerId]);
 
   // G32: a read that started after a write's response releases that write's overlay.
   useEffect(() => {
@@ -125,7 +138,7 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
     } catch (err) {
       setOverlays((cur) => dropOverlay(cur, key, mine) ?? cur);
       d.current.onApplied();
-      if (errorOf(err).status === 501) setNotImplemented(true);
+      if (refusesWrites(err)) setRefused(true);
       return { ok: false, err };
     }
   }, []);
@@ -310,7 +323,7 @@ export function useKanbanWrites(deps: KanbanWritesDeps): KanbanWrites {
       return { ok: true as const, taskId: id };
     } catch (err) {
       setPending((cur) => cur.filter((p) => p.key !== key));
-      if (errorOf(err).status === 501) setNotImplemented(true);
+      if (refusesWrites(err)) setRefused(true);
       log.warn('board', 'kanban task add failed', { taskId: ownerId, lane: laneId, error: boardErrorMessage(err) });
       return { ok: false as const, error: boardErrorMessage(err) };
     }

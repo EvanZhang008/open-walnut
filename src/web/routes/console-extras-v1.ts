@@ -31,16 +31,16 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion, isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 
 export const consoleExtrasV1Router = Router()
 
-/** C-class refusal: the backing store/runner lives on the primary box only. */
+/** C-class refusal: the backing store/runner lives on the leader only, so any replica refuses (the code stays not_supported_cloud for the phone). */
 function primaryOnly(res: Response, what: string): boolean {
-  if (!CLOUD_MODE) return false
+  if (!isFollower()) return false
   sendError(res, 501, 'not_supported_cloud', `${what} lives on the primary box only`)
   return true
 }
@@ -145,7 +145,7 @@ consoleExtrasV1Router.get('/config/providers', async (_req: Request, res: Respon
     const stripped = Object.fromEntries(
       Object.entries(providers).map(([name, { key_hint: _hint, ...rest }]) => [name, rest]),
     )
-    res.json({ providers: stripped, cloud: CLOUD_MODE })
+    res.json({ providers: stripped, cloud: isCompanion() })
   } catch (err) {
     next(err)
   }

@@ -31,11 +31,11 @@
  */
 
 import { bus, type BusEvent } from '../event-bus.js';
-import { CLOUD_MODE } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { readTriageConfig, type TriageConfigHolder } from './config.js';
 import { readTriageHeadline, recordTriageArrivals, type TriagePendingMail, type TriagePendingSlack } from './state.js';
 import { TRIAGE_WAKE_EVENTS } from './types.js';
+import { isFollower } from '../server-role.js';
 
 /** The ONE subscriber name. Re-subscribing overwrites it; nothing else may use it. */
 export const TRIAGE_COLLECT_SUBSCRIBER = 'triage-collect';
@@ -53,7 +53,7 @@ export type TriageCollectDeps = {
   getConfig?: () => Promise<TriageConfigHolder>;
   record?: typeof recordTriageArrivals;
   flushMs?: number;
-  /** Tests only: collect even under CLOUD_MODE. */
+  /** Tests only: collect even on a replica. */
   allowReplica?: boolean;
 };
 
@@ -223,7 +223,7 @@ export function startTriageCollect(deps: TriageCollectDeps = {}): TriageCollectH
     },
   };
 
-  if (CLOUD_MODE && !deps.allowReplica) {
+  if (isFollower() && !deps.allowReplica) {
     log.cron.debug('triage: collector not started on a replica');
     stopped = true;
     return handle;

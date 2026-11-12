@@ -91,7 +91,7 @@ the table reproduces today's values exactly (ratchet: a test computes the old `C
 each row and compares). At boot the server logs one line `boot policy` with every row's decision.
 
 The gate list above is only the `server.ts` part. `CLOUD_MODE` is read 568 times in 152 files of `src/`, and
-many modules gate inside their own start function (C9). Ratchet `tests/core/boot-policy-ratchet.test.ts`
+many modules gate inside their own start function (C9). Ratchet `tests/core/companion-is-a-replica-ratchet.test.ts`
 covers ALL of `src/`: every `CLOUD_MODE` read is either replaced by `role()`, `placement()` or `bootPolicy()`
 or listed in the ratchet with its host-replica decision; the count may only fall. The gates still missing
 from the list above (`src/web/server.ts:1300,1319,1355,1668,1857,1885,1941,2303,2321,2470,2564,3083,3546,
@@ -750,7 +750,7 @@ Rollout gate: `web --replica` shipped OFF by default, a per-host opt-in (`hosts.
   `/api/config` facts gain `{role, placement}` beside `cloud`; the leader door listener (section 1); env
   scrub; copy stores read only except the follower apply connection; the self-gated timers OFF.
 - Tests: `tests/core/server-role.test.ts` (extend: env matrix, reset); `tests/core/boot-policy.test.ts`
-  (new: every row, leader and cloud rows equal the old `CLOUD_MODE` truth); `tests/core/boot-policy-ratchet.test.ts`
+  (new: every row, leader and cloud rows equal the old `CLOUD_MODE` truth); `tests/core/companion-is-a-replica-ratchet.test.ts`
   (new: scans ALL of `src/` for a raw `CLOUD_MODE`; each read is replaced or listed with its host-replica
   decision; count may only fall); `tests/replica/leader-door.test.ts` (new: `POST /bridge/replica` with
   every kind, `devices` included, through the public port is 404 and changes no file; the same request

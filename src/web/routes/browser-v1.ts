@@ -714,8 +714,8 @@ async function fillLoginAct(req: Request, res: Response, b: Record<string, unkno
   what: 'login' | 'code'
 }): Promise<unknown> {
   const h = await hub()
-  const { isFollower, role } = await import('../../core/server-role.js')
-  if (role() !== 'leader' || isFollower()) throw new h.BrowserError('Passwords are kept on the Mac, which does not answer right now.', 503, 'vault_not_here')
+  const { isFollower } = await import('../../core/server-role.js')
+  if (isFollower()) throw new h.BrowserError('Passwords are kept on the Mac, which does not answer right now.', 503, 'vault_not_here')
   const v = await import('./vault-agent-v1.js')
   const { fillLogin } = await import('../../core/browser-control/fill-login.js')
   const { VaultError } = await import('../../core/vault/store.js')

@@ -4,8 +4,8 @@
  * (darwin.ts) and for GET /api/config's `macAccess` fact, which keeps the
  * Settings "macOS Access" entry off a server where that pane has nothing to show.
  */
-import { CLOUD_MODE } from '../../constants.js';
+import { isFollower } from '../server-role.js';
 
 export function permissionsApplicable(): boolean {
-  return process.platform === 'darwin' && !CLOUD_MODE;
+  return process.platform === 'darwin' && !isFollower();
 }

@@ -39,7 +39,7 @@
  * Primary only. The companion holds copies of both stores and must never mint.
  */
 
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js';
+import { WALNUT_HOME } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
 import { answeredSegments, deleteAskTask, releaseIdleSegments } from './lane-ask-repair.js';
 import { log } from '../../logging/index.js';
@@ -48,6 +48,7 @@ import { askProjectFor, resolveAskAgent, type AskAgentRef } from './ask-agent.js
 import { ASK_DEFAULT_TIER } from './ask-launch-plan.js';
 import { GENERAL_AGENT_ID } from './ask-list.js';
 import { parseLaneKey, personalAiLaneKey } from './personal-ai-lane.js';
+import { isFollower } from '../server-role.js';
 
 /** The event source of this module's own task writes (its listeners skip them). */
 const SOURCE = 'lane-ask-link';
@@ -207,7 +208,7 @@ export async function askTaskForLaneMint(
   conversationId: string,
   opts: { create: boolean },
 ): Promise<string> {
-  if (CLOUD_MODE) return '';
+  if (isFollower()) return '';
   const lane = personalAiLaneKey(agentId, conversationId);
   return serialized(lane, async () => {
     const askId = await findOrCreateAsk(agentId, conversationId, lane, opts.create);
@@ -245,7 +246,7 @@ async function newAskForClearedChat(agentId: string, conversationId: string, pre
  * the session joins it, live CLI included. Never throws.
  */
 export async function adoptLaneSessionForTurn(agentId: string, conversationId: string, sessionId: string): Promise<void> {
-  if (CLOUD_MODE) return;
+  if (isFollower()) return;
   const lane = personalAiLaneKey(agentId, conversationId);
   await serialized(lane, async () => {
     let taskId = await findOrCreateAsk(agentId, conversationId, lane, true);
@@ -363,7 +364,7 @@ export async function linkLaneAsks(opts: { now?: number } = {}): Promise<LaneAsk
     chats: 0, created: 0, adopted: 0, linkedSessions: 0, dismissed: 0, noSession: 0, main: 0,
     unanswered: 0, released: 0, removed: 0,
   };
-  if (CLOUD_MODE) return report;
+  if (isFollower()) return report;
   const now = opts.now ?? Date.now();
   const { listChatLaneSessions } = await import('../session-tracker.js');
   const byLane = new Map<string, SessionRecord[]>();
@@ -510,7 +511,7 @@ export async function linkLaneAsks(opts: { now?: number } = {}): Promise<LaneAsk
 
 /** The phone deleted a chat: its ask goes too. */
 export async function conversationDeleted(agentId: string, conversationId: string, askTaskId: string): Promise<void> {
-  if (CLOUD_MODE || !(await taskOrNull(askTaskId))) return;
+  if (isFollower() || !(await taskOrNull(askTaskId))) return;
   await deleteAskTask(askTaskId);
   log.session.info('chat deleted, its ask with it', { agentId, conversationId, taskId: askTaskId });
 }
@@ -530,7 +531,7 @@ export async function conversationTitleChanged(
   by: 'user' | 'auto',
   beforeFromAsk = false,
 ): Promise<void> {
-  if (CLOUD_MODE) return;
+  if (isFollower()) return;
   const meta = await conversationMeta(agentId, conversationId);
   const task = await taskOrNull(meta?.askTaskId);
   if (!task || task.title === after) return;
@@ -581,7 +582,7 @@ const seenTitles = new Map<string, string>();
  * and an ask deleted by a person deletes the chat. Returns a stop function.
  */
 export function startLaneAskSync(): () => void {
-  if (CLOUD_MODE) return () => {};
+  if (isFollower()) return () => {};
   bus.subscribe(SOURCE, async (event) => {
     if (event.source === SOURCE) return;
     try {

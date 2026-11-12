@@ -95,6 +95,14 @@ export function isHostReplicaProgram(): boolean {
 export function hasLocalDaemon(): boolean { return current().placement !== 'host' }
 /** Sessions run where this server is: the Mac, or (WP12) the host. */
 export function runsSessions(): boolean { return current().placement !== 'cloud' }
+/**
+ * This box is not one of the user's own machines (placement cloud): its disk holds the box's
+ * own config and credentials, not the user's files, so the file routes confine reads and writes
+ * to the safe folders and refuse secret paths. A fact of where the box runs, not a capability:
+ * it holds whatever WALNUT_CAPABILITIES says. A host replica runs on the user's own host and
+ * reads its files there by design.
+ */
+export function confinesLocalFiles(): boolean { return isCompanion() } // live, as followerKind(): placement cloud is CLOUD_MODE
 /** A box with the backup-leader capability may stand in for the Mac when the user allowed it (backupAllowed). */
 export function canStandIn(allowed: boolean): boolean { return hasCapability('backup-leader') && allowed }
 
