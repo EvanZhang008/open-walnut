@@ -533,6 +533,8 @@ describe('each host\'s slots', () => {
     __setWaitStepForTesting(null);
     expect(await isAutomaticStart({ source: 'org-autostart' })).toBe(true);
     expect(await isAutomaticStart({ source: 'engine-switch' })).toBe(false);
+    // A mail router's idle start of itself or of its receiver: the delivery right after it needs it now.
+    expect(await isAutomaticStart({ source: 'router-runtime', callerSid: 'sid-router' })).toBe(false);
     // The Org page's Retry runs through the org's path, but it is the user's click.
     expect(await isAutomaticStart({ source: 'org-autostart', byPerson: true })).toBe(false);
     expect(await isAutomaticStart({ source: 'api-v1' })).toBe(false);

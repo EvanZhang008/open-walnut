@@ -18,8 +18,8 @@
  * task_create, the run of a start an older Walnut queued (start-queue.ts), the org's own start of a lead or a VP
  * (org-autostart.ts), and a routine's run (routines/run-start-deps.ts). A person's start (the
  * board, the phone, a chat), a Personal AI ask's, a start that quotes the user's words
- * (`user_request`), and Walnut's own moves (an engine switch, a transfer, a recovery) start at
- * once. Not limited either: a start that continues a task's conversation (a message, no new
+ * (`user_request`), and Walnut's own moves (an engine switch, a transfer, a recovery, a mail
+ * router's idle start of itself or of its receiver) start at once. Not limited either: a start that continues a task's conversation (a message, no new
  * session), and `walnut start` typed in a shell (no caller session: it reads as a person's).
  * The org's Retry and Start now on a queued start are a person's clicks: they never wait. A
  * worker's start and the org's start of a lead fail with HostsFullError, which their caller reads
@@ -31,8 +31,13 @@ import type { HostLoadView } from '../hosts/placement.js';
 
 export const LOCAL_HOST = '__local__';
 
-/** Walnut's own moves of work that already runs: they need their session now. */
-const OWN_MOVES = new Set(['engine-switch', 'transfer', 'auto-recover', 'recovery', 'restart', 'folder-gone']);
+/**
+ * Walnut's own moves of work that already runs: they need their session now. `router-runtime` is a
+ * mail router's idle start of itself or of the task an item was routed to: no turn of its own, and
+ * the delivery right after it fails when it is left waiting (2026-11-12: a routed mail's new task
+ * was queued for a slot, so its brief found no receiver and the route failed for good).
+ */
+const OWN_MOVES = new Set(['engine-switch', 'transfer', 'auto-recover', 'recovery', 'restart', 'folder-gone', 'router-runtime']);
 
 /** Starts admitted per host and not settled yet (task ids). */
 const admitted = new Map<string, Set<string>>();
