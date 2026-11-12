@@ -18,7 +18,8 @@
 import { redactAiOnly } from '../lib/ai-only-envelope.js';
 import { hookContextText } from '../lib/walnut-added.js';
 import { NATIVE_PEER_TAGS, nonHumanOrigin } from '../lib/history-session-envelope.js';
-import { VALID_SESSION_EFFORT_IDS, type InPlaceRewindCut } from './types.js';
+import type { InPlaceRewindCut } from './types.js';
+import { VALID_SESSION_EFFORT_IDS } from './session-effort.js';
 import { projectUserText } from './sessions/user-text-projection.js';
 import { withLegacyHintCutoff } from './sessions/legacy-hint-lines.js';
 import type { CarriedHint } from './hints/hint-format.js';
