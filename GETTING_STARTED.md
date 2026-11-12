@@ -66,6 +66,7 @@ Open [http://localhost:3456](http://localhost:3456), type "hello" to the CEO, an
 - [Search & Embedding Setup](#search--embedding-setup)
 - [Intermediate: Cron, Skills, Commands](#intermediate-cron-skills-commands)
 - [Advanced: SSH, Integrations, Plugins](#advanced-ssh-integrations-plugins)
+- [Keyboard Shortcuts](#keyboard-shortcuts)
 - [CLI Quick Reference](#cli-quick-reference)
 - [Troubleshooting](#troubleshooting)
 - [What's Next](#whats-next)
@@ -715,6 +716,48 @@ npx @open-walnut/plugin-cli new my-plugin --dev
 ```
 
 That scaffolds the project, installs, builds, links it into `~/.open-walnut/plugins/`, asks the running Walnut to load it, prints the App URL, and then rebuilds and reloads on every save. Later loops are `npm run dev` in the project. See [Plugin development](docs/reference/plugin-development.md) for the full guide, and [examples/plugins/walnut-demo](examples/plugins/walnut-demo) (the Walnut Plugin Demo) for a runnable example of every public capability.
+
+---
+
+## Keyboard Shortcuts
+
+Press `?` (outside a text box) or `⌘/` (`Ctrl+/` on Windows and Linux) anywhere in the web UI to
+see the shortcuts for the place you run it in. A browser keeps `⌘1` to `⌘9` (`Ctrl+1` to `Ctrl+9`
+on Windows and Linux) for its own tabs, so switching between session columns uses `⌃` (Control)
+in a browser on a Mac and `Alt` on Windows and Linux; the Mac app uses `⌘`. This table is the
+same list the app shows, checked by `tests/web/keyboard-shortcuts.test.ts`.
+
+<!-- shortcuts:start -->
+**Sessions**
+
+| Action | Mac app | Browser on a Mac | Windows and Linux |
+|---|---|---|---|
+| Go to the 1st to 5th session column | `⌘1` to `⌘5` | `⌃1` to `⌃5` | `Alt+1` to `Alt+5` |
+| Go to the last session column | `⌘9` | `⌃9` | `Alt+9` |
+| Hold to show each column's number | `⌘` | `⌃` | `Alt` |
+| Previous / next session column | `⌘⇧[` / `⌘⇧]` | `⌃⇧[` / `⌃⇧]` | `Alt+Shift+[` / `Alt+Shift+]` |
+| Type in the current session | `⌘I` | `⌃I` | `Alt+I` |
+| Find a session | `⌘⇧O` | `⌘⇧O` | `Ctrl+Shift+O` |
+| New session column | `⌘⇧↩` | `⌘⇧↩` | `Ctrl+Shift+Enter` |
+| Show or hide the questions drawer | `⌘⇧E` | `⌘⇧E` | `Ctrl+Shift+E` |
+
+**Tasks**
+
+| Action | Mac app | Browser on a Mac | Windows and Linux |
+|---|---|---|---|
+| Complete the current task and go to the next one that needs you | `⌘⇧D` | `⌘⇧D` | `Ctrl+Shift+D` |
+| Undo the last task action (for 5 seconds) | `⌘Z` | `⌘Z` | `Ctrl+Z` |
+| Search tasks | `⌘K` or `/` | `⌘K` or `/` | `Ctrl+K` or `/` |
+| Filter the task list | `F` | `F` | `F` |
+
+**General**
+
+| Action | Mac app | Browser on a Mac | Windows and Linux |
+|---|---|---|---|
+| Find on the page | `⌘F` | `⌘F` | `Ctrl+F` |
+| Show these shortcuts | `?` or `⌘/` | `?` or `⌘/` | `?` or `Ctrl+/` |
+| Close a menu or dialog, or clear the selected task | `Esc` | `Esc` | `Esc` |
+<!-- shortcuts:end -->
 
 ---
 

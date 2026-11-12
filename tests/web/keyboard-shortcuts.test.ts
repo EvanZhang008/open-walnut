@@ -5,7 +5,7 @@
  * of the sheet is matched here to its handler, so a row added without one (or a handler
  * removed under a row) fails.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -118,6 +118,31 @@ describe('the sheet names only handled keys', () => {
       expect(h, `the sheet lists "${row.id}" (${row.label}) but no handler is named for it here`).toBeDefined()
       expect(web(h.file), `"${row.id}" names ${h.file}, which no longer handles it`).toMatch(h.has)
     }
+  })
+
+  // GETTING_STARTED.md lists the same sheet as a table, so the doc can never name a key the
+  // app does not have. WALNUT_WRITE_SHORTCUTS_DOC=1 rewrites the block from the sheet.
+  it('the Getting Started table is the sheet, for every place', () => {
+    const chord = (keys: string[], env: KeyEnv) => '`' + keys.join(env === 'other' ? '+' : '') + '`'
+    const cell = (row: ReturnType<typeof shortcutGroups>[number]['rows'][number], env: KeyEnv) =>
+      row.keys.map((k) => chord(k, env)).join(` ${row.sep ?? 'or'} `)
+    const envs: KeyEnv[] = ['mac-app', 'mac-browser', 'other']
+    const lines: string[] = []
+    shortcutGroups('mac-app').forEach((g, gi) => {
+      lines.push(`**${g.title}**`, '', '| Action | Mac app | Browser on a Mac | Windows and Linux |', '|---|---|---|---|')
+      g.rows.forEach((row, ri) => {
+        const cells = envs.map((env) => cell(shortcutGroups(env)[gi].rows[ri], env))
+        lines.push(`| ${row.label} | ${cells.join(' | ')} |`)
+      })
+      lines.push('')
+    })
+    const block = `<!-- shortcuts:start -->\n${lines.join('\n')}<!-- shortcuts:end -->`
+    const docPath = path.resolve(import.meta.dirname, '../../GETTING_STARTED.md')
+    const doc = readFileSync(docPath, 'utf8')
+    const re = /<!-- shortcuts:start -->[\s\S]*?<!-- shortcuts:end -->/
+    expect(doc, 'GETTING_STARTED.md lost its shortcuts block').toMatch(re)
+    if (process.env.WALNUT_WRITE_SHORTCUTS_DOC === '1') writeFileSync(docPath, doc.replace(re, block))
+    else expect(doc.match(re)![0], 'run with WALNUT_WRITE_SHORTCUTS_DOC=1 to rewrite it').toBe(block)
   })
 
   it('every place gets the same rows, in its own keys', () => {
