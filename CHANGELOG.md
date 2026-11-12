@@ -6,6 +6,199 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.32] - 2026-11-12
+
+### Added
+
+- A designed agent cursor, four looks, picked in Settings
+- Price Fable 5.2 at its published rates
+- The page logs how much it holds every five minutes, beside the Mac app's memory lines
+- Agenda and Scratchpad get their own Side bar group
+- The debugger is required in Chrome, so live pictures, agent screenshots and real input work everywhere in the agent window
+- An agent's cursor in the page, and Act in tab joins the task's tab group
+- Show it live on a covered agent window
+- Live pictures of a covered agent window through the debugger
+- At most 2 test servers at once on a Mac, and a long idle limit yields to a waiting one
+- The side panel's bar reads as designed, its composers pick mode and model, and the page chip says it is the page
+- Agents fill a saved login's one-time code with fill_code, never seeing it, under fill_login's rules; a fresh sign-in's yes covers its code once
+- Watching rows drag to the user's own order
+- Keep each routine's run history, show missed runs, retry a broken start in its slot, offer a catch-up run
+- Show each check's time limit, say a kill at the limit, and let trigger_test wait out long checks
+- Walnut-net 0.2.1 downloads are checked against pinned checksums
+- Dictate to the clipboard from the composer
+- A reworded ask is the same decision, never news
+- Tasks nobody started fold under their own Not started section
+- Filters that file mail into a folder of the account
+- Walnut.passwords.state and unlock, so a plugin can save a secret when Passwords is locked
+- Move between sessions from the keyboard, complete and go on, Undo for task actions
+- Reviewers give a score (function, UX, UI) on their reply; Engines compared shows it per task and per engine
+- One column per model line, a one-line verdict, add an engine on a model and an off switch in Settings
+- Share new tasks between coding engines and compare them on Usage & Costs
+- A thread push opens the VP's Threads with that thread visible
+- Walnut.passwords.save keeps a secret the person typed in a plugin's App
+- Drag, wheel and in-box scroll, type at a point and slowly, annotated screenshots, zoom, page dialogs, clicks by words across frames
+- Find the dev servers a session started, open them in its Web view, stop one
+- Stream binary route responses with cancellation
+- Mail lists each area's router with its live state, and the Org chart draws it beside the VPs
+- One mail router per area, beside the VPs, with its routing shown on every email
+- A linked pull request's live status on the task, a failed check wakes its agent, a merge completes it
+- Several terminals per session, split panes, docked under Changed
+- Call Ask Walnut "Quick question" and the main task "CEO" everywhere a person reads
+- Every letter says who sent it; Inbox Triage keeps routing rules
+- The fallback engine reads a session's usage-limit stop from the wait's own record
+- A new task starts on the fallback engine while the default engine is out of usage
+- An opened org chart project is the tree of its tasks, each with its status icon
+- A closed org chart card says how many it has open and what it is doing
+- Live Browser view stream, Take over and Hand back, sign-in hand-off, one tab group per task
+- One taskbar for the whole app, and Minimize on every session panel
+- The taskbar's chips are only sessions the user minimized; the rest go to Recent at its right end
+
+### Fixed
+
+- A widening leaves the live end before the follow cut can undo it, and a cut never removes a row on screen
+- A column following the live end cuts its chat back to the default tail
+- A push during a list read waits for it, then reads its own job
+- A clicked column wears no highlight: no tinted header, no accent line, no composer ring
+- ModeBesideCorner is pure; each pane tells a sheet move outside its updater
+- A later write for a task the list does not hold yet replaces its held edit
+- A column's Complete toast names its task before the board's list has come
+- A pane that goes full screen under a corner notice picks its mode afresh
+- A compact file bar draws the Terminal dock toggle as its icon
+- A column's Complete before the board's first list closes it at once
+- The ask drawer returns focus only when it closes, not when React replays its effect
+- On a phone a settings select is 44 px tall
+- An agent step never reports input the page did not get, and reads take 3 calls
+- The model catalog lives in a state dir, not the OS temp dir
+- Phone pills keep their colour and the title its room; spec covers the asking tab and phones
+- The browser pill's Sign in opens the asking tab; the guard catches wrappers
+- Larger widens the browser pill's popover; a browser glyph on the phone
+- Live servers and the browser show only as header pills
+- A GitHub server error is tried again instead of ending the run
+- The extensions' build number phases name the built Info.plist as input, so Xcode runs them after writing it
+- The nightly extra tests set their daemon dir in a step, since a job's env cannot read the runner context and GitHub rejected the file
+- The default branch reads every remote's main from the refs, so a second remote's branches count without that remote being configured
+- A card follows the answer to its send, and every mic in a view says the same
+- Place the HTML preview card as soon as the page reports its passage
+- On a phone the Web view's server strip keeps the shown page's port in view
+- Judge outward steps after the cursor; person's tab groups survive a reload; debugger holds end cleanly
+- A task change reaches a host as its rows, not the whole task manifest
+- The size notice repeats every 6 hours while free space is under the floor
+- The panel's composer gives its mode and model their own line, and its first drawing shows them
+- A request in flight to a daemon being replaced waits for the next one
+- The dependency mirror leaves out tool caches, so a vite run elsewhere no longer voids its copy
+- A reattach after a server restart keeps the window's screen
+- Walnut never picks a host that cannot run Claude Code, and one nothing uses takes no card
+- A question the person stopped is not asked again at the next turn's end
+- Full screen hides the Terminal dock toggle, and the blank click spec finds blank bar
+- The server's own timeout answer is said at once, not retried as a lost link
+- The Routers list keeps the narrow drill down's measure
+- The "still waiting" line counts from when the link's code went out
+- On a phone the route line reads at 12 px and the routing buttons take a finger
+- The event-loop alarm counts only stalls Walnut's own work caused
+- The reconcile loop no longer asks again for its own question's echo
+- A closed group's "Filter mails like these…" starts from its own mail
+- A send written with the words folds to one closed line after them
+- A darwin identity stamp that cannot sign leaves the file as bun wrote it
+- Sweep unused stages again once the new server serves
+- Hash daemon-over-busy.ts into the daemon version, and run the force twins test on Node
+- An overdue swap fences file changes from its start on every path, and a self-ending skip asks again
+- Every update path past a silent daemon, and no deferral without a clock
+- An overdue update ends even when the old daemon's work never settles
+- An overdue update gets past an older or stuck daemon too
+- Bound every hold on a daemon update, the daemon's own refusal included
+- Every chat page keeps the reader's place, and the question list opens only from its marker
+- The restart alarm counts only starts on the build already running, not deploys
+- A build takes its dependencies from its own mirror, so a checkout mid-merge cannot break it
+- The clipboard mic needs no router, and voice WebKit specs pin Safari's agent in the open
+- The sent text is the whole recording, transcribed once, unchanged
+- An open Recent row stays readable on the selected row's fill
+- A card header's pieces never overlap; the node's name gives way, the state and time stay whole
+- A receiving task's ask keeps its decision across rewordings
+- A decision is kept only across real rewordings, and what stays quiet survives a restart
+- A wider window keeps a plugin dialog, a task's detail and a new session's draft open
+- Delivery latency leaves out sleep and lines written earlier
+- A session just continued after the usage limit reads as continuing, not ended
+- A limit summary's count scrolls to the topmost of its rows
+- An init processor's timeout bounds its action, not the whole run
+- The widget's build-number script adds the version when its built Info.plist has none
+- The words answering the person never fold, whatever line ends the turn
+- A random mixed-case token is matched whole, so a short term among its base64url parts no longer fails the audit
+- Heavy work holds off at a whole-Mac load spike, deploys wait out a busy Mac
+- A cron push reads the one routine it names instead of the whole list
+- A split pick of the default engine with no model of its own still falls back while that engine is out of usage
+- The split's config fields stay out of a replica's copy; new task fields are listed as not drawn on rows; the split row's labels and model input pass the ratchets
+- A task's review score merges part by part, also on a close of a closed task; the All view names a column with no model line; plainer words for unknown cost and reviewers
+- The ops read a score by the same rule as the routes (any key case, text, refuse what cannot be read); another company's lower part still counts; a company keeps each part's latest; the default-model entry says so
+- A queued close keeps its score through a later close and a replay onto a closed task; a reviewer on a model of no known company is an unknown company
+- A close's score is kept offline too; one score rule online and offline; parts from two companies are no full verdict; an unknown reviewer company reads unknown, never 0%
+- Review counts and costs are never a win; medians rest on fully scored tasks; a text score needs all three parts valid; only a reviewer with a verdict counts as checked
+- A score ranks only with all three parts and says what it rests on; an offline reply's score is kept; an unusable score is refused; unknown reviewers count apart
+- A task counts under the model line that cost most; the off switch keeps the entries; models only where an entry takes one; a cross-company review share
+- Time and date work from recorded facts (a session's first turn, each completion), not from overwritten status moves
+- Claude Code's own turn signals count as work; a resumed dead spawn dates the work from its reopen; open tasks newest first
+- A failed start's empty session never dates or times the work that followed it
+- A CLI that dies before its first reply, then closed, is never-started work
+- Never-started tasks say so in the list; one engine stays one column under unknown model ids
+- A start that never ran a turn is never finished work, on any engine; ranks rest on each metric's own samples
+- The fair view has one column per split entry; tasks that never ran are not finished work
+- Medians judged on finished work; one failure counts once; a reopen keeps the first completion
+- Bounded turns, reviewers take none, failures kept; dollars decide a task's engine
+- Requests with no token counts are unknown; tasks go to the column that carried them
+- A start that failed before a session still counts; unknown usage reads as unknown
+- Unknown usage is never cheapest; a fair view keeps tasks where the split put them; a failed first start keeps its pick
+- One pick per task under double starts; a fair-test view; review costs and errors counted honestly
+- Split picks survive queued starts; the comparison counts honestly
+- Two task starts at once take different split entries
+- The default branch is the one HEAD left most recently, so an old work branch as origin/HEAD or a stale origin/main never becomes it
+- Picking a view in an Org node page's menu sticks while its threads read retries
+- Messages never stay QUEUED behind a jammed queue, and the panel shows the server's word
+- An ask that reached its target is never told "not taken", and a refused start says what to do
+- No standing attachment-limit lines; a limit shows only where it is hit
+- A task link in the phone Scratchpad sheet opens the task and closes the sheet
+- An Org page whose first task load failed tries again and settles its node once it lands
+- A changed e2e test runs under the e2e config, not the slow tier's
+- A grouped read that failed on a dropped link loads again by itself
+- One row per mail across folders, bodies fit the paper, and four small reader and Org fixes
+- A drag, a dialog's OK and slow typing are judged before they act; older extensions are refused the new input; a dialog stops the step it cut short
+- A table cell's bold no longer rewrites other text on save
+- A slow first ui-prefs read no longer opens the default layout or overwrites the user's prefs
+- Timeline notice rows start collapsed, the idle compaction row too
+- A page selection the panel already read has its clearing told
+- The origin badge reads 12 px on a phone
+- The side panel drawer's title stays on one line
+- A notice beside the full-screen sheet never takes a Tree Mode page away
+- A covered agent window says why it has no picture
+- A letter's origin lives on Letter, not on a thread turn
+- An agent's new tab never focuses the agent window
+- Escape closes a link tag's hover card
+- The bridge's owner check reads the spawn journal again on a miss
+- A finished session's stream capture goes after two days; the spawn journal proves residence
+- A low disk prunes a finished task after an hour, and one failed sweep step never skips the rest
+- The shipped Walnut skill lists thread_update's user_words, and its drift check runs in the quick tier
+- The last press on a page no longer keeps what it pressed alive after it leaves
+- A favorites or ordering read that crossed this tab's rename takes the new name
+- A toast still settling keeps its mark when the corner remounts
+- The asked prompt's disclosure stays light with dark ink, in both themes
+- A pop-out mounts the plugin dialog host, as App does
+- A composer that narrows only grows, so the transcript beside it keeps its end
+- The launch log's millisecond fields come from one plain helper
+- The launch hydration is a named method, so CI's compiler type-checks MainTabView's body again
+- A question answered in its tag is not asked again at Stop, and a Stop hook's hold makes no card
+- A routing rules file that cannot be read is never taken for no rules
+- A start Walnut never took is asked again instead of ending the run
+- A full-screen sheet is round at every corner: the sheet under it is not drawn
+- Every editor that saves Markdown keeps the document's own bytes on the lines nobody edited
+- A label cut in a long path stops at a slash, never at the bare verb
+- A land never runs an e2e test with the slow config
+- The tidy-up reads the task's status, not its phase; guards list Take over and the extension's CDP methods
+- The view never freezes, no window or tab is taken from the person, groups fold, finished tasks' tabs close
+- The push gate asks again for a job log GitHub has not served yet
+- A changed e2e test runs under the e2e config in the local test layers
+- Walnut-net 0.2.1 dials through the relay first, and logs each path's two ends
+- A host whose link keeps dropping reads unstable, never "Connected"
+- A message to a host nothing reaches waits for that host, and says so
+- An op call whose answer is lost says what is known, and a resend runs it once
+
 ## [0.6.31] - 2026-11-11
 
 ### Added
