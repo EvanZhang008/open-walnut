@@ -77,7 +77,7 @@ afterAll(() => {
   if (lookAlikeDir) fs.rmSync(lookAlikeDir, { recursive: true, force: true })
 })
 
-describe.skipIf(!canBuild)('a look-alike app on this Mac', () => {
+describe.skipIf(process.platform !== 'darwin' || !canBuild)('a look-alike app on this Mac', () => {
   it('an ad-hoc signed bundle with the Mac app\'s identifier is refused', async () => {
     lookAlikeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-lookalike-'))
     const app = path.join(lookAlikeDir, 'Walnut.app')
@@ -96,7 +96,7 @@ describe.skipIf(!canBuild)('a look-alike app on this Mac', () => {
     // Hardened runtime too: only the missing certificate tells it apart.
     execFileSync('codesign', ['--force', '--options', 'runtime', '--sign', '-', '--identifier', MAC_APP_BUNDLE_ID, app])
     lookAlike = spawn(exe, [], { stdio: 'ignore' })
-    await new Promise((r) => setTimeout(r, 300))
+    await new Promise((r) => lookAlike!.once('spawn', r))
     const proof = await pidIsMacApp(lookAlike.pid!)
     expect(proof).toEqual({ ok: false, why: 'the app is not signed by a developer certificate' })
   }, 60_000)
