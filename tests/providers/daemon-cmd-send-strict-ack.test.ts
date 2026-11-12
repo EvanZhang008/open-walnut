@@ -332,6 +332,67 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
     }
   }, 15_000)
 
+  // 2026-11-11: a 420KB message (three pictures) into a CLI mid-turn under load 190 had 377KB
+  // in at the 20s deadline; the daemon reaped the working CLI ('send-partial-write') and the
+  // cold resume took 81s. A reader that keeps draining is alive: the deadline follows it.
+  it('a reader that keeps draining slowly past the write deadline is not reaped', async () => {
+    const slow = await buildDeps({ fifoWriteDeadlineMs: 1_500 })
+    const core = createDaemonCore(slow.deps)
+    const fifo = makeFifo()
+    const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+    const chunks: Buffer[] = []
+    // 16KB every 150ms: a 384KB line (64KB of it fits the pipe) takes ~3s, twice the 1.5s deadline, never 1.5s idle.
+    const drain = setInterval(() => {
+      try {
+        const buf = Buffer.alloc(16 * 1024)
+        const n = fs.readSync(readerFd, buf, 0, buf.length, null)
+        if (n > 0) chunks.push(buf.slice(0, n))
+      } catch { /* EAGAIN */ }
+    }, 150)
+    try {
+      slow.sessions.set('sid', makeTestSession({ pid: 701, pipePath: fifo }))
+      const big = 'z'.repeat(384 * 1024)
+      const t0 = Date.now()
+      const res = await core.handleSendCommand('sid', big)
+      expect(res).toEqual({ ok: true })
+      expect(Date.now() - t0).toBeGreaterThan(1_500)
+      expect(slow.sessions.get('sid')!.state).toBe('running')
+      clearInterval(drain)
+      for (let i = 0; i < 200; i++) {
+        try {
+          const buf = Buffer.alloc(64 * 1024)
+          const n = fs.readSync(readerFd, buf, 0, buf.length, null)
+          if (n > 0) { chunks.push(buf.slice(0, n)); continue }
+          break
+        } catch { break }
+      }
+      expect(JSON.parse(Buffer.concat(chunks).toString('utf-8').trim()).message.content).toBe(big)
+    } finally {
+      clearInterval(drain)
+      fs.closeSync(readerFd)
+      await slow.cleanup()
+    }
+  }, 20_000)
+
+  it('a reader that takes a prefix and then stops reading is still reaped once it stalls', async () => {
+    const stall = await buildDeps({ fifoWriteDeadlineMs: 300 })
+    const core = createDaemonCore(stall.deps)
+    const fifo = makeFifo()
+    const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+    try {
+      stall.sessions.set('sid', makeTestSession({ pid: 702, pipePath: fifo }))
+      const t0 = Date.now()
+      const res = await core.handleSendCommand('sid', 'q'.repeat(256 * 1024)) as { ok: boolean; reason?: string }
+      expect(res.ok).toBe(false)
+      expect(res.reason).toBe('session_dead')
+      // Gave up one stall after the last drain (the pipe's own buffer), not at the boot cap.
+      expect(Date.now() - t0).toBeLessThan(5_000)
+    } finally {
+      fs.closeSync(readerFd)
+      await stall.cleanup()
+    }
+  }, 20_000)
+
   // Concurrent sends must not interleave partial writes: with async retries a
   // second send could otherwise splice its bytes into the middle of the first
   // send's stalled payload, corrupting both lines. The per-session write chain

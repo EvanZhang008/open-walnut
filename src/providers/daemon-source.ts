@@ -8225,6 +8225,12 @@ function stillBooting(session) {
 async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned, beforeNewline, progress, holdPartial, who) {
   const RETRY_INTERVAL_MS = 25;
   let held = false;
+  // A reader that keeps draining is alive (twin of daemon-core.ts): once a prefix is in,
+  // past the deadline the write goes on while the CLI keeps taking chunks, until it stops
+  // reading for FIFO_WRITE_DEADLINE_MS, at most FIFO_BOOT_WRITE_DEADLINE_MS past the
+  // deadline; giving up then reaps the CLI.
+  const writeCap = deadline + FIFO_BOOT_WRITE_DEADLINE_MS;
+  let drainedAt = Date.now();
   let fd;
   try {
     fd = fs.openSync(pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
@@ -8248,13 +8254,14 @@ async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned, beforeN
       const limit = barrierDone ? buf.length : barrier;
       try {
         const n = fs.writeSync(fd, buf, offset, limit - offset);
-        if (n > 0) { offset += n; if (progress) progress.sent = offset; continue; }
+        if (n > 0) { offset += n; drainedAt = Date.now(); if (progress) progress.sent = offset; continue; }
       } catch (err) {
         if (err && err.code === 'EPIPE') return 'ENXIO';
         if (!err || err.code !== 'EAGAIN') throw err;
       }
       if (isAbandoned && isAbandoned()) return offset === 0 ? 'EAGAIN' : 'partial';
-      if (Date.now() >= deadline) {
+      const until = offset > 0 ? Math.min(writeCap, Math.max(deadline, drainedAt + FIFO_WRITE_DEADLINE_MS)) : deadline;
+      if (Date.now() >= until) {
         // Part of the line is in a CLI still booting: it reads on once it boots (the boot hold).
         if (offset === 0 || !(holdPartial && holdPartial())) return offset === 0 ? 'EAGAIN' : 'partial';
         if (!held) {

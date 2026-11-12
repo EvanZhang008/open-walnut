@@ -64,7 +64,7 @@ function harness() {
   internals.sessions.set('stage-task', session)
   const line = (ev: Record<string, unknown>) => (session as unknown as { handleStreamLine(l: string): void }).handleStreamLine(JSON.stringify(ev))
   return {
-    internals, writes,
+    internals, writes, session,
     lifecycle: (uuid: string, state: string) => line({ type: 'command_lifecycle', command_uuid: uuid, state }),
     answer: () => line({ type: 'assistant', parent_tool_use_id: null, message: { id: `m-${Math.random()}`, role: 'assistant', content: [{ type: 'text', text: 'the answer' }] } }),
   }
@@ -126,6 +126,51 @@ describe('a queued row says how far it got', () => {
     const live = { taken: new Set<string>(), awaited: new Set(['other']), held: new Set<string>() }
     expect(queueRowFacts({ id: 'mid-delivery', status: 'processing', message: 'x' }, SID, live)).toEqual({ stage: 'waiting', delivered: false })
     expect(queueRowFacts({ id: 'other', status: 'processing', message: 'x' }, SID, live)).toEqual({ stage: 'written', delivered: false })
+  })
+
+  // 2026-11-11, the user: "the new conversation take like 7 second to even get the message
+  // delivered". A cold resume's first line is reported delivered at the spawn (0.8 s) and read
+  // once the new CLI has booted (4.3 s on the dev host); the queue read in between said
+  // `waiting`, so the web flipped the bubble back to Queued until its next read, 7.4 s in.
+  it('a cold resume\'s first line reads written from the spawn until the new process reads it, then taken', async () => {
+    const h = harness()
+    const row = await enqueueMessage(SID, 'what happened?', { sentBy: 'person' })
+    const store = await import('../../../src/core/session-message-queue.js')
+    const rows = await store.markNextProcessing(SID)
+    const lineUuid = 'resume-line-uuid'
+    const held = rows.map((r) => ({ ...r, lineUuid }))
+    // Still spawning: nothing vouches for it yet.
+    expect(await payload()).toMatchObject([{ id: row.id, status: 'processing', stage: 'waiting', delivered: false }])
+    // The spawn is confirmed and carried the line (settleResumeSuccess): the process reads it once booted.
+    const session = h.session as unknown as { _initSeenThisProcess: boolean; processEndCount: number; holdResumeLineUntilRead(r: unknown[], e: number): boolean; releaseResumeLine(how: string): void }
+    session._initSeenThisProcess = false
+    expect(session.holdResumeLineUntilRead(held, session.processEndCount)).toBe(true)
+    expect(await payload()).toMatchObject([{ id: row.id, status: 'processing', stage: 'written', delivered: false }])
+    // Its init: it read the line, only the answer is to come.
+    session.releaseResumeLine('read')
+    expect(await payload()).toMatchObject([{ id: row.id, status: 'processing', stage: 'taken', delivered: true }])
+  })
+
+  it('a resume line the process never read (it ended first) is no longer written', async () => {
+    const h = harness()
+    await enqueueMessage(SID, 'hello')
+    const store = await import('../../../src/core/session-message-queue.js')
+    const rows = await store.markNextProcessing(SID)
+    const session = h.session as unknown as { _initSeenThisProcess: boolean; processEndCount: number; holdResumeLineUntilRead(r: unknown[], e: number): boolean; _resumeLineHold: unknown }
+    session._initSeenThisProcess = false
+    session.holdResumeLineUntilRead(rows, session.processEndCount)
+    expect((await payload())[0].stage).toBe('written')
+    session._resumeLineHold = null
+    expect((await payload())[0].stage).toBe('waiting')
+  })
+
+  it('only a processing row is on its way: a resume row back to pending or parked reads waiting', () => {
+    const live = { ...NO_LINE_WORDS, resume: new Set(['a']) }
+    expect(queueRowFacts({ id: 'a', status: 'processing', message: 'x' }, SID, live)).toEqual({ stage: 'written', delivered: false })
+    for (const status of ['pending', 'parked']) {
+      expect(queueRowFacts({ id: 'a', status, message: 'x' }, SID, live)).toEqual({ stage: 'waiting', delivered: false })
+    }
+    expect(queueRowFacts({ id: 'a', status: 'processing', message: 'x' }, SID, { ...live, held: new Set(['a']) })).toEqual({ stage: 'waiting', delivered: false })
   })
 
   it('with no live word (idle, cold resume, an untracked engine) every row reads waiting', () => {
@@ -252,6 +297,59 @@ describe('class guard: every surface that lists queue rows to a person says thei
     for (const f of Object.keys(DISPLAY_QUEUE_READS)) {
       expect(readFileSync(path.join(root, f), 'utf8'), f).toMatch(/withoutWalnutRows\(await getQueue\(/)
     }
+  })
+})
+
+/**
+ * Class guard: the queue read never says less than the delivery report. Every place the runner
+ * tells the user rows are delivered (SESSION_MESSAGES_DELIVERED, through reportDelivered or
+ * directly) is listed with what its rows read in the queue right after; a new one fails until
+ * it is listed. 2026-11-11: settleResumeSuccess reported a cold resume's line delivered while
+ * the queue read said waiting, and the web flipped the bubble back to Queued for ~7 s.
+ */
+const DELIVERED_REPORTS: Record<string, string> = {
+  releaseLineRows: 'gone: removeTaken takes the rows out of the queue',
+  settleTakenLine: 'taken: awaitLineAnswer holds them for the answer (takenRowIds)',
+  injectMidTurn: 'written: the line was registered (awaitLine) before its write (awaitedRowIds)',
+  processNextNow: 'written: the line was registered (awaitLine) before its write (awaitedRowIds)',
+  settleResumeSuccess: 'written: the resume hold notes them (holdResumeLineUntilRead, resumeLineRowIds), or taken (settleReadResumeLine)',
+  drainAcpPrompt: 'gone: removeProcessed before the emit',
+  steerAcpQueued: 'gone: removeProcessed before the emit',
+}
+
+describe('class guard: every delivered report leaves its rows reading delivered in the queue', () => {
+  it('each place that reports rows delivered is listed with the stage its rows read', () => {
+    const file = path.resolve(import.meta.dirname, '../../../src/providers/claude-code-session.ts')
+    const lines = readFileSync(file, 'utf8').split('\n')
+    const sites: Record<string, number[]> = {}
+    let method = ''
+    let methodStart = 0
+    lines.forEach((line, i) => {
+      const head = /^  (?:private |public |protected )?(?:static )?(?:async )?([A-Za-z_]+)\(/.exec(line) ?? /^(?:export )?(?:async )?function ([A-Za-z_]+)\(/.exec(line)
+      if (head) { method = head[1]; methodStart = i }
+      const reports = /\breportDelivered\(/.test(line) && !/function reportDelivered\(/.test(line)
+      const emits = /emit\(EventNames\.SESSION_MESSAGES_DELIVERED/.test(line)
+      if (!reports && !emits) return
+      if (emits && method === 'reportDelivered') return
+      ;(sites[method] ??= []).push(methodStart)
+      if (emits) {
+        // A direct emit (no reportDelivered): its rows left the queue before it.
+        expect(lines.slice(methodStart, i).join('\n'), method).toMatch(/await removeProcessed\(/)
+      }
+    })
+    expect(Object.keys(sites).sort()).toEqual(Object.keys(DELIVERED_REPORTS).sort())
+    // No other file reports deliveries.
+    const root = path.resolve(import.meta.dirname, '../../../src')
+    const others: string[] = []
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (/\.tsx?$/.test(e.name) && p !== file && /emit\(\s*(?:EventNames\.SESSION_MESSAGES_DELIVERED|'session:messages-delivered')/.test(readFileSync(p, 'utf8'))) others.push(path.relative(root, p))
+      }
+    }
+    walk(root)
+    expect(others).toEqual([])
   })
 })
 

@@ -67,6 +67,14 @@ describe.each([
     expect(src).toMatch(/FIFO_BOOT_HOLD_MAX_MS = 15 \* 60_?000/)
   })
 
+  // 2026-11-11: a big line into a CLI mid-turn reaped it at 20s while it was still reading.
+  it('the writer gives up only after the reader stopped draining, never on a fixed clock alone', () => {
+    const w = src.slice(bodyOf(src, 'writeFifoFullyAsync').start, bodyOf(src, 'writeFifoFullyAsync').end)
+    expect(w).toMatch(/drainedAt = (?:clock|Date\.now)\(\)/)
+    expect(w).toMatch(/offset > 0 \? Math\.min\(writeCap, Math\.max\(deadline, drainedAt \+ /)
+    expect(w).toMatch(/>= until\)/)
+  })
+
   it('a partial write reaps only after chainFifoWrite gave up', () => {
     // Each reap for a partial write follows a chainFifoWrite result in the same handler.
     const reaps = [...src.matchAll(/reapSession\([^)]*'(send|sendRaw)-partial-write'/g)]

@@ -26,7 +26,8 @@ vi.mock('../../src/providers/daemon-connection.js', async (orig) => ({
   getConnectedDaemonConnection: () => ({ hasCapability: (cap: string) => serving.on && cap === 'walnut-mcp-v1' }),
 }))
 
-import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js'
+import { ClaudeCodeSession, LIVE_MOUNT_LINE_WAIT_MS } from '../../src/providers/claude-code-session.js'
+import { readFileSync } from 'node:fs'
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
@@ -248,4 +249,67 @@ describe('a RUNNING process without the mount gets it before its next turn, with
     expect(history.indexOf(raws[0])).toBeLessThan(history.findIndex((e) => e.cmd === 'send'))
     await session.gracefulStop(true).catch(() => {})
   }, 60_000)
+
+  // 2026-11-11 on prod: right after a dev host's daemon restarted, the mount request's answer
+  // never came, and a person's message waited the request's whole 15 s timeout before it was
+  // written (the "Messages slow to reach a running session" alarm).
+  it('a mount request that is never answered holds the line at most LIVE_MOUNT_LINE_WAIT_MS', async () => {
+    let results = 0
+    bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
+    serving.on = false
+    const { session } = await spawnMcpConfig('t-live-silent', { message: 'snapshot-clean-turn:one' })
+    await waitUntil(() => results >= 1, 15000, 'first result')
+    serving.on = true
+    // The CLI never answers the mount (its answer is lost): the request hangs to its own timeout.
+    const internals = session as unknown as { readControlPayloadWithRequest: (...a: unknown[]) => Promise<unknown> }
+    const real = internals.readControlPayloadWithRequest.bind(session)
+    let asked = 0
+    internals.readControlPayloadWithRequest = (id: unknown, req: unknown, ...rest: unknown[]) => {
+      if ((req as { subtype?: string })?.subtype !== 'mcp_set_servers') return real(id, req, ...rest)
+      asked++
+      return new Promise((resolve) => setTimeout(() => resolve(null), 15_000).unref?.())
+    }
+    daemon.clearCommandHistory()
+    const t0 = Date.now()
+    const [a, b] = await Promise.all([
+      session.writeMessage('snapshot-clean-turn:first'),
+      session.writeMessage('snapshot-clean-turn:second'),
+    ])
+    const waited = Date.now() - t0
+    expect(a && b).toBe(true)
+    expect(asked).toBe(1)
+    expect(waited).toBeGreaterThanOrEqual(LIVE_MOUNT_LINE_WAIT_MS - 50)
+    expect(waited).toBeLessThan(LIVE_MOUNT_LINE_WAIT_MS + 2_500)
+    // Both lines went out, in the order they came.
+    const sends = daemon.getCommandHistory().filter((e) => e.cmd === 'send').map((e) => JSON.stringify(e.payload))
+    expect(sends).toHaveLength(2)
+    expect(sends[0]).toContain('first')
+    expect(sends[1]).toContain('second')
+    await session.gracefulStop(true).catch(() => {})
+  }, 60_000)
+})
+
+/**
+ * Class guard: nothing a person's line waits on before it is written is unbounded or long.
+ * Every `await` in writeMessage ahead of the transport's write is listed here with the
+ * bound it carries; a new one fails until it is listed, with a bound of a couple of seconds.
+ */
+describe('class guard: a line waits on no side request before its write for more than a moment', () => {
+  const BOUNDED_WAITS: Record<string, string> = {
+    // The person's own Stop in flight: its ack (INTERRUPT_ACK_TIMEOUT_MS), else the process stop.
+    'await this._interruptPromise': 'an interrupt the person asked for, not a side request',
+    "await import('../core/sessions/session-stop.js')": 'a module load, no I/O after the first',
+    'await sessionStops.fence(this.claudeSessionId!)': 'one read of the local session record, no host',
+    'await this.liveMountBeforeLine()': 'LIVE_MOUNT_LINE_WAIT_MS',
+  }
+  it('every await in writeMessage before transport.writeMessage is listed and bounded', () => {
+    const src = readFileSync(path.resolve(import.meta.dirname, '../../src/providers/claude-code-session.ts'), 'utf8')
+    const start = src.indexOf('  async writeMessage(message: string')
+    expect(start).toBeGreaterThan(0)
+    const end = src.indexOf('await transport.writeMessage(message', start)
+    expect(end).toBeGreaterThan(start)
+    const awaits = [...src.slice(start, end).matchAll(/await [^\n;]+/g)].map((m) => m[0].trim())
+    expect(awaits).toEqual(Object.keys(BOUNDED_WAITS))
+    expect(LIVE_MOUNT_LINE_WAIT_MS).toBeLessThanOrEqual(3_000)
+  })
 })

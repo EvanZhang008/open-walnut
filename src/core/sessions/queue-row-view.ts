@@ -13,10 +13,15 @@
  *   written  written to the CLI's stdin, which reads it after its current step;
  *   taken    the CLI read it (the line is in its transcript); only the answer is
  *            still to come. `delivered` is true exactly then.
- * `written` only when the runner holds the row's line as written into the CLI's
- * stdin (line-consumption.ts awaitedRowIds); a row it cannot vouch for (an idle
- * or cold-resuming session, an engine whose lines it does not track, a row
- * mid-delivery) reads `waiting`, whatever its queue status.
+ * `written` when the runner holds the row's line as written into the CLI's
+ * stdin (line-consumption.ts awaitedRowIds), or as a cold resume's first line
+ * that the new process reads once it has booted (resumeLineRowIds): that line is
+ * reported delivered at the spawn, and a stage of `waiting` there made the web
+ * and the phone flip the bubble back to Queued for those seconds (2026-11-11,
+ * the user: "the new conversation take like 7 second to even get the message
+ * delivered"). A row the runner cannot vouch for (an idle session, a resume
+ * still spawning, an engine whose lines it does not track, a row mid-delivery)
+ * reads `waiting`, whatever its queue status.
  */
 import path from 'node:path';
 import { splitAttachmentHeaders } from '../../lib/attachment-headers.js';
@@ -49,17 +54,22 @@ export function queueImageUrl(imagePath: string, sessionId: string): string {
  * (`awaited`), and the rows held back behind a line still being confirmed
  * (`held`: processing in the queue, but never written).
  */
-export interface LiveLineWords { taken: ReadonlySet<string>; awaited: ReadonlySet<string>; held: ReadonlySet<string> }
+export interface LiveLineWords {
+  taken: ReadonlySet<string>; awaited: ReadonlySet<string>; held: ReadonlySet<string>;
+  /** A cold resume's first line, in its new process's stdin until it boots (resumeLineRowIds). Absent: none. */
+  resume?: ReadonlySet<string>;
+}
 
-export const NO_LINE_WORDS: LiveLineWords = { taken: new Set(), awaited: new Set(), held: new Set() };
+export const NO_LINE_WORDS: LiveLineWords = { taken: new Set(), awaited: new Set(), held: new Set(), resume: new Set() };
 
 export function queueStageOf(row: { id: string; status?: string }, live: LiveLineWords): QueueStage {
   if (live.taken.has(row.id)) return 'taken';
   if (live.held.has(row.id)) return 'waiting';
-  // Written only when the runner holds its line as in the CLI's stdin; anything it
-  // cannot vouch for (an idle or cold-resuming session, an engine it does not
-  // track, a row mid-delivery) is still waiting.
-  return live.awaited.has(row.id) ? 'written' : 'waiting';
+  // Written when the runner holds its line as in the CLI's stdin.
+  if (live.awaited.has(row.id)) return 'written';
+  // A cold resume's first line: the spawn carried it (and reported it delivered); the new
+  // process reads it once it has loaded the session.
+  return row.status === 'processing' && live.resume?.has(row.id) ? 'written' : 'waiting';
 }
 
 /**
@@ -70,8 +80,11 @@ export function queueStageOf(row: { id: string; status?: string }, live: LiveLin
  * done; the next read no longer lists it.
  */
 export async function liveLineWordsOf(sessionId: string): Promise<LiveLineWords> {
-  const { takenRowIds, awaitedRowIds, heldRows } = await import('../../providers/line-consumption.js');
-  return { taken: takenRowIds(sessionId), awaited: awaitedRowIds(sessionId), held: new Set(heldRows(sessionId)?.keys() ?? []) };
+  const { takenRowIds, awaitedRowIds, heldRows, resumeLineRowIds } = await import('../../providers/line-consumption.js');
+  return {
+    taken: takenRowIds(sessionId), awaited: awaitedRowIds(sessionId), held: new Set(heldRows(sessionId)?.keys() ?? []),
+    resume: resumeLineRowIds(sessionId),
+  };
 }
 
 /** What the person attached, read off the row's own words (after Walnut's notices in front). */

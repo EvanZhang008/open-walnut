@@ -335,6 +335,28 @@ export function takeUntold(sessionId: string, rowIds: string[]): string[] {
   return out
 }
 
+// ── A cold resume's first line, in the new process's stdin until it boots ──
+//
+// The spawn carried the line and the user is told it is delivered (settleResumeSuccess),
+// but the process reads it only once it has loaded the session (its init). The queue read
+// shows these rows as written meanwhile, never waiting: a read in that window flipped the
+// web's Delivered bubble back to Queued for the CLI's whole boot (2026-11-11, about 7 s on
+// a dev host). Set and cleared with the session's own hold (ClaudeCodeSession._resumeLineHold).
+
+const resumeHeld = new Map<string, Set<string>>()
+
+/** The rows a resumed process holds as its unread first line (null: none any more). */
+export function noteResumeLine(sessionId: string | null | undefined, rowIds: string[] | null): void {
+  if (!sessionId) return
+  if (rowIds && rowIds.length > 0) resumeHeld.set(sessionId, new Set(rowIds))
+  else resumeHeld.delete(sessionId)
+}
+
+/** The rows of this session's resume line still to be read by its new process. Memory only. */
+export function resumeLineRowIds(sessionId: string | null | undefined): Set<string> {
+  return new Set(sessionId ? resumeHeld.get(sessionId) ?? [] : [])
+}
+
 // ── Rows held behind a line whose delivery is being confirmed ──
 //
 // The web shows these as waiting, also after a reload: session:get-queue reads
@@ -393,6 +415,7 @@ export function resetLineConsumption(): void {
   answering.clear()
   seen.clear()
   told.clear()
+  resumeHeld.clear()
   held.clear()
   reclaimListener = null
 }

@@ -177,9 +177,11 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
   pictureRoots?: readonly string[]
   registryFile: string
   orphanPollIntervalMs?: number
-  /** Total budget for one FIFO send (chain wait + write), ms. Must stay under
-   *  the walnut client's 30s RPC timeout so the strict-ack always settles.
-   *  Default 20s — covers CLI boot (measured 2–7s before it reads stdin). */
+  /** Budget for one FIFO send (chain wait + write) while nothing of it is in, ms,
+   *  and how long a reader may stop draining once a prefix is in (the write then
+   *  follows the reader, at most fifoBootWriteDeadlineMs past the deadline). Default 20s. A write past
+   *  the client's 30s RPC timeout is settled by its send-outcome confirm (dedupe
+   *  sends queued behind it in the chain read the line's fate once it is written). */
   fifoWriteDeadlineMs?: number
   /** How long after its spawn a booting CLI may take to start reading a
    *  boot-wait send (`bootWait`), ms. Default 120s: `claude --resume` of a
@@ -1497,8 +1499,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     raw?: string,
   ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead' | 'budget_paused' | 'budget_checking' | LineFate> {
     // Absolute deadline fixed BEFORE queuing behind the chain: chain wait +
-    // own write share ONE budget, so the strict-ack always settles inside the
-    // walnut client's 30s RPC timeout even when writes stack up.
+    // own write share ONE budget until a prefix is in; from then the write follows
+    // a reader that keeps draining (writeFifoFullyAsync), and a reply past the
+    // client's 30s RPC timeout is settled by its send-outcome confirm.
     // write-boot-wait-v1: EVERY write into a CLI this daemon spawned that has not
     // shown its init (a raw control line, a later send) waits through its boot, not
     // only the boot-wait send. 2026-11-05: a 7KB status question written 5s after a
@@ -1607,6 +1610,14 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     who?: { sid: string; pid: number | null | undefined },
   ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial'> {
     const RETRY_INTERVAL_MS = 25
+    // A reader that keeps draining is alive: once a prefix is in, giving up reaps the
+    // CLI, so past the deadline the write goes on while the CLI keeps taking chunks,
+    // until it stops reading for fifoWriteDeadlineMs, at most fifoBootWriteDeadlineMs
+    // past the deadline. 2026-11-11: a 420KB message with three pictures into a CLI
+    // mid-turn under load 190 had 377KB in at 20s; the daemon reaped the working CLI
+    // and its resume took 81s.
+    const writeCap = deadline + fifoBootWriteDeadlineMs
+    let drainedAt = clock()
     let fd: number
     try {
       fd = fs.openSync(pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
@@ -1639,6 +1650,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
           const n = fs.writeSync(fd, buf, offset, limit - offset)
           if (n > 0) {
             offset += n
+            drainedAt = clock()
             if (progress) progress.sent = offset
             continue
           }
@@ -1654,7 +1666,8 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         }
         // Pipe full (EAGAIN) or zero-byte write: wait for the reader to drain.
         if (isAbandoned?.()) return offset === 0 ? 'EAGAIN' : 'partial'
-        if (clock() >= deadline) {
+        const until = offset > 0 ? Math.min(writeCap, Math.max(deadline, drainedAt + fifoWriteDeadlineMs)) : deadline
+        if (clock() >= until) {
           // Part of the line is in a CLI still booting: it reads on once it boots, and
           // reaping it would only start the slow boot again (the boot hold).
           if (offset === 0 || !holdPartial?.()) return offset === 0 ? 'EAGAIN' : 'partial'

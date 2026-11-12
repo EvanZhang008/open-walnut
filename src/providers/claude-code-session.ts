@@ -69,7 +69,7 @@ import { offerStartDeath, setUnreadFirstLineProbe, startRecoveryOwns, withdrawSt
 import { classifySessionError } from '../core/session-error-kind.js'
 import { lineUuidFor, noteTurnUserUuid, pickBatchUuid, rowsCarriedBy, turnUserUuid } from './batch-uuid.js'
 import {
-  announceReclaimed, answeredLines, awaitAnswer, awaitLine, orderAnswer, awaitedLines, dropLine, forgetLineState, hasAnsweringLines, heldRows, isLineAwaited, lineRows, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld, PROMPT_HOLD_REASON,
+  announceReclaimed, answeredLines, awaitAnswer, awaitLine, orderAnswer, awaitedLines, dropLine, forgetLineState, hasAnsweringLines, heldRows, isLineAwaited, lineRows, markUnconfirmed, noteHeld, noteLineState, noteResumeLine, onLinesReclaimed, releaseHeld, PROMPT_HOLD_REASON,
   takeAnswering, takeLine, takeUntold, unansweredLines, untakenLines, type LineState, type ReclaimReason, type UntakenLine,
 } from './line-consumption.js'
 import { lineAnswerFrame } from './line-fate-core.js'
@@ -743,6 +743,9 @@ export const SPAWN_COST_STATE_WAIT_MS = 2_000
 /** The cost read's own deadline, so a late answer can still seed the baseline (an older daemon parses the whole transcript). */
 const SPAWN_COST_STATE_TIMEOUT_MS = 30_000
 const INTERRUPT_ACK_TIMEOUT_MS = 5_000
+
+/** The longest a person's line waits for the live Walnut mount's answer before it is written (liveMountBeforeLine). */
+export const LIVE_MOUNT_LINE_WAIT_MS = 2_000
 const INTERRUPT_SETTLE_TIMEOUT_MS = 3_000
 /** Sessions a host reconnect redelivers to at once (redeliverPendingForHost). */
 export const REDELIVERY_PARALLEL = 4
@@ -4497,8 +4500,9 @@ export class ClaudeCodeSession {
     let ownCut = false
     // The line waited behind one whose answer was still being asked for.
     let waited = false
-    // A process launched without the Walnut tools gets them before its next turn.
-    if (this._processStatus !== 'running') await this.ensureLiveWalnutMount()
+    // A process launched without the Walnut tools gets them before its next turn, but a
+    // person's line never waits long for that side request (liveMountBeforeLine).
+    if (this._processStatus !== 'running') await this.liveMountBeforeLine()
     let ok: boolean
     try {
       ok = await transport.writeMessage(message, {
@@ -5173,7 +5177,17 @@ export class ClaudeCodeSession {
    * that cause instead of being reported delivered and dropped (the rows used to
    * be removed as soon as the spawn was confirmed).
    */
-  private _resumeLineHold: QueuedMessage[] | null = null
+  private _resumeLineHoldRows: QueuedMessage[] | null = null
+  /** The session id the hold was noted under (a clear after the id moved must clear that one). */
+  private _resumeLineHoldSid: string | null = null
+  // Every set and clear also tells the queue read (line-consumption.ts noteResumeLine).
+  private get _resumeLineHold(): QueuedMessage[] | null { return this._resumeLineHoldRows }
+  private set _resumeLineHold(rows: QueuedMessage[] | null) {
+    this._resumeLineHoldRows = rows
+    if (this._resumeLineHoldSid) noteResumeLine(this._resumeLineHoldSid, null)
+    this._resumeLineHoldSid = rows && rows.length > 0 ? rows[0].sessionId || this.claudeSessionId : null
+    if (this._resumeLineHoldSid) noteResumeLine(this._resumeLineHoldSid, rows!.map((r) => r.id))
+  }
 
   /** The first line a fresh start carried inside its `start` (no queue row holds it), and its uuid. */
   private _spawnFirstLine: { text: string; uuid?: string } | null = null
@@ -9729,7 +9743,41 @@ export class ClaudeCodeSession {
   }
 
   /** The live mount of one process: the attempt in flight (shared by every writer), and how many ran. */
-  private _liveWalnutMount: { pid: number; inFlight: Promise<void> | null; tries: number; done: boolean } | null = null
+  private _liveWalnutMount: {
+    pid: number; inFlight: Promise<void> | null; tries: number; done: boolean
+    /** What a line waits on for this attempt: its answer or LIVE_MOUNT_LINE_WAIT_MS, one gate for every writer. */
+    lineGate?: Promise<void> | null
+  } | null = null
+
+  /**
+   * What the next turn's line waits on: the live mount's answer, at most
+   * LIVE_MOUNT_LINE_WAIT_MS. The request goes out within milliseconds, ahead of the
+   * line, so the CLI reads it first either way; only its answer is not waited for
+   * (a late answer still records the mount; a turn that started first just runs
+   * without the tools, as it would have with no mount at all).
+   * 2026-11-11: a mount request whose answer never came held a person's message 15 s
+   * (the request's own timeout) right after a host's daemon restarted. Every writer
+   * of one attempt waits on the same gate, so lines still go out in the order they came.
+   */
+  private liveMountBeforeLine(): Promise<void> {
+    const mount = this.ensureLiveWalnutMount()
+    const state = this._liveWalnutMount
+    if (!state?.inFlight) return mount
+    if (!state.lineGate) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const bound = new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          log.session.warn('walnut MCP mount: no answer yet; the line goes out without waiting for it', {
+            sessionId: this.claudeSessionId, taskId: this.taskId, pid: state.pid, waitedMs: LIVE_MOUNT_LINE_WAIT_MS,
+          })
+          resolve()
+        }, LIVE_MOUNT_LINE_WAIT_MS)
+        timer.unref?.()
+      })
+      state.lineGate = Promise.race([mount, bound]).finally(() => clearTimeout(timer))
+    }
+    return state.lineGate
+  }
 
   /**
    * Give a RUNNING process launched without the Walnut tools its mount, with Claude
@@ -9761,7 +9809,7 @@ export class ClaudeCodeSession {
     const state = this._liveWalnutMount
     if (state.done) return Promise.resolve()
     if (state.inFlight) return state.inFlight
-    state.inFlight = this.tryLiveWalnutMount(state).finally(() => { state.inFlight = null })
+    state.inFlight = this.tryLiveWalnutMount(state).finally(() => { state.inFlight = null; state.lineGate = null })
     return state.inFlight
   }
 
