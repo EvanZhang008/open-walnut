@@ -564,6 +564,7 @@ describe('every path that tells an ask changed compares the decision', () => {
       'src/core/org/threads-store.ts': 'writes the threads file through updateThread, which keeps a reworded ask quiet',
       'src/core/sessions/session-request-notify.ts': 'rides a line about a handed-on request, no ask of the user',
       'src/core/sessions/reply-handoff.ts': 'rides a line about a reply that went past it, no ask of the user',
+      'src/core/sessions/safeguard-switch.ts': 'rides one line telling the lead its task moved to another model, no ask of the user',
       'src/core/org/team-note.ts': 'rides the team note: the user\'s messages to the team, not a task\'s ask of the user',
       'src/core/sessions/task-watch.ts': 'a watch its watcher set: it asked for the status when it runs out, moved or not',
       'src/integrations/mail/store.ts': 'its own seenOf: a mail message\'s read flag',

@@ -169,6 +169,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/core/sessions/place-notice.test.ts", sleep: "await new Promise((r) => setTimeout(r, 5))", reason: "time under test: clock must move so compaction and hook timestamps order" },
   { file: "tests/core/sessions/recovered-pid-stop.test.ts", sleep: "await new Promise((r) => setTimeout(r, 20))", reason: "negative: an old daemon must be sent nothing" },
   { file: "tests/core/sessions/relay-remote-read-failure.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50))", reason: "negative: no unhandled rejection once the bound settles" },
+  { file: "tests/core/sessions/safeguard-switch.test.ts", sleep: "await new Promise((r) => setTimeout(r, 120));", reason: "negative: a restart's rerun timer (30 ms) fires and must switch nothing for a session that worked again" },
   { file: "tests/core/sessions/status-question.test.ts", sleep: "await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 300))", reason: "negative: a cancelled question must not be asked after the settle window" },
   { file: "tests/core/sessions/status-question.test.ts", sleep: "await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 300))", reason: "negative: not asked mid-turn after the settle window" },
   { file: "tests/core/sessions/status-question.test.ts", sleep: "await new Promise((r) => setTimeout(r, 100))", reason: "negative: settleStatusQuestion must not finish before the flight ends" },
