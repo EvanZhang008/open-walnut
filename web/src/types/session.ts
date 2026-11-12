@@ -244,8 +244,8 @@ export interface SessionRecord {
   usageLimit?: SessionUsageLimit;
   /** Walnut continued it by itself after the reset and that turn ran (cleared by the next send). */
   usageLimitContinued?: SessionUsageLimitContinued;
-  /** Walnut moved it out of a folder that was gone. */
-  folderMoved?: { from: string; to: string; at: string; by: string; told?: boolean };
+  /** Walnut moved it to another folder: out of one that was gone, or (why: own-folder) a VP's or lead's into its own task directory. */
+  folderMoved?: { from: string; to: string; at: string; by: string; told?: boolean; why?: 'gone' | 'own-folder' };
   /** Pending permission prompt (control_request) the CLI is PAUSED on. The CLI's
    *  session state is 'requires_action' — process_status stays 'running', so the
    *  badge derives an amber "Waiting" from this field (incident 7e26389d: a plan

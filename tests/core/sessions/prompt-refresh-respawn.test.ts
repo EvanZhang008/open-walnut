@@ -46,6 +46,7 @@ function harness(over: Partial<PromptRefreshRespawnDeps> = {}, rec: SessionRecor
     emitNote: vi.fn(),
     refreshInputs: async () => {},
     debtBytes: () => debt,
+    folderDue: async () => false,
     ...over,
   }
   const pr = new PromptRefreshRespawn(deps)
@@ -127,6 +128,55 @@ describe('a clean turn end after a compaction', () => {
       h.pr.handleEvent(result(extra))
     }
     expect(h.timers[0].cleared).toBe(true)
+  })
+})
+
+describe('a VP or lead still running in a repository (org-own-folder.ts)', () => {
+  /** Outside its own folder until a respawn has run (the spawn moves it). */
+  const outside = (h: () => { deps: PromptRefreshRespawnDeps }) => vi.fn(async () => (h().deps.respawn as ReturnType<typeof vi.fn>).mock.calls.length === 0)
+
+  it('respawns where the cost rule alone says it is not worth it (2026-11-12: 429K of context, 31 KB of prompt debt), and says it moved', async () => {
+    let ref: ReturnType<typeof harness>
+    const h = ref = harness({ folderDue: outside(() => ref) })
+    h.live.promptCache = { ...h.live.promptCache!, tokens: 429_000 }
+    await h.pr.onTurnEnd(SID)
+    await h.fireAll()
+    expect(h.deps.respawn).toHaveBeenCalledWith(SID, expect.any(Function), { folder: true })
+    expect(h.get()!.promptRefresh).toMatchObject({ outcome: 'respawned', compactUuid: 'boundary-1' })
+    expect(h.deps.emitNote).toHaveBeenCalledWith(SID, 'mvm0n3bu-6910', expect.stringContaining('its own folder'))
+  })
+
+  it('respawns with its prompt current too, since the folder alone pays', async () => {
+    debt = 0
+    let ref: ReturnType<typeof harness>
+    const h = ref = harness({ folderDue: outside(() => ref) })
+    await h.pr.onTurnEnd(SID)
+    await h.fireAll()
+    expect(h.deps.respawn).toHaveBeenCalledWith(SID, expect.any(Function), { folder: true })
+    expect(h.get()!.promptRefresh).toMatchObject({ outcome: 'respawned', debtBytes: 0 })
+  })
+
+  it('keeps every quiet-moment guard: a queued message or a running background command holds it, nothing decided', async () => {
+    const q = harness({ folderDue: async () => true, queued: async () => 1 })
+    await q.pr.onTurnEnd(SID)
+    await q.fireAll()
+    expect(q.deps.respawn).not.toHaveBeenCalled()
+    expect(q.get()!.promptRefresh).toBeUndefined()
+    const b = harness({ folderDue: async () => true })
+    b.live.outliving = 1
+    await b.pr.onTurnEnd(SID)
+    await b.fireAll()
+    expect(b.deps.respawn).not.toHaveBeenCalled()
+    expect(b.get()!.promptRefresh).toBeUndefined()
+  })
+
+  it('a spawn that left it in place (its host did not answer) is not told as moved', async () => {
+    const h = harness({ folderDue: async () => true })
+    h.live.promptCache = { ...h.live.promptCache!, tokens: 429_000 }
+    await h.pr.onTurnEnd(SID)
+    await h.fireAll()
+    expect(h.deps.respawn).toHaveBeenCalledTimes(1)
+    expect(h.deps.emitNote).toHaveBeenCalledWith(SID, 'mvm0n3bu-6910', expect.not.stringContaining('its own folder'))
   })
 })
 

@@ -33,6 +33,7 @@ import { bus, EventNames } from '../../src/core/event-bus.js'
 import { taskDepth } from '../../src/core/sessions/subtask-limits.js'
 import { buildSessionContext } from '../../src/core/sessions/session-context.js'
 import { sendLetter } from '../../src/core/human-inbox/store.js'
+import { taskDirForHost } from '../../src/core/sessions/task-dir-place.js'
 
 let server: HttpServer
 let port: number
@@ -162,7 +163,7 @@ describe('/api/v1/org', () => {
     await deleteTask(sub.id)
   })
 
-  it('a lead\'s launch follows its project and is never written to the lead', async () => {
+  it('a lead\'s launch is its own task directory on its project\'s host, never its project\'s folder, and is never written to the lead', async () => {
     type Contact = { task: { id: string }; started: boolean; launch?: { cwd: string; host: string | null } }
     const own = path.join(WALNUT_HOME, 'repos', 'site')
     await updateConfig({ hosts: { devbox: { label: 'Dev box', hostname: 'org-devbox.invalid', user: 'someone' } } })
@@ -176,26 +177,31 @@ describe('/api/v1/org', () => {
       for (const title of ['One', 'Two']) await addTask({ title: `${project} ${title}`, project })
     }
     const site = await api<Contact>('POST', '/org/contact', { to: 'Site' })
-    expect(site.json.launch).toEqual({ cwd: own, host: null })
-    // The project's folder moves: the lead follows it, since nothing was recorded on the lead.
+    // A lead runs in its own task directory, never in its project's repository
+    // (sessions/org-own-folder.ts: the repository's instruction files rode every request).
+    const siteDir = await taskDirForHost(site.json.task.id, '__local__')
+    expect(site.json.launch).toEqual({ cwd: siteDir, host: null })
+    // The project's folder moves: the lead stays in its own directory.
     const moved = path.join(WALNUT_HOME, 'repos', 'site-2')
     await setProjectMetadata('Site', { default_cwd: moved })
-    expect((await api<Contact>('POST', '/org/contact', { to: 'Site' })).json.launch).toEqual({ cwd: moved, host: null })
+    expect((await api<Contact>('POST', '/org/contact', { to: 'Site' })).json.launch).toEqual({ cwd: siteDir, host: null })
     expect((await getTask(site.json.task.id)).cwd).toBeUndefined()
-    // Another host: the pair rides together. An unknown host, or a host with no folder,
-    // would refuse to start, so there is no place to offer (the chat asks for a folder).
-    expect((await api<Contact>('POST', '/org/contact', { to: 'Remote' })).json.launch).toEqual({ cwd: '/home/dev/app', host: 'devbox' })
+    // Another host that has not said where its task directories live (not connected): no place
+    // to offer yet, and the draft never waits on the host. An unknown host, or a host with no
+    // folder, would refuse to start, so there is no place to offer either.
+    expect((await api<Contact>('POST', '/org/contact', { to: 'Remote' })).json.launch).toBeUndefined()
     const nowhere = await api<Contact>('POST', '/org/contact', { to: 'Nowhere' })
     expect(nowhere.status).toBe(200)
     expect(nowhere.json.launch).toBeUndefined()
     expect((await api<Contact>('POST', '/org/contact', { to: 'Bare' })).json.launch).toBeUndefined()
 
-    // A lead from before (v1 copied the project's folder in) keeps it, paired with the project's host.
+    // A lead from before (v1 copied the project's folder in) runs in its own directory on the
+    // project's host too, not in the folder it recorded.
     for (const title of ['One', 'Two']) await addTask({ title: `Older ${title}`, project: 'Older' })
-    await setProjectMetadata('Older', { default_cwd: '/home/dev/older', default_host: 'devbox' })
+    await setProjectMetadata('Older', { default_cwd: '/home/dev/older' })
     const older = (await addTask({ title: 'Older lead', project: 'Older', source: 'local', org_role: 'lead', cwd: '/home/dev/older-then' })).task
     const byId = await api<Contact>('POST', '/org/contact', { to: older.id })
-    expect(byId.json).toMatchObject({ task: { id: older.id }, launch: { cwd: '/home/dev/older-then', host: 'devbox' } })
+    expect(byId.json).toMatchObject({ task: { id: older.id }, launch: { cwd: await taskDirForHost(older.id, '__local__'), host: null } })
 
     // A started lead is talked to in its session: no launch.
     await updateTaskRaw(older.id, { session_id: 'org-launch-started' })

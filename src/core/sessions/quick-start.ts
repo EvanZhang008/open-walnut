@@ -310,6 +310,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   } = params;
   let mode = params.mode;
   let { cwd } = params;
+  /** A person named this VP's or lead's folder: its later spawns keep it (org-own-folder.ts). */
+  let cwdByPerson: string | undefined;
   // The task's own directory is known only once the task has its id (below).
   const inOwnTaskDir = params.ownTaskDir === true && !cwd && !host && !existingTaskId && !walnutAgent;
   let model = params.model;
@@ -569,6 +571,19 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       const { taskDirForHost, ensureTaskDirOnHost } = await import('./task-dir-place.js');
       if (cwd && cwd === await taskDirForHost(updatedTask.id, '__local__')) await ensureTaskDirOnHost(updatedTask.id, '__local__');
     }
+    if (!conversation) {
+      // A VP or lead runs in its own task directory unless a person named this folder (org-own-folder.ts).
+      const { ownFolderStartCwd } = await import('./org-own-folder.js');
+      const own = await ownFolderStartCwd(updatedTask, host, { cwd, callerSid: params.callerSid, source });
+      if (own?.kind === 'own') {
+        const { ensureTaskDirOnHost } = await import('./task-dir-place.js');
+        const made = await ensureTaskDirOnHost(updatedTask.id, host);
+        if ('error' in made) throw new QuickStartError(`Task ${updatedTask.id} could not make its task directory (${made.error}).`, made.status);
+        cwd = made.path;
+      } else if (own?.kind === 'person') {
+        cwdByPerson = cwd;
+      }
+    }
     if (conversation) {
       const { refuseDifferentPlace, moveFromLostHost } = await import('./task-start.js');
       // Its session's host cannot be reached: the launch moves the task there (host-lost.ts).
@@ -795,6 +810,10 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
         // as a dead process and persist 'stopped' on a session just launched.
         initialStatusReason: 'awaiting_spawn',
       });
+      if (cwdByPerson) {
+        const { updateSessionRecord } = await import('../session-tracker.js');
+        await updateSessionRecord(preassignedSessionId, { cwdByPerson });
+      }
     } catch (err) {
       // Non-fatal: the spawn path persists the record too. Worst case the UI's
       // first metadata read 404s and the panel shows its empty state briefly.

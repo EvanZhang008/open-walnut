@@ -3111,7 +3111,8 @@ export class ClaudeCodeSession {
     const transport = createSessionManager(tmpId, host ?? undefined, sshTarget, undefined, this.cliCommand, this._testDaemonUrl)
     this._transport = transport
 
-    const resolvedCwd = cwd ?? process.cwd()
+    // `let`: a VP's or lead's resume moves to its own folder right before its spawn (below).
+    let resolvedCwd = cwd ?? process.cwd()
 
     // Layer 3 — CWD existence pre-flight. Cheap safety net so we don't spawn
     // `claude` into a nonexistent directory and report "session created and running"
@@ -3125,6 +3126,15 @@ export class ClaudeCodeSession {
       const steps: Record<string, number> = {}
       let stepAt = Date.now()
       const stepDone = (name: string) => { const now = Date.now(); steps[name] = now - stepAt; stepAt = now }
+      // A VP or lead resumed outside its own folder moves there first, conversation and all,
+      // between its old process and this one (core/sessions/org-own-folder.ts). Before the cost
+      // read below, which reads the transcript where it is.
+      if (isResume && this.taskId) {
+        const { moveToOwnFolderBeforeSpawn } = await import('../core/sessions/org-own-folder.js')
+        const own = await moveToOwnFolderBeforeSpawn({ sessionId: resumeSessionId!, taskId: this.taskId, cwd: resolvedCwd, host })
+        if (own) { resolvedCwd = own; this._cwd = own }
+        stepDone('ownFolderMs')
+      }
       // The restored cost state is read from the transcript on its host, which can
       // be slow on a large one. Start it first and wait for it last, bounded, so it
       // never holds the spawn. A late answer seeds only this spawn's baseline, and
@@ -14984,7 +14994,7 @@ export class SessionRunner {
    * when, after a compaction; the caller has checked that nothing runs in the CLI. 'not-due' when
    * the rebuild would change nothing, so the CLI is never stopped for a replay.
    */
-  async respawnOnCurrentPrompt(sessionId: string, stillWanted: () => boolean): Promise<'respawned' | 'not-due' | 'gave-way'> {
+  async respawnOnCurrentPrompt(sessionId: string, stillWanted: () => boolean, opts: { folder?: boolean } = {}): Promise<'respawned' | 'not-due' | 'gave-way'> {
     // Someone's restart is on its way: it runs on the current prompt too when that pays.
     if (this.nativeSessionReinitializations.has(sessionId)) return 'gave-way'
     const { getSessionByClaudeId } = await import('../core/session-tracker.js')
@@ -14993,7 +15003,9 @@ export class SessionRunner {
     const { freshResumePrompt } = await import('../core/sessions/prompt-refresh.js')
     const facts = this.findSessionByClaudeId(sessionId)?.promptCache ?? record.promptCache
     const fresh = await freshResumePrompt(record, Date.now(), facts)
-    if (!fresh) return 'not-due'
+    // `folder`: a VP or lead outside its own folder, which the spawn moves (org-own-folder.ts): due
+    // with its prompt current too, then respawned on the stored prompt.
+    if (!fresh && !opts.folder) return 'not-due'
     if (this.nativeSessionReinitializations.has(sessionId)) return 'gave-way'
     // Asked again with no await before the stop goes out: a message or a turn that came meanwhile wins.
     const wanted = () => {
@@ -15005,7 +15017,7 @@ export class SessionRunner {
     let respawned = false
     this.promptRespawns.add(sessionId)
     const operation = this.performNativeReinitialize(sessionId, undefined, {
-      by: 'system', prompt: fresh,
+      by: 'system', ...(fresh ? { prompt: fresh } : {}),
       // The daemon's word too: a line its own same-host delivery wrote is invisible here until the
       // CLI's output comes back. What is left is the round trip from its answer to the stop.
       quietCheck: (t) => t.quietForRespawn(),
@@ -15015,6 +15027,7 @@ export class SessionRunner {
     try { await operation } finally { this.promptRespawns.delete(sessionId) }
     if (!respawned) return 'gave-way'
     // Respawned on the prompt built above, or (its store failed) on the stored one.
+    if (!fresh) return 'respawned'
     return (await getSessionByClaudeId(sessionId))?.appliedAppendSystemPrompt === fresh ? 'respawned' : 'not-due'
   }
 

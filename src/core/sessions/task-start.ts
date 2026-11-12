@@ -688,6 +688,8 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
             engine, initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
             ...(startBody.trim() ? {} : { startedIdle: true }),
           });
+          // A person named this VP's or lead's folder: its later spawns keep it (org-own-folder.ts).
+          if ('cwdByPerson' in launch && launch.cwdByPerson) await updateSessionRecord(sid, { cwdByPerson: launch.cwdByPerson });
           seeded = true;
           await linkSession(task.id, sid);
           // A start is an ask too: one from outside the task's team is its VP's to know, as a
@@ -1160,6 +1162,6 @@ async function prepareLaunch(task: Task, params: SessionStartParams, area?: Rout
     const made = await ensureTaskDirOnHost(task.id, launch.host || undefined);
     if ('error' in made) throw new QuickStartError(`Task ${task.id} needs a cwd on host "${launch.host}": its task directory there could not be made (${made.error}). Pass cwd.`, made.status);
   }
-  const { createTaskDir, ...resolved } = launch;
-  return { ...resolved, profile: undefined as SessionProfile | undefined };
+  const { createTaskDir, cwdByPerson, ...resolved } = launch;
+  return { ...resolved, profile: undefined as SessionProfile | undefined, ...(cwdByPerson ? { cwdByPerson: resolved.cwd } : {}) };
 }

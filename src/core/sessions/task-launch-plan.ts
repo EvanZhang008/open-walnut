@@ -80,8 +80,13 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
   // A host the caller handed on without a folder counts as named: only a default on it applies.
   const onHost = named || (!!pair && !pair.cwd);
   cwd ||= pair?.cwd || (onHost ? defaultCwdOnHost(metadata, host) : metadata?.default_cwd);
-  // A named remote host with no folder of this task's there: the task's own directory on it.
   let createTaskDir = false;
+  // A VP or lead runs in its own task directory, whatever the task or its project recorded,
+  // unless a person named the folder for this start (org-own-folder.ts).
+  const { ownFolderStartCwd } = await import('./org-own-folder.js');
+  const own = await ownFolderStartCwd(task, host, { ...params, workspace: wsPlace ?? params.workspace });
+  if (own?.kind === 'own') { cwd = own.cwd; createTaskDir = true; }
+  // A named remote host with no folder of this task's there: the task's own directory on it.
   if (!cwd && onHost && host) {
     const { taskDirForHost } = await import('./task-dir-place.js');
     const dir = await taskDirForHost(task.id, host).catch(() => null);
@@ -100,7 +105,7 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
     const { taskDirForHost } = await import('./task-dir-place.js');
     if (cwd === await taskDirForHost(task.id, '__local__')) createTaskDir = true;
   }
-  return { taskId: task.id, project: task.project, cwd, host, model, createTaskDir,
+  return { taskId: task.id, project: task.project, cwd, host, model, createTaskDir, cwdByPerson: own?.kind === 'person',
     mode: params.mode, ...(params.effort ? { effort: params.effort } : {}), engine: normalizeEngine(params.engine),
     message: params.idle ? '' : params.message?.trim() || task.description || `Working on task: ${task.title}` };
 }

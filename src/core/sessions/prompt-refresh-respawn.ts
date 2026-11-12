@@ -12,7 +12,10 @@
  * after a compaction, where the conversation is smallest, and only when that costs less than the
  * restatements it saves (`refreshPays`: about a week of compactions for Main, a VP or a lead, one
  * for any other session; after Walnut's own idle compaction nothing read the context yet, so then
- * it costs only the old prompt).
+ * it costs only the old prompt). A VP or lead still running in a repository always pays: the spawn
+ * moves it to its own folder (org-own-folder.ts), which takes the repository's instruction files,
+ * tens of thousands of tokens, off every later request (2026-11-12: the Walnut VP was judged
+ * not worth it twice, at 429K and 286K of context, while each request carried about 62K of them).
  *
  * Decided once per compaction boundary (`SessionRecord.promptRefresh`). Never while anything could
  * be cut: only a live idle CLI on a clean turn end, quiet for QUIET_MS, with no prompt open, no
@@ -56,8 +59,11 @@ export interface PromptRefreshRespawnDeps {
   idleCompactionArmed: (sessionId: string) => boolean;
   /** The org is off and this task is Main or a VP. */
   orgOffFor: (task: Task) => Promise<boolean>;
-  /** Respawn on the current prompt; `stillWanted` is asked right before the old CLI is stopped. */
-  respawn: (sessionId: string, stillWanted: () => boolean) => Promise<'respawned' | 'not-due' | 'gave-way'>;
+  /** Respawn on the current prompt; `stillWanted` is asked right before the old CLI is stopped.
+   *  `folder`: respawn even with the prompt current, so the spawn moves it to its own folder. */
+  respawn: (sessionId: string, stillWanted: () => boolean, opts: { folder: boolean }) => Promise<'respawned' | 'not-due' | 'gave-way'>;
+  /** A VP's or lead's session outside its own folder: its next spawn moves it (org-own-folder.ts). */
+  folderDue: (rec: SessionRecord, task: Task) => Promise<boolean>;
   emitNote: (sessionId: string, taskId: string | undefined, message: string) => void;
   /** Re-read the user's profile and Reply language, which the default instructions read. */
   refreshInputs: () => Promise<void>;
@@ -70,7 +76,7 @@ type RunnerView = {
   isInTurn(id: string): boolean | null;
   outlivingWorkOf(id: string): readonly string[];
   controlRequestsPendingOf(id: string): number;
-  respawnOnCurrentPrompt(id: string, stillWanted: () => boolean): Promise<'respawned' | 'not-due' | 'gave-way'>;
+  respawnOnCurrentPrompt(id: string, stillWanted: () => boolean, opts?: { folder?: boolean }): Promise<'respawned' | 'not-due' | 'gave-way'>;
 };
 
 function defaultDeps(runner: RunnerView, idleArmed: (id: string) => boolean): PromptRefreshRespawnDeps {
@@ -100,7 +106,8 @@ function defaultDeps(runner: RunnerView, idleArmed: (id: string) => boolean): Pr
       const { isOrgEnabled, isOrgNode } = await import('../org/org-enabled.js');
       return isOrgNode(task) && !(await isOrgEnabled());
     },
-    respawn: (id, stillWanted) => runner.respawnOnCurrentPrompt(id, stillWanted),
+    respawn: (id, stillWanted, opts) => runner.respawnOnCurrentPrompt(id, stillWanted, opts),
+    folderDue: async (rec, task) => (await import('./org-own-folder.js')).ownFolderMoveDue(rec, task).catch(() => false),
     emitNote: (sessionId, taskId, message) => {
       bus.emit(EventNames.SESSION_SYSTEM_EVENT, { sessionId, taskId, variant: 'info' as const, message },
         ['main-ai'], { source: 'prompt-refresh' });
@@ -115,9 +122,13 @@ function defaultDeps(runner: RunnerView, idleArmed: (id: string) => boolean): Pr
   };
 }
 
-/** The words of the timeline note when the session moved onto its current prompt. */
-export function promptRefreshNote(debtBytes: number): string {
-  return `Restarted this session on its current instructions after its compaction (its prompt lacked ${Math.round(debtBytes / 1024)} KB of them); the conversation is kept.`;
+/** The words of the timeline note when the session moved onto its current prompt (and folder). */
+export function promptRefreshNote(debtBytes: number, folder = false): string {
+  const kb = Math.round(debtBytes / 1024);
+  if (folder) {
+    return `Restarted this session in its own folder after its compaction, so no repository's instruction files load into every request${debtBytes > 0 ? `, and on its current instructions (its prompt lacked ${kb} KB of them)` : ''}; the conversation is kept.`;
+  }
+  return `Restarted this session on its current instructions after its compaction (its prompt lacked ${kb} KB of them); the conversation is kept.`;
 }
 
 /** Why a session's respawn is not done now, or null to do it. Pure; exported for tests. */
@@ -218,10 +229,11 @@ export class PromptRefreshRespawn {
     this.timers.set(sessionId, { timer, token, retries });
   }
 
-  private verdict(rec: SessionRecord, task: Task): { pays: boolean; debtBytes: number; rewriteTokens?: number } {
+  private verdict(rec: SessionRecord, task: Task, folder: boolean): { pays: boolean; debtBytes: number; rewriteTokens?: number } {
     const facts = this.deps.live(rec.claudeSessionId).promptCache ?? rec.promptCache;
     const debtBytes = this.deps.debtBytes(rec, task);
-    const pays = refreshPays({
+    // The folder move takes the repository's instruction files off every later request: it pays.
+    const pays = folder || refreshPays({
       facts, debtBytes, storedPromptBytes: Buffer.byteLength(rec.appliedAppendSystemPrompt ?? '', 'utf8'),
       horizon: refreshHorizon(task), now: this.deps.now(),
     });
@@ -248,7 +260,8 @@ export class PromptRefreshRespawn {
     const task = rec.taskId ? await this.deps.getTask(rec.taskId) : null;
     if (!task || task.phase === 'COMPLETE') return 'task-complete';
     await this.deps.refreshInputs();
-    const verdict = this.verdict(rec, task);
+    const folder = await this.deps.folderDue(rec, task);
+    const verdict = this.verdict(rec, task, folder);
     const base = { compactUuid: boundary, debtBytes: verdict.debtBytes, ...(verdict.rewriteTokens !== undefined ? { rewriteTokens: verdict.rewriteTokens } : {}) };
     const stamp = () => new Date(this.deps.now()).toISOString();
     if (!verdict.pays) {
@@ -280,7 +293,7 @@ export class PromptRefreshRespawn {
     this.firing.add(sessionId);
     await this.deps.saveSession(sessionId, { promptRefresh: { ...base, at: stamp(), outcome: 'respawned' } });
     try {
-      const done = await this.deps.respawn(sessionId, () => this.firing.has(sessionId) && !this.stopped);
+      const done = await this.deps.respawn(sessionId, () => this.firing.has(sessionId) && !this.stopped, { folder });
       if (done !== 'respawned') {
         // A message came first: that context is not decided, its next quiet turn end asks again.
         if (done === 'gave-way') await this.deps.saveSession(sessionId, { promptRefresh: undefined });
@@ -288,8 +301,11 @@ export class PromptRefreshRespawn {
         log.session.info('prompt refresh: respawn not done', { sessionId, taskId: rec.taskId, why: done });
         return done;
       }
-      this.deps.emitNote(sessionId, rec.taskId, promptRefreshNote(verdict.debtBytes));
-      log.session.info('prompt refresh: respawned on the current prompt', { sessionId, taskId: rec.taskId, ...base });
+      // Said only when the spawn really moved it (a host that did not answer leaves it in place).
+      const after = folder ? await this.deps.getSession(sessionId) : null;
+      const moved = !!after && !(await this.deps.folderDue(after, task));
+      this.deps.emitNote(sessionId, rec.taskId, promptRefreshNote(verdict.debtBytes, moved));
+      log.session.info('prompt refresh: respawned on the current prompt', { sessionId, taskId: rec.taskId, ...base, folder, moved });
       return 'respawned';
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);

@@ -88,6 +88,9 @@ export async function placeStartByLoad(
   if (params.host !== undefined || params.cwd !== undefined || params.workspace || params.startAttemptId) return null;
   // A task with an isolated workspace (ready or still being made) runs in it, wherever it is.
   if (task.workspace) return null;
+  // A VP or lead stays on its project's default host, in its own task directory (org-own-folder.ts).
+  const { runsInOwnFolder } = await import('./org-own-folder.js');
+  if (runsInOwnFolder(task)) return null;
   if (params.source && KEEP_SOURCES.has(params.source)) return null;
   const { WALNUT_HOME } = await import('../../constants.js');
   if (!launch.cwd) return null;

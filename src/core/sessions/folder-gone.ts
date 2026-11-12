@@ -166,8 +166,12 @@ export async function clearFolderGone(sessionId: string | null | undefined): Pro
 }
 
 /** The notice the session reads in its next message, once. */
-export function folderMovedNotice(moved: { from: string; to: string }, kind: 'kept' | 'fresh', extra?: { recorded?: string }): string {
-  const body = kind === 'kept'
+export function folderMovedNotice(moved: { from: string; to: string }, kind: 'kept' | 'fresh' | 'own-folder', extra?: { recorded?: string }): string {
+  const body = kind === 'own-folder'
+    ? `Walnut moved this conversation from ${moved.from} to ${moved.to}, this task's own directory, which survives reboots. `
+      + `A VP or lead runs in a folder of its own, so no repository's instruction files (CLAUDE.md, AGENTS.md, its memory) load into every request. `
+      + `Nothing in ${moved.from} changed: read it by its absolute path when you need to, and hand work in it to a team (task_send, task_create).`
+    : kind === 'kept'
     ? `Your working folder ${moved.from} no longer exists. Walnut did not recreate it: this conversation now continues in ${moved.to}, this task's own directory, which survives reboots. `
       + `Files that were in the old folder are not here; before you rely on a path under ${moved.from}, find out where its files went (the user may have moved or deleted them).`
     : `This task's earlier conversation could not be continued: its working folder ${moved.from} no longer exists, and neither does that conversation's history, so this is a new conversation. `
@@ -238,10 +242,9 @@ async function continueNow(sessionId: string, opts: { by?: string }): Promise<Co
   const to = made.path
 
   if (historyInFolder(record)) {
-    const found = await findTranscript(record)
-    if (found.state === 'unknown') throw new SessionControlError(`Could not look for this conversation's history on ${record.host ?? 'this machine'}; try again, or move the task to another host (task_move)`, 503, { code: 'host_unreachable' })
-    if (found.state === 'missing') return startFresh(record, from, to, by)
-    await moveTranscript(record, found.path, to)
+    const moved = await moveConversation(record, to)
+    if (moved === 'unknown') throw new SessionControlError(`Could not look for this conversation's history on ${record.host ?? 'this machine'}; try again, or move the task to another host (task_move)`, 503, { code: 'host_unreachable' })
+    if (moved === 'missing') return startFresh(record, from, to, by)
   }
 
   const at = new Date().toISOString()
@@ -269,6 +272,20 @@ async function continueNow(sessionId: string, opts: { by?: string }): Promise<Co
   if (willCarry && sent === 0) await updateSessionRecord(sessionId, { folderMoved: { from, to, at, by } }).catch(() => {})
   log.session.info('folder gone: continued in a new folder', { sessionId, taskId: record.taskId, from, to, sent, by })
   return { status: 'continued', sessionId, cwd: to, from, history: 'kept', sent }
+}
+
+/**
+ * Move a Claude Code session's conversation to where a resume in `to` finds it: its transcript
+ * (wherever its project dir is) and the `<sid>/` sidecar, through the host's daemon. 'missing'
+ * and 'unknown' (the host could not be asked) move nothing; a conflict throws. Shared by the gone
+ * folder's button and the VP's move to its own folder (org-own-folder.ts). The CLI must not be
+ * running: it appends to the transcript by path.
+ */
+export async function moveConversation(record: SessionRecord, to: string): Promise<'moved' | 'missing' | 'unknown'> {
+  const found = await findTranscript(record)
+  if (found.state !== 'found') return found.state
+  await moveTranscript(record, found.path, to)
+  return 'moved'
 }
 
 /** Move the transcript (and its sidecar dir) into the new folder's project dir, through the host's daemon. */
@@ -430,7 +447,7 @@ export async function pendingFolderMovedNotice(sessionId: string): Promise<{ tex
     const moved = record?.folderMoved
     if (!moved || moved.told) return null
     return {
-      text: folderMovedNotice(moved, 'kept'),
+      text: folderMovedNotice(moved, moved.why === 'own-folder' ? 'own-folder' : 'kept'),
       markTold: async () => {
         await updateSessionRecordConditionally(
           sessionId,

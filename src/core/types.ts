@@ -3837,9 +3837,13 @@ export interface SessionRecord {
    *  host ('found' = it can continue in a new folder with its history, 'missing' = only a new
    *  conversation can carry the work on). `newCwd`: the task's own directory it would move to. */
   cwdGone?: { cwd: string; at: string; history: 'found' | 'missing' | 'unknown'; newCwd?: string };
-  /** Walnut moved this session out of a folder that was gone (sessions/folder-gone.ts). `told`
-   *  once a message into the session has carried the notice saying so. */
-  folderMoved?: { from: string; to: string; at: string; by: string; told?: boolean };
+  /** Walnut moved this session to another folder: out of one that was gone (sessions/folder-gone.ts),
+   *  or, `why: 'own-folder'`, a VP's or lead's out of a repository into its own task directory
+   *  (sessions/org-own-folder.ts). `told` once a message into the session has carried the notice. */
+  folderMoved?: { from: string; to: string; at: string; by: string; told?: boolean; why?: 'gone' | 'own-folder' };
+  /** The folder a person named when starting this VP's or lead's session: kept by its later spawns,
+   *  which otherwise move it to its own task directory (sessions/org-own-folder.ts). */
+  cwdByPerson?: string;
   /** An engine switch started (or resumed) this session with no message: the context it carried,
    *  a hint block, rides the session's next message (sessions/engine-switch-io.ts). */
   switchContext?: { text: string; switchId: string; at: string };
