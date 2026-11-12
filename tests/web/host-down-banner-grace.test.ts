@@ -4,7 +4,8 @@
  * the notice blinked on and off with every drop: "it keep showing reconnect what happend?").
  *
  *   - a re-dial shows the notice only once it has lasted HOST_DOWN_GRACE_MS, counted from
- *     its start or from when the panel first saw it, whichever is earlier;
+ *     its start or from when the panel first saw it, whichever is earlier; a dial with no
+ *     failure yet (what a drop reads as for its first half minute) counts from the drop;
  *   - a drop that is back within the grace never shows it;
  *   - a failed or switched-off host shows it at once;
  *   - once shown, it stays until the host is connected again;
@@ -29,7 +30,7 @@ vi.mock('@/hooks/useServerRole', () => ({ useIsReplicaServer: () => false, useSe
 vi.mock('@/api/hosts', () => ({ connectHost: async () => state.current, checkHostReadiness: async () => state.current }))
 vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
 
-const { SessionHostDownBanner, hostDownShowsAt, hostSitsIdle, HOST_DOWN_GRACE_MS } = await import('../../web/src/components/sessions/SessionHostErrorBar')
+const { SessionHostDownBanner, hostDownShowsAt, hostSitsIdle, hostDialsAfterDrop, HOST_DOWN_GRACE_MS } = await import('../../web/src/components/sessions/SessionHostErrorBar')
 const { hostProblemOf } = await import('../../src/core/hosts/host-problem')
 
 const T0 = 1_900_000_000_000
@@ -90,6 +91,29 @@ describe('the host-down notice waits out a short drop', () => {
     expect(shown()).toBe(true)
     await show({ ...up, at: Date.now() })
     expect(shown()).toBe(false)
+  })
+
+  it('a drop that reads as a dial with no failure yet shows it once the grace has passed since the drop', async () => {
+    await show(up)
+    await show({ ...dialing, at: Date.now() } as HostStatus)
+    expect(shown()).toBe(false)
+    await advance(HOST_DOWN_GRACE_MS + 100)
+    expect(shown()).toBe(true)
+    expect(el.textContent).toContain('Dev box')
+    // Its first failure later turns it into a reconnect: still shown.
+    await show(reconnecting(T0 + 25_000))
+    expect(shown()).toBe(true)
+    await show({ ...up, at: Date.now() })
+    expect(shown()).toBe(false)
+    // A dial back within the grace never shows it.
+    await show({ ...dialing, at: Date.now() } as HostStatus)
+    await advance(4_000)
+    await show({ ...up, at: Date.now() })
+    await advance(20_000)
+    expect(shown()).toBe(false)
+    expect(hostDialsAfterDrop(dialing as never, null)).toBe(true)
+    expect(hostDialsAfterDrop(up as never, null)).toBe(false)
+    expect(hostDialsAfterDrop({ ...dialing, removed: true } as never, null)).toBe(false)
   })
 
   it('a drop back within the grace never shows it, drop after drop', async () => {

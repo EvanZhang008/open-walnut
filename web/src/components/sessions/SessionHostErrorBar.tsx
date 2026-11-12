@@ -9,7 +9,7 @@
  * Sentences come from @open-walnut/host-problem (or the server) only.
  */
 import { useEffect, useRef, useState } from 'react';
-import { REMOTE_OFF_NOTE, hostProblemOf, type HostProblem } from '@open-walnut/host-problem';
+import { REMOTE_OFF_NOTE, hostProblemOf, isConnectingPhaseWire, type HostProblem } from '@open-walnut/host-problem';
 import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
 import { useHostActions, RETRY_FAILED_TEXT, CHECK_FAILED_TEXT } from '@/hooks/useHostActions';
 import { useIsReplicaServer } from '@/hooks/useServerRole';
@@ -141,9 +141,9 @@ export const HOST_DOWN_GRACE_MS = 10_000;
  * for a failed or switched-off host, for a reconnect once it has lasted HOST_DOWN_GRACE_MS
  * from its start or from when this panel first saw it, whichever is earlier.
  */
-export function hostDownShowsAt(p: HostProblem | null, firstSeenAt: number, idle = false): number | null {
-  // An idle host (added, nothing dialling, nothing failed) waits the same grace: a dial is often a moment away.
-  if (!p) return idle ? firstSeenAt + HOST_DOWN_GRACE_MS : null;
+export function hostDownShowsAt(p: HostProblem | null, firstSeenAt: number, quiet = false): number | null {
+  // A host down with nothing failed yet (sitting idle, or a dial in flight) waits the same grace.
+  if (!p) return quiet ? firstSeenAt + HOST_DOWN_GRACE_MS : null;
   if (p.type === 'connect' || p.type === 'off') return 0;
   if (p.type !== 'reconnecting') return null;
   const start = p.since > 0 ? Math.min(p.since, firstSeenAt) : firstSeenAt;
@@ -153,6 +153,15 @@ export function hostDownShowsAt(p: HostProblem | null, firstSeenAt: number, idle
 /** The host is added and not connected, with nothing dialling and nothing failed (its link was never asked for). */
 export function hostSitsIdle(status: { connected?: boolean; phase?: string; removed?: boolean } | undefined, p: HostProblem | null): boolean {
   return !!status && !status.removed && !status.connected && status.phase === 'idle' && !p;
+}
+
+/**
+ * The host is not connected and a dial is in flight with no failure recorded yet: what a dropped
+ * link reads as for its first half minute (hostProblemOf answers null then), so the grace counts
+ * from the drop itself (2026-11-12: counted only from the first failure, the notice came 40 s late).
+ */
+export function hostDialsAfterDrop(status: { connected?: boolean; phase?: string; removed?: boolean } | undefined, p: HostProblem | null): boolean {
+  return !!status && !status.removed && !status.connected && !p && isConnectingPhaseWire(status.phase);
 }
 
 /**
@@ -166,13 +175,14 @@ export function SessionHostDownBanner({ host, label }: { host: string; label: st
   const replica = useIsReplicaServer();
   const p = hostProblemOf(status, { replica });
   const idle = hostSitsIdle(status, p);
-  const down = (!!p && (p.type === 'connect' || p.type === 'reconnecting' || p.type === 'off')) || idle;
+  const dialing = hostDialsAfterDrop(status, p);
+  const down = (!!p && (p.type === 'connect' || p.type === 'reconnecting' || p.type === 'off')) || idle || dialing;
   const connected = status?.connected === true;
   // The first moment this panel saw the link down, kept until it is connected again.
   const firstSeen = useRef<number | null>(null);
   if (connected || !status) firstSeen.current = null;
   else if (down && firstSeen.current === null) firstSeen.current = serverNow();
-  const showAt = down ? hostDownShowsAt(p, firstSeen.current ?? serverNow(), idle) : null;
+  const showAt = down ? hostDownShowsAt(p, firstSeen.current ?? serverNow(), idle || dialing) : null;
   const [tick, rerender] = useState(0);
   // Armed again after each fire (`tick`): a fire a moment early (the server clock's skew moved) waits on.
   useEffect(() => {
@@ -197,7 +207,7 @@ export function SessionHostDownBanner({ host, label }: { host: string; label: st
       <div className="session-host-down-body">
         {idle ? <SessionHostIdleText host={host} label={l} /> : (
           <>
-            <SessionHostErrorText host={host} label={label} reconnecting={!down} fallback={`${l} cannot be reached right now`} />
+            <SessionHostErrorText host={host} label={label} reconnecting={!down || dialing} fallback={`${l} cannot be reached right now`} />
             <div className="hpb-last" data-testid="session-host-down-note">{HOST_DOWN_MESSAGES_NOTE}</div>
           </>
         )}
