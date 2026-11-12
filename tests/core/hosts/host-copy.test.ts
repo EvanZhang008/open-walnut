@@ -186,7 +186,7 @@ describe('host_copy', () => {
     const r = await copyBetweenHosts({ from: '~/work/src.tgz', to_host: 'macbox', to: '~/build/' }, SID)
     expect(r).toMatchObject({
       running: false, from_host: 'devbox', to_host: 'macbox', from: '~/work/src.tgz', to: '~/build/src.tgz',
-      bytes: body.length, sha256: sha(body), chunks: 3, retries: 0, replaced: false, copyId: expect.stringMatching(/^hc-/),
+      bytes: body.length, sha256: sha(body), chunks: 6, retries: 0, replaced: false, copyId: expect.stringMatching(/^hc-/),
     })
     const landed = path.join(hosts.macbox!.home, 'build', 'src.tgz')
     expect(fs.readFileSync(landed).equals(body)).toBe(true)

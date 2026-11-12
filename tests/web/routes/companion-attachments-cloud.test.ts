@@ -13,7 +13,7 @@
  *     longest suffix, nearest the note); an unknown file is a 404;
  *   - an unchanged round sends nothing; a changed file goes alone; a second copy of the
  *     same bytes is never sent; a file gone on the Mac leaves the copy;
- *   - a large file goes in 2 MB chunks, and an upload that broke resumes where the box
+ *   - a large file goes in 1 MB chunks, and an upload that broke resumes where the box
  *     says it stopped; bytes that are not the manifest's are refused;
  *   - a picture pasted on the box is never written to its disk: it shows at once from
  *     its journal record, still shows after the Mac took it (its journal bytes freed),
@@ -189,8 +189,8 @@ describe('the pictures and files of the notes on the box', () => {
     expect((await get('Acme/scan.pdf')).status).toBe(404)
     const resumed = await round()
     expect(resumed).toMatchObject({ action: 'synced', sent: 1 })
-    // The first 2 MB arrived before the break: the round went on from there.
-    expect(puts().map((p) => p.offset)).toEqual([2 * 1024 * 1024, 4 * 1024 * 1024])
+    // The first 1 MB arrived before the break: the round went on from there.
+    expect(puts().map((p) => p.offset)).toEqual([1, 2, 3, 4, 5].map((mb) => mb * 1024 * 1024))
     const r = await get('Acme/scan.pdf')
     expect(r.status).toBe(200)
     expect(sha256(r.bytes)).toBe(sha256(big))
