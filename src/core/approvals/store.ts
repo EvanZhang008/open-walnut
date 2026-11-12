@@ -150,6 +150,10 @@ export interface CreateInput {
   /** Why it asks and where the task stands (asker-context.ts); signed in a single-use envelope. */
   context?: AskerContext
   requestOnly?: boolean
+  /** Record it as done without asking (approvals off, ask-me.ts): the gate's name. */
+  unasked?: string
+  /** An ask the Approvals switch never answers (a new signing device, the person's site list). */
+  outsideSwitch?: boolean
 }
 
 /** Whether a viewer (its test-run label, or none for the person) sees this approval. */
@@ -217,6 +221,7 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     throw new ApprovalError(400, 'bad_request', 'Single-use operation context must be well-formed Unicode; it is never normalized.')
   }
   let detail = typeof input.detail === 'string' && input.detail.trim() ? wellFormed(input.detail) : undefined
+  if (input.unasked && input.singleUse) throw new ApprovalError(400, 'bad_request', 'A signed single-use approval is always asked: only its device can sign it.')
   const keySet = signerSet(input.signingKeyIds)
   if (input.signingKeyIds && !keySet) throw new ApprovalError(400, 'bad_request', 'signing_key_ids names two or more different keys; one key is signing_key_id.')
   const signers = keySet ? { signingKeyIds: keySet } : { signingKeyId: input.signingKeyId }
@@ -256,20 +261,28 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     ...(input.singleUse ? { singleUse: true, ...signers } : {}),
     ...(input.context && Object.keys(input.context).length ? { context: input.context } : {}),
     ...(input.requestOnly ? { requestOnly: true } : {}),
+    ...(input.outsideSwitch ? { outsideSwitch: true } : {}),
+    // Approvals off: nobody is asked; the record says the step went ahead and who took it.
+    ...(input.unasked ? {
+      unasked: input.unasked, status: 'approved' as const, readAt: createdAt,
+      answer: { decision: 'approve' as const, at: createdAt, mode: 'tap' as const, device: { name: 'Approvals off', kind: 'setting' as const } },
+    } : {}),
   }
   let settled: ApprovalRecord[] = []
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
     settled = settleClock(file, now)
     // A looping script must not flood the phone: past the cap a new ask is refused.
     const open = file.approvals.filter((a) => a.status === 'pending' && (a.testRun ?? null) === (rec.testRun ?? null)).length
-    if (open >= APPROVAL_PENDING_MAX) {
+    if (!rec.unasked && open >= APPROVAL_PENDING_MAX) {
       throw new ApprovalError(429, 'too_many_pending', `${open} approvals are already waiting for an answer; answer or withdraw some first.`)
     }
     file.approvals.push(rec)
     return file
   }))
-  log.web.info('approval created', { approvalId: id, mode: rec.mode, host: requester.host, taskId: requester.taskId })
-  announce([...settled, rec])
+  log.web.info(rec.unasked ? 'approval not asked: approvals are off' : 'approval created', { approvalId: id, mode: rec.mode, host: requester.host, taskId: requester.taskId, ...(rec.unasked ? { gate: rec.unasked } : {}) })
+  // One done without asking pops up nowhere and tells no one; the history lists it.
+  const out = !rec.unasked
+  announce(out ? [...settled, rec] : settled)
   return { approval: viewOf(rec), waitToken }
 }
 

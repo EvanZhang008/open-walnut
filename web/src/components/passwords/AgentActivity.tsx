@@ -36,7 +36,7 @@ const REASON: Record<string, string> = {
 function line(e: AgentLogEntry): { verb: string; tone: 'ok' | 'ask' | 'bad' } {
   const what = e.fields?.length && !(e.fields.length === 1 && e.fields[0] === 'password') ? e.fields.join(', ') : 'the password'
   switch (e.kind) {
-    case 'released': return { verb: `got ${what}${e.use && e.use !== 'list' ? `, ${USE_TEXT[e.use]}` : ''}${e.via === 'allow' ? ' (allowed without asking)' : e.via === 'grant' ? ' (task grant)' : ` (you approved${e.approvedBy ? ` on ${e.approvedBy}` : ''})`}`, tone: 'ok' }
+    case 'released': return { verb: `got ${what}${e.use && e.use !== 'list' ? `, ${USE_TEXT[e.use]}` : ''}${e.via === 'allow' ? ' (allowed without asking)' : e.via === 'approvals-off' ? ' (Approvals are off)' : e.via === 'grant' ? ' (task grant)' : ` (you approved${e.approvedBy ? ` on ${e.approvedBy}` : ''})`}`, tone: 'ok' }
     case 'listed': return { verb: `read the list (${e.count ?? 0} item${e.count === 1 ? '' : 's'})`, tone: 'ask' }
     case 'revoked': return { verb: 'lost its grant (you ended it)', tone: 'bad' }
     case 'synced': return { verb: e.summary ?? 'synced from Bitwarden', tone: 'ok' }

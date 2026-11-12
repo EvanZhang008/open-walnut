@@ -349,7 +349,7 @@ async function siteGate(req: Request, owner: string, url: string, holdMs: number
       what: `Let Walnut agents use ${site} in your browser?`,
       detail: `${requester.taskTitle ? `"${requester.taskTitle}" wants to open ${url}` : `An agent wants to open ${url}`} in the Walnut agent window of your browser. `
         + `Approve once and agents may use ${site} until you remove it in Settings, Browser extension.`,
-      mode: 'tap', timeoutMs: 10 * 60_000, requester, testRun: ambientTestRun(),
+      mode: 'tap', outsideSwitch: true, timeoutMs: 10 * 60_000, requester, testRun: ambientTestRun(),
     })
     id = made.approval.id
     siteAsks.set(key, id)
@@ -498,6 +498,15 @@ browserV1Router.post('/browser/act', (req, res, next) => {
         // A code right after the sign-in the person said yes to is part of it (fresh-sign-in.ts codeStepAfter).
         if (action === 'fill_code') codeClaim = fresh.claimCodeStep(scope)
         if (!codeClaim) freshClaim = fresh.claimGrant(scope)
+        if (!freshClaim && !codeClaim && b.fresh_sign_in === true) {
+          // Approvals off (core/approvals/ask-me.ts): the new sign-in goes ahead, recorded as not asked.
+          const { asksPerson } = await import('../../core/approvals/ask-me.js')
+          if (!(await asksPerson())) {
+            const ask = await fresh.askFreshSignIn({ ...scope, theirs, requester, testRun: ambientTestRun(), unasked: true })
+            const ans = await fresh.answerFreshSignIn({ ...scope, id: String(ask.request), holdMs: 0 })
+            if (ans.ok) freshClaim = fresh.claimGrant(scope)
+          }
+        }
         if (!freshClaim && !codeClaim) {
           if (b.fresh_sign_in === true) {
             log.web.info('browser fill_login asks the person for a new sign-in', { device: c.device, owner, tab, tabs: theirs.map((t) => t.id) })
@@ -550,9 +559,18 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       return h.send(c.device, action, args, { ...s.allowOf(f), walnut: own }, ms)
     }
     // The page held a step that buys, sends or deletes: the person is asked (outward-asks.ts).
-    const askIfHeld = async (err: unknown): Promise<Record<string, unknown> | null> => {
+    // Approvals off (core/approvals/ask-me.ts): nobody is asked; the step is recorded and goes with its mark ('go').
+    const askIfHeld = async (err: unknown): Promise<Record<string, unknown> | 'go' | null> => {
       const hold = err instanceof h.BrowserError && err.code === 'outward_needs_ok' && tab !== undefined ? outward.holdOf(err.extra) : null
       if (!hold) return null
+      const askMe = await import('../../core/approvals/ask-me.js')
+      if (!(await askMe.asksPerson()) && args.outward_ok !== hold.sig) {
+        const words = outward.askWords(hold, requester.taskTitle)
+        await askMe.goAheadUnasked('browserOutward', { what: words.what, detail: words.detail, requester, testRun: ambientTestRun() })
+        log.web.info('browser act goes ahead unasked: approvals are off', { action, device: c.device, owner, tab, kind: hold.kind })
+        args.outward_ok = hold.sig
+        return 'go'
+      }
       log.web.info('browser act waits for the person', { action, device: c.device, owner, tab, kind: hold.kind })
       return outward.askOutward({ owner, tab: tab!, action, args, hold, requester, testRun: ambientTestRun() })
     }
@@ -572,16 +590,19 @@ browserV1Router.post('/browser/act', (req, res, next) => {
       result = await go()
     } catch (err) {
       const ask = await askIfHeld(err)
-      if (ask) { res.status(202).json(ask); return undefined }
+      if (ask === 'go') {
+        try { result = await go() } catch (again) { undoEnd?.(); throw again }
+      } else if (ask) { res.status(202).json(ask); return undefined }
       // The page went to a site not allowed yet (a link, a redirect): ask, as for an open.
-      if (err instanceof h.BrowserError && err.code === 'site_not_allowed' && typeof err.extra.url === 'string') {
+      else if (err instanceof h.BrowserError && err.code === 'site_not_allowed' && typeof err.extra.url === 'string') {
         const g = await siteGate(req, owner, err.extra.url, 0)
         if (!g.ok) { res.status(g.status).json(g.body); return undefined }
         f = await s.readSites()
         try { result = await go() } catch (again) {
           const ask2 = await askIfHeld(again)
-          if (ask2) { res.status(202).json(ask2); return undefined }
-          throw again
+          if (ask2 === 'go') result = await go()
+          else if (ask2) { res.status(202).json(ask2); return undefined }
+          else throw again
         }
       } else { undoEnd?.(); throw err }
     }

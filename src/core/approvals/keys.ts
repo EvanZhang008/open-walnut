@@ -133,7 +133,7 @@ async function enrollOne(input: EnrollInput): Promise<EnrollResult> {
   const { approval } = await createApproval({
     what: `Let "${key.name}" (${key.kind === 'iphone' ? 'iPhone' : 'Mac app'}) sign your approvals`,
     detail: `A new device asked to sign Walnut approvals with Face ID or Touch ID.\nKey ${key.id}.\nApprove only if you just set this device up yourself.`,
-    mode: 'biometric',
+    mode: 'biometric', outsideSwitch: true,
     timeoutMs: 24 * 60 * 60_000,
     requester: { host: os.hostname() || 'this computer' },
     enrollsKey: key.id,

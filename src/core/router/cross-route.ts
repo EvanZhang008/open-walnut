@@ -358,6 +358,8 @@ async function crossRouteLocked(input: CrossRouteInput, deps: CrossRouteDeps, lo
     const { display: _d, ...identity } = identityOf(input, live, content.item.key)
     const approval = await requestHandoffApproval({ ...identity, content },
       { ...live.display, host: live.area.host, ...(input.testRun ? { testRun: input.testRun } : {}) }, deps.handoff)
+    // Approvals off (approvals/ask-me.ts): the yes is already recorded, so the handoff goes on now.
+    if (approval.status === 'approved') return crossRouteLocked({ ...input, approvalId: approval.approvalId }, deps, lockedAreaId)
     return { status: 'needs_approval', approval }
   }
 

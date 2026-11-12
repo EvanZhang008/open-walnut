@@ -187,6 +187,8 @@ export interface UnsubscribeAskResult {
   url?: string
   /** What the ledger keys this on: the sender's `List-Id`, else its address. */
   listKey: string
+  /** Approvals are off (core/approvals/ask-me.ts): no letter went out, the ladder ran now. */
+  done?: UnsubscribeOutcome
 }
 
 /**
@@ -268,6 +270,8 @@ export interface MailUnsubscribeDeps {
   approvals: UnsubscribeApprovals
   log: Log
   now?: () => number
+  /** Whether an agent's unsubscribe waits for the person (`config.approvals.ask_me`). Absent: it asks. */
+  asksPerson?: () => Promise<boolean>
   /**
    * Socket and resolver seam, handed straight to `fetchUnsubscribe`. NOT a way past the guard: every
    * url and every redirect is still checked, and every address the resolver answers with is still
@@ -828,6 +832,14 @@ export class MailUnsubscribe {
   async requestFromAgent(accountId: string, messageId: string): Promise<UnsubscribeAskResult> {
     const subject = await this.deps.service.unsubscribeSubject(accountId, messageId)
     const method = this.chooseRung(subject, undefined)
+    if (this.deps.asksPerson && !(await this.deps.asksPerson())) {
+      // Approvals are off: the agent's ask is the console's click, so the same ladder runs now.
+      const done = await this.run(accountId, messageId)
+      this.deps.log.info('mail unsubscribed with no letter: approvals are off', {
+        accountId: subject.accountId, messageId: subject.messageId, listKey: subject.listKey, method: done.method, status: done.status,
+      })
+      return { letterId: '', method: done.method, ...(done.url ? { url: done.url } : {}), listKey: subject.listKey, done }
+    }
     const held = await this.ledgerFor(subject.accountId, subject.messageId)
     if (held?.status === 'needs-human' && held.ref && await this.letterIsOpen(held.ref)) {
       throw new MailServiceError(

@@ -677,6 +677,26 @@ describe('an edit invalidates the approval it was asked for', () => {
   });
 });
 
+describe('with approvals off, an agent\'s send goes out with no letter', () => {
+  it('sends once, records the switch as its authority, and puts nothing in the inbox', async () => {
+    const before = process.env.WALNUT_APPROVALS_ASK;
+    process.env.WALNUT_APPROVALS_ASK = '0';
+    try {
+      const draft = await newDraft({ subject: 'Approvals off' });
+      const lettersBefore = (await mailLetters()).length;
+      const asked = await requestSend(draft) as { status: number; body: { letterId?: string; sent?: SendShape } };
+      expect(asked.status).toBe(200);
+      expect(asked.body.letterId).toBe('');
+      expect(asked.body.sent).toMatchObject({ state: 'sent', approvalKind: 'console', approvalRef: 'approvals-off' });
+      expect(callsFor(draft.draftId)).toHaveLength(1);
+      expect((await mailLetters()).length).toBe(lettersBefore);
+      expect(await sendsOf(draft.draftId)).toHaveLength(1);
+    } finally {
+      if (before === undefined) delete process.env.WALNUT_APPROVALS_ASK; else process.env.WALNUT_APPROVALS_ASK = before;
+    }
+  });
+});
+
 describe('the console can send without a letter', () => {
   it('sends once for the right revision and withdraws the outstanding letter', async () => {
     const draft = await newDraft();

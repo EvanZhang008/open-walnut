@@ -72,7 +72,7 @@ export interface AgentLogEntry {
   at: string
   kind: 'released' | 'fill' | 'asked' | 'denied' | 'refused' | 'expired' | 'listed' | 'revoked' | 'synced'
   itemId?: string; itemTitle?: string; fields?: string[]; purpose?: string
-  via?: 'allow' | 'grant' | 'approval'; reason?: string; approvalId?: string
+  via?: 'allow' | 'grant' | 'approval' | 'approvals-off'; reason?: string; approvalId?: string
   taskId?: string; taskTitle?: string; sessionId?: string; host?: string; command?: string
   /** How the value was used: reveal (shown to the agent), env (a command), fill (a browser page), list. */
   use?: 'reveal' | 'env' | 'fill' | 'list'

@@ -110,6 +110,37 @@ closed: creating it and spending it (`approval_consume`) each need the asking pr
 its session, checked again on each call, else `403 unverified_session`, so a check Walnut could not
 make refuses too.
 
+## Off by default: one switch
+
+Settings › General › **Ask me before agents act** (`config.approvals.ask_me`, `src/core/approvals/ask-me.ts`)
+decides whether an agent's step waits for the person. It is off unless the person turns it on.
+
+Off, these go ahead at once with no card, letter or wait, and each is recorded (an approved approval
+marked `unasked` with its gate, or the plugin's own sent log, or a host grant `via: approvals-off`):
+
+| Gate | Where |
+|---|---|
+| `walnut approve` / `approval_request` | `src/web/routes/approvals-v1.ts` |
+| A browser step that sends, buys or deletes | `src/web/routes/browser-v1.ts` (askIfHeld) |
+| A fresh sign-in on a site open in the person's own tab | `src/web/routes/browser-v1.ts`, `src/core/browser-control/fresh-sign-in.ts` |
+| A router hand-off outside its area | `src/core/router/handoff-approval.ts`, `cross-route.ts` |
+| An agent using a saved password | `src/core/vault/agent.ts` |
+| A mail send, a mailing-list unsubscribe | `src/integrations/mail/approvals.ts`, `unsubscribe.ts` |
+| A task's first command on another host | `src/core/hosts/host-exec-grant.ts` |
+| A plugin's own ask (a Slack post) | the plugin reads `walnut.letters.asksPerson()` |
+
+What the switch never turns off: a signed single-use approval (only its device can sign it; a script
+that wants one reads the switch itself), a new signing device without its app's proof, a password the
+person marked never or sensitive, the Browser extension's approved-sites list when the person chose it,
+a change to a calendar event other people are in (the native helper's own confirmation), an OS dialog,
+the person's own doors (Settings, answering), and an engine's own tool permission prompts (a session's
+permission mode, which is not a Walnut approval). A draft whose last send may have landed (`unknown`)
+is still shown to the person before another try. A host grant the switch made counts only while it
+stays off, and a Passwords use it released is logged `via: approvals-off`. Only a person moves the switch: a session gets
+`403 human_only` and a test run `409 test_run`. On, every gate asks as before.
+`tests/core/approvals/ask-me-gates-guard.test.ts` lists every ask from the source and fails on a new one
+that does not read the switch or say why it stays.
+
 ## Where the ask shows up
 
 - **The web console and the Mac app**, in three places that answer together:

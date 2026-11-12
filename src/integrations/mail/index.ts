@@ -35,6 +35,7 @@ import { MailStore } from './store.js'
 import { MailSync, mailSyncForTesting, setActiveMailSync } from './sync.js'
 import { createMailTools } from './tools.js'
 import { MailUnsubscribe } from './unsubscribe.js'
+import { asksPerson } from '../../core/approvals/ask-me.js'
 
 /**
  * The Mail base, as a capability plugin.
@@ -210,7 +211,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const drafts = new MailDrafts({ store, events })
   const sends = new MailSends({ store, service, drafts, letters: walnut.letters, events, log: walnut.log })
   const approvals = new MailApprovals({
-    store, service, drafts, sends, letters: walnut.letters, events, log: walnut.log,
+    store, service, drafts, sends, letters: walnut.letters, events, log: walnut.log, asksPerson,
   })
   // Leaving a mailing list. Its own module because it is the one part of this plugin that opens a url
   // a STRANGER wrote from inside the user's network, and every rule about that lives together in
@@ -219,7 +220,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // console side of it, so an unsubscribe mail is validated, recorded and settled by exactly the code
   // every other outgoing mail goes through. Nothing else about this module can send.
   const unsubscribe = new MailUnsubscribe({
-    store, service, events, drafts, approvals, letters: walnut.letters, log: walnut.log,
+    store, service, events, drafts, approvals, letters: walnut.letters, log: walnut.log, asksPerson,
   })
   // Everything that deletes, in one place, so a read path cannot reach a delete by accident.
   const retention = new MailRetention({

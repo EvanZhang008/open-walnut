@@ -81,6 +81,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     hooks: { defs: [{ id: 'notify', action: { type: 'webhook', secret: hookSecret } }] },
     self_repair: { enabled: false },
     updates: { auto: true },
+    approvals: { ask_me: true },
     ui: { session_panels: 'auto', show_priority: true },
     tag_display: { 'ticket-id:*': 'value' },
     tag_links: { 'ticket:*': 'https://tickets.example.com/{value}' },

@@ -146,6 +146,13 @@ if (process.env.WALNUT_DAEMON_UPDATE_MIN_GAP_MS === undefined) {
   process.env.WALNUT_DAEMON_UPDATE_MIN_GAP_MS = '0'
 }
 
+// Agents' steps go ahead without asking unless the person turns approvals on
+// (src/core/approvals/ask-me.ts): the tests written before the switch check the asking, so
+// they run with it on. The switch's own tests set the config, which wins over this.
+if (process.env.WALNUT_APPROVALS_ASK === undefined) {
+  process.env.WALNUT_APPROVALS_ASK = '1'
+}
+
 // Main and every VP start a session by themselves when they are made (src/core/org/org-autostart.ts):
 // a test that makes a VP would otherwise spawn a session it never asked for. The autostart tests
 // set this to '1' themselves.

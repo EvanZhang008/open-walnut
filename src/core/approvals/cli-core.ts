@@ -258,6 +258,7 @@ function envelopeOf(detail: string | undefined): Envelope | undefined {
 }
 
 function how(a: ApprovalLite): string {
+  if (a.answer?.device?.kind === 'setting') return 'with nobody asked: approvals are off (Settings, General)'
   const dev = a.answer?.device?.name ?? 'a device'
   const mode = a.answer?.mode === 'biometric' ? (a.answer.device?.kind === 'iphone' ? 'Face ID' : 'Touch ID') : 'a tap'
   return `on ${dev}, with ${mode}`

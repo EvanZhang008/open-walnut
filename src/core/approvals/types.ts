@@ -59,7 +59,8 @@ export interface ApprovalAnswer {
   signature?: string
 }
 
-export type ApprovalDeviceKind = 'iphone' | 'mac-app' | 'web' | 'cli'
+/** `setting`: nobody was asked, because the person turned approvals off (ask-me.ts). */
+export type ApprovalDeviceKind = 'iphone' | 'mac-app' | 'web' | 'cli' | 'setting'
 
 /**
  * An approval whose unsigned Approve from this machine is not enough (any process here can send
@@ -94,6 +95,10 @@ export interface ApprovalRecord {
   signingKeyId?: string
   /** A single-use approval any one of these keys may sign (two or more, sorted; store.ts allowedSigners). */
   signingKeyIds?: string[]
+  /** Not asked: approvals were off, so the step went ahead and this records it (ask-me.ts: which gate). */
+  unasked?: string
+  /** An ask the Approvals switch never answers, so its card offers no "stop asking me". */
+  outsideSwitch?: boolean
   /** When the asker first read how it ended, whatever it was (an expiry too): it knows. */
   readAt?: string
   /** When Walnut told the asking session the decision (tell-asker.ts), at most once. */

@@ -89,14 +89,14 @@ export interface UseInput {
 }
 
 export type UseResult =
-  | { status: 'released'; item: AgentItemView; values: Record<string, string>; via: 'allow' | 'grant' | 'approval'; grantedUntil?: string | null }
+  | { status: 'released'; item: AgentItemView; values: Record<string, string>; via: 'allow' | 'grant' | 'approval' | 'approvals-off'; grantedUntil?: string | null }
   | { status: 'pending'; requestId: string; waitToken: string; item: AgentItemView; mode: 'tap' | 'biometric'; expiresAt: string; downgraded?: string }
 
 // ── the decision, pure ──
 
 export type AgentDecision =
   | { kind: 'refuse'; status: number; code: 'agent_never'; message: string }
-  | { kind: 'release'; via: 'allow' | 'grant' }
+  | { kind: 'release'; via: 'allow' | 'grant' | 'approvals-off' }
   | { kind: 'ask'; biometric: boolean }
 
 export interface DecisionInput {
@@ -111,6 +111,9 @@ export interface DecisionInput {
   /** `use` absent: an older record, read as `fill`. */
   grant?: { until: number; fields: Iterable<string>; use?: AgentUse }
   now?: number
+  /** Approvals on (approvals/ask-me.ts). Off (false), an item that would ask is released, except one
+   *  the person marked sensitive or never, or with the agents switch off: those are their own choice. */
+  askMe?: boolean
 }
 
 /**
@@ -129,6 +132,7 @@ export function decideAgentUse(d: DecisionInput): AgentDecision {
   if (d.mode === 'off') return { kind: 'ask', biometric: d.sensitive }
   if (d.sensitive) return { kind: 'ask', biometric: true }
   if (d.mode === 'allow' || access === 'allow') return { kind: 'release', via: 'allow' }
+  if (d.askMe === false) return { kind: 'release', via: 'approvals-off' }
   return { kind: 'ask', biometric: false }
 }
 
@@ -342,7 +346,7 @@ function logBase(item: VaultItem | undefined, fields: string[] | undefined, purp
   }
 }
 
-async function release(item: VaultItem, ask: { fields: string[]; purpose: string; asker: string; requester: AgentRequester; use: AgentUse }, via: 'allow' | 'grant' | 'approval', approvalId?: string, since = epoch, approvedBy?: string) {
+async function release(item: VaultItem, ask: { fields: string[]; purpose: string; asker: string; requester: AgentRequester; use: AgentUse }, via: 'allow' | 'grant' | 'approval' | 'approvals-off', approvalId?: string, since = epoch, approvedBy?: string) {
   const now = Date.now()
   if (recent(releases, ask.asker, RELEASE_WINDOW_MS, now).length >= RELEASE_MAX) {
     await appendAgentLog({ kind: 'refused', reason: 'agent_rate', use: ask.use, ...logBase(item, ask.fields, ask.purpose, ask.requester) })
@@ -419,7 +423,8 @@ export async function agentUse(input: UseInput, createApproval: ApprovalCreator)
   const view = viewOf(item, input.agents)
   const now = Date.now()
   const grant = getGrant(holder, item.id, now)
-  const decision = decideAgentUse({ mode: input.agents, access: item.agentAccess, sensitive: !!item.sensitive, fields, use, grant, now })
+  const { asksPerson } = await import('../approvals/ask-me.js')
+  const decision = decideAgentUse({ mode: input.agents, access: item.agentAccess, sensitive: !!item.sensitive, fields, use, grant, now, askMe: await asksPerson() })
   if (decision.kind === 'refuse') {
     await appendAgentLog({ kind: 'refused', reason: decision.code, use, ...logBase(item, fields, purpose, r) })
     refuse(decision.status, decision.code, `"${item.title}" is never given to agents. Ask the person to do this step themselves.`)

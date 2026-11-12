@@ -107,7 +107,7 @@ async function waiting(id: string, site: string): Promise<Record<string, unknown
 }
 
 /** Ask the person whether this task may sign in again on the site. */
-export async function askFreshSignIn(input: Scope & { theirs: Array<{ id: number; title?: string }>; requester: AgentRequester; testRun?: string }): Promise<Record<string, unknown>> {
+export async function askFreshSignIn(input: Scope & { theirs: Array<{ id: number; title?: string }>; requester: AgentRequester; testRun?: string; unasked?: boolean }): Promise<Record<string, unknown>> {
   sweep()
   const scope: Scope = { owner: input.owner, device: input.device, tab: input.tab, site: input.site }
   for (const [id, a] of asks) if (same(a, scope) && Date.now() - a.at < ASK_MS) return waiting(id, input.site)
@@ -120,7 +120,8 @@ export async function askFreshSignIn(input: Scope & { theirs: Array<{ id: number
       `${input.requester.taskTitle ? `The task "${input.requester.taskTitle}"` : 'A Walnut agent'} wants to sign in to ${input.site} with your saved login in its own tab ${input.tab}, although you have the site open yourself (${tabs}).`,
       'Approve only if you asked it for a new sign-in there. Deny, and it asks you for your tab instead.',
     ].join('\n'),
-    mode: (await signers()).length ? 'biometric' : 'tap', guard: 'person',
+    // Approvals off (approvals/ask-me.ts): recorded as yes, nobody asked; the caller takes it at once.
+    ...(input.unasked ? { mode: 'tap' as const, unasked: 'browserSignIn' } : { mode: (await signers()).length ? 'biometric' as const : 'tap' as const, guard: 'person' as const }),
     timeoutMs: ASK_MS, requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}),
   })
   asks.set(made.approval.id, { ...scope, at: Date.now() })

@@ -3,7 +3,7 @@
  * yes. The console shows the pending ones and answers them; a biometric one is signed by
  * the Mac app's Touch ID bridge (desktop/ApprovalBridge.swift) or answered on the phone.
  */
-import { apiDelete, apiGet, apiPost } from './client';
+import { apiDelete, apiGet, apiPost, apiPut } from './client';
 
 export type ApprovalMode = 'tap' | 'biometric';
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'canceled';
@@ -29,6 +29,10 @@ export interface Approval {
   context?: ApprovalContext;
   /** A signed approval that is used once (its detail is the signed envelope). */
   singleUse?: boolean;
+  /** Not asked: approvals were off (src/core/approvals/ask-me.ts); the gate's name. */
+  unasked?: string;
+  /** An ask the Approvals switch never answers: no "stop asking me" on it. */
+  outsideSwitch?: boolean;
   /** A single-use approval only this one device key may sign (the Git gate pins the Mac's key). */
   signingKeyId?: string;
   /** Or any one of these keys (the Mac and the iPhone). */
@@ -93,4 +97,12 @@ export function enrollApprovalKey(body: { publicKey: string; name: string; kind:
 
 export function removeApprovalKey(id: string): Promise<{ ok: true }> {
   return apiDelete(`/api/v1/approvals/keys/${encodeURIComponent(id)}`, { quietStatuses: [409] });
+}
+
+/**
+ * The person's one Approvals switch (Settings, General: "Ask me before agents act";
+ * src/core/approvals/ask-me.ts). Off: agents' steps go ahead with no card, each logged.
+ */
+export function setApprovalsAskMe(askMe: boolean): Promise<unknown> {
+  return apiPut('/api/config', { approvals: { ask_me: askMe } });
 }

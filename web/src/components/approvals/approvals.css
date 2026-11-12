@@ -556,3 +556,12 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
     justify-content: flex-end;
   }
 }
+
+/* "Approve, and stop asking me": a quiet second way out under the buttons, never a third button. */
+.approval-stop-asking {
+  display: block;
+  margin: 8px auto 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.approval-stop-asking:hover { color: var(--accent-text, var(--accent)); text-decoration: underline; }

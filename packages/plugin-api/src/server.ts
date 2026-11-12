@@ -610,6 +610,12 @@ export interface LetterAnsweredEvent {
  * error. A letter badges the bell and pushes to the phone, so roll a batch into one letter.
  */
 export interface LettersService {
+  /**
+   * Whether a step you would ask about waits for the person now: their one Approvals switch
+   * (Settings, off by default). `false`: do the step now, record it where they read it later, and
+   * send no approval letter. Absent on a host older than the switch: ask (`?.() ?? true`).
+   */
+  asksPerson?(): Promise<boolean>
   send(input: LetterSendInput): Promise<{ letterId: string }>
   /** Add a turn to the letter's thread, so the human sees what happened after they answered. */
   reply(letterId: string, input: { markdown?: string; html?: string; text?: string; items?: InboxLetterItem[] }): Promise<void>

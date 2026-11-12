@@ -676,3 +676,45 @@ test('the corner never covers a page\'s left column on any page of the sidebar, 
   const res = await request.post(`/api/v1/approvals/${made.approval.id}/answer`, { data: { decision: 'deny' } })
   expect(res.ok()).toBe(true)
 })
+
+// The one Approvals switch (src/core/approvals/ask-me.ts; 2026-11-12, the user: "I want it to be off
+// by default don't need my approval for anything"): the card's "Approve, and stop asking me" approves
+// it and turns the switch off, Settings shows it off, a new ask goes ahead with no card, and turning
+// it back on in Settings brings the cards back. The fixture starts asking (test setup default), and
+// the test leaves it on for the other files.
+test('stop asking from the card, see it in Settings, and turn it back on there', async ({ page, request }) => {
+  const setAskMe = (v: boolean) => request.put('/api/config', { data: { approvals: { ask_me: v } } })
+  expect((await setAskMe(true)).ok()).toBe(true)
+  try {
+    await page.goto('/')
+    await expect(page.locator('.app-layout, #root').first()).toBeVisible()
+    await offHome(page)
+
+    const made = await ask(request, { what: `Post the release notes ${stamp()}` })
+    const card = page.locator(`[data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
+    await expect(card).toBeVisible({ timeout: 15_000 })
+    await card.getByTestId('approval-stop-asking').click()
+    expect((await waitFor(request, made.approval.id, made.waitToken)).approval.status).toBe('approved')
+
+    // Settings, General: the row reads off now.
+    await page.getByTestId('settings-nav-general').click()
+    const toggle = page.locator('#settings-approvals-ask-me')
+    await expect(toggle).toHaveAttribute('aria-checked', 'false', { timeout: 15_000 })
+
+    // Off: the next ask is answered at once, with no card.
+    const quiet = await ask(request, { what: `Post the changelog ${stamp()}` })
+    expect(quiet.approval).toMatchObject({ status: 'approved', unasked: 'approve' })
+    await page.waitForTimeout(1500)
+    await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${quiet.approval.id}"]`)).toHaveCount(0)
+
+    // On again from Settings: the next ask waits for the person.
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    await expect.poll(async () => ((await (await request.get('/api/v1/approvals')).json()) as { askMe: boolean }).askMe).toBe(true)
+    const asked = await ask(request, { what: `Post the roadmap ${stamp()}` })
+    await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${asked.approval.id}"]`)).toBeVisible({ timeout: 15_000 })
+    await request.post(`/api/v1/approvals/${asked.approval.id}/answer`, { data: { decision: 'deny' } })
+  } finally {
+    await setAskMe(true)
+  }
+})

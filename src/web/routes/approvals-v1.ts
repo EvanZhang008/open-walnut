@@ -290,7 +290,12 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
       ...(requester.taskId ? { taskId: requester.taskId } : {}),
       ...(str(body.why, 400) ? { why: str(body.why, 400) } : {}),
     })
+    // Approvals off (core/approvals/ask-me.ts): the ask is answered yes at once, recorded as not
+    // asked; `walnut approve` reads it and goes on. A signed single-use ask is always asked.
+    const { asksPerson } = await import('../../core/approvals/ask-me.js')
+    const unasked = !singleUse && !(await asksPerson())
     const { approval, waitToken } = await createApproval({
+      ...(unasked ? { unasked: 'approve' } : {}),
       what: String(body.what ?? ''),
       detail: typeof body.detail === 'string' ? body.detail : undefined,
       mode, timeoutMs, downgraded,
@@ -311,7 +316,10 @@ approvalsV1Router.get('/approvals', (req: Request, res: Response, next: NextFunc
     const { listKeys } = await import('../../core/approvals/keys.js')
     const status = req.query.status === 'all' ? 'all' : 'pending'
     const keys = (await listKeys()).map(({ id, name, kind, status: s, createdAt, activatedAt, lastUsedAt }) => ({ id, name, kind, status: s, createdAt, activatedAt, lastUsedAt }))
-    return { approvals: await listApprovals({ status, viewer: ambientTestRun() }), keys }
+    // `askMe`: the person's Approvals switch (ask-me.ts), so a script that asks with --single-use
+    // (always asked) can read it and skip its own ask while approvals are off.
+    const { asksPerson } = await import('../../core/approvals/ask-me.js')
+    return { approvals: await listApprovals({ status, viewer: ambientTestRun() }), keys, askMe: await asksPerson() }
   })
 })
 

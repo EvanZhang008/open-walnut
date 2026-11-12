@@ -76,6 +76,8 @@ export interface HandoffDeps {
   cancelApproval?: (id: string, reason: string) => Promise<unknown>
   activeKeyCount?: () => Promise<number>
   livePendingIds?: (testRun: string | undefined) => Promise<Set<string>>
+  /** Whether the person is asked (approvals/ask-me.ts); off, the handoff is recorded as not asked and goes ahead. */
+  asksPerson?: () => Promise<boolean>
 }
 
 export const HANDOFF_ASK_MS = 4 * 60 * 60_000
@@ -107,6 +109,7 @@ async function resolved(deps: HandoffDeps): Promise<Required<Omit<HandoffDeps, '
     cancelApproval: deps.cancelApproval ?? (async (id, r) => (await lazy()).cancelInternal(id, r)),
     activeKeyCount: deps.activeKeyCount ?? (async () => (await (await import('../approvals/keys.js')).activeKeys()).length),
     livePendingIds: deps.livePendingIds ?? (async (testRun) => new Set((await (await lazy()).listApprovals({ status: 'pending', viewer: testRun, limit: 1000 })).map((a) => a.id))),
+    asksPerson: deps.asksPerson ?? (async () => (await import('../approvals/ask-me.js')).asksPerson()),
   }
 }
 
@@ -239,6 +242,7 @@ export async function requestHandoffApproval(
   // Read once, outside the lock: which asks still wait, and whether a device signs.
   const live = await d.livePendingIds(opts.testRun)
   const keys = await d.activeKeyCount()
+  const askMe = await d.asksPerson()
   let ticket: HandoffTicket | undefined
   let created: string | undefined
   const sweep = new Set<string>()
@@ -267,17 +271,19 @@ export async function requestHandoffApproval(
       // The content is on disk before any approval can name it.
       await writeJsonFile(handoffSnapshotPath(digest, d.home), { version: 1, digest, snapshot: frozen } satisfies SnapshotFile, { mode: 0o600, durable: true })
       const made = await d.createApproval({
-        what, detail, mode, guard: 'person', timeoutMs: opts.timeoutMs ?? HANDOFF_ASK_MS,
+        what, detail, timeoutMs: opts.timeoutMs ?? HANDOFF_ASK_MS,
+        // Approvals off: recorded as yes with nobody asked (cross-route.ts goes on at once).
+        ...(askMe ? { mode, guard: 'person' as const } : { mode: 'tap' as const, guard: 'person' as const, unasked: 'routerHandoff' }),
         requester: { host: opts.host || 'unknown', taskId: frozen.byTaskId, ...(opts.routerTitle ? { taskTitle: opts.routerTitle.slice(0, 120) } : {}) },
         ...(opts.testRun ? { testRun: opts.testRun } : {}),
       })
       created = made.approval.id
       file.entries.push({
-        approvalId: made.approval.id, digest, approvalDigest: made.approval.digest, waitToken: made.waitToken, mode,
+        approvalId: made.approval.id, digest, approvalDigest: made.approval.digest, waitToken: made.waitToken, mode: made.approval.mode,
         ...(opts.testRun ? { testRun: opts.testRun } : {}), state: 'pending',
         createdAt: new Date(now).toISOString(), expiresAt: made.approval.expiresAt, identity: keyOf(frozen), display: shown,
       })
-      ticket = { approvalId: made.approval.id, digest, status: 'pending' }
+      ticket = { approvalId: made.approval.id, digest, status: made.approval.status === 'approved' ? 'approved' : 'pending' }
       return file
     }, { mode: 0o600, durable: true })
   } catch (error) {

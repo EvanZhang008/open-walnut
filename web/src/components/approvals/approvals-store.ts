@@ -9,7 +9,7 @@
  * in a row takes the card, the row and the notification off together.
  */
 import { useSyncExternalStore } from 'react';
-import { answerApproval, enrollApprovalKey, listApprovals, removeApprovalKey, type Approval, type ApprovalKey } from '@/api/approvals';
+import { answerApproval, enrollApprovalKey, listApprovals, removeApprovalKey, setApprovalsAskMe, type Approval, type ApprovalKey } from '@/api/approvals';
 import { onVaultSessionChange, vaultSession } from '@/api/vault';
 import { checkVault, vaultLive } from '@/api/vault-live';
 import { howToApprove, onlyDevice, signerKinds } from '../../../../src/core/approvals/signer-words';
@@ -330,6 +330,26 @@ export async function decideApproval(a: Approval, decision: 'approve' | 'deny', 
   } finally {
     const { [a.id]: _done, ...busy } = state.busy;
     set({ busy });
+  }
+}
+
+/**
+ * "Approve, and stop asking me": the person turns the Approvals switch off from the card, and this
+ * request is approved the way its Approve would (2026-11-12, the user: "don't need my approval for
+ * anything"). Only for a request the switch covers (not a signed single-use one) that this window
+ * can approve.
+ */
+export async function approveAndStopAsking(a: Approval): Promise<void> {
+  const kind = approveKind(state, a);
+  if (!kind || a.singleUse || a.outsideSwitch || state.busy[a.id]) return;
+  // This one first: a cancelled Touch ID leaves the switch as it was.
+  await decideApproval(a, 'approve', kind === 'touch-id');
+  if (state.done[a.id]?.status !== 'approved') return;
+  try {
+    await setApprovalsAskMe(false);
+    log.info('approvals', 'the person turned approvals off from a card', { approvalId: a.id });
+  } catch (err) {
+    log.warn('approvals', 'turning approvals off from a card failed', { approvalId: a.id, error: err instanceof Error ? err.message : String(err) });
   }
 }
 

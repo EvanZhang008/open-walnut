@@ -110,13 +110,15 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'general', label: 'General', title: 'General', group: 'configure',
     icon: 'gear', tint: '#8E8E93',
-    description: 'Appearance, window layout and updates.',
+    description: 'Appearance, window layout, approvals and updates.',
     keywords: [
       { word: 'theme', rowLabel: 'Appearance', anchor: 'settings-theme' },
       { word: 'dark', rowLabel: 'Appearance', anchor: 'settings-theme' },
       { word: 'light', rowLabel: 'Appearance', anchor: 'settings-theme' },
       'appearance', 'panels', 'columns',
       { word: 'your name', rowLabel: 'Your name', anchor: 'settings-name' },
+      { word: 'approvals', rowLabel: 'Ask me before agents act', anchor: 'settings-approvals-ask-me' },
+      { word: 'approve', rowLabel: 'Ask me before agents act', anchor: 'settings-approvals-ask-me' },
       'focus bar',
     ],
     render: ({ config, saveSection }) => <GeneralSection config={config} onSave={saveSection} />,

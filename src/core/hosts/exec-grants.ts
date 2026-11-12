@@ -38,7 +38,8 @@ export interface ExecGrant {
   host: string
   grantedAt: number
   /** Where the yes came from: the user's letter or Settings, or a task on a host he registered (no one asked). */
-  via: 'letter' | 'settings' | 'own-host'
+  /** `approvals-off`: the person's Approvals switch was off (core/approvals/ask-me.ts), so no letter asked. */
+  via: 'letter' | 'settings' | 'own-host' | 'approvals-off'
   revokedAt?: number
   /** An own-host grant made from a letter still asking: the user's Deny on it still wins. */
   letterId?: string
@@ -224,6 +225,8 @@ export async function grant(taskId: string, host: string, via: ExecGrant['via'])
     const live = s.grants.find((g) => g.taskId === taskId && g.host === host && !g.revokedAt)
     const replaced = s.asks.filter((a) => a.taskId === taskId && a.host === host && a.state === 'pending')
     s.asks = s.asks.filter((a) => !(a.taskId === taskId && a.host === host))
+    // A grant the Approvals switch made becomes the person's own when they grant it.
+    if (live && live.via === 'approvals-off' && via !== 'approvals-off') live.via = via
     if (live) return { g: live, replaced }
     const g: ExecGrant = { id: `xg-${randomUUID().slice(0, 12)}`, taskId, host, grantedAt: Date.now(), via, runs: 0 }
     s.grants.push(g)

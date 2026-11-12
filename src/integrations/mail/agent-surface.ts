@@ -477,6 +477,9 @@ async function patchDraft(
     (w) => w.edited,
   )
   const again = await deps.approvals.requestSend(draftId, patched.draft.revision)
+  if (again.sent) {
+    return `${draftJson(again.draft)}\nThe old letter was withdrawn. Approvals are off, so this revision was sent now (send ${again.sent.sendId}, ${again.sent.state}).`
+  }
   return `${draftJson(again.draft)}\n`
     + `The user was already looking at a letter for the old text, so that one was withdrawn and a `
     + `fresh letter (${again.letterId}) went out for this revision. Do not ask again for it.`
@@ -573,6 +576,10 @@ export async function mailUnsubscribeRequest(
   }
   try {
     const asked = await deps.unsubscribe.requestFromAgent(account.accountId, messageId)
+    if (asked.done) {
+      return `${JSON.stringify({ method: asked.method, status: asked.done.status, ...(asked.url ? { url: asked.url } : {}) })}\n`
+        + `Approvals are off, so Walnut ran the unsubscribe now with no letter: ${asked.done.message}`
+    }
     return `${JSON.stringify({
       letterId: asked.letterId,
       method: asked.method,
@@ -601,6 +608,10 @@ export async function mailRequestSend(deps: MailAgentDeps, input: Record<string,
   }
   try {
     const asked = await deps.approvals.requestSend(draftId, revision)
+    if (asked.sent) {
+      return JSON.stringify({ sendId: asked.sent.sendId, draftId: asked.draft.draftId, revision: asked.draft.revision, state: asked.sent.state })
+        + '\nApprovals are off, so the mail was sent now with no letter to the user. Tell the user it was sent.'
+    }
     return JSON.stringify({
       letterId: asked.letterId,
       draftId: asked.draft.draftId,

@@ -87,6 +87,7 @@ const ALLOW: Record<string, AllowSpec> = {
   stt_corrections: { '*': true },
   keep_awake: { enabled: true, battery_floor_pct: true, offline_grace_minutes: true, linger_minutes: true },
   updates: { auto: true },
+  approvals: { ask_me: true },
 }
 export const CONFIG_COPY_ALLOWLIST: Readonly<Record<string, AllowSpec>> = Object.freeze(ALLOW)
 

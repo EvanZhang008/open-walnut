@@ -105,7 +105,7 @@ import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
 import { defaultOrgInstructions, orgSelfWorkRule, ordinal, ORG_SELF_COMMAND_LIMIT } from '../org/core-instructions.js'
 import { orgInstructionsAuthor } from '../org/instructions-author.js'
 import { currentUserProfile, refreshUserProfile, userProfileLine } from './user-profile-context.js'
-import { currentReplyLanguage, refreshReplyLanguage, replyLanguageLine } from './reply-language-context.js'
+import { approvalsLine, currentApprovalsAsk, currentReplyLanguage, refreshReplyLanguage, replyLanguageLine } from './reply-language-context.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 import { PromptComposer, promptRollback, type PromptBlockId } from './prompt-blocks.js'
@@ -669,6 +669,8 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
     // The user's Reply language setting: a standing rule, so here (under no heading) and never on a
     // message (reply-language-context.ts).
     + replyLanguageLine(currentReplyLanguage())
+    // The Approvals switch, off by default: then an outward post is not the user's decision.
+    + approvalsLine(currentApprovalsAsk())
     // The two words the user reaches for, pinned to the two different things
     // (2026-09-30: "use a subagent" was answered with a Walnut subtask).
     + 'Words: a "subagent" is Claude Code\'s Agent tool inside this session, '

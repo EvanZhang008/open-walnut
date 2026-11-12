@@ -34,6 +34,8 @@ process.env.WALNUT_DAEMON_DIR = path.join(tmpBase, 'daemon')
 process.env.WALNUT_STREAMS_DIR = path.join(tmpBase, 'daemon-streams')
 process.env.WALNUT_DISABLE_SEARCH = '1'
 process.env.WALNUT_DISABLE_BACKGROUND_AI = '1'
+// Approvals ask, as before the switch (src/core/approvals/ask-me.ts): the specs check the cards.
+process.env.WALNUT_APPROVALS_ASK ??= '1'
 process.env.HOME = tmpBase
 process.env.USERPROFILE = tmpBase
 // An empty bundled store: Rhythm is linked below, and must not also list as bundled.

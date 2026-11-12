@@ -662,6 +662,29 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       }
     }
 
+    // Whether agents' steps wait for the person (core/approvals/ask-me.ts): the person's own choice,
+    // from any of their screens. A session cannot turn the asking off (or on) for itself, and a test
+    // browser cannot move the person's switch. A write that carries it back unchanged is fine.
+    if (body.approvals !== undefined) {
+      const a = body.approvals as { ask_me?: unknown } | null
+      if (!a || typeof a !== 'object' || Array.isArray(a) || Object.keys(a).some((k) => k !== 'ask_me') || (a.ask_me !== undefined && typeof a.ask_me !== 'boolean')) {
+        res.status(400).json({ error: 'approvals must be { ask_me: boolean }' })
+        return
+      }
+      const { askMeOf } = await import('../../core/approvals/ask-me.js')
+      if (askMeOf({ approvals: a as { ask_me?: boolean } }) !== askMeOf(await getConfig())) {
+        if (req.get('x-walnut-caller-sid')) {
+          res.status(403).json({ error: 'Only the person turns approvals on or off (Settings, Approvals).', code: 'human_only' })
+          return
+        }
+        const { ambientTestRun } = await import('../../core/test-run.js')
+        if (ambientTestRun()) {
+          res.status(409).json({ error: 'A test run does not change the person\'s Approvals switch.', code: 'test_run' })
+          return
+        }
+      }
+    }
+
     // The tunnel puts this server one address away from the internet, and its command runs
     // here: only the person at this machine changes it (routes/expose.ts). A write that
     // carries the section back unchanged (a whole-config round trip) is fine.

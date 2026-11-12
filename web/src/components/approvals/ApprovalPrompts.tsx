@@ -28,7 +28,7 @@ import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import type { Approval } from '@/api/approvals';
 import {
-  applyApprovalEvent, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
+  applyApprovalEvent, approveAndStopAsking, approveKind, closeApproval, decideApproval, noApproveReason, noticePending, openApproval, pendingAt, refreshApprovals,
   openUnlock, startTouchId, unlockApproves, unlockUndecided, useApprovals, type ApprovalsState,
 } from './approvals-store';
 import { ApprovalUnlock } from './ApprovalUnlock';
@@ -172,6 +172,13 @@ function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approva
       {(biometric || a.guard) && !approveKind(s, a) && !unlockUndecided(s, a)
         && !(s.unlockId === a.id && noApproveReason(s, a).startsWith('Unlock Passwords in this window')) ? <div className="approval-note">{noApproveReason(s, a)}</div> : null}
       <ApprovalButtons a={a} s={s} />
+      {!a.singleUse && !a.outsideSwitch && approveKind(s, a) && !s.busy[a.id] ? (
+        <button type="button" className="approval-link approval-stop-asking" data-testid="approval-stop-asking"
+          title="Approve this one and turn approvals off (Settings, General: Ask me before agents act). Steps then go ahead and are logged."
+          onClick={(e) => { e.stopPropagation(); void approveAndStopAsking(a); }}>
+          Approve, and stop asking me
+        </button>
+      ) : null}
     </>
   );
 }

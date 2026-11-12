@@ -27,7 +27,7 @@ function when(ms: number): string {
 
 /** A grant's second line: since when, and what it ran. */
 export function grantSummary(g: ExecGrant): string {
-  const parts = [`${g.via === 'own-host' ? 'Allowed (it runs on one of your hosts)' : 'Allowed'} ${when(g.grantedAt)}`];
+  const parts = [`${g.via === 'own-host' ? 'Allowed (it runs on one of your hosts)' : g.via === 'approvals-off' ? 'Allowed (Approvals are off)' : 'Allowed'} ${when(g.grantedAt)}`];
   parts.push(g.runs ? `${g.runs} use${g.runs === 1 ? '' : 's'}, last ${when(g.lastRunAt ?? g.grantedAt)}: ${g.lastCommand ?? ''}` : 'not used yet');
   // Each part has its own commas (dates), so the parts are kept apart by a semicolon.
   return parts.join('; ');

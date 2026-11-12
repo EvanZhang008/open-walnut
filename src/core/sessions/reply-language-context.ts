@@ -15,6 +15,8 @@ import { replyLanguageText } from './output-mode.js'
 const SYNC_STALE_MS = 5_000
 
 let cached: string | null = null
+/** The Approvals switch (approvals/ask-me.ts), read with the language: both are the user's settings in the prompt. */
+let askMe = true
 let checkedAt = 0
 let inflight: Promise<string | null> | null = null
 
@@ -26,7 +28,10 @@ export function refreshReplyLanguage(): Promise<string | null> {
       const { getConfig } = await import('../config-manager.js')
       // The setting alone decides (empty = no line). An old reply-language hint override is not
       // read: Settings no longer shows it, so nobody could see or undo what it did.
-      cached = replyLanguageText(await getConfig())
+      const config = await getConfig()
+      cached = replyLanguageText(config)
+      const { askMeOf } = await import('../approvals/ask-me.js')
+      askMe = askMeOf(config)
     } catch { /* keep the last copy */ }
     checkedAt = Date.now()
     return cached
@@ -55,9 +60,30 @@ export function replyLanguageLine(text: string | null): string {
     + `lines between tool calls included. Each line of this version starts with [${version}]:\n${tagged}\n\n`
 }
 
+/** The last Approvals switch read, for the sync prompt builders (true until one is read: ask). */
+export function currentApprovalsAsk(): boolean {
+  if (Date.now() - checkedAt > SYNC_STALE_MS) void refreshReplyLanguage()
+  return askMe
+}
+
+/**
+ * The prompt's line while approvals are off (2026-11-12, the user: "somehow AI need my approval for
+ * post etc ... I want it to be off by default don't need my approval for anything"). The charter
+ * still names an outward message or post as the user's to decide; with the switch off it is not.
+ * On: no line, the charter as it is.
+ */
+export function approvalsLine(ask: boolean): string {
+  if (ask) return ''
+  return 'Approvals are off (the user\'s setting, Settings \u203a General): Walnut no longer stops a post, a mail, '
+    + 'a browser step, a script\'s `walnut approve` or a command on another host for the user\'s yes; it records '
+    + 'each. An outward message or post is not the user\'s decision now: do it and say what you did. Still ask the '
+    + 'user before spending money, changing credentials or permissions, or deleting cloud resources or data.\n\n'
+}
+
 /** Tests: forget the copy. */
 export function _resetReplyLanguageForTesting(value: string | null = null): void {
   cached = value
+  askMe = true
   checkedAt = value === null ? 0 : Date.now()
   inflight = null
 }

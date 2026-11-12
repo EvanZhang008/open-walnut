@@ -136,6 +136,8 @@ export interface FakeWalnutResult {
   services: Map<string, ServiceApi>
   /** Every letter the plugin sent, in order, with its current state. */
   letters: LetterState[]
+  /** What `letters.asksPerson()` answers: the person's Approvals switch. Starts true (asks). */
+  approvals: { asksPerson: boolean }
   /**
    * Stand in for the human: records the answer on the letter and fires the plugin's
    * `onAnswered` handlers, the way the real inbox does. A letter can be answered once.
@@ -229,6 +231,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const appStates: FakeWalnutResult['appStates'] = new Map()
   const appBriefs: FakeWalnutResult['appBriefs'] = new Map()
   const letters: LetterState[] = []
+  const approvals = { asksPerson: true }
   const statusItems = new Map<string, StatusItemState>()
   const hostList: HostInfo[] = [{ alias: '__local__', local: true, enabled: true }, ...(options.hosts ?? []).map((host) => structuredClone(host))]
   const hostRuns: Array<{ alias: string; input: HostRunInput }> = []
@@ -832,6 +835,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     },
     // In-memory inbox: `send` records the letter, `answerLetter` on the result plays the human.
     letters: {
+      async asksPerson() { return approvals.asksPerson },
       async send(input: LetterSendInput) {
         const letterId = `letter-${letters.length + 1}`
         letters.push({ letterId, subject: input.subject, actions: structuredClone(input.actions ?? []) })
@@ -938,5 +942,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, appStates, appBriefs, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, importClaims, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls }
+  return { api, notices, errors, emitted, registeredOps, services, letters, approvals, answerLetter, statusItems, hostRuns, appStates, appBriefs, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, importClaims, tagDisplayDefaults, tagLinkDefaults, pinGroups, mcpRegistrations, exposeRegistrations, mcpCalls }
 }

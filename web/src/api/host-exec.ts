@@ -11,7 +11,7 @@ export interface ExecGrant {
   host: string;
   grantedAt: number;
   /** own-host: the task runs on a host the user registered, so no one was asked. */
-  via: 'letter' | 'settings' | 'own-host';
+  via: 'letter' | 'settings' | 'own-host' | 'approvals-off';
   revokedAt?: number;
   runs: number;
   lastRunAt?: number;

@@ -134,6 +134,31 @@ function UpdateOnStartRow({ config, save }: { config: Config; save: ReturnType<t
 }
 
 /**
+ * Ask me before agents act (config `approvals.ask_me`, src/core/approvals/ask-me.ts; 2026-11-12, the
+ * user: "I want it to be off by default don't need my approval for anything"). Off (absent): an
+ * agent's post, mail, browser step, `walnut approve` and first command on another host go ahead
+ * with no card or letter, each logged. On: each waits for the person's yes.
+ */
+function ApprovalsAskRow({ config, save }: { config: Config; save: ReturnType<typeof useSerialSave> }) {
+  const rowKey = 'general.approvals-ask-me';
+  const setting = useOptimisticSetting<boolean>(
+    config.approvals?.ask_me === true,
+    (v) => save(() => ({ approvals: { ask_me: v } }), { rowKey }),
+    { rowKey },
+  );
+  return (
+    <SettingsRow
+      label="Ask me before agents act"
+      help="Off: an agent's posts, mail, browser steps that buy or send, scripts' walnut approve and commands on another host go ahead with no card or letter, and each is logged. On: each one waits for your yes."
+      htmlFor="settings-approvals-ask-me"
+      error={setting.error}
+      data-testid="settings-approvals-ask-me-row"
+      control={<ToggleSwitch id="settings-approvals-ask-me" checked={setting.value} busy={setting.busy} onChange={setting.set} />}
+    />
+  );
+}
+
+/**
  * Appearance and the person. Appearance and Focus bar are browser prefs (local
  * storage, no config write) that ui-prefs sync copies to every window of this
  * Walnut, so their help says so; every other row is a config row via onSave.
@@ -250,6 +275,7 @@ export function GeneralSection({ config, onSave }: Props) {
             />
           }
         />
+        <ApprovalsAskRow config={config} save={save} />
         <UpdateOnStartRow config={config} save={save} />
         <AppUpdateRow />
       </SettingsGroup>

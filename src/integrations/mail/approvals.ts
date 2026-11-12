@@ -119,6 +119,11 @@ export class MailApprovals {
     events: MailEvents
     log: ApprovalLogger
     now?: () => number
+    /**
+     * Whether a send waits for the person (`config.approvals.ask_me`, core/approvals/ask-me.ts).
+     * Absent: it always asks, as the plugin did before the switch.
+     */
+    asksPerson?: () => Promise<boolean>
   }) {}
 
   private get now(): number {
@@ -133,7 +138,15 @@ export class MailApprovals {
    * need a placeholder id, which means a window where a draft is frozen against a letter that
    * does not exist, and a crash in that window leaves a draft nobody can ever unfreeze.
    */
-  async requestSend(draftId: string, revision: number): Promise<{ draft: DraftDto; letterId: string }> {
+  async requestSend(draftId: string, revision: number): Promise<{ draft: DraftDto; letterId: string; sent?: SendDto }> {
+    // A last attempt that may have landed (`unknown`) is the person's to judge, switch or not.
+    if (this.deps.asksPerson && (await this.deps.drafts.require(draftId)).state !== 'unknown' && !(await this.deps.asksPerson())) {
+      // Approvals are off: the agent's send goes out now, through the same ledger, with the switch
+      // as its authorisation (`approval_ref` says so, for whoever later asks who sent it).
+      const { send, draft } = await this.consoleSend(draftId, revision, undefined, 'approvals-off')
+      this.deps.log.info('mail sent with no letter: approvals are off', { draftId, revision: draft.revision, sendId: send.sendId })
+      return { draft, letterId: '', sent: send }
+    }
     const first = await this.deps.drafts.require(draftId)
     this.assertRevision(first, revision)
     const account = await this.requireActiveAccount(first.account_id)

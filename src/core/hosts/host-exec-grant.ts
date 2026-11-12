@@ -178,7 +178,8 @@ async function grantOrAsk(caller: Caller, host: string, preview: string | null):
     throw new HostExecError(`The user closed ${name} to tasks on other hosts (Settings › Remote Hosts). Do the step another way.`, 403, 'exec_host_closed')
   }
   const g = grants.findGrant(caller.taskId, host)
-  if (g) return g.id
+  // A grant the switch made counts only while approvals stay off: turned on, this task asks.
+  if (g && !(g.via === 'approvals-off' && preview !== null && await (await import('../approvals/ask-me.js')).asksPerson())) return g.id
   // Reading or stopping a job needs the grant the run had; it never asks for one.
   if (preview === null) {
     // A revoke reads as the pinned mode reads it: one code for one state (2026-11-05 review).
@@ -208,6 +209,15 @@ async function grantOrAsk(caller: Caller, host: string, preview: string | null):
       if (g2) return g2.id
     }
     ask = now === 'dropped' ? undefined : grants.findAsk(caller.taskId, host)
+  }
+  // Approvals are off: no letter asks. His own Deny and revoke above still stand.
+  if (ask?.state !== 'denied' && !grants.wasRevoked(caller.taskId, host)) {
+    const { asksPerson } = await import('../approvals/ask-me.js')
+    if (!(await asksPerson())) {
+      const off = grants.findGrant(caller.taskId, host) ?? await grants.grant(caller.taskId, host, 'approvals-off')
+      log.session.info('host exec: approvals are off, the task uses the host with no letter', { taskId: caller.taskId, fromHost: caller.host, host, grantId: off.id })
+      return off.id
+    }
   }
   if (ask?.state === 'denied') {
     throw new HostExecError(`The user declined to let this task use ${name} (commands, MCP servers, web services). Do the step another way, or ask the user in your reply.`, 403, 'exec_grant_denied')

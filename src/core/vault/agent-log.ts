@@ -31,7 +31,7 @@ export interface AgentLogEntry {
   fields?: string[]
   purpose?: string
   /** How a release was allowed: the item allows agents, a grant for this task, a person's approval. */
-  via?: 'allow' | 'grant' | 'approval'
+  via?: 'allow' | 'grant' | 'approval' | 'approvals-off'
   /** A refusal's code (agent_never, agents_off, agent_paused, ...). */
   reason?: string
   approvalId?: string

@@ -1016,6 +1016,15 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
      * deliver a choice to, and the bus event is the return path by design.
      */
     letters: {
+      /**
+       * Whether a step the plugin would ask about waits for the person now: the person's one
+       * Approvals switch (Settings, `config.approvals.ask_me`, off by default). `false`: do the step
+       * now and record it where the person reads it afterwards; send no approval letter.
+       */
+      async asksPerson(): Promise<boolean> {
+        const { asksPerson } = await import('../approvals/ask-me.js')
+        return asksPerson()
+      },
       async send(input: PluginLetterInput): Promise<{ letterId: string }> {
         chargeLetterQuota(pluginId)
         const { sendLetter } = await import('../human-inbox/store.js')
