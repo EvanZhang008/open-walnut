@@ -91,6 +91,7 @@ describe('every write that asks the user is checked', () => {
       'src/core/org/morning-report.ts': 'a report the user asked for, not a decision',
       'src/core/plugins/server-api.ts': 'a plugin\'s letter (a plugin sender is never a task)',
       'src/core/usage/session-budget.ts': 'Walnut\'s own budget alert',
+      'src/core/router/service.ts': 'a router\'s per-item letter: what arrived for the person to act on, once per item; no task\'s decision ask',
       'src/integrations/git-sync-secrets.ts': 'Walnut\'s own letter: a credential held out of git sync',
     }
     expect(callers, 'a new letter sender: send through sendLetterAsCaller (which runs the same-ask check) or list it here with why').toEqual(Object.keys(SENDERS).sort())

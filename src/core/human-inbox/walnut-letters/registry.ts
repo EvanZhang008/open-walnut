@@ -39,6 +39,7 @@ export const WALNUT_LETTER_KINDS: readonly WalnutLetterKind<any>[] = [
 /** Send sites whose words are not Walnut's own, each with why (repo-relative path -> reason). */
 export const EXEMPT_LETTER_SENDS: Readonly<Record<string, string>> = {
   'src/core/human-inbox/store.ts': 'the store itself: sendLetter is sendLetterOnce',
+  'src/core/router/service.ts': 'a mail router\'s for_user letter: the router session wrote the brief; Walnut adds only the email\'s sender and subject as labels',
   'src/core/human-inbox/letter-ops.ts': 'a session\'s own letter (human_inbox_send): the session wrote every word',
   'src/core/human-inbox/relay.ts': 'a session\'s letter relayed from a replica: the session wrote every word',
   'src/web/routes/human-inbox-v1.ts': 'POST /api/v1/human-inbox: a session\'s own letter',
