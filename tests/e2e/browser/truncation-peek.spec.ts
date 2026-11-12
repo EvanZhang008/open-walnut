@@ -115,7 +115,7 @@ test('a cut-off Home row grows its full title in place, takes no clicks, and lea
     await expect(pill(page)).toHaveCount(0)
     expect(errors).toEqual([])
   } finally {
-    for (const id of made) await request.delete(`/api/tasks/${id}`).catch(() => undefined)
+    for (const id of made) await request.delete(`/api/tasks/${id}?force=true`).catch(() => undefined)
   }
 })
 
