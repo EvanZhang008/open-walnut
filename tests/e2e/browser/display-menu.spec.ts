@@ -200,7 +200,7 @@ test('a view picked on the View page switches the list and the tab bar, closes t
   await expect(viewSummary(page)).toHaveText('Recent')
   for (const row of ['sort', 'group'] as const) {
     await expect(option(page, row).locator('[data-choice]')).toHaveCount(0)
-    await expect(option(page, row)).toContainText('Newest opened first')
+    await expect(option(page, row)).toContainText('Last used by you first')
   }
   await closeDisplayMenu(page)
 

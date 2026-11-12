@@ -275,7 +275,7 @@ test('Recent has one order, newest opened first: its Sort and Group rows say so'
   await chooseViewOption(page, 'recent')
   await openDisplayMenu(page)
   await expect(displayMenu(page).locator('[data-view-option="sort"] [data-choice]')).toHaveCount(0)
-  await expect(displayMenu(page).locator('[data-view-option="sort"]')).toContainText('Newest opened first')
+  await expect(displayMenu(page).locator('[data-view-option="sort"]')).toContainText('Last used by you first')
   await expect(displayMenu(page).locator('[data-view-option="group"] [data-choice]')).toHaveCount(0)
   await closeDisplayMenu(page)
 })
