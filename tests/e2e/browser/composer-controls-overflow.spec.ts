@@ -2,8 +2,8 @@ import { test, expect } from '@playwright/test';
 import {
   CTRL_SESSION, CTRL_FILLER, NARROW_WIDTH, COLUMN_NAME_ONLY, COLUMN_MODEL_IN_MENU,
   mockControlsSession, openControlsSession, clampColumn,
-  overflowBtn, controlOf, rowState, expectSingleRow, shootComposer,
-  addButton, addMenu, addRow, directControl,
+  overflowBtn, controlOf, barOf, rowState, expectSingleRow, shootComposer,
+  addButton, addMenu, addRow, directControl, expectNoteAndBtwOnce,
   type SettingsWrites,
 } from './composer-controls-overflow-helpers';
 
@@ -53,6 +53,8 @@ test('narrow composer shows Bypass without shortcut and the short model name wit
   await expect(overflowBtn(panel)).toHaveCount(0);
   await expectSingleRow(panel);
   await shootComposer(panel, 'narrow');
+  // Note and btw gave their room up (or never needed to), and are still one tap away.
+  await expectNoteAndBtwOnce(panel);
 });
 
 test('a tighter column keeps the model name and drops the percentage, which comes back with the room', async ({ page }) => {
@@ -125,8 +127,8 @@ test('reply style in add menu updates the session twice and keeps the menu label
 
 test('side thread and note open from their direct buttons without opening the add menu', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
-  await mockControlsSession(page, CTRL_FILLER);
-  const panel = await openControlsSession(page, { narrow: true });
+  // A column with room for them beside the model pill and its percentage.
+  const panel = await openControlsSession(page, { narrow: false });
   await directControl(panel, 'btw').click();
   await expect(addMenu(panel)).toHaveCount(0);
   await expect(panel.locator('.session-panel-input .side-question-popover--threads')).toBeVisible();
@@ -139,6 +141,40 @@ test('side thread and note open from their direct buttons without opening the ad
   await expect(panel.locator('.session-panel-input .session-notes-editor')).toBeVisible();
   await expect(addMenu(panel)).toHaveCount(0);
   await expect(controlOf(panel, 'note')).toHaveAttribute('data-hidden', 'true');
+});
+
+test('a tight column folds Note and btw into the add menu before the model pill gives anything up, and they come back with the room', async ({ page }) => {
+  await mockControlsSession(page, CTRL_SESSION);
+  const panel = await openControlsSession(page, { narrow: false });
+  await expect(directControl(panel, 'btw')).toBeVisible();
+  // 260px: the row keeps Bypass and the model name only with the buttons' room.
+  await clampColumn(page, COLUMN_NAME_ONLY);
+  await expect(barOf(panel)).toHaveAttribute('data-direct-folded', 'true');
+  expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
+  await expect(controlOf(panel, 'model').locator('.composer-model-pill-short')).toHaveText('Fable');
+  await expect(overflowBtn(panel)).toHaveCount(0);
+  await expectSingleRow(panel);
+  for (const id of ['btw', 'note'] as const) await expect(directControl(panel, id)).toBeHidden();
+  await shootComposer(panel, 'folded');
+
+  await addButton(panel).click();
+  await expect(addRow(panel, 'btw')).toContainText('Side thread');
+  await addRow(panel, 'btw').click();
+  await expect(addMenu(panel)).toHaveCount(0);
+  await expect(panel.locator('.session-panel-input .side-question-popover--threads')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(panel.locator('.session-panel-input .side-question-popover--threads')).toHaveCount(0);
+  await addButton(panel).click();
+  await expect(addRow(panel, 'note')).toHaveText('Note');
+  await addRow(panel, 'note').click();
+  await expect(panel.locator('.session-panel-input .session-notes-editor')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await clampColumn(page, null);
+  for (const id of ['btw', 'note'] as const) await expect(directControl(panel, id)).toBeVisible();
+  await expect(barOf(panel)).not.toHaveAttribute('data-direct-folded', 'true');
+  await addButton(panel).click();
+  for (const id of ['btw', 'note']) await expect(addRow(panel, id)).toHaveCount(0);
 });
 
 test('model picker stays anchored and repeated resize restores full model without moving reply style inline', async ({ page }) => {
@@ -157,7 +193,7 @@ test('model picker stays anchored and repeated resize restores full model withou
   await expect(controlOf(panel, 'model').locator('.session-detail-context-pct')).toContainText('45%');
   expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
   await expectSingleRow(panel);
-  await expect(directControl(panel, 'btw')).toBeVisible();
+  await expectNoteAndBtwOnce(panel);
   await addButton(panel).click();
   await expect(addRow(panel, 'output')).toBeVisible();
 });

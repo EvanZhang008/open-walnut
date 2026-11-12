@@ -105,3 +105,45 @@ export function pickVisibleControls(
   const keptIds = kept.map((c) => c.id);
   return { visible: byOrder(keptIds), overflow: order.filter((id) => !keptIds.includes(id)) };
 }
+
+/** What the fold decision compares: which controls go into the "..." menu, how
+ *  many px the row still lacks for what stays on it (the top control stays even
+ *  where it does not fit), and whether the condensed row keeps its detail (the
+ *  model pill's percentage). */
+export interface RowShape {
+  overflow: string[];
+  excess: number;
+  withDetail: boolean;
+}
+
+/**
+ * Whether the composer's direct buttons (Note, btw) fold back into the "+" menu.
+ * They give their room up before a control on the row gives up anything: its
+ * place (it would move into the "..." menu) or its detail. Without this, a 900px
+ * window with two columns on macOS fonts put the model pill behind "..." the day
+ * the buttons arrived (2026-11-12). Both shapes are taken at the same total room,
+ * the room the row has with the buttons folded, never from what is shown now, so
+ * folding cannot free the room that then unfolds them.
+ */
+export function foldDirectButtons(shown: RowShape, folded: RowShape): boolean {
+  if (folded.overflow.length !== shown.overflow.length) return folded.overflow.length < shown.overflow.length;
+  if (folded.excess !== shown.excess) return folded.excess < shown.excess;
+  return folded.withDetail && !shown.withDetail;
+}
+
+/** How many px a row of `room` lacks for `result`'s visible controls, the gaps
+ *  between them and, when anything is hidden, the "..." button. */
+export function rowExcess(
+  controls: ControlFitInput[],
+  result: ControlFitResult,
+  room: number,
+  options: { gap: number; overflowButtonWidth: number },
+): number {
+  const shown = controls.filter((c) => result.visible.includes(c.id));
+  const withButton = result.overflow.length > 0;
+  const slots = shown.length + (withButton ? 1 : 0);
+  const width = shown.reduce((sum, c) => sum + (c.width == null || c.width <= 0 ? ASSUMED_CONTROL_WIDTH : c.width), 0)
+    + Math.max(0, slots - 1) * options.gap
+    + (withButton ? options.overflowButtonWidth : 0);
+  return Math.max(0, Math.round(width - room));
+}

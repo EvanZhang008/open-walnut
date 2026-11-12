@@ -9,7 +9,7 @@
  * are the last to leave).
  */
 import { describe, it, expect } from 'vitest';
-import { pickVisibleControls, detailFits, ASSUMED_CONTROL_WIDTH, DETAIL_FIT_SLACK, type ControlFitInput } from '../../web/src/components/chat/composer-controls-fit';
+import { pickVisibleControls, detailFits, foldDirectButtons, rowExcess, ASSUMED_CONTROL_WIDTH, DETAIL_FIT_SLACK, type ControlFitInput } from '../../web/src/components/chat/composer-controls-fit';
 
 const OPTS = { gap: 4, overflowButtonWidth: 22 };
 
@@ -144,5 +144,62 @@ describe('detailFits', () => {
 
   it('is true when there is no detail to fit', () => {
     expect(detailFits(ROW, 0, 90)).toBe(true);
+  });
+});
+
+describe('foldDirectButtons', () => {
+  // The narrow composer measured in Linux WebKit at a 900px window with two
+  // columns: Bypass 56, "Fable" 37, " 45%" 23, the direct buttons btw 35 and
+  // Note 41 with a 2px gap each (80px of room).
+  const CONDENSED: ControlFitInput[] = [
+    { id: 'mode', priority: 1, width: 56 },
+    { id: 'model', priority: 2, width: 37 },
+  ];
+  const shapeIn = (room: number) => {
+    const withDetail = detailFits(97, 23, room);
+    const input = CONDENSED.map((c) => (c.id === 'model' && withDetail ? { ...c, width: 60 } : c));
+    const result = pickVisibleControls(input, room, OPTS);
+    return { withDetail, overflow: result.overflow, excess: rowExcess(input, result, room, OPTS) };
+  };
+  const DIRECT = 80;
+  const decide = (total: number) => foldDirectButtons(shapeIn(Math.max(1, total - DIRECT)), shapeIn(total));
+
+  it('keeps the buttons where the row keeps everything beside them', () => {
+    expect(decide(122 + DIRECT)).toBe(false);
+  });
+
+  it('folds them before the percentage goes', () => {
+    // 97px beside the buttons: the name fits, the percentage does not.
+    expect(decide(97 + DIRECT)).toBe(true);
+  });
+
+  it('folds them before the model leaves the row', () => {
+    // macOS fonts: a few px less beside the buttons, and the model went behind "...".
+    expect(decide(90 + DIRECT)).toBe(true);
+  });
+
+  it('folds them when the row could not hold even Bypass and the "..." button beside them', () => {
+    // 220px column: 80px in all. Beside the buttons nothing is left and Bypass is
+    // crushed; folded, Bypass and "..." (56 + 4 + 22) lack only 2px.
+    expect(decide(80)).toBe(true);
+  });
+
+  it('keeps them when folding gives the row nothing back', () => {
+    // Both shapes keep only Bypass and "...", and both fit it.
+    expect(foldDirectButtons(
+      { overflow: ['model'], excess: 0, withDetail: false },
+      { overflow: ['model'], excess: 0, withDetail: false },
+    )).toBe(false);
+  });
+
+  it('measures what a row still lacks for the controls it keeps', () => {
+    const result = pickVisibleControls(CONDENSED, 60, OPTS);
+    expect(result).toEqual({ visible: ['mode'], overflow: ['model'] });
+    expect(rowExcess(CONDENSED, result, 60, OPTS)).toBe(56 + 4 + 22 - 60);
+    expect(rowExcess(CONDENSED, pickVisibleControls(CONDENSED, 200, OPTS), 200, OPTS)).toBe(0);
+  });
+
+  it('never folds them in a row wider than the one that keeps everything beside them', () => {
+    for (let total = 122 + DIRECT; total <= 600; total++) expect(decide(total)).toBe(false);
   });
 });

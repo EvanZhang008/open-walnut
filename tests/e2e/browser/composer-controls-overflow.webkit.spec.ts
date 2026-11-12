@@ -2,7 +2,7 @@ import { devices, test, expect } from '@playwright/test';
 import {
   CTRL_SESSION, CTRL_FILLER, COLUMN_NAME_ONLY, mockControlsSession, openControlsSession, clampColumn,
   overflowBtn, controlOf, rowState, expectSingleRow, shootComposer,
-  addButton, addMenu, addRow, directControl,
+  addButton, addMenu, addRow, directControl, expectNoteAndBtwOnce,
   type SettingsWrites,
 } from './composer-controls-overflow-helpers';
 import { openDraft } from './draft-helpers';
@@ -44,6 +44,9 @@ test('WebKit narrow composer shows Bypass and the short model name with the real
   await expect(overflowBtn(panel)).toHaveCount(0);
   await expectSingleRow(panel);
   await shootComposer(panel, 'narrow');
+  // Note and btw gave their room up to the model pill (macOS fonts need it at
+  // this width), and are still one tap away.
+  await expectNoteAndBtwOnce(panel);
   // Tighter still: the name stays, the percentage goes, and the row is still one line.
   await clampColumn(page, COLUMN_NAME_ONLY);
   await expect(model.locator('.session-detail-context-pct')).toHaveCount(0);
@@ -118,8 +121,8 @@ test('WebKit draft add menu remains aligned, scrollable and dismissible', async 
 
 test('WebKit side thread and note open from their direct buttons and stay usable', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
-  await mockControlsSession(page, CTRL_FILLER);
-  const panel = await openControlsSession(page, { narrow: true });
+  // A column with room for them beside the model pill and its percentage.
+  const panel = await openControlsSession(page, { narrow: false });
   await directControl(panel, 'btw').click();
   await expect(addMenu(panel)).toHaveCount(0);
   await expect(panel.locator('.session-panel-input .side-question-popover--threads')).toBeVisible();

@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { detailFits, pickVisibleControls, type ControlFitInput } from './composer-controls-fit';
+import { detailFits, foldDirectButtons, pickVisibleControls, rowExcess, type ControlFitInput, type RowShape } from './composer-controls-fit';
 import '@/styles/composer-controls.css';
 
 /** What the row tells the controls on it about the room it has. */
@@ -49,6 +49,9 @@ export interface ComposerControlsBarHandle {
   activate: (id: string) => void;
   state: (id: string) => string;
   button: (id: string) => HTMLButtonElement | null;
+  /** True while the row has folded this control's direct button (Note, btw)
+   *  back into the "+" menu to keep its own controls on the row. */
+  folded: (id: string) => boolean;
 }
 
 interface ComposerControlsBarProps {
@@ -63,6 +66,35 @@ interface ComposerControlsBarProps {
 const ROW_GAP = 4;
 /** What the composer's recall line keeps for itself when the row is tight. */
 const RECALL_HINT_MIN_PX = 96;
+/** The composer's direct buttons beside this row (ComposerDirectControl). */
+const DIRECT_BUTTON = '.composer-direct-control';
+
+/**
+ * The room a flex row of the composer leaves this bar with its direct buttons
+ * folded: the row's content width, less every other item on it (the recall line
+ * keeps only its minimum) and the gaps between them. Infinity when the bar does
+ * not sit in a flex row, so the caller's own measure stands.
+ */
+function rowRoom(bar: HTMLElement, spacer: HTMLElement | null, hint: HTMLElement | null, gap: number): number {
+  const row = bar.parentElement;
+  if (!row) return Infinity;
+  const style = getComputedStyle(row);
+  if (!style.display.includes('flex') || style.flexDirection.startsWith('column')) return Infinity;
+  let used = 0;
+  let items = 0;
+  for (const child of row.children) {
+    const el = child as HTMLElement;
+    if (el.matches(DIRECT_BUTTON)) continue;
+    const childStyle = getComputedStyle(el);
+    if (childStyle.display === 'none' || childStyle.position === 'absolute' || childStyle.position === 'fixed') continue;
+    items += 1;
+    if (el === bar || el === spacer) continue;
+    const w = el.getBoundingClientRect().width;
+    used += el === hint ? Math.min(w, RECALL_HINT_MIN_PX) : w;
+  }
+  const content = row.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+  return content - used - Math.max(0, items - 1) * gap;
+}
 
 export function ComposerControlsBar({ controls, className, handleRef }: ComposerControlsBarProps) {
   const present = useMemo(() => controls.filter((c) => !!c.node), [controls]);
@@ -78,6 +110,10 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
   /** Last measured width of a control's detail, kept while the detail is hidden
    *  so the row can tell when there is room to bring it back. */
   const detailWidths = useRef(new Map<string, number>());
+  /** Last measured width of each direct button beside the row, kept while it is
+   *  folded so the row can tell when there is room to bring it back. */
+  const directWidths = useRef(new Map<string, number>());
+  const [folded, setFolded] = useState(false);
   const [overflow, setOverflow] = useState<string[]>([]);
   const [condensed, setCondensed] = useState(false);
   const [showDetail, setShowDetail] = useState(true);
@@ -114,10 +150,30 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     const hint = bar.parentElement?.querySelector<HTMLElement>('.chat-recall-hint');
     const yielded = hint ? Math.max(0, hint.getBoundingClientRect().width - RECALL_HINT_MIN_PX) : 0;
     const available = bar.getBoundingClientRect().width + (spacer?.getBoundingClientRect().width ?? 0) + yielded;
+    // The direct buttons (Note, btw) give their room up before a control leaves
+    // the row or loses its detail. Their room is what they take while shown: their
+    // remembered widths and a gap each. Only a button whose control is mounted
+    // counts; the others take no room either way.
+    const controlsRow = bar.parentElement;
+    const rowGap = controlsRow ? parseFloat(getComputedStyle(controlsRow).columnGap) || 0 : 0;
+    let directRoom = 0;
+    for (const el of controlsRow?.querySelectorAll<HTMLElement>(DIRECT_BUTTON) ?? []) {
+      const id = el.dataset.addControl ?? '';
+      if (!bar.querySelector(`[data-control-id="${id}"] button`)) continue;
+      const w = el.getBoundingClientRect().width;
+      if (w > 0) directWidths.current.set(id, w);
+      const known = directWidths.current.get(id);
+      if (known) directRoom += known + rowGap;
+    }
+    // The room the row would have with the buttons folded: the same number
+    // whether they are folded now or not, so the decision cannot blink. Capped by
+    // what the row itself leaves once its other items are placed: in a row that
+    // overflows, the bar's box cannot shrink below its contents and reports room
+    // the row does not have, and folding would then take that room back and give
+    // it again on every frame.
+    const roomFolded = Math.min(folded ? available : available + directRoom, rowRoom(bar, spacer ?? null, hint ?? null, rowGap));
     const naturalWidth = inline.reduce((total, control) => total + (widths.current.get(control.id) ?? 64), 0)
       + Math.max(0, inline.length - 1) * ROW_GAP;
-    const compact = available < Math.max(220, naturalWidth);
-    setCondensed((prev) => prev === compact ? prev : compact);
     const buttonWidth = buttonRef.current?.getBoundingClientRect().width || 22;
     // A control's short width before the condensed row has been measured once:
     // the mode pill minus its shortcut, the model pill as one family word.
@@ -128,27 +184,40 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
           ? ASSUMED_SHORT_MODEL_WIDTH
           : widths.current.get(c.id);
     const shortOf = (c: ComposerControl) => shortWidths.current.get(c.id) ?? assumedShort(c) ?? 64;
-    // The detail (the model pill's percentage) rides along only when the whole
-    // row still fits with it; otherwise the short form alone goes to the fit
-    // function, which may still move controls into the menu.
     const rowShort = inline.reduce((total, c) => total + shortOf(c), 0) + Math.max(0, inline.length - 1) * ROW_GAP;
     const detailTotal = inline.reduce((total, c) => total + (detailWidths.current.get(c.id) ?? 0), 0);
-    const withDetail = !compact || detailFits(rowShort, detailTotal, available);
-    setShowDetail((prev) => prev === withDetail ? prev : withDetail);
-    const input: ControlFitInput[] = inline.map((c) => ({
-      id: c.id,
-      priority: pinned === c.id ? 0 : c.priority,
-      width: compact
-        ? shortOf(c) + (withDetail ? detailWidths.current.get(c.id) ?? 0 : 0)
-        : widths.current.get(c.id),
-    }));
-    const next = pickVisibleControls(input, available, { gap: ROW_GAP, overflowButtonWidth: buttonWidth });
+    /** The row's shape in `room` px: condensed or not, with or without the detail
+     *  (the model pill's percentage rides along only when the whole row still fits
+     *  with it), and which controls go into the "..." menu. */
+    const shapeIn = (room: number): RowShape & { compact: boolean } => {
+      const compact = room < Math.max(220, naturalWidth);
+      const withDetail = !compact || detailFits(rowShort, detailTotal, room);
+      const input: ControlFitInput[] = inline.map((c) => ({
+        id: c.id,
+        priority: pinned === c.id ? 0 : c.priority,
+        width: compact
+          ? shortOf(c) + (withDetail ? detailWidths.current.get(c.id) ?? 0 : 0)
+          : widths.current.get(c.id),
+      }));
+      const options = { gap: ROW_GAP, overflowButtonWidth: buttonWidth };
+      const result = pickVisibleControls(input, room, options);
+      return { compact, withDetail, overflow: result.overflow, excess: rowExcess(input, result, room, options) };
+    };
+    // A laid-out row whose direct buttons leave nothing has 1px, not "not laid
+    // out yet" (which shows every control and lets the buttons crush them).
+    const shown = shapeIn(roomFolded > 0 ? Math.max(1, roomFolded - directRoom) : roomFolded - directRoom);
+    const foldedShape = directRoom > 0 ? shapeIn(roomFolded) : shown;
+    const fold = directRoom > 0 && foldDirectButtons(shown, foldedShape);
+    const next = fold ? foldedShape : shown;
+    setFolded((prev) => prev === fold ? prev : fold);
+    setCondensed((prev) => prev === next.compact ? prev : next.compact);
+    setShowDetail((prev) => prev === next.withDetail ? prev : next.withDetail);
     setOverflow((prev) => (prev.length === next.overflow.length && prev.every((id, i) => id === next.overflow[i])
       ? prev : next.overflow));
     // Everything fits again: drop the pin, so a column that grew goes back to
     // the plain priority order instead of remembering one menu click forever.
     if (next.overflow.length === 0) setPinned((p) => (p === null ? p : null));
-  }, [inline, pinned, condensed, showDetail]);
+  }, [inline, pinned, condensed, showDetail, folded]);
 
   useLayoutEffect(() => {
     measure();
@@ -163,6 +232,9 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     // changing once it has collapsed — watch the whole controls row too.
     if (bar.parentElement) ro.observe(bar.parentElement);
     for (const el of bar.querySelectorAll<HTMLElement>('[data-control-id]')) ro.observe(el);
+    // A direct button that appears (its control mounted late) takes room the row
+    // has to hear about even when the row's own box does not change.
+    for (const el of bar.parentElement?.querySelectorAll<HTMLElement>(DIRECT_BUTTON) ?? []) ro.observe(el);
     return () => { ro.disconnect(); cancelAnimationFrame(frame); };
     // `ids` covers "a control appeared or disappeared"; `measure` covers the rest.
   }, [measure, ids]);
@@ -209,12 +281,13 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
       if (control) activate(control);
     },
     button: (id) => barRef.current?.querySelector<HTMLButtonElement>(`[data-control-id="${id}"] button`) ?? null,
+    folded: (id) => folded && present.some((c) => c.id === id),
     state: (id) => {
       const button = barRef.current?.querySelector<HTMLElement>(`[data-control-id="${id}"] button`);
       const ariaLabel = button?.getAttribute('aria-label');
       return id === 'output' ? ariaLabel?.replace(/^Output mode: /, '') ?? '' : ariaLabel ?? button?.textContent?.trim() ?? '';
     },
-  }), [present, activate]);
+  }), [present, activate, folded]);
 
   const hidden = new Set(overflow);
   const fit = useMemo<ComposerRowFit>(() => ({ condensed, showDetail: condensed ? showDetail : true }), [condensed, showDetail]);
@@ -223,6 +296,7 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
       <div
         ref={barRef}
         className={`composer-controls-bar${className ? ` ${className}` : ''}${condensed ? ' is-condensed' : ''}`}
+        data-direct-folded={folded ? 'true' : undefined}
         onPointerDownCapture={pinTouched}
       >
         <ComposerRowFitContext.Provider value={fit}>

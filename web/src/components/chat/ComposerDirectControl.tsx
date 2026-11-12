@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { ComposerControlsBarHandle } from './ComposerControlsBar';
 
-interface Mirrored { present: boolean; open: boolean; disabled: boolean; title: string; count: string }
-const CLOSED: Mirrored = { present: false, open: false, disabled: false, title: '', count: '' };
+interface Mirrored { present: boolean; folded: boolean; open: boolean; disabled: boolean; title: string; count: string }
+const CLOSED: Mirrored = { present: false, folded: false, open: false, disabled: false, title: '', count: '' };
 const same = (a: Mirrored, b: Mirrored) =>
-  a.present === b.present && a.open === b.open && a.disabled === b.disabled && a.title === b.title && a.count === b.count;
+  a.present === b.present && a.folded === b.folded && a.open === b.open && a.disabled === b.disabled && a.title === b.title && a.count === b.count;
 
 /** Mirror the mounted control's live state, never a second copy of its logic. The
  *  mounted control may render after this button, or be replaced by a re-render, so
@@ -21,7 +21,8 @@ export function ComposerDirectControl({ id, handleRef, disabled }: {
     const read = () => {
       const source = handleRef.current?.button(id);
       const next = source ? {
-        present: true, open: source.classList.contains('is-open'), disabled: source.disabled,
+        present: true, folded: !!source.closest('[data-direct-folded="true"]'),
+        open: source.classList.contains('is-open'), disabled: source.disabled,
         title: source.title, count: source.querySelector('.side-question-count')?.textContent ?? '',
       } : CLOSED;
       setState((prev) => (same(prev, next) ? prev : next));
@@ -31,14 +32,16 @@ export function ComposerDirectControl({ id, handleRef, disabled }: {
     const observer = new MutationObserver(read);
     observer.observe(root, {
       subtree: true, childList: true, characterData: true, attributes: true,
-      attributeFilter: ['class', 'disabled', 'title'],
+      // data-direct-folded: the controls row folds this button into the "+" menu.
+      attributeFilter: ['class', 'disabled', 'title', 'data-direct-folded'],
     });
     return () => observer.disconnect();
   }, [id, handleRef]);
   return <button ref={selfRef} type="button"
     className={`side-question-pill composer-direct-control${state.open ? ' is-open' : ''}`}
-    // Hidden until the control it mirrors is mounted (the session record may load later).
-    style={state.present ? undefined : { display: 'none' }}
+    // Hidden until the control it mirrors is mounted (the session record may load
+    // later), and while a tight row folds it into the "+" menu.
+    style={state.present && !state.folded ? undefined : { display: 'none' }}
     data-add-control={id} disabled={disabled || state.disabled} aria-expanded={state.open}
     title={state.title || (id === 'btw' ? 'Open side threads' : 'Add a session note')}
     // Keep focus where it is until the toggle runs (no blur first), while other

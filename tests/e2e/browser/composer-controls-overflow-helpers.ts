@@ -111,6 +111,23 @@ export const addRow = (panel: Locator, id: string) => addMenu(panel).locator(`[d
 export const directControl = (panel: Locator, id: 'note' | 'btw') =>
   panel.locator(`.session-panel-input .chat-input-controls > [data-add-control="${id}"]`);
 
+/** Note and btw sit in exactly one place: on the controls row as direct buttons,
+ *  or, while a tight row folds them to keep its own controls whole, as rows of
+ *  the "+" menu. Returns where they are; leaves the menu closed. */
+export async function expectNoteAndBtwOnce(panel: Locator): Promise<'row' | 'menu'> {
+  const folded = (await barOf(panel).getAttribute('data-direct-folded')) === 'true';
+  for (const id of ['btw', 'note'] as const) {
+    if (folded) await expect(directControl(panel, id)).toBeHidden();
+    else await expect(directControl(panel, id)).toBeVisible();
+  }
+  await addButton(panel).click();
+  await expect(addMenu(panel)).toBeVisible();
+  for (const id of ['btw', 'note']) await expect(addRow(panel, id)).toHaveCount(folded ? 1 : 0);
+  await panel.page().keyboard.press('Escape');
+  await expect(addMenu(panel)).toHaveCount(0);
+  return folded ? 'menu' : 'row';
+}
+
 /** Ids currently ON the row, and the row's height in pill-rows. */
 export async function rowState(panel: Locator): Promise<{ visible: string[]; hidden: string[]; lines: number; height: number }> {
   return barOf(panel).evaluate((bar) => {

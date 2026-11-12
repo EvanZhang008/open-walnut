@@ -550,6 +550,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
   // The "+" button promises only an attachment until the caller adds rows.
   const hasCallerRows = !!plusMenuActions?.length || !!plusMenuToggles?.length || !!addMenuControls?.ids.length;
   const plusLabel = plusButtonLabel(hasCallerRows);
+  // Session control rows of the "+" menu: Reply style, plus Note and btw while a
+  // tight controls row has folded their direct buttons in. Read on render, as the
+  // rows' labels are: the menu renders afresh each time it opens.
+  const addMenuRowIds = addMenuControls?.ids.filter((id) =>
+    (id !== 'note' && id !== 'btw') || !!addMenuControls.handleRef.current?.folded(id)) ?? [];
 
   // Draft persistence: debounce save to localStorage
   const draftTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -2210,11 +2215,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
                   />
                 </ComposerMoreMenu>
               )}
-              {!!addMenuControls?.ids.some((id) => id !== 'note' && id !== 'btw') && (
+              {!!addMenuRowIds.length && (
                 <>
                   <div className="chat-plus-menu-divider" role="separator" />
-                  {addMenuControls.ids.filter((id) => id !== 'note' && id !== 'btw').map((id) => {
-                    const label = addMenuControls.handleRef.current?.state(id) ?? '';
+                  {addMenuRowIds.map((id) => {
+                    const label = addMenuControls!.handleRef.current?.state(id) ?? '';
                     return (
                       <button
                         key={id}
@@ -2224,11 +2229,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onSendIn
                         data-add-control={id}
                         onClick={() => {
                           setPlusOpen(false);
-                          addMenuControls.handleRef.current?.activate(id);
+                          addMenuControls!.handleRef.current?.activate(id);
                         }}
                       >
-                        <span>{id === 'output' ? 'Reply style' : id}</span>
-                        {label && <span className="chat-plus-menu-control-value">{label}</span>}
+                        <span>{id === 'output' ? 'Reply style' : id === 'btw' ? 'Side thread' : id === 'note' ? 'Note' : id}</span>
+                        {label && (id !== 'note' || label !== 'Note') && <span className="chat-plus-menu-control-value">{label}</span>}
                       </button>
                     );
                   })}
