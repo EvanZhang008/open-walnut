@@ -16,10 +16,30 @@ import { markdownKeepingSource, loadsAs } from '@/components/notes/editor-keep-s
 import {
   dropCachedNote, getCachedNote, loadNoteIntoCache, peekCachedNote, putCachedNote, wireNoteContentCacheEvents, type CachedNote,
 } from '@/stores/note-content-cache';
+import { forgetAutoName } from '@/components/notes/note-auto-name';
+import type { OwnSave } from '@/hooks/useNoteAutoName';
 
 const DEBOUNCE_MS = 500;
 /** Three-way merges after 409s in a row before the conflict is surfaced instead. */
 const MAX_MERGES = 3;
+/** Reads of the old path, a second apart, after a rename's move answered unclearly. */
+const MOVE_PROBES = 3;
+
+/** A move answer that does not say what happened: no HTTP status (a timeout, a dropped connection) or a 5xx. */
+function moveOutcomeUnclear(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+  return typeof status !== 'number' || status >= 500;
+}
+
+/** Is the note at `path` on the server? null when the read did not say. */
+async function noteExists(path: string): Promise<boolean | null> {
+  try {
+    await fetchNoteContent(path);
+    return true;
+  } catch (err) {
+    return (err as { status?: unknown } | null)?.status === 404 ? false : null;
+  }
+}
 
 /**
  * A pending external/AI write that arrived while the user was mid-edit.
@@ -59,9 +79,17 @@ export function useNoteContent(notePath: string | null) {
    * or when the editor goes idle+clean.
    */
   const [pendingExternal, setPendingExternal] = useState<PendingExternalChange | null>(null);
+  /**
+   * The last save THIS editor made, for the note it is on: what lets a new note's name
+   * follow its title only after its owner's own write (useNoteAutoName). Null again
+   * whenever another note is opened.
+   */
+  const [ownSave, setOwnSave] = useState<OwnSave | null>(null);
 
   const savingRef = useRef(false);
   const dirtyRef = useRef(false);
+  /** Counts the user's edits: a save leaves the note dirty when one came in while it was out. */
+  const editSeqRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentPathRef = useRef<string | null>(null);
@@ -131,6 +159,30 @@ export function useNoteContent(notePath: string | null) {
    * path-change effect when prevPath matches.
    */
   const movedAwayPathRef = useRef<string | null>(null);
+  /**
+   * The open note being renamed in place (renameOpenNote), while its move is on the
+   * server. Edits made meanwhile stay dirty and are written only once the note's
+   * path is known again; `departed` holds them when the user left the note (or the
+   * page) before the move answered, since by then the editor is gone.
+   */
+  const renamingRef = useRef<{ from: string; hash: string | null; departed: string | null } | null>(null);
+  /** The path renameOpenNote moved the open note to: the load effect for it keeps everything. */
+  const followedPathRef = useRef<string | null>(null);
+  /**
+   * The rendered editor's remount key. A new key per note opened, so switching notes
+   * remounts the editor as before; a rename in place keeps it, so the editor (its
+   * caret, undo history and unsaved text) carries on under the new path.
+   */
+  const remountKeyRef = useRef<{ path: string | null; key: string; seq: number }>({ path: notePath, key: `0:${notePath ?? ''}`, seq: 0 });
+  const keptRemountKeyRef = useRef<{ to: string; key: string } | null>(null);
+  if (remountKeyRef.current.path !== notePath) {
+    const kept = keptRemountKeyRef.current;
+    const seq = remountKeyRef.current.seq + 1;
+    remountKeyRef.current = kept && kept.to === notePath
+      ? { path: notePath, key: kept.key, seq }
+      : { path: notePath, key: `${seq}:${notePath ?? ''}`, seq };
+    keptRemountKeyRef.current = null;
+  }
   /**
    * Unsaved bytes of an editor that was destroyed while dirty, keyed by its
    * note. The click render shows the NEXT note (from the cache, or a spinner)
@@ -222,6 +274,8 @@ export function useNoteContent(notePath: string | null) {
           setPendingExternal(null);
           return;
         }
+        // Another writer's bytes: it holds this path, so the note keeps its name.
+        forgetAutoName(targetPath);
         contentHashRef.current = contentHash;
         lastWrittenRef.current = c;
         putCachedNote(targetPath, { content: c, updatedAt: u, contentHash });
@@ -323,6 +377,8 @@ export function useNoteContent(notePath: string | null) {
       // non-destructive "note changed on disk — reload" affordance, and apply
       // it automatically once the editor goes idle+clean (or on user click).
       // The visibility/focus path already has this guard; this aligns the WS path.
+      // Written by someone else, who holds this path: the note keeps its name.
+      forgetAutoName(path);
       if (dirtyRef.current) {
         log.info('notes', 'External note update deferred (editor dirty)', { path, contentHash });
         const pending: PendingExternalChange = { kind: 'external', path };
@@ -356,6 +412,8 @@ export function useNoteContent(notePath: string | null) {
       // The parked WS echo (if any) belongs to THIS write — this signal is the
       // authoritative version of it, so drop the parked copy either way.
       pendingEchoRef.current = null;
+      // Another view wrote it and holds this path: the note keeps its name.
+      forgetAutoName(notePath);
       if (dirtyRef.current) {
         // Same §6.2 dirty-guard as the WS path: never blow live typing away.
         log.info('notes', 'Note saved in another view — deferred (editor dirty)', { path: notePath });
@@ -410,10 +468,27 @@ export function useNoteContent(notePath: string | null) {
 
   // Load content when path changes
   useEffect(() => {
+    if (followedPathRef.current != null && followedPathRef.current === notePath && currentPathRef.current === notePath) {
+      // renameOpenNote moved the open note here: the same note in the same editor,
+      // already loaded, hashes and unsaved text included. Nothing to flush or load.
+      followedPathRef.current = null;
+      return;
+    }
+    followedPathRef.current = null;
     // Capture the previous path before overwriting the ref so the flush below
     // can save to the correct (old) file.
     const prevPath = currentPathRef.current;
     currentPathRef.current = notePath;
+    // Another note: its name waits for this editor's own next save of it.
+    setOwnSave(null);
+
+    // Left a note whose rename is still on the server: neither path is sure yet, so
+    // its unsaved text waits for the move's answer (renameOpenNote writes it there).
+    const renaming = renamingRef.current;
+    if (renaming && prevPath === renaming.from && dirtyRef.current) {
+      renaming.departed = departingMarkdown(prevPath);
+      dirtyRef.current = false;
+    }
 
     // Switching notes invalidates any deferred external change for the old note.
     pendingExternalRef.current = null;
@@ -504,6 +579,8 @@ export function useNoteContent(notePath: string | null) {
         .then(({ content: c, updatedAt: u, contentHash }) => {
           if (cancelled || currentPathRef.current !== notePath) return;
           if (contentHash === contentHashRef.current) return;
+          // Changed on disk while it was closed: another writer holds this path.
+          forgetAutoName(notePath);
           if (dirtyRef.current) {
             const pending: PendingExternalChange = { kind: 'external', path: notePath };
             pendingExternalRef.current = pending;
@@ -544,7 +621,8 @@ export function useNoteContent(notePath: string | null) {
   // Save function
   const doSave = useCallback(async (editor: Editor) => {
     const pathToSave = currentPathRef.current;
-    if (!pathToSave || savingRef.current) return;
+    // A rename in place is on the server: the edit is written once its path is known.
+    if (!pathToSave || savingRef.current || renamingRef.current) return;
 
     // Re-attach the preserved frontmatter so the saved bytes are
     // `frontmatter + editedBody` — keeps the id stable (no re-stamp) and the
@@ -581,6 +659,7 @@ export function useNoteContent(notePath: string | null) {
     const docKey = noteDocKey(pathToSave);
     beginDocSave(docKey);
 
+    const editSeq = editSeqRef.current;
     try {
       const hash = contentHashRef.current ?? undefined;
       // saveNoteContent announces the write on the shared doc-saved signal (and
@@ -596,6 +675,7 @@ export function useNoteContent(notePath: string | null) {
         pendingEchoRef.current = null;
         if (echo.hash !== result.contentHash && !wasSavedHere(docKey, echo.hash)
           && currentPathRef.current === pathToSave) {
+          forgetAutoName(pathToSave);
           const pending: PendingExternalChange = { kind: 'external', path: pathToSave };
           pendingExternalRef.current = pending;
           setPendingExternal(pending);
@@ -621,7 +701,10 @@ export function useNoteContent(notePath: string | null) {
         lastWrittenRef.current = joinFrontmatter(frontmatterRef.current, editorMd);
         putCachedNote(pathToSave, { content: lastWrittenRef.current, updatedAt: result.updatedAt, contentHash: result.contentHash });
         setSaveStatus('saved');
-        dirtyRef.current = false;
+        // Typed on while this save was out: still dirty, so the finally below saves that too
+        // (it was cleared here before, and that text waited for the next keystroke).
+        dirtyRef.current = editSeqRef.current !== editSeq;
+        setOwnSave((prev) => ({ path: pathToSave, seq: (prev?.seq ?? 0) + 1 }));
         // Adopt what we just wrote as the content STATE (same as the home Notes
         // panel does). Two reasons, and the second one is load-bearing: a remount
         // (pop-out, tab hop) must seed from the saved text rather than the text
@@ -637,8 +720,9 @@ export function useNoteContent(notePath: string | null) {
         savedFadeTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
         // §6.2 auto-apply: a non-conflicting external write that was deferred
         // while we were dirty can now be applied — the editor is idle+clean
-        // and our own edits are flushed. Reload to converge on disk truth.
-        if (pendingExternalRef.current?.kind === 'external' && pendingExternalRef.current.path === pathToSave) {
+        // and our own edits are flushed. Reload to converge on disk truth. Not while an
+        // edit made during this save is still to be written: that save applies it.
+        if (!dirtyRef.current && pendingExternalRef.current?.kind === 'external' && pendingExternalRef.current.path === pathToSave) {
           log.info('notes', 'Applying deferred external update (editor now clean)', { path: pathToSave });
           reloadContent(pathToSave);
         }
@@ -650,6 +734,9 @@ export function useNoteContent(notePath: string | null) {
       // on-disk version diverged before we converge on it (§6.2 conflict honesty).
       // A change made elsewhere since our base: merged three ways first (WP11); the
       // finally below saves the merge.
+      // Another writer changed the note since our base: it holds this path, so the
+      // note keeps its name from now on (useNoteAutoName).
+      if (err?.status === 409) forgetAutoName(pathToSave);
       if (err?.status === 409 && currentPathRef.current === pathToSave && await mergeAfterConflict(pathToSave, err)) {
         setSaveStatus('idle');
         return;
@@ -687,7 +774,9 @@ export function useNoteContent(notePath: string | null) {
       if (dirtyRef.current && editorRef.current && currentPathRef.current === pathToSave) {
         const editor = editorRef.current;
         if (timerRef.current) clearTimeout(timerRef.current);
+        // Nulled on fire like every save timer: a stale one reads as a save still to send.
         timerRef.current = setTimeout(() => {
+          timerRef.current = null;
           doSave(editor);
         }, DEBOUNCE_MS);
       }
@@ -734,7 +823,10 @@ export function useNoteContent(notePath: string | null) {
     if (movedAwayPathRef.current === currentPathRef.current) return;
 
     dirtyRef.current = true;
+    editSeqRef.current++;
     setSaveStatus('idle');
+    // Renamed in place right now: renameOpenNote schedules the save once the path is known.
+    if (renamingRef.current) return;
 
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
@@ -743,6 +835,86 @@ export function useNoteContent(notePath: string | null) {
       timerRef.current = null;
       doSave(editor);
     }, DEBOUNCE_MS);
+  }, [doSave]);
+
+  /**
+   * Rename the OPEN note without reopening it: the editor, its caret and its unsaved
+   * text stay, only the path changes (a new note's name follows its title this way
+   * while the user types). `move` does the server move, which keeps the file's bytes;
+   * `onMoved` runs the moment the note has its new path, so the caller points its tab
+   * there in the same tick. 'busy' (nothing done) unless `from` is the open note with
+   * nothing pending, in flight or deferred: the caller tries again after the next save.
+   * A failed move is rethrown and the note keeps its path. A move whose answer says
+   * nothing (a timeout, a dropped connection, a 5xx) may have happened on the server, so
+   * `from` is read first: gone means it moved, so nothing is written back to `from` (a
+   * save there would make the old file again beside the moved one).
+   */
+  const renameOpenNote = useCallback(async (
+    from: string,
+    to: string,
+    move: () => Promise<void>,
+    onMoved: (to: string) => void,
+  ): Promise<'moved' | 'busy'> => {
+    if (currentPathRef.current !== from || propPathRef.current !== from || renamingRef.current
+      || savingRef.current || timerRef.current || dirtyRef.current || pendingExternalRef.current) return 'busy';
+    const renaming = { from, hash: contentHashRef.current, departed: null as string | null };
+    renamingRef.current = renaming;
+    let failure: unknown = null;
+    try { await move(); } catch (err) { failure = err ?? new Error('move failed'); }
+    if (failure && moveOutcomeUnclear(failure)) {
+      let atFrom: boolean | null = null;
+      for (let probe = 0; probe < MOVE_PROBES && atFrom == null; probe++) {
+        if (probe > 0) await new Promise((r) => setTimeout(r, 1000));
+        atFrom = await noteExists(from);
+      }
+      if (atFrom === false) {
+        log.info('notes', 'A rename whose answer was lost did move the note', { from, to });
+        failure = null;
+      } else if (atFrom == null) {
+        // The server answered none of the reads: the note stays at `from`, where its
+        // text is saved once the server is back (at worst a second copy, never lost text).
+        log.warn('notes', 'A rename\'s outcome is unknown; the note keeps its old path', { from, to });
+      }
+    }
+    renamingRef.current = null;
+    const at = failure ? from : to;
+    const open = currentPathRef.current === from && renaming.departed == null;
+    if (!failure) {
+      const cached = peekCachedNote(from);
+      dropCachedNote(from);
+      if (cached) putCachedNote(to, cached);
+      if (open) {
+        currentPathRef.current = to;
+        propPathRef.current = to;
+        followedPathRef.current = to;
+        keptRemountKeyRef.current = { to, key: remountKeyRef.current.key };
+        setDoc((d) => (d.path === from ? { path: to, body: d.body } : d));
+        // A change from elsewhere that came in during the move belongs to the note, now at `to`.
+        // (Read afresh: the busy check above saw none, but the move awaited since.)
+        const pend = pendingExternalRef.current as PendingExternalChange | null;
+        if (pend && pend.path === from) {
+          const moved = { ...pend, path: to };
+          pendingExternalRef.current = moved;
+          setPendingExternal(moved);
+        }
+      }
+      onMoved(to);
+    }
+    if (renaming.departed != null) {
+      const md = renaming.departed;
+      saveNoteContent(at, md, renaming.hash ?? undefined, surfaceIdRef.current)
+        .then((res) => { putCachedNote(at, { content: md, updatedAt: res.updatedAt, contentHash: res.contentHash }); })
+        .catch((e) => {
+          log.warn('notes', 'Saving a note left during its rename failed', { path: at, error: e instanceof Error ? e.message : String(e) });
+        });
+    } else if (open && dirtyRef.current && editorRef.current) {
+      // Typed while the move was out: saved now, under the path the note has.
+      const editor = editorRef.current;
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => { timerRef.current = null; doSave(editor); }, DEBOUNCE_MS);
+    }
+    if (failure) throw failure;
+    return 'moved';
   }, [doSave]);
 
   // Flush on unmount
@@ -757,6 +929,12 @@ export function useNoteContent(notePath: string | null) {
         savedFadeTimerRef.current = null;
       }
       const pathToSave = currentPathRef.current;
+      const renaming = renamingRef.current;
+      if (renaming && renaming.from === pathToSave) {
+        // Its rename is on the server: renameOpenNote writes the edit where the note ends up.
+        if (dirtyRef.current) renaming.departed = departingMarkdown(pathToSave);
+        return;
+      }
       if (dirtyRef.current && pathToSave) {
         // Fire-and-forget save
         const md = departingMarkdown(pathToSave);
@@ -800,5 +978,11 @@ export function useNoteContent(notePath: string | null) {
     dismissExternalChange,
     /** Call BEFORE moving/renaming the open note: flush to old path + suppress stale re-write. */
     markMovedAway,
+    /** Rename the open note in place, keeping its editor (see renameOpenNote above). */
+    renameOpenNote,
+    /** Remount key for the rendered editor: new per note opened, kept by a rename in place. */
+    remountKey: remountKeyRef.current.key,
+    /** The last save this editor made of the open note (null until one): starts an auto-name. */
+    ownSave,
   };
 }

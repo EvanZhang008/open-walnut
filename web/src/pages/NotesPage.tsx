@@ -18,12 +18,15 @@ import { CommandPalette, pushRecent } from '@/components/notes/CommandPalette';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ICON_EXPAND } from '@/components/common/Icons';
 import { openPopout } from '@/popout/openPopout';
-import { saveNoteContent } from '@/api/notes-v2';
+import { createNote, moveNote, treeFilePaths } from '@/api/notes-v2';
 import { quickStartSession, fetchSession } from '@/api/sessions';
 import { fetchNotesDir } from '@/api/config';
 import { log } from '@/utils/log';
 import { usePhoneNoteLayer, replaceUrlKeepingState } from '@/components/notes/usePhoneNoteLayer';
 import { primaryDoc, requestPageFind } from '@/utils/find-doc';
+import { useAlert } from '@/hooks/useConfirm';
+import { useNoteAutoName } from '@/hooks/useNoteAutoName';
+import { fileBaseFromTitle, followAutoName, forgetAutoName, markAutoNamed, pickUntitledPath } from '@/components/notes/note-auto-name';
 
 const LS_WIDTH_KEY = 'open-walnut-notes-tree-width';
 const LS_TABS_KEY = 'open-walnut-notes-tabs';
@@ -379,8 +382,6 @@ export function NotesPage() {
   const activeCcTab = useMemo(() => ccTabs.find((t) => t.key === chatMode) ?? null, [ccTabs, chatMode]);
 
   const activeTab = useMemo(() => tabs.find((t) => t.path === activePath) ?? null, [tabs, activePath]);
-  // Phone: the open note is a layer (Back = the tree) and reads until Edit.
-  const noteLayer = usePhoneNoteLayer(activeTab ? activePath : null, () => setActivePath(null));
   // useNoteContent only ever sees a NOTE path; attachment tabs (and "no tab") → null
   // so the markdown editor never loads a binary file and the hook clears.
   const activeNotePath = activeTab?.kind === 'note' ? activeTab.path : null;
@@ -395,7 +396,17 @@ export function NotesPage() {
     applyExternalChange,
     dismissExternalChange,
     markMovedAway,
+    renameOpenNote,
+    remountKey,
+    ownSave,
   } = useNoteContent(activeNotePath);
+  // Phone: the open note is a layer (Back = the tree) and reads until Edit. A note
+  // renamed after its title is the same note (its editor's remount key), so Edit stays on.
+  const noteLayer = usePhoneNoteLayer(
+    activeTab ? activePath : null,
+    () => setActivePath(null),
+    activeNotePath ? remountKey : activePath,
+  );
 
   // ── Persist {tabs, activePath} (mirrors the tree-width persistence) ──
   useEffect(() => {
@@ -739,55 +750,107 @@ export function NotesPage() {
     },
   });
 
-  const handleCreateNote = useCallback(
-    async (notePath: string) => {
-      // Just open the path — the editor will create it on first save.
-      handleSelect(notePath);
-      await refreshTree();
-    },
-    [handleSelect, refreshTree],
-  );
+  // Every file in the vault: where New note finds a free name, and what an
+  // auto-named note's new name must not collide with.
+  const filePaths = useMemo(() => treeFilePaths(tree), [tree]);
+  const alert = useAlert();
+
+  // A note renamed or moved: its open tab follows in place (position and active
+  // state kept), so flush-on-switch is not triggered spuriously (§1.6).
+  const retargetTab = useCallback((from: string, to: string) => {
+    setTabs((prev) => prev.map((t) => (t.path === from ? { ...t, path: to } : t)));
+    setActivePath((cur) => (cur === from ? to : cur));
+  }, []);
 
   /**
-   * Quick-capture create used by the Cmd+K palette and the /notes empty-state
-   * CTA. An empty `title` means a blank/untitled note (⌘↵ — 0 required
-   * decisions): we mint a sensible default name. We persist an empty file
-   * immediately (mirrors the tree-panel create path) so the new note exists on
-   * disk + in the tree, then open it. The BE stamps the frontmatter `id` on this
-   * first write (§2 identity contract).
+   * New note (2026-11-11, the user: "When we new a file please immediately new the
+   * file"): the file exists at once, `Untitled.md` (`Untitled 1.md`, ... when taken) in
+   * `folder` ('' = vault root), opened ready to type, and its name then follows the
+   * title written into it (useNoteAutoName). Create-only, so a name another writer took
+   * since the tree loaded moves on to the next number instead of overwriting that note.
+   * The tree's New note, the empty state and the palette's blank capture all land here.
+   */
+  const handleNewNote = useCallback(async (folder: string) => {
+    const taken = new Set(filePaths);
+    let made: string | null = null;
+    for (let tries = 0; tries < 5 && !made; tries++) {
+      const candidate = pickUntitledPath(folder, taken);
+      try {
+        made = (await createNote(candidate)).path || candidate;
+      } catch (err) {
+        if ((err as { status?: number } | null)?.status === 409) { taken.add(candidate); continue; }
+        log.warn('notes', 'New note failed', { folder, path: candidate, error: err instanceof Error ? err.message : String(err) });
+        await alert({ title: 'Could not create the note', message: err instanceof Error ? err.message : 'The note could not be created.' });
+        return;
+      }
+    }
+    if (!made) {
+      await alert({ title: 'Could not create the note', message: 'Every Untitled name tried is taken. Refresh the notes and try again.' });
+      void refreshTree();
+      return;
+    }
+    const notePath = made;
+    markAutoNamed(notePath);
+    handleSelect(notePath);
+    // Opened first, so the editor never waits on the tree; its row is shown once the tree has it.
+    void refreshTree().then(() => revealInTree(notePath));
+  }, [filePaths, alert, handleSelect, refreshTree, revealInTree]);
+
+  /**
+   * Quick capture from the Cmd+K palette: a title names the note (create-only, so a
+   * title that is already a note's name opens that note and never empties it); an
+   * empty one (⌘↵) is a New note at the vault root. The server stamps the frontmatter
+   * `id` on the create (§2 identity contract).
    */
   const handleQuickCreate = useCallback(
     async (title: string) => {
-      const trimmed = title.trim();
-      // Sanitize a title into a flat vault filename: replace path separators,
-      // strip only genuinely-unsafe filename chars. Spaces and hyphens are
-      // perfectly legal (Obsidian convention) — an earlier over-eager character
-      // class silently collapsed "Project Plan" → "ProjectPlan.md".
-      const safe = trimmed
-        .replace(/[\\/]+/g, '-')
-        .replace(/[<>:"|?*]/g, '')
-        .trim();
-      const base = safe || `Untitled ${new Date().toISOString().slice(0, 10)} ${Date.now().toString(36)}`;
+      const base = fileBaseFromTitle(title);
+      if (!base) { await handleNewNote(''); return; }
       const notePath = `${base}.md`;
       try {
-        await saveNoteContent(notePath, '');
+        await createNote(notePath);
       } catch (err) {
-        // A 409/exists or transient error still lets us open the path (the editor
-        // loads existing content). Log and continue rather than dropping capture.
-        log.warn('notes', 'Quick-capture create failed (opening anyway)', {
-          notePath, error: err instanceof Error ? err.message : String(err),
-        });
+        // Taken: open the note that has the name. Anything else still opens the
+        // path (the editor's first save creates it) rather than dropping capture.
+        if ((err as { status?: number } | null)?.status !== 409) {
+          log.warn('notes', 'Quick-capture create failed (opening anyway)', {
+            notePath, error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
       await refreshTree();
       handleSelect(notePath);
     },
-    [refreshTree, handleSelect],
+    [refreshTree, handleSelect, handleNewNote],
   );
+
+  // An auto-named note follows its title: renamed in place, so the editor, its caret
+  // and its unsaved text carry on under the new name (useNoteContent.renameOpenNote).
+  const renameAutoNamed = useCallback((from: string, to: string) => renameOpenNote(
+    from,
+    to,
+    () => moveNote(from, to),
+    (moved) => {
+      followAutoName(from, moved);
+      retargetTab(from, moved);
+      pushRecent(moved);
+      void refreshTree();
+    },
+  ), [renameOpenNote, retargetTab, refreshTree]);
+  const handleAutoNameFailed = useCallback((from: string, to: string, err: unknown) => {
+    // Most likely the name was taken since the tree loaded: a fresh tree picks the next free one.
+    log.warn('notes', 'Naming a note after its title failed', { from, to, error: err instanceof Error ? err.message : String(err) });
+    void refreshTree();
+  }, [refreshTree]);
+  useNoteAutoName({
+    path: activeNotePath, body: content, ownSave, existing: filePaths, rename: renameAutoNamed, onFailed: handleAutoNameFailed,
+  });
 
   // Deleted note open in a tab → drop every matching tab (§1.6). Neighbor rule
   // matches close: if the deleted tab was active, activate a neighbor / empty.
   const handleDeleteNote = useCallback(
     async (notePath: string) => {
+      forgetAutoName(notePath);
       // Cancel any pending debounced save targeting the doomed note — an
       // in-flight PUT after the rm would re-create it (same resurrection bug
       // markMovedAway kills for the move path).
@@ -857,10 +920,11 @@ export function NotesPage() {
     [removeFolder, activeNotePath, markMovedAway],
   );
 
-  // Renamed/moved note open in a tab → rewrite its path IN PLACE (preserve
-  // position + active state) so flush-on-switch isn't triggered spuriously (§1.6).
+  // Renamed/moved from the tree: a name the user gave (or a place they chose) ends
+  // the note's auto-naming; its open tab follows (retargetTab).
   const handleRenameNote = useCallback(
     async (from: string, to: string) => {
+      forgetAutoName(from);
       // If the note being moved is the one open in the editor, flush its pending
       // edits to the OLD path AND mark it moved-away FIRST. Otherwise the
       // post-rename path change (or a tiptap re-emit) fires a stale
@@ -871,10 +935,9 @@ export function NotesPage() {
         await markMovedAway(from);
       }
       await renameNote(from, to);
-      setTabs((prev) => prev.map((t) => (t.path === from ? { ...t, path: to } : t)));
-      setActivePath((cur) => (cur === from ? to : cur));
+      retargetTab(from, to);
     },
-    [renameNote, activeNotePath, markMovedAway],
+    [renameNote, activeNotePath, markMovedAway, retargetTab],
   );
 
   // Rendered into the tab strip's trailing slot (both the with-tabs and the
@@ -925,13 +988,13 @@ export function NotesPage() {
           onSelect={handleSelect}
           onPreviewAttachment={handlePreviewAttachment}
           onHoverNote={prefetchNoteOnHover}
-          onCreateNote={handleCreateNote}
+          onNewNote={handleNewNote}
           onCreateFolder={addFolder}
           onDeleteNote={handleDeleteNote}
           onDeleteFolder={handleDeleteFolder}
           onDeleteAttachment={handleDeleteAttachment}
           onRenameNote={handleRenameNote}
-          onRefresh={refreshTree}
+          onStartRename={forgetAutoName}
           favoriteNotes={favoriteNotes}
           onToggleFavorite={toggleFavoriteNote}
           revealPath={reveal.path}
@@ -972,7 +1035,7 @@ export function NotesPage() {
           {activeTab?.kind === 'attachment' ? (
             <AttachmentPreview notePath={activeTab.path} findQuery={attachmentFind?.path === activeTab.path ? attachmentFind.query : undefined} />
           ) : !activeNotePath ? (
-            <NotesEmptyState onNewNote={() => handleQuickCreate('')} />
+            <NotesEmptyState onNewNote={() => void handleNewNote('')} />
           ) : contentLoading ? (
             <LoadingSpinner />
           ) : (
@@ -995,6 +1058,7 @@ export function NotesPage() {
               </button>
               <NotesEditorPanel
                 notePath={activeNotePath}
+                remountKey={remountKey}
                 content={content}
                 updatedAt={updatedAt}
                 saveStatus={saveStatus}

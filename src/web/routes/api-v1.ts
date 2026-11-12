@@ -59,7 +59,7 @@ import {
   getWildcardPath,
   MAX_NOTE_SIZE,
 } from './notes-v2.js'
-import { getNotesTree } from '../../core/notes-tree.js'
+import { getNotesTree, invalidateNotesTree } from '../../core/notes-tree.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
 import { armLateMirror, mirrorRelayedChatFrame, relayChatTurnToPrimary } from './chat-turn-relay.js'
 import {
@@ -4656,6 +4656,8 @@ apiV1Router.post('/notes', async (req: Request, res: Response, next: NextFunctio
       sendError(res, 409, 'conflict', 'Note already exists')
       return
     }
+    // A new file changes the tree (as the v2 PUT's create does): the next read is never stale.
+    invalidateNotesTree()
     const { contentHash, updatedAt } = created
     log.memory.info('Note created via api-v1', { path: notePath })
     res.status(201).json({ path: toRelPath(filePath), contentHash, updatedAt })

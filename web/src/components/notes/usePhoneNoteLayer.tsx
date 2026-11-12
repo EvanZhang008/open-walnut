@@ -39,10 +39,16 @@ export interface PhoneNoteLayer {
   close: () => void;
 }
 
-export function usePhoneNoteLayer(activePath: string | null, onBack: () => void): PhoneNoteLayer {
+/**
+ * `noteKey` names the note itself (the editor's remount key), so a note renamed in place
+ * (a new note taking its title as its name) stays in Edit; another note starts read only.
+ * Without it, the path is the note.
+ */
+export function usePhoneNoteLayer(activePath: string | null, onBack: () => void, noteKey?: string | null): PhoneNoteLayer {
   const phone = usePhoneLayout();
   const [editing, setEditing] = useState(false);
-  useEffect(() => { setEditing(false); }, [activePath]);
+  const identity = noteKey === undefined ? activePath : noteKey;
+  useEffect(() => { setEditing(false); }, [identity]);
 
   const action = useMemo(() => (
     <button

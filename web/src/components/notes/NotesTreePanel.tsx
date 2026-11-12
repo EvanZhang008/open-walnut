@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, memo } from 'react';
-import { searchNotesHybrid, saveNoteContent, revealNote } from '@/api/notes-v2';
+import { searchNotesHybrid, revealNote, treeFilePaths } from '@/api/notes-v2';
 import type { NoteTreeNode, SearchResult, SearchFolderGroup } from '@/api/notes-v2';
 import { noteHitLabel } from '../../../../src/core/note-hit-label';
 import { isImeKey } from '@/hooks/usePanelKeyRouter';
@@ -69,18 +69,6 @@ function collectFileNodes(nodes: NoteTreeNode[], acc: Map<string, NoteTreeNode> 
   return acc;
 }
 
-/** Every file path (notes AND attachments) — used for the move name-collision guard. */
-function collectFilePaths(nodes: NoteTreeNode[], acc: Set<string> = new Set()): Set<string> {
-  for (const n of nodes) {
-    if (n.type === 'folder') {
-      if (n.children) collectFilePaths(n.children, acc);
-    } else {
-      acc.add(n.path);
-    }
-  }
-  return acc;
-}
-
 interface NotesTreePanelProps {
   tree: NoteTreeNode[];
   selectedPath: string | null;
@@ -95,7 +83,11 @@ interface NotesTreePanelProps {
   onPreviewAttachment: (path: string, opts?: { findQueries?: string[] }) => void;
   /** Pointer resting on a note row: a hint that it is about to be opened (content prefetch). */
   onHoverNote?: (path: string) => void;
-  onCreateNote: (path: string) => void;
+  /**
+   * New note: the page makes an `Untitled` note in `folder` ('' = vault root) at once
+   * and opens it; its name then follows the title written into it.
+   */
+  onNewNote: (folder: string) => void | Promise<void>;
   onCreateFolder: (path: string) => void;
   onDeleteNote: (path: string) => void;
   /** Recursively delete a folder (notes + attachments). Gated behind a danger confirm. */
@@ -103,7 +95,8 @@ interface NotesTreePanelProps {
   /** Delete a binary attachment (png/pdf/docx/…). */
   onDeleteAttachment: (path: string) => void | Promise<void>;
   onRenameNote: (from: string, to: string) => void | Promise<void>;
-  onRefresh: () => void;
+  /** The user opened the rename box on `path`: a name of their own is coming (ends its auto-naming). */
+  onStartRename?: (path: string) => void;
   /** Vault-relative paths (WITH .md) of bookmarked notes — drives the Bookmarks group. */
   favoriteNotes: string[];
   /** Toggle a note's bookmark (used by the inline un-bookmark affordance). */
@@ -157,13 +150,13 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   onSelect,
   onPreviewAttachment,
   onHoverNote,
-  onCreateNote,
+  onNewNote,
   onCreateFolder,
   onDeleteNote,
   onDeleteFolder,
   onDeleteAttachment,
   onRenameNote,
-  onRefresh,
+  onStartRename,
   favoriteNotes,
   onToggleFavorite,
   revealPath,
@@ -181,9 +174,10 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   // Server-tokenized query words for token-wise title/folder highlighting.
   const [searchTokens, setSearchTokens] = useState<string[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(readExpandedFolders);
+  // New folder's inline name input: the folder it is made in ('' = vault root).
+  // A note needs no name first (onNewNote), so only a folder asks for one.
   const [creatingIn, setCreatingIn] = useState<string | null>(null);
   const [newItemName, setNewItemName] = useState('');
-  const [newItemType, setNewItemType] = useState<'file' | 'folder'>('file');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: NoteTreeNode } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -243,7 +237,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   // Feature 4: note paths present in the current tree (skip stale recents).
   const existingNotePaths = useMemo(() => collectNotePaths(tree), [tree]);
   // All files (incl. attachments) — the drag-move collision guard must see both.
-  const existingFilePaths = useMemo(() => collectFilePaths(tree), [tree]);
+  const existingFilePaths = useMemo(() => treeFilePaths(tree), [tree]);
   // path → node, so a path-only row (Bookmarks / Recent / search hit) can open
   // the SAME context menu the tree rows do.
   const fileNodeByPath = useMemo(() => collectFileNodes(tree), [tree]);
@@ -531,14 +525,18 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   }, [searchHits, openHit]);
 
   const handleNewItem = useCallback((parentPath: string | null, type: 'file' | 'folder') => {
-    setCreatingIn(parentPath ?? '');
-    setNewItemType(type);
-    setNewItemName('');
-    // Expand parent folder
+    // Expand parent folder, so the new note or the folder name input shows inside it.
     if (parentPath) {
       setExpandedFolders(prev => new Set(prev).add(parentPath));
     }
-  }, []);
+    if (type === 'file') {
+      setCreatingIn(null);
+      void onNewNote(parentPath ?? '');
+      return;
+    }
+    setCreatingIn(parentPath ?? '');
+    setNewItemName('');
+  }, [onNewNote]);
 
   const handleConfirmNewItem = useCallback(async () => {
     const name = newItemName.trim();
@@ -548,18 +546,11 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     const fullPath = parentPath ? `${parentPath}/${name}` : name;
 
     try {
-      if (newItemType === 'folder') {
-        await onCreateFolder(fullPath);
-      } else {
-        const notePath = fullPath.endsWith('.md') ? fullPath : `${fullPath}.md`;
-        await saveNoteContent(notePath, '');
-        onRefresh();
-        onCreateNote(notePath);
-      }
+      await onCreateFolder(fullPath);
     } catch { /* silently fail, tree will refresh */ }
     setCreatingIn(null);
     setNewItemName('');
-  }, [newItemName, creatingIn, newItemType, onCreateFolder, onCreateNote, onRefresh]);
+  }, [newItemName, creatingIn, onCreateFolder]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, node: NoteTreeNode) => {
     e.preventDefault();
@@ -616,10 +607,13 @@ export const NotesTreePanel = memo(function NotesTreePanel({
         });
       }
     }
+    // From here the name is the user's: the note stops following its title, so it is
+    // not renamed under the open rename box.
+    onStartRename?.(node.path);
     setRenaming(node.path);
     setRenameValue(node.name.replace(/\.md$/, ''));
     setContextMenu(null);
-  }, [searchResults, handleSearchChange]);
+  }, [searchResults, handleSearchChange, onStartRename]);
 
   const handleConfirmRename = useCallback(async () => {
     if (!renaming || !renameValue.trim()) { setRenaming(null); return; }
@@ -642,7 +636,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
 
     if (node.type === 'folder') {
       // Recursive delete — spell out exactly how much is going away.
-      const files = collectFilePaths(node.children ?? []);
+      const files = treeFilePaths(node.children ?? []);
       const notes = collectNotePaths(node.children ?? []);
       const attachments = files.size - notes.size;
       const parts = [
@@ -898,11 +892,11 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       className={`notes-tree-item notes-tree-new-item depth-${depth}`}
       style={{ paddingLeft: `${12 + depth * 16}px` }}
     >
-      {newItemType === 'folder' ? <FolderIcon /> : <FileIcon />}
+      <FolderIcon />
       <input data-no-draft="rename"
         ref={newItemInputRef}
         className="notes-tree-inline-input"
-        placeholder={newItemType === 'folder' ? 'folder name' : 'note name'}
+        placeholder="folder name"
         value={newItemName}
         onChange={e => setNewItemName(e.target.value)}
         onKeyDown={e => {

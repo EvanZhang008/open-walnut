@@ -228,16 +228,17 @@ test('task dependency references show current display names and preserve real ti
 })
 
 test('a mouse-selected note task reference finds display and stored names without saving a renamed task', async ({ page, request }) => {
-  const name = `quick-question-ref-${Date.now()}`;
   const made = await request.post('/api/tasks', { data: { title: 'Ask Walnut', project: 'Ask Walnut', source: 'local' } });
   expect(made.ok()).toBe(true);
   const task = (await made.json()).task;
   await loadHome(page);
   await pointAt(page, page.getByTestId('sidebar-core-app-notes'));
+  // New note makes an Untitled note at once and opens it, no name asked first; its
+  // file then takes the title typed into it, so the note is read where the page has it.
+  const created = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/notes');
   await pointAt(page, page.getByTitle('New Note', { exact: true }));
-  await pointAt(page, page.getByPlaceholder('note name', { exact: true }));
-  await typeKeys(page, name);
-  await page.keyboard.press('Enter');
+  const createdPath: string = (await (await created).json()).path;
+  const openPath = () => new URL(page.url()).searchParams.get('path') ?? createdPath;
   const editor = page.locator('.notes-editor .tiptap').first();
   try {
     await expect(editor).toBeFocused();
@@ -264,7 +265,7 @@ test('a mouse-selected note task reference finds display and stored names withou
     await expect(editor.locator('a')).toContainText('Quick question');
     await expect(editor.locator('a')).not.toContainText('Ask Walnut');
     await expect.poll(async () => {
-      const response = await request.get(`/api/notes-v2/content/${name}.md`);
+      const response = await request.get(`/api/notes-v2/content/${encodeURI(openPath())}`);
       return response.ok() ? (await response.json()).content : '';
     }).toContain('Quick question');
     const pickedHref = await editor.locator('a').getAttribute('href');
@@ -273,7 +274,7 @@ test('a mouse-selected note task reference finds display and stored names withou
     expect({ title: picked.title, project: picked.project }).toEqual({ title: 'Ask Walnut', project: 'Ask Walnut' });
     expect((await (await request.get(`/api/tasks/${task.id}`)).json()).task.title).toBe('Ask Walnut');
   } finally {
-    await request.delete(`/api/notes-v2/content/${name}.md`);
+    for (const notePath of new Set([openPath(), createdPath])) await request.delete(`/api/notes-v2/content/${encodeURI(notePath)}`);
     await request.delete(`/api/tasks/${task.id}?force=true`);
   }
 });

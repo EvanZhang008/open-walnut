@@ -1,5 +1,5 @@
 import { apiGet, apiPut, apiPost, apiDelete } from './client';
-import { noteDocKey, publishDocSaved } from '@/stores/file-save-signal';
+import { noteDocKey, publishDocSaved, rememberDocSave } from '@/stores/file-save-signal';
 
 export interface NoteTreeNode {
   name: string;
@@ -213,6 +213,32 @@ export async function deleteAttachment(attachmentPath: string): Promise<void> {
 /** Recursively delete a folder (notes + attachments + subfolders). Destructive. */
 export async function deleteFolder(folderPath: string): Promise<void> {
   await apiDelete(`/api/notes-v2/folder/${encodePathForUrl(folderPath)}`);
+}
+
+/**
+ * Make a note that must not exist yet: create-only (POST /api/v1/notes), so a name already
+ * taken answers 409 instead of an overwrite. A PUT here would have replaced that note's
+ * text with `content`, which is how New note and quick capture used to make files.
+ */
+export async function createNote(notePath: string, content = ''): Promise<{ path: string; contentHash: string; updatedAt: string }> {
+  const res = await apiPost<{ path: string; contentHash: string; updatedAt: string }>(
+    '/api/v1/notes', { path: notePath, content }, { quietStatuses: [409] },
+  );
+  // The server's notes:updated for this write is our own echo, never another writer's.
+  if (res?.contentHash) rememberDocSave(noteDocKey(res.path || notePath), res.contentHash);
+  return res;
+}
+
+/** Every file path in a tree, notes and attachments alike. */
+export function treeFilePaths(nodes: NoteTreeNode[], acc: Set<string> = new Set()): Set<string> {
+  for (const n of nodes) {
+    if (n.type === 'folder') {
+      if (n.children) treeFilePaths(n.children, acc);
+    } else {
+      acc.add(n.path);
+    }
+  }
+  return acc;
 }
 
 export async function moveNote(from: string, to: string): Promise<void> {

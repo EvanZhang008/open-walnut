@@ -137,6 +137,12 @@ export interface MarkdownEditorPanelProps {
   rawFlushIO?: RawFlushIO;
   /** Key fed to rawFlushIO and used as the NotesEditor remount key. */
   docId?: string | null;
+  /**
+   * Remount key for the rendered editor when it is not `docId`. A caller that renames
+   * the open doc in place keeps it, so the editor carries on under the new `docId`
+   * (caret, undo, unsaved text) instead of being rebuilt from the saved bytes.
+   */
+  remountKey?: string | null;
 
   /** Fallback shown when content === null (loading / failed). */
   loadingFallback?: React.ReactNode;
@@ -180,6 +186,7 @@ export function MarkdownEditorPanel({
   onDismissExternal,
   rawFlushIO,
   docId,
+  remountKey,
   loadingFallback,
 }: MarkdownEditorPanelProps) {
   // Wiki/tag corpora: caller may inject, else the shell reads the page-lifetime
@@ -362,6 +369,22 @@ export function MarkdownEditorPanel({
 
   // Switching doc: flush previous doc's raw buffer (to the OLD key) before reset.
   const prevPathRef = useRef<string | null>(key);
+  // The same doc under a new key (renamed in place: `remountKey` held still): its
+  // editor and raw buffer now belong to the new key, and nothing is flushed to the
+  // old one, a path that no longer exists. Set during render so the effects below,
+  // the raw seed included, already see the new owner.
+  const docKeysRef = useRef({ key, remountKey });
+  if (docKeysRef.current.key !== key) {
+    const prev = docKeysRef.current;
+    if (remountKey != null && prev.remountKey === remountKey) {
+      if (editorKeyRef.current === prev.key) editorKeyRef.current = key;
+      if (rawPathRef.current === prev.key) rawPathRef.current = key;
+      prevPathRef.current = key;
+    }
+    docKeysRef.current = { key, remountKey };
+  } else if (docKeysRef.current.remountKey !== remountKey) {
+    docKeysRef.current = { key, remountKey };
+  }
   useEffect(() => {
     const prev = prevPathRef.current;
     if (prev !== key) {
@@ -382,7 +405,9 @@ export function MarkdownEditorPanel({
     rawDirtyRef.current = true;
     rawPathRef.current = key;
     if (rawSaveTimerRef.current) clearTimeout(rawSaveTimerRef.current);
-    rawSaveTimerRef.current = setTimeout(() => { void flushRaw(key); }, RAW_SAVE_DEBOUNCE_MS);
+    // The buffer's owner when the timer fires: a doc renamed in place meanwhile has
+    // moved it to its new key (above), and the old key's path no longer exists.
+    rawSaveTimerRef.current = setTimeout(() => { void flushRaw(rawPathRef.current); }, RAW_SAVE_DEBOUNCE_MS);
   }, [key, flushRaw]);
 
   // Toggled while the caret was in the note: it lands in the view that shows
@@ -555,7 +580,7 @@ export function MarkdownEditorPanel({
             TipTap instance survives a flush. */}
         <div style={rawMode ? { display: 'none' } : undefined} className="notes-rendered-wrap">
           <NotesEditor
-            key={key ?? 'editor'}
+            key={remountKey ?? key ?? 'editor'}
             content={content}
             readOnly={readOnly}
             onDirty={handleEditorUpdate}

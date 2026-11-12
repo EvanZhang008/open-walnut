@@ -16,6 +16,8 @@ import type { PendingExternalChange } from '@/hooks/useNoteContent';
 
 interface NotesEditorPanelProps {
   notePath: string | null;
+  /** Remount key of the editor (useNoteContent.remountKey): kept when the note is renamed in place. */
+  remountKey?: string;
   content: string | null;
   updatedAt: string | null;
   saveStatus: 'saved' | 'saving' | 'error' | 'idle';
@@ -40,6 +42,7 @@ interface NotesEditorPanelProps {
 
 export function NotesEditorPanel({
   notePath,
+  remountKey,
   content,
   updatedAt,
   saveStatus,
@@ -72,6 +75,7 @@ export function NotesEditorPanel({
       saveStatus={saveStatus}
       updatedAt={updatedAt}
       docId={notePath}
+      remountKey={remountKey}
       breadcrumbPath={notePath}
       onNavigate={onNavigate}
       onLocate={onLocate}
