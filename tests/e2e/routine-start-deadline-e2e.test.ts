@@ -28,6 +28,8 @@ import type { SessionStartEvent } from '../../src/core/event-types.js';
 import { updateSessionRecord } from '../../src/core/session-tracker.js';
 import { _resetRoutineRunStarterForTesting } from '../../src/core/routines/run-start-deps.js';
 import { _runStartWatchesForTesting } from '../../src/core/routines/run-start.js';
+import { __setHostLoadProberForTesting } from '../../src/core/hosts/placement.js';
+import { updateConfig } from '../../src/core/config-manager.js';
 
 const DAEMON_DOWN = 'Local daemon failed to start — port file not created within 30s, and the Walnut Sessions host (pid 44765) is still running';
 
@@ -90,6 +92,14 @@ async function taskTitled(title: string): Promise<any> {
 
 beforeAll(async () => {
   _resetRoutineRunStarterForTesting();
+  __setHostLoadProberForTesting(async () => ({
+    cpus: 4, load: [1, 1, 1], cpuBusy: 0.2,
+    memTotalBytes: 16 * 1024 ** 3, memAvailBytes: 8 * 1024 ** 3,
+    diskFreeBytes: 100 * 1024 ** 3, at: new Date().toISOString(),
+  }));
+  // Spawn deadlines, not admission: prior cases retain short-lived start reservations.
+  // A four-core CI host has only two slots unless this isolated fixture sets its own limit.
+  await updateConfig({ session_limits: { local: 8 } });
   server = await startServer({ port: 0, dev: true });
   installFailingRunner();
   const addr = server.address();
@@ -99,6 +109,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await settled();
   await stopServer();
+  __setHostLoadProberForTesting(null);
   bus.clear();
 });
 
