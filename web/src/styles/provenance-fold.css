@@ -55,6 +55,23 @@
   color: var(--fg-secondary);
 }
 
+/* The open card's list of the tasks a message went to (MessageCard.tsx CardRecipients). */
+.op-card-recipients {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.op-card-recipients .op-card-to-pill {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .op-card-to-label {
   color: var(--fg-muted);
 }

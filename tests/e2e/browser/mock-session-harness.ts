@@ -43,8 +43,10 @@ export async function takeLine(page: Page, ...rowIds: string[]) {
   await injectEvent(page, 'session:user-line', { sessionId: MOCK_SESSION_ID, uuid: `line-${rowIds[0]}`, rowIds });
 }
 
-export async function mockSession(page: Page, messages: unknown[], status: 'running' | 'idle') {
-  await page.addInitScript(() => {
+/** `stream`: what the stream subscribe answers (a panel opened, or reloaded, mid-turn).
+ *  `record`: more fields of the session record (its question anchors, say). */
+export async function mockSession(page: Page, messages: unknown[], status: 'running' | 'idle', stream: { blocks: unknown[]; isStreaming: boolean } = { blocks: [], isStreaming: false }, record: Record<string, unknown> = {}) {
+  await page.addInitScript((stream) => {
     const OrigWebSocket = window.WebSocket;
     window.WebSocket = class PatchedWebSocket extends OrigWebSocket {
       constructor(url: string | URL, protocols?: string | string[]) {
@@ -59,7 +61,8 @@ export async function mockSession(page: Page, messages: unknown[], status: 'runn
               if (parsed.type === 'req' && parsed.method === 'session:stream-subscribe') {
                 setTimeout(() => {
                   this.dispatchEvent(new MessageEvent('message', {
-                    data: JSON.stringify({ type: 'res', id: parsed.id, ok: true, payload: { blocks: [], isStreaming: false } }),
+                    // What the server holds now (setMockStream), else the snapshot it opened with.
+                    data: JSON.stringify({ type: 'res', id: parsed.id, ok: true, payload: (window as any).__mockStreamNow ?? stream }),
                   }));
                 }, 10);
                 return;
@@ -75,7 +78,7 @@ export async function mockSession(page: Page, messages: unknown[], status: 'runn
         try { (window.WebSocket as any)[key] = (OrigWebSocket as any)[key]; } catch { /* read-only */ }
       }
     }
-  });
+  }, stream);
   await page.route(`**/api/sessions/${MOCK_SESSION_ID}/history**`, async (route) => {
     const since = new URL(route.request().url()).searchParams.get('since');
     if (since !== null) return route.fulfill({ json: { messages: messages.slice(Number(since)), cursor: messages.length, delta: true } });
@@ -88,11 +91,16 @@ export async function mockSession(page: Page, messages: unknown[], status: 'runn
         session: {
           claudeSessionId: MOCK_SESSION_ID, taskId: 'pw-task-mock-session', project: 'Walnut', process_status: status,
           mode: 'bypass', startedAt: '2026-01-01T00:00:00.000Z', lastActiveAt: new Date().toISOString(),
-          messageCount: messages.length, title: 'Mock session',
+          messageCount: messages.length, title: 'Mock session', ...record,
         },
       },
     });
   });
+}
+
+/** What the stream subscribe answers from now on (the turn ended: an empty buffer). */
+export async function setMockStream(page: Page, stream: { blocks: unknown[]; isStreaming: boolean }) {
+  await page.evaluate((s) => { (window as any).__mockStreamNow = s; }, stream);
 }
 
 export async function open(page: Page) {

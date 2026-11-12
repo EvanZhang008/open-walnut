@@ -45,8 +45,23 @@ export function CardWho({ glyph, icon, direction, taskIds, fallback, label, tool
     <div className="op-card-to">
       <span className="provenance-glyph" aria-hidden="true">{icon ? <StepIcon name={icon} /> : glyph}</span>
       <span className="op-card-dir">{direction}</span>
-      {taskIds.length > 0 ? taskIds.map((id) => <TaskPill key={id} taskId={id} tooltip={taskIds.length === 1 ? tooltip : undefined} />) : fallback}
+      {/* Several tasks are a count on the row and their pills in the detail (CardRecipients):
+          four titles side by side were one row cut four times (2026-11-11). */}
+      {taskIds.length > 1
+        ? <span className="op-card-to-text op-card-to-count">{taskIds.length} tasks</span>
+        : taskIds.length === 1 ? <TaskPill taskId={taskIds[0]} tooltip={tooltip} /> : fallback}
       {label && <span className="op-card-to-label">{label}</span>}
+    </div>
+  );
+}
+
+/** The tasks a message went to when there are several: one pill each, in the open card. */
+export function CardRecipients({ direction, taskIds }: { direction: string; taskIds: readonly string[] }) {
+  if (taskIds.length < 2) return null;
+  return (
+    <div className="op-card-recipients">
+      <span className="op-card-dir">{direction}</span>
+      {taskIds.map((id) => <TaskPill key={id} taskId={id} />)}
     </div>
   );
 }

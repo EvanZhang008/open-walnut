@@ -220,13 +220,15 @@ test('a fold of sends names the tasks they went to, also when only the answer sa
   const cards = fold.locator('.provenance-card[data-envelope-kind="outbound"]');
   await expect(cards).toHaveCount(2);
   await expect(cards.nth(0)).toContainText('Turn fold fixture task');
-  // A loop's send names each task it went to, one pill each.
-  await expect(cards.nth(1).locator('.op-card-to a.task-link')).toHaveText(['Turn fold fixture task', 'Rider fixture task']);
+  // A loop's send says how many tasks it went to; opened, it names each one, a pill each
+  // (2026-11-11: four pills made the closed card two lines tall).
+  await expect(cards.nth(1).locator('.op-card-to')).toContainText(/To\s*2 tasks/);
+  await cards.nth(1).locator('.op-card-main').click();
+  await expect(cards.nth(1).locator('.op-card-recipients a.task-link')).toHaveText(['Turn fold fixture task', 'Rider fixture task']);
   for (let i = 0; i < 2; i++) await expect(cards.nth(i)).not.toContainText('another session');
   await hist.locator('.session-msg', { hasText: 'OR_ANSWER_G' }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-named-sends.png`, clip: (await hist.boundingBox())! }).catch(() => {});
-  // The loop's card opens to a link per task.
-  await cards.nth(1).locator('.op-card-main').first().click();
+  // The loop's open card holds a link per task.
   await expect(cards.nth(1).locator('a.task-link')).toHaveCount(2);
 });
 

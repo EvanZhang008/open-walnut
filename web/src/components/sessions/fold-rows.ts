@@ -79,7 +79,7 @@ export interface ToolRead {
 /** One call's role. A failed call is a step: its fold's header says "N failed". */
 export function toolRole<T extends ToolRead>(t: T, isFoldableCall: (t: T) => boolean): ToolRole {
   if (t.name === 'AskUserQuestion') return 'question';
-  // A card first: an agent still working keeps its own card on screen.
+  // A card first: a call the timeline draws as its own card (a plan, a question's answer).
   if (!isFoldableCall(t)) return 'card';
   if (t.result === undefined && !t.isError) return 'running';
   return 'step';
@@ -100,6 +100,9 @@ export interface PlaceRead {
   afterPerson: boolean;
   /** Short words on the way (narration: a line or two, no table, heading, code or list). */
   narration?: boolean;
+  /** A turn with no answer yet (running, or cut off) has more of its rows after this one:
+   *  the words here are on the way, not where the turn ended. */
+  beforeEnd?: boolean;
 }
 
 /**
@@ -130,9 +133,14 @@ export function isNarration(text: string): boolean {
  *  this get auto collpes this si nto right"). */
 export function joinsQuiet(r: PlaceRead): boolean {
   if (r.personStart || r.labelled) return false;
-  if (r.afterPerson && r.role === 'reads' && !(r.narration && r.turn === 'answered' && r.beforeAnswer)) return false;
+  // Narration with more of its turn after it folds with the steps around it, in a turn
+  // that has its answer and in one that has none yet (2026-11-11, the user, of a running
+  // turn whose short line between steps split its fold in two: "If they are togter they
+  // need ot be collpesed").
+  const onTheWay = !!r.narration && ((r.turn === 'answered' && r.beforeAnswer) || (r.turn === 'open' && !!r.beforeEnd));
+  if (r.afterPerson && r.role === 'reads' && !onTheWay) return false;
   if (r.turn === 'hidden' || (r.turn === 'answered' && r.beforeAnswer)) return true;
-  return r.role === 'step';
+  return r.role === 'step' || onTheWay;
 }
 
 /**

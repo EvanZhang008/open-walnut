@@ -90,8 +90,9 @@ test('cards, reasoning and commands in one stretch are one row while the turn ru
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-one-row.png`, clip: (await hist.boundingBox())! }).catch(() => {});
   await page.waitForTimeout(600);
 
-  // Opened: every card and step, in arrival order.
-  const fold = hist.locator('[data-testid="step-group-fold"]');
+  // Opened: every card and step, in arrival order. The turn's own fold when the stretch
+  // opens the turn (the row its saved fold takes over), a stretch's fold after words.
+  const fold = hist.locator('[data-testid="step-group-fold"], [data-testid="turn-fold"]').last();
   await fold.locator(':scope > .tool-run-toggle').click();
   const body = fold.locator('.process-fold-body');
   await expect(body.locator('.provenance-card')).toHaveCount(3);
@@ -111,7 +112,7 @@ test('cards, reasoning and commands in one stretch are one row while the turn ru
 
   // More arrives while it is open: it joins the same row, which stays open.
   await cardShown(page, hist, 'qm-sg-4', 4, 4, { waiting: true });
-  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Received 4 messages(?: from [^·›]+?)? \u00b7 Ran 4 tools/);
+  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^(?:Working \u00b7 )?Received 4 messages(?: from [^·›]+?)? \u00b7 Ran 4 tools/);
   await expect(fold).toHaveAttribute('data-open', 'true');
   // Not taken yet, it waits below what streams meanwhile; taken, it stays where
   // Claude Code took it, above what came after.
@@ -129,7 +130,9 @@ test('cards, reasoning and commands in one stretch are one row while the turn ru
   await page.waitForTimeout(600);
 });
 
-test('words or a person\'s message split the stretch, and stay on screen', async ({ page }) => {
+// 2026-11-12, the user: "If they are togter they need ot be collpesed". Short words on
+// the way are a step of the stretch; a person's message still splits it and shows.
+test('a person\'s message splits the stretch and stays on screen; words on the way fold into it', async ({ page }) => {
   await mockSession(page, [{ role: 'user', text: 'SG_ASK2 go', timestamp: at(0) }], 'running');
   const hist = await open(page);
   await waitForWs(page);
@@ -151,14 +154,17 @@ test('words or a person\'s message split the stretch, and stay on screen', async
   await page.waitForTimeout(400);
   await streamTools(page, [['sw-3', 'tail log']]);
 
-  await expect(hist.getByText('SG_WORDS the checks pass, now the deploy.')).toBeVisible();
   await expect(hist.locator('.session-msg', { hasText: 'SG_PERSON' })).toBeVisible();
-  // Three rows, each a card and a command.
+  // Two rows: the stretch before the person's message (its words folded in it), and the one after.
   await expect.poll(() => labelsAfter(hist, 'SG_ASK2')).toEqual([
-    expect.stringMatching(/^Received 1 message(?: from [^·›]+?)? \u00b7 Ran 1 tool$/),
-    expect.stringMatching(/^Received 1 message(?: from [^·›]+?)? \u00b7 Ran 1 tool$/),
+    expect.stringMatching(/Received 2 messages.*Ran 2 tools/),
     expect.stringMatching(/^Received 1 message(?: from [^·›]+?)? \u00b7 Ran 1 tool$/),
   ]);
+  await expect(hist.getByText('SG_WORDS the checks pass, now the deploy.')).toBeHidden();
+  // Opened, the words are one row of the stretch.
+  const first = hist.locator('[data-testid="step-group-fold"], [data-testid="turn-fold"]').first();
+  await first.locator(':scope > .tool-run-toggle').click();
+  await expect(first.locator('.process-fold-body')).toContainText('SG_WORDS the checks pass');
 });
 
 test('a turn a notice started: the notice in history and the live steps are one row', async ({ page }) => {

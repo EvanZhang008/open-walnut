@@ -175,14 +175,16 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(body).toHaveCount(0)
     await beat(page)
 
-    // A running turn: one live line, the step it is on under it.
+    // A running turn: one live line, the step it is on under it (its thought when no call runs).
     await injectEvent(page, 'session:thinking-delta', { sessionId: SESSION_ID, delta: 'WF_LIVE_THOUGHT I should check the extension build first.', msgId: 'wf-live-1' })
     await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: 'Bash', toolUseId: 'wf-live-t1', input: { command: 'make extension' } })
     // The live line is the turn's run (or its fold, when it took in a message): either way one
     // line, and under it what it does now.
     const peek = history.locator('[data-testid="run-peek"], [data-testid="turn-fold-peek"]').last()
     await expect(peek).toContainText('make extension', { timeout: 10000 })
-    await expect(peek).toContainText('WF_LIVE_THOUGHT I should check')
+    // One line under it: the step it is on, never the thought above it too (the row would be
+    // three lines tall; every row is at most two).
+    await expect(peek).not.toContainText('WF_LIVE_THOUGHT')
     await beat(page, 1200)
     await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-${theme}-4-running.png` }).catch(() => {})
 

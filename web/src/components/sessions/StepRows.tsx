@@ -74,21 +74,17 @@ export function PeekRow({ icon, text, mono }: { icon: Parameters<typeof StepIcon
 type PeekMember = { type: string; name?: string; input?: Record<string, unknown>; content?: string };
 
 /**
- * What a live run or turn does now, under its closed line: the latest thought, then
- * the call it is on when the last member is a call (design 1, 2026-11-11: a running
- * turn shows one live line and the step it is on; nothing else grows).
+ * What a live run or turn does now, under its closed line, in ONE line: the call it is
+ * on when the last member is a call, else its latest thought (design 1, 2026-11-11: a
+ * running turn shows one live line; 2026-11-12: a thought above the call made the row
+ * three lines tall, and every row is at most two).
  */
 export function LivePeek({ members }: { members: readonly PeekMember[] }) {
   const last = members[members.length - 1];
   if (!last) return null;
-  const thought = [...members].reverse().find((m) => m.type === 'thinking' && !!m.content?.trim());
   const call = last.type === 'tool_call' && last.name ? last : undefined;
   const line = call ? callLine(call.name!, call.input) : undefined;
-  if (!thought && !line) return null;
-  return (
-    <>
-      {thought && <PeekRow icon="thought" text={thinkingFirstLine(thought.content!)} />}
-      {call && line && <PeekRow icon={toolStepIcon(call.name!)} text={line.label} mono={line.mono} />}
-    </>
-  );
+  if (call && line) return <PeekRow icon={toolStepIcon(call.name!)} text={line.label} mono={line.mono} />;
+  const thought = [...members].reverse().find((m) => m.type === 'thinking' && !!m.content?.trim());
+  return thought ? <PeekRow icon="thought" text={thinkingFirstLine(thought.content!)} /> : null;
 }

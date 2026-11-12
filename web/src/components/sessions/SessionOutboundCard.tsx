@@ -42,7 +42,7 @@ import { AgentText } from '@/components/common/AgentText';
 import { lookupTaskByRef } from '@/stores/entity-label-store';
 import { copyTextRobust } from '@/utils/clipboard';
 import { fallbackTitle, foldKey, useMessageFold } from './message-fold';
-import { CardMain, CardWho } from './MessageCard';
+import { CardMain, CardRecipients, CardWho } from './MessageCard';
 import { useOpCallRecords, type OpCallRecord } from '@/stores/op-call-store';
 import type { OpCardFields } from '../../../../src/core/op-cards';
 import { disclosureIds, useDetailsDisclosure } from './row-disclosure';
@@ -266,19 +266,24 @@ function withRecord(send: OutboundSend, record: OpCallRecord | undefined): Outbo
   };
 }
 
-/** Who the call went to: the target's task as a pill, else its session, else words. */
-function ToLine({ send, resolved, direction }: { send: OutboundSend; resolved: ResolvedTarget; direction: string }) {
+/** The tasks the call reached, its first target first. */
+function useToTaskIds(send: OutboundSend, resolved: ResolvedTarget): string[] {
   const version = useEntityLabelsVersion();
   const isSend = send.op === 'task_send' || send.op === 'session_send';
-  const taskIds = useMemo(() => {
+  return useMemo(() => {
     if (isSend) return resolved.taskId ? [resolved.taskId, ...(resolved.others ?? []).map((o) => o.id)] : [];
     return send.fields.to.map((r) => lookupTaskByRef(r)?.id).filter((t): t is string => !!t);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- version invalidates the label lookups
   }, [isSend, resolved, send.fields.to, version]);
+}
+
+/** Who the call went to: the target's task as a pill, else its session, else words. */
+function ToLine({ send, resolved, direction, taskIds }: { send: OutboundSend; resolved: ResolvedTarget; direction: string; taskIds: string[] }) {
+  const isSend = send.op === 'task_send' || send.op === 'session_send';
   const fallback = isSend
     ? (resolved.fullId
       ? <a className="provenance-chip provenance-chip-session session-link op-card-to-pill" data-session-id={resolved.fullId} href={`/sessions?id=${resolved.fullId}`}>{resolved.title || 'Open session'}</a>
-      : <span className="op-card-to-text">{resolved.title || send.to || (send.kind === 'reply' ? 'The session that asked' : 'another session')}</span>)
+      : <span className="op-card-to-text">{resolved.title || send.to || ((send.refs?.length ?? 0) > 1 ? `${send.refs!.length} tasks` : send.kind === 'reply' ? 'The session that asked' : 'another session')}</span>)
     : (send.fields.to[0] && !send.fields.toLabel ? <span className="op-card-to-text">{send.fields.to[0]}</span> : null);
   return (
     <CardWho glyph={outboundDirectionGlyph(send.kind)} icon={send.kind === 'reply' ? 'reply-out' : 'send'} direction={direction} taskIds={taskIds} fallback={fallback} label={send.fields.toLabel} tooltip={isSend ? resolved.title : undefined} />
@@ -314,6 +319,7 @@ export function SessionOutboundCard({
       : send.delivery === 'deferred' ? 'Held: the target is waiting on a permission prompt'
         : send.delivery;
   const direction = directionOf(send, send.fields.kind);
+  const taskIds = useToTaskIds(send, resolved);
   const hasDetail = send.body !== undefined;
 
   return (
@@ -330,11 +336,12 @@ export function SessionOutboundCard({
         handleClick(e);
       }}
     >
-      <ToLine send={send} resolved={resolved} direction={direction} />
+      <ToLine send={send} resolved={resolved} direction={direction} taskIds={taskIds} />
       <CardMain title={title} summary={summary} open={open} onToggle={toggle} />
       {send.error && <div className="provenance-status">{send.error}</div>}
       {open && (
         <div className="op-card-detail">
+          <CardRecipients direction={direction} taskIds={taskIds} />
           {!send.error && status && <div className="provenance-status">{status}</div>}
           {hasDetail && <OutboundBody body={send.body!} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} />}
           {note && <div className="provenance-outbound-payload">{note}</div>}

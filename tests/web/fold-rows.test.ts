@@ -158,6 +158,13 @@ describe('the rule', () => {
     expect(joinsQuiet({ ...base, role: 'reads', turn: 'answered', beforeAnswer: false, afterPerson: true, narration: true })).toBe(false)
     expect(joinsQuiet({ ...base, role: 'reads', turn: 'open', beforeAnswer: false, afterPerson: true, narration: true })).toBe(false)
   })
+  it('narration with more of a turn with no answer after it folds; a real answer there does not', () => {
+    // 2026-11-11, the user, of a running turn split in two by one short line: "If they are togter they need ot be collpesed".
+    expect(joinsQuiet({ ...base, role: 'reads', turn: 'open', afterPerson: true, narration: true, beforeEnd: true })).toBe(true)
+    expect(joinsQuiet({ ...base, role: 'reads', turn: 'open', afterPerson: true, narration: false, beforeEnd: true })).toBe(false)
+    expect(joinsQuiet({ ...base, role: 'reads', turn: 'open', afterPerson: true, narration: true, beforeEnd: false })).toBe(false)
+    expect(joinsQuiet({ ...base, role: 'reads', turn: 'answered', afterPerson: true, narration: true, beforeEnd: true })).toBe(false)
+  })
   it('narration is short words with no table, heading, code or list', () => {
     expect(isNarration('Screenshot: /tmp/shots/a.png')).toBe(false)
     expect(isNarration('Here it is ![shot](/api/images/a.png)')).toBe(false)

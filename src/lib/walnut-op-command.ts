@@ -59,6 +59,14 @@ const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/
 const MAX_COMMAND_CHARS = 400_000
 
 const HEREDOC_WORD = '\u0000HEREDOC'
+/** Does the shell expand what starts at `i`? A backtick, or a `$` that begins a name,
+ *  a parameter, `${`, `$(` or a special parameter; a lone `$` (`"costs $ 5"`, a `$` at the
+ *  end) stays the character it is. */
+function expandsAt(command: string, i: number): boolean {
+  if (command[i] === '`') return true
+  return command[i] === '$' && /[A-Za-z_{(0-9@*#?$!-]/.test(command[i + 1] ?? '')
+}
+
 /** A heredoc body the shell expands: its text here is not what the command read. */
 const EXPANDED_BODY = '\u0000EXPANDED'
 
@@ -106,7 +114,7 @@ export function tokenizeCommand(command: string): ShellToken[] {
         i++
         while (i < n && command[i] !== '"') {
           if (command[i] === '\\' && i + 1 < n) { value += command[i + 1]; i += 2; continue }
-          if (command[i] === '$' || command[i] === '`') expands = true
+          if (expandsAt(command, i)) expands = true
           value += command[i++]
         }
         i++
@@ -134,7 +142,7 @@ export function tokenizeCommand(command: string): ShellToken[] {
         i += 2
         continue
       }
-      if (ch === '$' || ch === '`') expands = true
+      if (expandsAt(command, i)) expands = true
       value += ch
       i++
     }
@@ -179,7 +187,7 @@ export function extractHeredocs(command: string): { text: string; bodies: string
         }
         const text = body.join('\n')
         // An unquoted delimiter expands `$x` and backticks in the body.
-        bodies.push(p.expands && /[$`]/.test(text) ? EXPANDED_BODY : text)
+        bodies.push(p.expands && [...text].some((_, k) => expandsAt(text, k)) ? EXPANDED_BODY : text)
       }
       pending.length = 0
       continue
@@ -352,12 +360,17 @@ function opCallIn(
     const stdin = heredoc === EXPANDED_BODY ? undefined : heredoc ?? piped
     if (!arg) return { op, form: stdin !== undefined ? 'stdin' : 'none', ...(stdin !== undefined ? withArgs(stdin) : {}) }
     if (arg.value === '-' && !arg.quoted) return { op, form: 'stdin', ...(stdin !== undefined ? withArgs(stdin) : {}) }
+    // A word the shell expands (`@$f` in a loop, `"$json"`) is not what the command read:
+    // its text here is a placeholder, never a path or words to show (2026-11-11: a card
+    // read "Sent from $f").
     if (arg.value.startsWith('@')) {
+      if (arg.expands) return { op, form: 'file' }
       const path = arg.value.slice(1)
       const written = files.get(path)
       return { op, form: 'file', path, ...(written !== undefined ? withArgs(written) : {}) }
     }
     if (arg.value.startsWith('--')) return { op, form: 'flags', args: flagArgs(words) }
+    if (arg.expands) return { op, form: 'inline' }
     return { op, form: 'inline', argText: arg.value, ...(parseJsonObject(arg.value) ? { args: parseJsonObject(arg.value) } : {}) }
   }
   return null
@@ -377,6 +390,8 @@ function flagArgs(words: ShellToken[]): Record<string, unknown> {
     const key = f.slice(2).replace(/-/g, '_')
     const next = words[i + 1]
     if (!next || next.value.startsWith('--')) { out[key] = true; continue }
+    // A value the shell expands is unknown here: left out, never shown as its `$x`.
+    if (next.expands) { i++; continue }
     out[key] = next.value === 'true' ? true : next.value === 'false' ? false : next.value
     i++
   }

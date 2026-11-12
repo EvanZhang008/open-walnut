@@ -14,7 +14,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { SessionHistoryTool } from '../../web/src/types/session';
-import { detectOutboundSend, replyRequestToLookUp } from '../../web/src/components/sessions/session-outbound';
+import { detectOutboundCalls, detectOutboundSend, replyRequestToLookUp } from '../../web/src/components/sessions/session-outbound';
 
 function bash(command: string, extra: Partial<SessionHistoryTool> = {}): SessionHistoryTool {
   return { name: 'Bash', input: { command }, ...extra };
@@ -159,6 +159,40 @@ describe('detectOutboundSend — CLI transport', () => {
     expect(send!.payloadFrom).toBe('file');
     expect(send!.body).toBeUndefined();
     expect(send!.target?.title).toBe('Fable rollout on the Mac');
+  });
+
+  // 2026-11-11: a loop's `@$f` showed the card "Sent from $f". A word the shell
+  // expands is a placeholder, never a path or words: every shape of it, every field.
+  for (const [name, command] of [
+    ['an @$f file in a for loop', 'for f in /tmp/a.json /tmp/b.json; do walnut tools call task_send @$f; done'],
+    ['an @"$f" file, quoted', 'for f in /tmp/a.json; do walnut tools call task_send @"$f"; done'],
+    ['an @${f} file, braced', 'for f in /tmp/a.json; do walnut tools call task_send @${f}; done'],
+    ['an inline "$json" payload', 'json=$(cat /tmp/a.json); walnut tools call task_send "$json"'],
+    ['a $(command) payload', 'walnut tools call task_send "$(cat /tmp/a.json)"'],
+    ['a flag value from a variable', 'walnut tools call task_send --to "$t" --text "$msg"'],
+  ] as const) {
+    it(`never shows a shell placeholder: ${name}`, () => {
+      const calls = detectOutboundCalls(bash(command));
+      expect(calls.length).toBeGreaterThan(0);
+      for (const send of calls) {
+        // `raw` is the command as typed (the card's "Raw" view); every field read from it is not.
+        const { raw: _raw, ...shown } = send;
+        expect(JSON.stringify(shown)).not.toMatch(/\$[A-Za-z_{(]/);
+      }
+    });
+  }
+
+  it('keeps a lone $ the shell leaves alone in the words it shows', () => {
+    const send = detectOutboundSend(bash(`walnut tools call task_send '{"to":"pw-task-001","text":"It costs $ 5"}'`));
+    expect(send!.body).toContain('It costs $ 5');
+    const flags = detectOutboundSend(bash('walnut tools call task_send --to pw-task-001 --text "Pay $ now"'));
+    expect(JSON.stringify(flags)).toContain('Pay $ now');
+  });
+
+  it('reads a looped @$f send as a file payload with no path', () => {
+    const send = detectOutboundSend(bash('for f in /tmp/a.json /tmp/b.json; do walnut tools call task_send @$f; done'));
+    expect(send!.payloadFrom).toBe('file');
+    expect(send!.path).toBeUndefined();
   });
 
   it('is a reply when the payload carries in_reply_to', () => {

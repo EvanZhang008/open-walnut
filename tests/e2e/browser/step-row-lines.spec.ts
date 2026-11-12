@@ -82,7 +82,7 @@ const HISTORY: Record<string, unknown>[] = [
     { name: 'Write', toolUseId: 'ln-t5', input: { file_path: '/home/sample/.claude/plans/ln-plan.md', content: 'plan' }, result: 'ok' },
     { name: 'ExitPlanMode', toolUseId: 'ln-p1', input: { plan: `LN_PLAN ${LONG}` }, result: 'ok' },
   ] },
-  // An agent's chip is a card of its own, never folded.
+  // An agent's chip is a step of its turn: in the fold, checked there (2026-11-12).
   { role: 'assistant', text: '', msgId: 'ln-b4', timestamp: at(41.5), tools: [
     { name: 'Agent', toolUseId: 'ln-t6', input: { description: `LN_CHIP agent survey ${LONG}`, prompt: 'go', subagent_type: 'general-purpose' }, result: 'done' },
   ] },
@@ -215,7 +215,7 @@ for (const width of [1280, 720]) {
     await expect(outside.locator('.op-card-detail')).toBeVisible();
     check('peer-note', 'outside a fold, open', await linesOf(outside, ROW_DETAIL_PARTS));
     await outside.locator('.op-card-main').click();
-    for (const kind of ['fold', 'lifted', 'plan', 'plan-write', 'chip', 'run'] as const) {
+    for (const kind of ['fold', 'lifted', 'plan', 'plan-write', 'run'] as const) {
       const rows = await rowsOf(hist, kind);
       expect(rows.length, `a ${kind} row on screen`).toBeGreaterThan(0);
       for (const r of rows) check(kind, 'folded', await linesOf(r, ROW_DETAIL_PARTS));
