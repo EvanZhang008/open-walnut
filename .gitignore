@@ -120,3 +120,19 @@ vendor/sqlite/
 
 # walnut-net (native/walnut-net): cargo output when built in place (CI); local builds use ~/.cache/walnut-net-target
 native/walnut-net/target/
+
+# Agent scratch the shared checkout collected (2026-11-12 cleanup): merge leftovers, bun's
+# compile scratch, a desktop tool's watermark, the WebKit no-activate shim built beside its
+# loader, node traces, one-off repro and verify scripts at the root, a "?" home from an unset HOME.
+*.orig
+*.rej
+.*.bun-build
+.peekaboo/
+tests/e2e/browser/pw-noactivate/
+node_trace.*.log
+/.tmp-*
+/.*-tmp.*
+/verify-*-tmp.mjs
+/verify-*.local.mjs
+/err_*.txt
+/\?/
