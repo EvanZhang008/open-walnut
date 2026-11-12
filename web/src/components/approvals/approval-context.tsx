@@ -1,10 +1,10 @@
 /**
- * Who asks and why, in the words the person decides on (2026-11-07, the user: "but how do I know
- * which session is this so that I can have some context?"): the asking task as a link, why it asks,
- * the task's goal, its last steps before it asked, what it runs and where, and whether Walnut saw
- * the asking process inside that session. Each part Walnut could not know says so ("Session:
- * unknown"), never a blank (the user: "if some is missing at least we know some info ... will show
- * xx is unknown").
+ * The request in the few parts the person decides on (2026-11-11, the user: "summary, say clearly,
+ * one sentence ... then is command to run ... 然后那个是哪一个 task 来的 ... 其他的就没必要吧"):
+ * the asker's sentence on top (the dialog's body, ApprovalPrompts), then the command that runs,
+ * the task that asked as a link, and the signed detail folded under them. What the session said
+ * before it asked, its goal, its last steps and the folder are left out: they read as noise, and
+ * the task link opens all of it.
  */
 import { useNavigate } from 'react-router-dom';
 import { openTaskOnHome } from '@/utils/open-session';
@@ -39,80 +39,70 @@ export function AskerLink({ a, label }: { a: Approval; label: string }) {
   );
 }
 
-const STEP_WORD = { ran: 'Ran', edited: 'Edited', said: 'Said', tool: 'Used' } as const;
-
-/** A signed approval's detail is its envelope: the person reads the context it carries. */
+/** A signed approval's detail is its envelope: the person reads the context it carries, laid out when it is JSON. */
 export function detailText(a: Approval): { text?: string; signed: boolean } {
   if (!a.detail) return { signed: false };
+  let text = a.detail;
+  let signed = false;
   if (a.singleUse) {
     try {
       const env = JSON.parse(a.detail) as { version?: string; context?: unknown };
-      if (env.version === 'walnut-single-use-v1' && typeof env.context === 'string') return { text: env.context, signed: true };
+      if (env.version === 'walnut-single-use-v1' && typeof env.context === 'string') { text = env.context; signed = true; }
     } catch { /* shown as it is */ }
   }
-  return { text: a.detail, signed: false };
+  return { text: prettyJson(text), signed };
 }
 
-function sessionWord(a: Approval): string {
-  const r = a.requester;
-  if (!r.sessionId) return 'unknown';
-  if (r.identity === 'unverified') {
-    return r.check === 'outside'
-      ? 'unverified: the asking process is not inside this session'
-      : 'not checked: Walnut could not look at the asking process (it came through a host’s daemon, or the check timed out)';
-  }
-  return r.identity === 'verified' ? 'seen inside this task’s session' : 'this task’s session';
+/** A one-line JSON object or list, indented so its fields read one per line; any other text as it is. */
+export function prettyJson(text: string): string {
+  const t = text.trim();
+  if (!(t.startsWith('{') && t.endsWith('}')) && !(t.startsWith('[') && t.endsWith(']'))) return text;
+  try {
+    const value = JSON.parse(t);
+    // Laid out only when nothing is lost: a repeated key or a number past 2^53 shows as signed.
+    return JSON.stringify(value) === t ? JSON.stringify(value, null, 2) : text;
+  } catch { return text; }
 }
 
-/** The dialog's rows: the whole request, every part named, the unknown ones too. */
+/** The dialog's parts under the sentence: the command that runs, who asked, and a warning only when one is due. */
 export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: string }) {
   const r = a.requester;
   const c = a.context ?? {};
-  const openAsker = useOpenAsker();
-  const where = [c.project, `on ${hostName}`].filter(Boolean).join(' · ');
+  const command = r.command || r.ranBy;
+  const where = r.local ? 'on this computer' : `on ${hostName}`;
   const outside = [r.process ? `run by ${r.process}` : '', r.user ? `as ${r.user}` : ''].filter(Boolean).join(' ');
   return (
     <div className="approval-context" data-testid="approval-context">
-      <dl className="approval-context-rows">
-        <dt>Why</dt>
-        <dd data-testid="approval-why" className={c.why ? '' : 'approval-unknown'}>
-          {c.why ? <>{c.why}{c.whyFrom === 'session' && <span className="approval-context-from"> (its last words before it asked)</span>}</> : 'not given'}
-        </dd>
-        <dt>Task</dt>
-        <dd data-testid="approval-task">
+      {/* The asker's own line (`walnut approve --why`), one or two lines; never the session's last words. */}
+      {c.why && c.whyFrom !== 'session' ? <div className="approval-why" data-testid="approval-why">{c.why}</div> : null}
+      {command ? (
+        <div className="approval-part">
+          <div className="approval-part-label">Command</div>
+          <code className="approval-command" data-testid="approval-command">{command}</code>
+          {/* The asker names its command itself; what Walnut read from the process table shows
+              beside it when they differ (a signed approval binds the real operation in its detail). */}
+          {!a.singleUse && r.command && r.ranBy && r.ranBy !== r.command
+            ? <div className="approval-ran-by" data-testid="approval-ran-by" title="Read by Walnut from this machine’s process list">Started by <code>{r.ranBy}</code></div>
+            : null}
+        </div>
+      ) : null}
+      <div className="approval-part" data-testid="approval-task">
+        <div className="approval-part-label">Asked by</div>
+        <div className="approval-part-value">
           {r.taskId
             ? <><AskerLink a={a} label={r.taskTitle || 'Its task'} /> <span className="approval-who-host">{where}</span></>
-            : <span className="approval-unknown">unknown <span className="approval-context-from">{`(on ${hostName}${outside ? `, ${outside}` : ''})`}</span></span>}
-        </dd>
-        {r.taskId && (<>
-          <dt>Goal</dt>
-          <dd data-testid="approval-goal" className={c.goal ? '' : 'approval-unknown'}>{c.goal ?? 'unknown'}</dd>
-        </>)}
-        <dt>Session</dt>
-        <dd data-testid="approval-session" className={r.sessionId && r.identity !== 'unverified' ? '' : 'approval-unknown'}>{sessionWord(a)}</dd>
-        {c.steps?.length ? (<>
-          <dt>Just before</dt>
-          <dd>
-            <ol className="approval-steps" data-testid="approval-steps">
-              {c.steps.map((s, i) => <li key={i}><span className="approval-step-kind">{STEP_WORD[s.kind]}</span> <span className="approval-step-text">{s.text}</span></li>)}
-            </ol>
-          </dd>
-        </>) : null}
-        <dt>Runs</dt>
-        <dd data-testid="approval-runs" className={r.command || r.ranBy ? '' : 'approval-unknown'}>
-          {r.command ? <code className="approval-command" data-testid="approval-command">{r.command}</code> : null}
-          {r.ranBy && r.ranBy !== r.command
-            ? <code className="approval-command" data-testid="approval-ran-by" title="Read by Walnut from this machine’s process list">{r.ranBy}</code>
-            : null}
-          {!r.command && !r.ranBy ? 'not given' : null}
-          {r.cwd ? <span className="approval-cwd">in {r.cwd}</span> : null}
-        </dd>
-      </dl>
-      {r.taskId && (
-        <button type="button" className="approval-link approval-open-chat" data-testid="approval-open-chat"
-          title="Open its chat beside this request: ask or answer it there, then decide"
-          onClick={() => openAsker(a)}>Open its chat ›</button>
-      )}
+            : <span className="approval-unknown">{`A script with no task ${where}${outside ? `, ${outside}` : ''}`}</span>}
+        </div>
+      </div>
+      {r.taskId && r.identity === 'unverified' ? (r.check === 'outside' ? (
+        <div className="approval-warn" data-testid="approval-outside" role="note">
+          Not sent from inside this task’s session: the asking process runs outside it.
+        </div>
+      ) : (
+        <div className="approval-unknown approval-unchecked" data-testid="approval-unchecked" role="note">
+          Walnut could not check that this came from the task’s session.
+        </div>
+      )) : null}
     </div>
   );
 }

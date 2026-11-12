@@ -79,10 +79,8 @@ struct ApprovalSheet: View {
     @ViewBuilder private var footer: some View {
         if approval.isPending {
             VStack(spacing: 10) {
-                if approval.isBiometric && !center.canSign {
-                    Text(center.signReason ?? (center.myKey?.status == "pending"
-                        ? "This iPhone is waiting to be allowed to sign approvals: approve that on a device that already signs."
-                        : "This iPhone cannot sign approvals yet."))
+                if approval.isBiometric && !center.canSign(approval) {
+                    Text(center.whereToApprove(approval))
                         .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 let buttons = stacked ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 12))
@@ -95,7 +93,7 @@ struct ApprovalSheet: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                         .accessibilityIdentifier("approval.approve")
-                    } else if center.canSign {
+                    } else if center.canSign(approval) {
                         Button { run("approve", signed: true) } label: {
                             Label(working == "approve" ? "Face ID…" : "Approve with Face ID", systemImage: "faceid")
                                 .frame(maxWidth: .infinity)

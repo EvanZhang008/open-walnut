@@ -28,6 +28,15 @@ export function howToApprove(kinds: readonly SignerKind[], opts: { unlock: boole
   return `${head}${joined}${opts.unlock && ways.length === 1 ? ' to approve.' : '.'}`
 }
 
+/**
+ * For an approval only one device may sign (`signingKeyId`): where that device is, so a device
+ * that cannot sign it names the one that can. "Approve it in the Walnut Mac app with Touch ID (only that device can sign this one)."
+ */
+export function onlyDevice(key: { kind: string; name?: string } | undefined): string {
+  const where = key && (key.kind === 'iphone' || key.kind === 'mac-app') ? ON[key.kind as SignerKind] : 'on the device it names'
+  return `Approve it ${where}: only that device can sign this one.`
+}
+
 /** For the agent: where the person is asked. "They are asked in Walnut and on their iPhone." */
 export function whereAsked(kinds: readonly SignerKind[]): string {
   const extra = kinds.includes('iphone') ? ' and on their iPhone' : ''

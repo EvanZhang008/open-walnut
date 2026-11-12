@@ -40,6 +40,7 @@ defineOp({
     mode: z.enum(['tap', 'biometric']).optional().describe('tap (default): a plain Approve; biometric: Face ID / Touch ID on a device that signs'),
     single_use: z.boolean().optional().describe('Strict signed approval: no tap fallback; wait only reads, approval_consume spends it once before expiry (at most 5 minutes). Requires a task session.'),
     signing_key_id: z.string().min(1).max(80).optional().describe('The enrolled signing device required for a single-use approval'),
+    signing_key_ids: z.array(z.string().min(1).max(80)).min(2).max(8).optional().describe('Instead of signing_key_id: two or more enrolled devices, any one of which may sign it (the set is signed in the envelope as signingKeyIds, sorted)'),
     timeout_ms: z.number().int().min(10_000).max(86_400_000).optional().describe('Unanswered after this long = expired (default 10 minutes, or 5 minutes for single_use)'),
     cwd: z.string().optional().describe('The asking process\'s working directory, shown to the person'),
     command: z.string().optional().describe('A short name for the asking script or command, shown to the person'),

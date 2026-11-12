@@ -9,10 +9,10 @@
  * in a row takes the card, the row and the notification off together.
  */
 import { useSyncExternalStore } from 'react';
-import { answerApproval, enrollApprovalKey, listApprovals, type Approval, type ApprovalKey } from '@/api/approvals';
+import { answerApproval, enrollApprovalKey, listApprovals, removeApprovalKey, type Approval, type ApprovalKey } from '@/api/approvals';
 import { onVaultSessionChange, vaultSession } from '@/api/vault';
 import { checkVault, vaultLive } from '@/api/vault-live';
-import { howToApprove, signerKinds } from '../../../../src/core/approvals/signer-words';
+import { howToApprove, onlyDevice, signerKinds } from '../../../../src/core/approvals/signer-words';
 import { hasTouchIdBridge, touchIdEnroll, touchIdSign, touchIdStatus, type TouchIdStatus } from './touch-id-bridge';
 import { clearApprovalNotice, keepApprovalNotices, setApprovalOpener, showApprovalNotice } from './approval-notify';
 import { testRunLabel } from '@/api/test-run';
@@ -125,6 +125,17 @@ export function canSignHere(s: ApprovalsState): boolean {
   return !!s.touchId?.available && myKeyOf(s)?.status === 'active';
 }
 
+/** The keys a single-use approval takes a signature from (store.ts allowedSigners); none = any signer. */
+function boundTo(a: Approval): string[] {
+  return a.signingKeyIds?.length ? a.signingKeyIds : a.signingKeyId ? [a.signingKeyId] : [];
+}
+
+/** Bound to keys this Mac does not hold: its Touch ID cannot approve it. */
+function boundElsewhere(s: ApprovalsState, a: Approval): boolean {
+  const keys = boundTo(a);
+  return keys.length > 0 && !keys.includes(s.touchId?.keyId ?? '');
+}
+
 /** The Approve this window offers: a tap, Touch ID, or none (approve it on the phone). */
 export function approveKind(s: ApprovalsState, a: Approval): 'tap' | 'touch-id' | null {
   if (a.guard) {
@@ -135,6 +146,8 @@ export function approveKind(s: ApprovalsState, a: Approval): 'tap' | 'touch-id' 
     return !sensitiveSigned && vaultLive() ? 'tap' : null;
   }
   if (a.mode !== 'biometric') return 'tap';
+  // Bound to one device's key (or a set): only those devices approve it, never another signer.
+  if (boundElsewhere(s, a)) return null;
   const ownEnrollment = !!a.enrollsKey && a.enrollsKey === s.touchId?.keyId;
   return canSignHere(s) && !ownEnrollment ? 'touch-id' : null;
 }
@@ -145,6 +158,7 @@ export function noApproveReason(s: ApprovalsState, a: Approval): string {
   const kinds = signerKinds(s.keys);
   if (a.guard === 'vault' || a.guard === 'person') return howToApprove(kinds, { unlock: true });
   if (a.guard === 'vault-sensitive' && a.mode !== 'biometric') return 'Unlock Passwords in this window to approve.';
+  if (boundElsewhere(s, a)) return onlyDevice(s.keys.find((k) => boundTo(a).includes(k.id)));
   if (a.enrollsKey && a.enrollsKey === s.touchId?.keyId) {
     return 'This is the request to let this Mac sign approvals: approve it on a device that already signs (your iPhone, with Face ID).';
   }
@@ -252,10 +266,12 @@ export async function startTouchId(): Promise<void> {
   set({ touchId });
   if (!touchId.available || !touchId.publicKey || enrolling) return;
   await refreshApprovals();
-  // Known already, unless it waits with no device to let it in (a key that is not this app's own
-  // making, say): then the app makes its own.
+  // Known and signing already: nothing to do. A key of its own still pending (asked before a
+  // device the person set up signed at once, 2026-11-12) is replaced by one the app sends from its
+  // own process, which signs now; the pending one and its "Let … sign" ask go.
   const known = state.keys.find((k) => k.id === touchId.keyId);
-  if (known && (known.status === 'active' || state.keys.some((k) => k.status === 'active'))) return;
+  if (known?.status === 'active') return;
+  const stalePending = known?.status === 'pending' ? known.id : undefined;
   enrolling = true;
   try {
     // The app sends it from its own process, which may be the first device (no setup step for
@@ -271,6 +287,9 @@ export async function startTouchId(): Promise<void> {
       ? native.body as { key: ApprovalKey }
       : await enrollApprovalKey({ publicKey: touchId.publicKey, name: touchId.name ?? 'Mac', kind: 'mac-app' });
     log.info('approvals', 'Mac app key enrolled', { keyId: r.key?.id, status: r.key?.status, native: !!native });
+    if (stalePending && r.key?.status === 'active' && r.key.id !== stalePending) {
+      await removeApprovalKey(stalePending).catch((err) => log.warn('approvals', 'old pending key not removed', { keyId: stalePending, error: String(err) }));
+    }
     await refreshApprovals();
   } catch (err) {
     log.warn('approvals', 'Mac app key enroll failed', { error: String(err) });

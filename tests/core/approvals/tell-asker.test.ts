@@ -99,7 +99,7 @@ describe('the asking session hears the decision', () => {
   it('a Touch ID or Face ID signature', async () => {
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
     const spki = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
-    await enrollKey({ publicKey: spki, name: 'Mac', kind: 'mac-app', firstAllowed: true })
+    await enrollKey({ publicKey: spki, name: 'Mac', kind: 'mac-app', fromDeviceApp: true })
     const { approval } = await createApproval({ what: 'Publish', mode: 'biometric', requester })
     const signature = crypto.sign('sha256', Buffer.from(answerMessage(approval.digest, 'approve'), 'utf8'), { key: privateKey, dsaEncoding: 'der' }).toString('base64')
     await answerApproval(approval.id, { decision: 'approve', keyId: keyIdOf(spki), signature, device: { name: 'Mac', kind: 'mac-app' } }, lookup)

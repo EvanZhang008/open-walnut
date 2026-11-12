@@ -72,10 +72,18 @@ test('a tap approval shows up live, and Approve and Deny each reach the asker', 
   await expect(card.locator('.approval-what')).toHaveText(what)
   await expect(card.locator('.approval-who')).toContainText('release.sh on')
   await expect(card.locator('.approval-clock')).toHaveText(/^\d+:\d\d left$/)
-  // The card is three short lines; its title opens the whole request, the detail with it.
+  // The card is three short lines; its title opens the whole request.
   await expect(card.locator('.approval-detail')).toBeHidden()
   await card.locator('.approval-what-open').click()
   const opened = page.getByTestId('approval-dialog')
+  // The dialog is the sentence, the command, who asked and the detail folded (2026-11-11, the user:
+  // "just summary ... then is command to run ... 哪一个 task 来的"): no title of its own, no other rows.
+  await expect(opened.locator('.approval-what')).toHaveText(what)
+  await expect(opened.locator('.approval-kicker')).toHaveCount(0)
+  await expect(opened.getByTestId('approval-command')).toHaveText('release.sh')
+  await expect(opened.getByTestId('approval-task')).toContainText('Asked by')
+  await expect(opened.locator('.approval-detail pre')).toBeHidden()
+  await opened.locator('.approval-detail summary').click()
   await expect(opened.locator('.approval-detail pre')).toContainText('migrations: none')
   await opened.locator('.approval-dialog-close').click()
   await expect(opened).toHaveCount(0)
@@ -152,6 +160,7 @@ test('Needs you: approvals are one line on Home, a click opens the request, and 
   await expect(homeCard).toHaveClass(/approval-card-line/)
   await summary.click()
   await expect(dialog.locator('.approval-what')).toContainText('Release notes')
+  await dialog.locator('.approval-detail summary').click()
   await expect(dialog.locator('.approval-detail pre')).toContainText('notes: 4 lines')
   // The open request is the dialog's alone: the whole corner steps aside while it is open.
   await expect(page.locator('[data-testid="corner-stack"] [data-testid="approval-card"]')).toBeHidden()

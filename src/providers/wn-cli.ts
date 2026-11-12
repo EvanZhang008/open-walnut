@@ -1413,20 +1413,23 @@ async function runApproveViaGateway(socketPath: string, sid: string, argv: strin
       return APPROVE_EXIT.error
     }
   }
-  let signingKey: string | undefined
-  if (parsed.signingKeyFrom) {
+  // Every --signing-key file, read here; runApprove checks each is a P-256 key.
+  const signingKeys: string[] = []
+  for (const from of parsed.signingKeysFrom ?? (parsed.signingKeyFrom ? [parsed.signingKeyFrom] : [])) {
     try {
-      signingKey = fs.readFileSync(parsed.signingKeyFrom, 'utf-8')
+      signingKeys.push(fs.readFileSync(from, 'utf-8'))
     } catch (err) {
-      process.stderr.write(`walnut approve: cannot read --signing-key ${parsed.signingKeyFrom}: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.stderr.write(`walnut approve: cannot read --signing-key ${from}: ${err instanceof Error ? err.message : String(err)}\n`)
       return APPROVE_EXIT.error
     }
   }
+  const signingKey = signingKeys[0]
+
   return runApprove({
     what: parsed.what, detail, biometric: parsed.biometric, timeoutMs: parsed.timeoutMs, json: parsed.json,
     cwd: process.cwd(), ...(parsed.command ? { command: parsed.command } : {}),
     ...(parsed.why ? { why: parsed.why } : {}),
-    ...(parsed.singleUse ? { singleUse: true, signingKey, signingKeyPath: path.resolve(parsed.signingKeyFrom!) } : {}),
+    ...(parsed.singleUse ? { singleUse: true, signingKey, signingKeyPath: path.resolve(parsed.signingKeyFrom!), ...(signingKeys.length > 1 ? { signingKeys } : {}) } : {}),
     ...(parsed.requestOnly ? { requestOnly: true } : {}),
     ...terminalSessionArg(process.env),
     ...(parsed.approvalId ? { approvalId: parsed.approvalId } : {}),

@@ -132,14 +132,15 @@ export function ApprovalDetail({ a, open = false }: { a: Approval; open?: boolea
 }
 
 /** What the request is, who asks, the detail, and the answer: the card's and the dialog's body. */
-function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total = 0 }: { a: Approval; s: ApprovalsState; now: number; detailOpen?: boolean; onOpen?: () => void; onMinimize?: () => void; total?: number }) {
+function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approval; s: ApprovalsState; now: number; onOpen?: () => void; onMinimize?: () => void; total?: number }) {
   const biometric = a.mode === 'biometric';
   const hostName = useHostDisplayLabel(a.requester.host);
   const asker = a.requester.taskId;
   return (
     <>
       <div className="approval-head">
-        <span className="approval-kicker">{biometric && approveKind(s, a) !== 'tap' ? 'Approve with Face ID / Touch ID' : 'Approve?'}</span>
+        {/* The card names itself in the corner; the dialog has no title of its own: its sentence is the request. */}
+        {onOpen ? <span className="approval-kicker">{biometric && approveKind(s, a) !== 'tap' ? 'Approve with Face ID / Touch ID' : 'Approve?'}</span> : <span />}
         {onOpen && total > 1 && (
           <button type="button" className="approval-count" data-testid="approval-count" title={`See all ${total} approvals waiting`} onClick={onOpen}>
             {total} waiting
@@ -158,16 +159,13 @@ function ApprovalBody({ a, s, now, detailOpen = false, onOpen, onMinimize, total
         ? <button type="button" className="approval-what approval-what-open" title="Open the request" data-testid="approval-what" onClick={onOpen}><span className="approval-what-text">{a.what}</span></button>
         : <div className="approval-what">{a.what}</div>}
       {onOpen ? (<>
-        {/* Why it asks, on the card too: two lines at most (the dialog has the whole of it). */}
-        {a.context?.why ? <div className="approval-why" data-testid="approval-card-why">Why: {a.context.why}</div> : null}
         <div className="approval-who">
           <span className="approval-who-text">{asker
-            ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} />{' '}<span className="approval-who-host">{[a.context?.project, `on ${hostName}`].filter(Boolean).join(' · ')}</span></>
+            ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} />{' '}<span className="approval-who-host">{a.requester.local ? 'on this computer' : `on ${hostName}`}</span></>
             : <span className="approval-who-host">{requesterText(a, hostName)}</span>}</span>
-          {a.requester.cwd ? <span className="approval-cwd">{a.requester.cwd}</span> : null}
         </div>
       </>) : <ApprovalContextRows a={a} hostName={hostName} />}
-      <ApprovalDetail a={a} open={detailOpen} />
+      <ApprovalDetail a={a} />
       {a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}
       {s.errors[a.id] ? <div className="approval-error" role="alert">{s.errors[a.id]}</div> : null}
       {/* The unlock form open on it says "Unlock Passwords in this window" in its own label. */}
@@ -242,7 +240,7 @@ function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
       <div ref={boxRef} className={`app-modal approval-dialog${live?.mode === 'biometric' ? ' approval-card-biometric' : ''}`} data-approval-id={id} onMouseDown={(e) => e.stopPropagation()}>
         <button type="button" className="approval-dialog-close" aria-label="Close" onClick={closeApproval}>×</button>
         {live ? (
-          <ApprovalBody a={live} s={s} now={now} detailOpen />
+          <ApprovalBody a={live} s={s} now={now} />
         ) : settled ? (
           <>
             <div className={`approval-settled-line approval-${settled.status}`} data-testid="approval-dialog-settled">

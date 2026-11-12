@@ -145,6 +145,8 @@ export interface CreateInput {
   guard?: ApprovalGuard
   singleUse?: boolean
   signingKeyId?: string
+  /** Any one of these keys may sign it (two or more; one key is `signingKeyId`). */
+  signingKeyIds?: string[]
   /** Why it asks and where the task stands (asker-context.ts); signed in a single-use envelope. */
   context?: AskerContext
   requestOnly?: boolean
@@ -174,12 +176,36 @@ export function cleanWhat(raw: unknown): string {
   return what
 }
 
-function singleUseDetailMatches(detail: string | undefined, requester: ApprovalRequester, signingKeyId: string | undefined): boolean {
-  if (!detail || !signingKeyId || !requester.sessionId || !requester.taskId) return false
+/**
+ * The keys a single-use approval takes a signature from: one (`signingKeyId`), or a set of two or
+ * more (`signingKeyIds`, sorted: a Git push the person may approve on the Mac or the iPhone). The
+ * set rides in the signed envelope, so no one can widen it after it was asked.
+ */
+export function allowedSigners(rec: { signingKeyId?: string; signingKeyIds?: string[] }): string[] {
+  return rec.signingKeyIds?.length ? rec.signingKeyIds : rec.signingKeyId ? [rec.signingKeyId] : []
+}
+
+/** Two or more distinct key ids, sorted; one id stays `signingKeyId`. Undefined when not that. */
+export function signerSet(ids: readonly string[] | undefined): string[] | undefined {
+  if (!ids) return undefined
+  const set = [...new Set(ids)].sort()
+  return set.length >= 2 ? set : undefined
+}
+
+function sameIds(a: unknown, b: readonly string[]): boolean {
+  return Array.isArray(a) && a.length === b.length && a.every((x, i) => x === b[i])
+}
+
+function singleUseDetailMatches(detail: string | undefined, requester: ApprovalRequester, signers: { signingKeyId?: string; signingKeyIds?: string[] }): boolean {
+  const allowed = allowedSigners(signers)
+  if (!detail || !allowed.length || !requester.sessionId || !requester.taskId) return false
   try {
     const value = JSON.parse(detail)
+    const keysMatch = allowed.length === 1
+      ? value?.signingKeyId === allowed[0] && value.signingKeyIds === undefined
+      : value?.signingKeyId === undefined && sameIds(value?.signingKeyIds, allowed)
     return value?.version === 'walnut-single-use-v1' && value.sessionId === requester.sessionId
-      && value.taskId === requester.taskId && value.host === requester.host && value.signingKeyId === signingKeyId
+      && value.taskId === requester.taskId && value.host === requester.host && keysMatch
       && typeof value.nonce === 'string' && /^[0-9a-f]{64}$/.test(value.nonce)
       && typeof value.context === 'string' && value.context.length > 0
   } catch { return false }
@@ -191,9 +217,12 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     throw new ApprovalError(400, 'bad_request', 'Single-use operation context must be well-formed Unicode; it is never normalized.')
   }
   let detail = typeof input.detail === 'string' && input.detail.trim() ? wellFormed(input.detail) : undefined
+  const keySet = signerSet(input.signingKeyIds)
+  if (input.signingKeyIds && !keySet) throw new ApprovalError(400, 'bad_request', 'signing_key_ids names two or more different keys; one key is signing_key_id.')
+  const signers = keySet ? { signingKeyIds: keySet } : { signingKeyId: input.signingKeyId }
   if (input.singleUse && detail) {
     detail = JSON.stringify({ version: 'walnut-single-use-v1', sessionId: input.requester.sessionId,
-      taskId: input.requester.taskId, host: input.requester.host, signingKeyId: input.signingKeyId,
+      taskId: input.requester.taskId, host: input.requester.host, ...signers,
       nonce: crypto.randomBytes(32).toString('hex'), context: detail,
       // What the person read to decide is signed with it, never only an unsigned requester.
       ...(input.context?.why ? { why: input.context.why } : {}),
@@ -204,7 +233,7 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
   }
   const timeout = Math.min(APPROVAL_MAX_TIMEOUT_MS, Math.max(APPROVAL_MIN_TIMEOUT_MS, input.timeoutMs ?? (input.singleUse ? 300_000 : APPROVAL_DEFAULT_TIMEOUT_MS)))
   if (input.singleUse && (input.mode !== 'biometric' || input.downgraded || !input.requester.sessionId
-    || !singleUseDetailMatches(detail, input.requester, input.signingKeyId) || !Number.isFinite(timeout) || timeout > 300_000)) {
+    || !singleUseDetailMatches(detail, input.requester, signers) || !Number.isFinite(timeout) || timeout > 300_000)) {
     throw new ApprovalError(400, 'strict_approval_required', 'Single-use approvals need a task session, a signing key, detail and biometric mode, with at most five minutes to use them.')
   }
   const now = Date.now()
@@ -224,7 +253,7 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     ...(input.removesKey ? { removesKey: input.removesKey } : {}),
     ...(input.testRun ? { testRun: input.testRun } : {}),
     ...(input.guard ? { guard: input.guard } : {}),
-    ...(input.singleUse ? { singleUse: true, signingKeyId: input.signingKeyId } : {}),
+    ...(input.singleUse ? { singleUse: true, ...signers } : {}),
     ...(input.context && Object.keys(input.context).length ? { context: input.context } : {}),
     ...(input.requestOnly ? { requestOnly: true } : {}),
   }
@@ -297,7 +326,7 @@ export async function answerApproval(id: string, input: AnswerInput, lookupKey: 
     }
     signed = { id: key.id, name: key.name, kind: key.kind }
   }
-  if (current.singleUse && input.decision === 'approve' && (!signed || signed.id !== current.signingKeyId)) {
+  if (current.singleUse && input.decision === 'approve' && (!signed?.id || !allowedSigners(current).includes(signed.id))) {
     throw new ApprovalError(403, 'biometric_required', 'This approval needs a signature from its required signing device; an unsigned answer or another device cannot approve it.')
   }
   if (current.mode === 'biometric' && input.decision === 'approve' && !signed && !input.proven) {
@@ -411,7 +440,7 @@ export async function consumeApproval(id: string, input: ConsumeInput, lookupKey
     }
     const digest = approvalDigest({ ...rec, host: owner.host, taskId: owner.taskId })
     if (!rec.singleUse || rec.mode !== 'biometric' || rec.downgraded || rec.digest !== digest
-      || input.digest !== digest || !singleUseDetailMatches(rec.detail, owner, rec.signingKeyId)
+      || input.digest !== digest || !singleUseDetailMatches(rec.detail, owner, rec)
       || JSON.parse(rec.detail!).context !== input.detail) {
       throw new ApprovalError(409, 'changed', 'The signed approval does not match this operation.')
     }
@@ -422,7 +451,7 @@ export async function consumeApproval(id: string, input: ConsumeInput, lookupKey
     }
     if (rec.consumedAt) throw new ApprovalError(409, 'approval_used', 'This approval was already used; ask again.')
     if (rec.status !== 'approved' || rec.answer?.decision !== 'approve' || rec.answer.mode !== 'biometric'
-      || !rec.answer.keyId || !rec.answer.signature || rec.answer.keyId !== rec.signingKeyId) {
+      || !rec.answer.keyId || !rec.answer.signature || !allowedSigners(rec).includes(rec.answer.keyId)) {
       throw new ApprovalError(403, 'not_approved', 'There is no signed approval for this operation.')
     }
     const key = await lookupKey(rec.answer.keyId)

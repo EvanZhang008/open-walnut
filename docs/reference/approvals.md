@@ -173,10 +173,11 @@ requests on the phone; a user without the phone app gets tap approvals.
 
 ## Signing devices
 
-The first device that signs sets itself up, with nothing for you to do: the Walnut Mac app adds
-its Touch ID key when it opens, and the iPhone app its Face ID key the first time it opens while it
-reaches your computer directly (the same network or your tailnet; a request through the cloud
-companion does not carry the phone's own sign-in, so it cannot be the first). So your first
+Every device you set up signs at once, with nothing for you to do and nothing to approve on
+another device: the Walnut Mac app adds its Touch ID key when it opens, and the iPhone app its Face
+ID key the first time it opens while it reaches your computer directly (the same network or your
+tailnet; a request through the cloud companion does not carry the phone's own sign-in). Face ID or
+Touch ID is still asked at every approval, by the device itself. So your first
 approval of an agent's step on the Mac is one touch, never the Passwords master password. The Mac
 app's key counts only when the app's own process sends it: Walnut checks that the process holding
 the request runs the signed Mac app's code: its bundle identifier, a certificate Apple issued to a
@@ -184,10 +185,13 @@ team (never ad-hoc, which anyone can make), the hardened runtime with no entitle
 another program load code into it or attach a debugger, and the same code hash as the signed
 bundle on disk. The app also makes a new key for this enrollment rather than using a key file it
 finds on disk. A Mac app built without a developer certificate cannot be the first device; its
-approvals then take the iPhone's Face ID, or an unlock in Passwords as before. A request from any other program on the computer is never the first
-device, because any program on it can call the console's routes. Every later device waits until
-an existing one approves it: Walnut asks "Let <device> sign your approvals" as a biometric
-approval on the devices that already sign.
+approvals then take the iPhone's Face ID, or an unlock in Passwords as before. A key from any other request (no
+paired device's sign-in, no Mac app proof) is never the first device, because any program on the
+computer can call the console's routes; a later one waits until an existing device approves it:
+Walnut asks "Let <device> sign your approvals" as a biometric approval on the devices that
+already sign. Known limit: a program running as you can make a device sign-in, and so add a key
+of its own; before 2026-11-12 only the first key had that limit. A single-use approval bound to
+pinned keys (below) still takes only those keys' signatures.
 `walnut approvals list` shows the devices. Removing one is done from a device while another
 remains. Walnut never removes the last one, since the next device would then be trusted on first
 use; if that phone is lost, delete `approvals/keys.json` in the Walnut data folder by hand.
@@ -224,11 +228,14 @@ Ops for agents: `approval_request`, `approval_wait`, `approval_consume`, `approv
 
 ### Strict single-use steps
 
-`approval_request` also accepts `single_use: true` and `signing_key_id`, with biometric mode,
+`approval_request` also accepts `single_use: true` and `signing_key_id` (or `signing_key_ids`, two
+or more keys any one of which may sign; `walnut approve --signing-key` given more than once), with biometric mode,
 operation context in `detail`, and a timeout of at most five minutes. It requires a task session
 and an active signing device. No device means refusal, never a tap fallback. The server wraps the
 context in a signed JSON detail: `{version:"walnut-single-use-v1", sessionId, taskId, host,
-signingKeyId, nonce, context}`. Identity comes from the caller, nonce is 32 random bytes, and the
+signingKeyId, nonce, context}`, or with a set `signingKeyIds` (sorted, distinct) in place of
+`signingKeyId`, so the set is signed and cannot be widened later; the answer's `keyId` names the
+key that signed. Identity comes from the caller, nonce is 32 random bytes, and the
 existing approval digest signs the entire envelope and its expiry. Existing clients can still
 show and sign the detail without a new digest format.
 

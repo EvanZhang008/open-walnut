@@ -21,6 +21,8 @@ export interface SavedApproval {
   detailSha256: string
   singleUse: boolean
   signingKeyId?: string
+  /** Two or more pinned keys, sorted, when any one of them may sign. */
+  signingKeyIds?: string[]
   signingKeyPath?: string
   createdAt: string
   expiresAt: string
@@ -83,6 +85,7 @@ export function loadToken(id: string, dir: string = tokenDir()): SavedApproval |
     if (v.detail !== undefined && typeof v.detail !== 'string') return undefined
     if (v.envelope !== undefined && typeof v.envelope !== 'string') return undefined
     if (v.signingKeyId !== undefined && typeof v.signingKeyId !== 'string') return undefined
+    if (v.signingKeyIds !== undefined && !(Array.isArray(v.signingKeyIds) && v.signingKeyIds.every((x) => typeof x === 'string'))) return undefined
     return v as SavedApproval
   } catch {
     return undefined

@@ -26,6 +26,8 @@ final class ApprovalCenter {
     var presented: Approval?
     /// This phone's key as the server knows it (nil before enrolling, or with no Face ID).
     private(set) var myKey: ApprovalKeyInfo?
+    /// Every device that signs, to name the one an approval needs.
+    private(set) var keys: [ApprovalKeyInfo] = []
     private(set) var signReason: String?
     /// Closed by the person: not shown again on its own (a push tap still opens it).
     private var dismissed = Set<String>()
@@ -68,6 +70,7 @@ final class ApprovalCenter {
         do {
             let r = try await api.approvals()
             pending = r.approvals.filter(\.isPending)
+            keys = r.keys
             if let mine = try? ApprovalSigning.publicKey().id {
                 myKey = r.keys.first { $0.id == mine }
             }
@@ -124,8 +127,30 @@ final class ApprovalCenter {
 
     var canSign: Bool { myKey?.status == "active" && ApprovalSigning.unavailableReason() == nil }
 
-    /// Once per server: give it this phone's public key (the first device is trusted at
-    /// once; a later one waits for an existing device's Face ID or Touch ID approval).
+    /// Whether this phone can approve this one: it signs, the approval is not bound to another
+    /// device's key, and it is not the ask to let this phone itself sign.
+    func canSign(_ a: Approval) -> Bool {
+        guard canSign, let mine = myKey?.id else { return false }
+        if !a.boundTo.isEmpty && !a.boundTo.contains(mine) { return false }
+        return a.enrollsKey != mine
+    }
+
+    /// Where to approve one this phone cannot sign, naming the device that can (never a bare Deny).
+    func whereToApprove(_ a: Approval) -> String {
+        if let reason = signReason { return reason }
+        let onMac = "in the Walnut Mac app with Touch ID"
+        if !a.boundTo.isEmpty && !a.boundTo.contains(myKey?.id ?? "") {
+            let kind = keys.first { a.boundTo.contains($0.id) }?.kind
+            return "Approve it \(kind == "iphone" ? "on the iPhone it names, with Face ID" : onMac): only that device can sign this one."
+        }
+        if let mine = myKey?.id, a.enrollsKey == mine { return "This asks to let this iPhone sign approvals: approve it \(onMac)." }
+        if myKey?.status == "pending" { return "This iPhone is waiting to be allowed to sign approvals: approve that \(onMac)." }
+        return "This iPhone cannot sign approvals yet. Approve it \(onMac)."
+    }
+
+    /// Once per server: give it this phone's public key, which signs at once (the phone app is a
+    /// device the person set up). A key the server still holds as pending (asked before that rule)
+    /// is sent again, which lets it sign and withdraws its "Let … sign" ask.
     private func enrollIfNeeded(keys: [ApprovalKeyInfo]) async {
         signReason = ApprovalSigning.unavailableReason()
         guard signReason == nil else { return }
@@ -133,14 +158,15 @@ final class ApprovalCenter {
         guard enrolledFor != server else { return }
         do {
             let pub = try ApprovalSigning.publicKey()
-            if let known = keys.first(where: { $0.id == pub.id }) {
+            if let known = keys.first(where: { $0.id == pub.id }), known.status != "pending" {
                 myKey = known
                 enrolledFor = server
                 return
             }
             let r = try await api.enrollApprovalKey(.init(publicKey: pub.base64, name: ApprovalSigning.deviceName, kind: "iphone"))
             myKey = r.key
-            enrolledFor = server
+            // Still pending (the server could not tell this is the phone app yet): asked again at the next refresh.
+            if r.key.status == "active" { enrolledFor = server }
             AppLog.info("approvals", "key enrolled", ["keyId": r.key.id, "status": r.key.status])
         } catch {
             // A refusal the person can act on (the first key must come over a direct link, not the

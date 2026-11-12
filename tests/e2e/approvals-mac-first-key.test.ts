@@ -81,18 +81,37 @@ describe('the Mac app as the first signing device', () => {
     expect(seen).toHaveLength(1)
     expect(seen[0]).toMatchObject({ remotePort: expect.any(Number), localPort: expect.any(Number) })
 
-    // Trust on first use is for the first key only: a second key from the app, or the iPhone, waits
-    // for this Mac's Touch ID.
+    // A later key from a device app the person set up signs at once too (2026-11-12, the user:
+    // "我都已经连接了，为什么还要问我？"): a second Mac app with its own proof, and the paired iPhone.
     const again = softKey()
     const second = await http('POST', '/api/v1/approvals/keys', { publicKey: again.spki, name: 'Other Mac', kind: 'mac-app' })
     expect(second.status).toBe(200)
-    expect(second.body.key.status).toBe('pending')
-    expect(second.body.enrollment).toMatchObject({ mode: 'biometric', enrollsKey: again.id })
-    expect(seen).toHaveLength(1)
+    expect(second.body.key.status).toBe('active')
+    expect(second.body.enrollment).toBeUndefined()
+    expect(seen).toHaveLength(2)
     const paired = await http('POST', '/api/devices', { name: 'mac-first-key-phone' })
     const phone = softKey()
     const ph = await http('POST', '/api/v1/approvals/keys', { publicKey: phone.spki, name: 'iPhone', kind: 'iphone' }, { authorization: `Bearer ${paired.body.token}` })
-    expect(ph.body.key.status).toBe('pending')
+    expect(ph.body.key.status).toBe('active')
+    expect(ph.body.enrollment).toBeUndefined()
+    // A browser's sign-in, or a device that said it is no phone, is not the phone app: it only asks
+    // (2026-11-12 review: a paired browser could otherwise add a signer with WebCrypto).
+    const { setDeviceInfo } = await import('../../src/core/device-auth.js')
+    for (const [name, report] of [['browser-a1b2c3', undefined], ['desk-laptop', { model: 'MacBookPro18,1', os: 'macOS 26.1' }]] as const) {
+      const made = await http('POST', '/api/devices', { name })
+      expect(made.status).toBe(201)
+      if (report) await setDeviceInfo(name, report)
+      const k = softKey()
+      const asked = await http('POST', '/api/v1/approvals/keys', { publicKey: k.spki, name: 'iPhone', kind: 'iphone' }, { authorization: `Bearer ${made.body.token}` })
+      expect(asked.body.key.status, name).toBe('pending')
+    }
+    // A request with no proof (the process check fails, no device token) still only asks.
+    _setMacAppProofForTesting(async () => ({ ok: false, why: 'not the app' }))
+    const stray = softKey()
+    const pend = await http('POST', '/api/v1/approvals/keys', { publicKey: stray.spki, name: 'Mac', kind: 'mac-app' })
+    expect(pend.body.key.status).toBe('pending')
+    expect(pend.body.enrollment).toMatchObject({ mode: 'biometric', enrollsKey: stray.id })
+    _setMacAppProofForTesting(async (conn) => { seen.push(conn); return { ok: true, pid: 4242, bundle: '/Applications/Walnut.app' } })
 
     // An agent's browser step: Touch ID's signature approves it with no Passwords unlock, a bare tap does not.
     const { createApproval } = await import('../../src/core/approvals/store.js')

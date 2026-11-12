@@ -190,6 +190,19 @@ describe('approvals store: one list for the cards, the rows and the dialog', () 
     expect(store.approveKind(s, approval({ mode: 'biometric' }))).toBeNull();
     expect(store.noApproveReason(s, approval({ mode: 'biometric' }))).toContain('iPhone with Face ID');
   });
+
+  it('one bound to another device\'s key offers no Approve here and names that device (2026-11-12: a bare Deny on the phone)', () => {
+    const base = snapshot();
+    const s = { ...base, touchId: { available: true, keyId: 'ak-mac' } as never,
+      keys: [{ id: 'ak-mac', name: 'Mac', kind: 'mac-app', status: 'active', createdAt: '' }, { id: 'ak-phone', name: 'iPhone', kind: 'iphone', status: 'active', createdAt: '' }] as never };
+    const onPhone = approval({ mode: 'biometric', singleUse: true, signingKeyId: 'ak-phone' });
+    expect(store.approveKind(s, onPhone)).toBeNull();
+    expect(store.noApproveReason(s, onPhone)).toBe('Approve it on your iPhone with Face ID: only that device can sign this one.');
+    // Bound to this Mac's key, or to a set holding it: Touch ID here.
+    expect(store.approveKind(s, approval({ mode: 'biometric', singleUse: true, signingKeyId: 'ak-mac' }))).toBe('touch-id');
+    expect(store.approveKind(s, approval({ mode: 'biometric', singleUse: true, signingKeyIds: ['ak-mac', 'ak-phone'] }))).toBe('touch-id');
+    expect(store.approveKind(s, approval({ mode: 'biometric', singleUse: true, signingKeyIds: ['ak-other', 'ak-phone'] }))).toBeNull();
+  });
 });
 
 describe('Org: which node lists an approval', () => {

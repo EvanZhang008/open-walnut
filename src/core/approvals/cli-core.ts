@@ -15,8 +15,9 @@
  *    exits 4, so an agent can tell the person; the same command with `--approval <id>` then waits
  *    for that answer (the what and the detail must be the same bytes) and goes on.
  *
- * `--single-use` is the strict form: Face ID / Touch ID on the one device whose public key the
- * script pins (`--signing-key`, never fetched from the network), at most 5 minutes. Waiting only
+ * `--single-use` is the strict form: Face ID / Touch ID on a device whose public key the script
+ * pins (`--signing-key`, never fetched from the network; repeat it to let any one of several
+ * devices sign, the set signed in the envelope as `signingKeyIds`), at most 5 minutes. Waiting only
  * reads; before exit 0 this CLI checks the signed record itself (key, digest rebuilt from the
  * fields, signature, the server's envelope around this run's detail, the clock) and then spends it
  * once with approval_consume. A failed check or a lost consume answer is exit 3: ask again.
@@ -55,6 +56,8 @@ export interface ApproveArgs {
   /** The pinned signing key's file content: PEM SPKI, or base64 DER SPKI. */
   signingKey?: string
   signingKeyPath?: string
+  /** Every pinned key's file content, when more than one may sign (`--signing-key` repeated). */
+  signingKeys?: string[]
   /** Ask, save the token, print the id and exit 4. */
   requestOnly?: boolean
   /** A task terminal's session (WALNUT_TERMINAL_SESSION_ID), when no session runs this command. */
@@ -78,7 +81,7 @@ export interface ApproveIo {
 }
 
 export const APPROVE_USAGE = 'usage: walnut approve "<what>" [--biometric] [--timeout 10m] [--detail <file>|-] [--why "<line>"] [--json]\n'
-  + '         [--single-use --signing-key <public key file>] [--request-only | --approval <id>]'
+  + '         [--single-use --signing-key <public key file> [--signing-key <another>]] [--request-only | --approval <id>]'
 
 /** The longest a single-use approval may stay open, and its default. */
 export const SINGLE_USE_MAX_MS = 5 * 60_000
@@ -104,7 +107,9 @@ export interface ParsedApprove {
   command?: string
   why?: string
   singleUse?: true
+  /** The first --signing-key; every one is in signingKeysFrom. */
   signingKeyFrom?: string
+  signingKeysFrom?: string[]
   requestOnly?: true
   approvalId?: string
 }
@@ -119,7 +124,7 @@ export function parseApproveArgv(argv: readonly string[]): ParsedApprove | { ok:
   let command: string | undefined
   let why: string | undefined
   let singleUse = false
-  let signingKeyFrom: string | undefined
+  const signingKeysFrom: string[] = []
   let requestOnly = false
   let approvalId: string | undefined
   for (let i = 0; i < argv.length; i++) {
@@ -155,8 +160,10 @@ export function parseApproveArgv(argv: readonly string[]): ParsedApprove | { ok:
       continue
     }
     if (is('--signing-key')) {
-      signingKeyFrom = valueOf('--signing-key')
-      if (!signingKeyFrom) return { ok: false, error: '--signing-key takes the path of a P-256 public key file' }
+      const from = valueOf('--signing-key')
+      if (!from) return { ok: false, error: '--signing-key takes the path of a P-256 public key file' }
+      if (signingKeysFrom.length >= 8) return { ok: false, error: '--signing-key is given at most 8 times' }
+      signingKeysFrom.push(from)
       continue
     }
     if (is('--approval')) {
@@ -172,6 +179,7 @@ export function parseApproveArgv(argv: readonly string[]): ParsedApprove | { ok:
   if (!what) return { ok: false, error: 'say what is to be approved' }
   if (what.length > 300) return { ok: false, error: 'what is at most 300 characters; put the rest in --detail' }
   if (requestOnly && approvalId) return { ok: false, error: '--request-only asks; --approval waits for an ask made before: use one of them' }
+  const signingKeyFrom = signingKeysFrom[0]
   if (signingKeyFrom && !singleUse) return { ok: false, error: '--signing-key goes with --single-use' }
   if (singleUse) {
     if (!signingKeyFrom) return { ok: false, error: '--single-use needs --signing-key <file>: the public key of the device that must sign (it is never fetched from the network)' }
@@ -182,7 +190,7 @@ export function parseApproveArgv(argv: readonly string[]): ParsedApprove | { ok:
     ok: true, what, biometric, timeoutMs: timeoutMs ?? (singleUse ? SINGLE_USE_MAX_MS : 10 * 60_000),
     ...(detailFrom ? { detailFrom } : {}), json, ...(command ? { command } : {}),
     ...(why ? { why } : {}),
-    ...(singleUse ? { singleUse: true as const, signingKeyFrom } : {}),
+    ...(singleUse ? { singleUse: true as const, signingKeyFrom, ...(signingKeysFrom.length > 1 ? { signingKeysFrom } : {}) } : {}),
     ...(requestOnly ? { requestOnly: true as const } : {}),
     ...(approvalId ? { approvalId } : {}),
   }
@@ -214,11 +222,23 @@ interface ApprovalLite {
   downgraded?: string
   singleUse?: boolean
   signingKeyId?: string
+  signingKeyIds?: string[]
   requester?: { host?: string; taskId?: string; sessionId?: string }
   answer?: { decision: string; mode: string; at: string; device?: { name?: string; kind?: string }; keyId?: string; signature?: string }
 }
 
-interface Envelope { version: string; sessionId?: string; taskId?: string; host?: string; signingKeyId?: string; nonce: string; context: string }
+interface Envelope { version: string; sessionId?: string; taskId?: string; host?: string; signingKeyId?: string; signingKeyIds?: unknown; nonce: string; context: string }
+
+/**
+ * Whether a record (or its envelope) names exactly the keys this run pinned: one key as
+ * `signingKeyId` and no set, or two or more as the sorted `signingKeyIds` and no single key.
+ */
+export function namesPinnedKeys(v: { signingKeyId?: unknown; signingKeyIds?: unknown } | undefined, ids: readonly string[]): boolean {
+  if (!v || !ids.length) return false
+  if (ids.length === 1) return v.signingKeyId === ids[0] && v.signingKeyIds === undefined
+  const got = v.signingKeyIds
+  return v.signingKeyId === undefined && Array.isArray(got) && got.length === ids.length && got.every((x, i) => x === ids[i])
+}
 
 function approvalOf(r: OpCallResult): ApprovalLite | undefined {
   const body = (r.result ?? {}) as { approval?: ApprovalLite }
@@ -243,14 +263,20 @@ function how(a: ApprovalLite): string {
   return `on ${dev}, with ${mode}`
 }
 
-/** Why a signed single-use record cannot be used for this run, or null when every check holds. */
-export function singleUseProblem(rec: ApprovalLite, want: { id: string; keyId: string; spki: string; detail: string; nonce?: string; now: number }): string | null {
+/**
+ * Why a signed single-use record cannot be used for this run, or null when every check holds.
+ * `keys` (key id -> base64 DER SPKI) are every key this run pinned; `keyId`/`spki` is the one-key form.
+ */
+export function singleUseProblem(rec: ApprovalLite, want: { id: string; keyId?: string; spki?: string; keys?: Record<string, string>; detail: string; nonce?: string; now: number }): string | null {
+  const keys = want.keys ?? (want.keyId && want.spki ? { [want.keyId]: want.spki } : {})
+  const ids = Object.keys(keys).sort()
   if (rec.id !== want.id) return 'the answer is for another approval'
   if (rec.singleUse !== true) return 'the approval is not single-use'
   if (rec.mode !== 'biometric' || rec.downgraded) return 'the approval was not asked with Face ID or Touch ID'
   if (rec.status !== 'approved' || rec.answer?.decision !== 'approve') return 'the approval is not approved'
   if (rec.answer.mode !== 'biometric') return 'the answer was not given with Face ID or Touch ID'
-  if (rec.answer.keyId !== want.keyId || rec.signingKeyId !== want.keyId) return 'the answer was not signed by the pinned key'
+  const signer = rec.answer.keyId
+  if (!signer || !Object.prototype.hasOwnProperty.call(keys, signer) || !namesPinnedKeys(rec, ids)) return 'the answer was not signed by the pinned key'
   const req = rec.requester
   if (!req || typeof req.host !== 'string' || !req.taskId || !req.sessionId) return 'the approval names no asking task session'
   if (typeof rec.digest !== 'string' || typeof rec.createdAt !== 'string' || typeof rec.expiresAt !== 'string') return 'the approval record is incomplete'
@@ -259,12 +285,12 @@ export function singleUseProblem(rec: ApprovalLite, want: { id: string; keyId: s
     host: req.host, taskId: req.taskId, what: rec.what, detail: rec.detail,
   })
   if (digest !== rec.digest) return 'the record does not match what was signed'
-  if (typeof rec.answer.signature !== 'string' || !verifySignature(want.spki, answerMessage(rec.digest, 'approve'), rec.answer.signature)) {
+  if (typeof rec.answer.signature !== 'string' || !verifySignature(keys[signer]!, answerMessage(rec.digest, 'approve'), rec.answer.signature)) {
     return 'the signature does not verify with the pinned key'
   }
   const env = envelopeOf(rec.detail)
   if (!env) return 'the signed detail is not a single-use envelope'
-  if (env.signingKeyId !== want.keyId) return 'the envelope names another signing key'
+  if (!namesPinnedKeys(env, ids)) return 'the envelope names another signing key'
   if (want.nonce !== undefined && env.nonce !== want.nonce) return 'the envelope is not the one this request was given'
   if (env.context !== want.detail) return 'the signed detail is not this run\'s detail'
   if (env.sessionId !== req.sessionId || env.taskId !== req.taskId || env.host !== req.host) return 'the envelope names another asker'
@@ -281,16 +307,23 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
   const singleUse = args.singleUse === true
   const biometric = singleUse || args.biometric
 
-  let spki: string | undefined
+  // Every pinned key, by id; one key keeps today's `signing_key_id`, two or more ask for a set.
+  const pinned: Record<string, string> = {}
   let keyId: string | undefined
+  let keyIds: string[] = []
   if (singleUse) {
-    if (!args.signingKey) { io.say('walnut approve: --single-use needs --signing-key <file>; not asked.'); return APPROVE_EXIT.error }
-    spki = spkiFromKeyText(args.signingKey)
-    if (!spki) {
-      io.say(`walnut approve: ${args.signingKeyPath ?? 'the signing key'} is not a P-256 public key (PEM or base64 DER SPKI); not asked.`)
-      return APPROVE_EXIT.error
+    const texts = args.signingKeys?.length ? args.signingKeys : args.signingKey ? [args.signingKey] : []
+    if (!texts.length) { io.say('walnut approve: --single-use needs --signing-key <file>; not asked.'); return APPROVE_EXIT.error }
+    for (const text of texts) {
+      const spki = spkiFromKeyText(text)
+      if (!spki) {
+        io.say(`walnut approve: ${texts.length === 1 && args.signingKeyPath ? args.signingKeyPath : 'a signing key'} is not a P-256 public key (PEM or base64 DER SPKI); not asked.`)
+        return APPROVE_EXIT.error
+      }
+      pinned[keyIdOf(spki)] = spki
     }
-    keyId = keyIdOf(spki)
+    keyIds = Object.keys(pinned).sort()
+    if (keyIds.length === 1) keyId = keyIds[0]
     if (!args.detail) { io.say('walnut approve: --single-use needs --detail, the operation context; not asked.'); return APPROVE_EXIT.error }
   }
 
@@ -305,7 +338,8 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
     saved = loadToken(args.approvalId, dir)
     if (!saved) { io.say(`walnut approve: no saved request ${args.approvalId} on this machine: ask again.`); return APPROVE_EXIT.error }
     if (saved.what !== args.what || saved.detailSha256 !== sha256Hex(args.detail) || saved.singleUse !== singleUse
-      || (saved.signingKeyId ?? undefined) !== keyId) {
+      || (saved.signingKeyId ?? undefined) !== keyId
+      || JSON.stringify(saved.signingKeyIds ?? []) !== JSON.stringify(keyIds.length > 1 ? keyIds : [])) {
       io.say('walnut approve: the request changed since it was asked: ask again.')
       return APPROVE_EXIT.error
     }
@@ -327,7 +361,7 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
       ...(args.why ? { why: args.why } : {}),
       mode: biometric ? 'biometric' : 'tap',
       timeout_ms: args.timeoutMs,
-      ...(singleUse ? { single_use: true, signing_key_id: keyId } : {}),
+      ...(singleUse ? { single_use: true, ...(keyIds.length > 1 ? { signing_key_ids: keyIds } : { signing_key_id: keyId }) } : {}),
       ...(args.cwd ? { cwd: args.cwd } : {}),
       ...(args.command ? { command: args.command } : {}),
       ...(args.requestOnly ? { request_only: true } : {}),
@@ -349,7 +383,7 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
     }
     if (singleUse) {
       const env = envelopeOf(asked.detail)
-      if (asked.singleUse !== true || !env || env.context !== args.detail || env.signingKeyId !== keyId || asked.signingKeyId !== keyId) {
+      if (asked.singleUse !== true || !env || env.context !== args.detail || !namesPinnedKeys(env, keyIds) || !namesPinnedKeys(asked, keyIds)) {
         await io.call('approval_cancel', { id, token, reason: 'not made as a single-use approval' }).catch(() => undefined)
         io.say('walnut approve: Walnut did not make it a single-use approval (an older Walnut?); withdrawn, not approved.')
         return APPROVE_EXIT.error
@@ -362,6 +396,7 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
         saveToken({
           id, waitToken: token, what: args.what, ...(args.detail !== undefined ? { detail: args.detail } : {}),
           detailSha256: sha256Hex(args.detail), singleUse, ...(keyId ? { signingKeyId: keyId } : {}),
+          ...(keyIds.length > 1 ? { signingKeyIds: keyIds } : {}),
           ...(args.signingKeyPath ? { signingKeyPath: args.signingKeyPath } : {}),
           createdAt: asked.createdAt ?? new Date(now()).toISOString(),
           expiresAt: asked.expiresAt ?? new Date(now() + args.timeoutMs).toISOString(),
@@ -382,7 +417,7 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
   }
 
   const finishSingleUse = async (rec: ApprovalLite): Promise<number> => {
-    const problem = singleUseProblem(rec, { id, keyId: keyId!, spki: spki!, detail: args.detail!, nonce, now: now() })
+    const problem = singleUseProblem(rec, { id, keys: pinned, detail: args.detail!, nonce, now: now() })
     if (problem) {
       io.say(`walnut approve: ${problem}; not approved, do not run. Ask again.`)
       return APPROVE_EXIT.error

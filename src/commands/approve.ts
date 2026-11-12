@@ -46,23 +46,26 @@ export async function runApproveCommand(argv: string[]): Promise<void> {
     process.exitCode = APPROVE_EXIT.error
     return
   }
-  let signingKey: string | undefined
-  if (parsed.signingKeyFrom) {
+  // Every --signing-key file, read here; runApprove checks each is a P-256 key.
+  const signingKeys: string[] = []
+  for (const from of parsed.signingKeysFrom ?? (parsed.signingKeyFrom ? [parsed.signingKeyFrom] : [])) {
     try {
-      signingKey = fs.readFileSync(parsed.signingKeyFrom, 'utf8')
+      signingKeys.push(fs.readFileSync(from, 'utf8'))
     } catch (err) {
-      console.error(`walnut approve: cannot read --signing-key ${parsed.signingKeyFrom}: ${err instanceof Error ? err.message : String(err)}`)
+      console.error(`walnut approve: cannot read --signing-key ${from}: ${err instanceof Error ? err.message : String(err)}`)
       process.exitCode = APPROVE_EXIT.error
       return
     }
   }
+  const signingKey = signingKeys[0]
+
   const { cliOpCaller } = await import('../lib/cli-sender.js')
   const caller = cliOpCaller()
   const code = await runApprove({
     what: parsed.what, detail, biometric: parsed.biometric, timeoutMs: parsed.timeoutMs, json: parsed.json,
     cwd: process.cwd(), ...(parsed.command ? { command: parsed.command } : {}),
     ...(parsed.why ? { why: parsed.why } : {}),
-    ...(parsed.singleUse ? { singleUse: true, signingKey, signingKeyPath: path.resolve(parsed.signingKeyFrom!) } : {}),
+    ...(parsed.singleUse ? { singleUse: true, signingKey, signingKeyPath: path.resolve(parsed.signingKeyFrom!), ...(signingKeys.length > 1 ? { signingKeys } : {}) } : {}),
     ...(parsed.requestOnly ? { requestOnly: true } : {}),
     ...terminalSessionArg(process.env),
     ...(parsed.approvalId ? { approvalId: parsed.approvalId } : {}),

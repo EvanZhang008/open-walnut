@@ -92,6 +92,8 @@ export interface ApprovalRecord {
   /** Wait reads the signed decision; consume spends it once, with no retry grace. */
   singleUse?: boolean
   signingKeyId?: string
+  /** A single-use approval any one of these keys may sign (two or more, sorted; store.ts allowedSigners). */
+  signingKeyIds?: string[]
   /** When the asker first read how it ended, whatever it was (an expiry too): it knows. */
   readAt?: string
   /** When Walnut told the asking session the decision (tell-asker.ts), at most once. */

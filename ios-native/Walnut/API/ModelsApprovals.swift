@@ -40,6 +40,13 @@ struct Approval: Codable, Identifiable, Equatable, Hashable {
     let status: String
     let answer: ApprovalAnswerRecord?
     let enrollsKey: String?
+    /// A single-use approval only this device key may sign (a Git push pins the Mac's key).
+    var signingKeyId: String? = nil
+    /// Or any one of these keys (the Mac and the iPhone).
+    var signingKeyIds: [String]? = nil
+
+    /// The keys that may sign it; empty = any device that signs.
+    var boundTo: [String] { signingKeyIds ?? signingKeyId.map { [$0] } ?? [] }
 
     var isBiometric: Bool { mode == "biometric" }
     var isPending: Bool { status == "pending" }

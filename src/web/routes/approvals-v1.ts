@@ -269,8 +269,11 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
     let mode = wanted
     let downgraded: string | undefined
     const keys = await activeKeys()
-    if (singleUse && (wanted !== 'biometric' || !requester.sessionId || !requester.taskId
-      || !keys.some((key) => key.id === body.signing_key_id))) {
+    // One pinned key (signing_key_id), or a set the person may approve from (signing_key_ids:
+    // the Mac and the iPhone): every key named must be an active one.
+    const keyIds = Array.isArray(body.signing_key_ids) ? body.signing_key_ids.map(String) : body.signing_key_id !== undefined ? [String(body.signing_key_id)] : []
+    if (singleUse && (wanted !== 'biometric' || !requester.sessionId || !requester.taskId || !keyIds.length || keyIds.length > 8
+      || !keyIds.every((k) => keys.some((key) => key.id === k)))) {
       throw new ApprovalError(403, 'strict_approval_required', 'A single-use approval needs a task session and its enrolled signing device; it never falls back to a tap.')
     }
     if (wanted === 'biometric' && keys.length === 0) {
@@ -292,7 +295,7 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
       detail: typeof body.detail === 'string' ? body.detail : undefined,
       mode, timeoutMs, downgraded,
       requester,
-      ...(singleUse ? { singleUse: true, signingKeyId: String(body.signing_key_id) } : {}),
+      ...(singleUse ? { singleUse: true, ...(Array.isArray(body.signing_key_ids) ? { signingKeyIds: keyIds } : { signingKeyId: keyIds[0] }) } : {}),
       context,
       ...(body.request_only === true ? { requestOnly: true } : {}),
       testRun: ambientTestRun(),
@@ -320,6 +323,19 @@ approvalsV1Router.get('/approvals/keys', (_req: Request, res: Response, next: Ne
   })
 })
 
+/**
+ * A device token the iPhone app holds: a QR pairing that never said it is anything but a phone.
+ * Never a browser signed in with a code, the browser extension, or a machine credential, whose
+ * tokens a page or an extension holds (2026-11-12 review: a paired browser could otherwise add a
+ * signing key with WebCrypto and no Face ID).
+ */
+async function isPairedPhoneApp(name: string): Promise<boolean> {
+  const { readDeviceRegistry } = await import('../../core/device-auth.js')
+  const { isBrowserSignInRecord } = await import('../../core/device-store.js')
+  const d = (await readDeviceRegistry()).devices.find((x) => x.name === name)
+  return !!d && d.kind !== 'machine' && !isBrowserSignInRecord(d) && !/^extension-/i.test(d.name) && d.platform !== 'other'
+}
+
 approvalsV1Router.post('/approvals/keys', (req: Request, res: Response, next: NextFunction) => {
   if (leaderOnly(res)) return
   if (!personOnly(req, res, 'adds a device that signs approvals')) return
@@ -328,16 +344,18 @@ approvalsV1Router.post('/approvals/keys', (req: Request, res: Response, next: Ne
     const body = (req.body ?? {}) as Record<string, unknown>
     const { activeKeys, enrollKey } = await import('../../core/approvals/keys.js')
     const kind = body.kind === 'mac-app' ? 'mac-app' : body.kind === 'iphone' ? 'iphone' : ''
-    // The first key only from the iPhone app with its paired device token, or from the Mac app's
-    // own signed process (core/approvals/keys.ts, mac-app-proof.ts); never from a script.
-    let firstAllowed = kind === 'iphone' && !!(req as Request & { deviceName?: string }).deviceName
-    if (!firstAllowed && kind === 'mac-app' && !(await activeKeys()).length) {
+    // A key signs at once when its device app sends it: the iPhone app with its paired device
+    // token, or the Mac app's own signed process (core/approvals/keys.ts, mac-app-proof.ts).
+    // Anything else adds no first key, and a later one waits for an active key's approval.
+    const deviceName = (req as Request & { deviceName?: string }).deviceName
+    let fromDeviceApp = kind === 'iphone' && !!deviceName && await isPairedPhoneApp(deviceName)
+    if (kind === 'mac-app') {
       const { requestFromMacApp } = await import('../../core/approvals/mac-app-proof.js')
       const proof = await requestFromMacApp(connOf(req))
-      firstAllowed = proof.ok
-      if (!proof.ok) log.web.info('approval first key refused', { kind, why: proof.why })
+      fromDeviceApp = proof.ok
+      if (!proof.ok) log.web.info('approval key not from the Mac app', { kind, why: proof.why, anyActive: (await activeKeys()).length > 0 })
     }
-    const out = await enrollKey({ publicKey: String(body.publicKey ?? ''), name: String(body.name ?? ''), kind: kind as 'iphone', firstAllowed })
+    const out = await enrollKey({ publicKey: String(body.publicKey ?? ''), name: String(body.name ?? ''), kind: kind as 'iphone', fromDeviceApp })
     const { enrollApprovalId: _e, ...key } = out.key
     return { key, ...(out.enrollment ? { enrollment: out.enrollment } : {}) }
   })

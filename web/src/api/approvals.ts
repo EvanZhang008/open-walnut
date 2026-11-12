@@ -29,6 +29,10 @@ export interface Approval {
   context?: ApprovalContext;
   /** A signed approval that is used once (its detail is the signed envelope). */
   singleUse?: boolean;
+  /** A single-use approval only this one device key may sign (the Git gate pins the Mac's key). */
+  signingKeyId?: string;
+  /** Or any one of these keys (the Mac and the iPhone). */
+  signingKeyIds?: string[];
   createdAt: string;
   expiresAt: string;
   status: ApprovalStatus;

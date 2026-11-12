@@ -198,6 +198,50 @@ describe('single-use: wait, check, consume', () => {
   })
 })
 
+describe('single-use with several pinned keys (--signing-key twice)', () => {
+  const ids = [key.keyId, otherKey.keyId].sort()
+  const setEnvelope = () => envelope({ signingKeyId: undefined, signingKeyIds: ids })
+  const setRec = (over: Rec = {}) => pendingRec({ detail: setEnvelope(), signingKeyId: undefined, signingKeyIds: ids, ...over })
+  const both: ApproveArgs = { ...strict, signingKeys: [otherKey.pem, key.pem] }
+
+  it('parses every --signing-key in order', () => {
+    expect(parseApproveArgv(['x', '--single-use', '--signing-key', 'a.pem', '--signing-key=b.pem', '--detail', 'd'])).toMatchObject({
+      ok: true, signingKeyFrom: 'a.pem', signingKeysFrom: ['a.pem', 'b.pem'],
+    })
+    expect(parseApproveArgv(['x', '--single-use', '--signing-key', 'a.pem', '--detail', 'd'])).not.toHaveProperty('signingKeysFrom')
+  })
+
+  it('asks for the sorted set, and takes a signature from either key', async () => {
+    for (const [signer, id] of [[key.privateKey, key.keyId], [otherKey.privateKey, otherKey.keyId]] as const) {
+      outs = []
+      const rec = setRec()
+      const s = server({ asked: rec, answered: signed(rec, { signer, keyId: id }) })
+      expect(await runApprove(both, io(s.call))).toBe(APPROVE_EXIT.approved)
+      expect(s.calls[0].args).toMatchObject({ single_use: true, signing_key_ids: ids })
+      expect('signing_key_id' in s.calls[0].args).toBe(false)
+    }
+  })
+
+  it('refuses a key outside the set, a widened or narrowed set, and a single-key record', async () => {
+    const stranger = pair()
+    const cases: Array<[string, Rec, Rec]> = [
+      ['signed by a key not pinned', setRec(), { signer: stranger.privateKey, keyId: stranger.keyId }],
+      ['the record widened the set', setRec({ signingKeyIds: [...ids, stranger.keyId].sort() }), {}],
+      ['the envelope widened the set', setRec({ detail: envelope({ signingKeyId: undefined, signingKeyIds: [...ids, stranger.keyId].sort() }) }), {}],
+      ['the record names one key', pendingRec(), {}],
+    ]
+    for (const [, rec, opts] of cases) {
+      const s = server({ asked: setRec(), answered: signed(withDigest(rec), opts) })
+      expect(await runApprove(both, io(s.call))).toBe(APPROVE_EXIT.error)
+      expect(s.names()).not.toContain('approval_consume')
+    }
+    // Asked with one key back, when two were pinned: withdrawn, never waited on.
+    const s = server({ asked: pendingRec(), answered: signed(pendingRec()) })
+    expect(await runApprove(both, io(s.call))).toBe(APPROVE_EXIT.error)
+    expect(s.names()).toEqual(['approval_request', 'approval_cancel'])
+  })
+})
+
 describe('ask now, wait later', () => {
   it('--request-only saves a 0600 token file, prints the id and exits 4', async () => {
     const s = server({ answered: pendingRec() })

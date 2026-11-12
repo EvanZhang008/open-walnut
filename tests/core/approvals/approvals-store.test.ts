@@ -128,7 +128,7 @@ describe('tap approvals', () => {
 describe('biometric approvals and device keys', () => {
   it('the first key is active, Approve needs its signature over this digest, Deny does not', async () => {
     const phone = softKey()
-    const first = await enrollKey({ publicKey: phone.spki, name: 'Test\u2019s iPhone', kind: 'iphone', firstAllowed: true })
+    const first = await enrollKey({ publicKey: phone.spki, name: 'Test\u2019s iPhone', kind: 'iphone', fromDeviceApp: true })
     expect(first.key.status).toBe('active')
     expect(first.enrollment).toBeUndefined()
 
@@ -156,10 +156,10 @@ describe('biometric approvals and device keys', () => {
     expect(denied.status).toBe('denied')
   })
 
-  it('a second key waits until an active key signs its enrollment, and cannot sign for itself', async () => {
+  it('a second key with no device app proof waits until an active key signs its enrollment, and cannot sign for itself', async () => {
     const phone = softKey()
     const mac = softKey()
-    await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', firstAllowed: true })
+    await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
     const second = await enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' })
     expect(second.key.status).toBe('pending')
     const enrollment = second.enrollment!
@@ -178,10 +178,33 @@ describe('biometric approvals and device keys', () => {
     expect((await listKeys()).find((k) => k.id === mac.id)?.status).toBe('active')
   })
 
+  it('a later key from a device app the person set up signs at once, with no ask (2026-11-12)', async () => {
+    const mac = softKey()
+    const phone = softKey()
+    const phone2 = softKey()
+    await enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app', fromDeviceApp: true })
+    // The paired iPhone (its device token): active now, nothing for another device to approve.
+    const second = await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
+    expect(second.key.status).toBe('active')
+    expect(second.enrollment).toBeUndefined()
+    // A second Mac app, with its own proof, too.
+    const thirdMac = softKey()
+    expect((await enrollKey({ publicKey: thirdMac.spki, name: 'Mac 2', kind: 'mac-app', fromDeviceApp: true })).key.status).toBe('active')
+    expect((await listApprovals({ status: 'pending' })).filter((x) => x.enrollsKey)).toHaveLength(0)
+    // A key left pending before (a request with no proof) signs once its app asks again; its ask is withdrawn.
+    const left = await enrollKey({ publicKey: phone2.spki, name: 'Old iPhone', kind: 'iphone' })
+    expect(left.key.status).toBe('pending')
+    const again = await enrollKey({ publicKey: phone2.spki, name: 'Old iPhone', kind: 'iphone', fromDeviceApp: true })
+    expect(again.key.status).toBe('active')
+    expect(again.enrollment).toBeUndefined()
+    expect((await getApproval(left.enrollment!.id))?.status).toBe('canceled')
+    expect((await listKeys()).every((k) => k.status === 'active')).toBe(true)
+  })
+
   it('a denied enrollment drops the pending key', async () => {
     const phone = softKey()
     const mac = softKey()
-    await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', firstAllowed: true })
+    await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
     const second = await enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' })
     const denied = await answerApproval(second.enrollment!.id, { decision: 'deny', device: { name: 'iPhone', kind: 'iphone' } }, lookup)
     await applyKeyApproval(denied)
@@ -191,7 +214,7 @@ describe('biometric approvals and device keys', () => {
   it('the last active key is never removed through Walnut', async () => {
     const phone = softKey()
     const mac = softKey()
-    await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', firstAllowed: true })
+    await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
     await rejects(removeKey(phone.id), 'last_key')
     const second = await enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' })
     await removeKey(mac.id)
@@ -200,7 +223,7 @@ describe('biometric approvals and device keys', () => {
     await rejects(enrollKey({ publicKey: 'AAAA', name: 'x', kind: 'iphone' }), 'bad_key')
   })
 
-  it('the first key comes only from a device app itself (firstAllowed), never from a plain request', async () => {
+  it('the first key comes only from a device app itself (fromDeviceApp), never from a plain request', async () => {
     const agent = softKey()
     await rejects(enrollKey({ publicKey: agent.spki, name: 'Mac', kind: 'mac-app' }), 'first_key_from_phone')
     await rejects(enrollKey({ publicKey: agent.spki, name: 'iPhone', kind: 'iphone' }), 'first_key_from_phone')
@@ -210,7 +233,7 @@ describe('biometric approvals and device keys', () => {
   it('two enrollments of one new key at once make one ask', async () => {
     const phone = softKey()
     const mac = softKey()
-    await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', firstAllowed: true })
+    await enrollKey({ publicKey: phone.spki, name: 'iPhone', kind: 'iphone', fromDeviceApp: true })
     const [a, b] = await Promise.all([
       enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' }),
       enrollKey({ publicKey: mac.spki, name: 'Mac', kind: 'mac-app' }),
@@ -232,7 +255,7 @@ describe('strict single-use approvals', () => {
   const detail = JSON.stringify(fields)
   async function signed() {
     const key = softKey()
-    await enrollKey({ publicKey: key.spki, name: 'Test phone', kind: 'iphone', firstAllowed: true })
+    await enrollKey({ publicKey: key.spki, name: 'Test phone', kind: 'iphone', fromDeviceApp: true })
     const made = await createApproval({ what: 'Allow one Git push?', mode: 'biometric', requester: owner,
       detail, singleUse: true, signingKeyId: key.id, timeoutMs: 300_000 })
     await answerApproval(made.approval.id, { decision: 'approve', device: { name: 'Test phone', kind: 'iphone' },
@@ -264,6 +287,40 @@ describe('strict single-use approvals', () => {
     await rejects(consumeApproval(a.approval.id, { ...a.input, requester: { ...owner, [field]: 'other' } }, lookup), 'wrong_asker')
     await rejects(consumeApproval(a.approval.id, { ...a.input, token: 'wrong' }, lookup), 'bad_token')
     await rejects(consumeApproval(a.approval.id, { ...a.input, digest: '00'.repeat(32) }, lookup), 'changed')
+  })
+
+  it('a set of keys (signingKeyIds): any one of them signs it, no other key, and the set is in the signed envelope', async () => {
+    const mac = softKey()
+    const phone = softKey()
+    const stranger = softKey()
+    for (const [k, kind] of [[mac, 'mac-app'], [phone, 'iphone'], [stranger, 'iphone']] as const) {
+      await enrollKey({ publicKey: k.spki, name: kind, kind, fromDeviceApp: true })
+    }
+    const ids = [mac.id, phone.id].sort()
+    const make = () => createApproval({ what: 'Push one commit?', mode: 'biometric', requester: owner,
+      detail, singleUse: true, signingKeyIds: [phone.id, mac.id, phone.id], timeoutMs: 300_000 })
+    const made = await make()
+    expect(made.approval.signingKeyIds).toEqual(ids)
+    expect(made.approval.signingKeyId).toBeUndefined()
+    const env = JSON.parse(made.approval.detail!)
+    expect(env.signingKeyIds).toEqual(ids)
+    expect(env.signingKeyId).toBeUndefined()
+    // A key outside the set is refused, even an active one.
+    await rejects(answerApproval(made.approval.id, { decision: 'approve', device: { name: 'x', kind: 'iphone' },
+      keyId: stranger.id, signature: stranger.sign(answerMessage(made.approval.digest, 'approve')) }, lookup), 'biometric_required')
+    // The phone signs it; consume spends it once.
+    const ok = await answerApproval(made.approval.id, { decision: 'approve', device: { name: 'x', kind: 'iphone' },
+      keyId: phone.id, signature: phone.sign(answerMessage(made.approval.digest, 'approve')) }, lookup)
+    expect(ok.answer?.keyId).toBe(phone.id)
+    const input = { token: made.waitToken, digest: made.approval.digest, detail, requester: owner }
+    expect((await consumeApproval(made.approval.id, input, lookup)).used).toBe(true)
+    // The Mac signs another one just as well.
+    const two = await make()
+    await answerApproval(two.approval.id, { decision: 'approve', device: { name: 'x', kind: 'mac-app' },
+      keyId: mac.id, signature: mac.sign(answerMessage(two.approval.digest, 'approve')) }, lookup)
+    expect((await consumeApproval(two.approval.id, { ...input, token: two.waitToken, digest: two.approval.digest }, lookup)).used).toBe(true)
+    // A set of one key is not a set.
+    await rejects(createApproval({ what: 'x', mode: 'biometric', requester: owner, detail, singleUse: true, signingKeyIds: [mac.id, mac.id], timeoutMs: 300_000 }), 'bad_request')
   })
 
   it('refuses an approved record after expiry, not just an unanswered one', async () => {
