@@ -53,13 +53,22 @@ jobs:
         with:
           bun-version: 1.4.4
       - name: Download the run's logs and its artifacts under 1 GB
+        id: fetch
         env:
           RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
           d="$RUNNER_TEMP/run"; mkdir -p "$d/artifacts"
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -H "Authorization: Bearer $GH_TOKEN" -o "$d/logs.zip" "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/logs"
           . scripts/lib/gh-retry.sh
+          # A run that started no job (a fork's pull request nobody approved) has no logs:
+          # GitHub answers 404 for them, so there is nothing of it to scan.
+          jobs=$(gh_retry gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?filter=all&per_page=1" --jq .total_count)
+          if [ "$jobs" = 0 ]; then
+            echo "::notice::run $RUN_ID started no job, so it has no logs or artifacts to scan"
+            echo "ran=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -H "Authorization: Bearer $GH_TOKEN" -o "$d/logs.zip" "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/logs"
           gh_retry gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" \
             --jq '.artifacts[] | select(.expired | not) | select(.size_in_bytes < 1073741824) | "\(.id) \(.name)"' |
           while read -r id name; do
@@ -67,6 +76,7 @@ jobs:
           done
           ls -la "$d" "$d/artifacts"
       - name: Scan them (a count only)
+        if: steps.fetch.outputs.ran != '0'
         env:
           LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
         # an artifact .dmg cannot be mounted on Linux; the release-assets job mounts the released one

@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { parse as parseYaml } from 'yaml'
 
@@ -67,6 +68,46 @@ describe('leak-audit.yml', () => {
     // Walnut's own dist in the runtime is scanned; only the packages it carries are left out
     const scan = audit.jobs['release-assets']!.steps!.find((s) => (s.run ?? '').includes('leak-scan.mjs'))!
     expect(scan.run).toContain('--skip-deps')
+  })
+
+  // 2026-11-12 (Leak audit runs 43240007914 and three more): a fork's pull request runs
+  // that started no job have no logs, GitHub answered 404, and the audit failed on them.
+  describe('a watched run that started no job', () => {
+    const fetch = audit.jobs['run-logs']!.steps!.find((s) => (s.run ?? '').includes('/logs"'))! as Step & { id?: string }
+    const scan = audit.jobs['run-logs']!.steps!.find((s) => (s.run ?? '').includes('leak-scan.mjs'))!
+    const runFetch = (jobs: number) => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'leak-fetch-'))
+      const bin = path.join(tmp, 'bin'); fs.mkdirSync(bin)
+      const calls = path.join(tmp, 'calls')
+      // gh answers the job count and lists no artifact; curl records its URL and writes the file
+      fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\necho "gh $*" >> "${calls}"\ncase "$*" in *"/jobs?"*) echo ${jobs} ;; esac\n`, { mode: 0o755 })
+      fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\necho "curl $*" >> "${calls}"\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && : > "$2"; shift; done\n`, { mode: 0o755 })
+      fs.writeFileSync(path.join(bin, 'ls'), '#!/bin/sh\n', { mode: 0o755 })
+      const out = path.join(tmp, 'output'); fs.writeFileSync(out, '')
+      const r = spawnSync('bash', ['-e', '-c', fetch.run!], {
+        cwd: REPO, encoding: 'utf8',
+        env: { PATH: `${bin}:/usr/bin:/bin`, RUNNER_TEMP: tmp, GITHUB_OUTPUT: out, REPO: 'o/r', RUN_ID: '42', GH_TOKEN: 't', GH_RETRY_TRIES: '1' },
+      })
+      const res = { status: r.status, stderr: r.stderr, output: fs.readFileSync(out, 'utf8'), calls: fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '' }
+      fs.rmSync(tmp, { recursive: true, force: true })
+      return res
+    }
+
+    it('asks for no logs and skips the scan', () => {
+      const r = runFetch(0)
+      expect(r.status, r.stderr).toBe(0)
+      expect(r.calls).not.toContain('curl')
+      expect(r.output).toContain('ran=0')
+      expect(fetch.id).toBe('fetch')
+      expect(scan.if).toBe("steps.fetch.outputs.ran != '0'")
+    })
+
+    it('a run with jobs still downloads its logs and is scanned', () => {
+      const r = runFetch(3)
+      expect(r.status, r.stderr).toBe(0)
+      expect(r.calls).toContain('/actions/runs/42/logs')
+      expect(r.output).not.toContain('ran=0')
+    })
   })
 
   it('runs only in the upstream repository, where the secret exists', () => {
