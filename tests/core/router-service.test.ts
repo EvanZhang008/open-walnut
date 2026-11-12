@@ -278,6 +278,37 @@ describe('a route inside one Area', () => {
     expect(await store().get(key)).toMatchObject({ status: 'not_routed' })
   })
 
+  it('a decision only the person can act on sends them one letter with the brief and records it handled', async () => {
+    const f = fakes()
+    const letter = vi.fn(async () => undefined)
+    const d = deps(f, { letter })
+    const key = routerKey(P_ITEM)
+    const decide = () => routeItem({ source: P_ITEM, forUser: true, reason: 'A bill only the person can pay', text: 'Pay the dock fee by Friday.', byTaskId: 'task-p-router' }, d)
+    const first = await decide()
+    expect(first.fresh).toBe(true)
+    expect(first.route).toMatchObject({ status: 'not_routed', reason: 'A bill only the person can pay' })
+    expect(letter).toHaveBeenCalledTimes(1)
+    expect(letter.mock.calls[0]).toEqual(expect.arrayContaining(['personal', expect.objectContaining({ key }), 'Pay the dock fee by Friday.']))
+    // The same decision again is the same row: no second letter.
+    const again = await decide()
+    expect(again.fresh).toBe(false)
+    expect(letter).toHaveBeenCalledTimes(1)
+    expect(f.send).not.toHaveBeenCalled()
+  })
+
+  it('a letter to the person names no target, rule or retry, and needs its brief', async () => {
+    const f = fakes()
+    const letter = vi.fn(async () => undefined)
+    const d = deps(f, { letter })
+    const base = { source: P_ITEM, forUser: true, reason: 'Only the person', text: 'Reply to the dock.' }
+    for (const extra of [{ retry: true }, { taskId: 'task-p-worker' }, { newTaskTitle: 'Dock task' }, { ruleId: 'rule-dock' }]) {
+      await expectRefusal(() => routeItem({ ...base, ...extra }, d), 'bad_decision', 400)
+    }
+    await expectRefusal(() => routeItem({ ...base, text: '  ' }, d), 'text_required', 400)
+    expect(letter).not.toHaveBeenCalled()
+    expect(f.resolve).not.toHaveBeenCalled()
+  })
+
   it('sends once when two callers on two connections route the same item at the same time', async () => {
     const f = fakes()
     const ledgerA = store()

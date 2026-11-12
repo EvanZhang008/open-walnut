@@ -285,7 +285,11 @@ routerV1Router.post('/router/route', async (req: Request, res: Response, next: N
     const areas = await routerAccess(source, callerSid(req));
     const reason = typeof b.reason === 'string' ? b.reason.trim() : '';
     if (!reason || reason.length > 500) throw new RouterError('reason_required', 'Give a routing reason of 1 to 500 characters.');
-    const notRouted = b.not_routed === true;
+    const forUser = b.for_user === true;
+    const notRouted = b.not_routed === true || forUser;
+    if (forUser && (b.task_id !== undefined || b.new_task_title !== undefined || b.rule_id !== undefined)) {
+      throw new RouterError('bad_decision', 'A letter to the person names no target, new work or rule.');
+    }
     let taskId = typeof b.task_id === 'string' ? b.task_id : undefined;
     if (b.rule_id !== undefined && (typeof b.rule_id !== 'string' || !b.rule_id.trim() || b.rule_id.length > 60)) {
       throw new RouterError('bad_rule', 'Name the confirmed rule from router_context.');
@@ -335,6 +339,7 @@ routerV1Router.post('/router/route', async (req: Request, res: Response, next: N
     if (b.approval_id !== undefined) throw new RouterError('bad_handoff', 'An approval is only for its exact existing target.');
     const result = await routeItem({
       source, reason, taskId, notRouted, retry: b.retry === true, callerSid: sid, ...(ruleId ? { ruleId } : {}),
+      ...(forUser ? { forUser: true } : {}),
       ...(typeof b.new_task_title === 'string' ? { newTaskTitle: b.new_task_title } : {}),
       ...(caller?.kind === 'session' && caller.record.taskId ? { byTaskId: caller.record.taskId } : {}),
       ...(typeof b.text === 'string' ? { text: b.text } : {}),

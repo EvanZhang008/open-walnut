@@ -47,6 +47,8 @@ export interface RouteItemInput {
   byTaskId?: string;
   text?: string;
   notRouted?: boolean;
+  /** Only the person can act on it: one inbox letter carries the brief, and the receipt reads not routed. */
+  forUser?: boolean;
   retry?: boolean;
   callerSid?: string;
 }
@@ -72,6 +74,8 @@ export interface RouterDeliveryDeps {
   ensureNewWork?: (request: RouterNewWorkRequest) => Promise<RouterAreasFile>;
   /** How long to wait for the area's route lock; default ROUTE_LOCK_WAIT_MS. */
   routeLockWaitMs?: number;
+  /** Sends the person's letter for a for_user decision; default: one inbox letter per item. */
+  letter?: (areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid?: string) => Promise<void>;
 }
 
 /** The new work's id: the same item in the same area always names the same task. */
@@ -136,6 +140,20 @@ export async function ensureRouterNewWork(request: RouterNewWorkRequest, home = 
     if (!live.taskIds.includes(request.taskId)) live.taskIds.push(request.taskId);
     return current;
   });
+}
+
+/** The router's one letter for an item only the person can act on: who sent it, its subject, why, and what to do. */
+async function routerLetter(areaId: string, item: RouterItem, route: RouterRoute, brief: string, callerSid?: string): Promise<void> {
+  const { sendLetterOnce } = await import('../human-inbox/store.js');
+  const subject = (item.subject || '(no subject)').replace(/\s+/g, ' ').slice(0, 100);
+  const from = (item.sender || 'unknown sender').replace(/\s+/g, ' ').slice(0, 200);
+  await sendLetterOnce({
+    subject: `For you: ${subject}`,
+    type: 'review',
+    markdown: [`**From:** ${from}`, `**Subject:** ${subject}`, '', `**Why it is yours:** ${route.reason}`, '', brief.trim()].join('\n'),
+    ...(route.byTaskId ? { taskRefs: [route.byTaskId] } : {}),
+    sender: { sessionId: callerSid?.trim() || 'external', ...(route.byTaskId ? { taskId: route.byTaskId } : {}) },
+  }, { opKey: `router-letter:${areaId}:${route.key}` });
 }
 
 /** Open work of the item's own area that is neither Main nor a router. */
@@ -245,6 +263,11 @@ async function resolveForRoute(input: RouteItemInput, deps: RouterDeliveryDeps):
  * while this waited is refused, and no claim, send or settle lands after the lock is given back.
  */
 export async function routeItem(input: RouteItemInput, deps: RouterDeliveryDeps = {}): Promise<{ route: RouterRoute; fresh: boolean }> {
+  if (input.forUser) {
+    if (input.retry || input.taskId || input.newTaskTitle || input.ruleId) throw new RouterError('bad_decision', 'A letter to the person names no target, rule or retry.');
+    if (!input.text?.trim()) throw new RouterError('text_required', 'A letter to the person needs its brief: what arrived and what they must do.');
+    input = { ...input, notRouted: true };
+  }
   if (input.notRouted && (input.retry || input.taskId || input.newTaskTitle)) throw new RouterError('bad_decision', 'Not routed cannot name a target or retry delivery.');
   if (!input.reason.trim() || input.reason.length > 500) throw new RouterError('reason_required', 'Every route needs a reason of 1 to 500 characters.');
   if (input.text !== undefined && input.text.length > 20000) throw new RouterError('text_too_large', 'The receiving brief is at most 20000 characters.');
@@ -307,6 +330,8 @@ async function routeItemLocked(input: RouteItemInput, deps: RouterDeliveryDeps, 
   if (!claimed.route) throw new RouterError('route_missing', 'The route disappeared during the retry.', 409);
   if (!claimed.fresh || claimed.route.status === 'not_routed') {
     if (claimed.fresh) await announce(claimed.route, deps);
+    // Once per item (the claim's winner, under a fixed op key): the person reads it in the inbox.
+    if (claimed.fresh && input.forUser) await (deps.letter ?? routerLetter)(area.id, item, claimed.route, input.text!, input.callerSid);
     return { route: claimed.route, fresh: claimed.fresh };
   }
   await announce(claimed.route, deps);
