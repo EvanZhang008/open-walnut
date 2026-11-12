@@ -14702,8 +14702,10 @@ export class SessionRunner {
       const record = await getSessionByClaudeId(sessionId)
       if (!record || record.appliedAppendSystemPrompt !== stored) return stored
       const { freshResumePrompt } = await import('../core/sessions/prompt-refresh.js')
-      // The live runner's facts are newer than the record's (stored at turn ends).
-      const fresh = await freshResumePrompt(record, Date.now(), this.findSessionByClaudeId(sessionId)?.promptCache ?? record.promptCache)
+      // The record's facts: a resume follows the old process's end, so the runner's in-memory
+      // facts are that dead process's and may be newer than an edit or a reap the record holds.
+      // A respawn of a live CLI decides with the live facts itself (respawnOnCurrentPrompt).
+      const fresh = await freshResumePrompt(record, Date.now(), record.promptCache)
       if (!fresh) return stored
       await updateSessionRecord(sessionId, { appliedAppendSystemPrompt: fresh })
       log.session.info('resume: runs on the current prompt (the stored one is behind, and rebuilding costs less than restating it)', {

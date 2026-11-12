@@ -18,7 +18,7 @@
  * be cut: only a live idle CLI on a clean turn end, quiet for QUIET_MS, with no prompt open, no
  * queued message, no quiet turn, no idle compaction armed (its own compaction comes first, and the
  * respawn after it is free), no work that outlives the turn (a background command or subagent, a
- * wakeup, a /loop or CLI cron: a respawn would end it), a task not complete, and for an org node
+ * wakeup or a /loop it armed, outlivingWorkOf: a respawn would end it), a task not complete, and for an org node
  * an org that is on. Any send to the session meanwhile cancels it (that message carries the notice,
  * and the next turn end decides again). Primary only (server.ts). WALNUT_PROMPT_REFRESH=0 turns it
  * off with the cold-resume refresh; WALNUT_PROMPT_REFRESH_RESPAWN=0 turns off only this.
@@ -47,7 +47,7 @@ export interface PromptRefreshRespawnDeps {
   saveSession: (sessionId: string, updates: Partial<SessionRecord>) => Promise<unknown>;
   getTask: (taskId: string) => Promise<Task | null>;
   /** What the live runner knows; `inTurn` null when it holds no runner for the session. */
-  live: (sessionId: string) => { promptCache?: PromptCacheFacts; inTurn: boolean | null; outliving: number; cron: boolean; asking: number };
+  live: (sessionId: string) => { promptCache?: PromptCacheFacts; inTurn: boolean | null; outliving: number; asking: number };
   /** The turn-end status question is waiting for its quiet time or on its way. */
   statusQuestion: (sessionId: string) => boolean;
   /** Rows waiting in Walnut's queue for the session. */
@@ -69,7 +69,6 @@ type RunnerView = {
   promptCacheOf(id: string): PromptCacheFacts | undefined;
   isInTurn(id: string): boolean | null;
   outlivingWorkOf(id: string): readonly string[];
-  isCronArmed(id: string): boolean;
   controlRequestsPendingOf(id: string): number;
   respawnOnCurrentPrompt(id: string, stillWanted: () => boolean): Promise<'respawned' | 'not-due' | 'gave-way'>;
 };
@@ -89,7 +88,6 @@ function defaultDeps(runner: RunnerView, idleArmed: (id: string) => boolean): Pr
       promptCache: runner.promptCacheOf(id),
       inTurn: runner.isInTurn(id),
       outliving: runner.outlivingWorkOf(id).length,
-      cron: runner.isCronArmed(id),
       asking: runner.controlRequestsPendingOf(id),
     }),
     statusQuestion: (id) => statusQuestionPending(id),
@@ -127,7 +125,7 @@ export function respawnSkipReason(input: {
   rec: SessionRecord | null;
   task: Task | null;
   boundary: string;
-  live: { inTurn: boolean | null; outliving: number; cron: boolean; asking: number };
+  live: { inTurn: boolean | null; outliving: number; asking: number };
   /** The turn-end status question has not been answered yet. */
   statusQuestion: boolean;
   queued: number;
@@ -150,7 +148,6 @@ export function respawnSkipReason(input: {
   if (input.orgOff) return 'org-off';
   if (live.inTurn !== false) return live.inTurn === null ? 'no-runner' : 'turn-running';
   if (live.outliving > 0) return 'work-outlives-turn';
-  if (live.cron) return 'cron-armed';
   // A side question in flight (the turn-end status question, a person's /btw) dies with the CLI.
   if (input.statusQuestion || live.asking > 0) return 'asking';
   if (input.quietTurn) return 'quiet-turn';

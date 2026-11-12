@@ -28,7 +28,7 @@ function harness(over: Partial<PromptRefreshRespawnDeps> = {}, rec: SessionRecor
   let current: SessionRecord | null = rec
   const timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = []
   const saved: Array<Partial<SessionRecord>> = []
-  const live = { promptCache: { tokens: 192_036, ttlMs: 3_600_000, requestAt: iso(-30_000), expiresAt: iso(3_570_000) } as SessionRecord['promptCache'], inTurn: false as boolean | null, outliving: 0, cron: false, asking: 0 }
+  const live = { promptCache: { tokens: 192_036, ttlMs: 3_600_000, requestAt: iso(-30_000), expiresAt: iso(3_570_000) } as SessionRecord['promptCache'], inTurn: false as boolean | null, outliving: 0, asking: 0 }
   const deps: PromptRefreshRespawnDeps = {
     now: () => NOW,
     setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t as never },
@@ -168,7 +168,6 @@ describe('nothing is cut by the respawn', () => {
     ['turn-running', (h: ReturnType<typeof harness>) => { h.live.inTurn = true }],
     ['no-runner', (h: ReturnType<typeof harness>) => { h.live.inTurn = null }],
     ['work-outlives-turn', (h: ReturnType<typeof harness>) => { h.live.outliving = 1 }],
-    ['cron-armed', (h: ReturnType<typeof harness>) => { h.live.cron = true }],
   ])('%s: skipped, nothing recorded', async (why, setup) => {
     const h = harness()
     setup(h)
@@ -180,7 +179,7 @@ describe('nothing is cut by the respawn', () => {
 
   it('queued messages, an open prompt, a quiet turn, an armed idle compaction, a completed task, an org that is off: skipped', async () => {
     const base = {
-      rec: record(), task: vpTask, boundary: 'boundary-1', live: { inTurn: false, outliving: 0, cron: false, asking: 0 },
+      rec: record(), task: vpTask, boundary: 'boundary-1', live: { inTurn: false, outliving: 0, asking: 0 },
       queued: 0, quietTurn: false, idleCompactionArmed: false, orgOff: false, statusQuestion: false,
     }
     expect(respawnSkipReason(base)).toBeNull()
@@ -246,7 +245,7 @@ describe('nothing is cut by the respawn', () => {
   it('a context-full recovery compacting holds it', () => {
     expect(respawnSkipReason({
       rec: record({ contextRecovery: { state: 'compacting', at: iso(0), attempts: [] } } as never), task: vpTask, boundary: 'boundary-1',
-      live: { inTurn: false, outliving: 0, cron: false, asking: 0 }, queued: 0, quietTurn: false, idleCompactionArmed: false, orgOff: false, statusQuestion: false,
+      live: { inTurn: false, outliving: 0, asking: 0 }, queued: 0, quietTurn: false, idleCompactionArmed: false, orgOff: false, statusQuestion: false,
     })).toBe('context-recovery')
   })
 
