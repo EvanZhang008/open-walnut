@@ -23,7 +23,7 @@ const SHELLS = ['/bin/sh', '/bin/bash', '/bin/dash', '/usr/bin/dash', '/bin/zsh'
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'typecheck-guard-'))
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }))
 
-/** A `ps -axo pid=,ppid=,etime=,command=` table; the session's CLI is pid 1000. */
+/** A `ps -ax -o pid= -o ppid= -o etime= -o command=` table; the session's CLI is pid 1000. */
 const CLI = '1000     1   01:02:03 claude -p --output-format stream-json --verbose'
 const OTHER_CLI = '2000     1   01:02:03 claude -p --output-format stream-json --verbose'
 const OWN_TSC = [

@@ -118,7 +118,7 @@ function starts(w, j, n,   k, body, segs, ns, s, ww, nw, m) {
 ` + SHELL_SPLIT_AWK
 
 /**
- * Reads `ps -A -ww -o pid=,ppid=,etime=,args=` on stdin (`args` is `command` on
+ * Reads `ps -A -ww -o pid= -o ppid= -o etime= -o args=` on stdin (`args` is `command` on
  * macOS and procps, and the one name busybox has); ROOT is the session's
  * CLI pid, MAX the machine's count ("" or 0: none). Prints the refusal, or
  * nothing.
@@ -164,7 +164,7 @@ export const TYPECHECK_GUARD_COMMAND = [
   '[ ${#in} -le 100000 ] || exit 0',
   `hit=$(printf '%s' "$in" | awk ${shQuoteAwk(COMMAND_AWK)} 2>/dev/null)`,
   '[ "$hit" = 1 ] || exit 0',
-  'if [ -n "$WALNUT_TYPECHECK_PS_FILE" ]; then procs=$(cat "$WALNUT_TYPECHECK_PS_FILE" 2>/dev/null); else procs=$(ps -A -ww -o pid=,ppid=,etime=,args= 2>/dev/null) || procs=$(ps -o pid,ppid,etime,args 2>/dev/null); fi',
+  'if [ -n "$WALNUT_TYPECHECK_PS_FILE" ]; then procs=$(cat "$WALNUT_TYPECHECK_PS_FILE" 2>/dev/null); else procs=$(ps -A -ww -o pid= -o ppid= -o etime= -o args= 2>/dev/null) || procs=$(ps -o pid,ppid,etime,args 2>/dev/null); fi',
   '[ -n "$procs" ] || exit 0',
   'max=$WALNUT_TYPECHECK_MAX',
   'if [ -z "$max" ]; then',
