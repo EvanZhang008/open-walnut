@@ -14,6 +14,7 @@
  * SIGKILLed after each test.
  */
 import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import zlib from 'node:zlib'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import net from 'node:net'
@@ -189,6 +190,28 @@ afterEach(async () => {
 
 for (const twin of TWINS) {
   describe(`a host_exec refused busy is asked again, ${twin.name}`, () => {
+    it('a big answer sent gzipped (gateway-result-gz-v1) reaches the caller whole', async () => {
+      // 2026-11-12: answers to a host's sessions were the top upload on its session link.
+      const port = await boot(twin)
+      const server = await connect(port, 'run-a')
+      const pending = call('task_history', { id: 'mtaskaaa-0001' }, 20_000)
+      expect(await waitFor(() => server.requests.length === 1)).toBe(true)
+      const result = { rows: Array.from({ length: 400 }, (_, i) => ({ i, text: `row ${i} \u4e2d `.repeat(20) })) }
+      const resultGz = zlib.gzipSync(Buffer.from(JSON.stringify(result))).toString('base64')
+      expect(resultGz.length).toBeLessThan(JSON.stringify(result).length / 5)
+      expect((await rpc(server.ws, { cmd: 'gateway-result', relayId: server.requests[0].relayId, resultGz })).ok).toBe(true)
+      const { resp, lines } = await pending
+      expect(resp).toEqual({ ok: true, result })
+      expect(lines).toBe(1)
+      // A resultGz that is not gzipped JSON is refused, and the relay stays open for a real answer.
+      const next = call('task_history', { id: 'mtaskaaa-0002' }, 20_000)
+      expect(await waitFor(() => server.requests.length === 2)).toBe(true)
+      const relayId = server.requests[1].relayId
+      expect((await rpc(server.ws, { cmd: 'gateway-result', relayId, resultGz: 'bm90IGd6aXA=' })).ok).toBe(false)
+      expect((await answer(server.ws, relayId, { ok: 1 })).ok).toBe(true)
+      expect((await next).resp).toEqual({ ok: true, result: { ok: 1 } })
+    })
+
     it('refused busy, then asked again as a new relay a second later: the caller gets the run', async () => {
       const port = await boot(twin)
       const server = await connect(port, 'run-a')

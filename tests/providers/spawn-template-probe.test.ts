@@ -5,16 +5,19 @@
  *
  *   - held: only the probe goes, about 100 bytes;
  *   - not held, or the probe fails: the template goes, naming its hash for the next probe;
- *   - an older daemon (no push-probe-v1) is never asked, and still gets the template.
+ *   - an older daemon (no push-probe-v1) is never asked, and still gets the template;
+ *   - a launch-mode read that failed or ran slow (degraded) builds from the last real read, so
+ *     the hash does not flip with the link's speed (each flip sent the template again).
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants())
 vi.mock('../../src/core/config-manager.js', () => ({ getConfig: async () => ({}) }))
-vi.mock('../../src/providers/claude-launch-mode.js', () => ({ resolveClaudeLaunchMode: async () => ({ mode: 'default', cli: null }) }))
+const launch = vi.hoisted(() => ({ choice: { mode: 'default', cli: 'default' } as Record<string, unknown> }))
+vi.mock('../../src/providers/claude-launch-mode.js', () => ({ resolveClaudeLaunchMode: async () => launch.choice }))
 
-const { pushHostSpawnTemplate, pushRoutineSpawnTemplate } = await import('../../src/providers/spawn-template.js')
+const { pushHostSpawnTemplate, pushRoutineSpawnTemplate, _resetLaunchChoicesForTesting } = await import('../../src/providers/spawn-template.js')
 
 const BASE_CAPS = ['replica-start-v1', 'clock-host-start-v1', 'implicit-mode-v1']
 
@@ -66,5 +69,28 @@ describe('the spawn templates are asked about before they are sent', () => {
     expect(older.sent).toHaveLength(1)
     expect(older.sent[0].probe).toBeUndefined()
     expect(older.sent[0].template).toBeTruthy()
+  })
+
+  it('a degraded launch-mode read builds from the last real read: no flip, nothing sent; another change still goes', async () => {
+    _resetLaunchChoicesForTesting()
+    const real = daemon([...BASE_CAPS, 'push-probe-v1'], (p) => (p.probe ? { ok: true, held: false } : { ok: true }))
+    const held = await pushHostSpawnTemplate(real.host, { ...o, cwd: '/fixture/marina-replica' }) as { hash: string }
+    const routineHash = await pushRoutineSpawnTemplate(real.host, o)
+    launch.choice = { mode: 'default', source: 'engine', degraded: true }
+    try {
+      const slow = daemon([...BASE_CAPS, 'push-probe-v1'], () => ({ ok: true }))
+      expect(await pushHostSpawnTemplate(slow.host, { ...o, cwd: '/fixture/marina-replica', unlessHash: held.hash })).toEqual({ hash: held.hash, sent: false })
+      expect(await pushRoutineSpawnTemplate(slow.host, { ...o, unlessHash: routineHash })).toBe(routineHash)
+      expect(slow.sent).toEqual([])
+      // askBypass turned on meanwhile: the template changed, so it goes.
+      const changed = await pushHostSpawnTemplate(slow.host, { ...o, cwd: '/fixture/marina-replica', bypassAllowed: true, unlessHash: held.hash }) as { hash: string; sent: boolean }
+      expect(changed.sent).toBe(true)
+      expect(changed.hash).not.toBe(held.hash)
+      // No real read yet (a server just started): the safe default goes, better than none.
+      _resetLaunchChoicesForTesting()
+      expect(await pushHostSpawnTemplate(slow.host, { ...o, cwd: '/fixture/marina-replica' })).toMatchObject({ sent: true })
+    } finally {
+      launch.choice = { mode: 'default', cli: 'default' }
+    }
   })
 })

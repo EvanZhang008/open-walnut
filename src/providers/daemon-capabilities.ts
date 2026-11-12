@@ -331,6 +331,11 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // (2026-11-12: each deploy sent them again on the new link, and the relay ended it). A new
   // process holds nothing. Both twins. Optional: without it each server start sends them.
   'push-probe-v1',
+  // 'gateway-result-gz-v1': `gateway-result {relayId, resultGz}` carries a big answer's result
+  // gzipped, base64 (2026-11-12: answers to a host's sessions were the top upload on its
+  // session link, 9 MB in 14 minutes, and the relay on the SSH path ended the link). Both
+  // twins. Optional: without it the server sends `result` as before.
+  'gateway-result-gz-v1',
   // 'host-slice-gz-v1': `host.slice {sliceGz}` carries the copy gzipped, base64 (about a
   // tenth of 1.5 MB). Whole copies were in flight in 74 of 95 deaths of the shared SSH
   // master (2026-10-30/31): a relay on the SSH path drops the link on an upload burst, and

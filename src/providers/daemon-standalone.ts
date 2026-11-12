@@ -5710,9 +5710,19 @@ function relayAttemptEnded(relayId: number): void {
 // So `gateway-result` is on the bridge allowlist, and a bridge answer to a relay
 // it was never sent is refused here.
 function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const { relayId, result, error, errorCode, detail } = cmd as {
-    relayId?: number; result?: Record<string, unknown>; error?: string
+  const { relayId, error, errorCode, detail } = cmd as {
+    relayId?: number; error?: string
     errorCode?: string; detail?: unknown
+  }
+  // gateway-result-gz-v1: a big answer's result comes gzipped. Twin of daemon-source.ts.
+  let result = cmd.result as Record<string, unknown> | undefined
+  if (typeof cmd.resultGz === 'string') {
+    try {
+      // At most the frame cap unpacked: the server sends a bigger answer as an error, never gzipped.
+      result = JSON.parse(zlib.gunzipSync(Buffer.from(cmd.resultGz, 'base64'), { maxOutputLength: 16 * 1024 * 1024 }).toString('utf8')) as Record<string, unknown>
+    } catch (err) {
+      return sendError(ws, id, 'gateway-result: resultGz is not gzipped JSON: ' + (err as Error).message)
+    }
   }
   const pending = typeof relayId === 'number' ? gatewayRelayPending.get(relayId) : undefined
   if (pending && ((ws.data?.origin === 'bridge') !== (pending.via === 'bridge') || (pending.bridge && pending.bridge !== ws))) {

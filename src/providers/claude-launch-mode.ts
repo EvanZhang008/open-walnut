@@ -10,6 +10,14 @@ export interface ClaudeLaunchMode {
   source: 'settings' | 'fallback' | 'engine'
   /** Only the fallback needs a flag. Settings and managed policy stay engine-owned. */
   cli?: string
+  /**
+   * The settings could not be read (a failed or slow read through the host's daemon): this
+   * is the safe default, not what the host says. A spawn template built from it differs
+   * from one built from a real read, so a push must not replace a template on its account
+   * (2026-11-12: the template's hash flipped with the link's speed, and each flip sent its
+   * 110 to 220 KB again on the session link).
+   */
+  degraded?: true
 }
 
 export function selectClaudeLaunchMode(view: EngineSettingsView | null, version?: string): ClaudeLaunchMode {
@@ -60,12 +68,14 @@ export async function resolveClaudeLaunchMode(host = '__local__', cwd?: string):
     const version = host === '__local__'
       ? (await (await import('../core/hosts/local-readiness.js')).refreshLocalClaude({ maxAgeMs: 60_000 }))?.claude.version
       : (await import('../core/hosts/host-readiness.js')).getHostReadiness(host)?.claude.version
-    return selectClaudeLaunchMode(view, version ?? undefined)
+    // An engine version not known yet (a host whose readiness has not come in since this
+    // server started) gives the safe default, not the host's answer.
+    return version ? selectClaudeLaunchMode(view, version) : { ...selectClaudeLaunchMode(view, undefined), degraded: true }
   }
   try {
     return await Promise.race([
-      read().catch(() => ({ mode: 'default', source: 'engine' } as const)),
-      new Promise<ClaudeLaunchMode>(resolve => { timer = setTimeout(() => resolve({ mode: 'default', source: 'engine' }), 4000) }),
+      read().catch((): ClaudeLaunchMode => ({ mode: 'default', source: 'engine', degraded: true })),
+      new Promise<ClaudeLaunchMode>(resolve => { timer = setTimeout(() => resolve({ mode: 'default', source: 'engine', degraded: true }), 4000) }),
     ])
   } finally { clearTimeout(timer) }
 }

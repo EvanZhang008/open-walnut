@@ -16,6 +16,7 @@ import { walnutCoordinationAllowRules } from './claude-walnut-allow.js'
  * reaches the host's gateway socket, which the daemon sets in the spawn env.
  */
 
+import type { ClaudeLaunchMode } from './claude-launch-mode.js'
 import type { AgentTools, EffortRules, SpawnTemplate } from './host-start-core.js'
 import { sessionSettingsHooks } from './session-settings-hooks.js'
 import { hookArgsFor } from './hook-files.js'
@@ -159,6 +160,25 @@ export function buildRoutineSpawnTemplate(i: Omit<SpawnTemplateInputs, 'cwd' | '
   return { ...buildHostSpawnTemplate({ ...i, cwd: '' }), ...hostRoutineModes(i.defaultMode), agents: {} }
 }
 
+/** The last launch-mode choice a real read gave, per host and folder. */
+const lastRealLaunchChoice = new Map<string, ClaudeLaunchMode>()
+
+/**
+ * The launch mode a template is built from. A read that failed or ran slow (degraded) gives
+ * the safe default, not what the host says: it builds from the last real read instead, so the
+ * template's hash does not flip with the link's speed (2026-11-12: each flip sent its 110 to
+ * 220 KB again on the session link). Every other input is read as usual, so a setting changed
+ * meanwhile (askBypass, the agents' tools) still goes out.
+ */
+function launchChoice(hostKey: string, cwd: string, choice: ClaudeLaunchMode): ClaudeLaunchMode {
+  const key = JSON.stringify([hostKey, cwd])
+  if (!choice.degraded) { lastRealLaunchChoice.set(key, choice); return choice }
+  return lastRealLaunchChoice.get(key) ?? choice
+}
+
+/** Tests only: forget the real reads. */
+export function _resetLaunchChoicesForTesting(): void { lastRealLaunchChoice.clear() }
+
 /**
  * Whether the daemon process already holds this template (push-probe-v1): this server
  * restarted, so it does not know, and asks in about 100 bytes instead of sending about 200 KB
@@ -192,7 +212,7 @@ export async function pushRoutineSpawnTemplate(
   if (!host.hasCapability('replica-start-v1') || !host.hasCapability('clock-host-start-v1') || !host.hasCapability('implicit-mode-v1')) return null
   const [{ getConfig }, { createHash }] = await Promise.all([import('../core/config-manager.js'), import('node:crypto')])
   const config = await getConfig()
-  const choice = await (await import('./claude-launch-mode.js')).resolveClaudeLaunchMode(o.hostKey)
+  const choice = launchChoice(o.hostKey, '', await (await import('./claude-launch-mode.js')).resolveClaudeLaunchMode(o.hostKey))
   const defaultMode = choice.mode
   const template = buildRoutineSpawnTemplate({
     defaultMode, implicitModeCli: choice.cli ?? null, home: o.home, hostKey: o.hostKey,
@@ -224,7 +244,7 @@ export async function pushHostSpawnTemplate(
   if (!host.hasCapability('replica-start-v1') || !host.hasCapability('implicit-mode-v1')) return false
   const [{ getConfig }, { createHash }] = await Promise.all([import('../core/config-manager.js'), import('node:crypto')])
   const config = await getConfig()
-  const choice = await (await import('./claude-launch-mode.js')).resolveClaudeLaunchMode(o.hostKey, o.cwd)
+  const choice = launchChoice(o.hostKey, o.cwd, await (await import('./claude-launch-mode.js')).resolveClaudeLaunchMode(o.hostKey, o.cwd))
   const defaultMode = choice.mode
   const template = buildHostSpawnTemplate({
     defaultMode, implicitModeCli: choice.mode === 'bypass' && o.bypassAllowed !== true ? 'default' : choice.cli ?? null,

@@ -6932,6 +6932,15 @@ function relayAttemptEnded(relayId) {
 // (twin of daemon-standalone.ts).
 function cmdGatewayResult(ws, id, cmd) {
   var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorCode = cmd.errorCode, detail = cmd.detail;
+  // gateway-result-gz-v1: a big answer's result comes gzipped. Twin of daemon-standalone.ts.
+  if (typeof cmd.resultGz === 'string') {
+    try {
+      // At most the frame cap unpacked: the server sends a bigger answer as an error, never gzipped.
+      result = JSON.parse(zlib.gunzipSync(Buffer.from(cmd.resultGz, 'base64'), { maxOutputLength: 16 * 1024 * 1024 }).toString('utf8'));
+    } catch (err) {
+      return sendError(ws, id, 'gateway-result: resultGz is not gzipped JSON: ' + err.message);
+    }
+  }
   var pending = typeof relayId === 'number' ? gatewayRelayPending.get(relayId) : undefined;
   if (pending && ((ws.origin === 'bridge') !== (pending.via === 'bridge') || (pending.bridge && pending.bridge !== ws))) {
     logMsg('warn', 'gateway: result from a socket the relay was not sent to', { relayId: relayId, fromBridge: ws.origin === 'bridge' });

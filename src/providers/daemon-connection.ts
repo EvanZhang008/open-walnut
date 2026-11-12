@@ -3147,7 +3147,7 @@ export class DaemonConnection {
       // Taken only when the daemon says ok (a refusal resolves too).
       let ack: { ok?: unknown } | undefined
       try {
-        ack = await this.send('gateway-result', reply) as { ok?: unknown } | undefined
+        ack = await this.send('gateway-result', await this.packGatewayResult(reply)) as { ok?: unknown } | undefined
       } catch (err) {
         if (!(err instanceof DaemonFrameTooLargeError)) throw err
         // Sent, it would close the link and come back asked again on the next one, forever:
@@ -3169,6 +3169,26 @@ export class DaemonConnection {
       clearTimeout(watch)
     }
   }
+
+  /**
+   * A big answer's result goes gzipped where the daemon reads it (gateway-result-gz-v1):
+   * answers to a host's sessions were the top upload on its session link (2026-11-12:
+   * 9 MB in 14 minutes, and the relay on the SSH path ended the link). Compressed off the
+   * event loop; a small answer goes as it is.
+   */
+  private async packGatewayResult(reply: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const result = reply.result
+    if (!result || typeof result !== 'object' || !this.hasCapability('gateway-result-gz-v1')) return reply
+    const json = JSON.stringify(result)
+    // Over the frame cap plain, it still gets the small "too large" answer (send throws), never
+    // a few MB of gzip on the link, nor tens of MB to unpack on the host's daemon.
+    if (json.length < DaemonConnection.GATEWAY_RESULT_GZ_BYTES || json.length > DAEMON_FRAME_MAX_BYTES) return reply
+    const { result: _plain, ...rest } = reply
+    return { ...rest, resultGz: (await gzipAsync(Buffer.from(json))).toString('base64') }
+  }
+
+  /** A gateway answer's result this big or bigger goes gzipped. */
+  static GATEWAY_RESULT_GZ_BYTES = 16 * 1024
 
   /** An answer unacked this long starts checkUpstream. */
   static UPSTREAM_CHECK_MS = 8_000
