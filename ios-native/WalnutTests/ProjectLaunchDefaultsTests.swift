@@ -118,9 +118,9 @@ final class ProjectLaunchDefaultsTests: XCTestCase {
     func testUnknownModelIdIsShownByItsIdAndStaysChecked() {
         XCTAssertEqual(NewSessionChatView.modelLabel("claude-sonnet-4-6"), "claude-sonnet-4-6")
         XCTAssertEqual(NewSessionChatView.modelLabel(nil), "Default model")
-        let items = NewSessionChatView.modelMenu(selected: "claude-sonnet-4-6").sections.flatMap(\.items)
+        let items = NewSessionChatView.modelMenu(selected: "claude-sonnet-4-6").sections[0].items
         XCTAssertEqual(items.filter(\.checked).map(\.title), ["claude-sonnet-4-6"])
-        XCTAssertEqual(NewSessionChatView.modelMenu(selected: "opus").sections.flatMap(\.items).count, 4,
+        XCTAssertEqual(NewSessionChatView.modelMenu(selected: "opus").sections[0].items.count, 4,
                        "a known alias adds no row")
     }
 

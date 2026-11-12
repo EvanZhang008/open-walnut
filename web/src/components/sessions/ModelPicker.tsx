@@ -281,9 +281,14 @@ interface ModelPickerProps {
    *  turn uses the new model. No Now/Next-turn split needed anymore. */
   onSwitch: (model: string) => void;
   /** Switch reasoning effort (same live apply_flag_settings mechanism).
-   *  Omitted → the effort section is hidden (a DRAFT has no effort field:
-   *  the CLI's own settings decide at spawn). */
+   *  Omitted → the effort section is hidden. */
   onEffortSwitch?: (effort: SessionEffort) => void;
+  /** A surface whose session does not exist yet (a draft): the Effort column leads with a
+   *  "Default" row (no --effort at spawn, the CLI's own settings decide), ticked while
+   *  `currentEffort` is undefined, and a level is ticked only when it was picked. */
+  onEffortDefault?: () => void;
+  /** What the Default row means on this surface (its tooltip). */
+  effortDefaultTitle?: string;
   onClose: () => void;
   /** The anchor pill left the page (a re-layout): defaults to onClose. */
   onAnchorLost?: () => void;
@@ -342,7 +347,7 @@ interface ModelPickerProps {
 const lastLiveSettings = new Map<string, SessionLiveSettings>();
 
 export function ModelPicker({
-  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose, onAnchorLost, switchNote, sourceNote, speedReadout,
+  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onEffortDefault, effortDefaultTitle, onClose, onAnchorLost, switchNote, sourceNote, speedReadout,
   engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow, acpCurrentNote,
   anchorRef, acpLive, acpEffortControl, onAcpEffortControl, acpContext,
 }: ModelPickerProps) {
@@ -568,10 +573,13 @@ export function ModelPicker({
   // Effort is a capability of the ACTIVE model. The catalog row (CLI truth) wins
   // when it carries capability fields; otherwise fall back to the static
   // substring-based tables (which already understand full provider IDs).
-  const capabilityModel = liveModel;
-  const rowLevels = activeRow?.supportedEffortLevels;
-  const effortSupported = activeRow?.supportsEffort !== undefined
-    ? activeRow.supportsEffort
+  // A draft on Auto has no model yet: its levels are those of the model Auto starts (the
+  // catalog's 'default' row), never the unknown-model guess that greys X-High and Max.
+  const capabilityRow = activeRow ?? (onEffortDefault && !liveModel ? models.find((m) => m.value === 'default') : undefined);
+  const capabilityModel = liveModel ?? capabilityRow?.resolvedModel;
+  const rowLevels = capabilityRow?.supportedEffortLevels;
+  const effortSupported = capabilityRow?.supportsEffort !== undefined
+    ? capabilityRow.supportsEffort
     : rowLevels !== undefined ? rowLevels.length > 0 : modelSupportsEffort(capabilityModel);
   const xhighSupported = rowLevels !== undefined ? rowLevels.includes('xhigh') : modelSupportsXhighEffort(capabilityModel);
   const maxSupported = rowLevels !== undefined ? rowLevels.includes('max') : modelSupportsMaxEffort(capabilityModel);
@@ -1238,14 +1246,28 @@ export function ModelPicker({
         {onEffortSwitch && (
           <div className="model-picker-col model-picker-col-effort" role="listbox" aria-label="Reasoning effort">
             <div className="model-picker-col-title">Effort</div>
+            {onEffortDefault && (
+              <button
+                type="button"
+                className={`model-picker-row${currentEffort === undefined ? ' model-picker-row-active' : ''}`}
+                role="option"
+                aria-selected={currentEffort === undefined}
+                data-effort="default"
+                title={effortDefaultTitle ?? 'No --effort at start: Claude Code\'s own settings decide'}
+                onClick={() => { if (currentEffort !== undefined) onEffortDefault(); }}
+              >
+                <span className="model-picker-row-check" aria-hidden>{currentEffort === undefined ? '✓' : ''}</span>
+                <span className="model-picker-row-name">Default</span>
+              </button>
+            )}
             {EFFORTS.map((e) => {
               const disabled = !effortSupported
                 || (e.id === 'xhigh' && !xhighSupported)
                 || (e.id === 'max' && !maxSupported);
-              const active = effortSupported && e.id === activeEffort;
+              const active = effortSupported && (onEffortDefault ? e.id === currentEffort : e.id === activeEffort);
               const requestedNotApplied = effortMismatch && e.id === requestedEffort;
               const title = !effortSupported
-                ? `Not supported by ${activeRow ? catalogRowLabel(activeRow) : shortModelLabel(liveModel)}`
+                ? `Not supported by ${capabilityRow ? catalogRowLabel(capabilityRow) : shortModelLabel(liveModel)}`
                 : e.id === 'xhigh' && !xhighSupported
                 ? 'X-High needs Fable 5 / Opus 4.7+ / Sonnet 5'
                 : e.id === 'max' && !maxSupported
@@ -1262,7 +1284,8 @@ export function ModelPicker({
                   aria-selected={active}
                   disabled={disabled}
                   title={title}
-                  onClick={() => { if (!disabled && e.id !== activeEffort) onEffortSwitch(e.id); }}
+                  data-effort={e.id}
+                  onClick={() => { if (!disabled && !active) onEffortSwitch(e.id); }}
                 >
                   <span className="model-picker-row-check" aria-hidden>{active ? '✓' : ''}</span>
                   <span className="model-picker-row-name">{e.label}{requestedNotApplied ? ' ⚠' : ''}</span>

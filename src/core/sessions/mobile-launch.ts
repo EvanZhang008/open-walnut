@@ -21,8 +21,8 @@ import { getConfig } from '../config-manager.js';
 import { getFrequentDirs, scoreFrequentDir } from '../frequent-dirs.js';
 import { quickStartSession, QuickStartError } from './quick-start.js';
 import { mobileWorkspacePlace } from '../workspaces/launch.js';
-import { resolveModelSwitchValue, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
-import type { SessionEngine, SessionMode } from '../types.js';
+import { resolveModelSwitchValue, VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
+import type { SessionEffort, SessionEngine, SessionMode } from '../types.js';
 import { DEFAULT_ENGINE, engineCaps, isAcpEngine, normalizeEngine, resolveEngine } from '../agents/engine-registry.js';
 import {
   ASK_HOST_REFUSAL,
@@ -60,6 +60,8 @@ export interface MobileLaunchInput {
   project?: string;
   model?: string;
   mode?: string;
+  /** Reasoning effort picked on the draft; absent = Claude Code's own setting. */
+  effort?: SessionEffort;
   engine?: SessionEngine;
   /** "Start anyway": skip an overridable readiness refusal (claude_outdated / claude_not_logged_in). */
   overrideReadiness?: boolean;
@@ -101,7 +103,7 @@ export function launchErrorCode(status: number): string {
  */
 function validateLaunchBody(body: unknown): MobileLaunchInput {
   const {
-    cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode, overrideReadiness,
+    cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode, effort, overrideReadiness,
     walnutAgent, agentId, voice, sync, sessionIdOptional, engine,
   } = (body ?? {}) as {
     cwd?: unknown;
@@ -112,6 +114,7 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     project?: unknown;
     model?: unknown;
     mode?: unknown;
+    effort?: unknown;
     overrideReadiness?: unknown;
     walnutAgent?: unknown;
     agentId?: unknown;
@@ -197,6 +200,9 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
   if (mode !== undefined && (typeof mode !== 'string' || !VALID_LAUNCH_MODES.has(mode))) {
     throw new QuickStartError(`Invalid mode: ${String(mode)}. Must be one of: ${[...VALID_LAUNCH_MODES].join(', ')}`, 400);
   }
+  if (effort !== undefined && effort !== null && (typeof effort !== 'string' || !VALID_SESSION_EFFORT_IDS.has(effort))) {
+    throw new QuickStartError(`Invalid effort: ${String(effort)}. Must be one of: ${[...VALID_SESSION_EFFORT_IDS].join(', ')}`, 400);
+  }
 
   return {
     cwd: isAsk ? '' : cwd as string, host, message: msg,
@@ -205,6 +211,7 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     project: typeof project === 'string' ? project.trim() : undefined,
     model,
     mode: typeof mode === 'string' ? mode : undefined,
+    ...(typeof effort === 'string' ? { effort: effort as SessionEffort } : {}),
     ...(overrideReadiness === true ? { overrideReadiness: true } : {}),
     ...(isAsk ? { walnutAgent: true as const } : {}),
     ...(isAsk && typeof agentId === 'string' ? { agentId: agentId.trim() } : {}),
@@ -347,6 +354,7 @@ export async function performMobileLaunch(
     host: wsPlace ? wsPlace.host : input.host,
     model: ask ? ask.model : pick?.model ?? input.model,
     mode: pick?.mode ?? input.mode,
+    ...(input.effort ? { effort: input.effort } : {}),
     ...(opts.callerSid ? { callerSid: opts.callerSid, ...(input.mode ? {} : { modeImplied: true }) } : {}),
     existingTaskId: input.taskId,
     taskTitle: input.taskTitle,

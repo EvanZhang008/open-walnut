@@ -19,7 +19,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import type { WorkingDirEntry } from '@/api/sessions';
-import type { SessionMode, TaskPriority } from '@open-walnut/core';
+import type { SessionEffort, SessionMode, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import type { LaunchEngine, LaunchMemory } from '@/utils/engines';
 import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, liveListingPrefix, HOME_LISTING_DIR, type InputState } from './path-selector/input-model';
@@ -71,6 +71,10 @@ export interface QuickStartTaskMeta {
    *  about THIS task, so a folder pick never rewrites it and picking one never
    *  switches that memory off. */
   mode?: SessionMode;
+  /** Reasoning effort the session spawns at (the picker's Effort column). undefined = no
+   *  --effort, so Claude Code's own settings decide. Claude Code only; like the mode it is a
+   *  choice about THIS task, never part of a folder's launch memory. */
+  effort?: SessionEffort;
   /** Task dates (ISO strings), same trio as the Quick Task form — a launch IS a
    *  task create, so it carries the same fields. Optional (unlike the controls
    *  above): they render as DatePicker pills, not controlled inputs. */

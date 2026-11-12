@@ -301,12 +301,12 @@ struct WalnutAPI {
     /// (`DraftLaunchDefaults.awaitSession`). An older server always answers with an id.
     func launchSession(
         cwd: String, host: String? = nil, message: String = "",
-        taskId: String? = nil, mode: String? = nil, model: String? = nil,
+        taskId: String? = nil, mode: String? = nil, model: String? = nil, effort: String? = nil,
         project: String? = nil, syncToProject: Bool = false, namesClaude: Bool = false
     ) async throws -> SessionLaunched {
         var body = Self.createSessionBody(
             cwd: cwd, host: host, message: message,
-            taskId: taskId, mode: mode, model: model, project: project,
+            taskId: taskId, mode: mode, model: model, effort: effort, project: project,
             syncToProject: syncToProject, namesClaude: namesClaude
         )
         body.sessionIdOptional = true
@@ -331,13 +331,16 @@ struct WalnutAPI {
         /// "claude": the draft's model (or its "Default") is its own pick over the project's
         /// default engine and model. Absent lets the project's defaults apply.
         var engine: String? = nil
+        /// Reasoning effort picked on the draft (low ... max), passed to Claude Code as --effort.
+        /// Absent: Claude Code's own setting decides (and an older server ignores the field).
+        var effort: String? = nil
         /// true: this client opens a launch answered without a session id (`launchSession`).
         var sessionIdOptional: Bool? = nil
     }
 
     static func createSessionBody(
         cwd: String, host: String?, message: String,
-        taskId: String?, mode: String?, model: String?, project: String? = nil,
+        taskId: String?, mode: String?, model: String?, effort: String? = nil, project: String? = nil,
         syncToProject: Bool = false, namesClaude: Bool = false
     ) -> CreateSessionBody {
         let filed = taskId != nil || (project?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
@@ -358,7 +361,8 @@ struct WalnutAPI {
             project: filed,
             // Only for a task the launch creates in a project: an existing task's source is decided.
             sync: syncToProject && filed != nil ? "project" : nil,
-            engine: namesClaude ? "claude" : nil
+            engine: namesClaude ? "claude" : nil,
+            effort: (effort?.isEmpty ?? true) ? nil : effort
         )
     }
 

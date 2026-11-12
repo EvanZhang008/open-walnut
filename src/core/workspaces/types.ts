@@ -34,7 +34,7 @@ export interface WorkspacePendingStart {
   messagePrefix?: string
   model?: string
   mode?: string
-  /** Reasoning effort (task-start only; an older Walnut replaying the start ignores it). */
+  /** Reasoning effort (an older Walnut replaying the start ignores it). */
   effort?: string
   engine?: string
   /** The engine was decided at the click (the project's default or a pick, Claude Code included):

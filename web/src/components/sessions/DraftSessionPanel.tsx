@@ -55,7 +55,7 @@ import { useModelOptions } from './path-selector/model-options';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { useClaudeLaunchMode } from '@/hooks/useClaudeLaunchMode';
 import { nextSessionMode } from './session-mode-cycle';
-import { DEFAULT_SESSION_MODE, SESSION_MODES, SESSION_MODE_LABELS, type SessionEngine, type SessionMode } from '@open-walnut/core';
+import { DEFAULT_SESSION_MODE, SESSION_EFFORTS, SESSION_MODES, modelSupportsEffort, modelSupportsMaxEffort, modelSupportsXhighEffort, SESSION_MODE_LABELS, type SessionEffort, type SessionEngine, type SessionMode } from '@open-walnut/core';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useHostEngineAvailability } from '@/hooks/useHostEngineAvailability';
 import {
@@ -159,6 +159,16 @@ const PARSE_MAX_CHARS = 500;
  *  probe warm-up per target is plenty; the server holds the real cache. */
 const prefetchedEngineCatalogs = new Set<string>();
 
+/** The picked effort kept across a model pick only while that model takes it; Auto keeps it
+ *  (the CLI lowers a level its default model lacks). */
+function effortFor(model: string, effort: SessionEffort | undefined): SessionEffort | undefined {
+  if (!effort || !model || model === 'default') return effort;
+  if (!modelSupportsEffort(model)) return undefined;
+  if (effort === 'xhigh' && !modelSupportsXhighEffort(model)) return undefined;
+  if (effort === 'max' && !modelSupportsMaxEffort(model)) return undefined;
+  return effort;
+}
+
 /**
  * DraftModelPill — the draft composer's model control: a pill (same classes as
  * a real session's model pill) opening the SHARED two-pane picker
@@ -243,6 +253,16 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
   const runsAuto = isAuto || !!fallbackLabel;
   const pickerEngine = viewing ?? engine;
   const pickerAcp = engineEntry(catalog, pickerEngine).capabilities.modelCatalog === 'provider-advertised';
+  // Reasoning effort is a Claude Code spawn flag (--effort): offered while the draft launches on
+  // it, and shown on the pill once picked. No pick = no flag, so the CLI's own settings decide.
+  // A fork keeps its source session's settings (the fork route takes no effort).
+  const effortOffered = !fork && !viewing && !fallbackLabel && !pickerAcp && engine === 'claude';
+  const pickedEffort = effortOffered ? meta.effort : undefined;
+  const pickEffort = (effort: SessionEffort | undefined) => {
+    setOpen(false);
+    backToComposer();
+    onMetaChange((m) => ({ ...m, effort }));
+  };
   // A pick or Escape hands the caret back to the draft's composer, so the next key types the prompt
   // (it stayed on the pill). A close that put focus somewhere else (a click on another field) keeps it.
   // It runs in the event that closes the menu, never a frame later: on a busy main thread a frame
@@ -263,6 +283,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
           ? `${entry.displayName} (via ACP) — session model: ${meta.model ? acpPillLabel : `${entry.displayName} default`}. Click to switch model / provider.`
           : `Session model: ${selectedLabel} — click to switch model / provider`}
         data-model={meta.model ?? ''}
+        data-effort={pickedEffort ?? ''}
         onClick={(e) => {
           pillRef.current = e.currentTarget;
           setFallbackView(fallbackLabel && fallbackEngine && fallbackEngine !== engine ? fallbackEngine : null);
@@ -270,6 +291,11 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
         }}
       >
         {fallbackLabel ?? (acpModels ? acpPillLabel : selectedLabel)}
+        {pickedEffort && (
+          <span className="session-detail-effort-badge" title={`Reasoning effort: ${pickedEffort} (the session starts with --effort ${pickedEffort})`}>
+            {' · '}{SESSION_EFFORTS.find((e) => e.id === pickedEffort)?.label ?? pickedEffort}
+          </span>
+        )}
       </button>
       {open && (
         <ModelPicker
@@ -286,9 +312,19 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
             // walnut mode it is the sentinel 'default': the launch memory is
             // applied server-side to a launch that names NO model, so a
             // hand-picked Auto must be spelled out or it could never win.
-            onMetaChange((m) => ({ ...m, model: model || (walnut ? 'default' : undefined) }));
+            onMetaChange((m) => ({ ...m, model: model || (walnut ? 'default' : undefined), effort: effortFor(model, m.effort) }));
           }}
           onClose={() => { setOpen(false); backToComposer(); }}
+          {...(effortOffered ? {
+            currentEffort: meta.effort,
+            onEffortSwitch: (effort: SessionEffort) => pickEffort(effort),
+            // A draft has no session to read a level from: "Default" is the honest no-pick row.
+            onEffortDefault: () => pickEffort(undefined),
+            // Ask Walnut's launch without a level takes its remembered one (else medium), not the CLI's.
+            effortDefaultTitle: walnut
+              ? 'No level picked here: the quick question starts at the level its last one used (medium the first time)'
+              : 'No --effort at start: Walnut\'s session effort setting when set, else Claude Code\'s own settings decide',
+          } : {})}
           // A draft can still change provider — flipping clears the model: the
           // catalogs don't overlap, and an ACP engine has no pre-start rows.
           onProviderSwitch={(provider) => {
@@ -296,7 +332,8 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
             if (viewing && resolveEngine(provider) === engine) { setFallbackView(null); return; }
             if (viewing && resolveEngine(provider) === viewing) return;
             setFallbackView(null);
-            onMetaChange((m) => ({ ...m, engine: normalizeEngine(provider), model: undefined }));
+            // The effort goes with it: a Claude Code flag, and another engine carries its own.
+            onMetaChange((m) => ({ ...m, engine: normalizeEngine(provider), model: undefined, effort: undefined }));
           }}
           providerLockReason={(provider) => (fork && provider !== engine
             ? 'A fork keeps the source session provider'
@@ -314,7 +351,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
             // A model picked on the fallback's tab is the user's own launch on that engine; its
             // default row is what Auto already runs.
             if (viewing) {
-              if (modelId && modelId !== fallbackModel) onMetaChange((m) => ({ ...m, engine: normalizeEngine(viewing), model: modelId }));
+              if (modelId && modelId !== fallbackModel) onMetaChange((m) => ({ ...m, engine: normalizeEngine(viewing), model: modelId, effort: undefined }));
               return;
             }
             onMetaChange((m) => ({ ...m, model: modelId || undefined }));

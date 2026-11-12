@@ -14,12 +14,24 @@ final class NewSessionLaunchBodyTests: XCTestCase {
     private func body(
         cwd: String = "/Users/x/walnut", host: String? = nil, message: String = "hi",
         taskId: String? = nil, mode: String? = nil, model: String? = nil,
-        project: String? = nil
+        effort: String? = nil, project: String? = nil
     ) -> WalnutAPI.CreateSessionBody {
         WalnutAPI.createSessionBody(
             cwd: cwd, host: host, message: message, taskId: taskId, mode: mode, model: model,
-            project: project
+            effort: effort, project: project
         )
+    }
+
+    // MARK: - effort
+
+    /// A picked level rides as `effort`; Default (nil or "") sends no field, so Claude Code's
+    /// own setting decides and an older server behaves as before.
+    func testEffortRidesOnlyWhenPicked() throws {
+        XCTAssertEqual(body(effort: "xhigh").effort, "xhigh")
+        XCTAssertNil(body(effort: nil).effort)
+        XCTAssertNil(body(effort: "").effort)
+        let json = try XCTUnwrap(String(data: JSONEncoder().encode(body()), encoding: .utf8))
+        XCTAssertFalse(json.contains("effort"), "no effort key on the wire without a pick: \(json)")
     }
 
     // MARK: - cwd + host
@@ -185,10 +197,21 @@ final class NewSessionLaunchBodyTests: XCTestCase {
         XCTAssertEqual(items.map(\.title), ["Default", "Opus", "Sonnet", "Haiku"])
         XCTAssertEqual(items.map(\.choice), [.model(""), .model("opus"), .model("sonnet"), .model("haiku")])
         XCTAssertEqual(items.filter(\.checked).map(\.title), ["Default"])
-        XCTAssertEqual(menu.sections.map(\.title), ["Model: Default"], "headed by the pick, like the live pill")
+        XCTAssertEqual(menu.sections.map(\.title), ["Model: Default", "Effort"], "headed by the pick, like the live pill")
 
-        let picked = NewSessionChatView.modelMenu(selected: "sonnet").sections.flatMap(\.items)
+        let picked = NewSessionChatView.modelMenu(selected: "sonnet").sections[0].items
         XCTAssertEqual(picked.filter(\.checked).map(\.title), ["Sonnet"], "exactly one row is checked")
+    }
+
+    /// The effort section: Default (the empty level, which the pick maps back to no
+    /// --effort), then every level, the pick checked and named in the heading.
+    func testDraftMenuOffersEffortDefaultThenEveryLevel() {
+        let none = NewSessionChatView.modelMenu(selected: nil).sections[1]
+        XCTAssertEqual(none.items.map(\.choice), [.effort(""), .effort("low"), .effort("medium"), .effort("high"), .effort("xhigh"), .effort("max")])
+        XCTAssertEqual(none.items.filter(\.checked).map(\.title), ["Default"])
+        let picked = NewSessionChatView.modelMenu(selected: "opus", effort: "max").sections[1]
+        XCTAssertEqual(picked.items.filter(\.checked).map(\.title), ["Max"])
+        XCTAssertEqual(picked.title, "Effort: Max")
     }
 
     /// The mode menu lists every mode the launch can carry, by its wire spelling,

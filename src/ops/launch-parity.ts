@@ -25,6 +25,7 @@ export const LAUNCH_PARITY: Readonly<Record<string, ParityEntry>> = {
   host: { op: ['task_create.host', 'task_start.host'] },
   model: { op: ['task_create.model', 'task_start.model'], note: 'an ACP engine\'s effort rides inside its model id, as in the picker' },
   mode: { op: ['task_create.mode', 'task_start.mode'] },
+  effort: { op: ['task_create.effort', 'task_start.effort'], note: 'Claude Code only; an ACP engine\'s effort rides its model id' },
   engine: { op: ['task_create.engine', 'task_start.engine'] },
   project: { op: 'task_create.project' },
   createCwd: { op: ['task_create.create_cwd', 'task_start.create_cwd'] },

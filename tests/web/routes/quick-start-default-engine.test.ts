@@ -366,3 +366,29 @@ describe('quickStartSession — inheritance vs a promised session id', () => {
     expect(started.engine).toBeUndefined();
   });
 });
+
+describe('POST /api/sessions/quick-start — a picked effort is Claude Code only', () => {
+  it('rides SESSION_START on the native engine, and never onto an ACP launch (named or inherited)', async () => {
+    const app = createApp();
+    const native = await request(app)
+      .post('/api/sessions/quick-start')
+      .send({ cwd: '/tmp/effort-native', message: 'hi', project: 'Walnut', effort: 'xhigh' });
+    expect(native.status).toBe(200);
+    expect(capture.last().effort).toBe('xhigh');
+
+    const named = await request(app)
+      .post('/api/sessions/quick-start')
+      .send({ cwd: '/tmp/effort-codex', message: 'hi', project: 'Walnut', engine: 'codex', effort: 'max' });
+    expect(named.status).toBe(200);
+    expect(capture.last().engine).toBe('codex');
+    expect(capture.last()).not.toHaveProperty('effort');
+
+    configuredEngine.value = 'codex';
+    const inherited = await request(app)
+      .post('/api/sessions/quick-start')
+      .send({ cwd: '/tmp/effort-inherits-codex', message: 'hi', project: 'Walnut', effort: 'low' });
+    expect(inherited.status).toBe(200);
+    expect(capture.last().engine).toBe('codex');
+    expect(capture.last()).not.toHaveProperty('effort');
+  });
+});

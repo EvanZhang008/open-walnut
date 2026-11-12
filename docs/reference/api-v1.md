@@ -3366,6 +3366,11 @@ host's SSH daemon). Works on BOTH boxes:
     shows no tier control, so the tier is moved later on the board.
   - `model` / `mode`: same accepted values as the web quick-start route
     (`bypass`/`accept`/`default`/`plan`; alias or catalog model ids).
+  - `effort` (additive, 2026-11): the new session's reasoning effort,
+    `low`/`medium`/`high`/`xhigh`/`max`, passed to Claude Code as `--effort`
+    at spawn. Absent = no flag, so Claude Code's own settings decide. Ignored
+    for an engine other than Claude Code; another value is `400 bad_request`.
+    Servers before it ignore the field.
   - Remote host gate (additive, 2026-09): a launch on a host that cannot run
     a session is refused BEFORE any task or session is written, with
     `409 { "error": { "code", "message" }, "kind"?, "host", "headline", "hint", "allowOverride"? }`

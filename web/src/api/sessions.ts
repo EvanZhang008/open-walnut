@@ -1219,6 +1219,8 @@ export async function quickStartSession(opts: {
   message: string;
   model?: string;
   mode?: string;
+  /** Reasoning effort for the new session; absent = Claude Code's own setting. */
+  effort?: SessionEffort;
   images?: ImageAttachment[];
   taskId?: string; // retry mode: reuse existing task
   taskMeta?: QuickStartTaskMeta;

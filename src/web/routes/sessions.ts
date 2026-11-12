@@ -354,12 +354,14 @@ function buildFixWalnutMessage(userReport: string): string {
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   const requestTs = Date.now()
   try {
-    const { cwd: rawCwdIn, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine, walnutAgent, agentId, overrideReadiness, ownTaskDir } = req.body as {
+    const { cwd: rawCwdIn, host, message, model: rawModel, mode, effort: rawEffort, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine, walnutAgent, agentId, overrideReadiness, ownTaskDir } = req.body as {
       cwd: string
       host?: string
       message: string
       model?: string
       mode?: string
+      /** Reasoning effort picked on the draft (absent = Claude Code's own setting). */
+      effort?: string
       images?: ImagePayload[]
       taskId?: string // retry mode: reuse existing task instead of creating a new one
       /** File the new task under this project (created if unknown). Omitted/empty = Inbox. */
@@ -562,6 +564,11 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         return
       }
     }
+    if (rawEffort !== undefined && rawEffort !== null && (typeof rawEffort !== 'string' || !VALID_SESSION_EFFORT_IDS.has(rawEffort))) {
+      res.status(400).json({ error: `effort must be one of: ${[...VALID_SESSION_EFFORT_IDS].join(', ')}` })
+      return
+    }
+    const launchEffort = typeof rawEffort === 'string' ? rawEffort as SessionEffort : undefined
     // A session's start runs at most as loose as that session (delegated-mode.ts): a looser mode
     // it names is refused, a looser project default comes down to its mode.
     const startedBySid = req.get('x-walnut-caller-sid')?.trim() || undefined
@@ -760,6 +767,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       const requestedHints = requestedHintsOf((req.body as { hints?: unknown }).hints)
       const updatedTask = await quickStartSession({
         message: sessionMessage, messagePrefix, cwd, host, model, mode: launchMode,
+        ...(launchEffort ? { effort: launchEffort } : {}),
         ...(startedBySid ? { callerSid: startedBySid, ...(mode ? {} : { modeImplied: true }) } : {}),
         // Hints the first message asks for (the side panel's object-context), beside the words.
         ...(requestedHints ? { hints: requestedHints } : {}),
@@ -834,6 +842,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       if (wsPlan?.begin) {
         res.json(await wsPlan.begin(updatedTask, {
           message: sessionMessage, ...(messagePrefix ? { messagePrefix } : {}), ...(model ? { model } : {}), ...(launchMode ? { mode: launchMode } : {}),
+          ...(launchEffort ? { effort: launchEffort } : {}),
           ...(effectiveEngine ? { engine: effectiveEngine } : {}), engine_decided: true, ...(preassignedSessionId ? { session_id: preassignedSessionId } : {}),
           source: routeSource('quick-start', req.headers), at: new Date(requestTs).toISOString(),
         }))

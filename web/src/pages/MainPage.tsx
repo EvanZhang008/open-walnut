@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, Fragment } from 'react';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import type { NavigateFunction } from 'react-router-dom';
-import type { SessionEngine, SessionMode, Task } from '@open-walnut/core';
+import type { SessionEffort, SessionEngine, SessionMode, Task } from '@open-walnut/core';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { launchEngineForHost, normalizeEngine } from '@/utils/engines';
 import { knownFallbackEngine } from '@/api/engine-fallback';
@@ -2002,6 +2002,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       ...(meta.mode ? { mode: meta.mode } : {}),
       ...(meta.engine ? { engine: meta.engine } : {}),
       ...(meta.model ? { model: meta.model } : {}),
+      ...(meta.effort ? { effort: meta.effort } : {}),
     }).then((result) => {
       // Update refs with (possibly new) taskId
       if (pendingQuickStartRef.current) {
@@ -2039,7 +2040,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Quick-start: track pending taskId, auto-open session panel when it starts
   const pendingQuickStartRef = useRef<string | null>(null);
   // Metadata for the pending session panel (cwd, host, etc.)
-  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string; walnutAgent?: boolean; gated?: boolean; mode?: SessionMode; engine?: SessionEngine; model?: string } | null>(null);
+  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string; walnutAgent?: boolean; gated?: boolean; mode?: SessionMode; engine?: SessionEngine; model?: string; effort?: SessionEffort } | null>(null);
 
   // Fork: pending panel metadata (same pattern as quick-start)
   const pendingForkMetaRef = useRef<{ id: string; cwd: string; host?: string; realTaskId?: string; httpError?: string } | null>(null);
@@ -3042,12 +3043,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // untouched pill reads the launch default, which the server applies to a
       // launch that names no mode, so the payload stays as it always was.
       const mode = metaSnapshot?.mode;
+      // The effort the picker's Effort column showed: a Claude Code flag, so only when that engine
+      // launches (the server drops it for any other engine too). Absent = the CLI's own setting.
+      const effort = (engine ?? 'claude') === 'claude' ? metaSnapshot?.effort : undefined;
       const sentEngine: SessionEngine | undefined = !engine && opts?.namesClaude && !opts?.walnutAgent ? 'claude' : engine;
       // Retry replays the pair as it was sent: silence would let a project's default replace a pick.
       if (pendingQuickStartMetaRef.current?.id === pendingColId && !opts?.walnutAgent) {
         pendingQuickStartMetaRef.current = {
           ...pendingQuickStartMetaRef.current,
-          ...(sentEngine ? { engine: sentEngine } : {}), ...(model ? { model } : {}),
+          ...(sentEngine ? { engine: sentEngine } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}),
         };
       }
 
@@ -3059,6 +3063,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         taskMeta,
         model,
         ...(mode ? { mode } : {}),
+        ...(effort ? { effort } : {}),
         engine: sentEngine,
         ...(opts?.expectEngine && !engine ? { expectEngine: opts.expectEngine } : {}),
         ...(opts?.fromFolder && (sentEngine || model) ? { fromFolder: true } : {}),

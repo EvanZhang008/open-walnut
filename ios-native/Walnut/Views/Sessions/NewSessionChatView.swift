@@ -65,6 +65,9 @@ struct NewSessionChatView: View {
     @State private var host = ""
     @State private var mode: NewSessionSheet.PermissionMode = NewSessionChatView.draftStart(inDemo: DemoMode.isActive).mode
     @State private var model: String?
+    /// The reasoning effort picked in the model sheet's Effort row; nil = Default (no --effort,
+    /// Claude Code's own setting decides).
+    @State private var effort: String?
     /// The user picked the mode / the model here: until then the pills show the project's
     /// launch defaults (`launchDefaults`) and the create call leaves them to the server.
     @State private var modeTouched = false
@@ -101,7 +104,7 @@ struct NewSessionChatView: View {
     /// A pick of his that the launch has not taken: the folder, mode, model, project or sync.
     /// His words are kept in the draft store; these are not, so a push waits for them.
     private var picksEdited: Bool {
-        cwd != offeredCwd || host != offeredHost || mode != initialMode || model != nil
+        cwd != offeredCwd || host != offeredHost || mode != initialMode || model != nil || effort != nil
             || !project.isEmpty || !syncLocal
     }
 
@@ -532,10 +535,10 @@ struct NewSessionChatView: View {
                 state: state,
                 wraps: false,
                 rawID: false,
-                menu: Self.modelMenu(selected: shownModel),
+                menu: Self.modelMenu(selected: shownModel, effort: effort),
                 menuID: "launchModel",
                 accessibilityID: "newSessionChat.modelPill",
-                accessibilityLabel: "Model: \(shownModel == nil ? "Default" : modelLabel)\(launchDefaults?.shownModel != nil && !modelTouched ? ", project default" : "")",
+                accessibilityLabel: "Model: \(shownModel == nil ? "Default" : Self.modelLabel(shownModel))\(launchDefaults?.shownModel != nil && !modelTouched ? ", project default" : "")\(effort.map { ", effort \(ComposerControlsModel.effortLabel($0))" } ?? "")",
                 onSelect: { choice, _ in pick(choice) },
                 onPresentedChange: { _, _ in },
                 // The same "Select model" sheet as a live composer's model pill.
@@ -545,7 +548,10 @@ struct NewSessionChatView: View {
         }
     }
 
-    private var modelLabel: String { Self.modelLabel(shownModel) }
+    /// The pill's words: the model, then the picked effort as a live session's pill shows it.
+    private var modelLabel: String {
+        Self.modelLabel(shownModel) + (effort.map { " · \(ComposerControlsModel.effortLabel($0))" } ?? "")
+    }
 
     /// The project whose launch defaults this draft starts on: the one picked here, or the
     /// task's own for a draft about a task (the server reads the same, `mobileLaunchDefaults`).
@@ -575,7 +581,9 @@ struct NewSessionChatView: View {
                 mode = picked
                 modeTouched = true
             }
-        case .effort, .retry, .none:
+        case .effort(let raw):
+            effort = raw.isEmpty ? nil : raw
+        case .retry, .none:
             return
         }
     }
@@ -601,8 +609,10 @@ struct NewSessionChatView: View {
     private static let draftMenuToken = ComposerControlsModel.MenuToken(generation: 0, version: 0)
 
     /// Default, then the stable aliases; the current pick checked. Default is the
-    /// empty id (`pick` maps it back to nil, which sends no model).
-    static func modelMenu(selected: String?) -> PillMenu {
+    /// empty id (`pick` maps it back to nil, which sends no model). A second section is the
+    /// effort (the sheet's Effort row, as on a live session's pill): Default (empty, no
+    /// --effort), then every level Claude Code takes.
+    static func modelMenu(selected: String?, effort: String? = nil) -> PillMenu {
         let items = [PillMenu.Item(
             title: "Default", choice: .model(""), checked: selected == nil,
             accessibilityID: "newSessionChat.model.default"
@@ -617,8 +627,20 @@ struct NewSessionChatView: View {
             accessibilityID: "newSessionChat.model.\(id)"
         )] } ?? [])
         let current = items.first(where: \.checked)?.title
-        return PillMenu(sections: [.init(title: ComposerControlsModel.heading("Model", current: current), items: items)],
-                        token: draftMenuToken)
+        let efforts = [PillMenu.Item(
+            title: "Default", choice: .effort(""), checked: effort == nil,
+            accessibilityID: "newSessionChat.effort.default"
+        )] + ComposerControlsModel.defaultEffortLevels.map { level in
+            PillMenu.Item(
+                title: ComposerControlsModel.effortLabel(level), choice: .effort(level), checked: effort == level,
+                accessibilityID: "newSessionChat.effort.\(level)"
+            )
+        }
+        let effortHeading = ComposerControlsModel.heading("Effort", current: effort.map(ComposerControlsModel.effortLabel))
+        return PillMenu(sections: [
+            .init(title: ComposerControlsModel.heading("Model", current: current), items: items),
+            .init(title: effortHeading, items: efforts),
+        ], token: draftMenuToken)
     }
 
     /// Every permission mode, the current one checked, headed like the live
@@ -892,6 +914,7 @@ struct NewSessionChatView: View {
                 // left to the server, which applies and records them.
                 mode: DraftLaunchDefaults.wireMode(picked: shownMode, touched: modeTouched, defaults: launchDefaults),
                 model: pair.model,
+                effort: effort,
                 // Only for a task-less draft, and only when picked: absent keeps the
                 // server's own Inbox + organize behaviour.
                 project: isTaskless && !project.isEmpty ? project : nil,

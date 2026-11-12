@@ -70,6 +70,10 @@ export interface QuickStartParams {
   host?: string;
   model?: string;
   mode?: string;
+  /** Reasoning effort the person picked for the new session (the draft picker's Effort column).
+   *  Absent = no --effort at spawn, so Claude Code's own settings decide. Native engine only:
+   *  an ACP engine carries its effort in its model id, so a launch on one drops it. */
+  effort?: import('../types.js').SessionEffort;
   /** The session that asks for this start (`x-walnut-caller-sid`): the launch runs at most as
    *  loose as its own mode (delegated-mode.ts capStartMode). Absent: the person, or Walnut itself. */
   callerSid?: string;
@@ -420,6 +424,9 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     }
   }
 
+  // The effort the person picked: only the native engine takes it as a spawn flag.
+  const pickedEffort = params.effort && !isAcpEngine(engine) ? params.effort : undefined;
+
   // "Ask Walnut": resolve the agent's profile up front — the same bundle
   // (persona + standing memory + skills index + walnut MCP mount) and the same
   // chat-tuned effort a main-chat lane spawns with. Resolved BEFORE any task
@@ -461,6 +468,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       const { getAskWalnutLaunchPrefs, resolveAskWalnutEffort } = await import('./ask-walnut-launch.js');
       const remembered = await getAskWalnutLaunchPrefs();
       walnutProfile.effort = resolveAskWalnutEffort(remembered.effort, model, walnutProfile.effort);
+      // A level picked on this launch's own picker wins over the remembered one.
+      if (pickedEffort) walnutProfile.effort = pickedEffort;
     }
   }
   // `let`, not const: a launcher can carry a project name the human has since
@@ -773,7 +782,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
         host,
         // Ask Walnut: the persona lives on the RECORD so a cold --resume
         // rebuilds it (same contract as a chat lane's record).
-        ...(walnutProfile ? { profile: walnutProfile.profile, effort: walnutProfile.effort } : {}),
+        ...(walnutProfile ? { profile: walnutProfile.profile, effort: walnutProfile.effort } : pickedEffort ? { effort: pickedEffort } : {}),
         // No turn has begun (the CLI isn't up yet) — 'running' would show a
         // phantom "working…" badge on a session that hasn't started.
         initialProcessStatus: 'idle',
@@ -810,7 +819,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     requestTs,
     engine,
     // Ask Walnut: the spawn takes the Personal AI profile + chat-tuned effort.
-    ...(walnutProfile ? { profile: walnutProfile.profile, effort: walnutProfile.effort } : {}),
+    ...(walnutProfile ? { profile: walnutProfile.profile, effort: walnutProfile.effort } : pickedEffort ? { effort: pickedEffort } : {}),
     // Named even when the profile rode the spawn: an ACP ask has no profile on
     // the wire, and this is what tells the runner to mount Walnut's own tools.
     ...(walnutAgent ? { walnutAgent: true } : {}),

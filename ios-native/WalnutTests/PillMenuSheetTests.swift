@@ -79,10 +79,11 @@ final class PillMenuSheetTests: XCTestCase {
         XCTAssertFalse(rows.contains { $0.kind == .current }, "an unlisted current row")
     }
 
-    /// The new-session draft's menu (models only) is one list with no Effort row.
-    func testTheDraftMenuIsOneModelList() {
+    /// The new-session draft's menu is one model list plus the Effort row (Default until picked).
+    func testTheDraftMenuIsOneModelListAndAnEffortRow() {
         let layout = PillMenuSheet.Layout(NewSessionChatView.modelMenu(selected: "sonnet"))
-        XCTAssertNil(layout.effort)
+        XCTAssertEqual(layout.effortValue, "Default")
+        XCTAssertEqual(PillMenuSheet.Layout(NewSessionChatView.modelMenu(selected: "sonnet", effort: "low")).effortValue, "Low")
         XCTAssertEqual(layout.lists.flatMap(\.items).map(\.title), ["Default", "Opus", "Sonnet", "Haiku"])
         XCTAssertEqual(layout.lists.flatMap(\.items).filter(\.checked).map(\.title), ["Sonnet"])
     }
