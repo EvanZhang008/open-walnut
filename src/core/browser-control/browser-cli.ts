@@ -391,7 +391,8 @@ function render(action: string | undefined, b: Record<string, unknown>): string 
   if (action === 'find') {
     const m = (b.matches as Array<{ ref: string; role: string; name: string; text: string }> | undefined) ?? []
     const more = Number(b.count ?? m.length) - m.length
-    return m.length ? m.map((x) => `[${x.ref}] ${x.role} "${x.name}"${x.text && x.text !== x.name ? `  ${x.text.slice(0, 100)}` : ''}`).join('\n') + (more > 0 ? `\n… ${more} more match(es): --limit N, or --role button / --exact to narrow` : '') : 'Nothing found.'
+    const lead = typeof b.by_words === 'string' ? `Nothing has those words together; controls named with "${b.by_words}":\n` : ''
+    return m.length ? lead + m.map((x) => `[${x.ref}] ${x.role} "${x.name}"${x.text && x.text !== x.name ? `  ${x.text.slice(0, 100)}` : ''}`).join('\n') + (more > 0 ? `\n… ${more} more match(es): --limit N, or --role button / --exact to narrow` : '') : 'Nothing found.'
   }
   if (action === 'form_values') {
     const f = (b.fields as Array<{ ref: string; label: string; type: string; value: string; checked?: boolean; name?: string }> | undefined) ?? []

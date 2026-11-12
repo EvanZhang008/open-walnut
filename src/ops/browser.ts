@@ -85,7 +85,7 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
     }
     case 'text': return { outcome: `${String(body.scope ?? 'The page\'s text')}${tab}: ${String(body.chars ?? '?')} characters${body.cut ? ', cut (max reads more, ref or selector one part)' : ''}.`, next: 'click or find what you need next.' }
     case 'snapshot': return { outcome: `Page snapshot${tab}${typeof body.more === 'number' ? `, ${body.more} more element(s) off screen (all: true lists them)` : ''}.`, next: 'click, type or select an element by its ref (e12, or f3:e12 in a frame); refs hold until the page changes, then snapshot again.' }
-    case 'find': return { outcome: `${body.count ?? 0} match(es)${tab}.`, next: 'Act on a match by its ref.' }
+    case 'find': return { outcome: `${body.count ?? 0} match(es)${tab}${typeof body.by_words === 'string' ? `: nothing had those words together, so these are controls named with "${body.by_words}"` : ''}.`, next: 'Act on a match by its ref.' }
     case 'form_values': return { outcome: `${body.count ?? 0} field(s)${tab}.`, next: 'fill_form {fields: [{ref or label, value}]} to fill several at once.' }
     case 'fill_form': return { outcome: `Filled ${(body.filled as unknown[] | undefined)?.length ?? 0} field(s)${tab}.`, next: 'form_values or snapshot to check, then send the form only if the person asked for that step.' }
     case 'screenshot': {

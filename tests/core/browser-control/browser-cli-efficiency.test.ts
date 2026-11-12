@@ -152,6 +152,11 @@ describe('find and refusals', () => {
     expect(t).toBe('[e1] button "Checkout"\n… 12 more match(es): --limit N, or --role button / --exact to narrow\n')
   })
 
+  it('find that matched by the words on controls says so first', async () => {
+    const t = await out(['find', 'search', 'box'], { matches: [{ ref: 'e17', role: 'textbox', name: 'Search GitHub', text: '' }], count: 1, by_words: 'search' })
+    expect(t).toBe('Nothing has those words together; controls named with "search":\n[e17] textbox "Search GitHub"\n')
+  })
+
   it('window_hidden and input_dropped are refusals (exit 1), with the message as it came', async () => {
     const p = parseBrowserArgv(['click', 'e1', '--trusted'])
     if (!p.ok) throw new Error('parse')

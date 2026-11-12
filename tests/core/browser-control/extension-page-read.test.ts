@@ -260,6 +260,34 @@ describe('find', () => {
   })
 })
 
+describe('find: a phrase no text holds falls back to the words on controls', () => {
+  it('"search box" finds the textbox named "Search GitHub"; role words pick the kind; the answer says it matched by words', async () => {
+    page.load(`<a id="l" href="/s">Search tips</a><input id="q" aria-label="Search GitHub"><button id="go">Search</button>`)
+    for (const [id, y] of [['#l', 0], ['#q', 30], ['#go', 60]] as const) page.place(id, { x: 0, y, w: 200, h: 20 })
+    const r = await op('find', { text: 'search box' })
+    expect(r.matches[0]).toMatchObject({ role: 'textbox', name: 'Search GitHub' })
+    expect(r.matches).toHaveLength(1)
+    expect(r.by_words).toBe('search')
+    const b = await op('find', { text: 'search button' })
+    expect(b.matches[0]).toMatchObject({ role: 'button', name: 'Search' })
+    // Every word must be in the name, in any order.
+    expect((await op('find', { text: 'github search' })).matches[0]).toMatchObject({ name: 'Search GitHub' })
+    expect((await op('find', { text: 'gitlab search' })).matches).toHaveLength(0)
+  })
+  it('only when the phrase found nothing, never with exact, never for one word alone', async () => {
+    page.load(`<input id="q" aria-label="Search GitHub"><p id="t">the search box is above</p>`)
+    page.place('#q', { x: 0, y: 0, w: 200, h: 20 }); page.place('#t', { x: 0, y: 30, w: 200, h: 20 })
+    const r = await op('find', { text: 'search box' })
+    expect(r.matches[0].text).toBe('the search box is above')
+    expect(r.by_words).toBeUndefined()
+    page.load(`<input id="q" aria-label="Search GitHub">`)
+    page.place('#q', { x: 0, y: 0, w: 200, h: 20 })
+    expect((await op('find', { text: 'search box', exact: true })).matches).toHaveLength(0)
+    expect((await op('find', { text: 'searching' })).matches).toHaveLength(0)
+    expect((await op('find', { text: 'box' })).matches).toHaveLength(0)
+  })
+})
+
 describe('find: the short text first, never only the region around it', () => {
   it('a page region focusable as a whole (a tabindex) is not the match; the short leaf text is, and its ref reads', async () => {
     const long = 'claude-code Public Watch 903 Fork 24.9k Star 155k main 222 Branches 266 Tags ' + 'more words in the region '.repeat(12)

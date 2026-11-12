@@ -24,7 +24,34 @@ export const FIND_LIMIT = 8
 /** Past this many characters of text an element only focusable is a region of the page, not a control. */
 const CONTAINER_CHARS = 200
 
-export function find(args: { text?: unknown; exact?: unknown; role?: unknown; limit?: unknown }): { matches: Array<{ ref: string; role: string; name: string; text: string; offscreen?: boolean }>; count: number } {
+/** Words an agent adds to say what kind of control it means ("search box", "login button"), with the roles they name. */
+const ROLE_WORDS: Record<string, string[]> = {
+  box: ['textbox', 'searchbox', 'combobox', 'checkbox'], field: ['textbox', 'searchbox', 'combobox'], input: ['textbox', 'searchbox', 'combobox'],
+  textbox: ['textbox'], searchbox: ['searchbox', 'textbox', 'combobox'], bar: ['textbox', 'searchbox', 'combobox'], button: ['button'], btn: ['button'],
+  link: ['link'], checkbox: ['checkbox'], tab: ['tab'], menu: ['menu', 'menuitem', 'button'], dropdown: ['combobox', 'listbox', 'button'],
+}
+
+/**
+ * The whole phrase matched nothing: the controls whose name holds every other word, in any order,
+ * of the kind its role words name when one is (2026-11-11: "search box" found nothing on GitHub's
+ * search page, whose box is named "Search GitHub").
+ */
+function byWords(w: string, exact: boolean): { els: Element[]; words: string[] } | undefined {
+  if (exact) return undefined
+  const parts = w.split(' ').filter(Boolean)
+  const kept = parts.filter((x) => !ROLE_WORDS[x])
+  const roles = [...new Set(parts.flatMap((x) => ROLE_WORDS[x] ?? []))]
+  if (!kept.length || (kept.length === parts.length && parts.length < 2)) return undefined
+  // A whole page region focusable as one (its name is all its text) is no control the words name.
+  const named = all(document, INTERACTIVE).filter((el) => {
+    const n = nameOf(el)
+    return visible(el) && (roleOf(el) !== 'generic' || n.length <= CONTAINER_CHARS) && kept.every((x) => n.toLowerCase().includes(x))
+  })
+  const ofRole = roles.length ? named.filter((el) => roles.includes(roleOf(el))) : named
+  return { els: ofRole.length ? ofRole : named, words: kept }
+}
+
+export function find(args: { text?: unknown; exact?: unknown; role?: unknown; limit?: unknown }): { matches: Array<{ ref: string; role: string; name: string; text: string; offscreen?: boolean }>; count: number; by_words?: string } {
   const want = typeof args.text === 'string' ? args.text.trim() : ''
   if (!want) throw new PageError('Say what text to find.', 'no_text')
   const exact = args.exact === true
@@ -52,6 +79,12 @@ export function find(args: { text?: unknown; exact?: unknown; role?: unknown; li
     const ctl = p.closest(INTERACTIVE)
     add(ctl && !container(ctl) ? ctl : p)
   }
+  // Nothing has the phrase: the controls named with its words (role words read as the kind).
+  let loose: string | undefined
+  if (!found.length) {
+    const b = byWords(w, exact)
+    if (b?.els.length) { b.els.forEach(add); loose = b.words.join(' ') }
+  }
   // Best first: the words as a control's whole name, then a control, then short text (a label, a
   // count, a link) before a long block, then what is on screen; then the shorter, then page order.
   const onScreen = (el: Element) => { const r = el.getBoundingClientRect(); return !(r.bottom < 0 || r.top > innerHeight) }
@@ -67,7 +100,7 @@ export function find(args: { text?: unknown; exact?: unknown; role?: unknown; li
       ...(r.bottom < 0 || r.top > innerHeight ? { offscreen: true } : {}),
     }
   })
-  return { matches, count: list.length }
+  return { matches, count: list.length, ...(loose && matches.length ? { by_words: loose } : {}) }
 }
 
 const FIELDS = 'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]), select, textarea, [contenteditable=""], [contenteditable=true], [role=textbox], [role=combobox], [role=checkbox], [role=switch]'
