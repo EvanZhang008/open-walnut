@@ -126,12 +126,21 @@ test('task ids in the Board text and its messages become live chips', async ({ p
   await expect(async () => { await msg.scrollIntoViewIfNeeded({ timeout: 2_000 }) }).toPass({ timeout: 20_000 })
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-board.png` })
 
-  // An author cannot fabricate an input by calling a public element method.
-  await msg.locator(`walnut-task[id="9c1d4e2a"]`).evaluate((el) => {
+  // An author cannot fabricate an input: no public element method opens a chip, and a click from a
+  // script opens neither the page's chip nor a message's link (a message's chip is an a.task-link).
+  const recent = () => page.evaluate(() => localStorage.getItem('walnut-todo-recent-opened'))
+  const inRecent = (id: string) => page.evaluate((x) => JSON.parse(localStorage.getItem('walnut-todo-recent-opened') ?? '[]').some((e: { id: string }) => e.id === x), id)
+  const recentBefore = await recent()
+  await prose.locator(`walnut-task[id="${OPEN_ID}"]`).evaluate((el) => {
     const possible = el as HTMLElement & { wnOpen?: (event: unknown) => void };
     possible.wnOpen?.({ isTrusted: true });
+    el.click();
   })
-  expect(await page.evaluate((id) => JSON.parse(localStorage.getItem('walnut-todo-recent-opened') ?? '[]').some((e: { id: string }) => e.id === id), UUID_ID)).toBe(false)
+  await msg.locator(`a.task-link[data-task-id="${UUID_ID}"]`).evaluate((el) => (el as HTMLElement).click())
+  await page.waitForTimeout(500)
+  expect(await recent()).toBe(recentBefore)
+  expect(await inRecent(UUID_ID)).toBe(false)
+  await expect(page.getByTestId('board-task-peek')).toHaveCount(0)
 
   // A chip opens its task beside the board.
   await pointer(page, msg.locator(`a.task-link[data-task-id="${UUID_ID}"]`))

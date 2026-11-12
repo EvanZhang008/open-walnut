@@ -604,7 +604,9 @@
     }
     return { thread: '', msg: '' };
   }
+  // Called only from the trusted listeners below, so an open it sends is a person's (Recent).
   function openInApp(e) {
+    if (!trusted(e)) return;
     var a = e.target && e.target.closest ? e.target.closest('a.wn-file[data-wn-path], a.wn-letter[data-wn-letter], a.file-link, a.letter-link, a.task-link, a.session-link, a[data-walnut-ref]') : null;
     if (!a) return;
     if (a.getAttribute('data-walnut-ref') === 'url') return;
@@ -612,7 +614,7 @@
     var from = messageOf(a);
     if (a.hasAttribute('data-walnut-ref')) { send({ t: 'wn-board:open-ref', href: a.getAttribute('href'), thread: from.thread, msg: from.msg }); return; }
     if (a.classList.contains('wn-file') || a.classList.contains('file-link')) send({ t: 'wn-board:open-file', path: a.getAttribute('data-wn-path') || a.getAttribute('data-file-path'), line: a.getAttribute('data-file-line'), endLine: a.getAttribute('data-file-end-line'), thread: from.thread, msg: from.msg });
-    else if (a.classList.contains('task-link')) send({ t: 'wn-board:open-task', id: a.getAttribute('data-task-id') });
+    else if (a.classList.contains('task-link')) send({ t: 'wn-board:open-task', id: a.getAttribute('data-task-id'), human: true });
     else if (a.classList.contains('session-link')) send({ t: 'wn-board:open-session', id: a.getAttribute('data-session-id') });
     else send({ t: 'wn-board:open-letter', id: a.getAttribute('data-wn-letter') || a.getAttribute('data-letter-id') });
   }

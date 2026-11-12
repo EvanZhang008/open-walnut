@@ -77,6 +77,13 @@ describe('Recent human touches', () => {
     expect(elements).toContain('openTaskFromInput(self, e)')
     expect(elements).not.toMatch(/\bwnOpen\s*\(/)
     expect(read('web/src/components/board/TaskBoardPane.tsx')).toContain('document.activeElement === frameRef.current')
+    // Every open a Board frame script sends comes from a trusted click or key, so each says so: a
+    // message's task link once sent none, and its open never reached Recent (2026-11-12).
+    const frames = readdirSync(join(__dirname, '../../web/src/components/board')).filter((f) => f.endsWith('.frame.js'))
+    const sends = frames.flatMap((f) => read(`web/src/components/board/${f}`).split('\n')
+      .filter((line) => line.includes("t: 'wn-board:open-task'")).map((line) => ({ f, line: line.trim() })))
+    expect(sends.map((s) => s.f).sort()).toEqual(['board-elements.frame.js', 'board-runtime.frame.js'])
+    for (const s of sends) expect(s.line, s.f).toContain('human: true')
     expect(read('src/core/workspaces/manager.ts')).toContain('requestedAt: pending.at')
     expect(read('src/core/workspaces/manager.ts')).toContain('requestTs: Date.parse(pending.at)')
   })
