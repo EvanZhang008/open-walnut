@@ -28,6 +28,7 @@ import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
 import { TaskGroupPrompt } from './SessionMessage';
+import { agentPromptInput, recordedAgentEffort } from './agent-effort';
 import { LaneHistoryTimeline, laneMessagesFromStream, type LiveLane } from './LaneTimeline';
 import { RowDisclosureScope } from './row-disclosure';
 import type { ReactNode } from 'react';
@@ -39,8 +40,12 @@ import { AgentText } from '../common/AgentText';
 /** How often a still-running agent's transcript is re-read while the modal is
  *  open. Each poll is a full read + parse of the agent's JSONL on the server
  *  (a remote host's file crosses the tunnel), so ticks are skipped while a
- *  previous read is in flight or the tab is hidden. */
+ *  previous read is in flight or the tab is hidden. A running lane the stream
+ *  draws is never polled: it is read for the effort the CLI recorded (stream
+ *  lines carry none), only when its call passed none, at most EFFORT_READS times. */
 const LIVE_POLL_MS = 8000;
+/** Reads of a running lane's transcript for its effort, at most (see TranscriptBody). */
+const EFFORT_READS = 3;
 
 export interface TranscriptTarget {
   agentId: string;
@@ -133,11 +138,37 @@ export function TranscriptBody({ target, sessionId, liveLane }: {
 
   const preloaded = (target.preloaded != null && !live) || target.fetchable === false;
   const fromStream = streamed != null;
+  // The effort a read of a running lane's transcript found (TranscriptBody mounts
+  // once per selected agent, so this state is that agent's).
+  const [readEffort, setReadEffort] = useState<string | undefined>(undefined);
+  const recordedEffort = recordedAgentEffort(messages) ?? readEffort;
+  // The stream draws a running lane's rows and carries no effort, so its transcript
+  // is read for it, only when the call's input is known and passed none. A read
+  // waits until the stream drew an assistant row (the CLI wrote one by then); one
+  // that found no assistant record, or failed, may read once more when the stream
+  // draws another, at most EFFORT_READS times, and never on a timer.
+  const streamedAssistants = streamed?.filter(m => m.role === 'assistant').length ?? 0;
+  const streamOwesEffort = fromStream && live && !preloaded && target.promptInput != null
+    && target.promptInput.effort == null && recordedEffort === undefined && streamedAssistants > 0;
+  const effortReads = useRef({ count: 0, at: 0, done: false });
+  useEffect(() => {
+    const reads = effortReads.current;
+    if (!streamOwesEffort || reads.done || reads.count >= EFFORT_READS || reads.at === streamedAssistants) return;
+    reads.count++;
+    reads.at = streamedAssistants;
+    fetchSubagentHistory(sessionId, target.agentId, { workflow })
+      .then((res) => {
+        // Any assistant record settles it: the CLI either wrote an effort or does not.
+        if (res.messages.some(m => m.role === 'assistant')) reads.done = true;
+        setReadEffort(recordedAgentEffort(res.messages));
+      })
+      .catch((err) => log.warn('workflow', 'failed to read subagent effort', { agentId: target.agentId, error: String(err) }));
+  }, [streamOwesEffort, streamedAssistants, sessionId, target.agentId, workflow]);
   useEffect(() => {
     // Embedded children ARE the transcript for a finished agent; nothing to fetch.
     // An unfetchable target (no real agent id) shows the caller's data or its result.
     // A lane in the stream IS the live transcript: nothing to fetch or poll.
-    if (preloaded || fromStream) return;
+    if (preloaded || (fromStream && live)) return;
     let cancelled = false;
     const cacheKey = workflow ? `wf:${target.agentId}` : target.agentId;
     const justFinished = wasLiveRef.current && !live;
@@ -188,11 +219,12 @@ export function TranscriptBody({ target, sessionId, liveLane }: {
   // One renderer, one place for the stream and the saved transcript, so the
   // saved rows take over the rows the stream drew (keys are what a row shows).
   const shown = streamed ?? (messages && messages.length > 0 ? messages : lastStreamed.current);
+  const promptInput = workflow ? target.promptInput : agentPromptInput(target.promptInput, recordedEffort);
 
   return (
     <>
       <RowDisclosureScope.Provider value={sessionId}>
-      {target.promptInput && <TaskGroupPrompt input={target.promptInput} toolUseId={liveLane?.taskBlock.toolUseId ?? target.toolUseId} />}
+      {promptInput && <TaskGroupPrompt input={promptInput} toolUseId={liveLane?.taskBlock.toolUseId ?? target.toolUseId} />}
       {shown && shown.length > 0 ? (
         <LaneHistoryTimeline messages={shown} sessionId={sessionId} live={live} startedAt={target.startedAt} agentLabel={target.agentLabel} />
       ) : loading ? (

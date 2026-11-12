@@ -68,6 +68,8 @@ import { HISTORY_CACHE_SCHEMA } from './history-parse.js';
  * 12 (2026-11-07): the idle compaction's notice says "before its prompt cache would expire" (it
  * runs before the expiry, never after).
  *
+ * 13 (2026-11-12): preserve the CLI's recorded assistant effort for the subagent settings reader.
+ *
  * The number itself lives in history-parse.ts, beside the parser it versions: the session
  * daemon's ready views (src/providers/history-ready-core.ts) carry it too.
  */

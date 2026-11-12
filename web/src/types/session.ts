@@ -323,6 +323,8 @@ export interface SessionHistoryMessage {
   tools?: SessionHistoryTool[];
   thinking?: string;
   model?: string;
+  /** Reasoning effort recorded by the CLI on this assistant message. */
+  effort?: string;
   usage?: { input_tokens: number; output_tokens: number };
   /** Stable message id: API `message.id` (`msg_…`) for assistant messages, else
    *  JSONL line uuid. Same id rides live-stream deltas (StreamingTextBlock.msgId),

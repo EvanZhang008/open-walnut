@@ -131,6 +131,74 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test('agent settings show passed effort, recorded effort, and no guessed default in live and history readers', async ({ page }) => {
+  const agents = [
+    { id: 'effort-explicit', effort: 'high', recorded: 'max' },
+    { id: 'effort-recorded', recorded: 'xhigh' },
+    { id: 'effort-unknown' },
+  ];
+  const tools = agents.map(a => ({
+    name: 'Agent', toolUseId: `toolu_${a.id}`, agentId: a.id,
+    input: { description: a.id, model: 'opus', ...(a.effort ? { effort: a.effort } : {}),
+      run_in_background: true, prompt: 'Review a long working session.\n'.repeat(80) },
+    result: `Async agent launched successfully. agentId: ${a.id}`,
+  }));
+  await mockHistory(page, [{ role: 'assistant', timestamp: '2026-01-01T00:00:00.000Z', tools }]);
+  await mockSessionDetail(page);
+  await page.route(`**/api/sessions/${SESSION_ID}/workflow`, r => r.fulfill({ status: 204, body: '' }));
+  for (const a of agents) {
+    await page.route(`**/api/sessions/${SESSION_ID}/subagent/${a.id}/history**`, r => r.fulfill({
+      json: { messages: [{ role: 'assistant', timestamp: '2026-01-01T00:00:00.000Z',
+        text: 'Saved agent output', ...(a.recorded ? { effort: a.recorded } : {}) }] },
+    }));
+  }
+  // Enter Home through a link, then the normal chip opens its reader.
+  await page.setContent(`<a href="http://localhost:3457/sessions?id=${SESSION_ID}">Open session</a>`);
+  await page.getByRole('link', { name: 'Open session' }).click();
+  await waitForWs(page);
+  const sessionPanel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`);
+  await expect(sessionPanel).toBeVisible();
+  await injectEvent(page, 'session:background-tasks', {
+    sessionId: SESSION_ID, inFlight: 3, phases: [], agents: [],
+    tasks: agents.map(a => ({ taskId: a.id, toolUseId: `toolu_${a.id}`, taskType: 'local_agent',
+      status: 'running', description: a.id, startedAt: Date.now(), isBackgrounded: true })),
+  });
+  for (const a of agents) {
+    await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: 'Agent',
+      toolUseId: `toolu_${a.id}`, input: tools.find(t => t.agentId === a.id)!.input });
+    await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: 'Live agent output',
+      msgId: `msg_${a.id}`, parentToolUseId: `toolu_${a.id}` });
+  }
+  // The working line's note opens the panel while the agents run.
+  await sessionPanel.locator('[data-testid="session-background-note"]').click();
+  const panel = page.locator('.wf-modal--tasks');
+  for (const live of [true, false]) {
+    if (!live) await injectEvent(page, 'session:background-tasks', {
+      sessionId: SESSION_ID, inFlight: 0, phases: [], agents: [],
+      tasks: agents.map(a => ({ taskId: a.id, toolUseId: `toolu_${a.id}`, taskType: 'local_agent',
+        status: 'completed', description: a.id, isBackgrounded: true })),
+    });
+    for (const a of agents) {
+      await panel.locator('.bg-task-row').filter({ hasText: a.id }).click();
+      const toggle = panel.locator('.task-group-prompt-toggle');
+      if (!(await panel.locator('.task-group-prompt-settings').count())) await toggle.click();
+      const settings = panel.locator('.task-group-prompt-settings');
+      await expect(settings).toContainText('model: opus');
+      if (a.effort || a.recorded) await expect(settings).toContainText(`effort: ${a.effort ?? a.recorded}`);
+      else await expect(settings).not.toContainText('effort:');
+      await expect(panel.locator('.bg-tasks-detail')).toContainText(live ? 'Live agent output' : 'Saved agent output');
+    }
+  }
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+  // Once they finished, the session menu's row reopens it on the saved transcript.
+  await sessionPanel.locator('.session-panel-header').getByRole('button', { name: 'More actions' }).click();
+  await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-open');
+  await page.locator('.task-kebab-menu:visible [data-testid="session-kebab-background"]').click();
+  await panel.locator('.bg-task-row').filter({ hasText: 'effort-recorded' }).click();
+  await expect(panel.locator('.task-group-prompt-settings')).toContainText('effort: xhigh');
+});
+
 test.describe('Inline-subagent interleave (main text integrity)', () => {
   test('subagent text + tool lines mid-turn do not split main text; the chat shows one chip and the panel holds the narration', async ({ page }) => {
     const base = [
@@ -516,7 +584,12 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await detail.locator('.tool-run-toggle').click();
     await detail.locator('.chat-tool-block-header', { hasText: 'probe 0' }).click();
     await expect(detail).toContainText('probe-0-out');
-    expect(fetches, 'a running lane is read from the stream, never fetched').toBe(0);
+    // The stream draws the lane; the call passed no effort, so its transcript is read
+    // once for the effort the CLI recorded (that read found an assistant record, so
+    // it is settled), and never polled.
+    await expect.poll(() => fetches).toBe(1);
+    await page.waitForTimeout(9000); // past one LIVE_POLL_MS tick
+    expect(fetches, 'a running lane is never polled').toBe(1);
 
     // Tag the rows the stream drew, and watch every frame.
     await page.evaluate(() => {

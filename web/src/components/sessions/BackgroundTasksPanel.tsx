@@ -36,7 +36,7 @@ import { TranscriptBody } from './WorkflowTranscriptModal';
 import { ICON_CLOSE } from '../common/Icons';
 import { AgentText } from '../common/AgentText';
 import type { SessionHistoryMessage } from '@/types/session';
-import { commandOutput, commandView, type ToolSource } from '@/stream/command-view';
+import { commandOutput, commandView, findToolInBlocks, findToolInHistory, type ToolSource } from '@/stream/command-view';
 import { useLiveAgentsForSession, useLiveTasksForSession, type LiveAgentStatus } from '@/stores/background-agents-store';
 import { openBackgroundPanel, closeBackgroundPanel, registerKnownAgents, unregisterKnownAgents, useBackgroundPanelOpen, useKnownAgents, useLiveLanes, useToolSource } from '@/stores/background-panel-store';
 
@@ -309,7 +309,7 @@ export function BackgroundTasksPanel({
         live: RUNNING.has(selected.status),
         preloaded: selected.agentId ? undefined : selected.known?.preloaded,
         fallbackResult: selected.known?.result || undefined,
-        promptInput: selected.known?.promptInput,
+        promptInput: selected.known?.promptInput ?? agentCallInput(source, selectedToolUseId),
         fetchable: !!selected.agentId,
         startedAt: selected.task?.startedAt,
         agentLabel: selected.subagentType ? `${selected.subagentType} agent` : 'Agent',
@@ -520,6 +520,16 @@ export function BackgroundTasksChip({ sessionId, agents }: { sessionId: string; 
       )}
     </button>
   );
+}
+
+/** The Agent call's own input, read from the conversation by its toolUseId: a chip
+ *  folded into its turn is not mounted, so it registers nothing (the turn fold,
+ *  2026-11-12), and the panel opened from the working line or the session menu
+ *  must still show the call's settings. */
+function agentCallInput(source: ToolSource, toolUseId: string | undefined): Record<string, unknown> | undefined {
+  if (!toolUseId) return undefined;
+  const view = findToolInBlocks(source.blocks, toolUseId) ?? findToolInHistory(source.messages, toolUseId);
+  return view && Object.keys(view.input).length > 0 ? view.input : undefined;
 }
 
 /** One per session panel, always mounted: renders the Background tasks panel while

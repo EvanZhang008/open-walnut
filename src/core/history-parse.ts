@@ -18,7 +18,7 @@
 import { redactAiOnly } from '../lib/ai-only-envelope.js';
 import { hookContextText } from '../lib/walnut-added.js';
 import { NATIVE_PEER_TAGS, nonHumanOrigin } from '../lib/history-session-envelope.js';
-import type { InPlaceRewindCut } from './types.js';
+import { VALID_SESSION_EFFORT_IDS, type InPlaceRewindCut } from './types.js';
 import { projectUserText } from './sessions/user-text-projection.js';
 import { withLegacyHintCutoff } from './sessions/legacy-hint-lines.js';
 import type { CarriedHint } from './hints/hint-format.js';
@@ -38,7 +38,13 @@ import { SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest } from './sessions
  * view, a daemon's ready view) written under another number is dropped, never served. The bump
  * log lives beside HISTORY_CACHE_SCHEMA's re-export in history-disk-cache.ts.
  */
-export const HISTORY_CACHE_SCHEMA = 12;
+export const HISTORY_CACHE_SCHEMA = 13;
+
+/** The reasoning effort the CLI recorded on an assistant line, when it is a known one. */
+function recordedEffortOf(raw: RawJsonlLine): string | undefined {
+  return raw.message?.role === 'assistant' && typeof raw.effort === 'string' && VALID_SESSION_EFFORT_IDS.has(raw.effort)
+    ? raw.effort : undefined;
+}
 
 /** A transcript line as the format canary reads it (transcript-line-types.ts CanaryLine). */
 export interface ParseCanaryLine {
@@ -198,6 +204,8 @@ export interface SessionHistoryMessage {
   tools?: SessionHistoryTool[];
   thinking?: string;
   model?: string;
+  /** Reasoning effort recorded by the CLI on this assistant message, not a default. */
+  effort?: string;
   usage?: { input_tokens: number; output_tokens: number };
   /** Stable message id: the API `message.id` (`msg_…`) for assistant messages,
    *  else the JSONL line `uuid`. The SAME id rides the live stream (SSE
@@ -274,6 +282,8 @@ export interface RawJsonlLine {
   /** Legacy inline-subagent flag (leaf selection in computeCliLoadedChain). */
   isSidechain?: boolean;
   parent_tool_use_id?: string | null;
+  /** CLI-recorded reasoning effort on canonical assistant lines. */
+  effort?: unknown;
   /** Walnut-generated message ID on synthetic user events (subtype='walnut-injected'). */
   walnutMessageId?: string;
   // CLI-injected user-line flags. Canonical JSONL writes isMeta (skill dumps,
@@ -634,6 +644,7 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
     role: string;
     timestamp: string;
     model?: string;
+    effort?: string;
     usage?: { input_tokens: number; output_tokens: number };
     parentToolUseId?: string;
     walnutMessageId?: string;
@@ -1227,6 +1238,8 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
       if (raw.message.usage) {
         existing.usage = raw.message.usage;
       }
+      const effort = recordedEffortOf(raw);
+      if (effort) existing.effort = effort;
       // Inherit parent_tool_use_id from any line in the group
       if (raw.parent_tool_use_id && !existing.parentToolUseId) {
         existing.parentToolUseId = raw.parent_tool_use_id;
@@ -1238,6 +1251,7 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
         role: raw.message.role,
         timestamp: raw.timestamp ?? new Date().toISOString(),
         model: raw.message.model,
+        effort: recordedEffortOf(raw),
         usage: raw.message.usage,
         parentToolUseId: raw.parent_tool_use_id ?? undefined,
         walnutMessageId: raw.walnutMessageId ?? undefined,
@@ -1497,6 +1511,7 @@ function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOp
       ...(tools.length > 0 ? { tools } : {}),
       ...(thinking ? { thinking } : {}),
       ...(msg.model ? { model: msg.model } : {}),
+      ...(msg.effort ? { effort: msg.effort } : {}),
       ...(msg.usage ? { usage: msg.usage } : {}),
       ...(msg.walnutMessageId ? { walnutMessageId: msg.walnutMessageId } : {}),
       ...(msg.sourceUuid ? { sourceUuid: msg.sourceUuid } : {}),
