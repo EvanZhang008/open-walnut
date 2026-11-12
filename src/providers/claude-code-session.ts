@@ -119,7 +119,8 @@ import {
 } from '../core/types.js'
 import { classifyStreamEvent, classifyDelta } from './claude-stream-event-map.js'
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/workflow-progress.js'
-import type { WorkflowPhaseInfo, WorkflowAgentInfo, SessionBackgroundTasksPayload, SessionPermissionResolvedEvent } from '../core/event-types.js'
+import type { WorkflowPhaseInfo, WorkflowAgentInfo, SessionBackgroundTasksPayload, SessionPermissionResolvedEvent, BackgroundTaskInfo } from '../core/event-types.js'
+import { lightSubagentRows } from '../core/subagents/registry.js'
 import { recordTurn } from '../core/observability/recorder.js'
 import { TurnSpeedMeter, tokensPerSecond, type TurnSpeedFinal } from '../core/sessions/turn-speed.js'
 import { noteCompaction, noteRequestUsage, type ClaudeUsageLike, type PromptCacheFacts } from '../core/sessions/prompt-cache.js'
@@ -2054,8 +2055,11 @@ export class ClaudeCodeSession {
   }
 
   /** Snapshot of background tasks for the UI (Workflow progress panel). */
-  get backgroundTasks(): Array<{ taskId: string; description?: string; subagentType?: string; taskType?: string; status: string; tokens?: number; lastTool?: string; summary?: string; workflowName?: string; toolUseId?: string; toolUses?: number; durationMs?: number; startedAt?: number; endedAt?: number; isBackgrounded?: boolean; ownedBySubagent?: boolean; spawnDepth?: number }> {
-    return [...this._bgTasks.entries()].map(([taskId, t]) => ({ taskId, ...t }))
+  get backgroundTasks(): BackgroundTaskInfo[] {
+    const own = [...this._bgTasks.entries()].map(([taskId, t]) => ({ taskId, ...t }))
+    // The light subagents this session runs on other engines (core/subagents): rows of
+    // the same panel, never counted in inFlight (they do not hold the turn open).
+    return this.claudeSessionId ? [...own, ...lightSubagentRows(this.claudeSessionId)] : own
   }
   get workflowName(): string | undefined { return this._workflowName }
   /** Per-subagent breakdown for the workflow progress panel, ordered by index. */
@@ -2091,7 +2095,7 @@ export class ClaudeCodeSession {
    *  after the last heartbeat reads the same rows the live tab saw. Null when
    *  nothing ever ran here (the route then falls back to the on-disk manifest). */
   backgroundTasksSnapshot(sessionId: string): SessionBackgroundTasksPayload | null {
-    if (this._bgTasks.size === 0 && this._workflowAgents.size === 0 && !this._workflowName) return null
+    if (this._bgTasks.size === 0 && this._workflowAgents.size === 0 && !this._workflowName && lightSubagentRows(sessionId).length === 0) return null
     return {
       sessionId,
       taskId: this.taskId,
@@ -2135,6 +2139,11 @@ export class ClaudeCodeSession {
     if (this._foregroundActive === active) return
     this._foregroundActive = active
     if (this.claudeSessionId && this._bgTasks.size > 0) this._emitBackgroundTasksUpdate(this.claudeSessionId)
+  }
+
+  /** Send the panel its ledger now (a light subagent of this session moved). */
+  emitBackgroundTasks(): void {
+    if (this.claudeSessionId) this._emitBackgroundTasksUpdate(this.claudeSessionId)
   }
 
   /** Broadcast the current background-task set so the UI can render workflow progress. */

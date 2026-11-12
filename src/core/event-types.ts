@@ -685,6 +685,8 @@ export interface BackgroundTaskInfo {
   ownedBySubagent?: boolean;
   /** Nesting level from task_started.spawn_depth (1 = spawned by the main agent). */
   spawnDepth?: number;
+  /** A light subagent's prompt (taskType walnut_subagent, core/subagents): display only. */
+  prompt?: string;
 }
 
 /** A phase in a dynamic workflow (from task_progress.workflow_progress[] entries of

@@ -82,6 +82,8 @@ const MARKERS: Record<string, { re: RegExp; files: Record<string, { count: numbe
       'src/core/sessions/host-start-gate.ts': { count: 1, way: 'the NEW host of a start does not answer: no old session involved' },
       'src/core/hosts/host-gate-body.ts': { count: 1, way: 'the gate code type' },
       'src/web/routes/engines.ts': { count: 3, way: "an engine's settings on a host that timed out: no session involved" },
+      'src/providers/light-subagent-acp.ts': { count: 1, way: 'a light subagent on a host Walnut cannot reach: its session itself runs there; the error names the host and another engine can run' },
+      'src/core/subagents/types.ts': { count: 1, way: 'the light subagent error code type' },
     },
   },
   'ACP session on a gone host': {

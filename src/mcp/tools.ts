@@ -11,6 +11,7 @@
  * ops are not even advertised.
  */
 
+import { withToolUseId } from '../lib/tool-use-id.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -162,6 +163,6 @@ export function registerWalnutTools(
     if (viaGateway) return viaGateway(params.arguments ?? {})
     const op = getOp(params.name)
     if (!op || !callable.has(op.name) || (options.readonly && !op.tags.readonly)) return fail(`Tool ${params.name} not found`)
-    return runWithCallId(op.name, params.arguments ?? {}, base)
+    return runWithCallId(op.name, withToolUseId(op.name, params.arguments ?? {}, params._meta), base)
   })
 }

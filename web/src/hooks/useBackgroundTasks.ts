@@ -36,6 +36,8 @@ export interface BackgroundTask {
   endedPerLevel?: boolean;
   /** Nesting level (1 = spawned by the main agent). */
   spawnDepth?: number;
+  /** A light subagent's prompt (taskType walnut_subagent). */
+  prompt?: string;
 }
 
 /** A phase in a dynamic workflow (mirrors backend WorkflowPhaseInfo). */

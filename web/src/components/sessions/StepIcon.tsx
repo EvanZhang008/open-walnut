@@ -63,6 +63,8 @@ export function toolStepIcon(name: string): StepIconName {
   if (name === 'AskUserQuestion') return 'question';
   if (name === 'Skill') return 'book';
   if (/^mcp__walnut__host_(exec|copy)/.test(name)) return 'monitor';
+  // A light subagent on another engine (Walnut's subagent_run): an agent like the Agent tool's.
+  if (/^mcp__walnut__subagent_/.test(name)) return 'bot';
   if (name.startsWith('mcp__walnut__')) return 'walnut';
   return 'wrench';
 }

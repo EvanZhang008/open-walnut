@@ -309,6 +309,10 @@ export async function getSessionWorkflowPayload(sessionId: string): Promise<Reco
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
   const live = sessionRunner.findByClaudeId(sessionId)?.backgroundTasksSnapshot(sessionId);
   if (live) return live as unknown as Record<string, unknown>;
+  // No Claude Code runner here (an ACP session): its light subagents are the ledger.
+  const { lightSubagentRows } = await import('../subagents/registry.js');
+  const light = lightSubagentRows(sessionId);
+  if (light.length > 0) return { sessionId, inFlight: 0, tasks: light, phases: [], agents: [] };
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   const { reconstructWorkflowProgress } = await import('../session-history.js');

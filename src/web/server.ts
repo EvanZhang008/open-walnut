@@ -163,6 +163,7 @@ import { taskExtrasV1Router } from './routes/task-extras-v1.js'
 import { transferV1Router } from './routes/transfer-v1.js'
 import { hostsFleetV1Router } from './routes/hosts-fleet-v1.js'
 import { hostExecV1Router } from './routes/host-exec-v1.js'
+import { subagentsV1Router } from './routes/subagents-v1.js'
 import { hostCopyV1Router } from './routes/host-copy-v1.js'
 import { secretsV1Router } from './routes/secrets-v1.js'
 import { approvalsV1Router } from './routes/approvals-v1.js'
@@ -2718,6 +2719,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', taskMoveV1Router)
   app.use('/api/v1', hostsFleetV1Router)
   app.use('/api/v1', hostExecV1Router)
+  app.use('/api/v1', subagentsV1Router)
   app.use('/api/v1', hostCopyV1Router)
   app.use('/api/v1', secretsV1Router)
   app.use('/api/v1', approvalsV1Router)
@@ -7063,6 +7065,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   // While every socket still stands: each feature node gets a 1012 close and the connection
   // journal says why this server stops (a deploy, an update, a signal). Bounded under a second.
   await shutdownStep('feature nodes', async () => (await import('./ws/feature-node-runtime.js')).stopFeatureNodes(opts.reason))
+  // Light subagents live in this server's memory: stop them (and their workers) while the links are up.
+  await shutdownStep('light subagents', async () => (await import('../core/subagents/registry.js')).stopAllLightSubagents('the server stopped', 3_000), { budgetMs: 4_000 })
   ;(await import('../core/net/net-mac.js')).stopNet()
   // The lock-screen card's clock: its bus subscription and timers belong to this server.
   ;(await import('../core/push/work-card.js')).stopWorkCard()

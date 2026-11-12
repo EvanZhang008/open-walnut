@@ -621,6 +621,54 @@ describe('lifecycle + repair', () => {
     expect(fs.readFileSync(journalPath, 'utf-8')).not.toContain(secret)
   })
 
+  /** A light worker running a tool command (a child that beats a heartbeat file); its pid. */
+  async function lightWorkerWithTool(sid: string, bounds: Record<string, number>, ws = makeWs()): Promise<{ ws: FakeWs; childPid: number; beat: string }> {
+    const pidFile = path.join(tmpDir, `${sid}.child.pid`)
+    const beat = path.join(tmpDir, `${sid}.heartbeat`)
+    const started = await acp.acpStart(ws, startParams(sid, { ...bounds, env: { MOCK_ACP_CHILD_PID_FILE: pidFile, MOCK_ACP_CHILD_HEARTBEAT: beat } }))
+    expect(started.ok).toBe(true)
+    expect((await acp.acpOp(sid, 'prompt', { commandId: `acp-prompt:qm-${sid}`, walnutMessageId: `qm-${sid}`, text: 'ignored-cancel-child' })).ok).toBe(true)
+    await waitFor(() => fs.existsSync(pidFile) && fs.existsSync(beat))
+    return { ws, childPid: Number(fs.readFileSync(pidFile, 'utf-8')), beat }
+  }
+  const gone = (pid: number) => { try { process.kill(pid, 0); return false } catch { return true } }
+  /** Its tool command is dead and writes nothing more. */
+  async function toolEnded(childPid: number, beat: string): Promise<void> {
+    await waitFor(() => gone(childPid), 10_000)
+    const size = fs.statSync(beat).size
+    await new Promise((r) => setTimeout(r, 300))
+    expect(fs.statSync(beat).size).toBe(size)
+  }
+
+  it('a light subagent worker is ended past its own deadline, the command its tool runs included', async () => {
+    const { childPid, beat } = await lightWorkerWithTool('sid-light-deadline', { deadlineAt: Date.now() + 600 })
+    await waitFor(() => !acp.hasWorker('sid-light-deadline'), 10_000)
+    await toolEnded(childPid, beat)
+  })
+
+  it('a light subagent worker nobody subscribes to is ended after its grace with its tool command; a subscribe in time keeps it', async () => {
+    const { ws: gone1, childPid, beat } = await lightWorkerWithTool('sid-light-orphan', { orphanGraceMs: 400 })
+    const kept = makeWs()
+    await acp.acpStart(kept, startParams('sid-light-back', { orphanGraceMs: 1_500 }))
+    // Their server's socket closes.
+    acp.removeSubscriber(gone1)
+    acp.removeSubscriber(kept)
+    // One comes back on a new socket before its grace ends.
+    expect(acp.subscribe(makeWs(), 'sid-light-back', 0)).toBe(true)
+    await waitFor(() => !acp.hasWorker('sid-light-orphan'), 10_000)
+    await toolEnded(childPid, beat)
+    await new Promise((r) => setTimeout(r, 2_000))
+    expect(acp.hasWorker('sid-light-back')).toBe(true)
+  })
+
+  it('a task session worker (no bounds) outlives its socket closing', async () => {
+    const ws = makeWs()
+    await acp.acpStart(ws, startParams('sid-task-plain'))
+    acp.removeSubscriber(ws)
+    await new Promise((r) => setTimeout(r, 1_000))
+    expect(acp.hasWorker('sid-task-plain')).toBe(true)
+  })
+
   it('idle worker is reaped by the sweep', async () => {
     for (const t of intervals) clearInterval(t)
     intervals = []

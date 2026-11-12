@@ -1,0 +1,31 @@
+/* A light subagent's reader in the Background tasks panel (LightSubagentDetail in
+   BackgroundTasksPanel.tsx): its prompt folded, then what it says or answered. */
+.bg-tasks-light { display: flex; flex-direction: column; gap: 8px; }
+.bg-tasks-light-prompt {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+.bg-tasks-light-prompt > summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+.bg-tasks-light-prompt > pre {
+  margin: 0;
+  padding: 8px 10px 10px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  color: var(--fg);
+}
+.bg-tasks-light-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-secondary);
+}

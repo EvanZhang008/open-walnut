@@ -75,6 +75,11 @@ interface AcpWorkerEntry<W> {
   cmd: string
   adapter: string
   start?: string
+  /** A light subagent's own bounds (AcpStartParams.deadlineAt / orphanGraceMs). */
+  deadlineAt?: number
+  orphanGraceMs?: number
+  /** Since when no socket has subscribed to it (only kept with orphanGraceMs). */
+  orphanedSince?: number
 }
 
 /** What `ps` says about one pid now; 'unknown' when it could not be asked. */
@@ -172,6 +177,14 @@ export interface AcpStartParams {
    * absent = none, which is the pre-mount behavior.
    */
   mcpServers?: AcpMcpServer[]
+  /**
+   * A light subagent's worker (core/subagents) bounds itself on this host: it is stopped
+   * past this time (epoch ms), and once nothing has subscribed to it for orphanGraceMs (its
+   * server went away mid-run). A task session's worker passes neither. An older daemon
+   * ignores both; its server stops the run itself.
+   */
+  deadlineAt?: number
+  orphanGraceMs?: number
 }
 
 export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
@@ -385,6 +398,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     const existing = workers.get(sid)
     if (existing && existing.state === 'running') {
       existing.subscribers.add(ws)
+      existing.orphanedSince = undefined
       replayTo(ws, existing, params.fromOffset ?? 0)
       const state = await rpc(existing, 'getState')
       return {
@@ -461,6 +475,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       activeControlCommandId: null,
       cmd: path.basename(workerCmd[workerCmd.length > 1 ? 1 : 0]),
       adapter: adapterCmd.slice(0, 2).join(' '),
+      ...(typeof params.deadlineAt === 'number' && params.deadlineAt > 0 ? { deadlineAt: params.deadlineAt } : {}),
+      ...(typeof params.orphanGraceMs === 'number' && params.orphanGraceMs > 0 ? { orphanGraceMs: params.orphanGraceMs } : {}),
     }
     workers.set(sid, entry)
     persistPids()
@@ -689,16 +705,31 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }, 6000)
   }
 
+  /**
+   * A light worker ends with its whole process group (the commands its tools started
+   * too): a graceful stop ends the worker and its adapter but leaves those running.
+   */
+  async function endLightWorker(sid: string): Promise<void> {
+    const entry = workers.get(sid)
+    if (!entry || entry.state !== 'running' || entry.stopping) return
+    const r = await acpAbortTurn(sid, { hard: true })
+    if (!r.ok) log('error', 'acp: light worker did not end', { sid, error: r.error?.message })
+  }
+
   function subscribe(ws: W, sid: string, fromOffset: number): boolean {
     const entry = workers.get(sid)
     if (!entry || entry.state !== 'running') return false
     entry.subscribers.add(ws)
+    entry.orphanedSince = undefined
     replayTo(ws, entry, fromOffset)
     return true
   }
 
   function removeSubscriber(ws: W): void {
-    for (const entry of workers.values()) entry.subscribers.delete(ws)
+    for (const entry of workers.values()) {
+      entry.subscribers.delete(ws)
+      if (entry.orphanGraceMs && entry.subscribers.size === 0 && entry.orphanedSince === undefined) entry.orphanedSince = Date.now()
+    }
   }
 
   function hasWorker(sid: string): boolean {
@@ -712,6 +743,17 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     const now = Date.now()
     for (const [sid, entry] of workers) {
       if (entry.state !== 'running') continue
+      // A light subagent's worker: past its own limit, or no server has watched it for its grace.
+      if (entry.deadlineAt && now > entry.deadlineAt) {
+        log('info', 'acp: light worker past its deadline', { sid, overMs: now - entry.deadlineAt })
+        void endLightWorker(sid)
+        continue
+      }
+      if (entry.orphanGraceMs && entry.orphanedSince !== undefined && now - entry.orphanedSince > entry.orphanGraceMs) {
+        log('info', 'acp: light worker with no subscriber', { sid, orphanedMs: now - entry.orphanedSince })
+        void endLightWorker(sid)
+        continue
+      }
       // Waiting on the worker's own reply is not idle (a slow session/load, or
       // acpStart's handshake). OP_TIMEOUT_MS bounds how long a reply can hold it.
       if (entry.pendingRpc.size > 0) continue
@@ -981,6 +1023,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     acpStart,
     acpOp,
     acpAbortTurn,
+    /** acpStart honors deadlineAt / orphanGraceMs ('acp-light-bounds-v1'). */
+    lightBounds: true as const,
     acpStop,
     subscribe,
     removeSubscriber,

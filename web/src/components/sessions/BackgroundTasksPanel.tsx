@@ -27,10 +27,12 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type React
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
-import { isAgentTask, isCommandTask } from './workflow-layout';
+import { isAgentTask, isCommandTask, isWalnutSubagent } from './workflow-layout';
 import { buildAgentMeta, fmtElapsed, rowElapsedMs } from './background-ledger';
 import { StatusDot } from './WorkflowGraph';
 import { BackgroundTaskStopButton } from './BackgroundTaskStopButton';
+import { useDetailsDisclosure } from './row-disclosure';
+import '@/styles/light-subagent.css';
 import { agentModelLabel } from './SessionMessage';
 import { TranscriptBody } from './WorkflowTranscriptModal';
 import { ICON_CLOSE } from '../common/Icons';
@@ -105,7 +107,8 @@ function buildRows(tasks: readonly BackgroundTask[], known: KnownAgent[]): Row[]
       isCommand: isCommandTask(t),
       task: t,
       known: k,
-      agentId: isAgent ? t.taskId : undefined,
+      // A light subagent has no CLI transcript: its reader is the prompt and what it said.
+      agentId: isAgent && !isWalnutSubagent(t) ? t.taskId : undefined,
     });
   }
   for (const k of known) {
@@ -160,6 +163,28 @@ function CommandDetail({ row, source }: { row: Row; source: ToolSource }) {
       <pre className="bash-tool-pre">
         {output ?? (running || view.status === 'calling' ? 'Running…' : '(no output)')}
       </pre>
+    </div>
+  );
+}
+
+/** A light subagent's reader: what it was asked, then what it says (live) or answered. */
+function LightSubagentDetail({ task, sessionId }: { task: BackgroundTask; sessionId: string }) {
+  const running = RUNNING.has(task.status);
+  const failed = task.status === 'failed' || task.status === 'stopped';
+  // Kept open across ledger updates and a reopen of the reader.
+  const promptDisclosure = useDetailsDisclosure(`light-prompt:${task.taskId}`);
+  return (
+    <div className="bg-tasks-light" data-testid="light-subagent-detail">
+      {task.prompt && (
+        <details className="bg-tasks-light-prompt" {...promptDisclosure}>
+          <summary>Prompt</summary>
+          <pre>{task.prompt}</pre>
+        </details>
+      )}
+      <div className="bg-tasks-light-label">{running ? 'Saying' : failed ? 'Why it ended' : 'Answer'}</div>
+      {task.summary
+        ? <AgentText compact sessionId={sessionId} text={task.summary} />
+        : <div className="wf-modal-loading">{running ? (task.lastTool ? `Running ${task.lastTool}` : 'Starting…') : 'It answered nothing.'}</div>}
     </div>
   );
 }
@@ -390,6 +415,8 @@ export function BackgroundTasksPanel({
                 </div>
               ) : selected?.isCommand && selected.task ? (
                 <CommandDetail row={selected} source={source} />
+              ) : selected?.task && isWalnutSubagent(selected.task) ? (
+                <LightSubagentDetail task={selected.task} sessionId={sessionId} />
               ) : selected ? (
                 <div className="wf-modal-loading">
                   {selected.task?.summary ? <AgentText compact sessionId={sessionId} text={selected.task.summary} /> : (selected.isAgent ? 'No transcript is available for this agent in this session.' : selected.title)}

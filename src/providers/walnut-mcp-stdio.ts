@@ -29,6 +29,7 @@ import { walnutMcpInstructions } from '../mcp/instructions.js'
 import { fitToolAnswer } from '../lib/tool-answer-fit.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { callIdFor, lostCallLines, newCallId } from '../lib/op-call-id.js'
+import { withToolUseId } from '../lib/tool-use-id.js'
 
 /** MCP protocol versions this server speaks; the first is offered when the client's is unknown. */
 export const MCP_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const
@@ -148,7 +149,8 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
     const given = params.arguments ?? {}
     if (typeof given !== 'object' || given === null || Array.isArray(given)) return toolError('arguments must be an object')
     // A run's id chosen here (host_exec), so an answer lost on the way back still leaves one to read.
-    const args = { ...given } as Record<string, unknown>
+    // The chat's tool call it runs for, from Claude Code's _meta (src/lib/tool-use-id.ts).
+    const args = withToolUseId(name, { ...given } as Record<string, unknown>, params._meta)
     // Every call's id (src/lib/op-call-id.ts): a resend runs it at most once, and op_result reads
     // what it did when its answer is lost. A model re-running a lost call passes "_call_id".
     const chosen = callIdFor(args)

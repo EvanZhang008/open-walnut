@@ -28,6 +28,8 @@
  * "Method not found", session/resume restores the thread WITHOUT a replay burst.
  * Set MOCK_ACP_GROUPED_MODELS=1 to publish the model select as
  * SessionConfigSelectGroup[] (one group per provider, dsh's shape).
+ * Set MOCK_ACP_START_MODE=<preset> to start every session in that `mode` preset, and
+ * MOCK_ACP_LOCK_MODE=1 to refuse every change of it (an adapter its own settings hold).
  * Set MOCK_ACP_REJECT_PROMPT=<text> to reject every session/prompt with a
  * JSON-RPC internal error whose message carries <text>.
  * Set MOCK_ACP_EXIT_ON_STDIN_CLOSE_MS to delay exit after stdin closes
@@ -542,7 +544,7 @@ rl.on('line', async (line) => {
         // overwrite the same durable "mock-session-1" record.
         const sessionId = `mock-session-${process.pid}-${sessionCounter}`;
         sessionModels.set(sessionId, 'mock-gpt-best');
-        sessionModes.set(sessionId, 'agent');
+        sessionModes.set(sessionId, process.env.MOCK_ACP_START_MODE || 'agent');
         sessionCollaborationModes.set(sessionId, 'default');
         const models = modelState(sessionId);
         reply(msg.id, {
@@ -560,7 +562,7 @@ rl.on('line', async (line) => {
       }
       const sid = msg.params?.sessionId;
       if (!sessionModels.has(sid)) sessionModels.set(sid, 'mock-gpt-best');
-      if (!sessionModes.has(sid)) sessionModes.set(sid, 'agent');
+      if (!sessionModes.has(sid)) sessionModes.set(sid, process.env.MOCK_ACP_START_MODE || 'agent');
       if (!sessionCollaborationModes.has(sid)) sessionCollaborationModes.set(sid, 'default');
       // No replay: resume restores the agent's log without re-sending history.
       reply(msg.id, { configOptions: sessionConfigOptions(sid) });
@@ -589,7 +591,7 @@ rl.on('line', async (line) => {
         await sleep(loadDelayMs);
       }
       if (!sessionModels.has(sid)) sessionModels.set(sid, 'mock-gpt-best');
-      if (!sessionModes.has(sid)) sessionModes.set(sid, 'agent');
+      if (!sessionModes.has(sid)) sessionModes.set(sid, process.env.MOCK_ACP_START_MODE || 'agent');
       if (!sessionCollaborationModes.has(sid)) sessionCollaborationModes.set(sid, 'default');
       // Historical replay (clients typically suppress these during load).
       notify('session/update', {
@@ -610,7 +612,7 @@ rl.on('line', async (line) => {
         sessionModels.set(sid, value);
       } else if (configId === 'reasoning_effort' && process.env.MOCK_ACP_DEPENDENT_OPTIONS === '1' && ['', 'high'].includes(value) && modelState(sid).currentModelId === 'mock-gpt-best') {
         sessionEfforts.set(sid, value);
-      } else if (configId === 'mode' && ['read-only', 'agent', 'agent-full-access'].includes(value)) {
+      } else if (configId === 'mode' && ['read-only', 'agent', 'agent-full-access'].includes(value) && process.env.MOCK_ACP_LOCK_MODE !== '1') {
         sessionModes.set(sid, value);
       } else if (configId === 'collaboration_mode' && ['default', 'plan'].includes(value)) {
         sessionCollaborationModes.set(sid, value);

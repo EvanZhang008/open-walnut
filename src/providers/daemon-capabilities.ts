@@ -693,6 +693,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // the queue-until-turn-end path (pre-steering behavior).
   'acpSteer',
   'acp-model-catalog-v1',
+  // 'acp-light-bounds-v1': acpStart takes `deadlineAt` and `orphanGraceMs` (a light subagent's
+  // worker, core/subagents), and the daemon ends such a worker's whole process group itself past
+  // its deadline or once no socket has subscribed to it for the grace. Required: a light ACP run
+  // is refused on a daemon without it, which would leave one running after its server died.
+  // The source twin says it only with an ACP sidecar that has the bounds (acp.lightBounds).
+  'acp-light-bounds-v1',
   // 'acp-host-v1' is NOT listed here: only the source twin says it, once the ACP files
   // a source deploy puts beside daemon.cjs are there (daemonCapabilities() in
   // daemon-source.ts). acpStart then takes `hostAdapter` instead of the primary's paths,

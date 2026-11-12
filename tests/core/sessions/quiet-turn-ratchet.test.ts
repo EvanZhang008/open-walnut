@@ -30,6 +30,7 @@ const SEES_QUIET_TURNS: Record<string, string> = {
   'src/providers/claude-code-session.ts': 'the runner: drains the queue and settles the turn, quiet or not',
   'src/providers/acp-session.ts': 'an ACP engine: never compacted while idle',
   'src/providers/acp-stream-normalizer.ts': 'an ACP engine: never compacted while idle',
+  'src/providers/light-subagent-acp.ts': 'a light subagent\'s own one-prompt worker: no session record, never compacted',
   'src/session-server/sdk-session.ts': 'the session server\'s own runner',
   'src/session-server/types.ts': 'types',
   'src/providers/session-server-client.ts': 'forwards the session server\'s events',

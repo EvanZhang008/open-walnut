@@ -33,6 +33,13 @@ export async function stopSessionBackgroundTask(sessionId: string, rawTaskId: un
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   if (!(await getSessionByClaudeId(sessionId))) throw new SessionControlError('session not found', 404);
 
+  // A light subagent of this session (core/subagents) is Walnut's own run, not the CLI's.
+  const light = await import('../subagents/registry.js');
+  if (light.hasLightSubagent(sessionId, taskId)) {
+    const { stopped, status } = light.stopLightSubagent(sessionId, taskId, 'the user');
+    log.session.info('light subagent stop', { sessionId, backgroundTaskId: taskId, stopped, status });
+    return { sessionId, taskId, stopped, status };
+  }
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
   const live = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined);
   if (!live) {

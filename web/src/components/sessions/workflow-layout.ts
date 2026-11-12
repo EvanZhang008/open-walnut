@@ -11,7 +11,12 @@ import type { WorkflowPhase, WorkflowAgent, BackgroundTask } from '@/hooks/useBa
 // TASKS (local_bash shell commands etc.). Tasks recovered from disk have no
 // taskType — fall back to subagentType (only the Agent tool sets it), else
 // treat as a plain task. taskType is authoritative when present.
-const AGENT_TASK_TYPES = new Set(['local_agent', 'remote_agent', 'in_process_teammate']);
+// walnut_subagent: a light subagent the session runs on another engine (Walnut's subagent_run).
+const AGENT_TASK_TYPES = new Set(['local_agent', 'remote_agent', 'in_process_teammate', 'walnut_subagent']);
+/** A light subagent Walnut runs for the session on another engine: no CLI transcript to fetch. */
+export function isWalnutSubagent(t: BackgroundTask): boolean {
+  return t.taskType === 'walnut_subagent';
+}
 export function isAgentTask(t: BackgroundTask): boolean {
   if (t.taskType) return AGENT_TASK_TYPES.has(t.taskType);
   return !!t.subagentType;

@@ -51,8 +51,6 @@ import {
 } from '../core/agents/engine-probe.js'
 import { localDaemon } from './local-daemon.js'
 import { getDirectDaemonConnection, DaemonConnection, type DaemonEvent } from './daemon-connection.js'
-import type { AcpHostAdapterSpec } from './acp-host-artifacts.js'
-import { hostAdapterSpec } from '../core/agents/host-adapter-spec.js'
 import { AcpJournalProjector } from './acp-journal-projector.js'
 import { AcpStreamNormalizer } from './acp-stream-normalizer.js'
 import { AcpTurnSpeedMeter } from '../core/sessions/acp-turn-speed.js'
@@ -96,6 +94,7 @@ import {
 } from '../core/session-message-queue.js'
 import { BudgetCheckingError, BudgetPausedError } from './delivery-failure.js'
 import { piNodeFor } from './pi-adapter-node.js'
+import { acpLaunchArtifacts, configuredEngineEnv, type AcpLaunchArtifacts } from './acp-launch.js'
 import {
   ACP_ASKING_MODE_VALUES,
   ACP_FULL_ACCESS_MODE_VALUES,
@@ -680,6 +679,25 @@ export function splitAcpModelId(modelId: string): { base: string; effort?: strin
 }
 
 export { CONTROL_PROMPT_GUARD }
+
+/**
+ * The option that answers a permission request with allow (allow_once, else another
+ * allow kind) or reject (reject_once, else another reject kind); null when there is none.
+ * Amendment options (accept_execpolicy_amendment, apply_network_policy_amendment:*) also
+ * carry kind allow_always but mean "change durable policy", not "approve this call", so a
+ * kind-based picker never selects one (reference study 2026-08-12).
+ */
+export function permissionOptionFor(options: ReadonlyArray<{ optionId?: string; kind?: string }>, allow: boolean): string | null {
+  if (allow) {
+    const isAmendment = (o: { optionId?: string }) => typeof o.optionId === 'string' && o.optionId.includes('amendment')
+    return options.find((o) => o.kind === 'allow_once')?.optionId
+      ?? options.find((o) => o.kind?.startsWith('allow') && !isAmendment(o))?.optionId
+      ?? null
+  }
+  return options.find((o) => o.kind === 'reject_once')?.optionId
+    ?? options.find((o) => o.kind?.startsWith('reject'))?.optionId
+    ?? null
+}
 
 /** A status question ended because the model reached for a tool; `partialText` is what it wrote first. */
 export class ControlToolRefusedError extends Error {
@@ -1570,28 +1588,6 @@ export class AcpSession {
   }
 
   /**
-   * argv for engines whose adapter comes from walnut config (source 'config').
-   * Resolved HERE, where config is already loaded on this path, so
-   * resolveAcpArtifacts stays synchronous for every other engine.
-   */
-  private async resolveConfiguredAdapterCmd(): Promise<string[] | undefined> {
-    if (engineCaps(this.engineId).acpAdapter?.source !== 'config') return undefined
-    try {
-      const { getConfig } = await import('../core/config-manager.js')
-      const config = await getConfig()
-      // Read structurally: engines.* is an optional additive config section.
-      const raw = (config as { engines?: Record<string, { adapter_cmd?: unknown } | undefined> })
-        .engines?.[this.engineId]?.adapter_cmd
-      if (!Array.isArray(raw)) return undefined
-      return raw.filter((arg): arg is string => typeof arg === 'string' && arg !== '')
-    } catch {
-      // Unreadable config reads as "not configured" — resolveAcpArtifacts then
-      // throws the actionable error naming the config key.
-      return undefined
-    }
-  }
-
-  /**
    * Environment for the adapter process.
    *
    * Everything except WALNUT_SESSION_ID is CODEX-SPECIFIC by contract:
@@ -1726,38 +1722,14 @@ export class AcpSession {
     return context ? renderHintBlock(SESSION_CONTEXT_HINT_KIND, `${SESSION_CONTEXT_LEAD}\n\n${context}`) : ''
   }
 
-  /** Operator env overlay from `engines.<id>.env` (see engineEnvOverlayFromConfig). */
+  /** Operator env overlay from `engines.<id>.env` (acp-launch.ts). */
   private async resolveConfiguredEngineEnv(): Promise<Record<string, string> | undefined> {
-    try {
-      const { getConfig } = await import('../core/config-manager.js')
-      return engineEnvOverlayFromConfig(await getConfig(), this.engineId)
-    } catch {
-      // Unreadable config = no overlay; the engine still launches with the
-      // inherited env (same degradation as resolveConfiguredAdapterCmd).
-      return undefined
-    }
+    return configuredEngineEnv(this.engineId)
   }
 
-  private async resolveArtifacts(): Promise<{ workerCmd: string[]; adapterCmd: string[] } | { hostAdapter: AcpHostAdapterSpec }> {
+  private async resolveArtifacts(): Promise<AcpLaunchArtifacts> {
     if (this.cfg.artifacts) return this.cfg.artifacts
-    if (this.remote) {
-      // The host's daemon builds both commands from what that host has (acp-host-artifacts.ts).
-      const spec = hostAdapterSpec(this.engineId)
-      if (!spec) throw new Error(`${engineCaps(this.engineId).displayName} runs on this machine only: its adapter command is this machine's config`)
-      return { hostAdapter: spec }
-    }
-    const artifacts = resolveAcpArtifacts(this.engineId, {
-      configuredAdapterCmd: await this.resolveConfiguredAdapterCmd(),
-    })
-    // Without Bun, build-daemon.sh skips the worker bundle (Claude sessions never need
-    // it). Fail here, before the daemon spawns a path that does not exist, and name the fix.
-    if (!fsModule.existsSync(artifacts.workerCmd[1])) {
-      throw new Error(
-        `Engine '${this.engineId}' runs on the ACP worker, which is not built (${artifacts.workerCmd[1]}). `
-        + 'Install Bun (https://bun.sh) and run `bun run build:daemon`, or install the released Walnut, which ships it.',
-      )
-    }
-    return artifacts
+    return acpLaunchArtifacts(this.engineId, this.remote)
   }
 
   private async establishProviderSession(): Promise<string> {
@@ -2583,16 +2555,7 @@ export class AcpSession {
     if (selectedOptionId && options.some((o) => o.optionId === selectedOptionId)) {
       optionId = selectedOptionId
     } else if (allow) {
-      // Amendment options (accept_execpolicy_amendment, apply_network_policy_
-      // amendment:*) also carry kind allow_always but mean "change durable
-      // policy", not "approve this call" — a kind-based picker must never
-      // select one implicitly (reference study 2026-08-12; one ACP client has this
-      // hole and is saved only by codex's option ordering).
-      const isAmendment = (o: { optionId?: string }) =>
-        typeof o.optionId === 'string' && o.optionId.includes('amendment')
-      optionId = options.find((o) => o.kind === 'allow_once')?.optionId
-        ?? options.find((o) => o.kind?.startsWith('allow') && !isAmendment(o))?.optionId
-        ?? null
+      optionId = permissionOptionFor(options, true)
       if (!optionId) {
         // Unknown requestId (stale card / replaced worker) — refuse loudly.
         // NEVER fall back to options[0]: on codex that could silently select
@@ -2604,9 +2567,7 @@ export class AcpSession {
         return false
       }
     } else {
-      optionId = options.find((o) => o.kind === 'reject_once')?.optionId
-        ?? options.find((o) => o.kind?.startsWith('reject'))?.optionId
-        ?? null // no reject option → cancelled outcome
+      optionId = permissionOptionFor(options, false) // null: no reject option → cancelled outcome
     }
     const resp = await conn.send('acpRespond', {
       sid: this.runtimeId,
