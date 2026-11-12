@@ -9,7 +9,7 @@
  * in a row takes the card, the row and the notification off together.
  */
 import { useSyncExternalStore } from 'react';
-import { answerApproval, enrollApprovalKey, listApprovals, removeApprovalKey, setApprovalsAskMe, type Approval, type ApprovalKey } from '@/api/approvals';
+import { answerApproval, enrollApprovalKey, listApprovals, setApprovalsAskMe, type Approval, type ApprovalKey } from '@/api/approvals';
 import { onVaultSessionChange, vaultSession } from '@/api/vault';
 import { checkVault, vaultLive } from '@/api/vault-live';
 import { howToApprove, onlyDevice, signerKinds } from '../../../../src/core/approvals/signer-words';
@@ -273,12 +273,11 @@ export async function startTouchId(): Promise<void> {
   set({ touchId });
   if (!touchId.available || !touchId.publicKey || enrolling) return;
   await refreshApprovals();
-  // Known and signing already: nothing to do. A key of its own still pending (asked before a
-  // device the person set up signed at once, 2026-11-12) is replaced by one the app sends from its
-  // own process, which signs now; the pending one and its "Let … sign" ask go.
+  // Known and signing already: nothing to do. Otherwise the app sends a new key from its own
+  // process, which signs now, and the server retires this Mac's earlier keys with their
+  // "Let … sign" asks (core/approvals/keys.ts).
   const known = state.keys.find((k) => k.id === touchId.keyId);
   if (known?.status === 'active') return;
-  const stalePending = known?.status === 'pending' ? known.id : undefined;
   enrolling = true;
   try {
     // The app sends it from its own process, which may be the first device (no setup step for
@@ -294,9 +293,6 @@ export async function startTouchId(): Promise<void> {
       ? native.body as { key: ApprovalKey }
       : await enrollApprovalKey({ publicKey: touchId.publicKey, name: touchId.name ?? 'Mac', kind: 'mac-app' });
     log.info('approvals', 'Mac app key enrolled', { keyId: r.key?.id, status: r.key?.status, native: !!native });
-    if (stalePending && r.key?.status === 'active' && r.key.id !== stalePending) {
-      await removeApprovalKey(stalePending).catch((err) => log.warn('approvals', 'old pending key not removed', { keyId: stalePending, error: String(err) }));
-    }
     await refreshApprovals();
   } catch (err) {
     log.warn('approvals', 'Mac app key enroll failed', { error: String(err) });

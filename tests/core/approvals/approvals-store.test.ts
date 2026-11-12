@@ -201,6 +201,51 @@ describe('biometric approvals and device keys', () => {
     expect((await listKeys()).every((k) => k.status === 'active')).toBe(true)
   })
 
+  it('a device that enrolls a newer key from its own app retires its earlier ones, active or pending, with their asks (2026-11-12)', async () => {
+    // The Mac app makes a new key at every enrollment (ApprovalBridge.swift): before this, each one
+    // stayed, and a pending one from a replaced key left a "Let … sign" card nobody could answer.
+    const oldMac = softKey()
+    const phone = softKey()
+    const strayMac = softKey()
+    const newMac = softKey()
+    await enrollKey({ publicKey: oldMac.spki, name: 'Studio', kind: 'mac-app', fromDeviceApp: true })
+    await enrollKey({ publicKey: phone.spki, name: 'Studio', kind: 'iphone', fromDeviceApp: true })
+    const stray = await enrollKey({ publicKey: strayMac.spki, name: 'Studio', kind: 'mac-app' })
+    expect(stray.key.status).toBe('pending')
+    const fresh = await enrollKey({ publicKey: newMac.spki, name: 'Studio', kind: 'mac-app', fromDeviceApp: true })
+    expect(fresh.key.status).toBe('active')
+    // The same device's older keys are gone; another kind with the same name stays.
+    expect((await listKeys()).map((k) => k.id).sort()).toEqual([newMac.id, phone.id].sort())
+    expect((await getApproval(stray.enrollment!.id))?.status).toBe('canceled')
+    expect((await listApprovals({ status: 'pending' })).filter((x) => x.enrollsKey)).toHaveLength(0)
+    // A phone never retires another phone of the same name (many are called "iPhone").
+    const phone2 = softKey()
+    await enrollKey({ publicKey: phone2.spki, name: 'Studio', kind: 'iphone', fromDeviceApp: true })
+    expect((await listKeys()).filter((k) => k.kind === 'iphone')).toHaveLength(2)
+    // A request with no app proof never retires anything.
+    const other = softKey()
+    await enrollKey({ publicKey: other.spki, name: 'Studio', kind: 'mac-app' })
+    expect((await listKeys()).find((k) => k.id === newMac.id)?.status).toBe('active')
+  })
+
+  it('only keys.ts writes the device keys, and only enrollKey adds one (where a device retires its earlier keys)', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const root = path.resolve(__dirname, '../../../src')
+    const writers: string[] = []
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name)
+        if (e.isDirectory()) walk(full)
+        else if (/\.tsx?$/.test(e.name) && /updateJsonFile<ApprovalKeysFile>/.test(fs.readFileSync(full, 'utf8'))) writers.push(path.relative(root, full))
+      }
+    }
+    walk(root)
+    expect(writers).toEqual(['core/approvals/keys.ts'])
+    const src = fs.readFileSync(path.join(root, 'core/approvals/keys.ts'), 'utf8')
+    expect(src.match(/file\.keys\.push\(/g)).toHaveLength(1)
+  })
+
   it('a denied enrollment drops the pending key', async () => {
     const phone = softKey()
     const mac = softKey()

@@ -95,6 +95,7 @@ async function enrollOne(input: EnrollInput): Promise<EnrollResult> {
   let needsEnrollment = false
   let activated = false
   let withdraw: string | undefined
+  let retired: ApprovalKey[] = []
   await updateJsonFile<ApprovalKeysFile>(keysFile(), EMPTY, (file) => {
     const now = new Date().toISOString()
     const existing = file.keys.find((k) => k.id === id)
@@ -117,6 +118,28 @@ async function enrollOne(input: EnrollInput): Promise<EnrollResult> {
     activated = trusted
     return file
   })
+  // The Mac app makes a new key at each enrollment (it never sends one read from disk:
+  // ApprovalBridge.swift), so the key it had before is one it can no longer sign with: the same Mac
+  // (its name) asking from its own app retires its earlier keys, active or pending, with their
+  // "Let … sign" asks (2026-11-12: the Mac app's keys piled up, and a pending one from a replaced
+  // key left a card nobody could answer). The iPhone app keeps its key and enrolls the same one
+  // again, and many phones share the default name "iPhone", so phones are left alone. Known limit:
+  // two Macs with the same name read as one, so each takes the other's place when it enrolls.
+  if (key && key.status === 'active' && input.fromDeviceApp && key.kind === 'mac-app') {
+    const keep = key
+    await updateJsonFile<ApprovalKeysFile>(keysFile(), EMPTY, (file) => {
+      retired = file.keys.filter((k) => k.id !== keep.id && k.kind === keep.kind && k.name === keep.name)
+      if (retired.length) file.keys = file.keys.filter((k) => !retired.includes(k))
+      return file
+    })
+    for (const old of retired) {
+      if (old.enrollApprovalId) await cancelInternal(old.enrollApprovalId, 'the device enrolled a newer key from its own app').catch(() => undefined)
+    }
+    if (retired.length) {
+      log.web.info('approval keys retired: the same device enrolled a newer key', { keyId: keep.id, kind: keep.kind, name: keep.name, retired: retired.map((k) => ({ id: k.id, status: k.status })) })
+      changed()
+    }
+  }
   if (!key) throw new ApprovalError(403, 'first_key_from_phone', FIRST_KEY_MESSAGE)
   if (withdraw) await cancelInternal(withdraw, 'the device signs now: it was set up from its own app').catch(() => undefined)
   if (key.status === 'active') {
