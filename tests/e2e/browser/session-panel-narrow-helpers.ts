@@ -22,6 +22,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expectPeeksInPlace } from './truncation-peek-helpers'
 
 export interface Offender {
   rule: 'R1' | 'R2' | 'R3' | 'R4'
@@ -422,14 +423,17 @@ export async function expectReadablePanel(page: Page, panel: Locator, label = 'p
 }
 
 /**
- * R5: a host name in a notice stays on one line, cut with an ellipsis, its whole name in a
- * title. The element is the deepest one whose text holds the host.
+ * R5: a host name in a notice stays on one line, cut with an ellipsis, and hovering it shows
+ * its whole name in place (truncation-peek-helpers.ts), never in a native title. The element
+ * is the deepest one whose text holds the host.
  */
 export async function expectHostNameCut(panel: Locator, host: string, label = 'host name'): Promise<void> {
   const facts = await panel.evaluate((root, name) => {
     const holders = Array.from(root.querySelectorAll('*')).filter((el) => (el.textContent ?? '').includes(name))
     const deepest = holders.find((el) => !Array.from(el.children).some((c) => (c.textContent ?? '').includes(name)))
     if (!deepest) return null
+    root.querySelectorAll('[data-r5-host]').forEach((el) => el.removeAttribute('data-r5-host'))
+    deepest.setAttribute('data-r5-host', '')
     const cs = getComputedStyle(deepest)
     const tops = new Set<number>()
     const walker = document.createTreeWalker(deepest, NodeFilter.SHOW_TEXT)
@@ -444,7 +448,6 @@ export async function expectHostNameCut(panel: Locator, host: string, label = 'h
     }
     return {
       tag: `${deepest.tagName.toLowerCase()}.${(deepest.getAttribute('class') ?? '').trim().split(/\s+/).join('.')}`,
-      title: deepest.closest('[title]')?.getAttribute('title') ?? null,
       lines: tops.size,
       textOverflow: cs.textOverflow,
       whiteSpace: cs.whiteSpace,
@@ -455,9 +458,9 @@ export async function expectHostNameCut(panel: Locator, host: string, label = 'h
   if (!facts) return
   const where = `${facts.tag} "${facts.ownText}"`
   expect.soft(facts.lines, `R5 ${label}: the host name in ${where} wraps onto ${facts.lines} lines`).toBe(1)
-  expect.soft(facts.title, `R5 ${label}: ${where} carries the full host name in a title`).toBe(host)
   expect.soft(facts.textOverflow, `R5 ${label}: ${where} is cut with an ellipsis`).toBe('ellipsis')
   expect.soft(facts.whiteSpace, `R5 ${label}: ${where} never wraps`).toMatch(/nowrap|pre/)
+  await expectPeeksInPlace(panel.locator('[data-r5-host]'), host, `R5 ${label}: ${where}`)
 }
 
 /** Save a screenshot of the panel under the task's shots folder (per browser project). */

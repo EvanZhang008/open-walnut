@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { isolateUiPrefs, showAllSections } from './todo-panel-helpers'
 import { openHome } from './home-navigation-helpers'
+import { peekPill } from './truncation-peek-helpers'
 
 /**
  * Cut-off text peeks in place (web/src/utils/truncation-peek.ts; 2026-11-12, the user, of a
@@ -22,7 +23,7 @@ const LONG_A = `${WORD} alpha: Plan the garden shed rebuild, with the lumber lis
 const LONG_B = `${WORD} beta: Write up the sourdough experiments, with the flour ratios, the proofing times and the notes from each bake`
 const SHORT = `${WORD} gamma`
 
-const pill = (page: Page) => page.getByTestId('truncation-peek')
+const pill = peekPill
 const ids = new Map<string, string>()
 // Pinned rows: the Home tier rows of the report (a pinned row's title is what showed the dark tooltip).
 const row = (page: Page, title: string) => page.locator(`.todo-pinned-section [data-task-id="${ids.get(title)}"]`).first()

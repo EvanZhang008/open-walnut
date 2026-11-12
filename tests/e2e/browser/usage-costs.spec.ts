@@ -8,6 +8,7 @@
  */
 import { devices, test, expect, type Page } from '@playwright/test'
 import { LONG_TITLE, routeCosts } from './usage-costs-fixture'
+import { expectPeeksInPlace } from './truncation-peek-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -126,10 +127,11 @@ test('one picture: dollars first, and every Break down by choice shows its lines
   await expect(short.locator(':scope > summary')).toHaveText(/12 short sessions \(tests and one-offs\) · \$2\.40/)
   const label = tasks.locator('.usage-line-label').first()
   const fit = await label.evaluate((el) => ({ h: el.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(el).lineHeight) || 18,
-    cut: el.scrollWidth > el.clientWidth, title: el.getAttribute('title') }))
+    cut: el.scrollWidth > el.clientWidth }))
   expect(fit.h).toBeLessThan(fit.lh * 1.6)
   expect(fit.cut).toBe(true)
-  expect(fit.title).toBe(LONG_TITLE)
+  // The rest of the cut line shows in place on hover, not in a native tooltip.
+  await expectPeeksInPlace(label, LONG_TITLE, 'the cut task line')
 
   // Periods: Today is one flat band, All time asks for no bounds.
   await page.getByTestId('usage-period-today').click()

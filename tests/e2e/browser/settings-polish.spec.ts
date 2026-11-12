@@ -8,6 +8,7 @@ import { devices, test, expect, type Page, type Request } from '@playwright/test
 import { backToApps, openApps, openPluginDetail } from './apps-store-helpers'
 import { withCssColor } from './css-color'
 import { dropFakes } from './route-teardown'
+import { expectPeeksInPlace } from './truncation-peek-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -187,13 +188,13 @@ test('N08 N26: accuracy chips stay on one line, the list is capped, Refresh sits
   const chips = await page.locator('.suggest-accuracy-entry').evaluateAll((els) => els.map((e) => ({
     h: Math.round(e.getBoundingClientRect().height),
     field: Math.round(e.querySelector('.suggest-accuracy-field')!.getBoundingClientRect().height),
-    title: e.querySelector('.suggest-accuracy-values')!.getAttribute('title'),
   })))
   for (const c of chips) {
     expect(c.h).toBeLessThanOrEqual(20)
     expect(c.field).toBeLessThanOrEqual(17)
-    expect(c.title).toContain('a-very-long-project-folder-name')
   }
+  // A cut-off path shows whole in place on hover, not in a native tooltip.
+  await expectPeeksInPlace(page.locator('.suggest-accuracy-entry .suggest-accuracy-values').first(), 'a-very-long-project-folder-name', 'N08 a cut accuracy chip')
   await expect(page.locator('.settings-pane-header-trailing').getByRole('button', { name: 'Refresh' })).toBeVisible()
   await page.getByTestId('suggest-accuracy-more').getByRole('button', { name: 'Show more' }).click()
   await expect(page.locator('.suggest-accuracy-record')).toHaveCount(20)
