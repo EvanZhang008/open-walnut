@@ -18,6 +18,7 @@ import { DAEMON_TUNNEL_PATH } from '../../core/hosts/cloud-box-host.js'
 import { configChangedForClients } from '../../core/config-broadcast.js'
 import { selectWsProtocol } from '../../lib/ws-bearer-protocol.js'
 import { upgradeCredential } from './upgrade-credential.js'
+import { leanShaper, newLeanState, wantsLean, type LeanState } from './lean-frames.js'
 import { authenticateFeatureNode, upgradeFeatureNode, startFeatureNodes, closeFeatureNodes } from './feature-node-runtime.js'
 import { BRIDGE_SESSION_STREAM_PATH, closeAllBridgeSessionStreams, handleBridgeSessionStreamUpgrade } from './bridge-session-stream.js'
 
@@ -43,6 +44,8 @@ interface Client {
   interest: Set<string>
   /** The paired device the upgrade's token named, if any: its revoke closes this socket. */
   device?: string
+  /** Set when the socket asked for lean frames (`/ws?lean=<signature>`): what it was sent (lean-frames.ts). */
+  lean?: LeanState
 }
 
 /** Close code of a socket whose device was signed out (revoked) while it was open. */
@@ -178,6 +181,9 @@ export function broadcastEvent(name: string, data: unknown): void {
   const entity = data as { sessionId?: string; taskId?: string } | null | undefined
   const sessionId = entity?.sessionId
   const taskId = entity?.taskId
+  // Shared work for lean sockets, done once and only when one is connected.
+  let shaper: ReturnType<typeof leanShaper> | undefined
+  let fullJson: string | undefined
 
   for (const client of clients) {
     if (client.ws.readyState !== WebSocket.OPEN) continue
@@ -185,8 +191,21 @@ export function broadcastEvent(name: string, data: unknown): void {
     // opted into. Default "global" clients are never filtered — unchanged firehose.
     if (client.mode === 'lightweight' && !clientWantsEvent(client, sessionId, taskId)) continue
     client.seq++
-    const frame: WsFrame = { type: 'event', name, data, seq: client.seq }
-    client.ws.send(JSON.stringify(frame))
+    if (client.lean) {
+      if (shaper === undefined) shaper = leanShaper(name, data)
+      if (shaper) {
+        const frame: WsFrame = { type: 'event', name, data: shaper(client.lean), seq: client.seq }
+        client.ws.send(JSON.stringify(frame))
+        continue
+      }
+    }
+    // One serialization for every socket that gets the frame as it is; only seq differs.
+    // (byte for byte what JSON.stringify of the whole frame gave, an undefined data left out).
+    if (fullJson === undefined) {
+      const json = JSON.stringify(data)
+      fullJson = `{"type":"event","name":${JSON.stringify(name)}${json === undefined ? '' : `,"data":${json}`},"seq":`
+    }
+    client.ws.send(`${fullJson}${client.seq}}`)
   }
 }
 
@@ -216,7 +235,8 @@ export function sendToClient(ws: WebSocket, name: string, data: unknown): void {
   for (const client of clients) {
     if (client.ws === ws) {
       client.seq++
-      const frame: WsFrame = { type: 'event', name, data, seq: client.seq }
+      const shaper = client.lean ? leanShaper(name, data) : null
+      const frame: WsFrame = { type: 'event', name, data: shaper && client.lean ? shaper(client.lean) : data, seq: client.seq }
       ws.send(JSON.stringify(frame))
       return
     }
@@ -607,9 +627,11 @@ export function attachWss(server: HttpServer): WebSocketServer {
   wss.on('connection', (ws: WebSocket, request?: IncomingMessage) => {
     // New connections default to "global" mode (full firehose) — unchanged behavior.
     const device = (request as DeviceUpgrade | undefined)?.walnutDevice
-    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set(), ...(device ? { device } : {}) }
+    let lean = false
+    try { lean = wantsLean(new URL(request?.url ?? '/', 'http://ws.local')) } catch { /* a bad URL asks for nothing */ }
+    const client: Client = { ws, seq: 0, alive: true, mode: 'global', interest: new Set(), ...(device ? { device } : {}), ...(lean ? { lean: newLeanState() } : {}) }
     clients.add(client)
-    log.ws.info('client connected', { clientCount: clients.size })
+    log.ws.info('client connected', { clientCount: clients.size, lean })
     // A browser's socket ends with its access token: the page renews and comes back (WS_RENEW_SIGN_IN).
     const accessUntil = (request as DeviceUpgrade | undefined)?.walnutAccessUntil
     const renewTimer = accessUntil === undefined ? null : setTimeout(() => {
