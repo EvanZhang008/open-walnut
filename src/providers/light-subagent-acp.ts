@@ -286,12 +286,12 @@ async function adapterEnv(spec: LightRunSpec, remote: boolean, artifacts: unknow
   const walnutConfig = await codexWalnutConfig()
   const base = acp.splitAcpModelId(spec.model ?? '')
   const effort = spec.effort ?? base.effort
-  const codex = resolveCodexEngine(
+  // An effort with no model rides the engine's own default model as its reasoning effort.
+  const codex = withEffort(resolveCodexEngine(
     walnutConfig,
     overlay && Object.hasOwn(overlay, 'CODEX_CONFIG') ? overlay.CODEX_CONFIG : (remote ? undefined : process.env.CODEX_CONFIG),
     base.base ? { pick: { model: base.base, ...(effort ? { reasoning_effort: effort } : {}) } } : {},
-  )
-  const baseConfig = !base.base && effort ? { ...(codex.baseConfig ?? {}), model_reasoning_effort: effort } : codex.baseConfig
+  ), base.base ? undefined : effort)
   let providerExecutable: string | undefined
   if (!remote && !testWiring) {
     const { mergeAcpSpawnEnv } = await import('./acp-worker/protocol.js')
@@ -302,11 +302,15 @@ async function adapterEnv(spec: LightRunSpec, remote: boolean, artifacts: unknow
     }
   }
   const managed = acp.buildAcpAdapterEnv(providerExecutable, {
-    baseConfig,
+    baseConfig: codex.baseConfig,
     sessionId: spec.callerSid,
     initialAgentMode: spec.fullAccess ? 'agent-full-access' : 'read-only',
     walnutApiEnv,
     codexModelPrefix: codex.prefix,
   })
   return { ...(overlay ?? {}), ...(managed ?? {}), [CODEX_TRANSPORT_ENV]: resolveCodexTransport(walnutConfig, process.env, { adapterGiven: false }) }
+}
+
+function withEffort<T extends { baseConfig?: Record<string, unknown> | undefined }>(codex: T, effort: string | undefined): T {
+  return effort ? { ...codex, baseConfig: { ...(codex.baseConfig ?? {}), model_reasoning_effort: effort } } : codex
 }

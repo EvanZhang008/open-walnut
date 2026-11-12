@@ -19,6 +19,7 @@ const ONE_FUNCTIONS = ['resolveCodexEngine(', 'resolveCodexAdapterConfig(']
 const KNOWN: Record<string, { applies: string } | { namesOnly: string }> = {
   'src/providers/acp-session.ts': { applies: 'buildAdapterEnv: the env of every Codex session start, on this machine and on another host' },
   'src/providers/engine-model-probe.ts': { applies: 'the model menu probe: the same env a session start gets' },
+  'src/providers/light-subagent-acp.ts': { applies: 'a light subagent on Codex: the env of its worker, from the same function a session start uses' },
   'src/providers/codex-model-probe.ts': { applies: 'the daemon side of the probe: codexProviderStartupArgs puts the CODEX_CONFIG provider on its app-server' },
   'src/providers/codex-engine-config.ts': { applies: 'the function itself' },
   'src/providers/codex-app-server/launch.ts': { applies: 'the direct Codex session\'s app-server: codexProviderStartupArgs puts the CODEX_CONFIG provider on it, the env comes from acp-session.ts' },
@@ -134,8 +135,8 @@ describe('every Codex spawn applies engines.codex through one function', () => {
         }
       }
     }
-    // The two Codex env builders: a session start and the model probe.
-    expect([...new Set(seen)].sort()).toEqual(['src/providers/acp-session.ts', 'src/providers/engine-model-probe.ts'])
+    // The Codex env builders: a session start, the model probe and a light subagent's worker.
+    expect([...new Set(seen)].sort()).toEqual(['src/providers/acp-session.ts', 'src/providers/engine-model-probe.ts', 'src/providers/light-subagent-acp.ts'])
   })
 
   it('each caller resolves against codexWalnutConfig, so a server off the Mac reads the Mac\'s engine settings', () => {

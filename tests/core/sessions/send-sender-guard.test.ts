@@ -145,6 +145,8 @@ const CALL_SITES: Record<string, number> = {
   'src/core/sessions/worker-question.ts': 1,       // a worker's question: its own session is the caller
   'src/core/health-monitor/fix-task.ts': 3,         // a health alarm's fix task: quickStartSession frames Walnut's brief; the alarm's note to a task that has it (walnut message, source health-alarm), or a start with it
   'src/core/status-consistency.ts': 1,
+  // A light subagent's end: a Walnut notice (walnut-notify) into the session that ran it.
+  'src/core/subagents/registry.ts': 1,
   // A low disk: one Walnut notice (walnut-notify) asking an open task to clear its own folder.
   'src/core/task-dir-size-notice.ts': 1,
   'src/core/pull-requests/pr-watch.ts': 1,       // pull request news: a Walnut envelope, source pr-watch
