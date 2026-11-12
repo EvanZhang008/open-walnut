@@ -25,13 +25,15 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-light-subage
 import { runAcpLight, _setLightAcpTestWiring } from '../../src/providers/light-subagent-acp.js'
 import { LightSubagentError, type LightProgress } from '../../src/core/subagents/types.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { acpWorkerBundle } from '../helpers/acp-worker-bundle.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 // This machine's compiled daemon (a build makes the darwin and linux files).
 const DAEMON_BIN = path.join(ROOT, `dist/daemon-binaries/daemon-${process.platform}-${process.arch}`)
-const WORKER = path.join(ROOT, 'dist/daemon-binaries/acp-worker.js')
 const MOCK_AGENT = path.join(ROOT, 'tests/providers/mock-acp-agent.mjs')
-const HAVE_BIN = fs.existsSync(DAEMON_BIN) && fs.existsSync(WORKER)
+const HAVE_BIN = fs.existsSync(DAEMON_BIN)
+// The worker built from this checkout's source, never a prebuilt file a deploy left in dist/.
+const WORKER = HAVE_BIN ? acpWorkerBundle() : ''
 
 let daemon: ChildProcess | null = null
 const streams = isolated.daemonDir + '-streams'
