@@ -150,10 +150,10 @@ describe('the prompt each role is spawned with (Claude Code)', () => {
     const start = await waitFor(() => startsFor(sessionId)[0], 'ask start command')
     const { append, system } = promptsOf(start.args)
     const whole = [system, append].filter(Boolean).join('\n\n')
-    // Two carriers, each once: the persona (the contract inside) and the session
-    // context after it. Kept on purpose: an ask started without its persona
-    // still gets the charter from the context.
-    expect(whole.split(TEAM_CHARTER).length - 1).toBe(2)
+    // One copy per prompt: the session context carries the charter, and the persona
+    // built beside it leaves it out (profiles.ts addSessionRules). An ask started
+    // without its persona still gets it from the context.
+    expect(whole.split(TEAM_CHARTER).length - 1).toBe(1)
     keep('claude-ask-new.txt', `${system ? `--system-prompt:\n${system}\n\n` : ''}--append-system-prompt:\n${append ?? ''}`)
   }, 60_000)
 

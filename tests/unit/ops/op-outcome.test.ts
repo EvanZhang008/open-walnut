@@ -195,7 +195,7 @@ describe('task_create starts the work by default', () => {
     expect(r.seen[0].body).toEqual({
       title: TASK.title, project: 'marina', focus_tier: 'focus', launch_cwd: '/srv/marina', launch_host: 'build-box',
     })
-    expect(r.seen[1].body).toEqual({ cwd: '/srv/marina', host: 'build-box', engine: 'claude', mode: 'default' })
+    expect(r.seen[1].body).toEqual({ cwd: '/srv/marina', host: 'build-box', engine: 'claude', mode: 'default', cwd_chosen: true })
     expect(rec(created.execution).state).toBe('running')
     expect(rec(rec(created.task).execution).state).toBe('running')
     expect(created.outcome).toContain(`Task ${TASK.id} started`)
@@ -290,7 +290,7 @@ describe('task_create says where the task landed', () => {
     const r = createRunner({ created: { task: TASK, placement: { project: 'marina', group_id: 'g_x', folder_created: false } } })
     await r.speak({ title: TASK.title, group_id: 'g_x', cwd: '/srv/marina' })
     expect(r.seen[0].body).toEqual({ title: TASK.title, group_id: 'g_x', launch_cwd: '/srv/marina' })
-    expect(r.seen[1].body).toEqual({ cwd: '/srv/marina' })
+    expect(r.seen[1].body).toEqual({ cwd: '/srv/marina', cwd_chosen: true })
   })
 
   it('names the project and the NEW folder, and carries placement + the folder on the task', async () => {
