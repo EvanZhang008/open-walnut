@@ -129,13 +129,13 @@ describe('GET /:sessionId/history?tail=N', () => {
     await updateSessionRecord(sid, { threadAnchors: Array.from({ length: 12 }, (_, k) => ({
       msgId: `ask-${k}`, parent: 'answer-11', quote: { exact: 'Answer' }, source: k ? 'sticky' : 'selection',
     })) } as never);
-    for (const source of ['', '&source=streams']) {
-      const res = await request(createApp()).get(`/api/sessions/${sid}/history?tail=100&turns=10${source}`);
-      expect(res.status).toBe(200);
-      // Ten main turns back (2..11), every follow-up after them.
-      expect(res.body.messages[0].msgId, source).toBe('question-2');
-      expect(res.body.messages).toHaveLength(rows.length - 2 * 22);
-    }
+    // The ten-turn read (a streams first answer is one screen, history-open-preview.ts, and the
+    // ten-turn read follows it).
+    const res = await request(createApp()).get(`/api/sessions/${sid}/history?tail=100&turns=10`);
+    expect(res.status).toBe(200);
+    // Ten main turns back (2..11), every follow-up after them.
+    expect(res.body.messages[0].msgId).toBe('question-2');
+    expect(res.body.messages).toHaveLength(rows.length - 2 * 22);
   });
 
   it('keeps both timestamped halves of a message across a cold-window seam', async () => {

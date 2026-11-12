@@ -111,8 +111,9 @@ describe('one owner of the reading place', () => {
       'const landingOwnedRef = useRef(() => onQuestionPageRef.current || readingPlace.held.current);',
       'if (onQuestionPageRef.current) { stop(); return; }',
     ])
-    // The bottom pin skips its frames while a kept place holds.
-    expect(history).toMatch(/if \(onQuestionPageRef\.current\) \{ stop\(\); return; \}\n[^\n]*\n[^\n]*\n\s*if \(readingPlace\.held\.current\) \{ raf = requestAnimationFrame\(pin\); return; \}/)
+    // The bottom pin stops once a stack landing put the box at a passage (Tree Mode's split
+    // half lands on the passage asked about), and skips its frames while a kept place holds.
+    expect(history).toMatch(/if \(onQuestionPageRef\.current\) \{ stop\(\); return; \}\n[^\n]*\n[^\n]*\n\s*if \(landingOwnedFor\.current === sessionId\) \{ stop\(\); return; \}\n[^\n]*\n[^\n]*\n\s*if \(readingPlace\.held\.current\) \{ raf = requestAnimationFrame\(pin\); return; \}/)
   })
 
   it('the stack landing defers to a kept place', () => {
