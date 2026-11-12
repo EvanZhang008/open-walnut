@@ -1022,6 +1022,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       watermark: turnWatermark.current,
       optimisticCount: optimisticMessages?.length ?? 0,
       alreadyFiredThisTurn: promptRefetchFired.current,
+      firstCheckPending,
     })) return;
     promptRefetchFired.current = true;
     log.info('session-history', 'turn prompt missing at first model output — refetching history', {
@@ -1039,7 +1040,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         bumpHistory();
       }, delay));
     }
-  }, [blocks, completedLen, loadedMessages, optimisticMessages, sessionId, clearPromptRefetchRetries, readTimeline]);
+  }, [blocks, completedLen, loadedMessages, optimisticMessages, sessionId, clearPromptRefetchRetries, readTimeline, firstCheckPending]);
   useEffect(() => () => clearPromptRefetchRetries(), [clearPromptRefetchRetries]);
 
   // ── Non-destructive absorption (the single-timeline core) ──

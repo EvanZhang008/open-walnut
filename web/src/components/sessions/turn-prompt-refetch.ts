@@ -84,8 +84,11 @@ export function shouldRefetchForTurnPrompt(input: {
   watermark: number;
   optimisticCount: number;
   alreadyFiredThisTurn: boolean;
+  /** The panel's first history read has not answered yet: that read is the
+   *  refetch, and a bump now would only cancel it. */
+  firstCheckPending?: boolean;
 }): boolean {
-  if (input.alreadyFiredThisTurn) return false;
+  if (input.alreadyFiredThisTurn || input.firstCheckPending) return false;
   if (!liveTurnHasModelOutput(input.blocks, input.completedLen)) return false;
   return turnPromptMissing(input.messages, input.watermark, input.optimisticCount);
 }

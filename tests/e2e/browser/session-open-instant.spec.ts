@@ -344,3 +344,55 @@ test('a late IndexedDB copy fills in when the full read fails after the first sc
     if (held) await page.evaluate(() => (window as any).__releaseHistoryDb?.()).catch(() => {});
   }
 });
+
+// Any history refetch that lands before the first load showed anything (a WS
+// reconnect at boot, a running turn's prompt refetch) is still the first load:
+// it must not cancel the cache read for a `since=0` network read.
+test('a refetch before the first load lands still shows the cached copy first', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await mockSessionDetail(page);
+  const history = buildHistory(30);
+  const pattern = `**/api/sessions/${SESSION_ID}/history**`;
+  await page.route(pattern, async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.has('since')) await route.fulfill({ json: { messages: [], cursor: history.length, delta: true } });
+    else await route.fulfill({ json: { messages: history, cursor: history.length, initialUserText: history[0].text } });
+  });
+  const url = new URL(`/sessions?id=${SESSION_ID}`, test.info().project.use.baseURL).href;
+  await page.setContent(`<a href="${url}">Open saved session</a>`);
+  await page.getByRole('link', { name: 'Open saved session', exact: true }).click();
+  await expect(page.locator('.session-history')).toContainText('instant answer 29', { timeout: 30_000 });
+  await page.waitForTimeout(1600); // the debounced IndexedDB write-through lands
+
+  // Every history read is held from here: whatever shows next came from IndexedDB.
+  await page.unroute(pattern);
+  const held: Array<() => void> = [];
+  await page.route(pattern, async route => {
+    await new Promise<void>(resolve => held.push(resolve));
+    await route.fulfill({ json: { messages: history, cursor: history.length } }).catch(() => {});
+  });
+  let socket: { close: () => Promise<void> } | null = null;
+  await page.routeWebSocket(/\/ws(?:\?|$)/, (ws) => { socket = ws; ws.connectToServer(); });
+  await holdHistoryDbOpen(page);
+  let dbHeld = false;
+  try {
+    await page.reload();
+    await page.waitForFunction(() => (window as any).__historyDbHeld === true);
+    dbHeld = true;
+    await waitForWs(page);
+    // The socket drops and comes back while the first load still waits on storage:
+    // the panel bumps its history version (`_ws:reconnected`).
+    const first = socket!;
+    await first.close();
+    await expect.poll(() => socket !== first, { message: 'the page reconnected' }).toBe(true);
+    // The reconnect handler runs once the new socket opens.
+    await page.waitForTimeout(1000);
+    await page.evaluate(() => (window as any).__releaseHistoryDb?.());
+    dbHeld = false;
+    // Fails when the bump replaced the first load with a network read (all held).
+    await expect(page.locator('.session-history')).toContainText('instant answer 29');
+  } finally {
+    if (dbHeld) await page.evaluate(() => (window as any).__releaseHistoryDb?.()).catch(() => {});
+    for (const release of held) release();
+  }
+});

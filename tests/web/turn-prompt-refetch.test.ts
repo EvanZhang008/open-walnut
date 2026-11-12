@@ -94,6 +94,12 @@ describe('shouldRefetchForTurnPrompt — the incident timeline', () => {
   it('fires on a first tool call too (no-thinking models)', () => {
     expect(shouldRefetchForTurnPrompt({ ...base, blocks: [sys(), tool()], completedLen: 0 })).toBe(true);
   });
+  it('waits while the first history read has not answered: that read is the refetch (2026-11-12)', () => {
+    // A running session's stream reached the panel before its history; a bump here
+    // cancelled the first load (a cache adopted at 114 ms) for a since=0 read.
+    expect(shouldRefetchForTurnPrompt({ ...base, blocks: [thinking()], completedLen: 0, firstCheckPending: true })).toBe(false);
+    expect(shouldRefetchForTurnPrompt({ ...base, blocks: [thinking()], completedLen: 0, firstCheckPending: false })).toBe(true);
+  });
   it('fires once per turn — the latch suppresses every later render', () => {
     expect(shouldRefetchForTurnPrompt({ ...base, blocks: [thinking(), text()], completedLen: 0, alreadyFiredThisTurn: true })).toBe(false);
   });

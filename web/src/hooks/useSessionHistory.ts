@@ -307,7 +307,17 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // our cursor (a few KB, not the full 6.4MB), APPEND them (don't replace), and
     // publish the delta so the consumer promotes matching streaming blocks by
     // evidence. Skip Phase 1 (already have content). Offscreen columns skip entirely.
-    if (version > 0) {
+    //
+    // A bump that lands before the first load put anything here has no cursor to
+    // read after: it is still the first load, and goes through the caches like one.
+    // 2026-11-12: a running session's stream reached the panel before its history,
+    // the turn-prompt refetch bumped with 0 rows held, and the cancelled first load
+    // was replaced by a `since=0` read: a cache adopted at 114-226 ms stayed off
+    // screen until the network answered 1.6 s to 30 s later.
+    // The real cursor is the mark: Phase 1's rows carry none, so a bump between
+    // Phase 1 and Phase 2 (a turn end, an error) is still the first load too.
+    const holdsHistory = cursorRef.current > 0;
+    if (version > 0 && holdsHistory) {
       if (!enabled) { setFirstCheckPending(false); return () => { cancelled = true; controller.abort(); }; }
       setLoading(true);
       setPhase2Pending(true);
