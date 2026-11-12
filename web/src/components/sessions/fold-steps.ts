@@ -96,6 +96,8 @@ function compactedName(lines: ReadonlySet<CompactLine>): string {
  *  A stretch with none of the three reads by what it was: an update, a
  *  runtime notice, an acknowledgement, or "Thinking", the old empty-fold line. */
 const NONE: ReadonlySet<string> = new Set();
+/** The line of a fold with nothing counted (reasoning alone, injected context). */
+export const EMPTY_FOLD_PHRASE = 'Thinking';
 
 export function foldStepsPhrase(steps: readonly FoldStep[], waiting: ReadonlySet<string> = NONE): string {
   let received = 0;
@@ -146,7 +148,7 @@ export function foldStepsPhrase(steps: readonly FoldStep[], waiting: ReadonlySet
   if (pieces.length > 0) return pieces.join(' \u00b7 ');
   if (updates > 0) return updates === 1 ? 'An update' : `${updates} updates`;
   if (errorNotices > 0) return count(errorNotices, 'notice', 'notices');
-  return acks > 0 ? 'Acknowledged' : 'Thinking';
+  return acks > 0 ? 'Acknowledged' : EMPTY_FOLD_PHRASE;
 }
 
 /**

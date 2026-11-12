@@ -15,7 +15,7 @@
  *
  * History and the WS are mocked (mock-session-harness.ts).
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createEnvelopeKit, type EnvelopeKind } from '../../../src/core/peers/envelope-kit';
 import { MOCK_SESSION_ID as SID, injectEvent, takeLine, waitForWs } from './mock-session-harness';
@@ -42,8 +42,13 @@ test('every envelope kind is listed here', () => {
 
 const at = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();
 // A long answer, so the row the reader reads crosses the top of the view while
-// the new turn lands under it.
-const LONG = Array.from({ length: 14 }, (_, i) => `RF_ANSWER line ${i + 1}: the chart and the text match.`).join('\n\n');
+// the new turn lands under it. It is well over two views tall: every turn's steps
+// now fold to one short row (2026-11-12), and with 14 lines the chat was barely
+// taller than the 900px view: a reader 77px from the bottom was already at its
+// top, so the wheel step up could not move them (one of the two WebKit flakes;
+// the other is in wheelUpOver).
+const LONG_LINES = 40;
+const LONG = Array.from({ length: LONG_LINES }, (_, i) => `RF_ANSWER line ${i + 1}: the chart and the text match.`).join('\n\n');
 
 async function harness(page: Page, getRows: () => unknown[]) {
   await page.addInitScript(() => {
@@ -86,6 +91,37 @@ async function harness(page: Page, getRows: () => unknown[]) {
   });
 }
 
+/**
+ * One wheel step up over the chat, as a reader moves a little up, until `moved`.
+ * Aimed at a point the chat itself answers for in the layout of now, never a box
+ * read before: in WebKit the page's layout was seen for a moment with the main
+ * page 0px tall (right after a notification or trigger message came in), and a
+ * wheel aimed from that box went to the panel's frame, which does not scroll
+ * (the old flake: the gap from the bottom stayed where it was). WebKit also
+ * applies a queued wheel step late, so each step gets time before the next.
+ */
+async function wheelUpOver(page: Page, scroller: Locator, moved: () => Promise<boolean>) {
+  for (let step = 0; step < 3; step++) {
+    const aim: { at?: { x: number; y: number } | null } = {};
+    await expect.poll(async () => {
+      aim.at = await scroller.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const p = { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        const at = document.elementFromPoint(p.x, p.y);
+        return r.height > 200 && at && el.contains(at) ? p : null;
+      });
+      return !!aim.at;
+    }, { timeout: 10_000 }).toBe(true);
+    await page.mouse.move(aim.at!.x, aim.at!.y);
+    await page.mouse.wheel(0, -120);
+    try {
+      await expect.poll(moved, { timeout: 4_000 }).toBe(true);
+      return;
+    } catch { /* not moved yet: aim again */ }
+  }
+  expect(await moved(), 'the reader moved up').toBe(true);
+}
+
 /** A chat whose answer fills the view takes `rounds` messages of `kind`, each
  *  answered, with the reader moving a little up before each turn is saved. */
 async function receiveRounds(page: Page, kind: EnvelopeKind, rounds: number, pauseMs = 0) {
@@ -98,7 +134,7 @@ async function receiveRounds(page: Page, kind: EnvelopeKind, rounds: number, pau
   await page.goto(`/sessions?id=${SID}`);
   await waitForWs(page);
   const hist = page.locator(`.session-panel[data-session-id="${SID}"] .session-history`);
-  await expect(hist).toContainText('RF_ANSWER line 14', { timeout: 15_000 });
+  await expect(hist).toContainText(`RF_ANSWER line ${LONG_LINES}`, { timeout: 15_000 });
   await page.waitForTimeout(pauseMs);
 
   for (let r = 1; r <= rounds; r++) {
@@ -129,13 +165,11 @@ async function receiveRounds(page: Page, kind: EnvelopeKind, rounds: number, pau
 
     // The reader moves up a little before the turn is saved: its rows stay in
     // view, under the row they read.
-    const box = (await hist.boundingBox())!;
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    const gapBefore = await hist.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
-    await page.mouse.wheel(0, -120);
-    // WebKit applies a queued wheel step late: wait until the reader really moved.
-    await expect.poll(() => hist.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 10_000 })
-      .toBeGreaterThan(gapBefore + 60);
+    const gapNow = () => hist.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+    const gapBefore = await gapNow();
+    // Room above for the wheel step (a chat that ends at its top cannot move up).
+    expect(await hist.evaluate((el) => el.scrollTop), 'the reader has room to move up').toBeGreaterThan(240);
+    await wheelUpOver(page, hist, async () => (await gapNow()) > gapBefore + 60);
     await page.waitForTimeout(600 + pauseMs);
 
     rows = [

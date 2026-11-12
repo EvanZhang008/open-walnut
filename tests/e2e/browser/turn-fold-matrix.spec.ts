@@ -7,7 +7,7 @@
  *
  * The matrix: each kind of step (a command, a file read and edit, reasoning,
  * words between steps, a send to one task and to several, a received message, a
- * Walnut op, a subagent), alone and mixed, times how the turn is drawn (saved,
+ * runtime notice, a Walnut op, a subagent), alone and mixed, times how the turn is drawn (saved,
  * live, a panel opened mid-turn, a live turn that just ended, a turn a notice cut
  * into), times the view (plain, and Conversation Mode, which a side thread turns
  * on), each checked folded and opened. Checked every time:
@@ -17,7 +17,7 @@
  *   - no shell placeholder (`$f`) reaches the screen.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { mockSession, open, waitForWs, injectEvent, setMockStream, MOCK_SESSION_ID } from './mock-session-harness';
+import { mockSession, open, waitForWs, waitForStream, injectEvent, setMockStream, MOCK_SESSION_ID } from './mock-session-harness';
 
 test.describe.configure({ mode: 'parallel', timeout: 90_000 });
 
@@ -60,15 +60,22 @@ const KINDS: Record<string, (k: number) => Step> = {
     row: { role: 'user', text: notice(k), timestamp: at(20 + k), msgId: `queue-n${k}`, walnutMessageId: `sn-${k}` },
     blocks: [],
   }),
+  // A line the runtime wrote mid-turn (a retry notice): a step like any other.
+  notice: (k) => ({
+    row: { role: 'system', systemVariant: 'info', text: `MX_NOTE_${k} Retrying after an upstream error.`, msgId: `mx-m${k}`, timestamp: at(20 + k) },
+    blocks: [{ type: 'system', variant: 'info', message: `MX_NOTE_${k} Retrying after an upstream error.`, uuid: `mx-m${k}` }],
+  }),
   op: (k) => toolStep(k, 'mcp__walnut__thread_update', { thread_id: `th-${k}`, state: 'working', title: `MX_OP_${k} thread` }, '{"ok":true}'),
   subagent: (k) => toolStep(k, 'Agent', { description: `MX_AGENT_${k} look around`, prompt: 'Look around the repo.', subagent_type: 'Explore' }, 'Nothing odd.'),
 };
 
-/** The step sets: each kind alone (twice, so a run of one kind is checked), every
- *  kind mixed, and mixed kinds that end on a received notice. */
+/** The step sets: each kind twice (a run of one kind) and once (a lone step: 2026-11-12,
+ *  the user: "event one shoudol be collpesed", "to keep ti simple clean"), every kind
+ *  mixed, and mixed kinds that end on a received notice. */
 const SETS: Record<string, string[]> = {
   ...Object.fromEntries(Object.keys(KINDS).map((kind) => [kind, [kind, kind]])),
-  mixed: ['command', 'received', 'edit', 'send-several', 'thinking', 'words', 'op', 'read', 'send', 'subagent'],
+  ...Object.fromEntries(Object.keys(KINDS).map((kind) => [`one ${kind}`, [kind]])),
+  mixed: ['command', 'received', 'edit', 'send-several', 'thinking', 'words', 'notice', 'op', 'read', 'send', 'subagent'],
   'ends-on-notice': ['command', 'command', 'send-several', 'received'],
 };
 
@@ -118,9 +125,9 @@ async function foldStepRows(fold: Locator) {
     const body = f.querySelector(':scope > .process-fold-body') as HTMLElement | null;
     if (!body) return [];
     const width = body.getBoundingClientRect().width;
-    return Array.from(body.querySelectorAll('button, [role="button"], .provenance-card'))
+    return Array.from(body.querySelectorAll('button, [role="button"], .provenance-card, .session-system-line'))
       .filter((e) => (e as HTMLElement).offsetParent !== null && e.getBoundingClientRect().width > width * 0.6)
-      .filter((e) => !e.parentElement?.closest('button, [role="button"], .provenance-card'))
+      .filter((e) => !e.parentElement?.closest('button, [role="button"], .provenance-card, .session-system-line'))
       .map((e) => ({ cls: e.className.toString(), text: (e as HTMLElement).innerText.replace(/\s+/g, ' ').trim().slice(0, 120), height: Math.round(e.getBoundingClientRect().height) }));
   });
 }
@@ -129,9 +136,8 @@ async function foldStepRows(fold: Locator) {
 const TWO_LINES = 60;
 const PLACEHOLDER = /\$[A-Za-z_{(]/;
 
-/** Between the person's words and the final answer: ONE row. A turn of several kinds of
- *  steps is the turn's fold; a turn of one step (a run of one kind of call, one reasoning)
- *  is that step's own closed row. Returns whether it is the turn's fold. */
+/** Between the person's words and the final answer: ONE row, the turn's fold, whatever
+ *  and however many the steps are. Returns whether it is the turn's fold. */
 async function expectOneFold(history: Locator, label: string, opened = false): Promise<boolean> {
   const rows = await topRows(history);
   const ask = rows.findIndex((r) => r.text.includes('MX_ASK'));
@@ -149,17 +155,10 @@ async function expectOneFold(history: Locator, label: string, opened = false): P
   return isFold;
 }
 
-/** Steps a run row takes ("Ran 3 tools ›"): calls and the reasoning between them. */
-const RUN_KINDS = new Set(['command', 'read', 'edit', 'thinking', 'op']);
-
-async function checkBothWays(page: Page, history: Locator, label: string, set: string[]) {
+async function checkBothWays(page: Page, history: Locator, label: string, _set: string[]) {
   const isFold = await expectOneFold(history, `${label}, folded`);
-  // Steps that are all one run's (calls and reasoning), or one kind of step: that one
-  // closed row is the whole turn.
-  if (!isFold) {
-    expect(set.every((k) => RUN_KINDS.has(k)) || new Set(set).size === 1, `${label}: only a run or one kind of step is a lone row`).toBe(true);
-    return;
-  }
+  // A run of calls, or one step alone, is the turn's fold too, never a row of its own.
+  expect(isFold, `${label}: the row between the words and the answer is the turn's fold`).toBe(true);
   const fold = history.locator('[data-testid="turn-fold"]').last();
   await fold.locator(':scope > .tool-run-toggle').click();
   await expect(fold.locator(':scope > .process-fold-body')).toBeVisible();
@@ -204,7 +203,11 @@ async function run(page: Page, set: string[], state: State, conv: boolean) {
   // Conversation Mode: the question's exchange is its label line.
   if (conv) await expect(history.locator('[data-thread-fold]')).toHaveCount(1, { timeout: 10000 });
   if (state === 'live' || state === 'notice-cut-in') {
+    // Sent once the panel holds the stream: on a busy machine an event sent before it subscribed is lost.
+    await waitForStream(page);
+    await page.waitForTimeout(300);
     await injectEvent(page, 'session:tool-use', { sessionId: MOCK_SESSION_ID, toolName: 'Bash', toolUseId: 'mx-live', input: { command: 'sample-cmd --last' } });
+    await expect(history).toContainText('sample-cmd --last', { timeout: 10000 });
   }
   if (state === 'just-ended') {
     await expect(history.locator('[data-testid="turn-fold"]')).toHaveCount(1, { timeout: 10000 });
@@ -283,6 +286,36 @@ for (const live of [false, true]) {
   });
 }
 
+// A turn that came to an error line (no answer after it) ends there: its steps fold, the
+// error is what the person acts on, so it shows under the fold. Alone too.
+for (const before of [['command', 'received'], []] as string[][]) {
+  test(`a turn that ends on an error line shows the line, ${before.length ? 'after its steps' : 'alone'}`, async ({ page }) => {
+    const { rows } = build(before);
+    const error: Row = { role: 'system', systemVariant: 'error', text: 'MX_ERROR Error during compaction: API Error: 400 Input is too long.', timestamp: at(80) };
+    await mockSession(page, [...PRIOR, ASK, ...rows, error], 'idle');
+    const history = await open(page);
+    await expect(history).toContainText('MX_ASK', { timeout: 15000 });
+    const line = history.getByText(/MX_ERROR Error during compaction/);
+    await expect(line).toBeVisible();
+    expect(await line.evaluate((e) => !!e.closest('[data-testid="turn-fold"]'))).toBe(false);
+    await expect(history.locator('[data-testid="turn-fold"]')).toHaveCount(before.length ? 1 : 0);
+  });
+}
+
+// A runtime line left in the stream after the turn is over (no saved twin) is no running
+// turn: it shows as its own line, an error in red, never a closed "1 notice" fold.
+for (const variant of ['info', 'error'] as const) {
+  test(`a runtime ${variant} line after the turn ended shows as its own line`, async ({ page }) => {
+    const message = `MX_LEFT ${variant === 'error' ? 'Execution error' : 'Waiting for the endpoint'}`;
+    await mockSession(page, [...PRIOR, ASK, FINAL], 'idle', { blocks: [{ type: 'system', variant, message }], isStreaming: false });
+    const history = await open(page);
+    await expect(history).toContainText('MX_FINAL', { timeout: 15000 });
+    const line = history.getByText(message);
+    await expect(line).toBeVisible();
+    expect(await line.evaluate((e) => !!e.closest('[data-testid="turn-fold"]'))).toBe(false);
+  });
+}
+
 test('long words in the middle of a turn are read, not folded', async ({ page }) => {
   const long = 'MX_LONG here is what I found:\n\n- first finding\n- second finding\n- third finding\n- fourth finding';
   const rows: Row[] = [KINDS.command(1).row, { role: 'assistant', text: long, msgId: 'mx-m2', timestamp: at(22) }, KINDS.edit(3).row];
@@ -295,17 +328,21 @@ test('long words in the middle of a turn are read, not folded', async ({ page })
 });
 
 // A fold the reader opened while the turn ran stays open when the turn is saved.
-test('a fold opened mid-turn stays open when the turn ends', async ({ page }) => {
+// Also a new session's first turn, with nothing saved yet (2026-11-12: it drew the old run row).
+for (const first of [false, true]) test(`a fold opened mid-turn stays open when the turn ends${first ? ', a new session\'s first turn' : ''}`, async ({ page }) => {
   const { rows, blocks } = build(['command', 'send-several', 'words', 'edit']);
   const live = { type: 'tool_call', toolUseId: 'mx-live', name: 'Bash', input: { command: 'sample-cmd --last' }, status: 'calling' };
-  const messages: Row[] = [...PRIOR, ASK];
+  const messages: Row[] = first ? [] : [...PRIOR, ASK];
   await mockSession(page, messages, 'running', { blocks: [...blocks, live], isStreaming: true });
   const history = await open(page);
   await waitForWs(page);
   const fold = history.locator('[data-testid="turn-fold"]');
   await expect(fold).toHaveCount(1, { timeout: 15000 });
+  await expect(fold.locator(':scope > .tool-run-toggle')).toContainText(/^Working/);
+  await expect(history.locator('.tool-run-row:not([data-testid="turn-fold"]):visible')).toHaveCount(0);
   await fold.locator(':scope > .tool-run-toggle').click();
   await expect(fold.locator(':scope > .process-fold-body')).toBeVisible();
+  if (first) messages.push(ASK);
   messages.push(...rows, { role: 'assistant', text: '', msgId: 'mx-mlast', timestamp: at(85), tools: [{ name: 'Bash', toolUseId: 'mx-live', input: { command: 'sample-cmd --last' }, result: 'ok' }] }, FINAL);
   await setMockStream(page, { blocks: [], isStreaming: false });
   await injectEvent(page, 'session:tool-result', { sessionId: MOCK_SESSION_ID, toolUseId: 'mx-live', result: 'ok' });
@@ -316,3 +353,23 @@ test('a fold opened mid-turn stays open when the turn ends', async ({ page }) =>
   await expect(history.locator('[data-testid="turn-fold"]')).toHaveCount(1);
   await expect(history.locator('[data-testid="turn-fold"] > .process-fold-body')).toBeVisible();
 });
+
+// An answer's own reasoning, with no step before it: a fold of its own above the answer
+// (the reported screen: one Thinking row with its preview between his words and the answer).
+for (const live of [false, true]) {
+  test(`an answer's own reasoning alone is folded, ${live ? 'while it streams' : 'saved'}`, async ({ page }) => {
+    const answer: Row = { role: 'assistant', text: 'MX_FINAL all done.', thinking: 'MX_OWN_THOUGHT tracing the loop first.', msgId: 'mx-fin', timestamp: at(90) };
+    const stream = { blocks: [
+      { type: 'thinking', content: 'MX_OWN_THOUGHT tracing the loop first.', msgId: 'mx-fin' },
+      { type: 'text', content: 'MX_FINAL all done.', msgId: 'mx-fin' },
+    ], isStreaming: true };
+    await mockSession(page, live ? [...PRIOR, ASK] : [...PRIOR, ASK, answer], live ? 'running' : 'idle', live ? stream : undefined);
+    const history = await open(page);
+    await expect(history).toContainText('MX_FINAL', { timeout: 15000 });
+    await page.waitForTimeout(800);
+    await checkBothWays(page, history, `own reasoning / ${live ? 'live' : 'saved'}`, ['thinking']);
+    // Saved, its preview is not on screen until the fold is opened (live, the fold's one
+    // live line is what it thinks now).
+    if (!live) await expect(history.getByText('MX_OWN_THOUGHT')).toBeHidden();
+  });
+}

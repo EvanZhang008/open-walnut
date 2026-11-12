@@ -13,6 +13,11 @@
  * → daemon → mock CLI → real stream events → reducer → render, and the history
  * after the turn is the real parser reading the daemon's stream file.
  *
+ * Since 2026-11-12 every step of a turn before its answer is ONE fold row, the
+ * turn's own ("Working · Ran 1 tool" while it runs, "Worked for 12s · Ran 2 tools"
+ * once answered), so the one closed line is that fold: it breathes while the turn
+ * runs, and opened, its calls are rows of the fold (no second run line to open).
+ *
  * The turn runs on a task of the test's own: a task holds one session, so a
  * start on a fixture task that already has a conversation continues THAT one
  * (src/core/sessions/task-session-claim.ts) and makes no new session.
@@ -89,26 +94,30 @@ async function openHome(page: Page, sessionId?: string): Promise<void> {
   await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 20_000 })
 }
 
-type RunView = { label: string; live: boolean; open: boolean }
+type FoldView = { label: string; live: boolean; open: boolean }
 
-/** The conversation's top-level run rows (a run's own members excluded), as the
- *  reader sees them: the label, whether it breathes, whether it is open. */
-async function topRuns(panel: Locator): Promise<RunView[]> {
+/** The conversation's top-level rows that fold steps (the turn's fold, and any run or
+ *  reasoning row standing beside it), as the reader sees them: the label, whether it
+ *  breathes, whether it is open. */
+async function topRows(panel: Locator): Promise<FoldView[]> {
   return panel.evaluate((root) => [...root.querySelectorAll('.tool-run-row')]
-    .filter((row) => !row.parentElement?.closest('.tool-run-body'))
+    .filter((row) => !row.parentElement?.closest('.tool-run-body, .process-fold-body'))
     .map((row) => ({
       label: row.querySelector(':scope > .tool-run-toggle > .tool-run-label')?.textContent ?? '',
-      live: !!row.querySelector(':scope > .tool-run-toggle > .tool-run-live-dot'),
-      open: !!row.querySelector(':scope > .tool-run-body'),
+      live: row.getAttribute('data-running') === 'true' || !!row.querySelector(':scope > .tool-run-toggle > .tool-run-live-dot'),
+      open: !!row.querySelector(':scope > .tool-run-body, :scope > .process-fold-body'),
+      fold: row.getAttribute('data-testid') === 'turn-fold',
     }))
-    .filter((r) => /^(Ran |Read |Thinking$)/.test(r.label)))
+    .filter((r) => r.fold || /^(Ran |Read |Fetched |Thinking$)/.test(r.label))
+    .map(({ fold: _fold, ...r }) => r))
 }
 
-/** ONE closed run with this label and nothing else: no card open anywhere and
- *  no reasoning row of its own. */
-async function expectClosedRun(panel: Locator, label: string, breathing: boolean): Promise<void> {
-  await expect.poll(() => topRuns(panel), { timeout: 20_000 })
+/** ONE closed row, the turn's fold, with this label and nothing else: no card open
+ *  anywhere and no reasoning row of its own. */
+async function expectClosedTurn(panel: Locator, label: string, breathing: boolean): Promise<void> {
+  await expect.poll(() => topRows(panel), { timeout: 20_000 })
     .toEqual([{ label, live: breathing, open: false }])
+  await expect(panel.locator('[data-testid="turn-fold"]')).toHaveCount(1)
   await expect(panel.locator('.chat-tool-block')).toHaveCount(0)
 }
 
@@ -127,25 +136,29 @@ test('a working turn stays one closed run while calls run, and after it ends', a
   await expect(panel).toBeVisible({ timeout: 20_000 })
   const shots = test.info().outputPath('')
 
-  // The Bash call is running: one closed line that breathes, no card.
-  await expectClosedRun(panel, 'Ran a command', true)
+  // The Bash call is running: one closed line that breathes, no card (was a
+  // "Ran a command" run row; now the turn's fold).
+  await expectClosedTurn(panel, 'Ran 1 tool', true)
   await page.screenshot({ path: `${shots}/1-bash-running.png`, clip: { x: 0, y: 0, width: 1280, height: 720 } })
 
   // The Read joins the same closed line while it runs.
-  await expectClosedRun(panel, 'Ran a command, read a file', true)
+  await expectClosedTurn(panel, 'Ran 2 tools', true)
   await page.screenshot({ path: `${shots}/2-read-running.png`, clip: { x: 0, y: 0, width: 1280, height: 720 } })
 
-  // The answer lands: still one closed line, now still, with the answer under it.
+  // The answer lands: still one closed line, still once the turn ended, with the
+  // answer under it.
   await expect(panel).toContainText(ANSWER, { timeout: 30_000 })
-  await expectClosedRun(panel, 'Ran a command, read a file', false)
+  await expectClosedTurn(panel, 'Ran 2 tools', false)
   await page.screenshot({ path: `${shots}/3-answered.png`, clip: { x: 0, y: 0, width: 1280, height: 720 } })
 
-  // Opened, the run holds both calls (done) and, where the record kept it, the
-  // reasoning; the reasoning is never a sibling row.
-  const run = panel.locator('.tool-run-row').filter({ hasText: 'Ran a command, read a file' }).first()
-  await run.locator(':scope > .tool-run-toggle').click()
-  await expect(run.locator('.chat-tool-block')).toHaveCount(2)
-  await expect(run.locator('.chat-tool-block-calling')).toHaveCount(0)
+  // Opened, the fold holds both calls (done) as its rows and, where the record kept
+  // it, the reasoning; the reasoning is never a sibling row.
+  const fold = panel.locator('[data-testid="turn-fold"]')
+  await fold.locator(':scope > .tool-run-toggle').click()
+  await expect(fold).toHaveAttribute('data-open', 'true')
+  await expect(fold.locator('.chat-tool-block')).toHaveCount(2)
+  await expect(fold.locator('.chat-tool-block-calling')).toHaveCount(0)
+  await expect(panel.locator('.chat-tool-block')).toHaveCount(2)
   await page.screenshot({ path: `${shots}/4-opened.png`, clip: { x: 0, y: 0, width: 1280, height: 720 } })
   expect(errors).toEqual([])
 })

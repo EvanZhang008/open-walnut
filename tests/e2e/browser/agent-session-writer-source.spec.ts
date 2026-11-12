@@ -408,17 +408,22 @@ test('(5) a remote session\'s own reply, tool output and Read picture draw from 
 
 test('(6) a person\'s picture beside a notice loads from this machine; the notice\'s quote opens on its own writer', async ({ page }) => {
   const panel = await openFixture(page)
-  const plain = panel.locator('.provenance-segments > .markdown-body').filter({ hasText: 'WS_PERSON' })
+  // The person's words are their own bubble; the notice that came with them is a step of
+  // the turn, in its fold (2026-11-11: notices after the words fold).
+  const plain = panel.locator('.session-msg-user .markdown-body').filter({ hasText: 'WS_PERSON' })
   await expect(plain).toHaveCount(1, { timeout: 20_000 })
   const img = pictures(plain).first()
   await expect(img).toBeVisible({ timeout: 20_000 })
   expect(await img.getAttribute('src')).not.toContain('host=')
   await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth), { timeout: 20_000 }).toBe(192)
 
-  // The notice delivered with those words: Walnut's one notification in the nearest group that
-  // holds both. Its sender's name is no key (every remote peer card names the same session).
-  const group = plain.locator(`xpath=ancestor::*[.//*[${hasClass('provenance-card')} and @data-envelope-kind="notification"]][1]`)
-  const card = await unfold(page, group.locator('.provenance-card[data-envelope-kind="notification"]'))
+  // The notice delivered with those words: Walnut's one notification in the turn's fold right
+  // after them. Its sender's name is no key (every remote peer card names the same session).
+  const fold = plain.locator('xpath=following::*[@data-testid="turn-fold"][1]')
+  await expect(fold).toHaveCount(1)
+  if ((await fold.getAttribute('data-open')) !== 'true') await click(page, fold.locator(':scope > .tool-run-toggle'))
+  await expect(fold).toHaveAttribute('data-open', 'true')
+  const card = await unfold(page, fold.locator('.provenance-card[data-envelope-kind="notification"]'))
   const quote = card.locator('.provenance-quote').filter({ hasText: 'WS_NOTICE_QUOTE' })
   await click(page, docLink(quote))
   await expectRemoteText(page)

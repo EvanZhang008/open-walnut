@@ -122,6 +122,25 @@ describe('shapeTurns per question (pageOf)', () => {
     }
   })
 
+  it('an untagged reply to a question stays in the main conversation as that turn\'s answer (2026-11-12)', () => {
+    // Q2 and Q3 are filed under their questions; their replies carried no tag, so the
+    // words stay on the main page, each the answer of the turn its send started.
+    const shapes = paged([
+      [person('Main ask'), ''],
+      [said('Main answer.'), ''],
+      [person('Q2 which list?'), 'q2'],
+      [said('processed: which list?'), ''],
+      [person('Q3 when?'), 'q3'],
+      [said('processed: when?'), ''],
+    ])
+    expect(answerOf(shapes, 1)!.answer).toBe(1)
+    for (const row of [3, 5]) {
+      const t = answerOf(shapes, row)!
+      expect([t.kind, t.answer, t.byPerson]).toEqual(['answered', row, false])
+      expect(t.rows).toEqual([row])
+    }
+  })
+
   it('one page only: the same shapes as without pageOf', () => {
     const rows: Array<[Row, string]> = [[person(), ''], [said('', [{ name: 'Read' }]), ''], [said('Here.'), ''], [notice(), ''], [line, '']]
     expect(paged(rows).map((t) => [t.kind, t.start, t.answer])).toEqual([['answered', 0, 2], ['hidden', 3, -1]])

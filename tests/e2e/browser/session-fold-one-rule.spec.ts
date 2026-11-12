@@ -118,8 +118,13 @@ for (const [name, history, a, b, phrase] of [
     // The commands are rows of the one list (design 1, 2026-11-11), the failed one red.
     await expect(fold.locator('.process-fold-body .chat-tool-block-bash')).toHaveCount(name === 'every step kind' ? 3 : 5);
     await expect(fold.locator('.process-fold-body .chat-tool-block-bash.chat-tool-block-error')).toHaveCount(name === 'every step kind' ? 2 : 1);
-    // A run of runtime rows with a compaction in it is named by it (fold-steps.ts systemRunLabel).
-    await expect(fold).toContainText(name === 'every step kind' ? 'Context compacted \u00b7 2 more' : '20 errors');
+    // A run of runtime rows with a compaction in it was named by it ("Context compacted · 2
+    // more", fold-steps.ts systemRunLabel); inside the open fold its lines are rows of the one
+    // list like every other step (2026-11-12), so the compaction reads as its own line.
+    if (name === 'every step kind') {
+      await expect(fold.locator('.process-fold-body .session-system-line', { hasText: 'Context compacted' })).toHaveCount(1);
+      await expect(fold.locator('.process-fold-body')).not.toContainText('2 more');
+    } else await expect(fold).toContainText('20 errors');
   });
 }
 

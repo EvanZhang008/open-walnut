@@ -4965,7 +4965,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         enforceStreamingPhase(sessionId, taskId, replayed)
       }
     } else if (event.name === 'session:tool-use') {
-      const { sessionId, toolName, toolUseId, input, planContent, parentToolUseId, subagentType, taskDescription } = eventData<'session:tool-use'>(event)
+      const { sessionId, toolName, toolUseId, input, planContent, parentToolUseId, subagentType, taskDescription, msgId } = eventData<'session:tool-use'>(event)
       if (sessionId) {
         // DUP-DEBUG: server.ts is the choke point between bus.emit and SSE
         // fan-out. If the same toolUseId reaches this branch twice, the
@@ -4975,7 +4975,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         log.ws.debug('server: session:tool-use received', {
           sessionId, toolUseId, toolName, parentToolUseId,
         })
-        sessionStreamBuffer.appendToolUse(sessionId, toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription)
+        sessionStreamBuffer.appendToolUse(sessionId, toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription, msgId)
         sendStreamEvent(sessionId, event.name, event.data)
         enforceStreamingPhase(sessionId, eventData<'session:tool-use'>(event).taskId, eventData<'session:tool-use'>(event).replayed)
       }

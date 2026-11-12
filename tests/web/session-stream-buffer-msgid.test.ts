@@ -30,6 +30,14 @@ describe('sessionStreamBuffer msgId boundaries', () => {
     expect(snap.blocks[0]).toMatchObject({ type: 'text', content: 'Hello world', msgId: 'msg_A' })
   })
 
+  it('stamps a tool call with its assistant message id, the id its saved row carries', () => {
+    sessionStreamBuffer.appendToolUse(SID, 'tu_1', 'Bash', { command: 'ls' }, undefined, undefined, undefined, undefined, 'msg_T')
+    sessionStreamBuffer.appendToolUse(SID, 'tu_2', 'Bash', { command: 'pwd' })
+    const snap = sessionStreamBuffer.getSnapshot(SID)
+    expect(snap.blocks[0]).toMatchObject({ type: 'tool_call', toolUseId: 'tu_1', msgId: 'msg_T' })
+    expect(snap.blocks[1]).not.toHaveProperty('msgId')
+  })
+
   it('starts a NEW text block when msgId changes (two assistant messages in one turn)', () => {
     sessionStreamBuffer.appendTextDelta(SID, 'first message', 'msg_A')
     sessionStreamBuffer.appendTextDelta(SID, 'second message', 'msg_B')

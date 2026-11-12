@@ -13,6 +13,7 @@ import { InFoldBody } from './fold-body-context';
 import { StepIcon } from './StepIcon';
 import '@/styles/turn-folds.css';
 import { foldFailureWords, type FoldFailures } from './fold-rows';
+import { EMPTY_FOLD_PHRASE } from './fold-steps';
 import '@/styles/step-rows.css';
 
 // Open folds, for the page (a remount keeps a fold the reader opened open), and
@@ -37,6 +38,15 @@ export function openTurnFold(key: string): void {
  * before the fold's row renders, so nobody needs telling.
  */
 export const ReaderOpenedFolds = createContext<Set<string> | null>(null);
+
+/**
+ * The running turn's row took another key (its first saved row came in after the stream,
+ * say): it keeps the open state the reader gave it. Called during the timeline's render,
+ * before the row renders, so nobody needs telling.
+ */
+export function carryTurnFold(from: string, to: string): void {
+  if (from !== to && opened.has(from)) opened.add(to);
+}
 
 /** Test seam. */
 export function _clearTurnFolds(): void {
@@ -78,12 +88,15 @@ export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed
 }) {
   const [open, toggle] = useTurnFold(foldKey ?? processFoldKey(foldId));
   const failedWords = foldFailureWords(failed);
+  // A turn's fold that holds only reasoning says how long it worked and nothing more:
+  // "Thinking" is the thinking row's own word, never a second line's (thinking-once.spec).
+  const label = lead && phrase === EMPTY_FOLD_PHRASE ? '' : phrase;
   return (
-    <div className="tool-run-row process-fold" data-testid={testId} data-open={open ? 'true' : 'false'} {...(running ? { 'data-running': 'true' } : {})}>
+    <div className="tool-run-row process-fold" data-testid={testId} data-fold-id={foldId} data-open={open ? 'true' : 'false'} {...(running ? { 'data-running': 'true' } : {})}>
       <button type="button" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
         <span className={`tool-run-chevron process-fold-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
-        {lead && <span className="tool-run-lead" data-testid="turn-fold-lead">{lead}<span className="tool-run-sep" aria-hidden="true"> · </span></span>}
-        <span className="tool-run-label" title={lead ? `${lead} · ${phrase}` : phrase}>{phrase}</span>
+        {lead && <span className="tool-run-lead" data-testid="turn-fold-lead">{lead}{label && <span className="tool-run-sep" aria-hidden="true"> · </span>}</span>}
+        {label && <span className="tool-run-label" title={lead ? `${lead} · ${label}` : label}>{label}</span>}
         {failedWords && <span className="tool-run-fail">{failedWords}</span>}
         {running && <span className="tool-run-live-dot" />}
       </button>

@@ -35,10 +35,18 @@
  *   6. the panel survives the turn end: history absorbs the Agent tool_calls, the
  *      streaming chip is replaced by the history chip, and the open panel stays
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { openKebabGroup } from './kebab-group-helpers';
 
 const SESSION_ID = 'pw-normal-session';
+
+/** Agents are steps: before the turn's answer they sit in its one fold (2026-11-12). */
+async function openTurn(scope: Locator): Promise<void> {
+  const fold = scope.locator('[data-testid="turn-fold"]').last();
+  await expect(fold).toHaveCount(1);
+  if ((await fold.getAttribute('data-open')) !== 'true') await fold.locator(':scope > .tool-run-toggle').click();
+  await expect(fold).toHaveAttribute('data-open', 'true');
+}
 const PARENT = 'toolu_pw_agent_parent';
 
 async function injectEvent(page: Page, name: string, data: unknown) {
@@ -297,6 +305,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(history).toContainText('$0.10/cluster/小时');
     // 2. ONE chip, no card, no dropdown: the subagent's conversation is not
     //    main-conversation content, so nothing of it is on screen.
+    await openTurn(history);  // every step before the answer is the turn's one fold
     const chip = history.locator('.bg-tasks-chip');
     await expect(chip).toHaveCount(1);
     // The chip carries what the old per-agent card carried: type, title, state.
@@ -721,6 +730,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     }
     await page.waitForTimeout(150);
 
+    await openTurn(history);  // every step before the answer is the turn's one fold
     const chip = history.locator('.bg-tasks-chip');
     await expect(chip).toHaveCount(1);
     await expect(chip.locator('.bg-tasks-chip-label')).toHaveText('3 agents');
@@ -779,13 +789,14 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     const col = page.locator('.session-history');
     for (let i = 0; i < 2; i++) {
       await injectEvent(page, 'session:tool-use', {
-        sessionId: SESSION_ID, toolName: 'Agent', toolUseId: `toolu_hand_${i}`,
+        sessionId: SESSION_ID, toolName: 'Agent', toolUseId: `toolu_hand_${i}`, msgId: 'msg_spawn',
         input: { description: `explorer ${i}`, subagent_type: 'explore', prompt: `look at ${i}` },
       });
     }
     await injectEvent(page, 'session:text-delta', {
       sessionId: SESSION_ID, delta: 'Live words from explorer 1.', msgId: 'msg_hand_1', parentToolUseId: 'toolu_hand_1',
     });
+    await openTurn(col);  // every step before the answer is the turn's one fold
     const chip = col.locator('.bg-tasks-chip');
     await expect(chip.locator('.bg-tasks-chip-status')).toHaveText('2 running');
     await chip.click();
@@ -861,6 +872,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
 
     // The chat's chip counts only the agent; the shell command is the ledger's.
     const history = page.locator('.session-history');
+    await openTurn(history);  // every step before the answer is the turn's one fold
     await expect(history.locator('.bg-tasks-chip')).toHaveCount(1);
     await expect(history.locator('.bg-tasks-chip .bg-tasks-chip-label')).toHaveText('Agent');
     // No Background bar; the working line's note counts both kinds and opens the panel.
@@ -948,6 +960,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
       ],
     });
 
+    await openTurn(history);  // every step before the answer is the turn's one fold
     const chips = history.locator('.bg-tasks-chip');
     await expect(chips).toHaveCount(2);
     const short = chips.nth(0);

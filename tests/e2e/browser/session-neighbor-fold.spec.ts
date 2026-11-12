@@ -60,8 +60,9 @@ test('a tool run and the injected context after it are one fold row', async ({ p
   const looseContext = await hist.evaluate((el) => [...el.querySelectorAll('.tool-run-label')]
     .filter((n) => /^(Injected context|Loaded skill)/.test(n.textContent ?? '') && !n.closest('[data-testid="process-fold"],[data-testid="turn-fold"]'))
     .map((n) => n.textContent));
-  // The lone note after turn 3's answer is the only one.
-  expect(looseContext).toEqual(['Injected context']);
+  // The lone note after turn 3's answer is folded too: one step alone is a fold (2026-11-12,
+  // the user: "event one shoudol be collpesed").
+  expect(looseContext).toEqual([]);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-folded.png`, clip: (await hist.boundingBox())! }).catch(() => {});
 
   // Opened: each step, in order, each still its own row.
@@ -152,7 +153,10 @@ test('a failed command in history that the live fold takes in is counted in its 
   await expect(fold.locator('.tool-run-fail')).toHaveText('1 failed');
 });
 
-test('a skill loaded after words mid-turn stays its own row while the turn runs', async ({ page }) => {
+// 2026-11-12, the user: "If they are togter they need ot be collpesed", "event one shoudol be
+// collpesed": while the turn runs, its words on the way, the skill it loaded and its calls are
+// one fold.
+test('a skill loaded after words mid-turn folds with them while the turn runs', async ({ page }) => {
   const live = [
     { role: 'user', text: 'NB_WORDS_ASK run it', timestamp: at(0) },
     { role: 'assistant', text: 'NB_WORDS first I load the plan.', timestamp: at(1) },
@@ -163,11 +167,13 @@ test('a skill loaded after words mid-turn stays its own row while the turn runs'
   await waitForWs(page);
   await expect(hist).toContainText('NB_WORDS first', { timeout: 15000 });
   await streamTools(page, [['w1', 'make check']]);
-  await expect(hist.locator('.tool-run-label', { hasText: /^Ran a command$/ })).toHaveCount(1, { timeout: 10000 });
-  // Words stay on screen; the skill row is not folded behind them.
-  await expect(hist.locator('.session-msg', { hasText: 'NB_WORDS first' })).toBeVisible();
-  await expect(hist.locator('.tool-run-label', { hasText: 'Loaded skill sample-plan' })).toBeVisible();
-  await expect(hist.locator('[data-testid="turn-fold"]')).toHaveCount(0);
+  const fold = hist.locator('[data-testid="turn-fold"]');
+  await expect(fold).toHaveCount(1, { timeout: 10000 });
+  await expect(hist.locator('.session-msg', { hasText: 'NB_WORDS first' })).toBeHidden();
+  await expect(hist.locator('.tool-run-label', { hasText: 'Loaded skill sample-plan' })).toBeHidden();
+  await fold.locator(':scope > .tool-run-toggle').click();
+  await expect(fold.locator('.process-fold-body')).toContainText('NB_WORDS first');
+  await expect(fold.locator('.process-fold-body')).toContainText('Loaded skill sample-plan');
 });
 
 // The reported Main shape: a notice the session only acknowledged (a hidden

@@ -66,6 +66,8 @@ export interface StreamingToolCallBlock {
   /** See StreamingTextBlock.subagentType/taskDescription. */
   subagentType?: string;
   taskDescription?: string;
+  /** The assistant message it belongs to: the id its saved row carries (the live fold's key). */
+  msgId?: string;
 }
 
 export interface StreamingSystemBlock {
@@ -443,6 +445,7 @@ export interface ToolUseEvent {
   parentToolUseId?: string;
   subagentType?: string;
   taskDescription?: string;
+  msgId?: string;
 }
 
 /** Find an existing tool_call by id (dup diagnostics at the closest layer to the UI). */
@@ -459,7 +462,7 @@ export function appendToolCall(
   blocks: readonly StreamingBlock[],
   ev: ToolUseEvent,
 ): StreamingBlock[] {
-  const { toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription } = ev;
+  const { toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription, msgId } = ev;
   return [
     ...blocks,
     {
@@ -468,6 +471,7 @@ export function appendToolCall(
       ...(parentToolUseId ? { parentToolUseId } : {}),
       ...(subagentType ? { subagentType } : {}),
       ...(taskDescription ? { taskDescription } : {}),
+      ...(msgId ? { msgId } : {}),
     },
   ];
 }

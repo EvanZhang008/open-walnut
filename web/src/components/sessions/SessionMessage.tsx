@@ -590,6 +590,7 @@ export function systemGroupMemberFromHistory(message: SessionHistoryMessage): Sy
 
 /** Collapsed run of consecutive system notices from history or the live stream. */
 export const SystemGroupRun = memo(function SystemGroupRun({ members }: { members: SystemGroupMember[] }) {
+  const inFold = useInFoldBody();
   // Closed until the reader opens it, an idle compaction's run too (2026-11-09, the user: "no, auto hide
   // cusotmer cna open if needed"; tests/web/notice-rows-start-closed.test.ts).
   const [open, setOpen] = useRowDisclosure(members[0] ? disclosureIds.content(`sysrun-${members[0].variant}`, members[0].message) : undefined, false);
@@ -600,27 +601,27 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
   // A line that names Walnut's compaction already says its size: the compaction's own row under it
   // would say it again (2026-11-05 review), so the run shows Walnut's notice of why.
   const shown = systemRunShows(members);
+  const lines = shown.map((member, i) => (
+    <SystemLineCollapsible
+      key={member.key ?? `${member.variant}:${member.message}:${i}`}
+      variant={member.variant}
+      message={member.message}
+      detail={member.detail}
+      time={member.time}
+      {...(member.key ? { noticeId: member.key } : {})}
+      inOpenedRun
+    />
+  ));
+  // Inside an opened fold the lines are rows of its one list, as a run's calls are
+  // (design 1: no second line to open there; a long run stays one row to open).
+  if (inFold && members.length <= FLAT_RUN_MAX) return <div className="tool-run-row tool-run-flat" data-flat="true">{lines}</div>;
   return (
     <div className="tool-run-row">
       <button className="tool-run-toggle" onClick={toggle}>
         <span className={`tool-run-label${allErrors ? ' tool-run-label--error' : ''}`}>{label}</span>
         <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
       </button>
-      {open && (
-        <div className="tool-run-body">
-          {shown.map((member, i) => (
-            <SystemLineCollapsible
-              key={member.key ?? `${member.variant}:${member.message}:${i}`}
-              variant={member.variant}
-              message={member.message}
-              detail={member.detail}
-              time={member.time}
-              {...(member.key ? { noticeId: member.key } : {})}
-              inOpenedRun
-            />
-          ))}
-        </div>
-      )}
+      {open && <div className="tool-run-body">{lines}</div>}
     </div>
   );
 });

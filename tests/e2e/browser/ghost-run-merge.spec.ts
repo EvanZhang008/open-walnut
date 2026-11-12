@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 
 const SESSION_ID = 'pw-ghost-run-session'
 const LONG_SYSTEM_TEXT = `commands_changed ${JSON.stringify({
@@ -76,7 +76,7 @@ async function openSession(page: Page): Promise<void> {
   await waitForWs(page)
 }
 
-async function completedTool(page: Page, name: string, id: string, parentToolUseId?: string): Promise<void> {
+async function completedTool(page: Page, name: string, id: string, parentToolUseId?: string, msgId?: string): Promise<void> {
   const inputs: Record<string, Record<string, string>> = {
     Read: { file_path: `/tmp/${id}.txt` },
     Edit: { file_path: `/tmp/${id}.txt`, old_string: 'before', new_string: 'after' },
@@ -84,12 +84,35 @@ async function completedTool(page: Page, name: string, id: string, parentToolUse
     Bash: { command: `printf ${id}` },
   }
   await injectEvent(page, 'session:tool-use', {
-    sessionId: SESSION_ID, toolName: name, toolUseId: id, parentToolUseId, input: inputs[name],
+    sessionId: SESSION_ID, toolName: name, toolUseId: id, parentToolUseId, input: inputs[name], ...(msgId ? { msgId } : {}),
   })
   await injectEvent(page, 'session:tool-result', {
     sessionId: SESSION_ID, toolUseId: id, result: id, parentToolUseId,
   })
 }
+
+/** Every step before a turn's answer is one fold (2026-11-12): the turn's fold,
+ *  opened, and the step rows in its body. */
+/** A beat for a render the click caused (or a reader hold) to settle. */
+const page_wait = (fold: Locator) => fold.page().waitForTimeout(300)
+
+async function openTurn(scope: Locator): Promise<Locator> {
+  const fold = scope.locator('[data-testid="turn-fold"]').last()
+  await expect(fold).toHaveCount(1)
+  // The timeline may open it for the reader at any moment (fold-reader-hold.ts), and a click
+  // then closes it: click only while it reads closed, until it stays open.
+  await expect(async () => {
+    if ((await fold.getAttribute('data-open')) !== 'true') await fold.locator(':scope > .tool-run-toggle').click()
+    await page_wait(fold)
+    await expect(fold).toHaveAttribute('data-open', 'true', { timeout: 500 })
+  }).toPass({ timeout: 10_000 })
+  return fold.locator(':scope > .process-fold-body')
+}
+// Inside the opened fold a run is no line of its own: its calls are the fold's rows (flat).
+const runsIn = (body: Locator) => body.locator(':scope > .session-msg-bare > .tool-run-row:not(.tool-run-row--words)')
+const callsIn = (run: Locator) => run.locator('.chat-tool-block')
+/** The turn fold's own failure words ("1 failed"). */
+const foldFail = (scope: Locator) => scope.locator('[data-testid="turn-fold"] > .tool-run-toggle .tool-run-fail')
 
 test.use({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 })
 
@@ -172,14 +195,12 @@ test.describe('Session timeline collapsed rows', () => {
       await completedTool(page, 'Read', 'grandchild_read', 'child_agent')
       await completedTool(page, 'Bash', 'main_command_2')
 
-      const rows = panel.locator('.session-live-row > .session-msg-bare > .tool-run-row')
+      const rows = runsIn(await openTurn(panel))
       await expect(rows).toHaveCount(1)
-      await expect(rows.locator('.tool-run-label')).toHaveText('Read 2 files, ran 2 commands')
+      await expect(callsIn(rows)).toHaveCount(4)
       await expect(panel.locator('.bg-tasks-chip')).toHaveCount(anchor === 'missing' ? 0 : 1)
       await expect(panel).not.toContainText('Hidden child narration.')
       await expect(panel).not.toContainText('Hidden child thinking.')
-      await rows.locator('.tool-run-toggle').click()
-      await expect(rows.locator('.chat-tool-block')).toHaveCount(4)
       await expect(rows).not.toContainText('child_command')
       await expect(rows).not.toContainText('grandchild_read')
       if (anchor === 'stream') {
@@ -218,15 +239,12 @@ test.describe('Session timeline collapsed rows', () => {
       for (const [j, name] of names.entries()) await completedTool(page, name, `dense_main_${i}_${j}`)
       await completedTool(page, 'Bash', `dense_child_${i}`, 'dense_background')
     }
-    const rows = panel.locator('.session-live-row > .session-msg-bare > .tool-run-row')
-    await expect(rows.locator('.tool-run-label')).toHaveText([
-      'Read a file, ran a command',
-      'Read 10 files, ran 9 commands, edited 3 files, used a tool',
-    ])
+    const rows = runsIn(await openTurn(panel))
+    await expect(rows).toHaveCount(2)
+    await expect(callsIn(rows.first())).toHaveCount(2)
+    await expect(callsIn(rows.last())).toHaveCount(23)
     await expect(panel).toContainText('Visible progress between tool runs.')
     await page.screenshot({ path: test.info().outputPath('merged-runs.png') })
-    await rows.last().locator('.tool-run-toggle').click()
-    await expect(rows.last().locator('.chat-tool-block')).toHaveCount(23)
     await expect(rows.last()).not.toContainText('dense_child')
     await page.screenshot({ path: test.info().outputPath('expanded-run.png') })
   })
@@ -238,15 +256,16 @@ test.describe('Session timeline collapsed rows', () => {
     }])
     await openSession(page)
     const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
-    await expect(panel.locator('.tool-run-label')).toHaveText('Read a file')
+    await expect(callsIn(runsIn(await openTurn(panel)))).toHaveCount(1)
     await completedTool(page, 'Read', 'child_boundary', 'background_parent')
     await completedTool(page, 'Bash', 'main_boundary_1')
     await injectEvent(page, 'session:text-delta', {
       sessionId: SESSION_ID, delta: 'Hidden boundary narration.', msgId: 'child_boundary_text', parentToolUseId: 'background_parent',
     })
     await completedTool(page, 'Bash', 'main_boundary_2')
-    await expect(panel.locator('.tool-run-label')).toHaveText('Read a file, ran 2 commands')
-    await panel.locator('.tool-run-toggle').click()
+    const runs = runsIn(await openTurn(panel))
+    await expect(runs).toHaveCount(1)
+    await expect(callsIn(runs)).toHaveCount(3)
     await expect(panel.locator('.chat-tool-block')).toHaveCount(3)
     await expect(panel).not.toContainText('Hidden boundary narration.')
     await expect(panel).not.toContainText('child_boundary')
@@ -263,9 +282,9 @@ test.describe('Session timeline collapsed rows', () => {
     await injectEvent(page, 'session:thinking-delta', { sessionId: SESSION_ID, delta: 'Visible thinking.', msgId: 'main_thinking' })
     // Reasoning is a run MEMBER, not a boundary: the row it streams into pulses,
     // and no top-level "Thinking ›" row appears (thinking-run-merge.spec.ts).
-    const toolRows = panel.locator('.session-live-row > .session-msg-bare > .tool-run-row').filter({ hasText: /^Ran / })
-    await expect(panel.locator('.session-live-row .tool-run-label').filter({ hasText: /^Thinking$/ })).toHaveCount(0)
-    await expect(toolRows.last().locator('.tool-run-live-dot')).toHaveCount(1)
+    const body = await openTurn(panel)
+    const toolRows = runsIn(body)
+    await expect(toolRows).toHaveCount(2)
     await completedTool(page, 'Bash', 'before_system')
     await injectEvent(page, 'session:system-event', { sessionId: SESSION_ID, variant: 'info', message: 'Visible notice.' })
     await completedTool(page, 'Bash', 'before_agent')
@@ -280,18 +299,13 @@ test.describe('Session timeline collapsed rows', () => {
     // A running call is no boundary (2026-10-04): it is inside the closed run,
     // which breathes until it returns, and no card opens for it.
     await expect(toolRows).toHaveCount(4)
-    await expect(toolRows.locator('.tool-run-label')).toHaveText([
-      'Ran a command', 'Ran 2 commands', 'Ran a command', 'Ran 3 commands',
-    ])
-    await expect(panel.locator('.session-live-row .tool-run-live-dot')).toHaveCount(1)
-    await expect(toolRows.last().locator('.tool-run-live-dot')).toHaveCount(1)
+    for (const [i, n] of [1, 2, 1, 3].entries()) await expect(callsIn(toolRows.nth(i))).toHaveCount(n)
+    await expect(panel.locator('[data-testid="turn-fold"]')).toHaveAttribute('data-running', 'true')
     await expect(panel.locator('.bg-tasks-chip')).toHaveCount(1)
-    await expect(panel.locator('.session-live-row .chat-tool-block')).toHaveCount(0)
     await expect(panel).toContainText('Visible notice.')
     await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: 'running_command', result: 'done' })
     await expect(toolRows).toHaveCount(4)
-    await expect(toolRows.last().locator('.tool-run-label')).toHaveText('Ran 3 commands')
-    await expect(panel.locator('.session-live-row .tool-run-live-dot')).toHaveCount(0)
+    await expect(callsIn(toolRows.last())).toHaveCount(3)
   })
 
   test('keeps failures and retries through duplicate results and history absorption', async ({ page }) => {
@@ -302,24 +316,25 @@ test.describe('Session timeline collapsed rows', () => {
     await openSession(page)
     const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
     await expect(panel.locator('.session-history')).toContainText('Parent turn.')
+    // The ids the CLI gives a turn's blocks, which its saved rows carry too.
     await injectEvent(page, 'session:tool-use', {
-      sessionId: SESSION_ID, toolName: 'Bash', toolUseId: 'failed_command', input: { command: 'printf failed_command' },
+      sessionId: SESSION_ID, toolName: 'Bash', toolUseId: 'failed_command', input: { command: 'printf failed_command' }, msgId: 'msg_retry',
     })
     await injectEvent(page, 'session:tool-result', {
       sessionId: SESSION_ID, toolUseId: 'failed_command', result: 'Error: fixture command failed',
     })
     await completedTool(page, 'Read', 'retry_child', 'retry_agent')
-    await completedTool(page, 'Bash', 'retry_command')
+    await completedTool(page, 'Bash', 'retry_command', undefined, 'msg_retry')
     await injectEvent(page, 'session:tool-result', {
       sessionId: SESSION_ID, toolUseId: 'retry_command', result: 'retry_command',
     })
-    await expect(panel.locator('.tool-run-label')).toHaveText('Ran 2 commands')
-    await expect(panel.locator('.tool-run-fail')).toHaveText('1 failed')
-    await panel.locator('.tool-run-toggle').click()
+    const liveRuns = runsIn(await openTurn(panel))
+    await expect(liveRuns).toHaveCount(1)
+    await expect(foldFail(panel)).toHaveText('1 failed')
     await expect(panel.locator('.chat-tool-block')).toHaveCount(2)
     await expect(panel).not.toContainText('retry_child')
     messages.push({
-      role: 'assistant', text: '', timestamp: new Date().toISOString(),
+      role: 'assistant', text: '', msgId: 'msg_retry', timestamp: new Date().toISOString(),
       tools: [
         { name: 'Bash', toolUseId: 'failed_command', input: { command: 'printf failed_command' }, result: 'Error: fixture command failed', isError: true },
         { name: 'Bash', toolUseId: 'retry_command', input: { command: 'printf retry_command' }, result: 'retry_command' },
@@ -328,10 +343,12 @@ test.describe('Session timeline collapsed rows', () => {
     await injectEvent(page, 'session:batch-completed', { sessionId: SESSION_ID, count: 1 })
     await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'done', isError: false })
     await expect(panel.locator('.session-live-row .tool-run-row')).toHaveCount(0)
-    await expect(panel.locator('.tool-run-label')).toHaveText('Ran 2 commands')
-    await expect(panel.locator('.tool-run-fail')).toHaveText('1 failed')
-    // The reader opened the run live: the saved run is open too (row-disclosure.ts).
-    await expect(panel.locator('.tool-run-row > .tool-run-body')).toHaveCount(1)
+    // The reader opened the turn live: it stays open once saved.
+    await expect(panel.locator('[data-testid="turn-fold"]')).toHaveAttribute('data-open', 'true')
+    await expect(foldFail(panel)).toHaveText('1 failed')
+    const savedRuns = runsIn(await openTurn(panel))
+    await expect(savedRuns).toHaveCount(1)
+    await expect(callsIn(savedRuns)).toHaveCount(2)
     await expect(panel.locator('.chat-tool-block')).toHaveCount(2)
   })
 
@@ -374,10 +391,12 @@ test.describe('Session timeline collapsed rows', () => {
       result: 'second',
     })
 
-    const toolRows = page.locator('.session-live-row .tool-run-row')
+    const body = await openTurn(page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`))
+    const toolRows = runsIn(body)
+    // Saved rows that come in after the stream (a late history read) keep the open row open.
+    await page.waitForTimeout(2000)
     await expect(toolRows).toHaveCount(1)
-    await expect(toolRows.locator('.tool-run-label')).toHaveText(/Ran 2 commands/i)
-    await expect(page.locator('.session-live-row .chat-tool-block')).toHaveCount(0)
+    await expect(callsIn(toolRows)).toHaveCount(2)
   })
 
   test('merges adjacent streaming thinking segments into one row', async ({ page }) => {
@@ -407,12 +426,14 @@ test.describe('Session timeline collapsed rows', () => {
       msgId: 'msg_think_2',
     })
 
-    const thinkingRows = page.locator('.session-live-row .tool-run-row', {
-      has: page.locator('.tool-run-label', { hasText: /^Thinking$/ }),
+    // A new session's first turn is its one fold too (2026-11-12); opened, ONE reasoning row.
+    const body = await openTurn(page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`))
+    const thinkingRows = body.locator('.tool-run-row--step', {
+      has: page.locator(':scope > .tool-run-toggle > .tool-run-label', { hasText: /^Thinking$/ }),
     })
     await expect(thinkingRows).toHaveCount(1)
 
-    await thinkingRows.locator('.tool-run-toggle').click()
+    await thinkingRows.locator(':scope > .tool-run-toggle').click()
     await expect(thinkingRows.locator('.chat-thinking-content')).toContainText('First thinking segment.')
     await expect(thinkingRows.locator('.chat-thinking-content')).toContainText('Second thinking segment.')
   })
@@ -441,7 +462,9 @@ test.describe('Session timeline collapsed rows', () => {
     await openSession(page)
 
     await expect(page.locator('.session-history .markdown-body p', { hasText: 'Final visible answer.' })).toBeVisible()
-    const thinkingRows = page.locator('.session-history .tool-run-row', {
+    // The reasoning before the answer is the turn's one fold; inside it, one thinking row.
+    const turnBody = await openTurn(page.locator('.session-history'))
+    const thinkingRows = turnBody.locator('.tool-run-row', {
       has: page.locator('.tool-run-label', { hasText: /^Thinking$/ }),
     })
     await expect(thinkingRows).toHaveCount(1)
@@ -457,7 +480,8 @@ test.describe('Session timeline collapsed rows', () => {
     await mockSession(page)
     await openSession(page)
 
-    const systemRow = page.locator('.session-history .tool-run-row').filter({ hasText: 'commands_changed' })
+    // A lone step is the turn's fold too: opened, the line is in it.
+    const systemRow = (await openTurn(page.locator('.session-history'))).locator('.tool-run-row').filter({ hasText: 'commands_changed' })
     await expect(systemRow).toHaveCount(1)
     await expect(systemRow.locator('.tool-run-label')).toContainText('…')
     await expect(systemRow.locator('.session-system-detail-pre')).toHaveCount(0)
@@ -470,7 +494,7 @@ test.describe('Session timeline collapsed rows', () => {
     await mockSession(page, [
       {
         role: 'assistant',
-        text: 'Timeline prose baseline',
+        text: '',
         timestamp: '2026-01-01T00:00:00.000Z',
         tools: [{
           name: 'Bash',
@@ -485,37 +509,29 @@ test.describe('Session timeline collapsed rows', () => {
         systemVariant: 'info',
         timestamp: `2026-01-01T00:00:0${index + 1}.000Z`,
       })),
+      { role: 'assistant', text: 'Timeline prose baseline', timestamp: '2026-01-01T00:00:05.000Z' },
     ])
     await openSession(page)
 
     const history = page.locator('.session-history')
-    const systemGroup = history.locator('.tool-run-row').filter({ hasText: /^3 system messages/ })
-    await expect(systemGroup).toHaveCount(1)
-    await expect(history.locator('.session-system-line')).toHaveCount(0)
+    await expect(history.locator('.markdown-body p', { hasText: 'Timeline prose baseline' })).toBeVisible()
+    // The steps before the answer are its one fold, lined up with the answer.
+    const turn = history.locator('[data-testid="turn-fold"]')
+    const body = await openTurn(history)
+    // Inside it the three lines are rows of its list, as the call is (no second line to open).
+    const lines = body.locator('.session-system-line')
+    await expect(lines).toHaveCount(3)
+    await expect(body.locator('.tool-run-row').filter({ hasText: /^3 system messages/ })).toHaveCount(0)
 
-    const baseline = await page.evaluate(() => {
-      const history = document.querySelector('.session-history')
-      if (!history) throw new Error('Missing session history')
-      const systemToggle = Array.from(history.querySelectorAll<HTMLElement>('.tool-run-toggle'))
-        .find((element) => element.textContent?.includes('3 system messages'))
-      const toolToggle = Array.from(history.querySelectorAll<HTMLElement>('.tool-run-toggle'))
-        .find((element) => element.textContent?.match(/Ran a command/i))
-      const prose = Array.from(history.querySelectorAll<HTMLElement>('.markdown-body p'))
-        .find((element) => element.textContent?.includes('Timeline prose baseline'))
-      if (!systemToggle || !toolToggle || !prose) throw new Error('Missing alignment probes')
-      return {
-        tool: toolToggle.getBoundingClientRect().left,
-        prose: prose.getBoundingClientRect().left,
-        system: systemToggle.getBoundingClientRect().left,
-      }
-    })
-    console.log(`ALIGNMENT_PROBE tool=${baseline.tool} prose=${baseline.prose} system=${baseline.system}`)
-    expect(Math.abs(baseline.tool - baseline.prose)).toBeLessThanOrEqual(1)
-    expect(Math.abs(baseline.system - baseline.prose)).toBeLessThanOrEqual(1)
-
-    await systemGroup.locator('.tool-run-toggle').click()
-    await expect(systemGroup.locator('.session-system-line')).toHaveCount(3)
-    await expect(systemGroup.locator('.session-system-text')).toHaveText([
+    const left = async (l: Locator) => (await l.boundingBox())!.x
+    const prose = await left(history.locator('.markdown-body p', { hasText: 'Timeline prose baseline' }))
+    const fold = await left(turn.locator(':scope > .tool-run-toggle'))
+    const tool = await left(callsIn(runsIn(body)).first())
+    const system = await left(lines.first())
+    console.log(`ALIGNMENT_PROBE fold=${fold} prose=${prose} tool=${tool} system=${system}`)
+    expect(Math.abs(fold - prose)).toBeLessThanOrEqual(1)
+    expect(Math.abs(tool - system)).toBeLessThanOrEqual(1)
+    await expect(body.locator('.session-system-text')).toHaveText([
       'history_notice_1',
       'history_notice_2',
       'history_notice_3',

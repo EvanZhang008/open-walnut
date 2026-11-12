@@ -92,7 +92,8 @@ describe('words with calls: the calls fold after the words exactly when they are
     expect(src.match(/const divides = !\(part\.kind === 'msg' && part\.toolsAfter\);\s*if \(divides && /g)).toHaveLength(2)
     expect(src).toContain("if (part.kind === 'msg' && part.toolsAfter) return;\n      host = i;")
     expect(src).toContain('{...(part.toolsAfter ? { noActions: true } : {})}')
-    // A lone send is always a fold, never its card on its own.
-    expect(src).toMatch(/items\.length === 1 && !answerThinking && !riders && !carry && !isInboundPart\(items\[0\]\.part\) && !sends\(items\[0\]\.part\)/)
+    // A lone send is always a fold, never its card on its own. Since 2026-11-12 every lone
+    // step is (the user: "event one shoudol be collpesed"): no lone-row path is left at all.
+    expect(src).not.toMatch(/items\.length === 1 && !answerThinking/)
   })
 })

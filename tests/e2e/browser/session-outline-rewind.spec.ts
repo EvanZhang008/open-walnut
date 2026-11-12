@@ -31,7 +31,9 @@ const TASK_ID = 'pw-task-pins'
 const EARLY_ASK = 'Now bump the version'
 /** Inside the initial window (indices 22-51 are rendered). */
 const LATE_ASK = 'outline filler ask 20'
-const LAST_REPLY = 'outline filler reply 24'
+// The last turn's short reply sits before its paragraph answer, so it is folded with that
+// turn's steps (every step before the answer is one fold): the turn before ends on its reply.
+const LAST_REPLY = 'outline filler reply 23'
 
 async function openSession(page: Page): Promise<Locator> {
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)

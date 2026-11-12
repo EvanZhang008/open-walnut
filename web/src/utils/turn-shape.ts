@@ -35,7 +35,8 @@ import { readTurnMarker, type MarkerTurnMessage } from './turn-end-marker';
 export type TurnKind = 'hidden' | 'answered' | 'open';
 
 export interface TurnShape {
-  /** Index of the row that opened the turn; -1 when the window starts inside it. */
+  /** Index of the row that opened the turn; -1 when the window starts inside it, or when a
+   *  row sent under another question opened it (pageOf). */
   start: number;
   /** First index after the turn. */
   end: number;
@@ -70,29 +71,40 @@ export interface PagedTurnShape extends TurnShape {
 
 export function shapeTurns(messages: readonly MarkerTurnMessage[], opts: TurnShapeOptions): PagedTurnShape[] {
   const pageOf = opts.pageOf;
-  if (!pageOf) return shapeRun(messages, opts);
+  const whole = () => shapeRun(messages, opts).map(({ lead: _lead, ...t }) => t);
+  if (!pageOf) return whole();
   const byPage = new Map<string, number[]>();
   messages.forEach((_, i) => {
     const key = pageOf(i);
     const list = byPage.get(key);
     if (list) list.push(i); else byPage.set(key, [i]);
   });
-  if (byPage.size <= 1) return shapeRun(messages, opts);
+  if (byPage.size <= 1) return whole();
   // The newest turn is the one holding the newest row: only it may stay open while live.
   const lastPage = pageOf(messages.length - 1);
   const out: PagedTurnShape[] = [];
+  // A row sent into the session, whichever page it is filed under: it starts a turn.
+  const sentAt = messages.map((m, i) => m.role === 'user' && opts.isSent(m, i));
   for (const [page, idx] of byPage) {
     const sub = idx.map((i) => messages[i]);
     const at = (j: number) => idx[j];
+    // A row sent under another question between two of this page's rows started the
+    // turn the later one belongs to: the main conversation's words after it answer it,
+    // never narration of the turn before (2026-11-12: an untagged reply to a question
+    // folded as "An update" with the next one's).
+    const cutBefore = (j: number) => {
+      for (let g = at(j - 1) + 1; g < at(j); g++) if (sentAt[g]) return true;
+      return false;
+    };
     const shapes = shapeRun(sub, {
       ...opts,
       isSent: (m, j) => opts.isSent(m, at(j)),
       isPerson: (m, j) => opts.isPerson(m, at(j)),
       isCleanNoAction: (j) => opts.isCleanNoAction(at(j)),
       streaming: opts.streaming && page === lastPage,
-    });
+    }, cutBefore);
     for (const t of shapes) {
-      const first = Math.max(t.start, 0);
+      const first = t.lead;
       const rows = idx.slice(first, t.end);
       out.push({
         start: t.start >= 0 ? at(t.start) : -1,
@@ -109,41 +121,51 @@ export function shapeTurns(messages: readonly MarkerTurnMessage[], opts: TurnSha
   return out.sort((a, b) => firstRow(a) - firstRow(b));
 }
 
-function shapeRun(messages: readonly MarkerTurnMessage[], opts: TurnShapeOptions): TurnShape[] {
-  const stripTag = opts.stripTag ?? ((t: string) => t);
-  const bounds: number[] = [];
-  messages.forEach((m, i) => { if (m.role === 'user' && opts.isSent(m, i)) bounds.push(i); });
-  const segs: { from: number; to: number }[] = [];
-  if (messages.length > 0 && (bounds.length === 0 || bounds[0] > 0)) segs.push({ from: -1, to: bounds[0] ?? messages.length });
-  bounds.forEach((b, k) => segs.push({ from: b, to: k + 1 < bounds.length ? bounds[k + 1] : messages.length }));
+/** A turn and the index of its first row (its sent row, else the first it holds). */
+type RunShape = TurnShape & { lead: number };
 
-  const lastRowOf = (from: number, to: number): number => {
-    for (let i = to - 1; i > from; i--) {
+function shapeRun(messages: readonly MarkerTurnMessage[], opts: TurnShapeOptions, cutBefore?: (i: number) => boolean): RunShape[] {
+  const stripTag = opts.stripTag ?? ((t: string) => t);
+  // Where a turn starts: a row sent into the session (`sent`), or a row a send filed
+  // elsewhere came right before (`cut`: the turn has no opening row of its own here).
+  const bounds: { at: number; sent: boolean }[] = [];
+  messages.forEach((m, i) => {
+    if (m.role === 'user' && opts.isSent(m, i)) bounds.push({ at: i, sent: true });
+    else if (i > 0 && cutBefore?.(i)) bounds.push({ at: i, sent: false });
+  });
+  // `from` is the opening row (-1: none); `lead` the turn's first row.
+  const segs: { from: number; lead: number; to: number }[] = [];
+  if (messages.length > 0 && (bounds.length === 0 || bounds[0].at > 0)) segs.push({ from: -1, lead: 0, to: bounds[0]?.at ?? messages.length });
+  bounds.forEach((b, k) => segs.push({ from: b.sent ? b.at : -1, lead: b.at, to: k + 1 < bounds.length ? bounds[k + 1].at : messages.length }));
+  const firstOf = (seg: { from: number; lead: number }) => (seg.from >= 0 ? seg.from + 1 : seg.lead);
+
+  const lastRowOf = (lo: number, to: number): number => {
+    for (let i = to - 1; i >= lo; i--) {
       const m = messages[i];
       if (m.role === 'system' && m.systemVariant !== 'error') continue;
       return i;
     }
     return -1;
   };
-  const endsInAnswer = (from: number, to: number): boolean => {
-    const i = lastRowOf(from, to);
+  const endsInAnswer = (seg: { from: number; lead: number; to: number }): boolean => {
+    const i = lastRowOf(firstOf(seg), seg.to);
     return i >= 0 && messages[i].role === 'assistant' && (messages[i].tools?.length ?? 0) === 0;
   };
 
   // Chains of segments: a delivery mid-work joins the turn it interrupted.
-  const chains: { from: number; to: number }[] = [];
+  const chains: { from: number; lead: number; to: number }[] = [];
   segs.forEach((seg, k) => {
     const prev = chains[chains.length - 1];
     const person = seg.from >= 0 && opts.isPerson(messages[seg.from], seg.from);
-    if (prev && !person && !endsInAnswer(segs[k - 1].from, segs[k - 1].to)) prev.to = seg.to;
+    if (prev && !person && !endsInAnswer(segs[k - 1])) prev.to = seg.to;
     else chains.push({ ...seg });
   });
 
   return chains.map((c, k) => {
     const byPerson = c.from >= 0 && opts.isPerson(messages[c.from], c.from);
-    const base = { start: c.from, end: c.to, byPerson, kind: 'open' as TurnKind, answer: -1 };
+    const base = { start: c.from, end: c.to, byPerson, kind: 'open' as TurnKind, answer: -1, lead: c.from >= 0 ? c.from : c.lead };
     if (k === chains.length - 1 && opts.streaming) return base;
-    const last = lastRowOf(c.from, c.to);
+    const last = lastRowOf(firstOf(c), c.to);
     if (last < 0) return base;
     const final = messages[last];
     if (final.role !== 'assistant' || (final.tools?.length ?? 0) > 0) return base;

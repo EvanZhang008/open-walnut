@@ -650,10 +650,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle tool use events
   useEvent('session:tool-use', (data) => {
-    const { sessionId: sid, toolName, toolUseId, input, planContent, parentToolUseId, subagentType, taskDescription } = data as {
+    const { sessionId: sid, toolName, toolUseId, input, planContent, parentToolUseId, subagentType, taskDescription, msgId } = data as {
       sessionId: string; toolName: string; toolUseId: string;
       input?: Record<string, unknown>; taskId: string; planContent?: string; parentToolUseId?: string;
-      subagentType?: string; taskDescription?: string;
+      subagentType?: string; taskDescription?: string; msgId?: string;
     };
     if (!sessionId || sid !== sessionId) return;
 
@@ -680,7 +680,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           totalBlocks: prev.length,
         });
       }
-      return appendToolCall(prev, { toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription });
+      return appendToolCall(prev, { toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription, msgId });
     });
   });
 

@@ -60,6 +60,8 @@ export async function mockSession(page: Page, messages: unknown[], status: 'runn
               const parsed = JSON.parse(data as string);
               if (parsed.type === 'req' && parsed.method === 'session:stream-subscribe') {
                 setTimeout(() => {
+                  // The panel holds the stream now: events sent after this reach it (waitForStream).
+                  (window as any).__mockStreamSubscribed = ((window as any).__mockStreamSubscribed ?? 0) + 1;
                   this.dispatchEvent(new MessageEvent('message', {
                     // What the server holds now (setMockStream), else the snapshot it opened with.
                     data: JSON.stringify({ type: 'res', id: parsed.id, ok: true, payload: (window as any).__mockStreamNow ?? stream }),
@@ -96,6 +98,11 @@ export async function mockSession(page: Page, messages: unknown[], status: 'runn
       },
     });
   });
+}
+
+/** Waits until the panel subscribed to the session's stream, so a live event sent next reaches it. */
+export async function waitForStream(page: Page) {
+  await page.waitForFunction(() => ((window as any).__mockStreamSubscribed ?? 0) > 0, undefined, { timeout: 15000 });
 }
 
 /** What the stream subscribe answers from now on (the turn ended: an empty buffer). */

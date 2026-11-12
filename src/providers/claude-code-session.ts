@@ -8033,6 +8033,7 @@ export class ClaudeCodeSession {
               ...(parentToolUseId ? { parentToolUseId } : {}),
               ...(subagentType ? { subagentType } : {}),
               ...(taskDescription ? { taskDescription } : {}),
+              ...(msgId ? { msgId } : {}),
               ...(this._isReplayedByOffset() !== undefined ? { replayed: this._isReplayedByOffset() } : {}),
             }, ['main-ai'], { source: 'session-runner' })
           }

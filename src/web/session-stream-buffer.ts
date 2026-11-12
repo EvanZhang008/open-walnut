@@ -44,6 +44,8 @@ export interface StreamingToolCallBlock {
   /** See StreamingTextBlock.subagentType/taskDescription. */
   subagentType?: string
   taskDescription?: string
+  /** The assistant message it belongs to (SessionToolUseEvent.msgId). */
+  msgId?: string
 }
 
 export interface StreamingSystemBlock {
@@ -290,7 +292,7 @@ class SessionStreamBuffer {
     }
   }
 
-  appendToolUse(sessionId: string, toolUseId: string, name: string, input?: Record<string, unknown>, planContent?: string, parentToolUseId?: string, subagentType?: string, taskDescription?: string): void {
+  appendToolUse(sessionId: string, toolUseId: string, name: string, input?: Record<string, unknown>, planContent?: string, parentToolUseId?: string, subagentType?: string, taskDescription?: string, msgId?: string): void {
     const entry = this.getOrCreate(sessionId)
     // ⚠️  DO NOT add `this.streaming.add(sessionId)` here — see appendTextDelta
     // for the Root Cause 5 explanation. Data events must never flip the lifecycle flag.
@@ -319,6 +321,7 @@ class SessionStreamBuffer {
       ...(parentToolUseId ? { parentToolUseId } : {}),
       ...(subagentType ? { subagentType } : {}),
       ...(taskDescription ? { taskDescription } : {}),
+      ...(msgId ? { msgId } : {}),
     })
   }
 

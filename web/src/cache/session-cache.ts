@@ -349,7 +349,7 @@ function registerGlobalListeners(): void {
 
   // ── tool-use ──
   onSessionEvent('session:tool-use', (data: unknown) => {
-    const { sessionId: sid, toolName, toolUseId, input, planContent, parentToolUseId, subagentType, taskDescription } =
+    const { sessionId: sid, toolName, toolUseId, input, planContent, parentToolUseId, subagentType, taskDescription, msgId } =
       data as {
         sessionId: string;
         toolName: string;
@@ -359,6 +359,7 @@ function registerGlobalListeners(): void {
         parentToolUseId?: string;
         subagentType?: string;
         taskDescription?: string;
+        msgId?: string;
       };
     if (!sid || !trackedSessions.has(sid)) return;
     const state = settledState(sid);
@@ -369,7 +370,7 @@ function registerGlobalListeners(): void {
       interruptText(state);
     }
     state.blocks = appendToolCall(state.blocks, {
-      toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription,
+      toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription, msgId,
     });
   });
 

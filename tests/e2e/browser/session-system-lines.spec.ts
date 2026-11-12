@@ -111,12 +111,22 @@ test('system lines with no handler: none raw, the git echo never splits the step
   // message, this turn's JSON, which holds every SL_ marker and subtype name too.
   const chat = col.locator('.session-history')
 
-  // Mid-turn (the hold): the readable line shows as its words, the steps are one row.
-  await expect(chat.getByText('SL_WORDS Switched to a backup model.')).toBeVisible({ timeout: 30_000 })
-  await expect(chat.getByText('SL_BEFORE Tests fail as expected.')).toBeVisible()
+  // Mid-turn (the hold): the words before the steps, the steps and the readable line
+  // are the turn's one fold, the steps one run inside it.
+  // The readable line is a step like the rest: inside the turn's one fold.
+  const fold = chat.locator('.process-fold').first()
+  await expect(chat.locator('.process-fold')).toHaveCount(1, { timeout: 30_000 })
+  await expect(fold.locator(':scope > .tool-run-toggle')).toContainText(/notice/, { timeout: 30_000 })
+  await expect(chat.getByText('SL_BEFORE Tests fail as expected.')).toHaveCount(0)
+  await fold.locator(':scope > .tool-run-toggle').click()
+  await expect(fold.getByText('SL_BEFORE Tests fail as expected.')).toBeVisible()
+  await expect(fold.getByText('SL_WORDS Switched to a backup model.')).toBeVisible()
   await expect(chat.getByText('SL_DONE pushed.')).toHaveCount(0)
-  const labels = await chat.locator('.tool-run-label').allTextContents()
-  expect(labels.filter((t) => /^Ran (2 commands|a command)/.test(t))).toEqual([expect.stringMatching(/^Ran 2 commands/)])
+  // Inside the fold the two commands are one run (its calls the fold's rows): the git
+  // echo between them drew nothing that splits it.
+  const runs = fold.locator('.process-fold-body > .session-msg-bare > .tool-run-row:not(.tool-run-row--words)')
+  await expect(runs).toHaveCount(1)
+  await expect(runs.locator('.chat-tool-block')).toHaveCount(2)
   expect(await rawLeaks(chat)).toEqual([])
   // The server's own stream buffer (what every client renders from): the readable
   // line is its only system row, with no name or JSON. A mid-turn history read can

@@ -409,6 +409,9 @@ export interface SessionToolUseEvent {
   /** See SessionTextDeltaEvent.subagentType/taskDescription. */
   subagentType?: string;
   taskDescription?: string;
+  /** The assistant message the call belongs to, the id its saved row carries: the live
+   *  turn's fold keys on it, so a fold the reader opened stays open when history takes it. */
+  msgId?: string;
   /** See SessionTextDeltaEvent.replayed. */
   replayed?: boolean;
 }

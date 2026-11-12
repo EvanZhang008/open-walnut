@@ -358,6 +358,11 @@ describe('appendLaneThinking', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('appendToolCall / backfillToolResult / findToolCall', () => {
+  it('keeps the assistant message id a tool call came with (the live fold keys on it)', () => {
+    const [b] = appendToolCall([], { toolUseId: 'tu-m', toolName: 'Bash', msgId: 'msg_T' });
+    expect(b).toMatchObject({ type: 'tool_call', toolUseId: 'tu-m', msgId: 'msg_T' });
+    expect(appendToolCall([], { toolUseId: 'tu-n', toolName: 'Bash' })[0]).not.toHaveProperty('msgId');
+  });
   it('appends with status calling and optional identity fields', () => {
     const blocks = appendToolCall([], {
       toolUseId: 'tu-1', toolName: 'Agent', input: { prompt: 'x' },

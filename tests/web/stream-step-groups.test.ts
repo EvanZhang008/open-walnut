@@ -1,19 +1,26 @@
 import { describe, it, expect } from 'vitest';
 import { chunkByKind, foldsAsOne, leadingStepGroup, settleWords, stepGroups, type StepKind } from '../../web/src/components/sessions/stream-step-groups';
 
-const K = (s: string): StepKind[] => s.split('').map((c) => ({ s: 'step', c: 'card', n: 'send', w: 'words', a: 'agent', '.': 'silent', o: 'other' } as const)[c as 's' | 'c' | 'n' | 'w' | 'a' | '.' | 'o']);
+const K = (s: string): StepKind[] => s.split('').map((c) => ({ s: 'step', c: 'card', n: 'send', w: 'words', a: 'agent', x: 'notice', '.': 'silent', o: 'other' } as const)[c as 's' | 'c' | 'n' | 'w' | 'a' | 'x' | '.' | 'o']);
 
 describe('stepGroups', () => {
+  it('a runtime line between steps is a step of the group, never a boundary (2026-11-12)', () => {
+    expect(stepGroups(K('sxws'))).toEqual([{ members: [0, 1, 2, 3], cards: 0, steps: 2, sends: 0, words: 1, agents: 0, notices: 1 }]);
+    expect(foldsAsOne(stepGroups(K('sx'))[0])).toBe(true);
+    expect(chunkByKind([0, 1, 2], (i) => K('sxs')[i]).map((c) => c.kind)).toEqual(['step', 'notice', 'step']);
+    // A notice after words is not the session working on: the words are the answer.
+    expect(settleWords(K('wx'))).toEqual(K('ox'));
+  });
   it('the reported stretch is one group: card, thinking, card, commands, card, command', () => {
-    expect(stepGroups(K('cscsssscs'))).toEqual([{ members: [0, 1, 2, 3, 4, 5, 6, 7, 8], cards: 3, steps: 6, sends: 0, words: 0, agents: 0 }]);
+    expect(stepGroups(K('cscsssscs'))).toEqual([{ members: [0, 1, 2, 3, 4, 5, 6, 7, 8], cards: 3, steps: 6, sends: 0, words: 0, agents: 0, notices: 0 }]);
   });
   it('silent items neither join nor split', () => {
-    expect(stepGroups(K('c.s..c'))).toEqual([{ members: [0, 2, 5], cards: 2, steps: 1, sends: 0, words: 0, agents: 0 }]);
+    expect(stepGroups(K('c.s..c'))).toEqual([{ members: [0, 2, 5], cards: 2, steps: 1, sends: 0, words: 0, agents: 0, notices: 0 }]);
   });
   it('anything a reader sees splits', () => {
     expect(stepGroups(K('csocs'))).toEqual([
-      { members: [0, 1], cards: 1, steps: 1, sends: 0, words: 0, agents: 0 },
-      { members: [3, 4], cards: 1, steps: 1, sends: 0, words: 0, agents: 0 },
+      { members: [0, 1], cards: 1, steps: 1, sends: 0, words: 0, agents: 0, notices: 0 },
+      { members: [3, 4], cards: 1, steps: 1, sends: 0, words: 0, agents: 0, notices: 0 },
     ]);
     expect(stepGroups(K('ooo'))).toEqual([]);
   });
@@ -21,7 +28,7 @@ describe('stepGroups', () => {
 
 describe('leadingStepGroup', () => {
   it('is the group the timeline opens with', () => {
-    expect(leadingStepGroup(K('..scos'))).toEqual({ members: [2, 3], cards: 1, steps: 1, sends: 0, words: 0, agents: 0 });
+    expect(leadingStepGroup(K('..scos'))).toEqual({ members: [2, 3], cards: 1, steps: 1, sends: 0, words: 0, agents: 0, notices: 0 });
   });
   it('is null when something visible comes first, or nothing does', () => {
     expect(leadingStepGroup(K('.osc'))).toBeNull();
@@ -42,7 +49,7 @@ describe('chunkByKind', () => {
 describe('sends', () => {
   it('a send joins the stretch and makes it one fold, alone or with steps', () => {
     // The reported turn: reasoning, two sends, then the answer.
-    expect(stepGroups(K('snno'))).toEqual([{ members: [0, 1, 2], cards: 0, steps: 1, sends: 2, words: 0, agents: 0 }]);
+    expect(stepGroups(K('snno'))).toEqual([{ members: [0, 1, 2], cards: 0, steps: 1, sends: 2, words: 0, agents: 0, notices: 0 }]);
     expect(foldsAsOne(stepGroups(K('snno'))[0])).toBe(true);
     expect(foldsAsOne(stepGroups(K('no'))[0])).toBe(true);
   });
@@ -89,7 +96,7 @@ describe('words and agents are steps of the turn', () => {
     expect(foldsAsOne(stepGroups(K('wsacn'))[0])).toBe(true);
   });
   it('the live turn opens with its words', () => {
-    expect(leadingStepGroup(settleWords(K('wsas')))).toEqual({ members: [0, 1, 2, 3], cards: 0, steps: 2, sends: 0, words: 1, agents: 1 });
+    expect(leadingStepGroup(settleWords(K('wsas')))).toEqual({ members: [0, 1, 2, 3], cards: 0, steps: 2, sends: 0, words: 1, agents: 1, notices: 0 });
   });
   it('words and agents keep their own chunk in the fold', () => {
     const kinds = K('wssaw');

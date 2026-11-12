@@ -19,9 +19,11 @@
  *  · `words`: the session's own short words on the way, with a step after them
  *    (history folds the same words before its answer: fold-rows.ts narration);
  *  · `agent`: a subagent it started (its chip);
+ *  · `notice`: a line the runtime wrote (a notice, a retry, an error line), a step
+ *    as its saved row is (fold-rows.ts SYSTEM_VARIANT_ROLE);
  *  · `silent`: draws nothing, so it neither joins nor ends a group;
- *  · `other`: anything a reader sees (the answer, a person's message, a notice, a
- *    question): it ends the group.
+ *  · `other`: anything a reader sees (the answer, a person's message, a question,
+ *    Claude Code's own error reply): it ends the group.
  * 2026-11-12: words and agents that only the stream had drew between two folds
  * of one live turn, so the turn read as three rows until it was saved.
  *
@@ -30,7 +32,7 @@
  * (the usual turn) nothing changes. 2026-11-11, the user, of a live turn in a session
  * with a side question that never folded: "If they are togter they need ot be collpesed".
  */
-export type StepKind = 'step' | 'card' | 'send' | 'words' | 'agent' | 'silent' | 'other';
+export type StepKind = 'step' | 'card' | 'send' | 'words' | 'agent' | 'notice' | 'silent' | 'other';
 
 export interface StepGroup {
   /** Timeline indices of the group's steps and cards, in order (no silent ones). */
@@ -40,10 +42,11 @@ export interface StepGroup {
   sends: number;
   words: number;
   agents: number;
+  notices: number;
 }
 
 /** An empty group (the live turn's fold before its first step is drawn). */
-export const EMPTY_STEP_GROUP: StepGroup = { members: [], cards: 0, steps: 0, sends: 0, words: 0, agents: 0 };
+export const EMPTY_STEP_GROUP: StepGroup = { members: [], cards: 0, steps: 0, sends: 0, words: 0, agents: 0, notices: 0 };
 
 /** Every maximal group of steps and cards. */
 export function stepGroups(kinds: readonly StepKind[], keyOf?: (i: number) => string): StepGroup[] {
@@ -62,6 +65,7 @@ export function stepGroups(kinds: readonly StepKind[], keyOf?: (i: number) => st
     else if (kind === 'send') cur.sends++;
     else if (kind === 'words') cur.words++;
     else if (kind === 'agent') cur.agents++;
+    else if (kind === 'notice') cur.notices++;
     else cur.steps++;
   });
   return out;
@@ -78,7 +82,7 @@ export function leadingStepGroup(kinds: readonly StepKind[], keyOf?: (i: number)
  *  group of cards alone keeps its "Received N messages" row, steps alone their run,
  *  agents alone their chip. */
 export function foldsAsOne(g: StepGroup): boolean {
-  return g.sends > 0 || [g.cards, g.steps, g.words, g.agents].filter((n) => n > 0).length >= 2;
+  return g.sends > 0 || [g.cards, g.steps, g.words, g.agents, g.notices].filter((n) => n > 0).length >= 2;
 }
 
 /** Words count as words only on the way: a `words` item with no step of the session's
@@ -104,14 +108,14 @@ export function settleWords(kinds: readonly StepKind[], segOf?: (i: number) => s
   return out;
 }
 
-export type ChunkKind = 'step' | 'card' | 'send' | 'words' | 'agent';
+export type ChunkKind = 'step' | 'card' | 'send' | 'words' | 'agent' | 'notice';
 
 /** Consecutive members of one kind, so each keeps the row it renders as inside the fold. */
 export function chunkByKind(members: readonly number[], kindOf: (i: number) => StepKind): Array<{ kind: ChunkKind; members: number[] }> {
   const out: Array<{ kind: ChunkKind; members: number[] }> = [];
   for (const i of members) {
     const k = kindOf(i);
-    const kind: ChunkKind = k === 'card' || k === 'send' || k === 'words' || k === 'agent' ? k : 'step';
+    const kind: ChunkKind = k === 'card' || k === 'send' || k === 'words' || k === 'agent' || k === 'notice' ? k : 'step';
     const last = out[out.length - 1];
     if (last && last.kind === kind) last.members.push(i);
     else out.push({ kind, members: [i] });
