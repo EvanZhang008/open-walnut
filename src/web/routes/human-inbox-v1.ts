@@ -107,6 +107,8 @@ const ERROR_CODES: Record<string, string> = {
   duplicate_reply: 'duplicate_reply',
   // A decision letter asking what a task in the sender's tree already asks the user (same-ask.ts).
   same_ask: 'same_ask',
+  // A letter or reply holding a credential (letter-credentials.ts): the sync would hold it back.
+  credential: 'credential',
 }
 
 interface LetterErrorLike { code: string; status: number; message: string }
@@ -434,6 +436,21 @@ humanInboxV1Router.post('/human-inbox/:id/settle', async (req: Request, res: Res
     const { settleLetter } = await import('../../core/human-inbox/store.js')
     const by = await answeredByCaller(sid)
     res.json({ letter: await settleLetter(id, { reason: typeof b.reason === 'string' ? b.reason : '', ...(by ? { by } : {}) }) })
+  })
+})
+
+// POST /api/v1/human-inbox/:id/redact-credentials
+// A letter written before the credential check: each line the sync's scan flags is replaced,
+// so the file syncs again (core/human-inbox/store.ts redactLetterCredentials). It only takes out.
+humanInboxV1Router.post('/human-inbox/:id/redact-credentials', async (req: Request, res: Response, next: NextFunction) => {
+  await guard(res, next, 'POST /human-inbox/:id/redact-credentials', async () => {
+    const id = letterId(req)
+    if (isCompanion()) {
+      await relayControlAction(res, 'server.human-inbox.redact-credentials', SERVER_RELAY_SID, { id }, 200)
+      return
+    }
+    const { redactLetterCredentials } = await import('../../core/human-inbox/store.js')
+    res.json(await redactLetterCredentials(id))
   })
 })
 

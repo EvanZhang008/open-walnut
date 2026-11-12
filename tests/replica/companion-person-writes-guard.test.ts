@@ -43,6 +43,7 @@ const TABLE: Record<string, Row> = {
   'POST /human-inbox/body': { offline: 'agent' },
   'POST /human-inbox/:id/reply': { offline: 'agent' },
   'POST /human-inbox/:id/settle': { offline: 'agent' },
+  'POST /human-inbox/:id/redact-credentials': { offline: 'agent' },
   'POST /human-inbox/:id/read': { offline: 'journal', kind: 'inbox-state' },
   'POST /human-inbox/:id/pin': { offline: 'journal', kind: 'inbox-state' },
   'POST /human-inbox/:id/archive': { offline: 'journal', kind: 'inbox-state' },

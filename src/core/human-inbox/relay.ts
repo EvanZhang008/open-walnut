@@ -177,6 +177,10 @@ export async function handleHumanInboxRelayAction(
       const by = await answeredByCaller(typeof p.callerSid === 'string' ? p.callerSid : undefined);
       return { letter: await settleLetter(requireId(p), { reason: str(p.reason), ...(by ? { by } : {}) }) };
     }
+    case 'redact-credentials': {
+      const { redactLetterCredentials } = await import('./store.js');
+      return await redactLetterCredentials(requireId(p));
+    }
     case 'human-reply': {
       const by = withUserWords(await answeredByCaller(typeof p.callerSid === 'string' ? p.callerSid : undefined), p);
       const pictures = await savePicturesOnce(requireId(p), p, { kind: 'reply' });

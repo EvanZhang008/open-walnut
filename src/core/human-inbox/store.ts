@@ -67,7 +67,7 @@ export class LetterError extends Error {
   constructor(
     message: string,
     readonly code: 'invalid' | 'not_found' | 'already_answered' | 'human_approval' | 'reply_instead' | 'user_words' | 'task_snoozed' | 'user_kind'
-      | 'duplicate_letter' | 'duplicate_reply' | 'same_ask',
+      | 'duplicate_letter' | 'duplicate_reply' | 'same_ask' | 'credential',
     readonly status: number,
   ) {
     super(message);
@@ -269,6 +269,19 @@ async function resolveBodySource(
   const bytes = Buffer.byteLength(text, 'utf-8');
   assertBodyBytes(bytes, field);
   return { kind: 'inline', text, bytes };
+}
+
+/**
+ * Refuse a letter or reply that holds a credential (letter-credentials.ts): every text
+ * field the sender wrote, and a staged body's bytes. Before anything is written.
+ */
+async function refuseCredentials(input: object, source: BodySource | null, what: 'letter' | 'reply'): Promise<void> {
+  const { credentialsInLetter, credentialRefusal } = await import('./letter-credentials.js');
+  const staged = source?.kind === 'staged'
+    ? { field: 'html', text: await fsp.readFile((await statStagedBody(source.ref)).path, 'utf-8') }
+    : undefined;
+  const found = await credentialsInLetter(input, staged);
+  if (found.length > 0) throw new LetterError(credentialRefusal(found, what), 'credential', 400);
 }
 
 /** Enough of a staged body for derivePreview, which stops at 8000 chars anyway. */
@@ -568,6 +581,7 @@ export async function sendLetterOnce(
     lane === 'html_ref' ? str(input.htmlRef ?? input.html_ref ?? '') : undefined,
     bodyFormat,
   );
+  await refuseCredentials(input, bodySource, 'letter');
   // The preview only ever reads the first few thousand chars (derivePreview), so
   // a staged body is peeked at rather than loaded — the whole point of the lane.
   const previewSource = bodySource.kind === 'inline'
@@ -847,6 +861,7 @@ export async function agentReply(id: string, input: AgentReplyInput, opts: { qui
       richFormat,
     )
     : null;
+  await refuseCredentials(input, richSource, 'reply');
 
   let newItems: AgentReplyInput['items'];
   try { newItems = validateNewItems(input.items); } catch (error) { throw invalid(errMsg(error)); }
@@ -1093,6 +1108,7 @@ function announceSettled(ids: readonly string[]): void {
 export async function settleLetter(id: string, input: { reason: string; by?: LetterAnsweredBy }): Promise<LetterRecord> {
   requireValidId(id);
   const reason = settleReason(input.reason);
+  await refuseCredentials({ reason }, null, 'reply');
   const record = await withWriteLock(() => withStore((store) => {
     const letter = find(store, id);
     if (letter.answered) throw new LetterError('This letter was answered; its answer is the record. Archive it instead.', 'already_answered', 409);
@@ -1210,6 +1226,7 @@ export async function withdrawLetter(
   const note = str(input?.note).trim();
   if (!note) throw invalid('note is required: a withdrawn letter has to say why');
   assertBodySize(note, 'note');
+  await refuseCredentials({ note }, null, 'reply');
   // Walnut's words on the record follow the letter language (walnut-letters/thread-words.ts).
   const { walnutLetterLanguage } = await import('./walnut-letters/languages.js');
   const { WITHDRAWN_LABEL_WORDS, WITHDRAWN_WORDS } = await import('./walnut-letters/thread-words.js');
@@ -1233,6 +1250,73 @@ export async function withdrawLetter(
     letterId: id, pluginId: letter.sender.pluginId,
   });
   return { letter, alreadyAnswered };
+}
+
+/**
+ * Take the credentials out of a letter already written (letter-credentials.ts): each line
+ * the sync's scan flags, in the body files (the letter's and each rich turn's) and in the
+ * index's text (subject, preview, thread text). The recorded sizes follow the new files,
+ * so a replica's copy check still holds. Nothing else changes: answered, read and pinned
+ * stay as they are. `lines` 0: the letter was clean.
+ */
+export async function redactLetterCredentials(id: string): Promise<{ letter: LetterRecord; lines: number }> {
+  requireValidId(id);
+  const { redactLetterLines } = await import('./letter-credentials.js');
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const letter = find(store, id);
+    let lines = 0;
+    const files: Array<{ name: string; set: (bytes: number) => void }> = [
+      { name: `${letter.id}.${bodyExt(letter.bodyFormat)}`, set: (b) => { letter.bodyBytes = b; } },
+      ...letter.thread.flatMap((t) => (t.bodyFile && BODY_FILE_RE.test(t.bodyFile) ? [{ name: t.bodyFile, set: (b: number) => { t.bodyBytes = b; } }] : [])),
+    ];
+    for (const f of files) {
+      const text = await readBodyFile(f.name);
+      if (text === null) continue;
+      const out = redactLetterLines(text);
+      if (out.count === 0) continue;
+      await writeBodyFile(f.name, out.text);
+      f.set(Buffer.byteLength(out.text, 'utf-8'));
+      lines += out.count;
+    }
+    const clean = (v: string): string => { const out = redactLetterLines(v); lines += out.count; return out.text; };
+    // Every string of the index entry the sender or the person wrote: the index syncs too.
+    const cleanItems = (items: Array<{ subject?: string; summary?: string }> | undefined) => {
+      for (const it of items ?? []) {
+        if (typeof it.subject === 'string') it.subject = clean(it.subject);
+        if (typeof it.summary === 'string') it.summary = clean(it.summary);
+      }
+    };
+    letter.subject = clean(letter.subject);
+    letter.textPreview = clean(letter.textPreview);
+    for (const a of letter.actions ?? []) {
+      a.label = clean(a.label);
+      if (typeof a.description === 'string') a.description = clean(a.description);
+    }
+    cleanItems(letter.items);
+    if (letter.answered && typeof letter.answered.freeText === 'string') letter.answered.freeText = clean(letter.answered.freeText);
+    for (const t of letter.thread) { t.text = clean(t.text); cleanItems(t.items); }
+    if (lines > 0) {
+      await withStore((s2) => {
+        const live = find(s2, id);
+        Object.assign(live, {
+          subject: letter.subject, textPreview: letter.textPreview, bodyBytes: letter.bodyBytes,
+          ...(letter.actions ? { actions: letter.actions } : {}),
+          ...(letter.items ? { items: letter.items } : {}),
+          ...(letter.answered && live.answered ? { answered: { ...live.answered, freeText: letter.answered.freeText } } : {}),
+        });
+        live.thread.forEach((t, i) => {
+          const done = letter.thread[i];
+          if (!done) return;
+          t.text = done.text;
+          if (done.items) t.items = done.items;
+          if (done.bodyBytes !== undefined) t.bodyBytes = done.bodyBytes;
+        });
+      });
+      log.notif.info('human-inbox: credentials taken out of a letter', { letterId: id, lines });
+    }
+    return { letter, lines };
+  });
 }
 
 /** Append the human's free-text reply. Same un-archive + mark-read reasoning. */

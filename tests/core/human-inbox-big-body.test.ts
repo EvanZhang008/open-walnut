@@ -86,7 +86,8 @@ describe('a letter body past the inline threshold', () => {
 
     // The envelope still carries a usable preview — the point of peeking the
     // staged file rather than skipping the preview for big bodies.
-    expect(sent.textPreview).toContain('Big digest')
+    // The summary is the first prose block (the heading is skipped since 9c8071269).
+    expect(sent.textPreview).toContain('digest é 中 🎧 line')
   })
 
   it('an explicit caller can still ask for the bytes in process', async () => {

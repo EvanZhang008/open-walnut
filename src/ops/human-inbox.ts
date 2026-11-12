@@ -315,7 +315,9 @@ defineOp({
     + 'settled, or one the user asked you to clear; an unread decision letter stays for the user. '
     + '`settled` closes a decision letter nobody needs to answer any more (the thing it asked was done '
     + 'outside Walnut, the blocker cleared, the question is moot): it leaves the inbox with your one-line '
-    + 'reason, which the user reads. Settle your own decision letter the moment its ask is moot.',
+    + 'reason, which the user reads. Settle your own decision letter the moment its ask is moot. '
+    + '`redact_credentials` takes a credential out of a letter written before sending refused them: '
+    + 'each line the sync\'s secret scan flags is replaced, so the file syncs again.',
   input: {
     id: z.string().min(1).describe('Letter id (lt-...)'),
     read: z.boolean().optional().describe('Read (true) or unread (false)'),
@@ -323,12 +325,20 @@ defineOp({
     archived: z.boolean().optional().describe('Archived (true) or back in the inbox (false)'),
     settled: z.string().min(3).max(200).optional().describe(
       'Settle an unanswered decision letter: one line saying why nobody needs to answer it now (e.g. "The agreement was accepted; build 140 uploaded")'),
+    redact_credentials: z.boolean().optional().describe(
+      'Take out each line that holds a credential (the sync\'s secret scan), in the body and the thread; the letter stays otherwise as it is'),
   },
-  handler: async ({ id, read, pinned, archived, settled }, call) => {
+  handler: async ({ id, read, pinned, archived, settled, redact_credentials }, call) => {
     const sets = ([['read', read], ['pin', pinned], ['archive', archived]] as const).filter(([, v]) => typeof v === 'boolean')
     const reason = typeof settled === 'string' ? settled.trim() : ''
-    if (!sets.length && !reason) throw new Error('Name at least one of read, pinned, archived, settled.')
+    if (!sets.length && !reason && redact_credentials !== true) throw new Error('Name at least one of read, pinned, archived, settled, redact_credentials.')
     let letter: unknown
+    let redacted: number | undefined
+    if (redact_credentials === true) {
+      const body = await call('POST', `/human-inbox/${encodeURIComponent(String(id))}/redact-credentials`, {}) as { letter?: LetterRow; lines?: number }
+      letter = body?.letter ? envelope(body.letter) : letter
+      redacted = typeof body?.lines === 'number' ? body.lines : 0
+    }
     if (reason) {
       const body = await call('POST', `/human-inbox/${encodeURIComponent(String(id))}/settle`, { reason }) as { letter?: LetterRow }
       letter = body?.letter ? envelope(body.letter) : letter
@@ -338,9 +348,13 @@ defineOp({
       const body = await call('POST', `/human-inbox/${encodeURIComponent(String(id))}/${what}`, { [key]: v }) as { letter?: LetterRow }
       letter = body?.letter ? envelope(body.letter) : letter
     }
-    return withOutcome({ letter }, `Letter ${id} updated.`, 'human_inbox_list shows the inbox as the user sees it.')
+    return withOutcome(
+      { letter, ...(redacted !== undefined ? { redactedLines: redacted } : {}) },
+      redacted === undefined ? `Letter ${id} updated.` : redacted > 0 ? `Letter ${id}: ${redacted} line(s) with a credential taken out.` : `Letter ${id} holds no credential; nothing changed.`,
+      'human_inbox_list shows the inbox as the user sees it.')
   },
   routes: [
+    { method: 'POST', path: '/human-inbox/:id/redact-credentials' },
     { method: 'POST', path: '/human-inbox/:id/read' },
     { method: 'POST', path: '/human-inbox/:id/pin' },
     { method: 'POST', path: '/human-inbox/:id/archive' },
