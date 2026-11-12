@@ -99,8 +99,11 @@
 .worker-fold-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
 .worker-fold-icon { display: inline-grid; place-items: center; flex: none; width: 16px; height: 16px; }
 .worker-fold-icon svg { width: 14px; height: 14px; }
-.worker-fold-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.worker-fold-state { flex: none; font-size: 11px; color: var(--fg-muted); }
+.worker-fold-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The state gives its room up before the title: the line's icon already says it. */
+.worker-fold-state { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--fg-muted); }
+.worker-fold-tree { container-type: inline-size; }
+@container (max-width: 240px) { .worker-fold-state { display: none; } }
 /* The actions are icons at the end of a line, the size and colours of the row's start button
    (globals.css .task-start-btn): the take-out arrow on the line's hover or focus, the put-back arrow
    always on a worker that is out, and the same arrow on that worker's own row. */
@@ -154,16 +157,12 @@
 .worker-fold-item.is-out .worker-fold-action { visibility: visible; }
 .worker-fold-foot { padding: 2px 0 0 26px; }
 
-/* What a control does, shown the moment the pointer is on it (a native title waits about a second).
-   Beside the control, inside the row, so no scroller clips it: left of an end control, right of the
-   foot's. Not drawn until hovered: a hidden box would still count as overflow. */
-:is(.worker-fold-action, .worker-fold-row-back, .worker-fold-all)[data-fold-tip]::after {
-  content: attr(data-fold-tip);
-  display: none;
-  position: absolute;
-  top: 50%;
-  right: calc(100% + 6px);
-  transform: translateY(-50%);
+/* What a control does, shown the moment the pointer is on it (fold-tip.ts; a native title waits about
+   a second). A fixed box on the body, kept inside the window, so no column or scroller cuts it off. */
+.worker-fold-tip {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(320px, calc(100vw - 12px));
   padding: 4px 8px;
   border-radius: 7px;
   background: rgba(28, 28, 30, 0.95);
@@ -172,15 +171,12 @@
   font-weight: 400;
   line-height: 16px;
   white-space: nowrap;
-  /* A leader's long title ends in an ellipsis; the hint stays inside the panel. */
-  max-width: min(260px, 70vw);
+  /* A leader's long title ends in an ellipsis. */
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none;
-  z-index: 30;
 }
-.worker-fold-all[data-fold-tip]::after { right: auto; left: calc(100% + 6px); }
-:is(.worker-fold-action, .worker-fold-row-back, .worker-fold-all)[data-fold-tip]:is(:hover, :focus-visible)::after { display: block; }
+.worker-fold-tip[hidden] { display: none; }
 
 /* A worker shown separately: the put-back arrow on the row's hover, beside its start button. */
 .status-section-card .worker-fold-row-back { display: none; }

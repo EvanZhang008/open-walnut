@@ -5,13 +5,15 @@
  * as a row of its own (an up arrow off a line), or puts it back (the arrow down). Icons, not words:
  * the user found the words too wordy and picked design 7 of ten, with the control at the END of the
  * line and a hint the moment the pointer is on it (2026-11-11: "一定要放到后面 ... 立马就显示一个
- * hover over"), so the hint is data-fold-tip drawn by worker-fold.css, never a native title with its delay.
+ * hover over"), so the hint is data-fold-tip drawn at once by fold-tip.ts, never a native title with its delay.
  */
+import { useEffect } from 'react';
 import type { Task } from '@open-walnut/core';
 import * as ICONS from '../common/Icons';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { taskUserState } from '@/utils/session-status';
 import { foldMixLine, stateSectionKey, type FoldEntry, foldStateWords } from './worker-fold';
+import { installFoldTip } from './fold-tip';
 import '@/styles/worker-fold.css';
 
 /** What a section row needs to draw its folded team: TodoPanel's fold state and its writers. */
@@ -72,6 +74,7 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
   onOpen(task: Task): void;
   twoLine: boolean;
 }) {
+  useEffect(installFoldTip, []);
   const folded = entries.filter((e) => !e.out).length;
   const canFoldBack = entries.some((e) => e.out && ctl.foldBackOf(e.task));
   return (
@@ -135,6 +138,7 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
 
 /** A worker row shown separately: the put-back arrow at the row's end, beside its start button. */
 export function FoldBackButton({ task, ctl }: { task: Task; ctl: WorkerFoldCtl }) {
+  useEffect(installFoldTip, []);
   const back = ctl.foldBackOf(task);
   if (!back) return null;
   return (

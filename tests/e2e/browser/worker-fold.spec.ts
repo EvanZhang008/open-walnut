@@ -82,8 +82,17 @@ test.describe('worker fold', () => {
     await expect(takeOut).toHaveAttribute('data-fold-tip', /Take out/)
     await expect(takeOut).not.toHaveAttribute('title', /./)
     await takeOut.hover()
-    expect(await takeOut.evaluate((e) => getComputedStyle(e, '::after').display)).toBe('block')
+    const tip = page.getByTestId('worker-fold-tip')
+    await expect(tip).toBeVisible({ timeout: 500 })
+    await expect(tip).toHaveText('Take out: show as its own row in the list')
     await takeOut.click()
+    // The new row pushes the line down, out from under the pointer: no hint stays behind.
+    await expect(tip).toBeHidden()
+    // React keeps the same button, now the put-back arrow: its hint has the new words.
+    await item1.getByTestId('worker-fold-back').hover()
+    await expect(tip).toHaveText(/^Put back into Ship the fold leader/)
+    await page.mouse.move(1, 1)
+    await expect(tip).toBeHidden()
     const row1 = statusSectionCard(panel, 'waiting', w1)
     await expect(row1).toBeVisible()
     await expect(item1.getByTestId('worker-fold-back')).toHaveAttribute('data-fold-tip', /^Put back into /)
@@ -200,5 +209,59 @@ test.describe('worker fold', () => {
     await item.getByTestId('worker-fold-separate').click()
     await expect(statusSectionCard(panel, 'waiting', w1)).toBeVisible()
     await expect(lead).toHaveAttribute('data-fold-quiet', '1')
+  })
+
+  // On the user's data the Focus column was about 120px wide: the hint ran off the column's left
+  // edge and each line showed only "Waiting / snoozed", its title squeezed to nothing (2026-11-12).
+  test('in a narrow column the hint stays whole in the window and a line keeps its title', async ({ page, baseURL }) => {
+    await isolateUiPrefs(page)
+    await presetPanelDesign(page, 'status')
+    await openHome(page, baseURL!)
+    const { leader, w1 } = await team(page)
+    await page.reload()
+    await selectSection(page, 'All')
+    const panel = page.locator('.todo-panel').first()
+    await setStatusSectionOpen(panel, 'waiting', true)
+    const lead = await showSectionCard(panel, 'waiting', leader)
+    await lead.getByTestId('worker-fold-toggle').click()
+    const item = panel.locator(`[data-testid="worker-fold-tree"][data-host-id="${leader}"] [data-fold-task-id="${w1}"]`)
+    const view = page.viewportSize()!
+    for (const width of [180, 240, 420]) {
+      await page.locator('#home-task-navigation').evaluate((el, w) => { (el as HTMLElement).style.width = `${w}px` }, width)
+      await item.scrollIntoViewIfNeeded()
+      // The title is drawn before the state: some of it always shows.
+      const title = await item.locator('.worker-fold-title').evaluate((e) => e.getBoundingClientRect().width)
+      expect(title, `title width in a ${width}px column`).toBeGreaterThan(30)
+      await item.hover()
+      const ctl = item.getByTestId('worker-fold-separate')
+      await ctl.hover()
+      const tip = page.getByTestId('worker-fold-tip')
+      await expect(tip).toBeVisible({ timeout: 500 })
+      const box = (await tip.boundingBox())!
+      expect(box.x, `hint left edge in a ${width}px column`).toBeGreaterThanOrEqual(0)
+      expect(box.x + box.width, `hint right edge in a ${width}px column`).toBeLessThanOrEqual(view.width)
+      expect(box.y).toBeGreaterThanOrEqual(0)
+      // The words are whole, not cut by the column.
+      expect(await tip.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
+      await page.mouse.move(view.width - 2, view.height - 2)
+      await expect(tip).toBeHidden()
+    }
+    // Keyboard focus shows the hint too, and a pointer moving elsewhere leaves it.
+    await page.locator('#home-task-navigation').evaluate((el) => { (el as HTMLElement).style.width = '' })
+    await item.hover()
+    const ctl = item.getByTestId('worker-fold-separate')
+    await ctl.focus()
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.press('Tab')
+    const tip = page.getByTestId('worker-fold-tip')
+    await expect(tip).toHaveText('Take out: show as its own row in the list')
+    await page.mouse.move(view.width - 2, view.height - 2)
+    await page.mouse.move(view.width - 40, view.height - 40)
+    await expect(tip).toBeVisible()
+    // Focus moves on: the box names the newly focused control, or hides when it has no hint.
+    await page.keyboard.press('Tab')
+    const next = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.foldTip ?? null)
+    if (next) await expect(tip).toHaveText(next)
+    else await expect(tip).toBeHidden()
   })
 })
