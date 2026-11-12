@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 vi.mock('../../web/src/utils/log', () => ({ log: { info: vi.fn() } }));
 import { log } from '../../web/src/utils/log';
-import { beginSessionOpen, noteSessionOpenSource, observeSessionOpen, hasVisibleSessionContent, hasReadableOpenRows } from '../../web/src/utils/session-open-latency';
+import { beginSessionOpen, noteSessionOpenSource, observeSessionOpen, hasVisibleSessionContent, hasReadableOpenRows, sessionOpenStageRecorder } from '../../web/src/utils/session-open-latency';
 
 const stops: Array<() => void> = [];
 afterEach(() => { stops.splice(0).forEach(stop => stop()); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers(); });
@@ -30,13 +30,22 @@ function harness() {
     constructor(cb: () => void) { mutate = cb; }
     observe() {} disconnect = disconnect;
   });
+  let intersect = () => {};
+  const intersectionDisconnect = vi.fn();
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(cb: () => void) { intersect = cb; }
+    observe() {} disconnect = intersectionDisconnect;
+  });
   let visible = false;
+  let offscreen = false;
   const box = { width: 300, height: 80, top: 100, bottom: 180, left: 0, right: 300 };
   const panel = {
-    getBoundingClientRect: () => ({ ...box, height: 800, bottom: 900 }),
+    getBoundingClientRect: () => offscreen ? { ...box, left: 2000, right: 2300 } : { ...box, height: 800, bottom: 900 },
     querySelectorAll: (selector: string) => visible && selector.includes('> .markdown-body') ? [{ textContent: 'Latest answer', getBoundingClientRect: () => box }] : [],
   } as unknown as HTMLElement;
-  return { panel, document, window, disconnect,
+  return { panel, document, window, disconnect, intersectionDisconnect,
+    offscreen(value: boolean) { offscreen = value; },
+    intersect() { intersect(); },
     show() { visible = true; mutate(); },
     paint(ms: number) { now = ms; frames.splice(0).forEach(cb => cb(ms)); },
   };
@@ -78,6 +87,61 @@ describe('chat open measurement', () => {
     expect(log.info).toHaveBeenCalledWith('session-open', expect.stringContaining('first content '), expect.objectContaining({ source: 'unknown', entry: 'mount' }));
   });
 
+  it('records first stage offsets without changing the click-to-paint total', () => {
+    const h = harness();
+    beginSessionOpen('metric-stages', 'home-column');
+    const stage = sessionOpenStageRecorder('metric-stages');
+    h.paint(20); stage('historyEffect'); stage('idbStart');
+    h.paint(420); stage('idbReady'); stage('historyReady');
+    stage('historyAdopted');
+    h.paint(440); stage('historyReady');
+    noteSessionOpenSource('metric-stages', 'idb');
+    stops.push(observeSessionOpen(h.panel, 'metric-stages', () => 'claude'));
+    h.show(); h.paint(1000); h.paint(1016);
+    expect(log.info).toHaveBeenCalledWith('session-open', expect.any(String), expect.objectContaining({
+      ms: 1016, source: 'idb', stages: { historyEffect: 20, idbStart: 20, idbReady: 420,
+        historyReady: 420, historyAdopted: 420, contentDetected: 1000 },
+    }));
+  });
+
+  it('late stage callbacks cannot annotate a reopened attempt of the same session', () => {
+    const h = harness();
+    beginSessionOpen('metric-late-stage', 'home-column');
+    const old = sessionOpenStageRecorder('metric-late-stage');
+    stops.push(observeSessionOpen(h.panel, 'metric-late-stage', () => 'claude'));
+    h.paint(20);
+    beginSessionOpen('metric-late-stage', 'home-column');
+    old('idbReady');
+    h.paint(30); sessionOpenStageRecorder('metric-late-stage')('historyReady');
+    h.show(); h.paint(100); h.paint(116);
+    expect(log.info).toHaveBeenCalledWith('session-open', expect.any(String), expect.objectContaining({
+      ms: 96, stages: { historyReady: 10, contentDetected: 80 },
+    }));
+  });
+
+  it('a recorder created without an open cannot claim a later mount', () => {
+    const h = harness();
+    const early = sessionOpenStageRecorder('metric-before-mount');
+    stops.push(observeSessionOpen(h.panel, 'metric-before-mount', () => 'claude'));
+    early('idbReady');
+    h.show(); h.paint(100); h.paint(116);
+    expect(log.info).toHaveBeenCalledWith('session-open', expect.any(String), expect.objectContaining({
+      stages: { contentDetected: 100 },
+    }));
+  });
+
+  it('mount measurement starts in layout before the passive history read can finish', () => {
+    const panel = fs.readFileSync('web/src/components/sessions/SessionPanel.tsx', 'utf8');
+    expect(panel).toMatch(/useLayoutEffect\(\(\) => \{\s*const panel = panelRef\.current;[\s\S]*?return observeSessionOpen/);
+    const hook = fs.readFileSync('web/src/hooks/useSessionHistory.ts', 'utf8');
+    expect(hook).toContain('const stage = sessionOpenStageRecorder(sessionId)');
+    expect(hook).toMatch(/stage\('idbStart'\);\s*idbGetHistory\(sessionId\)/);
+    expect(hook).toMatch(/if \(cancelled\) return;\s*stage\('idbReady'\)/);
+    expect(hook.indexOf('const stage = sessionOpenStageRecorder')).toBeGreaterThan(hook.indexOf('if (version > 0)'));
+    expect(hook).toMatch(/const readable = noteReady\(partial\.messages, 'network'\);\s*setMessages\(partial\.messages\);\s*if \(readable\) stage\('historyAdopted'\)/);
+    expect(hook).toMatch(/if \(result\.stale\) \{\s*if \(result\.messages\.length > shown\(\)\) \{\s*const readable = noteReady/);
+  });
+
   it('a first host-ready view is cold, not a cached visit', () => {
     const h = harness();
     beginSessionOpen('metric-ready', 'home-column');
@@ -102,6 +166,36 @@ describe('chat open measurement', () => {
       sessionId: 'metric-cached', ms: 116, source: 'idb', cache: 'cached', outcome: 'content', client: 'browser', userAgent: 'Test WebKit',
     }));
     expect(h.disconnect).toHaveBeenCalled();
+  });
+
+  it('an offscreen restored column is not a thirty-second visible loading timeout', async () => {
+    const h = harness(); h.offscreen(true);
+    stops.push(observeSessionOpen(h.panel, 'metric-offscreen', () => 'claude'));
+    h.show(); h.paint(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(log.info).toHaveBeenCalledWith('session-open', expect.any(String), expect.objectContaining({
+      outcome: 'not-visible', outsideViewportAtAttach: true, viewportSeen: false, measurementVersion: 2,
+    }));
+    expect(h.intersectionDisconnect).toHaveBeenCalled();
+  });
+
+  it('intersection changes reveal an existing body without a DOM mutation and retain the original total', () => {
+    const h = harness(); h.offscreen(true);
+    stops.push(observeSessionOpen(h.panel, 'metric-intersection', () => 'claude'));
+    h.show(); h.paint(100);
+    expect(log.info).not.toHaveBeenCalled();
+    h.offscreen(false); h.intersect(); h.paint(5000); h.paint(5016);
+    expect(log.info).toHaveBeenCalledWith('session-open', expect.any(String), expect.objectContaining({
+      ms: 5016, outsideViewportAtAttach: true, viewportSeen: true, viewportEnteredMs: 5000,
+    }));
+  });
+
+  it.each(['scroll', 'resize'])('%s checks existing content without a DOM mutation', event => {
+    const h = harness();
+    stops.push(observeSessionOpen(h.panel, `metric-geometry-${event}`, () => 'claude'));
+    h.show(); h.offscreen(true); h.paint(100);
+    h.offscreen(false); h.window.dispatchEvent(new Event(event)); h.paint(200); h.paint(216);
+    expect(log.info).toHaveBeenCalledWith('session-open', expect.any(String), expect.objectContaining({ ms: 216, outcome: 'content' }));
   });
 
   it('a hidden page or empty timeline never counts as content and times out explicitly', async () => {

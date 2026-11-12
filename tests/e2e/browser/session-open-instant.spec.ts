@@ -96,7 +96,17 @@ async function mockSessionDetail(page: Page) {
 
 test.describe('session open — instant (idb tier + coalescing)', () => {
   test('dual mounts coalesce to one fetch; reload renders from IndexedDB with the network held', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
     const history = buildHistory(6); // 12 messages
+    const opens: Array<{ source: string; ms: number; stages: Record<string, number>;
+      outsideViewportAtAttach?: boolean; viewportSeen?: boolean; viewportEnteredMs?: number }> = [];
+    page.on('console', async message => {
+      if (!message.text().includes('[session-open] first content')) return;
+      try {
+        const record = await message.args()[1]?.jsonValue();
+        if (record?.sessionId === SESSION_ID) opens.push(record);
+      } catch { /* A context closed after the log; no measurement is invented. */ }
+    });
 
     // ── Visit 1: count history requests by shape ──
     let streamsFetches = 0;
@@ -115,7 +125,9 @@ test.describe('session open — instant (idb tier + coalescing)', () => {
     });
     await mockSessionDetail(page);
 
-    await page.goto(`/sessions?id=${SESSION_ID}`);
+    const savedSessionUrl = new URL(`/sessions?id=${SESSION_ID}`, test.info().project.use.baseURL).href;
+    await page.setContent(`<a href="${savedSessionUrl}">Open saved session</a>`);
+    await page.getByRole('link', { name: 'Open saved session', exact: true }).click();
     await waitForWs(page);
     await page.waitForSelector('.session-msg', { timeout: 30000 });
     await expect(page.locator('.session-history')).toContainText('instant answer 5');
@@ -129,7 +141,7 @@ test.describe('session open — instant (idb tier + coalescing)', () => {
     await page.waitForTimeout(1600);
     expect(streamsFetches, 'streams fetches on one open').toBeLessThanOrEqual(1);
     expect(fullFetches, 'full fetches on one open').toBe(1);
-    await page.screenshot({ path: '/tmp/session-open-instant/visit1-seeded.png' });
+    await page.screenshot({ path: '/tmp/session-open-instant/visit1-seeded.png', scale: 'css' });
 
     // ── Visit 2 (full reload): blackhole the history route. If messages render,
     // they came from IndexedDB — there is nowhere else. ──
@@ -147,19 +159,57 @@ test.describe('session open — instant (idb tier + coalescing)', () => {
       });
     });
 
+    const previousOpens = opens.length;
     const t0 = Date.now();
-    await page.goto(`/sessions?id=${SESSION_ID}`);
+    await page.reload();
     await page.waitForSelector('.session-msg', { timeout: 30000 });
     const renderMs = Date.now() - t0;
     await expect(page.locator('.session-history')).toContainText('instant answer 5');
     // The pinned initial prompt must survive the cache round trip too.
     await expect(page.locator('.session-history')).toContainText('instant question 0');
-    await page.screenshot({ path: '/tmp/session-open-instant/visit2-idb-render.png' });
+    await page.screenshot({ path: '/tmp/session-open-instant/visit2-idb-render.png', scale: 'css' });
 
     // Proof: at least one network request is still being HELD while messages
     // are already on screen ⇒ the render did not come from the network.
-    expect(heldRequests, 'history requests held at render time').toBeGreaterThanOrEqual(1);
+    // Cache paint may precede even dispatching the background verification.
+    await expect.poll(() => heldRequests, { message: 'background history request is held' }).toBeGreaterThanOrEqual(1);
     console.log(`[session-open-instant] reload → first message: ${renderMs}ms (network held; render source = IndexedDB)`);
+
+    await expect.poll(() => opens.slice(previousOpens).find(record => record.source === 'idb')).toBeTruthy();
+    const restored = opens.slice(previousOpens).find(record => record.source === 'idb')!;
+    const stages = ['historyEffect', 'idbStart', 'idbReady', 'historyReady', 'historyAdopted', 'contentDetected'];
+    let last = 0;
+    for (const stage of stages) {
+      expect(restored.stages[stage], stage).toBeGreaterThanOrEqual(last);
+      last = restored.stages[stage];
+    }
+    expect(restored.ms).toBeGreaterThanOrEqual(last);
+    await test.info().attach('restored-open-stages', { body: JSON.stringify(restored), contentType: 'application/json' });
+
+    // A restored column outside the viewport is not a visible loading wait.
+    // Fixture CSS makes a real viewport resize reveal it without changing its DOM.
+    await page.addInitScript(() => {
+      document.addEventListener('DOMContentLoaded', () => {
+        const style = document.createElement('style');
+        style.textContent = '@media (max-width: 999px) { .session-panel { transform: translateX(1600px); } }';
+        document.head.appendChild(style);
+      });
+    });
+    await page.setViewportSize({ width: 900, height: 720 });
+    const beforeOffscreen = opens.length;
+    await page.reload();
+    await expect(page.locator('.session-history')).toContainText('instant answer 5');
+    // The IDB rows exist, but an offscreen body has not qualified as first content.
+    expect(opens.slice(beforeOffscreen)).toEqual([]);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await expect.poll(() => opens.slice(beforeOffscreen).find(record => record.source === 'idb')).toBeTruthy();
+    const revealed = opens.slice(beforeOffscreen).find(record => record.source === 'idb')!;
+    expect(revealed.outsideViewportAtAttach).toBe(true);
+    expect(revealed.viewportSeen).toBe(true);
+    expect(revealed.viewportEnteredMs).toBeGreaterThanOrEqual(0);
+    expect(revealed.ms).toBeGreaterThanOrEqual(revealed.viewportEnteredMs!);
+    await test.info().attach('offscreen-open-stages', { body: JSON.stringify(revealed), contentType: 'application/json' });
+    await page.screenshot({ path: '/tmp/session-open-instant/visit3-viewport-render.png', scale: 'css' });
 
     // Release the held routes so the context can tear down cleanly.
     for (const release of pendingRoutes) await release();

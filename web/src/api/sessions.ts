@@ -318,7 +318,11 @@ export async function fetchSessionHistory(
   },
 ): Promise<SessionHistoryResult> {
   const params: Record<string, string> = {};
-  if (opts?.source) params.source = opts.source;
+  if (opts?.source) {
+    params.source = opts.source;
+    // Opt in explicitly; older callers asking for complete turns keep that contract.
+    if (opts.source === 'streams') params.screen = '1';
+  }
   if (opts?.tail !== undefined && Number.isFinite(opts.tail)) params.tail = String(opts.tail);
   const turns = opts?.turns ?? (opts?.tail && opts.since === undefined ? INITIAL_HISTORY_TURNS : undefined);
   if (turns !== undefined) params.turns = String(turns);

@@ -64,6 +64,7 @@ describe('fetchSessionHistory coalescing', () => {
     const read = fetchSessionHistory('source-projection', { source: 'streams', tail: 400 });
     calls[0].resolve({ ...RESPONSE, firstPaintSource: 'ready', snapshot: '2026-01-01T00:00:00Z' });
     expect(await read).toMatchObject({ firstPaintSource: 'ready', snapshot: '2026-01-01T00:00:00Z' });
+    expect(mocks.apiGet.mock.calls[0][1]).toMatchObject({ source: 'streams', screen: '1' });
   });
 
   it('two concurrent identical requests share ONE network call and both resolve', async () => {

@@ -5,7 +5,8 @@ import { readTurnMarker } from './turn-end-marker';
 import type { SessionHistoryMessage } from '@/types/session';
 
 export type OpenHistorySource = 'memory' | 'idb' | 'snapshot' | 'ready' | 'preview' | 'network' | 'stream' | 'unknown';
-interface OpenAttempt { at: number; source?: OpenHistorySource; entry: string; id: number; timeout?: ReturnType<typeof setTimeout>; engine?: () => string; settle?: () => void; hiddenDuringOpen?: boolean }
+export type OpenHistoryStage = 'historyEffect' | 'idbStart' | 'idbReady' | 'historyReady' | 'historyAdopted' | 'contentDetected';
+interface OpenAttempt { at: number; source?: OpenHistorySource; entry: string; id: number; stages: Partial<Record<OpenHistoryStage, number>>; timeout?: ReturnType<typeof setTimeout>; engine?: () => string; settle?: () => void; hiddenDuringOpen?: boolean; viewportSeen?: boolean; outsideViewportAtAttach?: boolean; viewportEnteredMs?: number }
 const attempts = new Map<string, OpenAttempt>();
 const sources = new Map<string, OpenHistorySource>();
 const OPEN_EVENT = 'walnut:session-open-measure';
@@ -15,10 +16,15 @@ let sequence = 0;
 function finishAttempt(sessionId: string, attempt: OpenAttempt, outcome: 'content' | 'timeout'): void {
   if (attempts.get(sessionId) !== attempt) return;
   const source = attempt.source ?? 'unknown';
+  const measuredOutcome = outcome === 'timeout' && attempt.outsideViewportAtAttach && !attempt.viewportSeen
+    ? 'not-visible' : outcome;
   log.info('session-open', `first content ${sessionId} open ${attempt.id}`, {
     sessionId, ms: Math.round(performance.now() - attempt.at),
     cache: source === 'unknown' ? 'unknown' : ['memory', 'idb', 'snapshot'].includes(source) ? 'cached' : 'cold',
-    source, entry: attempt.entry, outcome, engine: attempt.engine?.() ?? 'unknown',
+    source, entry: attempt.entry, outcome: measuredOutcome, engine: attempt.engine?.() ?? 'unknown',
+    stages: { ...attempt.stages }, measurementVersion: 2,
+    outsideViewportAtAttach: attempt.outsideViewportAtAttach === true,
+    viewportSeen: attempt.viewportSeen === true, viewportEnteredMs: attempt.viewportEnteredMs,
     client: detectInputClient(), userAgent: navigator.userAgent,
     hiddenDuringOpen: attempt.hiddenDuringOpen === true || document.visibilityState === 'hidden',
   });
@@ -30,7 +36,7 @@ function finishAttempt(sessionId: string, attempt: OpenAttempt, outcome: 'conten
 function startAttempt(sessionId: string, entry: string, source?: OpenHistorySource): OpenAttempt {
   clearTimeout(attempts.get(sessionId)?.timeout);
   sources.delete(sessionId);
-  const attempt: OpenAttempt = { at: performance.now(), entry, id: ++sequence, source,
+  const attempt: OpenAttempt = { at: performance.now(), entry, id: ++sequence, source, stages: {},
     hiddenDuringOpen: document.visibilityState === 'hidden' };
   attempts.set(sessionId, attempt);
   // The clock starts at the click even if no panel or metadata ever arrives.
@@ -60,12 +66,26 @@ export function noteSessionOpenSource(sessionId: string, source: OpenHistorySour
   if (attempt && !attempt.source) attempt.source = source;
 }
 
+/** Bind callbacks to this open, so a late read cannot annotate a subsequent reopen. */
+export function sessionOpenStageRecorder(sessionId: string): (stage: OpenHistoryStage) => void {
+  const attempt = attempts.get(sessionId);
+  return (stage) => {
+    if (!attempt || attempts.get(sessionId) !== attempt || attempt.stages[stage] !== undefined) return;
+    attempt.stages[stage] = Math.round(performance.now() - attempt.at);
+  };
+}
+
+function panelInViewport(panel: HTMLElement): boolean {
+  if (document.visibilityState === 'hidden') return false;
+  const box = panel.getBoundingClientRect();
+  return box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < innerHeight
+    && box.right > 0 && box.left < innerWidth;
+}
+
 /** Only visible conversational content qualifies, not a spinner, tool run or notice fold. */
 export function hasVisibleSessionContent(panel: HTMLElement): boolean {
-  if (document.visibilityState === 'hidden') return false;
+  if (!panelInViewport(panel)) return false;
   const viewport = panel.getBoundingClientRect();
-  if (viewport.width <= 0 || viewport.height <= 0 || viewport.bottom <= 0 || viewport.top >= innerHeight
-    || viewport.right <= 0 || viewport.left >= innerWidth) return false;
   const bodies = panel.querySelectorAll<HTMLElement>(
     '.session-msg-user .session-msg-content > .markdown-body, .session-msg-assistant .session-msg-content > .markdown-body, .session-msg-assistant .session-msg-content > .rich-blocks .markdown-body, [data-stream-reply] .markdown-body',
   );
@@ -87,23 +107,32 @@ export function observeSessionOpen(panel: HTMLElement, sessionId: string, engine
   let stopped = false;
   let reported = 0;
   if (mountAttempt && !attempts.has(sessionId)) startAttempt(sessionId, 'mount');
+  const noteViewport = (attempt: OpenAttempt) => {
+    const visible = panelInViewport(panel);
+    if (attempt.outsideViewportAtAttach === undefined) attempt.outsideViewportAtAttach = !visible;
+    if (visible && !attempt.viewportSeen) {
+      attempt.viewportSeen = true;
+      attempt.viewportEnteredMs = Math.round(performance.now() - attempt.at);
+    }
+  };
   const attachEngine = () => {
     const attempt = attempts.get(sessionId);
-    if (attempt) { attempt.engine = engine; attempt.settle = () => observer.disconnect(); }
+    if (attempt) { attempt.engine = engine; attempt.settle = disconnect; noteViewport(attempt); }
   };
-  attachEngine();
   const report = (attempt: OpenAttempt) => {
     if (stopped || reported === attempt.id || attempts.get(sessionId) !== attempt) return;
     reported = attempt.id;
     finishAttempt(sessionId, attempt, 'content');
-    observer.disconnect();
   };
   const check = () => {
     if (stopped || frame) return;
     frame = requestAnimationFrame(() => {
       frame = 0;
       const attempt = attempts.get(sessionId);
-      if (!attempt || !hasVisibleSessionContent(panel)) return;
+      if (!attempt) return;
+      noteViewport(attempt);
+      if (!hasVisibleSessionContent(panel)) return;
+      sessionOpenStageRecorder(sessionId)('contentDetected');
       // A second frame records the content after the preceding frame could paint it.
       frame = requestAnimationFrame(() => {
         frame = 0;
@@ -112,10 +141,25 @@ export function observeSessionOpen(panel: HTMLElement, sessionId: string, engine
     });
   };
   const observer = new MutationObserver(check);
-  observer.observe(panel, { childList: true, subtree: true, characterData: true });
+  const intersection = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver(check);
+  const onGeometry = () => check();
+  const disconnect = () => {
+    observer.disconnect();
+    intersection?.disconnect();
+    window.removeEventListener('scroll', onGeometry, true);
+    window.removeEventListener('resize', onGeometry);
+  };
+  const watch = () => {
+    observer.observe(panel, { childList: true, subtree: true, characterData: true });
+    intersection?.observe(panel);
+    window.addEventListener('scroll', onGeometry, true);
+    window.addEventListener('resize', onGeometry);
+  };
+  watch();
+  attachEngine();
   const onOpen = (event: Event) => {
     if ((event as CustomEvent<{ sessionId: string }>).detail.sessionId === sessionId) {
-      observer.observe(panel, { childList: true, subtree: true, characterData: true });
+      watch();
       attachEngine();
       check();
     }
@@ -130,7 +174,7 @@ export function observeSessionOpen(panel: HTMLElement, sessionId: string, engine
   check();
   return () => {
     stopped = true;
-    observer.disconnect();
+    disconnect();
     cancelAnimationFrame(frame);
     const attempt = attempts.get(sessionId);
     if (attempt?.engine === engine) {

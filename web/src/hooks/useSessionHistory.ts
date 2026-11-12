@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { fetchSessionHistory, fetchSessionHistoryBefore, HISTORY_TAIL_LIMIT } from '@/api/sessions';
 import { perf } from '@/utils/perf-logger';
-import { hasReadableOpenRows, noteSessionOpenSource } from '@/utils/session-open-latency';
+import { hasReadableOpenRows, noteSessionOpenSource, sessionOpenStageRecorder } from '@/utils/session-open-latency';
 import { takeSessionOpenHistory } from '@/api/session-open-prime';
 import { log } from '@/utils/log';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -443,10 +443,22 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       return () => { cancelled = true; controller.abort(); };
     }
 
+    const stage = sessionOpenStageRecorder(sessionId);
+    stage('historyEffect');
+    const noteReady = (rows: SessionHistoryMessage[], source?: Parameters<typeof noteSessionOpenSource>[1]) => {
+      const readable = hasReadableOpenRows(rows);
+      if (readable) {
+        stage('historyReady');
+        if (source) noteSessionOpenSource(sessionId, source);
+      }
+      return readable;
+    };
+
     // Adopt a cached entry (memory or IndexedDB) for instant display, then
     // background-verify against the server. One body for both tiers so their
     // semantics can't drift.
     const adoptCachedAndVerify = (cached: NonNullable<ReturnType<typeof getHistoryCache>>) => {
+      const readable = noteReady(cached.messages);
       setMessages(cached.messages);
       setForkBoundaryIndex(cached.forkBoundaryIndex);
       cursorRef.current = cached.msgCount;
@@ -459,6 +471,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       initialUserTextRef.current = cached.initialUserText;
       setInitialUserText(cached.initialUserText);
       setLoading(false);
+      // State handed to React, not a commit or paint milestone.
+      if (readable) stage('historyAdopted');
       // Offscreen column: show cache, skip the background SSH re-verify until visible.
       if (!enabled) { setPhase2Pending(false); setFirstCheckPending(false); return; }
       setPhase2Pending(true);
@@ -486,6 +500,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           adoptInitialUserText(result.initialUserText);
           const heldLen = messagesRef.current.length;
           const folded = foldFullPayload(messagesRef.current, result, foldOpts());
+          const readable = noteReady(folded.messages);
           setHistoryCache(sessionId, {
             messages: folded.messages,
             forkBoundaryIndex: shiftedForkBoundary(result.forkBoundaryIndex, folded.kept),
@@ -499,6 +514,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           adoptOffset(folded.messages.length, folded.cursor, result.windowed, folded.kept);
           setMessages(folded.messages);
           setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
+          if (readable) stage('historyAdopted');
           // NOTE: turn-boundary block cleanup is driven by the version-bump delta
           // path (evidence-based), not here. A plain cache re-verify only refreshes
           // persisted content; streaming blocks are governed by session:result +
@@ -529,9 +545,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         .then((result) => {
           if (cancelled) return;
           endP1(`${result.messages.length} msgs`);
+          const readable = noteReady(result.messages, result.firstPaintSource ?? (result.snapshot ? 'snapshot' : 'preview'));
           diagnoseOrdering('P1:streams', sid, result.messages);
           if (result.messages.length > 0) {
-            if (hasReadableOpenRows(result.messages)) noteSessionOpenSource(sessionId, result.firstPaintSource ?? (result.snapshot ? 'snapshot' : 'preview'));
             p1Count = result.messages.length;
             setMessages(result.messages);
           }
@@ -551,7 +567,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
             baseOffsetRef.current = offset;
             setOlderHidden(offset);
           }
-          setLoading(false); // Always clear loading — even if empty, don't block on Phase 2
+          setLoading(false); // Always clear loading, even if empty: do not block on Phase 2.
+          if (readable) stage('historyAdopted');
         })
         .catch(() => {
           endP1('error');
@@ -572,7 +589,11 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           fetchJoiningLoad(sessionId, { tail: refreshTail(p1Count), signal: controller.signal }, (from, partial) => {
             if (cancelled) return;
             setLoadingFrom(from);
-            if (partial.messages.length > shown()) setMessages(partial.messages);
+            if (partial.messages.length > shown()) {
+              const readable = noteReady(partial.messages, 'network');
+              setMessages(partial.messages);
+              if (readable) stage('historyAdopted');
+            }
           }, () => cancelled)
             .then((result) => {
               if (!cancelled) {
@@ -586,8 +607,10 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 // count and would corrupt the next ?since= delta.
                 if (result.stale) {
                   if (result.messages.length > shown()) {
+                    const readable = noteReady(result.messages, 'network');
                     setMessages(result.messages);
                     setForkBoundaryIndex(result.forkBoundaryIndex);
+                    if (readable) stage('historyAdopted');
                   }
                   setStale(result.staleReason ?? 'live read failed');
                   return;
@@ -596,7 +619,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 // Held here is Phase 1's streams-file parse, not the transcript's:
                 // never lay a window after it across a gap.
                 const folded = foldFullPayload(messagesRef.current, result);
+                const readable = noteReady(folded.messages, 'network');
                 setMessages(folded.messages);
+                if (readable) stage('historyAdopted');
                 setForkBoundaryIndex(shiftedForkBoundary(result.forkBoundaryIndex, folded.kept));
                 adoptInitialUserText(result.initialUserText);
                 cursorRef.current = folded.cursor;
@@ -639,9 +664,11 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // first; a miss falls through to the normal network path.
     setLoading(true);
     setPhase2Pending(true);
+    stage('idbStart');
     idbGetHistory(sessionId)
       .then((persisted) => {
         if (cancelled) return;
+        stage('idbReady');
         if (persisted && persisted.messages.length > 0) {
           // Seed the memory tier so switches within this page-load are sync.
           setHistoryCache(sessionId, persisted);

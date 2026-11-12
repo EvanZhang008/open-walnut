@@ -67,7 +67,7 @@ describe('a remote session', () => {
     const sid = 'ready-route-kept';
     await createSessionRecord(sid, '', 'p', '/w', { host: 'remote-dev' });
     saveHistoryView(sid, { messages: [row('v1', 'user'), row('v2')] as never, total: 2 }, beginHistoryViewRead(sid));
-    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&tail=400`);
+    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=400`);
     expect(res.body.firstPaintSource).toBe('snapshot');
     expect(ids(res.body)).toEqual(['v1', 'v2']);
     expect(readyMock).not.toHaveBeenCalled();
@@ -79,7 +79,7 @@ describe('a remote session', () => {
     await createSessionRecord(sid, '', 'p', '/w', { host: 'remote-dev' });
     const messages = Array.from({ length: 400 }, (_, i) => row(`v${i}`));
     saveHistoryView(sid, { messages: messages as never, total: 400 }, beginHistoryViewRead(sid));
-    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&tail=400&turns=10`);
+    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=400&turns=10`);
     expect(res.body.messages).toHaveLength(40);
     expect(ids(res.body).at(-1)).toBe('v399');
     expect(res.body.total).toBe(400);
@@ -95,7 +95,7 @@ describe('a remote session', () => {
       readyMock.mockImplementation(() => later(800, late));
       previewRead.mockImplementation(() => later(20, [notice('n1'), row('p1')]));
       const t0 = performance.now();
-      const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&tail=400&turns=10`);
+      const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=400&turns=10`);
       const ms = performance.now() - t0;
       expect(res.body.firstPaintSource).toBe('preview');
       expect(ids(res.body)).toEqual(['n1', 'p1']);
@@ -113,7 +113,7 @@ describe('a remote session', () => {
       resolve(readyRows(['r1', 'r2', 'r3']));
     }, 60)));
     previewRead.mockResolvedValue([notice('n1')]);
-    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&tail=400&turns=10`);
+    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=400&turns=10`);
     expect(res.body.firstPaintSource).toBe('ready');
     expect(ids(res.body)).toEqual(['r1', 'r2', 'r3']);
     expect(res.body.windowed).toBe(true);
@@ -128,7 +128,7 @@ describe('a remote session', () => {
       const sid = `ready-route-remote-none-${rows ? rows[0]!.msgId : 'empty'}`;
       await createSessionRecord(sid, '', 'p', '/w', { host: 'remote-dev' });
       previewRead.mockResolvedValue(rows);
-      const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&tail=400`);
+      const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=400`);
       expect(res.body.firstPaintSource).toBe('preview');
       expect(ids(res.body)).toEqual(rows ? rows.map((r) => r.msgId) : []);
     }
@@ -139,7 +139,7 @@ describe('a remote session', () => {
     await createSessionRecord(sid, '', 'p', '/w', { host: 'remote-dev' });
     readyMock.mockResolvedValue(readyRows(['a', 'b', 'c', 'd'], { total: 40 }));
     previewRead.mockResolvedValue([notice('n1')]);
-    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&tail=2`);
+    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=2`);
     expect(ids(res.body)).toEqual(['c', 'd']);
     expect(res.body.total).toBe(40);
   });
@@ -149,7 +149,7 @@ describe('a remote session', () => {
     await createSessionRecord(sid, '', 'p', '/w', { host: 'remote-dev' });
     await updateSessionRecord(sid, { forkedFromSessionId: 'ready-route-parent' });
     previewRead.mockResolvedValue([row('p1')]);
-    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&tail=400`);
+    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=400`);
     expect(res.status).toBe(200);
     expect(readyMock).not.toHaveBeenCalled();
   });
@@ -161,7 +161,7 @@ describe('a local session', () => {
     await createSessionRecord(sid, '', 'p', '/w');
     readyMock.mockImplementation(() => later(40, readyRows(['l1', 'l2'])));
     localRead.mockResolvedValue({ messages: [notice('pv')], sourceAvailable: true, windowed: true });
-    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&tail=400`);
+    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=400`);
     expect(res.body.firstPaintSource).toBe('ready');
     expect(ids(res.body)).toEqual(['l1', 'l2']);
   });
@@ -172,7 +172,7 @@ describe('a local session', () => {
     readyMock.mockImplementation(() => later(800, readyRows(['l1'])));
     localRead.mockImplementation(() => later(10, { messages: [row('pv')], sourceAvailable: true, windowed: true }));
     const t0 = performance.now();
-    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&tail=400`);
+    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=400`);
     expect(performance.now() - t0).toBeLessThan(400);
     expect(res.body.firstPaintSource).toBe('preview');
     expect(ids(res.body)).toEqual(['pv']);
@@ -182,7 +182,7 @@ describe('a local session', () => {
     const sid = 'ready-route-local-none';
     await createSessionRecord(sid, '', 'p', '/w');
     localRead.mockResolvedValue({ messages: [row('pv')], sourceAvailable: true, windowed: true });
-    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&tail=400`);
+    const res = await request(app()).get(`/api/sessions/${sid}/history?source=streams&screen=1&tail=400`);
     expect(res.body.firstPaintSource).toBe('preview');
     expect(ids(res.body)).toEqual(['pv']);
     expect(readyMock).toHaveBeenCalledTimes(1);

@@ -26,11 +26,11 @@ for (const file of files) {
       }
     } catch { unreadable++; continue; }
     if (!data || !Number.isFinite(data.ms) || (client && data.client !== client)) continue;
-    const key = `${data.client ?? 'unknown'}:${data.cache ?? 'unknown'}:${data.entry ?? 'unknown'}${data.hiddenDuringOpen ? ':hidden' : ''}`;
+    const key = `${data.client ?? 'unknown'}:${data.cache ?? 'unknown'}:${data.entry ?? 'unknown'}${data.hiddenDuringOpen ? ':hidden' : ''}${data.measurementVersion ? `:v${data.measurementVersion}` : ''}${data.outsideViewportAtAttach ? ':offscreen' : ''}${data.outcome === 'not-visible' ? ':not-visible' : ''}`;
     if (!groups.has(key)) groups.set(key, { values: [], timeouts: 0 });
     const group = groups.get(key);
     if (data.outcome === 'content') group.values.push(data.ms);
-    else group.timeouts++;
+    else if (data.outcome === 'timeout') group.timeouts++;
   }
 }
 const report = {};

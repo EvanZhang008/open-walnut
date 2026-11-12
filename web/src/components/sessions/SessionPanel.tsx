@@ -703,7 +703,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const openEngineRef = useRef(session?.engine);
   const measuredMountRef = useRef<string | null>(null);
   openEngineRef.current = session?.engine;
-  useEffect(() => {
+  // Start the mount clock before passive history reads, including cache restoration.
+  useLayoutEffect(() => {
     const panel = panelRef.current;
     if (!panel) return;
     const firstMount = measuredMountRef.current !== sessionId;

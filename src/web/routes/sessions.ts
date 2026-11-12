@@ -1501,7 +1501,10 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     }
 
     if (source === 'streams') {
-      const screen = (rows: SessionHistoryMessage[]) => historyOpenScreen(rows, row => isReadableView([row]))
+      // Only clients opting into a small first paint may shrink their requested turn window.
+      const screenOnly = req.query.screen === '1'
+      const screen = (rows: SessionHistoryMessage[]) => screenOnly
+        ? historyOpenScreen(rows, row => isReadableView([row])) : rows
       if (record && engineCaps(record.engine).historySource === 'acp-journal') {
         // Tail-bounded P1: bound a COLD fold to the journal's last few MB so a
         // whale journal paints instantly; the fold cache serves the follow-ups.
@@ -1566,7 +1569,7 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // as soon as it has something to read (firstPaintRace), so a slow or missing ready view
       // never makes the first paint wait longer than it did; only a preview with nothing to read
       // waits for it. Forks and ACP sessions keep the paths below.
-      const readyP = record && !localWarm && readyViewEligible(record, false) ? readyViewWithin(record) : null
+      const readyP = screenOnly && record && !localWarm && readyViewEligible(record, false) ? readyViewWithin(record) : null
       const answerReady = (ready: ReadyViewRows): void => {
         const readySlice = screen(sliceHistory(ready.messages))
         res.json({

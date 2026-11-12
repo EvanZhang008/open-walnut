@@ -105,6 +105,15 @@ describe('GET /:sessionId/history?tail=N', () => {
       expect(res.body.messages[0].msgId).toBe('question-5');
       expect(res.body.total).toBe(rows.length);
     }
+    const screen = await request(createApp()).get(`/api/sessions/${sid}/history?tail=400&turns=10&source=streams&screen=1`);
+    expect(screen.status).toBe(200);
+    expect(screen.body.messages).toHaveLength(40);
+    expect(screen.body.messages.at(-1).msgId).toBe('answer-14');
+    expect(screen.body.total).toBe(rows.length);
+    expect(screen.body.cursor).toBeUndefined();
+    // Full refresh ignores the screen hint and still restores the complete turn window.
+    const full = await request(createApp()).get(`/api/sessions/${sid}/history?tail=400&turns=10&screen=1`);
+    expect(full.body.messages).toHaveLength(1020);
   });
 
   it('counts the main conversation\'s turns: a dozen follow-ups in an Ask here question do not push it out', async () => {

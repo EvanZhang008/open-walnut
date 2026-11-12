@@ -30,4 +30,24 @@ describe('measured chat opens report', () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('keeps measurement versions and offscreen restores separate without inventing visible timeouts', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'session-open-report-'));
+    try {
+      const file = path.join(dir, 'opens.log');
+      const row = (data: Record<string, unknown>) => JSON.stringify({ subsystem: 'browser',
+        message: '[session-open] first content neutral-session open 1', args: JSON.stringify({
+          sessionId: 'neutral-session', ms: 30_000, cache: 'cached', client: 'mac-app', entry: 'mount', ...data,
+        }) });
+      await fs.writeFile(file, [row({ outcome: 'timeout' }), row({ outcome: 'not-visible', measurementVersion: 2,
+        outsideViewportAtAttach: true }), row({ outcome: 'content', ms: 5016, measurementVersion: 2,
+        outsideViewportAtAttach: true })].join('\n'));
+      const result = JSON.parse((await exec(process.execPath, ['scripts/session-open-report.mjs', file])).stdout);
+      expect(result.groups).toEqual({
+        'mac-app:cached:mount': { n: 0, p50: null, worst: null, atLeast30s: 1 },
+        'mac-app:cached:mount:v2:offscreen:not-visible': { n: 0, p50: null, worst: null, atLeast30s: 0 },
+        'mac-app:cached:mount:v2:offscreen': { n: 1, p50: 5016, worst: 5016, atLeast30s: 0 },
+      });
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
 });
