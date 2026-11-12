@@ -200,8 +200,9 @@ test.describe('draft surfaces against the server host fixture', () => {
     const keyRow = page.locator('#rh-host-keybox')
     await keyRow.scrollIntoViewIfNeeded()
     const keyDetails = await openHostDetails(page, 'keybox')
-    // The headline is the row's state line, said once (2026-11-05 review: again in Details).
-    await expect(keyRow.getByTestId('rh-row-state')).toHaveText(/^Could not connect to Key box/)
+    // The headline is the row's state line, said once (2026-11-05 review: again in Details): the
+    // walkthrough's, what to do about it (2026-11-11: Remote Hosts walks a failed host through).
+    await expect(keyRow.getByTestId('rh-row-state')).toHaveText(/^Key box needs your SSH key/)
     await expect(keyDetails.locator('.rh-failure .hft-headline')).toHaveCount(0)
     // The server's hint verbatim, its `backticks` rendered as inline code.
     const hint = keyDetails.locator('.rh-failure .hft-hint')

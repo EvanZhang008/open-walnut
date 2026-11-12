@@ -38,6 +38,8 @@ import { bareLayout, expandSystemAttention } from './host-problems-helpers'
 import { openRow } from './banner-placement-helpers'
 
 const SHOTS = '/tmp/walnut-host-problems-slice/fix2'
+/** Key box refuses its key and takes no password: the Settings row leads with the walkthrough's headline (walkthroughOf). */
+const KEYBOX_WALK_HEADLINE = 'Key box needs your SSH key'
 
 test.beforeEach(async ({ page }) => { await isolatePrefs(page) })
 test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
@@ -110,8 +112,11 @@ test.describe('one failure, one sentence: Key box on every surface', () => {
     const settingsRow = hostRow(page, 'keybox')
     await expect(settingsRow).toBeVisible({ timeout: 20_000 })
     // The row: its one state line and its one action; the whole failure is in its Details. The
-    // row's retry names its way in (the banner's stays Retry: it has one host per row).
-    await expect(settingsRow.getByTestId('rh-row-state')).toHaveText('Could not connect to Key box')
+    // row's retry names its way in (the banner's stays Retry: it has one host per row). Its state
+    // line is the walkthrough's headline, what to do about it (2026-11-11, the user: Remote Hosts
+    // walks a failed host through like first-run setup); the banner and the picker keep the
+    // shared sentence, and every surface reads the same hint.
+    await expect(settingsRow.getByTestId('rh-row-state')).toHaveText(KEYBOX_WALK_HEADLINE)
     await expect(settingsRow.getByTestId('rh-row-connect')).toHaveText('Retry SSH')
     await expect(settingsRow.getByTestId('rh-row-connect')).toBeEnabled()
     await expect(settingsRow.locator('.hft')).toHaveCount(0)
@@ -121,7 +126,7 @@ test.describe('one failure, one sentence: Key box on every surface', () => {
 
     expect(inBanner.headline).toBe('Could not connect to Key box')
     expect(inPicker).toEqual(inBanner)
-    expect(inSettings).toEqual(inBanner)
+    expect(inSettings).toEqual({ headline: KEYBOX_WALK_HEADLINE, hint: inBanner.hint })
     expect(inBanner.hint).toBe(wire.hint!.replace(/`/g, ''))
     await details.screenshot({ path: `${SHOTS}/settings-keybox-open.png` })
   })
@@ -145,7 +150,7 @@ test.describe('one failure, one sentence: Key box on every surface', () => {
     expect(m.inRow).toBe(false)
     // The row keeps one short state line: no hint, no SSH output.
     await expect(r.locator('.hft, .hft-hint')).toHaveCount(0)
-    await expect(r.getByTestId('rh-row-state')).toHaveText('Could not connect to Key box')
+    await expect(r.getByTestId('rh-row-state')).toHaveText(KEYBOX_WALK_HEADLINE)
     await details.screenshot({ path: `${SHOTS}/settings-900-keybox.png` })
   })
 })
