@@ -20,6 +20,19 @@ Or with Homebrew, `brew install evanzhang008/tap/open-walnut && walnut web`, or 
 [Intel](https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-x64.dmg).
 Walnut runs its agents on [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in once.
 
+### Running from source
+
+Requires **Node.js >= 22** and the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+(`npm i -g @anthropic-ai/claude-code`, then run `claude` once to sign in).
+
+```bash
+npm install && npm start
+```
+
+On first run the app opens on [http://localhost:3456](http://localhost:3456) and keeps its data in
+`~/.open-walnut/`. If the page does not load, check that nothing else is on port 3456
+(`lsof -i :3456`) and that `claude --version` works in the same terminal.
+
 ![The Org page on 0.6.19: the org chart, a lead per area, and the one question that needs you, answered where it waits](docs/assets/org/org.gif)
 
 <p align="center"><sub><b>USED BY ENGINEERS AT</b></sub></p>
