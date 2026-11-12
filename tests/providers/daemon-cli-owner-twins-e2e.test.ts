@@ -19,7 +19,7 @@
  * MACHINE SAFETY: HOME, the daemon dirs and the streams dirs are temp paths; the
  * only processes signalled are the daemons and stand-in CLIs this file started.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -238,12 +238,12 @@ describe.each(PAIRS)('cli-owner-v1: $name', ({ a: twinA, b: twinB }) => {
     }
     expect(await send(a, sid, 'exit-now')).toMatchObject({ ok: true })
     expect(await waitFor(() => liveClis(sid).length === 0)).toBe(true)
-    let free: Record<string, unknown> = {}
-    for (let i = 0; i < 50; i++) {
-      free = await rpc(b, { cmd: 'cli.holder', sid })
-      if (free.holder === null) break
-      await new Promise((r) => setTimeout(r, 100))
-    }
+    // The other daemon reads the claim free once the exited CLI's record is judged stale.
+    const free = await vi.waitFor(async () => {
+      const r = await rpc(b, { cmd: 'cli.holder', sid })
+      expect(r.holder).toBeNull()
+      return r
+    }, { timeout: 5_000, interval: 100 })
     expect(free).toMatchObject({ ok: true, holder: null, journaledHome: '/home/me/.open-walnut' })
     expect(await rpc(b, { cmd: 'cli.holder', sid: '../etc' })).toMatchObject({ ok: false })
   }, 180_000)
