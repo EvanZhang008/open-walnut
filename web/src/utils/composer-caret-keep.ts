@@ -13,7 +13,9 @@
  *               in is gone moves the caret into its replacement first; a focus moved during
  *               keydown takes that key's character, so it is not lost either
  *
- * Only the box that was removed: a person who clicked somewhere else keeps their choice.
+ * Only the box that was removed: a person who clicked somewhere else keeps their choice, and a
+ * press outside the box ends the rescue, so a remount after it (a Save that re-keys the composer)
+ * leaves the caret where the person put it.
  */
 
 /** Keys within this long after typing in a box still belong to it. */
@@ -71,6 +73,13 @@ export function initComposerCaretKeep(opts: { now?: () => number; doc?: Document
   const now = opts.now ?? (() => performance.now());
   onRestore = opts.restored ?? null;
   const onInput = (e: Event) => note(e.target, now());
+  // A press anywhere outside the box typed in is the person's choice (a button, another box, the
+  // page): a remount after it gives nothing back. 2026-11-12: the extension's Save as todo re-keyed
+  // its composer after the click on Save, and the new box took the caret, so it never docked.
+  const onPress = (e: Event) => {
+    const t = typed;
+    if (t && !t.box.contains(e.target as Node | null)) typed = null;
+  };
   const onKey = (e: Event) => {
     const k = e as KeyboardEvent;
     if (k.key.length !== 1 || k.metaKey || k.ctrlKey || k.altKey || k.isComposing) return;
@@ -83,10 +92,12 @@ export function initComposerCaretKeep(opts: { now?: () => number; doc?: Document
   doc.addEventListener('input', onInput, true);
   doc.addEventListener('select', onInput, true);
   doc.addEventListener('keydown', onKey, true);
+  doc.addEventListener('pointerdown', onPress, true);
   return () => {
     doc.removeEventListener('input', onInput, true);
     doc.removeEventListener('select', onInput, true);
     doc.removeEventListener('keydown', onKey, true);
+    doc.removeEventListener('pointerdown', onPress, true);
     typed = null;
     installed = false;
     onRestore = null;
