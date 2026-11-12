@@ -191,6 +191,34 @@ export function olderPage(taskId: unknown, history: Record<string, unknown>): { 
   return { older: { before: first, how: `walnut tools call task_history '${JSON.stringify({ id: taskId, before: first })}'` } };
 }
 
+/**
+ * How long task_history waits on the page before a cut one to learn whether anything after `since`
+ * is still unread. The caller gives up after 10 s in all, and the newest page already had up to 5 s
+ * (the route's FRESH_READ_DEADLINE_MS): past it the answer says older rows may exist.
+ */
+const OLDER_CHECK_MS = 2_500;
+/** What task_history may spend in all before it answers: under the caller's 10 s, with room to send. */
+const HISTORY_BUDGET_MS = 8_000;
+
+/** `work`, or `fallback` when it is not settled within `ms`. */
+export function withinMs<T>(ms: number, work: Promise<T>, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const clock = new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback), ms); });
+  work.catch(() => { /* the race below reports it */ });
+  return Promise.race([work, clock]).finally(() => clearTimeout(timer));
+}
+
+/** The line a reader sees when the live read was slow and the saved copy answered instead. */
+export function degradedLine(marks: Array<Record<string, unknown>>): string {
+  const ages = marks.map((m) => (typeof m.ageSeconds === 'number' ? m.ageSeconds : null));
+  const known = ages.filter((a): a is number => a !== null);
+  const age = known.length ? Math.max(...known) : null;
+  const shown = age === null ? 'of unknown age' : age < 90 ? `${age} s old` : age < 5400 ? `${Math.round(age / 60)} min old` : `${Math.round(age / 3600)} h old`;
+  const why = marks.some((m) => m.reason === 'source_failed') ? 'could not be read' : 'was too slow to answer in time';
+  return `The live read of this conversation ${why}, so this is the saved copy (${shown}; savedAt says when). `
+    + 'Newer rows may be missing. Read again in a minute: the live read keeps going and warms the copy.';
+}
+
 defineOp({
   name: 'task_history',
   title: 'Read a task conversation',
@@ -205,7 +233,8 @@ defineOp({
     + 'Read without compact when you need a tool\'s result or a long reply in full.',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix'),
-    fresh: z.boolean().optional().describe('Force a live transcript read on the primary box'),
+    fresh: z.boolean().optional().describe('true: force a live transcript read on the primary box. false: never read live, '
+      + 'only the saved copy (fast; limit and since then shape that copy). Unset: live only for limit or since'),
     all: z.boolean().optional().describe('Every session of the task, oldest first, not only the active one'),
     before: z.string().datetime({ offset: true }).optional()
       .describe('ISO time: the page of messages older than it (from a previous answer\'s older.before, or a time you know)'),
@@ -217,6 +246,7 @@ defineOp({
       .describe('Short form: message text kept, each tool call and thinking block folded to one line, a total of what was left out'),
   },
   handler: async ({ id, fresh, all, before, limit, since, compact }, call) => {
+    const startedAt = Date.now();
     const body = await call('GET', `/tasks/${encodeURIComponent(String(id))}`) as { task?: Record<string, unknown> };
     if (!body?.task?.id) throw new Error('Task response has no id; cannot resolve its conversation.');
     const task = body.task;
@@ -235,8 +265,10 @@ defineOp({
     const shaped = Object.keys(shape).length > 0;
     // The route widens its page to hold `visible` text rows and to reach back to `since`, but only on
     // a page it builds (fresh or before); the exported tail it serves otherwise ignores both.
+    // fresh:false is the caller saying the saved copy will do: no live read, whatever else it asked.
+    const live = fresh === true || (fresh !== false && (shape.limit || shape.since))
     const query = new URLSearchParams({
-      ...(fresh || shape.limit || shape.since ? { fresh: '1' } : {}),
+      ...(live ? { fresh: '1' } : {}),
       ...(before ? { before: String(before) } : {}),
       ...(shape.limit ? { visible: String(shape.limit) } : {}),
       ...(shape.since ? { since: shape.since } : {}),
@@ -257,8 +289,12 @@ defineOp({
         total.cutOlder += r.cutOlder; total.cutSince += r.cutSince; total.clipped += r.clipped; total.chars += r.chars;
         total.folded.tool += r.folded.tool; total.folded.thinking += r.folded.thinking;
       };
-      for (const r of sessions) {
-        const h = await read(r.session_id).catch(() => ({ messages: [] as unknown[] }));
+      // Read side by side: each read has the route's own deadline, and in a row they could sum past the caller's.
+      const reads = await Promise.all(sessions.map((r) => read(r.session_id).catch(() => ({ messages: [] as unknown[] } as Record<string, unknown>))));
+      const degradedOnes: Array<Record<string, unknown>> = [];
+      for (const [i, r] of sessions.entries()) {
+        const h = reads[i];
+        if (h.degraded) degradedOnes.push({ session_id: r.session_id, ...(h.degraded as Record<string, unknown>) });
         let rows = h.messages as Record<string, unknown>[];
         if (shaped) {
           const one = shapeHistory(rows, { since: shape.since, compact: shape.compact });
@@ -276,10 +312,16 @@ defineOp({
         const header = messages.slice(0, cut.cutOlder).reverse().find((m) => m.role === 'system' && m.kind === 'notification' && !m.timestamp);
         messages = header && cut.messages[0] !== header ? [header, ...cut.messages] : cut.messages;
       }
-      return { taskId: task.id, sessions, messages, ...(shaped ? { left_out: { ...total, note: leftOutLine(total, false) } } : {}) };
+      return {
+        taskId: task.id, sessions, messages,
+        ...(degradedOnes.length ? { degraded: degradedOnes, degraded_note: degradedLine(degradedOnes) } : {}),
+        ...(shaped ? { left_out: { ...total, note: leftOutLine(total, false) } } : {}),
+      };
     }
     const history = await read(String(sid));
-    if (!shaped) return { ...history, taskId: task.id, ...(sessions.length > 1 ? { sessions } : {}), ...olderPage(task.id, history) };
+    const degraded = history.degraded as Record<string, unknown> | undefined;
+    const degradedNote = degraded ? { degraded_note: degradedLine([degraded]) } : {};
+    if (!shaped) return { ...history, ...degradedNote, taskId: task.id, ...(sessions.length > 1 ? { sessions } : {}), ...olderPage(task.id, history) };
     const out = shapeHistory(history.messages as Record<string, unknown>[], shape);
     const first = out.messages.find((r) => typeof r.timestamp === 'string')?.timestamp as string | undefined;
     let older = out.cutOlder > 0;
@@ -288,14 +330,20 @@ defineOp({
       // holds nothing at or before it may have stopped there (since reached) or at its own ceiling.
       // The page before it says which: anything in it after `since` is still unread.
       const after = shape.since ? Date.parse(shape.since) : -Infinity;
-      older = out.cutSince > 0 ? false : !shape.since || await read(String(sid), new URLSearchParams({ before: first }).toString())
-        .then((h) => (h.messages as Array<{ timestamp?: unknown }>).some((r) => typeof r.timestamp === 'string' && Date.parse(r.timestamp) > after))
-        .catch(() => true);
+      // A saved copy answered because the live read was slow: the page before it would be slow too.
+      // fresh:false asked for no live read, and the page before is one. What is left of the
+      // caller's 10 s bounds the check; with too little left, older rows may exist.
+      const left = Math.min(OLDER_CHECK_MS, HISTORY_BUDGET_MS - (Date.now() - startedAt));
+      older = out.cutSince > 0 ? false : !shape.since || degraded !== undefined || fresh === false || left <= 0 || await withinMs(left,
+        read(String(sid), new URLSearchParams({ before: first }).toString())
+          .then((h) => (h.messages as Array<{ timestamp?: unknown }>).some((r) => typeof r.timestamp === 'string' && Date.parse(r.timestamp) > after)),
+        true).catch(() => true);
     }
     const { cutOlder, cutSince, folded, clipped, chars } = out;
     const paged = older && first !== undefined;
     return {
       ...history,
+      ...degradedNote,
       messages: out.messages,
       truncated: paged,
       taskId: task.id,

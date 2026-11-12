@@ -224,6 +224,52 @@ describe('plain transcript read of a session that just ended', () => {
     expect(retry.body.messages.at(-1)!.text).toBe('Read after the hang.')
   })
 
+  // 2026-11-12 16:00Z: 16 of 77 tasks answered task_history hub_timeout (the caller's 10 s) on every
+  // try: the fresh read of a whale transcript on clouddev pulled a cold 4 MB tail over a 40 KB/s
+  // link and the route waited for it with no deadline, though a saved copy sat on disk.
+  it('every live read shape answers within the deadline when the host read hangs', async () => {
+    const sid = 'sess-live-slow-host'
+    await seedStoppedSession(sid, 'Live read after the hang.')
+    await updateSessionRecord(sid, { process_status: 'idle' })
+    const savedAt = new Date(Date.now() - 7 * 60_000).toISOString()
+    await writeExportedTail(sid, savedAt, 'THE SAVED COPY')
+    process.env.WALNUT_TRANSCRIPT_READ_DEADLINE_MS = '300'
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const realStat = DaemonFileReader.prototype.stat
+    vi.spyOn(DaemonFileReader.prototype, 'stat').mockImplementation(async function (this: DaemonFileReader, p: string) {
+      await gate
+      return realStat.call(this, p)
+    })
+    const since = encodeURIComponent('2026-10-26T00:00:00.000Z')
+    // Every shape that asks for a live read: the saved copy, marked with its age.
+    for (const qs of ['?fresh=1', '?fresh=1&visible=5', `?fresh=1&since=${since}`, '?fresh=1&rich=1&visible=40']) {
+      const read = await getTranscript(sid, qs)
+      expect(read.status, qs).toBe(200)
+      expect(read.ms, qs).toBeLessThan(3_000)
+      expect(read.body.messages.map((m) => m.text), qs).toEqual(['THE SAVED COPY'])
+      const degraded = (read.body as unknown as { degraded: { reason: string; savedAt: string; ageSeconds: number } }).degraded
+      expect(degraded, qs).toMatchObject({ reason: 'slow_source', savedAt })
+      expect(degraded.ageSeconds, qs).toBeGreaterThanOrEqual(7 * 60 - 1)
+    }
+    // A rich read without fresh keeps its contract: the saved copy, rich:false, no mark asked for.
+    const rich = await getTranscript(sid, '?rich=1')
+    expect(rich.status).toBe(200)
+    expect(rich.ms).toBeLessThan(3_000)
+    expect((rich.body as unknown as { rich: boolean }).rich).toBe(false)
+    // An older page has no saved copy: it says so in time instead of pinning the caller.
+    const page = await getTranscript(sid, `?before=${encodeURIComponent(new Date().toISOString())}`)
+    expect(page.status).toBe(503)
+    expect(page.body.error!.code).toBe('page_unavailable')
+    expect(page.ms).toBeLessThan(3_000)
+    release()
+    vi.restoreAllMocks()
+    const back = await getTranscript(sid, '?fresh=1')
+    expect(back.status).toBe(200)
+    expect(back.body.messages.at(-1)!.text).toBe('Live read after the hang.')
+    expect((back.body as unknown as { degraded?: unknown }).degraded).toBeUndefined()
+  })
+
   it('answers 503, not 404, on every read shape when the host cannot be read and nothing was exported', async () => {
     // The phone's first read is the page read (fresh=1&rich=1&visible=N); it answered
     // 404 not_found here while the plain read answered 503, so the phone said

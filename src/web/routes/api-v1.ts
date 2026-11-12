@@ -787,6 +787,29 @@ function deadline(ms: number): { promise: Promise<'timeout'>; cancel: () => void
 const TRANSCRIPT_READ_DEADLINE_MS = 10_000
 /** A stale archive is still an answer, so refreshing it may cost the reader less. */
 const STALE_REFRESH_DEADLINE_MS = 3_000
+/**
+ * Budget for a live read the caller asked for (fresh, rich, a page). An agent's
+ * task_history gives up after 10 s (the hub's own call timeout), and a cold 4 MB
+ * tail of a whale transcript on a remote host once took about 106 s over a
+ * 40 KB/s link (2026-11-12 16:00Z: 16 of 77 tasks read hub_timeout on every try).
+ * Past it the route answers from the exported copy, marked `degraded` with its age,
+ * and the build keeps running: it keeps its tail window (history-tail-window.ts, the
+ * `poll` read), so the next read moves only what was appended, and a retry meanwhile
+ * joins the same transfer (DaemonFileReader.shareRead) instead of starting another.
+ */
+const FRESH_READ_DEADLINE_MS = 5_000
+
+/** What a fresh read that missed its deadline says about the copy served instead. */
+export function degradedMark(exportedAt: unknown, reason: 'slow_source' | 'source_failed', now = Date.now()): {
+  reason: 'slow_source' | 'source_failed'; savedAt: string | null; ageSeconds: number | null
+} {
+  const at = typeof exportedAt === 'string' ? Date.parse(exportedAt) : NaN
+  return {
+    reason,
+    savedAt: Number.isFinite(at) ? new Date(at).toISOString() : null,
+    ageSeconds: Number.isFinite(at) ? Math.max(0, Math.round((now - at) / 1000)) : null,
+  }
+}
 
 /**
  * sid → the lastActiveAt a stale archive's refresh came back empty, failed or
@@ -4086,12 +4109,11 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
         sendError(res, 404, 'not_found', `No transcript for session: ${sessionId}`)
         return
       }
-      try {
-        const page = await buildSessionTranscript(sessionId, buildOpts)
-        answer(page, wantRich, true)
-      } catch {
-        sendError(res, 503, 'page_unavailable', 'The session could not be read right now')
-      }
+      // An older page has no saved copy to fall back to: past the deadline it says so in time.
+      const page = await buildTranscriptWithin(() => buildSessionTranscript(sessionId, buildOpts), FRESH_READ_DEADLINE_MS)
+      if (page === 'timeout') sendError(res, 503, 'page_unavailable', 'The session could not be read in time; retry shortly')
+      else if (page === 'failed') sendError(res, 503, 'page_unavailable', 'The session could not be read right now')
+      else answer(page, wantRich, true)
       return
     }
     // `fresh=1` ASKS for a live read; `rich=1` NEEDS one, because the exported file
@@ -4101,21 +4123,25 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     let builtOnce = false
     /** The fresh/rich build threw: the session's host or file could not be read now. */
     let freshFailed = false
+    /** The fresh read asked for missed its deadline or failed: the copy served instead says so. */
+    let freshMissed: 'slow_source' | 'source_failed' | undefined
     if ((wantFresh || wantRich) && !CLOUD_MODE && safeId) {
       builtOnce = true
-      try {
-        const built = await buildSessionTranscript(sessionId, buildOpts)
+      const built = await buildTranscriptWithin(() => buildSessionTranscript(sessionId, buildOpts), FRESH_READ_DEADLINE_MS)
+      if (built === 'timeout' || built === 'failed') {
+        // Unreachable session or a slow host: fall back to the exported file, marked.
+        freshFailed = true
+        if (wantFresh) freshMissed = built === 'timeout' ? 'slow_source' : 'source_failed'
+      } else if (wantFresh || built.messages.length > 0) {
         // A rich request must never cost the caller the ARCHIVE. The builder answers
         // an EMPTY transcript rather than throwing for a session it cannot read (a
         // stopped one whose JSONL is gone), and for those the exported file is the
         // only copy of the conversation left. `fresh=1` keeps its existing meaning —
         // the caller asked for live, and empty is live — but the build that `rich=1`
         // implies falls through to the file, which then answers `rich: false`.
-        if (wantFresh || built.messages.length > 0) {
-          answer(built, wantRich, true)
-          return
-        }
-      } catch { freshFailed = true /* unreachable session — fall back to the exported file */ }
+        answer(built, wantRich, true)
+        return
+      }
     }
     if (wantFresh && CLOUD_MODE && safeId) {
       // Cloud fresh path: read the live jsonl over the daemon bridge. Falls
@@ -4159,7 +4185,9 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
         // The fresh/rich read (the phone's first page) of a known session whose host
         // cannot be read now, with no exported copy to fall back to: the same answer
         // the plain read gives, never 404, which a client reads as "no transcript".
-        sendError(res, 503, 'transcript_unavailable', 'The session could not be read right now; retry shortly')
+        sendError(res, 503, 'transcript_unavailable', freshMissed === 'slow_source'
+          ? 'The session could not be read in time; retry shortly'
+          : 'The session could not be read right now; retry shortly')
         return
       }
       if (record && (!transcript || stale) && !builtOnce) {
@@ -4200,6 +4228,11 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     }
     if (!transcript) {
       sendError(res, 404, 'not_found', `No transcript for session: ${sessionId}`)
+      return
+    }
+    // A fresh read that missed its deadline says the rows are the saved copy, and how old.
+    if (freshMissed) {
+      answer({ ...transcript, degraded: degradedMark(transcript.exportedAt, freshMissed) }, false)
       return
     }
     // An inline build here is the same primary read the fresh path makes, so it pages too.
