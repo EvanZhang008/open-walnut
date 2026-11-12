@@ -18,6 +18,13 @@ import { isPageHidden, visibleInterval } from '@/utils/page-visibility';
 import type { SessionHistoryResult } from '@/api/sessions';
 
 
+/** How long a memory miss waits for IndexedDB before it also asks the server for
+ *  the first screen. IndexedDB normally answers well inside this, so a fast cache
+ *  costs no request; a slow open no longer holds the screen. */
+const IDB_FIRST_SCREEN_GRACE_MS = 150;
+/** IndexedDB that has not answered by then is given up on: the network decides. */
+const IDB_GIVE_UP_MS = 3_000;
+
 /** Still-loading answers joined in a row before the answer counts as stale (each is bounded at ~60s server-side). */
 const MAX_LOADING_JOINS = 12;
 
@@ -454,10 +461,16 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       return readable;
     };
 
+    // The first-screen read (Phase 1), started at most once per open: the click's
+    // own read when it began one, else a fresh one.
+    let firstScreenRead: Promise<SessionHistoryResult> | null = takeSessionOpenHistory(sessionId);
+    const startFirstScreen = () => firstScreenRead
+      ??= fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal });
+
     // Adopt a cached entry (memory or IndexedDB) for instant display, then
     // background-verify against the server. One body for both tiers so their
     // semantics can't drift.
-    const adoptCachedAndVerify = (cached: NonNullable<ReturnType<typeof getHistoryCache>>) => {
+    const adoptCachedRows = (cached: NonNullable<ReturnType<typeof getHistoryCache>>) => {
       const readable = noteReady(cached.messages);
       setMessages(cached.messages);
       setForkBoundaryIndex(cached.forkBoundaryIndex);
@@ -473,6 +486,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setLoading(false);
       // State handed to React, not a commit or paint milestone.
       if (readable) stage('historyAdopted');
+    };
+    const adoptCachedAndVerify = (cached: NonNullable<ReturnType<typeof getHistoryCache>>) => {
+      adoptCachedRows(cached);
       // Offscreen column: show cache, skip the background SSH re-verify until visible.
       if (!enabled) { setPhase2Pending(false); setFirstCheckPending(false); return; }
       setPhase2Pending(true);
@@ -528,8 +544,25 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         });
     };
 
+    // IndexedDB's copy when it answered after the first screen had already won
+    // the race below. Phase 2 normally supersedes it; when Phase 2 fails or is
+    // degraded (an offline host), the cached transcript, with its cursor and
+    // older rows, is still the best this page can show.
+    let lateCache: NonNullable<ReturnType<typeof getHistoryCache>> | null = null;
+    // Phase 2 already failed while IndexedDB was still reading: the rows shown then.
+    let cacheWanted: number | null = null;
+    const fallBackToLateCache = (shownRows: number) => {
+      const held = lateCache;
+      lateCache = null;
+      if (!held) { cacheWanted = shownRows; return; }
+      if (cancelled || held.messages.length <= shownRows) return;
+      setHistoryCache(sessionId, held);
+      adoptCachedRows(held);
+    };
+
     // Network load (both caches missed): Phase 1 (streams) → Phase 2 (full).
-    const startNetworkLoad = () => {
+    // `firstScreen` is a Phase 1 read already on its way (the IndexedDB race below).
+    const startNetworkLoad = (firstScreen?: Promise<SessionHistoryResult>) => {
       // Session switch without a cache entry: drop the previous session's prompt.
       initialUserTextRef.current = undefined;
       setInitialUserText(undefined);
@@ -541,7 +574,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       // than that (it would re-window the array under the reader). Tracked in a
       // local because messagesRef has not committed yet when Phase 2 is built.
       let p1Count = 0;
-      (takeSessionOpenHistory(sessionId) ?? fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal }))
+      (firstScreen ?? startFirstScreen())
         .then((result) => {
           if (cancelled) return;
           endP1(`${result.messages.length} msgs`);
@@ -577,7 +610,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           if (cancelled) return;
           // Offscreen column: Phase 1 (local streams) already gave instant
           // content; skip the expensive Phase 2 SSH fetch until visible.
-          if (!enabled) { setPhase2Pending(false); setFirstCheckPending(false); return; }
+          if (!enabled) { setLoading(false); setPhase2Pending(false); setFirstCheckPending(false); return; }
           // Phase 2: Full fetch (source of truth, may SSH for remote sessions).
           // Lazy: only the last HISTORY_TAIL_LIMIT messages — a whale session used
           // to pin one of the browser's 6 connections for 35-150s here.
@@ -612,6 +645,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                     setForkBoundaryIndex(result.forkBoundaryIndex);
                     if (readable) stage('historyAdopted');
                   }
+                  fallBackToLateCache(shown());
                   setStale(result.staleReason ?? 'live read failed');
                   return;
                 }
@@ -639,7 +673,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               }
             })
             .catch((e: Error) => {
-              if (!cancelled) { endP2('error'); setError(e.message); }
+              if (!cancelled) { endP2('error'); fallBackToLateCache(shown()); setError(e.message); }
             })
             .finally(() => {
               if (!cancelled) { setLoading(false); setPhase2Pending(false); setFirstCheckPending(false); }
@@ -656,31 +690,62 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       return () => { cancelled = true; controller.abort(); };
     }
 
-    // Memory miss → the reload-surviving tier (IndexedDB, ~1-5ms) BEFORE any
-    // network round trip: a session viewed in any earlier page-load renders
-    // instantly instead of waiting 140ms-3s for the server (remote sessions
-    // pay a daemon/SSH stat even when nothing changed). The read is orders of
-    // magnitude cheaper than the fetches it may replace, so it always runs
-    // first; a miss falls through to the normal network path.
+    // Memory miss → the reload-surviving tier (IndexedDB), raced against the
+    // server's first screen. IndexedDB usually answers in a few ms and wins
+    // without a request; but its open can take over a second while the page
+    // boots (2026-11-12, the Mac app restoring two columns: 1275 ms, with the
+    // server's screen ready in 6-39 ms), and a first screen must not wait on it.
+    // So the screen read starts once IndexedDB is late (or at once, when the
+    // click already started it), and whichever brings readable rows first is
+    // adopted; the other is dropped. A cache that loses is not needed: Phase 2
+    // follows the screen and brings the same rows with a real cursor.
     setLoading(true);
     setPhase2Pending(true);
+    let chosen: 'cache' | 'network' | null = null;
+    const choose = (path: 'cache' | 'network') => {
+      if (chosen || cancelled) return false;
+      chosen = path;
+      clearTimeout(graceTimer);
+      clearTimeout(deadline);
+      return true;
+    };
+    const raceScreen = () => {
+      const screen = startFirstScreen();
+      screen.then((result) => {
+        // An empty or unreadable screen leaves the choice to IndexedDB.
+        if (hasReadableOpenRows(result.messages) && choose('network')) startNetworkLoad(screen);
+      }, () => { /* IndexedDB, or its deadline, decides */ });
+    };
+    // Even a click's own read waits out the grace: it often lands before a fast
+    // IndexedDB, and a short screen would then beat the whole cached transcript.
+    // An offscreen column keeps the plain wait: it reads no server until visible.
+    const graceTimer = enabled ? setTimeout(raceScreen, IDB_FIRST_SCREEN_GRACE_MS) : undefined;
+    // A storage open that never answers must not hold the panel empty forever.
+    const deadline = setTimeout(() => { if (choose('network')) startNetworkLoad(firstScreenRead ?? undefined); }, IDB_GIVE_UP_MS);
     stage('idbStart');
     idbGetHistory(sessionId)
       .then((persisted) => {
         if (cancelled) return;
         stage('idbReady');
         if (persisted && persisted.messages.length > 0) {
+          if (!choose('cache')) {
+            if (chosen === 'network') {
+              lateCache = persisted;
+              if (cacheWanted !== null) fallBackToLateCache(cacheWanted);
+            }
+            return;
+          }
           // Seed the memory tier so switches within this page-load are sync.
           setHistoryCache(sessionId, persisted);
           if (hasReadableOpenRows(persisted.messages)) noteSessionOpenSource(sessionId, 'idb');
           adoptCachedAndVerify(persisted);
-        } else {
-          startNetworkLoad();
+        } else if (choose('network')) {
+          startNetworkLoad(firstScreenRead ?? undefined);
         }
       })
-      .catch(() => { if (!cancelled) startNetworkLoad(); });
+      .catch(() => { if (choose('network')) startNetworkLoad(firstScreenRead ?? undefined); });
 
-    return () => { cancelled = true; controller.abort(); };
+    return () => { cancelled = true; clearTimeout(graceTimer); clearTimeout(deadline); controller.abort(); };
   }, [sessionId, version, enabled]);
 
   useEffect(() => {

@@ -147,9 +147,11 @@ test.describe('session open — instant (idb tier + coalescing)', () => {
     // they came from IndexedDB — there is nowhere else. ──
     await page.unroute(`**/api/sessions/${SESSION_ID}/history**`);
     let heldRequests = 0;
+    let heldScreens = 0;
     const pendingRoutes: Array<() => Promise<void>> = [];
     await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
       heldRequests++;
+      if (new URL(route.request().url()).searchParams.get('source') === 'streams') heldScreens++;
       // Hold the response until after the assertion; fulfill later to unblock teardown.
       await new Promise<void>((resolve) => {
         pendingRoutes.push(async () => {
@@ -177,6 +179,12 @@ test.describe('session open — instant (idb tier + coalescing)', () => {
 
     await expect.poll(() => opens.slice(previousOpens).find(record => record.source === 'idb')).toBeTruthy();
     const restored = opens.slice(previousOpens).find(record => record.source === 'idb')!;
+    // A cache that answers inside the grace window (150 ms) costs no first-screen
+    // request. A reload's first IndexedDB open can itself be slower than that, and
+    // then the screen read going out is the point (the delayed-open test below).
+    const idbMs = restored.stages.idbReady - restored.stages.idbStart;
+    console.log(`[session-open-instant] reload stages ${JSON.stringify(restored.stages)}; first-screen reads ${heldScreens}`);
+    if (idbMs < 120) expect(heldScreens, 'first-screen reads while IndexedDB answered in time').toBe(0);
     const stages = ['historyEffect', 'idbStart', 'idbReady', 'historyReady', 'historyAdopted', 'contentDetected'];
     let last = 0;
     for (const stage of stages) {
@@ -214,4 +222,125 @@ test.describe('session open — instant (idb tier + coalescing)', () => {
     // Release the held routes so the context can tear down cleanly.
     for (const release of pendingRoutes) await release();
   });
+});
+
+/** Holds the history cache's IndexedDB open (its onsuccess) until the page calls
+ *  window.__releaseHistoryDb(): storage that is late without blocking the page. */
+async function holdHistoryDbOpen(page: Page) {
+  await page.addInitScript(() => {
+    // Patched on the prototype and on the real request (no Proxy around a native
+    // object, which WebKit does not take): the page's own onsuccess is kept back.
+    const proto = IDBFactory.prototype;
+    const original = proto.open;
+    proto.open = function (this: IDBFactory, name: string, version?: number) {
+      const request = version === undefined ? original.call(this, name) : original.call(this, name, version);
+      if (name !== 'walnut-history-cache') return request;
+      let handler: ((this: IDBRequest, ev: Event) => unknown) | null = null;
+      Object.defineProperty(request, 'onsuccess', {
+        configurable: true,
+        get: () => handler,
+        set: (value) => { handler = value; },
+      });
+      request.addEventListener('success', (event) => {
+        (window as any).__historyDbHeld = true;
+        (window as any).__releaseHistoryDb = () => handler?.call(request, event);
+      });
+      return request;
+    } as typeof proto.open;
+  });
+}
+
+// Storage can be late without blocking the page's event loop. A kept server
+// screen must be allowed to paint while the IndexedDB open is still pending.
+test('a readable first screen does not wait for a delayed IndexedDB open', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await mockSessionDetail(page);
+  const history = buildHistory(200);
+  let held = false;
+  let streams = 0;
+  let releaseFull!: () => void;
+  const fullGate = new Promise<void>(resolve => { releaseFull = resolve; });
+  await page.route(`**/api/sessions/${SESSION_ID}/history**`, async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.has('since')) {
+      await route.fulfill({ json: { messages: [], cursor: history.length, delta: true } });
+    } else if (url.searchParams.get('source') === 'streams') {
+      streams++;
+      await route.fulfill({ json: { messages: history.slice(-40), total: history.length, windowed: true } });
+    } else {
+      await fullGate;
+      await route.fulfill({ json: { messages: history, cursor: history.length, initialUserText: history[0].text } }).catch(() => {});
+    }
+  });
+  await holdHistoryDbOpen(page);
+  const url = new URL(`/sessions?id=${SESSION_ID}`, test.info().project.use.baseURL).href;
+  try {
+    await page.setContent(`<a href="${url}">Open saved session</a>`);
+    await page.getByRole('link', { name: 'Open saved session', exact: true }).click();
+    await page.waitForFunction(() => (window as any).__historyDbHeld === true);
+    held = true;
+    // This assertion fails on the old serial IDB-before-network load path.
+    await expect.poll(() => streams, { message: 'first screen fetched with storage held' }).toBe(1);
+    await expect(page.locator('.session-history')).toContainText('instant answer 199');
+    await page.screenshot({ path: '/tmp/session-open-instant/slow-idb-first-screen.png', scale: 'css' });
+    await page.evaluate(() => (window as any).__releaseHistoryDb?.());
+    held = false;
+    releaseFull();
+    await expect(page.locator('.session-history')).toContainText('instant answer 199');
+    await expect(page.locator('.session-history')).toContainText('instant question 0');
+  } finally {
+    if (held) await page.evaluate(() => (window as any).__releaseHistoryDb?.()).catch(() => {});
+    releaseFull();
+  }
+});
+
+// The first screen wins over a late IndexedDB, then the full read fails (the
+// host is offline): the cached transcript that arrives late is still shown.
+test('a late IndexedDB copy fills in when the full read fails after the first screen won', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await mockSessionDetail(page);
+  const history = buildHistory(200);
+  const pattern = `**/api/sessions/${SESSION_ID}/history**`;
+  await page.route(pattern, async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.has('since')) await route.fulfill({ json: { messages: [], cursor: history.length, delta: true } });
+    else await route.fulfill({ json: { messages: history, cursor: history.length, initialUserText: history[0].text } });
+  });
+  const url = new URL(`/sessions?id=${SESSION_ID}`, test.info().project.use.baseURL).href;
+  await page.setContent(`<a href="${url}">Open saved session</a>`);
+  await page.getByRole('link', { name: 'Open saved session', exact: true }).click();
+  await expect(page.locator('.session-history')).toContainText('instant question 0', { timeout: 30_000 });
+  // The debounced IndexedDB write-through (800 ms) lands.
+  await page.waitForTimeout(1600);
+
+  await page.unroute(pattern);
+  let fullFailed = 0;
+  await page.route(pattern, async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.has('since')) await route.fulfill({ status: 503, json: { error: 'host offline' } });
+    else if (url.searchParams.get('source') === 'streams') {
+      await route.fulfill({ json: { messages: history.slice(-40), total: history.length, windowed: true } });
+    } else {
+      fullFailed++;
+      await route.fulfill({ status: 503, json: { error: 'host offline' } });
+    }
+  });
+  await holdHistoryDbOpen(page);
+  let held = false;
+  try {
+    await page.reload();
+    await page.waitForFunction(() => (window as any).__historyDbHeld === true);
+    held = true;
+    await expect(page.locator('.session-history')).toContainText('instant answer 199');
+    await expect(page.locator('.session-history')).not.toContainText('instant question 0');
+    await expect.poll(() => fullFailed, { message: 'the full read failed' }).toBeGreaterThanOrEqual(1);
+    await page.evaluate(() => (window as any).__releaseHistoryDb?.());
+    held = false;
+    // The cache brings what the short screen lacks (the pinned first prompt).
+    await expect(page.locator('.session-history')).toContainText('instant question 0');
+    await expect(page.locator('.session-history')).toContainText('instant answer 199');
+    await page.screenshot({ path: '/tmp/session-open-instant/late-idb-fallback.png', scale: 'css' });
+  } finally {
+    if (held) await page.evaluate(() => (window as any).__releaseHistoryDb?.()).catch(() => {});
+  }
 });
