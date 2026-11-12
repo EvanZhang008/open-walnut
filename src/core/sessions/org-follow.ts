@@ -64,7 +64,7 @@ export function orgNoticeText(text: string): string {
 export async function noteOrgEdge(task: Task, edge: OrgEdge, opts: FollowOpts = {}): Promise<boolean> {
   try {
     if (!reportsToOrgNode(task, opts)) return false;
-    const { RECENT_REPLY_MS, ackOnlyStop, buildSubtaskNoticeText } = await import('./subtask-notices.js');
+    const { RECENT_REPLY_MS, ackOnlyStop, buildSubtaskNoticeText, coveringReplyAt } = await import('./subtask-notices.js');
     // A turn that was only an agent-ack is no news for the node above.
     if (ackOnlyStop(edge.kind, edge.lastWords)) return false;
     const { listTasks } = await import('../task-manager.js');
@@ -88,8 +88,9 @@ export async function noteOrgEdge(task: Task, edge: OrgEdge, opts: FollowOpts = 
     if (edge.actorSid && followerSids.has(edge.actorSid)) return false;
     // It asked the task something: the request's own notice tells it this edge, once.
     if (edge.askerSids?.some((sid) => followerSids.has(sid))) return false;
-    const { repliedRecently } = await import('../session-requests.js');
-    const answered = await repliedRecently(followerSids, task.id, RECENT_REPLY_MS).catch(() => false);
+    const { lastReplyAt } = await import('../session-requests.js');
+    const repliedAt = await lastReplyAt(followerSids, task.id, RECENT_REPLY_MS).catch(() => undefined);
+    const answered = repliedAt !== undefined;
     // A stop right after its answer reached the node is no news: the answer was the update.
     if (edge.kind === 'stopped' && answered) return false;
     // A stop of a task still asking the user the decision this node was told it asks is no news,
@@ -117,6 +118,7 @@ export async function noteOrgEdge(task: Task, edge: OrgEdge, opts: FollowOpts = 
       blockedOn: edge.blockedOn,
       waitUntil: edge.waitUntil,
       repliedRecently: answered,
+      ...(edge.kind === 'completed' && coveringReplyAt(repliedAt) ? { repliedAt } : {}),
       wordsUnread: edge.wordsUnread,
     }));
     rideNotice(rec.claudeSessionId, task.id, edge.kind, text, Date.now(), decision);

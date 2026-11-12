@@ -61,6 +61,18 @@ export type { SubtaskNoticeKind, TurnStarter };
 export const COALESCE_MS = 3_000;
 /** A child that answered its parent this recently is not reported "stopped" (the reply was the update). */
 export const RECENT_REPLY_MS = 10 * 60_000;
+/**
+ * A reply this close before the completion carried its result: the completion is one line naming it.
+ * Shorter than RECENT_REPLY_MS, so an interim answer ("on it") ten minutes before the end never
+ * stands in for the result (2026-11-12: the replies that a completion repeated came 23 to 32 s before it).
+ */
+export const REPLY_COVERS_MS = 3 * 60_000;
+
+/** The reply time a completion may name: only one close enough before it to hold its result. */
+export function coveringReplyAt(repliedAt: string | undefined, now = Date.now()): string | undefined {
+  const ms = repliedAt ? Date.parse(repliedAt) : NaN;
+  return Number.isFinite(ms) && now - ms <= REPLY_COVERS_MS ? repliedAt : undefined;
+}
 /** The bus source: a Walnut notice, never a human or a peer (phase.ts keeps it from reopening a task). */
 export const NOTICE_SOURCE = 'walnut-notify';
 
@@ -77,6 +89,11 @@ export interface SubtaskNotice {
   blockedOn?: string;
   waitUntil?: string;
   repliedRecently?: boolean;
+  /** completed: when the child's answer reached the parent (ISO, session-requests.ts lastReplyAt).
+   *  The notice is then one line pointing at that reply, and it wakes no idle parent. */
+  repliedAt?: string;
+  /** completed: the completion it reports (the task's completed_at): one notice per completion. */
+  completedAt?: string;
   /** No lastWords because the transcript read timed out or failed (readLastTurn's `unread`). */
   wordsUnread?: EnvelopeWordsUnread;
   /** G19: where the child's card sits on its parent's Board (stopped / completed, only when the parent has one). */
@@ -121,6 +138,64 @@ async function partialOf(childId: string): Promise<string> {
   }
 }
 
+/** A completion whose result already reached the parent in the child's reply: a one-line notice. */
+export function replyCovered(n: Pick<SubtaskNotice, 'kind' | 'repliedAt'>): boolean {
+  return n.kind === 'completed' && !!n.repliedAt;
+}
+
+/**
+ * The completions each parent was told or holds, child id → that completion (the task's
+ * completed_at): a second turn end of a task still COMPLETE is not a second completion
+ * (2026-11-12, the org reflection: a worker's two turn ends after task_complete sent its lead two
+ * "completed" notices 23 s apart). A reopened task completes again with a new completed_at, which
+ * is news. In memory: a restart forgets, and at worst one notice repeats.
+ */
+const completionsTold = new Map<string, { completedAt: string; at: number }>();
+
+function completionTold(n: SubtaskNotice, now: number): boolean {
+  for (const [k, v] of completionsTold) if (now - v.at > 24 * 60 * 60_000) completionsTold.delete(k);
+  return !!n.completedAt && completionsTold.get(`${n.parentTaskId}/${n.child.id}`)?.completedAt === n.completedAt;
+}
+
+/** Once a completion is on its way (delivered, or held for the parent), the next turn end is no news. */
+function noteCompletionsTold(notices: readonly SubtaskNotice[], now = Date.now()): void {
+  for (const n of notices) {
+    if (n.kind === 'completed' && n.completedAt) completionsTold.set(`${n.parentTaskId}/${n.child.id}`, { completedAt: n.completedAt, at: now });
+  }
+}
+
+/** Test seam. */
+export function _resetSubtaskNoticeMemory(): void {
+  completionsTold.clear();
+  siblingsTold.clear();
+}
+
+/**
+ * What each parent was last told of its open subtasks (parent task id → sibling id → its
+ * fingerprint, subtask-batch.ts siblingFingerprint): the next "Still open" line names only what
+ * changed since (2026-11-12, the org reflection: every completion a VP read listed "Still open: 42
+ * of your subtasks" with the same eight names, about 900 chars each).
+ */
+const siblingsTold = new Map<string, { at: number; seen: Map<string, string> }>();
+/** After this long the parent's own context may not hold the list any more: it is shown whole again. */
+const SIBLINGS_TOLD_MS = 6 * 60 * 60_000;
+
+/** What the parent was shown, still recent enough to count. */
+function siblingsSeen(parentTaskId: string, now = Date.now()): Map<string, string> | undefined {
+  const told = siblingsTold.get(parentTaskId);
+  if (told && now - told.at > SIBLINGS_TOLD_MS) siblingsTold.delete(parentTaskId);
+  return siblingsTold.get(parentTaskId)?.seen;
+}
+
+/**
+ * A delivered "Still open" line told the parent where its team stood: every open subtask, named
+ * or counted, is its state then (the count covers the rest, and task_list lists them). The next
+ * line names only one that changed since. Recorded after the delivery: a failed one is retried.
+ */
+function noteSiblingsShown(parentTaskId: string, open: readonly import('./subtask-batch.js').OpenSibling[], fp: (s: import('./subtask-batch.js').OpenSibling) => string): void {
+  siblingsTold.set(parentTaskId, { at: Date.now(), seen: new Map(open.map((s) => [s.id, fp(s)])) });
+}
+
 /** The kinds whose notice names the child's kanban card. */
 const CARD_KINDS: ReadonlySet<SubtaskNoticeKind> = new Set<SubtaskNoticeKind>(['stopped', 'completed']);
 
@@ -162,8 +237,15 @@ export function buildSubtaskNoticeText(n: SubtaskNotice): string {
     blockedOn: n.blockedOn,
     waitUntil: n.waitUntil,
     repliedRecently: n.repliedRecently,
+    ...(n.kind === 'completed' && n.repliedAt ? { repliedAt: n.repliedAt } : {}),
     wordsUnread: n.lastWords ? undefined : n.wordsUnread,
   });
+  if (replyCovered(n)) {
+    // One line: the reply carried the result and its not-done list. Only a card left behind is news.
+    const card = n.cardLine && !/^Card: Done\b/.test(n.cardLine) ? n.cardLine : '';
+    const close = text.lastIndexOf('\n</walnut-message>');
+    return card && close !== -1 ? `${text.slice(0, close)}\n${card}${text.slice(close)}` : text;
+  }
   const extra = [n.partial, n.remaining, n.cardLine].filter(Boolean).join('\n\n');
   if (!extra) return text;
   // Inside the envelope, before its closing "Next:" list (the last one: a quote may hold the word).
@@ -338,6 +420,12 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
       log.session.info('subtask notice skipped: its turn was only an agent-ack', { parentTaskId: n.parentTaskId, childTaskId: n.child.id });
       return;
     }
+    if (n.kind === 'completed' && completionTold(n, Date.now())) {
+      log.session.info('subtask notice skipped: this completion was already told', {
+        parentTaskId: n.parentTaskId, childTaskId: n.child.id, completedAt: n.completedAt,
+      });
+      return;
+    }
     const { getTask } = await import('../task-manager.js');
     const parent = await getTask(n.parentTaskId).catch(() => null);
     if (!parent) return;
@@ -378,17 +466,21 @@ const WAKES_AN_IDLE_PARENT: ReadonlySet<SubtaskNoticeKind> = new Set<SubtaskNoti
  * The completions in `notices` learn what is left of the team: the last one carries the
  * "Still open" line (subtask-batch.ts), counted once for the whole message.
  */
-async function withRemaining(parentTaskId: string, notices: SubtaskNotice[]): Promise<SubtaskNotice[]> {
-  const last = notices.map((n) => n.kind).lastIndexOf('completed');
-  if (last === -1) return notices;
-  const { openSiblings, remainingLine } = await import('./subtask-batch.js');
+async function withRemaining(parentTaskId: string, notices: SubtaskNotice[]): Promise<{ notices: SubtaskNotice[]; shown?: () => void }> {
+  // A one-line completion (its reply carried the result) carries no team list.
+  const last = notices.map((n) => (n.kind === 'completed' && !replyCovered(n) ? 'counted' : '')).lastIndexOf('counted');
+  if (last === -1) return { notices };
+  const { openSiblings, remainingLine, siblingFingerprint } = await import('./subtask-batch.js');
   const done = new Set(notices.filter((n) => n.kind === 'completed').map((n) => n.child.id));
-  const line = remainingLine(await openSiblings(parentTaskId, done));
+  const open = await openSiblings(parentTaskId, done);
+  const line = remainingLine(open, siblingsSeen(parentTaskId));
+  // Recorded once the notice went out: a failed delivery is held and retried, never "seen".
+  const shown = open ? () => noteSiblingsShown(parentTaskId, open, siblingFingerprint) : undefined;
   // The PARTIAL line as it stands now: a held completion's items may have been settled since.
   // One at a time: a few reads, and concurrent first imports of one module can stall under bun.
   const fresh: SubtaskNotice[] = [];
   for (const n of notices) fresh.push(n.kind === 'completed' ? { ...n, partial: await partialOf(n.child.id) } : n);
-  return fresh.map((n, i) => (i === last ? { ...n, remaining: line } : n.kind === 'completed' ? { ...n, remaining: undefined } : n));
+  return { notices: fresh.map((n, i) => (i === last ? { ...n, remaining: line } : n.kind === 'completed' ? { ...n, remaining: undefined } : n)), shown };
 }
 
 /** Deliver one parent's buffered notices as one message. */
@@ -417,6 +509,19 @@ async function flush(parentSid: string): Promise<void> {
     const batch = await import('./subtask-batch.js');
     // Not mid-turn: wake it once, when its team settles (see subtask-batch.ts and the header).
     if (target.process_status !== 'running') {
+      // A completion its reply already told asks nothing: it rides the parent's next message.
+      const covered = notices.filter(replyCovered);
+      if (covered.length > 0) {
+        const { holdNotice } = await import('./held-notices.js');
+        const texts = covered.map(buildSubtaskNoticeText);
+        covered.forEach((n, i) => holdNotice(parentSid, `subtask-completed:${n.child.id}`, texts[i]));
+        noteCompletionsTold(covered);
+        log.session.info('subtask completion held for the next message: its reply already reached the parent', {
+          parentSid, parentTaskId, children: covered.map((n) => n.child.id),
+        });
+        notices = notices.filter((n) => !replyCovered(n));
+        if (notices.length === 0) return;
+      }
       const edgeIds = new Set(notices.map((n) => n.child.id));
       const others = (await batch.openSiblings(parentTaskId, edgeIds));
       const settled = batch.teamSettled(others);
@@ -425,6 +530,7 @@ async function flush(parentSid: string): Promise<void> {
         const completions = notices.filter((n) => n.kind === 'completed');
         if (completions.length > 0) {
           await batch.holdNotices(parentTaskId, completions);
+          noteCompletionsTold(completions);
           armHeldWatch();
           log.session.info('subtask completion held: the parent is idle and its team still works', {
             parentSid, parentTaskId, children: completions.map((n) => n.child.id),
@@ -516,7 +622,7 @@ async function deliverOrHold(target: SessionRecord, notices: SubtaskNotice[]): P
 /** Send notices into the parent's session as one message (a lone replaceable one edits its pending row). */
 async function deliverNotices(target: SessionRecord, raw: SubtaskNotice[]): Promise<void> {
   const parentSid = target.claudeSessionId;
-  const notices = await withRemaining(raw[0].parentTaskId, raw);
+  const { notices, shown } = await withRemaining(raw[0].parentTaskId, raw);
   const text = notices.map(buildSubtaskNoticeText).join('\n\n');
   const key = notices.length === 1 ? noticeQueueId(notices[0]) : undefined;
   const deliveryId = key ? `${key}-${randomUUID()}` : undefined;
@@ -537,6 +643,8 @@ async function deliverNotices(target: SessionRecord, raw: SubtaskNotice[]): Prom
     // A subtask that finished or failed is what a waiting parent waits for.
     ...(notices.some((n) => n.kind === 'completed' || n.kind === 'error') ? { endsWait: true } : {}),
   });
+  noteCompletionsTold(notices);
+  shown?.();
   log.session.info('subtask notice delivered', {
     parentSid, parentTaskId: target.taskId, delivery, messageId,
     children: notices.map((n) => ({ id: n.child.id, kind: n.kind })),

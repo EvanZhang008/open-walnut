@@ -90,14 +90,30 @@ const ORDER: Record<OpenSibling['state'], number> = { needs: 0, read: 1, working
  * "Still open: 2 of your subtasks: "Bench Mac" (id, Working), "Bench iOS" (id, Needs you: approve the
  * TestFlight build)." or the line saying this was the last one.
  */
-export function remainingLine(open: readonly OpenSibling[] | null): string | undefined {
+export function remainingLine(open: readonly OpenSibling[] | null, told?: ReadonlyMap<string, string>): string | undefined {
   if (!open) return undefined;
   if (open.length === 0) return 'None of your subtasks is still open: this was the last one.';
   const sorted = [...open].sort((a, b) => ORDER[a.state] - ORDER[b.state]);
-  const shown = sorted.slice(0, NAMES_MAX).map((s) => `"${s.title}" (${s.id}, ${stateWord(s.state, s.snoozed)}${s.why ? `: ${s.why}` : ''})`);
-  const more = sorted.length - shown.length;
   const count = open.length === 1 ? '1 of your subtasks' : `${open.length} of your subtasks`;
-  return `Still open: ${count}: ${shown.join(', ')}${more > 0 ? `, and ${more} more` : ''}.`;
+  const names = (list: readonly OpenSibling[]) => {
+    const shown = list.slice(0, NAMES_MAX).map((s) => `"${s.title}" (${s.id}, ${stateWord(s.state, s.snoozed)}${s.why ? `: ${s.why}` : ''})`);
+    const more = list.length - shown.length;
+    return `${shown.join(', ')}${more > 0 ? `, and ${more} more` : ''}`;
+  };
+  // `told`: where the team stood at the parent's last line (id → siblingFingerprint). Only a subtask
+  // new or changed since is named (2026-11-12, the org reflection: every completion a VP read named
+  // the same eight of 42).
+  if (told && told.size > 0) {
+    const changed = sorted.filter((s) => told.get(s.id) !== siblingFingerprint(s));
+    if (changed.length === 0) return `Still open: ${count}, none changed since your last notice.`;
+    return `Still open: ${count}; changed since your last notice: ${names(changed)}.`;
+  }
+  return `Still open: ${count}: ${names(sorted)}.`;
+}
+
+/** What a "Still open" line says about one subtask: a change in it is news to the parent. */
+export function siblingFingerprint(s: OpenSibling): string {
+  return `${s.state}|${s.snoozed ? 1 : 0}|${s.why ?? ''}`;
 }
 
 /** No subtask left Working: the team has settled for now. */

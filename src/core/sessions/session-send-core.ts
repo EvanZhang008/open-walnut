@@ -129,12 +129,15 @@ export interface SessionSendInput {
   callerHost?: string;
   /** An anonymous caller that named itself: a script or scheduled job (the CLI's `x-walnut-sender`). */
   callerLabel?: string;
+  /** false: the note asks nothing, so it starts no turn; it rides the target's next message
+   *  (sessions/quiet-notes.ts). A script's note that ends "No reply needed" is read so too. */
+  wake?: boolean;
 }
 
 export interface SessionSendResult {
   /** queued = dispatched; deferred = enqueued but target awaits a permission prompt;
    *  recorded = an answer for the user kept on a task it was not delivered to (`notWoken`). */
-  delivery: 'queued' | 'deferred' | 'recorded';
+  delivery: 'queued' | 'deferred' | 'recorded' | 'held';
   /** An answers_ask send to a COMPLETE task or one with no session running: recorded, no turn started. */
   notWoken?: 'complete' | 'stopped';
   /** The user's ask was permanently withdrawn, not merely answered. */
@@ -710,13 +713,18 @@ async function holdAnswer(key: string): Promise<() => void> {
 
 /** A send that went out as a message (every send but an answer for the user that was only recorded). */
 export type DeliveredSendResult = SessionSendResult & { delivery: 'queued' | 'deferred' };
+/** Only on `wake: false`: a note that asks nothing waits for the target's next message (quiet-notes.ts). */
+export type HeldSendResult = SessionSendResult & { delivery: 'held' };
 
 /** The one send entry point (route + gateway both land here). */
-export async function performSessionSend(input: SessionSendInput & { answersAsk?: false }): Promise<DeliveredSendResult>;
+export async function performSessionSend(input: SessionSendInput & { answersAsk?: false; wake?: true }): Promise<DeliveredSendResult>;
 export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult>;
 export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult> {
   if (input.withdrawAsk && !input.answersAsk) {
     throw new SendError('bad_request', 'withdraw_ask requires answers_ask: true');
+  }
+  if (input.answersAsk && input.wake === false) {
+    throw new SendError('bad_request', 'answers_ask is delivered to the task: it cannot be a wake=false note');
   }
   if (!input.answersAsk) {
     const result = await performPlainSend(input);
@@ -798,10 +806,11 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   const liveOnly = !forced && destination ? await liveDelivery(destination.claudeSessionId) : undefined;
   let result: DeliveredSendResult;
   try {
+    // An answer is always delivered: wake=false was refused above. Never held, so never 'held'.
     result = await performPlainSend({
-      ...input, answersAsk: false, ...(liveOnly ? { liveOnly } : {}),
+      ...input, answersAsk: false, wake: undefined, ...(liveOnly ? { liveOnly } : {}),
       text: input.text?.trim() ? `${prepared.line}\n\n${input.text}` : prepared.line,
-    });
+    }) as DeliveredSendResult;
   } catch (err) {
     // It stopped between the check and the write: nothing was queued, so it is only recorded.
     if (liveOnly && await notDeliveredLive(err)) return recordOnly('stopped');
@@ -845,7 +854,7 @@ async function settleAnswerNotDelivered(
   else if (request.status === 'expired') await settleLateReply(request.id, fields).catch(() => null);
 }
 
-async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendResult> {
+async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendResult | HeldSendResult> {
   const { readStructuredReply, composeReplyText, scoreProblem } = await import('../peers/structured-reply.js');
   const badScore = scoreProblem(input.reply?.score);
   if (badScore) throw new SendError('bad_request', badScore);
@@ -920,6 +929,35 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
     if (queueDepth >= PEER_PENDING_CAP) {
       throw new SendError('queue_full', `session ${shortId(targetSid)} already has ${queueDepth} queued messages`, 429);
     }
+  }
+
+  // A note that asks nothing starts no turn: it waits for the target's next message, folded with
+  // the same sender's other such notes (sessions/quiet-notes.ts, 2026-11-12).
+  if (input.wake === false && (input.expectReply === true || input.handsOn)) {
+    throw new SendError('bad_request', 'wake=false is a note that asks nothing: it cannot also ask for a reply or hand on a request');
+  }
+  if (input.wake === false && fenced && !input.force) {
+    const { holdQuietNote } = await import('./quiet-notes.js');
+    const label = caller.kind === 'session'
+      ? sessionHandle(await senderTitleOf(caller.record), caller.record.claudeSessionId)
+      : caller.kind === 'external' && caller.app ? `${caller.app} (App)`
+        : input.callerLabel ? `automation: ${input.callerLabel}` : walnutSends ? `Walnut (${input.source})` : 'an unidentified process';
+    const host = caller.kind === 'session' ? displayHost(caller.record.host) : input.callerHost?.trim().slice(0, 64) || 'unknown';
+    holdQuietNote(targetSid, {
+      key: caller.kind === 'session' ? caller.record.claudeSessionId : `${label}@${host}`,
+      label: caller.kind === 'session' ? label : `${label} (on ${host}, not your user)`,
+    }, { at: Date.now(), ...(input.title ? { title: input.title } : {}), text: body });
+    const heldTaskId = target.taskId ?? target.session.taskId;
+    log.session.info('session_send held: the note asks nothing, it rides the next message', {
+      targetSessionId: targetSid, taskId: heldTaskId, callerKind: caller.kind, wake: input.wake,
+    });
+    return {
+      delivery: 'held',
+      targetSessionId: targetSid,
+      targetTitle: target.session.title ?? null,
+      ...(heldTaskId ? { targetTaskId: heldTaskId } : {}),
+      target: { handle: sessionHandle(target.session.title, targetSid), sessionId: targetSid, ...(heldTaskId ? { taskId: heldTaskId } : {}) },
+    };
   }
 
   // expect_reply: register the pending row BEFORE the envelope is built (the

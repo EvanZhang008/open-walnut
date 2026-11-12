@@ -147,6 +147,60 @@ describe('parseCheckStdout', () => {
 });
 
 describe('decideCheck + applyCheckOutcome', () => {
+  // 2026-11-12, the org reflection: the Mac queue-result watch (walnut-dev mac-unread) printed every
+  // result it still saw; a fire for 1 new item carried 13, three delivered hours before.
+  it('a fire carries only the input lines about its NEW items, never the ones an earlier fire told', () => {
+    const state = emptyHostState(NOW);
+    const line = (id: string, rc: number, head: string) =>
+      `${id} (exit ${rc}): ${head}\n  read it: walnut-dev mac show ${id} (log and evidence: /tmp/task/mac-runs/${id})\n`;
+    const out = (ids: string[]) => JSON.stringify({
+      fire: true, items: ids.map((id) => ({ id, title: `t ${id}` })),
+      input: ids.map((id) => line(id, 0, `landed ${id.slice(-4)}`)).join(''),
+    });
+    const first = parsedOk(out(['20261112T032752Z-land-x-927', '20261112T020702Z-land-x-10055']));
+    applyCheckOutcome(state, first.output, decideCheck(def, first.output, state, NOW), NOW, 1);
+    // Newest first, as mac-unread prints them: one new result on top of the two already told.
+    const second = parsedOk(out(['20261112T063753Z-land-x-26930', '20261112T032752Z-land-x-927', '20261112T020702Z-land-x-10055']));
+    const d = decideCheck(def, second.output, state, NOW + 60_000);
+    expect(d).toMatchObject({ kind: 'fire' });
+    const input = (d as { input?: string }).input ?? '';
+    expect(input).toContain('20261112T063753Z-land-x-26930 (exit 0)');
+    expect(input).toContain('read it: walnut-dev mac show 20261112T063753Z-land-x-26930');
+    // Neither an old result's line nor the indented line under it comes back.
+    expect(input).not.toContain('20261112T032752Z-land-x-927');
+    expect(input).not.toContain('20261112T020702Z-land-x-10055');
+    expect(input.split('\n')).toHaveLength(2);
+  });
+
+  it('the script\'s own words stay; a token inside a longer id is not that id; all old: no input', () => {
+    const state = emptyHostState(NOW);
+    const first = parsedOk('{"fire": true, "items": [{"id": "run-0001"}], "input": "x"}');
+    applyCheckOutcome(state, first.output, decideCheck(def, first.output, state, NOW), NOW, 1);
+    const mixed = parsedOk(JSON.stringify({
+      fire: true, items: [{ id: 'run-00012' }, { id: 'run-0001' }],
+      input: 'Results waiting:\nrun-00012 failed\nrun-0001 passed\n  details of run-0001\nEnd.',
+    }));
+    const d = decideCheck(def, mixed.output, state, NOW + 1);
+    expect((d as { input?: string }).input).toBe('Results waiting:\nrun-00012 failed\nEnd.');
+    // A fire with nothing new to say about anything but already-told items carries no input.
+    const state2 = emptyHostState(NOW);
+    const a = parsedOk('{"fire": true, "items": [{"id": "alpha-1"}], "input": "alpha-1 done"}');
+    applyCheckOutcome(state2, a.output, decideCheck(def, a.output, state2, NOW), NOW, 1);
+    const b = parsedOk('{"fire": true, "items": [{"id": "bravo-2"}, {"id": "alpha-1"}], "input": "alpha-1 done"}');
+    const d2 = decideCheck(def, b.output, state2, NOW + 1);
+    expect(d2).toMatchObject({ kind: 'fire' });
+    expect((d2 as { input?: string }).input).toBeUndefined();
+    // A short seen id is no proof a line is about it: "took 12 s" stays.
+    const state3 = emptyHostState(NOW);
+    const s1 = parsedOk('{"fire": true, "items": [{"id": "12"}], "input": "x"}');
+    applyCheckOutcome(state3, s1.output, decideCheck(def, s1.output, state3, NOW), NOW, 1);
+    const s2 = parsedOk('{"fire": true, "items": [{"id": "13"}, {"id": "12"}], "input": "13 took 12 s"}');
+    expect((decideCheck(def, s2.output, state3, NOW + 1) as { input?: string }).input).toBe('13 took 12 s');
+    // No seen item in the run: the input goes as the script wrote it.
+    const c = parsedOk('{"fire": true, "items": [{"id": "z"}], "input": "  z\\n\\n\\n"}');
+    expect((decideCheck(def, c.output, emptyHostState(NOW), NOW) as { input?: string }).input).toBe('  z\n\n\n');
+  });
+
   it('fire:false is quiet and still stores the new cursor', () => {
     const state = emptyHostState(NOW);
     const p = parsedOk('{"fire": false, "state": {"cursor": 7}}');

@@ -1,7 +1,7 @@
 /**
  * /api/v1/messages + /api/v1/requests — the unified send surface.
  *
- *   POST /messages        { to?, text, title?, expect_reply?, reply_timeout?, in_reply_to?, hands_on?, answers_ask?, withdraw_ask?, force?, reason?, messageId?, thread? }
+ *   POST /messages        { to?, text, title?, wake?, expect_reply?, reply_timeout?, in_reply_to?, hands_on?, answers_ask?, withdraw_ask?, force?, reason?, messageId?, thread? }
  *                         → 202 SessionSendResult (session-send-core.ts), with `thread_handoff` when a Thread
  *                         of the sender's went with it (core/org/thread-follow.ts)
  *   GET  /requests/:id    → { request, delivery? } — status read for `walnut wait rq-…`;
@@ -43,6 +43,10 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
     const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
 
     const { performSessionSend, SendError } = await import('../../core/sessions/session-send-core.js')
+    const { asksNothing } = await import('../../core/sessions/quiet-notes.js')
+    // No session and no person behind it (a script, a LaunchAgent, cron: the CLI's rule,
+    // src/lib/cli-sender.ts): an anonymous sender that names itself, never the user.
+    const automationCaller = !header(req, 'x-walnut-caller-sid') && header(req, CALLER_KIND_HEADER) === 'automation'
     try {
       const result = await performSessionSend({
         to: str(b.to),
@@ -61,12 +65,17 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         force: b.force === true,
         reason: str(b.reason),
         messageId: str(b.messageId),
+        // A note that asks nothing starts no turn (sessions/quiet-notes.ts): wake=false, or a
+        // script's note that ends "No reply needed".
+        ...(asksNothing({ wake: typeof b.wake === 'boolean' ? b.wake : undefined, text: str(b.text) ?? '', automation: automationCaller })
+          && !b.in_reply_to && b.expect_reply !== true && !b.hands_on && b.force !== true && b.answers_ask !== true
+          ? { wake: false } : typeof b.wake === 'boolean' ? { wake: b.wake } : {}),
         // A reply's structured fields (core/peers/structured-reply.ts); absent on a plain send.
         ...(b.result !== undefined || b.evidence !== undefined || b.not_done !== undefined || b.score !== undefined
           ? { reply: { result: b.result, evidence: b.evidence, not_done: b.not_done, score: b.score } } : {}),
         // No session and no person behind it (a script, a LaunchAgent, cron: the CLI's rule,
         // src/lib/cli-sender.ts): an anonymous sender that names itself, never the user.
-        ...(!header(req, 'x-walnut-caller-sid') && header(req, CALLER_KIND_HEADER) === 'automation'
+        ...(automationCaller
           ? { callerSid: 'external', callerLabel: senderLabel(header(req, SENDER_LABEL_HEADER)) }
           : { callerSid: header(req, 'x-walnut-caller-sid') }),
         callerHost: header(req, 'x-walnut-caller-host'),

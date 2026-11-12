@@ -801,12 +801,35 @@ export async function repliedRecently(
   windowMs: number,
   now = Date.now(),
 ): Promise<boolean> {
+  return (await lastReplyAt(fromSessionIds, toTaskId, windowMs, now)) !== undefined;
+}
+
+/**
+ * When the task `toTaskId` last answered a request from one of `fromSessionIds`, within `windowMs`
+ * (ISO), else undefined. A late answer counts too: one to a request a turn end had already settled
+ * (`notified`) still reached its asker, at `answeredAt` (2026-11-12, the org reflection: a worker
+ * answered its lead six hours after the request's fallback, and the "completed" notice 30 s later
+ * quoted the same result again, because only a `replied` row counted).
+ */
+export async function lastReplyAt(
+  fromSessionIds: Iterable<string>,
+  toTaskId: string,
+  windowMs: number,
+  now = Date.now(),
+): Promise<string | undefined> {
   const askers = new Set(fromSessionIds);
-  if (askers.size === 0 || !toTaskId) return false;
+  if (askers.size === 0 || !toTaskId) return undefined;
   const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
-  return (store.requests ?? []).some((r) =>
-    r.status === 'replied' && !r.forwardedTo && r.toTaskId === toTaskId && askers.has(r.fromSessionId)
-    && !!r.settledAt && now - Date.parse(r.settledAt) <= windowMs);
+  let best: string | undefined;
+  for (const r of store.requests ?? []) {
+    if (r.forwardedTo || r.toTaskId !== toTaskId || !askers.has(r.fromSessionId)) continue;
+    // answeredAt: the answer reached its asker (noteAnswerDelivered); a replied row without one is an older Walnut's.
+    const at = r.answeredAt ?? (r.status === 'replied' ? r.settledAt : undefined);
+    const ms = at ? Date.parse(at) : NaN;
+    if (!Number.isFinite(ms) || now - ms > windowMs || ms > now + 60_000) continue;
+    if (!best || ms > Date.parse(best)) best = at;
+  }
+  return best;
 }
 
 /** Every pending request (the host copy's query: rows whose two parties share a host). */

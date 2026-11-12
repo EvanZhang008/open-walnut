@@ -104,6 +104,8 @@ export interface SubtaskNoticeInput {
   waitUntil?: string;
   /** The child answered a request of the parent's a moment ago: no quote, say so. */
   repliedRecently?: boolean;
+  /** When that answer reached the parent (ISO): a `completed` notice is then one line naming it. */
+  repliedAt?: string;
   /** No lastMessage because the transcript could not be read (never because the turn wrote none). */
   wordsUnread?: EnvelopeWordsUnread;
 }
@@ -507,6 +509,25 @@ export function createEnvelopeKit(): EnvelopeKit {
     const { child, kind } = input;
     const title = sessionHandle(child.title, undefined) || 'untitled';
     const who = `Your subtask "${title}" (${child.taskId})`;
+    // Its answer reached the parent a moment ago and holds the result: the completion is one line
+    // pointing at it (2026-11-12, the org reflection: 13 of 20 completed notices a VP read quoted
+    // again, in 2-3K chars, the reply it had just read).
+    const repliedMs = input.repliedAt ? Date.parse(input.repliedAt) : NaN;
+    if (kind === 'completed' && Number.isFinite(repliedMs)) {
+      const at = new Date(repliedMs).toISOString().slice(11, 16);
+      return buildWalnutMessage({
+        kind: 'notification',
+        attrs: {
+          from: 'Walnut',
+          about: sessionHandle(child.title, child.sessionId),
+          'about-session': child.sessionId,
+          'about-task': child.taskId,
+          outcome: kind,
+          note: NOTE_NOTIFICATION,
+        },
+        body: `${who} completed; its result is in its ${at} UTC reply to you.`,
+      });
+    }
     const said = Boolean(input.lastMessage?.text.trim());
     const did = Boolean(input.lastMessage?.actions?.length);
     const last = !input.repliedRecently && (said || did) ? input.lastMessage : undefined;

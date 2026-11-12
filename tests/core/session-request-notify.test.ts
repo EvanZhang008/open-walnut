@@ -925,8 +925,39 @@ describe('sessionRequestWatchHook — the parent hears about its subtask by stat
     await fire(phasePayload({ newPhase: 'COMPLETE' }));
     const [n] = parentNotices();
     expect(n.attrs.outcome).toBe('completed');
-    expect(n.body).toContain('Its reply to your request already reached you.');
+    // One line naming the reply that carried the result (2026-11-12, the org reflection).
+    expect(n.body).toMatch(/^Your subtask "Run the migration" \(task-77\) completed; its result is in its \d\d:\d\d UTC reply to you\.$/);
     expect(n.body).not.toContain('Footer added');
+    expect(n.body).not.toContain('Still open');
+    expect(n.body).not.toContain('Next:');
+  });
+
+  // 2026-11-12, the org reflection (mwd55cl2 at 13:38Z): the worker answered six hours after the
+  // request's fallback had settled it, and the completed notice 30 s later quoted the result again
+  // (3.2K chars), because only a request still `replied` counted as an answer.
+  it('a LATE answer (to a request the fallback already settled) makes the completion one line too', async () => {
+    const rq = await arm({ fromSessionId: PARENT });
+    await settleNotified(rq.id, 'completed');
+    const { noteAnswerDelivered } = await import('../../src/core/session-requests.js');
+    await noteAnswerDelivered(rq.id, { digest: 'd1', deliveredTo: PARENT });
+    await fire(phasePayload({ newPhase: 'COMPLETE' }));
+    const [n] = parentNotices();
+    expect(n.attrs.outcome).toBe('completed');
+    expect(n.body).toMatch(/completed; its result is in its \d\d:\d\d UTC reply to you\.$/);
+    expect(n.body).not.toContain('Footer added');
+  });
+
+  it('an interim answer minutes before the completion never stands in for its result', async () => {
+    const rq = await arm({ fromSessionId: PARENT });
+    await settleNotified(rq.id, 'completed');
+    const { noteAnswerDelivered } = await import('../../src/core/session-requests.js');
+    // "On it" five minutes before the end: the completion quotes its words as before.
+    await noteAnswerDelivered(rq.id, { digest: 'd1', deliveredTo: PARENT }, Date.now() - 5 * 60_000);
+    await fire(phasePayload({ newPhase: 'COMPLETE' }));
+    const [n] = parentNotices();
+    expect(n.attrs.outcome).toBe('completed');
+    expect(n.body).not.toMatch(/its result is in its/);
+    expect(n.body).toContain('Next:');
   });
 
   it('a turn started by the parent\'s own note is named as such', async () => {

@@ -70,6 +70,7 @@ defineOp({
       'One-line TL;DR of the message (about 10 words): the reader sees only this line until they open the message. Always give one; put the detail in `text`.'),
     text: z.string().min(1).optional().describe(`Message text: the detail behind the title. Required, except on an answer (in_reply_to) that gives \`result\`. ${MESSAGE_TEXT_HINT}`),
     expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when a session sends down or across; false when it reports up (to its own leader, its VP, or Main). Pass true to ask a question up, false for fire-and-forget'),
+    wake: z.boolean().optional().describe('false: a note that asks nothing (an FYI). It starts no turn: it rides the target\'s next message, folded with your other such notes. Not with expect_reply=true or hands_on. A script\'s note that ends "No reply needed" is held the same way'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 1h when you ask for a reply, 6h otherwise; 2h and 12h to a lead or Main)'),
     in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),
     hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer, is told where the work went, and gets that answer straight from it'),
@@ -107,6 +108,13 @@ defineOp({
     // The target's host did not take its last message in time: this one waits behind it.
     const waiting = sendBehindSlowHostLine(b.waiting, b.requestId, b.messageId);
     const said = userSaidLine(b.userSaid as UserSaid | undefined);
+    if (delivery === 'held') {
+      return withOutcome(
+        { ...b },
+        `Note held for ${b.targetTaskId || target}: it asks for no reply, so it starts no turn and rides that task's next message (folded with your other such notes). Do NOT resend.`,
+        'Nothing to wait for: no reply comes back.',
+      );
+    }
     if (delivery === 'recorded') {
       const who = b.targetTaskId || target;
       return withOutcome(

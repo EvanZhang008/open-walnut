@@ -439,6 +439,60 @@ describe('performSessionSend — who is speaking decides the envelope', () => {
     expect(parseWalnutMessage(deliveredText(1))!.attrs.host).toBe('unknown');
   });
 
+  // 2026-11-12, the org reflection: the Mac load watchdog sent one note per paused process, each
+  // ending "No reply needed"; one task got 24 in a night, three in one minute, each a turn.
+  it('a note that asks nothing (wake=false) starts no turn: a burst from one sender rides the next message as ONE notice', async () => {
+    const { _clearHeldNotices, pendingHeldNotices } = await import('../../src/core/sessions/held-notices.js');
+    const { splitLeadingRiders } = await import('../../src/lib/history-walnut-riders.js');
+    _clearHeldNotices();
+    sessions = [rec('sess-target-1', { title: 'Target', taskId: 'task-t' })];
+    addOrdinaryTasksForSessions();
+    const tail = 'It resumes by itself once the load is under 56, or after 30 minutes at most. Nothing to do; if it times out, rerun it. No reply needed.';
+    for (const pid of [101, 202, 303]) {
+      const r = await performSessionSend({
+        to: 'sess-target-1', title: `Load watchdog paused your job (pid ${pid})`,
+        text: `The Mac load watchdog paused your job pid ${pid} (vitest run) with SIGSTOP because the load is 29${pid % 10}. ${tail}`,
+        callerSid: 'external', callerLabel: 'load-watchdog', callerHost: 'local', wake: false,
+      });
+      expect(r.delivery).toBe('held');
+    }
+    // Nothing reached the session: no dispatch, no queue row.
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(enqueueMessage).not.toHaveBeenCalled();
+    const held = (await pendingHeldNotices('sess-target-1'))!;
+    const envelopes = parseSessionEnvelopes(held.text)!.filter((x) => x.kind === 'envelope');
+    expect(envelopes).toHaveLength(1);
+    const env = parseWalnutMessage(held.text)!;
+    expect(env.attrs).toMatchObject({ kind: 'notification', from: 'Walnut', outcome: 'quiet-notes' });
+    expect(env.body).toContain('3 notes from automation: load-watchdog (on local, not your user)');
+    for (const pid of [101, 202, 303]) expect(env.body).toContain(`pid ${pid}`);
+    // The sentences every note repeats are said once.
+    expect(env.body.split('No reply needed.').length - 1).toBe(1);
+    expect(env.body.split('It resumes by itself').length - 1).toBe(1);
+    // In front of a person's message it is a rider: the person's words stay theirs.
+    const split = splitLeadingRiders(`${held.text}\n\nhello from Evan`);
+    expect(split?.riders).toHaveLength(1);
+    expect(split?.body).toBe('hello from Evan');
+  });
+
+  it('a note that asks nothing cannot ask for a reply; a session\'s wake=false note is held, without it a note goes now', async () => {
+    const { _clearHeldNotices, pendingHeldNotices } = await import('../../src/core/sessions/held-notices.js');
+    _clearHeldNotices();
+    sessions = [rec('sess-caller-1', { title: 'Caller', taskId: 'task-c' }), rec('sess-target-1', { title: 'Target', taskId: 'task-t' })];
+    addOrdinaryTasksForSessions();
+    await expectSendError(performSessionSend({
+      to: 'sess-target-1', text: 'fyi', callerSid: 'sess-caller-1', wake: false, expectReply: true,
+    }), 'bad_request');
+    const r = await performSessionSend({ to: 'sess-target-1', text: 'FYI: the build is green.', callerSid: 'sess-caller-1', wake: false });
+    expect(r.delivery).toBe('held');
+    expect(r.requestId).toBeUndefined();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect((await pendingHeldNotices('sess-target-1'))!.text).toContain('FYI: the build is green.');
+    // Without wake=false a note goes now, whatever it says.
+    await performSessionSend({ to: 'sess-target-1', text: 'FYI: the deploy is done.', callerSid: 'sess-caller-1', expectReply: false });
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+  });
+
   it('an installed App\'s own call is named as that App, never as an unidentified process', async () => {
     sessions = [rec('sess-target-1', { title: 'Target' })];
     notePluginName('quiz-coach', 'Quiz Coach');

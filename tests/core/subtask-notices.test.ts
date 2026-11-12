@@ -60,8 +60,10 @@ import {
   resolveParentDestination,
   restoreWithdrawnAsks,
   sweepHeldSubtaskNotices,
+  _resetSubtaskNoticeMemory,
   type SubtaskNotice,
 } from '../../src/core/sessions/subtask-notices.js';
+import { _clearHeldNotices, pendingHeldNotices } from '../../src/core/sessions/held-notices.js';
 import { heldParents, resetHeld } from '../../src/core/sessions/subtask-batch.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { REQUESTS_FILE, createSessionRequest, getSessionRequest } from '../../src/core/session-requests.js';
@@ -110,6 +112,8 @@ const storedChild = (id: string): Partial<Task> | null => (STORED_CHILDREN.has(i
 
 beforeEach(async () => {
   await resetHeld();
+  _resetSubtaskNoticeMemory();
+  _clearHeldNotices();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   // Mid-turn by default: every kind reaches a parent whose turn is running.
   sessions = [rec(PARENT_SID, { title: 'Ship the dashboard', process_status: 'running' })];
@@ -634,6 +638,81 @@ describe('what is left of the team (2026-10-28: count what is open, wake an idle
     const { text } = delivered();
     expect(text.match(/None of your subtasks is still open: this was the last one\./g)).toHaveLength(1);
     expect(text.lastIndexOf('None of your subtasks')).toBeGreaterThan(text.indexOf('(b) completed'));
+  });
+
+  // 2026-11-12, the org reflection (VP mvm0n3bu, 12:58Z-16:04Z): 13 of 20 completed notices came
+  // right after the same task's reply and quoted it again, a second completed came 23 s later, and
+  // every one listed "Still open: 42 of your subtasks" with the same names.
+  describe('a completion carries only what the parent has not read', () => {
+    const at = '2026-11-12T13:38:02.911Z';
+    it('right after its reply it is one line naming that reply: no quote, no team list, no Next', async () => {
+      getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'IN_PROGRESS', { state: 'working' })]);
+      await queueSubtaskNotice({ ...completed('a'), repliedRecently: true, repliedAt: at, completedAt: at });
+      await flushNow();
+      const { text } = delivered();
+      const env = parseWalnutMessage(text)!;
+      expect(env.attrs.outcome).toBe('completed');
+      expect(env.body).toBe('Your subtask "A" (a) completed; its result is in its 13:38 UTC reply to you.');
+      expect(text).not.toContain('a is done.');
+      expect(text).not.toContain('Still open');
+    });
+
+    it('right after its reply it wakes no idle parent: it rides the parent\'s next message', async () => {
+      sessions = [rec(PARENT_SID, { process_status: 'idle' })];
+      getChildTasks.mockResolvedValue([child('a', 'COMPLETE')]);
+      await queueSubtaskNotice({ ...completed('a'), repliedRecently: true, repliedAt: at, completedAt: at });
+      await flushNow();
+      expect(sendMessageToSession).not.toHaveBeenCalled();
+      expect(enqueueMessage).not.toHaveBeenCalled();
+      expect(await heldParents()).toEqual([]);
+      const held = (await pendingHeldNotices(PARENT_SID))!;
+      expect(parseWalnutMessage(held.text)!.body).toBe('Your subtask "A" (a) completed; its result is in its 13:38 UTC reply to you.');
+    });
+
+    it('one notice per completion: a second turn end of the same completion sends nothing; a new completion does', async () => {
+      getChildTasks.mockResolvedValue([child('a', 'COMPLETE')]);
+      await queueSubtaskNotice({ ...completed('a'), completedAt: at });
+      await flushNow();
+      await vi.advanceTimersByTimeAsync(23_000);
+      await queueSubtaskNotice({ ...completed('a'), completedAt: at, lastWords: { text: 'Replying to the lead, then closing.' } });
+      await flushNow();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+      // Reopened and completed again: news.
+      await queueSubtaskNotice({ ...completed('a'), completedAt: '2026-11-12T15:00:00.000Z' });
+      await flushNow();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    });
+
+    it('a team list that never arrived is not counted as seen', async () => {
+      getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'COMPLETE'), child('d', 'IN_PROGRESS', { state: 'working' })]);
+      sendMessageToSession.mockRejectedValueOnce(new Error('daemon unreachable'));
+      await queueSubtaskNotice(completed('a'));
+      await flushNow();
+      await queueSubtaskNotice(completed('b'));
+      await flushNow();
+      expect(delivered(1).text).toContain('Still open: 1 of your subtasks: "D" (d, Working).');
+    });
+
+    it('the team list names only what changed since the parent\'s last notice', async () => {
+      const team = (cState: 'working' | 'needs') => [
+        child('a', 'COMPLETE'), child('b', 'COMPLETE'), child('x', 'COMPLETE'),
+        child('c', 'IN_PROGRESS', cState === 'working' ? { state: 'working' } : { state: 'needs', ask: 'Approve it.', source: 'session' }),
+        child('d', 'IN_PROGRESS', { state: 'working' }),
+      ];
+      getChildTasks.mockResolvedValue(team('working'));
+      await queueSubtaskNotice(completed('a'));
+      await flushNow();
+      expect(delivered(0).text).toContain('Still open: 2 of your subtasks: "C" (c, Working), "D" (d, Working).');
+      await queueSubtaskNotice(completed('b'));
+      await flushNow();
+      expect(delivered(1).text).toContain('Still open: 2 of your subtasks, none changed since your last notice.');
+      expect(delivered(1).text).not.toContain('"D" (d, Working)');
+      getChildTasks.mockResolvedValue(team('needs'));
+      await queueSubtaskNotice(completed('x'));
+      await flushNow();
+      expect(delivered(2).text).toContain('Still open: 2 of your subtasks; changed since your last notice: "C" (c, Needs you: Approve it).');
+      expect(delivered(2).text).not.toContain('"D" (d, Working)');
+    });
   });
 
   it('names at most eight and counts the rest', async () => {

@@ -648,6 +648,51 @@ export function boundedWarnings(warnings: readonly string[]): string[] {
 
 // ── Deciding ──
 
+/** The shortest seen item id that marks an input line as already told (inputForNewItems). */
+export const SEEN_ID_MATCH_MIN = 6;
+
+/** Does `line` name `id` as a whole token (not inside a longer id)? */
+function namesId(line: string, id: string): boolean {
+  if (!id) return false;
+  let at = line.indexOf(id);
+  while (at !== -1) {
+    const before = at === 0 ? '' : line[at - 1];
+    const after = line[at + id.length] ?? '';
+    if (!/[A-Za-z0-9_-]/.test(before) && !/[A-Za-z0-9_-]/.test(after)) return true;
+    at = line.indexOf(id, at + 1);
+  }
+  return false;
+}
+
+/**
+ * A fire's `input` without what an earlier fire already told (2026-11-12, the org reflection: a
+ * queue-result watch printed every result it still saw, newest first, so a fire for 1 new item
+ * carried 13 results, three of them delivered hours before; 5 fires, 39.7K chars). The daemon
+ * already drops seen items from `items`; the script's own words about them went out again in full.
+ * A line naming an item the session was already given (an id of SEEN_ID_MATCH_MIN chars or
+ * more), and no new one, is dropped, with the indented lines under it; a line naming no item (the
+ * script's own words) stays. Nothing left: no input.
+ */
+export function inputForNewItems(input: string, newIds: readonly string[], seenIds: readonly string[]): string | undefined {
+  const fresh = newIds.filter(Boolean);
+  // A short id ("12") is too likely to be some other number in the text: only a longer one drops a line.
+  const seen = seenIds.filter((id) => id.length >= SEEN_ID_MATCH_MIN && !fresh.includes(id));
+  if (seen.length === 0) return input;
+  const kept: string[] = [];
+  let dropping = false;
+  for (const line of input.split('\n')) {
+    const isNew = fresh.some((id) => namesId(line, id));
+    const isOld = !isNew && seen.some((id) => namesId(line, id));
+    if (isOld) { dropping = true; continue; }
+    // An indented line under a dropped one belongs to it ("  read it: ..."), unless it names a new item.
+    if (dropping && !isNew && /^\s+\S/.test(line)) continue;
+    dropping = false;
+    kept.push(line);
+  }
+  const out = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return out ? out : undefined;
+}
+
 export function newItemsOf(items: TriggerItem[] | undefined, state: TriggerHostState): TriggerItem[] {
   if (!items) return [];
   return items.filter((it) => !(it.id in state.seen));
@@ -672,9 +717,13 @@ export function decideCheck(def: TriggerDef, output: TriggerCheckOutput, state: 
     }
   }
   if (fireBudgetNextAtMs(def, state, nowMs) > nowMs) return { kind: 'quiet', reason: 'rate-limited' };
+  const seenIds = output.items ? output.items.filter((it) => it.id in state.seen).map((it) => it.id) : [];
+  const input = output.input !== undefined && seenIds.length > 0
+    ? inputForNewItems(output.input, items.map((it) => it.id), seenIds)
+    : output.input;
   return {
     kind: 'fire', items,
-    ...(output.input !== undefined ? { input: output.input } : {}),
+    ...(input !== undefined ? { input } : {}),
     budgetCap: fireBudgetCap(def),
     ...(truncated ? { truncated: true } : {}),
   };

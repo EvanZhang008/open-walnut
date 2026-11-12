@@ -51,7 +51,8 @@ const TAG_CLOSE = '\n</walnut-message>';
  * restart (`restarted`), org digest (`org-update`), status push (`status`, and the
  * state notices of followed tasks it carries: `completed`, `error`, `stopped`, `blocked`), wait
  * note (`waiting`), retired lead (`handed-over`), a request past its deadline held
- * for the next message (`timeout`, sessions/held-notices.ts), plus the changed
+ * for the next message (`timeout`, sessions/held-notices.ts), notes that asked for no reply held
+ * the same way (`quiet-notes`, sessions/quiet-notes.ts), plus the changed
  * default instructions the queue's drain
  * puts first (`task-routing-policy`). iOS keeps the same list
  * (TimelineInboundMessage.riderOutcomes).
@@ -62,6 +63,8 @@ export const RIDER_NOTICE_OUTCOMES: readonly string[] = [
   // renderItems, org-follow.ts): one per SubtaskNoticeKind. 2026-11-10: they were not on the
   // list, so five of them in front of the user's message drew open above his words.
   'completed', 'error', 'stopped', 'blocked',
+  // Notes that asked for no reply, held for the next message (sessions/quiet-notes.ts, 2026-11-12).
+  'quiet-notes',
 ];
 const RIDER_OUTCOMES = new Set(RIDER_NOTICE_OUTCOMES);
 /** `name="value"`, first occurrence wins (same rule as the envelope parser). */

@@ -2507,7 +2507,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     // read (up to LAST_MESSAGE_READ_MS): the parent's own sessions as askers are
     // answered by the fallback notice; a parent that answered lately needs no
     // "stopped"; a COMPLETE parent, or one with no session, hears nothing.
-    let subtask: { kind: SubtaskNoticeKind; answeredLately: boolean } | undefined;
+    let subtask: { kind: SubtaskNoticeKind; answeredLately: boolean; repliedAt?: string } | undefined;
     const edgeKind: SubtaskNoticeKind =
       phase === 'COMPLETE' ? 'completed'
         : outcome === 'error' || undelivered ? 'error'
@@ -2518,9 +2518,10 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       const { getSessionsForTask } = await import('../session-tracker.js');
       const parentSids = new Set((await getSessionsForTask(parentTaskId).catch(() => [])).map((s) => s.claudeSessionId));
       const kind = edgeKind;
-      const { repliedRecently } = await import('../session-requests.js');
+      const { lastReplyAt } = await import('../session-requests.js');
       const notices = await import('../sessions/subtask-notices.js');
-      const answeredLately = await repliedRecently(parentSids, task.id, notices.RECENT_REPLY_MS).catch(() => false);
+      const repliedAt = await lastReplyAt(parentSids, task.id, notices.RECENT_REPLY_MS).catch(() => undefined);
+      const answeredLately = repliedAt !== undefined;
       const { stoppedByTeam } = await import('../sessions/team-stop.js');
       // Its own work runs on after the turn (a background subagent or command, a team, a wakeup, a
       // /loop: sessions/outliving-work.ts): the turn ending is no stop (2026-11-03, a lead read
@@ -2540,7 +2541,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
         // nothing to do about it.
         && !(undelivered && (undelivered.parentAsked || undelivered.held))
         && await notices.parentCanHear(parentTaskId);
-      if (parentHears) subtask = { kind, answeredLately };
+      if (parentHears) subtask = { kind, answeredLately, ...(repliedAt ? { repliedAt } : {}) };
     }
     // The VP or Main that follows a task with no leader hears the same edges (org-follow.ts),
     // except a stop a team stop made: whoever stopped the team knows.
@@ -2603,7 +2604,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     }
     if (!subtask || !parentTaskId || !task) return;
 
-    const { queueSubtaskNotice } = await import('../sessions/subtask-notices.js');
+    const { queueSubtaskNotice, coveringReplyAt } = await import('../sessions/subtask-notices.js');
     const errorText = undelivered ? undelivered.reason
       : 'error' in payload && !isPhaseEdge
         ? String((payload as { error?: unknown }).error ?? '')
@@ -2619,6 +2620,8 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       blockedOn: subtask.kind === 'blocked' ? record?.pendingPermission?.toolName : undefined,
       waitUntil: subtask.kind === 'waiting' ? task.wait_until ?? undefined : undefined,
       repliedRecently: subtask.answeredLately,
+      ...(subtask.kind === 'completed' && coveringReplyAt(subtask.repliedAt) ? { repliedAt: subtask.repliedAt } : {}),
+      ...(subtask.kind === 'completed' && task.completed_at ? { completedAt: task.completed_at } : {}),
     });
   },
 };
