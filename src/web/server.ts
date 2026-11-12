@@ -7,6 +7,9 @@
 
 import { markServerStopping, resetServerStopping } from '../core/sessions/shutdown-death.js'
 import { closeHttpServer } from './http-close.js'
+import { beginShutdownSteps, shutdownStep } from './shutdown-steps.js'
+// The bail's line names the step it caught (commands/web.ts).
+export { shutdownStepSuffix } from './shutdown-steps.js'
 import { closeDaemonDials, reopenDaemonDials } from '../providers/daemon-dial-gate.js'
 import { serverBindAddress } from './bind-address.js'
 import { createServer, type Server as HttpServer } from 'node:http'
@@ -7038,7 +7041,10 @@ function startPluginSyncPolling(): void {
 /**
  * Gracefully shut down the server.
  */
-export async function stopServer(opts: { dropConnections?: boolean; reason?: string } = {}): Promise<void> {
+export async function stopServer(opts: { dropConnections?: boolean; reason?: string; bailMs?: number } = {}): Promise<void> {
+  // Every awaited step below runs through shutdownStep (shutdown-steps.ts): named for the bail,
+  // and bounded to fit inside the caller's bail when it has one.
+  beginShutdownSteps({ bailMs: opts.bailMs })
   // At the entry, before any await: no boot owns the lane any more, and it stops now.
   localDaemonLaneOwner++
   localDaemonLane?.stop()
@@ -7056,15 +7062,17 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   leaderLoopHandle = null
   // While every socket still stands: each feature node gets a 1012 close and the connection
   // journal says why this server stops (a deploy, an update, a signal). Bounded under a second.
-  try { await (await import('./ws/feature-node-runtime.js')).stopFeatureNodes(opts.reason) } catch { /* best-effort */ }
+  await shutdownStep('feature nodes', async () => (await import('./ws/feature-node-runtime.js')).stopFeatureNodes(opts.reason))
   ;(await import('../core/net/net-mac.js')).stopNet()
   // The lock-screen card's clock: its bus subscription and timers belong to this server.
   ;(await import('../core/push/work-card.js')).stopWorkCard()
   // Visits still in memory (at most FLUSH_MS of them); bounded like every write here.
-  await (await import('../core/page-visits.js')).flushVisitsNow().catch(() => {})
-  await searchCopyHandle?.stop().catch(() => {})
+  await shutdownStep('page visits flush', async () => (await import('../core/page-visits.js')).flushVisitsNow())
+  const searchCopy = searchCopyHandle
+  await shutdownStep('search copy', () => searchCopy?.stop())
   searchCopyHandle = null
-  await hostReplicaDoor?.close().catch(() => {})
+  const replicaDoor = hostReplicaDoor
+  await shutdownStep('host replica door', () => replicaDoor?.close())
   hostReplicaDoor = null
   currentApp = null
   // Before the front: its watch timer asks the link, and its copy watcher and RPC answer are module globals.
@@ -7077,23 +7085,21 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     ws.setUpgradeInterceptor(null)
     ws.setRpcGate(null)
     ws.setConnectEvent(null)
-    await hostReplicaFront.stop().catch(() => {})
+    const front = hostReplicaFront
+    await shutdownStep('host replica front', () => front.stop())
     hostReplicaFront = null
     ;(await import('../replica/notes-source.js')).installReplicaNotesSource(null)
     ;(await import('../replica/host-copy-reads.js')).installHostCopyReads(null)
     ;(await import('../replica/attachment-source.js')).installReplicaAttachments(null)
   }
   if (bootPolicy('leader-heartbeat')) {
-    try { await (await import('../core/leader/primary-leader.js')).announceLeaderRestart(800) } catch { /* best-effort */ }
+    await shutdownStep('leader restart notice', async () => (await import('../core/leader/primary-leader.js')).announceLeaderRestart(800))
   } else {
     try { (await import('./ws/bridge-registry.js')).setGatewayRequestHandler(null) } catch { /* best-effort */ }
   }
-  try {
-    const { stopStallRecorder } = await import('../core/stall-recorder.js')
-    await stopStallRecorder()
-  } catch { /* never started */ }
+  await shutdownStep('stall recorder', async () => (await import('../core/stall-recorder.js')).stopStallRecorder())
   // The tunnel this server runs, and its port (bounded: the child gets 6 s at most).
-  try { await (await import('./expose-runtime.js')).getExposeRuntime()?.stop() } catch { /* never started */ }
+  await shutdownStep('tunnel', async () => (await import('./expose-runtime.js')).getExposeRuntime()?.stop(), { budgetMs: 2_500 })
   try {
     unsubscribeMemoryPressure?.()
     unsubscribeMemoryPressure = null
@@ -7162,19 +7168,17 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   // Await each stop() so any in-flight plugin tick completes before we tear down
   // the registry and other dependencies. Otherwise a mid-tick ctx.updateTask /
   // ctx.addTask / bus.emit could fire after shutdown.
-  await pluginMutationTail.catch(() => undefined)
-  await stopPluginSyncPolling()
-  try { await disposeLoadedPlugins(registry) } catch { /* best-effort shutdown */ }
+  await shutdownStep('plugin mutations', () => pluginMutationTail)
+  await shutdownStep('plugin sync polling', () => stopPluginSyncPolling())
+  // A plugin may take 5 s to deactivate (plugin-manager.ts); the stores below still get their turn.
+  await shutdownStep('plugins', () => disposeLoadedPlugins(registry), { budgetMs: 3_000 })
   const { disposeRouterWake } = await import('../core/router/wake.js')
   disposeRouterWake()
   const { disposeRouterStores } = await import('../core/router/runtime.js')
-  await disposeRouterStores()
+  await shutdownStep('router stores', () => disposeRouterStores())
   // A plugin's dispose closes its MCP servers; this catches one whose plugin never finished
   // disposing, so no server process outlives Walnut.
-  try {
-    const { closeAllMcpServers } = await import('../core/mcp-servers/registry.js')
-    await closeAllMcpServers()
-  } catch { /* import failed (partial dist): nothing was started */ }
+  await shutdownStep('MCP servers', async () => (await import('../core/mcp-servers/registry.js')).closeAllMcpServers())
   disposeCoreServices() // after the plugins, so a deactivate may still use a core service
   removeCalendarEventForwarder()
   pluginSoftReload = async () => {}
@@ -7249,7 +7253,7 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     // otherwise be dropped by a restart, and those Slack items exist nowhere else.
     const collector = triageCollectHandle
     triageCollectHandle = null
-    try { await collector.flush() } catch { /* best effort on the way out */ }
+    await shutdownStep('triage collector flush', () => collector.flush())
     collector.stop()
   }
   if (triageRunsHandle) {
@@ -7274,10 +7278,10 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     recordingReaperHandle.stop()
     recordingReaperHandle = null
   }
-  // Awaited: an in-flight import writes task/session rows, so shutdown must not
-  // return while one is mid-write.
+  // An import pass in flight stops at its next row (its stop aborts it); the wait is that row's write.
   if (externalSessionImporter) {
-    try { await externalSessionImporter.stop() } catch { /* already logged */ }
+    const importer = externalSessionImporter
+    await shutdownStep('external session import', () => importer.stop())
     externalSessionImporter = null
   }
   if (terminalReaperHandle) {
@@ -7285,29 +7289,27 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     terminalReaperHandle = null
   }
   // Save current audio recording chunk before shutdown (prevents data loss on restart)
-  try {
+  await shutdownStep('audio capture', async () => {
     const { audioCaptureService } = await import('../core/audio-capture.js')
     if (audioCaptureService.getStatus().recording) {
       log.web.info('saving audio recording before shutdown')
       await audioCaptureService.stop()
     }
-  } catch (err) {
-    log.web.warn('audio capture shutdown failed', { error: err instanceof Error ? err.message : String(err) })
-  }
+  }, { budgetMs: 2_000 })
 
   subagentRunner.destroy()
   // Always detach — sessions are detached child processes and must survive
   // server shutdown. Never kill session PIDs from stopServer().
   sessionRunner.destroy()
   if (searchV2WiringHandle) {
-    await searchV2WiringHandle.stop().catch(() => {})
+    const wiring = searchV2WiringHandle
+    await shutdownStep('search index', () => wiring.stop(), { budgetMs: 2_500 })
     searchV2WiringHandle = null
   }
   // A follower's copy has no wiring, but the same rule: an embed run still
   // in flight at exit aborts the process (libc++abi, exit 134).
   if (isFollower()) {
-    const { closeSearchV2Index } = await import('../core/search/wiring.js')
-    await closeSearchV2Index().catch(() => {})
+    await shutdownStep('search index', async () => (await import('../core/search/wiring.js')).closeSearchV2Index(), { budgetMs: 2_500 })
   }
   bus.unsubscribe('task-ledger')
   if (notesWatcherHandle) {
@@ -7339,7 +7341,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (keepAwakeHandle) {
     keepAwakeHandle.stop()
     // Release the pmset hold — a dead server must never leave the Mac sleepless.
-    await keepAwakeHandle.release().catch(() => {})
+    const keepAwake = keepAwakeHandle
+    await shutdownStep('keep-awake release', () => keepAwake.release())
     keepAwakeHandle = null
   }
   if (gitMaintenanceHandle) {

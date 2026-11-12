@@ -29,6 +29,8 @@ interface FakeHost {
   fail?: boolean;
   calls: Array<Record<string, unknown>>;
   describeCalls: string[][];
+  /** Runs inside the scan RPC before it answers (a slow host, a stop mid-scan). */
+  duringScan?: () => Promise<void> | void;
 }
 const hosts = new Map<string, FakeHost>();
 
@@ -53,6 +55,7 @@ vi.mock('../../src/providers/daemon-connection.js', () => ({
           return { ok: true, candidates: ids.map((id) => entry.described?.[id]).filter(Boolean), activity: [] };
         }
         entry.calls.push(params);
+        await entry.duringScan?.();
         return { ok: true, candidates: entry.candidates, truncated: entry.truncated === true };
       },
     };
@@ -89,6 +92,7 @@ import {
   importSessionsById,
   extendImportLifecycle,
   importAutoCompleteAfterDays,
+  startExternalSessionImporter,
 } from '../../src/core/sessions/external-session-import.js';
 import { EXTERNAL_SESSION_IMPORT_TAG } from '../../src/core/types.js';
 import {
@@ -1404,5 +1408,50 @@ describe('importExternalSessions: imported folders feed the folder picker', () =
     dirs = byKey(await storedDirs());
     expect(dirs.get('__local__::/Users/dev/proj')!.count).toBe(4);
     expect(dirs.get('__local__::/Users/dev/newdir')!.count).toBe(1);
+  });
+});
+
+// 2026-11-12: a deploy's smoke boot was stopped 13 s into an import pass, and
+// its shutdown waited on the whole pass into the 7 s bail. A stop ends a pass
+// at its next row.
+describe('an import pass stops at its next row when aborted', () => {
+  it('a pass whose signal is already aborted scans and imports nothing', async () => {
+    const host = setHost('__local__', { candidates: [candidate({ sessionId: 'ab-1' })] });
+    const abort = new AbortController();
+    abort.abort();
+    const result = await importExternalSessions({ signal: abort.signal });
+    expect(result.imported).toBe(0);
+    expect(host.calls).toHaveLength(0);
+  });
+
+  it('an abort during the host scan imports none of its candidates', async () => {
+    const abort = new AbortController();
+    const host = setHost('__local__', {
+      candidates: [candidate({ sessionId: 'ab-2' }), candidate({ sessionId: 'ab-3', title: 'Second' })],
+      duringScan: () => abort.abort(),
+    });
+    const result = await importExternalSessions({ signal: abort.signal });
+    expect(host.calls).toHaveLength(1);
+    expect(result.imported).toBe(0);
+    expect(await getSessionByClaudeId('ab-2')).toBeFalsy();
+  });
+
+  it("the importer's stop aborts a pass in flight and returns once it ends", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let scanning!: () => void;
+    const reached = new Promise<void>((r) => { scanning = r; });
+    setHost('__local__', {
+      candidates: [candidate({ sessionId: 'ab-4' })],
+      duringScan: async () => { scanning(); await gate; },
+    });
+    const handle = startExternalSessionImporter();
+    const pass = handle.runNow();
+    await reached;
+    const stopping = handle.stop();
+    release();
+    await stopping;
+    expect((await pass).imported).toBe(0);
+    expect(await getSessionByClaudeId('ab-4')).toBeFalsy();
   });
 });

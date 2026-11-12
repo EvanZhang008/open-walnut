@@ -166,7 +166,7 @@ export async function runWeb(options: {
     )
   }
 
-  const { startServer, stopServer, armGracefulSignalExit, exitTraceFile } = await import('../web/server.js')
+  const { startServer, stopServer, armGracefulSignalExit, exitTraceFile, shutdownStepSuffix } = await import('../web/server.js')
 
   const port = options.port ? parseInt(options.port, 10) : undefined
 
@@ -195,12 +195,12 @@ export async function runWeb(options: {
     // SIGKILL grace (scripts/dev-prod.sh STOP_GRACE_SECS). The trace names the
     // bail, so a code=1 exit is not mistaken for a crash.
     const bail = setTimeout(() => {
-      const msg = `[${new Date().toISOString()}] SERVER EXIT: shutdown bail after ${SHUTDOWN_BAIL_MS}ms pid=${process.pid}`
+      const msg = `[${new Date().toISOString()}] SERVER EXIT: shutdown bail after ${SHUTDOWN_BAIL_MS}ms pid=${process.pid}${shutdownStepSuffix()}`
       try { fs.appendFileSync(exitTraceFile(), msg + '\n') } catch { /* best-effort */ }
       process.exit(1)
     }, SHUTDOWN_BAIL_MS)
     try {
-      await stopServer({ reason: typeof signal === 'string' ? signal : undefined })
+      await stopServer({ reason: typeof signal === 'string' ? signal : undefined, bailMs: SHUTDOWN_BAIL_MS })
     } catch {
       // A failed teardown must still terminate — never leave an immune process.
     } finally {
@@ -303,16 +303,16 @@ async function runHostReplica(options: { port?: string; dev?: boolean }): Promis
   // keeps three days of logs like every other Walnut.
   const { initLogging } = await import('../logging/index.js')
   initLogging()
-  const { startServer, stopServer, armGracefulSignalExit } = await import('../web/server.js')
+  const { startServer, stopServer, armGracefulSignalExit, shutdownStepSuffix } = await import('../web/server.js')
   let shuttingDown = false
   const shutdown = async (signal?: unknown) => {
     if (shuttingDown) return
     shuttingDown = true
     const bail = setTimeout(() => {
-      try { fs.appendFileSync(path.join(LOG_DIR, 'exit.log'), `[${new Date().toISOString()}] SERVER EXIT: shutdown bail after ${SHUTDOWN_BAIL_MS}ms pid=${process.pid}\n`) } catch { /* best-effort */ }
+      try { fs.appendFileSync(path.join(LOG_DIR, 'exit.log'), `[${new Date().toISOString()}] SERVER EXIT: shutdown bail after ${SHUTDOWN_BAIL_MS}ms pid=${process.pid}${shutdownStepSuffix()}\n`) } catch { /* best-effort */ }
       process.exit(1)
     }, SHUTDOWN_BAIL_MS)
-    try { await stopServer({ reason: typeof signal === 'string' ? signal : undefined }) } catch { /* a failed teardown must still terminate */ } finally { clearTimeout(bail) }
+    try { await stopServer({ reason: typeof signal === 'string' ? signal : undefined, bailMs: SHUTDOWN_BAIL_MS }) } catch { /* a failed teardown must still terminate */ } finally { clearTimeout(bail) }
     process.exit(0)
   }
   process.on('SIGINT', shutdown)

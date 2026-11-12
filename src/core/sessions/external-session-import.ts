@@ -996,6 +996,11 @@ export interface ImportExternalSessionsOptions {
   now?: number;
   /** Per-run caps (test seam; production uses the module constants). */
   limits?: { sweep?: number; folderBackfill?: number; retitle?: number; audit?: number };
+  /**
+   * Ends the pass at its next row: the server's shutdown aborts it, so a stop never
+   * waits on a whole pass (2026-11-12: a deploy's smoke boot bailed waiting on one).
+   */
+  signal?: AbortSignal;
 }
 
 export function importExternalSessions(options: ImportExternalSessionsOptions = {}): Promise<ExternalImportResult> {
@@ -1019,12 +1024,19 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
   const folders: FolderIndex = new Map();
   const { scannable, skipped } = await scanTargets(excludedCwds);
   result.hostsSkipped = skipped;
+  const { signal } = options;
+  const stopped = (phase: string): boolean => {
+    if (!signal?.aborted) return false;
+    log.session.info('external session import stopped before its end', { phase, imported: result.imported });
+    return true;
+  };
 
-  if (scannable.length > 0) {
+  if (scannable.length > 0 && !stopped('scan')) {
     await scanAndImport(scannable, {
-      windowMs, excludedCwds, folders, retitleLimit: options.limits?.retitle ?? RETITLE_LIMIT_PER_RUN,
+      windowMs, excludedCwds, folders, retitleLimit: options.limits?.retitle ?? RETITLE_LIMIT_PER_RUN, signal,
     }, result);
   }
+  if (stopped('audit')) return result;
 
   // Maintenance of what is already imported needs no daemon, so it runs even
   // when no host is warm: the provenance audit (it asks hosts, and skips any
@@ -1032,8 +1044,10 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
   const { queryTasks } = await import('../task-manager.js');
   const imports = await queryTasks({ tagsAll: [HOLDER_TAG] });
   result.removed = await auditImports(imports, options.limits?.audit ?? AUDIT_LIMIT_PER_RUN);
+  if (stopped('folders')) return result;
   const kept = result.removed > 0 ? await queryTasks({ tagsAll: [HOLDER_TAG] }) : imports;
   result.foldered = await backfillImportFolders(folders, kept, options.limits?.folderBackfill ?? FOLDER_BACKFILL_LIMIT_PER_RUN);
+  if (stopped('sweep')) return result;
   result.completed = await sweepIdleImports(kept, idleMs, now, options.limits?.sweep ?? SWEEP_LIMIT_PER_RUN);
 
   if (result.imported > 0 || result.retitled > 0 || result.completed > 0 || result.foldered > 0 || result.removed > 0) {
@@ -1053,10 +1067,10 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
 
 async function scanAndImport(
   scannable: string[],
-  ctx: { windowMs: number; excludedCwds: Record<string, string[]>; folders: FolderIndex; retitleLimit: number },
+  ctx: { windowMs: number; excludedCwds: Record<string, string[]>; folders: FolderIndex; retitleLimit: number; signal?: AbortSignal },
   result: ExternalImportResult,
 ): Promise<void> {
-  const { windowMs, excludedCwds, folders, retitleLimit } = ctx;
+  const { windowMs, excludedCwds, folders, retitleLimit, signal } = ctx;
   // v1 buckets go first: dropping their session rows makes those ids unknown
   // again, so the scans below re-import them in the one-task-per-session shape.
   result.cleanedLegacyBuckets = await cleanupLegacyBuckets(excludedCwds);
@@ -1073,6 +1087,7 @@ async function scanAndImport(
 
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js');
   for (const host of scannable) {
+    if (signal?.aborted) break;
     const hostExclusions = excludedCwds[host] ?? [];
     const hostLevel = auditRuleLevel(getConnectedDaemonConnection(host));
     const scanned = await scanHost(host, knownSessionIds, windowMs, hostExclusions);
@@ -1098,6 +1113,7 @@ async function scanAndImport(
     const importedBefore = result.imported;
 
     for (const candidate of candidates) {
+      if (signal?.aborted) break;
       if (result.imported >= PER_RUN_IMPORT_LIMIT) {
         result.truncated = true;
         log.session.warn('external session import hit the per-run cap; remainder waits for the next tick', {
@@ -1240,11 +1256,12 @@ export function startExternalSessionImporter(): ExternalSessionImporterHandle {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let inflight: Promise<ExternalImportResult> | null = null;
+  const abort = new AbortController();
 
   const runOnce = async (): Promise<ExternalImportResult> => {
     // Coalesce: a manual trigger during a tick joins that tick.
     if (inflight) return inflight;
-    inflight = importExternalSessions().finally(() => { inflight = null; });
+    inflight = importExternalSessions({ signal: abort.signal }).finally(() => { inflight = null; });
     return inflight;
   };
 
@@ -1278,6 +1295,8 @@ export function startExternalSessionImporter(): ExternalSessionImporterHandle {
     stop: async () => {
       stopped = true;
       if (timer) { clearTimeout(timer); timer = null; }
+      // A pass in flight ends at its next row; only that row's write is waited for.
+      abort.abort();
       if (inflight) { try { await inflight; } catch { /* already logged */ } }
     },
     runNow: runOnce,
