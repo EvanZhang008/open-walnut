@@ -284,6 +284,19 @@ describe('a long transfer waits out a dropped link', () => {
     expect(read('src/core/sessions/task-start.ts')).toContain('noLinkWait(() => placeStartByLoad(')
   })
 
+  it('every bound of a link wait counts awake time only, never Date.now (a sleep never uses it up)', () => {
+    // 2026-11-12: a 41 minute sleep used up both moves' 10 minute bounds; they failed on wake.
+    const lw = read('src/core/transfer/link-wait.ts')
+    expect(lw.match(/Date\.now\(\)/g)).toHaveLength(2) // the default clock, and its reset
+    expect(body(lw, 'export async function awaitLink<C>(')).toContain('awakeStopwatch(POLL_JUMP_MS)')
+    expect(lw.slice(lw.indexOf('export function awakeStopwatch('))).toMatch(/^[^]*?sleptBetween\(last, now\)/)
+    expect(read('src/core/transfer/part-retry.ts')).not.toMatch(/Date\.now\(\)/)
+    const client = read('src/core/transfer/daemon-transfer-client.ts')
+    const c = body(client, 'async function call<T>(')
+    expect(c).not.toMatch(/Date\.now\(\)/)
+    expect(c).toContain('awakeStopwatch()')
+  })
+
   it('a cut final part is sent again final, never as a smaller part that starts the file over', () => {
     const retry = body(read('src/core/transfer/part-retry.ts'), 'export function partRetry(')
     expect(retry).toMatch(/kind === 'no-link' \|\| kind === 'lost' \|\| kind === 'no-answer'/)

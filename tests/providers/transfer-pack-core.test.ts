@@ -196,6 +196,31 @@ describe('transfer.pack: git repos', () => {
     expect(git(clone, ['rev-parse', 'HEAD'])).toBe(git(work, ['rev-parse', 'HEAD']))
   })
 
+  it('a slow bundle (a long history on a busy machine) gets longer than one git call\'s deadline, still bounded', async () => {
+    // 2026-11-12: right after the Mac woke, a move failed on "git bundle: timed out" at the 60 s
+    // every git call gets. Here every git call gets 1.5 s and the bundle takes 3 s.
+    const slow = createTransferPack({
+      ...packerDeps,
+      timeouts: { gitMs: 1_500 },
+      spawn: ((cmd: string, args: string[], o: Record<string, unknown>) => (cmd === 'git' && args[0] === 'bundle'
+        ? packerDeps.spawn('/bin/sh', ['-c', 'sleep 3; exec git "$@"', 'sh', ...args], o as never)
+        : packerDeps.spawn(cmd, args, o as never))) as unknown as TransferPackDeps['spawn'],
+    })
+    const root = dir('slow-bundle')
+    const work = path.join(root, 'work')
+    fs.mkdirSync(work)
+    git(work, ['init', '-q'])
+    write(path.join(work, 'x.txt'), 'x\n')
+    git(work, ['add', '-A'])
+    git(work, ['commit', '-q', '-m', 'only'])
+    const r = await slow.pack({ cwd: work, outDir: path.join(root, 'out') })
+    expect(r.files.map((f) => f.name)).toContain('repo.bundle')
+    // The bound: at most 8 minutes, under the server's 10 minute deadline for the whole pack.
+    const src = fs.readFileSync(path.join(__dirname, '../../src/providers/transfer-pack-core.ts'), 'utf8')
+    expect(src).toMatch(/var BUNDLE_MAX_MS = 8 \* 60000/)
+    expect(fs.readFileSync(path.join(__dirname, '../../src/core/transfer/daemon-transfer-client.ts'), 'utf8')).toMatch(/const PACK_RPC_MS = 10 \* 60_000/)
+  }, 30_000)
+
   it('a remote that is a folder on this host is no base: every commit rides, even those it has', async () => {
     const root = dir('folder-remote')
     const remote = path.join(root, 'remote.git')

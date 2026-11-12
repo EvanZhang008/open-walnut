@@ -144,6 +144,11 @@ export interface ApplyReply {
 export function createTransferPack(deps: TransferPackDeps) {
   var GIT_MS = (deps.timeouts && deps.timeouts.gitMs) || 60000
   var TAR_MS = (deps.timeouts && deps.timeouts.tarMs) || 5 * 60000
+  // A bundle of a long history on a busy machine outlasts one git call's deadline (2026-11-12: a
+  // move right after the Mac woke failed on "git bundle: timed out" at 60 s). It gets a second per
+  // MB of the repository's objects, at least three git calls' worth, at most BUNDLE_MAX_MS: under
+  // the server's own deadline for the whole pack (daemon-transfer-client.ts, PACK_RPC_MS, 10 min).
+  var BUNDLE_MAX_MS = 8 * 60000
   var SKIPPED_CAP = 200
   var NAMES = ['meta.json', 'changes.patch', 'untracked.tgz', 'repo.bundle', 'workspace.tgz']
   var DIR_EXCLUDES = ['node_modules', '.git', '.venv', 'dist', 'build', 'target', '__pycache__']
@@ -228,6 +233,17 @@ export function createTransferPack(deps: TransferPackDeps) {
   }
 
   function text(r: RunResult): string { return r.code === 0 ? r.stdout.toString('utf8').trim() : '' }
+
+  /** The deadline of `git bundle create` in `root`, by the size of its objects (git count-objects). */
+  async function bundleMs(root: string): Promise<number> {
+    var kib = 0
+    var lines = text(await git(root, ['count-objects', '-v'])).split('\n')
+    for (var i = 0; i < lines.length; i++) {
+      var m = /^(size|size-pack): (\d+)$/.exec(lines[i].trim())
+      if (m) kib += Number(m[2])
+    }
+    return Math.min(BUNDLE_MAX_MS, Math.max(3 * GIT_MS, GIT_MS + Math.round(kib / 1024) * 1000))
+  }
 
   function lastLine(s: string): string {
     var lines = String(s || '').split('\n').map(function (l) { return l.trim() }).filter(Boolean)
@@ -495,7 +511,7 @@ export function createTransferPack(deps: TransferPackDeps) {
       if (base) args.push('^' + base)
       args.push('HEAD')
       if (branch) args.push('refs/heads/' + branch)
-      var b = await git(root, args)
+      var b = await git(root, args, { timeoutMs: await bundleMs(root) })
       if (b.code !== 0) throw fail('git_failed', 'git bundle: ' + (b.timedOut ? 'timed out' : lastLine(b.stderr)))
       written.push('repo.bundle')
       meta.bundle = base ? { base: base } : {}

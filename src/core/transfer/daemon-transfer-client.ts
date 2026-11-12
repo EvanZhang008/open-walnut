@@ -21,7 +21,7 @@ import type { WritePartReply, ReachReply, FetchReply, FetchFileResult } from '..
 import type { HostFacts, HostLoad, ModelEndpointProbe } from '../../providers/host-facts-core.js'
 import { MAX_UPLOAD_FRAME_BYTES } from '../../providers/ssh-upload-budget.js'
 import { linkFailureKind } from '../../providers/link-failure.js'
-import { awaitLink, currentLinkWait, linkPollMs } from './link-wait.js'
+import { awaitLink, awakeStopwatch, currentLinkWait, linkPollMs } from './link-wait.js'
 import { partRetry } from './part-retry.js'
 import { interruptedByShutdown, isServerStopping } from '../server-stopping.js'
 
@@ -126,7 +126,8 @@ async function sendOn(conn: TransferConn, host: string, command: string, params:
 async function call<T>(host: string, capability: string, command: string, params: Record<string, unknown>, timeoutMs: number, gate?: SendGate): Promise<T> {
   let res: Record<string, unknown>
   const wait = currentLinkWait()
-  const until = Date.now() + (wait?.ms ?? 0)
+  // The bound counts awake time only: a sleep never uses it up.
+  const waited = awakeStopwatch()
   let sent = params
   for (let attempt = 1; ; attempt++) {
     const conn = await connectionFor(host, capability)
@@ -140,7 +141,7 @@ async function call<T>(host: string, capability: string, command: string, params
       // one that can run twice. Outside a wait, and once the wait's bound passed, the error stands.
       const kind = linkFailureKind(err)
       const again = kind === 'lost' ? RESEND_ON_LOST[command] : kind === 'no-link' ? (p: Record<string, unknown>) => p : undefined
-      if (!wait || !again || Date.now() >= until) throw err
+      if (!wait || !again || waited.ms() >= wait.ms) throw err
       sent = again(params, attempt)
       log.session.info('transfer: the link went away under a command; it goes again once the link is back', { host, command, kind, attempt })
       await new Promise((r) => setTimeout(r, linkPollMs()))

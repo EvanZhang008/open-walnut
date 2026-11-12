@@ -21,7 +21,7 @@ import { log } from '../../logging/index.js'
 import { DaemonNeedsUpgradeError } from '../daemon-file-reader.js'
 import { ServerStoppingError } from '../server-stopping.js'
 import { linkFailureKind } from '../../providers/link-failure.js'
-import { currentLinkWait, linkPollMs } from './link-wait.js'
+import { awakeStopwatch, currentLinkWait, linkPollMs } from './link-wait.js'
 import { TransferCommandError, TransferHostOfflineError } from './transfer-errors.js'
 
 /** A refusal from either daemon (not a dropped link): retrying gets the same answer. */
@@ -58,14 +58,15 @@ export function partRetry(opts: { host: string; path: string; size: number; trie
   let retries = 0
   let failures = 0
   let inRow = 0
-  let lostSince: number | undefined
+  // Awake time since the first part of a run of cut ones (a sleep never uses the bound up).
+  let lostFor: { ms(): number } | undefined
   let last: unknown = null
   return {
     get size() { return size },
     get retries() { return retries },
     ok() {
       failures = 0
-      lostSince = undefined
+      lostFor = undefined
       if (size < full && ++inRow >= GROW_AFTER) { size = Math.min(full, size * 2); inRow = 0 }
     },
     async next(err, offset, sent) {
@@ -85,8 +86,8 @@ export function partRetry(opts: { host: string; path: string; size: number; trie
       // Offline inside a wait: the command already waited the whole bound for a link.
       if (wait && err instanceof TransferHostOfflineError) throw err
       if (wait && (kind === 'no-link' || kind === 'lost' || kind === 'no-answer')) {
-        lostSince ??= Date.now()
-        if (Date.now() - lostSince > wait.ms) throw last
+        lostFor ??= awakeStopwatch()
+        if (lostFor.ms() > wait.ms) throw last
         inRow = 0
         // A part that may have gone up (lost, or no answer in its window: a big part on a paced
         // link) is followed by a smaller one. A final part stays final: it may have finished the
@@ -97,7 +98,7 @@ export function partRetry(opts: { host: string; path: string; size: number; trie
           if (sent?.final) at = Math.max(at, sent.end - size)
         }
         log.session.info('transfer: the link dropped under a part; it goes again once the link is back', {
-          host: opts.host, path: opts.path, offset: at, kind, partBytes: size, waitedMs: Date.now() - lostSince,
+          host: opts.host, path: opts.path, offset: at, kind, partBytes: size, waitedMs: Math.round(lostFor.ms()),
         })
         // The next try finds the link back (the client waits for it) and resumes from the receiver's bytes.
         await new Promise((r) => setTimeout(r, linkPollMs()))

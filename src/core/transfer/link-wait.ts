@@ -13,12 +13,43 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { log } from '../../logging/index.js'
 import { isServerStopping } from '../server-stopping.js'
+import { sleptBetween } from '../../lib/sleep-ledger.js'
 
 /** How long a task move waits for a dropped link (the longest drop seen was about 9 minutes). */
 export const MOVE_LINK_WAIT_MS = 10 * 60_000
 
 const store = new AsyncLocalStorage<{ ms: number }>()
 let pollMs = 2_000
+let wallNow: () => number = () => Date.now()
+
+/** Test-only: the wall clock the bounds read (null: Date.now). Drive lib/sleep-ledger.ts with the same one. */
+export function __setLinkWaitClockForTesting(now: (() => number) | null): void { wallNow = now ?? (() => Date.now()) }
+
+/**
+ * How long a wait has run while the machine was awake: its bound never runs out in a sleep
+ * (2026-11-12: the Mac slept 41 minutes, and on wake both moves in flight failed at once, their
+ * 10 minute bounds read on Date.now long gone). Sleep is what lib/sleep-ledger.ts saw: process.hrtime
+ * stops while this Mac sleeps under Bun (the server's runtime), so wall minus hrtime is sleep. Where
+ * that clock counts sleep too (Node's hrtime on macOS does), a look that comes `jumpMs` or more after
+ * the one before counts nothing: a poll that late was asleep, or frozen.
+ */
+export function awakeStopwatch(jumpMs = Infinity): { ms(): number } {
+  let last = wallNow()
+  let awake = 0
+  return {
+    ms() {
+      const now = wallNow()
+      const span = Math.max(0, now - last)
+      const up = span - sleptBetween(last, now)
+      if (up < jumpMs) awake += Math.max(0, up)
+      last = now
+      return awake
+    },
+  }
+}
+
+/** A poll of awaitLink later than this (a poll is pollMs, then one dial) was a sleep, never awake time. */
+const POLL_JUMP_MS = 2 * 60_000
 
 /** Test-only: how often a wait looks again (null: the default). */
 export function __setLinkWaitPollForTesting(ms: number | null): void { pollMs = ms ?? 2_000 }
@@ -49,18 +80,18 @@ export function currentLinkWait(): { ms: number } | null {
  * when this server begins its own stop meanwhile.
  */
 export async function awaitLink<C>(host: string, ms: number, resolve: (host: string) => Promise<C[]>, stopping: () => Error): Promise<C[]> {
-  const started = Date.now()
+  const waited = awakeStopwatch(POLL_JUMP_MS)
   log.session.info('transfer: no link to the host; waiting for it to come back', { host, waitMs: ms })
-  while (Date.now() - started < ms) {
+  while (waited.ms() < ms) {
     if (isServerStopping()) throw stopping()
-    await new Promise((r) => setTimeout(r, Math.min(pollMs, Math.max(0, ms - (Date.now() - started)))))
+    await new Promise((r) => setTimeout(r, Math.min(pollMs, Math.max(0, ms - waited.ms()))))
     if (isServerStopping()) throw stopping()
     const conns = await resolve(host)
     if (conns.length > 0) {
-      log.session.info('transfer: the link to the host is back; the step goes on', { host, waitedMs: Date.now() - started })
+      log.session.info('transfer: the link to the host is back; the step goes on', { host, waitedMs: waited.ms() })
       return conns
     }
   }
-  log.session.warn('transfer: the link to the host did not come back in time', { host, waitedMs: Date.now() - started })
+  log.session.warn('transfer: the link to the host did not come back in time', { host, waitedMs: waited.ms() })
   return []
 }
