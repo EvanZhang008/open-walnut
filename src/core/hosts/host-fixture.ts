@@ -34,7 +34,7 @@ export interface FixtureHostSpec {
   hostname: string
   user?: string
   port?: number
-  phase?: 'connected' | 'failed' | 'reconnecting' | 'off'
+  phase?: 'connected' | 'failed' | 'reconnecting' | 'off' | 'idle'
   /** The raw connect failure text (classified by the real classifier). */
   error?: string
   /** A credential re-dial is armed this many seconds from load. */

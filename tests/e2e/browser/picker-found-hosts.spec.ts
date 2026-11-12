@@ -25,8 +25,11 @@ const statusOf = (host: string, label: string, over: Record<string, unknown> = {
   host, label, hostname: `${host}.example.test`, connected: false, phase: 'idle', phaseLabel: '',
   steps: [], phaseElapsedMs: 0, connectElapsedMs: 0, at: Date.now(), ...over,
 })
-const connected = (host: string, label: string) =>
-  statusOf(host, label, { connected: true, phase: 'connected', connectedAt: Date.now() })
+/** Connected with Claude Code checked on this connection, so the dot reads ok, not "Checking Claude Code". */
+const connected = (host: string, label: string) => {
+  const at = Date.now()
+  return statusOf(host, label, { connected: true, phase: 'connected', connectedAt: at, readiness: { checkedAt: at, problems: [] } })
+}
 
 interface Fake {
   hosts: Array<{ alias: string; label: string }>

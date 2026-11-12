@@ -54,24 +54,17 @@ export function SessionHostErrorText({ host, label, reconnecting, fallback }: {
         <HostFailureText headline={p.headline} hint={p.hint} summary={p.summary} kind={p.kind} retryAt={p.retryAt}
           lastFrameAt={status?.serverNow ?? status?.at} />
         {/* A replica cannot dial ssh: no Retry there, only the sentence. */}
-        {(!replica || actions.receipt || actions.failed === 'retry') && (
-          <div className="session-host-error-actions">
-            {!replica && (
-              <StableButton label={actions.pending === 'retry' ? 'Retrying...' : 'Retry'} labels={['Retry', 'Retrying...']}
-                disabled={actions.pending !== null} onClick={() => { void actions.retry(); }} testId="session-host-retry" />
-            )}
-            {actions.receipt && <span className="hpb-receipt">{actions.receipt}</span>}
-            {actions.failed === 'retry' && <span className="host-connect-retry-msg" role="alert">{RETRY_FAILED_TEXT}</span>}
-          </div>
-        )}
+        <HostConnectButton actions={actions} replica={replica} idle="Retry" busy="Retrying..." testId="session-host-retry" />
       </div>
     );
   }
   if (reconnecting || p?.type === 'reconnecting') {
+    // Walnut re-dials by itself; Reconnect now dials at once instead of waiting for the next try.
     return (
       <div className="session-host-error" data-testid="session-host-reconnecting">
         <span className="session-error-banner-text">{reconnectingText(l)}</span>
         {p?.type === 'reconnecting' && p.headline && <div className="hpb-last">Last attempt: {p.headline}</div>}
+        <HostConnectButton actions={actions} replica={replica} idle="Reconnect now" busy="Reconnecting..." testId="session-host-reconnect" />
       </div>
     );
   }
@@ -101,6 +94,38 @@ export function SessionHostErrorText({ host, label, reconnecting, fallback }: {
   return <span className="session-error-banner-text">{fallback}</span>;
 }
 
+/** One click that dials the host now (the connect route every host surface uses), with its receipt or failure. */
+function HostConnectButton({ actions, replica, idle, busy, testId }: {
+  actions: ReturnType<typeof useHostActions>; replica: boolean; idle: string; busy: string; testId: string;
+}) {
+  // A replica cannot dial ssh: no button there, only a receipt or failure already on screen.
+  if (replica && !actions.receipt && actions.failed !== 'retry') return null;
+  return (
+    <div className="session-host-error-actions">
+      {!replica && <StableButton label={actions.pending === 'retry' ? busy : idle} labels={[idle, busy]}
+        disabled={actions.pending !== null} onClick={() => { void actions.retry(); }} testId={testId} />}
+      {actions.receipt && <span className="hpb-receipt">{actions.receipt}</span>}
+      {actions.failed === 'retry' && <span className="host-connect-retry-msg" role="alert">{RETRY_FAILED_TEXT}</span>}
+    </div>
+  );
+}
+
+/** An added host nothing dials now and nothing failed on: the session says so with Connect. */
+export function hostIdleText(label: string): string {
+  return `${label} is not connected right now. Connect reaches it; a message you send connects it too.`;
+}
+
+function SessionHostIdleText({ host, label }: { host: string; label: string }) {
+  const actions = useHostActions(host);
+  const replica = useIsCloudReplica();
+  return (
+    <div className="session-host-error" data-testid="session-host-idle">
+      <span className="session-error-banner-text">{hostIdleText(label)}</span>
+      <HostConnectButton actions={actions} replica={replica} idle="Connect" busy="Connecting..." testId="session-host-connect" />
+    </div>
+  );
+}
+
 /** What the panel says, beside the host line, about messages while nothing reaches the host. */
 export const HOST_DOWN_MESSAGES_NOTE = 'Messages you send wait and go out by themselves once the connection is back; replies written meanwhile show then.';
 
@@ -116,12 +141,18 @@ export const HOST_DOWN_GRACE_MS = 10_000;
  * for a failed or switched-off host, for a reconnect once it has lasted HOST_DOWN_GRACE_MS
  * from its start or from when this panel first saw it, whichever is earlier.
  */
-export function hostDownShowsAt(p: HostProblem | null, firstSeenAt: number): number | null {
-  if (!p) return null;
+export function hostDownShowsAt(p: HostProblem | null, firstSeenAt: number, idle = false): number | null {
+  // An idle host (added, nothing dialling, nothing failed) waits the same grace: a dial is often a moment away.
+  if (!p) return idle ? firstSeenAt + HOST_DOWN_GRACE_MS : null;
   if (p.type === 'connect' || p.type === 'off') return 0;
   if (p.type !== 'reconnecting') return null;
   const start = p.since > 0 ? Math.min(p.since, firstSeenAt) : firstSeenAt;
   return start + HOST_DOWN_GRACE_MS;
+}
+
+/** The host is added and not connected, with nothing dialling and nothing failed (its link was never asked for). */
+export function hostSitsIdle(status: { connected?: boolean; phase?: string; removed?: boolean } | undefined, p: HostProblem | null): boolean {
+  return !!status && !status.removed && !status.connected && status.phase === 'idle' && !p;
 }
 
 /**
@@ -134,13 +165,14 @@ export function SessionHostDownBanner({ host, label }: { host: string; label: st
   const status = useHostStatus(host);
   const replica = useIsCloudReplica();
   const p = hostProblemOf(status, { replica });
-  const down = !!p && (p.type === 'connect' || p.type === 'reconnecting' || p.type === 'off');
+  const idle = hostSitsIdle(status, p);
+  const down = (!!p && (p.type === 'connect' || p.type === 'reconnecting' || p.type === 'off')) || idle;
   const connected = status?.connected === true;
   // The first moment this panel saw the link down, kept until it is connected again.
   const firstSeen = useRef<number | null>(null);
   if (connected || !status) firstSeen.current = null;
   else if (down && firstSeen.current === null) firstSeen.current = serverNow();
-  const showAt = down ? hostDownShowsAt(p, firstSeen.current ?? serverNow()) : null;
+  const showAt = down ? hostDownShowsAt(p, firstSeen.current ?? serverNow(), idle) : null;
   const [tick, rerender] = useState(0);
   // Armed again after each fire (`tick`): a fire a moment early (the server clock's skew moved) waits on.
   useEffect(() => {
@@ -163,8 +195,12 @@ export function SessionHostDownBanner({ host, label }: { host: string; label: st
   return (
     <PanelNotice className="session-error-banner session-error-banner--reconnecting" icon={'\u21BB'} testId="session-host-down" role="status">
       <div className="session-host-down-body">
-        <SessionHostErrorText host={host} label={label} reconnecting={!down} fallback={`${l} cannot be reached right now`} />
-        <div className="hpb-last" data-testid="session-host-down-note">{HOST_DOWN_MESSAGES_NOTE}</div>
+        {idle ? <SessionHostIdleText host={host} label={l} /> : (
+          <>
+            <SessionHostErrorText host={host} label={label} reconnecting={!down} fallback={`${l} cannot be reached right now`} />
+            <div className="hpb-last" data-testid="session-host-down-note">{HOST_DOWN_MESSAGES_NOTE}</div>
+          </>
+        )}
       </div>
     </PanelNotice>
   );

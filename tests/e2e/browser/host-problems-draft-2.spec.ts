@@ -402,3 +402,58 @@ test.describe('a session on a reconnecting host', () => {
     await expect(bar).toHaveCount(0)
   })
 })
+
+/**
+ * One click from the session panel, never a trip to Settings (2026-11-12, the user: someone who
+ * missed setup "点一下 OK，那重新去 connect"): a re-dial has Reconnect now, and a host added but
+ * not connected (nothing dialling, nothing failed) says so with Connect.
+ */
+test.describe('a session reconnects its host in one click', () => {
+  test.afterEach(async ({ page }) => { await dropFakes(page) })
+
+  async function openSession(page: Page) {
+    await loadApp(page)
+    await page.locator('.todo-search-input').fill(SESSION_ID)
+    const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
+    await expect(task).toBeVisible()
+    await task.locator('.todo-item-title').click()
+    return page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
+  }
+
+  test('a re-dial: Reconnect now dials once', async ({ page, request }) => {
+    await loadFixture(request, fixtureFile({ devbox: { label: 'Dev box', hostname: 'dev.example.com', phase: 'connected', claude: HEALTHY } }))
+    await hostFixture(request, { action: 'start-reconnect', host: 'devbox' })
+    await hostFixture(request, { action: 'inject-failure', host: 'devbox', kind: 'timeout' })
+    await devboxSessionInError(page, 'Connection lost: unable to reach remote host', 'Reconnecting...')
+    const panel = await openSession(page)
+    const bar = panel.locator('[data-testid="session-host-reconnecting"]')
+    await expect(bar).toBeVisible({ timeout: 20_000 })
+    const now = bar.getByTestId('session-host-reconnect')
+    await expect(now).toHaveText('Reconnect now')
+    await bar.screenshot({ path: `${SHOTS}/session-reconnect-now.png` })
+    const before = (await fixtureCounters(request)).connect.devbox ?? 0
+    await now.click()
+    await expect.poll(async () => (await fixtureCounters(request)).connect.devbox ?? 0).toBe(before + 1)
+    // The host connected: the bar no longer names a last attempt (the shaped session keeps its own error).
+    await expect(bar.locator('.hpb-last')).toHaveCount(0, { timeout: 15_000 })
+  })
+
+  test('a host added but not connected: the panel says so after its grace, and Connect connects it', async ({ page, request }) => {
+    await loadFixture(request, fixtureFile({ devbox: { label: 'Dev box', hostname: 'dev.example.com', phase: 'idle', claude: HEALTHY } }))
+    const shape = (s: Record<string, unknown>) => ({ ...s, host: 'devbox', hostname: 'dev.example.com' })
+    await page.route(/\/api\/sessions\/pw-vscode-session(\?|$)/, async (route) => {
+      const body = await (await route.fetch()).json() as { session?: Record<string, unknown> }
+      await route.fulfill({ json: { ...body, session: shape(body.session ?? {}) } })
+    })
+    const panel = await openSession(page)
+    const idle = panel.getByTestId('session-host-idle')
+    await expect(idle).toBeVisible({ timeout: 20_000 })
+    await expect(idle.locator('.session-error-banner-text')).toHaveText(
+      'Dev box is not connected right now. Connect reaches it; a message you send connects it too.')
+    await panel.getByTestId('session-host-down').screenshot({ path: `${SHOTS}/session-host-idle.png` })
+    const before = (await fixtureCounters(request)).connect.devbox ?? 0
+    await idle.getByTestId('session-host-connect').click()
+    await expect.poll(async () => (await fixtureCounters(request)).connect.devbox ?? 0).toBe(before + 1)
+    await expect(panel.getByTestId('session-host-down')).toHaveCount(0, { timeout: 15_000 })
+  })
+})

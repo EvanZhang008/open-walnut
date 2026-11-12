@@ -6,9 +6,10 @@
  */
 /** Every button the pane may show, and the check that clicks it. `optional`: it depends on the engine. */
 export const REGISTRY: Record<string, { check: string; optional?: true }> = {
-  'Header/button#remote-hosts-add': { check: 'the header\'s action: a menu with the two ways in, under the button, its first item highlighted from the keyboard; each lands at the top of the list, in view, focused and ringed' },
+  'Header/button#remote-hosts-add': { check: 'the header\'s action: a menu with the three ways in, under the button, its first item highlighted from the keyboard; each lands at the top of the list, in view, focused and ringed' },
   'Header/button#rh-needs-look': { check: 'the page\'s one count: each press shows the next host it counts ("1 of 3"), in view; the focus stays on it' },
   'Add host menu/menuitem[join]': { check: 'Making a link... at once, then the link with its Copy focused; a link that still works shows again; a failure says why with its fix' },
+  'Add host menu/menuitem[pick]': { check: 'opens the setup dialog again, listing the machines ~/.ssh/config names; Close closes it, saving and answering nothing' },
   'Add host menu/menuitem[ssh]': { check: 'a new row at the top, Not saved, Hostname focused; a second press goes to its first empty field; an untouched link closes' },
   'Footer/button#remote-hosts-copy-diagnostics': { check: 'the page-end link copies the hosts section: reads /api/diagnostics; says Copied or why not, the focus kept' },
   'Pane/button#host-fleet-refresh': { check: 'one Refreshing... for the page until the read ends' },

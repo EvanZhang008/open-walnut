@@ -69,7 +69,7 @@ export async function callBack(ctx: StepCtx, id: string): Promise<void> {
   ctx.ran('Hosts/button#host-network-cancel', 'Hosts/button#host-network-closed-done')
 }
 
-/** Add host: a menu with two ways in, each landing in view at the top of the list; one draft per way in. */
+/** Add host: a menu with three ways in, each landing in view at the top of the list; one draft per way in. */
 export async function checkAddHost(ctx: StepCtx): Promise<void> {
   const { page, routes } = ctx
   // The pane header's, or the sticky bar's once the pane scrolled (the same button, moved).
@@ -199,7 +199,18 @@ export async function checkAddHost(ctx: StepCtx): Promise<void> {
   expect(routes.callsTo('PUT', '/api/config').length).toBe(puts)
   // Close, then Cancel link: the next run of this check starts with no link.
   await callBack(ctx, `ni-${n}`)
-  ctx.ran('Header/button#remote-hosts-add', 'Add host menu/menuitem[join]', 'Add host menu/menuitem[ssh]', 'Hosts/button#rh-draft-cancel', 'Hosts/button#host-network-done')
+  // Pick from your SSH config: the setup dialog again, listing what ~/.ssh/config names; Close
+  // (nothing connected from here) closes it, saving and answering nothing.
+  await addButton(page).click()
+  await menu.getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
+  const picker = page.getByTestId('first-run-dialog')
+  await expect(picker).toBeVisible()
+  await expect(picker.locator('.app-modal-title')).toHaveText('Remote Hosts')
+  await expect(page.getByTestId('first-run-primary')).toHaveText('Close')
+  await page.getByTestId('first-run-primary').click()
+  await expect(picker).toHaveCount(0)
+  expect(routes.callsTo('PUT', '/api/config').length).toBe(puts)
+  ctx.ran('Header/button#remote-hosts-add', 'Add host menu/menuitem[join]', 'Add host menu/menuitem[pick]', 'Add host menu/menuitem[ssh]', 'Hosts/button#rh-draft-cancel', 'Hosts/button#host-network-done')
 }
 
 /**

@@ -29,7 +29,7 @@ vi.mock('@/hooks/useIsCloudReplica', () => ({ useIsCloudReplica: () => false }))
 vi.mock('@/api/hosts', () => ({ connectHost: async () => state.current, checkHostReadiness: async () => state.current }))
 vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
 
-const { SessionHostDownBanner, hostDownShowsAt, HOST_DOWN_GRACE_MS } = await import('../../web/src/components/sessions/SessionHostErrorBar')
+const { SessionHostDownBanner, hostDownShowsAt, hostSitsIdle, HOST_DOWN_GRACE_MS } = await import('../../web/src/components/sessions/SessionHostErrorBar')
 const { hostProblemOf } = await import('../../src/core/hosts/host-problem')
 
 const T0 = 1_900_000_000_000
@@ -133,5 +133,52 @@ describe('hostDownShowsAt classifies every kind of host problem', () => {
     expect(hostDownShowsAt(hostProblemOf(reconnecting(T0)), T0 + 5_000)).toBe(T0 + HOST_DOWN_GRACE_MS)
     expect(hostDownShowsAt(hostProblemOf(up), T0)).toBeNull()
     expect(hostDownShowsAt({ type: 'listing', hint: '', summary: '', headline: '' }, T0)).toBeNull()
+  })
+})
+
+/**
+ * A session whose host is added but not connected, with nothing dialling and nothing failed,
+ * says so with Connect after the same grace, and a re-dial has Reconnect now (2026-11-12, the
+ * user: someone who skipped setup reconnects with one click, never a trip to Settings).
+ */
+describe('one click connects a host from the session panel', () => {
+  const idle = { ...up, connected: false, phase: 'idle', connectedAt: undefined } as unknown as HostStatus
+  const button = (id: string) => el.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null
+
+  it('an idle host shows "not connected" with Connect after the grace, gone once connected', async () => {
+    await show(idle)
+    expect(shown()).toBe(false)
+    await advance(HOST_DOWN_GRACE_MS + 100)
+    expect(shown()).toBe(true)
+    expect(el.querySelector('[data-testid="session-host-idle"]')?.textContent).toContain('Dev box is not connected right now.')
+    expect(button('session-host-connect')?.textContent).toBe('Connect')
+    await show({ ...up, at: Date.now() })
+    expect(shown()).toBe(false)
+  })
+
+  it('an idle host that connects within the grace never shows it', async () => {
+    await show(idle)
+    await advance(4_000)
+    await show({ ...up, at: Date.now() })
+    await advance(HOST_DOWN_GRACE_MS)
+    expect(shown()).toBe(false)
+  })
+
+  it('a re-dial past the grace has Reconnect now', async () => {
+    await show(reconnecting(T0 - 30_000))
+    expect(button('session-host-reconnect')?.textContent).toBe('Reconnect now')
+  })
+
+  it('a failed host keeps Retry', async () => {
+    await show(failed)
+    expect(button('session-host-retry')?.textContent).toBe('Retry')
+  })
+
+  it('a removed or connected host is never idle', async () => {
+    expect(hostSitsIdle({ ...idle, removed: true } as never, null)).toBe(false)
+    expect(hostSitsIdle(up as never, null)).toBe(false)
+    expect(hostSitsIdle(idle as never, null)).toBe(true)
+    expect(hostSitsIdle(undefined, null)).toBe(false)
+    expect(hostDownShowsAt(null, T0, true)).toBe(T0 + HOST_DOWN_GRACE_MS)
   })
 })
