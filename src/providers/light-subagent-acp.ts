@@ -54,7 +54,7 @@ export async function runAcpLight(spec: LightRunSpec): Promise<LightRunResult> {
   }
   // Its daemon must end the worker itself should this server go away mid-run.
   if (!conn.hasCapability('acp-light-bounds-v1')) {
-    throw new LightSubagentError('engine_unavailable', `${caps.displayName} subagents need a newer Walnut daemon on ${spec.host === '__local__' ? 'this machine' : spec.host}: it updates by itself, so try again in a while, or use the claude engine`)
+    throw new LightSubagentError('engine_unavailable', `${caps.displayName} subagents need a newer Walnut daemon on ${spec.host === '__local__' ? 'this machine' : spec.host}: it updates by itself after a deploy, so try again in a while`)
   }
   if (remote && conn.readOnlyRemote) {
     throw new LightSubagentError('engine_unavailable', `${caps.displayName} on ${spec.host} is not started from a test server: that host's daemon is shared with the real Walnut`)
