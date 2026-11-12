@@ -82,6 +82,7 @@ import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
 import { notLinuxSentence, classifyHostConnectError, CONNECT_IN_FLIGHT_PHASES, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
 import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, runSshBounded, shq, userShellPathScript } from './remote-sh.js'
+import { PACED_STREAM_PURPOSES, rideMaster } from './ssh-upload-budget.js'
 import { chunkListScript, parseChunkList, parseUploadPrecheck, remoteSha256Command, resumeFailureCap, sha256Hex, uploadPrecheckScript } from './upload-resume.js'
 import { count as metricsCount } from '../core/observability/metrics.js'
 import {
@@ -3332,6 +3333,12 @@ export class DaemonConnection {
     // connection the sessions share. The session link only when it cannot come up.
     const lane = this.lane
     if (lane && await lane.waitReady(DaemonConnection.LANE_WAIT_MS)) return lane.open(to, purpose)
+    // A background stream (a copy's round) never takes the session link of a host that
+    // keeps a lane: its upload is what a relay ends that link on (ssh-upload-budget.ts).
+    // It fails with nothing sent, and its round runs again once the lane is back.
+    if (lane && purpose && PACED_STREAM_PURPOSES.has(purpose)) {
+      throw new Error(`the stream lane to ${this.hostKey} is not up; a background copy waits for it`)
+    }
     return this.streamEndpoint().open(to, purpose ? { purpose } : {})
   }
 
@@ -3843,7 +3850,11 @@ export class DaemonConnection {
    * prints a banner used to corrupt every JSON or port-number answer here.
    */
   private async sshExec(remoteCmd: string, timeoutMs = 10_000): Promise<string> {
-    return runRemoteSh([...this.baseSshArgs, this.sshHostString], remoteCmd, timeoutMs)
+    // The script rides stdin. A large one is an upload, and an upload never rides the
+    // shared master: a relay ends the connection a few MB up, and the master takes
+    // every session's link with it (ssh-upload-budget.ts).
+    const args = rideMaster(Buffer.byteLength(remoteCmd)) ? this.baseSshArgs : this.freshSshArgs
+    return runRemoteSh([...args, this.sshHostString], remoteCmd, timeoutMs)
   }
 
   /**
@@ -4473,7 +4484,8 @@ export class DaemonConnection {
       format: FOLD_CHECKPOINT_FORMAT,
       exec: (script, timeoutMs) => this.sshExec(script, timeoutMs),
       upload: async (remotePath, content) => {
-        const run = await runSshBounded([...this.baseSshArgs, this.sshHostString, markedUploadCommand(remotePath, Buffer.byteLength(content))], {
+        // An upload: a fresh connection, never the shared master (ssh-upload-budget.ts).
+        const run = await runSshBounded([...this.freshSshArgs, this.sshHostString, markedUploadCommand(remotePath, Buffer.byteLength(content))], {
           input: content, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS,
         })
         if (run.spawnError) throw run.spawnError

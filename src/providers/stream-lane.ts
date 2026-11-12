@@ -18,6 +18,8 @@ import type { Duplex } from 'node:stream'
 import { WebSocket } from '#ws'
 import { createStreamEndpoint, type StreamEndpoint, type StreamEndpointOptions, type StreamPeer } from '../lib/link-stream.js'
 import { log } from '../logging/index.js'
+import { createUploadPacer, type UploadPacer } from '../lib/upload-pacer.js'
+import { PACED_STREAM_PURPOSES, RELAY_UPLOAD_BURST_BYTES, RELAY_UPLOAD_BYTES_PER_SEC } from './ssh-upload-budget.js'
 
 /** What a forward that this side stopped says when it ends. */
 export const STOPPED = 'stopped'
@@ -46,6 +48,8 @@ export interface StreamLaneOptions {
   maxRetryMs?: number
   /** Wait before dialing again after a lane that was up dropped. */
   redialMs?: number
+  /** The pace of a background stream's upload (ssh-upload-budget.ts); tests set their own. */
+  pace?: { bytesPerSec: number; burstBytes: number } | null
 }
 
 const BEAT_MS = 15_000
@@ -76,6 +80,11 @@ export class StreamLane {
   /** The last dial did not come up: streams do not wait for this lane. */
   private failing = false
   private waiters: Array<(up: boolean) => void> = []
+  /** This connection's pacer for background streams; a new one per connection. */
+  private pacer: UploadPacer | null = null
+  /** Frame bytes this connection's streams sent, by purpose; logged when it drops. */
+  private sentByPurpose = new Map<string, number>()
+  private upAt = 0
 
   constructor(private readonly opts: StreamLaneOptions) {
     this.retryMs = opts.retryMs ?? RETRY_MS
@@ -147,12 +156,21 @@ export class StreamLane {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`, { handshakeTimeout: 10_000 })
       this.ws = ws
+      const paceOpts = this.opts.pace === undefined
+        ? { bytesPerSec: RELAY_UPLOAD_BYTES_PER_SEC, burstBytes: RELAY_UPLOAD_BURST_BYTES } : this.opts.pace
+      const pacer = paceOpts ? createUploadPacer(paceOpts) : null
+      this.pacer = pacer
+      this.sentByPurpose = new Map()
+      const sentByPurpose = this.sentByPurpose
       const endpoint = createStreamEndpoint({
         send: (frame) => {
           if (ws.readyState !== WebSocket.OPEN) throw new Error(`the stream lane to ${this.opts.hostKey} is down`)
           ws.send(JSON.stringify(frame))
         },
         accept: this.opts.accept,
+        // A background stream's upload is paced: a relay ends a connection that bursts (ssh-upload-budget.ts).
+        pace: (purpose) => (pacer && PACED_STREAM_PURPOSES.has(purpose) ? pacer : null),
+        sent: (purpose, bytes) => { sentByPurpose.set(purpose || 'none', (sentByPurpose.get(purpose || 'none') ?? 0) + bytes) },
       })
       this.endpoint = endpoint
       const pending = new Map<number, (msg: Record<string, unknown>) => void>()
@@ -195,6 +213,7 @@ export class StreamLane {
           this.retryMs = this.opts.retryMs ?? RETRY_MS
           this.heardAt = Date.now()
           this.startBeat(ws)
+          this.upAt = Date.now()
           log.session.info('stream lane: up', { host: this.opts.hostKey, port })
           this.settle(true)
           resolve()
@@ -227,6 +246,8 @@ export class StreamLane {
     const ws = this.ws
     this.ws = null
     if (ws) { try { ws.terminate() } catch { /* gone */ } }
+    this.pacer?.drop(reason)
+    this.pacer = null
     const fwd = this.fwd
     this.fwd = null
     fwd?.stop()
@@ -246,10 +267,21 @@ export class StreamLane {
       wait = this.retryMs
       this.retryMs = Math.min(this.retryMs * 2, this.opts.maxRetryMs ?? MAX_RETRY_MS)
     }
-    log.session.warn(wasUp ? 'stream lane: dropped, dialing again' : 'stream lane: dial failed, trying again', { host: this.opts.hostKey, why, waitMs: wait })
+    log.session.warn(wasUp ? 'stream lane: dropped, dialing again' : 'stream lane: dial failed, trying again', {
+      host: this.opts.hostKey, why, waitMs: wait,
+      ...(wasUp ? laneUploadSummary(this.sentByPurpose, this.upAt, Date.now()) : {}),
+    })
     this.retryTimer = setTimeout(() => { this.retryTimer = null; void this.dial() }, wait)
     this.retryTimer.unref?.()
   }
+}
+
+/** What a lane that dropped had sent up, by stream purpose, for its log line. */
+export function laneUploadSummary(sent: ReadonlyMap<string, number>, upAt: number, now: number): Record<string, unknown> {
+  const kb: Record<string, number> = {}
+  let total = 0
+  for (const [purpose, bytes] of sent) { kb[purpose] = Math.round(bytes / 1024); total += bytes }
+  return { lifeS: upAt ? Math.round((now - upAt) / 1000) : null, sentKB: Math.round(total / 1024), sentKBByPurpose: kb }
 }
 
 let forwardForTesting: ((hostKey: string) => Promise<LaneForward>) | null = null

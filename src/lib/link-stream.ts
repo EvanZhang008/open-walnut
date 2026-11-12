@@ -16,6 +16,7 @@
  */
 
 import { Duplex } from 'node:stream'
+import type { UploadPacer } from './upload-pacer.js'
 
 export type StreamPeer = 'primary' | 'companion' | 'follower'
 
@@ -35,6 +36,14 @@ export interface StreamEndpointOptions {
   accept?: (info: IncomingStreamInfo) => ((stream: Duplex) => void) | null
   window?: number
   openTimeoutMs?: number
+  /**
+   * The pacer for a stream of this purpose ('' when it has none), or null to send
+   * at once (upload-pacer.ts): a piece goes out once the pacer allows its bytes.
+   * Acks, opens and ends are a few bytes and always go at once.
+   */
+  pace?: (purpose: string) => UploadPacer | null
+  /** Told the frame bytes each stream sent, by its purpose ('' when it had none). */
+  sent?: (purpose: string, bytes: number) => void
 }
 
 export interface StreamEndpoint {
@@ -49,6 +58,8 @@ export interface StreamEndpoint {
 const CHUNK = 48 * 1024
 const DEFAULT_WINDOW = 256 * 1024
 const DEFAULT_OPEN_TIMEOUT_MS = 10_000
+/** A data frame's bytes on the wire: the base64 of the piece and its JSON around it. */
+const frameBytes = (n: number) => Math.ceil(n / 3) * 4 + 48
 
 class LinkStream extends Duplex {
   unacked = 0
@@ -58,21 +69,45 @@ class LinkStream extends Duplex {
   remoteEnded = false
   remoteClosed = false
 
-  constructor(private readonly ep: Endpoint, readonly sid: string) {
+  constructor(private readonly ep: Endpoint, readonly sid: string, readonly purpose = '') {
     super({ allowHalfOpen: true })
   }
 
   override _write(chunk: Buffer, _enc: BufferEncoding, cb: (err?: Error | null) => void): void {
+    const pace = this.ep.paceFor(this.purpose)
+    if (pace) { void this.writePaced(chunk, pace, cb); return }
+    try {
+      for (let off = 0; off < chunk.length; off += CHUNK) this.sendPiece(chunk.subarray(off, off + CHUNK))
+    } catch (err) {
+      cb(err as Error)
+      return
+    }
+    this.afterWrite(cb)
+  }
+
+  private async writePaced(chunk: Buffer, pace: UploadPacer, cb: (err?: Error | null) => void): Promise<void> {
     try {
       for (let off = 0; off < chunk.length; off += CHUNK) {
         const piece = chunk.subarray(off, off + CHUNK)
-        this.ep.send({ cmd: 'stream.data', sid: this.sid, d: piece.toString('base64') })
-        this.unacked += piece.length
+        await pace.take(frameBytes(piece.length))
+        if (this.destroyed) { cb(new Error('stream closed')); return }
+        this.sendPiece(piece)
       }
     } catch (err) {
       cb(err as Error)
       return
     }
+    this.afterWrite(cb)
+  }
+
+  private sendPiece(piece: Buffer): void {
+    const d = piece.toString('base64')
+    this.ep.send({ cmd: 'stream.data', sid: this.sid, d })
+    this.ep.noteSent(this.purpose, d.length + 48)
+    this.unacked += piece.length
+  }
+
+  private afterWrite(cb: (err?: Error | null) => void): void {
     if (this.unacked <= this.ep.window) cb()
     else this.waiting = cb
   }
@@ -160,6 +195,12 @@ class Endpoint implements StreamEndpoint {
     this.opts.send(frame)
   }
 
+  paceFor(purpose: string): UploadPacer | null { return this.opts.pace?.(purpose) ?? null }
+
+  noteSent(purpose: string, bytes: number): void {
+    this.opts.sent?.(purpose, bytes)
+  }
+
   forget(sid: string): void {
     this.streams.delete(sid)
   }
@@ -170,7 +211,7 @@ class Endpoint implements StreamEndpoint {
 
   open(to: StreamPeer, opts: { purpose?: string } = {}): Promise<Duplex> {
     const sid = `o${++this.counter}`
-    const stream = new LinkStream(this, sid)
+    const stream = new LinkStream(this, sid, opts.purpose ?? '')
     this.streams.set(sid, stream)
     return new Promise<Duplex>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -231,7 +272,7 @@ class Endpoint implements StreamEndpoint {
       try { this.send({ cmd: 'stream.close', sid, error: 'this server does not take that stream' }) } catch { /* gone */ }
       return
     }
-    const stream = new LinkStream(this, sid)
+    const stream = new LinkStream(this, sid, info.purpose ?? '')
     // The owner may reject before a socket or HTTP consumer installs its listener.
     stream.on('error', () => {})
     this.streams.set(sid, stream)
