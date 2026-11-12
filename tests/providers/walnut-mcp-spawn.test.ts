@@ -252,7 +252,7 @@ describe('a RUNNING process without the mount gets it before its next turn, with
 
   // 2026-11-11 on prod: right after a dev host's daemon restarted, the mount request's answer
   // never came, and a person's message waited the request's whole 15 s timeout before it was
-  // written (the "Messages slow to reach a running session" alarm).
+  // written (2026-11-11: sends to a quiet session took up to 59 s).
   it('a mount request that is never answered holds the line at most LIVE_MOUNT_LINE_WAIT_MS', async () => {
     let results = 0
     bus.subscribe('test', (e: BusEvent) => { if (e.name === EventNames.SESSION_RESULT) results++ }, { global: true })
