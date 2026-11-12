@@ -162,6 +162,8 @@ export interface SessionSendResult {
   sameAnswerAs?: string;
   /** The target's open ask of the user, sent by a task above it without answers_ask (openAskBelow). */
   openAsk?: string;
+  /** A line of a task's message (or reply) that asks someone to decide, sent to a task not below it (decisionAskedIn). */
+  asksDecision?: string;
   messageId?: string;
 }
 
@@ -190,6 +192,33 @@ async function openAskBelow(callerSid: string | undefined, targetTaskId: string 
   const said = await userSaidIn(target, everything).catch(() => null);
   return { ask: open.ask, ...(said?.words.length ? { userSaid: said } : {}) };
 }
+/**
+ * A line of a task's message that asks someone to decide ("you decide", "your call", "do you want me
+ * to", stale-note.ts userQuestionIn), when it goes to a task not below the sender (a reply to its
+ * lead, a note to a peer). 2026-11-11: a worker wrote the user's "you decide" into a reply to another
+ * task, so neither its lead nor the user saw it. The send is never refused: the sender is told in one
+ * line to make it its own ask if it is the user's. A question down to the sender's own team is theirs.
+ */
+async function decisionAskedIn(input: SessionSendInput, targetTaskId: string | undefined): Promise<string | undefined> {
+  const { userQuestionIn } = await import('./stale-note.js');
+  const asText = (v: unknown): string | string[] | undefined =>
+    typeof v === 'string' ? v : Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined;
+  const line = userQuestionIn(input.text, asText(input.reply?.result), asText(input.reply?.not_done));
+  if (!line) return undefined;
+  const caller = await resolveCaller(input.callerSid);
+  if (caller.kind !== 'session' || !caller.record.taskId) return undefined;
+  if (targetTaskId) {
+    const { listTasks } = await import('../task-manager.js');
+    const everything = await listTasks();
+    const from = everything.find((t) => t.id === caller.record.taskId);
+    const target = everything.find((t) => t.id === targetTaskId);
+    const { standsAbove } = await import('./ask-answer.js');
+    // Main speaks to the user itself; down the sender's own team the question is theirs.
+    if (target?.org_role === 'main' || (from && target && standsAbove(from, target, everything))) return undefined;
+  }
+  return line;
+}
+
 const displayHost = (host: string | undefined): string =>
   !host || host === '__local__' ? 'local' : host;
 
@@ -673,7 +702,12 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   if (!input.answersAsk) {
     const result = await performPlainSend(input);
     const open = input.inReplyTo ? null : await openAskBelow(input.callerSid, result.targetTaskId).catch(() => null);
-    return open ? { ...result, openAsk: open.ask, ...(open.userSaid ? { userSaid: open.userSaid } : {}) } : result;
+    const asked = await decisionAskedIn(input, result.targetTaskId).catch(() => undefined);
+    return {
+      ...result,
+      ...(open ? { openAsk: open.ask, ...(open.userSaid ? { userSaid: open.userSaid } : {}) } : {}),
+      ...(asked ? { asksDecision: asked } : {}),
+    };
   }
   // An answer for the user (ask-answer.ts): checked and led by Walnut's line, then recorded.
   const caller = await resolveCaller(input.callerSid);

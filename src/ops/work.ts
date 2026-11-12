@@ -139,6 +139,7 @@ defineOp({
         + (typeof b.openAsk === 'string' && b.openAsk
           ? ` That task still asks the user: "${b.openAsk.replace(/\s+/g, ' ').slice(0, 160)}". If your message decides it, send one more short line with answers_ask: true naming the answer: only that takes it off the user's Needs you, and without it the user is asked again.`
           : '')
+        + (typeof b.asksDecision === 'string' && b.asksDecision ? ` ${asksDecisionLine(b.asksDecision)}` : '')
         + (Array.isArray(b.handedOn) && b.handedOn.length ? ` Handed on: ${b.handedOn.join(', ')} now wait for this task's answer, which goes straight to their asker; you read one line. Handed to several tasks, each answer comes to you: combine them and answer.` : '')
         + (Array.isArray(b.handOnRefused) && b.handOnRefused.length
           ? ` Not handed on: ${(b.handOnRefused as { id: string; reason: string }[]).map((r) => `${r.id} (${r.reason})`).join(', ')}.`
@@ -162,6 +163,18 @@ defineOp({
   name: 'session_send',
   deprecated: 'Use task_send with the task id.',
 });
+
+/**
+ * The one line a sender reads back when its message asks someone to decide (session-send-core.ts
+ * decisionAskedIn, read by stale-note.ts userQuestionIn).
+ */
+export function asksDecisionLine(line: string): string {
+  const shown = Array.from(line.replace(/\s+/g, ' ').trim());
+  return `Your message asks for a decision ("${shown.length > 160 ? `${shown.slice(0, 159).join('')}…` : shown.join('')}"). `
+    + 'If it is the user\'s to make, a message to another task does not reach them: make it your own ask '
+    + '(FOR_USER_ASK at the end of your turn, or task_report_set) so it is on their Needs you; if your lead already decided it, '
+    + 'drop it. If the task you wrote to decides it, nothing more is needed.';
+}
 
 /** The route's own ceiling on the text rows one page reaches back for (TRANSCRIPT_VISIBLE_MAX). */
 const TRANSCRIPT_LIMIT_MAX = 200;

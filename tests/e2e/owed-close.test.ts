@@ -372,6 +372,11 @@ describe('what ends a hold, and what still closes', () => {
   it('a session closes a task with nothing left for the user; its own open item does not hold it', async () => {
     const { task, sid } = await worker('Owed')
     await updateTaskRaw(task.id, { note: PROGRESS('Ship the user-status fix') }, { emitEvent: true })
+    // Its own open line is only asked about once (stale-note-close.test.ts), never held for the user.
+    const first = await json('POST', `/api/v1/tasks/${task.id}/complete`, {}, sid)
+    expect(first.status).toBe(409)
+    expect(JSON.stringify(await first.json())).toContain('stale_note')
+    expect((await getTask(task.id)).result_report?.owed).toBeUndefined()
     expect((await json('POST', `/api/v1/tasks/${task.id}/complete`, {}, sid)).status).toBe(200)
     expect((await getTask(task.id)).phase).toBe('COMPLETE')
   })

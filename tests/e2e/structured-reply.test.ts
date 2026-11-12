@@ -502,3 +502,42 @@ describe('one step stops a whole team', () => {
     expect((await req('POST', '/api/v1/tasks/no-such-task/team-stop', {})).status).toBe(404)
   }, 120_000)
 })
+
+describe('a message that asks for a decision', () => {
+  // 2026-11-11: a worker wrote the user's "you decide" into a reply to another task, where neither its
+  // lead nor the user saw it (src/core/sessions/stale-note.ts userQuestionIn). Never refused: named back.
+  it('a reply asking to decide is named back to its sender; a plain one is not', async () => {
+    const rq = await ask(asker, lead, 'should the standby runner keep the groups?')
+    const r = await req('POST', '/api/v1/messages', {
+      in_reply_to: rq.id, text: 'The other runner is stopped and stayed quiet.\nYou decide: keep the three groups or unsubscribe them.',
+    }, asSession(lead.sid))
+    expect(r.status, JSON.stringify(r.json)).toBe(202)
+    expect(r.json.asksDecision).toBe('You decide: keep the three groups or unsubscribe them.')
+    expect((await getSessionRequest(rq.id))?.status).toBe('replied')
+    await until('asker idle', () => sessionStatus(asker.sid), (s) => s !== 'running', 30_000)
+
+    const rq2 = await ask(asker, lead, 'is it quiet now?')
+    const plain = await req('POST', '/api/v1/messages', { in_reply_to: rq2.id, text: 'Quiet since 22:15; nothing left open.' }, asSession(lead.sid))
+    expect(plain.status, JSON.stringify(plain.json)).toBe(202)
+    expect(plain.json.asksDecision).toBeUndefined()
+    await until('asker idle', () => sessionStatus(asker.sid), (s) => s !== 'running', 30_000)
+  }, 60_000)
+
+  it('a decision in a reply\'s not_done is named too; one sent down to the sender\'s own worker is not', async () => {
+    const rq = await ask(asker, lead, 'anything open?')
+    const r = await req('POST', '/api/v1/messages', { in_reply_to: rq.id, result: 'Runner stopped.', not_done: ['Whether to keep the groups: your call'] }, asSession(lead.sid))
+    expect(r.status, JSON.stringify(r.json)).toBe(202)
+    expect(r.json.asksDecision).toBe('Whether to keep the groups: your call')
+    await until('asker idle', () => sessionStatus(asker.sid), (s) => s !== 'running', 30_000)
+
+    const boss = await startWorker('lead the naming')
+    const w = await startWorker('name the release')
+    expect((await req('PATCH', `/api/v1/tasks/${w.taskId}`, { parent_task_id: boss.taskId })).status).toBe(200)
+    const down = await req('POST', '/api/v1/messages', { to: w.taskId, text: 'Your call on the name; keep it short.', expect_reply: false }, asSession(boss.sid))
+    expect(down.status, JSON.stringify(down.json)).toBe(202)
+    expect(down.json.asksDecision).toBeUndefined()
+    const up = await req('POST', '/api/v1/messages', { to: boss.taskId, text: 'Do you want me to pick between the two names?', expect_reply: false }, asSession(w.sid))
+    expect(up.status, JSON.stringify(up.json)).toBe(202)
+    expect(up.json.asksDecision).toBe('Do you want me to pick between the two names?')
+  }, 120_000)
+})

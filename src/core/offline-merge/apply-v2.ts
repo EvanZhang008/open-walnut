@@ -134,8 +134,10 @@ async function applyTaskFields(ctx: V2Context, record: V2Record): Promise<void> 
     // A session's close is checked; a person's (their device) settles a hold; a trigger's does neither.
     if (record.actor?.kind === 'session' || record.actor?.kind === 'device') {
       const admit = await admitSessionClose(taskId, record.actor.kind === 'session' ? record.actor.sid : undefined);
-      if (!admit.ok) throw new RefusedWrite(`${admit.message} Nothing of this write was applied.`);
-      settle = admit.settle;
+      // A stale note is a reminder for the session while it works, never a refused write the person reads
+      // later: a replayed close goes through it (owed-to-user.ts admitOwnNote).
+      if (!admit.ok && admit.code !== 'stale_note') throw new RefusedWrite(`${admit.message} Nothing of this write was applied.`);
+      if (admit.ok) settle = admit.settle;
     }
   }
   // A person's queued close of a held task settles the hold with it, put back if it did not land.

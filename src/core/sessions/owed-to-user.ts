@@ -22,7 +22,9 @@
  * makes of the user (its own report, a letter, a Board choice, a live prompt, a snoozed ask), an
  * unanswered decision letter it sent, an unanswered Board choice about it. A person's own
  * completion is never checked: they decided. Main and a lead are never held: they are never closed
- * as work, and their asks are their teams'. Guard tests: tests/core/owed-to-user.test.ts (sources,
+ * as work, and their asks are their teams'. A session closing its OWN task with nothing owed is
+ * still asked once to bring a note that reads as unfinished up to date (admitOwnNote, stale-note.ts:
+ * "[WIP] review is running" on a COMPLETE task). Guard tests: tests/core/owed-to-user.test.ts (sources,
  * every close path) and tests/e2e/owed-close.test.ts (every source through every close route).
  */
 import { log } from '../../logging/index.js';
@@ -30,6 +32,7 @@ import type { Task } from '../types.js';
 import { openOwed, type StructuredReply, type TaskResultReport } from '../peers/structured-reply.js';
 import type { UserStatus } from '../user-status.js';
 import { userSaidLine } from './user-spoke.js';
+import type { OpenLineKind } from './stale-note.js';
 
 export type OwedSource = 'progress' | 'ask' | 'letter' | 'choice' | 'held';
 export interface OwedItem { source: OwedSource; text: string }
@@ -142,7 +145,9 @@ export interface CloseSettle {
 
 export type CloseAdmission =
   | { ok: true; settle?: CloseSettle }
-  | { ok: false; code: 'owed_to_user'; message: string; items: OwedItem[] };
+  | { ok: false; code: 'owed_to_user'; message: string; items: OwedItem[] }
+  /** Its own session closing it while its note still reads as unfinished (admitOwnNote): asked once. */
+  | { ok: false; code: 'stale_note'; message: string; items: Array<{ source: 'note'; kind: OpenLineKind; text: string }> };
 
 interface Closer { taskId: string; /** The resolved session's own id, never the header's text. */ sessionId?: string }
 
@@ -290,7 +295,7 @@ export async function admitSessionClose(
   const task = await getTask(taskId).catch(() => null);
   if (!task || task.phase === 'COMPLETE' || task.status === 'done' || task.org_role === 'main' || task.org_role === 'lead') return { ok: true };
   const items = await owedToUser(task);
-  if (!items.length) return { ok: true };
+  if (!items.length) return closer.taskId === task.id ? admitOwnNote(task, opts.fields) : { ok: true };
   const reason = (opts.reason ?? '').replace(/\s+/g, ' ').trim();
   const held = openOwed(task.result_report);
   // Another task closing one that asks the user is shown what he wrote there (user-spoke.ts): the hold
@@ -321,6 +326,46 @@ export async function admitSessionClose(
     + (said?.words.length ? `${userSaidLine(said)} Read his words before you settle anything in his place. ` : '')
     + `If they are already done or no longer needed, close it again with force:true and a reason (${REASON_MIN}+ characters) saying so; the reason is kept as how they were settled.`;
   return { ok: false, code: 'owed_to_user', message, items };
+}
+
+/** The open lines each task's own close was already told of (admitOwnNote), by task id. */
+const toldNote = new Map<string, Set<string>>();
+const NOTE_LINES_SHOWN = 8;
+
+/**
+ * A session closing its own task while its note still reads as unfinished (stale-note.ts: an open
+ * Progress label, "waiting for", "you decide") is asked once to bring the note up to date: whoever
+ * reads a COMPLETE task with "[WIP] review is running" thinks the work is not done, and a "you
+ * decide" in a note reaches nobody. The same close again (the lines it was told of, or fewer) goes
+ * through, and so does one that brings its own not_done: what is really open is then on the result.
+ * Never a hold: nothing is written, the task stays in its phase. Kept in memory: a restart asks once more.
+ */
+export async function admitOwnNote(task: Pick<Task, 'id' | 'note'>, fields?: StructuredReply | null): Promise<CloseAdmission> {
+  const { openLinesKey, openNoteLines } = await import('./stale-note.js');
+  const lines = openNoteLines(task.note);
+  if (!lines.length || (fields?.not_done?.length ?? 0) > 0) return { ok: true };
+  const keys = openLinesKey(lines);
+  const told = toldNote.get(task.id);
+  // Kept after it lets the close through (bounded below): a close that then fails on its own (a sync
+  // push) and is tried again is not asked a second time.
+  if (told && keys.every((k) => told.has(k))) {
+    log.task.info('own close with an unfinished-looking note let through: it was told once', { taskId: task.id, lines: lines.length });
+    return { ok: true };
+  }
+  toldNote.delete(task.id);
+  toldNote.set(task.id, new Set([...(told ?? []), ...keys]));
+  if (toldNote.size > 500) toldNote.delete(toldNote.keys().next().value!);
+  const shown = lines.slice(0, NOTE_LINES_SHOWN);
+  const asks = lines.some((l) => l.kind === 'question');
+  const message = `Not completed yet: this task's own note still reads as unfinished, so whoever reads it would think work is left${asks ? ' or a decision is still open' : ''}: `
+    + `${shown.map((l, n) => `${n + 1}) ${l.text.replace(/[.;:]+$/, '')}`).join('; ')}${lines.length > shown.length ? `; and ${lines.length - shown.length} more` : ''}. `
+    + 'Bring the note up to date first (task_note_write: mark what is finished [DONE] and say it in the Executive Summary, drop what no longer applies), '
+    + 'and pass what is really still open as not_done when you complete. Nothing of this call was kept: complete again with the same result, evidence and score. '
+    + (asks
+      ? 'A decision for the user written in a note reaches nobody: if it is still the user\'s to decide, make it your own ask (FOR_USER_ASK at the end of your turn, or task_report_set) instead of completing; if your lead already decided it, drop the line. '
+      : '')
+    + 'Walnut asks this once: completing again with the same lines goes through as it is.';
+  return { ok: false, code: 'stale_note', message, items: lines.map((l) => ({ source: 'note' as const, kind: l.kind, text: l.text })) };
 }
 
 /**
