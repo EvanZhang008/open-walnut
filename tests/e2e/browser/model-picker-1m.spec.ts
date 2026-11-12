@@ -144,7 +144,7 @@ function modelPickerPopout(page: import('@playwright/test').Page) {
   return page.locator('body > .model-picker.model-picker-popout')
 }
 
-async function openModelPicker(page: import('@playwright/test').Page, input: import('@playwright/test').Locator) {
+async function openModelPicker(page: import('@playwright/test').Page, input: import('@playwright/test').Locator, realClick = false) {
   await input.focus()
   await input.fill('/m')
   await page.waitForTimeout(300)
@@ -156,7 +156,8 @@ async function openModelPicker(page: import('@playwright/test').Page, input: imp
   await expect(modelItem).toBeVisible({ timeout: 3000 })
   const modelPicker = modelPickerPopout(page)
   await expect(modelPicker).toHaveCount(0)
-  await modelItem.dispatchEvent('mousedown')
+  if (realClick) await modelItem.click()
+  else await modelItem.dispatchEvent('mousedown')
 
   await expect(modelPicker).toBeVisible({ timeout: 3000 })
   await expect(modelPicker).toHaveCount(1)
@@ -462,55 +463,125 @@ test.describe('ModelPicker CLI catalog', () => {
   })
 })
 
-// ── `/model` before the session record loads ──
+// `/model` before the session record loads.
 //
-// The composer takes `/model` while the header still says "Loading...", but the
-// model pill (which owns the picker) mounts only once the record arrives. The pill
-// used to count the request it mounted with as already served and dropped it: the
-// input cleared and no picker ever opened (a cold run, 2026-10-03: the first test
-// on each of 4 workers). Unit level: tests/web/composer-model-pill-open-request.test.ts.
+// Home now warms the recent-session records before a task is opened. Holding only
+// the detail request no longer guarantees a cold panel: the pill can already mount
+// from that list. Keep the original delayed-mount guard by excluding only this
+// record from the warm list, and also cover the seeded path while detail is held.
+// Unit level: tests/web/composer-model-pill-open-request.test.ts.
 
 test.describe('ModelPicker requested before the session loads', () => {
+  test.use({ viewport: { width: 1280, height: 720 } })
+
   test('/model picked while the record loads opens the picker once the pill mounts', async ({ page }) => {
-    // Hold the panel's record request so the pill cannot mount yet.
+    await page.route('**/api/sessions/recent*', async (route) => {
+      const response = await route.fetch()
+      const body = await response.json()
+      await route.fulfill({ response, json: {
+        ...body, sessions: body.sessions.filter((s: { claudeSessionId: string }) => s.claudeSessionId !== SESSION_ID),
+      } })
+    })
+    // No cached record for this id: the pill must wait for the detail response.
     let release!: () => void
+    let held = 0
     const gate = new Promise<void>((resolve) => { release = resolve })
     await page.route(`**/api/sessions/${SESSION_ID}`, async (route) => {
+      held++
       await gate
       await route.continue()
     })
 
-    await presetPanelView(page)
-    await page.goto('/')
-    const taskItem = page.locator('.todo-panel-item', { hasText: TASK_TITLE }).first()
-    await expect(taskItem).toBeVisible({ timeout: 15_000 })
-    await taskItem.click()
-    const input = page.locator(`${REAL_PANEL} .chat-input-textarea`)
-    await expect(input).toBeVisible({ timeout: 10_000 })
-    await expect(page.locator(`${REAL_PANEL} .session-panel-badge`, { hasText: 'Loading' })).toBeVisible()
-    const pill = page.locator(`${REAL_PANEL} [data-control-id="model"]`)
-    await expect(pill).toHaveCount(0)
+    try {
+      await presetPanelView(page)
+      const home = new URL('/', test.info().project.use.baseURL).href
+      await page.setContent(`<a href="${home}">Open Walnut</a>`)
+      await page.getByRole('link', { name: 'Open Walnut' }).click()
+      const taskItem = page.locator('.todo-panel-item', { hasText: TASK_TITLE }).first()
+      await expect(taskItem).toBeVisible({ timeout: 15_000 })
+      await taskItem.click()
+      const input = page.locator(`${REAL_PANEL} .chat-input-textarea`)
+      await expect(input).toBeVisible({ timeout: 10_000 })
+      await expect.poll(() => held).toBeGreaterThan(0)
+      await expect(page.locator(`${REAL_PANEL} .session-panel-badge`, { hasText: 'Loading' })).toBeVisible()
+      const pill = page.locator(`${REAL_PANEL} [data-control-id="model"]`)
+      await expect(pill).toHaveCount(0)
 
-    await input.focus()
-    await input.fill('/m')
-    const palette = page.locator(`${REAL_PANEL} .command-palette`)
-    await expect(palette).toBeVisible({ timeout: 3000 })
-    const modelItem = palette.locator('.command-palette-item.command-palette-control', { hasText: 'model' })
-    await expect(modelItem).toBeVisible({ timeout: 3000 })
-    await modelItem.dispatchEvent('mousedown')
-    await expect(input).toHaveValue('')
-    const picker = modelPickerPopout(page)
-    await expect(picker).toHaveCount(0)
+      await input.fill('/m')
+      const palette = page.locator(`${REAL_PANEL} .command-palette`)
+      const modelItem = palette.locator('.command-palette-item.command-palette-control', { hasText: 'model' })
+      await expect(modelItem).toBeVisible({ timeout: 3000 })
+      await modelItem.click()
+      await expect(input).toHaveValue('')
+      const picker = modelPickerPopout(page)
+      await expect(picker).toHaveCount(0)
 
-    release()
-    await expect(pill).toHaveCount(1, { timeout: 10_000 })
-    await expect(picker).toBeVisible({ timeout: 5000 })
-    await expect(picker).toHaveCount(1)
-    // The 7 catalog rows (a saved out-of-catalog model adds its own checked row).
-    await expect(picker.locator('.model-picker-col-models .model-picker-row:not([data-testid="picker-out-of-catalog"])')).toHaveCount(7)
+      release()
+      await expect(pill).toHaveCount(1, { timeout: 10_000 })
+      await expect(picker).toBeVisible({ timeout: 5000 })
+      await expect(picker).toHaveCount(1)
+      await expect(picker.locator('.model-picker-col-models .model-picker-row:not([data-testid="picker-out-of-catalog"])')).toHaveCount(7)
+      await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-cold-delayed.png'), scale: 'css' })
 
-    // Served once: closed, it stays closed.
-    await page.keyboard.press('Escape')
-    await expect(picker).toHaveCount(0)
+      // Served once: closed, it stays closed. A new command still opens it.
+      await page.keyboard.press('Escape')
+      await expect(picker).toHaveCount(0)
+      await openModelPicker(page, input, true)
+      await page.keyboard.press('Escape')
+      await expect(picker).toHaveCount(0)
+    } finally {
+      release()
+    }
+  })
+
+  test('/model opens from a seeded record before detail returns and is not replayed by the refresh', async ({ page }) => {
+    let release!: () => void
+    let held = 0
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    await page.route(`**/api/sessions/${SESSION_ID}`, async (route) => {
+      held++
+      await gate
+      await route.continue()
+    })
+    await answerSwitch(page, 'model')
+
+    try {
+      await presetPanelView(page)
+      const recent = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/sessions/recent' && r.ok())
+      const home = new URL('/', test.info().project.use.baseURL).href
+      await page.setContent(`<a href="${home}">Open Walnut</a>`)
+      await page.getByRole('link', { name: 'Open Walnut' }).click()
+      const body = await (await recent).json()
+      expect(body.sessions.some((s: { claudeSessionId: string }) => s.claudeSessionId === SESSION_ID)).toBe(true)
+      const taskItem = page.locator('.todo-panel-item', { hasText: TASK_TITLE }).first()
+      await expect(taskItem).toBeVisible({ timeout: 15_000 })
+      await taskItem.click()
+      const input = page.locator(`${REAL_PANEL} .chat-input-textarea`)
+      await expect(input).toBeVisible({ timeout: 10_000 })
+      await expect.poll(() => held).toBeGreaterThan(0)
+      const pill = page.locator(`${REAL_PANEL} [data-control-id="model"]`)
+      await expect(pill).toHaveCount(1)
+      await expect(page.locator(`${REAL_PANEL} .session-panel-badge`, { hasText: 'Loading' })).toHaveCount(0)
+      const picker = await openModelPicker(page, input, true)
+      await expect(input).toHaveValue('')
+      await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-seeded-held.png'), scale: 'css' })
+      await page.keyboard.press('Escape')
+      await expect(picker).toHaveCount(0)
+
+      const refreshed = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/sessions/${SESSION_ID}` && r.ok())
+      release()
+      await (await refreshed).finished()
+      await expect(pill).toHaveCount(1)
+      await expect(picker).toHaveCount(0)
+      await openModelPicker(page, input, true)
+      const [request] = await Promise.all([
+        page.waitForRequest((r) => new URL(r.url()).pathname === `/api/sessions/${SESSION_ID}/model` && r.method() === 'POST'),
+        picker.locator('.model-picker-row', { has: page.locator('.model-picker-row-name', { hasText: /^Haiku$/ }) }).click(),
+      ])
+      expect(request.postDataJSON()).toEqual({ model: 'haiku' })
+      await expect(picker).toHaveCount(0)
+    } finally {
+      release()
+    }
   })
 })

@@ -61,6 +61,9 @@ export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands,
             className={`command-palette-item${i === selectedIndex ? ' command-palette-item-active' : ''}${cmd.source === 'control' ? ' command-palette-control' : ''}`}
             onMouseDown={(e) => {
               e.preventDefault();
+              // A control command can mount a popout before this press reaches
+              // document: it is the opening press, not that popout's outside click.
+              e.stopPropagation();
               onSelect(cmd);
             }}
           >
