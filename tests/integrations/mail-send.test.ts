@@ -681,6 +681,9 @@ describe('with approvals off, an agent\'s send goes out with no letter', () => {
   it('sends once, records the switch as its authority, and puts nothing in the inbox', async () => {
     const before = process.env.WALNUT_APPROVALS_ASK;
     process.env.WALNUT_APPROVALS_ASK = '0';
+    // The switch Walnut set at boot (ask-me.ts latch) was on, from the test default: this case reads the env alone.
+    const { _resetAskMeLatchForTesting } = await import('../../src/core/approvals/ask-me.js');
+    _resetAskMeLatchForTesting();
     try {
       const draft = await newDraft({ subject: 'Approvals off' });
       const lettersBefore = (await mailLetters()).length;
