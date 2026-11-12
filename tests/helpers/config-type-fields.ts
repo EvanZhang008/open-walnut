@@ -20,7 +20,7 @@ export interface TypeNode {
 }
 
 const ROOT = path.join(__dirname, '../..')
-const FILES = ['src/core/types.ts', 'src/core/keep-awake.ts', 'src/model/providers/types.ts']
+const FILES = ['src/core/types.ts', 'src/core/session-effort.ts', 'src/core/keep-awake.ts', 'src/model/providers/types.ts']
 let sources: string[] | null = null
 
 function stripComments(s: string): string {
