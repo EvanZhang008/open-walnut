@@ -140,7 +140,7 @@ const LINK_WORDS_MAX = 4;
  */
 function directionLinks(text: string | undefined | null, token: (w: string) => string): string[] {
   let norm = normalizeText(nameDirections(text ?? ''));
-  for (const [re, en] of CJK_DIRECTIONS) norm = norm.replace(re, en);
+  for (const [re, en] of CJK_DIRECTIONS) norm = norm.replace(re, () => en);
   const out = new Set<string>();
   for (const clause of norm.split(/[,.;:!?\u3001\uff0c\u3002\uff1b\uff1a\uff01\uff1f]+/u)) {
     const words = clause.split(/[^\p{L}\p{N}]+/u).filter(Boolean);

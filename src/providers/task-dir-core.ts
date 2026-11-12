@@ -188,7 +188,7 @@ async function trustedRemoteArgs(repo: string, root: string, volatile: string[],
     if (!url) continue
     const local = url.startsWith('file://') ? url.slice(7) : (url.startsWith('/') || url.startsWith('.') || url.startsWith('~')) ? url : null
     if (local !== null) {
-      const abs = path.resolve(repo, local.replace(/^~(?=\/|$)/, os.homedir()))
+      const abs = path.resolve(repo, local.replace(/^~(?=\/|$)/, () => os.homedir()))
       if (!fs.existsSync(abs)) continue
       const r = real(abs)
       if (within(r, root) || volatile.some((v) => within(r, real(v)) || within(abs, v))) continue

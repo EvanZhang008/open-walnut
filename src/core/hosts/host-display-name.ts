@@ -43,7 +43,7 @@ export function inHostTerms(text: string, host: string, label?: unknown): string
   if (!host || name === host || !text.includes(host)) return text
   // Not inside a word, a hostname (`box.example.test`) or a path (`/srv/box/x`);
   // a sentence's closing period is not a hostname.
-  return text.replace(new RegExp(`(?<![\\w./-])${escapeRe(host)}(?![\\w/-]|\\.\\w)`, 'g'), name)
+  return text.replace(new RegExp(`(?<![\\w./-])${escapeRe(host)}(?![\\w/-]|\\.\\w)`, 'g'), () => name)
 }
 
 /** hostDisplayName with the label read from the host's row in config. */

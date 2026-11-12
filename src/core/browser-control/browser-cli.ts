@@ -342,7 +342,7 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
       if (!m) { io.say('walnut browser: the browser sent no image'); return BROWSER_EXIT.error }
       // The file's name says what is in it: an older extension sends a JPEG even when a PNG was asked.
       const ext = m[1] === 'png' ? '.png' : '.jpg'
-      let file = path.resolve(io.cwd, p.file ?? defaultShot(io).replace(/\.jpg$/, ext))
+      let file = path.resolve(io.cwd, p.file ?? defaultShot(io).replace(/\.jpg$/, () => ext))
       const named = path.extname(file).toLowerCase()
       if (named !== ext && !(ext === '.jpg' && named === '.jpeg')) {
         file = file.slice(0, file.length - named.length) + ext

@@ -535,7 +535,7 @@ defineOp({
     }
     const next = replaceAll
       ? note.content.split(oldStr).join(newStr)
-      : note.content.replace(oldStr, newStr)
+      : note.content.replace(oldStr, () => newStr)
     // The hash just read is the lock: a concurrent write between the read and
     // this PUT loses the race with a 409 instead of silently clobbering.
     const written = await call('PUT', `/notes/content/${encodeVaultPath(note.path)}`, {

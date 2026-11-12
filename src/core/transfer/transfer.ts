@@ -81,7 +81,7 @@ export function expandHome(p: string, host: string, profile: HostProfile | null)
   if (!p.startsWith('~')) return p;
   const home = host === LOCAL_HOST ? os.homedir() : profile?.probed?.home;
   if (!home) throw new TransferError(`Walnut does not know the home directory on ${host} yet; pass an absolute cwd`, 409, 'unknown_home');
-  return p.replace(/^~/, home);
+  return p.replace(/^~/, () => home);
 }
 
 export async function writeTargetFile(host: string, filePath: string, content: string): Promise<void> {

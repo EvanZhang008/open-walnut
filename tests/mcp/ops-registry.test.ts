@@ -475,6 +475,38 @@ describe('ops registry — parity with the live server (P4)', () => {
     if (!neither.ok) expect(neither.message).toContain('pass path')
   })
 
+  // 2026-11-12: note_edit handed new_str to String.replace as a replacement
+  // STRING, so "$`" pasted the whole text before the match (frontmatter
+  // included) into the note, "$'" the text after it, "$&" old_str again.
+  it('note_edit writes new_str literally, $ patterns included', async () => {
+    const addr = server.address()
+    if (!addr || typeof addr === 'string') throw new Error('no port')
+    const base = `http://127.0.0.1:${addr.port}`
+    const notePath = 'ops-probe/Dollar probe'
+    const created = await executeOp(
+      'note_write',
+      { path: notePath, content: '# Dollar probe\n\nbefore\nMARK-1\nMARK-2\nafter\n' },
+      { apiBase: base },
+    )
+    expect(created.ok, created.ok ? '' : created.message).toBe(true)
+    const tricky = 'cost: $` / $\' / $& / $$ / $1 / $<x>'
+
+    const one = await executeOp('note_edit', { path: notePath, old_str: 'MARK-1', new_str: tricky }, { apiBase: base })
+    expect(one.ok, one.ok ? '' : one.message).toBe(true)
+    const all = await executeOp(
+      'note_edit',
+      { path: notePath, old_str: 'MARK-2', new_str: `${tricky} (all)`, replace_all: true },
+      { apiBase: base },
+    )
+    expect(all.ok, all.ok ? '' : all.message).toBe(true)
+
+    const read = await executeOp('note_read', { path: notePath }, { apiBase: base })
+    expect(read.ok, read.ok ? '' : read.message).toBe(true)
+    const body = read.ok ? (read.result as { content: string }).content : ''
+    expect(body).toContain(`\nbefore\n${tricky}\n${tricky} (all)\nafter\n`)
+    expect(body.split('# Dollar probe').length - 1, 'the text before the match is not pasted in again').toBe(1)
+  })
+
   it('note_attach saves an image beside the note and returns its vault path', async () => {
     const addr = server.address()
     if (!addr || typeof addr === 'string') throw new Error('no port')

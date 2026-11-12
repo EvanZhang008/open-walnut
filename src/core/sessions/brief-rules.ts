@@ -72,7 +72,7 @@ export function completeBriefRefs<T extends { text: string }>(brief: T, tasks: r
     const hits = matchIdRef(tasks, id);
     if (hits.length !== 1) return whole;
     changed = true;
-    return whole.replace(`id="${id}"`, `id="${hits[0]!.id}"`);
+    return whole.replace(`id="${id}"`, () => `id="${hits[0]!.id}"`);
   });
   return changed ? { ...brief, text } : brief;
 }

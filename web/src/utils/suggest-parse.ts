@@ -107,7 +107,7 @@ const ENTITIES: Array<[RegExp, string]> = [
 
 function decodeEntities(raw: string): string {
   let out = raw;
-  for (const [re, ch] of ENTITIES) out = out.replace(re, ch);
+  for (const [re, ch] of ENTITIES) out = out.replace(re, () => ch);
   return out;
 }
 

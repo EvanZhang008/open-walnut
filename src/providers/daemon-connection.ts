@@ -6231,7 +6231,7 @@ export class DaemonConnection {
     const rootSpec = checkHostRoot(hostServerRootSpec() ?? HOST_ROOT)
     const lookThere = iso.mode !== 'isolated' || iso.replica
     const home = lookThere && rootSpec.startsWith('$HOME') ? (await this.sshExec('printf %s "$HOME"', 10_000)).trim() : ''
-    const alsoAt = !lookThere ? [] : !rootSpec.startsWith('$HOME') ? [`${rootSpec}/app/${file.id}/walnut`] : home.startsWith('/') ? [`${rootSpec.replace('$HOME', home)}/app/${file.id}/walnut`] : []
+    const alsoAt = !lookThere ? [] : !rootSpec.startsWith('$HOME') ? [`${rootSpec}/app/${file.id}/walnut`] : home.startsWith('/') ? [`${rootSpec.replace('$HOME', () => home)}/app/${file.id}/walnut`] : []
     // Run once before it goes in (its daemon version, which also proves it runs here), and only with room for it.
     const fit: SlotFit = { version: this.getExpectedDaemonVersion(), ...(iso.mode === 'isolated' ? { env: this.dirEnv } : {}) }
     const rawBytes = file.gz.length >= 18 ? file.gz.readUInt32LE(file.gz.length - 4) : 0

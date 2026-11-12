@@ -322,7 +322,7 @@ function wrapIslandHtml(html: string, key: string, seed: IslandItems): string {
         ? html.replace(/<html[^>]*>/i, (m) => `${m}<head>${top}</head>`)
         : top + html;
     return /<\/body\s*>/i.test(withHead)
-      ? withHead.replace(/<\/body\s*>/i, `${reporter}</body>`)
+      ? withHead.replace(/<\/body\s*>/i, (m) => `${reporter}${m}`)
       : withHead + reporter;
   }
   return `<!doctype html><html><head>${csp}${runtime}<style>${FRAGMENT_BASE_CSS}</style></head>`

@@ -69,7 +69,7 @@ export function runAnswerLines(lines: ReadonlyArray<string>, commands?: Readonly
   const ran = new Map<string, Set<string>>();
   texts.forEach((line, i) => {
     const grant = RULE_OF_GRANT.find(([rule]) => rule.test(line));
-    const same = grant && line.replace(grant[0], grant[1]);
+    const same = grant && line.replace(grant[0], () => grant[1]);
     if (same && texts.includes(same)) { byRule.set(same, (byRule.get(same) ?? 0) + 1); return; }
     counts.set(line, (counts.get(line) ?? 0) + 1);
     const command = commands?.[i]?.trim();

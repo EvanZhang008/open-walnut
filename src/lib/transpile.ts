@@ -171,5 +171,5 @@ function exportsTarget(dir: string, subpath: string): string | null | undefined 
     return null
   }
   const rel = pick(target)
-  return rel ? path.join(dir, rel.replace(/\*/g, star)) : null
+  return rel ? path.join(dir, rel.replace(/\*/g, () => star)) : null
 }

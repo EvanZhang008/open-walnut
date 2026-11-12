@@ -440,7 +440,7 @@ async function runSourceGit(
     });
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error);
-    const masked = url ? raw.replaceAll(url, maskSourceUrl(url)) : raw;
+    const masked = url ? raw.replaceAll(url, () => maskSourceUrl(url)) : raw;
     throw new Error(masked.replace(/(https?:\/\/)[^/\s@]+@/gi, '$1***@'));
   }
 }

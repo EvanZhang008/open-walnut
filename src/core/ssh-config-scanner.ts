@@ -118,7 +118,7 @@ async function parseSshConfigFile(sshConfigPath: string): Promise<Map<string, Di
       // HostName (`%h` is the name it was reached by); the first one wins, as in ssh
       const hostnameMatch = line.match(/^HostName\s+(\S+)/i);
       if (hostnameMatch) {
-        if (!hostNameSet) for (const h of current) h.hostname = hostnameMatch[1].replace(/%h/g, h.alias);
+        if (!hostNameSet) for (const h of current) h.hostname = hostnameMatch[1].replace(/%h/g, () => h.alias);
         hostNameSet = true;
         continue;
       }

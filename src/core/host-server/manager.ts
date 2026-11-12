@@ -449,7 +449,7 @@ export function createHostServerManager(deps: ManagerDeps) {
     const rootSpec = checkHostRoot(deps.hostRoot ?? HOST_ROOT)
     const remoteHome = rootSpec.startsWith('$HOME') ? (await host.runRemoteScript('printf %s "$HOME"', 10_000)).trim() : ''
     if (rootSpec.startsWith('$HOME') && !remoteHome.startsWith('/')) throw new Error('the host did not say where its home is')
-    const root = rootSpec.replace('$HOME', remoteHome)
+    const root = rootSpec.replace('$HOME', () => remoteHome)
     // Each Walnut's server keeps its own data, log and run dirs on a host it may share with
     // another Walnut. One this Walnut already ran in the shared dirs from before the split
     // stays there (a live data dir is not moved), unless another Walnut marked them since.

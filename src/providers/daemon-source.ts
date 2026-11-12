@@ -372,9 +372,9 @@ export function getDaemonSource(): string {
   validateFoldInjection(foldInjections)
 
   let out = DAEMON_SOURCE
-    .replaceAll(placeholder, capsLiteral)
-    .replaceAll(versionPlaceholder, version)
-    .replaceAll(promptLimitPlaceholder, String(CRON_PROMPT_LIMIT))
+    .replaceAll(placeholder, () => capsLiteral)
+    .replaceAll(versionPlaceholder, () => version)
+    .replaceAll(promptLimitPlaceholder, () => String(CRON_PROMPT_LIMIT))
     .replace(helpersPlaceholder, () => INJECTED_HELPERS_SOURCE)
   for (const [ph, body] of foldInjections) {
     // Function replacer: a literal replacement string would reinterpret any

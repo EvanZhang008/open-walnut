@@ -337,7 +337,7 @@ function rewrites(doc) {
   for (const [en, zh] of zhWords) {
     const i = ctlQ.findIndex((w) => CJK_RE.test(w) && w.includes(zh));
     if (i < 0 || inDoc(en)) continue;
-    const mixed = ctlQ[i].replace(zh, ` ${en} `).trim().replace(/\s+/g, ' ');
+    const mixed = ctlQ[i].replace(zh, () => ` ${en} `).trim().replace(/\s+/g, ' ');
     out.push(['to-english', q(replaceAt(i, mixed))]);
     break;
   }

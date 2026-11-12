@@ -60,7 +60,7 @@ export function boardSummaryTexts(html: string): BoardSummaryText[] {
           const quoted = raw[0] === '"' || raw[0] === "'";
           const value = quoted ? raw.slice(1, -1) : raw;
           summaries.push({
-            text: decodeHTMLAttribute(value.replace(/\r\n?/g, '\n').replace(/\u0000/g, String.fromCodePoint(0xfffd))),
+            text: decodeHTMLAttribute(value.replace(/\r\n?/g, '\n').replace(/\u0000/g, '\ufffd')),
             start: start + valueStart,
             end: start + e,
             raw: value,

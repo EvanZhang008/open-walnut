@@ -202,7 +202,7 @@ encryptedBackupRouter.post('/restore', async (req: Request, res: Response) => {
   // folder of the request's choosing gets the whole data home in the clear: the person's step.
   if ((custom || typedKey || customTarget) && !personOnly(req, res, 'A restore from another destination or key, or into a folder of your choice, is started')) return;
   const targetDir = typeof req.body?.targetDir === 'string' && req.body.targetDir.trim()
-    ? req.body.targetDir.trim().replace(/^~(?=\/|$)/, os.homedir())
+    ? req.body.targetDir.trim().replace(/^~(?=\/|$)/, () => os.homedir())
     : suggestedRestoreDir(req.body?.suggestedDir) ?? defaultRestoreDir();
   const bad = await badTarget(targetDir);
   if (bad) return void res.status(400).json({ error: bad });

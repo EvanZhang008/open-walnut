@@ -236,7 +236,7 @@ export function newBoardNonce(): string {
 export function wrapBoardHtml(html: string, runtimeSrc: string, runtimeCss: string, nonce = newBoardNonce()): string {
   const css = runtimeCss.replace(/<\/style/gi, '<\\/style');
   // The silencer first: the board's own scripts must not reach a test machine's speakers.
-  const js = (AUTOMATION_SILENCE_JS + runtimeSrc.replace('__WN_BOARD_NONCE__', nonce)).replace(/<\/script/gi, '<\\/script');
+  const js = (AUTOMATION_SILENCE_JS + runtimeSrc.replace('__WN_BOARD_NONCE__', () => nonce)).replace(/<\/script/gi, '<\\/script');
   const block = `${BOARD_FRAME_CSP}<style id="wn-board-runtime-css">${css}</style><script>${js}</script>`;
   const doctype = DOCTYPE.exec(html);
   const prefix = doctype?.[0] ?? '';

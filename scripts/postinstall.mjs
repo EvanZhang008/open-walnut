@@ -131,7 +131,7 @@ export function applySdkPatch(root, { warn = (m) => console.warn(`open-walnut po
   if (!content.includes(removed[0])) {
     return warn('SDK cli.js does not match the patch context, skipping');
   }
-  writeFileSync(cliPath, content.replace(removed[0], added[0]), 'utf8');
+  writeFileSync(cliPath, content.replace(removed[0], () => added[0]), 'utf8');
   console.log(`open-walnut postinstall: patched claude-agent-sdk@${installedVersion} (reminder disabled)`);
   return 'patched';
 }

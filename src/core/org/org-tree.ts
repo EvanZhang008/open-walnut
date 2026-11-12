@@ -149,7 +149,7 @@ export const ORG_INSTRUCTIONS_MAX = 4000;
 export function orgDisplayTitle(task: { title: string; project?: string; org_role?: string; org_name?: string }): string {
   if (task.org_role === 'main') return CEO_LABEL;
   if (task.org_role === 'lead' && task.org_name?.trim()) return `${task.org_name.trim()} ${VP_LABEL}`;
-  if (task.org_role === 'lead') return task.title.replace(/ lead$/i, ` ${VP_LABEL}`);
+  if (task.org_role === 'lead') return task.title.replace(/ lead$/i, () => ` ${VP_LABEL}`);
   if (task.org_role === 'router') return task.org_name?.trim() || task.title;
   return task.project && task.title.trim().toLowerCase() === task.project.trim().toLowerCase()
     ? askProjectDisplay(task.title) : task.title;

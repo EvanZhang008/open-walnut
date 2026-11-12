@@ -170,7 +170,7 @@ export async function dirEntries(host: string, dir: string): Promise<string[] | 
   const ask = async (): Promise<string[] | null> => {
     if (!host || host === '__local__' || host === 'local') {
       try {
-        return await fs.promises.readdir(dir.replace(/^~(?=\/)/, os.homedir()));
+        return await fs.promises.readdir(dir.replace(/^~(?=\/)/, () => os.homedir()));
       } catch (err) {
         return (err as NodeJS.ErrnoException)?.code === 'ENOENT' ? [] : null;
       }

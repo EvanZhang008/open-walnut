@@ -34,7 +34,7 @@ export function waitRefusal(waitFor: WaitFor, taskDir: string | null): string | 
 /** A wait_for.file on this host: `~` is home, $WALNUT_TASK_DIR the task's directory, else relative to the job's cwd. */
 export function resolveWaitFile(file: string, place: { cwd: string; home: string; taskDir: string | null }): string {
   let f = file
-  if (place.taskDir) f = f.replace(/^\$\{?WALNUT_TASK_DIR\}?(?=\/|$)/, place.taskDir)
+  if (place.taskDir) f = f.replace(/^\$\{?WALNUT_TASK_DIR\}?(?=\/|$)/, () => place.taskDir!)
   if (f === '~') return place.home
   if (f.startsWith('~/')) return path.join(place.home, f.slice(2))
   return path.resolve(place.cwd, f)
