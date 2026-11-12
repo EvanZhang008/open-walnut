@@ -14,7 +14,11 @@ import { createHash } from 'node:crypto'
 import {
   attachmentBlocks, findShippableFiles, rewriteShipped, shipFile, SHIP_FAILED_NOTE, type DaemonSend, type ShipRoots,
 } from '../../src/providers/outbound-uploads.js'
-import { FILES_ATTACHED_LINE, UPLOAD_CHUNK_BYTES, withFilePaths } from '../../src/core/sessions/session-uploads.js'
+import { FILES_ATTACHED_LINE, withFilePaths } from '../../src/core/sessions/session-uploads.js'
+import { MAX_UPLOAD_FRAME_BYTES } from '../../src/providers/ssh-upload-budget.js'
+
+/** A part to a host is one upload frame at most (smaller than a phone's chunk). */
+const UPLOAD_CHUNK_BYTES = MAX_UPLOAD_FRAME_BYTES
 
 const IMAGES_LINE = '[Images attached — use the Read tool to view them]'
 const PASTE_LINE = '[Large text attached — 300,000 chars, spilled to a file. Use the Read tool to view it]'

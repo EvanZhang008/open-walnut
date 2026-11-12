@@ -260,7 +260,7 @@ describe('RemoteSessionManager.prepareOutbound (Walnut-owned files to the remote
     injectConn(mgr, conn)
     const out = await mgr.prepareOutbound(`${FILES}\n- ${local}\n\nwhat does it show?`)
     expect(fsWrites(conn)).toEqual([])
-    expect(conn.send.mock.calls.filter((c) => c[0] === 'upload.part')).toHaveLength(2)
+    expect(conn.send.mock.calls.filter((c) => c[0] === 'upload.part')).toHaveLength(3)
     expect(out).toBe(`${FILES}\n- /home/admin/.local/state/open-walnut/uploads/up-abcdefgh-png1/chart.png\n\nwhat does it show?`)
   })
 
