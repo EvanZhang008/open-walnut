@@ -67,7 +67,7 @@ function status(phase: Phase, extra: Partial<HostStatus> = {}): HostStatus {
     host: HOST, label: HOST_LABEL, hostname: HOSTNAME, user: 'me',
     connected: phase === 'connected', phase, phaseLabel: PHASE_LABEL[phase], steps,
     note: phase === 'install-runtime' || phase === 'upload'
-      ? `First connect installs the session daemon on ${HOST_LABEL}; this can take a minute or two.` : undefined,
+      ? `First connect installs the session daemon on ${HOST_LABEL}; this can take a few minutes. It keeps going in the background: you can close this.` : undefined,
     phaseElapsedMs: 12_000, connectElapsedMs: 40_000, at: Date.now(), ...extra,
   }
 }

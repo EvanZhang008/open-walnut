@@ -34,6 +34,7 @@ import {
   type DraftWorkspaceChoice,
 } from './draft-workspace-store';
 import { autoGivesWay, defaultIsolationOn, suggestedText } from './draft-workspace-model';
+import { WORKSPACE_HINT } from './draft-workspace-model';
 import '@/styles/workspaces.css';
 
 export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: {
@@ -192,6 +193,10 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
           <span className={`draft-workspace-switch${choice.enabled && !quiet ? ' is-on' : ''}`} aria-hidden />
           Isolated workspace
         </button>
+      )}
+      {/* Said on the row, not only in a tooltip (2026-11-12, the user: "what ... is isolated workspace, have no idea?"). */}
+      {bound && !choice.enabled && (
+        <div className="draft-workspace-hint" data-testid="draft-workspace-hint">{WORKSPACE_HINT}</div>
       )}
       {choice.enabled && !autoOnly && (
         <div className="draft-workspace-body">

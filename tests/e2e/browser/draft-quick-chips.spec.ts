@@ -392,7 +392,7 @@ test('an unclaimed folder defaults the project to its basename, badged new, and 
   // The pick fills the project pill with the folder's basename, badged "new"
   // (same badge + meaning as Quick Task's confirm panel): this project doesn't
   // exist yet, starting will create it.
-  await expect(draftProjectPill(panel)).toHaveText(`New project: ${projectName}`)
+  await expect(draftProjectPill(panel)).toHaveText(`New project (auto-created): ${projectName}`)
   await expect(draftProjectPill(panel)).toHaveClass(/draft-project-chip-new/)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/04-folder-derived-project.png`, fullPage: false })
 

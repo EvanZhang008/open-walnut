@@ -127,7 +127,9 @@ export function describeConnectSteps(phase: DaemonConnectPhase): ConnectStep[] {
  */
 export function connectPhaseNote(phase: DaemonConnectPhase, hostLabel: string): string | undefined {
   if (phase !== 'install-runtime' && phase !== 'upload') return undefined
-  return `First connect installs the session daemon on ${hostLabel}; this can take a minute or two.`
+  // It runs in the server, so closing the picker or the dialog never stops it (2026-11-12, the
+  // user: "make it clear that this will working in the background, feel free to close").
+  return `First connect installs the session daemon on ${hostLabel}; this can take a few minutes. It keeps going in the background: you can close this.`
 }
 
 export type HostConnectErrorKind =

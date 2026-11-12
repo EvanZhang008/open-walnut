@@ -54,7 +54,7 @@ describe('draftProjectChip copy', () => {
 
   it('a project Start will create reads New project: with the create sentence', () => {
     const c = chip.draftProjectChip(draft({ cwd: '/w/notes-lab', project: 'notes-lab', projectSource: 'folder' }), plain);
-    expect(c).toMatchObject({ key: 'New project:', name: 'notes-lab', isNew: true });
+    expect(c).toMatchObject({ key: 'New project (auto-created):', name: 'notes-lab', isNew: true });
     expect(c?.title).toBe('Starting creates a new project named notes-lab. Change it in More.');
   });
 
@@ -64,7 +64,7 @@ describe('draftProjectChip copy', () => {
     expect(c).toMatchObject({ ai: true, isNew: false });
     expect(c?.title).toBe('Walnut picked Marina from what you typed. Change it in More.');
     const n = chip.draftProjectChip({ ...d, project: 'Orchard' }, plain);
-    expect(n?.key).toBe('New project:');
+    expect(n?.key).toBe('New project (auto-created):');
     expect(n?.title).toContain('Starting creates it.');
   });
 

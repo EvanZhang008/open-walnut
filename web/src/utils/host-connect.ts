@@ -144,7 +144,7 @@ export function hostStatusText(status: HostStatus | undefined, hydration?: HostS
  * own: a minute of silence on "Install runtime" reads as a hang unless the UI says
  * this is one-time work.
  */
-export const FIRST_CONNECT_NOTE = 'First connect to this host installs the session daemon; it only happens once.';
+export const FIRST_CONNECT_NOTE = 'First connect to this host installs the session daemon; it only happens once. It keeps going in the background: you can close this.';
 
 /** The explainer to show under the steps, if any. */
 export function connectNote(status: HostStatus | undefined, steps: HostConnectStep[]): string | undefined {
@@ -195,4 +195,36 @@ export function formatElapsed(ms: number): string {
   const totalMin = Math.floor(totalSec / 60);
   if (totalMin < 60) return `${totalMin}m ${String(totalSec % 60).padStart(2, '0')}s`;
   return `${Math.floor(totalMin / 60)}h ${String(totalMin % 60).padStart(2, '0')}m`;
+}
+
+/** The daemon file's bytes on the host so far, as the active step carries them. */
+export interface TransferProgress {
+  via: 'upload' | 'download';
+  done: number;
+  total: number;
+  /** 0..1, or null when the total is not known. */
+  fraction: number | null;
+}
+
+/**
+ * The progress of the daemon file going onto the host: on the active step while a first
+ * connect sends it (2026-11-12, the user: "this uploading to old dev please have some kind
+ * of progress bar"). Null when the server sends none (an older one, or any other step).
+ */
+export function transferProgress(status: Pick<HostStatus, 'steps'> | undefined): TransferProgress | null {
+  const p = status?.steps?.find((s) => s.status === 'active' && s.progress)?.progress;
+  if (!p || !Number.isFinite(p.done) || p.done < 0) return null;
+  const total = Number.isFinite(p.total) && p.total > 0 ? p.total : 0;
+  return { via: p.via === 'download' ? 'download' : 'upload', done: p.done, total, fraction: total ? Math.min(1, p.done / total) : null };
+}
+
+function mb(bytes: number): string {
+  const v = bytes / 1_048_576;
+  return v < 10 ? v.toFixed(1) : String(Math.round(v));
+}
+
+/** "23 of 67 MB sent" · "23 of 67 MB, downloaded by the host" · "4.2 MB sent" when the total is not known. */
+export function transferWords(p: TransferProgress): string {
+  const amount = p.total ? `${mb(p.done)} of ${mb(p.total)} MB` : `${mb(p.done)} MB`;
+  return p.via === 'download' ? `${amount}, downloaded by the host` : `${amount} sent`;
 }

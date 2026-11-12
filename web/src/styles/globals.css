@@ -18668,6 +18668,8 @@ a.task-kebab-info:hover {
 .sps-host-tab.active .sps-host-dot-connecting,
 .sps-host-tab.active .sps-host-dot-unknown { background: #fff; }
 
+/* All tab and multi-host cards: a host still connecting keeps going if this closes. */
+.sps-host-line-bg { color: var(--fg-muted); font-size: 11px; }
 .sps-host-connecting.sps-host-steps {
   flex-direction: column;
   align-items: stretch;

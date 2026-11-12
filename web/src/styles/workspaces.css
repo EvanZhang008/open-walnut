@@ -23,6 +23,7 @@
   line-height: 1.5;
   cursor: pointer;
 }
+.draft-workspace-hint { margin: 4px 0 0 24px; font-size: 11px; line-height: 1.4; color: var(--fg-muted); }
 .draft-workspace-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .draft-workspace-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
 .draft-workspace-toggle.is-on { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); }

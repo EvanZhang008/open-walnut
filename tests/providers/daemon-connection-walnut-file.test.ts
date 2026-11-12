@@ -305,6 +305,19 @@ describe('a released build: the host downloads the file itself, the upload only 
     expect((conn as unknown as { _hostFetchOff: { until: number; why: string } })._hostFetchOff).toMatchObject({ why: 'download: exit 7: Failed to connect' })
   })
 
+  it('a download the SSH link cut off (no answer) is tried again on the next deploy: the link dropped, not the host', async () => {
+    for (const fetch of ['', new Error('Remote command timed out after 180000ms')] as Array<string | Error>) {
+      compiledMac()
+      publish()
+      const { conn, seen } = setup({ fetch, start: { binary: STARTED } })
+      await priv(conn).deployWalnutFile()
+      await priv(conn).deployWalnutFile()
+      expect(seen.filter((c) => c.includes('echo fetch=ok'))).toHaveLength(2)
+      expect((conn as unknown as { _hostFetchOff: unknown })._hostFetchOff).toBeNull()
+      vi.restoreAllMocks()
+    }
+  })
+
   it('the install after a download fails: the deploy answers as after an upload, and nothing is sent', async () => {
     compiledMac()
     publish()

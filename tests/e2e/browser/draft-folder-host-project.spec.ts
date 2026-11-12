@@ -80,7 +80,7 @@ test('a folder a project owns reads Folder/Host and Project; a new folder reads 
   await input.press('Shift+Enter')
   await expect(page.locator('.session-path-selector')).toBeHidden()
   const name = basenameOf(fresh)
-  await expect(draftProjectPill(panel)).toHaveText(`New project: ${name}`)
+  await expect(draftProjectPill(panel)).toHaveText(`New project (auto-created): ${name}`)
   await expect(draftProjectPill(panel)).toHaveClass(/draft-project-chip-new/)
   await expect(draftProjectPill(panel)).toHaveAttribute('title', `Starting creates a new project named ${name}. Change it in More.`)
   expect(await draftProjectPill(panel).evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe('dashed')

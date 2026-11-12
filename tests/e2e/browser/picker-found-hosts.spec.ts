@@ -159,3 +159,49 @@ test('an added host that is not connected says so on its tab, with Connect', asy
   expect(fake.connects).toEqual(['idlebox'])
   await page.screenshot({ path: `${SHOTS}/idle-connected.png`, clip: await picker(page).boundingBox() ?? undefined })
 })
+
+test('a host still connecting is one line above the folders on All, and the whole chain on its own tab', async ({ page }) => {
+  // 2026-11-12, the user: "the uploading is at the bottom" (the chain sat under the local folders).
+  const fake = await serve(page)
+  fake.statuses.idlebox = statusOf('idlebox', 'Idle box', {
+    phase: 'upload', phaseLabel: 'Uploading the session daemon to Idle box', phaseElapsedMs: 65_000, connectElapsedMs: 80_000,
+    steps: [
+      { phase: 'ssh', label: 'SSH', status: 'done' },
+      { phase: 'upload', label: 'Upload daemon', status: 'active', progress: { via: 'download', done: 50 * 1_048_576, total: 67 * 1_048_576 } },
+      { phase: 'start', label: 'Start daemon', status: 'todo' },
+    ],
+  })
+  await page.route((url) => url.pathname === '/api/sessions/list-dirs', async (route: Route) => {
+    const params = new URL(route.request().url()).searchParams
+    if (params.get('host') !== 'idlebox') { await route.fallback(); return }
+    await route.fulfill({ json: { dirs: [], parent: '~/', exists: true, pending: { phase: 'upload', label: 'Uploading the session daemon to Idle box', elapsedMs: 65_000 } } })
+  })
+  await openPicker(page)
+  await expect(hostTab(page, 'idlebox')).toBeVisible({ timeout: 20_000 })
+  await picker(page).locator('.sps-search-input').fill('~/')
+
+  const line = picker(page).locator('.sps-host-connecting[data-host="idlebox"]')
+  await expect(line).toHaveAttribute('data-compact', '', { timeout: 15_000 })
+  await expect(line).toContainText('Idle box')
+  await expect(line).toContainText('Keeps going in the background')
+  await expect(line.locator('.sps-host-step')).toHaveCount(0)
+  // The bar is the daemon file's bytes while it goes onto the host, not the steps done.
+  await expect(line).toContainText('50 of 67 MB, downloaded by the host')
+  await expect(line.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '75')
+  // Above every folder, never under them.
+  const firstSection = picker(page).locator('.sps-section').first()
+  if (await firstSection.count()) {
+    const [l, f] = [await line.boundingBox(), await firstSection.boundingBox()]
+    expect(l!.y).toBeLessThan(f!.y)
+  }
+  await page.screenshot({ path: `${SHOTS}/all-connecting-line.png`, clip: await picker(page).boundingBox() ?? undefined })
+
+  // Its own tab: the step chain, with the note that it keeps going if this closes.
+  await hostTab(page, 'idlebox').click()
+  const chain = picker(page).locator('.sps-host-connecting[data-host="idlebox"]').first()
+  await expect(chain).not.toHaveAttribute('data-compact', '', { timeout: 10_000 })
+  await expect(chain.locator('.sps-host-step[data-step="upload"]')).toHaveAttribute('data-status', 'active')
+  await expect(chain.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '75')
+  await expect(chain.locator('.sps-host-line-bg')).toHaveCount(0)
+  await page.screenshot({ path: `${SHOTS}/tab-connecting-chain.png`, clip: await picker(page).boundingBox() ?? undefined })
+})

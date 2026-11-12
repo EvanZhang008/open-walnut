@@ -14,7 +14,7 @@
 import { useEffect, useState } from 'react';
 import type { DirListingPending } from '@/api/sessions';
 import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
-import { connectNote, connectSteps, elapsedNow, formatElapsed, hostStatusText, reconnectReasonOf } from '@/utils/host-connect';
+import { connectNote, connectSteps, elapsedNow, formatElapsed, hostStatusText, reconnectReasonOf, transferProgress, transferWords } from '@/utils/host-connect';
 import { SetupProgress } from '@/components/common/SetupProgress';
 
 interface Props {
@@ -27,7 +27,11 @@ interface Props {
   /** 'Last attempt: {headline}' while a reconnect retries after a failure. Absent: read off the
    *  pushed status (reconnectReasonOf), so no surface shows a bare clock with no reason. */
   lastHeadline?: string;
-  /** One progress line, no step list or note: a card with several hosts (FoundHostPrompts). */
+  /**
+   * One progress line, no step list or note: a card with several hosts (FoundHostPrompts), and the
+   * picker's All tab, where a whole chain sat under the local folders (2026-11-12, the user: "the
+   * uploading is at the bottom"). A host's own tab keeps the chain.
+   */
   compact?: boolean;
 }
 
@@ -66,13 +70,17 @@ export function HostConnectSteps({ hostKey, label, pending, lastHeadline, compac
   const note = connectNote(status, steps);
   // Every surface that draws the steps says why a reconnect is not back yet, not only the picker.
   const lastAttempt = lastHeadline ?? reconnectReasonOf(status);
+  // While the daemon file goes onto the host the bar is its bytes, else the steps done (2026-11-12,
+  // the user: "this uploading to old dev please have some kind of progress bar").
+  const transfer = transferProgress(status);
+  const percent = transfer ? (transfer.fraction == null ? undefined : Math.round(transfer.fraction * 100)) : steps.length ? completed / steps.length * 100 : undefined;
+  const valueText = transfer ? transferWords(transfer) : `${completed} of ${steps.length} steps complete`;
 
   return (
-    <div className="sps-host-connecting sps-host-steps" role="status" data-host={hostKey}>
+    <div className="sps-host-connecting sps-host-steps" role="status" data-host={hostKey} data-compact={compact ? '' : undefined}>
       <div className="sps-host-step-phase">
         <SetupProgress label={phaseText} ariaLabel={`Connecting to ${label}: ${phaseText}`}
-          percent={steps.length ? completed / steps.length * 100 : undefined}
-          valueText={`${completed} of ${steps.length} steps complete`} />
+          percent={percent} valueText={valueText} />
       </div>
 
       {!compact && <ol className="sps-host-step-list">
@@ -95,6 +103,7 @@ export function HostConnectSteps({ hostKey, label, pending, lastHeadline, compac
       </ol>}
 
       {note && !compact && <div className="sps-host-step-note">{note}</div>}
+      {compact && <div className="sps-host-line-bg">Keeps going in the background</div>}
       {lastAttempt && <div className="sps-host-step-last">{`Last attempt: ${lastAttempt}`}</div>}
       {totalElapsed > 0 && (
         <div className="sps-host-step-total">Connecting for {formatElapsed(totalElapsed)}</div>

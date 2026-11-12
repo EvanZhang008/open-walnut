@@ -6681,7 +6681,9 @@ export class DaemonConnection {
     const answer = parseHostFetchAnswer(out)
     if (!answer?.ok) {
       const why = answer && !answer.ok ? `${answer.reason}${answer.detail ? `: ${answer.detail}` : ''}` : `no answer${error ? ` (${error})` : ''}`
-      this._hostFetchOff = { until: Date.now() + HOST_FETCH_RETRY_MS, why: why.slice(0, 300) }
+      // Only the host's own "fetch=no" keeps it from downloading next time: no answer is the SSH
+      // link's doing (a relay that dropped), and says nothing about the host's way to the release.
+      if (answer && !answer.ok) this._hostFetchOff = { until: Date.now() + HOST_FETCH_RETRY_MS, why: why.slice(0, 300) }
       log.session.info('DaemonConnection: the host could not download the walnut file itself; sending it', {
         host: this.hostKey, url: plan.url, why: why.slice(0, 300), ms: Date.now() - t0,
       })

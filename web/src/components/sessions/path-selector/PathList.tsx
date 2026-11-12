@@ -155,6 +155,12 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
           suppress the error while a load is in flight. */}
       {loadError && !loading && <div className="sps-error">{loadError}</div>}
 
+      {/* A host still connecting says so first, above every folder: under them it sat at
+          the bottom of a long list (2026-11-12). With several hosts listed (All), one line each. */}
+      {liveNotes.filter((n) => n.kind === 'connecting').map((note) => note.kind === 'connecting' && (
+        <HostConnectSteps key={note.key} hostKey={note.key} label={note.label} pending={note.pending} compact={hostStates.size > 1} />
+      ))}
+
       {sections.map(section => (
         <div className="sps-section" key={section.id} data-section-id={section.id}>
           <div className="sps-section-label">{section.label}</div>
@@ -249,13 +255,8 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
 
       {/* Explicit live empty states — never let history matches impersonate live results */}
       {liveNotes.map(note => {
-        if (note.kind === 'connecting') {
-          // Step chain, not a bare spinner: a first connect installs a runtime and
-          // uploads the daemon, so the wait needs to show progress to read as alive.
-          return (
-            <HostConnectSteps key={note.key} hostKey={note.key} label={note.label} pending={note.pending} />
-          );
-        }
+        // Connecting hosts are drawn above the folders (the step chain, or one line on All).
+        if (note.kind === 'connecting') return null;
         if (note.kind === 'down') {
           const state = hostStates.get(note.key);
           return state && renderHostNote ? <div key={note.key}>{renderHostNote(note.key, state)}</div> : null;

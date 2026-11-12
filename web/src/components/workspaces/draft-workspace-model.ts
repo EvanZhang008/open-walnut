@@ -110,3 +110,9 @@ export function workspaceRequestFor(choice: DraftWorkspaceChoice): { provider: s
   }
   return { provider: c.provider, inputs };
 }
+
+/**
+ * What the Isolated workspace switch does, said on the row itself, not only in a tooltip
+ * (2026-11-12, the user: "what ... is isolated workspace, have no idea?").
+ */
+export const WORKSPACE_HINT = 'Its own copy of this folder (a git worktree): its changes stay apart from yours until you merge them.';

@@ -181,7 +181,8 @@ test('git worktree: each task gets its own, the session runs in it, a clean one 
   await pickDraftFolder(page, draft, repo)
   await expect(draft.getByTestId('draft-workspace-row')).toHaveCount(0)
   const offMenu = await openDraftSettings(draft)
-  await expect(offMenu.getByTestId('draft-menu-workspace-hint')).toHaveCount(0)
+  // With a folder, the row says what the switch does (2026-11-12: a tooltip alone left it a mystery).
+  await expect(offMenu.getByTestId('draft-menu-workspace-hint')).toHaveText(/its own copy of this folder \(a git worktree\)/i)
   await shot(page, 'draft-more-row', offMenu, 8)
   await page.keyboard.press('Escape')
   await expect(draftTaskMenu(page)).toHaveCount(0)

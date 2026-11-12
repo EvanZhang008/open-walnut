@@ -181,8 +181,11 @@
   white-space: nowrap;
 }
 
+/* The badge sits right after the name it describes, the caret at the end: with the button's
+   space-between it floated to the middle (2026-11-12, the user: "the new is not at the end"). */
 .draft-task-menu-project .qtc-confirm-new {
   margin-left: 4px;
+  margin-right: auto;
 }
 
 /* The draft's source choice (SyncChoiceChip): only in a project that syncs to an outside service. */

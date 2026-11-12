@@ -54,6 +54,8 @@
 .fr-error { margin-top: 6px; font-size: 12px; color: var(--error, #ff3b30); }
 .fr-failure-actions .fr-error { margin-top: 0; }
 
+.fr-hosts-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.fr-hosts-foot .fr-add-all.app-modal-btn { margin-top: 10px; }
 .fr-empty { margin: 10px 0 0; font-size: 13px; color: var(--fg-muted); }
 .fr-link {
   margin-top: 10px; padding: 2px 0; border: none; background: none; cursor: pointer;
@@ -75,3 +77,5 @@
 }
 .fr-tried { font-size: 12px; color: var(--fg-muted); }
 .fr-failure .hft { margin-top: 6px; }
+
+.fr-transfer { margin-top: 6px; }

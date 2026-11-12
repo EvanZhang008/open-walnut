@@ -15,6 +15,7 @@
 import { log } from '@/utils/log';
 import { setDraftWorkspace, useDraftWorkspace } from './draft-workspace-store';
 import { autoGivesWay } from './draft-workspace-model';
+import { WORKSPACE_HINT } from './draft-workspace-model';
 import '@/styles/workspaces.css';
 
 export function DraftWorkspaceMenuItem({ draftId, hasFolder, onDone }: {
@@ -50,7 +51,7 @@ export function DraftWorkspaceMenuItem({ draftId, hasFolder, onDone }: {
         <span className={`draft-workspace-switch${on ? ' is-on' : ''}`} aria-hidden />
         <span className="draft-workspace-menu-text">
           <span>Isolated workspace</span>
-          {!hasFolder && <span className="draft-workspace-menu-hint" data-testid="draft-menu-workspace-hint">Pick a folder first</span>}
+          <span className="draft-workspace-menu-hint" data-testid="draft-menu-workspace-hint">{hasFolder ? WORKSPACE_HINT : 'Pick a folder first'}</span>
         </span>
       </button>
       <div className="task-kebab-divider" />

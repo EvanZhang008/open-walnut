@@ -5,7 +5,7 @@
  * The project is not a question the bar asks up front any more: it follows the
  * folder (projectForFolderPick), so the row only STATES it once there is one,
  * and the change control lives in More. A project Start will create is said in
- * so many words ("New project: x"), because creating one is a write.
+ * so many words ("New project (auto-created): x"), because creating one is a write.
  */
 import type { DraftColumn } from './draft-column';
 import { projectDisplayName } from '../../utils/project-display';
@@ -19,8 +19,9 @@ type ChipDraft = Pick<DraftColumn, 'project' | 'projectSource' | 'taskId' | 'for
 export type DraftProjectChipAction = 'menu' | 'flyout' | 'none';
 
 export interface DraftProjectChipModel {
-  /** The muted key in front of the name. */
-  key: 'Project:' | 'New project:';
+  /** The muted key in front of the name. A new one says Start makes it (2026-11-12, the user:
+   *  "new project (auto create)"). */
+  key: 'Project:' | 'New project (auto-created):';
   /** '' never reaches here: Inbox is spelled out. */
   name: string;
   isNew: boolean;
@@ -91,7 +92,7 @@ export function draftProjectChip(draft: ChipDraft, ctx: DraftProjectCtx): DraftP
     title = isNew ? `${create} ${where}` : `Tasks from this folder file under ${name}. ${where}`;
   }
   return {
-    key: isNew ? 'New project:' : 'Project:', name, isNew, ai,
+    key: isNew ? 'New project (auto-created):' : 'Project:', name, isNew, ai,
     action: ctx.hasMenu ? 'menu' : 'flyout', title,
   };
 }

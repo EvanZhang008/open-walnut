@@ -312,3 +312,34 @@ test('a long connecting sentence wraps beside a long address, never crushing it 
   expect(s!.width).toBeLessThanOrEqual(r!.width * 0.55);
   await shot(page, 'long-state', row);
 });
+
+test('Add all adds every waiting host in one click, and a slow first connect says it keeps going if closed', async ({ page }) => {
+  // 2026-11-12, the user: "pelase have a connect to all button", then "make it clear that this will
+  // working in the background, feel free to close".
+  const fake = await serve(page, { pending: ['hosts'] });
+  // Its upload carries numbers: the row draws them as a bar ("please have some kind of progress bar").
+  fake.onYes['lab-mac'] = (host) => statusOf(host, {
+    phase: 'upload', phaseLabel: `Uploading the session daemon to ${host}`, phaseElapsedMs: 30_000, connectElapsedMs: 40_000,
+    steps: [
+      { phase: 'ssh', label: 'SSH', status: 'done' },
+      { phase: 'upload', label: 'Upload daemon', status: 'active', progress: { via: 'upload', done: 23 * 1_048_576, total: 67 * 1_048_576 } },
+      { phase: 'start', label: 'Start daemon', status: 'todo' },
+    ],
+  });
+  await page.goto('/');
+  await expect(dialog(page)).toBeVisible({ timeout: 30_000 });
+  const all = page.getByTestId('first-run-add-all');
+  await expect(all).toHaveText('Add all 3');
+  await all.click();
+  await expect.poll(() => [...fake.yes].sort()).toEqual(['home-pc', 'lab-mac', 'mac-mini']);
+  // Nothing waits any more: the button goes, each row shows its own state.
+  await expect(all).toHaveCount(0);
+  await expect(page.getByTestId('first-run-add-lab-mac')).toHaveCount(0);
+  await expect(page.getByTestId('first-run-later')).toHaveText('Connecting keeps going in the background: you can close this.');
+  const bar = page.getByTestId('first-run-host-lab-mac').getByTestId('host-transfer');
+  await expect(bar).toContainText('23 of 67 MB sent');
+  await expect(bar.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '34');
+  await shot(page, 'add-all', dialog(page).locator('.fr-modal'));
+  await page.getByTestId('first-run-primary').click();
+  await expect(dialog(page)).toHaveCount(0);
+});

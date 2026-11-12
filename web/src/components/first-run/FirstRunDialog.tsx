@@ -23,6 +23,8 @@ import { answerFoundHost, connectHost } from '@/api/hosts';
 import { seedHostStatus, serverNow, useAllHostStatus, useHostStatus } from '@/hooks/useHostStatus';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { HostFailureText } from '@/components/hosts/HostFailureText';
+import { SetupProgress } from '@/components/common/SetupProgress';
+import { transferProgress, transferWords } from '@/utils/host-connect';
 import type { FirstRunStep } from '@/api/first-run';
 import { WalkthroughSteps, useSshKey } from '@/components/hosts/SshWalkthrough';
 import { addedRowState, firstRunHostRows, type FirstRunHostRow } from './first-run-model';
@@ -48,6 +50,20 @@ function AddedState({ row }: { row: FirstRunHostRow }) {
     return <span className="fr-state fr-state-busy" data-testid={`first-run-state-${row.alias}`}><span className="fr-spinner" aria-hidden="true" />{state.words}</span>;
   }
   return null;
+}
+
+/**
+ * The daemon file going onto a host while it connects, as a measured bar (2026-11-12, the user:
+ * "this uploading to old dev please have some kind of progress bar"); nothing between files.
+ */
+function TransferLine({ status }: { status: Parameters<typeof transferProgress>[0] }) {
+  const transfer = transferProgress(status);
+  if (!transfer) return null;
+  return (
+    <div className="fr-transfer" data-testid="host-transfer">
+      <SetupProgress inline label="Session daemon" percent={transfer.fraction == null ? undefined : Math.round(transfer.fraction * 100)} valueText={transferWords(transfer)} />
+    </div>
+  );
 }
 
 /** A try that fails at once would look like nothing happened: the button stays busy this long. */
@@ -150,6 +166,7 @@ function HostRow({ row, adding, addError, onAdd, onUndo }: {
             : !failed && <AddedState row={row} />}
         </span>
       </div>
+      {stateType === 'connecting' && <TransferLine status={status} />}
       {row.waits && addError && <div className="fr-error" role="alert">{`Could not add ${row.name}: ${addError}`}</div>}
       {!row.waits && <AddedFailure row={row} onUndo={onUndo} onRetry={() => { follow.current = true; }} />}
     </li>
@@ -176,6 +193,7 @@ function HostsStep({ hosts, saidYes, onSaidYes, onUndone, onAddByHand }: {
   const shown = rows
     .map((r) => (saidYes.has(r.alias) ? { ...r, waits: false } : r))
     .sort((a, b) => (order.current.get(a.alias) ?? 0) - (order.current.get(b.alias) ?? 0));
+  const waiting = shown.filter((r) => r.waits && !adding.has(r.alias));
   const add = async (alias: string) => {
     if (adding.has(alias)) return;
     setAdding((prev) => new Set(prev).add(alias));
@@ -234,9 +252,23 @@ function HostsStep({ hosts, saidYes, onSaidYes, onUndone, onAddByHand }: {
       {rows.length === 0 && (
         <p className="fr-empty" data-testid="first-run-hosts-empty">No machines found in ~/.ssh/config.</p>
       )}
-      <button type="button" tabIndex={0} className="fr-link" onClick={onAddByHand} data-testid="first-run-add-by-hand">
-        + Add a machine that is not listed
-      </button>
+      <div className="fr-hosts-foot">
+        <button type="button" tabIndex={0} className="fr-link" onClick={onAddByHand} data-testid="first-run-add-by-hand">
+          + Add a machine that is not listed
+        </button>
+        {/* Every host still waiting, in one click (2026-11-12, the user: "pelase have a connect to all button"). */}
+        {waiting.length > 1 && (
+          <button
+            type="button"
+            tabIndex={0}
+            className="app-modal-btn fr-add-all"
+            onClick={() => { for (const r of waiting) void add(r.alias); }}
+            data-testid="first-run-add-all"
+          >
+            {`Add all ${waiting.length}`}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -285,6 +317,9 @@ export function FirstRunDialog({ steps, mode, onClose, onAddByHand }: {
   const addedAliases = new Set([...saidYes, ...firstRunHostRows(config?.hosts).filter((r) => !r.waits).map((r) => r.alias)]);
   const connectedHere = [...addedAliases].some((a) => statusOf(a)?.connected);
   const failedHere = !connectedHere && [...addedAliases].some((a) => { const s = statusOf(a); return !!s && !s.connected && (s.phase === 'failed' || !!s.lastError); });
+  // A first connect can take minutes; it runs in the server, so the dialog can go (2026-11-12, the
+  // user: "make it clear that this will working in the background, feel free to close").
+  const connectingHere = [...addedAliases].some((a) => { const s = statusOf(a); return !!s && !s.connected && s.phase !== 'failed' && s.phase !== 'idle'; });
 
   const close = useCallback(() => onClose({ added: addedHere, answered: true }), [onClose, addedHere]);
   const owner = useModalOverlay(useCallback(() => onClose({ added: addedHere, answered: false }), [onClose, addedHere]));
@@ -327,7 +362,9 @@ export function FirstRunDialog({ steps, mode, onClose, onAddByHand }: {
           </div>
           <div className="fr-foot">
             <span className="fr-later" data-testid="first-run-later">
-              {mode === 'picker'
+              {connectingHere
+                ? 'Connecting keeps going in the background: you can close this.'
+                : mode === 'picker'
                 ? 'Hosts you add here show in Remote Hosts.'
                 : failedHere
                   ? 'Hosts that could not connect stay in Remote Hosts. To see these steps again: Add host › Pick from your SSH config.'

@@ -70,7 +70,7 @@ test("a team folder inside a checkout with a project gets its own project, not t
   await expect(draftProjectPill(panel)).toHaveText(`Project: ${OWNER}`)
   await pickDraftFolder(page, panel, team)
   const TEAM = basenameOf(team)
-  await expect(draftProjectPill(panel)).toHaveText(`New project: ${TEAM}`)
+  await expect(draftProjectPill(panel)).toHaveText(`New project (auto-created): ${TEAM}`)
   await panel.locator('.draft-composer-bar').screenshot({ path: `${SHOTS}/team-folder-new-project.png` })
 
   const taskId = await startDraft(page, panel, `triage the team tickets ${stamp}`)
@@ -98,7 +98,7 @@ test("a name another folder's project has grows by the parent folder", async ({ 
 
   const panel = await openDraftOnCwd(page, ours)
   const GROWN = `reef-${stamp}-${NAME}`
-  await expect(draftProjectPill(panel)).toHaveText(`New project: ${GROWN}`)
+  await expect(draftProjectPill(panel)).toHaveText(`New project (auto-created): ${GROWN}`)
   await expect(draftProjectPill(panel)).toHaveAttribute('title', `Starting creates a new project named ${GROWN}. Change it in More.`)
   await panel.locator('.draft-composer-bar').screenshot({ path: `${SHOTS}/grown-name.png` })
 
@@ -117,7 +117,7 @@ test("two open drafts on two same-named folders: starting one renames the other'
   await loadHome(page)
 
   const a = await openDraftOnCwd(page, first)
-  await expect(draftProjectPill(a)).toHaveText(`New project: ${NAME}`)
+  await expect(draftProjectPill(a)).toHaveText(`New project (auto-created): ${NAME}`)
   // "+" refocuses an EMPTY draft instead of stacking another: give this one text.
   await a.locator('.chat-input-textarea').fill(`north kelp ${stamp}`)
   await openDraft(page)
@@ -126,14 +126,14 @@ test("two open drafts on two same-named folders: starting one renames the other'
   await pickDraftFolder(page, b, second)
   await expect(draftPanels(page)).toHaveCount(2)
   const older = draftPanels(page).nth(1)
-  await expect(draftProjectPill(b)).toHaveText(`New project: ${NAME}`)
-  await expect(draftProjectPill(older)).toHaveText(`New project: ${NAME}`)
+  await expect(draftProjectPill(b)).toHaveText(`New project (auto-created): ${NAME}`)
+  await expect(draftProjectPill(older)).toHaveText(`New project (auto-created): ${NAME}`)
 
   const firstTask = await startDraft(page, older, `north kelp ${stamp}`)
   expect(await projectOf(page, firstTask)).toBe(NAME)
   // The registry event reaches the other draft: its pill now says what Start will do.
   const remaining = draftPanel(page)
-  await expect(draftProjectPill(remaining)).toHaveText(`New project: south-${stamp}-${NAME}`, { timeout: 15_000 })
+  await expect(draftProjectPill(remaining)).toHaveText(`New project (auto-created): south-${stamp}-${NAME}`, { timeout: 15_000 })
   await remaining.locator('.draft-composer-bar').screenshot({ path: `${SHOTS}/pill-follows-registry.png` })
   const secondTask = await startDraft(page, remaining, `south kelp ${stamp}`)
   expect(await projectOf(page, secondTask)).toBe(`south-${stamp}-${NAME}`)
@@ -148,7 +148,7 @@ test('a placeholder task from a new folder makes that folder its project', async
   await loadHome(page)
 
   const panel = await openDraftOnCwd(page, cwd)
-  await expect(draftProjectPill(panel)).toHaveText(`New project: ${NAME}`)
+  await expect(draftProjectPill(panel)).toHaveText(`New project (auto-created): ${NAME}`)
   await draftComposer(page).fill(`write the notes later ${stamp}`)
   const taskId = await createTaskForLater(page, panel)
   expect(await projectOf(page, taskId)).toBe(NAME)
