@@ -69,6 +69,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/routines/trigger-daemon.ts': { calls: 2, kind: 'wake-recheck', why: 'the link for trigger tests, claims and acks; a lost ack costs one replay' },
   'src/core/secrets/fleet-secrets.ts': { calls: 1, kind: 'wake-recheck', why: 'a lost put is kept as maybe there and sent again when the host next connects' },
   'src/core/session-changes.ts': { calls: 2, kind: 'wake-recheck', why: 'change reads; the routes bound them (boundHostRead)' },
+  'src/core/sessions/org-own-folder.ts': { calls: 5, kind: 'wake-recheck', why: 'before an Org node\'s own-folder move: a capability flag of the linked daemon, and cli.holder reads that ask whether a CLI still holds the transcript; a lost read answers unknown and nothing moves' },
   'src/core/session-commit.ts': { calls: 2, kind: 'wake-recheck', why: 'a commit job a person starts; a lost start fails the job where they see it' },
   'src/core/session-git-diff.ts': { calls: 1, kind: 'wake-recheck', why: 'a diff read; its routes bound it (boundHostRead)' },
   'src/core/session-git-status.ts': { calls: 2, kind: 'wake-recheck', why: 'a status read under 15 s; a lost one only errors the status pill' },
