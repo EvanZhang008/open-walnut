@@ -73,7 +73,7 @@ const RPC_TIMEOUT_MS = 30_000;
 /** Longest a fallback notice waits on a running handover. */
 const HANDOVER_WAIT_MS = 5_000;
 
-const running = new Map<string, Promise<HandoverResult>>();
+const running = new Map<string, { conn: HandoverConnection; job: Promise<HandoverResult> }>();
 
 /**
  * Hosts that said they journaled something we have not drained yet (the
@@ -103,7 +103,7 @@ function pruneDue(): void {
 
 /** The handover of this host that is running now, if any. */
 export function runningHandover(hostKey: string): Promise<HandoverResult> | undefined {
-  return running.get(hostKey);
+  return running.get(hostKey)?.job;
 }
 
 /** Resolves when every running or due handover has finished (or after HANDOVER_WAIT_MS). */
@@ -112,15 +112,23 @@ export async function waitForOfflineHandovers(maxMs = HANDOVER_WAIT_MS): Promise
   if (running.size === 0 && due.size === 0) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
-    Promise.allSettled([...running.values(), ...[...due.values()].map((d) => d.done)]),
+    Promise.allSettled([...[...running.values()].map((r) => r.job), ...[...due.values()].map((d) => d.done)]),
     new Promise<void>((resolve) => { timer = setTimeout(resolve, maxMs); timer.unref?.(); }),
   ]).finally(() => clearTimeout(timer));
 }
 
-/** One handover per host at a time; a call while one runs joins it. */
+/**
+ * One handover per host at a time; a call while one runs joins it. Not one that rides a
+ * connection already gone: its commands fail "not connected", and a new connection that joined
+ * it failed with them and waited 30 s for its next try (2026-11-12, a flaky test that a
+ * reconnect in production does the same). Then this call runs its own once that one ends.
+ */
 export function runOfflineHandover(conn: HandoverConnection): Promise<HandoverResult> {
   const existing = running.get(conn.hostKey);
-  if (existing) return existing;
+  if (existing) {
+    if (existing.conn === conn || existing.conn.alive?.() !== false) return existing.job;
+    return existing.job.catch(() => undefined).then(() => runOfflineHandover(conn));
+  }
   // Every drain first letters what an earlier one left unsent (a drain that threw after a
   // conflict was durable, a letter that failed, a crash): its redrain acks from the ledger
   // with nothing new to letter, so waiting for the next boot kept the away text unseen.
@@ -129,12 +137,12 @@ export function runOfflineHandover(conn: HandoverConnection): Promise<HandoverRe
   });
   const startedAt = Date.now();
   const job = handover(conn).finally(() => {
-    running.delete(conn.hostKey);
+    if (running.get(conn.hostKey)?.job === job) running.delete(conn.hostKey);
     // Only a drain that began after the nudge has seen what the nudge was about.
     const d = due.get(conn.hostKey);
     if (d && d.at <= startedAt) { due.delete(conn.hostKey); d.resolve(); }
   });
-  running.set(conn.hostKey, job);
+  running.set(conn.hostKey, { conn, job });
   return job;
 }
 
