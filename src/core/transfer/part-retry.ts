@@ -7,10 +7,11 @@
  *
  *  - a refusal that retrying gets again (FINAL_CODES), an old daemon, or this server's own stop:
  *    final;
- *  - inside a link wait (link-wait.ts, a task move): a link that dropped under a part, or was not
- *    there for it, is waited out and never counted as a failed part, until the wait's bound passes
- *    with no part acknowledged; and each part a lost link cut is followed by one a quarter of its
- *    size, so a part fits in a link that keeps being cut (2026-11-12: a 1 MB part takes 50 s or
+ *  - inside a link wait (link-wait.ts, a task move): a link that dropped under a part, was not
+ *    there for it, or gave no answer in the part's window, is waited out and never counted as a
+ *    failed part, until the wait's bound passes with no part acknowledged; and each part that may
+ *    have gone up is followed by one a quarter of its size (a final part stays final), so a part
+ *    fits in a link that keeps being cut (2026-11-12: a 1 MB part takes 50 s or
  *    more on the paced bulk link to a dev host at 20 KB/s; a read waiting behind it timed out and
  *    ended that link, about every 90 s, so the same part was cut again and again for 10 minutes and
  *    a task move failed on "daemon command lost: fs.writePart");
@@ -41,8 +42,12 @@ export interface PartRetry {
   readonly retries: number
   /** The part was acknowledged. */
   ok(): void
-  /** The part at `offset` failed with `err`: the offset to go on from, or `err` (or the last error) thrown. */
-  next(err: unknown, offset: number): Promise<number>
+  /**
+   * The part at `offset` failed with `err`: the offset to go on from, or `err` (or the last error)
+   * thrown. `sent`: the part was the file's final one, ending at `end`; `jump` when the caller may
+   * send a final part from a later offset (it knows the file's sha256 and passes no bytes on).
+   */
+  next(err: unknown, offset: number, sent?: { final: boolean; end: number; jump: boolean }): Promise<number>
 }
 
 export function partRetry(opts: { host: string; path: string; size: number; tries: number; delayMs: number }): PartRetry {
@@ -63,7 +68,7 @@ export function partRetry(opts: { host: string; path: string; size: number; trie
       lostSince = undefined
       if (size < full && ++inRow >= GROW_AFTER) { size = Math.min(full, size * 2); inRow = 0 }
     },
-    async next(err, offset) {
+    async next(err, offset, sent) {
       let at = offset
       if (err instanceof TransferCommandError && err.command === 'fs.writePart' && err.code === 'gap') {
         // The receiver lost bytes (a restart, a cleared staging file): resume where it stands.
@@ -79,11 +84,18 @@ export function partRetry(opts: { host: string; path: string; size: number; trie
       const kind = linkFailureKind(err)
       // Offline inside a wait: the command already waited the whole bound for a link.
       if (wait && err instanceof TransferHostOfflineError) throw err
-      if (wait && (kind === 'no-link' || kind === 'lost')) {
+      if (wait && (kind === 'no-link' || kind === 'lost' || kind === 'no-answer')) {
         lostSince ??= Date.now()
         if (Date.now() - lostSince > wait.ms) throw last
         inRow = 0
-        if (kind === 'lost') size = Math.max(Math.min(MIN_PART_BYTES, full), Math.floor(size / 4))
+        // A part that may have gone up (lost, or no answer in its window: a big part on a paced
+        // link) is followed by a smaller one. A final part stays final: it may have finished the
+        // file there, and only a final part ending at the file's end finds that out (the receiver
+        // answers done, or gap with what it holds), never a part that starts the file over.
+        if (kind !== 'no-link' && (!sent?.final || sent.jump)) {
+          size = Math.max(Math.min(MIN_PART_BYTES, full), Math.floor(size / 4))
+          if (sent?.final) at = Math.max(at, sent.end - size)
+        }
         log.session.info('transfer: the link dropped under a part; it goes again once the link is back', {
           host: opts.host, path: opts.path, offset: at, kind, partBytes: size, waitedMs: Date.now() - lostSince,
         })

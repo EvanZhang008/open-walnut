@@ -290,7 +290,8 @@ export async function writeFileInParts(host: string, path: string, bytes: Buffer
       if (final) return reply
       offset = end
     } catch (err) {
-      offset = await retry.next(err, offset)
+      // The sha256 is known up front: a cut final part may go again from a later offset.
+      offset = await retry.next(err, offset, { final, end, jump: true })
     }
   }
 }
@@ -487,6 +488,8 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
       const reason: unknown = opts.signal.reason
       throw reason instanceof Error ? reason : new TransferCommandError('the relay was stopped', fromHost, 'relay', 'aborted')
     }
+    // The part this try sent, once it is the file's final one (a cut final part goes again final).
+    let sent: { final: boolean; end: number; jump: boolean } | undefined
     try {
       let bytes = Buffer.alloc(0)
       // An empty file is read once too, so a source that is not empty after all is caught.
@@ -505,6 +508,8 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
       // The part of this chunk not hashed yet (none on a re-send below hashedTo).
       const fresh = hasher && offset + bytes.length > hashedTo ? bytes.subarray(hashedTo - offset) : null
       const sha256 = !final ? undefined : hasher ? (fresh ? hasher.copy().update(fresh) : hasher.copy()).digest('hex') : opts.sha256
+      // From a later offset only when no byte must pass through here in order (a hash built here, onBytes).
+      sent = { final, end: offset + bytes.length, jump: !hasher && !opts.onBytes }
       const reply = await writePart(toHost, {
         path: toPath, offset, data: bytes, ...(final ? { final: true, size: total, sha256 } : {}),
         ...(opts.privateAttempt !== undefined ? { attempt: opts.privateAttempt } : {}),
@@ -522,7 +527,7 @@ export async function relayFile(fromHost: string, fromPath: string, toHost: stri
       if (final) return { bytes: reply.staged, sha256: reply.sha256 ?? sha256 ?? '', chunks, retries: retry.retries, ...(reply.path ? { path: reply.path } : {}) }
     } catch (err) {
       if (stopped) throw (stopped as { err: unknown }).err
-      offset = await retry.next(err, offset)
+      offset = await retry.next(err, offset, sent)
     }
   }
 }

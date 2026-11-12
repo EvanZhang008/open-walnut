@@ -1246,4 +1246,30 @@ describe('task_move through a dropped link', () => {
     expect(fs.readFileSync(`${destTaskDir}/plan.md`, 'utf8')).toBe('# the task\'s plan\n');
     expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'done' });
   }, 120_000);
+
+  it('after the new session started, a source link that went away never holds the move: its cleanup answers at once', async () => {
+    const { taskId, sid, clone } = await taskInSharedCheckout();
+    // It worked IN the shared checkout: once the move is done, its own file is cleared from there.
+    fs.rmSync(path.dirname(clone), { recursive: true, force: true });
+    write(path.join(shared, 'own.txt'), 'the task\'s edit\n');
+    W.changes = [{ repoRoot: shared, label: 'marina', kind: 'cwd', files: [{ relPath: 'own.txt', filePath: path.join(shared, 'own.txt'), status: 'added', before: '', after: 'the task\'s edit\n', ops: 1, partial: false }] }];
+    __setLinkWaitPollForTesting(100);
+    let askedAfterStart = 0;
+    __setTransferConnectionResolverForTesting(async (host) => {
+      if (!W.homes[host]) return [];
+      // From the start on this Mac's link is gone: the shared checkout's cleanup cannot reach it.
+      if (host === '__local__' && W.starts.length > 0) { askedAfterStart++; return []; }
+      return [daemonFor(host)];
+    });
+    const t0 = Date.now();
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+    // Under the move's link wait this would wait out its 10 minute bound.
+    expect(Date.now() - t0).toBeLessThan(30_000);
+    expect(askedAfterStart).toBeGreaterThan(0);
+    expect(res).toMatchObject({ state: 'done', fromSessionId: sid, host: 'cloud' });
+    // Left in place, and said so: the shared checkout keeps the file until a later cleanup.
+    expect(res.moved!.join('\n')).toMatch(/Still in .* 1 file this task changed/);
+    expect(fs.existsSync(path.join(shared, 'own.txt'))).toBe(true);
+    expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'done' });
+  }, 120_000);
 });

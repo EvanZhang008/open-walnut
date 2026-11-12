@@ -20,7 +20,9 @@
  *     the link to a dev host dropped every few minutes while a move uploaded), or is listed with
  *     the bound it keeps instead; so does every sender of fs.writePart and every caller of a file
  *     write in parts (2026-11-12: a move failed on "daemon command lost: fs.writePart", a member
- *     the first list of steps did not name), and the whole engine switch run is under the wait;
+ *     the first list of steps did not name); a move runs under the wait up to its new session's
+ *     start, and from the start on outside it (nothing that outlives the run carries it), and a cut
+ *     final part goes again final;
  *  7. only the leader resumes switches at boot (a replica holds a copy of the leader's tasks).
  */
 import { describe, it, expect } from 'vitest'
@@ -203,7 +205,7 @@ describe('a long transfer waits out a dropped link', () => {
   const STEP = /\b(relayFile|copyPack|packWorkspace|applyPack|fetchFromHost|moveTaskWork|moveWorkspace)\(/g
   /** Each file that calls a long transfer step, its count, and how a dropped link is handled there. */
   const CALLERS: Record<string, { count: number; way: string }> = {
-    'src/core/sessions/engine-switch.ts': { count: 1, way: 'task_move: runEngineSwitch runs the whole run under the link wait' },
+    'src/core/sessions/engine-switch.ts': { count: 1, way: 'task_move: runEngineSwitch runs a move under the link wait up to its start' },
     'src/core/transfer/task-work.ts': { count: 7, way: 'inside moveWork, which moveTaskWork runs under withLinkWait' },
     'src/core/transfer/move-resume.ts': { count: 1, way: 'copyNow, the probe pack, called from moveWork only' },
     'src/core/transfer/workspace.ts': { count: 4, way: 'moveWorkspace runs under withLinkWait; copyPack is called from waits only (and start-placement)' },
@@ -237,7 +239,7 @@ describe('a long transfer waits out a dropped link', () => {
     const WRITERS: Record<string, { count: number; way: string }> = {
       'src/core/transfer/daemon-transfer-client.ts': { count: 2, way: 'relayFile and writeFileInParts, each part through partRetry (part-retry.ts)' },
       'src/core/transfer/transfer.ts': { count: 3, way: 'writeTargetFile: in parts that wait inside a wait; task_transfer writes its transcript under withLinkWait' },
-      'src/core/sessions/engine-switch-io.ts': { count: 1, way: 'the switch\'s transcript, inside the run runEngineSwitch runs under withLinkWait' },
+      'src/core/sessions/engine-switch-io.ts': { count: 1, way: 'the switch\'s transcript, in prepare: a move runs it under withLinkWait (runEngineSwitch), a plain switch keeps one try' },
       'src/core/hosts/host-mcp-images.ts': { count: 1, way: 'one picture for a tool\'s answer, its own deadline; no wait' },
       // The receivers: the daemon twins and the core they share.
       'src/providers/daemon-source.ts': { count: 1, way: 'the receiver' },
@@ -256,12 +258,43 @@ describe('a long transfer waits out a dropped link', () => {
     expect(read('src/core/transfer/transfer.ts')).toContain('withLinkWait(MOVE_LINK_WAIT_MS, () => writeTargetFile(')
   })
 
-  it('the whole engine switch run is under the wait, and the steps with their own deadline leave it', () => {
-    expect(body(read('src/core/sessions/engine-switch.ts'), 'export function runEngineSwitch(')).toContain('withLinkWait(MOVE_LINK_WAIT_MS, () => execute(')
+  it('a move runs under the wait up to its new session\'s start; from the start on, and the steps with their own deadline, leave it', () => {
+    const file = 'src/core/sessions/engine-switch.ts'
+    const src = read(file)
+    // A plain engine switch never waits 10 minutes for a link; a move does, until the start.
+    expect(body(src, 'export function runEngineSwitch(')).toContain('state.move ? withLinkWait(MOVE_LINK_WAIT_MS, () => execute(')
+    const exec = body(src, 'async function execute(')
+    expect(exec).toContain('return noLinkWait(() => handOver(')
+    // What outlives the run (a start, a send, a queue that delivers) never carries the wait: none of
+    // it is in execute or prepare, and restore puts rows back outside it.
+    const LONG = /\b(startSessionForTask|sendMessageToSession|putQueuedRows|releaseMoveHeldRows)\(/
+    expect(exec).not.toMatch(LONG)
+    expect(body(src, 'async function prepare(')).not.toMatch(LONG)
+    const r = body(src, 'async function restore(')
+    expect(r.slice(r.indexOf('noLinkWait('))).toMatch(/putQueuedRows\([\s\S]*releaseMoveHeldRows\(/)
+    expect(r.slice(0, r.indexOf('noLinkWait('))).not.toMatch(LONG)
+    // The new session holds the task and its messages before the source's cleanup runs.
+    const hand = body(src, 'async function handOver(')
+    expect(hand.indexOf('flight.handedOver = true')).toBeGreaterThan(0)
+    expect(hand.indexOf('flight.handedOver = true')).toBeLessThan(hand.indexOf('clearMovedCopies('))
+    expect(hand.indexOf('putQueuedRows(')).toBeLessThan(hand.indexOf('clearMovedCopies('))
     const leavers = SOURCES.filter((f) => /\bnoLinkWait\(/.test(f.text) && f.rel !== 'src/core/transfer/link-wait.ts').map((f) => f.rel).sort()
-    expect(leavers).toEqual(['src/core/sessions/endpoint-wait.ts', 'src/core/sessions/task-start.ts'])
+    expect(leavers).toEqual(['src/core/sessions/endpoint-wait.ts', file, 'src/core/sessions/task-start.ts'])
     expect(read('src/core/sessions/endpoint-wait.ts')).toContain('noLinkWait(() => probeModelEndpoint(')
     expect(read('src/core/sessions/task-start.ts')).toContain('noLinkWait(() => placeStartByLoad(')
+  })
+
+  it('a cut final part is sent again final, never as a smaller part that starts the file over', () => {
+    const retry = body(read('src/core/transfer/part-retry.ts'), 'export function partRetry(')
+    expect(retry).toMatch(/kind === 'no-link' \|\| kind === 'lost' \|\| kind === 'no-answer'/)
+    expect(retry).toMatch(/!sent\?\.final \|\| sent\.jump/)
+    const client = read('src/core/transfer/daemon-transfer-client.ts')
+    // Every writer hands the retry the part it sent.
+    const nexts = [...client.matchAll(/retry\.next\(([^)]*)\)/g)].map((m) => m[1])
+    expect(nexts).toHaveLength(2)
+    for (const args of nexts) expect(args.split(',').length).toBeGreaterThanOrEqual(3)
+    // The relay jumps ahead only when no byte must pass through it in order.
+    expect(body(client, 'export async function relayFile(')).toContain('jump: !hasher && !opts.onBytes')
   })
 
   it('the moves run under the link wait, and the client waits inside one', () => {

@@ -52,7 +52,7 @@ import { hostPath, putQueuedRows, releaseMoveHeld, releaseMoveHeldRows, stashSwi
 import { newSwitchProgress, pauseForRestart, type SwitchProgress } from './engine-switch-restart.js';
 import { interruptedByShutdown } from '../server-stopping.js';
 import { clearSwitchRunning, markSwitchRunning } from './running-switches.js';
-import { MOVE_LINK_WAIT_MS, withLinkWait } from '../transfer/link-wait.js';
+import { MOVE_LINK_WAIT_MS, noLinkWait, withLinkWait } from '../transfer/link-wait.js';
 import {
   CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, estimateTokens, readActiveContext, readCachedContext, renderCarriedContext, targetWindowTokens,
 } from './engine-switch-context.js';
@@ -395,10 +395,10 @@ export function runEngineSwitch(taskId: string, state: EngineSwitchState, opts: 
   if (running) return running.work;
   // A deploy waits while this runs (running-switches.ts, scripts/lib/deploy-queue.sh).
   const marker = markSwitchRunning(taskId, state.move ? `move to ${normalizeHost(state.to.host)}` : `switch to ${resolveEngine(state.to.engine)}`);
-  // Every long step of the run waits out a dropped link to either host (link-wait.ts): the work's
-  // copy, the transcript written there, the reads of the old session. A step with its own deadline
-  // leaves the wait (noLinkWait).
-  const work = withLinkWait(MOVE_LINK_WAIT_MS, () => execute(taskId, state, opts)).then(async (r) => {
+  // A move's steps up to the new session's start wait out a dropped link to either host
+  // (link-wait.ts): the work's copy, the transcript written there, the reads of the old session.
+  // From the start on, and a step with its own deadline, leave the wait (noLinkWait).
+  const work = (state.move ? withLinkWait(MOVE_LINK_WAIT_MS, () => execute(taskId, state, opts)) : execute(taskId, state, opts)).then(async (r) => {
     inFlight.delete(taskId);
     if (state.move && r.state === 'done' && r.fromSessionId && r.sessionId) await carryLateRows(taskId, r.fromSessionId, r.sessionId);
     return r;
@@ -603,6 +603,18 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
     }
   }
 
+  // From the start on, no step waits out a dropped link: the new session holds the task, and
+  // a message for it, or a deploy, must never wait 10 minutes on a cleanup (link-wait.ts).
+  return noLinkWait(() => handOver(taskId, state, old, prepared, held, host, engine, progress));
+}
+
+/** The new session started (or an earlier one resumed), the task handed to it, the switch recorded done. */
+async function handOver(
+  taskId: string, state: EngineSwitchState, old: SessionRecord, prepared: Awaited<ReturnType<typeof prepare>>,
+  held: HeldRow[], host: string, engine: SessionEngine, progress: SwitchProgress,
+): Promise<EngineSwitchResult> {
+  const tm = await import('../task-manager.js');
+  const tracker = await import('../session-tracker.js');
   if (prepared.resume) {
     const resumed = await resumeEarlier(taskId, state, old, prepared.resume, prepared.transcriptPath, held).catch(async (err: unknown) => {
       log.session.warn('engine switch: resuming the earlier session failed, starting a new one', {
@@ -660,12 +672,6 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
   await tracker.updateSessionRecord(old.claudeSessionId, { supersededBy: sessionId }).catch(() => {});
   const { retargetRequestsToSession } = await import('../session-requests.js');
   const movedRequests = await retargetRequestsToSession(old.claudeSessionId, sessionId).catch(() => 0);
-  // The move is done: what it carried away from a shared checkout leaves it (backed up first).
-  if (state.move && prepared.clearable) {
-    const { clearMovedCopies } = await import('../transfer/task-work.js');
-    const cleared = await clearMovedCopies(prepared.clearable, { taskId, sourceHost: normalizeHost(old.host), targetHost: host }).catch(() => [] as string[]);
-    if (cleared.length) prepared.moved = [...(prepared.moved ?? []), ...cleared];
-  }
   // Messages that came during a move (or before a restart cut an earlier try of it) were held
   // on the old session: they go too, deliverable again.
   if (state.move) {
@@ -677,6 +683,13 @@ async function execute(taskId: string, state: EngineSwitchState, opts: SwitchRun
   }
   if (prepared.context) held = await stashSwitchContext(sessionId, prepared.context, state.id, held);
   await putQueuedRows(sessionId, held);
+  // The move is done: what it carried away from a shared checkout leaves it (backed up first),
+  // after the new session holds the task and its messages.
+  if (state.move && prepared.clearable) {
+    const { clearMovedCopies } = await import('../transfer/task-work.js');
+    const cleared = await clearMovedCopies(prepared.clearable, { taskId, sourceHost: normalizeHost(old.host), targetHost: host }).catch(() => [] as string[]);
+    if (cleared.length) prepared.moved = [...(prepared.moved ?? []), ...cleared];
+  }
   await tm.updateTaskRaw(taskId, {
     // The task is on the engine its user picked now: a fallback start's note is done.
     engine_fallback: null,
@@ -916,12 +929,15 @@ async function restore(taskId: string, old: SessionRecord, newSid: string | unde
   await tm.linkSession(taskId, old.claudeSessionId).catch((err: unknown) => log.session.warn('engine switch: relinking the old session failed', {
     taskId, sessionId: old.claudeSessionId, error: err instanceof Error ? err.message : String(err),
   }));
-  await putQueuedRows(old.claudeSessionId, held);
-  // Messages held during a failed move are the old session's again.
-  if (await releaseMoveHeldRows(old.claudeSessionId)) {
-    const { bus, EventNames } = await import('../event-bus.js');
-    bus.emit(EventNames.SESSION_SEND, { sessionId: old.claudeSessionId, taskId, message: '' }, ['session-runner'], { source: 'engine-switch' });
-  }
+  // The old session's delivery outlives this run: it never carries the run's link wait.
+  await noLinkWait(async () => {
+    await putQueuedRows(old.claudeSessionId, held);
+    // Messages held during a failed move are the old session's again.
+    if (await releaseMoveHeldRows(old.claudeSessionId)) {
+      const { bus, EventNames } = await import('../event-bus.js');
+      bus.emit(EventNames.SESSION_SEND, { sessionId: old.claudeSessionId, taskId, message: '' }, ['session-runner'], { source: 'engine-switch' });
+    }
+  });
 }
 
 /**
