@@ -12,6 +12,7 @@ import { WALNUT_HOME } from '../../constants.js';
 import type { RouterSource } from '../../core/router/types.js';
 import { sendV1Error } from './v1-control-relay.js';
 import { createRouterNode, updateRouterNode, type RouterNodePatch } from '../../core/router/nodes.js';
+import { setSelfRouter, clearSelfRouter } from '../../core/router/self-router.js';
 import { assertIsolatedHistory } from '../../core/router/history-isolation.js';
 import { OrgError } from '../../core/org/org-store.js';
 import { routerProcessingRouter } from './router-processing.js';
@@ -68,6 +69,35 @@ routerV1Router.post('/org/routers', async (req: Request, res: Response, next: Ne
       host: body.host, links: body.links, sources: body.sources,
       ...(typeof body.task_id === 'string' ? { taskId: body.task_id } : {}) });
     res.status(created ? 201 : 200).json({ task });
+  } catch (error) { failure(res, next, error); }
+});
+
+// A task that routes or watches by itself, listed among the routers (self-router.ts): its
+// session, triggers and loops stay exactly as they run.
+routerV1Router.put('/org/routers/self/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primary(true);
+    const body = req.body as Record<string, unknown> | undefined;
+    if (!body || !Array.isArray(body.links) || body.links.some((id) => typeof id !== 'string')
+      || (body.name !== undefined && typeof body.name !== 'string')) {
+      throw new RouterError('bad_router', 'Give the VP links (a list of VP task ids) and, if you like, its name on the Org page.');
+    }
+    const sid = req.headers['x-walnut-caller-sid'];
+    let by = 'human';
+    if (typeof sid === 'string' && sid.trim()) {
+      const { resolveCaller } = await import('../../core/sessions/session-send-core.js');
+      const caller = await resolveCaller(sid.trim());
+      by = caller.kind === 'session' && caller.record.taskId ? `task:${caller.record.taskId}` : 'agent';
+    }
+    res.json({ task: await setSelfRouter(String(req.params.id), {
+      links: body.links as string[], by, ...(typeof body.name === 'string' ? { name: body.name } : {}) }) });
+  } catch (error) { failure(res, next, error); }
+});
+
+routerV1Router.delete('/org/routers/self/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primary(true);
+    res.json({ task: await clearSelfRouter(String(req.params.id)) });
   } catch (error) { failure(res, next, error); }
 });
 

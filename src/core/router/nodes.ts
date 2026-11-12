@@ -29,14 +29,14 @@ export interface RouterNodePatch {
 
 const NAME_MAX = 60;
 
-function routerName(raw: string): string {
+export function routerName(raw: string): string {
   const name = raw.trim();
   if (!name || name.length > NAME_MAX) throw new OrgError('bad_name', 400, 'A router name is 1 to 60 characters.');
   return name;
 }
 
 /** Links name open VPs only. A link is a collaboration preference, never ownership or access. */
-async function openLeadLinks(raw: string[]): Promise<string[]> {
+export async function openLeadLinks(raw: string[]): Promise<string[]> {
   const links = [...new Set(raw)];
   const all = await orgTasks();
   if (links.some((id) => !all.some((task) => task.id === id && task.org_role === 'lead' && task.phase !== 'COMPLETE'))) {

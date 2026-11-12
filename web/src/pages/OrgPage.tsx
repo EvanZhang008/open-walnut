@@ -369,8 +369,9 @@ export function OrgPage() {
       : { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
   }, [setParams, phone]);
   // Main or a lead named anywhere on the page is a node of the page: it is selected, not opened beside.
+  // A self router is still its project's work, so a chip of it opens the task beside the page.
   const nodeOf = useCallback((match: (t: Task) => boolean): ChannelRow | undefined => {
-    const all = [channels.main, ...channels.rows, ...channels.routers];
+    const all = [channels.main, ...channels.rows, ...channels.routers.filter((r) => !r.selfRouter)];
     return all.find((r) => { const t = r.contactId ? tasks.find((x) => x.id === r.contactId) : undefined; return !!t && match(t); });
   }, [channels, tasks]);
   /** A letter's Answer: the task beside the page opens on its session's Inbox tab. */

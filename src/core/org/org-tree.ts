@@ -41,6 +41,8 @@ export interface OrgTaskLike {
   router_area_id?: string;
   router_links?: readonly string[];
   router_paused?: boolean;
+  /** A task listed among the routers because it routes by itself (Task.self_router). */
+  self_router?: { links: readonly string[]; name?: string } | null;
   /** A lead only: the other projects it leads (Task.org_leads). */
   org_leads?: readonly string[];
   /** A lead only: the name the user gave it (Task.org_name). */
@@ -112,7 +114,8 @@ export interface OrgProjectNode {
 
 export interface OrgTree {
   main?: OrgNodeRef;
-  routers?: Array<OrgNodeRef & { areaId?: string; links: readonly string[]; paused: boolean }>;
+  /** `self`: a task that routes by itself (Task.self_router): no area, never paused by Walnut. */
+  routers?: Array<OrgNodeRef & { areaId?: string; links: readonly string[]; paused: boolean; self?: true }>;
   projects: OrgProjectNode[];
   counts: OrgCounts;
 }
@@ -405,9 +408,15 @@ export function buildOrgTree(all: readonly OrgTaskLike[]): OrgTree {
   });
 
   const main = pickMain(tasks);
-  const routers = tasks.filter((task) => task.org_role === 'router' && task.phase !== 'COMPLETE').map((task) => ({
-    ...refOf(task), areaId: task.router_area_id, links: task.router_links ?? [], paused: task.router_paused !== false,
-  }));
+  const routers = [
+    ...tasks.filter((task) => task.org_role === 'router' && task.phase !== 'COMPLETE').map((task) => ({
+      ...refOf(task), areaId: task.router_area_id, links: task.router_links ?? [], paused: task.router_paused !== false,
+    })),
+    ...tasks.filter((task) => task.self_router && !task.org_role && task.phase !== 'COMPLETE' && !task.plugin_only).map((task) => ({
+      ...refOf(task), ...(task.self_router!.name ? { name: task.self_router!.name } : {}),
+      links: task.self_router!.links ?? [], paused: false, self: true as const,
+    })),
+  ];
   return { ...(main ? { main: refOf(main) } : {}), ...(routers.length ? { routers } : {}), projects, counts: total };
 }
 

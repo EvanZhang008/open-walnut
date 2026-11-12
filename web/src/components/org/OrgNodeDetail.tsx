@@ -39,7 +39,7 @@ import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/compos
 import { recentMainStart } from './ask-main';
 import { OrgNodeStart } from './OrgNodeStart';
 import { OrgRouterSettings, routerLinkRows } from './OrgRouterSettings';
-import { OrgRouterOverview, routerEmptyChatLine } from './OrgRouterOverview';
+import { OrgRouterOverview, routerEmptyChatLine, selfRouterLine } from './OrgRouterOverview';
 import { useRouterAreaNames } from './router-area-names';
 import { OrgRouterFromMail } from './OrgRouterFromMail';
 import { OrgAvatar } from './OrgChannelList';
@@ -196,6 +196,12 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   // A router is its own node: no team, no Board, no Brief, no Threads, no side bar (OrgRouterSettings).
   const isRouter = row.kind === 'router';
   const routerTask = isRouter && contact?.org_role === 'router' ? contact : undefined;
+  // A task that routes by itself (Task.self_router): its own chat, with one line on what it is.
+  const selfRouterTask = isRouter && contact && !contact.org_role && contact.self_router ? contact : undefined;
+  const selfRouterLinks = useMemo(
+    () => (selfRouterTask ? routerLinkRows(selfRouterTask.self_router?.links ?? [], tasks).filter((r) => r.state === 'open').map((r) => r.name) : []),
+    [selfRouterTask, tasks],
+  );
   const hasBoard = useHasBoard(isRouter ? undefined : row.contactId);
   // A router's chat is empty until mail of its area reaches it: say so instead of "No conversation
   // history found" (memoized: SessionChatHistory is memo'd and compares the element by identity).
@@ -473,6 +479,11 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
       {routerTask && <OrgRouterFromMail node={row.key} routerId={routerTask.id} title={title} paused={routerTask.router_paused !== false} />}
       {routerTask && <OrgRouterSettings key={routerTask.id} router={routerTask} tasks={tasks} tasksLoading={!!tasksLoading} />}
       {routerTask && <OrgRouterOverview key={`overview-${routerTask.id}`} routerId={routerTask.id} title={title} links={routerLinkNames} paused={routerTask.router_paused !== false} />}
+      {selfRouterTask && (
+        <div className="org-router-overview" data-testid="org-self-router-overview">
+          <p className="org-router-overview-what">{selfRouterLine(title, selfRouterTask.project || '', selfRouterLinks)}</p>
+        </div>
+      )}
       {/* One parent for both places, so moving the rail never remounts it (a picked choice, an
           open More and the held order stay when a side panel narrows the page). */}
       <div ref={(el) => { splitRef.current = el; railWidth.panelRef.current = el; }} className={`org-detail-split ${railHidden ? 'no-rail' : railSide ? 'has-rail' : 'is-stacked'}${isRouter ? ' is-router-split' : ''}`}>

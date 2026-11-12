@@ -130,6 +130,8 @@ export interface ProjectedTask {
   router_area_id?: string
   router_links?: string[]
   router_paused?: boolean
+  /** A task listed among the routers because it routes by itself (Task.self_router; additive, 2026-11-11). */
+  self_router?: { links: string[]; name?: string }
   /** A lead's projects (Task.org_leads; additive, 2026-10-29, lead rows only): the cloud
    *  companion lets a lead file work in each of them while the Mac is away. */
   org_leads?: string[]
@@ -229,6 +231,7 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.org_role ? { org_role: t.org_role } : {}),
     ...(t.router_area_id ? { router_area_id: t.router_area_id } : {}),
     ...(t.org_role === 'router' ? { router_links: t.router_links ?? [], router_paused: t.router_paused !== false } : {}),
+    ...(t.self_router && !t.org_role ? { self_router: { links: [...(t.self_router.links ?? [])], ...(t.self_router.name ? { name: t.self_router.name } : {}) } } : {}),
     ...(t.org_role === 'lead' && t.org_leads?.length ? { org_leads: [...t.org_leads] } : {}),
     ...(t.walnut_agent ? { walnut_agent: true as const } : {}),
     ...(isPartial(t.result_report) ? { result_report: {

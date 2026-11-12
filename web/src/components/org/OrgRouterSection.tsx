@@ -1,5 +1,6 @@
 /**
- * The Org list's Routers: one row per router node (a task whose org_role is 'router'), drawn after
+ * The Org list's Routers: one row per router node (a task whose org_role is 'router', or a task that
+ * routes by itself, Task.self_router: core/router/self-router.ts), drawn after
  * the CEO and every VP, before the folded Archived (2026-11-10, the person: "router should be placed
  * below all VPs"). A router is its own node, not a VP and not a task under one, so it
  * has its own section and its own row kind; a click selects it like any node and the page opens its
@@ -64,7 +65,7 @@ function RouterRow({ row, selected, now, onSelect }: { row: ChannelRow; selected
           <span className="org-channel-name">{row.name}</span>
           <span className="org-channel-time">{shortAgo(row.latestAt || row.lastAt, now)}</span>
         </span>
-        {/* Its area, Paused or Active, and how many VPs it links to (buildChannels writes the line). */}
+        {/* Its area, Paused or Active (or that it runs its own loop), and how many VPs it links to (buildChannels writes the line). */}
         <span className={`org-channel-latest${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-router-line" title={row.latest}>
           {row.latest}
         </span>

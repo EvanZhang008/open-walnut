@@ -97,6 +97,8 @@ export interface ChannelRow {
   /** 'main' | `project:<key>`: the page's selection and URL value. */
   key: string;
   kind: 'main' | 'project' | 'router';
+  /** A router row for a task that routes by itself (Task.self_router), not an area router. */
+  selfRouter?: boolean;
   /** '' = the Inbox. */
   project: string;
   name: string;
@@ -337,6 +339,16 @@ export function routerLine(task: Pick<Task, 'router_area_id' | 'router_paused' |
   return `${area} · ${routerStateWord(task.router_paused !== false, true)} · ${vpLinkCount(new Set(task.router_links ?? []).size)}`;
 }
 
+/** A row's line for a task that routes by itself (Task.self_router): it runs its own loop, how many VPs it works with. */
+export function selfRouterLine(task: Pick<Task, 'self_router'>): string {
+  return `Runs its own loop · ${vpLinkCount(new Set(task.self_router?.links ?? []).size)}`;
+}
+
+/** A task listed among the routers because it routes by itself: open, no org role, no plugin's own. */
+export function isSelfRouterTask(task: Pick<Task, 'self_router' | 'org_role' | 'phase' | 'plugin_only'>): boolean {
+  return !!task.self_router && !task.org_role && task.phase !== 'COMPLETE' && !task.plugin_only;
+}
+
 function addCounts(a: OrgCounts, b: OrgCounts): OrgCounts {
   // `toRead` may be missing from an older server's counts; it is shown under Needs you.
   return { open: a.open + b.open, running: a.running + b.running, needsYou: a.needsYou + b.needsYou, toRead: (a.toRead ?? 0) + (b.toRead ?? 0), waiting: a.waiting + b.waiting };
@@ -423,6 +435,20 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
     latest: routerLine(task, areaNames),
     latestAt: taskTime(task), lastAt: taskTime(task), unread: !!task.unread,
   }));
+  // A task that routes by itself keeps its own state: Walnut never pauses it.
+  for (const task of tasks) {
+    if (!isSelfRouterTask(task)) continue;
+    const state = task.user_status?.state;
+    routers.push({
+      key: `router:${task.id}`, kind: 'router', project: '', name: task.self_router?.name || task.title,
+      contactId: task.id, contactTitle: task.title, isLead: false, selfRouter: true,
+      counts: { open: 1, running: state === 'working' ? 1 : 0, needsYou: 0, toRead: 0, waiting: 0 },
+      state: state === 'working' ? 'working' : 'quiet',
+      alerts: collectAlerts([task.id], byId, probe), needs: 0,
+      latest: selfRouterLine(task),
+      latestAt: taskTime(task), lastAt: taskTime(task), unread: !!task.unread,
+    });
+  }
   return { main, rows, projects, routers };
 }
 

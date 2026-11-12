@@ -146,3 +146,9 @@ export function OrgRouterOverview({ routerId, title, links, paused }: { routerId
     </section>
   );
 }
+
+/** What a task that routes by itself is (Task.self_router), in one line: Walnut only lists it. */
+export function selfRouterLine(title: string, project: string, links: readonly string[]): string {
+  const works = links.length ? ` It works with ${links.join(', ')}.` : '';
+  return `${title} routes by itself: its own triggers and loops do the work${project ? ` for ${project}` : ''}, and Walnut only lists it among the routers.${works}`;
+}

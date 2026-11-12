@@ -14,6 +14,21 @@ defineOp({
 });
 
 defineOp({
+  name: 'router_list_self', title: 'List a task that routes by itself among the routers',
+  description: 'Show an existing task that already routes or watches by itself (its own triggers, loops or trackers, on any host) among the Org page\'s routers, with the VPs it works with. Nothing of its session, triggers or work is started, stopped, paused or changed, and it stays work of its project; it gets no area, mail source or router profile (that is router_create, for a router Walnut feeds). Repeat to change its links or name; remove:true takes it off the list.',
+  input: { task_id: z.string().min(1).max(200), links: z.array(z.string()).default([]),
+    name: z.string().min(1).max(60).optional().describe('Its name on the Org page; default its title'),
+    remove: z.boolean().optional().describe('Take it off the routers list; its work is untouched') },
+  handler: async (args, call) => {
+    const path = `/org/routers/self/${encodeURIComponent(String(args.task_id))}`;
+    if (args.remove) return call('DELETE', path);
+    return call('PUT', path, { links: args.links ?? [], ...(args.name !== undefined ? { name: args.name } : {}) });
+  },
+  routes: [{ method: 'PUT', path: '/org/routers/self/:task_id' }, { method: 'DELETE', path: '/org/routers/self/:task_id' }],
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});
+
+defineOp({
   name: 'router_update', title: 'Rename, relink, pause or resume a router',
   description: 'Change an existing router\'s name, its VP links (zero or many open VPs; collaboration preferences, never ownership or data access) or whether it is paused. Pausing or resuming changes only this router\'s own assignment; no area, item or task moves. Resuming arms its daemon wake so confirmed pending items can be processed. Main, VPs and other tasks are refused.',
   input: { id: z.string().min(1).max(200).describe('The router\'s task id'), name: z.string().min(1).max(60).optional(),

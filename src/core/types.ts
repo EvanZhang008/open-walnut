@@ -1013,6 +1013,13 @@ export interface Task {
   router_area_id?: string;
   router_links?: string[];
   router_paused?: boolean;
+  /** A task the person (or an agent for them) listed among the Org page's routers because it
+   *  routes or watches by itself: its own session, triggers and loops, on its own host
+   *  (src/core/router/self-router.ts). Walnut adds no area, wake, profile or pause to it and
+   *  never starts, stops or changes its session; the mark only lists it there, with the VPs it
+   *  works with (`links`) and its name on the page (`name`, else its title). It stays work of its
+   *  project. Payload blob, local-only. */
+  self_router?: { links: string[]; at: string; by: string; name?: string } | null;
   /** A lead only: the other projects it leads, put under it by the user in the
    *  org chart (setProjectVp in src/core/org/org-store.ts). Each stays its own
    *  project with its own tasks; this lead is its contact. Payload blob,
