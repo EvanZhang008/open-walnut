@@ -144,6 +144,8 @@ describe('while a device signs approvals, only its signature turns them off', ()
     const list = await http('GET', '/api/v1/approvals')
     const turnOff = (list.body.approvals as Array<Record<string, any>>).find((a) => a.id === off.body.approvalId)!
     expect(turnOff).toMatchObject({ turnsAskMeOff: true, mode: 'biometric', outsideSwitch: true })
+    // The list carries each key's public half, for a verifier that checks signatures itself.
+    expect((list.body.keys as Array<Record<string, unknown>>).find((k) => k.id === keyIdOf(spki))?.publicKey).toBe(spki)
     const tap = await http('POST', `/api/v1/approvals/${turnOff.id}/answer`, { decision: 'approve' })
     expect(tap.status).toBe(403)
     expect(await asksPerson()).toBe(true)

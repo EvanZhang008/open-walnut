@@ -202,7 +202,7 @@ describe('biometric approvals and device keys', () => {
   })
 
   it('a device that enrolls a newer key from its own app retires its earlier ones, active or pending, with their asks (2026-11-12)', async () => {
-    // The Mac app makes a new key at every enrollment (ApprovalBridge.swift): before this, each one
+    // The Mac app made a new key at every enrollment (ApprovalBridge.swift, before it kept its key): each one
     // stayed, and a pending one from a replaced key left a "Let … sign" card nobody could answer.
     const oldMac = softKey()
     const phone = softKey()
@@ -214,8 +214,12 @@ describe('biometric approvals and device keys', () => {
     expect(stray.key.status).toBe('pending')
     const fresh = await enrollKey({ publicKey: newMac.spki, name: 'Studio', kind: 'mac-app', fromDeviceApp: true })
     expect(fresh.key.status).toBe('active')
-    // The same device's older keys are gone; another kind with the same name stays.
-    expect((await listKeys()).map((k) => k.id).sort()).toEqual([newMac.id, phone.id].sort())
+    // The same device's older active key is retired (its row stays, naming what replaced it, for a
+    // verifier that pinned it), its pending one goes; another kind with the same name stays.
+    const active = (await listKeys()).filter((k) => k.status === 'active').map((k) => k.id).sort()
+    expect(active).toEqual([newMac.id, phone.id].sort())
+    expect((await listKeys()).find((k) => k.id === oldMac.id)).toMatchObject({ status: 'retired', replacedBy: newMac.id })
+    expect((await listKeys()).some((k) => k.id === strayMac.id)).toBe(false)
     expect((await getApproval(stray.enrollment!.id))?.status).toBe('canceled')
     expect((await listApprovals({ status: 'pending' })).filter((x) => x.enrollsKey)).toHaveLength(0)
     // A phone never retires another phone of the same name (many are called "iPhone").
@@ -226,6 +230,20 @@ describe('biometric approvals and device keys', () => {
     const other = softKey()
     await enrollKey({ publicKey: other.spki, name: 'Studio', kind: 'mac-app' })
     expect((await listKeys()).find((k) => k.id === newMac.id)?.status).toBe('active')
+    // A retired key never signs, and comes back only from its own app (which keeps its key now).
+    await expect(enrollKey({ publicKey: oldMac.spki, name: 'Studio', kind: 'mac-app' })).rejects.toMatchObject({ code: 'key_retired' })
+    const back = await enrollKey({ publicKey: oldMac.spki, name: 'Studio', kind: 'mac-app', fromDeviceApp: true })
+    expect(back.key.status).toBe('active')
+    expect((await listKeys()).find((k) => k.id === newMac.id)).toMatchObject({ status: 'retired', replacedBy: oldMac.id })
+  })
+
+  it('a Mac that enrolls the same key again keeps its id: nothing is retired (the Git gate pins it)', async () => {
+    const mac = softKey()
+    await enrollKey({ publicKey: mac.spki, name: 'Desk', kind: 'mac-app', fromDeviceApp: true })
+    await enrollKey({ publicKey: mac.spki, name: 'Desk', kind: 'mac-app', fromDeviceApp: true })
+    const rows = (await listKeys()).filter((k) => k.name === 'Desk')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: mac.id, status: 'active' })
   })
 
   it('on boot, keys an older Walnut kept for a Mac that enrolled a newer one go, with their asks (the 2026-11-12 keys.json)', async () => {
@@ -247,7 +265,8 @@ describe('biometric approvals and device keys', () => {
     )
     await fs.writeFile(file, JSON.stringify(raw))
     expect(await retireReplacedMacKeys()).toBe(2)
-    expect((await listKeys()).map((k) => k.id).sort()).toEqual([phone.id, c.id, later.id].sort())
+    expect((await listKeys()).filter((k) => k.status !== 'retired').map((k) => k.id).sort()).toEqual([phone.id, c.id, later.id].sort())
+    expect((await listKeys()).find((k) => k.id === a.id)).toMatchObject({ status: 'retired', replacedBy: c.id })
     expect((await getApproval(asked.enrollment!.id))?.status).toBe('canceled')
     expect(await retireReplacedMacKeys()).toBe(0)
   })

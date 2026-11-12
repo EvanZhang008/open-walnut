@@ -95,6 +95,22 @@ final class ApprovalBridge: NSObject, WKScriptMessageHandlerWithReply {
         return try makeKey()
     }
 
+    /// The key on disk when it is a Secure Enclave key that signs only with user presence: a sign
+    /// with no interaction allowed must refuse for want of it (LAError.notInteractive). Shows nothing.
+    private func touchIDKeyOnDisk() -> SecureEnclave.P256.Signing.PrivateKey? {
+        guard let blob = try? Data(contentsOf: blobURL) else { return nil }
+        let quiet = LAContext()
+        quiet.interactionNotAllowed = true
+        guard let key = try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: blob, authenticationContext: quiet) else { return nil }
+        do {
+            _ = try key.signature(for: Data("walnut-approval-key-probe".utf8))
+            return nil // it signed with no finger: not a key this app made
+        } catch {
+            let e = error as NSError
+            return e.domain == LAErrorDomain && e.code == LAError.notInteractive.rawValue ? key : nil
+        }
+    }
+
     /// A new Secure Enclave key that signs only after Touch ID, written over any blob on disk.
     private func makeKey() throws -> SecureEnclave.P256.Signing.PrivateKey {
         var cfErr: Unmanaged<CFError>?
@@ -123,12 +139,14 @@ final class ApprovalBridge: NSObject, WKScriptMessageHandlerWithReply {
 
     private func enroll(page: URL, done: @escaping ([String: Any]) -> Void) {
         if let why = unavailableReason() { done(["error": why]); return }
-        // Always a key this process makes now, never one read from disk: another program of this
-        // account could have left a blob there for a key it made without Touch ID, and the app
-        // would then hand the server that program's key. A blob changed after this is only a key
-        // the server does not know, so its signatures are refused.
+        // The key on disk, while it still needs Touch ID to sign; else a new one. Another program of
+        // this account could have left a blob there for a key it made without Touch ID, so the blob is
+        // tried first with no interaction allowed: a Touch ID key refuses (it needs a finger), one
+        // without refuses nothing and is replaced. Keeping the key keeps its id, so whatever pinned
+        // it (the Git gate) still trusts this Mac after the app enrolls again (2026-11-12: a new key
+        // at every enrollment left the gate's pinned Mac key stale).
         let spki: Data
-        do { spki = try makeKey().publicKey.derRepresentation } catch { done(["error": error.localizedDescription]); return }
+        do { spki = try (touchIDKeyOnDisk() ?? makeKey()).publicKey.derRepresentation } catch { done(["error": error.localizedDescription]); return }
         // The page's own origin (an IPv6 host keeps its brackets).
         guard let url = URL(string: "/api/v1/approvals/keys", relativeTo: page)?.absoluteURL else { done(["error": "no Walnut address"]); return }
         var request = URLRequest(url: url, timeoutInterval: 20)

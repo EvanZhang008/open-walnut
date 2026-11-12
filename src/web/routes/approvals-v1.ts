@@ -315,7 +315,12 @@ approvalsV1Router.get('/approvals', (req: Request, res: Response, next: NextFunc
     const { listApprovals } = await import('../../core/approvals/store.js')
     const { listKeys } = await import('../../core/approvals/keys.js')
     const status = req.query.status === 'all' ? 'all' : 'pending'
-    const keys = (await listKeys()).map(({ id, name, kind, status: s, createdAt, activatedAt, lastUsedAt }) => ({ id, name, kind, status: s, createdAt, activatedAt, lastUsedAt }))
+    // Public halves only. A retired row stays, with what replaced it, so a verifier that pinned a key
+    // (the Git gate) can follow it; it signs nothing.
+    const keys = (await listKeys()).map(({ id, name, kind, status: s, createdAt, activatedAt, lastUsedAt, publicKey, retiredAt, replacedBy, endorsement }) => ({
+      id, name, kind, status: s, createdAt, activatedAt, lastUsedAt, publicKey,
+      ...(retiredAt ? { retiredAt } : {}), ...(replacedBy ? { replacedBy } : {}), ...(endorsement ? { endorsement } : {}),
+    }))
     // `askMe`: the person's Approvals switch (ask-me.ts), so a script that asks with --single-use
     // (always asked) can read it and skip its own ask while approvals are off.
     const { asksPerson } = await import('../../core/approvals/ask-me.js')

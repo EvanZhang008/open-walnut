@@ -63,7 +63,7 @@ export interface ApprovalKey {
   id: string;
   name: string;
   kind: 'iphone' | 'mac-app';
-  status: 'active' | 'pending';
+  status: 'active' | 'pending' | 'retired';
   createdAt: string;
   activatedAt?: string;
   lastUsedAt?: string;

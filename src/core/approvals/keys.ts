@@ -99,6 +99,13 @@ async function enrollOne(input: EnrollInput): Promise<EnrollResult> {
   await updateJsonFile<ApprovalKeysFile>(keysFile(), EMPTY, (file) => {
     const now = new Date().toISOString()
     const existing = file.keys.find((k) => k.id === id)
+    if (existing?.status === 'retired') {
+      // A key this Mac had before, sent again from its own app (it keeps its key now:
+      // ApprovalBridge.swift): it signs again, and what replaced it is retired below.
+      if (!input.fromDeviceApp || existing.kind !== input.kind) { key = existing; return file }
+      existing.status = 'active'; existing.activatedAt = now; delete existing.retiredAt; delete existing.replacedBy
+      key = existing; activated = true; return file
+    }
     if (existing) {
       // A key left pending (asked before this rule, or from a request without proof) signs at
       // once when its device app asks again; its enrollment ask is withdrawn below.
@@ -118,9 +125,9 @@ async function enrollOne(input: EnrollInput): Promise<EnrollResult> {
     activated = trusted
     return file
   })
-  // The Mac app makes a new key at each enrollment (it never sends one read from disk:
-  // ApprovalBridge.swift), so the key it had before is one it can no longer sign with: the same Mac
-  // (its name) asking from its own app retires its earlier keys, active or pending, with their
+  // The Mac app keeps its key while the one on disk still needs Touch ID, and makes a new one only
+  // when it does not (ApprovalBridge.swift); then the key it had before is one it can no longer sign
+  // with: the same Mac (its name) asking from its own app retires its earlier keys, active or pending, with their
   // "Let … sign" asks (2026-11-12: the Mac app's keys piled up, and a pending one from a replaced
   // key left a card nobody could answer). The iPhone app keeps its key and enrolls the same one
   // again, and many phones share the default name "iPhone", so phones are left alone. Known limit:
@@ -128,13 +135,14 @@ async function enrollOne(input: EnrollInput): Promise<EnrollResult> {
   if (key && key.status === 'active' && input.fromDeviceApp && key.kind === 'mac-app') {
     const keep = key
     await updateJsonFile<ApprovalKeysFile>(keysFile(), EMPTY, (file) => {
-      retired = file.keys.filter((k) => k.id !== keep.id && k.kind === keep.kind && k.name === keep.name)
-      if (retired.length) file.keys = file.keys.filter((k) => !retired.includes(k))
+      retired = file.keys.filter((k) => k.id !== keep.id && k.kind === keep.kind && k.name === keep.name && k.status !== 'retired')
+      retire(file, retired, keep)
       return file
     })
     await afterRetire(retired, keep)
   }
   if (!key) throw new ApprovalError(403, 'first_key_from_phone', FIRST_KEY_MESSAGE)
+  if (key.status === 'retired') throw new ApprovalError(409, 'key_retired', 'This key was replaced by a newer one from the same Mac; only that Mac\'s own app can bring it back.')
   if (withdraw) await cancelInternal(withdraw, 'the device signs now: it was set up from its own app').catch(() => undefined)
   if (key.status === 'active') {
     if (activated) changed()
@@ -233,14 +241,30 @@ export async function retireReplacedMacKeys(): Promise<number> {
       if (!cur || at(k) > at(cur)) newest.set(k.name, k)
     }
     retired = file.keys.filter((k) => {
-      const keep = k.kind === 'mac-app' ? newest.get(k.name) : undefined
+      const keep = k.kind === 'mac-app' && k.status !== 'retired' ? newest.get(k.name) : undefined
       return !!keep && k.id !== keep.id && at(k) <= at(keep)
     })
-    if (retired.length) file.keys = file.keys.filter((k) => !retired.includes(k))
+    for (const k of retired) retire(file, [k], newest.get(k.name)!)
     return file
   })
   await afterRetire(retired)
   return retired.length
+}
+
+/** How many retired rows are kept (the newest), so a verifier can follow a few re-enrollments back. */
+const RETIRED_KEEP = 20
+
+/** Mark keys retired in place, replaced by `keep`: a pending one (it never signed) goes. */
+function retire(file: ApprovalKeysFile, keys: ApprovalKey[], keep: ApprovalKey): void {
+  if (!keys.length) return
+  const now = new Date().toISOString()
+  file.keys = file.keys.filter((k) => !(keys.includes(k) && k.status === 'pending'))
+  for (const k of keys) {
+    if (k.status !== 'active') continue
+    k.status = 'retired'; k.retiredAt = now; k.replacedBy = keep.id
+  }
+  const old = file.keys.filter((k) => k.status === 'retired').sort((a, b) => (b.retiredAt ?? '').localeCompare(a.retiredAt ?? ''))
+  if (old.length > RETIRED_KEEP) { const drop = new Set(old.slice(RETIRED_KEEP)); file.keys = file.keys.filter((k) => !drop.has(k)) }
 }
 
 async function afterRetire(retired: ApprovalKey[], keep?: ApprovalKey): Promise<void> {

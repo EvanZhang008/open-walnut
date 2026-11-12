@@ -137,9 +137,21 @@ export interface ApprovalKey {
   /** base64 DER SubjectPublicKeyInfo of a P-256 key. */
   publicKey: string
   createdAt: string
-  /** pending until an active key signs its enrollment approval (the first key is active at once). */
-  status: 'active' | 'pending'
+  /**
+   * pending until an active key signs its enrollment approval (the first key is active at once);
+   * retired once the same Mac enrolled another key (keys.ts): kept as a row, so a verifier that
+   * pinned it can follow what replaced it, and it signs nothing.
+   */
+  status: 'active' | 'pending' | 'retired'
   activatedAt?: string
+  retiredAt?: string
+  /** The key that took a retired one's place. */
+  replacedBy?: string
+  /**
+   * A signature that vouches for this key, by a key a verifier already trusts (the Git gate's
+   * pinned keys): ECDSA P-256 over keyEndorseMessage() (digest.ts), base64 DER.
+   */
+  endorsement?: { by: string; replaces: string; signature: string }
   lastUsedAt?: string
   /** The approval that enrolls it, while pending. */
   enrollApprovalId?: string
