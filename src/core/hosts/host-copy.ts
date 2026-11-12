@@ -35,6 +35,7 @@
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { log } from '../../logging/index.js'
+import { MAX_UPLOAD_FRAME_BYTES } from '../../providers/ssh-upload-budget.js'
 import { HostExecError, budgetLeft, callerOf, grantFor, hostName, type Caller } from './host-exec.js'
 import { checkPath, macPlace, macSide, planTarget, probe, refuseMacPlace, refuseProtected, sourceSize, trimSlashes, type MacSide } from './host-copy-paths.js'
 
@@ -48,8 +49,8 @@ const KEEP_ENDED_MS = 30 * 60_000
 export const HOLD_MAX_MS = 60_000
 /** What a call keeps back of its hold to write its answer. */
 const REPLY_MARGIN_MS = 1_000
-/** Under the 4 MB part limit, and well under the frame size some proxies cut. */
-const CHUNK_BYTES = 2 * 1024 * 1024
+/** Under the 4 MB part limit, and one frame the paced bulk link carries before a daemon's keepalive runs out. */
+const CHUNK_BYTES = MAX_UPLOAD_FRAME_BYTES
 const CLEANUP_MS = 5_000
 /** The final part: the receiver hashes and syncs the whole file before it answers. */
 const FINAL_PART_BASE_MS = 60_000

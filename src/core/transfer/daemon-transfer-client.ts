@@ -18,6 +18,7 @@ import { TRANSCRIPT_FIND_DEPTH } from '../claude-config-dir.js'
 import type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile } from '../../providers/transfer-pack-core.js'
 import type { WritePartReply, ReachReply, FetchReply, FetchFileResult } from '../../providers/transfer-core.js'
 import type { HostFacts, HostLoad, ModelEndpointProbe } from '../../providers/host-facts-core.js'
+import { MAX_UPLOAD_FRAME_BYTES } from '../../providers/ssh-upload-budget.js'
 
 export type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile, WritePartReply, ReachReply, FetchReply, FetchFileResult, HostFacts, HostLoad, ModelEndpointProbe }
 
@@ -234,9 +235,24 @@ export interface UploadPartOptions {
   sessionId?: string
 }
 
-/** One chunk of a phone's session upload onto `host` ('upload-part-v1'); the daemon picks the path. */
-export function uploadPart(host: string, opts: UploadPartOptions): Promise<WritePartReply> {
-  return call<WritePartReply>(host, UPLOAD_PART_CAPABILITY, 'upload.part', { ...opts, data: opts.data.toString('base64') }, PART_RPC_MS)
+/**
+ * One chunk of a phone's session upload onto `host` ('upload-part-v1'); the daemon picks the path.
+ * A chunk over MAX_UPLOAD_FRAME_BYTES goes as several parts at their offsets (the daemon reads the
+ * last one from its length and checks the whole file's sha256 there), so no frame outlasts a
+ * daemon's keepalive on the paced bulk link.
+ */
+export async function uploadPart(host: string, opts: UploadPartOptions): Promise<WritePartReply> {
+  const { data, sha256, ...rest } = opts
+  let reply: WritePartReply | null = null
+  for (let at = 0; at < data.length || reply === null; at += MAX_UPLOAD_FRAME_BYTES) {
+    const piece = data.subarray(at, at + MAX_UPLOAD_FRAME_BYTES)
+    const last = at + MAX_UPLOAD_FRAME_BYTES >= data.length
+    reply = await call<WritePartReply>(host, UPLOAD_PART_CAPABILITY, 'upload.part', {
+      ...rest, offset: opts.offset + at, data: piece.toString('base64'), ...(last && sha256 ? { sha256 } : {}),
+    }, PART_RPC_MS)
+    if (last) break
+  }
+  return reply!
 }
 
 /** Refuses unless `host` can hold a private stage; nothing is read or sent. */
@@ -382,7 +398,8 @@ const FINAL_CODES = ['size_mismatch', 'checksum_mismatch', 'source_changed', 're
  */
 export async function relayFile(fromHost: string, fromPath: string, toHost: string, toPath: string, opts: RelayOptions): Promise<RelayResult> {
   let total: number | null = typeof opts.size === 'number' ? opts.size : null
-  const chunk = Math.max(1, Math.min(opts.chunkBytes ?? 1024 * 1024, MAX_CHUNK_BYTES))
+  // Each part is one upload frame onto the target: at most what the paced bulk link carries in time.
+  const chunk = Math.max(1, Math.min(opts.chunkBytes ?? MAX_UPLOAD_FRAME_BYTES, MAX_CHUNK_BYTES, MAX_UPLOAD_FRAME_BYTES))
   const tries = Math.max(1, opts.retries ?? 3)
   const delay = opts.retryDelayMs ?? 500
   const hasher = opts.sha256 ? null : crypto.createHash('sha256')

@@ -39,3 +39,20 @@ export const RELAY_UPLOAD_BURST_BYTES = 96 * 1024
  * at once.
  */
 export const PACED_STREAM_PURPOSES: ReadonlySet<string> = new Set(['replica'])
+
+/**
+ * The pace of the bulk channel's own connection (paced-forward.ts): everything it carries up,
+ * a task move's file parts and the host's read copy included. Smooth 20 KB/s lived a 10-minute,
+ * 12 MB run on the relay; what killed this connection was the burst at each redial (2026-11-12:
+ * ended within 1 to 4 s, eleven times in a row).
+ */
+export const BULK_UPLOAD_BYTES_PER_SEC = 20 * 1024
+/** A small burst: about a second and a half of the pace. */
+export const BULK_UPLOAD_BURST_BYTES = 32 * 1024
+
+/**
+ * The most one upload command carries. A daemon closes a client it heard no whole frame from for
+ * 120 to 135 s (its keepalive, daemon-standalone.ts CLIENT_KEEPALIVE_MISSED), and its pings wait
+ * behind a frame still going up: 1 MB is 1.37 MB as base64, about 70 s at the bulk pace.
+ */
+export const MAX_UPLOAD_FRAME_BYTES = 1024 * 1024

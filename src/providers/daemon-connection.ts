@@ -82,7 +82,8 @@ import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
 import { notLinuxSentence, classifyHostConnectError, CONNECT_IN_FLIGHT_PHASES, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
 import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, runSshBounded, shq, userShellPathScript } from './remote-sh.js'
-import { PACED_STREAM_PURPOSES, rideMaster } from './ssh-upload-budget.js'
+import { BULK_UPLOAD_BURST_BYTES, BULK_UPLOAD_BYTES_PER_SEC, PACED_STREAM_PURPOSES, rideMaster } from './ssh-upload-budget.js'
+import { pacedForward } from './paced-forward.js'
 import { chunkListScript, parseChunkList, parseUploadPrecheck, remoteSha256Command, resumeFailureCap, sha256Hex, uploadPrecheckScript } from './upload-resume.js'
 import { count as metricsCount } from '../core/observability/metrics.js'
 import {
@@ -902,6 +903,10 @@ export class DaemonConnection {
   private mainSentByCmd = new Map<string, number>()
   /** Bytes heard on a bulk socket of its own connection (kept out of _heardBytes). */
   private _ownBulkHeardBytes = 0
+  /** Bytes the bulk channel's own (paced) connections let go up so far, over every connection: an upload's progress. */
+  private bulkUpBase = 0
+  private bulkUpSent: (() => number) | null = null
+  private bulkUpBytes(): number { return this.bulkUpBase + (this.bulkUpSent?.() ?? 0) }
   /** Own connections in a row that ended within BULK_OWN_MIN_LIFE_MS: the redial backs off. */
   private bulkShortLives = 0
   private bulkForwardOpenedAt = 0
@@ -932,6 +937,10 @@ export class DaemonConnection {
    * so no command waits forever.
    */
   private static COMMAND_PROGRESS_CEILING_MS = 5 * 60_000
+  /** The same, for a request whose bytes still go up at the bulk connection's pace behind other uploads. */
+  private static UPLOAD_PROGRESS_CEILING_MS = 20 * 60_000
+  /** Bytes a request may sit in between the WebSocket and the pacer (socket buffers, one read). */
+  private static UPLOAD_BUFFERS_BYTES = 1024 * 1024
   /** What one timeout window must bring to count as the reply arriving (a pong or a keepalive is a few bytes). */
   private static PROGRESS_MIN_BYTES = 4_096
   /** The companion answers the tunnel upgrade only after its daemon is up (a cold start is ~10s). */
@@ -2600,6 +2609,11 @@ export class DaemonConnection {
     const bulkHeard = () => (ownBulk ? this._ownBulkHeardBytes : this._bulkHeardBytes)
     const progressNow = () => (bulkSocket ? bulkHeard() : this._heardBytes - this._bulkHeardBytes)
     let progressMark = progressNow()
+    // On the paced bulk connection, this request's bytes (and those ahead of it) going up: the
+    // window extends while they move, until the count passes this request's end (what was
+    // waiting to go up before it, itself, and the socket buffers between).
+    let upMark = this.bulkUpBytes()
+    const upEnd = upMark + (bulkSocket?.bufferedAmount ?? 0) + message.length + DaemonConnection.UPLOAD_BUFFERS_BYTES
     // A main-socket reply on a link it shares with a bulk reply waits behind
     // that reply's bytes (one ssh stream): what the link brings is its line moving.
     let linkMark = this._heardBytes
@@ -2625,8 +2639,14 @@ export class DaemonConnection {
         const open = socketStill && sentOn.readyState === WebSocket.OPEN
         const underCeiling = Date.now() - startedAt < DaemonConnection.COMMAND_PROGRESS_CEILING_MS
         const arriving = progressNow() - progressMark >= DaemonConnection.PROGRESS_MIN_BYTES
-        if (isBulk && open && arriving && underCeiling) {
-          // Its bytes are still arriving: not a timeout, a slow link. Wait one more window.
+        // A paced upload still going up is no timeout either (2026-11-12: a 1 MB part at the
+        // relay's 20 KB/s needs about 70 s, over its 60 s window).
+        const upNow = this.bulkUpBytes()
+        const sending = ownBulk && upNow - upMark >= DaemonConnection.PROGRESS_MIN_BYTES && upMark < upEnd
+          && Date.now() - startedAt < DaemonConnection.UPLOAD_PROGRESS_CEILING_MS
+        if (isBulk && open && ((arriving && underCeiling) || sending)) {
+          // Its bytes are still moving: not a timeout, a slow link. Wait one more window.
+          upMark = this.bulkUpBytes()
           progressMark = progressNow()
           linkMark = this._heardBytes
           pending.timer = setTimeout(onTimeout, timeoutMs)
@@ -7329,6 +7349,9 @@ export class DaemonConnection {
       if (seq !== this.bulkDialSeq || !this._connected || this._destroyed) { fwd.stop(); return }
       this.bulkForward = fwd
       this.bulkForwardOpenedAt = Date.now()
+      // Kept monotonic across connections, so a mark taken on the last one still compares.
+      this.bulkUpBase = this.bulkUpBytes()
+      this.bulkUpSent = (fwd as { sentBytes?: () => number }).sentBytes ?? null
       fwd.onExit((why) => {
         if (this.bulkForward !== fwd) return
         this.bulkForward = null
@@ -7361,7 +7384,10 @@ export class DaemonConnection {
     if (this.noSsh || !this.sshTarget || this._dialledDirect || !remotePort) return null
     const sshArgs = this.buildSshArgs({ useControlMaster: false })
     const sshHost = this.sshHostString
-    return () => sshLaneForward(sshArgs, sshHost, remotePort)
+    // Its upload goes at the relay's pace, whatever waited for it (paced-forward.ts).
+    return async () => pacedForward(await sshLaneForward(sshArgs, sshHost, remotePort), {
+      bytesPerSec: BULK_UPLOAD_BYTES_PER_SEC, burstBytes: BULK_UPLOAD_BURST_BYTES,
+    })
   }
 
   /** Wait (at most `ms`) for the bulk channel to be up; resolves with the time waited. */

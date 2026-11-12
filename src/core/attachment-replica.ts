@@ -27,6 +27,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { NOTES_DIR, WALNUT_HOME } from '../constants.js'
 import { log } from '../logging/index.js'
+import { MAX_UPLOAD_FRAME_BYTES } from '../providers/ssh-upload-budget.js'
 import { leftOut } from './replication/keep-rule.js'
 
 const MAX_FILES = 20_000
@@ -35,7 +36,8 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024
 const BUDGET_BYTES = 8 * 1024 * 1024 * 1024
 /** What one round uploads at most, so the notes rounds never wait an hour behind a first fill. */
 export const ROUND_BYTES = 128 * 1024 * 1024
-const CHUNK_BYTES = 2 * 1024 * 1024
+/** One frame the paced bulk link carries before a daemon's keepalive runs out (ssh-upload-budget.ts). */
+const CHUNK_BYTES = MAX_UPLOAD_FRAME_BYTES
 const PUT_TIMEOUT_MS = 60_000
 const NEXT_ROUND_MS = 15_000
 const MEMO_MS = 30 * 60_000
