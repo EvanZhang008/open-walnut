@@ -5,12 +5,10 @@ import { LinkifiedText } from '../common/LinkifiedText';
 import { CollapsibleUrlEditor, type CollapsibleUrlEditorHandle } from '../common/CollapsibleUrlEditor';
 
 /**
- * Session notes — minimal two-mode UI sharing one state (useSessionNote):
- *  - NO note  → a quiet text-only "Note" pill next to the btw pill (SessionNotesPill);
- *               clicking it opens the editor row.
- *  - HAS note → an always-visible slim row above the composer (SessionNotesBar):
- *               amber dot + first-line preview. Click to edit in place (auto-saves).
- * The pill hides once a note exists (the row takes over as the entry point).
+ * One reference note above the composer, shared by every session surface.
+ * The label identifies it as a note, not an incoming or queued message. Its text
+ * has no source or delivery metadata. Edit in place; the existing autosave keeps
+ * the full text, including links and line breaks. Empty notes use the Note pill.
  */
 
 export interface SessionNoteState {
@@ -153,7 +151,9 @@ export function SessionNotesBar({ noteState, expanded, onToggleExpanded, onColla
   return (
     <div
       ref={cardRef}
-      className={`session-notes${hasNote ? ' session-notes--has-note' : ''}`}
+      className={`session-notes${hasNote ? ' session-notes--has-note' : ''}${expanded ? ' is-editing' : ''}`}
+      role="region"
+      aria-label="Session note"
       // Keyboard escape hatches: Tab out to a REAL element → collapse (keyboard
       // parity with outside-click); Escape → collapse. relatedTarget=null blurs
       // (unmount race, window switch) deliberately do nothing — see above.
@@ -164,6 +164,21 @@ export function SessionNotesBar({ noteState, expanded, onToggleExpanded, onColla
         if (expanded && e.key === 'Escape') { e.stopPropagation(); collapse(); }
       }}
     >
+      <div className="session-notes-heading">
+        <span className="session-notes-label">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <path d="M14 2v6h6M8 13h8M8 17h6" />
+          </svg>
+          Session note
+        </span>
+        <span className="session-notes-heading-actions">
+          {status}
+          <button type="button" className="session-notes-action" onClick={expanded ? collapse : onToggleExpanded}>
+            {expanded ? 'Done' : 'Edit'}
+          </button>
+        </span>
+      </div>
       {expanded ? (
         // Edit mode: everything is editable, but URLs display COLLAPSED (pill)
         // until the caret moves into them — then they expand to the full text
@@ -178,7 +193,6 @@ export function SessionNotesBar({ noteState, expanded, onToggleExpanded, onColla
             placeholder="Session note…"
           />
           <div className="session-notes-side">
-            {status}
             <MicButton size="sm" onTranscribe={(text) => handleChange(note ? note + ' ' + text : text)} />
           </div>
         </div>
@@ -196,7 +210,6 @@ export function SessionNotesBar({ noteState, expanded, onToggleExpanded, onColla
           }}
           title={note}
         >
-          <span className="session-notes-dot" aria-hidden="true" />
           <span className="session-notes-preview">
             {lines.map((line, i) => (
               <span className="session-notes-line" key={i}>
@@ -204,7 +217,6 @@ export function SessionNotesBar({ noteState, expanded, onToggleExpanded, onColla
               </span>
             ))}
           </span>
-          {status}
         </div>
       )}
     </div>

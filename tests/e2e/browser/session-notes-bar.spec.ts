@@ -1,8 +1,7 @@
 /**
- * E2E: session Notes hybrid UI —
- *  - NO note  → a small "📝 Notes" pill next to the btw pill (no bar).
- *  - HAS note → an always-visible sticky-note BAR docked above the composer
- *               (highlight + dot + first-line preview); the pill disappears.
+ * E2E: a labeled session note above the composer.
+ * Empty notes open from the add menu. Existing notes use a quiet reference strip
+ * with an explicit Edit/Done action, not an unexplained dot or another input card.
  *
  * The dedicated /sessions page was removed — every test exercises the homepage
  * session column (`.main-page-session-column .session-panel`), the only surface.
@@ -21,7 +20,8 @@ import { test, expect, type Page } from '@playwright/test'
 // This is also why the link tests live HERE rather than in their own file: a
 // separate spec file would race against this one no matter how each is ordered
 // internally, since Playwright parallelizes ACROSS files.
-test.describe.configure({ mode: 'serial' })
+test.describe.configure({ mode: 'serial', timeout: 60_000 })
+test.use({ viewport: { width: 1280, height: 800 } })
 
 // The real link from the report (a deploy pipeline change_history URL).
 const LONG_URL =
@@ -33,10 +33,17 @@ async function openSeededSessionOnHome(page: Page) {
   await page.addInitScript(() => {
     sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id: 'pw-normal-session', locked: false }]))
   })
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
+  // Enter through a real link; later opens exercise a normal reload.
+  if (page.url() === 'about:blank') {
+    await page.setContent(`<a href="${test.info().project.use.baseURL}/">Open Walnut</a>`)
+    await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
+  } else {
+    await page.reload()
+  }
   const panel = page.locator('.main-page-session-column .session-panel[data-session-id="pw-normal-session"]')
-  await expect(panel).toBeVisible({ timeout: 10_000 })
+  await expect(panel).toBeVisible({ timeout: 20_000 })
+  // The add menu can paint before the session record supplies its handlers.
+  await expect(panel.locator('[data-control-id="btw"]').first()).toBeAttached({ timeout: 20_000 })
   return panel
 }
 
@@ -119,6 +126,38 @@ test('empty note opens from add menu; saving swaps to the always-visible bar', a
   await expect(panel2.locator('.session-panel-input [data-add-control="note"]')).toBeVisible()
 
   // Cleanup
+  await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: '' } })
+})
+
+test('note is labeled and edits in place without a second input outline', async ({ page }) => {
+  const note = 'Morgan\nPlease include the minimum limit increase as well.'
+  await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: note } })
+  const panel = await openSeededSessionOnHome(page)
+  const bar = panel.getByRole('region', { name: 'Session note', exact: true })
+  await expect(bar.locator('.session-notes-label')).toHaveText('Session note')
+  await expect(bar.locator('.session-notes-dot')).toHaveCount(0)
+  await expect(bar.getByRole('button', { name: 'Edit', exact: true })).toBeVisible()
+  await expect(bar.locator('.session-notes-preview')).toHaveText(note.replace('\n', ''))
+  await panel.locator('.session-panel-input textarea').fill('Keep this composer draft')
+
+  for (const width of [1280, 740]) {
+    await page.setViewportSize({ width, height: 800 })
+    await bar.getByRole('button', { name: 'Edit', exact: true }).click()
+    const editor = bar.locator('.session-notes-editor')
+    await expect(editor).toBeFocused()
+    expect(await editorText(editor)).toBe(note)
+    const skin = await editor.evaluate(el => {
+      const s = getComputedStyle(el)
+      return { border: s.borderTopWidth, outline: s.outlineStyle, shadow: s.boxShadow }
+    })
+    expect(skin).toEqual({ border: '0px', outline: 'none', shadow: 'none' })
+    const box = (await bar.boundingBox())!
+    const panelBox = (await panel.boundingBox())!
+    expect(box.x + box.width).toBeLessThanOrEqual(panelBox.x + panelBox.width + 1)
+    await bar.getByRole('button', { name: 'Done', exact: true }).click()
+    await expect(editor).toHaveCount(0)
+    await expect(panel.locator('.session-panel-input textarea')).toHaveValue('Keep this composer draft')
+  }
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: '' } })
 })
 
@@ -240,8 +279,13 @@ test('editor does NOT flash shut after opening (blur-unmount race regression)', 
   // And it must actually be editable: type, autosave fires.
   await textarea.click()
   await textarea.press('End')
-  await textarea.type(' — edited')
-  await expect(bar.locator('.session-notes-status-saved')).toBeVisible({ timeout: 5000 })
+  await textarea.pressSequentially(' edited')
+  const edited = await editorText(textarea)
+  expect(edited).toContain('edited')
+  await expect.poll(async () => {
+    const response = await page.request.get('/api/sessions/pw-normal-session')
+    return (await response.json()).session?.human_note
+  }).toBe(edited)
 
   // Outside pointerdown is what collapses it now.
   await panel.locator('.session-panel-header').click({ position: { x: 5, y: 5 } })
@@ -394,8 +438,11 @@ test('EDIT VIEW: URL renders collapsed; caret inside expands it; caret out re-co
   await editor.click({ position: { x: 4, y: 4 } })
   await page.keyboard.press('End')
   await page.keyboard.type(' now')
-  await expect(bar.locator('.session-notes-status-saved')).toBeVisible({ timeout: 5000 })
   expect(await editorText(editor)).toBe(`check deployment now\n${LONG_URL}\ndone`)
+  await expect.poll(async () => {
+    const response = await page.request.get('/api/sessions/pw-normal-session')
+    return (await response.json()).session?.human_note
+  }).toBe(`check deployment now\n${LONG_URL}\ndone`)
 
   // (5) PASTE a second URL → collapses immediately (the headline use case).
   await page.keyboard.press('Control+End')

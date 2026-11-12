@@ -4,6 +4,7 @@
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* N2-06: keyboard up, the timeline keeps its 300 px. The strips above the
      composer fold away while typing; they come back with the keyboard down. */
+  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .session-notes:not(.is-editing),
   html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .session-notes-toggle,
   html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .wf-card--bar {
     display: none !important;
@@ -55,6 +56,9 @@
     min-height: 44px;
     box-sizing: border-box;
   }
+  .app-shell-navigation .session-notes-label,
+  .app-shell-navigation .session-notes-action { font-size: 12px; }
+  .app-shell-navigation .session-notes-action { min-height: 44px; min-width: 44px; }
   /* The outline rail is a hover affordance at the message's left edge; on a
      phone it overlapped the text and was an 18 px target. */
   .app-shell-navigation .session-panel.is-phone-layer .session-toc-rail {

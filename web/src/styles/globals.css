@@ -2513,24 +2513,21 @@ select {
   border-top: 1px solid var(--border);
 }
 
-/* ── Session Notes — minimal ──
-   Empty: a text-only "Note" pill next to btw (style fully inherited from
-   .side-question-pill). Has note: a slim quiet row above the composer —
-   amber dot + one-line preview. Editing: plain textarea, system look. */
+/* Session notes are references, not a second chat input. The heading and
+   neutral rule stay in place while the body switches between reading/editing. */
 
 .session-notes {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
+  padding: 6px 16px;
 }
 
 .session-notes-toggle {
   display: flex;
-  /* flex-start, not center: a multi-line note's dot/status should sit with the
-     FIRST line rather than float beside the block's middle. */
   align-items: flex-start;
   gap: 8px;
   width: 100%;
-  padding: 6px 16px;
+  padding: 0 0 0 20px;
   background: none;
   border: none;
   cursor: pointer;
@@ -2539,22 +2536,25 @@ select {
   min-width: 0;
 }
 
-/* Keep the dot and the save status optically on the first text line. */
-.session-notes-toggle > .session-notes-dot { margin-top: 6px; }
-.session-notes-toggle > .session-notes-status { margin-top: 1px; }
-
-.session-notes-toggle:hover {
-  background: var(--bg-hover);
+.session-notes-heading,
+.session-notes-label,
+.session-notes-heading-actions { display: flex; align-items: center; }
+.session-notes-heading { justify-content: space-between; gap: 8px; margin-bottom: 3px; }
+.session-notes-label { gap: 7px; font-size: 11px; font-weight: 500; color: var(--fg-muted); }
+.session-notes-heading-actions { gap: 8px; flex-shrink: 0; }
+.session-notes-action {
+  padding: 2px 5px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
 }
-
-/* The one accent: a small amber dot marking "this session has a note". */
-.session-notes-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--warning);
-  flex-shrink: 0;
-}
+.session-notes-action:hover { background: var(--bg-hover); color: var(--fg); }
+.session-notes-action:focus-visible,
+.session-notes-toggle:focus-visible { outline: 1px solid var(--fg-muted); outline-offset: 2px; }
 
 /* The collapsed note keeps the LINE STRUCTURE the user typed (a note is usually
    a checklist). Bounded to 3 lines so the bar can't push the composer around;
@@ -2578,9 +2578,8 @@ select {
    (which would break the token-per-span rendering). */
 .session-notes-line {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* An empty typed line (blank line between paragraphs) still deserves its height,
@@ -2614,7 +2613,7 @@ select {
   display: flex;
   gap: 8px;
   align-items: flex-start;
-  padding: 8px 16px;
+  padding: 0 0 0 20px;
 }
 
 .session-notes-side {
@@ -2627,16 +2626,17 @@ select {
 
 .session-notes-textarea {
   flex: 1;
-  min-height: 64px;
-  max-height: 260px;
-  padding: 8px 10px;
-  font-size: 13px;
+  min-width: 0;
+  min-height: 54px;
+  max-height: 180px;
+  padding: 0;
+  font-size: 12px;
   font-family: inherit;
   line-height: 1.5;
   color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  border-radius: 0;
   resize: vertical;
   outline: none;
 }
@@ -2684,8 +2684,10 @@ select {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-.session-notes-textarea:focus {
-  border-color: var(--accent);
+.session-notes .session-notes-textarea:focus {
+  border: none;
+  outline: none;
+  box-shadow: none;
 }
 
 .session-notes-textarea::placeholder {
@@ -30311,15 +30313,14 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   margin-top: calc(var(--sp-header-h, 76px) + 6px);
 }
 
-/* The notes bar / send-error rows above the composer card get their own card
-   surface, matching the recap tip and queue indicator next to them. */
+/* A reference strip, not an outlined input card stacked on the composer. */
 .session-panel-input .session-notes {
-  border-top: none;
-  border: 0.5px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg);
-  margin-bottom: 6px;
-  overflow: hidden;
+  border: none;
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0;
+  background: var(--bg-secondary);
+  padding: 4px 8px;
+  margin: 0 4px 8px;
 }
 .session-panel-input > .text-xs {
   background: var(--bg);
@@ -30328,7 +30329,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
-  .session-panel-input .session-notes,
   .session-panel-input > .text-xs {
     background: var(--glass-g4-bg);
     -webkit-backdrop-filter: var(--glass-g4-blur);
