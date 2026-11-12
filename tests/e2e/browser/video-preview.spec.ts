@@ -41,13 +41,13 @@ test.describe('video file preview in chat', () => {
     await expect(panel.locator('.fv-media-preview')).toBeVisible({ timeout: 5000 })
     expect(new URL(page.url()).pathname).toBe(new URL(urlBefore).pathname)
 
-    // A real <video controls> whose src is the raw streaming endpoint (by host and path)
+    // A real video with a persistent seek control and the raw streaming URL.
     const video = overlay.locator('.fv-media-preview video')
     await expect(video).toBeVisible({ timeout: 5000 })
     const src = await video.getAttribute('src')
     expect(src).toContain('/api/file-raw/')
     expect(src).toContain('walkthrough.mp4')
-    await expect(video).toHaveAttribute('controls', '')
+    await expect(overlay.getByRole('slider', { name: 'Video position' })).toBeVisible()
 
     // ⋯ → Download sends the browser to the attachment URL
     const href = await downloadFromMenu(page, overlay)

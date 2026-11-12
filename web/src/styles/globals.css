@@ -25478,6 +25478,14 @@ a.file-link:hover {
 .fv-media-preview audio {
   width: min(90%, 560px);
 }
+/* Reserve the timeline's height inside the pane, including a short/narrow split.
+   A 100%-high player below the document bar used to hide its bottom controls. */
+.file-content-view.fv-video-view { display: flex; flex-direction: column; overflow: hidden; }
+.fv-video-view > .fv-doc-bar { flex: 0 0 auto; }
+.fv-video-view .fv-media-preview { flex: 1; min-height: 0; height: auto; flex-direction: column; }
+.fv-video-view .fv-media-preview video { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
+.fv-video-view .wn-video-controls { flex: 0 0 auto; }
+
 
 /* PDF: the browser's own viewer fills the pane (no bundled PDF renderer). */
 .fv-doc-preview {

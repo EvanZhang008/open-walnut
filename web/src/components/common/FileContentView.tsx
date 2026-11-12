@@ -2482,7 +2482,7 @@ export function FileContentView({
       document.body,
     )}
     <div
-      className={`file-content-view${fullscreen ? ' fv-fullscreen' : ''}`}
+      className={`file-content-view${fullscreen ? ' fv-fullscreen' : ''}${media === 'video' ? ' fv-video-view' : ''}`}
       ref={contentRef}
       // Quote-to-ask for the READ-ONLY views (md preview of MDX, truncated
       // <pre>): DOM selection → pill. The editors report selections through

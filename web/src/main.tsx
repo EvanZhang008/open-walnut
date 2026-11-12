@@ -30,6 +30,7 @@ import { installGlobalAutofillSuppression } from './utils/no-autofill';
 import { installEscapeBeepGuard } from './utils/escape-beep-guard';
 import { silenceAutomatedAudio } from './utils/automation-silence';
 import { installImageSizeHold } from './utils/image-size-hold';
+import { installVideoControls } from '../../src/lib/video-controls';
 import { installHighlightRules } from './utils/highlight-rules';
 import { installCodeBlockActions } from './utils/code-block-actions';
 import { installTruncationPeek } from './utils/truncation-peek';
@@ -50,6 +51,7 @@ import { installLeaderPresence } from './hooks/useLeaderPresence';
 // A browser under automation (every Playwright run) makes no sound on the machine,
 // whatever this page shows (automation-silence.ts).
 silenceAutomatedAudio();
+installVideoControls();
 // Every same-origin fetch write carries an op id (api/op-id.ts), the raw ones too,
 // before anything below sends one.
 installOpIdFetch();
