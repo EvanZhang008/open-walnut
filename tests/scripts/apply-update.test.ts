@@ -72,7 +72,7 @@ function standInHost(dir: string, commandLine: string, marker: string, versionFi
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + 10_000;
     const poll = () => {
-      const ps = spawnSync('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'command='], { encoding: 'utf8' }).stdout;
+      const ps = spawnSync('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'command='], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout;
       if (ps.split('\n').some((l) => l.trim().split(/\s+/)[1] === String(child.pid) && l.includes(commandLine))) return resolve();
       if (Date.now() > deadline) return reject(new Error('stand-in host did not start'));
       setTimeout(poll, 50);
