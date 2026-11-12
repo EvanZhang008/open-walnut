@@ -60,8 +60,19 @@ describe('shortenCwd', () => {
     const tmp = '/var/folders/ph/qftcnrrx0wb8n18r4j_pd9m00000gq/T/walnut-browser-abc123/projects/work'
     const a = shortenCwd(`${tmp}/repo-a/services/api`)
     const b = shortenCwd(`${tmp}/repo-b/services/api`)
-    expect(a).toBe('/var/folders/ph/…/work/repo-a/services/api')
-    expect(b).toBe('/var/folders/ph/…/work/repo-b/services/api')
+    expect(a).toBe('/var/folders/…/projects/work/repo-a/services/api')
+    expect(b).toBe('/var/folders/…/projects/work/repo-b/services/api')
+  })
+
+  it('a Linux temp root whose head would fit still gives the budget to the tail first', () => {
+    const tmp = '/tmp/walnut-pw-1794499621398/ps-fixture/0123456789abcdef/work'
+    const a = shortenCwd(`${tmp}/repo-a/services/api`)
+    const b = shortenCwd(`${tmp}/repo-b/services/api`)
+    expect(a).toContain('repo-a')
+    expect(b).toContain('repo-b')
+    expect(a).not.toBe(b)
+    expect(a.length).toBeLessThanOrEqual(48)
+    expect(a.startsWith('/tmp/')).toBe(true)
   })
 
   it('still too long after that: the tail is trimmed with an ellipsis, within max', () => {

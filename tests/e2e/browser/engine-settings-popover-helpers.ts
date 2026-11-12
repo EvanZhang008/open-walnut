@@ -311,20 +311,27 @@ export async function shot(page: Page, name: string): Promise<string> {
  * Same rule as web/src/utils/engine-settings-copy.ts shortenCwd, restated
  * so the spec pins it: two head segments, `…`, the last segment, then whole
  * segments given back head first, then tail, while the result fits `max`.
+ * Under a temp root (/tmp, /var/folders) the head keeps one segment and the
+ * tail is given back first.
  */
+const TEMP_ROOTS = ['/tmp/', '/private/tmp/', '/var/folders/', '/private/var/folders/']
 export function shortCwd(cwd: string, max = 48): string {
   if (cwd.length <= max) return cwd
   const root = cwd.startsWith('~/') ? '~/' : cwd.startsWith('/') ? '/' : ''
   const segments = cwd.slice(root.length).split('/').filter(Boolean)
   let short = cwd
   if (segments.length > 3) {
-    let head = 2
+    const tailFirst = root === '/' && TEMP_ROOTS.some((t) => cwd.startsWith(t))
+    let head = tailFirst ? 1 : 2
     let tail = 1
     const render = (h: number, t: number) =>
       `${root}${segments.slice(0, h).join('/')}/…/${segments.slice(segments.length - t).join('/')}`
+    const fits = (h: number, t: number) => h + t < segments.length && render(h, t).length <= max
     for (;;) {
-      if (head + tail + 1 < segments.length && render(head + 1, tail).length <= max) { head += 1; continue }
-      if (head + tail + 1 < segments.length && render(head, tail + 1).length <= max) { tail += 1; continue }
+      const first: [number, number] = tailFirst ? [head, tail + 1] : [head + 1, tail]
+      const second: [number, number] = tailFirst ? [head + 1, tail] : [head, tail + 1]
+      if (fits(...first)) { [head, tail] = first; continue }
+      if (fits(...second)) { [head, tail] = second; continue }
       break
     }
     short = render(head, tail)

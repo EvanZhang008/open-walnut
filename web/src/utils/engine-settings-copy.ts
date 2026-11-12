@@ -35,20 +35,28 @@ const ELLIPSIS = '…';
  * long after that: the tail is trimmed. Never guesses the home directory: a
  * `~/`-relative input stays relative, an absolute one is not tildified.
  */
+/** Temp roots whose leading segments tell two paths apart by nothing but a random name. */
+const TEMP_ROOTS = ['/tmp/', '/private/tmp/', '/var/folders/', '/private/var/folders/'];
+
 export function shortenCwd(cwd: string, max = 48): string {
   if (cwd.length <= max) return cwd;
   const root = cwd.startsWith('~/') ? '~/' : cwd.startsWith('/') ? '/' : '';
   const segments = cwd.slice(root.length).split('/').filter(Boolean);
   let short = cwd;
   if (segments.length > 3) {
-    let head = 2;
+    // Under a temp root the head says nothing (every fixture and scratch dir shares
+    // it, and its next segment is a random name), so it keeps one segment and the
+    // tail grows first: the repo segments stay in view.
+    const tailFirst = root === '/' && TEMP_ROOTS.some((t) => cwd.startsWith(t));
+    let head = tailFirst ? 1 : 2;
     let tail = 1;
     const render = (h: number, t: number) =>
       `${root}${segments.slice(0, h).join('/')}/${ELLIPSIS}/${segments.slice(segments.length - t).join('/')}`;
     // Grow while a whole segment still fits and the two halves stay apart.
+    const growHead = () => head + tail + 1 < segments.length && render(head + 1, tail).length <= max && ((head += 1), true);
+    const growTail = () => head + tail + 1 < segments.length && render(head, tail + 1).length <= max && ((tail += 1), true);
     for (;;) {
-      if (head + tail + 1 < segments.length && render(head + 1, tail).length <= max) { head += 1; continue; }
-      if (head + tail + 1 < segments.length && render(head, tail + 1).length <= max) { tail += 1; continue; }
+      if (tailFirst ? growTail() || growHead() : growHead() || growTail()) continue;
       break;
     }
     short = render(head, tail);
