@@ -6,6 +6,9 @@
  *
  * Under the switch, while it is off: the steps that went ahead without asking, newest first (the
  * approved records marked `unasked`), so the person can read afterwards what the switch let through.
+ *
+ * Turning it off while a device signs approvals is itself an approval (Face ID or Touch ID): the
+ * switch stays on, its dialog opens, and the server turns the switch off once it is signed.
  */
 import { useEffect, useState } from 'react';
 import type { Config } from '@open-walnut/core';
@@ -13,6 +16,7 @@ import { SettingsRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { listApprovals, type Approval } from '@/api/approvals';
+import { askApprovalsOff, useApprovals } from '@/components/approvals/approvals-store';
 import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
 import '@/styles/approvals-ask-row.css';
@@ -40,15 +44,34 @@ export function ApprovalsAskRow({ config, save }: { config: Config; save: Save }
     (v) => save(() => ({ approvals: { ask_me: v } }), { rowKey }),
     { rowKey },
   );
+  // Off while a device signs: the "Turn approvals off" approval this row opened, until it settles.
+  const [offAsk, setOffAsk] = useState<string | null>(null);
+  const [offBusy, setOffBusy] = useState(false);
+  const [offError, setOffError] = useState<string | null>(null);
+  const approvals = useApprovals();
+  const offWaiting = offAsk !== null && setting.value && approvals.items.has(offAsk);
+  const onChange = (v: boolean) => {
+    setOffError(null);
+    if (v) { setOffAsk(null); setting.set(true); return; }
+    setOffBusy(true);
+    void askApprovalsOff().then((out) => {
+      if ('approvalId' in out) setOffAsk(out.approvalId);
+      else setting.set(false);
+    }).catch((err: unknown) => {
+      setOffError(`Couldn't turn approvals off: ${err instanceof Error ? err.message : String(err)}`);
+    }).finally(() => setOffBusy(false));
+  };
   return (
     <>
       <SettingsRow
         label="Ask me before agents act"
-        help="Off: agents post, send mail and run steps without asking you; each is listed below. On: each one waits for your OK."
+        help={offWaiting
+          ? 'Approve “Turn approvals off” with Face ID or Touch ID to finish. Until then agents still ask you.'
+          : 'Off: agents post, send mail and run steps without asking you; each is listed below. On: each one waits for your OK.'}
         htmlFor="settings-approvals-ask-me"
-        error={setting.error}
+        error={setting.error ?? offError}
         data-testid="settings-approvals-ask-me-row"
-        control={<ToggleSwitch id="settings-approvals-ask-me" checked={setting.value} busy={setting.busy} onChange={setting.set} />}
+        control={<ToggleSwitch id="settings-approvals-ask-me" checked={setting.value} busy={setting.busy || offBusy} onChange={onChange} />}
       />
       <UnaskedList off={!setting.value} />
     </>

@@ -486,6 +486,7 @@ approvalsV1Router.post('/approvals/:id/answer', (req: Request, res: Response, ne
     }, async (id) => keys.activeKey(id))
     if (approval.answer?.keyId) await keys.touchKey(approval.answer.keyId)
     if (approval.enrollsKey) await keys.applyKeyApproval(approval)
+    if (approval.turnsAskMeOff) await (await import('../../core/approvals/ask-me.js')).applyAskMeOff(approval)
     return { approval }
   })
 })

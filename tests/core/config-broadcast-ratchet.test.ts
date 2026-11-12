@@ -126,6 +126,7 @@ describe('the source: config:changed carries a config only through the helper', 
       .filter((f) => /\b(emitConfigChanged|emitSettingsConfigChanged)\(/.test(fs.readFileSync(f, 'utf8')))
       .map((f) => path.relative(ROOT, f)).sort()
     expect(callers).toEqual([
+      'src/core/approvals/ask-me.ts',
       'src/core/config-broadcast.ts',
       'src/core/plugins/server-api.ts',
       'src/core/stt/auto-setup.ts',

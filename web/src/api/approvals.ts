@@ -106,3 +106,19 @@ export function removeApprovalKey(id: string): Promise<{ ok: true }> {
 export function setApprovalsAskMe(askMe: boolean): Promise<unknown> {
   return apiPut('/api/config', { approvals: { ask_me: askMe } });
 }
+
+/**
+ * Turn approvals off. While a device signs approvals the server does not take an unsigned off: it
+ * opens a "Turn approvals off" approval for Face ID or Touch ID and answers with its id
+ * (routes/config.ts, core/approvals/ask-me.ts requestAskMeOff).
+ */
+export async function turnApprovalsOff(): Promise<{ off: true } | { approvalId: string }> {
+  try {
+    await setApprovalsAskMe(false);
+    return { off: true };
+  } catch (err) {
+    const body = (err as { body?: { code?: unknown; approvalId?: unknown } }).body;
+    if (body?.code === 'signature_needed' && typeof body.approvalId === 'string') return { approvalId: body.approvalId };
+    throw err;
+  }
+}

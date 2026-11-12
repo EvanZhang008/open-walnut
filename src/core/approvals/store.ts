@@ -123,6 +123,9 @@ export async function sweepExpired(): Promise<number> {
 
 /** On boot: arm the clock of every pending approval and expire the overdue ones. */
 export async function initApprovals(): Promise<void> {
+  // The switch Walnut set last (ask-me.ts): an off it did not sign never reads as off.
+  const { loadAskMeLatch } = await import('./ask-me.js')
+  await loadAskMeLatch().catch((err) => log.web.warn('approvals: reading the switch failed', { error: String(err) }))
   await sweepExpired()
   // Keys an older Walnut kept for a Mac that has since enrolled a newer one (keys.ts).
   const { retireReplacedMacKeys } = await import('./keys.js')
@@ -144,6 +147,7 @@ export interface CreateInput {
   downgraded?: string
   enrollsKey?: string
   removesKey?: string
+  turnsAskMeOff?: true
   testRun?: string
   guard?: ApprovalGuard
   singleUse?: boolean
@@ -259,6 +263,7 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
     requester, createdAt, expiresAt, status: 'pending', waitTokenHash: sha(waitToken),
     ...(input.enrollsKey ? { enrollsKey: input.enrollsKey } : {}),
     ...(input.removesKey ? { removesKey: input.removesKey } : {}),
+    ...(input.turnsAskMeOff ? { turnsAskMeOff: true as const } : {}),
     ...(input.testRun ? { testRun: input.testRun } : {}),
     ...(input.guard ? { guard: input.guard } : {}),
     ...(input.singleUse ? { singleUse: true, ...signers } : {}),

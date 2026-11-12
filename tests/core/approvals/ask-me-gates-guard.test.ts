@@ -39,7 +39,7 @@ const GATES: Record<string, Gate> = {
   'src/core/hosts/host-exec-grant.ts': { asks: 1, reads: 'self' },
   'src/integrations/mail/approvals.ts': { asks: 1, reads: 'self' },
   'src/integrations/mail/unsubscribe.ts': { asks: 1, reads: 'self' },
-  'src/core/approvals/ask-me.ts': { asks: 1, kept: 'the off path itself: records an approved approval nobody was asked' },
+  'src/core/approvals/ask-me.ts': { asks: 2, kept: 'the off path itself (records an approved approval nobody was asked), and turning approvals off, which a device signs' },
   'src/core/approvals/keys.ts': { asks: 1, kept: 'a new signing device without its app\'s proof: the trust root of every signed approval' },
   'src/core/plugins/server-api.ts': { asks: 1, kept: 'a plugin\'s letters.send; the plugin reads letters.asksPerson() itself' },
   'src/integrations/mail/digest.ts': { asks: 1, kept: 'the mail digest the person set up: a report, not an ask' },

@@ -9,7 +9,7 @@
  * in a row takes the card, the row and the notification off together.
  */
 import { useSyncExternalStore } from 'react';
-import { answerApproval, enrollApprovalKey, listApprovals, setApprovalsAskMe, type Approval, type ApprovalKey } from '@/api/approvals';
+import { answerApproval, enrollApprovalKey, listApprovals, setApprovalsAskMe, turnApprovalsOff, type Approval, type ApprovalKey } from '@/api/approvals';
 import { onVaultSessionChange, vaultSession } from '@/api/vault';
 import { checkVault, vaultLive } from '@/api/vault-live';
 import { howToApprove, onlyDevice, signerKinds } from '../../../../src/core/approvals/signer-words';
@@ -350,13 +350,33 @@ export async function approveAndStopAsking(a: Approval): Promise<void> {
   await decideApproval(a, 'approve', kind === 'touch-id');
   if (state.done[a.id]?.status !== 'approved') { set({ stoppingId: null }); return; }
   try {
-    await setApprovalsAskMe(false);
+    const off = await askApprovalsOff();
+    if ('approvalId' in off) {
+      // A device signs approvals: the off is its own Face ID / Touch ID approval, open now.
+      set({ stoppingId: null });
+      return;
+    }
     log.info('approvals', 'the person turned approvals off from a card', { approvalId: a.id });
     showStopped({ id: a.id, at: Date.now() });
   } catch (err) {
     log.warn('approvals', 'turning approvals off from a card failed', { approvalId: a.id, error: err instanceof Error ? err.message : String(err) });
     set({ stoppingId: null, errors: { ...state.errors, [a.id]: 'Approved, but approvals could not be turned off. Try again in Settings › General.' } });
   }
+}
+
+/**
+ * Turn approvals off, from Settings or a card. While a device signs approvals the server opens a
+ * "Turn approvals off" approval instead (core/approvals/ask-me.ts): it is read in and opened here,
+ * so its Approve with Touch ID (or the iPhone's Face ID) is the next thing the person sees.
+ */
+export async function askApprovalsOff(): Promise<{ off: true } | { approvalId: string }> {
+  const out = await turnApprovalsOff();
+  if ('approvalId' in out) {
+    log.info('approvals', 'turning approvals off asks for a device signature', { approvalId: out.approvalId });
+    await refreshApprovals();
+    openApproval(out.approvalId);
+  }
+  return out;
 }
 
 /** How long the "won't ask you any more" note stays in the corner. */

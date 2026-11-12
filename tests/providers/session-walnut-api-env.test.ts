@@ -27,6 +27,7 @@ import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { setSelfApiRoot } from '../../src/lib/self-api-root.js'
 import { GIT_TMP_GUARD_COMMAND } from '../../src/providers/git-tmp-guard-hook.js'
+import { APPROVALS_GUARD_COMMAND } from '../../src/providers/approvals-guard-hook.js'
 import { TMP_WRITE_NOTE_COMMAND } from '../../src/providers/tmp-write-note-hook.js'
 import { CLONE_IDENTITY_COMMAND } from '../../src/providers/clone-identity-hook.js'
 import { STOP_UNANSWERED_HOOK_COMMAND } from '../../src/providers/stop-unanswered-hook.js'
@@ -83,6 +84,8 @@ const COMPACT_HOOK = {
 // the note after a Write of a draft or plan into /tmp (tmp-write-note-hook.ts), then the clone
 // identity hook before and after every Bash command (clone-identity-hook.ts).
 const GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: GIT_TMP_GUARD_COMMAND, timeout: 10 }] }
+// Then the guard refusing a write to Walnut's approval records (approvals-guard-hook.ts).
+const APPROVALS_GUARD = { matcher: 'Bash|Write|Edit|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command: APPROVALS_GUARD_COMMAND, timeout: 10 }] }
 const WRITE_NOTE = { matcher: 'Write', hooks: [{ type: 'command', command: TMP_WRITE_NOTE_COMMAND, timeout: 10 }] }
 const CLONE_IDENTITY = { matcher: 'Bash', hooks: [{ type: 'command', command: CLONE_IDENTITY_COMMAND, timeout: 10 }] }
 // Then the guard refusing a walnut call the shell would cut a "$14.99" from (shell-dollar-guard-hook.ts).
@@ -97,7 +100,7 @@ const TYPECHECK_GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: T
 const CODEX_GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: CODEX_PROVIDER_GUARD_COMMAND, timeout: 10 }] }
 // And the Stop hook that names a request the session has not answered (stop-unanswered-hook.ts).
 const STOP = { Stop: [{ hooks: [{ type: 'command', command: STOP_UNANSWERED_HOOK_COMMAND, timeout: 5 }] }] }
-const TOOL_HOOKS = { PreToolUse: [GUARD, CLONE_IDENTITY, DOLLAR_GUARD, KILL_GUARD, SOUND_GUARD, TYPECHECK_GUARD, CODEX_GUARD], PostToolUse: [WRITE_NOTE, CLONE_IDENTITY], ...STOP }
+const TOOL_HOOKS = { PreToolUse: [GUARD, APPROVALS_GUARD, CLONE_IDENTITY, DOLLAR_GUARD, KILL_GUARD, SOUND_GUARD, TYPECHECK_GUARD, CODEX_GUARD], PostToolUse: [WRITE_NOTE, CLONE_IDENTITY], ...STOP }
 
 const SESSION_HOOKS = { ...COMPACT_HOOK, ...TOOL_HOOKS }
 
@@ -152,6 +155,7 @@ describe('local session spawn → launching server URL', () => {
   it('every hook off and no server: argv unchanged from before them (no --settings)', async () => {
     process.env.WALNUT_COMPACT_OPEN_ITEMS = '0'
     process.env.WALNUT_TMP_GIT_GUARD = '0'
+    process.env.WALNUT_APPROVALS_GUARD = '0'
     process.env.WALNUT_TMP_WRITE_NOTE = '0'
     process.env.WALNUT_CLONE_IDENTITY = '0'
     process.env.WALNUT_SHELL_DOLLAR_GUARD = '0'
@@ -168,6 +172,7 @@ describe('local session spawn → launching server URL', () => {
       delete process.env.WALNUT_AUTO_ALLOW_OPS
       delete process.env.WALNUT_COMPACT_OPEN_ITEMS
       delete process.env.WALNUT_TMP_GIT_GUARD
+      delete process.env.WALNUT_APPROVALS_GUARD
       delete process.env.WALNUT_TMP_WRITE_NOTE
       delete process.env.WALNUT_CLONE_IDENTITY
       delete process.env.WALNUT_SHELL_DOLLAR_GUARD

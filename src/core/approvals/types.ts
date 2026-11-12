@@ -116,6 +116,8 @@ export interface ApprovalRecord {
   guard?: ApprovalGuard
   /** A removal approval: approving it removes this device key. */
   removesKey?: string
+  /** Turning approvals off (ask-me.ts requestAskMeOff): a device's signed Approve turns the switch off. */
+  turnsAskMeOff?: true
   canceledReason?: string
   /**
    * The test run that asked (core/test-run.ts): such an approval is shown only to that test

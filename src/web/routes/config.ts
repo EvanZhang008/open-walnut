@@ -671,8 +671,13 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
         res.status(400).json({ error: 'approvals must be { ask_me: boolean }' })
         return
       }
-      const { askMeOf } = await import('../../core/approvals/ask-me.js')
-      if (askMeOf({ approvals: a as { ask_me?: boolean } }) !== askMeOf(await getConfig())) {
+      // Written only through setAskMe (ask-me.ts), never by the generic merge below; turning it
+      // off while a device signs approvals is an approval of its own, whatever the headers say.
+      const askMe = await import('../../core/approvals/ask-me.js')
+      const current = await getConfig()
+      const want = askMe.storedAskMe({ approvals: a as { ask_me?: boolean } })
+      const changes = a.ask_me !== undefined && (want !== askMe.askMeOf(current) || (want && askMe.storedAskMe(current) !== true))
+      if (changes) {
         if (req.get('x-walnut-caller-sid')) {
           res.status(403).json({ error: 'Only the person turns approvals on or off (Settings, Approvals).', code: 'human_only' })
           return
@@ -682,7 +687,18 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
           res.status(409).json({ error: 'A test run does not change the person\'s Approvals switch.', code: 'test_run' })
           return
         }
+        if (want) await askMe.setAskMe(true, { person: true })
+        else if (await askMe.offNeedsSignature()) {
+          const os = await import('node:os')
+          const approval = await askMe.requestAskMeOff({ host: os.hostname() || 'this computer', local: true, process: 'Settings' })
+          res.status(409).json({
+            error: 'Turning approvals off needs Face ID or Touch ID: approve it in the Walnut Mac app or on your iPhone.',
+            code: 'signature_needed', approvalId: approval.id,
+          })
+          return
+        } else await askMe.setAskMe(false, { unsigned: 'no device signs approvals yet' })
       }
+      delete body.approvals
     }
 
     // The tunnel puts this server one address away from the internet, and its command runs

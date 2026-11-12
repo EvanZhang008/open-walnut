@@ -25,11 +25,13 @@ import { CLOUD_MODE } from '../constants.js'
 import { maskForMacClients, redactConfig } from './config-redact.js'
 import { bus, EventNames, type EmitOptions } from './event-bus.js'
 import { withoutCloudBoxHost } from './hosts/cloud-box-host.js'
+import { withSwitchAsItIs } from './approvals/ask-me.js'
 
 /** The config as a client may see it: the view `GET /api/config` answers with. */
 export function configForClients<T>(config: T): T {
-  return CLOUD_MODE ? redactConfig(config) as T : maskForMacClients(config)
+  return withSwitchAsItIs(CLOUD_MODE ? redactConfig(config) as T : maskForMacClients(config))
 }
+
 
 /** A `config:changed` payload as a client may see it: its `config`, if any, in the client view. */
 export function configChangedForClients(data: unknown): unknown {

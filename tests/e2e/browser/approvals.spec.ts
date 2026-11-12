@@ -103,6 +103,77 @@ test('a tap approval shows up live, and Approve and Deny each reach the asker', 
   expect((await waitFor(request, deny.approval.id, deny.waitToken)).approval.status).toBe('denied')
 })
 
+// With no device that signs: the card's "stop asking" turns approvals off at once. Before the
+// biometric test, which enrolls one (a fixture that already has one skips it).
+test('stop asking from the card, see it in Settings, and turn it back on there', async ({ page, request }) => {
+  const signers = await (await request.get('/api/v1/approvals/keys')).json() as { keys: Array<{ status: string }> }
+  test.skip(signers.keys.some((k) => k.status === 'active'), 'a signing device is enrolled on this fixture server: the next tests cover that path')
+  const setAskMe = (v: boolean) => request.put('/api/config', { data: { approvals: { ask_me: v } } })
+  expect((await setAskMe(true)).ok()).toBe(true)
+  try {
+    await page.goto('/')
+    await expect(page.locator('.app-layout, #root').first()).toBeVisible()
+    await offHome(page)
+
+    const askMeNow = async () => ((await (await request.get('/api/v1/approvals')).json()) as { askMe: boolean }).askMe
+    const note = page.getByTestId('approval-stopped-asking')
+
+    // Stop asking, then Undo: approvals are on again, the one approved stays approved.
+    const first = await ask(request, { what: `Post the release notes ${stamp()}` })
+    const firstCard = page.locator(`[data-testid="approval-card"][data-approval-id="${first.approval.id}"]`)
+    await expect(firstCard).toBeVisible({ timeout: 15_000 })
+    await firstCard.getByTestId('approval-stop-asking').click()
+    expect((await waitFor(request, first.approval.id, first.waitToken)).approval.status).toBe('approved')
+    await expect(note).toContainText('From now on agents go ahead without asking you')
+    await expect.poll(askMeNow).toBe(false)
+    await note.getByTestId('approval-stopped-undo').click()
+    await expect(note).toContainText('Agents ask you first again')
+    await expect.poll(askMeNow).toBe(true)
+
+    // Stop asking again, and keep it. Another request that was already waiting still waits, and the
+    // note says so (the corner shows the first one that came).
+    const made = await ask(request, { what: `Post the weekly update ${stamp()}` })
+    const earlier = await ask(request, { what: `Publish the preview site ${stamp()}` })
+    const card = page.locator(`[data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
+    await expect(card).toBeVisible({ timeout: 15_000 })
+    await card.getByTestId('approval-stop-asking').click()
+    expect((await waitFor(request, made.approval.id, made.waitToken)).approval.status).toBe('approved')
+    await expect(note).toContainText('From now on agents go ahead without asking you')
+    await expect(note.getByTestId('approval-stopped-still')).toContainText('1 other request still waits for you')
+    expect((await request.post(`/api/v1/approvals/${earlier.approval.id}/answer`, { data: { decision: 'deny' } })).ok()).toBe(true)
+
+    // Off: the next ask is answered at once, with no card.
+    const quietWhat = `Post the changelog ${stamp()}`
+    const quiet = await ask(request, { what: quietWhat })
+    expect(quiet.approval).toMatchObject({ status: 'approved', unasked: 'approve' })
+    await page.waitForTimeout(1500)
+    await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${quiet.approval.id}"]`)).toHaveCount(0)
+
+    // The note's link opens Settings, General: the row reads off, with what went ahead under it.
+    await note.getByTestId('approval-stopped-settings').click()
+    const toggle = page.locator('#settings-approvals-ask-me')
+    await expect(toggle).toHaveAttribute('aria-checked', 'false', { timeout: 15_000 })
+    await expect(page.getByTestId('settings-approvals-unasked')).toContainText(quietWhat, { timeout: 20_000 })
+    // A row opens to what it was: the command and who asked.
+    const row = page.getByTestId('settings-approvals-unasked-item').filter({ hasText: quietWhat })
+    await row.locator('summary').click()
+    await expect(row).toContainText('release.sh')
+    if (process.env.APR_SHOTS) await page.getByTestId('settings-approvals-ask-me-row').screenshot({ path: `${process.env.APR_SHOTS}/settings-switch-off.png` })
+
+    // On again from Settings: the next ask waits for the person.
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    // The record stays once something went ahead, said to be from while approvals were off.
+    await expect(page.getByTestId('settings-approvals-unasked')).toContainText('While approvals were off')
+    await expect.poll(askMeNow).toBe(true)
+    const asked = await ask(request, { what: `Post the roadmap ${stamp()}` })
+    await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${asked.approval.id}"]`)).toBeVisible({ timeout: 15_000 })
+    await request.post(`/api/v1/approvals/${asked.approval.id}/answer`, { data: { decision: 'deny' } })
+  } finally {
+    await setAskMe(true)
+  }
+})
+
 test('biometric: a tap with a reason when no device signs, then Face ID only once one does', async ({ page, request }) => {
   const keys = await (await request.get('/api/v1/approvals/keys')).json() as { keys: Array<{ status: string }> }
   test.skip(keys.keys.some((k) => k.status === 'active'), 'a signing device is already enrolled on this fixture server')
@@ -684,68 +755,76 @@ test('the corner never covers a page\'s left column on any page of the sidebar, 
 // it and turns the switch off, Settings shows it off, a new ask goes ahead with no card, and turning
 // it back on in Settings brings the cards back. The fixture starts asking (test setup default), and
 // the test leaves it on for the other files.
-test('stop asking from the card, see it in Settings, and turn it back on there', async ({ page, request }) => {
+
+// While a device signs approvals, turning them off is its own approval (core/approvals/ask-me.ts):
+// from a card's "stop asking" and from the Settings switch, the switch stays on until the device's
+// Face ID signs, and a browser that cannot sign says to use the iPhone (2026-11-12, a review of the
+// Git gate: an unsigned PUT used to turn every approval off).
+test('with a device that signs, turning approvals off waits for its Face ID, from a card and from Settings', async ({ page, request }) => {
   const setAskMe = (v: boolean) => request.put('/api/config', { data: { approvals: { ask_me: v } } })
+  const askMeNow = async () => ((await (await request.get('/api/v1/approvals')).json()) as { askMe: boolean }).askMe
+  // This test's own iPhone: its key signs the turn-off as the phone would.
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+  const spki = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+  const paired = await request.post('/api/devices', { data: { name: `approvals-off-spec-${stamp()}` } })
+  const token = (await paired.json() as { token: string }).token
+  const enrolled = await request.post('/api/v1/approvals/keys', { data: { publicKey: spki, name: 'Spec iPhone', kind: 'iphone' }, headers: { authorization: `Bearer ${token}` } })
+  expect(enrolled.status()).toBe(200)
+  const keyId = (await enrolled.json() as { key: { id: string } }).key.id
+  const signTurnOff = async (id: string) => {
+    const a = (await (await request.get(`/api/v1/approvals/${id}`)).json() as { approval: { digest: string; what: string } }).approval
+    expect(a.what).toContain('Turn approvals off')
+    const signature = crypto.sign('sha256', Buffer.from(`walnut-approval-answer-v1\n${a.digest}\napprove`), { key: privateKey, dsaEncoding: 'der' }).toString('base64')
+    expect((await request.post(`/api/v1/approvals/${id}/answer`, { data: { decision: 'approve', keyId, signature } })).ok()).toBe(true)
+  }
   expect((await setAskMe(true)).ok()).toBe(true)
   try {
     await page.goto('/')
     await expect(page.locator('.app-layout, #root').first()).toBeVisible()
     await offHome(page)
 
-    const askMeNow = async () => ((await (await request.get('/api/v1/approvals')).json()) as { askMe: boolean }).askMe
-    const note = page.getByTestId('approval-stopped-asking')
-
-    // Stop asking, then Undo: approvals are on again, the one approved stays approved.
+    // From a card: this request is approved, and the turn-off opens as its own Face ID approval.
     const first = await ask(request, { what: `Post the release notes ${stamp()}` })
     const firstCard = page.locator(`[data-testid="approval-card"][data-approval-id="${first.approval.id}"]`)
     await expect(firstCard).toBeVisible({ timeout: 15_000 })
     await firstCard.getByTestId('approval-stop-asking').click()
     expect((await waitFor(request, first.approval.id, first.waitToken)).approval.status).toBe('approved')
-    await expect(note).toContainText('From now on agents go ahead without asking you')
+    const dialog = page.getByTestId('approval-dialog')
+    await expect(dialog).toContainText('Turn approvals off', { timeout: 15_000 })
+    await expect(dialog.getByRole('button', { name: /^Approve/ })).toHaveCount(0)
+    await expect(page.getByTestId('approval-stopped-asking')).toHaveCount(0)
+    expect(await askMeNow()).toBe(true)
+    if (process.env.APR_SHOTS) await dialog.screenshot({ path: `${process.env.APR_SHOTS}/turn-off-dialog.png` })
+    const turnOffId = await page.locator('.approval-dialog').getAttribute('data-approval-id')
+    await signTurnOff(turnOffId!)
     await expect.poll(askMeNow).toBe(false)
-    await note.getByTestId('approval-stopped-undo').click()
-    await expect(note).toContainText('Agents ask you first again')
-    await expect.poll(askMeNow).toBe(true)
-
-    // Stop asking again, and keep it. Another request that was already waiting still waits, and the
-    // note says so (the corner shows the first one that came).
-    const made = await ask(request, { what: `Post the weekly update ${stamp()}` })
-    const earlier = await ask(request, { what: `Publish the preview site ${stamp()}` })
-    const card = page.locator(`[data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
-    await expect(card).toBeVisible({ timeout: 15_000 })
-    await card.getByTestId('approval-stop-asking').click()
-    expect((await waitFor(request, made.approval.id, made.waitToken)).approval.status).toBe('approved')
-    await expect(note).toContainText('From now on agents go ahead without asking you')
-    await expect(note.getByTestId('approval-stopped-still')).toContainText('1 other request still waits for you')
-    expect((await request.post(`/api/v1/approvals/${earlier.approval.id}/answer`, { data: { decision: 'deny' } })).ok()).toBe(true)
-
-    // Off: the next ask is answered at once, with no card.
-    const quietWhat = `Post the changelog ${stamp()}`
-    const quiet = await ask(request, { what: quietWhat })
+    await page.keyboard.press('Escape')
+    const quiet = await ask(request, { what: `Post the changelog ${stamp()}` })
     expect(quiet.approval).toMatchObject({ status: 'approved', unasked: 'approve' })
-    await page.waitForTimeout(1500)
-    await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${quiet.approval.id}"]`)).toHaveCount(0)
 
-    // The note's link opens Settings, General: the row reads off, with what went ahead under it.
-    await note.getByTestId('approval-stopped-settings').click()
+    // From Settings: on needs nothing; off keeps the switch on until the phone signs.
+    if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()
+    await page.locator('.sidebar-nav a[href="/settings"]').click()
     const toggle = page.locator('#settings-approvals-ask-me')
     await expect(toggle).toHaveAttribute('aria-checked', 'false', { timeout: 15_000 })
-    await expect(page.getByTestId('settings-approvals-unasked')).toContainText(quietWhat, { timeout: 20_000 })
-    // A row opens to what it was: the command and who asked.
-    const row = page.getByTestId('settings-approvals-unasked-item').filter({ hasText: quietWhat })
-    await row.locator('summary').click()
-    await expect(row).toContainText('release.sh')
-    if (process.env.APR_SHOTS) await page.getByTestId('settings-approvals-ask-me-row').screenshot({ path: `${process.env.APR_SHOTS}/settings-switch-off.png` })
-
-    // On again from Settings: the next ask waits for the person.
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-checked', 'true')
-    // The record stays once something went ahead, said to be from while approvals were off.
-    await expect(page.getByTestId('settings-approvals-unasked')).toContainText('While approvals were off')
     await expect.poll(askMeNow).toBe(true)
-    const asked = await ask(request, { what: `Post the roadmap ${stamp()}` })
-    await expect(page.locator(`[data-testid="approval-card"][data-approval-id="${asked.approval.id}"]`)).toBeVisible({ timeout: 15_000 })
-    await request.post(`/api/v1/approvals/${asked.approval.id}/answer`, { data: { decision: 'deny' } })
+    await toggle.click()
+    await expect(dialog).toContainText('Turn approvals off', { timeout: 15_000 })
+    const settingsOffId = await page.locator('.approval-dialog').getAttribute('data-approval-id')
+    expect(settingsOffId).not.toBe(turnOffId)
+    await page.keyboard.press('Escape')
+    const row = page.getByTestId('settings-approvals-ask-me-row')
+    await expect(row).toContainText('Approve “Turn approvals off” with Face ID or Touch ID to finish')
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    expect(await askMeNow()).toBe(true)
+    if (process.env.APR_SHOTS) await row.screenshot({ path: `${process.env.APR_SHOTS}/settings-turn-off-waiting.png` })
+    await signTurnOff(settingsOffId!)
+    // The phone's yes reaches this window by itself: the switch reads off, the note goes.
+    await expect(toggle).toHaveAttribute('aria-checked', 'false', { timeout: 15_000 })
+    await expect(row).not.toContainText('Turn approvals off')
+    expect(await askMeNow()).toBe(false)
   } finally {
     await setAskMe(true)
   }
