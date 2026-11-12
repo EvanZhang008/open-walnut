@@ -111,14 +111,27 @@ agentMemoryV1Router.get('/tasks/:id/memory-files', route(async (req, res) => {
   res.json({ task_id: id ?? SHARED_FOLDER, title, files: await listMemoryFiles(id) })
 }))
 
+/** The host the task's session runs on: the caller's own session when it is the task's, else its newest one. */
+async function sessionHostOf(taskId: string, callerSid: string | undefined): Promise<string | undefined> {
+  const { getSessionByClaudeId, getSessionsForTask } = await import('../../core/session-tracker.js')
+  const caller = callerSid ? await getSessionByClaudeId(callerSid).catch(() => null) : null
+  if (caller?.taskId === taskId) return caller.host ?? undefined
+  const records = await getSessionsForTask(taskId).catch(() => [])
+  const newest = [...records].sort((a, b) => (b.lastActiveAt || b.startedAt || '').localeCompare(a.lastActiveAt || a.startedAt || ''))[0]
+  return newest?.host ?? undefined
+}
+
 agentMemoryV1Router.get('/tasks/:id/memory-files/:name', route(async (req, res) => {
   const { id } = await folderTask(param(req.params.id))
   res.json(await readMemoryFile(id, param(req.params.name), {
     // A pointer the notice or the compaction hook told before the session's next start wrote its file.
+    // Composed from the inputs a spawn reads (its host's directory and fleet, its own notes), so a
+    // moved block of the task's state is written again as its session would see it.
     regenerate: async () => {
       if (!id) return []
-      const { composeInstructions } = await import('../../core/sessions/session-context.js')
-      return composeInstructions(await getTask(id), { taskLine: '', taskDir: '', fleet: '' }).overflows
+      const { composeSessionContext } = await import('../../core/sessions/session-context.js')
+      const { composed } = await composeSessionContext(id, await sessionHostOf(id, header(req, 'x-walnut-caller-sid')))
+      return composed.overflows
     },
   }))
 }))

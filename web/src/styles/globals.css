@@ -16304,7 +16304,7 @@ a.task-kebab-info:hover {
   font-size: 12px;
 }
 
-/* Skills index — parsed <available_skills> XML rendered as a grouped list */
+/* Skills index: the parsed index (one line per skill, or the XML form) rendered as a grouped list */
 .context-skills-index {
   max-height: 400px;
   overflow-y: auto;

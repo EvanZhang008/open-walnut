@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { AgentText } from '@/components/common/AgentText';
 import type { ContextInspectorResponse } from '@/api/context';
 import { ContextSection } from './ContextSection';
+import { parseSkillsIndex } from './skills-index-parse';
 
 interface ContextInspectorPanelProps {
   data: ContextInspectorResponse | null;
@@ -17,42 +18,16 @@ function ContextMarkdown({ content, fallback }: { content: string; fallback?: st
   return <AgentText className="context-markdown" unknownSource taskIds="links" text={text} />;
 }
 
-interface ParsedSkill {
-  name: string;
-  type: string;
-  description: string;
-  location: string;
-}
-
 /**
- * Skills section renderer — the prompt is a markdown preamble followed by an
- * <available_skills> XML index. Rendered as raw markdown the XML collapses into
- * an unreadable wall of text, so parse it and show a grouped, scannable list.
+ * Skills section renderer: the prompt is a preamble followed by the skills index (one line per
+ * skill, or the XML form). Rendered as raw markdown it reads as a wall of text, so parse it and
+ * show a grouped, scannable list (skills-index-parse.ts).
  */
 function SkillsIndexView({ content }: { content: string }) {
-  const parsed = useMemo(() => {
-    // lastIndexOf: the preamble TEXT mentions "<available_skills>" — the real
-    // XML block is the final occurrence, at the end of the prompt.
-    const xmlStart = content.lastIndexOf('<available_skills>');
-    if (xmlStart === -1) return null;
-    const preamble = content.slice(0, xmlStart).trim();
-    try {
-      const doc = new DOMParser().parseFromString(content.slice(xmlStart), 'text/xml');
-      if (doc.querySelector('parsererror')) return null;
-      const categories = [...doc.querySelectorAll('category')].map((cat) => ({
-        name: cat.getAttribute('name') ?? 'general',
-        skills: [...cat.querySelectorAll('skill')].map((s): ParsedSkill => ({
-          name: s.querySelector('name')?.textContent ?? '',
-          type: s.querySelector('type')?.textContent ?? '',
-          description: s.querySelector('description')?.textContent ?? '',
-          location: s.querySelector('location')?.textContent ?? '',
-        })),
-      }));
-      return { preamble, categories };
-    } catch {
-      return null;
-    }
-  }, [content]);
+  const parsed = useMemo(
+    () => parseSkillsIndex(content, (xml) => new DOMParser().parseFromString(xml, 'text/xml')),
+    [content],
+  );
 
   if (!parsed) return <ContextMarkdown content={content} fallback="(No skills loaded)" />;
 
@@ -68,7 +43,7 @@ function SkillsIndexView({ content }: { content: string }) {
             <div key={s.location || s.name} className="context-skill-row">
               <div className="context-skill-head">
                 <span className="context-skill-name">{s.name}</span>
-                <span className={`context-skill-type context-skill-type-${s.type}`}>{s.type}</span>
+                {s.type && <span className={`context-skill-type context-skill-type-${s.type}`}>{s.type}</span>}
               </div>
               <div className="context-skill-desc">{s.description}</div>
               <div className="context-skill-location">{s.location}</div>

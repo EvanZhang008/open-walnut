@@ -34,6 +34,7 @@ import { isMemorySafetyEnforced, screenMemoryText } from './memory-safety.js';
 import { registry } from './integration-registry.js';
 import { listOwnedSkillDirs } from './plugins/skill-registry.js';
 import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, BUILTIN_SKILLS_DIR } from '../constants.js';
+import { promptRollback } from './sessions/prompt-blocks.js';
 import { sortedNames } from '../lib/dir-order.js';
 
 export type SkillType = 'action' | 'knowledge';
@@ -499,10 +500,47 @@ function formatSessionIndex(skills: SkillMeta[]): string {
   return `${SESSION_SKILLS_PREAMBLE}\n\n${groups.join('\n\n')}`;
 }
 
+/**
+ * The index as it was before the one-line form, for the rollback switch only
+ * (prompt-blocks.ts promptRollback): the XML index with its preamble, and the short
+ * form an ACP engine read on its first message. Remove with the switch.
+ */
+const ROLLBACK_SESSION_SKILLS_PREAMBLE = `## Walnut skills (mandatory)
+These are Walnut's OWN skills — they live outside any CLI's native skill store, so no engine auto-discovers them; this injected index is the only way you see them. They are IN ADDITION to whatever skills your runtime loaded natively.
+Before replying: scan ALL <available_skills> <description> entries — this scan is not optional.
+- Skills come in two types: **action** (procedures/how-tos to follow) and **knowledge** (curated domain facts to consult).
+- If any skill might apply, ERR ON THE SIDE OF LOADING IT: read its SKILL.md at <location> with your file-read tool. Loading an unneeded skill is cheap; missing a needed one causes wrong answers.
+- Skills encode the user's preferred approach, conventions, and quality standards — load them even for tasks you already know how to do, because the skill defines how it should be done HERE.
+- Multiple relevant skills? Load each relevant one — knowledge skills especially are meant to be consulted together.
+- If a skill you loaded is outdated, missing a step, or wrong, fix its SKILL.md in place (plain file).
+- Only skip loading when you are confident none apply.`;
+
+const ROLLBACK_COMPACT_SKILLS_PREAMBLE = `## Walnut skills
+Walnut's own skills, which no engine finds by itself. When a skill below fits the request, read its SKILL.md with your file-read tool before you act, and follow it; skills hold the user's conventions. If one is wrong or out of date, fix its SKILL.md.`;
+
+function formatRollbackCompactIndex(skills: SkillMeta[]): string {
+  if (skills.length === 0) return '';
+  const byRoot = new Map<string, string[]>();
+  for (const s of skills.map(screenIndexEntry)) {
+    const root = path.dirname(path.dirname(s.location));
+    const line = `- ${path.relative(root, s.location)} (${s.type}): ${s.description.replace(/\s+/g, ' ').trim()}`;
+    byRoot.set(root, [...(byRoot.get(root) ?? []), line]);
+  }
+  const groups = [...byRoot.entries()].map(([root, lines]) => `In ${root}:\n${lines.join('\n')}`);
+  return `${ROLLBACK_COMPACT_SKILLS_PREAMBLE}\n\n${groups.join('\n\n')}`;
+}
+
+/** The session index in the form the prompt takes now (the rollback switch: the XML form). */
+function formatSessionIndexNow(skills: SkillMeta[]): string {
+  return promptRollback() ? formatSkillsPrompt(skills, ROLLBACK_SESSION_SKILLS_PREAMBLE) : formatSessionIndex(skills);
+}
+
 // ─── cache + public API ─────────────────────────────────────────────
 
 let cachedPrompt: string | undefined;
-let cachedSessionPrompt: string | undefined;
+/** Keyed by the rollback switch's state, so flipping it never reads the other form. */
+let cachedSessionPrompt: { rollback: boolean; text: string } | undefined;
+let cachedCompactPrompt: string | undefined;
 /** All sources (incl. ~/.claude/skills) — management UI + skill_view resolution. */
 let cachedSkills: (SkillMeta & { dirName: string })[] | undefined;
 /** Prompt scope only (no ~/.claude/skills) — what the Personal AI's index is built from. */
@@ -513,6 +551,7 @@ let skillsCacheGeneration = 0;
 export function clearSkillsCache(): void {
   cachedPrompt = undefined;
   cachedSessionPrompt = undefined;
+  cachedCompactPrompt = undefined;
   cachedSkills = undefined;
   cachedPromptSkills = undefined;
   skillsCacheGeneration++;
@@ -582,9 +621,18 @@ export async function buildSkillsPrompt(): Promise<string> {
  * short form on every engine (formatSessionIndex).
  */
 export async function buildSessionSkillsPrompt(): Promise<string> {
-  if (cachedSessionPrompt !== undefined) return cachedSessionPrompt;
-  cachedSessionPrompt = formatSessionIndex(await getPromptSkills());
-  return cachedSessionPrompt;
+  const rollback = promptRollback();
+  if (cachedSessionPrompt?.rollback === rollback) return cachedSessionPrompt.text;
+  const text = formatSessionIndexNow(await getPromptSkills());
+  cachedSessionPrompt = { rollback, text };
+  return text;
+}
+
+/** The short form an ACP engine read on its first message, for the rollback switch only (buildLaneProfile compactSkills). */
+export async function buildCompactSessionSkillsPrompt(): Promise<string> {
+  if (cachedCompactPrompt !== undefined) return cachedCompactPrompt;
+  cachedCompactPrompt = formatRollbackCompactIndex(await getPromptSkills());
+  return cachedCompactPrompt;
 }
 
 /**
@@ -592,7 +640,7 @@ export async function buildSessionSkillsPrompt(): Promise<string> {
  * its copy of the Mac's skills (stage 4d), never from the skill files git sync wrote there.
  */
 export function formatSessionSkillsPrompt(skills: SkillMeta[]): string {
-  return formatSessionIndex(skills);
+  return formatSessionIndexNow(skills);
 }
 
 /** List all eligible skills with dirName, name, and description (for UI/API). */

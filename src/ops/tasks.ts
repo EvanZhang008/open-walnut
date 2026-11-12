@@ -964,8 +964,8 @@ defineOp({
 })
 
 // A task's own MEMORY.md (src/core/sessions/agent-memory.ts): Main's, a lead's, a leader's working memory.
-const MEMORY_FOLDER_SCOPE = 'Your memory folder holds the rest of any always-loaded prompt section Walnut cut to its size (your '
-  + 'prompt names the file where it cut, e.g. org-threads.md) and your own longer notes (file on agent_memory_write).'
+const MEMORY_FOLDER_SCOPE = 'Your memory folder holds the rest of a long list Walnut cut out of your always-loaded prompt (the '
+  + 'skills index, the global MEMORY.md, the machines; your prompt names the file where it cut) and your own longer notes (file on agent_memory_write).'
 const AGENT_MEMORY_SCOPE = 'Your own MEMORY.md is the working memory of your task (Main, a lead, a leader): pending items, '
   + 'a deadline days away, reminders, things to raise later, facts you learned for this work. Only you read it; it never '
   + 'reaches the user\'s Brief, Board or status. It is NOT Walnut\'s global MEMORY.md / USER.md (memory_read / memory_write).'
@@ -977,7 +977,7 @@ defineOp({
     + `${MEMORY_FOLDER_SCOPE} With file: that file whole (yours first, then the shared one). task defaults to your own task.`,
   input: {
     task: z.string().min(1).optional().describe('Task id or unique prefix; default: your own task'),
-    file: z.string().min(1).max(66).optional().describe('A memory folder file to read whole, e.g. "org-threads.md"'),
+    file: z.string().min(1).max(66).optional().describe('A memory folder file to read whole, e.g. "skills-index.1a2b3c4d.md"'),
     hook: z.enum(['startup', 'compact']).optional().describe(
       'Set by Walnut\'s own SessionStart hook for Main and the VPs: what you keep across conversations (your MEMORY.md, '
       + 'your skills\' index, your recent work in your Threads) in the JSON shape the hook prints'),
@@ -994,8 +994,9 @@ defineOp({
     if (typeof args.file === 'string' && args.file.trim()) {
       // A taskless session reads the shared folder: what its prompt moved is there.
       const body = await call('GET', `/tasks/${encodeURIComponent(id || '_shared')}/memory-files/${encodeURIComponent(args.file.trim())}`) as
-        { name?: string; walnut?: boolean; shared?: boolean; at?: string }
-      return withOutcome(body, `${body.name}${body.walnut ? ', Walnut\'s own file' : ', your note'}${body.shared ? ' (shared)' : ''}, written ${body.at}.`,
+        { name?: string; walnut?: boolean; shared?: boolean; at?: string; replaces?: string }
+      const newer = body.replaces ? ` The file your prompt names (${body.replaces}) is an older version of it, replaced since your session started: this is the current one.` : ''
+      return withOutcome(body, `${body.name}${body.walnut ? ', Walnut\'s own file' : ', your note'}${body.shared ? ' (shared)' : ''}, written ${body.at}.${newer}`,
         body.walnut ? 'It is part of your instructions: follow it where it applies.' : 'No further action is required.')
     }
     if (!id) throw new Error('No task of your own: pass task.')

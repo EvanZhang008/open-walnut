@@ -23,6 +23,18 @@ export function fixtureUserMd(): string {
   return `---\nname: User Profile\ndescription: >\n  Who the user is.\n---\n\n# USER.md — User Profile\n\n${sections.join('\n\n')}\n`
 }
 
+/**
+ * USER.md in a script of three bytes a character (CJK), at the memory store's 4,000-character budget:
+ * 4,000 characters, about 12 KB. Built from code points, never literal text (repo rule: tests carry
+ * non-ASCII only as escapes or generated data).
+ */
+export function fixtureWideUserMd(): string {
+  const word = (i: number) => String.fromCodePoint(0x4e00 + ((i * 37) % 2000), 0x4e00 + ((i * 91) % 2000), 0x4e00 + ((i * 53) % 2000))
+  const line = (s: number, i: number) => `- ${Array.from({ length: 12 }, (_, k) => word(s * 100 + i * 12 + k)).join('')}\u3002`
+  const sections = Array.from({ length: 6 }, (_, s) => `## ${word(s)}\n\n${Array.from({ length: 16 }, (_, i) => line(s, i)).join('\n')}`)
+  return `# USER.md\n\n${sections.join('\n\n')}\n`.slice(0, 4_000)
+}
+
 /** A global MEMORY.md of about 10 KB: standing rules first, then conventions. */
 export function fixtureMemoryMd(): string {
   const rule = (n: number) => `## Rule ${n}: a standing rule\n\n${sentence(n, 'standing')} ${sentence(n + 100, 'standing')}\n- ${sentence(n + 200, 'example')}`
@@ -66,9 +78,9 @@ export function fixtureState(role: PromptRole): { taskLine: string; taskDir: str
 }
 
 /** Write the fixture USER.md and MEMORY.md into a Walnut home and read the profile in. */
-export async function seedFixtureHome(home: string): Promise<void> {
+export async function seedFixtureHome(home: string, opts: { userMd?: string } = {}): Promise<void> {
   await fs.mkdir(path.join(home, 'memory'), { recursive: true })
-  await fs.writeFile(path.join(home, 'memory', 'USER.md'), fixtureUserMd())
+  await fs.writeFile(path.join(home, 'memory', 'USER.md'), opts.userMd ?? fixtureUserMd())
   await fs.writeFile(path.join(home, 'memory', 'MEMORY.md'), fixtureMemoryMd())
   const { refreshUserProfile } = await import('../../src/core/sessions/user-profile-context.js')
   await refreshUserProfile()
@@ -77,31 +89,36 @@ export async function seedFixtureHome(home: string): Promise<void> {
 export interface ComposedRolePrompt {
   role: PromptRole
   text: string
+  /** Characters, as caps and budgets measure (prompt-blocks.ts). */
+  chars: number
   bytes: number
-  blocks: Array<{ id: string; bytes: number; capped: boolean }>
-  overflows: Array<{ id: string; bytes: number }>
+  blocks: Array<{ id: string; chars: number; bytes: number; capped: boolean }>
+  overflows: Array<{ id: string; chars: number; text: string }>
 }
 
 /**
- * The whole appended prompt of one kind of session, persona and session context, as the spawn
- * joins them (claude-code-session.ts: profile prompt, then "\n\n", then the session context).
+ * The whole appended prompt of one kind of session, persona and session context, joined as the
+ * spawn joins them (prompt-blocks.ts joinAppendedPrompt, which claude-code-session.ts calls).
  * Main and an ask carry the Personal AI persona; a lead and a worker carry only Walnut's context.
  */
-export async function composeRolePrompt(role: PromptRole, opts: { uncapped?: boolean } = {}): Promise<ComposedRolePrompt> {
+export async function composeRolePrompt(
+  role: PromptRole, opts: { uncapped?: boolean; memoryMd?: string; task?: Record<string, unknown> } = {},
+): Promise<ComposedRolePrompt> {
   const { composeInstructions } = await import('../../src/core/sessions/session-context.js')
   const { personalAiPersona } = await import('../../src/core/sessions/profiles.js')
   const { formatSessionSkillsPrompt } = await import('../../src/core/skill-loader.js')
   const { laneMemoryContextOf } = await import('../../src/core/sessions/personal-ai-lane.js')
-  const { byteLength } = await import('../../src/core/sessions/prompt-blocks.js')
-  const context = composeInstructions(FIXTURE_TASKS[role] as never, fixtureState(role), opts)
-  const blocks = context.blocks.map((b) => ({ id: b.id, bytes: b.bytes, capped: b.capped }))
-  const overflows = context.overflows.map((o) => ({ id: o.id, bytes: o.bytes }))
+  const { byteLength, charLength, joinAppendedPrompt } = await import('../../src/core/sessions/prompt-blocks.js')
+  const context = composeInstructions({ ...FIXTURE_TASKS[role], ...opts.task } as never, fixtureState(role), opts)
+  const blocks = context.blocks.map((b) => ({ id: b.id, chars: b.chars, bytes: b.bytes, capped: b.capped }))
+  const overflows = context.overflows.map((o) => ({ id: o.id, chars: o.chars, text: o.text }))
   let text = context.text()
   if (role === 'main' || role === 'ask') {
-    const persona = personalAiPersona('Avery', formatSessionSkillsPrompt(fixtureSkills()), laneMemoryContextOf(fixtureMemoryMd().trim(), ''), { withSessionContext: true, ...opts })
-    text = `${persona.systemPrompt}\n\n${text}`
-    blocks.unshift(...persona.blocks.map((b) => ({ id: b.id, bytes: b.bytes, capped: b.capped })))
-    overflows.unshift(...persona.overflows.map((o) => ({ id: o.id, bytes: o.bytes })))
+    const persona = personalAiPersona('Avery', formatSessionSkillsPrompt(fixtureSkills()),
+      laneMemoryContextOf((opts.memoryMd ?? fixtureMemoryMd()).trim(), ''), { withSessionContext: true, uncapped: opts.uncapped })
+    text = joinAppendedPrompt([persona.systemPrompt, text])
+    blocks.unshift(...persona.blocks.map((b) => ({ id: b.id, chars: b.chars, bytes: b.bytes, capped: b.capped })))
+    overflows.unshift(...persona.overflows.map((o) => ({ id: o.id, chars: o.chars, text: o.text })))
   }
-  return { role, text, bytes: byteLength(text), blocks, overflows }
+  return { role, text, chars: charLength(text), bytes: byteLength(text), blocks, overflows }
 }

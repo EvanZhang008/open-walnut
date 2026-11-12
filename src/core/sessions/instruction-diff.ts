@@ -21,7 +21,6 @@
  * keep asking these)" became "## Standing rules" and all its lines went out again).
  */
 
-import { POINTER_OPENING } from './prompt-blocks.js'
 import { createHash } from 'node:crypto';
 
 export const hash = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
@@ -132,21 +131,6 @@ export interface BlockGone { id: string; heading?: string; from: string; removed
 export interface Due { plain: Changed[]; blocks: BlockChange[]; gone: BlockGone[] }
 
 /**
- * A block a cap cut (prompt-blocks.ts) reads as its head line, then a pointer line to the rest.
- * A session spawned before the cut holds that line whole, so the head is no change to it; the
- * pointer is told (a few hundred bytes), so the session knows where the rest lives from then on.
- * Only a line right before a pointer counts as a head, and only one long enough to be a rule of
- * its own, so a rule shortened by hand (a clause taken off its end) is still told.
- */
-const isPointer = (line: string | undefined): boolean => !!line && line.startsWith(POINTER_OPENING)
-
-function headOfHeld(line: string, prompt: Parsed): boolean {
-  if (line.length < 80) return false
-  for (const held of prompt.all) if (held.length > line.length && held.startsWith(line)) return true
-  return false
-}
-
-/**
  * What to tell: the current plain lines the prompt lacks and the session was not
  * told (`toldPlain`, line hashes), and every block whose version differs from the
  * one the session holds (`views`, by block id; a block missing there is read from
@@ -157,9 +141,7 @@ export function dueChanges(
   // By block id: lines its source still holds that did not fit in the block (user-profile-context.ts `cut`).
   beyond: Record<string, Set<string>> = {},
 ): Due | null {
-  const plain = current.plain.filter((c, i) => !prompt.all.has(c.line) && !toldPlain.has(hash(c.line))
-    // The head a cap cut, when the session holds that line whole: no change to it (its pointer is told).
-    && !(isPointer(current.plain[i + 1]?.line) && headOfHeld(c.line, prompt)));
+  const plain = current.plain.filter((c) => !prompt.all.has(c.line) && !toldPlain.has(hash(c.line)));
   const held = (id: string): BlockView | undefined => {
     if (views[id]) return views[id];
     const b = prompt.blocks.get(id);

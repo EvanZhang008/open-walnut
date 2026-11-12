@@ -138,6 +138,7 @@ import { hardStopTokens } from '../core/sessions/context-full.js'
 import { deliveryLatency, outOfPathBetween, REAL_WAITS, resumeMachineShare, type KnownLineFate, type OutOfPathWaits } from './delivery-latency.js'
 import { memoryPressureSeenSince } from '../core/memory-pressure.js'
 import { linkDownIntervals } from './host-link-ledger.js'
+import { joinAppendedPrompt, joinCallerAndContext } from '../core/sessions/prompt-blocks.js'
 import {
   openTurn,
   settleTurn,
@@ -2903,7 +2904,7 @@ export class ClaudeCodeSession {
     }
     if (appendSystemPrompt) appendParts.push(appendSystemPrompt)
     if (appendParts.length > 0) {
-      args.push('--append-system-prompt', appendParts.join('\n\n'))
+      args.push('--append-system-prompt', joinAppendedPrompt(appendParts))
     }
     // Inline JSON is safe in an arg: the bun daemon shell-quotes every element
     // and the JS daemon spawns without a shell (no re-parsing either way).
@@ -13514,9 +13515,7 @@ export class SessionRunner {
         const ctx = await buildSessionContext(taskId ?? '', cwd, data.host)
         if (ctx.systemPrompt) {
           // Combine: caller-provided prompt takes priority, task context appended after
-          appendSystemPrompt = appendSystemPrompt
-            ? `${appendSystemPrompt}\n\n---\n\n## Task Context\n\n${ctx.systemPrompt}`
-            : ctx.systemPrompt
+          appendSystemPrompt = joinCallerAndContext(appendSystemPrompt, ctx.systemPrompt)
           log.session.info('session context built', { taskId, promptLength: ctx.systemPrompt.length })
         }
       } catch (err) {
@@ -13816,9 +13815,7 @@ export class SessionRunner {
       const { buildSessionContext } = await import('../core/sessions/session-context.js')
       const ctx = await buildSessionContext(taskId ?? '', cwd, data.host)
       if (ctx.systemPrompt) {
-        systemPrompt = systemPrompt
-          ? `${systemPrompt}\n\n---\n\n## Task Context\n\n${ctx.systemPrompt}`
-          : ctx.systemPrompt
+        systemPrompt = joinCallerAndContext(systemPrompt, ctx.systemPrompt)
       }
     } catch (err) {
       log.session.warn('failed to build SDK session context', {

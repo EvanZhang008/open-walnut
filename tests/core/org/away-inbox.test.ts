@@ -20,7 +20,6 @@ const normalizeRecord = (raw: unknown) => normalizeStore({ version: 1, letters: 
 import { buildMorningReport, parseReportAt, reportTime } from '../../../src/core/org/morning-report.js';
 import { AWAY_INBOX_LINE, WALNUT_PROMPT_MARK, defaultInstructions } from '../../../src/core/sessions/session-context.js';
 import { instructionNoticeFor } from '../../../src/core/sessions/instruction-notice.js';
-import { nodeReads } from '../../helpers/node-reads.js';
 import type { LetterRecord } from '../../../src/core/human-inbox/types.js';
 import type { Task } from '../../../src/core/types.js';
 
@@ -222,16 +221,11 @@ describe('the rule rides Main\'s and a lead\'s prompt', () => {
   it('Main and a lead have it, a worker does not, and a running session hears it through the notice', () => {
     expect(AWAY_INBOX_LINE).toMatch(/goes to his inbox with human_inbox_send/);
     expect(AWAY_INBOX_LINE).toMatch(/org_report at:<time>/);
-    // Its head is always loaded and points to the rest in the memory folder (prompt-blocks.ts org-away).
-    const head = AWAY_INBOX_LINE.slice(0, AWAY_INBOX_LINE.indexOf(' Walnut adds your letters'));
     for (const t of [{ org_role: 'main', project: 'Main' }, { org_role: 'lead', project: 'Walnut' }]) {
-      expect(nodeReads(t)).toContain(AWAY_INBOX_LINE.trim());
-      const prompt = defaultInstructions(t);
-      expect(prompt).toContain(head);
-      expect(prompt).toMatch(/agent_memory_read \{"file":"org-away\.[0-9a-f]{8}\.md"\}/);
-      const old = `${WALNUT_PROMPT_MARK}\n` + prompt.split('\n').filter((l) => !l.startsWith(head.slice(0, 60))).join('\n');
-      expect(instructionNoticeFor({ appliedAppendSystemPrompt: old } as never, t)).toContain(head);
+      expect(defaultInstructions(t)).toContain(AWAY_INBOX_LINE.trim());
+      const old = `${WALNUT_PROMPT_MARK}\n` + defaultInstructions(t).split('\n').filter((l) => l.trim() !== AWAY_INBOX_LINE.trim()).join('\n');
+      expect(instructionNoticeFor({ appliedAppendSystemPrompt: old } as never, t)).toContain(AWAY_INBOX_LINE.trim());
     }
-    expect(nodeReads({ project: 'Walnut' })).not.toContain(head);
+    expect(defaultInstructions({ project: 'Walnut' })).not.toContain(AWAY_INBOX_LINE.trim());
   });
 });

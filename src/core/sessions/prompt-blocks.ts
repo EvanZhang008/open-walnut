@@ -1,6 +1,7 @@
 /**
  * Every block of Walnut's own text that a session carries on EVERY request (its appended
- * system prompt), each with a byte cap enforced where the prompt is composed.
+ * system prompt), each with a cap, measured in characters (as the builders' own budgets are:
+ * USER_CHAR_BUDGET, ORG_INSTRUCTIONS_MAX), so text in any script is held the same way.
  *
  * 2026-11-12, the user: "programmatically restrict the length of the always loading thing,
  * u can create some kind memory folder u can add it there, all walnut CEO / VP need to do the
@@ -8,38 +9,49 @@
  * index in XML, the task routing, the charter and where work lives twice, the whole global
  * MEMORY.md), a lead about 31 KB. A rule in a prompt does not keep a prompt short; a cap does.
  *
- * How a cap works (capBlock): a block within its cap is left as it is. A block over it keeps
- * its head, cut at the last paragraph, line or sentence that fits, and one pointer line in
- * place of the rest, saying how much moved, what it holds (its headings) and the op that reads
- * it; the rest becomes a file in the node's memory folder (memory-folder.ts), written by the
- * async builders (buildSessionContext, buildLaneProfile). Nothing is cut silently: the pointer
- * is in the prompt, and the writer logs every block it moved. The cut is a pure function of
- * the text, so the default instructions instruction-notice.ts compares stay deterministic.
+ * Three kinds of block, and only one is ever cut:
+ * - `rules`: Walnut's own rules. Never cut, because a rule moved out of the prompt is a rule
+ *   the session does not follow in the turn it applies (2026-11-12 review: a head cut of the
+ *   org manuals moved "one place per update" and the proof-in-place rule into a file). Its cap
+ *   is a ceiling the guard holds: text added to a rule block fails the guard until something
+ *   else gets shorter. Over its cap at runtime it is kept whole and logged.
+ * - `user`: the user's own words (USER.md, a role's core instructions, a console agent's own
+ *   persona). Never cut either: their builders cap them, and the cap here is the ceiling those
+ *   allow. A versioned one is diffed line by line by the instruction notice besides.
+ * - `list`: what grows with the install (the skills index, the global MEMORY.md, an agent's
+ *   context sources, the fleet). Over its cap it keeps its head, cut at the last paragraph,
+ *   line or sentence that fits, and one pointer line in place of the rest, saying how much
+ *   moved, what it holds (its headings) and the op that reads it; the rest becomes a file in
+ *   the node's memory folder (memory-folder.ts), written by the async builders
+ *   (buildSessionContext, buildLaneProfile), which log every block they moved. The cut is a
+ *   pure function of the text, so the default instructions instruction-notice.ts compares stay
+ *   deterministic.
  *
- * A versioned block (the user's profile, a role's core instructions) is never cut here: its
- * lines carry a version the instruction notice diffs line by line, so a cut would read to a
- * running session as rules removed. Its own builder caps it (USER_CHAR_BUDGET,
- * ORG_INSTRUCTIONS_MAX) and the cap here is the ceiling those allow.
+ * WALNUT_PROMPT_CAPS=0 is the rollback switch (promptRollback): every session prompt as it was
+ * before this registry (no cut, the persona's own copy of the charter and routing rules, the
+ * XML skills index, the MCP instructions without the on-demand line).
  *
  * The guard (tests/core/sessions/prompt-blocks-guard.test.ts) fails when a block outgrows its
- * cap, a composed prompt outgrows its role's budget, or a new block reaches the prompt without
- * an entry here.
+ * cap, a composed prompt outgrows its role's budget, a named rule ends up in a memory folder
+ * file, or text reaches the prompt outside a registered block.
  */
 
 /** Which half of the appended prompt a block rides: the persona (profiles.ts) or Walnut's session context (session-context.ts). */
 export type PromptPart = 'persona' | 'context' | 'mcp'
+
+/** See the header: only a `list` block is ever cut. */
+export type PromptBlockKind = 'rules' | 'user' | 'list'
 
 export interface PromptBlockDef {
   id: string
   /** As the pointer and the folder file name it. */
   title: string
   part: PromptPart
-  /** Bytes, UTF-8, the block's own trailing blank line included. */
+  kind: PromptBlockKind
+  /** Characters (UTF-16 code units, String.length), the block's own trailing blank line included. */
   cap: number
-  /** What the moved rest holds, in a few words, for the pointer line. */
+  /** What the moved rest holds, in a few words, for the pointer line (a `list` block). */
   holds: string
-  /** Lines carry a version the instruction notice diffs: never cut here (see above). */
-  versioned?: boolean
   /** Describes this task right now (title, place, directory, fleet): left out of the default instructions. */
   state?: boolean
   /** Why this cap, against what it measured (2026-11-12). */
@@ -47,91 +59,80 @@ export interface PromptBlockDef {
 }
 
 import { createHash } from 'node:crypto'
+import { log } from '../../logging/index.js'
 
-const KB = 1024
+/** WALNUT_PROMPT_CAPS=0: every session prompt as it was before the registry (see the header). Read on each call. */
+export const promptRollback = (): boolean => process.env.WALNUT_PROMPT_CAPS === '0'
 
 /**
- * The registry, in the order the blocks reach the prompt. Caps are the measured size of
- * today's text plus a small margin (so growth fails the guard first), except where a block
- * is meant to keep only its head: the skills index, the standing memory and the org manuals
- * (Brief, Threads, the user away), whose detail is read when the op is used.
+ * The registry, in the order the blocks reach the prompt. A cap is the measured size of
+ * today's text at its builder's limit plus a small margin, so growth fails the guard first;
+ * a `list` cap is the room its head keeps.
  */
 export const PROMPT_BLOCKS: readonly PromptBlockDef[] = [
   // ── persona half (profiles.ts) ──
-  { id: 'persona', title: 'Persona and operating contract', part: 'persona', cap: Math.round(3.2 * KB),
-    holds: 'the rest of the operating contract and the task board model',
-    why: 'Header, identity line, operating contract and board model measured 2.9 KB once the parts the session context carries left it.' },
-  { id: 'standing-user', title: 'Standing memory: the user profile', part: 'persona', cap: 6 * KB,
-    holds: 'the rest of USER.md',
-    why: 'Only where no session context carries the user\'s profile (an ACP lane, a taskless lane): USER.md as written, measured 4.2 to 4.6 KB, with the standing memory\'s head lines.' },
-  { id: 'standing-memory', title: 'Standing memory: the global MEMORY.md', part: 'persona', cap: Math.round(4.5 * KB),
+  { id: 'persona', title: 'Persona and operating contract', part: 'persona', kind: 'rules', cap: 3_200,
+    holds: '',
+    why: 'Header, identity line, operating contract and board model: 2.9 K once the parts the session context carries left it.' },
+  { id: 'standing-user', title: 'Standing memory: the user profile', part: 'persona', kind: 'user', cap: 4_600,
+    holds: '',
+    why: 'Only where no session context carries the user\'s profile (an ACP lane, a taskless lane): the standing memory\'s head lines and USER.md, held to USER_CHAR_BUDGET (4,000 characters) by the memory store.' },
+  { id: 'standing-memory', title: 'Standing memory: the global MEMORY.md', part: 'persona', kind: 'list', cap: 4_500,
     holds: 'the later sections of the global MEMORY.md',
-    why: 'The global MEMORY.md measured 10 KB (its own budget is 8,000 characters); its first sections are the standing rules, the rest is read on demand.' },
-  { id: 'skills-index', title: 'Walnut skills index', part: 'persona', cap: 7 * KB,
+    why: 'The global MEMORY.md measured 10 K (its own budget is 8,000 characters); its first sections are the standing rules, the rest is read on demand.' },
+  { id: 'skills-index', title: 'Walnut skills index', part: 'persona', kind: 'list', cap: 7_000,
     holds: 'the rest of the skills index',
-    why: 'One line of at most 90 characters per skill: 56 real skills measured 6.0 KB (the XML form with whole descriptions and paths was 30 to 49 KB).' },
-  { id: 'agent-persona', title: 'Agent persona', part: 'persona', cap: 6 * KB,
-    holds: 'the rest of this agent\'s own persona',
-    why: 'A console agent\'s own system prompt, written in its definition: room for a long one, the rest on demand.' },
-  { id: 'agent-context', title: 'Agent context', part: 'persona', cap: Math.round(4.5 * KB),
+    why: 'One line of at most 90 characters per skill: 56 real skills measured 6.0 K (the XML form with whole descriptions and paths was 30 to 49 K).' },
+  { id: 'agent-persona', title: 'Agent persona', part: 'persona', kind: 'user', cap: 6_000,
+    holds: '',
+    why: 'A console agent\'s own system prompt, written in its definition by the user.' },
+  { id: 'agent-context', title: 'Agent context', part: 'persona', kind: 'list', cap: 4_500,
     holds: 'the rest of this agent\'s context sources',
     why: 'A console agent\'s own memory and context sources: the same room as the standing memory.' },
   // ── session context half (session-context.ts), in order ──
-  { id: 'identity', title: 'Who opened this session', part: 'context', cap: 400,
-    holds: 'the rest of who opened this session',
-    why: 'The opening paragraph measured 237 B.' },
-  { id: 'task-state', title: 'Your task', part: 'context', cap: 3 * KB, state: true,
-    holds: 'the rest of what describes your task (its leader, its workers)',
-    why: 'Title, place, leader and workers: under 1.5 KB with a long title and a reviewer line.' },
-  { id: 'own-notes', title: 'Your own notes', part: 'context', cap: 900, state: true,
-    holds: 'the rest of the list of your own notes',
-    why: 'The names and sizes of a node\'s own note files, at most 12 listed.' },
-  { id: 'org-role', title: 'Your role', part: 'context', cap: Math.round(6.2 * KB),
-    holds: 'the later rules of your role',
-    why: 'Main\'s role lines without the manuals measured 5.8 KB, a lead\'s 4.0 KB.' },
-  { id: 'org-away', title: 'When the user is away', part: 'context', cap: 700,
-    holds: 'what goes to the inbox while the user is away, threads first, and the scheduled report',
-    why: 'A manual for one situation (a user-away note on the message): its first sentences stay, the 1.6 KB whole is read then.' },
-  { id: 'org-brief', title: 'Your Brief', part: 'context', cap: 800,
-    holds: 'the Brief\'s sections, line format and what Walnut checks',
-    why: 'brief_read returns the rules again on the first read; 1.8 KB whole.' },
-  { id: 'org-threads', title: 'Your Threads', part: 'context', cap: 1600,
-    holds: 'how the summary reads, and the pending, known, open and move rules of Threads',
-    why: 'The head keeps what a thread is, thread_update, merging and "every thread you answer gets its summary in that same turn"; thread_update carries the rules too, and the Stop hook holds a turn whose summary is behind. 4.7 KB whole.' },
-  { id: 'org-about', title: 'Naming the tasks a reply is about', part: 'context', cap: 650,
-    holds: 'the rest of the walnut-about line',
-    why: 'Measured 575 B.' },
-  { id: 'task-routing', title: 'Task routing', part: 'context', cap: Math.round(2.4 * KB),
-    holds: 'the later task routing rules',
-    why: 'Measured 2.1 KB; once per prompt (the persona no longer carries a second copy).' },
-  { id: 'core-instructions', title: 'Your core instructions', part: 'context', cap: Math.round(7.5 * KB), versioned: true,
-    holds: 'the rest of your core instructions',
-    why: 'Versioned. The user\'s words up to ORG_INSTRUCTIONS_MAX (4,000 characters) with their tags and Walnut\'s default after an agent\'s; today 1.9 to 2.1 KB.' },
-  { id: 'tools', title: 'How Walnut and its tools reach you', part: 'context', cap: Math.round(1.4 * KB),
-    holds: 'the rest of how Walnut and its tools reach you',
-    why: 'The ops paragraph (737 B) and the one-line tool map (about 420 B).' },
-  { id: 'work-rules', title: 'How this session works', part: 'context', cap: Math.round(4.6 * KB),
-    holds: 'the later rules of how this session works',
-    why: 'The work, waiting, inbox, private-task, acknowledgement and one-team rules measured 2.6 to 4.2 KB by role.' },
-  { id: 'task-dir', title: 'Your task directory', part: 'context', cap: 600, state: true,
-    holds: 'the rest of the task directory line',
+  { id: 'identity', title: 'Who opened this session', part: 'context', kind: 'rules', cap: 400,
+    holds: '',
+    why: 'The opening paragraph measured 237.' },
+  { id: 'task-state', title: 'Your task', part: 'context', kind: 'rules', cap: 3_000, state: true,
+    holds: '',
+    why: 'Title, place, leader and workers: under 1.5 K with a long title and a reviewer line.' },
+  { id: 'own-notes', title: 'Your own notes', part: 'context', kind: 'rules', cap: 1_300, state: true,
+    holds: '',
+    why: 'The names and sizes of a node\'s own note files, at most 12 listed: 1.2 K at 12 of the longest names.' },
+  { id: 'org-role', title: 'Your role', part: 'context', kind: 'rules', cap: 15_200,
+    holds: '',
+    why: 'Main\'s role lines with the away, Brief, Threads and walnut-about rules measured 14.6 K, a lead\'s 12.8 K: every line applies in every turn.' },
+  { id: 'task-routing', title: 'Task routing', part: 'context', kind: 'rules', cap: 2_400,
+    holds: '',
+    why: 'Measured 2.1 K; once per prompt (the persona no longer carries a second copy).' },
+  { id: 'core-instructions', title: 'Your core instructions', part: 'context', kind: 'user', cap: 7_500,
+    holds: '',
+    why: 'Versioned. The user\'s words up to ORG_INSTRUCTIONS_MAX (4,000 characters) with their tags and Walnut\'s default after an agent\'s; today 1.9 to 2.1 K.' },
+  { id: 'tools', title: 'How Walnut and its tools reach you', part: 'context', kind: 'rules', cap: 900,
+    holds: '',
+    why: 'The ops paragraph measured 737.' },
+  { id: 'work-rules', title: 'How this session works', part: 'context', kind: 'rules', cap: 4_600,
+    holds: '',
+    why: 'The work, waiting, inbox, private-task, acknowledgement and one-team rules measured 2.6 to 4.2 K by role.' },
+  { id: 'task-dir', title: 'Your task directory', part: 'context', kind: 'rules', cap: 600, state: true,
+    holds: '',
     why: 'One path and a sentence.' },
-  { id: 'where-work-lives', title: 'Where work lives', part: 'context', cap: Math.round(1.1 * KB),
-    holds: 'the later rules of where work lives',
-    why: 'Measured 951 B.' },
-  { id: 'fleet', title: 'Your machines', part: 'context', cap: 2 * KB, state: true,
+  { id: 'where-work-lives', title: 'Where work lives', part: 'context', kind: 'rules', cap: 1_100,
+    holds: '',
+    why: 'Measured 951.' },
+  { id: 'fleet', title: 'Your machines', part: 'context', kind: 'list', cap: 2_000, state: true,
     holds: 'the rest of the machines you can use',
     why: 'One line per host; a big fleet keeps the first hosts and reads the rest on demand.' },
-  { id: 'how-we-work', title: 'How we work', part: 'context', cap: Math.round(5.6 * KB),
-    holds: 'the later charter rules',
-    why: 'The team charter measured 5.3 KB; every bullet is a rule the same for every role, so it stays whole.' },
-  { id: 'user-profile', title: 'Your user', part: 'context', cap: 6 * KB, versioned: true,
-    holds: 'the rest of the user\'s profile',
-    why: 'Versioned. USER.md capped at USER_CHAR_BUDGET (4,000 characters) with a version tag per line; measured 4.6 KB.' },
-  // ── MCP server instructions (src/mcp/instructions.ts): Claude Code puts them in the system prompt too ──
-  { id: 'mcp-instructions', title: 'Walnut MCP instructions', part: 'mcp', cap: 2 * KB,
+  { id: 'how-we-work', title: 'How we work', part: 'context', kind: 'rules', cap: 5_600,
     holds: '',
-    why: 'Read by every MCP client of Walnut, a session without Walnut\'s prompt included; trimmed from 2.5 KB to the lifecycle rules and the tool map (1.9 KB).' },
+    why: 'The team charter measured 5.3 K; every bullet is a rule the same for every role.' },
+  { id: 'user-profile', title: 'Your user', part: 'context', kind: 'user', cap: 6_000,
+    holds: '',
+    why: 'Versioned. USER.md capped at USER_CHAR_BUDGET (4,000 characters) with a version tag per line; measured 4.6 K.' },
+  // ── MCP server instructions (src/mcp/instructions.ts): Claude Code puts them in the system prompt too ──
+  { id: 'mcp-instructions', title: 'Walnut MCP instructions', part: 'mcp', kind: 'rules', cap: 3_000,
+    holds: '',
+    why: 'Read by every MCP client of Walnut, a session without Walnut\'s prompt included: the lifecycle rules, how the tools load on demand and which is for what (2.9 K).' },
 ] as const
 
 export type PromptBlockId = string
@@ -161,22 +162,28 @@ export function walnutFolderBlock(name: string): PromptBlockId | null {
 }
 
 /**
- * The whole appended prompt (persona and session context) of each kind of session, with a
- * realistic full load (a 4 KB USER.md, a 10 KB MEMORY.md, 60 skills, a long title; the fixture
- * in tests/helpers/prompt-size-fixture.ts). Measured on that load (scripts/prompt-sizes.ts):
- * before the registry Main 83.6 KB (90.7 KB in the real session, whose skills index alone was 49 KB),
- * a lead 31.2 KB, a worker 15.6 KB, an ask 66.0 KB; with it Main 39.4 KB, a lead 26.3 KB, a worker
- * 16.0 KB (the one-line tool map), an ask 29.2 KB. Each
- * budget is that plus about 1.5 KB, so text added anywhere fails the guard until something else
- * moves out. What stays whole on purpose: the team charter (5.3 KB, the same rules for every
- * role), the routing rules (2.1 KB), the role lines, and the user's own words (USER.md, a role's
- * core instructions), none of which a head cut could shorten without dropping a rule.
+ * The whole appended prompt (persona and session context) of each kind of session, in
+ * characters. Measured by scripts/prompt-sizes.ts on a realistic full load (a 4,000-character
+ * USER.md, a 10 K MEMORY.md, 60 skills, a long title; tests/helpers/prompt-size-fixture.ts):
+ *
+ *            before the registry   now
+ *   Main          83.6 K           44.2 K   (the real session was 90.7 K, its skills index alone 49 K)
+ *   a lead        31.2 K           31.2 K   (every line of a lead's prompt is a rule: nothing cut)
+ *   a worker      15.6 K           15.6 K
+ *   an ask        66.0 K           28.7 K
+ *
+ * Main and an ask lost the persona's second copy of the charter, where work lives and the
+ * routing rules (8.3 K), the XML skills index (31.6 K here, 4.6 K as one line per skill) and the
+ * later sections of the global MEMORY.md. Each budget is that, plus the room the user's own
+ * words may still grow into at their builders' limits (the user profile to its 6,000 cap, a
+ * role's core instructions to 7,500 for Main and a lead), plus 1,000: Walnut text added
+ * anywhere fails its block's cap first, and this whole-prompt ceiling after.
  */
 export const PROMPT_BUDGETS = {
-  main: 40 * KB,
-  lead: 27 * KB,
-  worker: 17 * KB,
-  ask: 30 * KB,
+  main: 52_500,
+  lead: 39_800,
+  worker: 18_500,
+  ask: 31_600,
 } as const
 
 export interface PromptOverflow {
@@ -186,7 +193,7 @@ export interface PromptOverflow {
   part: PromptPart
   /** The moved text, as the folder file holds it after its heading. */
   text: string
-  bytes: number
+  chars: number
 }
 
 export interface CapResult {
@@ -195,6 +202,8 @@ export interface CapResult {
 }
 
 export const byteLength = (s: string): number => Buffer.byteLength(s, 'utf8')
+/** How caps and budgets measure (see the header). */
+export const charLength = (s: string): number => s.length
 
 /** The pointer line's opening words: instruction-diff and tests know a pointer by them. */
 export const POINTER_OPENING = '(Walnut moved the rest of this section to your memory folder'
@@ -206,7 +215,7 @@ function headingsOf(rest: string): string {
   let out = ''
   for (const h of heads) {
     const next = out ? `${out}; ${h}` : h
-    if (byteLength(next) > 320) return ` (${out}; and more)`
+    if (charLength(next) > 320) return ` (${out}; and more)`
     out = next
   }
   return ` (${out})`
@@ -215,7 +224,7 @@ function headingsOf(rest: string): string {
 export function pointerLine(def: PromptBlockDef, rest: string, opts: { short?: boolean } = {}): string {
   const file = overflowFileOf(def.id, rest)
   const holds = def.holds && !opts.short ? `: ${def.holds}` : ''
-  return `${POINTER_OPENING} as ${file}, ${byteLength(rest).toLocaleString('en-US')} bytes${holds}${opts.short ? '' : headingsOf(rest)}. `
+  return `${POINTER_OPENING} as ${file}, ${charLength(rest).toLocaleString('en-US')} characters${holds}${opts.short ? '' : headingsOf(rest)}. `
     + `Read it with agent_memory_read {"file":"${file}"} before you act on that part.)`
 }
 
@@ -227,13 +236,24 @@ function cutPoints(body: string): number[] {
   return [...points].filter((p) => p > 0 && p < body.length).sort((a, b) => a - b)
 }
 
+/** A rule or user block over its cap, said once per block and process: the guard is where it is fixed. */
+const warnedOver = new Set<string>()
+
 /**
- * The block as the prompt carries it: whole within its cap, else its head and a pointer to the
- * moved rest (see the header). Pure.
+ * The block as the prompt carries it: whole within its cap, and whole always unless it is a
+ * `list` block; a `list` block over its cap is its head and a pointer to the moved rest (see
+ * the header). Pure, apart from the one log line for a rule block over its cap.
  */
 export function capBlock(id: PromptBlockId, text: string): CapResult {
   const def = promptBlock(id)
-  if (!text || byteLength(text) <= def.cap || def.versioned || def.part === 'mcp') return { text, overflow: null }
+  if (!text || charLength(text) <= def.cap) return { text, overflow: null }
+  if (def.kind !== 'list') {
+    if (!warnedOver.has(id)) {
+      warnedOver.add(id)
+      log.session.warn('prompt block over its cap, kept whole (never cut: see prompt-blocks.ts)', { block: id, kind: def.kind, chars: charLength(text), cap: def.cap })
+    }
+    return { text, overflow: null }
+  }
   const trail = /\s*$/.exec(text)![0]
   const body = text.slice(0, text.length - trail.length)
   const points = cutPoints(body)
@@ -242,39 +262,38 @@ export function capBlock(id: PromptBlockId, text: string): CapResult {
   for (let i = points.length - 1; i >= 0; i--) {
     const h = body.slice(0, points[i]).trimEnd()
     const r = body.slice(points[i]).trim()
-    if (byteLength(h) + 1 + byteLength(pointerLine(def, r)) + byteLength(trail) <= def.cap) { head = h; rest = r; break }
+    if (charLength(h) + 1 + charLength(pointerLine(def, r)) + charLength(trail) <= def.cap) { head = h; rest = r; break }
   }
   // No cut leaves room: the whole block moves, under the shortest pointer.
   const pointer = head ? pointerLine(def, rest) : pointerLine(def, rest, { short: true })
   return {
     text: `${head ? `${head}\n` : ''}${pointer}${trail}`,
-    overflow: { id: def.id, file: overflowFileOf(def.id, rest), title: def.title, part: def.part, text: rest, bytes: byteLength(rest) },
+    overflow: { id: def.id, file: overflowFileOf(def.id, rest), title: def.title, part: def.part, text: rest, chars: charLength(rest) },
   }
 }
 
-export interface ComposedBlock { id: PromptBlockId; text: string; bytes: number; capped: boolean }
+export interface ComposedBlock { id: PromptBlockId; text: string; chars: number; bytes: number; capped: boolean }
 
 /**
- * Builds a prompt only out of registered blocks: every byte of `text()` is some block's. Adding
- * an empty block is a no-op, so a block that applies to one role only adds nothing elsewhere.
+ * Builds a prompt only out of registered blocks: every character of `text()` is some block's.
+ * Adding an empty block is a no-op, so a block that applies to one role only adds nothing elsewhere.
  */
 export class PromptComposer {
   readonly blocks: ComposedBlock[] = []
   readonly overflows: PromptOverflow[] = []
 
   /**
-   * `uncapped`: every block whole, as a prompt from before the caps read (a prompt read where no
-   * memory folder can be, tests of what a running session is told). WALNUT_PROMPT_CAPS=0 turns the
-   * caps off everywhere.
+   * `uncapped`: every block whole (a prompt read where no memory folder can be: the companion,
+   * the personas copy a host replica reads). The rollback switch (promptRollback) is uncapped too.
    */
   constructor(private readonly opts: { uncapped?: boolean } = {}) {
-    if (process.env.WALNUT_PROMPT_CAPS === '0') this.opts = { ...opts, uncapped: true }
+    if (promptRollback()) this.opts = { ...opts, uncapped: true }
   }
 
   add(id: PromptBlockId, text: string | undefined | null): this {
     if (!text) { promptBlock(id); return this }
     const r = this.opts.uncapped ? (promptBlock(id), { text, overflow: null }) : capBlock(id, text)
-    this.blocks.push({ id, text: r.text, bytes: byteLength(r.text), capped: !!r.overflow })
+    this.blocks.push({ id, text: r.text, chars: charLength(r.text), bytes: byteLength(r.text), capped: !!r.overflow })
     if (r.overflow) this.overflows.push(r.overflow)
     return this
   }
@@ -282,4 +301,23 @@ export class PromptComposer {
   text(): string {
     return this.blocks.map((b) => b.text).join('')
   }
+}
+
+/**
+ * How the spawn joins the parts of the appended prompt (src/providers/claude-code-session.ts): a
+ * caller's own prompt (a SESSION_START with appendSystemPrompt) and Walnut's session context, then
+ * the persona first. The only text Walnut adds outside a block is these separators; the guard holds
+ * the spawn to these two functions.
+ */
+export const TASK_CONTEXT_SEPARATOR = '\n\n---\n\n## Task Context\n\n'
+
+/** A caller's own prompt, then Walnut's session context under its heading; either alone as it is. */
+export function joinCallerAndContext(callerPrompt: string | undefined, context: string): string {
+  if (!context) return callerPrompt ?? ''
+  return callerPrompt ? `${callerPrompt}${TASK_CONTEXT_SEPARATOR}${context}` : context
+}
+
+/** The whole `--append-system-prompt`: the persona, then the rest, each part once. */
+export function joinAppendedPrompt(parts: ReadonlyArray<string | undefined | null>): string {
+  return parts.filter((p): p is string => !!p).join('\n\n')
 }

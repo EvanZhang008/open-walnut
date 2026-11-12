@@ -9,7 +9,7 @@
 
 import path from 'node:path'
 import { buildRoleSection, buildWorkModesSection } from './persona-sections.js'
-import { PromptComposer, type ComposedBlock, type PromptOverflow } from './prompt-blocks.js'
+import { PromptComposer, promptRollback, type ComposedBlock, type PromptOverflow } from './prompt-blocks.js'
 
 /** The heading the standing memory puts MEMORY.md under (personal-ai-lane.ts laneMemoryContextOf). */
 export const GLOBAL_MEMORY_HEADING = '### Global memory (memory/MEMORY.md)'
@@ -74,10 +74,11 @@ export function walnutMcpProfile(): SessionProfile {
  * WHO/HOW-TO-SPEAK, the default prompt keeps authority on tools and safety.
  */
 function personaPrecedenceHeader(): string {
-  return `## Persona override
+  return `${PERSONA_PRECEDENCE_OPENING}
 
 The sections below define WHO YOU ARE and HOW YOU SPEAK. Where they conflict with the coding-agent identity, tone, or response-length rules above, this persona wins. Everything else above still applies: keep following the tool-usage and safety guidance, and use the environment info (working directory, today's date, platform) given above.`
 }
+const PERSONA_PRECEDENCE_OPENING = '## Persona override'
 
 /**
  * The Personal AI's own profile — an appended persona system prompt plus the
@@ -113,7 +114,7 @@ export function personalAiPersona(
 ): ComposedPersona {
   const c = new PromptComposer(opts)
     .add('persona', `${personaPrecedenceHeader()}\n\n${buildRoleSection(name, { withSessionContext: true })}\n\n`)
-  if (!opts.withSessionContext) addSessionRules(c)
+  if (!besideSessionContext(opts)) addSessionRules(c)
   const memory = splitStandingMemory(memoryContext)
   c.add('standing-user', blockOf(memory.head)).add('standing-memory', blockOf(memory.memory)).add('skills-index', blockOf(skillsIndex))
   return { systemPrompt: c.text().trimEnd(), overflows: c.overflows, blocks: c.blocks }
@@ -140,6 +141,21 @@ export function personalAiProfile(name: string, skillsIndex?: string, memoryCont
   )!
 }
 
+/** The persona leaves out what the session context carries; under the rollback switch it never does (as before). */
+const besideSessionContext = (opts: { withSessionContext?: boolean }): boolean => !!opts.withSessionContext && !promptRollback()
+
+/**
+ * Whether a stored persona was built beside Walnut's session context (it left the charter out):
+ * the mint's own decision, read back from what it stamped, for a session whose spawn prompt is
+ * not stored yet (personal-ai-lane.ts hasWalnutContext). Only a Walnut persona answers yes.
+ */
+export function personaBuiltBesideSessionContext(systemPrompt: string | undefined): boolean {
+  if (!systemPrompt || !systemPrompt.includes(PERSONA_PRECEDENCE_OPENING)) return false
+  return !systemPrompt.includes(TEAM_CHARTER_OPENING)
+}
+// The charter's first sentence: its heading alone could be the user's own words in USER.md.
+const TEAM_CHARTER_OPENING = TEAM_CHARTER.split('\n').find((l) => l.length > 40)!
+
 /** A block of the persona after its head ('' when there is none). */
 const blockOf = (text: string | undefined): string => (text?.trim() ? `${text.trim()}\n\n` : '')
 
@@ -165,7 +181,7 @@ export function consoleAgentPersona(
   const c = new PromptComposer(opts)
     .add('agent-persona', `${personaPrecedenceHeader()}\n\n${persona}\n\n`)
     .add('persona', `${buildWorkModesSection({ withSessionContext: true })}\n\n`)
-  if (!opts.withSessionContext) addSessionRules(c)
+  if (!besideSessionContext(opts)) addSessionRules(c)
   c.add('agent-context', blockOf(contextBlock)).add('skills-index', blockOf(skillsIndex))
   return { systemPrompt: c.text().trimEnd(), overflows: c.overflows, blocks: c.blocks }
 }

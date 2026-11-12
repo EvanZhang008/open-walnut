@@ -71,15 +71,17 @@ export function overflowFileText(o: PromptOverflow): string {
     + `same standing as the rest of your instructions.)\n\n${o.text.trim()}\n`
 }
 
-/** A shared file a persona moved is kept this long after its last write: another agent or variant may still point to it. */
-const SHARED_KEEP_MS = 7 * 24 * 3_600_000
+/**
+ * A Walnut file no pointer of a new prompt names is kept this long after its last write: a running
+ * session still holds the pointer of the prompt it was spawned with (a deploy that changes a moved
+ * block gives the new prompt another file name), and the shared folder holds every agent's and
+ * variant's persona files side by side. A file still pointed to is touched at each write.
+ */
+export const WALNUT_FILE_KEEP_MS = 7 * 24 * 3_600_000
 
 /**
- * Write what one half of a prompt moved, and remove that half's Walnut files no pointer names any
- * more. In a task's folder only its own session context writes, so a file of that part not written
- * now is stale at once; the shared folder holds every agent's and variant's persona files side by
- * side (each name carries its text's hash), so one there goes only after a week unwritten.
- * Best effort per file: never throws (the prompt's pointer still says what moved).
+ * Write what one half of a prompt moved, and remove that half's Walnut files no pointer has named
+ * for WALNUT_FILE_KEEP_MS. Best effort per file: never throws (the prompt's pointer still says what moved).
  */
 export async function writeOverflows(taskId: string | null | undefined, part: PromptPart, overflows: readonly PromptOverflow[]): Promise<void> {
   if (isCompanion()) return
@@ -91,9 +93,9 @@ export async function writeOverflows(taskId: string | null | undefined, part: Pr
     try {
       const file = path.join(dir, o.file)
       if (await writeIfChanged(file, overflowFileText(o))) {
-        log.session.info('prompt block over its cap: rest moved to the memory folder', { taskId: who, block: o.id, file: o.file, movedBytes: o.bytes })
-      } else if (!taskId) {
-        // Still pointed to: keep it out of the week's sweep.
+        log.session.info('prompt block over its cap: rest moved to the memory folder', { taskId: who, block: o.id, file: o.file, movedChars: o.chars })
+      } else {
+        // Still pointed to: keep it out of the sweep.
         const now = new Date()
         await fsp.utimes(file, now, now).catch(() => {})
       }
@@ -106,10 +108,8 @@ export async function writeOverflows(taskId: string | null | undefined, part: Pr
     const id = walnutFolderBlock(name)
     if (!id || keep.has(name) || promptBlock(id).part !== part) continue
     try {
-      if (!taskId) {
-        const st = await fsp.stat(path.join(dir, name))
-        if (Date.now() - st.mtimeMs < SHARED_KEEP_MS) continue
-      }
+      const st = await fsp.stat(path.join(dir, name))
+      if (Date.now() - st.mtimeMs < WALNUT_FILE_KEEP_MS) continue
       await fsp.rm(path.join(dir, name), { force: true })
     } catch { /* the next start tries again */ }
   }
@@ -136,22 +136,59 @@ export async function listMemoryFiles(taskId?: string | null): Promise<MemoryFil
   return [...own, ...shared]
 }
 
+export interface MemoryFileRead {
+  name: string
+  text: string
+  at: string
+  walnut: boolean
+  shared: boolean
+  /** A pointer named an older version of this block, which is gone: this is the block's current file. */
+  replaces?: string
+}
+
 /**
  * `regenerate`: what the task's prompt moves now, for a Walnut file not written yet. A pointer can
  * reach a session before its file does (the instruction notice tells a running session the new
- * pointer, a compaction hook restates it), so a miss writes it from the current text.
+ * pointer, a compaction hook restates it), so a miss writes it from the current text. A pointer to
+ * a version of a block that is gone (its text changed and the old file was swept) is answered with
+ * the block's current file, saying so, never with not found.
  */
 export async function readMemoryFile(
   taskId: string | null | undefined, name: string, opts: { regenerate?: () => Promise<readonly PromptOverflow[]> } = {},
-): Promise<{ name: string; text: string; at: string; walnut: boolean; shared: boolean }> {
+): Promise<MemoryFileRead> {
   const n = checkName(name)
-  if (taskId && opts.regenerate && walnutFolderBlock(n) && !isCompanion()) {
+  const block = walnutFolderBlock(n)
+  let current: readonly PromptOverflow[] | null = null
+  if (taskId && opts.regenerate && block && !isCompanion()) {
     const file = path.join(memoryFolderOf(taskId), n)
     if (!(await fsp.stat(file).catch(() => null))) {
-      const o = (await opts.regenerate().catch(() => [])).find((x) => x.file === n)
+      current = await opts.regenerate().catch(() => [])
+      const o = current.find((x) => x.file === n)
       if (o) await writeIfChanged(file, overflowFileText(o)).catch(() => false)
     }
   }
+  const found = await readFrom(taskId, n)
+  if (found) return found
+  if (block) {
+    // Another version of the same block: the one the current prompt names, else the newest on disk.
+    const now = current?.find((x) => x.id === block)
+    if (now && taskId && !isCompanion()) {
+      await writeIfChanged(path.join(memoryFolderOf(taskId), now.file), overflowFileText(now)).catch(() => false)
+      const read = await readFrom(taskId, now.file)
+      if (read) return { ...read, replaces: n }
+    }
+    for (const f of (await listMemoryFiles(taskId)).filter((x) => walnutFolderBlock(x.name) === block).sort((a, b) => b.at.localeCompare(a.at))) {
+      const read = await readFrom(taskId, f.name)
+      if (read) return { ...read, replaces: n }
+    }
+  }
+  throw new MemoryFolderError('not_found', 404, isCompanion()
+    ? `No file "${n}" here: memory folders are kept on the main computer, so read it while that computer is on.`
+    : `No file "${n}" in this memory folder. agent_memory_read with no file lists what there is; a file Walnut `
+      + 'moved there is written when a session of the task starts, and replaced when the moved text changes.')
+}
+
+async function readFrom(taskId: string | null | undefined, n: string): Promise<MemoryFileRead | null> {
   const dirs: Array<[string, boolean]> = [...(taskId ? [[memoryFolderOf(taskId), false] as [string, boolean]] : []), [memoryFolderOf(null), true]]
   for (const [dir, shared] of dirs) {
     const file = path.join(dir, n)
@@ -160,10 +197,16 @@ export async function readMemoryFile(
     const st = await fsp.stat(file).catch(() => null)
     return { name: n, text, at: st?.mtime.toISOString() ?? '', walnut: !!walnutFolderBlock(n), shared }
   }
-  throw new MemoryFolderError('not_found', 404, isCompanion()
-    ? `No file "${n}" here: memory folders are kept on the main computer, so read it while that computer is on.`
-    : `No file "${n}" in this memory folder. agent_memory_read with no file lists what there is; a file Walnut `
-      + 'moved there is written when a session of the task starts, and replaced when the moved text changes.')
+  return null
+}
+
+/** Remove a task's memory folder (the task was deleted). Never the shared folder. */
+export async function removeMemoryFolder(taskId: string): Promise<void> {
+  if (isCompanion() || !taskId.trim()) return
+  let dir: string
+  try { dir = memoryFolderOf(taskId) } catch { return }
+  if (path.basename(dir) === SHARED_FOLDER) return
+  await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
 }
 
 /** A node's own note: written whole; `content: ""` removes it. Walnut's file names are refused. */

@@ -5587,6 +5587,7 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
   // write lock: session-tracker takes its own lock and the two must never
   // nest. Best-effort: a failure here must not undo the delete itself.
   await dropTestRunSessionRecords([result.task]);
+  await removeDeletedTaskFolders([result.task.id]);
   try {
     const { unlinkSessionsFromTasks } = await import('./session-tracker.js');
     await unlinkSessionsFromTasks([result.task.id]);
@@ -5598,6 +5599,17 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
   }
 
   return result;
+}
+
+/**
+ * A deleted task's memory folder (sessions/memory-folder.ts: what a cap moved out of its prompt,
+ * its own notes) goes with it; nothing reads a folder whose task is gone. Every delete path calls
+ * this (deleteTask, deleteTasksByIds, which the test-run sweep uses, deleteTasksBulk). Best-effort.
+ */
+async function removeDeletedTaskFolders(ids: readonly string[]): Promise<void> {
+  if (!ids.length) return;
+  const { removeMemoryFolder } = await import('./sessions/memory-folder.js');
+  for (const id of ids) await removeMemoryFolder(id);
 }
 
 /**
@@ -5710,6 +5722,7 @@ export async function deleteTasksByIds(
   // Clear session-side task links (same reasoning as deleteTask; best-effort).
   if (deleted.length) {
     await dropTestRunSessionRecords(deleted);
+    await removeDeletedTaskFolders(deleted.map((t) => t.id));
     try {
       const { unlinkSessionsFromTasks } = await import('./session-tracker.js');
       await unlinkSessionsFromTasks(deleted.map((t) => t.id));
@@ -9165,6 +9178,7 @@ export async function deleteTasksBulk(ids: string[]): Promise<{ deleted: Task[] 
   // Outside the task write lock — session-tracker has its own lock and the two
   // must not nest in this direction anywhere else either.
   if (result.deleted.length) {
+    await removeDeletedTaskFolders(result.deleted.map((t) => t.id));
     try {
       const { unlinkSessionsFromTasks } = await import('./session-tracker.js');
       await unlinkSessionsFromTasks(result.deleted.map((t) => t.id));

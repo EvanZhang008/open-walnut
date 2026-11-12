@@ -108,7 +108,7 @@ import { currentUserProfile, refreshUserProfile, userProfileLine } from './user-
 import { currentReplyLanguage, refreshReplyLanguage, replyLanguageLine } from './reply-language-context.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
-import { PromptComposer, type PromptBlockId } from './prompt-blocks.js'
+import { PromptComposer, promptRollback, type PromptBlockId } from './prompt-blocks.js'
 
 /**
  * What a session does when Claude Code answers "API Error: <model>'s safeguards flagged this message":
@@ -327,7 +327,11 @@ export const AWAY_INBOX_LINE =
  */
 type OrgRoleTask = { org_role?: string; project?: string; org_leads?: readonly string[]; org_vp_only?: boolean; org_name?: string }
 
-/** Main's or a lead's role lines as blocks: the role, then the manuals of its ops, then the routing rules. */
+/**
+ * Main's or a lead's role lines as blocks: the role, then the routing rules. Every line of the
+ * role applies in every turn (the away, Brief, Threads and walnut-about rules included), so it
+ * is one `rules` block, never cut (prompt-blocks.ts).
+ */
 export function orgRoleParts(task: OrgRoleTask): Array<[PromptBlockId, string]> {
   if (task.org_role === 'main') {
     const head = 'You are the user\'s main agent: with the user you run their org as co-CEOs, and you set its direction '
@@ -344,12 +348,13 @@ export function orgRoleParts(task: OrgRoleTask): Array<[PromptBlockId, string]> 
       + DECISION_CONTEXT_LINE + MAIN_DECISION_LINE
       + ORG_REPLY_LANGUAGE_LINE
       + MAIN_NEWS_ONCE_LINE
+      + ORG_MANUALS()
       + MAIN_DELEGATES_LINE
       + MAIN_FOLLOW_LINE
       + MAIN_TRACKING_LINE
       + ownReadbackLine()
       + MAIN_STAYS_ACTIVE_LINE
-    return [['org-role', head], ...orgManuals()]
+    return [['org-role', head], ['task-routing', TASK_ROUTING_CONTRACT + '\n\n']]
   }
   if (task.org_role === 'lead') {
     const project = (task.project ?? '').trim()
@@ -385,26 +390,18 @@ export function orgRoleParts(task: OrgRoleTask): Array<[PromptBlockId, string]> 
       + DECISION_CONTEXT_LINE + LEAD_DECISION_LINE
       + ORG_REPLY_LANGUAGE_LINE
       + LEAD_NEWS_ONCE_LINE
+      + ORG_MANUALS()
       + LEAD_TRACKING_LINE
       + ownReadbackLine()
-    return [['org-role', body], ...orgManuals()]
+    return [['org-role', body], ['task-routing', TASK_ROUTING_CONTRACT + '\n\n']]
   }
   return []
 }
 
-/**
- * The manuals of an org node's ops, each its own capped block (prompt-blocks.ts): the first
- * sentences stay in the prompt, the detail is one agent_memory_read away, read when the op is used.
- */
-const orgManuals = (): Array<[PromptBlockId, string]> => [
-  ['org-away', AWAY_INBOX_LINE],
-  ['org-brief', BRIEF_LINE],
-  ['org-threads', THREADS_LINE],
-  ['org-about', MESSAGE_ABOUT_LINE],
-  ['task-routing', TASK_ROUTING_CONTRACT + '\n\n'],
-]
+/** The away, Brief, Threads and walnut-about rules of Main and every lead, in that order. */
+const ORG_MANUALS = (): string => AWAY_INBOX_LINE + BRIEF_LINE + THREADS_LINE + MESSAGE_ABOUT_LINE
 
-/** Main's or a lead's role lines, every block of them uncapped ('' for any other task). */
+/** Main's or a lead's role lines ('' for any other task). */
 export function orgRoleLine(task: OrgRoleTask): string {
   return orgRoleParts(task).map(([, text]) => text).join('')
 }
@@ -432,6 +429,23 @@ export async function buildSessionContext(
   /** The task as the caller holds it (a host replica's ask made while the Mac is away, WP12: not in its copy yet). */
   opts?: { task?: import('../types.js').Task },
 ): Promise<SessionContext> {
+  const { composed, task } = await composeSessionContext(taskId, host, opts)
+  // What a cap moved goes to the task's memory folder before the session can read the pointer to it.
+  const { writeOverflows } = await import('./memory-folder.js')
+  await writeOverflows(task?.id, 'context', composed.overflows)
+  return { systemPrompt: composed.text() }
+}
+
+/**
+ * The session context as a composer, from the same inputs a spawn reads (the task, its host's
+ * directory and fleet, its own notes): also what a memory folder file a pointer names is written
+ * from again when it is missing (agent-memory-v1.ts).
+ */
+export async function composeSessionContext(
+  taskId: string,
+  host?: string,
+  opts?: { task?: import('../types.js').Task },
+): Promise<{ composed: PromptComposer; task: import('../types.js').Task | undefined }> {
   let taskLine = ''
   let found: import('../types.js').Task | undefined
   if (taskId) {
@@ -514,11 +528,7 @@ export async function buildSessionContext(
   ])
   // The copy composePrompt reads: as on disk now, not as at the last read.
   await Promise.all([refreshUserProfile(), refreshReplyLanguage()])
-  const composed = composeInstructions(found, { taskLine, taskDir, fleet, ownNotes })
-  // What a cap moved goes to the task's memory folder before the session can read the pointer to it.
-  const { writeOverflows } = await import('./memory-folder.js')
-  await writeOverflows(found?.id, 'context', composed.overflows)
-  return { systemPrompt: composed.text() }
+  return { composed: composeInstructions(found, { taskLine, taskDir, fleet, ownNotes }), task: found }
 }
 
 /** The task fields the default instructions depend on (role, project, ask, its standing instructions). */
@@ -631,11 +641,12 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
     + 'projects, runs the work on those tasks, and holds their memory, notes, '
     + 'and the history of that work.\n\n')
   c.add('task-state', state.taskLine)
-  c.add('own-notes', state.ownNotes)
+  c.add('own-notes', promptRollback() ? '' : state.ownNotes)
   // An org node (see 2d): the main agent, or a project's lead.
   for (const [id, text] of task ? orgRoleParts(task) : []) c.add(id, text)
   // An ask (the dispatcher) routes work too: one copy here, none in its persona (profiles.ts).
-  if (task && !mainAgent && !projectLead && ask) c.add('task-routing', TASK_ROUTING_CONTRACT + '\n\n')
+  // (Under the rollback switch the ask's persona carries its own copy, as before.)
+  if (task && !mainAgent && !projectLead && ask && !promptRollback()) c.add('task-routing', TASK_ROUTING_CONTRACT + '\n\n')
   c.add('core-instructions', task ? orgInstructionsLine(task) : '')
   c.add('tools', 'This session is how that task runs, so the task id is how everything '
     + 'else addresses your work. '
@@ -653,9 +664,7 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
     + '`walnut tools list` names every operation; '
     + '`walnut guide` is the manual. Questions about the user\'s tasks or work '
     + '(even which one made a commit) are answered by Walnut, never by '
-    + 'guessing or by git.\n\n'
-    // 2026-11-12: the Walnut MCP tools are deferred (src/mcp/tools.ts): one line on how to load them, and which is for what.
-    + TOOL_MAP_LINE)
+    + 'guessing or by git.\n\n')
   c.add('work-rules', workRule
     // The user's Reply language setting: a standing rule, so here (under no heading) and never on a
     // message (reply-language-context.ts).
@@ -722,17 +731,6 @@ export type PromptState = { taskLine: string; taskDir: string; fleet: string; ow
 function composePrompt(task: InstructionTask | undefined, state: PromptState): string {
   return composeInstructions(task, state).text()
 }
-
-/**
- * Which Walnut tool is for what, in one line. The Walnut MCP tools load on demand (deferred
- * behind ToolSearch since 2026-11-12, src/mcp/tools.ts), so the session sees their names here
- * before it has loaded any of them.
- */
-export const TOOL_MAP_LINE =
-  'In Claude Code, Walnut\'s MCP tools load on demand: ToolSearch "select:mcp__walnut__<op>" loads one before its first call. '
-  + 'Which for what: your task and others task_get, task_list, task_update, task_send, task_create; search everything '
-  + 'search; your notes agent_memory_read / agent_memory_write; the user\'s memory memory_read; watches trigger_create; '
-  + 'what is open for you open_items; anything else `walnut tools list`.\n\n'
 
 const userBlock = (block: string) => (block ? `\n\n${block.trimEnd()}` : '')
 
