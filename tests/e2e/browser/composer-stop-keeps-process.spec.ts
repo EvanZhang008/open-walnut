@@ -169,7 +169,9 @@ test('Tree Mode sends UUID messages into the FIFO before the running turn ends',
   await expect.poll(() => sent.length).toBe(asked + 1)
   expect(sent.at(-1)!.userUuid).toMatch(/^[0-9a-f-]{36}$/)
   await switchView(panel, 'stack')
-  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
+  // Tree Mode shows the page before the current one too (two pages from 600px): the
+  // question's page is the depth-1 one, beside Main's.
+  await expect(panel.locator('.thread-stack[data-thread-depth="1"]')).toBeVisible({ timeout: 15_000 })
   await expect(panel.getByText(PARTIAL_TEXT, { exact: false }).first()).toBeVisible({ timeout: 20_000 })
   await expect(stopButton(panel)).toBeVisible()
   const pid = (await sessionRecord(page, sessionId)).pid
