@@ -201,16 +201,39 @@ test.describe('Selection & copy in session chat', () => {
     expect(postSelection).toContain('SELECT-END');
     expect(postSelection).not.toContain('Post-release chunk');
 
-    // Clear the selection → auto-follow must RESUME (guards against a
-    // regression where selectionActive() sticks true and kills follow-bottom
-    // forever — the fix's biggest blast radius).
-    await page.locator('.session-history').getByText('Line one of the explanation', { exact: false }).first().click();
-    await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: 'Resume-follow chunk. ', msgId: 'msg-resume-1' });
-    await expect.poll(async () => page.evaluate(() => {
+    // Clear the selection. While it was held, eight new rows (~57px each) arrived
+    // below the view, far past NEAR_BOTTOM_PX, so by design the pause has become
+    // the ordinary "scrolled up" state (noteSuppressedScroll in
+    // SessionChatHistory.tsx): no jump to the bottom the instant the selection
+    // goes, and the arrow is the way back.
+    const gapToBottom = () => page.evaluate(() => {
       const el = document.querySelector('.session-history') as HTMLElement | null;
       if (!el) return -1;
       return el.scrollHeight - el.scrollTop - el.clientHeight;
-    }), { timeout: 5000 }).toBeLessThan(100);
+    });
+    await page.locator('.session-history').getByText('Line one of the explanation', { exact: false }).first().click();
+    expect(await selectedText(page)).toBe('');
+    const arrow = page.locator('.scroll-to-bottom-btn');
+    await expect(arrow).toHaveClass(/\bvisible\b/);
+    await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: 'Resume-follow chunk 0. ', msgId: 'msg-resume-0' });
+    await expect(page.locator('[data-stream-reply]', { hasText: 'Resume-follow chunk 0' })).toHaveCount(1);
+    await page.waitForTimeout(300);
+    expect(await gapToBottom(), 'the cleared selection did not jump the view to the bottom').toBeGreaterThan(100);
+
+    // The arrow takes the reader back, and from there auto-follow must RESUME:
+    // the guard against selectionActive() sticking true after the selection is
+    // gone, which kills follow-bottom for good (the fix's biggest blast radius).
+    // Three new rows, ~170px together: a stuck guard would hold the view above
+    // them and demote follow again.
+    await arrow.click();
+    await expect.poll(gapToBottom, { timeout: 5000 }).toBeLessThan(3);
+    for (let i = 1; i <= 3; i++) {
+      await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: `Resume-follow chunk ${i}. `, msgId: `msg-resume-${i}` });
+      await page.waitForTimeout(60);
+    }
+    await expect(page.locator('[data-stream-reply]', { hasText: 'Resume-follow chunk 3' })).toHaveCount(1);
+    await expect.poll(gapToBottom, { timeout: 5000 }).toBeLessThan(3);
+    await expect(arrow).not.toHaveClass(/\bvisible\b/);
   });
 
   test('selection inside a LIVE streaming block survives further deltas, then content catches up on clear', async ({ page }) => {

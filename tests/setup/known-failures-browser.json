@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 226,
+  "count": 225,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -139,7 +139,6 @@
     "routine-watcher.spec.ts :: picking Watcher turns an untouched trigger into an interval, and leaves a chosen one alone",
     "scroll-jump-on-absorption.spec.ts :: Scroll teleport on turn-end absorption › reader scrolled up mid-turn survives the absorption collapse without a jump to top",
     "section-last-location.spec.ts :: Settings comes back on the pane the user left open",
-    "selection-copy.spec.ts :: Selection & copy in session chat › selection held during streaming does NOT extend to bottom and survives deltas",
     "separator-group-and-unpin.spec.ts :: a card dropped into the gap under the line lands BELOW the line",
     "session-board-tab-lead-only.spec.ts :: A. a plain task has no Board tab",
     "session-cron-supervision.spec.ts :: shared recovery toggle keeps both home surfaces and a dense transcript usable",
@@ -367,7 +366,6 @@
     "routine-watcher.spec.ts :: picking Watcher turns an untouched trigger into an interval, and leaves a chosen one alone": "Test timeout of 30000ms exceeded.",
     "scroll-jump-on-absorption.spec.ts :: Scroll teleport on turn-end absorption › reader scrolled up mid-turn survives the absorption collapse without a jump to top": "Test timeout of 30000ms exceeded.",
     "section-last-location.spec.ts :: Settings comes back on the pane the user left open": "Error: expect(locator).toHaveAttribute(expected) failed",
-    "selection-copy.spec.ts :: Selection & copy in session chat › selection held during streaming does NOT extend to bottom and survives deltas": "Error: expect(received).toBeLessThan(expected)",
     "separator-group-and-unpin.spec.ts :: a card dropped into the gap under the line lands BELOW the line": "Error: expect(received).toMatchObject(expected)",
     "session-board-tab-lead-only.spec.ts :: A. a plain task has no Board tab": "Error: expect(locator).toBeVisible() failed",
     "session-cron-supervision.spec.ts :: shared recovery toggle keeps both home surfaces and a dense transcript usable": "Test timeout of 90000ms exceeded.",
