@@ -104,8 +104,9 @@ const newest = (c: SessionPassageComment): string =>
  * window's) become one: every id either holds, in the order first seen. Sent and
  * taken out are one-way, so either copy's stamp stands (the earliest, when both have one). The words are the sent
  * copy's when only one copy was sent (an edit made elsewhere while it went never
- * rewrites what the model read), otherwise the copy edited last wins (on a tie in
- * time, the larger words, so two windows always agree). Nothing is ever dropped here, so neither a stale read nor a write from another window can
+ * rewrites what the model read); when both were (two windows sent it, each on its
+ * own words), the first send's, the one whose stamp is kept; otherwise the copy
+ * edited last wins (on a tie in time, the larger words, so two windows always agree). Nothing is ever dropped here, so neither a stale read nor a write from another window can
  * lose a comment, un-send one, or bring a removed one back.
  */
 export function mergeComments(a: readonly SessionPassageComment[], b: readonly SessionPassageComment[]): SessionPassageComment[] {
@@ -113,9 +114,12 @@ export function mergeComments(a: readonly SessionPassageComment[], b: readonly S
   for (const c of [...a, ...b]) {
     const prev = byId.get(c.id);
     if (!prev) { byId.set(c.id, c); continue; }
+    const later = (x: string, y: string) => x > y || (x === y && c.comment > prev.comment);
     const winner = !c.sentAt !== !prev.sentAt
       ? (c.sentAt ? c : prev)
-      : newest(c) > newest(prev) || (newest(c) === newest(prev) && c.comment > prev.comment) ? c : prev;
+      : c.sentAt && prev.sentAt
+        ? (later(prev.sentAt, c.sentAt) ? c : prev)
+        : later(newest(c), newest(prev)) ? c : prev;
     // Two windows may stamp one item at different times: both keep the earliest, so they agree.
     const sentAt = earliest(prev.sentAt, c.sentAt);
     const removedAt = earliest(prev.removedAt, c.removedAt);

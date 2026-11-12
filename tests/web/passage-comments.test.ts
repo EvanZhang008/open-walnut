@@ -187,6 +187,20 @@ describe('mergeComments', () => {
     const removedThere = [item('a', 'x', 'words that went', { removedAt: T1 })];
     expect(mergeComments(editedHere, removedThere)[0]!.removedAt).toBe(T1);
   });
+
+  it('two windows each sent it on their own words: the first send\'s words, with its stamp (either order, both agree)', () => {
+    // Window A edited and sent at T1; window B, before it saw that, sent its older words at T2.
+    const fromA = [item('a', 'x', 'edited then sent', { updatedAt: T1, sentAt: T1 })];
+    const fromB = [item('a', 'x', 'older words', { sentAt: T2 })];
+    for (const merged of [mergeComments(fromA, fromB), mergeComments(fromB, fromA)]) {
+      expect(merged[0]).toMatchObject({ comment: 'edited then sent', sentAt: T1 });
+    }
+    // The same stamp on both: the larger words, so every window settles on one.
+    const tieA = [item('a', 'x', 'alpha', { sentAt: T1 })];
+    const tieB = [item('a', 'x', 'beta', { sentAt: T1 })];
+    expect(mergeComments(tieA, tieB)[0]!.comment).toBe('beta');
+    expect(mergeComments(tieB, tieA)[0]!.comment).toBe('beta');
+  });
 });
 
 describe('a send in flight meets another window\'s edit (mergeKeepingClaimed)', () => {
