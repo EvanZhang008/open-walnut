@@ -10,7 +10,8 @@
 import { randomUUID } from 'node:crypto';
 import { log } from '../logging/index.js';
 import { compareEnqueueOrder, mutateStore, readQueueFileFresh, type QueuedMessage } from './session-queue-store.js';
-import { AFTER_TURN_REASON, STOP_PARKED_REASON } from './relay-fates.js';
+import { AFTER_TURN_REASON, START_RECOVERY_HELD_REASON, STOP_PARKED_REASON } from './relay-fates.js';
+import { leaveParked, parkRow } from './queue-held-spans.js';
 
 /**
  * Age backstop for the parking policy: a pending row this old is parked instead
@@ -67,9 +68,7 @@ export async function parkMessages(messages: QueuedMessage[], reason: string, st
         queue.sort(compareEnqueueOrder);
       }
       if (row.status === 'parked') continue;
-      row.status = 'parked';
-      row.parkedAt = parkedAt;
-      row.parkedReason = reason;
+      parkRow(row, reason, parkedAt);
       done.push(row);
     }
     return done;
@@ -101,9 +100,7 @@ export async function parkIfQueued(
       if (!row || row.status === 'parked') continue;
       // Checked under the lock: a row a delivery took meanwhile is the CLI's now.
       if (opts?.onlyPending && row.status !== 'pending') continue;
-      row.status = 'parked';
-      row.parkedAt = parkedAt;
-      row.parkedReason = reason;
+      parkRow(row, reason, parkedAt);
       if (opts?.freshLine) {
         // Plain rows derive their UUID from the unchanged id unless a fresh one is kept.
         if (!row.userUuid || opts.transcribed) {
@@ -153,9 +150,7 @@ export async function parkStalePending(maxAgeMs = MAX_PENDING_AGE_MS): Promise<Q
     for (const msgs of Object.values(s.queues)) {
       for (const m of msgs) {
         if (!isStale(m)) continue;
-        m.status = 'parked';
-        m.parkedAt = parkedAt;
-        m.parkedReason = reason;
+        parkRow(m, reason, parkedAt);
         done.push(m);
       }
     }
@@ -188,8 +183,7 @@ export async function unparkMessage(sessionId: string, messageId: string): Promi
       msg.lineUuid = randomUUID();
       msg.lineTries = 0;
     }
-    delete msg.parkedAt;
-    delete msg.parkedReason;
+    leaveParked(msg);
     return true;
   });
   if (ok) log.session.info('parked message un-parked by user action', { sessionId, messageId });
@@ -205,7 +199,7 @@ export async function unparkMessage(sessionId: string, messageId: string): Promi
  * version sent a copy of the text instead, which lost it on every path that did
  * not send and turned the user's own words into Walnut's.
  */
-export const START_RECOVERY_HELD_REASON = 'Waiting for Walnut to start the session again: its process ended before it read this message';
+export { START_RECOVERY_HELD_REASON };
 
 /** Hold `rows` for start recovery (re-inserting any a cleanup removed meanwhile). Returns the ids held. */
 export async function holdForStartRecovery(rows: QueuedMessage[]): Promise<string[]> {
@@ -222,9 +216,7 @@ export async function holdForStartRecovery(rows: QueuedMessage[]): Promise<strin
         queue.sort(compareEnqueueOrder);
       }
       if (row.status === 'parked' && row.parkedReason !== START_RECOVERY_HELD_REASON) continue;
-      row.status = 'parked';
-      row.parkedAt = parkedAt;
-      row.parkedReason = START_RECOVERY_HELD_REASON;
+      parkRow(row, START_RECOVERY_HELD_REASON, parkedAt);
       ids.push(row.id);
     }
     return ids;
@@ -283,8 +275,7 @@ export async function settleStartRecoveryHeld(sessionId: string, how: 'deliver' 
       const done: QueuedMessage[] = [];
       for (const row of s.queues[sessionId] ?? []) {
         if (!ids.includes(row.id) || row.status !== 'parked' || row.parkedReason !== START_RECOVERY_HELD_REASON) continue;
-        row.parkedAt = parkedAt;
-        row.parkedReason = how.park;
+        parkRow(row, how.park, parkedAt);
         done.push(row);
       }
       return done;
@@ -297,8 +288,7 @@ export async function settleStartRecoveryHeld(sessionId: string, how: 'deliver' 
     for (const row of s.queues[sessionId] ?? []) {
       if (row.status !== 'parked' || row.parkedReason !== START_RECOVERY_HELD_REASON) continue;
       row.status = 'pending';
-      delete row.parkedAt;
-      delete row.parkedReason;
+      leaveParked(row);
       ids.push(row.id);
     }
     return ids;
@@ -319,8 +309,7 @@ export async function setAsideHeld(sessionId: string, keepFence?: string | null)
     for (const row of s.queues[sessionId] ?? []) {
       if (row.status !== 'parked' || row.parkedReason !== AFTER_TURN_REASON) continue;
       if (keepFence !== undefined && (row.stopFence ?? null) === keepFence) continue;
-      row.parkedAt = parkedAt;
-      row.parkedReason = STOP_PARKED_REASON;
+      parkRow(row, STOP_PARKED_REASON, parkedAt);
       count++;
     }
     return count;

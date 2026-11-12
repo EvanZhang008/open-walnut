@@ -8,6 +8,7 @@ import { engineCaps } from '../agents/engine-registry.js';
 import { LOCAL_HOST, normalizeHost } from '../transfer/planner.js';
 import { HINT_AUTHOR, HINT_TAG } from '../hints/hint-format.js';
 import { ENGINE_SWITCH_HINT } from './engine-switch-context.js';
+import { closeTaken, leftParked, stampTaken } from '../queue-held-spans.js';
 
 /** A path on the old session's host, as the new session reads it (another host's path says where it lives). */
 export function hostPath(p: string, fromHost: string, toHost: string): string {
@@ -54,8 +55,7 @@ export const MOVE_HELD_REASON = 'Held while its task moves to another host';
 /** A row held for a move, deliverable again. */
 export function releaseMoveHeld(r: HeldRow): HeldRow {
   if (r.status !== 'parked' || r.parkedReason !== MOVE_HELD_REASON) return r;
-  const { parkedAt: _a, parkedReason: _r, ...rest } = r;
-  return { ...rest, status: 'pending' };
+  return { ...leftParked(r), status: 'pending' };
 }
 
 /** Release the rows held for a move on `sessionId`, in place. How many were released. */
@@ -81,6 +81,9 @@ export async function takeQueuedRows(sessionId: string): Promise<HeldRow[]> {
     const rows = s.queues[sessionId] ?? [];
     const take = rows.filter((r) => r.status !== 'processing' && !r.lineInDoubt);
     if (take.length === 0) return [];
+    // Out of any queue from now until putQueuedRows: that wait is the move's (queue-held-spans.ts).
+    const now = Date.now();
+    for (const r of take) stampTaken(r, now);
     s.queues[sessionId] = rows.filter((r) => !take.includes(r));
     if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
     return take;
@@ -100,8 +103,9 @@ export async function putQueuedRows(sessionId: string, rows: HeldRow[]): Promise
   await mutateStore((s) => {
     // Idempotent: a restart that resumes a switch may put the same rows again.
     const have = new Set((s.queues[sessionId] ?? []).map((r) => r.id));
+    const now = Date.now();
     const moved = rows.filter((r) => !have.has(r.id)).map((r) => {
-      const { lineUuid: _l, lineTries: _t, lineTracked: _k, stopFence: own, ...rest } = r;
+      const { lineUuid: _l, lineTries: _t, lineTracked: _k, stopFence: own, ...rest } = closeTaken(r, now);
       const f = fence === undefined ? own : fence;
       return { ...rest, ...(f ? { stopFence: f } : {}), sessionId };
     });

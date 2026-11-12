@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { SessionRecord } from '../types.js'
 import { describeStopRefusal, STOP_NOT_SENT_NO_OWNERSHIP_CHECK, stopProvenance } from './stop-provenance.js'
 import { HOST_LOST_STOP_MAX_MS, hostLostFenceText, hostLostStopError, isHostLostStopError, type HostReach } from './host-lost.js'
+import { leaveParked } from '../queue-held-spans.js'
 
 type StopRequest = NonNullable<SessionRecord['stopRequest']>
 
@@ -363,8 +364,7 @@ export const sessionStops = new SessionStopCoordinator({
         if (row.status !== 'parked' || row.parkedReason !== STOP_PARKED_REASON || (row.parkedAt ?? '') < since) continue
         row.status = 'pending'
         row.stopFence = fence
-        delete row.parkedAt
-        delete row.parkedReason
+        leaveParked(row)
       }
     }, false, true)
   },

@@ -113,7 +113,7 @@ import {
   clearReconnectCause, decideReconnectStep, getReconnectCause, hostSignalCount, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause, WAKE_GRACE_MS,
 } from './daemon-reconnect-cause.js'
 import { clearLinkDrops, noteLinkDrop, recentLinkDrops } from './daemon-link-drops.js'
-import { noteHostLinkDown, noteHostLinkUp } from './host-link-ledger.js'
+import { noteHostLinkDialing, noteHostLinkDown, noteHostLinkUp } from './host-link-ledger.js'
 import { FLAP_WINDOW_MS } from '../core/hosts/host-problem.js'
 // Leaf (no runtime imports): the cloud box alias and the companion's last answer.
 import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEADER, getCloudBoxState } from '../core/hosts/cloud-box-host.js'
@@ -1196,6 +1196,12 @@ export class DaemonConnection {
     this.sshTarget = sshTarget
   }
 
+  /** When this instance was made: a link whose first connect fails was down from here. */
+  readonly createdAt = Date.now()
+
+  /** This instance's link was up at least once. */
+  get everConnected(): boolean { return this.linkUpAt > 0 }
+
   /**
    * Access sshTarget with non-null assertion. Only call from SSH-only code paths
    * (connect, deploy, tunnel) — never from connectDirect.
@@ -1574,7 +1580,8 @@ export class DaemonConnection {
       // teardown, and a drop this Mac's own wake or network change caused do not (daemon-link-drops.ts).
       const ownChange = this._disconnectedSince - lastHostSignalAt() < WAKE_GRACE_MS
       // A planned swap's wait is Walnut's own (the update holds the sends), so it stays in the delivery.
-      if (!this._destroyed && !this._handoverArmed) noteHostLinkDown(this.hostKey, this._disconnectedSince)
+      // A server stop closing its links is no outage of the host (the next server would read it as one).
+      if (!this._destroyed && !this._handoverArmed && !daemonDialsClosed()) noteHostLinkDown(this.hostKey, this._disconnectedSince)
       if (!this._destroyed && !this._handoverArmed && !ownChange) {
         noteLinkDrop(this.hostKey, this._disconnectedSince)
         // The frame changes meaning when this drop ages out of the window: push one then, so an
@@ -9421,6 +9428,7 @@ async function getDaemonConnectionOrThrow(hostKey: string, sshTarget: SshTarget)
     // AFTER the cache write, so listeners read phase:'failed' with error/retryInMs
     // already populated (getDaemonConnectState folds the cache in).
     notifyDaemonPhaseChange(hostKey)
+    noteFirstConnectFailed(hostKey, mine)
     // The full text, once, where it actually happened.
     log.session.warn('DaemonConnection: connect failed (full error logged once, summary cached)', {
       host: hostKey, error: raw,
@@ -9470,11 +9478,22 @@ export async function getDirectDaemonConnection(hostKey: string, wsUrl: string):
     return conn!
   }).catch((err) => {
     connectingPromises.delete(poolKey)
+    if (connectionPool.get(poolKey) === conn) noteFirstConnectFailed(hostKey, conn!)
     throw err
   })
 
   connectingPromises.set(poolKey, promise)
   return promise
+}
+
+/**
+ * A connection that never came up failed to connect: its host's link was down from the moment
+ * the connection was made (host-link-ledger.ts), unless another link to that host is up. Only
+ * after a failure, so a first dial that works (its SSH, a daemon deploy) stays the path's own wait.
+ */
+function noteFirstConnectFailed(hostKey: string, conn: DaemonConnection): void {
+  if (conn.everConnected || daemonDialsClosed()) return
+  noteHostLinkDialing(hostKey, !!getConnectedDaemonConnection(hostKey), conn.createdAt)
 }
 
 /** The pooled connection to `hostKey` when there is one; never dials. */

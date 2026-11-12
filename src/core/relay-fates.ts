@@ -50,6 +50,9 @@ export type WithdrawState =
 export const STOP_PARKED_REASON = 'Session stopped by user; retry explicitly to send';
 
 /** Why a message a person lined up for after the running turn waits (core/sessions/queue-after-turn.ts). */
+/** Rows a start death holds until restart recovery starts the session again (session-queue-park.ts holdForStartRecovery). */
+export const START_RECOVERY_HELD_REASON = 'Waiting for Walnut to start the session again: its process ended before it read this message';
+
 export const AFTER_TURN_REASON = 'Waiting for the running turn to finish';
 
 /** The slice of the queue store the fates work on. */

@@ -174,6 +174,9 @@ export const SEND_QUEUE_DIR = path.join(WALNUT_HOME, 'cache', 'send-queue');
 /** Who leads this Walnut while the primary is away (NON-git, both boxes): the
  *  cloud companion's lead and the Walnut it serves. See core/leader/. */
 export const LEADER_STATE_DIR = path.join(WALNUT_HOME, 'cache', 'leader');
+/** When each host's link was down (NON-git, per box): read back at boot so a wait across a
+ *  restart leaves out the host's outage. See providers/host-link-ledger.ts. */
+export const HOST_LINK_LEDGER_FILE = path.join(WALNUT_HOME, 'cache', 'host-link-ledger.json');
 /** Letter read/pin/archive changes a cloud box took for the primary (NON-git,
  *  cloud box only): queued while the primary was unreachable, and kept after
  *  delivery until the git-synced inbox shows them. See core/human-inbox/replica-state.ts. */

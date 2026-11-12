@@ -138,7 +138,7 @@ import {
 import { hardStopTokens } from '../core/sessions/context-full.js'
 import { deliveryLatency, outOfPathBetween, REAL_WAITS, resumeMachineShare, type KnownLineFate, type OutOfPathWaits } from './delivery-latency.js'
 import { memoryPressureSeenSince } from '../core/memory-pressure.js'
-import { linkDownIntervals } from './host-link-ledger.js'
+import { linkDownIntervals, loadHostLinkLedger } from './host-link-ledger.js'
 import { joinAppendedPrompt, joinCallerAndContext } from '../core/sessions/prompt-blocks.js'
 import {
   openTurn,
@@ -11458,6 +11458,9 @@ export class SessionRunner {
   init(reconnectable?: SessionRecord[]): void {
     // Reconnect to surviving sessions + startup recovery (async)
     const startupRecovery = async () => {
+      // What earlier servers saw of each host's link, before any queued row is delivered
+      // (host-link-ledger.ts): a row that waited across a restart for its host leaves that out.
+      await loadHostLinkLedger().catch(() => {})
       // Phase 1: reconnect to surviving sessions
       if (reconnectable?.length) {
         for (const record of reconnectable) {
@@ -14460,6 +14463,7 @@ export class SessionRunner {
       ...(lat.wallMs !== undefined ? { wallMs: lat.wallMs } : {}),
       ...(lat.sleptMs !== undefined ? { sleptMs: lat.sleptMs } : {}),
       ...(lat.linkDownMs !== undefined ? { linkDownMs: lat.linkDownMs } : {}),
+      ...(lat.heldMs !== undefined ? { heldMs: lat.heldMs } : {}),
       ...(machineMs > 0 ? { machineMs } : {}),
       ...(lat.writtenEarlier ? { writtenEarlier: true, fate: known?.fate } : {}),
     })

@@ -27,6 +27,13 @@ export interface QueuedMessage {
   /** Why it was parked, shown to the human, e.g. the cwd pre-flight error. */
   parkedReason?: string;
   /**
+   * When it was held where no delivery could take it (parked, or out of the queue for a
+   * move), epoch ms: its delivery wait leaves these out (queue-held-spans.ts).
+   */
+  heldSpans?: Array<{ start: number; end: number }>;
+  /** A move took it out of its queue at this time (epoch ms); cleared when it is put back. */
+  takenAt?: number;
+  /**
    * Process-monotonic enqueue counter: the tiebreaker for messages that share
    * an `enqueuedAt` millisecond. Optional: rows persisted before this field
    * existed don't have it. See compareEnqueueOrder.

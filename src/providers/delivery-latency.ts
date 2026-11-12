@@ -16,6 +16,11 @@
  *  - Time this machine slept (sleep-ledger.ts).
  *  - Time the session's host link was down (host-link-ledger.ts): the rows wait
  *    for the host, which the host link's own alarm and banner report.
+ *  - Time the row was held where no delivery could take it (its `heldSpans`,
+ *    core/queue-held-spans.ts): parked while its task moved to another host,
+ *    for a running turn's end, for start recovery or a Retry, or out of any
+ *    queue during a move. 2026-11-12: a message held 1 h 55 min while a move to
+ *    clouddev was cut short by four deploys read 6,926 s "slow to wake".
  *  - A resumed CLI's start on this machine while it was short of memory
  *    (resumeMachineShare): the process waited on paging, which no Walnut code
  *    path can make faster. It is counted under the machine's own
@@ -24,7 +29,7 @@
 
 import { sleepIntervals } from '../lib/sleep-ledger.js'
 
-export interface DeliveredRow { id: string; enqueuedAt: string }
+export interface DeliveredRow { id: string; enqueuedAt: string; heldSpans?: Interval[] }
 
 /** What the daemon said instead of writing the line (onFate). */
 export interface KnownLineFate { fate: string; writtenAt?: number }
@@ -50,6 +55,8 @@ export interface DeliveryLatency {
   sleptMs?: number
   /** The host link's downtime left out of it (none of it asleep). */
   linkDownMs?: number
+  /** The row's time held out of delivery left out of it (none of it asleep or link down). */
+  heldMs?: number
   /** The line was written before this delivery. */
   writtenEarlier?: true
 }
@@ -58,6 +65,17 @@ export interface DeliveryLatency {
 export function outOfPathBetween(waits: OutOfPathWaits, from: number, to: number): number {
   if (!(to > from)) return 0
   return Math.min(to - from, unionMs([...waits.slept(from, to), ...(waits.linkDown ? waits.linkDown(from, to) : [])]))
+}
+
+/** The well-formed parts of `list` inside `[from, to]`. */
+function clip(list: Interval[] | undefined, from: number, to: number): Interval[] {
+  const out: Interval[] = []
+  for (const i of Array.isArray(list) ? list : []) {
+    const a = Math.max(from, Number(i?.start))
+    const b = Math.min(to, Number(i?.end))
+    if (Number.isFinite(a) && Number.isFinite(b) && b > a) out.push({ start: a, end: b })
+  }
+  return out
 }
 
 /** Length of the union of the intervals. */
@@ -96,10 +114,14 @@ export function deliveryLatency(
     const to = Math.max(enq, end)
     const sleep = wall > 0 ? waits.slept(enq, to) : []
     const down = wall > 0 && waits.linkDown ? waits.linkDown(enq, to) : []
+    const held = wall > 0 ? clip(r.heldSpans, enq, to) : []
     const slept = Math.min(wall, unionMs(sleep))
-    // Sleep and a down link overlap (a Mac asleep drops its links): the union is left out once.
-    const out = Math.min(wall, unionMs([...sleep, ...down]))
-    const linkDown = out - slept
+    // Sleep, a down link and a hold overlap (a Mac asleep drops its links, a move waits for
+    // its host): the union is left out once.
+    const sleptOrDown = Math.min(wall, unionMs([...sleep, ...down]))
+    const out = Math.min(wall, unionMs([...sleep, ...down, ...held]))
+    const linkDown = sleptOrDown - slept
+    const heldOut = out - sleptOrDown
     const ms = Math.max(0, wall - out)
     if (!best || ms >= best.deliveryMs!) {
       best = {
@@ -108,6 +130,7 @@ export function deliveryLatency(
         ...(out > 0 ? { wallMs: wall } : {}),
         ...(slept > 0 ? { sleptMs: Math.round(slept) } : {}),
         ...(linkDown > 0 ? { linkDownMs: Math.round(linkDown) } : {}),
+        ...(heldOut > 0 ? { heldMs: Math.round(heldOut) } : {}),
       }
     }
   }

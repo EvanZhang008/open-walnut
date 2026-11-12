@@ -33,6 +33,7 @@ import {
   fateOf, isPhoneMessageId, noteDelivered, setFate, withdrawIn, STOP_PARKED_REASON,
   type RelayFate, type WithdrawState,
 } from './relay-fates.js';
+import { parkRow } from './queue-held-spans.js';
 import {
   compareEnqueueOrder, generateId, getStore, mutateStore, nextEnqueueSeq, QueueNotStoredError, resetCache,
   type QueuedMessage, type QueueStore,
@@ -452,9 +453,7 @@ export async function markProcessing(
     if (stopFence !== undefined) {
       for (const message of queue) {
         if (message.status !== 'pending' || (message.stopFence ?? null) === stopFence) continue;
-        message.status = 'parked';
-        message.parkedAt = new Date().toISOString();
-        message.parkedReason = STOP_PARKED_REASON;
+        parkRow(message, STOP_PARKED_REASON);
       }
     }
     const pendingRows = queue.filter((m) => m.status === 'pending');
