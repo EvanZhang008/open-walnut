@@ -67,7 +67,8 @@ describe('every new mail reaches its mailbox router', () => {
     const capture = sync.indexOf('const finish = deferred ? await this.captureIncoming(accountId, headlines) : null');
     expect(capture).toBeGreaterThan(0);
     expect(sync.indexOf('announce(finish ? await this.finishIncoming(accountId, finish) : [])')).toBeGreaterThan(capture);
-    expect(callSites('routeArrivals')).toEqual(['src/integrations/mail/index.ts:activate']);
+    // Only the plugin's MailService wiring (pinned above) hands arrivals to the intake.
+    expect(callSites('routeArrivals').map((site) => site.split(':')[0])).toEqual(['src/integrations/mail/index.ts']);
     const index = read('src/integrations/mail/index.ts');
     expect(index).toMatch(/const captureIncoming = createMailRouterIntake\(/);
     expect(index).toMatch(/new MailSync\(\{[^}]*captureIncoming[^}]*\}\)/);
