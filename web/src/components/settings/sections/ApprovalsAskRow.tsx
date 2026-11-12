@@ -64,8 +64,8 @@ function UnaskedList() {
       if (!live) return;
       setItems(r.approvals.filter((a) => a.unasked).sort((x, y) => Date.parse(y.createdAt) - Date.parse(x.createdAt)));
     }).catch((err: unknown) => {
+      // What it showed stays: the next read (focus, the timer) tries again.
       log.warn('settings', 'reading the steps that went ahead unasked failed', { error: err instanceof Error ? err.message : String(err) });
-      if (live) setItems([]);
     });
     void read();
     // Nothing announces a step that went ahead (it asks no one), so the list reads again while in
