@@ -99,7 +99,7 @@ export function BoardTaskPeek({ ownTaskId, targetTaskId, onEscape, onJump, rende
       <div className="board-task-peek-context" data-testid="board-peek-context">
         <div className="board-task-peek-kicker">Another task</div>
         <div className="board-task-peek-heading">
-          <span className="board-task-peek-title" title={title} data-testid="board-peek-title">{title}</span>
+          <span className="board-task-peek-title" data-testid="board-peek-title">{title}</span>
           {phase && (
             <span className="board-task-peek-phase" data-phase={task?.phase} data-testid="board-peek-phase">{phase}</span>
           )}

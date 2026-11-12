@@ -74,7 +74,7 @@ export function KanbanCardDetail({ card, laneName, readOnly, onBack, onOpenSessi
         <button ref={backRef} type="button" className="kanban-text-btn kanban-detail-back" data-testid="kanban-detail-back" onClick={onBack}>Back</button>
         <span className="kanban-detail-lane">{laneName}</span>
       </div>
-      <h3 className="kanban-detail-title" title={card.title}>{card.title}</h3>
+      <h3 className="kanban-detail-title">{card.title}</h3>
       {(card.ticket || card.sev) && (
         <div className="kanban-card-ids">
           {card.ticket && (

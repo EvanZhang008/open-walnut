@@ -156,7 +156,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
               const sug = getErrorSuggestion(errorMessage, { host });
               return sug ? <ErrorSuggestionLink {...sug} /> : null;
             })()}
-            <span className="pending-session-path" title={cwd} style={{ marginTop: 8 }}>
+            <span className="pending-session-path" style={{ marginTop: 8 }}>
               {cwd}
             </span>
           </div>
@@ -216,7 +216,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
           <span className="pending-session-label" style={{
             color: phase === 'slow' ? 'var(--color-warning, #ff9500)' : undefined,
           }}>{statusLabel}</span>
-          <span className="pending-session-path" title={cwd}>{cwd}</span>
+          <span className="pending-session-path">{cwd}</span>
         </div>
       </div>
     </div>

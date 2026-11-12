@@ -383,7 +383,7 @@ export function SessionServerList({
                 <span className={`session-server-dot session-server-dot-${s.kind}`} aria-hidden="true" />
                 <span className="session-server-port">:{s.port}</span>
                 {s.title
-                  ? <><span className="session-server-title" title={s.title}>{s.title}</span><span className="session-server-name session-server-program">{serverLabel(s)}</span></>
+                  ? <><span className="session-server-title">{s.title}</span><span className="session-server-name session-server-program">{serverLabel(s)}</span></>
                   : <span className="session-server-name">{serverLabel(s)}</span>}
                 {s.via === 'terminal' && <span className="session-server-tag">Terminal</span>}
                 {!openable(s) && <span className="session-server-tag">not a web page</span>}

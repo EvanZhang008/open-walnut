@@ -259,7 +259,6 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
     <span
       {...edit.titleProps}
       className={`todo-pinned-title${edit.isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
-      title={orgDisplayTitle(task)}
       onClick={edit.isEditing ? (e) => e.stopPropagation() : undefined}
     >{orgDisplayTitle(task)}</span>
   );

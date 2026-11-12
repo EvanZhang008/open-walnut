@@ -395,7 +395,8 @@ test('a fleet of five, the Overview: its numbers, the diagram (a node lands on i
   await expect(home.locator('.hf-off-why')).toHaveAttribute('title', 'ssh: connection timed out')
   expect((await home.boundingBox())!.height).toBeLessThan(50)
   const old = awayOf(page, 'olddev')
-  await expect(old.locator('.hf-off-name')).toHaveAttribute('title', FLEET[2].label)
+  // Its whole name is in the row (cut off, it peeks in place on hover: utils/truncation-peek.ts).
+  await expect(old.locator('.hf-off-name')).toHaveText(FLEET[2].label)
 
   // Details, in place: the facts table. Opening them reads that host again (the person is looking
   // at it); closing them reads nothing.
@@ -533,9 +534,9 @@ for (const { width, dark } of [{ width: 900 }, { width: 700 }, { width: 1280, da
       await expectEveryUnknownSaysWhy(page)
     }
     // The long label fits its row and its Not connected row (no spill above), its whole name in
-    // the title; the diagram scales down, still readable.
-    await expect(row(page, 'olddev').locator('.rh-host-name')).toHaveAttribute('title', FLEET[2].label)
-    await expect(awayOf(page, 'olddev').locator('.hf-off-name')).toHaveAttribute('title', FLEET[2].label)
+    // the text (a cut-off one peeks in place on hover); the diagram scales down, still readable.
+    await expect(row(page, 'olddev').locator('.rh-host-name')).toHaveText(FLEET[2].label)
+    await expect(awayOf(page, 'olddev').locator('.hf-off-name')).toHaveText(FLEET[2].label)
     expect((await page.locator('[data-testid="host-fleet-topo-link"][data-host="devbox"]').boundingBox())!.height).toBeGreaterThanOrEqual(7)
     // Dark: no dark text left on a dark surface (the diagram's text by its fill).
     const inks = !dark ? [] : await page.locator('#remote-hosts').evaluate((root) => {

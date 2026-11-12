@@ -169,7 +169,7 @@ export function MailInviteCard({ accountId, messageId, kind }: Props) {
           {when || (checking && !details ? 'Checking your calendar…' : 'Meeting invite')}
         </p>
         {details?.location && (
-          <p className="mail-invite-where" data-testid="mail-invite-where" title={details.location}>
+          <p className="mail-invite-where" data-testid="mail-invite-where">
             {details.location}
           </p>
         )}

@@ -321,7 +321,7 @@ export function ViewDropdown({
                 // Two data attributes, not one joined string: a value can itself
                 // contain ':' (project names), which would make a combined selector ambiguous.
                 <span key={i} className="vd-sc" data-chip-dim={tok.dim} data-chip-value={tok.value}>
-                  <span className="vd-sc-label" title={tok.label}>{tok.label}</span>
+                  <span className="vd-sc-label">{tok.label}</span>
                   <button className="vd-sc-x" aria-label={`Remove ${tok.label}`} onClick={() => onQueryChange(tok.removed)}>
                     {ICON_CLOSE}
                   </button>

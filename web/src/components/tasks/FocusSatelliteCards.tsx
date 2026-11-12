@@ -443,7 +443,6 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       <span
         {...titleProps}
         className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
-        title={orgDisplayTitle(task)}
         onClick={isEditing ? (e) => e.stopPropagation() : undefined}
       >
         {orgDisplayTitle(task)}

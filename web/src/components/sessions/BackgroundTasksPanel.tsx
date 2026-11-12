@@ -242,7 +242,7 @@ const TaskListRow = memo(function TaskListRow({
     >
       <div className="bg-task-row-head">
         <StatusDot status={row.status} />
-        <span className="bg-task-row-name" title={row.title}>{row.title}</span>
+        <span className="bg-task-row-name">{row.title}</span>
         <KindPill row={row} />
       </div>
       <div className="bg-task-row-meta">

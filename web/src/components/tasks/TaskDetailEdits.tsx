@@ -133,7 +133,7 @@ export function TaskDependencies({ task, detail, onChanged, onOpenTask, onError 
       {rows.map((dep) => (
         <div key={dep.id} className="tdp-row tdp-dep-row" data-testid="task-detail-dependency">
           <div className="tdp-row-line">
-            <button type="button" className="tdp-dep-title" onClick={() => onOpenTask(dep.id)} title={displayTitle(dep)}>{displayTitle(dep)}</button>
+            <button type="button" className="tdp-dep-title" onClick={() => onOpenTask(dep.id)}>{displayTitle(dep)}</button>
             {dep.phase && <span className="tdp-row-end">{PHASE_LABELS[dep.phase as TaskPhase] ?? dep.phase}</span>}
             <button type="button" className="tdp-dep-remove" aria-label="Remove dependency" title="Remove dependency" onClick={() => void remove(dep.id)}>&times;</button>
           </div>

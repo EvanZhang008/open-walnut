@@ -109,7 +109,7 @@ class SectionErrorBoundary extends Component<
         <SettingsGroup>
           <SettingsRow
             label="This section couldn't load."
-            help={<code className="settings-crash-message" title={error.message}>{error.message}</code>}
+            help={<code className="settings-crash-message">{error.message}</code>}
             control={<SettingsButton onClick={() => this.setState({ error: null })}>Try again</SettingsButton>}
             data-testid="settings-section-crash"
           />
@@ -216,7 +216,7 @@ function ConfigErrorPane({ message, onRetry }: { message: string; onRetry: () =>
       <SettingsGroup>
         <SettingsRow
           label="Settings couldn't load."
-          help={<code className="settings-config-error-message" title={message}>{message}</code>}
+          help={<code className="settings-config-error-message">{message}</code>}
           control={<SettingsButton onClick={onRetry}>Try again</SettingsButton>}
         />
       </SettingsGroup>

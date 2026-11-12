@@ -269,7 +269,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
       onBlur={(e: FocusEvent<HTMLDivElement>) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setInside(false); }}
       onContextMenu={onContextMenu}
     >
-      <div className="kanban-card-title" data-testid="kanban-card-title" title={vm.title}>{vm.title}</div>
+      <div className="kanban-card-title" data-testid="kanban-card-title">{vm.title}</div>
       {(vm.ticket || vm.sev || vm.leaderCount || project) && (
         <div className="kanban-card-ids">
           {vm.ticket && (
@@ -364,7 +364,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
       ) : null}
       {vm.suggestion && (
         <div className="kanban-card-suggested" data-testid="kanban-card-suggested" data-kanban-zone>
-          <span className="kanban-card-suggested-text" title={vm.suggestion.text}>{vm.suggestion.text}</span>
+          <span className="kanban-card-suggested-text">{vm.suggestion.text}</span>
           {/* N6: the buttons move to a line of their own before the lane name is cut. */}
           <span className="kanban-card-suggested-actions">
           <button type="button" className="kanban-text-btn" data-testid="kanban-card-suggest-accept" aria-disabled={ro || undefined}

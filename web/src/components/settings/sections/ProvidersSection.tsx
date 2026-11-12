@@ -434,7 +434,7 @@ function ModelRows({ providerName, models, config, onSave, onAfterSave }: {
       )}
       <SettingsDisclosure id="providers-models" label="Available models" summary={String(models.length)} data-testid="provider-models-toggle">
         {models.map((m) => (
-          <SettingsRow key={m.id} indent label={<code className="settings-mono-value" title={m.id}>{m.id}</code>} help={m.label}
+          <SettingsRow key={m.id} indent label={<code className="settings-mono-value">{m.id}</code>} help={m.label}
             control={<InlineConfirmButton aria-label={`Remove ${m.id}`} onConfirm={() => saveModels((configModels?.models ?? []).filter((x) => x.id !== m.id))} />} />
         ))}
         <SettingsRow indent wide label="Add a model" htmlFor="provider-add-model" error={listError} control={

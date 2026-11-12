@@ -461,7 +461,7 @@ function PendingCommentCard({ loc, code, comment, onCopy, onRemove }: {
   return (
     <div className="session-diff-pending-card" data-pending-loc={loc}>
       <div className="session-diff-pending-head">
-        <span className="session-diff-pending-loc" title={loc}>{loc}</span>
+        <span className="session-diff-pending-loc">{loc}</span>
         <div className="session-diff-pending-actions">
           <button className="session-diff-pending-copy" onClick={copy} title="Copy this comment">
             {copied ? 'Copied' : 'Copy'}
@@ -3196,7 +3196,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               <div className="session-diff-ghost">
                 <div className="session-diff-ghost-banner">
                   <span className="session-diff-ghost-tag">context</span>
-                  <span className="session-diff-ghost-path" title={ghost.file}>{ghost.file}</span>
+                  <span className="session-diff-ghost-path">{ghost.file}</span>
                   <span className="session-diff-ghost-note">not part of this change — read-only</span>
                   {onOpenFile && (
                     <button

@@ -269,7 +269,7 @@ struct PopoutWindowTests {
             let draft = try await js(parent, "document.querySelector('#ref-draft')?.value")
             try expect(draft as? String == "unsent ref draft", "\(step): parent draft lost")
         }
-        let viewerOpen = "document.querySelector('.file-viewer-full-path')?.title === \(AppLink.jsString(file.path))"
+        let viewerOpen = "document.querySelector('.file-viewer-full-path')?.textContent === \(AppLink.jsString(file.path))"
             + " && document.querySelector('.file-viewer-line')?.textContent === ':2'"
         let viewerContent = "(document.querySelector('.file-viewer-overlay')?.textContent ?? '').includes('\(marker)')"
         for round in ["first", "repeat"] {

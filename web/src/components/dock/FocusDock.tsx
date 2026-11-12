@@ -120,7 +120,7 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     >
       <div className="dock-task-header">
         <div className="dock-task-header-top">
-          <span className={`dock-task-title${task.walnut_agent ? ' walnut-task-title' : ''}`} title={task.title}>{task.title}</span>
+          <span className={`dock-task-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{task.title}</span>
           <span className={`dock-task-phase-badge${unread ? ' dock-task-phase-unread' : ''}${isStreaming ? ' dock-task-phase-streaming' : ''}`}>
             {/* The task's own status in the user's words (taskStatusLabel). */}
             {taskStatusLabel(task)}

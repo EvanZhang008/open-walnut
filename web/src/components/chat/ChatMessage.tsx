@@ -501,7 +501,6 @@ function renderJsonWithTaskLinks(
             key={`file-link-${m.index}`}
             className="file-link"
             href="#"
-            title={filePath}
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onFileOpen(filePath); }}
           >
             {filePath}

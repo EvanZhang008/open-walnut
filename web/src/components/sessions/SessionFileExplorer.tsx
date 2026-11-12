@@ -229,7 +229,6 @@ function PathSuggestions({ anchorRef, paths, active, onPick }: {
           className={`sfe-path-suggest-item${i === active ? ' active' : ''}`}
           // mousedown, not click: the input's blur-commit must not win the race.
           onMouseDown={(e) => { e.preventDefault(); onPick(p); }}
-          title={p}
         >
           {p}
         </div>

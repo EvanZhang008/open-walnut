@@ -1,0 +1,42 @@
+/* Cut-off text peeking in place (utils/truncation-peek.ts): one light pill laid over the
+   text the page cut off, its font copied onto it so the words stay on the same spot, grown
+   out over the neighbours until the whole text shows. The same surface as the side bar's
+   item peek (sidebar-peek.css): the hover tint over an opaque page colour, a soft shadow.
+   It takes no pointer events, so the row under it, and the row below it covers, keep their
+   clicks; it sits above menus and popovers, since rows inside them peek too. */
+
+.truncation-peek {
+  position: fixed;
+  z-index: 100000;
+  box-sizing: border-box;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(var(--accent-subtle), var(--accent-subtle)), var(--bg);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14), 0 0 0 1px var(--border);
+  overflow-wrap: anywhere;
+  text-align: left;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  animation: truncation-peek-grow 140ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+.truncation-peek[data-instant] {
+  animation: none;
+}
+/* Copies of the row's own children: their own cut-off rules must not cut them again here. */
+.truncation-peek * {
+  max-width: none !important;
+  overflow: visible !important;
+  white-space: inherit !important;
+  text-overflow: clip !important;
+  -webkit-line-clamp: unset !important;
+}
+
+@keyframes truncation-peek-grow {
+  from { clip-path: inset(0 var(--peek-from, 0px) 0 0 round var(--radius-sm)); }
+  to { clip-path: inset(0 0 0 0 round var(--radius-sm)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .truncation-peek { animation: none; }
+}

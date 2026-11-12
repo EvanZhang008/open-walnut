@@ -339,7 +339,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                       <span className="oc-card-title" data-testid="org-chart-router-name">{r.name}</span>
                       <span className="oc-role">Router</span>
                     </span>
-                    <span className="oc-doing" data-testid="org-chart-router-line" title={r.latest}>{r.latest}</span>
+                    <span className="oc-doing" data-testid="org-chart-router-line">{r.latest}</span>
                   </span>
                 </div>
               </li>
@@ -377,7 +377,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                       />
                     ))}
                   </ul>
-                  {over && <div className="oc-hint" data-testid="org-chart-hint" title={plan!.hint}>{plan!.hint}</div>}
+                  {over && <div className="oc-hint" data-testid="org-chart-hint">{plan!.hint}</div>}
                 </OrgChartVp>
               );
             })}

@@ -28,7 +28,6 @@ export function MailListStatus({ viewKey }: { viewKey: string }) {
               type="button"
               className="mail-text-btn mail-list-status-close"
               aria-label="Dismiss"
-              title="Dismiss"
               onClick={() => { dismissMailListStatus(note.id); }}
             >
               Dismiss

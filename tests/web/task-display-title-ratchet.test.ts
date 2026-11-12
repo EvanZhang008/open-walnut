@@ -249,7 +249,8 @@ describe('task row surfaces render the display name (ratchet)', () => {
     expect(source).toMatch(/lookupTaskLabel\(reference\.id\)/)
     expect(source).toMatch(/resolveTaskToken\(reference\.id\)\?\.label\.project/)
     expect(source).not.toMatch(/resolveTaskToken\(reference\.id\)\?\.label\.title/)
-    expect(source.match(/displayTitle\(dep\)/g)).toHaveLength(3)
+    // The two dependency chips' text (their titles went: a cut-off chip peeks in place, utils/truncation-peek.ts).
+    expect(source.match(/displayTitle\(dep\)/g)).toHaveLength(2)
     expect(source).toContain('orgDisplayTitle(t).toLowerCase().includes(needle)')
   })
 })

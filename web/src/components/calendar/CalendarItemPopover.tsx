@@ -247,7 +247,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
             style={{ borderLeft: `3px solid ${item.event.color ?? 'var(--accent)'}` }}
           />
         ) : (
-          <div className="cal-item-title cal-item-title-static" title={item.task.title}>
+          <div className="cal-item-title cal-item-title-static">
             {item.task.title}
           </div>
         )}

@@ -122,7 +122,7 @@ function KanbanLaneInner(p: KanbanLaneProps) {
           ) : items}
           {p.pending.map((a) => (
             <div key={a.key} className="kanban-card kanban-card-pending" data-testid="kanban-card-pending" aria-busy="true">
-              <div className="kanban-card-title" title={a.title}>{a.title}</div>
+              <div className="kanban-card-title">{a.title}</div>
               <div className="kanban-card-status kanban-tone-grey"><span className="kanban-card-dot" aria-hidden="true" /><span className="kanban-card-status-text">Adding...</span></div>
             </div>
           ))}

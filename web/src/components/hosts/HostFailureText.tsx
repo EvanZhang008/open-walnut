@@ -66,7 +66,7 @@ export function HostFailureText({ headline, hint, summary, kind, retryAt, lastFr
   const hidden = collapsed ? (cleanHint || cleanSummary) : (inline ? '' : cleanSummary);
   return (
     <div className="hft" data-testid={testId} {...(kind ? { 'data-kind': kind } : {})}>
-      {headline && <div className="hft-headline" title={headline}>{headline}</div>}
+      {headline && <div className="hft-headline">{headline}</div>}
       {afterHeadline}
       {!collapsed && cleanHint && <div className="hft-hint"><InlineCodeText text={cleanHint} /></div>}
       {inline && cleanSummary && <pre className="hft-summary">{cleanSummary}</pre>}

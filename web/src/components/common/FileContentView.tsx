@@ -2298,7 +2298,7 @@ export function FileContentView({
         )}
         {/* Live Edit receipt: something arrived from another writer and was folded
             in. Transient (4s) and one line: it reports, it doesn't ask. */}
-        {live.receipt && <span className="fv-draft-note fv-live-receipt" role="status" title={live.receipt}>{live.receipt}</span>}
+        {live.receipt && <span className="fv-draft-note fv-live-receipt" role="status">{live.receipt}</span>}
         {pathCopied && <span className="fv-draft-note" role="status">Path copied</span>}
         {saveStateEl}
         {isRenderable && tight && barFold < 4 && (

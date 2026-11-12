@@ -297,7 +297,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
               <button type="button" className="quick-sort-card-title" onClick={() => onOpen(item.task)}>{item.task.title}</button>
               <div className="quick-sort-card-meta"><span className={`home-board-state home-board-state-${state}`}><i />{taskStatusLabel(item.task)}</span><span>{label(item.tier)}</span></div>
               {tags.length > 0 && <div className="quick-sort-tags">{tags.map(t => <span key={t.kind} className={`quick-sort-tag is-${t.kind}${t.kind === 'idle' && item.ages.idle >= 7 ? ' is-old' : ''}`} data-sort-age={t.kind}>{t.text}</span>)}</div>}
-              {item.line && <div className="quick-sort-card-line" title={item.line}>{item.line}</div>}
+              {item.line && <div className="quick-sort-card-line">{item.line}</div>}
               {replying === item.task.id ? <QuickSortReply task={item.task} onSent={() => taskReplied(item)} onClose={() => setReplying(null)} /> : <div className="quick-sort-actions"><div className="quick-sort-tiers">
                 {tierKeyed(tierChoices(item.tier)).map(({ id, key }) => <button key={id} type="button" className={`quick-sort-btn ${tierClass(id)}`} data-sort-tier={id} data-sort-key={key} onClick={() => taskTier(item, id)}>{label(id)}{key && <small>{key}</small>}</button>)}
                 </div><div className="quick-sort-moves">
@@ -318,7 +318,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
                 {tiers.map(t => (project.tiers[t.id] ?? 0) > 0 && <i key={t.id} className={tierClass(t.id)} style={{ flexGrow: project.tiers[t.id] }} />)}
               </div>
               <div className="quick-sort-card-meta">{tiers.filter(t => project.tiers[t.id]).map(t => <span key={t.id}>{project.tiers[t.id]} {t.label}</span>)}</div>
-              <ul className="quick-sort-card-list">{project.roots.slice(0, 3).map(t => <li key={t.id} title={t.title}>{t.title}</li>)}{project.roots.length > 3 && <li className="more">and {project.roots.length - 3} more</li>}</ul>
+              <ul className="quick-sort-card-list">{project.roots.slice(0, 3).map(t => <li key={t.id}>{t.title}</li>)}{project.roots.length > 3 && <li className="more">and {project.roots.length - 3} more</li>}</ul>
               {ask ? <div className="quick-sort-confirm" role="alert">
                 <span>Move {project.tasks.filter(t => homeBoardTier(t, focus.customTiers) !== ask.tier).length} tasks of {project.label} to {label(ask.tier)}?</span>
                 <button type="button" className="quick-sort-btn" data-sort-confirm="yes" onClick={() => projectTier(project, ask.tier)}>Move</button>

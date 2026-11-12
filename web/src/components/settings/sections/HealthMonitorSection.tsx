@@ -221,7 +221,7 @@ function AlarmRows({ row, now, open, onToggle, onChanged }: { row: AlarmRow; now
         <td><span className={`health-pill health-pill-${row.state}`}>{STATE_LABEL[row.state]}</span></td>
         <td className="health-name">
           <span className="health-title">{row.title}</span>
-          {label && <span className="health-label" title={label}>{label}</span>}
+          {label && <span className="health-label">{label}</span>}
           <span className="health-since">since {ago(row.since, now)}</span>
         </td>
         <td className="health-value">{fmt(row.value, row.unit)}</td>

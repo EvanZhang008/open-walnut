@@ -106,7 +106,7 @@ function FileRow({ file, sel, onSel }: { file: CommitPlanFile; sel: RepoSelectio
           ? <button type="button" className="scd-disclose" aria-expanded={open} aria-label={open ? 'Hide changes' : 'Show changes'} onClick={() => setOpen((o) => !o)}>{open ? '▾' : '▸'}</button>
           : <span className="scd-disclose-spacer" />}
         <span className={`scd-status-letter scd-st-${file.status}`}>{file.status === 'added' ? 'A' : file.status === 'deleted' ? 'D' : 'M'}</span>
-        <span className="scd-path" title={file.path}>{file.path}</span>
+        <span className="scd-path">{file.path}</span>
         {splittable && <span className="scd-stat"><span className="scd-add">+{file.added ?? 0}</span> <span className="scd-del">-{file.removed ?? 0}</span></span>}
         {file.session && <OwnerBadge label={fileOwnerLabel(file.owner)} owner={file.owner} />}
       </div>

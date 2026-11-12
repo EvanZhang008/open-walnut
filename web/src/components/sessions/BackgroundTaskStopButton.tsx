@@ -72,7 +72,7 @@ export function BackgroundTaskStopButton({ sessionId, taskId, noun }: {
     : 'Stop';
   return (
     <span className="bg-task-stop-wrap">
-      {phase === 'error' && <span className="bg-task-stop-error" role="alert" title={error}>{error}</span>}
+      {phase === 'error' && <span className="bg-task-stop-error" role="alert">{error}</span>}
       <button
         type="button"
         className={`bg-task-stop bg-task-stop--${phase}`}

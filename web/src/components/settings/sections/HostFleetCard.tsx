@@ -67,7 +67,7 @@ export function HostFleetCard({ host, now, action, onBootStart, onDetails }: {
     <article className="hf-card" data-testid="hf-dash-card" data-host={host.host} id={`hf-card-${host.host}`} tabIndex={-1}>
       <header className="hf-card-head">
         <span className="sps-host-dot hsd" data-kind={statusKind(host)} aria-hidden="true" />
-        <span className="hf-card-name" title={name}>{name}</span>
+        <span className="hf-card-name">{name}</span>
         <Chips list={roleChips(host)} className="hf-roles" testId="host-fleet-roles" />
       </header>
       <p className="hf-card-sys" data-testid="host-fleet-system">{systemLine(host)}</p>
@@ -135,7 +135,7 @@ export function HostFleetOfflineRow({ host, now, onDetails }: { host: FleetHost;
     <div className="hf-off" data-testid="hf-dash-offline" data-host={host.host} id={`hf-card-${host.host}`} tabIndex={-1}>
       <div className="hf-off-line">
         <span className="sps-host-dot hsd" data-kind={statusKind(host)} aria-hidden="true" />
-        <span className="hf-off-name" title={host.label}>{host.label}</span>
+        <span className="hf-off-name">{host.label}</span>
         <span className="hf-off-why" title={host.connection.error ?? undefined}>{offlineLine(host)}</span>
         {host.refreshing && <ReadMark host={host} now={now} />}
         <DetailsToggle open={open} onToggle={toggle} label={host.label} />

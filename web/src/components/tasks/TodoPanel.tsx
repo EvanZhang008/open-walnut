@@ -1298,7 +1298,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
               </span>
             )}
             {searchContext && (
-              <span className="todo-search-context-pill" title={searchContext}>
+              <span className="todo-search-context-pill">
                 {searchContext}
               </span>
             )}
@@ -2201,7 +2201,6 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
       <span
         {...titleProps}
         className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
-        title={orgDisplayTitle(task)}
         onClick={isEditing ? (e) => e.stopPropagation() : undefined}
       >
         {orgDisplayTitle(task)}
@@ -8352,7 +8351,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             {activeDragPinnedTask && (
               <div className="todo-pinned-drag-frame">
                 <div className="todo-pinned-card todo-pinned-card-dragging">
-                  <span className={`todo-pinned-title${activeDragPinnedTask.walnut_agent ? ' walnut-task-title' : ''}`} title={orgDisplayTitle(activeDragPinnedTask)}>{orgDisplayTitle(activeDragPinnedTask)}</span>
+                  <span className={`todo-pinned-title${activeDragPinnedTask.walnut_agent ? ' walnut-task-title' : ''}`}>{orgDisplayTitle(activeDragPinnedTask)}</span>
                 </div>
               </div>
             )}
@@ -8368,7 +8367,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     {activeDragGroup.count > 0 && <span className="todo-pinned-group-drag-count">{activeDragGroup.count}</span>}
                   </div>
                   {activeDragGroup.titles.slice(0, 3).map((t, i) => (
-                    <div key={i} className="todo-pinned-group-drag-row" title={t}>{t}</div>
+                    <div key={i} className="todo-pinned-group-drag-row">{t}</div>
                   ))}
                   {activeDragGroup.titles.length > 3 && (
                     <div className="todo-pinned-group-drag-more">+{activeDragGroup.titles.length - 3} more</div>

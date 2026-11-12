@@ -72,7 +72,7 @@ export function MailUnsubscribePlanRow({ item, ticked, onTick, disabled, run, fr
           disabled={!tickable || disabled}
           onChange={(event) => onTick(event.target.checked)}
         />
-        <span className="mail-unsub-name" title={item.label}>{item.label}</span>
+        <span className="mail-unsub-name">{item.label}</span>
         <span className="mail-unsub-method" data-testid="mail-unsub-method">{methodText(item)}</span>
         <span className="mail-unsub-mails">{formatCount(item.mails)} {item.mails === 1 ? 'mail' : 'mails'}</span>
       </label>

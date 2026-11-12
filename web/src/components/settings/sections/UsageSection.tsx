@@ -213,7 +213,7 @@ function LineRow({ line, share, label, help, onOpen }: { line: CostLine; share?:
   return (
     <SettingsRow
       className="usage-line"
-      label={<span className="usage-line-label" title={label ?? line.label}>{label ?? line.label}</span>}
+      label={<span className="usage-line-label">{label ?? line.label}</span>}
       help={help ?? `${volume(line.requests, totalTokens(line))}${share !== undefined ? ` · ${share.toFixed(share < 10 ? 1 : 0)}% of the cost` : ''}${line.unpriced ? ` · ${line.unpriced.toLocaleString('en-US')} without a price` : ''}`}
       control={onOpen ? <SettingsButton onClick={onOpen}>{amount}</SettingsButton> : amount}
     />

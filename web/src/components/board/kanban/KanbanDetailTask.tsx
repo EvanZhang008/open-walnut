@@ -53,7 +53,7 @@ export function KanbanDetailTask({ taskId }: { taskId: string }) {
         <section className="kanban-detail-section">
           <h4 className="kanban-detail-heading">Open subtasks ({subtasks.length})</h4>
           <ul className="kanban-detail-subtasks" data-testid="kanban-detail-subtasks">
-            {subtasks.map((t) => <li key={t.id} title={t.title}>{t.title}</li>)}
+            {subtasks.map((t) => <li key={t.id}>{t.title}</li>)}
           </ul>
         </section>
       )}

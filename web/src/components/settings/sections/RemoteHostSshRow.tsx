@@ -268,7 +268,7 @@ export function RemoteHostSshRow(props: Props) {
       sub={
         <>
           {alias && <span className="rh-host-alias">{alias}</span>}
-          {sub && <span className="settings-addons-mono settings-addons-muted settings-addons-ellipsis rh-host-hostname" title={sub}>{sub}</span>}
+          {sub && <span className="settings-addons-mono settings-addons-muted settings-addons-ellipsis rh-host-hostname">{sub}</span>}
         </>
       }
       tag={<SettingsTag title={host.discovered ? 'Found in ~/.ssh/config: Walnut reaches it with ssh' : 'Walnut reaches it with ssh'}>SSH</SettingsTag>}

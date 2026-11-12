@@ -191,7 +191,7 @@ export function FileViewer({ path: filePath, line, endLine, host: askedHost, sou
           )}
         </div>
         <div className="file-viewer-footer">
-          <span className="file-viewer-full-path" title={filePath}>{filePath}</span>
+          <span className="file-viewer-full-path">{filePath}</span>
           {remote && <span className="file-viewer-host">{remoteHostTag(remote, hostName)}</span>}
         </div>
       </div>

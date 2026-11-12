@@ -176,7 +176,7 @@ export function PluginConnectionPanel({ pluginId, initial, onReport }: Props) {
           <span className="settings-addons-inline">
             <span>Account</span>
             {report.account && (
-              <span className="settings-addons-ellipsis settings-addons-account" title={report.account}>{report.account}</span>
+              <span className="settings-addons-ellipsis settings-addons-account">{report.account}</span>
             )}
           </span>
         }

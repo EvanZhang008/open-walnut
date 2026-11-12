@@ -32,6 +32,7 @@ import { silenceAutomatedAudio } from './utils/automation-silence';
 import { installImageSizeHold } from './utils/image-size-hold';
 import { installHighlightRules } from './utils/highlight-rules';
 import { installCodeBlockActions } from './utils/code-block-actions';
+import { installTruncationPeek } from './utils/truncation-peek';
 import { hasUnsavedWork, initStaleAssetRecovery, initStaleBuildUpgrade } from './utils/stale-assets';
 import { installDesktopBridge } from './utils/desktop-bridge';
 import { installPluginHostRuntime } from './plugins/runtime';
@@ -210,6 +211,7 @@ function bootApp(): void {
   // Copy and Wrap on every rendered code block (utils/code-block-actions.ts), and
   // the saved wrap preference on <html> before the first message paints.
   installCodeBlockActions();
+  installTruncationPeek();
 
   // Clear text selection instantly on mousedown to avoid macOS inactive-selection pink flash.
   // Scoped (was unconditional, which broke copy entirely): never on right/middle click —

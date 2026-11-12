@@ -271,7 +271,7 @@ function ProjectSection({ project, onDone }: { project: DraftMenuProject; onDone
           {project.isNew && <span className="qtc-confirm-new">new</span>}
           <span className="task-kebab-project-caret">▾</span>
         </button>
-        {project.why && <div className="draft-task-menu-project-why" title={project.why}>{project.why}</div>}
+        {project.why && <div className="draft-task-menu-project-why">{project.why}</div>}
       </div>
       <ProjectPickerFlyout
         open={open}

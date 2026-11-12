@@ -29,7 +29,8 @@ describe('HostFailureText', () => {
     })
     expect(html).toContain('class="hft"')
     expect(html).toContain('data-testid="hft-devbox"')
-    expect(html).toContain('title="Could not connect to Dev box"')
+    // The headline reads whole in the row; cut off, it peeks in place (utils/truncation-peek.ts), no native title.
+    expect(html).toContain('<div class="hft-headline">Could not connect to Dev box</div>')
     expect(html).toContain('<code>ssh alice@devbox.example.com</code>')
     expect(html).toContain('aria-expanded="false"')
     expect(text(html)).toContain('Show SSH output')

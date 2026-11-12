@@ -107,7 +107,7 @@ function VerticalLink({ link, from, to }: { link: StageLink; from: number; to: n
       <svg className="wf-stage-link-lines" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
         {linkPaths(link.kind, from, to).map((d, i) => <path key={i} d={d} vectorEffect="non-scaling-stroke" />)}
       </svg>
-      {link.kind !== 'next' && <span className="wf-stage-link-label" title={link.long}>{link.long}</span>}
+      {link.kind !== 'next' && <span className="wf-stage-link-label">{link.long}</span>}
     </div>
   );
 }

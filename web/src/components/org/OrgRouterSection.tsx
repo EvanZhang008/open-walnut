@@ -66,7 +66,7 @@ function RouterRow({ row, selected, now, onSelect }: { row: ChannelRow; selected
           <span className="org-channel-time">{shortAgo(row.latestAt || row.lastAt, now)}</span>
         </span>
         {/* Its area, Paused or Active (or that it runs its own loop), and how many VPs it links to (buildChannels writes the line). */}
-        <span className={`org-channel-latest${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-router-line" title={row.latest}>
+        <span className={`org-channel-latest${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-router-line">
           {row.latest}
         </span>
       </span>

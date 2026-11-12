@@ -556,7 +556,6 @@ export function MailAccountsPane({
               <p
                 className="mail-refresh-note"
                 data-testid="mail-pane-note"
-                title={paneNote.text}
               >
                 {paneNote.text}
               </p>

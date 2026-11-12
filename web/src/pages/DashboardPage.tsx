@@ -413,7 +413,7 @@ export function DashboardPage() {
 
       <main className="tp-board">
         <div className="tp-toolbar">
-          <span className="tp-title" title={boardTitle}>{boardTitle}</span>
+          <span className="tp-title">{boardTitle}</span>
           <span className="tp-stats">{stats.todo} open · {stats.done} complete</span>
           {/* The high-frequency conditions stay one click away as chips; every
               other dimension lives in the shared View panel next to them. Both

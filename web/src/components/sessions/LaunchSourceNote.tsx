@@ -26,7 +26,7 @@ export function LaunchSourceNote({ rows, title = 'Where these come from', projec
       {rows.map((r) => (
         <div key={r.key} className="launch-source-row" data-key={r.key} data-source={r.source}>
           <span className="launch-source-label">{r.label}</span>
-          <span className="launch-source-value" title={r.value}>{r.value}</span>
+          <span className="launch-source-value">{r.value}</span>
           <LaunchSourceTag row={r} />
         </div>
       ))}

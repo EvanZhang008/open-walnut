@@ -98,7 +98,7 @@ export function SettingsUsageBreakdown({ data, loading, activeName, onSelect }: 
               onClick={onSelect ? () => onSelect(row.name) : undefined}
               title={onSelect ? (active ? 'Click to clear this filter' : `Filter to ${label}`) : undefined}
             >
-              <td title={label}>{label}</td>
+              <td>{label}</td>
               <td className="num">{row.unverified_calls === row.api_calls ? 'Unverified' : `$${row.cost_usd.toFixed(2)}`}{!!row.unverified_calls && row.unverified_calls !== row.api_calls && <small className="settings-usage-via"> Partial</small>}</td>
               <td className="num">{tokens(row.input_tokens)}</td>
               <td className="num">{tokens(row.cache_read_tokens)}</td>

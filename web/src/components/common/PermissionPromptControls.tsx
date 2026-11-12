@@ -165,7 +165,7 @@ export function PermissionAskDetail({ n, detail, clamp = false }: { n: Notificat
           {/* No plan text (dropped over the size ceiling): no toggle, a toggle that reveals nothing is a dead end. */}
           {detail.plan ? (
             clamp ? (
-              <div className={`nfc-card-sub${expanded ? '' : ' is-clamped'}`} data-testid="permission-detail-plan" title={detail.plan} onClick={() => setExpanded((v) => !v)}>
+              <div className={`nfc-card-sub${expanded ? '' : ' is-clamped'}`} data-testid="permission-detail-plan" onClick={() => setExpanded((v) => !v)}>
                 {detail.plan}
               </div>
             ) : (
@@ -181,7 +181,7 @@ export function PermissionAskDetail({ n, detail, clamp = false }: { n: Notificat
           )}
         </div>
       )}
-      {detail.type === 'file' && <div className="nfc-card-path" title={detail.filePath}>{detail.filePath}</div>}
+      {detail.type === 'file' && <div className="nfc-card-path">{detail.filePath}</div>}
       {detail.type === 'generic' && (
         // Over the ceiling, `preview` is all that is left of the input: render it.
         detail.preview ? (

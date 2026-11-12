@@ -208,8 +208,7 @@ export function SuggestAccuracyPanel({ standalone = false }: { standalone?: bool
                       <span className="suggest-accuracy-field">
                         {FIELD_LABELS.find((f) => f.field === e.field)?.label ?? e.field}
                       </span>{' '}
-                      <span className="suggest-accuracy-values settings-addons-mono"
-                        title={e.verdict === 'kept' ? e.suggested : `${e.suggested} to ${e.chosen ?? '(none)'}`}>
+                      <span className="suggest-accuracy-values settings-addons-mono">
                         {e.verdict === 'kept' ? e.suggested : `${e.suggested} to ${e.chosen ?? '(none)'}`}
                       </span>{' '}
                       <span className="suggest-accuracy-verdict">{VERDICT_LABELS[e.verdict] ?? e.verdict}</span>

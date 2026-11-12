@@ -148,7 +148,7 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
               <span className="pw-agent-text">
                 <span><b>{e.taskTitle ?? (e.host ? `A script on ${hostLabel(e.host)}` : 'A script')}</b> {l.verb}{e.itemTitle ? <> of <b>{e.itemTitle}</b></> : null}</span>
                 {(e.purpose || e.command) && (
-                  <span className="pw-agent-why">{e.purpose ? `“${e.purpose}”` : ''}{e.purpose && e.command ? ' · ' : ''}{e.command && <code title={e.command}>{e.command}</code>}</span>
+                  <span className="pw-agent-why">{e.purpose ? `“${e.purpose}”` : ''}{e.purpose && e.command ? ' · ' : ''}{e.command && <code>{e.command}</code>}</span>
                 )}
               </span>
               <span className="pw-agent-when" title={`${new Date(e.at).toLocaleString()}${e.sessionId ? ` · session ${e.sessionId}` : ''}`}>{ago(e.at)}</span>

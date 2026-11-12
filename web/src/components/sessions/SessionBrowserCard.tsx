@@ -275,7 +275,7 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
           onClick={onClose} data-testid="session-browser-hide">{CLOSE_GLYPH}</button>
       </header>
       <div className="session-browser-names">
-        <div className="session-browser-url" data-testid="session-browser-url" title={url}>{url}</div>
+        <div className="session-browser-url" data-testid="session-browser-url">{url}</div>
         <div className="session-browser-where" data-testid="session-browser-where" title={whereFull}>{where}</div>
       </div>
       {tabs.length > 1 && (

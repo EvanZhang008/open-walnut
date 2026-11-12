@@ -274,7 +274,7 @@ export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRo
           {/* Why there is no price, on the same line (a row of its own grew the picker under the
               pointer when it landed); the whole sentence is the tooltip. */}
           {cost?.status === 'unavailable' && cost.reason && (
-            <span className="session-cost-muted session-cost-reason" data-testid="session-cost-reason" title={cost.reason}>{cost.reason}</span>
+            <span className="session-cost-muted session-cost-reason" data-testid="session-cost-reason">{cost.reason}</span>
           )}
         </span>
         {times && (

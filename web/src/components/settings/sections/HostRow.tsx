@@ -167,7 +167,7 @@ export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, 
         label={
           <span className="rh-row-name-line">
             {dot}
-            <span className="rh-host-name" title={name}>{name}</span>
+            <span className="rh-host-name">{name}</span>
             {sub}
             {tag}
             {unsaved && <SettingsTag tone="warning" title="Walnut keeps it on this page until it saves">Not saved</SettingsTag>}

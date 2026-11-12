@@ -47,9 +47,9 @@ export function PanelNotice({ className, icon, actions, style, testId, role, chi
  * from another, always shows ("/home/someone/wor…/build").
  */
 export function NoticeToken({ text, code }: { text: string; code?: boolean }) {
-  if (!code) return <span className="panel-notice-token" title={text}>{text}</span>;
+  if (!code) return <span className="panel-notice-token">{text}</span>;
   const cut = text.replace(/\/+$/, '').lastIndexOf('/');
-  if (cut <= 0) return <code className="panel-notice-token" title={text}>{text}</code>;
+  if (cut <= 0) return <code className="panel-notice-token">{text}</code>;
   return (
     <code className="panel-notice-token panel-notice-token--path" title={text}>
       <span className="panel-notice-token-head">{text.slice(0, cut)}</span>

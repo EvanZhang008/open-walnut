@@ -190,7 +190,7 @@ function FixProgress({ actions, label }: { actions: HostActions; label: string }
 function Receipts({ actions }: { actions: HostActions }) {
   return (
     <>
-      {actions.receipt && <div className="hpb-receipt" data-testid="hpb-receipt" title={actions.receipt}>{actions.receipt}</div>}
+      {actions.receipt && <div className="hpb-receipt" data-testid="hpb-receipt">{actions.receipt}</div>}
       {actions.failed === 'retry' && <div className="host-connect-retry-msg" role="alert">{RETRY_FAILED_TEXT}</div>}
     </>
   );

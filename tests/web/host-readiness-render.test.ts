@@ -79,7 +79,7 @@ describe('RemoteHostReadiness: the problem line', () => {
 
   it('commands render as chips with Copy; alternatives sit behind Other ways', () => {
     const html = render(statusWith({ checkedAt: 5, problems: [GCC] }))
-    expect(html).toContain('<code class="hc-chip" title="sudo yum install -y gcc">')
+    expect(html).toContain('<code class="hc-chip">sudo yum install -y gcc</code>')
     expect(text(html)).toContain('Other ways')
   })
 })
@@ -136,7 +136,7 @@ describe('RemoteHostReadiness: automatic fixes (C29, C95)', () => {
     const html = render(statusWith({ checkedAt: 6, claude: claudeNative, problems: [{ ...OUTDATED, commands: ['claude update'], fix: { action: 'update-claude', state: 'failed', text: 'the installer exited with 1' } }] }))
     expect(text(html)).toContain('The update did not work: the installer exited with 1')
     expect(text(html)).toContain('Update by hand')
-    expect(html).toContain('title="claude update"')
+    expect(html).toContain('<code class="hc-chip">claude update</code>')
     expect(text(html)).not.toContain('Try again')
   })
 })

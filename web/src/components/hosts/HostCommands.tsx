@@ -44,7 +44,7 @@ function CommandChip({ command }: { command: string }) {
   const label = state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed' : 'Copy';
   return (
     <div className="hc-row">
-      <code ref={chipRef} className="hc-chip" title={command}>{command}</code>
+      <code ref={chipRef} className="hc-chip">{command}</code>
       <button
         type="button"
         // WebKit only tabs to buttons with an explicit tabindex (the Mac app).

@@ -190,7 +190,7 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
         </span>
       </div>
       {routine.description && (
-        <p className="routine-description trigger-jobs-description" title={routine.description}>{routine.description}</p>
+        <p className="routine-description trigger-jobs-description">{routine.description}</p>
       )}
       {routine.check && <code className="trigger-jobs-run" title={routine.check.run}>{describeCheck(routine.check)}</code>}
       {clockWhere && routine.state.clockHost && (

@@ -155,7 +155,7 @@ export function AudioCaptureSection({ config, onSave }: Props) {
         {excludeApps.map(app => (
           <SettingsRow
             key={app}
-            label={<span className="settings-addons-mono" title={app}>{app}</span>}
+            label={<span className="settings-addons-mono">{app}</span>}
             control={
               <SettingsButton variant="danger" onClick={() => removeApp(app)} aria-label={`Remove ${app}`}>
                 Remove

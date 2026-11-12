@@ -288,7 +288,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                 <tbody>
                   {data.tasks.map((t) => (
                     <tr key={t.taskId} className="usage-line" data-task={t.taskId}>
-                      <td><button type="button" className="usage-ec-open" title={t.title} onClick={() => openTaskOnHome(t.taskId, navigate)}>{t.title}</button>
+                      <td><button type="button" className="usage-ec-open" onClick={() => openTaskOnHome(t.taskId, navigate)}>{t.title}</button>
                         <span className="usage-ec-sub">{[label(t.key), t.project || 'Inbox', t.done ? hours(t.hours) : t.notStarted ? 'never started' : 'open', t.split ? 'split' : '',
                           t.reviews ? `${t.reviews} review${t.reviews === 1 ? '' : 's'}${t.reviewCostUsd ? ` (${money(t.reviewCostUsd)})` : ''}` : '',
                           t.score ? `scored ${scoreNamed(t.score)}${scoredByText(t.scoredFamilies)}${t.scorePartial ? ' (partial, not in the median)' : ''}` : '', t.followUps ? `${t.followUps} of your messages` : '',
