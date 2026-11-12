@@ -170,10 +170,14 @@ async function firstInRecent(id: string): Promise<void> {
   await tab.click()
   await expect(tab).toHaveClass(/is-active/)
   await expect(v.locator('.todo-pinned-list-recent [data-task-id]').first()).toHaveAttribute('data-task-id', id, { timeout: 15_000 })
+  // The synced list is written a moment after the open (the touch save waits a little), so read
+  // it until it holds the open rather than once.
   const key = 'walnut-todo-recent-opened'
-  const prefs = (await (await lab.doc.request.get(`${lab.base}/api/ui-prefs?key=${key}`)).json() as Record<string, any>).prefs?.[key]?.v
-  const list = (typeof prefs === 'string' ? JSON.parse(prefs) : prefs) as Array<{ id: string }>
-  expect(list[0]?.id).toBe(id)
+  await expect.poll(async () => {
+    const prefs = (await (await lab.doc.request.get(`${lab.base}/api/ui-prefs?key=${key}`)).json() as Record<string, any>).prefs?.[key]?.v
+    const list = (typeof prefs === 'string' ? JSON.parse(prefs) : prefs) as Array<{ id: string }> | undefined
+    return list?.[0]?.id
+  }, { timeout: 15_000 }).toBe(id)
   await v.locator('.todo-section-tab').filter({ hasText: 'All' }).click()
 }
 async function getTask(id: string): Promise<Record<string, any>> {
