@@ -28,6 +28,7 @@ import { computeHostLocalChanges } from '../../src/providers/session-changes-cor
 import { scanSessionCost } from '../../src/providers/session-cost-core.js'
 import { createWorkspaceCore, type WorkspaceCoreDeps } from '../../src/providers/workspace-core.js'
 import { createDaemonPorts } from '../../src/providers/port-scan-core.js'
+import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -160,6 +161,11 @@ export class MockDaemon {
   /** Bridge liveness reported by `bridge.configure` replies (Mac-side visibility tests). */
   private _bridgeConnected = false
   private readonly streamsDir: string
+  private _argvFiles: ReturnType<typeof createCliArgvFiles> | null = null
+  /** The real daemons' argv files, in this mock's streams dir. */
+  private argvFiles(): ReturnType<typeof createCliArgvFiles> {
+    return this._argvFiles ??= createCliArgvFiles({ fs, path, crypto, dir: path.join(this.streamsDir, 'argv') })
+  }
   private readonly turnSnapshotRoot: string | null
   /** Real ACP supervision (same module the standalone daemon embeds) so tests
    *  can drive acp* sessions through MockDaemon with real workers + mock agent. */
@@ -527,14 +533,24 @@ export class MockDaemon {
       cliArgs.push(message)
     }
 
-    // Spawn mock CLI (use process.execPath to avoid PATH issues in vitest)
-    const proc = spawn(process.execPath, [this._cliCommand, ...cliArgs], {
-      stdio: [pipeFd, outputFd, stderrFd],
-      cwd,
-      // This daemon lives in the test worker, so a CLI that outlives the worker
-      // is a leak: let the mock exit with its parent (see mock-claude.mjs).
-      env: { ...process.env, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', MOCK_CLAUDE_EXIT_WITH_PARENT: '1' },
-    })
+    // Spawn mock CLI (use process.execPath to avoid PATH issues in vitest). As the real daemons do
+    // (cli-argv-files-core.ts), the content arguments (--settings with its hook scripts, the system
+    // prompt) ride files: inline, the settings outgrew one argument's 128 KB on Linux, and the
+    // spawn's E2BIG ended the whole fixture server (2026-11-12, CI's browser shards).
+    let proc: ChildProcess
+    try {
+      proc = spawn(process.execPath, [this._cliCommand, ...this.argvFiles().toFiles(cliArgs)], {
+        stdio: [pipeFd, outputFd, stderrFd],
+        cwd,
+        // This daemon lives in the test worker, so a CLI that outlives the worker
+        // is a leak: let the mock exit with its parent (see mock-claude.mjs).
+        env: { ...process.env, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', MOCK_CLAUDE_EXIT_WITH_PARENT: '1' },
+      })
+    } catch (err) {
+      // A spawn that throws (E2BIG, EMFILE) fails this start, never the process hosting the mock.
+      for (const fd of [pipeFd, outputFd, stderrFd]) { try { fs.closeSync(fd) } catch { /* closed */ } }
+      return this.sendError(ws, id, `spawn failed: ${(err as Error).message}`)
+    }
 
     const pid = proc.pid ?? 0
     // As the real daemons: where this process's output begins (line-answer-v1).
