@@ -165,6 +165,7 @@ const PASSING: Record<string, string> = {
   'components/sessions/TaskQuickActions.tsx#memoryOpen': 'the task memory, a dialog',
   'components/sessions/TaskQuickActions.tsx#detailOpen': 'the task details popup opened from the menu where the host has no detail pane, a dialog',
   'components/sessions/ThreadCommentCard.tsx#expanded': 'one comment unfolded',
+  'components/inbox/LetterEnvelopeRow.tsx#expanded': 'one letter unfolded for a read-only look inside the notification panel or session Inbox; reopening the list starts with compact cards',
   'components/sessions/TriggerPickerPopover.tsx#listOpen': 'a list inside a popover',
   'components/sessions/WorkflowProgress.tsx#transcriptTarget': 'one agent\'s transcript, an overlay',
   'components/sessions/useThreadReviewPane.tsx#selected': 'one question picked in the review pane',

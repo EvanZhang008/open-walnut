@@ -549,8 +549,8 @@ describe('runOfflineHandover over journal v2', () => {
 
   it('a RefusedWrite is lettered at once; an unknown kind is left unacked', async () => {
     const t = await newTask('Refused v2')
-    const { listLetters } = await import('../../src/core/human-inbox/store.js')
-    const lettersBefore = (await listLetters()).letters.length
+    const { listLetters, getLetter } = await import('../../src/core/human-inbox/store.js')
+    const lettersBefore = (await listLetters()).letters
     // A person's write (a paired phone) the Mac refuses is the user's to see; the same refusal of
     // a session's write goes back to that session alone (letter.ts refusedBySession), no letter.
     const { createDevice, listDeviceRecords } = await import('../../src/core/device-auth.js')
@@ -567,10 +567,13 @@ describe('runOfflineHandover over journal v2', () => {
     expect([...d.pending.keys()]).toEqual([2])
     expect((await task(t))).toMatchObject({ title: 'Refused v2', priority: 'important' })
     const letters = (await listLetters()).letters
-    expect(letters.length).toBe(lettersBefore + 1)
-    expect(JSON.stringify(letters)).toContain('cwd')
-    // The session's refused cwd (seq 4) is in no letter.
-    expect(JSON.stringify(letters)).not.toContain('/srv/other')
+    expect(letters.length).toBe(lettersBefore.length + 1)
+    const added = letters.filter((letter) => !lettersBefore.some((prior) => prior.id === letter.id))
+    const detail = await getLetter(added[0]!.id)
+    // Field-level refusal details belong to the formatted body, not the short summary.
+    expect(detail?.body).toContain('cwd')
+    // The session's refused cwd (seq 4) is in no letter body or envelope.
+    expect(JSON.stringify(detail)).not.toContain('/srv/other')
   })
 
   it('a record this Mac applied whose ack never reached the host (killed after apply, R14) is drained again on the next connect and lands once, by the applied-ops ledger', async () => {
