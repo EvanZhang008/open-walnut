@@ -258,6 +258,12 @@ export function pickMain<T extends OrgTaskLike>(tasks: readonly T[]): T | undefi
 /** The words that name Main, whatever its task is titled: its role and the UI's name for it. */
 const MAIN_NAMES = ['main', 'main agent', CEO_LABEL.toLowerCase()];
 
+/** A VP's name with each role word it is called by: "<name> VP", and an older build's "<name> lead"
+ *  (read only: Walnut titles a VP with vpTaskTitle). */
+function withRoleWords(name: string): string[] {
+  return [VP_LABEL, 'lead'].map((word) => [name, word].join(' '));
+}
+
 /** One way to write a node's name: case, spacing and a leading "the" do not matter. */
 function nodeNameKey(name: string | undefined): string {
   return (name ?? '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/^the /, '');
@@ -283,11 +289,11 @@ export function orgNodeNames(task: OrgTaskLike): string[] {
     add(task.title);
   } else if (task.org_role === 'lead') {
     const own = task.org_name?.trim();
-    if (own) { add(own); add(`${own} ${VP_LABEL}`); add(`${own} lead`); }
+    if (own) { add(own); for (const n of withRoleWords(own)) add(n); }
     add(orgDisplayTitle(task));
     add(task.title);
     const project = (task.project ?? '').trim();
-    if (project) { add(`${project} ${VP_LABEL}`); add(`${project} lead`); }
+    if (project) for (const n of withRoleWords(project)) add(n);
   }
   return [...names];
 }
@@ -308,7 +314,7 @@ export function orgNodeNamed<T extends OrgTaskLike>(tasks: readonly T[], want: s
   if (leads.length <= 1) return leads[0];
   const named = leads.filter((t) => {
     const own = t.org_name?.trim();
-    return !!own && [own, `${own} ${VP_LABEL}`, `${own} lead`].some((n) => nodeNameKey(n) === key);
+    return !!own && [own, ...withRoleWords(own)].some((n) => nodeNameKey(n) === key);
   });
   return named.length === 1 ? named[0] : undefined;
 }
