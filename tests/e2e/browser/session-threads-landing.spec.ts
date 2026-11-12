@@ -36,8 +36,12 @@ async function boot(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle')
 }
 
+/** The current page's stack. A wide column in Tree Mode shows the page before it
+ *  too (a second .thread-stack, left of it), so every read names the right page. */
+const currentStack = (panel: Locator): Locator => panel.locator('.session-panel-body > .thread-stack')
+
 async function expectDepth(panel: Locator, depth: number): Promise<void> {
-  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
+  await expect(currentStack(panel)).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
 }
 
 /** Wheel the timeline until `target` sits near 40% of the box. */
@@ -361,7 +365,7 @@ test.describe('Question stack landing', () => {
       await row.click()
       await expectDepth(p, 1)
     }
-    const depths = () => Promise.all(panels.map((p) => p.locator('.thread-stack').getAttribute('data-thread-depth')))
+    const depths = () => Promise.all(panels.map((p) => currentStack(p).getAttribute('data-thread-depth')))
     const drawers = () => Promise.all(panels.map((p) => p.locator('.thread-drawer').isVisible()))
     const pressOnce = async (key: string) => {
       const before = routed.length
@@ -384,7 +388,7 @@ test.describe('Question stack landing', () => {
     await expect.poll(drawers).toEqual([false, false, false])
     // C62: the focus wins over the pointer; with no focus, the pointer's column.
     await panels[0].locator('.chat-input-textarea').first().click()
-    const b3 = (await panels[2].locator('.session-history').boundingBox())!
+    const b3 = (await currentStack(panels[2]).locator('.session-history').boundingBox())!
     await page.mouse.move(b3.x + b3.width / 2, b3.y + b3.height / 2)
     await pressOnce('Escape')
     await expect.poll(depths).toEqual(['0', '0', '1'])
@@ -396,7 +400,7 @@ test.describe('Question stack landing', () => {
     const routedBefore = routed.length
     await page.keyboard.press('Escape')
     await expect.poll(drawers).toEqual([false, false, false])
-    expect(routed.length).toBe(routedBefore)
+    expect(routed.length, `no router hop for the drawer's own Esc: ${routed.slice(routedBefore).join(' | ')}`).toBe(routedBefore)
     await expect.poll(depths).toEqual(['0', '0', '1'])
     await shot(page, 'c19-c62-three-columns')
 
@@ -406,7 +410,7 @@ test.describe('Question stack landing', () => {
     await centre(page, panels[0], row)
     await row.click()
     await expectDepth(panels[0], 1)
-    await panels[0].locator('.thread-stack-header .thread-stack-more').click()
+    await panels[0].locator('.session-panel-body .thread-stack-header .thread-stack-more').click()
     await page.locator('.thread-menu [role="menuitem"]', { hasText: /Remove question/ }).click()
     const confirm = page.locator('.thread-confirm')
     if (await confirm.count() > 0) await confirm.locator('.thread-confirm-btn--danger').click()

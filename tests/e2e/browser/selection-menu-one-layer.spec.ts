@@ -376,6 +376,16 @@ test.describe('Selection menu: a bar and normal menus over the conversation, in 
     await expect(left).toBeVisible({ timeout: 15_000 })
     await expect(left.locator('.session-history')).toContainText(MAP_READY, { timeout: 15_000 })
     await checkAllStates(page, left, await underTable(left), 'split-left-under-table')
+    // The divider dragged to its narrowest (a quarter of the sheet): the menus still
+    // hang off their buttons inside the narrow left page.
+    const divider = panel.locator('.tree-split-divider')
+    await divider.focus()
+    for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowLeft')
+    await expect(divider).toHaveAttribute('aria-valuenow', /^(2[5-9]|30)$/)
+    await page.evaluate(() => window.getSelection()?.removeAllRanges())
+    await checkAllStates(page, left, await underTable(left), 'split-left-narrow-under-table')
+    await divider.dblclick()
+    await expect(divider).toHaveAttribute('aria-valuenow', '50')
   })
 
   test('a narrow column: the bar and the menus stay in the viewport', async ({ page }) => {
