@@ -70,8 +70,10 @@ describe('connect failure (C6, C27, C78)', () => {
   it('the detail block is the shared HostFailureText: the hint verbatim, SSH output behind a toggle; the headline is the row\'s', () => {
     const { line, detail } = row(auth)
     expect(detail).toContain('class="rh-failure"')
-    // The headline by kind is the row's state line, said once (2026-11-05 review: again in Details).
-    expect(text(line)).toContain('Could not connect to Key box')
+    // The headline is the row's state line, said once (2026-11-05 review: again in Details). A
+    // sign-in failure is walked through the way first-run setup does, so it reads as that step.
+    expect(text(line)).toContain('Key box needs your SSH key')
+    expect(text(detail)).not.toContain('Key box needs your SSH key')
     expect(text(detail)).not.toContain('Could not connect to Key box')
     expect(detail).not.toContain('hft-headline')
     expect(detail).toContain('<code>ssh alice@key.example.com</code>')

@@ -199,14 +199,15 @@ export async function checkAddHost(ctx: StepCtx): Promise<void> {
   expect(routes.callsTo('PUT', '/api/config').length).toBe(puts)
   // Close, then Cancel link: the next run of this check starts with no link.
   await callBack(ctx, `ni-${n}`)
-  // Pick from your SSH config: the setup dialog again, listing what ~/.ssh/config names; Close
-  // (nothing connected from here) closes it, saving and answering nothing.
+  // Pick from your SSH config: the setup dialog again, listing what ~/.ssh/config names. Its way
+  // out reads Done when a host it lists is connected (the fixture's are), else Close; either
+  // closes it, saving and answering nothing.
   await addButton(page).click()
   await menu.getByRole('menuitem', { name: ADD_ITEMS[1] }).click()
   const picker = page.getByTestId('first-run-dialog')
   await expect(picker).toBeVisible()
   await expect(picker.locator('.app-modal-title')).toHaveText('Remote Hosts')
-  await expect(page.getByTestId('first-run-primary')).toHaveText('Close')
+  await expect(page.getByTestId('first-run-primary')).toHaveText(/^(Done|Close)$/)
   await page.getByTestId('first-run-primary').click()
   await expect(picker).toHaveCount(0)
   expect(routes.callsTo('PUT', '/api/config').length).toBe(puts)

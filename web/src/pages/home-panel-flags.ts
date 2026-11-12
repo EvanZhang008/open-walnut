@@ -26,6 +26,15 @@ export function readHomeChatVisible(storage: Pick<Storage, 'getItem'> | null | u
   return HOME_CHAT_VISIBLE_DEFAULT;
 }
 
+/** Did the user open the chat spot themselves (as opposed to its default)? */
+export function homeChatChosenOpen(storage: Pick<Storage, 'getItem'> | null | undefined, chatVisible: boolean): boolean {
+  try {
+    return chatVisible && storage?.getItem(LS_HOME_CHAT_VISIBLE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 /** Has this browser ever opened (or then closed) the chat spot? */
 export function hasHomeChatChoice(storage: Pick<Storage, 'getItem'> | null | undefined): boolean {
   try {
@@ -56,14 +65,21 @@ export interface FirstDraftInput {
   tasksError: boolean;
   /** A deep link (`?task=`, `?session=`) is still being applied. */
   urlPending: boolean;
+  /** The user's own tasks: Main and the VPs (org nodes) are Walnut's, not work on the board. */
   taskCount: number;
   /** Completed tasks older than the loaded window: a board with history, not a new one. */
   completedHidden: number;
   /** Session columns in the strip, drafts included. */
   columnCount: number;
   draftCount: number;
-  /** The chat spot is open: the user chose it, and a draft would borrow its place. */
-  chatVisible: boolean;
+  /**
+   * The user opened the chat spot themselves (a stored 'true'). The spot's default
+   * open state is not a choice: a new browser starts with it open, and counting
+   * that kept every new user on the CEO's chat instead of the New task draft
+   * (2026-11-12, the user: "it should show the new task!!! not CEO"). The draft
+   * borrows the open spot and gives it back when it closes or starts.
+   */
+  chatChosen: boolean;
   /** Phone-width layout, where any column is a full-screen overlay over the board. */
   narrowLayout: boolean;
 }
@@ -82,7 +98,7 @@ export function firstDraftDecisionReady(input: Pick<FirstDraftInput, 'visible' |
  * Open ONE "New task" draft column on the first open of an empty board, so a new
  * user lands on the one place a task is made instead of an empty list. Only for a
  * board with nothing on it and nothing open: any task (loaded or archived), any
- * column, an open chat, or a phone-width screen keeps the page as it is.
+ * column, a chat the user opened, or a phone-width screen keeps the page as it is.
  */
 export function shouldAutoOpenFirstDraft(input: FirstDraftInput): boolean {
   return firstDraftDecisionReady(input)
@@ -90,7 +106,7 @@ export function shouldAutoOpenFirstDraft(input: FirstDraftInput): boolean {
     && input.completedHidden === 0
     && input.columnCount === 0
     && input.draftCount === 0
-    && !input.chatVisible
+    && !input.chatChosen
     && !input.narrowLayout;
 }
 

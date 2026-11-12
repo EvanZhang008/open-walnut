@@ -11,7 +11,7 @@
  * answer re-runs the per-host pre-warm, which skips hosts already warmed on this
  * page, so only a newly appeared host gets a connect.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   peekWorkingDirs, prewarmWorkingDirs, refreshWorkingDirs, revalidateWorkingDirs,
   type ConfiguredHost, type FoundHost, type WorkingDirEntry, type WorkingDirsResult,
@@ -44,7 +44,7 @@ export function useWorkingDirs(open: boolean): WorkingDirsState {
   const [error, setError] = useState<string | null>(null);
   const hostsRef = useRef<ConfiguredHost[] | null>(null);
   const refreshRef = useRef<() => void>(() => {});
-  const [refresh] = useState(() => () => refreshRef.current());
+  const refresh = useCallback(() => refreshRef.current(), []);
 
   useEffect(() => {
     if (!open) return;

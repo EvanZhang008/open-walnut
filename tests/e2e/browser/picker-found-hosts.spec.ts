@@ -25,7 +25,7 @@ const statusOf = (host: string, label: string, over: Record<string, unknown> = {
   host, label, hostname: `${host}.example.test`, connected: false, phase: 'idle', phaseLabel: '',
   steps: [], phaseElapsedMs: 0, connectElapsedMs: 0, at: Date.now(), ...over,
 })
-/** Connected with Claude Code checked on this connection, so the dot reads ok, not "Checking Claude Code". */
+/** Connected with Claude Code checked on this connection, so the dot reads connected, not "Checking Claude Code". */
 const connected = (host: string, label: string) => {
   const at = Date.now()
   return statusOf(host, label, { connected: true, phase: 'connected', connectedAt: at, readiness: { checkedAt: at, problems: [] } })
@@ -134,7 +134,7 @@ test('a host found in ~/.ssh/config has its own tab in the new task panel, and C
   await expect(tab).not.toHaveAttribute('data-found', '', { timeout: 10_000 })
   await expect(tab).toHaveClass(/active/)
   await expect(picker(page).locator('.sps-host-note[data-type="found"]')).toHaveCount(0)
-  await expect(tab.locator('.sps-host-dot')).toHaveAttribute('data-kind', 'ok', { timeout: 10_000 })
+  await expect(tab.locator('.sps-host-dot')).toHaveAttribute('data-kind', 'connected', { timeout: 10_000 })
   expect(fake.yes).toEqual(['labbox'])
   await page.screenshot({ path: `${SHOTS}/found-added.png`, clip: await picker(page).boundingBox() ?? undefined })
 })
@@ -155,7 +155,7 @@ test('an added host that is not connected says so on its tab, with Connect', asy
   await note.getByTestId('sps-note-connect').click()
   await expect.poll(() => fake.connects).toEqual(['idlebox'])
   await expect(picker(page).locator('.sps-host-note[data-type="idle"]')).toHaveCount(0, { timeout: 10_000 })
-  await expect(tab.locator('.sps-host-dot')).toHaveAttribute('data-kind', 'ok', { timeout: 10_000 })
+  await expect(tab.locator('.sps-host-dot')).toHaveAttribute('data-kind', 'connected', { timeout: 10_000 })
   expect(fake.connects).toEqual(['idlebox'])
   await page.screenshot({ path: `${SHOTS}/idle-connected.png`, clip: await picker(page).boundingBox() ?? undefined })
 })

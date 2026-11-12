@@ -3,9 +3,11 @@
  *
  * Load-bearing because three components (MainPage, the Sidebar toggle, the Focus
  * Dock) read the chat flag at mount, and must agree that a new install opens on
- * the main agent, and a first-draft rule that fired on a board with
+ * the chat spot open, and a first-draft rule that fired on a board with
  * history (or twice) would grow columns the user never asked for.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
   HOME_CHAT_VISIBLE_DEFAULT,
@@ -14,6 +16,7 @@ import {
   hasHomeChatChoice,
   readHomeChatVisible,
   shouldAutoOpenFirstDraft,
+  homeChatChosenOpen,
   showHomeChatToggle,
   type FirstDraftInput,
 } from '../../web/src/pages/home-panel-flags';
@@ -58,7 +61,7 @@ const emptyBoard: FirstDraftInput = {
   completedHidden: 0,
   columnCount: 0,
   draftCount: 0,
-  chatVisible: false,
+  chatChosen: false,
   narrowLayout: false,
 };
 
@@ -104,12 +107,43 @@ describe('shouldAutoOpenFirstDraft', () => {
       { completedHidden: 12 },
       { columnCount: 1 },
       { draftCount: 1 },
-      { chatVisible: true },
+      { chatChosen: true },
       { narrowLayout: true },
     ]) {
       const input = { ...emptyBoard, ...patch };
       expect(firstDraftDecisionReady(input), JSON.stringify(patch)).toBe(true);
       expect(shouldAutoOpenFirstDraft(input), JSON.stringify(patch)).toBe(false);
     }
+  });
+});
+
+describe('a new user lands on New task, not the CEO chat', () => {
+  // 2026-11-12, the user: "it keep first show the CEO panel ... it should show the new task!!! not CEO".
+  // The chat spot starts open on a new browser; the first-draft rule had read that default as the
+  // user's choice, so the draft never opened. The input here is built the way MainPage builds it.
+  const inputFor = (stored: string | null) => {
+    const storage = storageWith(stored);
+    const chatVisible = readHomeChatVisible(storage);
+    return { ...emptyBoard, chatChosen: homeChatChosenOpen(storage, chatVisible) };
+  };
+
+  it('a browser that never chose: the chat is open by default, and the draft still opens', () => {
+    expect(readHomeChatVisible(storageWith(null))).toBe(true);
+    expect(shouldAutoOpenFirstDraft(inputFor(null))).toBe(true);
+  });
+
+  it('a chat the user opened keeps its place; one they closed opens the draft too', () => {
+    expect(shouldAutoOpenFirstDraft(inputFor('true'))).toBe(false);
+    expect(shouldAutoOpenFirstDraft(inputFor('false'))).toBe(true);
+  });
+
+  it('storage that throws is no choice', () => {
+    expect(homeChatChosenOpen({ getItem: () => { throw new Error('denied'); } }, true)).toBe(false);
+  });
+
+  it('MainPage counts the user\'s own tasks only: Main and the VPs are no work on the board', () => {
+    const src = readFileSync(join(__dirname, '../../web/src/pages/MainPage.tsx'), 'utf8');
+    expect(src).toContain('taskCount: tasks.filter(t => !t.org_role).length');
+    expect(src).toContain('chatChosen: homeChatChosenOpen(localStorage, chatVisible)');
   });
 });

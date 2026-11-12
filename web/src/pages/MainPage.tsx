@@ -119,7 +119,7 @@ import { restoreDraftColumns, saveDraftColumns } from '@/components/sessions/dra
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
 import {
-  HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, firstDraftDecisionReady, homeTaskPanelShown, readHomeChatVisible, shouldAutoOpenFirstDraft,
+  HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, firstDraftDecisionReady, homeChatChosenOpen, homeTaskPanelShown, readHomeChatVisible, shouldAutoOpenFirstDraft,
 } from './home-panel-flags';
 import { deriveRepairTarget, type WalnutRepairTarget } from './repair-target';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
@@ -1367,9 +1367,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (firstDraftDecidedRef.current) return;
     const input = {
       visible, tasksLoading: loading, tasksError: !!tasksError, urlPending: !!urlSync.pending,
-      taskCount: tasks.length, completedHidden,
+      taskCount: tasks.filter(t => !t.org_role).length, completedHidden,
       columnCount: sessionColumns.length, draftCount: draftColumns.length,
-      chatVisible, narrowLayout: isPhoneLayout(),
+      chatChosen: homeChatChosenOpen(localStorage, chatVisible), narrowLayout: isPhoneLayout(),
     };
     if (!firstDraftDecisionReady(input)) return;
     firstDraftDecidedRef.current = true;
@@ -1381,7 +1381,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const draftId = openDraftColumn();
     if (typing) setFocusDraftId(prev => (prev === draftId ? null : prev));
     log.info('home', 'opened a first draft on an empty board', { draftId, typing });
-  }, [visible, loading, tasksError, urlSync.pending, tasks.length, completedHidden, sessionColumns.length, draftColumns.length, chatVisible, openDraftColumn]);
+  }, [visible, loading, tasksError, urlSync.pending, tasks, completedHidden, sessionColumns.length, draftColumns.length, chatVisible, openDraftColumn]);
 
   /** Drop a draft's client-side state: the row, its persisted composer text and
    *  its focus claim. The strip SLOT is handled by the caller, because the two
