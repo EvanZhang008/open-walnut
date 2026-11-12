@@ -136,6 +136,8 @@ test('agent settings show passed effort, recorded effort, and no guessed default
     { id: 'effort-explicit', effort: 'high', recorded: 'max' },
     { id: 'effort-recorded', recorded: 'xhigh' },
     { id: 'effort-unknown' },
+    // A SendMessage continued it: the ledger lists it under the message's toolUseId.
+    { id: 'effort-continued', effort: 'low', send: 'toolu_send_continued' },
   ];
   const tools = agents.map(a => ({
     name: 'Agent', toolUseId: `toolu_${a.id}`, agentId: a.id,
@@ -143,7 +145,10 @@ test('agent settings show passed effort, recorded effort, and no guessed default
       run_in_background: true, prompt: 'Review a long working session.\n'.repeat(80) },
     result: `Async agent launched successfully. agentId: ${a.id}`,
   }));
-  await mockHistory(page, [{ role: 'assistant', timestamp: '2026-01-01T00:00:00.000Z', tools }]);
+  const sends = agents.filter(a => a.send).map(a => ({
+    name: 'SendMessage', toolUseId: a.send!, input: { to: a.id, message: 'Carry on with the next part.' }, result: 'Message sent.',
+  }));
+  await mockHistory(page, [{ role: 'assistant', timestamp: '2026-01-01T00:00:00.000Z', tools: [...tools, ...sends] }]);
   await mockSessionDetail(page);
   await page.route(`**/api/sessions/${SESSION_ID}/workflow`, r => r.fulfill({ status: 204, body: '' }));
   for (const a of agents) {
@@ -159,8 +164,8 @@ test('agent settings show passed effort, recorded effort, and no guessed default
   const sessionPanel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`);
   await expect(sessionPanel).toBeVisible();
   await injectEvent(page, 'session:background-tasks', {
-    sessionId: SESSION_ID, inFlight: 3, phases: [], agents: [],
-    tasks: agents.map(a => ({ taskId: a.id, toolUseId: `toolu_${a.id}`, taskType: 'local_agent',
+    sessionId: SESSION_ID, inFlight: agents.length, phases: [], agents: [],
+    tasks: agents.map(a => ({ taskId: a.id, toolUseId: a.send ?? `toolu_${a.id}`, taskType: 'local_agent',
       status: 'running', description: a.id, startedAt: Date.now(), isBackgrounded: true })),
   });
   for (const a of agents) {
@@ -175,7 +180,7 @@ test('agent settings show passed effort, recorded effort, and no guessed default
   for (const live of [true, false]) {
     if (!live) await injectEvent(page, 'session:background-tasks', {
       sessionId: SESSION_ID, inFlight: 0, phases: [], agents: [],
-      tasks: agents.map(a => ({ taskId: a.id, toolUseId: `toolu_${a.id}`, taskType: 'local_agent',
+      tasks: agents.map(a => ({ taskId: a.id, toolUseId: a.send ?? `toolu_${a.id}`, taskType: 'local_agent',
         status: 'completed', description: a.id, isBackgrounded: true })),
     });
     for (const a of agents) {
@@ -186,7 +191,8 @@ test('agent settings show passed effort, recorded effort, and no guessed default
       await expect(settings).toContainText('model: opus');
       if (a.effort || a.recorded) await expect(settings).toContainText(`effort: ${a.effort ?? a.recorded}`);
       else await expect(settings).not.toContainText('effort:');
-      await expect(panel.locator('.bg-tasks-detail')).toContainText(live ? 'Live agent output' : 'Saved agent output');
+      await expect(settings).not.toContainText('message:');
+      await expect(panel.locator('.bg-tasks-detail')).toContainText(live && !a.send ? 'Live agent output' : 'Saved agent output');
     }
   }
   await page.keyboard.press('Escape');

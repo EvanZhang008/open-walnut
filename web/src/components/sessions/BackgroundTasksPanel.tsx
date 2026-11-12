@@ -39,6 +39,7 @@ import { ICON_CLOSE } from '../common/Icons';
 import { AgentText } from '../common/AgentText';
 import type { SessionHistoryMessage } from '@/types/session';
 import { commandOutput, commandView, findToolInBlocks, findToolInHistory, type ToolSource } from '@/stream/command-view';
+import { isSubagentCall } from '@open-walnut/tool-header-text';
 import { useLiveAgentsForSession, useLiveTasksForSession, type LiveAgentStatus } from '@/stores/background-agents-store';
 import { openBackgroundPanel, closeBackgroundPanel, registerKnownAgents, unregisterKnownAgents, useBackgroundPanelOpen, useKnownAgents, useLiveLanes, useToolSource } from '@/stores/background-panel-store';
 
@@ -334,7 +335,7 @@ export function BackgroundTasksPanel({
         live: RUNNING.has(selected.status),
         preloaded: selected.agentId ? undefined : selected.known?.preloaded,
         fallbackResult: selected.known?.result || undefined,
-        promptInput: selected.known?.promptInput ?? agentCallInput(source, selectedToolUseId),
+        promptInput: selected.known?.promptInput ?? agentCallInput(source, selectedToolUseId, selected.agentId),
         fetchable: !!selected.agentId,
         startedAt: selected.task?.startedAt,
         agentLabel: selected.subagentType ? `${selected.subagentType} agent` : 'Agent',
@@ -549,14 +550,22 @@ export function BackgroundTasksChip({ sessionId, agents }: { sessionId: string; 
   );
 }
 
-/** The Agent call's own input, read from the conversation by its toolUseId: a chip
- *  folded into its turn is not mounted, so it registers nothing (the turn fold,
- *  2026-11-12), and the panel opened from the working line or the session menu
- *  must still show the call's settings. */
-function agentCallInput(source: ToolSource, toolUseId: string | undefined): Record<string, unknown> | undefined {
-  if (!toolUseId) return undefined;
-  const view = findToolInBlocks(source.blocks, toolUseId) ?? findToolInHistory(source.messages, toolUseId);
-  return view && Object.keys(view.input).length > 0 ? view.input : undefined;
+/** The Agent call's own input, read from the conversation: a chip folded into its
+ *  turn is not mounted, so it registers nothing (the turn fold, 2026-11-12), and the
+ *  panel opened from the working line or the session menu must still show the
+ *  call's settings. Only a subagent call counts: an agent a SendMessage continued
+ *  is listed under that SendMessage's toolUseId, so its own call is found by its
+ *  agentId, never the message's input read as settings. */
+function agentCallInput(source: ToolSource, toolUseId: string | undefined, agentId: string | undefined): Record<string, unknown> | undefined {
+  const view = toolUseId ? findToolInBlocks(source.blocks, toolUseId) ?? findToolInHistory(source.messages, toolUseId) : undefined;
+  if (view && isSubagentCall(view.name) && Object.keys(view.input).length > 0) return view.input;
+  if (!agentId) return undefined;
+  for (const m of source.messages) {
+    for (const t of m.tools ?? []) {
+      if (t.agentId === agentId && isSubagentCall(t.name) && t.input && Object.keys(t.input).length > 0) return t.input;
+    }
+  }
+  return undefined;
 }
 
 /** One per session panel, always mounted: renders the Background tasks panel while

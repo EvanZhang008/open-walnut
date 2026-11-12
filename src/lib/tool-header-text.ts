@@ -126,6 +126,11 @@ export function editDiffIsLarge(oldString: string, newString: string): boolean {
 /** Subagent calls drawn as their chip (SessionToolCall's TaskGroup). */
 const GROUPED_TOOLS = new Set(['Task', 'Agent']);
 
+/** A call that starts a subagent (the Agent tool, Task in older Claude Code). */
+export function isSubagentCall(name: string): boolean {
+  return GROUPED_TOOLS.has(name);
+}
+
 /** How the session chat draws a saved call (SessionToolCall), as far as its header goes. */
 export type ToolCardKind = 'chip' | 'plan' | 'plan-write' | 'edit' | 'bash' | 'generic';
 
