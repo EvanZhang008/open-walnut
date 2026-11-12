@@ -29,7 +29,8 @@ import { opFailure } from '../../src/commands/approve.js'
 import { createApproval } from '../../src/core/approvals/store.js'
 import { answerMessage, keyIdOf } from '../../src/core/approvals/digest.js'
 import { updateConfig } from '../../src/core/config-manager.js'
-import { asksPerson } from '../../src/core/approvals/ask-me.js'
+import { applyAskMeOff, asksPerson } from '../../src/core/approvals/ask-me.js'
+import type { ApprovalView } from '../../src/core/approvals/types.js'
 
 let base = ''
 const before = process.env.WALNUT_APPROVALS_ASK
@@ -111,12 +112,15 @@ describe('only the person moves the switch', () => {
 
 describe('while a device signs approvals, only its signature turns them off', () => {
   it('opens a turn-off approval, ignores every unsigned way, and turns off on a signed Approve', async () => {
-    expect((await http('PUT', '/api/config', { approvals: { ask_me: true } })).status).toBe(200)
+    // The phone was paired before approvals went on, so its key may turn them off (ask-me.ts keyMayTurnOff).
+    expect((await http('PUT', '/api/config', { approvals: { ask_me: false } })).status).toBe(200)
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
     const spki = publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
     const paired = await http('POST', '/api/devices', { name: 'approvals-off-e2e-phone' })
     const phone = { authorization: `Bearer ${paired.body.token}` }
     expect((await http('POST', '/api/v1/approvals/keys', { publicKey: spki, name: 'Test iPhone', kind: 'iphone' }, phone)).status).toBe(200)
+    await new Promise((r) => setTimeout(r, 5))
+    expect((await http('PUT', '/api/config', { approvals: { ask_me: true } })).status).toBe(200)
     const sign = (digest: string) => crypto.sign('sha256', Buffer.from(answerMessage(digest, 'approve')), { key: privateKey, dsaEncoding: 'der' }).toString('base64')
 
     // An unsigned off, with no session header (the one-curl hole): refused, and one approval opens.
@@ -147,6 +151,26 @@ describe('while a device signs approvals, only its signature turns them off', ()
     // A biometric approval of another kind, signed, never turns it off.
     const other = await createApproval({ what: 'Publish v2', mode: 'biometric', requester: { host: 'local' } })
     expect((await http('POST', `/api/v1/approvals/${other.approval.id}/answer`, { decision: 'approve', keyId: keyIdOf(spki), signature: sign(other.approval.digest) })).status).toBe(200)
+    expect(await asksPerson()).toBe(true)
+
+    // A phone added while approvals are on (a device token any process here can mint) cannot do it.
+    const late = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+    const lateSpki = late.publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+    const latePhone = await http('POST', '/api/devices', { name: 'approvals-off-e2e-late' })
+    expect((await http('POST', '/api/v1/approvals/keys', { publicKey: lateSpki, name: 'Late iPhone', kind: 'iphone' }, { authorization: `Bearer ${latePhone.body.token}` })).status).toBe(200)
+    const lateSig = crypto.sign('sha256', Buffer.from(answerMessage(turnOff.digest, 'approve')), { key: late.privateKey, dsaEncoding: 'der' }).toString('base64')
+    const tooNew = await http('POST', `/api/v1/approvals/${turnOff.id}/answer`, { decision: 'approve', keyId: keyIdOf(lateSpki), signature: lateSig })
+    expect(tooNew.status).toBe(403)
+    expect(tooNew.body.code).toBe('signer_too_new')
+    expect(await asksPerson()).toBe(true)
+
+    // Forged records never turn it off: a changed sentence, another approval's signature.
+    const open = (await http('GET', `/api/v1/approvals/${turnOff.id}`)).body.approval as ApprovalView
+    const forged = { ...open, status: 'approved' as const, answer: { decision: 'approve' as const, at: open.createdAt, mode: 'biometric' as const, device: { name: 'x', kind: 'iphone' as const }, keyId: keyIdOf(spki), signature: sign(turnOff.digest) } }
+    expect(await applyAskMeOff({ ...forged, what: 'Publish v3' })).toBe(false)
+    expect(await applyAskMeOff({ ...forged, answer: { ...forged.answer, signature: sign(other.approval.digest) } })).toBe(false)
+    expect(await applyAskMeOff({ ...forged, answer: { ...forged.answer, keyId: keyIdOf(lateSpki), signature: lateSig } })).toBe(false)
+    expect(await applyAskMeOff({ ...forged, turnsAskMeOff: undefined })).toBe(false)
     expect(await asksPerson()).toBe(true)
 
     const signed = await http('POST', `/api/v1/approvals/${turnOff.id}/answer`, { decision: 'approve', keyId: keyIdOf(spki), signature: sign(turnOff.digest) })

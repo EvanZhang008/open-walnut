@@ -7,10 +7,9 @@
  * approval off with one unsigned PUT /api/config, or by editing the files Walnut reads. The server
  * now takes an off only with a device's signature and holds the switch it set last; what is left
  * is a process of this account writing those files itself, before a restart reads them. This hook
- * refuses that for every session Walnut runs: Write, Edit, MultiEdit and NotebookEdit on those
- * files (config.yaml only when the edit touches the Approvals section), and a Bash command that
- * names one of them and writes (a redirect, sed -i, tee, mv, cp, rm, an interpreter). Reading them
- * stays open. It raises the bar for an agent; it is no wall against a hostile program of this
+ * refuses that for every session Walnut runs: Write, Edit, MultiEdit and NotebookEdit inside
+ * approvals/ (and on config.yaml while it holds the switch), and a Bash command that names the
+ * approvals folder of Walnut's data folder and writes. Reading them stays open. It raises the bar for an agent; it is no wall against a hostile program of this
  * account, which the server's own checks are for.
  *
  * POSIX sh + awk like the other guards (git-tmp-guard-hook.ts): a `case` bails out at once on a
@@ -23,28 +22,28 @@ import { shQuoteAwk } from './tmp-path-awk.js'
 // Kept small on purpose: an older daemon takes every hook inline in one spawn template string
 // (host-start-core.ts MAX_TEMPLATE_STRING, hook-files.ts), so no JSON parser and no comments
 // inside. The payload is read as raw JSON: tool_name and file_path come before tool_input's
-// content, whose own quotes are escaped. `r` names a record file; a Bash command is judged only
-// when it writes (a redirect, an in-place edit, a copy, move or removal, an interpreter).
+// content, whose own quotes are escaped. Matching is case-blind (macOS paths are). A Bash command
+// is judged only when it writes (a redirect other than to /dev/null or a stream, an in-place edit,
+// a copy, move, removal or mode change, an interpreter) and names Walnut's data folder.
 const GUARD_AWK = String.raw`BEGIN{RS="\001"}
 {H=ENVIRON["OPEN_WALNUT_HOME"];if(H=="")H=ENVIRON["HOME"]"/.open-walnut"
-r="approvals/(keys|approvals|switch)\\.json"
-if($0~/"tool_name":"Bash"/){
-if($0!~/>|(sed|perl|ruby|yq)[^;&|]* -[a-zA-Z]*i|[ ;&|(":](tee|mv|cp|rm|truncate|dd|ln|install|rsync|python3?|node|bun|deno|osascript) /)exit
-if($0~r||($0~/open-walnut\/approvals/&&$0~/(keys|approvals|switch)\.json/))d("write Walnut's approval records")
-if($0~/config\.yaml/&&$0~/ask_me/)d("change the Approvals switch in config.yaml")
+H=tolower(H);c=tolower($0)
+if(c~/"tool_name":"bash"/){gsub(/[0-9]?>(&[0-9]|\/dev\/null)/,"",c)
+if(c!~/>|(sed|perl|ruby|yq)[^;&|]* -[a-z]*i|[ ;&|(":](tee|mv|cp|rm|truncate|dd|ln|install|rsync|chmod|chown|python3?|node|bun|deno|osascript) /)exit
+w=c~/\.open-walnut/||index(c,H)
+if(w&&c~/approvals([\/" ;&|)\\]|$)/)d("write Walnut's approval records")
+if(c~/config\.yaml/&&c~/ask_me/)d("change the Approvals switch in config.yaml")
 exit}
-if($0!~/"tool_name":"(Write|Edit|MultiEdit|NotebookEdit)"/||!match($0,/"(file|notebook)_path":"[^"]*"/))exit
-p=substr($0,RSTART,RLENGTH);sub(/^"[a-z_]*":"/,"",p);sub(/"$/,"",p)
-if(p~r"$"&&(index(p,H"/")==1||p~/\/\.open-walnut\//))d("write "p", one of Walnut's approval records")
-if(p==H"/config.yaml"||p~/\/\.open-walnut\/config\.yaml$/){
-if($0~/"tool_name":"Write"/){while((getline l<p)>0)if(l~/ask_me/)d("rewrite config.yaml, which holds the Approvals switch")}
-else if($0~/ask_me|approvals/)d("change the Approvals switch in config.yaml")}}
-function d(w){printf "Walnut refused this: it would %s. Only the person changes approvals, in Settings, General (turning them off asks for Face ID or Touch ID). Read them with walnut tools call approval_list.",w;exit}`
+if(c!~/"tool_name":"(write|edit|multiedit|notebookedit)"/||!match($0,/"(file|notebook)_path":"[^"]*"/))exit
+p=substr($0,RSTART,RLENGTH);sub(/^"[a-z_]*":"/,"",p);sub(/"$/,"",p);m=tolower(p)
+if(index(m,H"/approvals/")==1||m~/\/\.open-walnut\/approvals\//)d("write "p", one of Walnut's approval records")
+if(m==H"/config.yaml"||m~/\/\.open-walnut\/config\.yaml$/)while((getline l<p)>0)if(l~/ask_me/)d("change config.yaml, which holds the Approvals switch")}
+function d(x){printf "Walnut refused this: it would %s. Only the person changes approvals, in Settings (an off asks for Face ID or Touch ID). Read them with walnut tools call approval_list.",x;exit}`
 
 /** The hook command: a `case` on the payload, then the awk check. */
 export const APPROVALS_GUARD_COMMAND = [
   'in=$(cat 2>/dev/null)',
-  'case $in in *approvals*|*config.yaml*) ;; *) exit 0 ;; esac',
+  'case $in in *[Aa][Pp][Pp][Rr][Oo][Vv][Aa][Ll][Ss]*|*[Cc][Oo][Nn][Ff][Ii][Gg].[Yy][Aa][Mm][Ll]*) ;; *) exit 0 ;; esac',
   `msg=$(printf '%s' "$in" | awk ${shQuoteAwk(GUARD_AWK)} 2>/dev/null)`,
   // Only the refusal text refuses: an awk that fails prints nothing, and allows.
   'case $msg in "Walnut refused"*) ;; *) exit 0 ;; esac',

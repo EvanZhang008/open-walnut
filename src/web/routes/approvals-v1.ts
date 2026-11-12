@@ -457,6 +457,12 @@ approvalsV1Router.post('/approvals/:id/answer', (req: Request, res: Response, ne
     // A test run answers only its own approvals, and the person never answers a test run's by accident.
     const target = await getApproval(param(req.params.id))
     if (!target || !visibleTo(target, ambientTestRun())) throw new ApprovalError(404, 'not_found', 'No such approval.')
+    // A turn-off takes only a key that may sign one (ask-me.ts keyMayTurnOff); it stays open for another.
+    if (target.turnsAskMeOff && body.decision === 'approve') {
+      const askMe = await import('../../core/approvals/ask-me.js')
+      const signer = typeof body.keyId === 'string' ? await keys.activeKey(body.keyId) : undefined
+      if (signer && !askMe.keyMayTurnOff(signer)) throw new ApprovalError(403, 'signer_too_new', askMe.TURN_OFF_SIGNER_WORDS)
+    }
     let proven = false
     if (target.guard && body.decision === 'approve' && !body.signature) {
       // Unsigned: only a Passwords unlock in this window proves it is the person (vaultApprover).

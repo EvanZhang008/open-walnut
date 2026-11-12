@@ -18,13 +18,16 @@
  */
 import { expect, test, type APIRequestContext, type Page, type WebSocketRoute } from '@playwright/test'
 import crypto from 'node:crypto'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { fixtureHome } from './engine-settings-helpers'
 import { holdApprovalsLock } from './approvals-lock'
 import { ensureVaultSetUp, VAULT_MASTER } from './vault-session-helper'
 import { holdVaultLock } from './vault-lock'
 import { isolateUiPrefsContext } from './status-section-helpers'
 import { openSection, openTasksBy, sectionCount, taskSection } from './org-view-helpers'
 
-test.use({ video: process.env.APR_VIDEO ? 'on' : 'off' })
+test.use({ video: process.env.APR_VIDEO || process.env.PW_VIDEO ? 'on' : 'off' })
 test.describe.configure({ mode: 'serial' })
 // Its cards unlock the shared fixture vault; the vault lock comes before the approvals lock.
 holdVaultLock('shared', 'file')
@@ -771,6 +774,13 @@ test('with a device that signs, turning approvals off waits for its Face ID, fro
   const enrolled = await request.post('/api/v1/approvals/keys', { data: { publicKey: spki, name: 'Spec iPhone', kind: 'iphone' }, headers: { authorization: `Bearer ${token}` } })
   expect(enrolled.status()).toBe(200)
   const keyId = (await enrolled.json() as { key: { id: string } }).key.id
+  // A phone paired a while ago: one added while approvals are on cannot turn them off at once (ask-me.ts
+  // keyMayTurnOff). The fixture's keys file is the server's own record, read at every answer.
+  const keysFile = path.join(await fixtureHome(request), 'approvals', 'keys.json')
+  const keys = JSON.parse(await fs.readFile(keysFile, 'utf8')) as { keys: Array<{ id: string; createdAt: string; activatedAt?: string }> }
+  const long = new Date(Date.now() - 2 * 24 * 60 * 60_000).toISOString()
+  for (const k of keys.keys) if (k.id === keyId) { k.createdAt = long; k.activatedAt = long }
+  await fs.writeFile(keysFile, JSON.stringify(keys, null, 2))
   const signTurnOff = async (id: string) => {
     const a = (await (await request.get(`/api/v1/approvals/${id}`)).json() as { approval: { digest: string; what: string } }).approval
     expect(a.what).toContain('Turn approvals off')

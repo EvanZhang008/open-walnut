@@ -55,7 +55,20 @@ const CASES: Array<[string, () => Record<string, unknown>, boolean]> = [
   ['Bash', () => ({ command: 'cat ~/.open-walnut/approvals/keys.json | jq .keys' }), false],
   ['Bash', () => ({ command: 'grep ask_me ~/.open-walnut/config.yaml' }), false],
   ['Bash', () => ({ command: "sed -i '' s/a/b/ src/core/approvals/keys.ts" }), false],
-  ['Edit', () => ({ file_path: `${W()}/config.yaml`, old_string: 'engine: a', new_string: 'engine: b' }), false],
+  // config.yaml while it holds the switch: any edit (a partial string would slip a word match).
+  ['Edit', () => ({ file_path: `${W()}/config.yaml`, old_string: 'sk_me: true', new_string: 'sk_me: false' }), true],
+  // Case-blind (macOS paths are), the folder itself, and mode changes.
+  ['Write', () => ({ file_path: `${W()}/Approvals/Keys.JSON`, content: '{}' }), true],
+  ['Write', () => ({ file_path: `${W()}/approvals/other.json`, content: '{}' }), true],
+  ['Bash', () => ({ command: 'rm -rf ~/.open-walnut/approvals' }), true],
+  ['Bash', () => ({ command: 'cd ~/.open-walnut && mv approvals old' }), true],
+  ['Bash', () => ({ command: 'chmod 000 ~/.open-walnut/approvals/keys.json' }), true],
+  ['Bash', () => ({ command: ': > ~/.open-walnut/approvals/switch.json' }), true],
+  // Reads with their errors sent away, and work in a task folder whose path says open-walnut.
+  ['Bash', () => ({ command: 'cat ~/.open-walnut/approvals/keys.json 2>/dev/null' }), false],
+  ['Bash', () => ({ command: 'grep ask_me ~/.open-walnut/config.yaml 2>&1 | head' }), false],
+  ['Bash', () => ({ command: "cd /home/u/.local/state/open-walnut/tasks/T1/walnut && sed -i '' s/a/b/ src/core/approvals/keys.ts" }), false],
+  ['Bash', () => ({ command: 'echo [] > /tmp/fx/approvals/keys.json' }), false],
   ['Write', () => ({ file_path: `${home}/other/config.yaml`, content: 'x: 1\n' }), false],
   ['Write', () => ({ file_path: `${home}/repo/src/core/approvals/keys.ts`, content: 'export {}' }), false],
   ['Read', () => ({ file_path: `${W()}/approvals/keys.json` }), false],
@@ -67,7 +80,7 @@ describe('approvals guard hook', () => {
       it(`${path.basename(shell)}: ${tool} ${JSON.stringify(input()).slice(0, 90)} is ${refused ? 'refused' : 'allowed'}`, () => {
         const r = run(shell, tool, input())
         expect(r.refused).toBe(refused)
-        if (refused) expect(r.reason).toMatch(/^Walnut refused this: .*Settings, General/)
+        if (refused) expect(r.reason).toMatch(/^Walnut refused this: .*Only the person changes approvals, in Settings/)
       })
     }
   }

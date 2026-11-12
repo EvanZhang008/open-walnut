@@ -29,10 +29,11 @@
  * Every gate that waits for the person reads `asksPerson()`; tests/core/approvals/ask-me-gates-guard.test.ts
  * lists them from the source and fails on a new one that does not.
  */
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import { getConfig } from '../config-manager.js'
 import { WALNUT_HOME } from '../../constants.js'
-import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
+import { writeJsonFile } from '../../utils/fs.js'
 import { log } from '../../logging/index.js'
 import type { ApprovalRequester, ApprovalView } from './types.js'
 
@@ -79,12 +80,34 @@ function switchFile(): string {
   return path.join(WALNUT_HOME, 'approvals', 'switch.json')
 }
 
-/** On boot (store.ts initApprovals): read the latch; the first boot of this version starts it where config.yaml stands. */
+/**
+ * On boot, before the server listens (web/server.ts; store.ts initApprovals reads it again): the
+ * latch. The first boot of this version, with no file, starts it where config.yaml stands; a file
+ * that is there but does not read (truncated, unreadable) reads as on, never as off.
+ */
 export async function loadAskMeLatch(): Promise<void> {
-  const file = await readJsonFile<SwitchFile | null>(switchFile(), null)
-  if (file && typeof file.on === 'boolean') { latch = file; return }
-  latch = { version: 1, on: storedAskMe(await getConfig()), at: new Date().toISOString() }
-  await writeJsonFile(switchFile(), latch, { mode: 0o600 })
+  let text: string | null = null
+  try { text = await fs.readFile(switchFile(), 'utf8') } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') { latch = brokenLatch(err); return }
+  }
+  if (text !== null) {
+    try {
+      const file = JSON.parse(text) as SwitchFile
+      latch = file && typeof file.on === 'boolean' && typeof file.at === 'string' ? file : brokenLatch('not a switch record')
+    } catch (err) { latch = brokenLatch(err) }
+    return
+  }
+  try {
+    latch = { version: 1, on: storedAskMe(await getConfig()), at: new Date().toISOString() }
+    await writeJsonFile(switchFile(), latch, { mode: 0o600 })
+  } catch (err) {
+    latch = brokenLatch(err)
+  }
+}
+
+function brokenLatch(err: unknown): SwitchFile {
+  log.web.warn('approvals: the switch file does not read, so approvals stay on', { error: err instanceof Error ? err.message : String(err) })
+  return { version: 1, on: true, at: new Date().toISOString(), by: { unsigned: 'the switch file did not read' } }
 }
 
 /** Since when approvals have been on, as Walnut set them (undefined: off, or not read). */
@@ -105,21 +128,61 @@ export function withSwitchAsItIs<T>(config: T): T {
  */
 export async function setAskMe(on: boolean, by: SwitchBy): Promise<void> {
   const { updateConfig } = await import('../config-manager.js')
-  const next: SwitchFile = { version: 1, on, at: new Date().toISOString(), by }
+  // `at` is when approvals went on: saving on again keeps it (keyMayTurnOff reads it).
+  const wasOn = latch?.on === true
+  const at = on && wasOn ? latch!.at : new Date().toISOString()
+  const next: SwitchFile = { version: 1, on, at, by: on && wasOn && latch!.by ? latch!.by : by }
   const writeConfig = async () => updateConfig({ approvals: { ...(await getConfig()).approvals, ask_me: on } })
   const writeLatch = async () => { await writeJsonFile(switchFile(), next, { mode: 0o600 }); latch = next }
   if (on) { await writeConfig(); await writeLatch() } else { await writeLatch(); await writeConfig() }
   log.web.info(on ? 'approvals: turned on' : 'approvals: turned off', { by })
+  // On again after an off: a turn-off still open (asked before that off) is withdrawn.
+  if (on && !wasOn) {
+    const { cancelInternal, listApprovals } = await import('./store.js')
+    for (const a of (await listApprovals({ status: 'pending' })).filter((x) => x.turnsAskMeOff)) {
+      await cancelInternal(a.id, 'approvals were turned on again').catch(() => undefined)
+    }
+  }
   // Every window's Settings and cards read the new switch (a signed off lands from another device).
   const { emitConfigChanged } = await import('../config-broadcast.js')
   emitConfigChanged(await getConfig(), ['web-ui'], { source: 'approvals' })
 }
 
-/** Whether turning approvals off needs a device's signature: some device signs approvals. */
+/**
+ * Whether turning approvals off needs a device's signature: some device signs approvals, or the
+ * keys file is there but does not read (a broken file never reads as "no device").
+ */
 export async function offNeedsSignature(): Promise<boolean> {
-  const { activeKeys } = await import('./keys.js')
-  return (await activeKeys()).length > 0
+  let text: string
+  try { text = await fs.readFile(path.join(WALNUT_HOME, 'approvals', 'keys.json'), 'utf8') } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== 'ENOENT'
+  }
+  try {
+    const file = JSON.parse(text) as { keys?: Array<{ status?: string }> }
+    return !Array.isArray(file?.keys) || file.keys.some((k) => k?.status === 'active')
+  } catch { return true }
 }
+
+/** How long a phone's key is active before it may turn approvals off even when it was added while they were on. */
+export const PHONE_KEY_SETTLE_MS = 24 * 60 * 60_000
+
+/**
+ * Which device key may sign a turn-off: the Mac app's (its key comes only from the signed app's
+ * own process, or a signed enrollment: keys.ts), or a phone's that was active before approvals
+ * went on or for a day. A phone key rides a device token, which a process here can mint (keys.ts
+ * known limit), so one an agent adds while approvals are on cannot turn them off at once; the
+ * person's own new phone can after a day, and the Mac app at any time.
+ */
+export function keyMayTurnOff(key: { kind: string; activatedAt?: string; createdAt: string } | undefined, now = Date.now()): boolean {
+  if (!key) return false
+  if (key.kind === 'mac-app') return true
+  const active = Date.parse(key.activatedAt ?? key.createdAt)
+  if (Number.isNaN(active)) return false
+  const since = latch?.on ? Date.parse(latch.at) : NaN
+  return !(active > since) || now - active >= PHONE_KEY_SETTLE_MS
+}
+
+export const TURN_OFF_SIGNER_WORDS = 'This device was added after approvals were turned on, so for its first day it cannot turn them off: approve it in the Walnut Mac app with Touch ID, or with a device you had before.'
 
 export const ASK_ME_OFF_WHAT = 'Turn approvals off: agents will post, send mail and run steps without asking you'
 
@@ -131,7 +194,7 @@ export async function requestAskMeOff(requester: ApprovalRequester): Promise<App
   const since = askMeOnSince()
   const { approval } = await createApproval({
     what: ASK_ME_OFF_WHAT,
-    detail: `${since ? `Approvals have been on since ${since}. ` : ''}Approve with Face ID or Touch ID to turn them off. Every step that then goes ahead is listed in Settings, General.`,
+    detail: `${since ? `Approvals have been on since ${since}. ` : ''}Approve only if you just turned approvals off yourself, in Settings or from a request. Every step that then goes ahead is listed in Settings, General.`,
     mode: 'biometric', outsideSwitch: true, turnsAskMeOff: true, timeoutMs: 10 * 60_000, requester,
   })
   return approval
@@ -147,7 +210,7 @@ export async function applyAskMeOff(a: ApprovalView): Promise<boolean> {
   const { answerMessage, approvalDigest, verifySignature } = await import('./digest.js')
   const key = await activeKey(a.answer.keyId)
   const digest = approvalDigest({ id: a.id, mode: a.mode, createdAt: a.createdAt, expiresAt: a.expiresAt, host: a.requester.host, taskId: a.requester.taskId, what: a.what, detail: a.detail })
-  if (!key || a.what !== ASK_ME_OFF_WHAT || digest !== a.digest || !verifySignature(key.publicKey, answerMessage(digest, 'approve'), a.answer.signature)) {
+  if (!key || !keyMayTurnOff(key) || a.what !== ASK_ME_OFF_WHAT || digest !== a.digest || !verifySignature(key.publicKey, answerMessage(digest, 'approve'), a.answer.signature)) {
     log.web.warn('approvals: a turn-off approval did not carry a valid device signature; the switch stays on', { approvalId: a.id })
     return false
   }

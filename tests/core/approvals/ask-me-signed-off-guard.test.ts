@@ -46,6 +46,11 @@ describe('the Approvals switch has one writer', () => {
     expect(writers, 'write the switch only through setAskMe (core/approvals/ask-me.ts), which asks for a device signature before an off').toEqual([])
   })
 
+  it('only ask-me.ts names the switch file', () => {
+    const named = files(SRC).filter((f) => fs.readFileSync(f, 'utf8').includes("'switch.json'")).map((f) => path.relative(SRC, f).split(path.sep).join('/'))
+    expect(named).toEqual(['core/approvals/ask-me.ts'])
+  })
+
   it('setAskMe writes the latch and config.yaml, off to the latch first', () => {
     const text = fs.readFileSync(path.join(SRC, 'core/approvals/ask-me.ts'), 'utf8')
     expect(text).toMatch(/export async function setAskMe\(/)

@@ -690,7 +690,8 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
         if (want) await askMe.setAskMe(true, { person: true })
         else if (await askMe.offNeedsSignature()) {
           const os = await import('node:os')
-          const approval = await askMe.requestAskMeOff({ host: os.hostname() || 'this computer', local: true, process: 'Settings' })
+          // Who asked is not known here (any process on this computer can send this), so it says none.
+          const approval = await askMe.requestAskMeOff({ host: os.hostname() || 'this computer', local: true })
           res.status(409).json({
             error: 'Turning approvals off needs Face ID or Touch ID: approve it in the Walnut Mac app or on your iPhone.',
             code: 'signature_needed', approvalId: approval.id,

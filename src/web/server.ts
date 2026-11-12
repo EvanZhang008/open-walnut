@@ -2975,6 +2975,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.warn('found hosts: settle failed', { error: err instanceof Error ? err.message : String(err) })
   }
 
+  // The Approvals switch Walnut set last (core/approvals/ask-me.ts), read before the first request:
+  // until it is, config.yaml alone would decide, and an off Walnut did not sign could read as off.
+  if (bootPolicy('approvals')) {
+    const { loadAskMeLatch } = await import('../core/approvals/ask-me.js')
+    await loadAskMeLatch()
+  }
+
   // -- HTTP + WebSocket --
   httpServer = createServer(app)
   attachWss(httpServer)
