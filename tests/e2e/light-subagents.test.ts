@@ -14,10 +14,10 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-light-subage
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { addTask } from '../../src/core/task-manager.js'
+import { addTask, completeTask } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
-import { _resetLightSubagentsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, prune } from '../../src/core/subagents/registry.js'
+import { _resetLightSubagentsForTest, _setLightRunnerForTest, _skipEngineCheckForTest, prune, stopAllLightSubagents } from '../../src/core/subagents/registry.js'
 import type { LightRunSpec } from '../../src/core/subagents/types.js'
 
 const SID = '5ab0a6e1-1111-4bbb-8ccc-dddddddddd01'
@@ -26,6 +26,9 @@ const READER = '5ab0a6e1-3333-4bbb-8ccc-dddddddddd03'
 const ACP_PARENT = '5ab0a6e1-4444-4bbb-8ccc-dddddddddd04'
 const BURST = '5ab0a6e1-5555-4bbb-8ccc-dddddddddd05'
 const LINGER = '5ab0a6e1-6666-4bbb-8ccc-dddddddddd06'
+const DONE_PARENT = '5ab0a6e1-7777-4bbb-8ccc-dddddddddd07'
+const STOPPED_PARENT = '5ab0a6e1-8888-4bbb-8ccc-dddddddddd08'
+const taskOf: Record<string, string> = {}
 let base = ''
 
 /** Runs held until released by name; each records the spec it was given. */
@@ -60,10 +63,14 @@ beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   const server = await startServer({ port: 0, dev: true })
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-  for (const [sid, mode] of [[SID, 'bypass'], [OTHER, 'default'], [READER, 'bypass'], [ACP_PARENT, 'bypass'], [BURST, 'bypass'], [LINGER, 'bypass']] as const) {
+  for (const [sid, mode] of [[SID, 'bypass'], [OTHER, 'default'], [READER, 'bypass'], [ACP_PARENT, 'bypass'], [BURST, 'bypass'], [LINGER, 'bypass'], [DONE_PARENT, 'bypass'], [STOPPED_PARENT, 'bypass']] as const) {
     const id = (await addTask({ title: `Parent ${sid.slice(9, 13)}`, project: 'Orchard' } as never)).task.id
+    taskOf[sid] = id
     await createSessionRecord(sid, id, 'Orchard', WALNUT_HOME, { mode })
+    // A live session between turns, the one a background agent's end is told to.
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
   }
+  await updateSessionRecord(STOPPED_PARENT, { process_status: 'stopped' } as never)
   // An ACP parent started in bypass whose user then picked read-only in its engine's own Mode control.
   await updateSessionRecord(ACP_PARENT, { engine: 'opencode', acpConfig: { mode: 'read-only' }, acpRuntimeId: 'acp-light-parent-runtime' } as never)
   bus.subscribe('light-subagents-test', (e) => { sent.push(JSON.stringify(e.data ?? {})) }, { global: true, interest: [EventNames.SESSION_SEND] })
@@ -230,5 +237,40 @@ describe('light subagents', () => {
     expect((await call('GET', `/api/v1/subagents/${id}`, undefined, OTHER)).status).toBe(200)
     prune(Date.now() + 7 * 3_600_000)
     expect((await call('GET', `/api/v1/subagents/${id}`, undefined, OTHER)).status).toBe(404)
+  })
+  // Every way a run's end could reach a session that must not hear it: none wakes or reopens it.
+  it.each([
+    ['its task is complete', DONE_PARENT],
+    ['its session is stopped', STOPPED_PARENT],
+  ])('a run whose end no call returned is not told when %s', async (_why, sid) => {
+    const prompt = `hold quiet ${sid.slice(9, 13)}`
+    const r = await call('POST', '/api/v1/subagents', { engine: 'codex', prompt, background: true }, sid)
+    expect(r.json.state).toBe('running')
+    const id = String(r.json.id)
+    if (sid === DONE_PARENT) {
+      await completeTask(taskOf[sid])
+      // Kept live on purpose, so only the task's phase keeps the notice out.
+      await updateSessionRecord(sid, { process_status: 'idle' } as never)
+    }
+    release(prompt)
+    await until(async () => (await call('GET', `/api/v1/subagents/${id}?wait_ms=0`, undefined, sid)).json.state === 'completed' || undefined)
+    await sleep(3_500)
+    expect(sentAbout(id)).toBeUndefined()
+    // The answer is still there to read.
+    expect((await call('GET', `/api/v1/subagents/${id}`, undefined, sid)).json).toMatchObject({ state: 'completed', answer: `answer to ${prompt}` })
+  })
+
+  // Every stop path records a stop, never an engine error.
+  it('a stop from the panel, from subagent_stop and from the server records code stopped', async () => {
+    const start = async (prompt: string) => String((await call('POST', '/api/v1/subagents', { engine: 'codex', prompt, background: true }, OTHER)).json.id)
+    const panel = await start('hold stop code panel')
+    expect((await call('POST', `/api/v1/sessions/${OTHER}/background-tasks/${panel}/stop`, {}, null)).status).toBe(200)
+    const own = await start('hold stop code own')
+    expect((await call('POST', `/api/v1/subagents/${own}/stop`, {}, OTHER)).json).toMatchObject({ stopped: true })
+    const server = await start('hold stop code server')
+    await stopAllLightSubagents('the server stopped', 3_000)
+    for (const id of [panel, own, server]) {
+      expect((await call('GET', `/api/v1/subagents/${id}`, undefined, OTHER)).json).toMatchObject({ state: 'stopped', code: 'stopped' })
+    }
   })
 })

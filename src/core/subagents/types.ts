@@ -19,6 +19,7 @@ export type LightSubagentErrorCode =
   | 'too_many'
   | 'not_found'
   | 'timed_out'
+  | 'stopped'
   | 'engine_error'
 
 export class LightSubagentError extends Error {

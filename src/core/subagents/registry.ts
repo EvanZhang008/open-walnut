@@ -251,7 +251,8 @@ function end(live: Live, status: Exclude<LightSubagentStatus, 'running'>, o: { a
     run.text = answer
   }
   run.prompt = run.prompt.slice(0, PROMPT_KEPT_MAX)
-  if (o.error) { run.error = o.error; run.errorCode = o.errorCode; run.text = o.error }
+  // A stop is a stop whichever path made it (the panel, subagent_stop, the server's own), never an engine error.
+  if (o.error) { run.error = o.error; run.errorCode = status === 'stopped' ? 'stopped' : o.errorCode; run.text = o.error }
   // A timeout or a stop also ends the engine's turn and worker.
   if (!live.abort.signal.aborted && status !== 'completed') live.abort.abort()
   log.agent.info('light subagent ended', { id: run.id, parentSid: run.parentSid, status, ms: run.endedAt - run.startedAt, error: run.error })
@@ -292,7 +293,7 @@ export function stopLightSubagent(parentSid: string | undefined, id: string, by:
   if (run.status !== 'running') return { stopped: false, status: run.status }
   run.stoppedBy = by
   live.abort.abort()
-  end(live, 'stopped', { error: `Stopped by ${by}`, errorCode: 'engine_error' })
+  end(live, 'stopped', { error: `Stopped by ${by}` })
   return { stopped: true, status: 'stopped' }
 }
 
@@ -381,7 +382,7 @@ function armPrune(): void {
 export async function stopAllLightSubagents(by: string, waitMs: number): Promise<void> {
   const live = [...runs.values()].filter((l) => l.run.status === 'running')
   if (live.length === 0) return
-  for (const l of live) { l.run.stoppedBy = by; end(l, 'stopped', { error: `Stopped: ${by}`, errorCode: 'engine_error' }) }
+  for (const l of live) { l.run.stoppedBy = by; end(l, 'stopped', { error: `Stopped: ${by}` }) }
   await Promise.race([
     Promise.all(live.map((l) => l.settledP)),
     new Promise<void>((resolve) => setTimeout(resolve, waitMs).unref?.()),
@@ -398,20 +399,44 @@ export function endNotice(run: LightSubagentRun): string {
   return `${head}${body}\n\nsubagent_read {"id":"${run.id}"} shows it again.`
 }
 
+/**
+ * Why the session that ran a subagent hears nothing of its end: a notice never wakes a stopped
+ * session or one whose task is COMPLETE (the answer stays readable with subagent_read). Only a
+ * running or idle session of an open task is told, as a Claude Code background agent's is.
+ */
+export async function parentHearsNothing(target: import('../types.js').SessionRecord | null | undefined): Promise<string | null> {
+  if (!target) return 'no session'
+  const { isLiveSessionStatus } = await import('../routines/session-target.js')
+  if (target.archived || !isLiveSessionStatus(target.process_status)) return `its session is ${target.archived ? 'archived' : target.process_status ?? 'stopped'}`
+  if (target.taskId) {
+    const { getTask } = await import('../task-manager.js')
+    const task = await getTask(target.taskId).catch(() => null)
+    if (task?.phase === 'COMPLETE') return 'its task is complete'
+  }
+  return null
+}
+
 async function tellParent(run: LightSubagentRun): Promise<void> {
   if (run.told) return
   run.told = true
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js')
     const target = await getSessionByClaudeId(run.parentSid)
-    if (!target) return
+    const quiet = await parentHearsNothing(target)
+    if (quiet || !target) {
+      log.agent.info('light subagent end not told: its session is not there to hear it', { id: run.id, parentSid: run.parentSid, why: quiet ?? 'no session' })
+      return
+    }
     const { deliverToSession } = await import('../sessions/session-send-core.js')
     const { NOTICE_SOURCE } = await import('../sessions/subtask-notices.js')
+    const { liveDelivery } = await import('../sessions/ask-answer.js')
     const text = endNotice(run)
+    // Only into the session still live as checked: a Stop between the check and the write wins.
     await deliverToSession(target, {
       busText: text, enqueueText: text, source: NOTICE_SOURCE,
       ...(target.taskId ? { taskId: target.taskId } : {}),
       messageId: `sa-end-${run.id}`, endsWait: true,
+      liveOnly: await liveDelivery(target.claudeSessionId),
     })
     log.agent.info('light subagent end told to its session', { id: run.id, parentSid: run.parentSid, status: run.status })
   } catch (err) {
