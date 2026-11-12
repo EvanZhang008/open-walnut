@@ -98,7 +98,7 @@ struct PopoutWindowTests {
         _ = try await js(parent, "window.open('/popout?view=session&id=\(sid)&cwd=%2Fworkspace','metadata-enriched'); true")
         precondition(delegate.popoutWindows.count == 1)
         let parentBefore = parent.url
-        _ = try await js(parent, "const t=document.createElement('textarea');t.id='test-draft';t.value='unsent parent draft';document.body.append(t);true")
+        _ = try await js(parent, "(() => { const t=document.createElement('textarea');t.id='test-draft';t.value='unsent parent draft';document.body.append(t); return true })()")
         let secondURL = "http://localhost:\(port)/popout?view=note&id=missing-test-note"
         _ = try await js(parent, "window.open('\(secondURL)','second-target'); true")
         try await wait { delegate.popoutWindows.count == 2 }
@@ -136,7 +136,7 @@ struct PopoutWindowTests {
         try await wait { (try? await js(recycled, "!!document.querySelector('.popout-session .session-panel-input textarea')")) as? Bool == true }
         precondition(WebContentWatchdog.webContentPid(recycled) != childPid)
         print("Recycled WebContent PID: \(WebContentWatchdog.webContentPid(recycled) ?? 0)")
-        _ = try await js(recycled, "const t=document.createElement('textarea');t.id='child-draft';t.value='unsent child draft';document.body.append(t);true")
+        _ = try await js(recycled, "(() => { const t=document.createElement('textarea');t.id='child-draft';t.value='unsent child draft';document.body.append(t); return true })()")
         try pressCloseKey(firstWindow)
         try pressCloseKey(firstWindow)
         try await wait { firstWindow.attachedSheet != nil }
@@ -180,7 +180,7 @@ struct PopoutWindowTests {
             let rep = NSBitmapImageRep(data: image.tiffRepresentation!)!
             try rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: output))
         }
-        _ = try await js(finalView, "const t=document.createElement('textarea');t.value='discard test draft';document.body.append(t);true")
+        _ = try await js(finalView, "(() => { const t=document.createElement('textarea');t.value='discard test draft';document.body.append(t); return true })()")
         try pressCloseKey(final)
         try await wait { final.attachedSheet != nil }
         print("Command-W discard sheet displayed")
@@ -255,7 +255,7 @@ struct PopoutWindowTests {
         prefs.javaScriptCanOpenWindowsAutomatically = false
         defer { prefs.javaScriptCanOpenWindowsAutomatically = popupsBefore }
         try await openLetter(parent, sourceId, sourceSubject)
-        _ = try await js(parent, "const t=document.createElement('textarea');t.id='ref-draft';t.value='unsent ref draft';document.body.append(t);true")
+        _ = try await js(parent, "(() => { const t=document.createElement('textarea');t.id='ref-draft';t.value='unsent ref draft';document.body.append(t); return true })()")
         defer { parent.evaluateJavaScript("document.querySelector('#ref-draft')?.remove()", completionHandler: nil) }
         let urlBefore = parent.url
         let popouts = delegate.popoutWindows.count
