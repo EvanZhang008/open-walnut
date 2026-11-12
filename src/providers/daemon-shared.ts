@@ -29,10 +29,16 @@ export const SHARED_WINDOW_MS = 3 * 24 * 3600_000
 export const SERVES_FILE = 'daemon.serves.json'
 
 /**
- * Capabilities a daemon says or not by its host, never by its build: the service ones and
- * the ACP host engines. They are no reason to keep or to replace it.
+ * Capabilities a daemon says or not by its host, never by its build: the service ones, the
+ * ACP host engines, and reading the process on its gateway socket (caller-proof-v1, only
+ * where bun's FFI loads libc). They are no reason to keep or to replace it. Every one a twin
+ * adds in its hello beyond ADVERTISED_DAEMON_CAPABILITIES belongs here
+ * (tests/providers/daemon-shared-host-dependent.test.ts): 2026-11-12, caller-proof-v1 was
+ * missing, so a dev host's daemon read as having something every newer build "lacks" and was
+ * kept for good, and none of the day's daemon fixes reached it.
  */
-const HOST_DEPENDENT = new Set(['service-handover-v1', 'cron-supervision-v1', 'service-update-v1', 'service-update-force-v1', 'acp-host-v1'])
+export const HOST_DEPENDENT_CAPABILITIES: ReadonlySet<string> = new Set(['service-handover-v1', 'cron-supervision-v1', 'service-update-v1', 'service-update-force-v1', 'acp-host-v1', 'caller-proof-v1'])
+const HOST_DEPENDENT = HOST_DEPENDENT_CAPABILITIES
 
 export type DaemonTwin = 'binary' | 'source'
 
