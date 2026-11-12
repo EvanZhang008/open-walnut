@@ -310,16 +310,14 @@ class MockLocalDaemonFileReader {
   }
 
   /**
-   * Whether the CLI ever wrote this conversation for `cwd` (mirrors the real reader): its path,
-   * null only when proven absent (every transcripts root exists, its own path does not, and no
-   * copy is anywhere under them), undefined when that cannot be told.
+   * The transcript at its own path for `cwd`, with no search (mirrors the real reader): its path,
+   * null when every transcripts root exists and holds no file there, undefined when that cannot be told.
    */
-  async probeSessionPath(sessionId: string, cwd: string): Promise<string | null | undefined> {
+  async ownSessionPath(sessionId: string, cwd: string): Promise<string | null | undefined> {
     const { encodeProjectPath, isSafeForProjectEncoding } = await import('../../src/core/session-file-reader.js');
     if (!isSafeForProjectEncoding(cwd)) return undefined;
     const { claudeProjectsSearchRoots } = await import('../../src/core/claude-config-dir.js');
-    const roots = await Promise.all(claudeProjectsSearchRoots(this.host).map((r) => this.resolve(r)));
-    for (const root of roots) {
+    for (const root of await Promise.all(claudeProjectsSearchRoots(this.host).map((r) => this.resolve(r)))) {
       if (!root) return undefined;
       try {
         if (!(await fsp.stat(root)).isDirectory()) return undefined;
@@ -330,9 +328,21 @@ class MockLocalDaemonFileReader {
       try {
         await fsp.access(own);
         return own;
-      } catch { /* not at its own path: look for a copy */ }
+      } catch { /* not at its own path */ }
     }
-    for (const root of roots) {
+    return null;
+  }
+
+  /**
+   * Whether the CLI ever wrote this conversation for `cwd` (mirrors the real reader): its path,
+   * null only when proven absent (every transcripts root exists, its own path does not, and no
+   * copy is anywhere under them), undefined when that cannot be told.
+   */
+  async probeSessionPath(sessionId: string, cwd: string): Promise<string | null | undefined> {
+    const own = await this.ownSessionPath(sessionId, cwd);
+    if (own !== null) return own;
+    const { claudeProjectsSearchRoots } = await import('../../src/core/claude-config-dir.js');
+    for (const root of await Promise.all(claudeProjectsSearchRoots(this.host).map((r) => this.resolve(r)))) {
       const hit = await expandGlob(path.join(root!, `${sessionId}.jsonl`));
       if (hit && path.basename(hit) === `${sessionId}.jsonl`) return hit;
     }

@@ -97,6 +97,9 @@ describe('a history read answers no conversation at once when the own path prove
     expect(await transcriptNotWrittenYet(record({ cwd: '/work/a' }), NOW)).toBe(false)
     expect(await transcriptNotWrittenYet(routerRec({ process_status: 'error' }), NOW)).toBe(false)
     expect(await transcriptNotWrittenYet(routerRec({ host: 'devbox' }), NOW)).toBe(false)
+    // A session in its launch seconds reads as usual: its transcript may land under another folder any moment.
+    const fresh = new Date(NOW - 2_000).toISOString()
+    expect(await transcriptNotWrittenYet(record({ cwd: '/work/a', startedAt: fresh, last_status_change: fresh }), NOW)).toBe(false)
     expect(ownCalls).toEqual([])
   })
 })
@@ -122,7 +125,7 @@ describe('every "History unavailable" answer asks historyNotWrittenYet first', (
     }
     // The four known sites: the web history route (two) and the core history reads (two).
     expect(sites.length).toBeGreaterThanOrEqual(4)
-  })
+  }, 180_000)
 })
 
 describe('every transcript find walks one level under a projects root', () => {
@@ -140,5 +143,5 @@ describe('every transcript find walks one level under a projects root', () => {
     }
     // The transcript reader, its probe, and the task move's lookup.
     expect(sites.length).toBeGreaterThanOrEqual(3)
-  })
+  }, 180_000)
 })

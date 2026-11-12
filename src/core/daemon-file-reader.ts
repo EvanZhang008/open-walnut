@@ -711,23 +711,7 @@ export class DaemonFileReader implements SessionFileReader {
    * folder, a missing root, a stat that fails). A few stats, never a walk.
    */
   async ownSessionPath(sessionId: string, cwd: string, timeoutMs?: number): Promise<string | null | undefined> {
-    // A long cwd's folder carries a hash this side cannot compute: its own path is unknown.
-    if (!isSafeForProjectEncoding(cwd)) return undefined
-    try {
-      await this.resolve()
-      const conn = await link(this.host)
-      for (const root of claudeProjectsSearchRoots(this.host)) {
-        const rootStat = await conn.send('fs.stat', { path: root }, timeoutMs)
-        if (!rootStat.ok || !rootStat.exists) return undefined
-        const own = path.posix.join(root, encodeProjectPath(cwd), `${sessionId}.jsonl`)
-        const ownStat = await conn.send('fs.stat', { path: own }, timeoutMs)
-        if (!ownStat.ok) return undefined
-        if (ownStat.exists) return own
-      }
-      return null
-    } catch {
-      return undefined
-    }
+    return this.transcriptLookup(sessionId, cwd, timeoutMs, false)
   }
 
   /**
@@ -740,11 +724,27 @@ export class DaemonFileReader implements SessionFileReader {
    * and unreadable ones and still answers ok (2026-11-05 review).
    */
   async probeSessionPath(sessionId: string, cwd: string, timeoutMs?: number): Promise<string | null | undefined> {
-    const own = await this.ownSessionPath(sessionId, cwd, timeoutMs)
-    if (own !== null) return own
+    return this.transcriptLookup(sessionId, cwd, timeoutMs, true)
+  }
+
+  /** Both lookups on one link: the own path in every root, then (with `find`) a walk of the roots. */
+  private async transcriptLookup(sessionId: string, cwd: string, timeoutMs: number | undefined, find: boolean): Promise<string | null | undefined> {
+    // A long cwd's folder carries a hash this side cannot compute: its own path is unknown.
+    if (!isSafeForProjectEncoding(cwd)) return undefined
     try {
+      await this.resolve()
       const conn = await link(this.host)
-      for (const root of claudeProjectsSearchRoots(this.host)) {
+      const roots = claudeProjectsSearchRoots(this.host)
+      for (const root of roots) {
+        const rootStat = await conn.send('fs.stat', { path: root }, timeoutMs)
+        if (!rootStat.ok || !rootStat.exists) return undefined
+        const own = path.posix.join(root, encodeProjectPath(cwd), `${sessionId}.jsonl`)
+        const ownStat = await conn.send('fs.stat', { path: own }, timeoutMs)
+        if (!ownStat.ok) return undefined
+        if (ownStat.exists) return own
+      }
+      if (!find) return null
+      for (const root of roots) {
         const result = await conn.send('fs.find', { path: root, name: sessionId + '.jsonl', maxDepth: TRANSCRIPT_FIND_DEPTH }, timeoutMs)
         if (!result.ok) return undefined
         if ((result.files as string[] | undefined)?.length) return (result.files as string[])[0]

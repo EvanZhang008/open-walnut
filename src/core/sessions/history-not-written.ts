@@ -50,19 +50,27 @@ const OWN_PATH_CHECK_MS = 3_000;
  * cwd's hashed folder, a stat that fails or is slow, a fork, an ACP journal) keeps
  * the usual read.
  */
-export async function transcriptNotWrittenYet(record: SessionRecord, nowMs = Date.now()): Promise<boolean> {
-  if (!record.cwd || record.forkedFromSessionId || record.firstTurnAt) return false;
+export async function transcriptNotWrittenYet(record: SessionRecord, _nowMs = Date.now()): Promise<boolean> {
+  // Only this machine's sessions: a remote host's first paint makes no host call (it may hang).
+  if (!record.cwd || record.forkedFromSessionId || record.firstTurnAt || isRemoteHost(record.host)) return false;
   const [{ engineCaps }, { turnEvidenceAt }] = await Promise.all([
     import('../agents/engine-registry.js'), import('../session-tracker.js'),
   ]);
   if (engineCaps(record.engine).historySource === 'acp-journal' || turnEvidenceAt(record)) return false;
-  if (!(await historyNotWrittenYet(record, nowMs))) return false;
-  const { DaemonFileReader } = await import('../daemon-file-reader.js');
-  const reader = new DaemonFileReader(record.host ?? '__local__');
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const own = await Promise.race([
-    reader.ownSessionPath(record.claudeSessionId, record.cwd, OWN_PATH_CHECK_MS).catch(() => undefined),
-    new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), OWN_PATH_CHECK_MS); }),
-  ]).finally(() => clearTimeout(timer));
-  return own === null;
+  // Only a session that waits for its first message by design (started idle, a router). One in its
+  // launch seconds keeps the usual read: its transcript may be written under another folder any moment.
+  if (record.process_status === 'error' || !(record.startedIdle || await isRouterSession(record))) return false;
+  try {
+    const { DaemonFileReader } = await import('../daemon-file-reader.js');
+    const reader = new DaemonFileReader('__local__');
+    if (typeof reader.ownSessionPath !== 'function') return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const own = await Promise.race([
+      reader.ownSessionPath(record.claudeSessionId, record.cwd, OWN_PATH_CHECK_MS).catch(() => undefined),
+      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), OWN_PATH_CHECK_MS); }),
+    ]).finally(() => clearTimeout(timer));
+    return own === null;
+  } catch {
+    return false;
+  }
 }
