@@ -346,9 +346,12 @@ export function assertNoReassignment(before: RouterAreasFile, after: RouterAreas
       throw new RouterAreaError('area_reassignment', 409, `A confirmed ${item.source.kind} item of area ${item.areaId} cannot become an open one`)
     }
   }
+  const wasOpen = new Set((before.openItems ?? []).map((item) => itemKey(item.source)))
   for (const item of allAreaItems(before)) {
     const nextItem = nextItems.get(itemKey(item.source))
     const next = nextItem?.areaId
+    // An open arrival restricts no reader, so it may leave the list (its mail moved or is gone), never another area.
+    if (next === undefined && wasOpen.has(itemKey(item.source))) continue
     if (next === item.areaId) {
       // A saved canonical key is part of the confirmation: it may be added, never changed or dropped.
       if (item.canonicalKey !== undefined && nextItem!.canonicalKey !== item.canonicalKey) {

@@ -4,15 +4,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { assertNoReassignment, normalizeRouterAreas, readRouterAreas, updateRouterAreas, type RouterAreasFile, type RouterRuleBinding } from '../../src/core/router/areas.js';
-import { ensureAccountRouter } from '../../src/core/router/account-intake.js';
+import { ensureAccountRouter, followOpenArrivals } from '../../src/core/router/account-intake.js';
 import { sourceReaderFor } from '../../src/core/router/source-reader.js';
 import { keepTriageMailOutsideAreas } from '../../src/core/triage/router-mail.js';
 import {
   confirmRouterIncoming, readPendingRuleMatches, routerRulesView, saveRouterRuleBindings,
   type PendingRuleMatch, type RouterRulesDeps,
 } from '../../src/core/router/rules.js';
-import { currentRouterSources, readRouterItem, resolveRouterItem } from '../../src/core/router/source-registry.js';
+import { currentRouterSources, readRouterItem, relocateRouterItem, resolveRouterItem } from '../../src/core/router/source-registry.js';
 import { disposeRouterStores, routerStore } from '../../src/core/router/runtime.js';
+import { routerKey } from '../../src/core/router/store.js';
 import { routeItem } from '../../src/core/router/service.js';
 import type { Task } from '../../src/core/types.js';
 import { setRoutingRule } from '../../src/core/triage/routing-rules.js';
@@ -330,7 +331,7 @@ async function harness(options: {
   });
   entry.sync = sync;
   return {
-    store, bodies, service, sync, listing, control, bodyFrom, bodyAddresses, calls, areas, captured, beforePrefetch, warnings, events, assigned: recorder.assigned,
+    db: entry.db, store, bodies, service, sync, listing, control, bodyFrom, bodyAddresses, calls, areas, captured, beforePrefetch, warnings, events, assigned: recorder.assigned,
     confirmed: () => recorder.confirmed, confirmDeps: recorder.confirmDeps, written: recorder.written, reads: recorder.reads, rules,
   };
 }
@@ -1170,6 +1171,98 @@ describe('a mailbox bound to its router: every new mail reaches that router', ()
     return { outcome, mail, unregister };
   }
 
+  it('an arrival a filter moves out of the inbox before the router wakes still reaches the router, at its new copy', async () => {
+    // 2026-11-12, prod: a CI notice arrived in the inbox, the person's keep-out-of-inbox rule moved it
+    // seconds later, and the router's next wake found no current copy: no wake, no receipt.
+    const router = await personalRouter();
+    const { mail, unregister } = await bindAndArrive(router, [envelope(2, { subject: 'Run failed: CI' }), envelope(3)]);
+    try {
+      expect((await readRouterAreas(router.home)).openItems!.map((one) => one.source.message).sort()).toEqual(ids(2, 3));
+      // The cache now holds the message only in the CI folder, under another id.
+      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
+      const before = await readRouterAreas(router.home);
+      expect((await pendingSources(before, before.areas[0], { routesFor: async () => new Map() })).map((one) => one.message)).toEqual(['inbox:m-3']);
+
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(1);
+      const after = await readRouterAreas(router.home);
+      const moved = after.openItems!.find((one) => one.source.message === 'ci:m-2')!;
+      expect(moved.source.version).toBe(mailRowDeliveryVersion(await rowOf(mail.store, 'ci:m-2')));
+      expect(moved.canonicalKey).toBe(before.openItems!.find((one) => one.source.message === 'inbox:m-2')!.canonicalKey);
+      expect((await pendingSources(after, after.areas[0], { routesFor: async () => new Map() })).map((one) => one.message).sort()).toEqual(['ci:m-2', 'inbox:m-3']);
+      // Followed once: nothing changes again, and a routed arrival never moves.
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(0);
+
+      // A message the cache holds no copy of any more leaves the list.
+      await mail.db.run('DELETE FROM messages WHERE account_id = ? AND message_id = ?', [ACCOUNT, 'inbox:m-3']);
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(1);
+      expect((await readRouterAreas(router.home)).openItems!.map((one) => one.source.message)).toEqual(['ci:m-2']);
+    } finally { unregister(); }
+  });
+
+  it('the wake check follows a moved arrival first, so the router is woken for it', async () => {
+    const router = await personalRouter();
+    const { mail, unregister } = await bindAndArrive(router, [envelope(2)]);
+    try {
+      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
+      expect(await router.wakes()).toBe(false);
+      const fire = (await checkRouterPending({ areaId: 'personal' }, {
+        readAreas: () => readRouterAreas(router.home),
+        getTask: async (id) => ({ id, phase: 'IN_PROGRESS', source: 'local', org_role: 'router', router_area_id: 'personal', router_paused: false }) as WakeTask,
+        orgEnabled: async () => true,
+        routesFor: async () => new Map(),
+        sessionsForTask: async () => [],
+        send: async () => undefined,
+        start: async () => ({}),
+        nonce: () => 'n',
+        followOpen: (areaId) => followOpenArrivals(areaId, { routesFor: async () => new Map() }, router.home),
+      })).fire;
+      expect(fire).toBe(true);
+    } finally { unregister(); }
+  });
+
+  it('one arrival the source cannot follow never holds back the others, and an unknown answer keeps it', async () => {
+    const router = await personalRouter();
+    const { mail, unregister } = await bindAndArrive(router, [envelope(2), envelope(3)]);
+    try {
+      for (const n of [2, 3]) {
+        await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', `ci:m-${n}`, ACCOUNT, `inbox:m-${n}`]);
+      }
+      const relocate = async (source: RouterSource, scopeKey: string) => {
+        if (source.message === 'inbox:m-2') throw new Error('cache unavailable');
+        return relocateRouterItem(source, scopeKey);
+      };
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map(), relocate }, router.home)).toBe(1);
+      expect((await readRouterAreas(router.home)).openItems!.map((one) => one.source.message).sort()).toEqual(['ci:m-3', 'inbox:m-2']);
+      // A source that cannot tell (undefined) leaves the item as it is.
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map(), relocate: async () => undefined }, router.home)).toBe(0);
+      expect((await readRouterAreas(router.home)).openItems!.map((one) => one.source.message).sort()).toEqual(['ci:m-3', 'inbox:m-2']);
+    } finally { unregister(); }
+  });
+
+  it('a mail with no RFC id that moved under another id is kept, never dropped as gone', async () => {
+    const router = await personalRouter();
+    const { mail, unregister } = await bindAndArrive(router, [envelope(2, { rfcMessageId: '' })]);
+    try {
+      const listed = (await readRouterAreas(router.home)).openItems!;
+      expect(listed.map((one) => one.source.message)).toEqual(['inbox:m-2']);
+      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
+      expect(await followOpenArrivals('personal', { routesFor: async () => new Map() }, router.home)).toBe(0);
+      expect((await readRouterAreas(router.home)).openItems).toEqual(listed);
+    } finally { unregister(); }
+  });
+
+  it('a routed arrival stays where it was routed when its mail moves', async () => {
+    const router = await personalRouter();
+    const { mail, unregister } = await bindAndArrive(router, [envelope(2)]);
+    try {
+      const routed = (await readRouterAreas(router.home)).openItems![0]!.source;
+      await mail.db.run('UPDATE messages SET mailbox_id = ?, message_id = ? WHERE account_id = ? AND message_id = ?', ['ci', 'ci:m-2', ACCOUNT, 'inbox:m-2']);
+      const routesFor = async (_area: string, sources: readonly RouterSource[]) => new Map(sources.map((one) => [routerKey(one), {} as RouterRoute]));
+      expect(await followOpenArrivals('personal', { routesFor }, router.home)).toBe(0);
+      expect((await readRouterAreas(router.home)).openItems!.map((one) => one.source)).toEqual([routed]);
+    } finally { unregister(); }
+  });
+
   it('binds the mailbox to the one router area and gives that router every arrival, with no rule', async () => {
     const router = await personalRouter();
     const { outcome, mail, unregister } = await bindAndArrive(router, [envelope(2), envelope(3, { subject: 'A newsletter' }), envelope(4)]);
@@ -1290,6 +1383,10 @@ describe('a mailbox bound to its router: every new mail reaches that router', ()
     const reopened = normalizeRouterAreas({ ...base, items: [], openItems: [item] });
     expect(() => assertNoReassignment(closed, reopened)).toThrow(/cannot become an open one/);
     expect(() => assertNoReassignment(reopened, closed)).not.toThrow();
+    // An open arrival may leave the list (its mail moved or is gone); a confirmed one never does.
+    const empty = normalizeRouterAreas({ ...base, items: [] });
+    expect(() => assertNoReassignment(reopened, empty)).not.toThrow();
+    expect(() => assertNoReassignment(closed, empty)).toThrow(/cannot be removed/);
   });
 
   it('binds every mailbox the cache holds at start', async () => {

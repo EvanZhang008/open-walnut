@@ -739,6 +739,15 @@ export class MailStore {
     )
   }
 
+  /** Every cached copy of one durable id in one account (one message cached in several folders). */
+  messagesByRfcId(accountId: string, rfcMessageId: string, limit = 20): Promise<MessageRow[]> {
+    return this.db.all<MessageRow>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE account_id = ? AND rfc_message_id = ?`
+      + ' ORDER BY sent_at DESC, rowid DESC LIMIT ?',
+      [accountId, rfcMessageId, limit],
+    )
+  }
+
   /**
    * Newest inbox envelopes with no body yet: the tick's prefetch step reads this.
    *

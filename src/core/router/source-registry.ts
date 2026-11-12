@@ -35,6 +35,11 @@ export interface RouterSourceAdapter {
   read?(source: RouterSource): Promise<RouterItemContent>;
   /** Cache-only batch check: the given sources that are still the cached current delivery. */
   currentSources?(sources: readonly RouterSource[]): Promise<RouterSource[]>;
+  /**
+   * Cache-only: the current copy of the item a scope key names (a filter moved it, or its cached
+   * delivery changed), or null when the cache holds no copy of it any more.
+   */
+  relocate?(source: RouterSource, scopeKey: string): Promise<RouterItem | null | undefined>;
 }
 
 const host = globalThis as typeof globalThis & { __walnutRouterSources?: Map<RouterSource['kind'], RouterSourceAdapter> };
@@ -48,11 +53,12 @@ export function assertRouterSource(kind: unknown, adapter: unknown): asserts ada
   }
   if (!adapter || typeof adapter !== 'object') throw new TypeError('A routing source adapter must be an object with resolve() and an optional read().');
   for (const key of Object.keys(adapter)) {
-    if (key !== 'resolve' && key !== 'read' && key !== 'currentSources') {
-      throw new TypeError(`A routing source adapter takes only resolve(), read() and currentSources(), not "${key}".`);
+    if (key !== 'resolve' && key !== 'read' && key !== 'currentSources' && key !== 'relocate') {
+      throw new TypeError(`A routing source adapter takes only resolve(), read(), currentSources() and relocate(), not "${key}".`);
     }
   }
-  const { resolve, read, currentSources } = adapter as Record<string, unknown>;
+  const { resolve, read, currentSources, relocate } = adapter as Record<string, unknown>;
+  if (relocate !== undefined && typeof relocate !== 'function') throw new TypeError('A routing source adapter\'s relocate must be a function when given.');
   if (typeof resolve !== 'function') throw new TypeError('A routing source adapter needs a resolve() function.');
   if (read !== undefined && typeof read !== 'function') throw new TypeError('A routing source adapter\'s read must be a function when given.');
   if (currentSources !== undefined && typeof currentSources !== 'function') {
@@ -148,4 +154,28 @@ export async function currentRouterSources(sources: readonly RouterSource[]): Pr
     } finally { if (timer) clearTimeout(timer); }
   }
   return sources.filter((one) => current.has(one));
+}
+
+/**
+ * The current copy of an item by its scope key, from the cache only: undefined when nothing is known
+ * (no relocate hook, or the source cannot tell), null when the cache holds no copy any more.
+ */
+export async function relocateRouterItem(source: RouterSource, scopeKey: string): Promise<RouterItem | null | undefined> {
+  const adapter = adapters.get(source.kind);
+  if (!adapter?.relocate) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const item = await Promise.race([
+      adapter.relocate(Object.freeze({ ...source }), scopeKey),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Routing source relocate timed out.')), 3000); }),
+    ]);
+    if (item === null || item === undefined) return item;
+    if ( item.source.kind !== source.kind || item.source.account !== source.account || item.scopeKey !== scopeKey
+      || typeof item.source.version !== 'string' || !item.source.version) {
+      throw new Error('Routing source relocated an item to another identity.');
+    }
+    return checkedItem(item, item.source);
+  } catch (error) {
+    throw new RouterSourceError('source_unavailable', error instanceof Error ? error.message : String(error));
+  } finally { if (timer) clearTimeout(timer); }
 }

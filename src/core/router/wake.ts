@@ -51,6 +51,8 @@ export interface RouterWakeDeps {
   waitingSources?(areaId: string, sources: readonly RouterSource[], routerTaskId: string): Promise<Set<string>>;
   /** Cache-only batch check of which sources are still the current delivery; absent = the registry's. */
   currentSources?(sources: readonly RouterSource[]): Promise<RouterSource[]>;
+  /** Moves the area's unsettled open arrivals to their mail's current copy (account-intake.ts); absent = none. */
+  followOpen?(areaId: string): Promise<number>;
 }
 
 function defaultDeps(): RouterWakeDeps {
@@ -85,6 +87,10 @@ function defaultDeps(): RouterWakeDeps {
     },
     nonce: () => randomUUID(),
     currentSources: currentRouterSources,
+    async followOpen(areaId) {
+      const { followOpenArrivals } = await import('./account-intake.js');
+      return await followOpenArrivals(areaId, { routesFor: (id, sources) => this.routesFor(id, sources) });
+    },
     async waitingSources(_areaId, sources, routerTaskId) {
       const { handoffWaitingSources } = await import('./handoff-approval.js');
       return await handoffWaitingSources(sources, routerTaskId);
@@ -193,6 +199,9 @@ export async function routerWakeJobId(taskId: string): Promise<string> {
 export async function checkRouterPending(params: Record<string, string>, deps: RouterWakeDeps = defaultDeps()): Promise<{ fire: boolean; input?: string }> {
   const areaId = params.areaId;
   if (typeof areaId !== 'string') throw new RouterWakeError('area_required', 'A router wake names its area.');
+  routerAreaId(areaId);
+  // First, so an arrival a filter moved is pending at its new copy (a failure only waits for the next check).
+  await deps.followOpen?.(areaId).catch(() => 0);
   const gate = await routerWakeGate(areaId, deps);
   if (!gate.ready) return { fire: false };
   // No items: the daemon's seen set never swallows a source whose routing is unfinished.

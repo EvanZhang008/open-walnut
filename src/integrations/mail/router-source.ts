@@ -56,6 +56,37 @@ function itemOf(row: MessageRow): RouterItem {
   };
 }
 
+/** Where a moved message is read from first: the inbox, a folder, the archive, then the rest. */
+const ROLE_ORDER = ['inbox', 'other', 'archive'];
+const roleRank = (role: string | undefined) => {
+  const at = ROLE_ORDER.indexOf(role ?? 'other');
+  return at < 0 ? ROLE_ORDER.length : at;
+};
+
+/**
+ * The current cached copy of the message a scope key names (mailRouterKey without a version), null
+ * when the cache holds no copy of it, undefined when that cannot be told (a mail with no RFC id moved
+ * under another id, or its scope changed): the caller keeps the item as it is.
+ */
+export async function relocateMailItem(store: Pick<MailStore, 'getMessage' | 'messagesByRfcId' | 'listMailboxes'>, scopeKey: string): Promise<RouterItem | null | undefined> {
+  let parts: unknown;
+  try { parts = JSON.parse(scopeKey); } catch { return undefined; }
+  if (!Array.isArray(parts) || parts.length !== 4 || parts[0] !== 'mail' || typeof parts[1] !== 'string' || typeof parts[3] !== 'string') return undefined;
+  const [, account, by, id] = parts as [string, string, string, string];
+  if (by === 'cache') {
+    const row = await store.getMessage(account, id);
+    const item = row ? itemOf(row) : undefined;
+    return item?.scopeKey === scopeKey ? item : undefined;
+  }
+  if (by !== 'rfc' || !id) return undefined;
+  const rows = await store.messagesByRfcId(account, id);
+  if (rows.length === 0) return null;
+  const roles = new Map((await store.listMailboxes(account)).map((box) => [box.mailbox_id, box.role ?? undefined]));
+  const best = [...rows].sort((a, b) => roleRank(roles.get(a.mailbox_id)) - roleRank(roles.get(b.mailbox_id)))[0]!;
+  const item = itemOf(best);
+  return item.scopeKey === scopeKey ? item : undefined;
+}
+
 export function registerMailRouterSource(store: MailStore, bodies: MailBodyStore): () => void {
   const rowFor = async (source: RouterItem['source']) => {
     const row = await store.getMessage(source.account, source.message);
@@ -102,5 +133,6 @@ export function registerMailRouterSource(store: MailStore, bodies: MailBodyStore
       return sources.filter((one) => one.kind === 'mail' && one.version !== undefined
         && versions.get(JSON.stringify([one.account, one.message])) === one.version);
     },
+    relocate: (_source, scopeKey) => relocateMailItem(store, scopeKey),
   });
 }

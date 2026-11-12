@@ -187,10 +187,69 @@ export async function confirmAccountArrivals(sources: readonly RouterSource[], h
       if (!areaId || !live.some((entry) => sameSource(entry, one.source))) continue;
       if (allAreaItems(file).some((item) => sameSource(item.source, one.source))) continue;
       if (heldElsewhere(file, one.source, areaId, one.canonicalKey)) continue;
+      // One decision per mail: another folder's copy of a message this area already lists (a label's copy) is not new.
+      if (allAreaItems(file).some((item) => item.areaId === areaId && item.source.kind === one.source.kind
+        && item.source.account === one.source.account && item.canonicalKey === one.canonicalKey)) continue;
       file.openItems = [...(file.openItems ?? []), { source: { ...one.source }, areaId, canonicalKey: one.canonicalKey }];
       entered.push({ ...one.source });
     }
     return file;
   });
   return entered.filter((one) => (saved.openItems ?? []).some((item) => sameSource(item.source, one)));
+}
+
+export interface FollowOpenDeps {
+  /** Ledger rows of a batch, keyed by routerKey: a routed arrival never moves. */
+  routesFor(areaId: string, sources: readonly RouterSource[]): Promise<Map<string, unknown>>;
+  current?: (sources: readonly RouterSource[]) => Promise<RouterSource[]>;
+  relocate?: (source: RouterSource, scopeKey: string) => Promise<RouterItem | null | undefined>;
+}
+
+/**
+ * An open arrival no route settled yet follows its mail when the exact cached copy is no longer
+ * current: a filter moved it to another folder within seconds of arriving, or its cached delivery
+ * changed (2026-11-12: a CI notice arrived in the inbox and the person's "keep out of the inbox"
+ * rule moved it before the router's next wake, so the router never saw it and it had no receipt).
+ * Its current copy (same scope key) takes its place; one the cache holds no copy of leaves the list.
+ * Returns how many open items changed.
+ */
+export async function followOpenArrivals(areaId: string, deps: FollowOpenDeps, home = WALNUT_HOME): Promise<number> {
+  const file = await readRouterAreas(home);
+  const mine = (file.openItems ?? []).filter((one) => one.areaId === areaId);
+  if (mine.length === 0) return 0;
+  const { routerKey } = await import('./store.js');
+  const routes = await deps.routesFor(areaId, mine.map((one) => one.source));
+  const unsettled = mine.filter((one) => !routes.has(routerKey(one.source)));
+  if (unsettled.length === 0) return 0;
+  const { currentRouterSources, relocateRouterItem } = await import('./source-registry.js');
+  const live = await (deps.current ?? currentRouterSources)(unsettled.map((one) => one.source));
+  const stale = unsettled.filter((one) => !live.some((entry) => sameSource(entry, one.source)));
+  if (stale.length === 0) return 0;
+  const moves: Array<{ from: RouterSource; to: RouterSource | null }> = [];
+  for (const one of stale) {
+    if (!one.canonicalKey) continue;
+    let found: RouterItem | null | undefined;
+    // One item the source cannot follow never holds back the others.
+    try { found = await (deps.relocate ?? relocateRouterItem)(one.source, one.canonicalKey); } catch { continue; }
+    // No hook, or no answer: nothing is known, so the item stays as it is.
+    if (found === undefined) continue;
+    moves.push({ from: one.source, to: found ? { ...found.source } : null });
+  }
+  if (moves.length === 0) return 0;
+  let changed = 0;
+  await updateRouterAreas(home, (current) => {
+    changed = 0;
+    const open = [...(current.openItems ?? [])];
+    for (const move of moves) {
+      const at = open.findIndex((one) => one.areaId === areaId && sameSource(one.source, move.from));
+      if (at < 0) continue;
+      const listed = move.to && allAreaItems({ items: current.items, openItems: open }).some((one) => sameSource(one.source, move.to!));
+      if (!move.to || listed) open.splice(at, 1);
+      else open[at] = { ...open[at]!, source: { ...move.to } };
+      changed += 1;
+    }
+    current.openItems = open;
+    return current;
+  });
+  return changed;
 }
