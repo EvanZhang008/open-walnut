@@ -90,6 +90,15 @@ async function openFirstPage(): Promise<Page> {
 test.beforeAll(async ({}, info) => {
   test.setTimeout(400_000)
   lab = await startPanelLab(String(info.project.use.baseURL ?? 'http://localhost:3457'), 'first-page')
+  // The harness answers this browser's ui-prefs itself (extension-panel-harness.ts: the fixture
+  // serves every spec), so the panel's Recent mirror never reaches the server: keep what it sends.
+  lab.ctx.on('request', (r) => {
+    if (r.method() !== 'PUT' || !r.url().includes('/api/ui-prefs')) return
+    try {
+      const v = (r.postDataJSON() as { prefs?: Record<string, { v?: unknown }> } | null)?.prefs?.[RECENT_KEY]?.v
+      if (typeof v === 'string') mirroredRecent = v
+    } catch { /* not a JSON body */ }
+  })
   // A person who has Passwords: the key and the Passwords entry read a locked vault, never "set it up".
   await ensureVaultSetUp(lab.doc, lab.base)
   const post = async (data: Record<string, unknown>): Promise<string> => {
@@ -150,10 +159,15 @@ async function holdPosts(url: string): Promise<{ count: () => number; release: (
   await lab.ctx.route(url, route)
   return { count: () => n, release: () => release(), done: async () => { release(); await lab.ctx.unroute(url, route) } }
 }
+const RECENT_KEY = 'walnut-todo-recent-opened'
+/** The panel's last write of Recent to the synced prefs (the harness keeps it from the server). */
+let mirroredRecent: string | undefined
 /**
  * A task he just made from the panel is first in Recent at once, in the panel and in the one synced
  * list Home and the phone read (2026-11-10, the user: a task made from the side panel could not be
- * found in Recent, which still ordered rows by agent updates). Back on All after.
+ * found in Recent, which still ordered rows by agent updates). Back on All after. The synced list is
+ * what the panel writes to ui-prefs: an open is only the panel's (the server never sees it here,
+ * as the harness answers this browser's ui-prefs), a create the server's too.
  */
 async function firstInRecent(id: string): Promise<void> {
   const v = askView(panel)
@@ -173,12 +187,7 @@ async function firstInRecent(id: string): Promise<void> {
   await expect(v.locator('.todo-pinned-list-recent [data-task-id]').first()).toHaveAttribute('data-task-id', id, { timeout: 15_000 })
   // The synced list is written a moment after the open (the touch save waits a little), so read
   // it until it holds the open rather than once.
-  const key = 'walnut-todo-recent-opened'
-  await expect.poll(async () => {
-    const prefs = (await (await lab.doc.request.get(`${lab.base}/api/ui-prefs?key=${key}`)).json() as Record<string, any>).prefs?.[key]?.v
-    const list = (typeof prefs === 'string' ? JSON.parse(prefs) : prefs) as Array<{ id: string }> | undefined
-    return list?.[0]?.id
-  }, { timeout: 15_000 }).toBe(id)
+  await expect.poll(() => (JSON.parse(mirroredRecent ?? '[]') as Array<{ id: string }>)[0]?.id, { timeout: 15_000 }).toBe(id)
   await v.locator('.todo-section-tab').filter({ hasText: 'All' }).click()
 }
 async function getTask(id: string): Promise<Record<string, any>> {
