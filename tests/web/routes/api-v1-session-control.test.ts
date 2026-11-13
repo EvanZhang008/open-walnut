@@ -311,7 +311,12 @@ describe('POST /api/v1/sessions/:id/fork', () => {
     // Sibling task exists and is NOT a parent/child of the source.
     const forkTask = await getTask(body.taskId)
     expect(forkTask.parent_task_id).toBeUndefined()
-    expect(forkTask.title).toMatch(/^Fork of /)
+    // The background heuristic can finish before or after this read. Both
+    // states must keep the exact source title, not just any fork-shaped label.
+    expect([
+      'Fork of Source task for ctl-fork-1',
+      'Try Approach B - fork of Source task for ctl-fork-1',
+    ]).toContain(forkTask.title)
     // Record pre-seeded (the phone opens the panel on this response).
     const record = await getSessionByClaudeId(body.sessionId)
     expect(record).toBeTruthy()
