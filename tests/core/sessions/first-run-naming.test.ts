@@ -48,7 +48,7 @@ describe('guard: every new-task title and folder-project name goes through the r
     const qs = src('core/sessions/quick-start.ts')
     expect(qs).toMatch(/folderNamesNoWork\(cwd, home\)/)
     // The refine kick is outside the own-task-dir branch, so every words title gets it.
-    const kick = qs.indexOf('refineShortTitle(id, wordsTitle, message)')
+    const kick = qs.indexOf('refineShortTitle(id, wordsTitle, words)')
     const ownDir = qs.indexOf('if (inOwnTaskDir) {')
     expect(kick).toBeGreaterThan(0)
     const ownDirEnd = qs.indexOf('\n    }\n', ownDir)

@@ -22,6 +22,7 @@ import type { LaunchSourceRecord } from './project-launch-defaults.js';
 import { buildAskProfilePrefix } from './ask-profile-prefix.js';
 import { isPersonSource } from './send-sent-by.js';
 import { heuristicShortTitle } from './task-title-brake.js';
+import { ownWordsOf } from './own-words.js';
 import { ASK_WALNUT_PROJECT, GENERAL_AGENT_ID, askProjectFor, resolveAskAgent, stampedAgentId, type AskAgentRef } from './ask-agent.js';
 
 export interface QuickStartTaskMeta {
@@ -265,11 +266,12 @@ function isCommandLine(message: string): boolean {
 }
 
 /**
- * A new task's title from the words that start it: their first line, cut to a row's length as the
- * title brake cuts (SESSION_TITLE_MAX). '' for no words.
+ * A new task's title from the words that start it: the first line of the person's own words
+ * (ownWordsOf: no Ask here framing, no hint or context block, a reference read as its label), cut
+ * to a row's length as the title brake cuts (SESSION_TITLE_MAX). '' for no words.
  */
 export function titleFromWords(message: string): string {
-  const line = message.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? '';
+  const line = ownWordsOf(message).split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? '';
   return line ? heuristicShortTitle(line) : '';
 }
 
@@ -768,9 +770,10 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // its own directory).
     launchWordsTitle = wordsTitle && task.title === wordsTitle ? wordsTitle : '';
     const launchTitles = !!preassignedSessionId && !isAcpEngine(engine) && !!message.trim() && !!launchWordsTitle;
-    if (wordsTitle && wordsTitle !== message.trim() && !launchTitles) {
+    const words = wordsTitle ? ownWordsOf(message) : '';
+    if (wordsTitle && wordsTitle !== words && !launchTitles) {
       const id = task.id;
-      void import('./task-title-brake.js').then(({ refineShortTitle }) => refineShortTitle(id, wordsTitle, message));
+      void import('./task-title-brake.js').then(({ refineShortTitle }) => refineShortTitle(id, wordsTitle, words));
     }
     // One rare follow-up write left: `unread` doesn't ride AddTaskInput. The
     // tier no longer needs one — it rode the create above.

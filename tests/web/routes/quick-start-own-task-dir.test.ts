@@ -129,6 +129,9 @@ describe('POST /api/sessions/quick-start: ownTaskDir', () => {
     expect(t.title).not.toContain('Session:');
     expect(titleFromWords('\n\n  Book the room  \nmore')).toBe('Book the room');
     expect(titleFromWords('   ')).toBe('');
+    // Read off the person's own words: a reference is its label, the Ask here framing comes off.
+    expect(titleFromWords('please read <task-ref id="t-1" label="Login button"/> first')).toBe('please read Login button first');
+    expect(titleFromWords('(Back to the main conversation)\n\nBook the room')).toBe('Book the room');
   });
 
   it('the flag takes nothing from a launch that names its folder', async () => {

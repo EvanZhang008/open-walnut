@@ -9,9 +9,14 @@
  * context, history-injected-banner.ts) and the attachment headers. None of it is
  * what the person asked. 2026-10-30: an Ask Walnut chat on OpenCode was titled
  * "Walnut agent profile", read off the persona block its first message opens with.
+ * A reference the composer put in the words (`<task-ref id label/>`, the `@[title]`
+ * pill the person saw) reads as its label: a name is plain text, and markup cut to a
+ * row's length leaves a half-open tag (2026-11-13: a quick-start task was titled
+ * `please read <task-ref id="..." label="...`).
  *
  * '' when the message is nothing but Walnut's additions.
  */
+import { stripEntityRefs } from '../../utils/entity-refs.js';
 import { parseHinted } from '../hints/hint-format.js';
 import { typedUserText } from '../../lib/history-injected-banner.js';
 import { withoutAttachmentHeaders } from './session-uploads.js';
@@ -67,5 +72,5 @@ export function ownWordsOf(raw: string): string {
     if (next === text) break;
     text = next;
   }
-  return text;
+  return stripEntityRefs(text);
 }

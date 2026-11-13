@@ -35,6 +35,13 @@ describe('ownWordsOf', () => {
     expect(ownWordsOf(buildAskProfilePrefix({ systemPrompt: 'P' }))).toBe('')
   })
 
+  it('a reference reads as its label, never as markup', () => {
+    expect(ownWordsOf('please read <task-ref id="t-1" label="Login button stays grey"/> first'))
+      .toBe('please read Login button stays grey first')
+    expect(ownWordsOf('see <session-ref id="s-1" label="the &quot;B&quot; plan"/> and <project-ref id="Walnut"/>'))
+      .toBe('see the "B" plan and Walnut')
+  })
+
   it("the person's own brackets and text are kept", () => {
     expect(ownWordsOf('[draft] rename the module, then [/draft] the docs')).toBe('[draft] rename the module, then [/draft] the docs')
     expect(ownWordsOf(ASK)).toBe(ASK)
@@ -73,6 +80,9 @@ describe('every session titler reads the person\'s words', () => {
     ['src/core/session-hooks/builtins.ts', /async function askAndApplyTitle[\s\S]{0,600}ownWordsOf\(message\)/],
     ['src/core/session-hooks/builtins.ts', /export async function autoTitleFromObservedMessage[\s\S]{0,1400}ownWordsOf\(rawMessage\)/],
     ['src/core/session-title-reconciler.ts', /function pickTitleSource[\s\S]{0,500}ownWordsOf\(t\)/],
+    // A new task's title from its first words (quick-start), and the brief its refine reads.
+    ['src/core/sessions/quick-start.ts', /export function titleFromWords[\s\S]{0,200}ownWordsOf\(message\)/],
+    ['src/core/sessions/quick-start.ts', /const words = wordsTitle \? ownWordsOf\(message\) : ''/],
   ])('%s', (file, re) => {
     expect(re.test(fs.readFileSync(path.resolve(__dirname, '../../..', file), 'utf8'))).toBe(true)
   })
