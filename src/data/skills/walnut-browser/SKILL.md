@@ -52,6 +52,11 @@ frames, real input, dialogs, recording a tab's requests, uploads, taking a tab o
   to enter it. `page_tampered`: navigate to the page again, then fill. Never type a password you
   read from elsewhere. A sign-in only the user can do (no saved login, a code to their phone, a
   check): `request-sign-in "<what>"` and wait for it.
+- **A code to the user's phone or mail is announced first, and never at night.** Before a step
+  that sends one (Send code, Text me, a sign-in that texts a code), say in one line where they
+  read it (your chat, or a `request-sign-in`) which task, which site and why the code is needed;
+  only then trigger it. Never between 22:00 and 08:00 their local time: schedule it for the
+  morning (`wait_until` or a trigger).
 - **Buying, paying, sending, posting or deleting waits for the user's yes** (Place order, Pay,
   Send, Post, Publish, Delete, a form with card details or a message): `needs_ok`. The shell
   command waits by itself; with the op, call the same action again with `request` and `wait_ms:
