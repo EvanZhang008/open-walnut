@@ -260,7 +260,22 @@ async function discoverSkills(dirs: string[]): Promise<Map<string, DiscoveredSki
 
 // ─── parsing ────────────────────────────────────────────────────────
 
-function parseFrontmatter(raw: string): { frontmatter: SkillFrontmatter; body: string } {
+/**
+ * Frontmatter texts already warned about as not strict YAML. Every rebuild of the skill
+ * list re-parses every SKILL.md, so without this one lenient file warned thousands of
+ * times a day (log.chronic alarm). Keyed by the frontmatter text itself: an edit that
+ * changes it warns again. Bounded so a stream of distinct texts cannot grow it forever.
+ */
+const lenientFrontmatterWarned = new Set<string>();
+const LENIENT_WARNED_MAX = 1000;
+
+/** Test hook: forget which lenient frontmatter texts were already warned about. */
+export function _resetLenientFrontmatterWarnedForTest(): void {
+  lenientFrontmatterWarned.clear();
+}
+
+/** `file` names the SKILL.md in the one warning a lenient file gets. */
+function parseFrontmatter(raw: string, file?: string): { frontmatter: SkillFrontmatter; body: string } {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return { frontmatter: {}, body: raw };
   const fmText = match[1];
@@ -278,10 +293,19 @@ function parseFrontmatter(raw: string): { frontmatter: SkillFrontmatter; body: s
       const m = line.match(/^(name|description):\s*(.*)$/);
       if (m) (frontmatter as Record<string, unknown>)[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, '$2');
     }
-    log.task.warn('skill-loader: frontmatter is not strict YAML; recovered name/description by line', {
+    const key = `${file ?? ''}\0${fmText}`;
+    const fields = {
+      file,
       error: err instanceof Error ? err.message : String(err),
       recovered: Object.keys(frontmatter),
-    });
+    };
+    if (lenientFrontmatterWarned.has(key)) {
+      log.task.debug('skill-loader: frontmatter is not strict YAML; recovered name/description by line', fields);
+    } else {
+      if (lenientFrontmatterWarned.size >= LENIENT_WARNED_MAX) lenientFrontmatterWarned.clear();
+      lenientFrontmatterWarned.add(key);
+      log.task.warn('skill-loader: frontmatter is not strict YAML; recovered name/description by line', fields);
+    }
   }
   return { frontmatter, body };
 }
@@ -580,7 +604,7 @@ async function loadEligibleSkills(dirs: string[]): Promise<(SkillMeta & { dirNam
       });
       continue;
     }
-    const { frontmatter } = parseFrontmatter(raw);
+    const { frontmatter } = parseFrontmatter(raw, file);
     if (!(await isEligible(frontmatter))) continue;
 
     skills.push({

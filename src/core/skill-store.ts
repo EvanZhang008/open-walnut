@@ -178,7 +178,7 @@ async function buildSkillList(
     } catch {
       return null;
     }
-    const { frontmatter } = parseFrontmatter(raw);
+    const { frontmatter } = parseFrontmatter(raw, file);
     const [source, eligible, hasReferences] = await Promise.all([
       resolveSource(dir, roots),
       isEligible(frontmatter),
@@ -247,7 +247,7 @@ export async function getSkill(requested: string): Promise<SkillInfo | null> {
     return null;
   }
 
-  const { frontmatter } = parseFrontmatter(raw);
+  const { frontmatter } = parseFrontmatter(raw, entry.file);
   const [source, eligible, hasReferences] = await Promise.all([
     resolveSource(entry.dir),
     isEligible(frontmatter),

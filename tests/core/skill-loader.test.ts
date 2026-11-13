@@ -17,7 +17,9 @@ import {
   buildSkillsPrompt,
   clearSkillsCache,
   listAvailableSkills,
+  _resetLenientFrontmatterWarnedForTest,
 } from '../../src/core/skill-loader.js';
+import { log } from '../../src/logging/index.js';
 import type { SkillMeta } from '../../src/core/skill-loader.js';
 import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, WALNUT_HOME } from '../../src/constants.js';
 
@@ -87,6 +89,58 @@ Body`;
     const { frontmatter } = parseFrontmatter(raw);
     // Should not throw; returns empty or whatever yaml.load returns
     expect(frontmatter).toBeDefined();
+  });
+});
+
+describe('lenient frontmatter warning', () => {
+  // A description with an unquoted ": " is not strict YAML; the CLI accepts it, so the
+  // loader recovers it by line. Every skill-list rebuild re-parses every SKILL.md, and
+  // before this guard one such file warned thousands of times a day (log.chronic alarm).
+  const lenient = (desc: string) => `---\nname: demo\ndescription: Demo skill: ${desc}\n---\nBody`;
+  const WARN_MSG = 'skill-loader: frontmatter is not strict YAML; recovered name/description by line';
+
+  beforeEach(() => _resetLenientFrontmatterWarnedForTest());
+  afterEach(() => vi.restoreAllMocks());
+
+  it('warns once per file and content, then only at debug level', () => {
+    const warn = vi.spyOn(log.task, 'warn');
+    const debug = vi.spyOn(log.task, 'debug');
+    for (let i = 0; i < 5; i++) {
+      const { frontmatter } = parseFrontmatter(lenient('does a: thing'), '/skills/demo/SKILL.md');
+      expect(frontmatter.description).toBe('Demo skill: does a: thing');
+    }
+    const warns = warn.mock.calls.filter((c) => c[0] === WARN_MSG);
+    expect(warns).toHaveLength(1);
+    expect(warns[0][1]).toMatchObject({ file: '/skills/demo/SKILL.md' });
+    expect(debug.mock.calls.filter((c) => c[0] === WARN_MSG)).toHaveLength(4);
+
+    // An edit that changes the frontmatter, or another file, is news: it warns again.
+    parseFrontmatter(lenient('does b: thing'), '/skills/demo/SKILL.md');
+    parseFrontmatter(lenient('does a: thing'), '/skills/other/SKILL.md');
+    expect(warn.mock.calls.filter((c) => c[0] === WARN_MSG)).toHaveLength(3);
+  });
+
+  it('every src caller of the skill-loader parser names the file it parsed', async () => {
+    // Enumerated from the source, so a new caller that drops the path fails here.
+    const { execFileSync } = await import('node:child_process');
+    const repo = path.resolve(__dirname, '../..');
+    const files = execFileSync('git', ['grep', '-l', 'skill-loader', '--', 'src'], { cwd: repo, encoding: 'utf-8' })
+      .split('\n').filter(Boolean);
+    const offenders: string[] = [];
+    let calls = 0;
+    for (const rel of files) {
+      const text = await fsp.readFile(path.join(repo, rel), 'utf-8');
+      const importsIt = rel === 'src/core/skill-loader.ts'
+        || /import\s*\{[^}]*\bparseFrontmatter\b[^}]*\}\s*from\s*'[^']*skill-loader\.js'/.test(text);
+      if (!importsIt) continue;
+      for (const m of text.matchAll(/\bparseFrontmatter\(([^)]*)\)/g)) {
+        if (/^raw: string/.test(m[1])) continue; // the definition itself
+        calls++;
+        if (!m[1].includes(',')) offenders.push(`${rel}: parseFrontmatter(${m[1]})`);
+      }
+    }
+    expect(calls).toBeGreaterThanOrEqual(3);
+    expect(offenders).toEqual([]);
   });
 });
 
