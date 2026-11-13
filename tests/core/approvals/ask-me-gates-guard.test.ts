@@ -31,7 +31,8 @@ type Gate =
 
 const GATES: Record<string, Gate> = {
   'src/web/routes/approvals-v1.ts': { asks: 1, kept: 'an explicit walnut approve or approval_request: the person put it there to be asked, so it always asks (2026-11-12)' },
-  'src/web/routes/test-host-fixture.ts': { asks: 1, reads: 'self' },
+  // Two: the built-in ask (it reads the switch) and a signed Git push (single-use, always asked, as the Git gate's is).
+  'src/web/routes/test-host-fixture.ts': { asks: 2, reads: 'self' },
   'src/web/routes/browser-v1.ts': { asks: 1, kept: 'the site gate: only when the person set Browser extension to approved sites only, their own list of where agents may go (the outward steps and the fresh sign-in in this file read the switch)' },
   'src/core/browser-control/outward-asks.ts': { asks: 1, readBy: 'src/web/routes/browser-v1.ts', why: 'askIfHeld reads the switch before it calls askOutward' },
   'src/core/browser-control/fresh-sign-in.ts': { asks: 1, readBy: 'src/web/routes/browser-v1.ts', why: 'the fill_login route asks with unasked:true when the switch is off' },

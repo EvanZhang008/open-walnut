@@ -253,6 +253,27 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
       if (!(await asksPerson())) return { approval: await goAheadUnasked('browserOutward', { what, requester }) }
       return await createApproval({ what, mode: 'tap', requester })
     }
+    case 'git-push-approval': {
+      // A signed Git push as the Git gate asks it (a walnut-git-operation-v1 context in a single-use
+      // envelope), so a spec can check the dialog's Task and Repo lines on the real shape.
+      const { createApproval } = await import('../../core/approvals/store.js')
+      const repository = str(body.repository) ?? '/home/dev/.local/state/open-walnut/tasks/t-fixture/meta-fresh'
+      const branch = str(body.branch) ?? 'mainline'
+      const argv = ['git', '-C', repository, 'push', 'origin', `HEAD:refs/heads/${branch}`]
+      const command = argv.join(' ')
+      const context = JSON.stringify({
+        argv, command, commitSha: 'da21d9c6ebf95b2d1003c6af76bb17894603c207', cwd: repository, localRef: `refs/heads/${branch}`,
+        operation: 'push', remote: 'origin', remoteRef: `refs/heads/${branch}`, repository, version: 'walnut-git-operation-v1',
+      })
+      return await createApproval({
+        what: `Push commit da21d9c to origin ${branch} in ${repository.split('/').pop()}`, detail: context,
+        mode: 'biometric', singleUse: true, signingKeyId: 'ak-fixture-signer', outsideSwitch: true,
+        requester: {
+          host: str(body.host) ?? 'this computer', local: !str(body.host), taskId: str(body.taskId) ?? 't-fixture',
+          taskTitle: str(body.taskTitle) ?? 'Platform Lead', sessionId: 's-fixture', cwd: repository, command, identity: 'verified',
+        },
+      })
+    }
     case 'advance-clock': {
       advanceFixtureClock(typeof body.ms === 'number' ? body.ms : 0)
       pushAll()

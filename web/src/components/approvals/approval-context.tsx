@@ -64,36 +64,78 @@ export function prettyJson(text: string): string {
   } catch { return text; }
 }
 
-/** The dialog's parts under the sentence: the command that runs, who asked, and a warning only when one is due. */
+
+/** A signed Git operation's own fields (the Git gate's context, `walnut-git-operation-v1`), when the request carries one. */
+export interface GitOperation { repository: string; operation?: string; branch?: string; commitSha?: string }
+
+export function gitOperation(a: Approval): GitOperation | null {
+  const { text, signed } = detailText(a);
+  if (!signed || !text) return null;
+  try {
+    const c = JSON.parse(text) as Record<string, unknown>;
+    if (c.version !== 'walnut-git-operation-v1' || typeof c.repository !== 'string' || !c.repository) return null;
+    const ref = typeof c.remoteRef === 'string' ? c.remoteRef : undefined;
+    return {
+      repository: c.repository,
+      operation: typeof c.operation === 'string' ? c.operation : undefined,
+      branch: ref ? ref.replace(/^refs\/heads\//, '') : undefined,
+      commitSha: typeof c.commitSha === 'string' ? c.commitSha : undefined,
+    };
+  } catch { return null; }
+}
+
+/** A path with its home folder said as `~` (`/Users/u`, `/home/u`, `/local/home/u`): the rest is what tells folders apart. */
+export function shortPath(p: string): string {
+  return p.replace(/^(?:\/local)?\/home\/[^/]+(?=\/|$)|^\/Users\/[^/]+(?=\/|$)|^\/root(?=\/|$)/, '~');
+}
+
+/** The second line: where it acts, said as a path (the repository and the branch it pushes to, else the folder it ran in) and the machine. */
+function whereLine(a: Approval, git: GitOperation | null, hostName: string): { label: string; text: string } {
+  const host = a.requester.local ? 'this computer' : hostName;
+  if (git) return { label: 'Repo', text: `${shortPath(git.repository)}${git.branch ? ` → ${git.branch}` : ''} (${host})` };
+  if (a.requester.cwd) return { label: 'Folder', text: `${shortPath(a.requester.cwd)} (${host})` };
+  return { label: 'Host', text: host };
+}
+
+/**
+ * The dialog's body (2026-11-12, the user on a Git push dialog: "I just need to know which task and
+ * which path right.. this si confuing"): two lines read at a glance, the task that asked (a link)
+ * and where it acts (the repo and branch, or the folder, and the machine), then the request's own
+ * sentence when it says more than those two lines (a mail, a browser step, a script's question),
+ * a warning only when one is due, and everything else (the command, what started it, the asker's
+ * own line, the signed detail) in one Details fold, closed. One layout for every kind of approval.
+ */
 export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: string }) {
   const r = a.requester;
   const c = a.context ?? {};
+  const git = gitOperation(a);
+  const where = whereLine(a, git, hostName);
   const command = r.command || r.ranBy;
-  const where = r.local ? 'on this computer' : `on ${hostName}`;
   const outside = [r.process ? `run by ${r.process}` : '', r.user ? `as ${r.user}` : ''].filter(Boolean).join(' ');
+  const detail = detailText(a);
+  // A Git push's sentence ("Push commit … to origin mainline in meta-fresh") says again what the Repo line says.
+  const asks = git && git.operation === 'push' && git.branch ? '' : a.what;
+  const why = c.why && c.whyFrom !== 'session' ? c.why : '';
   return (
     <div className="approval-context" data-testid="approval-context">
-      {/* The asker's own line (`walnut approve --why`), one or two lines; never the session's last words. */}
-      {c.why && c.whyFrom !== 'session' ? <div className="approval-why" data-testid="approval-why">{c.why}</div> : null}
-      {command ? (
-        <div className="approval-part">
-          <div className="approval-part-label">Command</div>
-          <code className="approval-command" data-testid="approval-command">{command}</code>
-          {/* The asker names its command itself; what Walnut read from the process table shows
-              beside it when they differ (a signed approval binds the real operation in its detail). */}
-          {!a.singleUse && r.command && r.ranBy && r.ranBy !== r.command
-            ? <div className="approval-ran-by" data-testid="approval-ran-by" title="Read by Walnut from this machine’s process list">Started by <code>{r.ranBy}</code></div>
-            : null}
+      <div className="approval-row" data-testid="approval-task">
+        <span className="approval-row-label">Task</span>
+        <span className="approval-row-value">
+          {r.taskId
+            ? <AskerLink a={a} label={r.taskTitle || 'Its task'} />
+            : <span className="approval-unknown">{`A script with no task${outside ? `, ${outside}` : ''}`}</span>}
+        </span>
+      </div>
+      <div className="approval-row" data-testid="approval-where">
+        <span className="approval-row-label">{where.label}</span>
+        <span className="approval-row-value approval-where" title={git?.repository ?? r.cwd}>{where.text}</span>
+      </div>
+      {asks ? (
+        <div className="approval-row">
+          <span className="approval-row-label">Asks</span>
+          <span className="approval-row-value approval-asks" data-testid="approval-asks">{asks}</span>
         </div>
       ) : null}
-      <div className="approval-part" data-testid="approval-task">
-        <div className="approval-part-label">Asked by</div>
-        <div className="approval-part-value">
-          {r.taskId
-            ? <><AskerLink a={a} label={r.taskTitle || 'Its task'} /> <span className="approval-who-host">{where}</span></>
-            : <span className="approval-unknown">{`A script with no task ${where}${outside ? `, ${outside}` : ''}`}</span>}
-        </div>
-      </div>
       {r.taskId && r.identity === 'unverified' ? (r.check === 'outside' ? (
         <div className="approval-warn" data-testid="approval-outside" role="note">
           Not sent from inside this task’s session: the asking process runs outside it.
@@ -103,6 +145,32 @@ export function ApprovalContextRows({ a, hostName }: { a: Approval; hostName: st
           Walnut could not check that this came from the task’s session.
         </div>
       )) : null}
+      {command || why || detail.text ? (
+        <details className="approval-detail approval-details" data-testid="approval-detail">
+          <summary>Details</summary>
+          <div className="approval-details-body">
+            {/* The asker's own line (`walnut approve --why`); never the session's last words. */}
+            {why ? <div className="approval-why" data-testid="approval-why">{why}</div> : null}
+            {command ? (
+              <div className="approval-part">
+                <div className="approval-part-label">Command</div>
+                <code className="approval-command" data-testid="approval-command">{command}</code>
+                {/* What Walnut read from the process table, when it differs from the command the asker named
+                    (a signed approval binds the real operation in its detail). */}
+                {!a.singleUse && r.command && r.ranBy && r.ranBy !== r.command
+                  ? <div className="approval-ran-by" data-testid="approval-ran-by" title="Read by Walnut from this machine’s process list">Started by <code>{r.ranBy}</code></div>
+                  : null}
+              </div>
+            ) : null}
+            {detail.text ? (
+              <div className="approval-part">
+                <div className="approval-part-label">{detail.signed ? 'Signed detail' : 'Detail'}</div>
+                <pre className="approval-detail-text">{detail.text}</pre>
+              </div>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }

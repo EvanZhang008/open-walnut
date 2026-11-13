@@ -410,6 +410,7 @@ test('the approval card opens the task that asked, from a full-screen sheet and 
   const dialog = page.getByTestId('approval-dialog')
   await expect(dialog).toBeVisible()
   // The whole request: the command it runs too (2026-11-07 review: only the folder showed).
+  await dialog.locator('.approval-detail summary').click()
   await expect(dialog.getByTestId('approval-command')).toHaveText('release.sh')
   await expectAskerLinkReads(dialog.getByTestId('approval-task-link'), dialog.locator('.approval-dialog'))
   await dialog.locator('.approval-dialog-close').click()

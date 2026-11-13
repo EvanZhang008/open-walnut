@@ -158,15 +158,15 @@ function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approva
       </div>
       {onOpen
         ? <button type="button" className="approval-what approval-what-open" title="Open the request" data-testid="approval-what" onClick={onOpen}><span className="approval-what-text">{a.what}</span></button>
-        : <div className="approval-what">{a.what}</div>}
+        : null}
       {onOpen ? (<>
         <div className="approval-who">
           <span className="approval-who-text">{asker
             ? <><AskerLink a={a} label={a.requester.taskTitle || 'Its task'} />{' '}<span className="approval-who-host">{a.requester.local ? 'on this computer' : `on ${hostName}`}</span></>
             : <span className="approval-who-host">{requesterText(a, hostName)}</span>}</span>
         </div>
+        <ApprovalDetail a={a} />
       </>) : <ApprovalContextRows a={a} hostName={hostName} />}
-      <ApprovalDetail a={a} />
       {onOpen && a.downgraded ? <div className="approval-note">{a.downgraded}</div> : null}
       {s.errors[a.id] ? <div className="approval-error" role="alert">{s.errors[a.id]}</div> : null}
       {/* The unlock form open on it says "Unlock Passwords in this window" in its own label. */}

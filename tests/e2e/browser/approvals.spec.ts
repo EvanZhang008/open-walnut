@@ -87,14 +87,17 @@ test('a tap approval shows up live, and Approve and Deny each reach the asker', 
   await expect(card.locator('.approval-detail')).toBeHidden()
   await card.locator('.approval-what-open').click()
   const opened = page.getByTestId('approval-dialog')
-  // The dialog is the sentence, the command, who asked and the detail folded (2026-11-11, the user:
-  // "just summary ... then is command to run ... 哪一个 task 来的"): no title of its own, no other rows.
-  await expect(opened.locator('.approval-what')).toHaveText(what)
+  // The dialog leads with who asked and where, then the request's sentence; the command and the
+  // detail wait in one Details fold, closed (2026-11-12, the user: "I just need to know which task and
+  // which path right.. this si confuing"). No title of its own.
+  await expect(opened.getByTestId('approval-task')).toContainText('Task')
+  await expect(opened.getByTestId('approval-where')).toHaveText(/^Folder\s*\/work\/site \(this computer\)$/)
+  await expect(opened.getByTestId('approval-asks')).toContainText(what)
   await expect(opened.locator('.approval-kicker')).toHaveCount(0)
-  await expect(opened.getByTestId('approval-command')).toHaveText('release.sh')
-  await expect(opened.getByTestId('approval-task')).toContainText('Asked by')
+  await expect(opened.getByTestId('approval-command')).toBeHidden()
   await expect(opened.locator('.approval-detail pre')).toBeHidden()
   await opened.locator('.approval-detail summary').click()
+  await expect(opened.getByTestId('approval-command')).toHaveText('release.sh')
   await expect(opened.locator('.approval-detail pre')).toContainText('migrations: none')
   await opened.locator('.approval-dialog-close').click()
   await expect(opened).toHaveCount(0)
@@ -253,7 +256,7 @@ test('Needs you: approvals are one line on Home, a click opens the request, and 
   // The line in sight lists it already: the card keeps its short form, so it never shows twice at full size.
   await expect(homeCard).toHaveClass(/approval-card-line/)
   await summary.click()
-  await expect(dialog.locator('.approval-what')).toContainText('Release notes')
+  await expect(dialog.getByTestId('approval-asks')).toContainText('Release notes')
   await dialog.locator('.approval-detail summary').click()
   await expect(dialog.locator('.approval-detail pre')).toContainText('notes: 4 lines')
   // The open request is the dialog's alone: the whole corner steps aside while it is open.
@@ -305,7 +308,7 @@ test('Needs you: approvals are one line on Home, a click opens the request, and 
   await expect(summary).toHaveText(/2 approvals waiting/, { timeout: 15_000 })
   await summary.click()
   await expect(dialog.getByTestId('approval-dialog-list').locator('[aria-current="true"]')).toContainText('Batch A')
-  await expect(dialog.locator('.approval-what')).toContainText('Batch A')
+  await expect(dialog.getByTestId('approval-asks')).toContainText('Batch A')
   for (const m of many) await request.post(`/api/v1/approvals/${m.approval.id}/answer`, { data: { decision: 'deny' } })
   await page.keyboard.press('Escape')
   await expect(summary).toHaveCount(0)
@@ -323,7 +326,7 @@ test('Needs you: approvals are one line on Home, a click opens the request, and 
   await expect(orgLine).toBeVisible({ timeout: 15_000 })
   await expect(sectionCount(page, 'needs')).not.toHaveText('0')
   await orgLine.click()
-  await expect(dialog.locator('.approval-what')).toContainText('Rotate keys')
+  await expect(dialog.getByTestId('approval-asks')).toContainText('Rotate keys')
   const approve = dialog.getByRole('button', { name: 'Approve', exact: true })
   await expect(approve, 'the dialog stays open over the Org page').toBeVisible({ timeout: 10_000 })
   await approve.click({ timeout: 20_000 })
@@ -446,17 +449,17 @@ test('the corner: a toast and an approval card share the bottom left, right of t
   await page.screenshot({ path: test.info().outputPath('corner-two.png') })
   await count.click()
   const dialog = page.getByTestId('approval-dialog')
-  await expect(dialog.locator('.approval-what')).toHaveText(what)
+  await expect(dialog.getByTestId('approval-asks')).toHaveText(what)
   // Every request waiting is listed by its title, the one shown marked; a click shows another.
   const list = dialog.getByTestId('approval-dialog-list')
   await expect(list).toContainText('2 waiting')
   await expect(list.locator('li')).toHaveCount(2)
   await expect(list.locator('[aria-current="true"]')).toContainText(what)
   await list.getByRole('button', { name: new RegExp(second.what) }).click()
-  await expect(dialog.locator('.approval-what')).toHaveText(second.what)
+  await expect(dialog.getByTestId('approval-asks')).toHaveText(second.what)
   await expect(list.locator('[aria-current="true"]')).toContainText(second.what)
   await list.getByRole('button', { name: new RegExp(what) }).click()
-  await expect(dialog.locator('.approval-what')).toHaveText(what)
+  await expect(dialog.getByTestId('approval-asks')).toHaveText(what)
   await dialog.getByRole('button', { name: 'Deny' }).click()
   await expect(page.getByTestId('approval-dialog-settled')).toContainText('Denied')
   // The next request is one click away from the answer.
@@ -858,4 +861,48 @@ test('with a device that signs, turning approvals off waits for its Face ID, fro
   } finally {
     await setAskMe(true)
   }
+})
+
+// A Git push from the Git gate (2026-11-12, the user on its dialog: "I just need to know which task
+// and which path right.. this si confuing"): two lines, Task (a link) and Repo (path, branch,
+// machine); the sentence that repeats them, the command and the signed JSON are in Details, closed.
+test('a Git push approval reads as Task and Repo, with the command and the signed detail folded', async ({ page, request }, info) => {
+  await page.goto('/')
+  await expect(page.locator('.app-layout, #root').first()).toBeVisible()
+  await offHome(page)
+  const res = await request.post('/api/test/host-fixture', { data: {
+    action: 'git-push-approval', host: 'clouddev', taskTitle: 'Orchid Platform Lead',
+    repository: '/local/home/dev/.local/state/open-walnut/tasks/t-8252/meta-fresh', branch: 'mainline',
+  } })
+  expect(res.status(), await res.text()).toBe(200)
+  const made = await res.json() as { approval: { id: string } }
+  const card = page.locator(`[data-testid="approval-card"][data-approval-id="${made.approval.id}"]`)
+  await expect(card).toBeVisible({ timeout: 15_000 })
+  await card.getByTestId('approval-what').click()
+  const dialog = page.getByTestId('approval-dialog')
+  await expect(dialog.getByTestId('approval-task')).toHaveText(/^Task\s*Orchid Platform Lead/)
+  await expect(dialog.getByTestId('approval-task-link')).toBeVisible()
+  await expect(dialog.getByTestId('approval-where')).toHaveText(/^Repo\s*~\/\.local\/state\/open-walnut\/tasks\/t-8252\/meta-fresh → mainline \(.+\)$/)
+  // Nothing else above the fold: no sentence repeating the Repo line, no command, no JSON.
+  await expect(dialog.getByTestId('approval-asks')).toHaveCount(0)
+  await expect(dialog.locator('.approval-what')).toHaveCount(0)
+  await expect(dialog.getByTestId('approval-command')).toBeHidden()
+  await expect(dialog.locator('.approval-detail-text')).toBeHidden()
+  await expect(dialog.locator('details')).toHaveCount(1)
+  await expect(dialog.locator('.approval-clock')).toHaveText(/^\d+:\d\d left$/)
+  await expect(dialog.getByRole('button', { name: 'Deny' })).toBeVisible()
+  if (process.env.APR_SHOTS) await page.locator('.approval-dialog').screenshot({ path: `${process.env.APR_SHOTS}/${info.project.name}-git-closed.png` })
+  // Details opens the command and the signed detail, and closes again.
+  await dialog.locator('.approval-detail summary').click()
+  await expect(dialog.getByTestId('approval-command')).toBeVisible()
+  await expect(dialog.getByTestId('approval-command')).toContainText('meta-fresh')
+  await expect(dialog.locator('.approval-detail-text')).toContainText('"remoteRef": "refs/heads/mainline"')
+  await expect(dialog.locator('.approval-details')).toContainText('Signed detail')
+  if (process.env.APR_SHOTS) await page.locator('.approval-dialog').screenshot({ path: `${process.env.APR_SHOTS}/${info.project.name}-git-open.png` })
+  await dialog.locator('.approval-detail summary').click()
+  await expect(dialog.getByTestId('approval-command')).toBeHidden()
+  // The dialog never scrolls sideways on a long path.
+  expect(await page.locator('.approval-dialog').evaluate((n) => n.scrollWidth <= n.clientWidth + 1)).toBe(true)
+  await dialog.getByRole('button', { name: 'Deny' }).click()
+  await expect.poll(async () => (await (await request.get(`/api/v1/approvals/${made.approval.id}`)).json()).approval.status).toBe('denied')
 })
