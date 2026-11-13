@@ -1,5 +1,8 @@
 import { beforeAll, afterAll, describe, it, expect, vi } from 'vitest'
 import type { SessionStartEvent } from '../../src/core/event-types.js'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { guardedPath } from '../setup/exec-guard-core.js'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-routine-capacity'))
@@ -12,11 +15,14 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { addTask, getTask, listTasks, updateTaskRaw } from '../../src/core/task-manager.js'
 import { createSessionExecutor } from '../../src/core/routines/executors/session.js'
-import { updateSessionRecord } from '../../src/core/session-tracker.js'
+import { getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { admitHostStart, __setHostViewForTesting, __resetHostAdmissionForTesting } from '../../src/core/sessions/host-admission.js'
 import { drainStartQueue, cancelQueuedStartByPerson, startQueuedNow, queueOrder } from '../../src/core/sessions/start-queue.js'
 import { _resetRoutineRunStarterForTesting, routineRunStarter } from '../../src/core/routines/run-start-deps.js'
 import { _runStartWatchesForTesting } from '../../src/core/routines/run-start.js'
+import { __setRunPlacementDepsForTesting } from '../../src/core/routines/run-placement.js'
+import { WALNUT_HOME } from '../../src/constants.js'
+import { updateConfig } from '../../src/core/config-manager.js'
 
 let root: string
 let full = true
@@ -77,6 +83,106 @@ describe('a routine run with no capacity', () => {
     for (const promise of _runStartWatchesForTesting().values()) await promise
     expect((await getTask(task.id)).routine_start?.state).toBe('started')
     expect((await getTask(task.id)).start_queue).toBeFalsy()
+  }, 30_000)
+
+  it('the real routine API and an older capacity wait both launch on the selected host', async () => {
+    const originalPath = process.env.PATH
+    const fakeBin = path.join(WALNUT_HOME, 'fixture-bin')
+    await fs.mkdir(fakeBin, { recursive: true })
+    await fs.writeFile(path.join(fakeBin, 'ssh'), '#!/bin/sh\nexit 255\n', { mode: 0o755 })
+    process.env.PATH = guardedPath([fakeBin])
+    await updateConfig({ hosts: { 'fixture-worker': { hostname: 'fixture.invalid', user: 'fixture', enabled: true } } })
+    let remoteFull = false
+    __setHostViewForTesting(async host => {
+      const blocked = host === '__local__' || remoteFull
+      return { host, label: host, known: true, running: blocked ? 7 : 0, runningLimit: 7,
+        full: blocked, fullReasons: blocked ? ['all 7 slots taken'] : [], busy: blocked, reasons: [], score: blocked ? 0 : 1 }
+    })
+    // Only remote host facts are fake; admission, API, cron, task store and launch are real.
+    __setRunPlacementDepsForTesting({
+      place: async input => {
+        const why = await input.eligible!('fixture-worker', { forFiles: false })
+        return { host: 'fixture-worker', moved: !why, from: '__local__', reason: why ?? 'has room', hosts: [] }
+      },
+      connected: async () => true, closed: async () => false, hasDaemonCap: async () => true,
+      remoteHome: async () => '/home/fixture', engineOn: async () => undefined,
+      engineBlocker: async () => null, takesMintedId: async () => true, ensureDir: async () => {},
+    })
+    try {
+      for (const replay of [false, true]) {
+        remoteFull = replay
+        const created = await post('/api/routines', { name: `Portable API routine ${replay}`, enabled: true,
+          schedule: { kind: 'every', everyMs: 3_600_000 }, executor: { type: 'claude-code', config: {
+            instructions: 'Read server notes. '.repeat(100), cwd: WALNUT_HOME, taskTitle: `Portable API run ${replay}`,
+            placement: { portable: true },
+          } } })
+        await post(`/api/routines/${created.job.id}/run`, {})
+        const task = (await listTasks()).find(t => t.title === `Portable API run ${replay}`)!
+        if (replay) {
+          expect(task.start_queue?.host).toBe('__local__')
+          remoteFull = false
+          expect((await drainStartQueue()).started).toContain(task.id)
+        }
+        const emitted = starts.filter(s => s.taskId === task.id)
+        expect(emitted).toHaveLength(1)
+        expect(emitted[0]).toMatchObject({ host: 'fixture-worker', cwd: '/home/fixture/.open-walnut' })
+        for (const promise of _runStartWatchesForTesting().values()) await promise
+        const stored = await getTask(task.id)
+        expect(stored.start_queue).toBeFalsy()
+        expect(stored.routine_start?.state).toBe('started')
+        const session = await getSessionByClaudeId(stored.routine_start!.session_id!)
+        expect(session?.host).toBe('fixture-worker')
+        expect(session?.cwd).toBe('/home/fixture/.open-walnut')
+        expect(stored.cwd).toBe('/home/fixture/.open-walnut')
+        if (!replay) {
+          const detail = await (await fetch(root + `/api/routines/${created.job.id}`)).json()
+          expect(detail.job.state.runLog[0].summary).toContain('/home/fixture/.open-walnut @ fixture-worker')
+        }
+      }
+    } finally {
+      __setRunPlacementDepsForTesting(null)
+      __setHostViewForTesting(async host => ({ host, label: 'This host', known: true, running: full ? 7 : 0, runningLimit: 7,
+        full, fullReasons: full ? ['all 7 slots taken'] : [], busy: full, reasons: [], score: full ? 0 : 1 }))
+      await updateConfig({ hosts: {} })
+      if (originalPath === undefined) delete process.env.PATH
+      else process.env.PATH = originalPath
+    }
+  }, 30_000)
+
+  it('a newly due host-bound routine takes a free slot ahead of ordinary queued work', async () => {
+    full = false
+    const { task: ordinary } = await addTask({ title: 'Ordinary waiting start', source: 'local' })
+    await updateTaskRaw(ordinary.id, { start_queue: { at: new Date(Date.now() - 60_000).toISOString(),
+      parent_id: ordinary.id, caller_sid: '', host: '__local__', wait_for_slot: true, params: {} } })
+    try {
+      const created = await post('/api/routines', { name: 'Priority host-bound routine', enabled: true,
+        schedule: { kind: 'every', everyMs: 3_600_000 },
+        executor: { type: 'claude-code', config: { instructions: 'Read the local file.', cwd: '/tmp', taskTitle: 'Priority routine run' } } })
+      await post(`/api/routines/${created.job.id}/run`, {})
+      const task = (await listTasks()).find(t => t.title === 'Priority routine run')!
+      expect(task.start_queue).toBeFalsy()
+      expect(starts.filter(s => s.taskId === task.id)).toHaveLength(1)
+      for (const promise of _runStartWatchesForTesting().values()) await promise
+    } finally {
+      await updateTaskRaw(ordinary.id, { start_queue: null })
+    }
+  }, 30_000)
+
+  it('ordinary automatic starts cannot bypass a ready routine even with an explicit host or queue replay', async () => {
+    full = true
+    const created = await post('/api/routines', { name: 'Routine reserves next slot', enabled: true,
+      schedule: { kind: 'every', everyMs: 3_600_000 },
+      executor: { type: 'claude-code', config: { instructions: 'Read local data.', cwd: '/tmp', taskTitle: 'Reserved routine run' } } })
+    await post(`/api/routines/${created.job.id}/run`, {})
+    const task = (await listTasks()).find(t => t.title === 'Reserved routine run')!
+    full = false
+    await expect(admitHostStart('explicit-ordinary', '__local__', { automatic: true, respectWaiting: false }))
+      .rejects.toMatchObject({ code: 'hosts_full' })
+    // A person's click remains exempt from the automatic queue.
+    const release = await admitHostStart('human-start', '__local__', { automatic: false })
+    release()
+    expect((await drainStartQueue()).started).toContain(task.id)
+    for (const promise of _runStartWatchesForTesting().values()) await promise
   }, 30_000)
 
   it('a trigger starting a missing conversation uses the same persistent capacity wait', async () => {

@@ -191,7 +191,7 @@ export function waitWords(ms: number): string {
 }
 
 /** `automatic`: held to the host's room. */
-interface AdmitOpts { automatic: boolean; respectWaiting?: boolean }
+interface AdmitOpts { automatic: boolean; respectWaiting?: boolean; routine?: boolean }
 let waitStepMs = WAIT_STEP_MS;
 export function __setWaitStepForTesting(ms: number | null): void { waitStepMs = ms ?? WAIT_STEP_MS; }
 
@@ -205,16 +205,20 @@ async function admitOnce(taskId: string, host: string | undefined | null, opts: 
   await previous;
   try {
     if (opts.automatic) {
-      if (opts.respectWaiting) {
+      // Routine priority is enforced at admission too: explicit hosts and ordinary
+      // replays must not take the next slot before a ready routine's queue pass.
+      if (opts.respectWaiting || !opts.routine) {
         const { listTasks } = await import('../task-manager.js');
         const all = await listTasks();
         const byId = new Map(all.map((t) => [t.id, t]));
-        const { heldByTeamStop, queuedRoutineSwitches, routineQueueEnabled } = await import('./start-queue.js');
+        const { heldByTeamStop, queuedRoutineSwitches, routineQueueEnabled, isQueuedRoutine } = await import('./start-queue.js');
         const switches = await queuedRoutineSwitches();
         const { isOrgEnabled } = await import('../org/org-enabled.js');
         const orgOn = await isOrgEnabled();
         const waiting = all.some((t) => t.id !== taskId && t.phase !== 'COMPLETE'
           && t.start_queue?.wait_for_slot && (t.start_queue.host ?? LOCAL_HOST) === key
+          // A due routine ignores ordinary waits but keeps earlier routine fires.
+          && (opts.routine ? isQueuedRoutine(t) : (opts.respectWaiting || isQueuedRoutine(t)))
           && byId.get(t.start_queue.parent_id)?.phase !== 'COMPLETE' && byId.has(t.start_queue.parent_id)
           && !heldByTeamStop(t, byId) && routineQueueEnabled(t, switches)
           && (orgOn || (t.org_role !== 'main' && t.org_role !== 'lead')));

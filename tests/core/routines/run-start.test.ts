@@ -147,6 +147,20 @@ async function run(w: World) {
 }
 
 describe('a routine run is a run once its session is up', () => {
+  it('a moved run persists its actual host for the watch and a later retry', async () => {
+    const w = new World();
+    w.plan = ['fail', 'up'];
+    const deps = w.deps();
+    const launch = deps.launch;
+    const placed = { ...LAUNCH, host: 'worker', cwd: '/home/worker/.open-walnut' };
+    deps.launch = async (input, opts) => ({ ...await launch(input, opts), launch: placed });
+    await new RoutineRunStarter(deps, TIMINGS).start({ job: JOB, runAtMs: T0, launch: LAUNCH });
+    await Promise.all([..._runStartWatchesForTesting().values()]);
+    expect(w.launches[1].launch).toEqual(placed);
+    expect(w.starts[0].start.launch).toEqual(placed);
+    expect(w.lastStart('task-1')?.state).toBe('started');
+  });
+
   it('a session that comes up is confirmed inline: one launch, a minted id, nothing retried', async () => {
     const w = new World();
     const started = await run(w);

@@ -46,6 +46,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/session-service-preview.ts': { calls: 1, kind: 'checks', why: 'hostLinkAnswers asks the link before a port forward is opened on it' },
   'src/core/session-vscode-embed.ts': { calls: 1, kind: 'checks', why: 'hostLinkAnswers asks the link before code-server is set up on it' },
   'src/providers/light-subagent-acp.ts': { calls: 2, kind: 'checks', why: 'hostLinkAnswers asks a remote link before a light subagent\'s worker starts on it (the other call is the test daemon)' },
+  'src/core/routines/run-placement.ts': { calls: 1, kind: 'checks', why: 'reads whether a host\'s link is up, its capabilities and home; the one send (the run\'s folder, through ensureCwd) follows hostLinkAnswers' },
 
   // Sends without asking; the wake recheck and the ping loop find a dead link.
   'src/core/agents/host-engines.ts': { calls: 2, kind: 'wake-recheck', why: 'a read under its own 4 s deadline; a lost one answers from its cache' },

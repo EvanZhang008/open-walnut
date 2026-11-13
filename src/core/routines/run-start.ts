@@ -142,6 +142,8 @@ export interface RoutineRunStarted {
   /** 'started': confirmed inline. 'pending': the watch decides after the executor returns. */
   confirmed: boolean;
   queued?: true;
+  /** The actual launch, including a capacity-safe fallback host and directory. */
+  launch?: RoutineLaunch;
 }
 
 interface ErrorTap { text?: string; stop: () => void }
@@ -175,10 +177,11 @@ export class RoutineRunStarter {
     const prior = await this.deps.findRun?.(input.job.id, new Date(input.runAtMs).toISOString());
     if (prior?.routine_start?.state === 'failed') throw new Error(prior.routine_start.error || 'This dispatched run did not start');
     if (prior?.routine_start) return { task: prior, confirmed: prior.routine_start.state === 'started',
+      launch: prior.start_queue?.routine ?? prior.routine_start.launch ?? input.launch,
       ...(prior.start_queue?.routine ? { queued: true as const } : {}),
       ...(prior.routine_start.session_id && !prior.start_queue ? { sessionId: prior.routine_start.session_id } : {}),
     };
-    const sid = await this.deps.mintSessionId(input.launch.host, input.launch.model, input.launch.walnutAgent ? undefined : input.launch.project);
+    const sid = await this.deps.mintSessionId(input.launch.host, input.launch.model, input.launch.walnutAgent ? undefined : input.launch.project, input.launch);
     const attemptAt = this.deps.now();
     // Listening before the launch: a spawn can fail before the launch returns.
     const tap = this.tap(sid);
@@ -194,8 +197,11 @@ export class RoutineRunStarter {
     };
     let task: Task;
     let queued: true | undefined;
+    let placed: RoutineLaunch | undefined;
     try {
-      ({ task, queued } = await this.deps.launch(input.launch, { preassignedSessionId: sid, record }));
+      ({ task, queued, launch: placed } = await this.deps.launch(input.launch, { preassignedSessionId: sid, record }));
+      // The watch and its retry follow the host that actually took the slot.
+      if (placed) record.launch = placed;
     } catch (err) {
       tap.stop();
       throw err;
@@ -203,16 +209,16 @@ export class RoutineRunStarter {
     if (!queued) await this.deps.writeStart(task.id, record);
     if (queued) {
       tap.stop();
-      return { task, confirmed: false, queued: true };
+      return { task, confirmed: false, queued: true, launch: record.launch };
     }
     const inline = await this.observe(task.id, sid, record.attempt_at, tap, attemptAt + Math.min(this.t.inlineWaitMs, this.t.attemptDeadlineMs));
     if (inline.kind === 'started') {
       tap.stop();
       await this.settle(task.id, record, { state: 'started' });
-      return { task, ...(sid ? { sessionId: sid } : {}), confirmed: true };
+      return { task, ...(sid ? { sessionId: sid } : {}), confirmed: true, launch: record.launch };
     }
     this.follow(task.id, record, tap);
-    return { task, ...(sid ? { sessionId: sid } : {}), confirmed: false };
+    return { task, ...(sid ? { sessionId: sid } : {}), confirmed: false, launch: record.launch };
   }
 
   /** A queued launch failed for a reason other than capacity. */
@@ -340,7 +346,7 @@ export class RoutineRunStarter {
 
   private async retry(taskId: string, prev: RoutineStart): Promise<{ record: RoutineStart; tap: ErrorTap } | { continued: string } | { queued: true } | { error: string }> {
     const launch = prev.launch!;
-    const sid = await this.deps.mintSessionId(launch.host, launch.model, launch.walnutAgent ? undefined : launch.project);
+    const sid = await this.deps.mintSessionId(launch.host, launch.model, launch.walnutAgent ? undefined : launch.project, launch);
     const next: RoutineStart = {
       ...prev,
       attempt: 2,

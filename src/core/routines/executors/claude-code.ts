@@ -23,6 +23,7 @@ import { getConfig } from '../../config-manager.js';
 import type { RoutineRunStarter } from '../run-start.js';
 import type { ExecutorDefinition } from '../types.js';
 import { clearHostGateNotices, noteHostGateRefusal, resetHostGateNotices } from '../host-gate-notice.js';
+import { routineLaunchPlacement, routinePlacementOf } from '../run-placement.js';
 
 /** How a refused run tells the human (a cron notification by default; a seam for tests). */
 export interface RoutineGateNotify {
@@ -177,12 +178,17 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify; sta
       if (typeof c.titleTemplate === 'string' && c.titleTemplate.trim()) {
         out.titleTemplate = c.titleTemplate.trim();
       }
+      // Server API work may start on another host when its own is full (run-placement.ts).
+      // Written out only when portable: a routine without it validates as before.
+      const placement = routinePlacementOf(c.placement);
+      if (!placement.ok) return { ok: false, error: placement.error };
+      if (placement.placement) out.placement = placement.placement;
       return { ok: true, config: out };
     },
     async run(job, executor, message, ctx) {
       const config = executor.config as {
-        cwd: string; host?: string; model?: string; taskTitle?: string;
-        walnutAgent?: boolean; agentId?: string; project?: string; titleTemplate?: string;
+        cwd: string; host?: string; model?: string; taskTitle?: string; instructions?: string;
+        walnutAgent?: boolean; agentId?: string; project?: string; titleTemplate?: string; placement?: unknown;
       };
 
       // Host must exist in config.hosts — fail the run with a clear error
@@ -239,6 +245,8 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify; sta
             // config.defaults.engine for it.
             ...(config.walnutAgent ? { walnutAgent: true } : {}),
             ...(config.agentId ? { agentId: config.agentId } : {}),
+            // Whether it may start elsewhere when its host is full, and the instructions its needs are read from.
+            ...routineLaunchPlacement(config, sessionMessage),
           },
         });
       } catch (err) {
@@ -251,7 +259,8 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify; sta
       clearHostGateNotices(job.id);
 
       // The task id stays in the summary: a later verdict on this run finds its row by it.
-      const where = `${config.cwd}${config.host ? ` @ ${config.host}` : ''}`;
+      const actual = started.launch ?? config;
+      const where = `${actual.cwd}${actual.host ? ` @ ${actual.host}` : ''}`;
       return {
         status: 'ok',
         summary: started.queued

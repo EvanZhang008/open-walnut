@@ -2754,8 +2754,26 @@ export type RestartLossVerdict = 'resume' | 'waiting_user' | 'settled' | 'wait_h
  * 2026-10-26 that rewrite made every queued recovery read as "not infra" and
  * abort, and every interrupted task was handed back as if it waited on the user.
  */
+/**
+ * A routine's declaration that its runs are server API work (routines/run-placement.ts): a run
+ * whose host is full may start on another host with room that carries every capability tag,
+ * in that host's Walnut home. Absent: its runs keep their host.
+ */
+export interface RoutinePlacement {
+  portable: true;
+  /** Fleet capability tags the host must carry (hosts/capabilities.ts), normalized. */
+  capabilities?: string[];
+}
+
 /** What a routine run asked for, enough to start the same session again. */
 export interface RoutineLaunch {
+  /** May start on another host when its own is full (RoutinePlacement). */
+  placement?: RoutinePlacement;
+  /**
+   * The routine's own instructions, when the message carries more (an init processor's batch,
+   * with its mail and history): what placement reads for host-only needs. Absent: the message.
+   */
+  requirementsText?: string;
   message: string;
   cwd: string;
   host?: string;

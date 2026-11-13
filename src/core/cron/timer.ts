@@ -15,7 +15,9 @@ import { withFileLock } from '../../utils/file-lock.js';
 import {
   appendAudit, auditDelivery, injectedPreview, wakeAuditEntry, TRIGGER_FIRE_LOG_MAX,
 } from './trigger-audit.js';
-import { appendRun, catchUpNote, judgesSlots, runEntry, runFailed, SLOT_RETRIES } from './run-log.js';
+import {
+  appendRun, catchUpNote, HELD_RECHECK_MS, judgesSlots, runEntry, runFailed, runSlots, SLOT_RETRIES,
+} from './run-log.js';
 
 const MAX_TIMER_DELAY_MS = 60_000;
 
@@ -208,12 +210,16 @@ export type JobRunOutcome = {
   sessionId?: string;
   /** Run now: a person asked for this run, the schedule did not. */
   manual?: boolean;
-  /** The slot this run was due at (run-log.ts); absent for Run now. */
+  /** The newest slot this run stood for (run-log.ts runSlots); absent for Run now. */
   slotMs?: number;
+  /** The oldest, when it stood for every slot from it to `slotMs`. */
+  firstSlotMs?: number;
   /** A catch-up run made for this missed slot. */
   catchUpMs?: number;
   /** The run failed because something broke before it did its work: worth another try in its slot. */
   retryable?: boolean;
+  /** The run was held behind an earlier one that has not started (that run's task): its slots stay owed. */
+  heldBy?: string;
 };
 
 /**
@@ -253,8 +259,12 @@ export function applyJobResult(
   // the count anyway spent the batch on nothing AND left the routine below its
   // threshold, so the backoff retry arrived as "no new items" (skipWhenIdle) and
   // the clock leg stalled until the threshold filled again from scratch.
+  //
+  // NOT applied to a run held behind an earlier one that has not started either: nobody looked
+  // at those items, and its look again must still see them (or skipWhenIdle would read the owed
+  // slots as "no new items" and settle them with nothing done).
   if (job.wake) {
-    const observed = result.status === 'error' ? 0 : Math.max(0, Math.floor(result.wakeObserved ?? 0));
+    const observed = result.status === 'error' || result.heldBy ? 0 : Math.max(0, Math.floor(result.wakeObserved ?? 0));
     job.state.wakeCount = Math.max(0, (job.state.wakeCount ?? 0) - observed);
     if (observed > 0 && result.status !== 'skipped') {
       // One audit row per wake fire, with the text the run injected. A 'skipped'
@@ -282,7 +292,8 @@ export function applyJobResult(
   }
 
   recordSessionRun(job, result);
-  const retryAt = slotRetryAtMs(job, result);
+  const retryAt = slotRetryAtMs(job, result) ?? heldRecheckAtMs(job, result);
+  settleOwed(job, result, retryAt);
 
   const shouldDelete =
     job.schedule.kind === 'at' && result.status === 'ok' && job.deleteAfterRun === true;
@@ -311,10 +322,14 @@ export function applyJobResult(
     } else if (retryAt !== undefined) {
       // A start that broke (no room on the host) is tried again inside its own slot: a daily
       // routine's next slot is a day away, and the 2026-11-08 reflection lost its day that way.
+      // A run held behind one that has not started looks again the same way (2026-11-12).
       job.state.nextRunAtMs = retryAt;
       armGuard(retryAt);
-      state.deps.log.info('routine start failed: trying again in its slot', {
-        jobId: job.id, slotMs: job.state.retrySlotMs, attempt: job.state.consecutiveErrors, nextRunAtMs: retryAt,
+      state.deps.log.info(result.heldBy
+        ? 'routine run held behind an earlier run that has not started: looking again'
+        : 'routine start failed: trying again in its slot', {
+        jobId: job.id, slotMs: job.state.retrySlotMs, owedFromMs: job.state.owedFromMs,
+        ...(result.heldBy ? { heldBy: result.heldBy } : { attempt: job.state.consecutiveErrors }), nextRunAtMs: retryAt,
       });
     } else if (result.status === 'error' && job.enabled) {
       // Apply exponential backoff for errored jobs to prevent retry storms.
@@ -372,39 +387,73 @@ function slotRetryAtMs(job: CronJob, result: JobRunOutcome): number | undefined 
   return at;
 }
 
-/** The slot a due run stands for: the one a failed start is being tried again for, else its next run. */
-function slotOf(job: CronJob): number | undefined {
-  if (job.check) return undefined;
-  return job.state.retrySlotMs ?? job.state.nextRunAtMs;
+/**
+ * When a run held behind an earlier one that has not started looks again (2026-11-12: Inbox
+ * Triage's 16:20 run waited for a slot on a full Mac, and every run after it skipped): soon, inside
+ * its slot, while the routine is judged slot by slot; at its next slot otherwise, which stands for
+ * the owed ones too (run-log.ts runSlots). Sets `retrySlotMs`; undefined = no look again.
+ */
+function heldRecheckAtMs(job: CronJob, result: JobRunOutcome): number | undefined {
+  const slot = result.slotMs;
+  if (!result.heldBy || slot === undefined || !job.enabled || !judgesSlots(job, result.endedAt)) return undefined;
+  const at = result.endedAt + HELD_RECHECK_MS;
+  const next = computeJobNextRunAtMs(job, Math.max(slot, result.endedAt) + 1);
+  if (next !== undefined && at >= next) return undefined;
+  job.state.retrySlotMs = slot;
+  return at;
 }
 
-/** Runs already recorded for `slot`. */
+/**
+ * The slots still owed after this run (`owedFromMs`, run-log.ts runSlots). A held run, or a failed
+ * start tried again, keeps every slot it stood for owed: the next run stands for them. Any other
+ * scheduled run settled them, good or failed (a failure is then each slot's missed run, with its
+ * error). A run that stood for no slot (Run now, a trigger) leaves them as they are.
+ */
+function settleOwed(job: CronJob, result: JobRunOutcome, retryAt: number | undefined): void {
+  if (result.slotMs === undefined) return;
+  const owes = (result.heldBy && judgesSlots(job, result.endedAt)) || retryAt !== undefined;
+  if (!owes || !job.enabled) {
+    delete job.state.owedFromMs;
+    return;
+  }
+  // Only the slots this run stood for. The run it waits for owes its own slot only if it is
+  // recorded failed while this backlog lasts (ops.ts recordRunStartFailure); one that starts
+  // did its work, and the next run must not claim it did not.
+  const first = result.firstSlotMs ?? result.slotMs;
+  const prior = job.state.owedFromMs;
+  job.state.owedFromMs = typeof prior === 'number' ? Math.min(prior, first) : first;
+}
+
+/** Runs already recorded for `slot` that tried to do its work (a held run did not try). */
 function triesOfSlot(job: CronJob, slot: number | undefined): number {
   if (slot === undefined) return 0;
-  return (job.state.runLog ?? []).filter((e) => e.slotMs === slot).length;
+  return (job.state.runLog ?? []).filter((e) => e.slotMs === slot && !e.heldBy).length;
 }
 
 /** The run's row in the routine's history, and its error in the log (run-log.ts). */
 function recordRoutineRun(state: CronServiceState, job: CronJob, result: JobRunOutcome, retryAt: number | undefined): void {
   if (job.check) return;
   // A try again of a slot whose start had failed is the slot's second (third...) row.
-  const attempt = triesOfSlot(job, result.slotMs) + 1;
+  const attempt = result.heldBy ? 1 : triesOfSlot(job, result.slotMs) + 1;
   const entry = runEntry({
     atMs: result.startedAt,
     durationMs: result.endedAt - result.startedAt,
     status: result.status,
     ...(result.slotMs !== undefined ? { slotMs: result.slotMs } : {}),
+    ...(result.firstSlotMs !== undefined ? { firstSlotMs: result.firstSlotMs } : {}),
+    ...(result.heldBy ? { heldBy: result.heldBy } : {}),
     ...(result.error ? { error: result.error } : {}),
     ...(result.summary ? { summary: result.summary } : {}),
     ...(result.sessionId ? { sessionId: result.sessionId } : {}),
     ...(result.manual ? { manual: true } : {}),
     ...(result.catchUpMs !== undefined ? { catchUpMs: result.catchUpMs } : {}),
     ...(attempt > 1 ? { attempt } : {}),
-    ...(retryAt !== undefined ? { willRetryAtMs: retryAt } : {}),
+    // A held run's look again is not a retry of a failure: owedFromMs keeps its slots.
+    ...(retryAt !== undefined && !result.heldBy ? { willRetryAtMs: retryAt } : {}),
   });
   job.state.runLog = appendRun(job.state.runLog, entry, (s) => scheduleNextRunAtMs(job, s + 1));
-  // The history begins with this run's slot, so that slot is judged too.
-  job.state.runLogSinceMs ??= Math.min(result.slotMs ?? result.startedAt, result.startedAt);
+  // The history begins with this run's slots, so they are judged too.
+  job.state.runLogSinceMs ??= Math.min(result.firstSlotMs ?? result.slotMs ?? result.startedAt, result.startedAt);
   if (runFailed(entry)) {
     state.deps.log.warn('routine run failed', {
       jobId: job.id, jobName: job.name, status: result.status, error: result.error,
@@ -462,16 +511,20 @@ export interface JobExecution {
   sessionId?: string;
   /** The executor broke rather than declined (registry.ts runExecutor). */
   retryable?: boolean;
+  /** The init processor declined only because an earlier run has not started (its task). */
+  heldBy?: string;
 }
 
+/** A catch-up run: the slot it stands for, or every slot from `fromMs` to `toMs` (run-log.ts). */
+type CatchUp = { fromMs: number; toMs?: number };
 
 async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   /** A human pressed Run now. The idle gate is a cadence rule, and they outrank it. */
   forced = false,
-  /** A catch-up run for this missed slot: the executor is told which run it stands for (run-log.ts). */
-  catchUpMs?: number,
+  /** A catch-up run: the executor is told which runs it stands for (run-log.ts). */
+  catchUp?: CatchUp,
 ): Promise<JobExecution> {
   // ── Wake: nothing new, nothing to do ──
   // Here rather than in findDueJobs: a job filtered out THERE keeps a past-due
@@ -513,8 +566,10 @@ async function executeJobCore(
     // The action DECLINED this fire (see CronServiceDeps.runAction). Returning
     // before the executor is the whole point: an init processor is the only place
     // that can refuse a run before a session, a task or a model call exists.
+    // `heldBy`: declined only because an earlier run has not started; its slots stay owed.
     if (actionResult.status === 'skipped') {
-      return { status: 'skipped', summary: actionResult.summary };
+      const heldBy = typeof actionResult.heldBy === 'string' && actionResult.heldBy.trim() ? actionResult.heldBy.trim() : undefined;
+      return { status: 'skipped', summary: actionResult.summary, ...(heldBy ? { heldBy } : {}) };
     }
 
     // targetAgent used to pipe the action result into a config-defined action
@@ -540,7 +595,7 @@ async function executeJobCore(
       || `[action '${job.initProcessor.actionId}' completed with no output]`;
   }
   // A catch-up run says which run it is, ahead of everything the session reads.
-  const lead = catchUpMs !== undefined ? `${catchUpNote(catchUpMs, state.deps.nowMs())}\n\n` : '';
+  const lead = catchUp ? `${catchUpNote(catchUp.fromMs, state.deps.nowMs(), catchUp.toMs)}\n\n` : '';
 
   // ── Routines layer: non-legacy executors (e.g. claude-code) dispatch via
   // runExecutor. main-agent/walnut-agent executors fall through to the legacy
@@ -559,7 +614,7 @@ async function executeJobCore(
       return { status: 'skipped', error: `executor '${executor.type}' requires non-empty instructions` };
     }
     const message = lead + (initOutput ? `${initOutput}\n\n${instructions}` : instructions);
-    const res = await state.deps.runExecutor(job, executor, message, catchUpMs !== undefined ? { runForMs: catchUpMs } : undefined);
+    const res = await state.deps.runExecutor(job, executor, message, catchUp ? { runForMs: catchUp.fromMs } : undefined);
     // `delivered.text` is the exact text a session received when the executor
     // knows it (the session executor does); otherwise the message we dispatched
     // is the honest answer to "what did this run inject".
@@ -648,8 +703,10 @@ async function executeJobCore(
 }
 
 /**
- * Full execution wrapper for a single job. Updates state, emits events,
- * handles timeout, and applies result. Used by `run` command and `start` (missed jobs).
+ * THE entry every server-clock run takes: the timer's tick, the boot catch-up (`start`) and a
+ * Run (`run`, due or forced). Decides the slots a scheduled run stands for (run-log.ts runSlots),
+ * updates state, emits events, handles the timeout and applies the result to a fresh load. No
+ * other path calls executeJobCore or records a scheduled run (scheduled-run-entry-guard.test.ts).
  */
 export async function executeJob(
   state: CronServiceState,
@@ -660,9 +717,14 @@ export async function executeJob(
   if (!job.state) {
     job.state = {};
   }
-  // A run the schedule asked for (a boot catch-up, a due run) stands for its slot; Run now for none.
-  const slotMs = options.forced ? undefined : slotOf(job);
   const startedAt = state.deps.nowMs();
+  // A run the schedule asked for (a tick, a boot catch-up, a due run) stands for its slots, every
+  // one that came due since and every one still owed (run-log.ts runSlots); Run now for none.
+  const slots = options.forced ? undefined : runSlots(job, startedAt);
+  if (slots === null) return await settleSetAside(state, job, startedAt);
+  const catchUp: CatchUp | undefined = options.catchUpMs !== undefined
+    ? { fromMs: options.catchUpMs }
+    : slots?.late ? { fromMs: slots.firstSlotMs ?? slots.slotMs, toMs: slots.slotMs } : undefined;
   job.state.runningAtMs = startedAt;
   job.state.lastError = undefined;
   // Read at DISPATCH, before the executor runs: this is the batch this run owns.
@@ -676,7 +738,7 @@ export async function executeJob(
 
   try {
     coreResult = await withTimeout(
-      executeJobCore(state, job, options.forced === true, options.catchUpMs),
+      executeJobCore(state, job, options.forced === true, catchUp),
       jobTimeoutMs(job),
       'cron: job execution timed out',
     );
@@ -703,9 +765,11 @@ export async function executeJob(
       dispatched: coreResult.dispatched,
       sessionId: coreResult.sessionId,
       ...(options.forced ? { manual: true } : {}),
-      ...(slotMs !== undefined ? { slotMs } : {}),
+      ...(slots ? { slotMs: slots.slotMs } : {}),
+      ...(slots?.firstSlotMs !== undefined ? { firstSlotMs: slots.firstSlotMs } : {}),
       ...(options.catchUpMs !== undefined ? { catchUpMs: options.catchUpMs } : {}),
       ...(coreResult.retryable ? { retryable: true } : {}),
+      ...(coreResult.heldBy ? { heldBy: coreResult.heldBy } : {}),
     });
 
     emit(state, {
@@ -728,8 +792,36 @@ export async function executeJob(
   return coreResult;
 }
 
+/**
+ * Every slot a due run would stand for was set aside (Dismiss): nothing runs and no row is
+ * written; the routine moves on to its next slot, under the lock, to a fresh load.
+ */
+async function settleSetAside(state: CronServiceState, job: CronJob, nowMs: number): Promise<JobExecution> {
+  const summary = 'every slot this run stood for was set aside';
+  await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const target = state.store?.jobs.find((j) => j.id === job.id) ?? job;
+    target.state.runningAtMs = undefined;
+    delete target.state.retrySlotMs;
+    delete target.state.owedFromMs;
+    target.state.nextRunAtMs = computeJobNextRunAtMs(target, nowMs + 1);
+    replayGuardOf(state).set(target.id, target.state.nextRunAtMs ?? null);
+    state.deps.log.info('routine run not made: its slots were set aside', { jobId: target.id, nextRunAtMs: target.state.nextRunAtMs });
+    // 'finished', not 'updated': the definition did not change.
+    emit(state, { jobId: target.id, action: 'finished', status: 'skipped', summary, runAtMs: nowMs, nextRunAtMs: target.state.nextRunAtMs });
+    await persist(state);
+  });
+  return { status: 'skipped', summary };
+}
+
 // ── Timer tick ──
 
+/**
+ * The jobs whose due slot this server's timer runs now: at a tick, and at boot for the slots that
+ * came due while the server was down (one run each, standing for all of them: run-log.ts
+ * runSlots). Returns the list without executing: callers run it outside the lock, so an agent
+ * that calls cron tools during a run cannot deadlock.
+ */
 export function findDueJobs(state: CronServiceState): CronJob[] {
   if (!state.store) return [];
   const now = state.deps.nowMs();
@@ -738,11 +830,14 @@ export function findDueJobs(state: CronServiceState): CronJob[] {
     if (!j.enabled) return false;
     // A trigger is the daemon's job to run: nextRunAtMs here is only its last
     // report, and running the executor from the server would deliver a fire
-    // nothing decided (no check output, no dedup, no seen set).
+    // nothing decided (no check output, no dedup, no seen set). It missed nothing
+    // while the server was down either (its daemon kept polling).
     if (j.check) return false;
-    // A clock a host's daemon holds: that daemon runs its slots (clock-routine-v1).
+    // A clock a host's daemon holds: that daemon runs its slots (clock-routine-v1),
+    // and catches up there, by the same one-run rule.
     if (isClockOwned(j)) return false;
     if (typeof j.state.runningAtMs === 'number') return false;
+    if (j.schedule.kind === 'at' && j.state.lastStatus === 'ok') return false;
     const next = j.state.nextRunAtMs;
     if (!(typeof next === 'number' && now >= next)) return false;
     if (replayGuardBlocks(state, j, now)) return false;
@@ -781,94 +876,25 @@ export async function onTimer(state: CronServiceState): Promise<void> {
       }
       await persist(state);
 
-      // The slot each run stands for, read before it runs (run-log.ts).
-      return due.map((j) => ({ id: j.id, job: j, slotMs: slotOf(j) }));
+      return due;
     });
 
-    // Phase 2: execute each due job sequentially (outside the lock)
-    const results: Array<{
-      jobId: string;
-      status: 'ok' | 'error' | 'skipped';
-      error?: string;
-      summary?: string;
-      dispatched?: string;
-      sessionId?: string;
-      retryable?: boolean;
-      slotMs?: number;
-      startedAt: number;
-      endedAt: number;
-      wakeObserved: number;
-    }> = [];
-
-    for (const { id, job, slotMs } of dueJobs) {
-      const startedAt = state.deps.nowMs();
-      job.state.runningAtMs = startedAt;
-      // The wake batch this run owns, read at dispatch (see applyJobResult).
-      const wakeObserved = job.wake ? job.state.wakeCount ?? 0 : 0;
-      emit(state, { jobId: job.id, action: 'started', runAtMs: startedAt });
-
-      const timeoutMs = jobTimeoutMs(job);
-
+    // Phase 2: run each due job, one by one, outside the lock, through the one entry every
+    // scheduled run takes (executeJob): the slots it stands for (run-log.ts runSlots), its
+    // timeout, its result applied to a fresh load. A new scheduler path calls executeJob too
+    // (tests/core/cron/scheduled-run-entry-guard.test.ts).
+    for (const job of dueJobs) {
       try {
-        const result = await withTimeout(executeJobCore(state, job), timeoutMs, 'cron: job execution timed out');
-        results.push({ jobId: id, ...result, slotMs, startedAt, endedAt: state.deps.nowMs(), wakeObserved });
+        await executeJob(state, job);
       } catch (err) {
-        state.deps.log.warn(`job failed: ${String(err)}`, {
-          jobId: id,
-          jobName: job.name,
-          timeoutMs,
-        });
-        results.push({
-          jobId: id,
-          status: 'error',
-          error: String(err),
-          slotMs,
-          startedAt,
-          endedAt: state.deps.nowMs(),
-          wakeObserved,
-        });
+        state.deps.log.warn(`job failed: ${String(err)}`, { jobId: job.id, jobName: job.name });
       }
     }
 
-    // Phase 3: apply results under lock, persist, emit events
-    if (results.length > 0) {
+    // Phase 3: the next runs of every job, under the lock, to a fresh load.
+    if (dueJobs.length > 0) {
       await locked(state, async () => {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-
-        for (const result of results) {
-          const job = state.store?.jobs.find((j) => j.id === result.jobId);
-          if (!job) continue;
-
-          const shouldDelete = applyJobResult(state, job, {
-            status: result.status,
-            error: result.error,
-            startedAt: result.startedAt,
-            endedAt: result.endedAt,
-            wakeObserved: result.wakeObserved,
-            summary: result.summary,
-            dispatched: result.dispatched,
-            sessionId: result.sessionId,
-            ...(result.slotMs !== undefined ? { slotMs: result.slotMs } : {}),
-            ...(result.retryable ? { retryable: true } : {}),
-          });
-
-          emit(state, {
-            jobId: job.id,
-            action: 'finished',
-            status: result.status,
-            error: result.error,
-            summary: result.summary,
-            runAtMs: result.startedAt,
-            durationMs: job.state.lastDurationMs,
-            nextRunAtMs: job.state.nextRunAtMs,
-          });
-
-          if (shouldDelete && state.store) {
-            state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
-            emit(state, { jobId: job.id, action: 'removed' });
-          }
-        }
-
         recomputeNextRuns(state);
         await persist(state);
       });
@@ -877,35 +903,4 @@ export async function onTimer(state: CronServiceState): Promise<void> {
     state.running = false;
     armTimer(state);
   }
-}
-
-// ── Missed jobs (on startup) ──
-
-/**
- * Find jobs whose nextRunAtMs is in the past. Returns the list without
- * executing them — callers must run execution outside the lock to avoid
- * deadlocks when the agent calls cron tools during job execution.
- */
-export function findMissedJobs(state: CronServiceState): CronJob[] {
-  if (!state.store) return [];
-
-  const now = state.deps.nowMs();
-  return state.store.jobs.filter((j) => {
-    if (!j.state) j.state = {};
-    if (!j.enabled) return false;
-    // Same rule as findDueJobs: a trigger missed nothing while the server was
-    // down (its daemon kept polling), so there is nothing to catch up here. A
-    // clock a host's daemon holds catches up there, by the same one-run rule.
-    if (j.check || isClockOwned(j)) return false;
-    if (typeof j.state.runningAtMs === 'number') return false;
-    if (j.schedule.kind === 'at' && j.state.lastStatus === 'ok') return false;
-    const next = j.state.nextRunAtMs;
-    if (!(typeof next === 'number' && now >= next)) return false;
-    if (replayGuardBlocks(state, j, now)) return false;
-    if (cloudModeSkipsJob(j)) {
-      state.deps.log.info('replica: skipping non-allowlisted missed cron job', { jobId: j.id, jobName: j.name });
-      return false;
-    }
-    return true;
-  });
 }

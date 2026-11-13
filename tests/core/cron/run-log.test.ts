@@ -204,15 +204,26 @@ describe('the 2026-11-08 morning: a start with no room on the Mac', () => {
 })
 
 describe('a slot nothing ran for', () => {
-  it('is a missed run: the timer made one late run for the oldest slot, and the next day had none', async () => {
+  it('is a missed run when nothing ran for it and nothing will', async () => {
     const state = makeState()
     const job = await ops.add(state, daily)
     await tickAt(state, SLOT1 + 5)
-    // The server is down from day 2 07:00 to day 3 09:00: one late run, for day 2's slot.
+    const j = await stored(state, job.id)
+    // Day 2's slot passed with no row while its next run was already on day 3 (a lost write).
+    j.state.nextRunAtMs = SLOT1 + 2 * DAY
+    expect(missedRuns(j, SLOT1 + DAY + 2 * HOUR)).toEqual([{ slotMs: SLOT1 + DAY, reason: NO_RUN_REASON }])
+  })
+
+  it('a downtime is not: the late run stands for every slot of it (2026-11-12, the downtime report)', async () => {
+    const state = makeState()
+    const job = await ops.add(state, daily)
+    await tickAt(state, SLOT1 + 5)
+    // The server is down from day 2 07:00 to day 3 09:00: one late run, for days 2 and 3.
     await tickAt(state, SLOT1 + 2 * DAY + HOUR)
     const j = await stored(state, job.id)
-    expect(j.state.runLog?.[0]).toMatchObject({ slotMs: SLOT1 + DAY, status: 'ok' })
-    expect(missedRuns(j, SLOT1 + 2 * DAY + 2 * HOUR)).toEqual([{ slotMs: SLOT1 + 2 * DAY, reason: NO_RUN_REASON }])
+    expect(runs).toHaveLength(2)
+    expect(j.state.runLog?.[0]).toMatchObject({ slotMs: SLOT1 + 2 * DAY, firstSlotMs: SLOT1 + DAY, status: 'ok' })
+    expect(missedRuns(j, SLOT1 + 2 * DAY + 2 * HOUR)).toEqual([])
   })
 
   it('a catch-up run for it covers it, and its row names the slot', async () => {
@@ -258,7 +269,8 @@ describe('nothing is called missed that was not expected', () => {
     // A routine from before this Walnut kept a history (no runLogSinceMs): nothing is judged.
     const legacy: CronJob = { ...j, state: { ...j.state, runLogSinceMs: undefined } }
     expect(missedRuns(legacy, SLOT1 + 5 * DAY)).toEqual([])
-    const older: CronJob = { ...j, createdAtMs: SLOT1 - 10 * DAY, state: { ...j.state, expectFromMs: undefined, runLogSinceMs: SLOT1 + DAY + 1 } }
+    // Its next run already past those slots (the timer moved on), so they are judged.
+    const older: CronJob = { ...j, createdAtMs: SLOT1 - 10 * DAY, state: { ...j.state, nextRunAtMs: SLOT1 + 3 * DAY, expectFromMs: undefined, runLogSinceMs: SLOT1 + DAY + 1 } }
     expect(missedRuns(older, SLOT1 + 2 * DAY + HOUR).map((m) => m.slotMs)).toEqual([SLOT1 + 2 * DAY])
   })
 
@@ -335,6 +347,10 @@ describe('review findings', () => {
     const job = await ops.add(state, daily)
     const j = await stored(state, job.id)
     expect(j.state.runLogSinceMs).toBe(BASE)
+    // While its next run is still to come, that run stands for both slots (run-log.ts runSlots).
+    expect(missedRuns(j, SLOT1 + DAY + HOUR)).toEqual([])
+    // Once the server's clock moved on with no run for them, both are missed.
+    j.state.nextRunAtMs = SLOT1 + 2 * DAY
     expect(missedRuns(j, SLOT1 + DAY + HOUR).map((m) => m.slotMs)).toEqual([SLOT1 + DAY, SLOT1])
   })
 

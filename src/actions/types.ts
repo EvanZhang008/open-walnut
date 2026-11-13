@@ -34,6 +34,13 @@ export interface ActionResult {
    * `invoke`/`content` and ignore this.
    */
   status?: 'skipped' | 'error';
+  /**
+   * With `status: 'skipped'`: the action declined ONLY because an earlier run of this routine has
+   * not started yet (the task it waits in). The routine engine keeps that slot owed instead of
+   * done, looks again soon, and the next run that goes ahead stands for every owed slot
+   * (src/core/cron/run-log.ts runSlots).
+   */
+  heldBy?: string;
 }
 
 /** Internal type — descriptor enriched with source and file path. */

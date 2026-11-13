@@ -20,7 +20,7 @@ import { WALNUT_HOME } from '../../../src/constants.js';
 import { DELIVER_PROMPT_MAX } from '../../../src/providers/trigger-check-core.js';
 import { normalizeCronJobCreate, normalizeCronJobPatch } from '../../../src/core/cron/normalize.js';
 import { applyJobPatch, computeJobNextRunAtMs, createJob, nextWakeAtMs } from '../../../src/core/cron/jobs.js';
-import { findDueJobs, findMissedJobs } from '../../../src/core/cron/timer.js';
+import { findDueJobs } from '../../../src/core/cron/timer.js';
 import { compileTriggerDefs, triggerDefOf } from '../../../src/core/routines/trigger-push.js';
 import { buildTriggerMessage, buildScheduledSessionMessage } from '../../../src/core/routines/trigger-envelope.js';
 import { parseWalnutMessage } from '../../../src/core/peers/walnut-message-tag.js';
@@ -171,8 +171,8 @@ describe('a check job in the store', () => {
     // nextRunAtMs is in the PAST — exactly the state a daemon report leaves.
     const store: CronStoreFile = { version: 2, jobs: [triggerJob({ state: { nextRunAtMs: 1_000 } })] };
     const state = makeState(store, 500_000);
+    // One selector for the tick and the boot catch-up (timer.ts findDueJobs).
     expect(findDueJobs(state)).toEqual([]);
-    expect(findMissedJobs(state)).toEqual([]);
     // Without the exclusion armTimer would re-arm with delay 0 forever.
     expect(nextWakeAtMs(state)).toBeUndefined();
   });

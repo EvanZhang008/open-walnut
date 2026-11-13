@@ -1973,6 +1973,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // The start is held to a deadline like the claude-code executor's
       // (core/routines/run-start.ts): retried once, then recorded failed.
       const { routineRunStarter } = await import('../core/routines/run-start-deps.js')
+      const { routineLaunchPlacement } = await import('../core/routines/run-placement.js')
       try {
         const started = await (await routineRunStarter()).start({
           job: { id: job.id, name: job.name },
@@ -1984,6 +1985,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             taskTitle: `Routine: ${job.name}`,
             project: 'Routines',
             source: 'cron-isolated',
+            ...routineLaunchPlacement(job.executor?.config ?? {}, message),
           },
         })
         return {
@@ -2002,8 +2004,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Adapt ActionResult { invoke, content, image } → CronServiceDeps shape { status, summary, data }
       // An action that set `status` is deciding the RUN's fate, not just its text:
       // 'skipped' declines the fire (nothing is minted), 'error' fails it. Absent
-      // is the old behaviour and stays byte-identical.
-      if (ar.status === 'skipped') return { status: 'skipped', summary: ar.content }
+      // is the old behaviour and stays byte-identical. `heldBy`: the slot is owed, not
+      // done (an earlier run has not started; cron/run-log.ts runSlots).
+      if (ar.status === 'skipped') return { status: 'skipped', summary: ar.content, ...(ar.heldBy ? { heldBy: ar.heldBy } : {}) }
       if (ar.status === 'error') return { status: 'error', error: ar.content }
       if (!ar.invoke) {
         // invoke=false: either error/permission issue or screen unchanged — return ok, let agent handle via text
@@ -2019,9 +2022,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         } : undefined,
       }
     },
-    runExecutor: async (job, executor, message) => {
+    // `ctx` carries a catch-up run's slot (runForMs), which dates the run's task title.
+    runExecutor: async (job, executor, message, ctx) => {
       const { runExecutor } = await import('../core/routines/index.js')
-      return await runExecutor(job, executor, message)
+      return await runExecutor(job, executor, message, ctx)
     },
     onEvent: (evt) => {
       broadcastEvent(`cron:job-${evt.action}`, evt)

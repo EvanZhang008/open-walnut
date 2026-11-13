@@ -3863,6 +3863,15 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
 - `POST /api/v1/routines` body = the normalized job shape (at minimum
   `schedule` + `payload`/`executor`) → `201 { "job" }`; invalid input →
   `400 bad_request`.
+- A `claude-code` executor may declare `config.placement: { portable: true,
+  capabilities: ["linux", "mcp:mail"] }`. Capability tags are normalized and
+  required together. When its named host is full, server-API work in Walnut's
+  home can use a connected, ready host with room and those capabilities.
+  Its directory maps to that host's Walnut home. Local files, Mac tools and
+  sessions already running or of unknown spawn outcome keep their host.
+  Inbox Triage's existing configuration is portable without being saved again.
+  Host-bound routines take the next automatic slot before ordinary queued starts;
+  a person's Start remains immediate.
 - `PATCH /api/v1/routines/:id` → `{ "job" }`.
 - `DELETE /api/v1/routines/:id` → `204`; unknown id → `404 not_found`
   (unlike the tolerant legacy web route — a phone delete fails loudly).
@@ -3873,13 +3882,18 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
 - Run history and missed runs (additive, 2026-11-09): a routine without a check
   keeps `state.runLog`, its runs newest first (`atMs`, `status`, `durationMs`,
   `slotMs`, `error`, `summary`, `manual`, `catchUpMs`, `attempt`,
-  `willRetryAtMs`, `repeats`), and every read of a routine carries `missed:
+  `willRetryAtMs`, `repeats`, `firstSlotMs`, `heldBy`), and every read of a routine carries `missed:
   [{ slotMs, reason, failedAtMs? }]` when a slot of an hourly-or-slower routine
   ended with no good run. It is told to the first task that can be reached of
   `ownerTaskId` (the creating session's task), the task the routine delivers
   into, and the org's Main; only with none of them does it go on the user's
   notifications. `POST /api/v1/routines/:id/missed/dismiss { slotMs }` →
   `{ "job" }` sets one aside. Older clients ignore all three fields.
+  A run blocked by an earlier unstarted run keeps its slots owed, rather than
+  treating them as successful skips. The next run merges those slots into one
+  catch-up. Slots due while the server was down are caught up the same way,
+  without a missed-run notice. Explicitly dismissed slots stay dismissed;
+  an actual catch-up failure remains visible in history and missed-run notices.
 - `POST /api/v1/routines/trigger` (the `trigger_create` op) body `{ run, every,
   prompt, description, session?, host?, cwd?, name?, timeoutSeconds?,
   maxFiresPerDay?, wait?, wait_until? }` → `201 { job, host,

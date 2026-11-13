@@ -31,10 +31,15 @@ const PRIORITY_RANK: Record<TaskPriority, number> = { immediate: 0, important: 1
 
 type Queued = Pick<Task, 'id' | 'priority'> & { start_queue?: StartQueueEntry | null };
 
+/** Main uses the routine launch plumbing, but its automatic start is ordinary work. */
+export function isQueuedRoutine(t: Queued): boolean {
+  return !!t.start_queue?.routine && t.start_queue.routine.source !== 'org-autostart';
+}
+
 /** Accepted routine fires first, then task priority, age and a stable id tie-break. */
 export function queueOrder(a: Queued, b: Queued): number {
   const rank = (t: Queued) => PRIORITY_RANK[t.priority ?? 'none'] ?? PRIORITY_RANK.none;
-  return Number(!a.start_queue?.routine) - Number(!b.start_queue?.routine)
+  return Number(!isQueuedRoutine(a)) - Number(!isQueuedRoutine(b))
     || rank(a) - rank(b)
     || (a.start_queue?.at ?? '').localeCompare(b.start_queue?.at ?? '')
     || a.id.localeCompare(b.id);

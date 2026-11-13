@@ -29,6 +29,14 @@ describe('queue order', () => {
     expect(tasks.sort(queueOrder as never).map(t => t.id)).toEqual(['routine', 'urgent-task'])
   })
 
+  it('shared launch plumbing does not give ordinary org starts routine priority', () => {
+    const org = { ...row('org', '2026-11-03T00:00:00Z', 'backlog'), start_queue: {
+      ...row('org', '2026-11-03T00:00:00Z').start_queue!, routine: { message: 'Start Main.', cwd: '/work', source: 'org-autostart' },
+    } }
+    expect([org, row('urgent', '2026-11-03T00:01:00Z', 'immediate')].sort(queueOrder as never).map(t => t.id))
+      .toEqual(['urgent', 'org'])
+  })
+
   it('takes priority first (immediate, important, unset, backlog), then the oldest queued', () => {
     const rows = [
       row('backlog-old', '2026-11-03T00:00:00Z', 'backlog'),

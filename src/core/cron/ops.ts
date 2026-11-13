@@ -20,7 +20,7 @@ import {
   scheduleNextRunAtMs,
 } from './jobs.js';
 import { ensureLoaded, persist, warnIfDisabled } from './store.js';
-import { armTimer, emit, executeJob, findMissedJobs, locked, replayGuardOf, stopTimer } from './timer.js';
+import { armTimer, emit, executeJob, findDueJobs, locked, replayGuardOf, stopTimer } from './timer.js';
 import { WALNUT_HOME } from '../../constants.js';
 import { CronJobChangedError, cronJobRevision } from './job-revision.js';
 
@@ -49,7 +49,7 @@ export async function start(state: CronServiceState): Promise<void> {
       }
     }
 
-    const missedJobs = findMissedJobs(state);
+    const missedJobs = findDueJobs(state);
 
     // Mark missed jobs as running so they aren't picked up by a concurrent tick
     if (missedJobs.length > 0) {
@@ -77,11 +77,18 @@ export async function start(state: CronServiceState): Promise<void> {
   });
 
   // Phase 2: Execute missed jobs OUTSIDE the lock (prevents deadlock when
-  // agent calls cron tools during job execution)
+  // agent calls cron tools during job execution). Each run stands for every slot
+  // that came due while the server was down (run-log.ts runSlots): one late run,
+  // a catch-up, never a missed-run notice for them. One job's throw does not
+  // leave the others marked running.
   if (missed.length > 0) {
     try {
       for (const job of missed) {
-        await executeJob(state, job);
+        try {
+          await executeJob(state, job);
+        } catch (err) {
+          state.deps.log.warn(`missed job failed: ${String(err)}`, { jobId: job.id, jobName: job.name });
+        }
       }
     } finally {
       // Phase 3: Always finalize under lock, even if execution threw.
@@ -462,10 +469,18 @@ export async function recordRunStartFailure(
     // run replayed late carries the fire's time, not the dispatch's.
     if (job.state.runLog) {
       const byRef = job.state.runLog.some((e) => e.status === 'ok' && !!e.summary?.includes(input.ref));
-      job.state.runLog = job.state.runLog.map((e) => e.status === 'ok'
-        && (byRef ? !!e.summary?.includes(input.ref) : Math.abs(e.atMs - input.runAtMs) <= 5_000)
-        ? { ...e, status: 'error' as const, error: input.error.slice(0, 300) }
-        : e);
+      const failed: number[] = [];
+      job.state.runLog = job.state.runLog.map((e) => {
+        if (!(e.status === 'ok' && (byRef ? !!e.summary?.includes(input.ref) : Math.abs(e.atMs - input.runAtMs) <= 5_000))) return e;
+        const slot = e.firstSlotMs ?? e.slotMs;
+        if (typeof slot === 'number') failed.push(slot);
+        return { ...e, status: 'error' as const, error: input.error.slice(0, 300) };
+      });
+      // Runs are held behind this one still (an owed backlog, run-log.ts runSlots): the run that
+      // ends that backlog takes this run's work too, so it stands for this slot as well. With no
+      // backlog left, the slot stays a missed run with this error.
+      const owed = job.state.owedFromMs;
+      if (typeof owed === 'number' && failed.length) job.state.owedFromMs = Math.min(owed, ...failed);
     }
     await persist(state);
     // 'finished', not 'updated': the definition did not change (no wake or clock recompile).
@@ -534,9 +549,10 @@ export async function toggle(state: CronServiceState, id: string) {
  */
 function startScheduleOver(job: CronJob, now: number): void {
   delete job.state.clockReturned;
-  // Slots before now were not expected of this schedule (run-log.ts missedRuns).
+  // Slots before now were not expected of this schedule (run-log.ts missedRuns), nor owed.
   job.state.expectFromMs = now;
   delete job.state.retrySlotMs;
+  delete job.state.owedFromMs;
 }
 
 /**

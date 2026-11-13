@@ -231,8 +231,17 @@ export type RoutineRunEntry = {
   /** Identical skips in a row are one row: how many, and when the first was. */
   repeats?: number;
   firstAtMs?: number;
-  /** The slot of the first of those skips. */
+  /**
+   * The row stands for every slot from this one to `slotMs`: the first of identical skips in a
+   * row, or the oldest slot one late run caught up (the server was down, an earlier run held it).
+   */
   firstSlotMs?: number;
+  /**
+   * The run did not do its work because an earlier run of this routine has not started yet (the
+   * task it waits in): its slots stay owed and the next run that does start stands for them
+   * (run-log.ts runSlots). Never a run that covers its slot.
+   */
+  heldBy?: string;
   /** Other slots this one run stood for (a host's clock delivering several at once). */
   alsoSlotsMs?: number[];
 };
@@ -367,8 +376,17 @@ export type CronJobState = {
   missedDismissedMs?: number[];
   /** Missed slots the owner was already told about, newest first. */
   missedToldMs?: number[];
-  /** The slot a failed start is being tried again for, while those tries last (timer.ts). */
+  /**
+   * The slot the next run stands for while its nextRunAtMs is a try again (timer.ts): a start that
+   * broke, or a run held behind an earlier one that has not started.
+   */
   retrySlotMs?: number;
+  /**
+   * The oldest slot still owed: runs held behind one that had not started, or a failed run that
+   * is tried again. The next run stands for every slot from it (run-log.ts runSlots), and none of
+   * them is called missed meanwhile.
+   */
+  owedFromMs?: number;
 };
 
 // ── The job itself ──
@@ -497,12 +515,17 @@ export type CronServiceDeps = {
    * a precondition it owns): the executor is never reached, so nothing is minted
    * and the run is recorded as skipped rather than as an error — no backoff, no
    * red card, next slot computed as usual.
+   *
+   * `heldBy` on a skip: the action declined only because an earlier run of this routine has not
+   * started yet (the task it waits in). That slot is not done, it is owed: the engine looks again
+   * soon and the next run that goes ahead stands for every owed slot (run-log.ts runSlots).
    */
   runAction?: (actionId: string, params: Record<string, unknown>) => Promise<{
     status: 'ok' | 'error' | 'skipped';
     summary?: string;
     error?: string;
     data?: unknown;
+    heldBy?: string;
   }>;
   onEvent?: (evt: CronEvent) => void;
 };

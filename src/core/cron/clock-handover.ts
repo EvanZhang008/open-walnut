@@ -146,6 +146,9 @@ export async function placeClocks(state: CronServiceState, host: string, opts: P
       job.state.clockHost = host;
       job.state.clockFromMs = fromMs;
       job.state.nextRunAtMs = fromMs;
+      // The daemon's clock starts at fromMs: slots the server still owed before it are judged
+      // (run-log.ts missedRuns), never merged into a later server run over the host's own.
+      delete job.state.owedFromMs;
       out.handed.push(job.id);
       out.owned.push(job);
       changed = true;

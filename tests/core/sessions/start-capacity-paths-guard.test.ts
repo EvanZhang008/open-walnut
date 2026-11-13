@@ -16,6 +16,7 @@ const CALLERS: Record<string, string> = {
   'web/routes/notifications.ts': 'The person approved starting a fix.',
   'core/sessions/task-start.ts': 'Automatic unpinned starts persist through waitForHostSlot; explicit agent constraints fail.',
   'core/routines/run-start-deps.ts': 'Routine and isolated-trigger runs persist the original launch in start_queue.',
+  'core/routines/run-placement.ts': 'Every routine tries capability-safe fallback through the shared admission lock.',
   'core/transfer/transfer.ts': 'A transfer is an own move and keeps its host/files constraints.',
   'core/sessions/start-queue.ts': 'The persisted task or routine start replays; full waits remain queued.',
   'web/routes/triage-rules-v1.ts': 'Routing sends into the named durable target task.',
@@ -52,6 +53,17 @@ describe('automatic start entry points keep accepted work through a full host', 
   it('enumerates real calls, including any new entry point, rather than comments or a fixed case list', () => {
     expect(startCallers()).toEqual(Object.keys(CALLERS).sort())
     expect(Object.values(CALLERS).every(why => why.length > 30)).toBe(true)
+  })
+
+  it('routine priority is enforced at the shared admission gate, not only by a queue sort', () => {
+    const admission = fs.readFileSync('src/core/sessions/host-admission.ts', 'utf8')
+    const queue = fs.readFileSync('src/core/sessions/start-queue.ts', 'utf8')
+    // These mandatory branches cover future automatic callers that do not opt in to FIFO.
+    expect(admission).toContain('opts.respectWaiting || !opts.routine')
+    expect(admission).toContain('opts.routine ? isQueuedRoutine(t)')
+    expect(admission).toContain('routineQueueEnabled(t, switches)')
+    expect(queue).toContain('Number(!isQueuedRoutine(a)) - Number(!isQueuedRoutine(b))')
+    expect(queue).toContain("t.start_queue.routine.source !== 'org-autostart'")
   })
 
   it('the admission callers preserve a full-host replay instead of consuming the request', () => {

@@ -120,10 +120,13 @@ export async function run(ctx: ActionContext): Promise<ActionResult> {
   const nowMs = Date.now();
   const held = await waitingRun(home, nowMs);
   if (held.waiting) {
+    // `heldBy`: this slot is owed, not done; the engine looks again and the next run that goes
+    // ahead stands for it (2026-11-12: every run after a waiting one was skipped for good).
     return {
       invoke: false,
       status: 'skipped',
-      content: `The previous Inbox Triage run (task ${held.waiting}) has not started yet (it waits for a free slot or for its session to come up) and carries the open batch; no new batch this run.`,
+      heldBy: held.waiting,
+      content: `The previous Inbox Triage run (task ${held.waiting}) has not started yet (it waits for a free slot or for its session to come up) and carries the open batch; this run waits for it and is made once it has started.`,
     };
   }
   const claimed = await claimTriageBatch(nowMs, home);
