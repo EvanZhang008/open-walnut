@@ -6,7 +6,7 @@ import { test, expect, type APIRequestContext, type Locator, type Page } from '@
 import { discoverBrowserFixture } from './codex-test-audit'
 import { TINY_SILENT_MP4_BASE64 } from './fixtures/tiny-video'
 import { dragAcrossWords, press as click } from './real-press'
-import { DRAFT_PANEL } from './draft-helpers'
+import { DRAFT_PANEL, serverHome, shownHomePath } from './draft-helpers'
 import { PHONE_QUERY } from './board-view-helpers'
 
 export const AGENT_TEXT_BASE = process.env.AGENT_TEXT_URL ?? 'http://localhost:3457'
@@ -53,7 +53,8 @@ export async function openDraftOnCwd(page: Page, cwd: string, opts: { engine?: '
   await page.keyboard.press('ControlOrMeta+a')
   await page.keyboard.press('Backspace')
   await page.keyboard.type(cwd, { delay: 5 })
-  await expect(search).toHaveValue(cwd)
+  // The field folds this server's HOME to `~` (path-selector/field-home.ts).
+  await expect(search).toHaveValue(shownHomePath(cwd, await serverHome(page)))
   await page.keyboard.press('Shift+Enter')
   await expect(picker).toBeHidden()
   await expect(pill).toContainText(cwd.replace(/\/+$/, '').split('/').pop() || '/')

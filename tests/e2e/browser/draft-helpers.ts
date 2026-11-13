@@ -198,6 +198,25 @@ export function draftPills(panel: Locator): Locator {
 }
 export const draftCwdPill = (panel: Locator): Locator => draftPills(panel).first()
 export const draftProjectPill = (panel: Locator): Locator => panel.locator('.draft-composer-bar .draft-project-chip')
+/**
+ * What a folder field shows for the absolute `abs` on a host whose HOME is `home`: the home
+ * reads `~` (web/src/utils/home-folder.ts tildePath, path-selector/field-home.ts), so a spec
+ * names the absolute path and expects the folded one.
+ */
+export function shownHomePath(abs: string, home: string): string {
+  const h = home.replace(/\/+$/, '')
+  if (!h || h === '/') return abs
+  if (abs === h) return '~'
+  return abs.startsWith(`${h}/`) ? `~${abs.slice(h.length)}` : abs
+}
+/** This server's own HOME, the one its folder fields fold local paths under (GET /api/sessions/working-dirs). */
+export async function serverHome(page: Page): Promise<string> {
+  const res = await page.request.get('/api/sessions/working-dirs')
+  expect(res.ok()).toBe(true)
+  const { localHome } = await res.json() as { localHome?: string }
+  expect(typeof localHome).toBe('string')
+  return localHome!
+}
 /** The folder pill's empty-state copy. */
 export const CHOOSE_FOLDER = 'Choose folder and host…'
 /** A New task with no folder picked starts in the home folder (draft-home-default.ts). */

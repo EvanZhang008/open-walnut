@@ -167,7 +167,7 @@ function WorkspaceFlyout({ open, anchorRef, anchorPoint, taskId, taskTitle, ws, 
       {ws.cwd && ws.cwd !== ws.root && <Fact label="Sessions in" value={tildePath(ws.cwd, knownHomeOf(ws.host))} mono />}
       <Fact label="Branch" value={ws.branch} mono />
       {ws.base_ref?.name && <Fact label="From" value={ws.base_ref.name} mono />}
-      <Fact label="Made from" value={ws.anchor} mono />
+      <Fact label="Made from" value={ws.anchor && tildePath(ws.anchor, knownHomeOf(ws.host))} mono />
       {showRepos && (
         <div className="workspace-fact">
           <span className="workspace-fact-label">Repositories</span>

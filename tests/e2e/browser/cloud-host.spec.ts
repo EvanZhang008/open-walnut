@@ -24,7 +24,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { expandSystemAttention } from './host-problems-helpers'
-import { draftComposer, draftCwdPill, draftPanel, draftSend, loadHome, openDraft, REAL_PANEL } from './draft-helpers'
+import { draftComposer, draftCwdPill, draftPanel, draftSend, loadHome, openDraft, REAL_PANEL, shownHomePath } from './draft-helpers'
 import { backToDevices } from './devices-ways-helpers'
 
 const SHOTS = process.env.CLOUD_HOST_SHOTS ?? path.join(os.tmpdir(), 'walnut-cloud-host-shots')
@@ -34,10 +34,10 @@ const PORT = Number(process.env.PW_TEST_PORT ?? 3466)
 test.describe.configure({ mode: 'serial' })
 
 /** The fixture's port-keyed file (cloud-host-server.ts). */
-async function fixture(): Promise<{ projects: string; boxConfig: string; boxAuth: string }> {
+async function fixture(): Promise<{ projects: string; boxConfig: string; boxAuth: string; boxHome: string }> {
   const file = path.join(os.tmpdir(), `walnut-cloudhost-pw-${PORT}.json`)
   for (let i = 0; i < 120 && !fs.existsSync(file); i++) await new Promise((r) => setTimeout(r, 250))
-  return JSON.parse(fs.readFileSync(file, 'utf-8')) as { projects: string; boxConfig: string; boxAuth: string }
+  return JSON.parse(fs.readFileSync(file, 'utf-8')) as { projects: string; boxConfig: string; boxAuth: string; boxHome: string }
 }
 /** The box's folders (the replica's projects root). */
 async function projectsDir(): Promise<string> {
@@ -53,6 +53,7 @@ test('the picker offers Cloud, lists the box folders, and a session starts there
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   const projects = await projectsDir()
+  const { boxHome } = await fixture()
 
   await loadHome(page)
   const panel = await openDraft(page)
@@ -75,7 +76,8 @@ test('the picker offers Cloud, lists the box folders, and a session starts there
   // the typed path appended to it, and the folders never showed.
   await expect(rows.filter({ hasText: 'projects' }).first()).toBeVisible({ timeout: 90_000 })
   await input.fill(`${projects}/`)
-  await expect(input).toHaveValue(`${projects}/`)
+  // The field folds the box's HOME, which its listing revealed, to `~` (path-selector/field-home.ts).
+  await expect(input).toHaveValue(shownHomePath(`${projects}/`, boxHome))
   await expect(rows.filter({ hasText: 'alpha' }).first()).toBeVisible({ timeout: 90_000 })
   await expect(rows.filter({ hasText: 'beta' }).first()).toBeVisible()
   await picker(page).screenshot({ path: path.join(SHOTS, `picker-cloud-folders-${browserName}.png`) })

@@ -21,7 +21,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
-import { REAL_PANEL, draftComposer, draftPanel, draftTaskMenu, openDraft, openDraftOnCwd, openDraftSettings, pickDraftFolder } from './draft-helpers'
+import { REAL_PANEL, draftComposer, draftPanel, draftTaskMenu, openDraft, openDraftOnCwd, openDraftSettings, pickDraftFolder, serverHome, shownHomePath } from './draft-helpers'
 import { selectSection } from './todo-panel-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
 import { expectPanelRunning } from './session-header-labels-helpers'
@@ -213,7 +213,10 @@ test('git worktree: each task gets its own, the session runs in it, a clean one 
   const card1 = await taskCard(page, one.taskId)
   await expect(card1.getByTestId('workspace-pill')).toContainText('Worktree')
   const flyout1 = await openPanelWorkspaceFlyout(page, panel1)
-  await expect(flyout1).toContainText(ws1.root!)
+  // The flyout's folders read the home as `~` (utils/home-folder.ts), Made from too.
+  const shownHome = await serverHome(page)
+  await expect(flyout1.locator('.workspace-fact', { hasText: 'Folder' })).toContainText(shownHomePath(ws1.root!, shownHome))
+  await expect(flyout1.locator('.workspace-fact', { hasText: 'Made from' })).toContainText(shownHomePath(repo, shownHome))
   await expect(flyout1).toContainText(ws1.branch!)
   await expect(flyout1.getByTestId('workspace-flyout-state')).toHaveText('Ready')
   await shot(page, 'flyout-ready', flyout1)
