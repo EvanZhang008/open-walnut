@@ -739,14 +739,20 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
    * The Walnuts this host keeps a copy of that are still in use: a server of it was bound
    * here lately (`served`, the week served-walnuts keeps), or its copy was sent or
    * confirmed within `maxAgeMs` (30 days). Older is a Walnut nothing keeps here (a test
-   * run's), which says nothing about who calls.
+   * run's), which says nothing about who calls. Of two or more, those that hold something (a
+   * session, task or request) win over an empty one (2026-11-13: an empty copy a test left made two
+   * fresh copies, and 90% of the host's outside calls answered "no server"); a Walnut whose own
+   * copy is empty (no session here this week) is kept when it is the only fresh one.
    */
   function freshHomes(served?: (home: string) => boolean, now: number = deps.now(), maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): string[] {
     const out: string[] = []
+    const holding: string[] = []
     for (const [home, slice] of slices) {
-      if ((served && served(home)) || now - Number(slice.asOf ?? 0) <= maxAgeMs) out.push(home)
+      if (!((served && served(home)) || now - Number(slice.asOf ?? 0) <= maxAgeMs)) continue
+      out.push(home)
+      if ((slice.sessions?.length ?? 0) + (slice.tasks?.length ?? 0) + (slice.requests?.length ?? 0) > 0) holding.push(home)
     }
-    return out
+    return out.length > 1 && holding.length > 0 ? holding : out
   }
 
   function persistAsOf(slice: HostSlice): void {

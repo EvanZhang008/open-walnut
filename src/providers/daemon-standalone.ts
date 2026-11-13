@@ -6665,6 +6665,17 @@ async function cmdCancelPendingStart(ws: ServerWebSocket<WsData>, id: number, cm
 async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const sid = cmd.sid as string
   if (!sid) return sendError(ws, id, 'start: missing sid')
+  // A start's long arguments may come by hash (start-arg-refs-v1, cli-argv-files-core.ts): put
+  // them back from this host's copies, and keep copies of what came in full. Mirror daemon-source.ts.
+  if (cmd.argRefs === true && Array.isArray(cmd.args)) {
+    const refs = cliArgvFiles.resolveRefs(cmd.args.map(String))
+    if (refs.missing.length) {
+      logMsg('info', 'start: no copy of some arguments, asked for them in full', { sid, missing: refs.missing.length })
+      return sendOk(ws, id, { ok: false, code: 'ARG_REFS_MISSING', missingRefs: refs.missing, error: 'start: this host has no copy of some of its arguments; send them in full' })
+    }
+    cmd = { ...cmd, args: refs.args }
+    cliArgvFiles.rememberRefs(refs.args)
+  }
   const stopVersion = sessionStopVersions.get(sid) ?? 0
   const current = () => (sessionStopVersions.get(sid) ?? 0) === stopVersion
     && (!cronRuntime || (cronRuntime.deliveryAllowed(sid, cmd.stopFence) && (cmd.autoRetry !== true || !cronRuntime.get(sid))))

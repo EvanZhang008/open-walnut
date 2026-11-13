@@ -28,6 +28,7 @@ import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { sessionSettingsHooks } from '../../src/providers/session-settings-hooks.js'
 import { compactHookArgs, HOOK_FILE_FLAG, HOOK_FILES_CAPABILITY } from '../../src/providers/hook-files.js'
+import { sendStartWithRefs, START_ARG_REFS_CAPABILITY, ARG_REF_TOKEN, _resetStartArgRefsForTesting } from '../../src/providers/start-arg-refs.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
@@ -271,6 +272,64 @@ describe.each(TWINS)('cli argv files: $name', (twin) => {
     expect(live).not.toMatch(/walnut-hook-file|PreToolUse|clone/)
     // The registry keeps the inline args: an older daemon that takes it over (a rollback) re-spawns those.
     expect((await rpc(d, { cmd: 'status', sid, includeArgs: true })).args).toEqual(inline)
+  }, 180_000)
+
+  it('start-arg-refs-v1: a second start names its long arguments by hash, and a copy the host lost goes again in full', async () => {
+    // 2026-11-13: after a wake, 14 resumed sessions sent about 140 KB of starts each on one link.
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-argv-files-')))
+    fs.mkdirSync(path.join(root, 'home'), { recursive: true })
+    _resetStartArgRefsForTesting()
+    const d = await boot(twin)
+    expect((await rpc(d, { cmd: 'hello' })).capabilities as string[]).toContain(START_ARG_REFS_CAPABILITY)
+    const out = path.join(root, 'argv.jsonl')
+    const sh = `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(cliPath)} ${JSON.stringify(out)} "$@"`
+    const longPrompt = PROMPT + ' ' + 'context line\n'.repeat(400)
+    const argsFor = (sid: string) => ['/bin/sh', '-c', sh, 'sh', '--output-format', 'stream-json', '--append-system-prompt', longPrompt,
+      '--mcp-config', MCP, '--settings', SETTINGS, '--input-format', 'stream-json', '--resume', sid]
+    const frames: number[] = []
+    const send = (p: Record<string, unknown>) => { frames.push(JSON.stringify(p).length); return rpc(d, { cmd: 'start', ...p }) }
+    const start = async (sid: string) => {
+      const args = argsFor(sid)
+      const answer = await sendStartWithRefs('host-a', { sid, cwd: root, message: '', resume: true, mode: 'default', args }, send)
+      expect(answer).toMatchObject({ ok: true })
+      spawnedPids.add(answer.pid as number)
+      // Whatever went on the link, the registry holds the inline args the caller gave.
+      expect((await rpc(d, { cmd: 'status', sid, includeArgs: true })).args).toEqual(args)
+      return answer
+    }
+    const sidA = 'dddddddd-0000-4000-8000-00000000000d'
+    const sidB = 'eeeeeeee-0000-4000-8000-00000000000e'
+    const sidC = 'ffffffff-0000-4000-8000-00000000000f'
+    await start(sidA)
+    expect(frames).toHaveLength(1)
+    const fullFrame = frames[0]
+    expect(fullFrame).toBeGreaterThan(30 * 1024)
+
+    await start(sidB)
+    expect(frames).toHaveLength(2)
+    expect(frames[1], 'the second start names the hooks and the prompt by hash').toBeLessThan(4 * 1024)
+    expect(await waitFor(() => recorded().length === 2)).toBe(true)
+    const [a, b] = recorded()
+    // The CLI runs the same files: the hash form changes nothing past the link.
+    expect(valueOf(b.argv, '--settings')).toBe(valueOf(a.argv, '--settings'))
+    expect(valueOf(b.argv, '--append-system-prompt-file')).toBe(valueOf(a.argv, '--append-system-prompt-file'))
+    expect(fs.readFileSync(valueOf(b.argv, '--append-system-prompt-file')!, 'utf8')).toBe(longPrompt)
+    expect(asInline(valueOf(b.argv, '--settings')!, path.join(d.streams, 'argv'))).toEqual(JSON.parse(SETTINGS))
+    expect(commandLine(b.pid)).not.toContain(ARG_REF_TOKEN)
+
+    // The host lost its copies (a sweep, a cleaner): the start is answered ARG_REFS_MISSING and sent in full.
+    fs.rmSync(path.join(d.streams, 'argv', 'refs'), { recursive: true, force: true })
+    await start(sidC)
+    expect(frames).toHaveLength(4)
+    expect(frames[2]).toBeLessThan(4 * 1024)
+    expect(frames[3]).toBeGreaterThan(30 * 1024)
+    expect(await waitFor(() => recorded().length === 3)).toBe(true)
+    expect(fs.readFileSync(valueOf(recorded()[2].argv, '--append-system-prompt-file')!, 'utf8')).toBe(longPrompt)
+    // A forged ref (a hash it never kept) is refused, never run.
+    const forged = await rpc(d, { cmd: 'start', sid: 'abababab-0000-4000-8000-0000000000ab', cwd: root, message: '', resume: true, mode: 'default', argRefs: true,
+      args: ['/bin/sh', '-c', sh, 'sh', '--settings', ARG_REF_TOKEN + '0'.repeat(32)] })
+    expect(forged).toMatchObject({ ok: false, code: 'ARG_REFS_MISSING', missingRefs: ['0'.repeat(32)] })
+    expect(recorded()).toHaveLength(3)
   }, 180_000)
 
   it('a one-shot claude run passes file paths too', async () => {

@@ -20,6 +20,8 @@ import crypto from 'node:crypto'
 import { createServer } from 'node:net'
 import { createAcpDaemon, type AcpStartParams } from '../../src/providers/acp-daemon.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { ARG_REF_TOKEN, ARG_REF_MIN_CHARS, argRefHash } from '../../src/providers/start-arg-refs.js'
+import { createCliArgvFiles } from '../../src/providers/cli-argv-files-core.js'
 import { lineFate } from '../../src/providers/line-fate-core.js'
 import { resolveAgentCommand } from '../../src/providers/agent-command-map.js'
 import { createTurnSnapshots, type TurnSnapshotExecFile, type TurnSnapshotFs } from '../../src/providers/turn-snapshot-core.js'
@@ -100,6 +102,9 @@ export interface MockDaemonOptions {
 /**
  * MockDaemon — implements the daemon WebSocket protocol locally.
  */
+/** The daemon's pure argument helpers (inlineArgs writes nothing). */
+const MOCK_ARGV = createCliArgvFiles({ fs, path, crypto, dir: '/nonexistent/mock-daemon-argv' })
+
 export class MockDaemon {
   private wss: WebSocketServer | null = null
   private sessions = new Map<string, DaemonSession>()
@@ -148,7 +153,12 @@ export class MockDaemon {
   private _deadSessions = new Map<string, number>()
   /** Command log for test assertions. `connIndex` = arrival socket (0-based,
    *  connection order) so bulk-channel tests can assert routing. */
-  private _commandHistory: Array<{ cmd: string; payload: Record<string, unknown>; timestamp: number; connIndex: number }> = []
+  private _commandHistory: Array<{ cmd: string; payload: Record<string, unknown>; timestamp: number; connIndex: number; wireBytes?: number; wireArgs?: unknown[] }> = []
+  /** Copies of start arguments, by hash, as a real daemon keeps them (start-arg-refs-v1). */
+  private _argRefs = new Map<string, string>()
+  /** Capabilities `hello` leaves out (a test models an older daemon). */
+  private _omitCapabilities = new Set<string>()
+  omitCapabilities(caps: string[]): void { this._omitCapabilities = new Set(caps) }
   /** User lines cmdSend actually wrote to a live FIFO. A `send` in the command
    *  log may have failed (ENXIO once the CLI exited) and been retried, so the
    *  log alone over-counts deliveries. Cleared with the command log. */
@@ -309,6 +319,31 @@ export class MockDaemon {
 
     const id = cmd.id as number
 
+    // A start's arguments as the real daemon's cmdStart reads them: refs put back from its copies
+    // (start-arg-refs-v1) and hook texts back in the settings, so history holds the inline args.
+    let wireBytes: number | undefined
+    let wireArgs: unknown[] | undefined
+    if (cmd.cmd === 'start' && Array.isArray(cmd.args)) { wireBytes = raw.length; wireArgs = [...(cmd.args as unknown[])] }
+    // Only what this daemon advertises: an older one (omitCapabilities) takes the args as they came.
+    if (cmd.cmd === 'start' && cmd.argRefs === true && Array.isArray(cmd.args) && !this._omitCapabilities.has('start-arg-refs-v1')) {
+      const missing: string[] = []
+      const resolved = (cmd.args as unknown[]).map(String).map((a) => {
+        if (!a.startsWith(ARG_REF_TOKEN)) return a
+        const text = this._argRefs.get(a.slice(ARG_REF_TOKEN.length))
+        if (text === undefined) missing.push(a.slice(ARG_REF_TOKEN.length))
+        return text ?? a
+      })
+      if (missing.length) {
+        ws.send(JSON.stringify({ id, ok: false, code: 'ARG_REFS_MISSING', missingRefs: missing, error: 'start: this host has no copy of some of its arguments; send them in full' }))
+        return
+      }
+      for (const a of resolved) if (a.length >= ARG_REF_MIN_CHARS) this._argRefs.set(argRefHash(a), a)
+      cmd = { ...cmd, args: resolved }
+    }
+    if (cmd.cmd === 'start' && Array.isArray(cmd.args) && !this._omitCapabilities.has('hook-files-v1')) {
+      cmd = { ...cmd, args: MOCK_ARGV.inlineArgs((cmd.args as unknown[]).map(String)) }
+    }
+
     // Record command history for test assertions
     if (typeof cmd.cmd === 'string') {
       this._commandHistory.push({
@@ -316,6 +351,7 @@ export class MockDaemon {
         payload: { ...cmd },
         timestamp: Date.now(),
         connIndex: this._connIndices.get(ws) ?? -1,
+        ...(wireBytes !== undefined ? { wireBytes, wireArgs } : {}),
       })
     }
 
@@ -398,7 +434,7 @@ export class MockDaemon {
       // ROLLED-BACK daemon and the C2 snapshot flow was gated off.
       case 'hello': return this.sendOk(ws, id, {
         version: 'mock',
-        capabilities: [...ADVERTISED_DAEMON_CAPABILITIES],
+        capabilities: ADVERTISED_DAEMON_CAPABILITIES.filter((c) => !this._omitCapabilities.has(c)),
         instanceId: this._helloInstanceMismatch ? `mock-other-${this._connSeq}` : this.instanceId,
         startedAt: Date.now(),
         uptimeSec: 0,

@@ -138,6 +138,23 @@ describe('offline host: the read copy', () => {
     expect(restarted.host.freshHomes().sort()).toEqual([HOME, OLD].sort())
   })
 
+  it('of two fresh copies, one that holds nothing loses; alone it is still the Walnut in use', () => {
+    // 2026-11-13: a test left an empty copy on a dev host; with two fresh copies the host's outside
+    // calls had no owner, and 931 of 1,023 answered "no server connected".
+    const h = harness()
+    const EMPTY = '/tmp/probe-copy/home'
+    h.host.configure(slice({ asOf: h.clock.now - 60_000 }))
+    h.host.configure({ v: 1, home: EMPTY, host: 'devbox', sessions: [], tasks: [], requests: [], boards: [], boardOf: {}, hash: 'h-empty', asOf: h.clock.now } as never)
+    expect(h.host.homes().sort()).toEqual([HOME, EMPTY].sort())
+    expect(h.host.freshHomes()).toEqual([HOME])
+    expect(h.host.freshHomes(() => true)).toEqual([HOME])
+    // A real Walnut with no session here this week, beside only a stale copy: still its own.
+    const lone = harness()
+    lone.host.configure({ v: 1, home: EMPTY, host: 'devbox', sessions: [], tasks: [], requests: [], boards: [], boardOf: {}, hash: 'h-empty', asOf: lone.clock.now } as never)
+    lone.host.configure(slice({ asOf: lone.clock.now - 40 * 24 * 3600_000 }))
+    expect(lone.host.freshHomes()).toEqual([EMPTY])
+  })
+
   it('reads a task by id and by unique prefix, and refuses an ambiguous prefix', async () => {
     const h = harness()
     h.host.configure(slice())

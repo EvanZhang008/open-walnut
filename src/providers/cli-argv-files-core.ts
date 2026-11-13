@@ -322,13 +322,84 @@ export function createCliArgvFiles(deps: CliArgvFilesDeps) {
     return removed
   }
 
+  // A start's long arguments ride by hash once this host holds them (start-arg-refs-v1; the
+  // server side is start-arg-refs.ts, which mirrors these two values; a test pins both).
+  // 2026-11-13: after a wake each resumed session's start sent about 140 KB of hook scripts and
+  // prompt again, 3.3 MB on one link in 16 minutes, and the relay on the SSH path ended it.
+  var REF_TOKEN = '@walnut-arg-ref:'
+  var REF_MIN_CHARS = 1024
+  var REF_DIR = path.join(deps.dir, 'refs')
+  // Each use touches a copy: a hook text every start sends stays; a session's prompt goes 3 days after its last start.
+  var REF_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
+  var REF_SWEEP_EVERY_MS = 60 * 60 * 1000
+  var lastRefSweep = 0
+
+  function refFile(h: string): string { return path.join(REF_DIR, h + '.arg') }
+
+  /** args with each `@walnut-arg-ref:<hash>` put back from this host's copy; missing: the hashes it has no copy of. */
+  function resolveRefs(args: readonly string[]): { args: string[]; missing: string[] } {
+    var out: string[] = []
+    var missing: string[] = []
+    for (var i = 0; i < args.length; i++) {
+      var a = String(args[i])
+      if (a.indexOf(REF_TOKEN) !== 0) { out.push(a); continue }
+      var h = a.slice(REF_TOKEN.length)
+      var text: string | null = null
+      if (/^[0-9a-f]{32}$/.test(h)) {
+        try { text = fs.readFileSync(refFile(h), 'utf8') } catch (e) { text = null }
+        // A copy that does not hash to its name is no copy: it goes, so the full value is kept again.
+        if (text !== null && hashOf(text) !== h) { text = null; try { fs.unlinkSync(refFile(h)) } catch (e) { /* gone already */ } }
+      }
+      if (text === null) { missing.push(h); out.push(a); continue }
+      try { var t = new Date(now()); fs.utimesSync(refFile(h), t, t) } catch (e) { /* still readable */ }
+      out.push(text)
+    }
+    return { args: out, missing: missing }
+  }
+
+  /** Keep a copy of each long argument of a start, so the next start may name it by hash. */
+  function rememberRefs(args: readonly string[]): void {
+    try {
+      var made = false
+      for (var i = 0; i < args.length; i++) {
+        var a = String(args[i])
+        if (a.length < REF_MIN_CHARS || a.indexOf(REF_TOKEN) === 0) continue
+        if (!made) {
+          fs.mkdirSync(REF_DIR, { recursive: true, mode: 0o700 })
+          try { fs.chmodSync(REF_DIR, 0o700) } catch (e) { /* not ours to fix */ }
+          made = true
+        }
+        writeOnce(refFile(hashOf(a)), a)
+      }
+    } catch (err) {
+      if (deps.log) deps.log('warn', 'cli argv refs: could not keep a copy; the next start sends it in full', { error: (err as Error).message })
+    }
+    sweepRefs()
+  }
+
+  /** At most hourly: drop copies no start named for 3 days, and half-written ones after an hour. */
+  function sweepRefs(): void {
+    var t = now()
+    if (t - lastRefSweep < REF_SWEEP_EVERY_MS) return
+    lastRefSweep = t
+    var names: string[]
+    try { names = fs.readdirSync(REF_DIR) } catch (e) { return }
+    for (var i = 0; i < names.length; i++) {
+      var full = path.join(REF_DIR, names[i])
+      var st: { mtimeMs: number }
+      try { st = fs.statSync(full) } catch (e) { continue }
+      if (t - st.mtimeMs < (names[i].indexOf('.tmp-') >= 0 ? TMP_MIN_AGE_MS : REF_MAX_AGE_MS)) continue
+      try { fs.unlinkSync(full) } catch (e) { /* gone already */ }
+    }
+  }
+
   /** Whether a spawn runs Claude Code (its own file, or node with the CLI's script first). */
   function isClaude(command: string, args: readonly string[]): boolean {
     var base = String(command).slice(String(command).lastIndexOf('/') + 1)
     return /claude/i.test(base) || /claude/i.test(String(args[0] || ''))
   }
 
-  return { toFiles: toFiles, inlineArgs: inlineArgs, namesIn: namesIn, sweep: sweep, isClaude: isClaude, dir: deps.dir }
+  return { toFiles: toFiles, inlineArgs: inlineArgs, namesIn: namesIn, sweep: sweep, isClaude: isClaude, resolveRefs: resolveRefs, rememberRefs: rememberRefs, dir: deps.dir }
 }
 
 export type CliArgvFiles = ReturnType<typeof createCliArgvFiles>

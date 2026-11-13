@@ -616,7 +616,8 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const af = createArgvFiles({ fs: fs as never, path, crypto, dir: '/nonexistent/argv' })
       // A template's hook text (hook-files-v1) goes back into its settings, and the pseudo flag goes.
       if (af.inlineArgs(['claude', '--walnut-hook-file', 'x']).join(' ') !== 'claude' ||
-        af.namesIn(['claude', '--settings', '{"a":1}']).length !== 1 || af.namesIn(['claude', '--settings', '/x.json']).length !== 0 || !af.isClaude('/bin/claude', []) || af.sweep([], null) !== 0) {
+        af.namesIn(['claude', '--settings', '{"a":1}']).length !== 1 || af.namesIn(['claude', '--settings', '/x.json']).length !== 0 || !af.isClaude('/bin/claude', []) || af.sweep([], null) !== 0 ||
+        af.resolveRefs(['x', '@walnut-arg-ref:zz']).args[0] !== 'x' || af.resolveRefs(['@walnut-arg-ref:zz']).missing[0] !== 'zz') {
         throw new Error('cli argv files did not build')
       }
     }
@@ -7579,6 +7580,17 @@ async function cmdCancelPendingStart(ws, id, cmd) {
 async function cmdStart(ws, id, cmd) {
   const sid = cmd.sid;
   if (!sid) return sendError(ws, id, 'start: missing sid');
+  // A start's long arguments may come by hash (start-arg-refs-v1, cli-argv-files-core.ts): put
+  // them back from this host's copies, and keep copies of what came in full. Mirror daemon-standalone.ts.
+  if (cmd.argRefs === true && Array.isArray(cmd.args)) {
+    const refs = cliArgvFiles.resolveRefs(cmd.args.map(String));
+    if (refs.missing.length) {
+      logMsg('info', 'start: no copy of some arguments, asked for them in full', { sid: sid, missing: refs.missing.length });
+      return sendOk(ws, id, { ok: false, code: 'ARG_REFS_MISSING', missingRefs: refs.missing, error: 'start: this host has no copy of some of its arguments; send them in full' });
+    }
+    cmd = Object.assign({}, cmd, { args: refs.args });
+    cliArgvFiles.rememberRefs(refs.args);
+  }
   const stopVersion = sessionStopVersions.get(sid) || 0;
   const current = function () {
     return (sessionStopVersions.get(sid) || 0) === stopVersion

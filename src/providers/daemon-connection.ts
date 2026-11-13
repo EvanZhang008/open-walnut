@@ -20,6 +20,8 @@
  *   Events: { ev, ...data } (no id — unsolicited)
  */
 
+import { sendStartWithRefs, START_ARG_REFS_CAPABILITY } from './start-arg-refs.js'
+import { HOOK_FILES_CAPABILITY } from './hook-files.js'
 import { ACP_HOST_FILES } from './acp-host-artifacts.js'
 import { statusReplyAlive } from './daemon-status-reply.js'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -2548,8 +2550,31 @@ export class DaemonConnection {
       const pooled = connectionPool.get(host)
       return pooled && pooled.usable ? pooled : this
     }
+    // A start names its long arguments by hash where the host keeps them (start-arg-refs.ts).
+    // Not to this machine's own daemon: no relay sits between them, and it would only keep copies.
+    if (cmd === 'start' && Array.isArray(traced.args) && host !== '__local__'
+      && this.hasCapability(START_ARG_REFS_CAPABILITY) && this.hasCapability(HOOK_FILES_CAPABILITY)) {
+      // A try that lands on a daemon without them (a swap to an older one) sends the start in full.
+      return sendStartWithRefs(host, traced, (p, full) => this.sendResending(cmd, p, timeoutMs, current, full))
+    }
+    return this.sendResending(cmd, traced, timeoutMs, current)
+  }
+
+  /** `send` without the start's argument refs: a daemon swap is invisible here. */
+  private sendResending(
+    cmd: string,
+    traced: Record<string, unknown>,
+    timeoutMs: number,
+    current: () => DaemonConnection,
+    withoutRefs?: Record<string, unknown>,
+  ): Promise<DaemonCommandResult> {
+    const host = this.hostKey
     return resendThroughSwap(cmd, {
-      once: (budget) => current().sendOnce(cmd, traced, budget),
+      once: (budget) => {
+        const conn = current()
+        const refs = !!withoutRefs && conn.hasCapability(START_ARG_REFS_CAPABILITY) && conn.hasCapability(HOOK_FILES_CAPABILITY)
+        return conn.sendOnce(cmd, withoutRefs && !refs ? withoutRefs : traced, budget)
+      },
       failure: (err) => { const kind = linkFailureKind(err); return kind === 'no-link' || kind === 'lost' ? kind : null },
       swapUnderway: () => current().swapUnderway,
       noteRefusal: () => { current()._drainSeenAt = Date.now() },

@@ -336,6 +336,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // session link, 9 MB in 14 minutes, and the relay on the SSH path ended the link). Both
   // twins. Optional: without it the server sends `result` as before.
   'gateway-result-gz-v1',
+  // 'start-arg-refs-v1': a `start`'s long arguments (hook scripts, the session prompt) may come
+  // as `@walnut-arg-ref:<sha256-32>` once the host kept a copy of them from an earlier start; a
+  // copy it lacks is answered `{code: 'ARG_REFS_MISSING', missingRefs}` and the server sends those
+  // in full (2026-11-13: after a wake, resumed sessions' starts sent 3.3 MB on one link in 16
+  // minutes and the relay ended it). Both twins (cli-argv-files-core.ts). Optional: without it
+  // every start sends its arguments in full.
+  'start-arg-refs-v1',
   // 'host-slice-gz-v1': `host.slice {sliceGz}` carries the copy gzipped, base64 (about a
   // tenth of 1.5 MB). Whole copies were in flight in 74 of 95 deaths of the shared SSH
   // master (2026-10-30/31): a relay on the SSH path drops the link on an upload burst, and
