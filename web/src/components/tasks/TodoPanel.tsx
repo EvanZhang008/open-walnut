@@ -1,5 +1,6 @@
 import { matchParentRef, refNamesId } from '../../../../src/lib/id-ref';
-import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
+import { useState, useMemo, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type Dispatch, type SetStateAction, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useScrollAnchor } from '@/hooks/useScrollAnchor';
 import { manualMoved, orderToDraw } from './draw-order';
@@ -130,7 +131,7 @@ import { FilterBar } from './FilterBar';
 import { DisplayButton } from './DisplayMenu';
 import type { DisplayMenuProps, FilterBarController, FilterDim, FilterState } from './filter-bar-types';
 import { OPEN_PHASES, hasAllOpen, isDefaultStatus } from './filter-bar-model';
-import { buildFilterEvalContext, dimPasses, hiddenByReasons, passesChips } from './filter-predicate';
+import { buildFilterEvalContext, dimPasses, hiddenByReasons, passesChips, type FilterEvalContext } from './filter-predicate';
 import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHomeFilters';
 import { archiveNarrowed, footerScope } from './TodoFilterFooter';
 import { LimitedSummary, StatusSectionGroup, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
@@ -141,9 +142,9 @@ import { firstVisitFoldAll, firstVisitFolds } from './first-visit-folds';
 import { parentsToAutoOpen, recordAutoOpened } from './auto-open-parents';
 import { useFoldStore } from './useFoldStore';
 import {
-  LS_JUMP_SECTIONS_KEY, LS_STATUS_SECTIONS_KEY, STATUS_SECTION_ORDER, buildStatusSections, drawnSectionOf, isBackground, isWatched, stateSectionNoNeeds, stateSectionOf, type DrawnSectionKey, type StatusSectionKey,
+  LS_JUMP_SECTIONS_KEY, LS_STATUS_SECTIONS_KEY, STATUS_SECTION_ORDER, buildStatusSections, drawnSectionOf, isBackground, isWatched, stateSectionNoNeeds, stateSectionOf, type DrawnSectionKey, type StatusSectionKey, type StatusSectionsModel,
 } from './status-sections';
-import { WORKER_FOLD_KEEP, foldHostOf, foldLeaderOf, foldSections, useWorkerFold, withId } from './worker-fold';
+import { WORKER_FOLD_KEEP, foldHostOf, foldLeaderOf, foldSections, useWorkerFold, withId, type FoldedSections, type WorkerFoldView } from './worker-fold';
 import type { WorkerFoldCtl } from './WorkerFoldTree';
 import { isProjectJump, projectJumpHolds, projectJumpSection, startProjectJump, type ProjectJump } from './project-jump';
 import { usePageView } from '@/utils/view-memory';
@@ -407,11 +408,90 @@ function overFits(activeId: string, over: DroppableContainer, rulesFor: SlotRule
     : slotFits(frame.arr, frame.at, frame.rules);
 }
 
-function makePinnedCollision(rulesFor: () => SlotRulesFor | null): CollisionDetection {
+/**
+ * The chips' rule for the status sections and the By project folds. Date at its default
+ * ("Available now") only puts a task that has not started yet under Waiting / snoozed; any
+ * other Date is the user's chip and narrows every section. Module level, so the two
+ * predicates hold only `ctx`, not the render of the panel that asked for them.
+ */
+function sectionRulesFor(ctx: FilterEvalContext): { passes: (t: Task) => boolean; snoozed?: (t: Task) => boolean } {
+  const dateDefault = ctx.state.date === 'now';
+  return {
+    passes: (t) => passesChips(t, ctx, { except: dateDefault ? ['status', 'date'] : 'status' }),
+    snoozed: dateDefault ? (t) => !dimPasses(t, 'date', ctx) : undefined,
+  };
+}
+
+/**
+ * The worker fold's controller (WorkerFoldTree.tsx). Module level, so its handlers hold only
+ * these inputs, never the render of the panel that built it (useLeanCallback.ts).
+ */
+function makeWorkerFoldCtl({ workerFolds, workerFold, setWorkerFold, tasks, shownSectionModel, openStatusSection }: {
+  workerFolds: FoldedSections<StatusSectionKey>;
+  workerFold: WorkerFoldView;
+  setWorkerFold: Dispatch<SetStateAction<WorkerFoldView>>;
+  tasks: Task[];
+  shownSectionModel: StatusSectionsModel;
+  openStatusSection: (key: StatusSectionKey) => void;
+}): WorkerFoldCtl {
+  // A team down to its last level: a worker shown as a row carries its own workers in a tree of its own.
+  const teamOf = (hostId: string): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>([hostId]);
+    const walk = (id: string) => {
+      for (const e of workerFolds.trees.get(id) ?? []) {
+        if (seen.has(e.task.id)) continue;
+        seen.add(e.task.id);
+        out.push(e.task.id);
+        walk(e.task.id);
+      }
+    };
+    walk(hostId);
+    return out;
+  };
+  // A worker shown as a row is drawn in its own section, which may be folded: open it, so the
+  // row the user asked for is on screen.
+  const openSectionsOf = (ids: readonly string[]) => {
+    const want = new Set(ids);
+    for (const k of STATUS_SECTION_ORDER) {
+      if (sectionRowsOf(shownSectionModel, k).tasks.some((t) => want.has(t.id))) openStatusSection(k);
+    }
+  };
+  return {
+    trees: workerFolds.trees,
+    quiet: workerFolds.quiet,
+    movedFrom: workerFolds.movedFrom,
+    isOpen: (id) => workerFold.open.includes(id),
+    toggleOpen: (id) => setWorkerFold((v) => ({ ...v, open: withId(v.open, id, !v.open.includes(id)) })),
+    separate: (id, on) => {
+      setWorkerFold((v) => ({ ...v, separate: withId(v.separate, id, on) }));
+      if (on) openSectionsOf([id]);
+    },
+    // The whole team, every level: each leader in it shows (or folds) its own workers too.
+    showTeam: (id, on) => { if (on) openSectionsOf(teamOf(id)); setWorkerFold((v) => {
+      const team = teamOf(id);
+      const all = new Set([id, ...team]);
+      const teams = on ? [...all].reduce((l, x) => withId(l, x, true), v.teams) : v.teams.filter((x) => !all.has(x));
+      return { ...v, teams, separate: on ? v.separate : v.separate.filter((x) => !all.has(x)) };
+    }); },
+    foldBackOf: (t) => {
+      const leader = foldLeaderOf(tasks, t);
+      if (!leader) return null;
+      const team = workerFold.teams.includes(leader.id);
+      return team || workerFold.separate.includes(t.id) ? { leader, team } : null;
+    },
+  };
+}
+
+/** One row's Move up: swap it with `prevId` in its group's full order. */
+interface MoveUpSwap { prevId: string; fullGroupTasks: Task[]; project: string }
+
+/** Takes the ref, not a reader closure: a closure made in the component would keep the render that made it. */
+function makePinnedCollision(rulesRef: { readonly current: SlotRulesFor | null }): CollisionDetection {
   return (args) => {
     const point = args.pointerCoordinates;
     const activeId = String(args.active.id);
-    const rules = rulesFor();
+    const rules = rulesRef.current;
     const fits = (container: DroppableContainer) => !rules || overFits(activeId, container, rules);
     const hit = (container: DroppableContainer) => [{ id: container.id, data: { droppableContainer: container, value: 0 } }];
     if (point) {
@@ -1073,7 +1153,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
   // Deps hold `task` itself, not `task.id`: the click hands the task on, and a
   // copy from before its session started opens nothing
   // (tests/web/stale-object-closure-ratchet.test.ts).
-  const handleTitleClick = useCallback((e: React.MouseEvent) => {
+  const handleTitleClick = useLeanCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
     // Select mode: a click on the title toggles selection (never edits/navigates).
@@ -2244,7 +2324,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
 export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier: onSetTierProp, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, tabBarAlways = false, openSessionIds, openSessionTaskIds, openInWindowTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, onOpenSearchSession, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden, folderMeta, onCreateFolder, onDeleteFolder, onMoveFolderToProject, onSetFolderParent, banner }: TodoPanelProps) {
   const pinUndo = useTaskUndo();
   const pinBar = useFocusBarContextSafe();
-  const pinIntoTier = useCallback((id: string, tier: FocusTier, order?: string[]) => {
+  const pinIntoTier = useLeanCallback((id: string, tier: FocusTier, order?: string[]) => {
     if (!pinBar) return;
     void (async () => {
       if (pinUndo) await pinUndo.pinToTier(id, tier);
@@ -2295,14 +2375,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // auto-switches the sort mode to 'manual'. Routed through the unified toaster
   // (kind:'sort', non-persistent, 3s lifetime) — no local toast state needed.
   const { notify } = useNotifications();
-  const showSortToast = useCallback((msg: string) => {
+  const showSortToast = useLeanCallback((msg: string) => {
     notify({ kind: 'sort', severity: 'info', title: 'Sort', body: msg, persistent: false, dedupKey: 'sort' });
   }, [notify]);
   const [groupBy, setGroupBy] = useState<GroupBy>(readGroupBy);
-  const sortForProject = useCallback((project: string): SortBy =>
+  const sortForProject = useLeanCallback((project: string): SortBy =>
     (groupBy === 'project' ? projectSorts[project] : undefined) ?? sortBy, [groupBy, projectSorts, sortBy]);
   // One project's order. Picking the order every other project has just drops its own.
-  const setProjectSort = useCallback((project: string, v: SortBy) => {
+  const setProjectSort = useLeanCallback((project: string, v: SortBy) => {
     setProjectSorts((prev) => {
       const next = { ...prev };
       if (v === sortBy) delete next[project]; else next[project] = v;
@@ -2311,7 +2391,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
   }, [sortBy]);
   // Every project at once (the Projects heading, the filter menu): per-project choices go.
-  const setSortForAll = useCallback((v: SortBy) => {
+  const setSortForAll = useLeanCallback((v: SortBy) => {
     setSortBy(v); persistSortBy(v);
     setProjectSorts({}); persistProjectSorts({});
   }, []);
@@ -2325,7 +2405,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const createdOverrideRef = useRef<string | null>(null);
   const fadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [_overrideTick, setOverrideTick] = useState(0);
-  const clearFocusOverride = useCallback(() => {
+  const clearFocusOverride = useLeanCallback(() => {
     if (focusOverrideRef.current) {
       const fadingId = focusOverrideRef.current;
       focusOverrideRef.current = null;
@@ -2386,7 +2466,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  status sections a task Waiting draws (Flat: every task whose user status is Waiting;
    *  By project: a parked one, or a snoozed one while Date reads "Available now", in its
    *  project's fold) is never in a list too. */
-  const hiddenAsWaiting = useCallback(
+  const hiddenAsWaiting = useLeanCallback(
     // A parked task whose own work goes on (its build, its test run) is Working, and one with a result
     // to read is To read: they stay (2026-11-02).
     (t: Task): boolean => (t.phase === 'WAITING' && !waitingRevealed && stateSectionOf(t) !== 'working' && taskUserState(t) !== 'read')
@@ -2409,7 +2489,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  that tier's run opens and the Projects list is left alone (a list project opens
    *  only when the user acts on it there); without one, only the list's project opens,
    *  never a run in a tier above it. */
-  const expandProject = useCallback((project: string, opts?: { tier?: string }) => {
+  const expandProject = useLeanCallback((project: string, opts?: { tier?: string }) => {
     const tier = opts?.tier;
     if (tier === undefined) {
       setListOpen(prev => prev.has(project) ? prev : saveListOpen(new Set(prev).add(project)));
@@ -2421,12 +2501,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return next;
     });
   }, []);
-  const handleHeaderAddTask = useCallback((project: string) => {
+  const handleHeaderAddTask = useLeanCallback((project: string) => {
     expandProject(project);
     setHeaderAddSignal((prev) => ({ project, nonce: (prev?.nonce ?? 0) + 1 }));
   }, [expandProject]);
   // Consume-once acknowledgment from the target InlineAdd (see its effect).
-  const clearHeaderAddSignal = useCallback(() => setHeaderAddSignal(null), []);
+  const clearHeaderAddSignal = useLeanCallback(() => setHeaderAddSignal(null), []);
   // Stored choices win; a first visit keeps every region folded. (Parked is retired and its
   // tasks draw in Satellite, so a stored 'wait' entry folds nothing.)
   const firstSectionsVisit = useRef<boolean | null>(null);
@@ -2455,7 +2535,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // a click on a visually-open header would silently flip the PERSISTED collapse
   // state with zero visible effect until the query is cleared.
   const isSearchModeRef = useRef(false);
-  const toggleSection = useCallback((id: string) => {
+  const toggleSection = useLeanCallback((id: string) => {
     if (isSearchModeRef.current || jumpLiveRef.current) return;
     setCollapsedSections((prev) => {
       const next = new Set(prev);
@@ -2505,11 +2585,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   tabBarRef.current = { shown: quickViews, hidden: tabBarHidden };
   // Per-tier view mode (project clustering vs raw pin order) — see TierViewMode.
   const [tierViewModes, setTierViewModes] = useState<Record<string, TierViewMode>>(readTierViewModes);
-  const tierViewMode = useCallback(
+  const tierViewMode = useLeanCallback(
     (tier: string): TierViewMode => tierViewModes[tier] ?? 'project',
     [tierViewModes],
   );
-  const setTierViewMode = useCallback((tier: string, mode: TierViewMode) => {
+  const setTierViewMode = useLeanCallback((tier: string, mode: TierViewMode) => {
     setTierViewModes((prev) => {
       const next = { ...prev, [tier]: mode };
       persistTierViewModes(next);
@@ -2518,8 +2598,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, []);
   // Per-tier task sort: Manual (pin order) unless the Display menu picked another.
   const [tierSorts, setTierSorts] = useState<Record<string, SortBy>>(readTierSorts);
-  const tierSort = useCallback((tier: string): SortBy => tierSorts[tier] ?? 'manual', [tierSorts]);
-  const setTierSort = useCallback((tier: string, v: SortBy) => {
+  const tierSort = useLeanCallback((tier: string): SortBy => tierSorts[tier] ?? 'manual', [tierSorts]);
+  const setTierSort = useLeanCallback((tier: string, v: SortBy) => {
     setTierSorts((prev) => {
       if ((prev[tier] ?? 'manual') === v) return prev;
       const next = { ...prev };
@@ -2560,7 +2640,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const filterStateRef = useRef(filterState);
   filterStateRef.current = filterState;
   const applyFilters = homeFilters.apply;
-  const jumpToProject = useCallback((project: string) => {
+  const jumpToProject = useLeanCallback((project: string) => {
     log.info('todo-panel', 'project jump', { project });
     const state = filterStateRef.current;
     setProjectJump((prev) => startProjectJump(project, projectJumpHolds(prev, state.projects) ? prev : null));
@@ -2571,7 +2651,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // list it as a dependency (a tab switch would re-run the whole locate pass).
   // Holds the EFFECTIVE section (assigned after search-view resolution below).
   const activeSectionRef = useRef<TodoSection>(activeSection);
-  const handleSectionChange = useCallback((section: TodoSection) => {
+  const handleSectionChange = useLeanCallback((section: TodoSection) => {
     if (isSearchModeRef.current) { setSearchSection(section); return; }
     // A tab picked inside a project jump stays the jump's: the saved tab is what clearing returns to.
     if (jumpLiveRef.current) { setProjectJump((prev) => (prev ? { ...prev, section } : prev)); return; }
@@ -2720,7 +2800,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const isPinnedView = effectiveSection === 'pinned';
   const isStacked = isAll || isPinnedView;
   /** True when `section` should be mounted: either we're in a stacked view that holds it or it IS the active tab. */
-  const showSection = useCallback(
+  const showSection = useLeanCallback(
     (section: TodoSection) => (isAll && section !== 'recent')
       || (isPinnedView && isTierSection(section))
       || effectiveSection === section,
@@ -2730,13 +2810,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  chevrons — and a live search ignores them entirely (a hit hidden inside a
    *  folded region would read as "search found nothing"). The persisted collapse
    *  state is untouched; clearing the query folds things back. */
-  const isFolded = useCallback(
+  const isFolded = useLeanCallback(
     (id: string) => isStacked && !isSearchMode && !jumpLive && collapsedSections.has(id),
     [isStacked, isSearchMode, jumpLive, collapsedSections],
   );
   /** Chevron direction — must track the CONTENT (isFolded), not the raw collapsed
    *  set, or a search's force-expand would show open regions with "collapsed" arrows. */
-  const chevronCollapsed = useCallback(
+  const chevronCollapsed = useLeanCallback(
     (id: string) => !isSearchMode && !jumpLive && collapsedSections.has(id),
     [isSearchMode, jumpLive, collapsedSections],
   );
@@ -2765,7 +2845,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const placeSigRef = useRef<(t: Task) => string>(() => '');
   /** Opens every collapsed parent and folded folder above a task; published below the memos. */
   const revealAncestorsRef = useRef<(t: Task) => void>(() => {});
-  const endLocateHold = useCallback(() => {
+  const endLocateHold = useLeanCallback(() => {
     locateHoldRef.current = null;
     panelGestureAtRef.current = performance.now();
   }, []);
@@ -2780,7 +2860,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Pulse a card so a "locate" jump (e.g. session panel → task) is visible:
   // scrolling alone leaves the user unsure which card was the target, especially
   // when several pinned cards look alike. Re-triggers cleanly on repeat locates.
-  const flashCard = useCallback((el: Element) => {
+  const flashCard = useLeanCallback((el: Element) => {
     el.classList.remove('todo-card-locate-flash');
     void (el as HTMLElement).offsetWidth; // reflow so the animation restarts
     el.classList.add('todo-card-locate-flash');
@@ -2791,7 +2871,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Uses double-RAF + retry to wait for React commit + browser paint + layout settle
   // after state changes (expand/filter-clear, detail panel open).
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const scrollToTask = useCallback((taskId: string) => {
+  const scrollToTask = useLeanCallback((taskId: string) => {
     cancelAnimationFrame(scrollRafRef.current);
     clearTimeout(scrollTimerRef.current);
     scrollLog('focus-scroll-start', { taskId: taskId.substring(0, 12) });
@@ -2846,7 +2926,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  the corner's notices at the bottom (the list's scroll padding, corner-stack.css), as out of
    *  view. The card's scroll margin is how much the headings cover; Chromium ignores it for a card
    *  that is already on screen, and would leave it hidden under them. */
-  const revealBelowHeadings = useCallback((el: Element) => {
+  const revealBelowHeadings = useLeanCallback((el: Element) => {
     const covered = parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
     let scroller = el.parentElement;
     while (scroller && !(/(auto|scroll)/.test(getComputedStyle(scroller).overflowY) && scroller.scrollHeight > scroller.clientHeight)) scroller = scroller.parentElement;
@@ -2863,7 +2943,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // jumps + highlights too — not just the list below. Double-RAF waits for tier re-render.
   const pinnedScrollRafRef = useRef<number>(0);
   const pinnedScrollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const scrollToPinnedTask = useCallback((taskId: string) => {
+  const scrollToPinnedTask = useLeanCallback((taskId: string) => {
     cancelAnimationFrame(pinnedScrollRafRef.current);
     clearTimeout(pinnedScrollTimerRef.current);
     const tryScroll = () => {
@@ -2909,7 +2989,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // A task opened from outside that the tab the user is on does not draw: the note that says so.
   // Set only once the row is still not drawn after the folds the locate opened have rendered.
   const [offView, setOffView] = useState<{ taskId: string; from: TodoSection; target: TodoSection } | null>(null);
-  const noteOffView = useCallback((taskId: string, from: TodoSection, target: TodoSection) => {
+  const noteOffView = useLeanCallback((taskId: string, from: TodoSection, target: TodoSection) => {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (!rowShownInPanel(taskId)) setOffView({ taskId, from, target });
     }));
@@ -3152,7 +3232,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  AFTER the completion render commits, so without this the optimistic-complete
    *  render would hide the row for one frame (or forever — the memos don't re-run on
    *  ref writes). completed_at-based, so it needs no state at all. */
-  const isInCompletionGrace = useCallback((t: Task): boolean => {
+  const isInCompletionGrace = useLeanCallback((t: Task): boolean => {
     if (t.status !== 'done' && t.phase !== 'COMPLETE') return false;
     if (!t.completed_at) return false;
     const elapsed = Date.now() - new Date(t.completed_at).getTime();
@@ -3160,7 +3240,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, []);
 
   /** A done task is still rendered while it's inside the grace window. */
-  const keepWhileCompleting = useCallback(
+  const keepWhileCompleting = useLeanCallback(
     (t: Task): boolean => recentlyCompletedRef.current.has(t.id) || isInCompletionGrace(t),
     [isInCompletionGrace],
   );
@@ -3168,12 +3248,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   /** The Waiting twin: a task whose phase_changed_at is inside the window (the
    *  optimistic write stamps it, the server echo carries its own), or one the
    *  batch effect already holds. Only a WAITING task ever qualifies. */
-  const isInParkingGrace = useCallback((t: Task): boolean => {
+  const isInParkingGrace = useLeanCallback((t: Task): boolean => {
     if (t.phase !== 'WAITING' || !t.phase_changed_at) return false;
     const elapsed = Date.now() - new Date(t.phase_changed_at).getTime();
     return elapsed >= 0 && elapsed < GRACE_MS;
   }, []);
-  const keepWhileParking = useCallback(
+  const keepWhileParking = useLeanCallback(
     (t: Task): boolean => t.phase === 'WAITING' && (recentlyParkedRef.current.has(t.id) || isInParkingGrace(t)),
     [isInParkingGrace],
   );
@@ -3181,7 +3261,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   /** (Re)arm the two shared batch timers against the current deadline. Called on
    *  every deadline extension — a batch mid-fade snaps back to fully visible and
    *  holds again, which is exactly the "wait for the latest one" contract. */
-  const armGraceTimers = useCallback(() => {
+  const armGraceTimers = useLeanCallback(() => {
     if (graceExitTimerRef.current) clearTimeout(graceExitTimerRef.current);
     if (graceClearTimerRef.current) clearTimeout(graceClearTimerRef.current);
     const untilDeadline = Math.max(0, graceDeadlineRef.current - Date.now());
@@ -3314,7 +3394,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // above the dragged card grow at the gesture's start and shrink at its end. The
   // list scrolls by the same amount so the anchor stays under the pointer.
   const scrollAnchorRef = useRef<{ selector: string; top: number } | null>(null);
-  const holdScrollAnchor = useCallback((selector: string) => {
+  const holdScrollAnchor = useLeanCallback((selector: string) => {
     const el = document.querySelector(selector);
     scrollAnchorRef.current = el ? { selector, top: anchorTop(el) } : null;
   }, []);
@@ -3365,7 +3445,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   /** Per-tier membership set widened to include tasks still inside the grace window.
    *  Grace is empty almost always — the fast path returns `live` unchanged (stable
    *  identity, no allocation; callers treat these sets as read-only). */
-  const tierGraceUnion = useCallback((live: Set<string> | undefined, tierKey: string): Set<string> => {
+  const tierGraceUnion = useLeanCallback((live: Set<string> | undefined, tierKey: string): Set<string> => {
     const extra = graceAdditions.get(tierKey);
     if (!extra || extra.length === 0) return live ?? EMPTY_ID_SET;
     const out = new Set(live ?? []);
@@ -3470,7 +3550,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [pinnedTasks, customTiers, customIdsWithGrace]);
 
   // Helper: resolve a task's current tier
-  const getTier = useCallback((taskId: string): FocusTier | undefined => {
+  const getTier = useLeanCallback((taskId: string): FocusTier | undefined => {
     if (!pinnedIdsWithGrace.has(taskId)) return undefined;
     if (focusIdsWithGrace.has(taskId)) return 'focus';
     for (const [tid, ids] of Object.entries(customIdsWithGrace)) {
@@ -3510,7 +3590,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // The pinned collision reads each tier's slot rules through a ref (set below, once the
   // task map and the folder tree exist), so its identity never changes mid-drag.
   const slotRulesRef = useRef<SlotRulesFor | null>(null);
-  const pinnedCollision = useMemo(() => makePinnedCollision(() => slotRulesRef.current), []);
+  const pinnedCollision = useMemo(() => makePinnedCollision(slotRulesRef), []);
 
   const pinnedTaskIds_arr = useMemo(() => pinnedTasks.map((t) => t.id), [pinnedTasks]);
 
@@ -3569,7 +3649,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const lastNamedOverRef = useRef<string | null>(null);
   const [, setDragTick] = useState(0);
   const dragRafRef = useRef(0);
-  const bumpDragTick = useCallback(() => {
+  const bumpDragTick = useLeanCallback(() => {
     if (dragRafRef.current) return; // already scheduled this frame
     dragRafRef.current = requestAnimationFrame(() => {
       dragRafRef.current = 0;
@@ -3602,7 +3682,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Folder → parent folder, normalised (folder-tree.ts). Empty on a board where no
   // folder nests, and every nesting pass below is then a no-op.
   const folderParents = useMemo(() => buildFolderParents(folderMeta), [folderMeta]);
-  const clusterForTier = useCallback((tier: string, tierTasks: Task[]): string[] => {
+  const clusterForTier = useLeanCallback((tier: string, tierTasks: Task[]): string[] => {
     const isCustom = tierViewMode(tier) === 'custom';
     const sort = tierSort(tier);
     const byId = new Map(tierTasks.map((t) => [t.id, t]));
@@ -3672,7 +3752,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // (not with the rest of the separator UI far below) because the drag handlers
   // need them directly. persistSeparators is the single write path for every
   // separator mutation.
-  const persistSeparators = useCallback((next: TierSeparator[]) => {
+  const persistSeparators = useLeanCallback((next: TierSeparator[]) => {
     if (!ordering?.saveSeparators) return;
     void ordering.saveSeparators(next).catch((err) => {
       onOperationError?.(err instanceof Error ? err.message : String(err));
@@ -3682,7 +3762,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Rule 5 (tier-separators.ts): a drag that RELOCATES a card must not tow the
   // divider lines anchored to it. Custom mode only: project-mode lines anchor
   // FOLDERS, which stay put when one card moves.
-  const sepReanchor = useCallback((tier: string, beforeIds: string[], movedIds: string[]) => {
+  const sepReanchor = useLeanCallback((tier: string, beforeIds: string[], movedIds: string[]) => {
     if (tierViewMode(tier) !== 'custom' || tierSortRef.current(tier) !== 'manual') return;
     const next = reanchorSeparatorsAfterMove({
       separators, tier, beforeIds, movedIds,
@@ -3695,7 +3775,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  for all affected tiers. With lines living in `items`, the last frame dnd-kit
    *  showed IS the gesture's truth — deriving anchors from it means nothing jumps
    *  after the drop lands. */
-  const syncCustomSepAnchors = useCallback((tiers: Array<{ tier: string; arr: string[] }>, movedIds: string[] = []) => {
+  const syncCustomSepAnchors = useLeanCallback((tiers: Array<{ tier: string; arr: string[] }>, movedIds: string[] = []) => {
     let next = separators;
     for (const { tier, arr } of tiers) {
       if (tierViewMode(tier) !== 'custom' || tierSortRef.current(tier) !== 'manual') continue;
@@ -3750,7 +3830,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Recent card ids for SortableContext — must mirror SortableRecentCard's id
   // choice exactly: pinned/done cards register namespaced (static, the raw id
   // already belongs to their tier card in this DndContext), others raw.
-  const recentStaticId = useCallback((t: Task) =>
+  const recentStaticId = useLeanCallback((t: Task) =>
     (t.status === 'done' || t.phase === 'COMPLETE' || pinnedTaskIds?.has(t.id)) ? `recent-static:${t.id}` : t.id,
   [pinnedTaskIds]);
   // Only genuinely draggable Recent ids — feeds the drag-start snapshot and
@@ -3778,7 +3858,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Stable fallback for onSetPhase — avoids creating a new arrow function every render
   // which would defeat React.memo on SortableTierCard and other memoized task items.
   // Signature matches onSetPhase (id, phase) but only forwards id to onComplete.
-  const setPhaseOrComplete = useCallback(
+  const setPhaseOrComplete = useLeanCallback(
     (id: string, _phase: string) => onSetPhase ? onSetPhase(id, _phase) : onComplete(id),
     [onSetPhase, onComplete],
   );
@@ -3799,7 +3879,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const [unpinZone, setUnpinZone] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [unpinHot, setUnpinHot] = useState(false);
   // The explicit strip owns its pixels; both the highlight and release use this hit test.
-  const overUnpinZone = useCallback((x: number, y: number) => {
+  const overUnpinZone = useLeanCallback((x: number, y: number) => {
     const r = unpinRectRef.current;
     if (!r || x < r.left || x > r.left + r.width || y < r.top || y > r.top + r.height) return false;
     const el = document.elementFromPoint(x, y);
@@ -3838,7 +3918,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     };
   }, [unpinZone, overUnpinZone]);
 
-  const handlePinnedDragStart = useCallback((event: DragStartEvent) => {
+  const handlePinnedDragStart = useLeanCallback((event: DragStartEvent) => {
     // Freeze the CLUSTERED order (what's on screen) — not the raw pin order — so the
     // frozen refs match the rendered list and grouped members sit contiguously (a
     // prerequisite for the collapse below). One entry per tier, render order.
@@ -3926,12 +4006,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Shared live-drag tier accessors: dragTierIdsRef is the live state during a
   // drag with the frozen snapshot as fallback. `findTierOf` answers "which tier
   // array currently holds this id" across built-ins AND custom tiers.
-  const getLiveArr = useCallback((tier: FocusTier): string[] => {
+  const getLiveArr = useLeanCallback((tier: FocusTier): string[] => {
     return dragTierIdsRef.current?.get(tier)
       ?? dragStartSnapshot.current?.tiers.get(tier)
       ?? [];
   }, []);
-  const setLiveArr = useCallback((tier: FocusTier, val: string[]) => {
+  const setLiveArr = useLeanCallback((tier: FocusTier, val: string[]) => {
     // COPY-ON-WRITE, not in-place .set(): the render-side memos (focusIds_arr /
     // satelliteIds_arr / customIds_arr) key on this Map's IDENTITY.
     // The old three-ref model replaced each ref's array per write, so bumpDragTick's
@@ -3942,7 +4022,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     next.set(tier, val);
     dragTierIdsRef.current = next;
   }, []);
-  const findTierOf = useCallback((id: string): FocusTier | undefined => {
+  const findTierOf = useLeanCallback((id: string): FocusTier | undefined => {
     const tiers = dragTierIdsRef.current ?? dragStartSnapshot.current?.tiers;
     if (!tiers) return undefined;
     for (const [tier, arr] of tiers) {
@@ -3953,7 +4033,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Live movement: when hovering over a different tier, move item between arrays
   // Also handles items dragged FROM Recent into a tier zone
-  const handlePinnedDragOver = useCallback((event: DragOverEvent) => {
+  const handlePinnedDragOver = useLeanCallback((event: DragOverEvent) => {
     const { active, over } = event;
     const activeId = active.id as string;
     // The folder a drop would go into lights up (its row): for a folder or a card from
@@ -4110,7 +4190,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     bumpDragTick(); // trigger visual update
   }, [bumpDragTick, pinnedCardIds, tasks, DROP_ZONE_TIERS, findTierOf, getLiveArr, setLiveArr, tierViewMode]);
 
-  const clearDragState = useCallback(() => {
+  const clearDragState = useLeanCallback(() => {
     if (dragRafRef.current) { cancelAnimationFrame(dragRafRef.current); dragRafRef.current = 0; }
     dragTierIdsRef.current = null;
     dragStartSnapshot.current = null;
@@ -4129,13 +4209,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setUnpinHot(false);
   }, []);
 
-  const handlePinnedDragCancel = useCallback((event: DragCancelEvent) => {
+  const handlePinnedDragCancel = useLeanCallback((event: DragCancelEvent) => {
     holdScrollAnchor(`#home-task-navigation .todo-pinned-section [data-task-id="${window.CSS.escape(String(event.active.id))}"]`);
     dragBus.cancel();
     clearDragState();
   }, [clearDragState, holdScrollAnchor]);
 
-  const handlePinnedDragEnd = useCallback((event: DragEndEvent) => {
+  const handlePinnedDragEnd = useLeanCallback((event: DragEndEvent) => {
     holdScrollAnchor(`#home-task-navigation .todo-pinned-section [data-task-id="${window.CSS.escape(String(event.active.id))}"]`);
     // Cross-panel drop first: if a bus target (calendar side panel) consumed
     // the pointer-up, skip ALL in-panel drop semantics — dnd-kit's
@@ -4830,17 +4910,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const sectionOpenRef = useRef(sectionOpen);
   sectionOpenRef.current = sectionOpen;
   const setSectionFold = sectionFolds.setOpen;
-  const setSectionOpenTo = useCallback((key: StatusSectionKey, open: boolean) => setSectionFold(key, open), [setSectionFold]);
+  const setSectionOpenTo = useLeanCallback((key: StatusSectionKey, open: boolean) => setSectionFold(key, open), [setSectionFold]);
   // Inside a project jump the sections fold on the jump's own store, never the saved one.
   const jumpOpen = useMemo(() => statusSectionsOpen(jumpFolds.store), [jumpFolds.store]);
   const shownSectionOpen = jumpLive ? jumpOpen : sectionOpen;
   const toggleJumpFold = jumpFolds.toggle;
-  const toggleStatusSection = useCallback((key: StatusSectionKey) => {
+  const toggleStatusSection = useLeanCallback((key: StatusSectionKey) => {
     if (jumpLiveRef.current) { toggleJumpFold(key); return; }
     setSectionOpenTo(key, !sectionOpenRef.current[key]);
   }, [setSectionOpenTo, toggleJumpFold]);
   /** Open one section for a locate: the jump's own store while a jump is on, else the saved one. */
-  const openStatusSection = useCallback((key: StatusSectionKey) => {
+  const openStatusSection = useLeanCallback((key: StatusSectionKey) => {
     // An open auto fold still hears it: its time starts again for the row shown.
     if (jumpLiveRef.current) openJumpFolds(key, true);
     else setSectionOpenTo(key, true);
@@ -4850,7 +4930,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // rows a moment (state, so a re-render keeps the mark).
   const [limitFlash, setLimitFlash] = useState<ReadonlySet<string>>(() => new Set());
   const limitFlashTimer = useRef<number | undefined>(undefined);
-  const showLimitedSection = useCallback((key: StatusSectionKey, taskIds: string[]) => {
+  const showLimitedSection = useLeanCallback((key: StatusSectionKey, taskIds: string[]) => {
     openStatusSection(key);
     setLimitFlash(new Set(taskIds));
     window.clearTimeout(limitFlashTimer.current);
@@ -4881,14 +4961,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const lastPlaceRef = useRef<Map<string, DrawnSectionKey>>(new Map());
   /** The completed archive, fetched once a Completed section's "Show more" runs past the loaded rows. */
   const [archiveAsked, setArchiveAsked] = useState(false);
-  const askArchive = useCallback(() => setArchiveAsked(true), []);
-  const heldInGrace = useCallback(
+  const askArchive = useLeanCallback(() => setArchiveAsked(true), []);
+  const heldInGrace = useLeanCallback(
     (t: Task) => keepWhileCompleting(t) || keepWhileParking(t),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recentTick re-runs the grace check
     [keepWhileCompleting, keepWhileParking, recentTick],
   );
   /** Drawn by a status section (Watching, Needs you, Background, or one it holds through its exit grace), so the list leaves it out. */
-  const inTopSection = useCallback((t: Task): boolean => {
+  const inTopSection = useLeanCallback((t: Task): boolean => {
     if (isSearchMode) return false;
     if (isWatched(t)) return true;
     if (!sectionsActive) return false;
@@ -4897,7 +4977,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return (needsSection && (taskNeedsAction(t) || stateSectionOf(t) === 'needs')) || (lastPlaceRef.current.has(t.id) && heldInGrace(t));
   }, [isSearchMode, sectionsActive, needsSection, heldInGrace]);
 
-  const passesBoard = useCallback((t: Task): boolean => {
+  const passesBoard = useLeanCallback((t: Task): boolean => {
     if (inTopSection(t)) return false;
     if (sectionsActive && hiddenAsWaiting(t) && !keepWhileParking(t)) return false;
     if (passesChips(t, boardEvalCtx)) return true;
@@ -4941,7 +5021,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const completedWillHide = !showCompleted && !isSearchMode;
   // The Waiting twin, and one answer for every row: "is this row on its way out?"
   const waitingWillHide = !waitingRevealed && !isSearchMode;
-  const isRowVanishing = useCallback((t: Task): boolean => graceExiting && (
+  const isRowVanishing = useLeanCallback((t: Task): boolean => graceExiting && (
     (recentlyCompletedRef.current.has(t.id) && completedWillHide)
     || (recentlyParkedRef.current.has(t.id) && waitingWillHide)
   ), [graceExiting, completedWillHide, waitingWillHide]);
@@ -4969,7 +5049,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const overrideCreated = !!filterOverrideReasons && createdOverrideRef.current === filterOverrideReasons.task.id
     && isJustCreated(filterOverrideReasons.task.created_at);
   const { showTask } = homeFilters;
-  const showOverrideDim = useCallback((dim: FilterDim) => {
+  const showOverrideDim = useLeanCallback((dim: FilterDim) => {
     if (filterOverrideReasons) showTask(filterOverrideReasons.task, [dim], 'override');
   }, [filterOverrideReasons, showTask]);
   const filterOverrideNode = filterOverrideReasons
@@ -5226,7 +5306,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const labelProjects = useFrozenWhile(labelProjectsLive, isPinnedDragActive);
   // A tier's rows that pass the filters, plus the chips, lines and labels that still
   // head something visible.
-  const shownTierIds = useCallback((arr: string[], tier: string) => pruneTierLabels(
+  const shownTierIds = useLeanCallback((arr: string[], tier: string) => pruneTierLabels(
     pruneOrphanSentinels(
       arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || isTierLabelId(id) || tierDisplayTaskIds.has(id)),
       pinnedTaskMap, activeDragPinnedId, folderParents,
@@ -5251,7 +5331,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const tierChains = useFrozenWhile(tierChainsLive, isPinnedDragActive);
   useLayoutEffect(() => { tierChainsRef.current = tierChains; }, [tierChains]);
   // A tier's sortable ids as drawn: a chain's row is its top folder's chip alone.
-  const visibleTierIds = useCallback(
+  const visibleTierIds = useLeanCallback(
     (arr: string[], tier: string) => withoutChainedChips(shownTierIds(arr, tier), tierChains.get(tier)),
     [shownTierIds, tierChains],
   );
@@ -5309,7 +5389,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // --- Parent-anchored sort with child grouping ---
   // Produces a sorted ID order where children always follow their parent.
-  const computeSortOrder = useCallback((items: Task[]): string[] => {
+  const computeSortOrder = useLeanCallback((items: Task[]): string[] => {
     // Partition tasks into top-level (+ orphans) vs children-of-visible-parent
     const topLevel: Task[] = [];
     const childrenOf = new Map<string, Task[]>();
@@ -5424,7 +5504,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const prevFilteredIdsRef = useRef<Set<string>>(new Set(filtered.map((t) => t.id)));
   // Equality check for sort order — prevents no-op re-renders when task data changes
   // but the sorted order is identical (e.g. focus_tier change doesn't affect sort position).
-  const stableSortUpdate = useCallback((newOrder: string[]) => {
+  const stableSortUpdate = useLeanCallback((newOrder: string[]) => {
     setSortOrder(prev => {
       if (prev.length === newOrder.length && prev.every((id, i) => id === newOrder[i])) return prev;
       return newOrder;
@@ -5497,7 +5577,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // The bottom name-entry row is mounted only while this is set (the Projects
   // heading's "New project..." sets it; the row's Esc / empty blur / create clears it).
   const [newProjectOpen, setNewProjectOpen] = useState(false);
-  const closeNewProject = useCallback(() => setNewProjectOpen(false), []);
+  const closeNewProject = useLeanCallback(() => setNewProjectOpen(false), []);
   // Prune against the registry: a fresh project later renamed/deleted (kebab)
   // must not resurrect as a phantom empty group. Only after the first fetch
   // resolves — pruning against a still-empty registry would wipe a name the
@@ -5527,7 +5607,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    * for the server's answer, so a refused (or duplicate, in-flight) move leaves no
    * phantom empty group behind.
    */
-  const requestMoveFolder = useCallback(async (groupId: string, project: string): Promise<boolean> => {
+  const requestMoveFolder = useLeanCallback(async (groupId: string, project: string): Promise<boolean> => {
     if (!onMoveFolderToProject) return false;
     // The move takes the folder's whole subtree, so it migrates every synced card in
     // it whose provider the destination does not share: ONE confirm for all of them,
@@ -5552,7 +5632,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return true;
   }, [onMoveFolderToProject, tasks, folderParents, taskGroups, projectRegistry.sourceByName, projectRegistry.loaded, projectRegistry.refresh, confirm]);
   useLayoutEffect(() => { requestMoveFolderRef.current = requestMoveFolder; }, [requestMoveFolder]);
-  const handleMoveFolderToProject = useCallback((groupId: string, project: string) => {
+  const handleMoveFolderToProject = useLeanCallback((groupId: string, project: string) => {
     void requestMoveFolder(groupId, project);
   }, [requestMoveFolder]);
 
@@ -5697,7 +5777,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     () => new Set([...Object.keys(taskGroups ?? {}), ...Object.keys(folderMeta ?? {})]),
     [taskGroups, folderMeta],
   );
-  const toggleFolder = useCallback((place: string, groupId: string) => {
+  const toggleFolder = useLeanCallback((place: string, groupId: string) => {
     setFolderFolds((prev) => {
       const kept = foldersKnown.size > 0
         ? pruneFolds(prev, (key) => foldedId(key) === groupId || foldersKnown.has(foldedId(key)))
@@ -5707,7 +5787,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return next;
     });
   }, [foldersKnown]);
-  const toggleListFolder = useCallback((groupId: string) => toggleFolder(LIST_PLACE, groupId), [toggleFolder]);
+  const toggleListFolder = useLeanCallback((groupId: string) => toggleFolder(LIST_PLACE, groupId), [toggleFolder]);
 
   // taskId → its folder id, for the ancestor walk below. Built from `sorted` (the
   // rows actually drawn), the same source the folder header/collapse logic uses.
@@ -5724,7 +5804,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    * parent row the fold had already hidden. Same parent-chain walk as
    * isChildHidden below, with the same depth cap guarding a cycle.
    */
-  const isRowFolderCollapsed = useCallback((taskId: string) => {
+  const isRowFolderCollapsed = useLeanCallback((taskId: string) => {
     if (folderFolds.size === 0) return false;
     let currentId: string | undefined = taskId;
     for (let hops = 0; currentId && hops <= 10; hops++) {
@@ -5758,7 +5838,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [groupRenderMap, folderFolds, folderParents]);
 
   // Determine if a child task should be hidden (any ancestor is collapsed, walks full chain)
-  const isChildHidden = useCallback((taskId: string) => {
+  const isChildHidden = useLeanCallback((taskId: string) => {
     let currentId: string | undefined = taskId;
     while (currentId) {
       const parentId = childParentMap.get(currentId);
@@ -5792,7 +5872,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // click never move. The main list keeps its own record (`listOpen`, folded by
   // default). Both survive a reload. useCallback because the tier render pass
   // depends on it.
-  const toggleRun = useCallback((tier: string, project: string) => {
+  const toggleRun = useLeanCallback((tier: string, project: string) => {
     setRunFolds((prev) => {
       const next = toggleFold(prev, tier, project, allTierKeysRef.current);
       saveFolds(LS_RUN_FOLDS_KEY, next);
@@ -5801,7 +5881,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, []);
 
   // Toggle child task visibility for a parent task (default: collapsed)
-  const toggleParentExpand = useCallback((parentId: string) => {
+  const toggleParentExpand = useLeanCallback((parentId: string) => {
     setExpandedParents((prev) => {
       const next = new Set(prev);
       if (next.has(parentId)) next.delete(parentId);
@@ -5811,7 +5891,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
   }, []);
 
-  const isParentExpanded = useCallback((parentId: string) => {
+  const isParentExpanded = useLeanCallback((parentId: string) => {
     return expandedParents.has(parentId);
   }, [expandedParents]);
 
@@ -5823,7 +5903,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const queryActive = homeFilters.chips.some((c) => c.dim !== 'date');
   const [queryFoldedProjects, setQueryFoldedProjects] = useState<Set<string>>(() => new Set());
   useEffect(() => { if (!queryActive) setQueryFoldedProjects(new Set()); }, [queryActive]);
-  const isListProjectCollapsed = useCallback(
+  const isListProjectCollapsed = useLeanCallback(
     (project: string) => queryActive ? queryFoldedProjects.has(project)
       : !listOpen.has(project) && !revealedProjects.has(project),
     [queryActive, queryFoldedProjects, listOpen, revealedProjects],
@@ -5873,7 +5953,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     });
   };
 
-  const toggleListProject = useCallback((project: string) => {
+  const toggleListProject = useLeanCallback((project: string) => {
     if (queryActive) {
       setQueryFoldedProjects(prev => {
         const next = new Set(prev);
@@ -5895,7 +5975,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const allCollapsed = liveGroupKeys.size > 0 &&
     [...liveGroupKeys].every(project => isListProjectCollapsed(project));
 
-  const handleCollapseExpandAll = useCallback(() => {
+  const handleCollapseExpandAll = useLeanCallback(() => {
     if (queryActive) { setQueryFoldedProjects(new Set<string>(allCollapsed ? [] : liveGroupKeys)); return; }
     setRevealedProjects(new Set());
     setListBatch(new Map());
@@ -5908,7 +5988,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Row batching (list-batch.ts). A folded folder's members stay drawn but unseen, so
   // they don't use up the batch; the "In one list" view batches under FLAT_BATCH_KEY.
-  const countsTowardBatch = useCallback(
+  const countsTowardBatch = useLeanCallback(
     (task: Task) => !isRowFolderCollapsed(task.id) || !!groupRenderMap.get(task.id)?.isLead,
     [isRowFolderCollapsed, groupRenderMap],
   );
@@ -5916,7 +5996,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const state = listBatch.get(key) ?? FRESH_BATCH;
     return cutListBatch(rows, state.limit, id => id === focusedTaskId || state.kept.has(id), countsTowardBatch);
   };
-  const showMoreRows = useCallback((key: string) => {
+  const showMoreRows = useLeanCallback((key: string) => {
     setListBatch(prev => {
       const state = prev.get(key) ?? FRESH_BATCH;
       return new Map(prev).set(key, { ...state, limit: state.limit + LIST_BATCH });
@@ -5954,7 +6034,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [rawTasks]);
 
   const runningJumpCursor = useRef(0);
-  const jumpToNextRunning = useCallback(() => {
+  const jumpToNextRunning = useLeanCallback(() => {
     if (runningTaskIds.length === 0) return;
     const idx = runningJumpCursor.current % runningTaskIds.length;
     runningJumpCursor.current = idx + 1;
@@ -5966,7 +6046,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     else scrollToTask(id);
   }, [runningTaskIds, rawTasks, onFocusTask, scrollToTask]);
 
-  const handleDragStart = useCallback((event: DragStartEvent) => {
+  const handleDragStart = useLeanCallback((event: DragStartEvent) => {
     const id = String(event.active.id);
     setActiveDragId(id);
     const type = (event.active.data?.current as { type?: string })?.type ?? 'task';
@@ -5989,7 +6069,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, []);
 
   /** Clear all drop-intent highlights + stop pointer tracking — on drag end/cancel. */
-  const clearDropIntent = useCallback(() => {
+  const clearDropIntent = useLeanCallback(() => {
     window.removeEventListener('pointermove', trackPointer);
     dropIntentRef.current = null;
     setNestTargetId((prev) => (prev === null ? prev : null));
@@ -5997,12 +6077,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, []);
 
   /** Main-list drag cancel: also retract the cross-panel bus announcement. */
-  const handleMainDragCancel = useCallback(() => {
+  const handleMainDragCancel = useLeanCallback(() => {
     dragBus.cancel();
     clearDropIntent();
   }, [clearDropIntent]);
 
-  const handleDragOver = useCallback((event: DragOverEvent) => {
+  const handleDragOver = useLeanCallback((event: DragOverEvent) => {
     const activeType = (event.active.data?.current as { type?: string })?.type ?? 'task';
     // Drop-intent highlighting only applies to task drags (not project group drags).
     if (activeType !== 'task') { clearDropIntent(); return; }
@@ -6077,7 +6157,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   //
   // In the By-project list only the project the action happened in switches: every
   // project keeps its own order.
-  const ensureManualSort = useCallback((project?: string) => {
+  const ensureManualSort = useLeanCallback((project?: string) => {
     if (groupBy === 'project' && project !== undefined) {
       if (sortForProject(project) === 'manual') return;
       if (onBakeOrder && sortOrder.length > 0) onBakeOrder(sortOrder);
@@ -6103,7 +6183,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // another project's folder then lands in the drop's own render, instead of drawing
   // the card back where it came from for a frame while the answer resolves.
   type MoveGate = { ok: boolean; migrates: boolean };
-  const confirmProjectMove = useCallback((taskId: string, project: string): MoveGate | Promise<MoveGate> => {
+  const confirmProjectMove = useLeanCallback((taskId: string, project: string): MoveGate | Promise<MoveGate> => {
     const task = tasks.find((t) => t.id === taskId);
     const mig = resolveMoveMigration(task?.source, project, projectRegistry.sourceByName);
     // Fail CLOSED while the registry hasn't loaded: with an empty sourceByName
@@ -6124,7 +6204,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }).then((ok) => ({ ok, migrates: mig.migrates }));
   }, [tasks, projectRegistry.sourceByName, projectRegistry.loaded, confirm, integrations]);
 
-  const requestMoveTask = useCallback(async (
+  const requestMoveTask = useLeanCallback(async (
     taskId: string,
     project: string,
     opts?: { insertNearTaskId?: string; ensureSort?: boolean },
@@ -6154,7 +6234,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // runs with the filing, synchronously when nothing asks first, so both land in one
   // render, and its request goes out FIRST: the filing waits for it, so the list the
   // filing then refetches already holds that order.
-  const requestFileIntoFolder = useCallback(async (
+  const requestFileIntoFolder = useLeanCallback(async (
     taskId: string,
     into: { groupId: string; project: string } | { withTaskId: string; project: string },
     place?: () => unknown,
@@ -6185,7 +6265,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    * moveFolderToProject) and nests once that landed. Into itself or into one of its
    * own descendants is nothing; depth is the server's call and comes back as an error.
    */
-  const nestFolder = useCallback(async (groupId: string, intoGroupId: string): Promise<boolean> => {
+  const nestFolder = useLeanCallback(async (groupId: string, intoGroupId: string): Promise<boolean> => {
     if (!onSetFolderParent || groupId === intoGroupId) return false;
     if (folderWithin(intoGroupId, groupId, folderParents)) return false;
     const own = folderMeta?.[groupId];
@@ -6198,7 +6278,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [onSetFolderParent, requestMoveFolder, folderMeta, folderParents]);
   useLayoutEffect(() => { nestFolderRef.current = nestFolder; }, [nestFolder]);
 
-  const handleDragEnd = useCallback((event: DragEndEvent) => {
+  const handleDragEnd = useLeanCallback((event: DragEndEvent) => {
     // Cross-panel drop first (calendar side panel via the drag bus). When a bus
     // target consumed the drop, every in-panel semantic (group/nest/reorder)
     // must be skipped — dnd-kit's collision detection still reports an
@@ -6452,7 +6532,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Kebab "Move left" — promote subtask to top-level via onReparentTask(id, null).
   // Also primes scroll restoration so the task stays visible after refetch.
-  const handleUnparent = useCallback((taskId: string) => {
+  const handleUnparent = useLeanCallback((taskId: string) => {
     if (!onReparentTask) return;
     ensureManualSort(tasks.find((t) => t.id === taskId)?.project || '');
     scrollAfterReparentRef.current = taskId;
@@ -6461,7 +6541,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Kebab "Project" select — same mutation as dragging the task onto another
   // project group, minus the drag (no insertNearTaskId: append to the target).
-  const handleMoveToProject = useCallback((taskId: string, project: string) => {
+  const handleMoveToProject = useLeanCallback((taskId: string, project: string) => {
     requestMoveTask(taskId, project).catch((err) => {
       onOperationError?.(err instanceof Error ? err.message : 'Move failed');
     });
@@ -6469,7 +6549,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Group chip click → rename the group via the app's own prompt dialog (never the
   // browser-native prompt). Cancel/empty/unchanged keeps the name.
-  const handleRenameGroup = useCallback(async (groupId: string, currentLabel: string) => {
+  const handleRenameGroup = useLeanCallback(async (groupId: string, currentLabel: string) => {
     if (!onRenameGroup) return;
     const next = await prompt({ title: 'Rename group', defaultValue: currentLabel, confirmLabel: 'Rename' });
     if (next == null) return; // cancelled or left empty
@@ -6483,7 +6563,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // longer auto-pruned server-side, so ungrouping members would leave an empty
   // shell — delete is the real inverse of creating a folder). Falls back to
   // ungroup-all for a consumer that wired the old callbacks only.
-  const handleDissolveGroup = useCallback((groupId: string) => {
+  const handleDissolveGroup = useLeanCallback((groupId: string) => {
     if (onDeleteFolder) { onDeleteFolder(groupId); return; }
     const memberIds = tasks.filter((t) => t.group_id === groupId).map((t) => t.id);
     if (memberIds.length === 0) return;
@@ -6492,7 +6572,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [onDeleteFolder, onUngroupTasks, onUngroupTask, tasks]);
 
   // "+ → New folder" on a project header: prompt a name, create it empty.
-  const handleCreateFolder = useCallback(async (project: string) => {
+  const handleCreateFolder = useLeanCallback(async (project: string) => {
     if (!onCreateFolder) return;
     const name = await prompt({ title: 'New folder', placeholder: 'Folder name', confirmLabel: 'Create' });
     const trimmed = name?.trim();
@@ -6508,21 +6588,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Group chip ⊘ → hide the whole cluster from the Focus area. Unlike dissolve this
   // keeps the group + membership intact — only the pinned rendering collapses it.
   // Unhide from a member's kebab ("Unhide group") or the /tasks page.
-  const handleHideGroup = useCallback((groupId: string) => {
+  const handleHideGroup = useLeanCallback((groupId: string) => {
     onSetGroupHidden?.(groupId, true);
   }, [onSetGroupHidden]);
 
   // Kebab "Unhide group in Focus" → restore a Focus-hidden group.
-  const handleUnhideGroup = useCallback((groupId: string) => {
+  const handleUnhideGroup = useLeanCallback((groupId: string) => {
     onSetGroupHidden?.(groupId, false);
   }, [onSetGroupHidden]);
 
-  // Kebab "Move up" — map of taskId → handler that swaps the task with the
-  // previous sibling in its group. Siblings are grouped by parent_task_id so
-  // child tasks only move among their own siblings. Tasks that are already
-  // first among their siblings have no handler (button auto-hides).
-  const moveUpMap = useMemo((): Map<string, () => void> => {
-    const map = new Map<string, () => void>();
+  // Kebab "Move up" — map of taskId → the swap with the previous sibling in its
+  // group. Siblings are grouped by parent_task_id so child tasks only move among
+  // their own siblings. Tasks that are already first among their siblings have no
+  // entry (button auto-hides). Plain data, no closure per row: a closure made here
+  // would keep the render that built the map alive (useLeanCallback.ts).
+  const moveUpMap = useMemo((): Map<string, MoveUpSwap> => {
+    const map = new Map<string, MoveUpSwap>();
     if (!onReorder) return map;
 
     const processGroup = (groupTasks: Task[], fullGroupTasks: Task[], project: string) => {
@@ -6537,20 +6618,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       for (const siblings of siblingGroups.values()) {
         for (let i = 1; i < siblings.length; i++) {
-          const task = siblings[i];
-          const prev = siblings[i - 1];
-          map.set(task.id, () => {
-            // Work on the FULL (unfiltered) order so hidden tasks keep their slots
-            const fullIds = fullGroupTasks.map((t) => t.id);
-            const a = fullIds.indexOf(task.id);
-            const b = fullIds.indexOf(prev.id);
-            if (a === -1 || b === -1) return;
-            const newOrder = [...fullIds];
-            [newOrder[a], newOrder[b]] = [newOrder[b], newOrder[a]];
-            ensureManualSort(project);
-            scrollAfterReparentRef.current = task.id;
-            onReorder(project, newOrder);
-          });
+          map.set(siblings[i].id, { prevId: siblings[i - 1].id, fullGroupTasks, project });
         }
       }
     };
@@ -6560,26 +6628,37 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (fullTasks) processGroup(projTasks, fullTasks, project);
     }
     return map;
-  }, [grouped, fullGrouped, onReorder, ensureManualSort, knownTaskIds]);
+  }, [grouped, fullGrouped, onReorder, knownTaskIds]);
 
-  // Stable move-up dispatcher: the map above rebuilds (fresh closures) on every
-  // tasks change, and passing those closures straight down gave every row a new
-  // onMoveUp identity per render — defeating the row memo() list-wide. Rows get
-  // this ONE function (eligibility still decided per row via moveUpMap.has).
+  // Stable move-up dispatcher: the map above rebuilds on every tasks change, and
+  // a handler per row gave every row a new onMoveUp identity per render, defeating
+  // the row memo() list-wide. Rows get this ONE function (eligibility still
+  // decided per row via moveUpMap.has).
   // useLayoutEffect, not a render-phase write: this component renders inside
   // startTransition, where React may discard or replay a render — a ref
   // mutated during render can then hold a map from a thrown-away tree.
   const moveUpMapRef = useRef(moveUpMap);
   useLayoutEffect(() => { moveUpMapRef.current = moveUpMap; }, [moveUpMap]);
-  const handleMoveUpById = useCallback((taskId: string) => {
-    moveUpMapRef.current.get(taskId)?.();
+  const handleMoveUpById = useLeanCallback((taskId: string) => {
+    const swap = moveUpMapRef.current.get(taskId);
+    if (!swap || !onReorder) return;
+    // Work on the FULL (unfiltered) order so hidden tasks keep their slots
+    const fullIds = swap.fullGroupTasks.map((t) => t.id);
+    const a = fullIds.indexOf(taskId);
+    const b = fullIds.indexOf(swap.prevId);
+    if (a === -1 || b === -1) return;
+    const newOrder = [...fullIds];
+    [newOrder[a], newOrder[b]] = [newOrder[b], newOrder[a]];
+    ensureManualSort(swap.project);
+    scrollAfterReparentRef.current = taskId;
+    onReorder(swap.project, newOrder);
   }, []);
 
   const draggedTask = activeDragId ? sorted.find((t) => t.id === activeDragId) : null;
 
   // User-controlled collapse only — no auto-collapse during drag.
   // `project` = the plain project name ('' = Inbox).
-  const isRunCollapsed = useCallback((tier: string, project: string) => {
+  const isRunCollapsed = useLeanCallback((tier: string, project: string) => {
     return isFoldedAt(runFolds, tier, project);
   }, [runFolds]);
 
@@ -6593,7 +6672,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // plain click toggles selection. The modifier-click path keeps working independently.
   const [selectMode, setSelectMode] = useState(false);
 
-  const onSelectToggle = useCallback((taskId: string) => {
+  const onSelectToggle = useLeanCallback((taskId: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
@@ -6602,17 +6681,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, []);
 
   // Kebab "Select…" entry — enter select mode with this task already picked.
-  const onStartSelect = useCallback((taskId: string) => {
+  const onStartSelect = useLeanCallback((taskId: string) => {
     setSelectMode(true);
     setSelectedIds(new Set([taskId]));
   }, []);
 
-  const exitSelectMode = useCallback(() => {
+  const exitSelectMode = useLeanCallback(() => {
     setSelectMode(false);
     setSelectedIds(new Set());
   }, []);
 
-  const handleTaskClick = useCallback((task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
+  const handleTaskClick = useLeanCallback((task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
     if (e && (e.metaKey || e.ctrlKey || e.shiftKey)) {
       setSelectedIds((prev) => {
         const next = new Set(prev);
@@ -6632,7 +6711,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // AI search rows carry only a taskId — resolve to the live Task and route
   // through handleTaskClick so a click behaves exactly like a normal result row.
   const tasksForAgentClickRef = useCommittedRef(tasks);
-  const handleAgentResultClick = useCallback((taskId: string) => {
+  const handleAgentResultClick = useLeanCallback((taskId: string) => {
     const task = tasksForAgentClickRef.current.find((t) => t.id === taskId);
     if (task) handleTaskClick(task);
   }, [handleTaskClick]);
@@ -6649,7 +6728,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return { tasks: picked, canGroup: picked.length >= 2, doneCount };
   }, [tasks, selectedIds]);
 
-  const handleGroupSelected = useCallback(() => {
+  const handleGroupSelected = useLeanCallback(() => {
     if (!onGroupTasks || selectionInfo.tasks.length < 2) return;
     onGroupTasks(selectionInfo.tasks.map((t) => t.id));
     exitSelectMode();
@@ -6657,17 +6736,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Batch operations from the "Group ▾" side dropdown — apply one action to every
   // selected task, then exit select mode (the action is the user's intent, done).
-  const batchSetPriority = useCallback((priority: string) => {
+  const batchSetPriority = useLeanCallback((priority: string) => {
     selectionInfo.tasks.forEach((t) => { if (t.priority !== priority) onSetPriority?.(t.id, priority); });
     exitSelectMode();
   }, [selectionInfo, onSetPriority, exitSelectMode]);
 
-  const batchSetDate = useCallback((date: string | null) => {
+  const batchSetDate = useLeanCallback((date: string | null) => {
     selectionInfo.tasks.forEach((t) => onSetDate?.(t.id, date));
     exitSelectMode();
   }, [selectionInfo, onSetDate, exitSelectMode]);
 
-  const batchSetStartDate = useCallback((date: string | null) => {
+  const batchSetStartDate = useLeanCallback((date: string | null) => {
     selectionInfo.tasks.forEach((t) => onSetStartDate?.(t.id, date));
     exitSelectMode();
   }, [selectionInfo, onSetStartDate, exitSelectMode]);
@@ -6677,7 +6756,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *   - rejected (active children / active session / gone) → "Could not <verb> N"
    *   - `syncOnly` (applied locally, external push failed) → "<verb>d, but N not synced"
    *  Conflating them told the user their tasks weren't completed when they were. */
-  const reportBatchFailures = useCallback((outcomes: BatchTaskOutcome[], verb: string) => {
+  const reportBatchFailures = useLeanCallback((outcomes: BatchTaskOutcome[], verb: string) => {
     if (outcomes.length === 0) return;
     const rejected = outcomes.filter((o) => !o.syncOnly);
     const syncOnly = outcomes.filter((o) => o.syncOnly);
@@ -6703,7 +6782,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
   }, [notify]);
 
-  const batchSetPhase = useCallback(async (phase: string) => {
+  const batchSetPhase = useLeanCallback(async (phase: string) => {
     const ids = selectionInfo.tasks.map((t) => t.id);
     if (ids.length === 0) return;
     exitSelectMode();
@@ -6715,7 +6794,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     ids.forEach((id) => setPhaseOrComplete(id, phase));
   }, [selectionInfo, onBatchSetPhase, setPhaseOrComplete, exitSelectMode, reportBatchFailures]);
 
-  const batchDelete = useCallback(async () => {
+  const batchDelete = useLeanCallback(async () => {
     const picked = selectionInfo.tasks;
     if (picked.length === 0) return;
     const ok = await confirm({
@@ -6736,7 +6815,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     ids.forEach((id) => onDelete?.(id));
   }, [selectionInfo, confirm, onBatchDelete, onDelete, exitSelectMode, reportBatchFailures]);
 
-  const batchPinToTier = useCallback((tier: FocusTier) => {
+  const batchPinToTier = useLeanCallback((tier: FocusTier) => {
     // New pins and their tier share one write; existing pins only change tier.
     selectionInfo.tasks.forEach((t) => {
       const alreadyPinned = pinnedTaskIds?.has(t.id);
@@ -6749,7 +6828,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     exitSelectMode();
   }, [selectionInfo, pinnedTaskIds, pinIntoTier, onSetTier, exitSelectMode]);
 
-  const batchMoveToProject = useCallback(async (project: string) => {
+  const batchMoveToProject = useLeanCallback(async (project: string) => {
     if (!onMoveTask) return; // never confirm a destructive move we then can't perform
     const moving = selectionInfo.tasks.filter((t) => (t.project || '') !== project);
     // ONE confirm for the whole batch when any member crosses a provider boundary —
@@ -6774,11 +6853,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const handlePinnedCardClick = handleTaskClick;
   // A Recent row the board list does not carry (finished long ago, opened from search) opens
   // the way any task link does, by id: Home reads it and shows its details.
-  const openUnlistedTask = useCallback((task: Task) => {
+  const openUnlistedTask = useLeanCallback((task: Task) => {
     window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: task.id, openDetail: true } }));
   }, []);
 
-  const handleExpandDetail = useCallback((task: Task) => {
+  const handleExpandDetail = useLeanCallback((task: Task) => {
     setDetailTarget(null);
     onFocusTask ? onFocusTask(task) : openTaskOnHome(task.id, navigate);
   }, [onFocusTask, navigate]);
@@ -6786,29 +6865,29 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const { hold: holdRecentRow, outside: recentOutside } = recentOpened;
   // Recent is for opening what you looked at: a row with no session to open (a finished task,
   // one never started) opens its details instead of only being selected.
-  const handleRecentRowClick = useCallback((task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
+  const handleRecentRowClick = useLeanCallback((task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
     holdRecentRow(task.id);
     if (recentOutside.has(task.id)) { openUnlistedTask(task); return; }
     if (!resolveTaskSessionId(task) && !(e && (e.metaKey || e.ctrlKey || e.shiftKey))) { handleExpandDetail(task); return; }
     handlePinnedCardClick(task, e);
   }, [holdRecentRow, recentOutside, openUnlistedTask, handlePinnedCardClick, handleExpandDetail]);
-  const handleRecentExpandDetail = useCallback((task: Task) => {
+  const handleRecentExpandDetail = useLeanCallback((task: Task) => {
     holdRecentRow(task.id);
     (recentOutside.has(task.id) ? openUnlistedTask : handleExpandDetail)(task);
   }, [holdRecentRow, recentOutside, openUnlistedTask, handleExpandDetail]);
-  const handleRecentStartSession = useCallback((task: Task) => {
+  const handleRecentStartSession = useLeanCallback((task: Task) => {
     holdRecentRow(task.id);
     onStartSession?.(task);
   }, [holdRecentRow, onStartSession]);
 
-  const showProjectDetail = useCallback((project: string) => {
+  const showProjectDetail = useLeanCallback((project: string) => {
     // Inbox has no registry row, so there is nothing to show for it.
     if (!project) return;
     setDetailTarget({ type: 'project', project });
     onClearFocus?.();
   }, [onClearFocus]);
 
-  const handleUpdateTitle = useCallback((id: string, title: string) => {
+  const handleUpdateTitle = useLeanCallback((id: string, title: string) => {
     if (onUpdate) onUpdate(id, { title });
   }, [onUpdate]);
 
@@ -6820,7 +6899,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // tab groups and the /tasks rail use, so all surfaces re-order together.
   const [labelDragProj, setLabelDragProj] = useState<string | null>(null);
   const [labelDropProj, setLabelDropProj] = useState<string | null>(null);
-  const handleLabelDrop = useCallback((active: string, target: string, visibleOrder: readonly string[]) => {
+  const handleLabelDrop = useLeanCallback((active: string, target: string, visibleOrder: readonly string[]) => {
     setLabelDragProj(null);
     setLabelDropProj(null);
     // '' (Inbox) is a legal drag participant: it has no registry row, but its
@@ -6862,7 +6941,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
    *  list's group order, or one tier's project runs), so "up" always means the row
    *  the user can see above this one; the swap itself is handleLabelDrop, so there
    *  is still exactly one place that writes `ordering.projectOrder`. */
-  const moveProjectBy = useCallback((seq: readonly string[], project: string, delta: -1 | 1) => {
+  const moveProjectBy = useLeanCallback((seq: readonly string[], project: string, delta: -1 | 1) => {
     const index = seq.indexOf(project);
     if (index === -1) return;
     const target = seq[index + delta];
@@ -6889,15 +6968,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Live drop target while dragging — rendered as the line's real position, so
   // the preview IS the frame that gets committed on drop.
   const [sepPreview, setSepPreview] = useState<TierSeparator | null>(null);
-  const clearSepDrag = useCallback(() => { setSepDrag(null); setSepPreview(null); }, []);
+  const clearSepDrag = useLeanCallback(() => { setSepDrag(null); setSepPreview(null); }, []);
 
-  const sepModeFor = useCallback((tier: string): SeparatorMode =>
+  const sepModeFor = useLeanCallback((tier: string): SeparatorMode =>
     (tierViewMode(tier) === 'custom' ? 'custom' : 'project'), [tierViewMode]);
 
   /** Resolve a pointer position inside a tier list into a separator placement.
    *  Rows are read from the DOM: what the user SEES is the only honest source for
    *  "which two rows did I drop between". */
-  const sepDropAt = useCallback((container: HTMLElement, tier: string, clientY: number): Omit<TierSeparator, 'id'> | null => {
+  const sepDropAt = useLeanCallback((container: HTMLElement, tier: string, clientY: number): Omit<TierSeparator, 'id'> | null => {
     // A project fold's cards (By project) are not tier rows: a line never anchors to one.
     const rows = Array.from(container.querySelectorAll<HTMLElement>('[data-task-id]:not(.status-section-card)'))
       .map((el) => ({ el, id: el.dataset.taskId ?? '' }))
@@ -6954,7 +7033,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [sepModeFor, pinnedTaskMap]);
 
   /** DnD props for a tier's list container — accepts a dragged separator line. */
-  const sepDropProps = useCallback((tier: string) => ({
+  const sepDropProps = useLeanCallback((tier: string) => ({
     onDragOver: (e: ReactDragEvent<HTMLDivElement>) => {
       if (!sepDrag) return;
       e.preventDefault();
@@ -6976,7 +7055,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   /** "Add separator" from a header "+". An empty list gets no line — it would have
    *  nothing to divide and nowhere to render, and a control that silently does
    *  nothing visible is worse than none. */
-  const addSeparator = useCallback((tier: string, project?: string) => {
+  const addSeparator = useLeanCallback((tier: string, project?: string) => {
     const mode = sepModeFor(tier);
     const tierIds = (tierIdsByTier.get(tier) ?? []).filter((id) => pinnedTaskMap.has(id));
     if (tierIds.length === 0) {
@@ -7013,13 +7092,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     add({ tier, mode, ...anchorsForSlot(tierIds, 0) });
   }, [sepModeFor, tierIdsByTier, pinnedTaskMap, persistSeparators, separators, onOperationError]);
 
-  const deleteSeparator = useCallback((id: string) => {
+  const deleteSeparator = useLeanCallback((id: string) => {
     persistSeparators(removeSeparator(separators, id));
   }, [persistSeparators, separators]);
 
   /** Name (or clear the name of) a line — a named line renders as a section
    *  heading. Empty text removes the field so the record stays a plain line. */
-  const renameSeparator = useCallback((id: string, label: string) => {
+  const renameSeparator = useLeanCallback((id: string, label: string) => {
     const sep = separators.find((s) => s.id === id);
     if (!sep || (sep.label ?? '') === label) return;
     const next = { ...sep };
@@ -7033,37 +7112,42 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // re-focuses an already-open row.
   const [tierAddSignal, setTierAddSignal] = useState<{ tier: string; nonce: number } | null>(null);
   const [runAddSignal, setRunAddSignal] = useState<{ tier: string; project: string; nonce: number } | null>(null);
-  const addTaskToTier = useCallback((tier: string) => {
+  const addTaskToTier = useLeanCallback((tier: string) => {
     setTierAddSignal({ tier, nonce: Date.now() });
   }, []);
-  const addTaskToRun = useCallback((tier: string, project: string) => {
+  const addTaskToRun = useLeanCallback((tier: string, project: string) => {
     // The ghost row is rendered INSIDE the project's run, so a folded project
     // would hide the very row this click asked for. Unfold first.
     expandProject(project, { tier });
     setRunAddSignal({ tier, project, nonce: Date.now() });
   }, [expandProject]);
-  const tierAddOpenSignal = useCallback((tier: string) =>
+  const tierAddOpenSignal = useLeanCallback((tier: string) =>
     (tierAddSignal?.tier === tier ? tierAddSignal.nonce : undefined), [tierAddSignal]);
-  const consumeTierAddSignal = useCallback(() => setTierAddSignal(null), []);
+  const consumeTierAddSignal = useLeanCallback(() => setTierAddSignal(null), []);
   /** The inline add row for ONE project run inside a tier. Mounted only while that
    *  run is the "+"-picked target — the tier's own bottom row covers the default
    *  case, and a permanent ghost row per project would triple the list's chrome.
    *  Consuming the signal zeroes the nonce instead of unmounting: dropping the row
    *  the moment it opens would eat the click that asked for it. */
   const reorderWatching = useWatchReorder();
+  // The row predicates are lean callbacks, not arrows in the memo: an arrow made there keeps the
+  // render that built the handlers alive (useLeanCallback.ts).
+  const isPinnedRow = useLeanCallback((id: string) => !!pinnedTaskIds?.has(id), [pinnedTaskIds]);
+  const tierLabelOf = useLeanCallback((tier: FocusTier) => tierDisplayLabel(tier, customTiers), [customTiers]);
+  // A watched task stays under Watching when it completes: it never fades out.
+  const isSectionRowVanishing = useLeanCallback((t: Task) => graceExiting && heldInGrace(t) && !isWatched(t), [graceExiting, heldInGrace]);
   const sectionRowHandlers = useMemo<SectionRowHandlers>(() => ({
     focusedTaskId,
     limitFlash,
     limitLive,
     suppressDetail,
     openSessionTaskIds,
-    isPinned: (id) => !!pinnedTaskIds?.has(id),
+    isPinned: isPinnedRow,
     tierOf: getTier,
     viewSection: effectiveSection,
-    tierLabel: (tier) => tierDisplayLabel(tier, customTiers),
+    tierLabel: tierLabelOf,
     twoLine: needsSection && effectiveSection !== 'recent' && effectiveSection !== 'tasks',
-    // A watched task stays under Watching when it completes: it never fades out.
-    isVanishing: (t) => graceExiting && heldInGrace(t) && !isWatched(t),
+    isVanishing: isSectionRowVanishing,
     onLoadMore: askArchive,
     onClick: handleTaskClick,
     onSetPhase: setPhaseOrComplete,
@@ -7083,7 +7167,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onFilterProject: jumpToProject,
     // Watching is the user's own order: its rows drag (watchReorder).
     onReorderWatching: isSearchMode ? undefined : reorderWatching,
-  }), [isSearchMode, reorderWatching, focusedTaskId, limitFlash, limitLive, suppressDetail, openSessionTaskIds, pinnedTaskIds, getTier, effectiveSection, needsSection, customTiers, graceExiting, heldInGrace, askArchive, handleTaskClick, setPhaseOrComplete, onUpdate, handleUpdateTitle, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete, jumpToProject]);
+  }), [isSearchMode, reorderWatching, focusedTaskId, limitFlash, limitLive, suppressDetail, openSessionTaskIds, isPinnedRow, getTier, effectiveSection, needsSection, tierLabelOf, isSectionRowVanishing, askArchive, handleTaskClick, setPhaseOrComplete, onUpdate, handleUpdateTitle, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete, jumpToProject]);
   // The By project design (panel-design.ts): each region's waiting and completed tasks
   // by project, drawn as folds at the end of the project. A tier region holds its own
   // pins; the list holds the rest (the pins too, outside the stacked view).
@@ -7107,25 +7191,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     regions.set('list', list);
     return regions;
   }, [sectionsActive, tasks, pinnedTaskIds, hiddenGroups, getTier, dedupePinned]);
-  const regionRules = useMemo(() => {
-    const dateDefault = filterEvalCtx.state.date === 'now';
-    return {
-      passes: (t: Task) => passesChips(t, filterEvalCtx, { except: dateDefault ? ['status', 'date'] : 'status' }),
-      snoozed: dateDefault ? (t: Task) => !dimPasses(t, 'date', filterEvalCtx) : undefined,
-    };
-  }, [filterEvalCtx]);
+  const regionRules = useMemo(() => sectionRulesFor(filterEvalCtx), [filterEvalCtx]);
   const foldRegions = useMemo(() => {
     const regions = new Map<string, Map<string, ProjectFoldTasks>>();
     if (!projectFoldsOn) return regions;
     for (const [region, arr] of regionTasks) regions.set(region, foldTasksByProject(arr, regionRules.passes, regionRules.snoozed));
     return regions;
   }, [projectFoldsOn, regionTasks, regionRules]);
-  const projectFoldsFor = useCallback((region: string, project: string, label?: boolean) => (
+  const projectFoldsFor = useLeanCallback((region: string, project: string, label?: boolean) => (
     <ProjectStatusFolds key={`folds:${region}:${project}`} region={region} project={project}
       tasks={foldRegions.get(region)?.get(project)} open={openProjectFolds} onToggle={toggleProjectFold}
       handlers={sectionRowHandlers} label={label} />
   ), [foldRegions, openProjectFolds, toggleProjectFold, sectionRowHandlers]);
-  const runAddRow = useCallback((tier: string, project: string) => (
+  const runAddRow = useLeanCallback((tier: string, project: string) => (
     <InlineAdd
       key={`runadd:${tier}:${project}`}
       draftId={`run:${tier}:${project}`}
@@ -7144,7 +7222,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // chip alone (it IS the whole cluster mid-drag). The chip's key is stable across
   // both states (`group:<gid>:<tier>`) so React keeps the same drag node through the
   // idle→collapsed handoff — dnd-kit's active node must not remount mid-drag.
-  const movePinnedRow = useCallback((taskId: string, neighborId: string, tier: FocusTier) => {
+  const movePinnedRow = useLeanCallback((taskId: string, neighborId: string, tier: FocusTier) => {
     let next = [...pinnedTaskIds ?? []];
     if (tierSort(tier) !== 'manual') {
       // A sorted tier draws no hand order to swap in: the order it shows becomes its
@@ -7161,7 +7239,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [next[from], next[to]] = [next[to], next[from]];
     onReorderPinned?.(next);
   }, [pinnedTaskIds, onReorderPinned, tierSort, setTierSort, tierIdsAtRest, showSortToast, customTiers]);
-  const renderTierItems = useCallback((ids: string[], tier: FocusTier, groupMeta: Map<string, GroupRenderInfo>) => {
+  const renderTierItems = useLeanCallback((ids: string[], tier: FocusTier, groupMeta: Map<string, GroupRenderInfo>) => {
     const out: ReactNode[] = [];
     // Project labels — a slim row above each project run (ids are pre-clustered by
     // project). Each one is a `tierproj:` sentinel IN the ids (withProjectLabels), so
@@ -7573,7 +7651,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     : (sectionCounts[effectiveSection] ?? 0);
   // 5.3: chips are set and nothing matches: say so, with one way back.
   const showFilterEmpty = !isSearchMode && filterCount === 0 && homeFilters.chips.length > 0;
-  const toggleIncludeComplete = useCallback(() => setShowDoneResults((v) => !v), []);
+  const toggleIncludeComplete = useLeanCallback(() => setShowDoneResults((v) => !v), []);
   // The view name rides in the filter row whenever no tab shows it: the bar is
   // hidden, or the view is Projects, which the bar never draws (F36).
   const viewItemLabel = (!quickViews || effectiveSection === 'tasks') && effectiveSection !== 'all'
@@ -7601,6 +7679,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       onDismiss={() => setOffView(null)}
     />
   ) : null;
+  const openFilterDisplay = useLeanCallback(() => homeFilters.setMenuOpen(true), [homeFilters]);
   const filterBar = useMemo<FilterBarController>(() => ({
     state: homeFilters.state, lists: homeFilters.lists, chips: homeFilters.chips, facets: homeFilters.facets,
     recent: homeFilters.recent, apply: homeFilters.apply, clearAll: homeFilters.clearAll,
@@ -7617,8 +7696,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         : null,
     },
     viewItem: viewItemLabel ? { label: viewItemLabel } : null,
-    openDisplay: () => homeFilters.setMenuOpen(true),
-  }), [homeFilters, filterCount, archiveLoading, isSearchMode, effectiveSection, statusIsDefault, searchDoneCount, showDoneResults, toggleIncludeComplete, viewItemLabel]);
+    openDisplay: openFilterDisplay,
+  }), [homeFilters, openFilterDisplay, filterCount, archiveLoading, isSearchMode, effectiveSection, statusIsDefault, searchDoneCount, showDoneResults, toggleIncludeComplete, viewItemLabel]);
   const footerTasks = useMemo(() => footerScope(tasks, effectiveSection, {
     pinned: pinnedTaskIds, focus: focusTaskIds, custom: customTierIds,
   }), [tasks, effectiveSection, pinnedTaskIds, focusTaskIds, customTierIds]);
@@ -7630,11 +7709,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return footerTasks.filter((t) => !(t.group_id && hiddenGroups.has(t.group_id)));
   }, [footerTasks, effectiveSection, hiddenGroups]);
   const baseSectionModel = useMemo(() => {
-    // Date at its default ("Available now") only puts a task that has not started yet
-    // under Waiting / snoozed; any other Date is the user's chip and narrows every section.
-    const dateDefault = filterEvalCtx.state.date === 'now';
-    const passes = (t: Task) => passesChips(t, filterEvalCtx, { except: dateDefault ? ['status', 'date'] : 'status' });
-    const snoozed = dateDefault ? (t: Task) => !dimPasses(t, 'date', filterEvalCtx) : undefined;
+    const { passes, snoozed } = regionRules;
     const lastPlace = lastPlaceRef.current;
     return buildStatusSections({
       scope: isSearchMode ? [] : sectionScope,
@@ -7655,7 +7730,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       splitNotStarted: needsSection,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recentTick re-runs the grace check
-  }, [sectionsActive, needsSection, sectionScope, isSearchMode, tasks, filterEvalCtx, tasksStore?.completedHidden, footerTasks, heldInGrace, recentTick]);
+  }, [sectionsActive, needsSection, sectionScope, isSearchMode, tasks, filterEvalCtx, regionRules, tasksStore?.completedHidden, footerTasks, heldInGrace, recentTick]);
   /**
    * Flat: the view's own list (tiers, projects) is not drawn; Working is a section.
    * Recent and Projects keep their lists: their order is what they are for.
@@ -7698,56 +7773,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const r = workerFolds.rows;
     return { ...m, ...r, workingCount: Math.max(0, m.workingCount + r.working.length - m.working.length) };
   }, [shownSectionModel, workerFolds]);
-  const workerFoldCtl = useMemo<WorkerFoldCtl | undefined>(() => {
-    if (!workerFolds) return undefined;
-    // A team down to its last level: a worker shown as a row carries its own workers in a tree of its own.
-    const teamOf = (hostId: string): string[] => {
-      const out: string[] = [];
-      const seen = new Set<string>([hostId]);
-      const walk = (id: string) => {
-        for (const e of workerFolds.trees.get(id) ?? []) {
-          if (seen.has(e.task.id)) continue;
-          seen.add(e.task.id);
-          out.push(e.task.id);
-          walk(e.task.id);
-        }
-      };
-      walk(hostId);
-      return out;
-    };
-    // A worker shown as a row is drawn in its own section, which may be folded: open it, so the
-    // row the user asked for is on screen.
-    const openSectionsOf = (ids: readonly string[]) => {
-      const want = new Set(ids);
-      for (const k of STATUS_SECTION_ORDER) {
-        if (sectionRowsOf(shownSectionModel, k).tasks.some((t) => want.has(t.id))) openStatusSection(k);
-      }
-    };
-    return {
-      trees: workerFolds.trees,
-      quiet: workerFolds.quiet,
-      movedFrom: workerFolds.movedFrom,
-      isOpen: (id) => workerFold.open.includes(id),
-      toggleOpen: (id) => setWorkerFold((v) => ({ ...v, open: withId(v.open, id, !v.open.includes(id)) })),
-      separate: (id, on) => {
-        setWorkerFold((v) => ({ ...v, separate: withId(v.separate, id, on) }));
-        if (on) openSectionsOf([id]);
-      },
-      // The whole team, every level: each leader in it shows (or folds) its own workers too.
-      showTeam: (id, on) => { if (on) openSectionsOf(teamOf(id)); setWorkerFold((v) => {
-        const team = teamOf(id);
-        const all = new Set([id, ...team]);
-        const teams = on ? [...all].reduce((l, x) => withId(l, x, true), v.teams) : v.teams.filter((x) => !all.has(x));
-        return { ...v, teams, separate: on ? v.separate : v.separate.filter((x) => !all.has(x)) };
-      }); },
-      foldBackOf: (t) => {
-        const leader = foldLeaderOf(tasks, t);
-        if (!leader) return null;
-        const team = workerFold.teams.includes(leader.id);
-        return team || workerFold.separate.includes(t.id) ? { leader, team } : null;
-      },
-    };
-  }, [workerFolds, workerFold, setWorkerFold, tasks, shownSectionModel, openStatusSection]);
+  const workerFoldCtl = useMemo<WorkerFoldCtl | undefined>(
+    () => (workerFolds ? makeWorkerFoldCtl({ workerFolds, workerFold, setWorkerFold, tasks, shownSectionModel, openStatusSection }) : undefined),
+    [workerFolds, workerFold, setWorkerFold, tasks, shownSectionModel, openStatusSection],
+  );
   useEffect(() => {
     // Only for a locate: a page-load restore never opens (and saves) a section the user folded.
     const asked = focusLocateRef.current?.id === overrideId && focusLocateRef.current?.locate;
@@ -7839,7 +7868,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // which left FilterBar's scroll keeper reading a null list scroller.
   const listScrollRef = homeFilters.listScrollRef;
   const stopRowFit = useRef<(() => void) | null>(null);
-  const setListScrollEl = useCallback((el: HTMLDivElement | null) => {
+  const setListScrollEl = useLeanCallback((el: HTMLDivElement | null) => {
     listScrollRef.current = el;
     stopRowFit.current?.();
     stopRowFit.current = el ? observeRowFit(el) : null;
@@ -7857,7 +7886,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   useScrollAnchor(pinnedWrapperRef, HOME_LIST_ROWS, dragging);
   useScrollAnchor(recentListRef, HOME_LIST_ROWS, dragging);
   // 6.8: the project heading's "Filter to this project" replaces the Project set.
-  const filterToProject = useCallback(
+  const filterToProject = useLeanCallback(
     (project: string) => homeFilters.apply({ ...homeFilters.state, projects: [project] }, 'board'),
     [homeFilters],
   );

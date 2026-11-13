@@ -10,7 +10,8 @@
  * The state is read synchronously in the useState initialisers, so the first
  * render is already narrowed (no flash of every task before the chips land).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { Task } from '@open-walnut/core';
 import { log } from '@/utils/log';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
@@ -130,7 +131,7 @@ export function useHomeFilters(opts: HomeFiltersOptions) {
   const listScrollRef = useRef<HTMLElement | null>(null);
   const { notify, dismissToast, pinToast } = useNotifications();
   const clearToastRef = useRef<{ id: string; timer: ReturnType<typeof setTimeout> } | null>(null);
-  const dropClearToast = useCallback(() => {
+  const dropClearToast = useLeanCallback(() => {
     const t = clearToastRef.current;
     if (!t) return;
     clearTimeout(t.timer);
@@ -139,7 +140,7 @@ export function useHomeFilters(opts: HomeFiltersOptions) {
   }, [dismissToast]);
   useEffect(() => () => { if (clearToastRef.current) clearTimeout(clearToastRef.current.timer); }, []);
 
-  const apply = useCallback((next: FilterState, origin: FilterOrigin) => {
+  const apply = useLeanCallback((next: FilterState, origin: FilterOrigin) => {
     const prev = stateRef.current;
     const w = writeFilterState(next, modelsRef.current.query);
     const pair = { legacy: w.legacy, query: w.query };
@@ -156,7 +157,7 @@ export function useHomeFilters(opts: HomeFiltersOptions) {
     clearFocusOverride();
   }, [onProjectChange, clearFocusOverride, dropClearToast]);
 
-  const clearAll = useCallback(() => {
+  const clearAll = useLeanCallback(() => {
     const snapshot = stateRef.current;
     apply(clearedState(), 'board');
     dropClearToast();
@@ -176,7 +177,7 @@ export function useHomeFilters(opts: HomeFiltersOptions) {
   }, [apply, notify, pinToast, dismissToast, dropClearToast]);
 
   /** Widen just enough to let `task` in (5.11 / 5.12 Show). */
-  const showTask = useCallback((task: Task, dims: readonly FilterDim[], origin: FilterOrigin) => {
+  const showTask = useLeanCallback((task: Task, dims: readonly FilterDim[], origin: FilterOrigin) => {
     let next = stateRef.current;
     for (const dim of dims) next = showValueFor(next, task, dim);
     apply(next, origin);
@@ -213,6 +214,8 @@ export function useHomeFilters(opts: HomeFiltersOptions) {
   const showPriority = useShowPriority();
   const tagDisplay = useTagDisplay().compiled;
   const integrations = useIntegrations();
+  // A lean callback, not an arrow in the memo: that would keep this render (its task list) alive.
+  const tagLabel = useLeanCallback((tag: string) => tagPillText(tag, tagDisplay.valueOnly), [tagDisplay]);
   const lists = useMemo<FilterLists>(() => ({
     loading,
     projects: orderFilterProjects(tasks, projectOrder),
@@ -223,8 +226,8 @@ export function useHomeFilters(opts: HomeFiltersOptions) {
     tags: deriveTagOptions(tasks, tagDisplay.shown),
     sprints: deriveSprintOptions(tasks),
     showPriority,
-    tagLabel: (tag: string) => tagPillText(tag, tagDisplay.valueOnly),
-  }), [loading, tasks, projectOrder, integrations, tagDisplay, showPriority]);
+    tagLabel,
+  }), [loading, tasks, projectOrder, integrations, tagDisplay, showPriority, tagLabel]);
 
   const chips = useMemo(() => buildFilterChips(state, lists), [state, lists]);
   // One `now` per state change; timeTick re-arms a relative time window.

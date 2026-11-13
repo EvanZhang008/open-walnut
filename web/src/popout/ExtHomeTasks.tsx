@@ -8,7 +8,8 @@
  * What it does not do here: open Home's detail pane or session columns. A row opens in the frame
  * (`onOpen`): a task's conversation, or its detail for one with none yet.
  */
-import { useCallback, useMemo } from 'react';
+import { useMemo } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { Task } from '@open-walnut/core';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
 import { useTasksContext } from '@/contexts/TasksContext';
@@ -36,17 +37,17 @@ export default function ExtHomeTasks({ onOpen }: { onOpen: OpenTask }) {
     for (const [tid, ids] of Object.entries(focusBar.customTierIds)) map[tid] = new Set(ids);
     return map;
   }, [focusBar.customTierIds]);
-  const onCreate = useCallback((input: { title: string; priority: string; project?: string }) => create({ title: input.title, priority: input.priority, project: input.project }), [create]);
+  const onCreate = useLeanCallback((input: { title: string; priority: string; project?: string }) => create({ title: input.title, priority: input.priority, project: input.project }), [create]);
   // A row's click (TodoPanel handleTaskClick, the search rows through it): a task with a session
   // opens its conversation (onOpenSession, then a focus with `openDetail: false`, left alone here).
   const tasksRef = useCommittedRef(tasks);
-  const onOpenSession = useCallback((sessionId: string) => {
+  const onOpenSession = useLeanCallback((sessionId: string) => {
     const task = taskOfSession(tasksRef.current, sessionId);
     if (task) onOpen(task, { sessionId });
   }, [onOpen]);
   // A row's click with no conversation to open, and the row's detail button: its detail here (on a
   // desktop a click only focuses the row, and the panel has no side detail to show it in).
-  const onFocusTask = useCallback((task: Task, opts?: { openDetail?: boolean }) => {
+  const onFocusTask = useLeanCallback((task: Task, opts?: { openDetail?: boolean }) => {
     if (!opts || opts.openDetail || !resolveTaskSessionId(task)) onOpen(task, 'detail');
   }, [onOpen]);
   return (

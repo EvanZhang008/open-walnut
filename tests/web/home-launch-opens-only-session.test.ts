@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 const SRC = readFileSync(join(__dirname, '../../web/src/pages/MainPage.tsx'), 'utf8');
 
-/** The useCallback body that starts at `marker`, up to its dependency list. */
+/** The useLeanCallback body that starts at `marker`, up to its dependency list. */
 function callbackBody(marker: string): string {
   const start = SRC.indexOf(marker);
   expect(start, marker).toBeGreaterThan(-1);
@@ -39,7 +39,7 @@ describe('the chat slot shows only on the user\'s step', () => {
   });
 
   it('a launch ends the borrow with the chat closed, and keeps it closed across a reload', () => {
-    const forget = callbackBody('const forgetDraft = useCallback(');
+    const forget = callbackBody('const forgetDraft = useLeanCallback(');
     expect(forget).toMatch(/\(draftId: string, exit: 'close' \| 'launch'\)/);
     expect(forget).toMatch(/else persistPanelFlag\(LS_CHAT_VISIBLE_KEY, false, HOME_CHAT_VISIBLE_DEFAULT\);/);
   });
@@ -48,8 +48,8 @@ describe('the chat slot shows only on the user\'s step', () => {
     const exits = [...SRC.matchAll(/forgetDraft\(draftId(?:, '(close|launch)')?\)/g)].map((m) => m[1] ?? 'unnamed');
     expect(exits).not.toContain('unnamed');
     expect(exits.filter((e) => e === 'close')).toHaveLength(1);
-    expect(callbackBody('const closeDraftColumn = useCallback(')).toMatch(/forgetDraft\(draftId, 'close'\)/);
-    const start = callbackBody('const handleDraftStart = useCallback(');
+    expect(callbackBody('const closeDraftColumn = useLeanCallback(')).toMatch(/forgetDraft\(draftId, 'close'\)/);
+    const start = callbackBody('const handleDraftStart = useLeanCallback(');
     expect(start.match(/forgetDraft\(draftId, 'launch'\)/g)).toHaveLength(3); // Ask Walnut, fork, coding
     expect(start).not.toMatch(/forgetDraft\(draftId, 'close'\)/);
   });
@@ -60,14 +60,14 @@ describe('a launch opens one column: the draft\'s own, morphed into the session'
   const OPENS = /\b(openSessionOrToast(?:Ref\.current)?|addSessionColumn|forceAddSessionColumn|replaceSessionColumn|regrowColumns|showAskInSlot)\(/g;
 
   it('the draft Start opens nothing itself but the fork\'s morph of its own column', () => {
-    const start = callbackBody('const handleDraftStart = useCallback(');
+    const start = callbackBody('const handleDraftStart = useLeanCallback(');
     expect([...start.matchAll(OPENS)].map((m) => m[1])).toEqual([]);
     expect(start).toMatch(/handleForkPending\(draft\.cwd, draft\.host \?\? undefined, \{ columnId: draftId \}\)/);
     expect(start.match(/columnId: draftId/g)?.length).toBeGreaterThanOrEqual(3);
   });
 
   it('launchQuickStart opens only its pending column (the draft morphed, else one insert) and swaps it in place', () => {
-    const launch = callbackBody('const launchQuickStart = useCallback(');
+    const launch = callbackBody('const launchQuickStart = useLeanCallback(');
     expect([...launch.matchAll(OPENS)].map((m) => m[1])).toEqual([
       'replaceSessionColumn', // the draft column morphs into the pending one
       'forceAddSessionColumn', // no draft column: one pending column

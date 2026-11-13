@@ -68,7 +68,7 @@ describe('the Home list is anchored by hand in every box that scrolls it', () =>
 
   it('holds the rows of each with useScrollAnchor', () => {
     expect(refOf(/^home-navigation-scroll\b/)).toBe('setListScrollEl');
-    expect(panel).toMatch(/const setListScrollEl = useCallback\(\(el: HTMLDivElement \| null\) => \{\s*listScrollRef\.current = el;/);
+    expect(panel).toMatch(/const setListScrollEl = useLeanCallback\(\(el: HTMLDivElement \| null\) => \{\s*listScrollRef\.current = el;/);
     expect(refOf(/^todo-panel-list$/)).toBe('panelListRef');
     expect(refOf(/^todo-pinned-wrapper\b/)).toBe('pinnedWrapperRef');
     expect(refOf(/^todo-pinned-list-scroll$/)).toBe('listRef');

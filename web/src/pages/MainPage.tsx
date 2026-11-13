@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, Fragment } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, Fragment } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import type { NavigateFunction } from 'react-router-dom';
 import type { SessionEffort, SessionEngine, SessionMode, Task } from '@open-walnut/core';
@@ -440,7 +441,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return map;
   }, [focusBar.customTierIds]);
   // Display label for a tier value (a built-in's board label, custom id → its label).
-  const tierLabel = useCallback((tier: string): string => tierLabelOf(tier, focusBar.customTiers), [focusBar.customTiers]);
+  const tierLabel = useLeanCallback((tier: string): string => tierLabelOf(tier, focusBar.customTiers), [focusBar.customTiers]);
   const projectRegistry = useProjectRegistry();
   // config.defaults.engine, for a draft launch's "names Claude Code" rule (utils/launch-source.ts).
   const globalEngine = useGlobalDefaultEngine();
@@ -486,7 +487,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * deploy reload and page-process recycle reopened its detail over Home. The focus (the row,
    * the URL) is restored; opening the detail is the user's own click.
    */
-  const restoreFocus = useCallback((task: Task) => {
+  const restoreFocus = useLeanCallback((task: Task) => {
     setFocusedTask(task);
     setSuppressDetail(true);
   }, [setFocusedTask]);
@@ -510,7 +511,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // agentId/conversationId form stays on the route for other callers).
   const inspector = useContextInspector(undefined, undefined, askSlotSelection.sessionId ?? undefined);
 
-  const handleNavigateSettings = useCallback((hash?: string) => {
+  const handleNavigateSettings = useLeanCallback((hash?: string) => {
     navigateRef?.current?.(`/settings${hash ?? ''}`);
   }, [navigateRef]);
 
@@ -558,7 +559,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   );
 
   // Closing a companion pane hands focus back to the rail toggle that opens it.
-  const closeCompanionPane = useCallback((setVisible: (visible: boolean) => void, toggle: string) => {
+  const closeCompanionPane = useLeanCallback((setVisible: (visible: boolean) => void, toggle: string) => {
     setVisible(false);
     requestAnimationFrame(() => {
       const opener = document.querySelector<HTMLButtonElement>(`[data-testid="${toggle}"]`);
@@ -566,8 +567,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       else document.querySelector<HTMLButtonElement>('.app-task-panel-toggle')?.focus();
     });
   }, []);
-  const closeCompanion = useCallback(() => closeCompanionPane(setCalendarVisible, 'sidebar-toggle-calendar'), [closeCompanionPane]);
-  const closeScratchpad = useCallback(() => closeCompanionPane(setScratchpadVisible, 'sidebar-toggle-scratchpad'), [closeCompanionPane]);
+  const closeCompanion = useLeanCallback(() => closeCompanionPane(setCalendarVisible, 'sidebar-toggle-calendar'), [closeCompanionPane]);
+  const closeScratchpad = useLeanCallback(() => closeCompanionPane(setScratchpadVisible, 'sidebar-toggle-scratchpad'), [closeCompanionPane]);
 
   // New-session drafts whose composer still holds words come back in their
   // slots (draft-column-persist.ts); read once, before either list's first render.
@@ -615,7 +616,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   useEffect(() => onTaskbarClose((sessionId) => {
     resizeClosedRef.current = pendingRegrow(resizeClosedRef.current, [], new Set([sessionId]));
   }), []);
-  const handleMinimizeSession = useCallback((sessionId: string) => {
+  const handleMinimizeSession = useLeanCallback((sessionId: string) => {
     minimizedIdsRef.current.add(sessionId);
     setSessionColumns(prev => removeSessionColumn(prev, sessionId));
   }, []);
@@ -656,7 +657,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // A Start the host refused (409): the draft came back, and its bar says why.
   const [draftGateErrors, setDraftGateErrors] = useState<Record<string, DraftGateError>>({});
   const [draftRestoreImages, setDraftRestoreImages] = useState<Record<string, ImageAttachment[]>>({});
-  const clearDraftGateError = useCallback((draftId: string) => {
+  const clearDraftGateError = useLeanCallback((draftId: string) => {
     setDraftGateErrors(prev => {
       if (!(draftId in prev)) return prev;
       const next = { ...prev };
@@ -718,7 +719,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // The task panel's banner reads health from this channel, so a health frame
   // never changes the (memo) TodoPanel's props.
   useLayoutEffect(() => { publishBannerHealth(health, healthLoading); }, [health, healthLoading]);
-  const startDraftFromBanner = useCallback(() => { openDraftColumnRef.current(); }, []);
+  const startDraftFromBanner = useLeanCallback(() => { openDraftColumnRef.current(); }, []);
   const needsFirstSetup = firstUseNeedsSetup(tasks, completedHidden, health, loading || healthLoading);
   // The welcome card (FirstUseSetup) leads the Ask slot while setup is needed. With the slot closed
   // (the rail's Ask Walnut toggle, the slot's ×) it stays on Home at the top of the task panel
@@ -904,11 +905,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // identity on every render would remount the container and wipe animations,
   // and in React 18 a changing ref callback re-runs with null then the element,
   // which has caused infinite loops in the past.
-  const sessionsAreaCombinedRef = useCallback((el: HTMLDivElement | null) => {
+  const sessionsAreaCombinedRef = useLeanCallback((el: HTMLDivElement | null) => {
     (sessionPanel.panelRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
     sessionsAreaAutoAnimateRef(el);
   }, [sessionPanel.panelRef, sessionsAreaAutoAnimateRef]);
-  const holdSessionsAreaAnimation = useCallback(() => {
+  const holdSessionsAreaAnimation = useLeanCallback(() => {
     holdStripAnimation(setSessionsAreaAnimate, sessionPanel.panelRef.current as HTMLElement | null);
   }, [setSessionsAreaAnimate, sessionPanel.panelRef]);
 
@@ -951,7 +952,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       saveColWeights(colWeightsRef.current, localStorage);
     },
   });
-  const colSplitHandleProps = useCallback((boundary: number) => ({
+  const colSplitHandleProps = useLeanCallback((boundary: number) => ({
     onPointerDown: (e: React.PointerEvent) => {
       dragBoundaryRef.current = boundary;
       colSplitPointerDown(e);
@@ -1286,12 +1287,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *  (applyDraftParse's folder-follows-project lookup). No fetch. */
   const projectDefaultsRef = useRef(projectDefaults);
   projectDefaultsRef.current = projectDefaults;
-  const draftProjectDefault = useCallback(
+  const draftProjectDefault = useLeanCallback(
     (name: string) => projectDefaultsRef.current.get(name.trim().toLowerCase()),
     [],
   );
 
-  const openDraftColumn = useCallback((seed?: DraftSeed): string => {
+  const openDraftColumn = useLeanCallback((seed?: DraftSeed): string => {
     // Every exit below puts a draft in front of the user (new or refocused), and a
     // fullscreen panel — the Fork chip lives in one — would cover it (useFullscreen).
     yieldFullscreen(seed?.forkOf ? 'fork-draft' : 'draft-column');
@@ -1446,7 +1447,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *  its focus claim. The strip SLOT is handled by the caller, because the two
    *  exits differ there — closing removes the column, Start morphs it into the
    *  `pending:` one. */
-  const forgetDraft = useCallback((draftId: string, exit: 'close' | 'launch') => {
+  const forgetDraft = useLeanCallback((draftId: string, exit: 'close' | 'launch') => {
     setDraftColumns(prev => prev.filter(d => d.id !== draftId));
     setFocusDraftId(prev => (prev === draftId ? null : prev));
     discardDraft(draftComposerKey(draftId));
@@ -1465,7 +1466,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   /** Discard a draft: column + row + persisted composer text. Close = no trace. */
-  const closeDraftColumn = useCallback((draftId: string) => {
+  const closeDraftColumn = useLeanCallback((draftId: string) => {
     setSessionColumns(prev => removeSessionColumn(prev, draftId));
     forgetDraft(draftId, 'close');
   }, [forgetDraft]);
@@ -1492,7 +1493,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * projectForFolderPick owns the rules (never over a 'user'/'seed' pick, never on
    * bound/fork drafts), so the quick chips and the full picker behave identically.
    */
-  const handleDraftPathChange = useCallback((
+  const handleDraftPathChange = useLeanCallback((
     draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta, openedMeta?: QuickStartTaskMeta,
   ) => {
     // Task fields rebase per field against `openedMeta` (applyDraftPathPick), so a
@@ -1504,7 +1505,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   /** Project pill / quick-access chip → an EXPLICIT project choice. `projectSource:
    *  'user'` is what makes it final: the background parse (handleDraftAiParse) will
    *  never write over it again, however the sentence changes. */
-  const handleDraftProjectChange = useCallback((draftId: string, project: string) => {
+  const handleDraftProjectChange = useLeanCallback((draftId: string, project: string) => {
     setDraftColumns(prev => prev.map(d => (d.id === draftId
       ? { ...clearAiFields(d, ['project']), project, projectSource: 'user' as const, userTouched: true }
       : d)));
@@ -1528,7 +1529,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   );
   const draftParseOptsRef = useRef({ tierKnown, priorityVisible });
   draftParseOptsRef.current = { tierKnown, priorityVisible };
-  const handleDraftAiParse = useCallback((draftId: string, parse: DraftParseInput, kind: DraftParseKind) => {
+  const handleDraftAiParse = useLeanCallback((draftId: string, parse: DraftParseInput, kind: DraftParseKind) => {
     setDraftColumns(prev => mapDraft(prev, draftId, (d) =>
       applyDraftParse(d, parse, draftProjectDefault, { ...draftParseOptsRef.current, kind })));
   }, [draftProjectDefault]);
@@ -1536,12 +1537,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   /** More / a decision chip edited task fields: those fields become the user's
    *  (no ✦, final against the AI). Never `metaTouched`: that is model/engine
    *  launch memory only, so a folder picked afterwards still brings its model. */
-  const handleDraftTaskFieldChange = useCallback((draftId: string, patch: DraftTaskFieldPatch) => {
+  const handleDraftTaskFieldChange = useLeanCallback((draftId: string, patch: DraftTaskFieldPatch) => {
     setDraftColumns(prev => mapDraft(prev, draftId, (d) => applyDraftTaskFieldEdit(d, patch)));
   }, []);
 
   /** "Use Walnut's pick": the field goes back to the AI, ✦ included. */
-  const handleDraftReturnFieldToWalnut = useCallback((draftId: string, field: DraftTaskField) => {
+  const handleDraftReturnFieldToWalnut = useLeanCallback((draftId: string, field: DraftTaskField) => {
     setDraftColumns(prev => mapDraft(prev, draftId, (d) => returnFieldToWalnut(d, field)));
   }, []);
 
@@ -1584,7 +1585,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *  it — projectForFolderPick then names a new project after the folder, made
    *  unique against the registry (see its doc). Reads the already-loaded
    *  registry — no fetch, which the draft path requires. */
-  const projectForDir = useCallback(
+  const projectForDir = useLeanCallback(
     (cwd: string) => projectByCwd.get(cwd.replace(/\/+$/, '')) ?? '',
     [projectByCwd],
   );
@@ -1600,7 +1601,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   /** Registry membership for the launch bar's "new" badge — reports everything as
    *  known until the registry has actually LOADED, so a seeded draft rendered in
    *  that window can't flash "new" on a project that exists. */
-  const isKnownProjectLoaded = useCallback(
+  const isKnownProjectLoaded = useLeanCallback(
     (name: string) => !projectRegistry.loaded || projectRegistry.isKnownProject(name),
     [projectRegistry.loaded, projectRegistry.isKnownProject],
   );
@@ -1611,7 +1612,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *  place that flips `metaTouched`: from then on the row's model/engine are
    *  authoritative and per-directory launch memory stops overwriting them (same
    *  contract as SessionPathSelector's `launchTouchedRef`). */
-  const handleDraftMetaChange = useCallback((
+  const handleDraftMetaChange = useLeanCallback((
     draftId: string,
     updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta,
     opts?: { touched?: boolean },
@@ -1624,7 +1625,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   /** The composer's mode pill: the permission mode the session starts in. A
    *  user edit (`userTouched`), but NOT `metaTouched`: that latch is the folder's
    *  model/engine memory, and a mode pick must leave it following the folder. */
-  const handleDraftModeChange = useCallback((draftId: string, mode: SessionMode) => {
+  const handleDraftModeChange = useLeanCallback((draftId: string, mode: SessionMode) => {
     setDraftColumns(prev => prev.map(d => (d.id === draftId
       ? { ...d, meta: { ...d.meta, mode }, userTouched: true }
       : d)));
@@ -1640,7 +1641,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * it, and the AI backfill is disabled in walnut mode anyway. Leaving restores
    * only what the seed wrote and the user hasn't since touched.
    */
-  const handleDraftWalnutToggle = useCallback((draftId: string, walnut: boolean) => {
+  const handleDraftWalnutToggle = useLeanCallback((draftId: string, walnut: boolean) => {
     if (walnut) {
       // Ask Walnut's own launch memory (the model last picked FOR an Ask Walnut
       // session — at a draft launch or in a running session's picker): seed the
@@ -1708,7 +1709,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // An open grew the strip past the user's count: shared by every open path (a pill
   // click here, a placeholder becoming a real session in the trim effect).
-  const followGrownStrip = useCallback((realBefore: number, realAfter: number) => {
+  const followGrownStrip = useLeanCallback((realBefore: number, realAfter: number) => {
     // The strip just grew past the user's count (every panel was pinned, so the
     // open took the lock grant). The count FOLLOWS: the setting becomes the new
     // width, so every picker (kebab, view menu, Settings) shows the number of
@@ -1753,7 +1754,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const fadeTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   /** A column still fading (handleCloseSession `fade`) stops fading and its pending removal
    *  is dropped: it was swapped out in place, or an Undo brought it back. */
-  const endFade = useCallback((sessionId: string) => {
+  const endFade = useLeanCallback((sessionId: string) => {
     const timer = fadeTimersRef.current.get(sessionId);
     if (timer === undefined) return;
     clearTimeout(timer);
@@ -1764,7 +1765,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Clicking a session pill always opens/moves to rightmost — use close button to dismiss.
   // Single path for "open a session, with toast if fully locked" — shared by pill
   // clicks, dock events, chat session-link clicks.
-  const openSessionOrToast = useCallback((sessionId: string, opts?: { restore?: boolean }) => {
+  const openSessionOrToast = useLeanCallback((sessionId: string, opts?: { restore?: boolean }) => {
     const current = sessionColumnsRef.current;
     const next = addSessionColumn(current, sessionId, triageOpenRef.current, maxPanelsRef.current);
     if (next === current && !current.some(c => c.id === sessionId)) {
@@ -1798,7 +1799,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   /** The next task's session takes the place of the column that is closing (the eye stays
    *  put), in the same render as the close and with the strip's animation held for it: one
    *  frame swaps the two, with no fade over the neighbours and no second reflow. */
-  const openSessionInPlaceOf = useCallback((sessionId: string, closing: string, at: number) => {
+  const openSessionInPlaceOf = useLeanCallback((sessionId: string, closing: string, at: number) => {
     const current = sessionColumnsRef.current;
     if (current.some(c => c.id === sessionId)) return;
     const without = current.filter(c => c.id !== closing);
@@ -1815,7 +1816,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [openSessionOrToast, holdSessionsAreaAnimation, followGrownStrip, endFade]);
 
   // ── The org (pages/OrgPage.tsx): a page of its own; the drawer's link goes there ──
-  const openOrg = useCallback(() => {
+  const openOrg = useLeanCallback(() => {
     const go = () => navigateRef?.current?.('/org');
     // On a phone the asks drawer closes through history.back(), which lands a moment later, and
     // a push made before it lands is undone by it (usePhoneOverlayHistory.ts): go once it has.
@@ -1831,7 +1832,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setTimeout(once, 1500);
   }, [navigateRef]);
   /** Talk to an org node: Main in the chat slot; any other task in its session, or a composer bound to it. */
-  const chatWithOrgNode = useCallback(async (taskId: string) => {
+  const chatWithOrgNode = useLeanCallback(async (taskId: string) => {
     if (taskId === 'main') {
       showAskInSlot(MAIN_PICK);
       setChatVisible(true);
@@ -1931,7 +1932,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // `fade`: the column fades where it stands, then leaves with the strip's animation held, so
   // its neighbours widen after it rather than under it (a completion's close; the strip's own
   // exit drew the column at its old width over neighbours already at their new one).
-  const handleCloseSession = useCallback((sessionId: string, opts?: { keepFocus?: boolean; fade?: boolean }) => {
+  const handleCloseSession = useLeanCallback((sessionId: string, opts?: { keepFocus?: boolean; fade?: boolean }) => {
     const opener = sessionOpenersRef.current.get(sessionId);
     sessionOpenersRef.current.delete(sessionId);
     const task = taskOfSession(taskMapRef.current.values(), sessionId);
@@ -1960,7 +1961,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [holdSessionsAreaAnimation, endFade]);
 
   // A restored column whose session no longer exists: gone quietly, focus left where it is.
-  const handleRestoredGone = useCallback((sessionId: string) => {
+  const handleRestoredGone = useLeanCallback((sessionId: string) => {
     if (!restoredColumnIdsRef.current.delete(sessionId)) return;
     closedColumnIdsRef.current.add(sessionId);
     setSessionColumns(prev => removeSessionColumn(prev, sessionId));
@@ -1993,7 +1994,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     maxPanelsRef,
   });
   // The × on a column: a completion's pending close gives way to the person's own close.
-  const handleClosePanel = useCallback((sessionId: string) => {
+  const handleClosePanel = useLeanCallback((sessionId: string) => {
     columnComplete.release(sessionId);
     handleCloseSession(sessionId);
   }, [columnComplete.release, handleCloseSession]);
@@ -2028,12 +2029,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [sessionColumns]);
 
   // Lock toggle — reorders slot; auto-animate handles the smooth slide.
-  const handleToggleLockSession = useCallback((sessionId: string) => {
+  const handleToggleLockSession = useLeanCallback((sessionId: string) => {
     setSessionColumns(prev => toggleLockSlot(prev, sessionId));
   }, []);
 
   // Per-column session-replaced handler factory (plan→exec transitions)
-  const handleSessionReplaced = useCallback((oldId: string, newId: string) => {
+  const handleSessionReplaced = useLeanCallback((oldId: string, newId: string) => {
     setSessionColumns(prev => replaceSessionColumn(prev, oldId, newId));
   }, []);
 
@@ -2057,7 +2058,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   });
 
   // ── Quick Start retry handler ──
-  const handleQuickStartRetry = useCallback(() => {
+  const handleQuickStartRetry = useLeanCallback(() => {
     const meta = pendingQuickStartMetaRef.current;
     // Empty string is a VALID message (todo-launcher path-first launch spawns
     // the CLI with no first turn) — only bail when there's no meta at all.
@@ -2098,14 +2099,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [notify]);
 
   // ── Triage panel handlers ──
-  const handleOpenTriageForTask = useCallback((taskId: string) => {
+  const handleOpenTriageForTask = useLeanCallback((taskId: string) => {
     setTriagePanelOpen(true);
     setTriageTaskId(taskId);
     // Triage consumes one slot — evict unlocked slots first, keep locked.
     setSessionColumns(prev => trimUnlockedToMax(prev, maxPanelsRef.current - 1));
   }, []);
 
-  const handleCloseTriage = useCallback(() => {
+  const handleCloseTriage = useLeanCallback(() => {
     setTriagePanelOpen(false);
     setTriageTaskId(null);
   }, []);
@@ -2130,7 +2131,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // the quick-start / fork HTTP response — before the CLI has even finished
   // booting. SessionPanel is fine mounting "early": its metadata fetch already
   // retries transient failures, and the record is written at spawn confirmation.
-  const promoteToRealSession = useCallback((pendingColId: string, sessionId: string, taskId?: string) => {
+  const promoteToRealSession = useLeanCallback((pendingColId: string, sessionId: string, taskId?: string) => {
     if (pendingQuickStartMetaRef.current?.id === pendingColId) {
       // The pending column showed the message; the real panel's first frame must too.
       const launched = pendingQuickStartMetaRef.current.message;
@@ -2150,7 +2151,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // TodoPanel toolbar "+" — one verb "New": grow an empty draft session column.
   // No popover, no tabs, no network; the draft's own composer row covers what the
   // old Session|Task tab pair did ("◌ Save as todo" is the Task half).
-  const handleToolbarOpenLauncher = useCallback(() => {
+  const handleToolbarOpenLauncher = useLeanCallback(() => {
     openDraftColumn();
   }, [openDraftColumn]);
 
@@ -2158,7 +2159,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // pill pre-filled, then patch in the project's default cwd/host when the detail
   // fetch lands. Opening first is the point — the old flow awaited the fetch
   // before showing anything, which is exactly the delay this design removes.
-  const handleOpenLauncherForProject = useCallback((project: string) => {
+  const handleOpenLauncherForProject = useLeanCallback((project: string) => {
     const draftId = openDraftColumn({ project });
     fetchProjectDetail(project).then((detail) => {
       const cwd = detail.metadata?.default_cwd;
@@ -2185,7 +2186,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // header's "+", with the tier pre-selected instead of the project. Network-free:
   // a tier is a local value, so there is nothing to fetch (contrast the project
   // path above, which patches in a default_cwd when its detail lands).
-  const handleOpenLauncherForTier = useCallback((tier: string) => {
+  const handleOpenLauncherForTier = useLeanCallback((tier: string) => {
     openDraftColumn({ pinTier: tier });
   }, [openDraftColumn]);
 
@@ -2203,7 +2204,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // first Start makes, so those installs get the entry too.
   const walnutRepairTargetRef = useRef(walnutRepairTarget);
   walnutRepairTargetRef.current = walnutRepairTarget;
-  const handleFixWalnut = useCallback(() => {
+  const handleFixWalnut = useLeanCallback(() => {
     const target = walnutRepairTargetRef.current;
     if (!target) return; // the entry is hidden when null; belt-and-braces
     // `cwdPinned`: the checkout is the target, not a suggestion — no async seed
@@ -2226,7 +2227,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // draft, through the same rewrite a reused column gets (rebindDraftToSeed) and
   // the same engine rule as the drawer's entry. The chip shows only while the
   // composer is empty and only when a target exists.
-  const handleCustomizeWalnut = useCallback((draftId: string) => {
+  const handleCustomizeWalnut = useLeanCallback((draftId: string) => {
     const target = walnutRepairTargetRef.current;
     if (!target) return;
     log.info('home', 'draft turned into a Walnut repair draft', {
@@ -2239,7 +2240,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Auto-open session panel when a quick-start or fork session resolves.
   // Strategy: listen to task:updated events (fires after linkSession persists the
   // session record). Also poll as fallback in case the WS event is missed.
-  const openPendingSession = useCallback((data: unknown) => {
+  const openPendingSession = useLeanCallback((data: unknown) => {
     const d = data as Record<string, unknown>;
     const task = d.task as { id?: string; exec_session_id?: string; plan_session_id?: string } | undefined;
     if (!task?.id) return;
@@ -2333,7 +2334,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [sessionColumns]);
 
   // ── Fork pending handlers ──
-  const handleForkPending = useCallback((cwd: string, host?: string, opts?: { columnId?: string }) => {
+  const handleForkPending = useLeanCallback((cwd: string, host?: string, opts?: { columnId?: string }) => {
     const pendingColId = `pending:fork-${Date.now()}`;
     pendingForkMetaRef.current = { id: pendingColId, cwd, host };
     // From a fork DRAFT the column morphs in place (same one-commit swap Start
@@ -2343,7 +2344,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       : addSessionColumn(prev, pendingColId, triageOpenRef.current, maxPanelsRef.current)));
   }, []);
 
-  const handleForkResolved = useCallback((taskId: string, sessionId?: string) => {
+  const handleForkResolved = useLeanCallback((taskId: string, sessionId?: string) => {
     // The fork route pre-assigns the new session's id, so the response already
     // knows it — swap straight to the real panel instead of showing "Forking
     // session..." until task:updated / the poll lands.
@@ -2362,7 +2363,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   /** Session panel "Fork" → a pre-bound fork DRAFT column (the shared "+"
    *  surface). Folder/host/project ride in pinned; the model is a changeable
    *  preselect. The composer, slash palette and AI backfill all come free. */
-  const handleOpenForkDraft = useCallback((seed: {
+  const handleOpenForkDraft = useLeanCallback((seed: {
     forkOf: { sessionId: string; title?: string };
     cwd: string; host: string | null; hostLabel?: string;
     project?: string; model?: string; cwdPinned: true;
@@ -2370,7 +2371,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     openDraftColumn(seed);
   }, [openDraftColumn]);
 
-  const handleForkFailed = useCallback((errorMessage?: string) => {
+  const handleForkFailed = useLeanCallback((errorMessage?: string) => {
     if (pendingForkMetaRef.current) {
       pendingForkMetaRef.current = {
         ...pendingForkMetaRef.current,
@@ -2381,7 +2382,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   // Handle session click from chat: focus the associated task + open session column
-  const handleSessionClick = useCallback(async (sessionId: string) => {
+  const handleSessionClick = useLeanCallback(async (sessionId: string) => {
     const recordOpen = recentOpenRecorder();
     openSessionOrToast(sessionId);
     // Fetch session to find its associated task
@@ -2398,7 +2399,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // `pinnedTier: null` = explicitly NOT pinned (a draft whose tier the user
   // unpinned): sent as `pinned: false`, because a create that says nothing is
   // pinned to Satellite by the server (newTaskPinDefault).
-  const handleCreate = useCallback(async (input: { title: string; priority: string; project?: string; description?: string; due_date?: string; start_date?: string; end_date?: string; pinnedTier?: string | null; capture?: boolean; local?: boolean }) => {
+  const handleCreate = useLeanCallback(async (input: { title: string; priority: string; project?: string; description?: string; due_date?: string; start_date?: string; end_date?: string; pinnedTier?: string | null; capture?: boolean; local?: boolean }) => {
     const tier = input.pinnedTier;
     // Quick-capture ("Add to <tier>…" inline rows, Focus Dock) routes to the user's
     // configured Default Platform + Project instead of the active tab's project — so a
@@ -2474,7 +2475,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Inline "+" in the Focus Dock — create a task and pin it straight to the Focus tier.
   // capture:true routes it to the configured Default Platform/Project (fast local Inbox
   // by default) rather than the active tab.
-  const handleQuickAddToFocus = useCallback(async (title: string) => {
+  const handleQuickAddToFocus = useLeanCallback(async (title: string) => {
     await handleCreate({ title, priority: 'none', pinnedTier: 'focus', capture: true });
   }, [handleCreate]);
 
@@ -2483,7 +2484,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // "focused task went away" effects below.
   const focusedTaskRef = useRef(focusedTask);
   focusedTaskRef.current = focusedTask;
-  const handleFocusTask = useCallback((task: Task, opts?: { openDetail?: boolean; fromOutside?: boolean }) => {
+  const handleFocusTask = useLeanCallback((task: Task, opts?: { openDetail?: boolean; fromOutside?: boolean }) => {
     recordTaskOpened(task.id);
     // Always focus (never toggle off) — unfocusing is done via detail panel close / Esc.
     // Increment nonce so TodoPanel re-scrolls even when the same task is re-clicked.
@@ -2504,7 +2505,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Locate only: select + scroll the task panel, never touch the session columns. A session
   // panel's Locate button uses this: its session is already on screen, and reopening it moved
   // the panel to the left edge of its region.
-  const handleLocateTaskById = useCallback((taskId: string) => {
+  const handleLocateTaskById = useLeanCallback((taskId: string) => {
     const task = taskMapRef.current.get(taskId);
     if (!task) return;
     // A locate into a hidden task panel, or under a fullscreen sheet, would select and scroll a
@@ -2516,7 +2517,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Unified task-click: select + scroll + open session (if any). Never open detail panel.
   // Used by chat refs, session panels, triage — must behave identically to TodoPanel/PinnedCard clicks.
-  const handleFocusTaskById = useCallback((taskId: string) => {
+  const handleFocusTaskById = useLeanCallback((taskId: string) => {
     const task = taskMapRef.current.get(taskId);
     if (!task) return;
     const sid = resolveTaskSessionId(task);
@@ -2524,7 +2525,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     handleLocateTaskById(taskId);
   }, [handleLocateTaskById, handleToggleSession]);
 
-  const handleFocusTaskByIdFromBoard = useCallback((task: Task) => {
+  const handleFocusTaskByIdFromBoard = useLeanCallback((task: Task) => {
     if (resolveTaskSessionId(task)) handleFocusTaskById(task.id);
     else { setTodoVisible(true); handleFocusTask(task, { openDetail: true, fromOutside: true }); }
   }, [handleFocusTaskById, handleFocusTask]);
@@ -2562,7 +2563,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const loadingRef = useCommittedRef(loading);
   const sessionToOpen = (task: Task, sessionId?: string, openSession?: boolean) =>
     sessionId ?? (openSession ? resolveTaskSessionId(task) ?? undefined : undefined);
-  const revealOnHome = useCallback((task: Task, sessionId?: string, openDetail?: boolean) => {
+  const revealOnHome = useLeanCallback((task: Task, sessionId?: string, openDetail?: boolean) => {
     if (sessionId) {
       // The slot's own rule (`agentOfTask` over the agents it lists): a task it would not show goes to a
       // column rather than to a slot that would drop the selection.
@@ -2579,14 +2580,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (openDetail || task.status === 'done') setSuppressDetail(false);
   }, [handleLocateTaskById, openSessionOrToast]);
   // The full-screen task detail for a listed task, touching neither the session columns nor the locate.
-  const openDetailOf = useCallback((task: Task) => {
+  const openDetailOf = useLeanCallback((task: Task) => {
     recordTaskOpened(task.id);
     setFocusScope('all');
     setFocusedTask(task);
     setFocusNonce(n => n + 1);
     setSuppressDetail(false);
   }, []);
-  const revealPending = useCallback((task: Task, pending: PendingLocate) => {
+  const revealPending = useLeanCallback((task: Task, pending: PendingLocate) => {
     pending.recordOpen?.(task.id);
     if (pending.detailOnly) openDetailOf(task);
     else revealOnHome(task, sessionToOpen(task, pending.sessionId, pending.openSession), pending.openDetail);
@@ -2594,7 +2595,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // The list has loaded and does not carry the task: read it. The server resolves an id prefix, so
   // the list may carry it after all; a task seconds old (an ask started from Mail) may still be on
   // its way to the list, so it gets a short while to arrive before it opens on its own.
-  const revealFetched = useCallback(async (pending: PendingLocate) => {
+  const revealFetched = useLeanCallback(async (pending: PendingLocate) => {
     const reading: PendingLocate = { ...pending, reading: true };
     pendingLocateRef.current = reading;
     const full = await fetchTask(pending.taskId).catch(() => null);
@@ -2656,7 +2657,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (!loading && !pending.reading) void revealFetched(pending);
   }, [taskMap, loading, revealPending, revealFetched]);
 
-  const handleClearFocus = useCallback(() => {
+  const handleClearFocus = useLeanCallback(() => {
     setFocusedTask(null);
     setSuppressDetail(false);
   }, []);
@@ -2667,7 +2668,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // session's own task, so Details can be tapped before Home's list has it (a cold deep
   // link on a slow link) or for a task the list never carries: held like a locate and
   // opened when the list has it, else read by id into the details popup (OutsideTaskDetail).
-  const handleOpenTaskDetailById = useCallback((taskId: string) => {
+  const handleOpenTaskDetailById = useLeanCallback((taskId: string) => {
     const task = taskMapRef.current.get(taskId);
     if (task) { openDetailOf(task); return; }
     const pending: PendingLocate = { recordOpen: recentOpenRecorder(), taskId, detailOnly: true, until: Date.now() + 60_000 };
@@ -2697,18 +2698,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   // The list's complete / reopen, snooze, pin and delete take an Undo (undo/TaskUndoContext.tsx).
-  const handleComplete = useCallback((id: string) => {
+  const handleComplete = useLeanCallback((id: string) => {
     const task = taskMapRef.current.get(id);
     if (task && task.status !== 'done' && focusedTaskRef.current?.id === id) setFocusedTask(null);
     if (taskUndo) taskUndo.toggleComplete(id); else toggleComplete(id);
   }, [toggleComplete, taskUndo]);
 
-  const handleSetPhase = useCallback((id: string, phase: string) => {
+  const handleSetPhase = useLeanCallback((id: string, phase: string) => {
     if (phase === 'COMPLETE' && focusedTaskRef.current?.id === id) setFocusedTask(null);
     if (taskUndo) taskUndo.setPhase(id, phase); else setPhase(id, phase);
   }, [setPhase, taskUndo]);
 
-  const handleDeleteTask = useCallback((id: string) => {
+  const handleDeleteTask = useLeanCallback((id: string) => {
     if (focusedTaskRef.current?.id === id) setFocusedTask(null);
     if (taskUndo) taskUndo.deleteTask(id); else void deleteTask(id);
   }, [deleteTask, taskUndo]);
@@ -2748,9 +2749,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     };
   }), [taskUndo, handleCloseSession]);
 
-  const handlePinTask = useCallback((id: string) => { void (taskUndo ?? focusBar).pin(id); }, [taskUndo, focusBar]);
-  const handleUnpinTask = useCallback((id: string) => { void (taskUndo ?? focusBar).unpin(id); }, [taskUndo, focusBar]);
-  const handleSetTier = useCallback(
+  const handlePinTask = useLeanCallback((id: string) => { void (taskUndo ?? focusBar).pin(id); }, [taskUndo, focusBar]);
+  const handleUnpinTask = useLeanCallback((id: string) => { void (taskUndo ?? focusBar).unpin(id); }, [taskUndo, focusBar]);
+  const handleSetTier = useLeanCallback(
     (id: string, tier: Parameters<typeof focusBar.setTier>[1], order?: string[]) => (taskUndo ?? focusBar).setTier(id, tier, order),
     [taskUndo, focusBar],
   );
@@ -2811,7 +2812,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   /** The task a column shows: the list's row, else, before the board's first list has come (a
    *  slow load), the column's own copy (`unlisted`), as its header's Complete reads it. */
-  const columnTaskOf = useCallback((columnId: string): { task: Task; unlisted?: true } | undefined => {
+  const columnTaskOf = useLeanCallback((columnId: string): { task: Task; unlisted?: true } | undefined => {
     const listed = taskOfSession(taskMapRef.current.values(), columnId);
     if (listed) return { task: listed };
     const shown = loadingRef.current ? shownTaskOf(columnId) : undefined;
@@ -2820,7 +2821,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // mod+shift+D in a column: what its header's Complete does (close it, Undo, go on).
   // `given`: the task, when the caller knows it (the list's selection), not read off the column.
-  const completeColumnTask = useCallback((columnId: string, given?: Task): boolean => {
+  const completeColumnTask = useLeanCallback((columnId: string, given?: Task): boolean => {
     const found = given ? { task: given } : columnTaskOf(columnId);
     const task = found?.task;
     if (!task || task.status === 'done' || task.phase === 'COMPLETE') return false;
@@ -2837,7 +2838,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // mod+shift+D with no column in hand: the task selected in the list. A task whose session is
   // open in a column takes that column's road (it closes, and the next opens in its place); else
   // its Undo also takes back the advance (the column it opened closes again).
-  const completeSelectedTask = useCallback((): boolean => {
+  const completeSelectedTask = useLeanCallback((): boolean => {
     const task = focusedTaskRef.current ? taskMapRef.current.get(focusedTaskRef.current.id) : undefined;
     if (!task || task.status === 'done' || task.phase === 'COMPLETE') return false;
     const ownColumn = sessionColumnsRef.current.find((c) => c.id === task.session_id
@@ -2900,7 +2901,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Batch complete/reopen from the multi-select bar. Mirrors handleSetPhase's detail-pane
   // cleanup: completing the focused task must drop the detail pane, and in a batch the
   // focused task can be ANY member of the selection.
-  const handleBatchSetPhase = useCallback((ids: string[], phase: string) => {
+  const handleBatchSetPhase = useLeanCallback((ids: string[], phase: string) => {
     const focusedId = focusedTaskRef.current?.id;
     if (phase === 'COMPLETE' && focusedId && ids.includes(focusedId)) setFocusedTask(null);
     return batchSetPhase(ids, phase);
@@ -2908,31 +2909,31 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Batch delete — a deleted task must not stay in the detail pane (it would render
   // a task that no longer exists). Same cleanup as complete, applied to any member.
-  const handleBatchDelete = useCallback((ids: string[], opts?: { force?: boolean }) => {
+  const handleBatchDelete = useLeanCallback((ids: string[], opts?: { force?: boolean }) => {
     const focusedId = focusedTaskRef.current?.id;
     if (focusedId && ids.includes(focusedId)) setFocusedTask(null);
     return batchDelete(ids, opts);
   }, [batchDelete]);
 
-  const handleSetPriority = useCallback((id: string, priority: string) => {
+  const handleSetPriority = useLeanCallback((id: string, priority: string) => {
     update(id, { priority });
   }, [update]);
 
-  const handleSetDate = useCallback((id: string, date: string | null) => {
+  const handleSetDate = useLeanCallback((id: string, date: string | null) => {
     update(id, { due_date: date ?? '' });
   }, [update]);
 
-  const handleSetStartDate = useCallback((id: string, date: string | null) => {
+  const handleSetStartDate = useLeanCallback((id: string, date: string | null) => {
     if (taskUndo) taskUndo.setStartDate(id, date); else update(id, { start_date: date ?? '' });
   }, [update, taskUndo]);
 
-  const handleUpdate = useCallback((id: string, updates: { title?: string }) => {
+  const handleUpdate = useLeanCallback((id: string, updates: { title?: string }) => {
     update(id, updates);
   }, [update]);
 
   // The draft column's "Save as todo" (a task with no session):
   // create → locate the new row → success toast w/ Undo.
-  const handleQuickTaskCreate = useCallback(async (input: Parameters<typeof handleCreate>[0]) => {
+  const handleQuickTaskCreate = useLeanCallback(async (input: Parameters<typeof handleCreate>[0]) => {
     const created = await handleCreate(input);
     // LOCATE the new task: open the todo panel if hidden and select+scroll
     // to the row. Without this the task lands invisibly ("where did it
@@ -2977,7 +2978,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * the SAME draft comes back in the same slot with its text, host, folder, model,
    * images and meta. Its bar says why; no 'Quick Start Failed' notification.
    */
-  const restoreGatedDraft = useCallback((pendingColId: string, restore: GatedRestore, err: QuickStartGateError) => {
+  const restoreGatedDraft = useLeanCallback((pendingColId: string, restore: GatedRestore, err: QuickStartGateError) => {
     const { draft, composerText, images } = restore;
     // Written BEFORE the commit: ChatInput reads its text at mount.
     try { localStorage.setItem(draftComposerKey(draft.id), composerText); } catch { /* quota */ }
@@ -3003,7 +3004,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // API call. Deliberately does NOT touch chat state/visibility: the todo-panel
   // "+" entry point starts sessions while the chat column stays hidden (the CLI
   // spawns with an empty first message and idles on stdin).
-  const launchQuickStart = useCallback((
+  const launchQuickStart = useLeanCallback((
     qsp: QuickStartPath,
     metaSnapshot: QuickStartTaskMeta | null,
     text: string,
@@ -3242,7 +3243,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * ChatInput restores the composer only for a promise resolving false — a sync
    * false takes its other branch and CLEARS the persisted draft, losing the text.
    */
-  const handleDraftStart = useCallback(async (
+  const handleDraftStart = useLeanCallback(async (
     draftId: string, text: string, images?: ImageAttachment[], startOpts?: { overrideReadiness?: boolean },
   ): Promise<boolean> => {
     const draft = draftColumnsRef.current.find(d => d.id === draftId);
@@ -3381,7 +3382,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   /** "◌ Save as todo": the composed text becomes a task, no session. First
    *  line = title, the rest = description. Images are dropped (text-only by design). */
-  const handleDraftSaveAsTask = useCallback(async (draftId: string, text: string) => {
+  const handleDraftSaveAsTask = useLeanCallback(async (draftId: string, text: string) => {
     const draft = draftColumnsRef.current.find(d => d.id === draftId);
     const [firstLine, ...rest] = text.split('\n');
     // A task title is plain text: a reference the composer put on the first line
@@ -3484,7 +3485,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *  4. Task WITH a description → launch directly, reusing THIS task (`taskId`),
    *     with title + description as the first message. The brief already exists.
    */
-  const handleStartSessionForTask = useCallback(async (task: Task) => {
+  const handleStartSessionForTask = useLeanCallback(async (task: Task) => {
     // Starting a session on a task (its ▶) is opening it, for the Recent tab.
     recordTaskOpened(task.id);
     // A start that waits for the task's workspace (it is being made, or its setup
@@ -3605,7 +3606,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * for ▶ Start).
    */
   const searchSessionLaunchingRef = useRef(false);
-  const handleOpenSearchSession = useCallback(async (
+  const handleOpenSearchSession = useLeanCallback(async (
     message: string,
     query: string,
     opts: { search: boolean; progressId?: string },

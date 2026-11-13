@@ -5,7 +5,8 @@
  * one the server no longer has is left out. A row opened from the list itself keeps its place
  * while the tab stays on screen (`hold`, recentRowOrder).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { Task } from '@open-walnut/core';
 import { fetchTasksByIds } from '@/api/tasks';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -71,7 +72,7 @@ export function useRecentOpenedTasks(listed: readonly Task[], listLoading: boole
   if (!active && heldRef.current.size > 0) heldRef.current = new Map();
   const opensRef = useRef(opens);
   opensRef.current = opens;
-  const hold = useCallback((taskId: string) => {
+  const hold = useLeanCallback((taskId: string) => {
     // Held already (opened from the list before): it keeps its first place, for this click too.
     const h = heldRef.current.get(taskId);
     if (h) { h.clickedAt = Date.now(); return; }

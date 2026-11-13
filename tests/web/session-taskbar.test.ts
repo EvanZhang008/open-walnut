@@ -119,7 +119,7 @@ describe('sessionTaskbar: the one way onto the chips (guard)', () => {
     const src = read('pages/MainPage.tsx');
     const marks = [...src.matchAll(/minimizedIdsRef\.current\.add\(/g)];
     expect(marks.length, 'a new path marks a session minimized: only the Minimize click may').toBe(1);
-    const fn = src.slice(src.indexOf('const handleMinimizeSession = useCallback'));
+    const fn = src.slice(src.indexOf('const handleMinimizeSession = useLeanCallback'));
     expect(fn.slice(0, fn.indexOf('}, [])'))).toContain('minimizedIdsRef.current.add(');
   });
 
