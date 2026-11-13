@@ -417,9 +417,10 @@ test('switching to Session carries the instructions over and an empty Prompt is 
 
 // A draft the model could not make leaves the typed words in the form, not only in the box.
 test('a failed AI draft opens the form with the typed words as its instructions', async ({ page }) => {
-  await page.route('**/api/routines/draft', (r) => r.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ error: 'No model answered' }) }))
   await page.goto('/routines')
   const composer = await openRoutineComposer(page)
+  // Routed only once the page is up: the model's answer is the one thing this test fakes.
+  await page.route('**/api/routines/draft', (r) => r.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ error: 'No model answered' }) }))
   await composer.locator('textarea').fill('Every Friday, list what moved this week')
   await composer.getByRole('button', { name: /Draft/ }).click()
   await expect(composer.locator('.cron-form-error')).toContainText('Your words are in the form')
