@@ -346,7 +346,8 @@ describe('ci-gate', () => {
 
   it('asks GitHub again only on its passing trouble, never on an answer', () => {
     for (const t of ['gh: Server Error (HTTP 502)', 'HTTP 503: Service Unavailable', 'HTTP 429: rate limited',
-      'dial tcp 20.29.134.17:443: connect: connection refused', 'read: connection reset by peer', 'net/http: TLS handshake timeout', 'spawnSync gh ETIMEDOUT']) {
+      'dial tcp 20.29.134.17:443: connect: connection refused', 'read: connection reset by peer', 'net/http: TLS handshake timeout', 'spawnSync gh ETIMEDOUT',
+      'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com', 'dial tcp: lookup api.github.com: no such host']) {
       expect(isTransientGhFailure(t), t).toBe(true)
     }
     for (const t of ['gh: Not Found (HTTP 404)', 'HTTP 401: Bad credentials', 'gh: Resource not accessible by integration (HTTP 403)',

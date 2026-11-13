@@ -31,6 +31,7 @@ jobs:
         with:
           sparse-checkout: |
             scripts/ci-runner-retry.mjs
+            scripts/lib/gh-transient.mjs
             .github/workflows/ci.yml
           sparse-checkout-cone-mode: false
       - uses: oven-sh/setup-bun@v2
