@@ -409,7 +409,9 @@ test('files dropped on the conversation attach, and the panel says it takes them
 
 test('at most two uploads run at once; the rest wait their turn', async ({ page }) => {
   const h = await open(page)
-  h.setPlan(() => ({ status: 200, delayMs: 300 }))
+  // Each upload holds long enough that the files behind the first two still read Waiting when
+  // the check looks: at 300 ms the last ones left that state before a loaded runner saw it.
+  h.setPlan(() => ({ status: 200, delayMs: 1500 }))
   await fileInput(page).setInputFiles(Array.from({ length: 6 }, (_, i) => ({
     name: `part-${i}.txt`, mimeType: 'text/plain', buffer: Buffer.from(`file ${i}`),
   })))
