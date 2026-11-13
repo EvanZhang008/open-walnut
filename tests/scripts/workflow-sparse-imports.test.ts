@@ -10,25 +10,13 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import { localImports } from '../helpers/script-imports.js'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
 const DIR = path.join(REPO, '.github', 'workflows')
 
 interface Step { uses?: string; run?: string; with?: Record<string, unknown> }
 interface Job { steps?: Step[] }
-
-/** The repo files a script imports by a relative path, followed through those files. */
-function localImports(rel: string, seen = new Set<string>()): Set<string> {
-  const text = fs.readFileSync(path.join(REPO, rel), 'utf8')
-  for (const m of text.matchAll(/(?:^|\n)\s*(?:import|export)\b[^'"\n]*?from\s+['"](\.{1,2}\/[^'"]+)['"]|import\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)|^\s*\.\s+(scripts\/\S+\.sh)/gm)) {
-    const spec = m[1] ?? m[2]
-    const dep = spec ? path.posix.normalize(path.posix.join(path.posix.dirname(rel), spec)) : m[3]!
-    if (seen.has(dep) || !fs.existsSync(path.join(REPO, dep))) continue
-    seen.add(dep)
-    localImports(dep, seen)
-  }
-  return seen
-}
 
 const jobs = fs.readdirSync(DIR).filter((f) => f.endsWith('.yml')).flatMap((file) => {
   const wf = parseYaml(fs.readFileSync(path.join(DIR, file), 'utf8')) as { jobs?: Record<string, Job> }
@@ -60,3 +48,22 @@ describe('a sparse checkout carries what its scripts import', () => {
     expect([...new Set(missing)], 'add these to the job\'s sparse-checkout list').toEqual([])
   })
 })
+
+// A test that copies repo scripts into a sandbox has the same need: every such copy goes
+// through withLocalImports, so a new import of a copied script comes along by itself.
+describe('a test that copies repo scripts into a sandbox copies their imports too', () => {
+  const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? (e.name === 'node_modules' ? [] : walk(path.join(dir, e.name))) : [path.join(dir, e.name)])
+  const copiers = walk(path.join(REPO, 'tests')).filter((f) => /\.test\.ts$/.test(f))
+    .map((f) => ({ rel: path.relative(REPO, f), text: fs.readFileSync(f, 'utf8') }))
+    .filter(({ text }) => /copyFileSync\(\s*path\.join\(\s*(REPO|ROOT|REPO_ROOT|repoRoot|root)\s*,\s*'scripts'/.test(text))
+
+  it('finds them', () => {
+    expect(copiers.map((c) => c.rel)).toEqual(expect.arrayContaining(['tests/scripts/release-script-e2e.test.ts', 'tests/scripts/release-promote-steps.test.ts']))
+  })
+
+  it.each(copiers.map((c) => [c.rel, c] as const))('%s', (_rel, { text }) => {
+    expect(text, 'copy the list through withLocalImports from tests/helpers/script-imports.ts').toContain('withLocalImports(')
+  })
+})
+
