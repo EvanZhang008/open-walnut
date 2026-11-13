@@ -371,7 +371,7 @@ export function PlanCard({ content, disclosureId, sessionId, sessionCwd, session
   return (
     <div className="session-plan-card">
       <div className="session-plan-card-header">
-        <button className="session-plan-card-toggle" onClick={() => setOpen((p) => !p)}>
+        <button className="session-plan-card-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
           <span className="session-plan-card-icon">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
           <span className="session-plan-card-title">Plan</span>
         </button>
@@ -1287,6 +1287,8 @@ function specialSessionRow({ message }: SessionMessageProps): ReactNode | undefi
 function RiderFold({ foldId, segments, children }: { foldId: string; segments: EnvelopeSegment[]; children: ReactNode }) {
   return (
     <ProcessFoldRow foldId={foldId} foldKey={`rider:${foldId === 'rider' ? '' : foldId}`} testId="rider-fold"
+      // Inside its message row: the find opens it through the row (bridge openFolds).
+      findMembers={undefined}
       phrase={foldStepsPhrase(envelopeSteps(segments))}>
       {children}
     </ProcessFoldRow>

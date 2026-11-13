@@ -48,6 +48,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
+import { openAllTurnFolds } from './turn-fold-helpers'
 import { directControl } from './composer-controls-overflow-helpers'
 import { modeMenu, pickMode, type ModeId } from './permission-mode-helpers'
 
@@ -445,6 +446,11 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   await expect(popover.locator('.session-notes')).toBeVisible({ timeout: 10_000 })
   await chips.first().click()
 
+  // Remounted, thread 1 reads its history: the mock's stream capture holds the answers and
+  // none of the questions, so the first answer is words on the way to the follow-up's
+  // answer, in that turn's fold (one fold before every answer).
+  await expect(body.getByTestId('turn-fold').first()).toBeVisible({ timeout: 30_000 })
+  await openAllTurnFolds(body)
   await expect(body.getByText(answerFor(FIRST_Q), { exact: false }).first())
     .toBeVisible({ timeout: 30_000 })
   await expect(body.getByText(answerFor(SECOND_Q), { exact: false })).toHaveCount(0)

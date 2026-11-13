@@ -173,6 +173,14 @@ export async function expectAnswerCarded(panel: Locator): Promise<void> {
 
 /** The model's mid-run narration is prose, and stays prose. */
 export async function expectNarrationStillProse(panel: Locator): Promise<void> {
+  // Words on the way to the answer are a step of the turn (one fold before the answer,
+  // each such words row a click away): open the turn, then the words row, as a reader does.
+  const turn = panel.getByTestId('turn-fold').first();
+  await turn.locator(':scope > .tool-run-toggle').click();
+  await expect(turn).toHaveAttribute('data-open', 'true');
+  const words = turn.getByTestId('folded-words').filter({ hasText: 'SEARCH_ASK_NARRATION' });
+  await expect(words).toHaveCount(1);
+  await words.locator(':scope > .tool-run-toggle').click();
   const narration = panel.locator('.session-msg-assistant', { hasText: 'SEARCH_ASK_NARRATION' }).first();
   await expect(narration).toBeVisible();
   await expect(narration.locator(ANSWER_CARD)).toHaveCount(0);

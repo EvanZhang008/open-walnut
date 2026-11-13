@@ -76,7 +76,7 @@ export function useTurnFold(key: string): [boolean, () => void] {
  * answer use the same row under turnFoldKey. `failed` puts the count of failed calls (and,
  * apart, of the runtime's error lines) in the header, so a folded failure is never silent.
  */
-export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed = 0, testId = 'process-fold', running = false, peek }: {
+export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed = 0, testId = 'process-fold', running = false, peek, findMembers }: {
   foldId: string; phrase: string;
   /** Before the steps: how long the turn worked ("Worked for 2m 16s"), or "Working" while it runs. */
   lead?: string; children: ReactNode; foldKey?: string; failed?: number | FoldFailures; testId?: string;
@@ -85,6 +85,10 @@ export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed
   /** What the turn is doing now, drawn under the closed line while it runs (the latest
    *  thought, the current step), so a running turn shows one live line and nothing grows. */
   peek?: ReactNode;
+  /** The saved rows it holds (space-separated ids), REQUIRED of every fold: the find bar
+   *  counts them as drawn while the fold is shut, and opens it to land on them
+   *  (PageFind openRunsOf). `undefined` only for a fold of no saved row. */
+  findMembers: string | undefined;
 }) {
   const [open, toggle] = useTurnFold(foldKey ?? processFoldKey(foldId));
   const failedWords = foldFailureWords(failed);
@@ -92,7 +96,7 @@ export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed
   // "Thinking" is the thinking row's own word, never a second line's (thinking-once.spec).
   const label = lead && phrase === EMPTY_FOLD_PHRASE ? '' : phrase;
   return (
-    <div className="tool-run-row process-fold" data-testid={testId} data-fold-id={foldId} data-open={open ? 'true' : 'false'} {...(running ? { 'data-running': 'true' } : {})}>
+    <div className="tool-run-row process-fold" data-testid={testId} data-fold-id={foldId} data-open={open ? 'true' : 'false'} {...(running ? { 'data-running': 'true' } : {})} {...(findMembers ? { 'data-find-members': findMembers } : {})}>
       <button type="button" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
         <span className={`tool-run-chevron process-fold-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
         {lead && <span className="tool-run-lead" data-testid="turn-fold-lead">{lead}{label && <span className="tool-run-sep" aria-hidden="true"> · </span>}</span>}

@@ -5398,7 +5398,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const steps = [...envelopeSteps(c.riders), ...(answerThinking ? [{ kind: 'thought' as const }] : [])];
     pageRows.push(
       <div key={`turn-${c.id}:after`} data-turn-fold-index={c.g} className="session-msg-bare">
-        <ProcessFoldRow foldId={`${c.id}:after`} foldKey={key} testId="turn-fold" phrase={foldStepsPhrase(steps)}>
+        <ProcessFoldRow foldId={`${c.id}:after`} foldKey={key} testId="turn-fold" phrase={foldStepsPhrase(steps)} findMembers={c.id}>
           {carriedRow(c)}
           {answerThinking && <SessionThinking key={`fold-thinking-${c.id}:after`} text={answerThinking} />}
         </ProcessFoldRow>
@@ -5415,7 +5415,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const startAt = lastVisible && turnOf(lastVisible.g) && turnOf(lastVisible.g) === turnOf(head.globalIndex) ? lastVisible.at : head.m.timestamp;
     pageRows.push(
       <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
-        <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold"
+        <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" findMembers={findMembersAttr([head.m])}
           lead={workedForLead(secondsBetween(startAt, head.m.timestamp))} phrase={foldStepsPhrase([{ kind: 'thought' }])}>
           <SessionThinking key={`fold-thinking-${id}`} text={thinking} />
         </ProcessFoldRow>
@@ -5502,6 +5502,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     pageRows.push(
       <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
         <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed} running={running}
+          findMembers={findMembersAttr(items.flatMap((x) => rowsOf(x.part)))}
           lead={running ? WORKING_LEAD : workedForLead(secondsBetween(startAt, endAt))} phrase={foldStepsPhrase(steps, waitingTools)}>
           {body}
         </ProcessFoldRow>
@@ -5589,7 +5590,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A line Claude Code took before the first live step started another turn, words or not.
   const firstLiveItem = leadingGroup?.members.length ? timeline[leadingGroup.members[0]] : undefined;
   const firstLiveKind = leadingGroup?.members.length ? stepKinds[leadingGroup.members[0]] : undefined;
-  const newInputFirst = firstLiveItem?.kind === 'block' && blocks.slice(0, firstLiveItem.index).some((b) => b.type === 'user_line');
+  // A message the person sent that the stream's first shown block comes after (or no block
+  // shown yet: the turn it starts has just begun) opened the live turn too: the saved turn
+  // before it is over, its last words its answer (2026-11-13: a stopped turn's words folded
+  // as the next turn's while it ran, composer-stop-keeps-process.spec).
+  const firstShownBlock = timeline.find((x): x is Extract<TimelineItem, { kind: 'block' }> => x.kind === 'block');
+  const sentBeforeLive = timeline.some((x) => x.kind === 'user' && (!firstShownBlock || x.at <= firstShownBlock.index));
+  const newInputFirst = sentBeforeLive
+    || (firstLiveItem?.kind === 'block' && blocks.slice(0, firstLiveItem.index).some((b) => b.type === 'user_line'));
   const answerGoesOn = (t: TurnShape) => t === newestTurn && isStreaming && t.kind === 'answered'
     && t.answer === lastRowOfTurn(t) && liveTailStart >= 0 && !!firstLiveKind && firstLiveKind !== 'card' && !newInputFirst;
   const askedTurns = new Set<TurnShape>();
@@ -5612,7 +5620,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       afterPerson: !!t && personAt.has(t) && g >= personAt.get(t)!,
       narration: isWordsPart(item.part) && isNarration((item.part as Extract<HistoryPart, { kind: 'msg' }>).m.text ?? ''),
       // Only the turn running now has words on the way; a finished turn's last words show.
-      beforeEnd: !!t && ((t === newestTurn && isStreaming
+      beforeEnd: !!t && ((t === newestTurn && isStreaming && !newInputFirst
         && (g < lastRowOfTurn(t) || (liveTailStart >= 0 && (leadingGroup?.members.length ?? 0) > 0)))
         || (t.watchedStepsTo !== undefined && g <= t.watchedStepsTo)),
     });
@@ -5694,6 +5702,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         return [...liftedSteps(tail, id, streamToolsOf(members)), (
           <div key={`turn-${id}`} data-turn-fold-index={head?.globalIndex ?? 0} {...threadWrapperProps(head ? head.m.msgId ?? head.m.walnutMessageId : undefined, 'session-msg-bare')}>
             <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
+              findMembers={findMembersAttr(tail.flatMap(rowsOf))}
               running={isStreaming || live}
               peek={isStreaming ? livePeek(group) : undefined}
               lead={isStreaming ? WORKING_LEAD : undefined} phrase={phrase}>
@@ -6179,6 +6188,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return [...liftedSteps([], key, streamToolsOf(members)), (
       <div key={`turn-${key}`} className="session-msg-bare" data-testid="session-step-group-row">
         <ProcessFoldRow foldId={key} foldKey={turnFoldKey(key)} testId="step-group-fold" failed={{ calls: streamFailedOf(members), errors: streamErrorLinesOf(group) }}
+          // The stream's blocks are no saved rows yet: the find counts their history twins.
+          findMembers={undefined}
           running={live || (isStreaming && streamRunHasCallingTool(members))}
           phrase={foldStepsPhrase(streamFoldStepsOf(group), waitingTools)}>
           {renderGroupBody(group)}
@@ -6477,6 +6488,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       return (
         <div key={`qf-${m.queueId}`} className="session-msg-bare" data-testid="session-received-fold-row">
           <ProcessFoldRow foldId={m.queueId} foldKey={`queued:${m.queueId}`} testId="received-fold"
+            // Queued messages are no saved rows yet.
+            findMembers={undefined}
             phrase={foldStepsPhrase(rows.flatMap((r) => receivedSteps(r.text ?? '')))}>
             {rows.map(renderQueuedRow)}
           </ProcessFoldRow>

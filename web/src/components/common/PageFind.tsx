@@ -161,6 +161,11 @@ function matchesOfRow(ranges: readonly StaticRange[], id: string): number[] {
   return out;
 }
 
+/** The shut disclosures of a row the find opens to land on words inside them: a tool run or
+ *  fold, and a plan card (closed by default since 2026-11-12). A new shut-by-default card
+ *  fails tests/e2e/browser/session-find-whole-cases.ts (every kind of card) until it is here. */
+const FIND_OPENS_SELECTOR = '.tool-run-toggle[aria-expanded="false"], .session-plan-card-toggle[aria-expanded="false"]';
+
 /**
  * Open the closed tool runs ("Ran 3 commands ›") that hold row `id`'s words: in
  * its own elements, and the run its tools merged into while that run is shut
@@ -171,7 +176,7 @@ function openRunsOf(root: Element, id: string): boolean {
   const hosts = [...rowElements(root, id), ...root.querySelectorAll(`[data-find-members~="${CSS.escape(id)}"]`)];
   let opened = false;
   for (const host of hosts) {
-    for (const t of host.querySelectorAll<HTMLElement>('.tool-run-toggle[aria-expanded="false"]')) {
+    for (const t of host.querySelectorAll<HTMLElement>(FIND_OPENS_SELECTOR)) {
       if (!visible(t)) continue;
       t.click();
       opened = true;

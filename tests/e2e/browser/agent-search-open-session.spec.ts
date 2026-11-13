@@ -22,6 +22,7 @@
  */
 import { expect, test } from '@playwright/test';
 import { REAL_PANEL, REAL_PANEL_IN_COLUMN, homeColumns } from './draft-helpers';
+import { openAllTurnFolds } from './turn-fold-helpers';
 import {
   AGENT_PAYLOAD, EMPTY_PAYLOAD, SCREENSHOT_DIR, TARGET_TASK_ID, clickOpenSession,
   expectNothingClippedAtNarrowest, expectUnwrappedLabels, isQuickStart, laneToggle, openBtn,
@@ -124,6 +125,11 @@ test('one click while the AI lane is still searching: pending column, real sessi
   const reopened = page.locator(`.main-page-session-column:has([data-session-id="${sessionId}"])`);
   await expect(reopened.getByText(new RegExp(`I processed your message: ${followUp}`)).first())
     .toBeVisible({ timeout: 60_000 });
+  // The fixture's mock writes no transcript, so the reload reads the stream capture: the
+  // answers with none of the messages that asked them. The first answer then reads as
+  // words on the way to the second turn's answer, in that turn's fold (one fold before
+  // every answer): it is there, a click away.
+  await openAllTurnFolds(reopened);
   await expect(reopened.getByText(new RegExp(`I processed your message: Find everything about: ${QUERY}`)).first())
     .toBeVisible({ timeout: 60_000 });
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03-follow-up-answered.png`, fullPage: false });

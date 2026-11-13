@@ -61,7 +61,7 @@ describe('the fold line says how long the turn worked, then its steps', () => {
     expect(secondsBetween('2026-11-11T06:00:00Z', '2026-11-11T06:02:16Z')).toBe(136)
   })
   it('the fold line has its chevron first and no rule under it', () => {
-    const closed = html(createElement(ProcessFoldRow, { foldId: 'f1', lead: 'Worked for 9s', phrase: 'Ran 1 tool', testId: 'turn-fold' }, 'body'))
+    const closed = html(createElement(ProcessFoldRow, { findMembers: undefined, foldId: 'f1', lead: 'Worked for 9s', phrase: 'Ran 1 tool', testId: 'turn-fold' }, 'body'))
     expect(closed).toMatch(/<button[^>]*class="tool-run-toggle"[^>]*><span class="tool-run-chevron process-fold-chevron"><svg[^>]*data-step-icon="chevron"/)
     expect(closed.replace(/<[^>]+>/g, '')).toContain('Worked for 9s · Ran 1 tool')
     // The steps keep their own span: what the line counts reads the same as before.
@@ -71,11 +71,21 @@ describe('the fold line says how long the turn worked, then its steps', () => {
     for (const rule of foldRules) expect(rule, rule).not.toMatch(/border-(bottom|top)\s*:\s*\d/)
   })
   it('a running fold shows what it does now under its closed line', () => {
-    const live = html(createElement(ProcessFoldRow, { foldId: 'f2', lead: 'Working', phrase: 'Ran 1 tool', running: true, peek: 'NOW' }, 'body'))
+    const live = html(createElement(ProcessFoldRow, { findMembers: undefined, foldId: 'f2', lead: 'Working', phrase: 'Ran 1 tool', running: true, peek: 'NOW' }, 'body'))
     expect(live).toContain('data-testid="turn-fold-peek"')
     expect(live).toContain('NOW')
-    const idle = html(createElement(ProcessFoldRow, { foldId: 'f3', phrase: 'Ran 1 tool', peek: 'NOW' }, 'body'))
+    const idle = html(createElement(ProcessFoldRow, { findMembers: undefined, foldId: 'f3', phrase: 'Ran 1 tool', peek: 'NOW' }, 'body'))
     expect(idle).not.toContain('turn-fold-peek')
+  })
+  it('a shut fold names the saved rows it holds, so the find bar can count and open it', () => {
+    const shut = html(createElement(ProcessFoldRow, { findMembers: 'ta1 tb1', foldId: 'f4', phrase: 'Ran 2 tools', testId: 'turn-fold' }, 'body'))
+    expect(shut).toContain('data-find-members="ta1 tb1"')
+    expect(shut).toContain('aria-expanded="false"')
+    // Every fold in the session chat passes the prop (required): a new one cannot forget it.
+    const src = readFileSync(join(__dirname, '../../web/src/components/sessions/SessionChatHistory.tsx'), 'utf8')
+    const folds = src.split('<ProcessFoldRow').slice(1).map((s) => s.slice(0, s.indexOf('>\n') > 0 ? s.indexOf('>\n') : 600))
+    expect(folds.length).toBeGreaterThan(3)
+    for (const f of folds) expect(f, f.slice(0, 120)).toContain('findMembers=')
   })
 })
 

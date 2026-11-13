@@ -22,9 +22,20 @@ const panel = (page: Page) => page.locator(`.main-page-session-column .session-p
 const history = (page: Page) => panel(page).locator('.session-history');
 const failedAnswer = (page: Page) => history(page).locator(`[data-message-id="${OLD_ID}"][data-msg-role="assistant"]`);
 const finalAnswer = (page: Page) => history(page).locator(`[data-message-id="${FINAL_ID}"][data-msg-role="assistant"]`);
-const errorCard = (page: Page) => history(page).locator('.tool-run-row').filter({
+// The retry notice is a step of its turn: it sits in the turn's fold ("Worked for ·
+// 1 notice 1 error"), never as a row of its own. The fold row is a tool-run-row too.
+const errorCard = (page: Page) => history(page).locator('.tool-run-row:not([data-testid="turn-fold"])').filter({
   has: page.locator('.tool-run-toggle').filter({ hasText: NOTICE }),
 });
+const turnFold = (page: Page) => history(page).getByTestId('turn-fold');
+
+/** Open the turn's fold the way a reader does, when it is closed (its open state is kept). */
+async function openRetryTurn(page: Page) {
+  await expect(turnFold(page)).toHaveCount(1);
+  await expect(turnFold(page).locator(':scope > .tool-run-toggle')).toContainText('1 error');
+  if ((await turnFold(page).getAttribute('data-open')) !== 'true') await turnFold(page).locator(':scope > .tool-run-toggle').click();
+  await expect(turnFold(page)).toHaveAttribute('data-open', 'true');
+}
 
 async function inject(page: Page, name: string, data: unknown) {
   await page.evaluate(({ name, data }) => {
@@ -102,6 +113,7 @@ async function reopenViaFinder(page: Page): Promise<Locator> {
 }
 
 async function expectRetryCard(page: Page) {
+  await openRetryTurn(page);
   await expect(failedAnswer(page)).toHaveCount(0);
   await expect(history(page)).not.toContainText(PARTIAL);
   await expect(errorCard(page)).toHaveCount(1);
@@ -116,6 +128,7 @@ async function expectRetryCard(page: Page) {
 }
 
 async function expectFinalOnce(page: Page) {
+  await openRetryTurn(page);
   await expect(finalAnswer(page)).toHaveCount(1);
   await expect(finalAnswer(page)).toContainText(FINAL);
   await expect.poll(async () => ((await history(page).textContent()) ?? '').split(FINAL).length - 1).toBe(1);
@@ -209,6 +222,7 @@ for (const scenario of ['live', 'persisted-prefix', 'offscreen'] as const) {
     await inject(page, 'session:system-event', { sessionId: SID, variant: 'error', message: NOTICE, uuid: OLD_ID, replacesMsgId: OLD_ID, detail: PARTIAL });
     if (scenario === 'persisted-prefix') {
       await expect.poll(() => retryRevisionRequests, { message: 'the retry notice must re-read its unsettled history row before the final answer' }).toBeGreaterThan(0);
+      await openRetryTurn(page);
       await expect(history(page).locator(`[data-message-id="${OLD_ID}"][data-msg-role="system"]`)).toHaveCount(1);
       await expect(failedAnswer(page)).toHaveCount(0);
       await expect(finalAnswer(page)).toHaveCount(0);

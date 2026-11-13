@@ -97,8 +97,14 @@ export function definePageFindCases(engine: string): void {
     await page.locator('.page-find input').fill(HIDDEN_WORD);
     expect(await settledLabel(page)).toBe('No results');
     // ...and counted, in place, the moment the reader opens it.
-    const fold = page.locator(historySelector).locator('.tool-run-toggle', { hasText: 'Thinking' }).last();
-    await fold.click();
+    // A turn whose only step is the thought folds into the turn's row ("Worked for 1s",
+    // the thought's own row inside says "Thinking"): open the turn, then the thought.
+    const closed = page.locator(historySelector).getByTestId('turn-fold').filter({ hasText: /^Worked for \d+s$/ }).last();
+    const turn = page.locator(historySelector).locator(`[data-testid="turn-fold"][data-fold-id="${await closed.getAttribute('data-fold-id')}"]`);
+    await turn.locator(':scope > .tool-run-toggle').click();
+    await expect(turn).toHaveAttribute('data-open', 'true');
+    const thought = turn.locator('.tool-run-toggle[aria-expanded="false"]', { hasText: 'Thinking' });
+    if (await thought.count()) await thought.last().click();
     await expect(label(page)).toHaveText('1 match', { timeout: 5_000 });
 
     // "Load earlier" renders the old rows; the count follows.
