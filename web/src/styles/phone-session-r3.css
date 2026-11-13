@@ -70,6 +70,10 @@
     flex-wrap: wrap;
     gap: 8px;
   }
+  html body .hib-subject-open {
+    min-height: 44px;
+    min-width: 44px;
+  }
   html body .hib-row-btn {
     min-height: 44px;
     min-width: 44px;

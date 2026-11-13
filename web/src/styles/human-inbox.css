@@ -164,9 +164,6 @@
 .hib-subject-open { padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .hib-card-expand:not(.is-expanded) { margin-top: -5px; }
 .hib-card-content .hib-md-body { overscroll-behavior: contain; }
-@media (pointer: coarse) {
-  .hib-row-actions .hib-row-btn { min-height: 36px; }
-}
 .hib-card-chevron { flex: 0 0 auto; transition: transform 200ms ease; font-size: 18px; }
 .hib-card-toggle[aria-expanded="true"] .hib-card-chevron { transform: rotate(90deg); }
 .hib-card-expand { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 220ms ease, opacity 180ms ease; }
