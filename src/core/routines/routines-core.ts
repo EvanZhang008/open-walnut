@@ -253,25 +253,33 @@ function withMissed<T>(job: T, nowMs = Date.now()): T {
   return (missed.length ? { ...j, missed } : job) as T;
 }
 
+/** Every answer that carries routines names the task each belongs to (routine-owner.ts). */
+async function owned<T extends { jobs: unknown[] } | { job: unknown }>(answer: T): Promise<T> {
+  const { withRoutineOwners, withRoutineOwner } = await import('./routine-owner.js');
+  if ('jobs' in answer && Array.isArray(answer.jobs)) return { ...answer, jobs: await withRoutineOwners(answer.jobs as object[]) };
+  if ('job' in answer && answer.job && typeof answer.job === 'object') return { ...answer, job: await withRoutineOwner(answer.job as object) };
+  return answer;
+}
+
 export async function listRoutines(includeDisabled: boolean): Promise<{ jobs: unknown[] }> {
-  if (isHostReplicaProgram()) return { jobs: (await copiedRoutines(includeDisabled)).map((j) => withMissed(j)) };
+  if (isHostReplicaProgram()) return owned({ jobs: (await copiedRoutines(includeDisabled)).map((j) => withMissed(j)) });
   if (isCompanion()) {
     const out = await (await companion()).companionListRoutines(includeDisabled);
-    return { ...out, jobs: out.jobs.map((j) => withMissed(j)) };
+    return owned({ ...out, jobs: out.jobs.map((j) => withMissed(j)) });
   }
   const service = await requireCronService();
-  return { jobs: (await service.list({ includeDisabled })).map((j) => withMissed(j)) };
+  return owned({ jobs: (await service.list({ includeDisabled })).map((j) => withMissed(j)) });
 }
 
 export async function getRoutine(id: string): Promise<{ job: unknown }> {
   if (isCompanion()) {
     const out = await (await companion()).companionGetRoutine(id);
-    return { ...out, job: withMissed(out.job) };
+    return owned({ ...out, job: withMissed(out.job) });
   }
   const jobs = isHostReplicaProgram() ? await copiedRoutines(true) : await (await requireCronService()).list({ includeDisabled: true });
   const job = jobs.find((j) => j.id === id);
   if (!job) throw new SessionControlError(`Cron job not found: ${id}`, 404);
-  return { job: withMissed(job) };
+  return owned({ job: withMissed(job) });
 }
 
 /**
@@ -280,7 +288,7 @@ export async function getRoutine(id: string): Promise<{ job: unknown }> {
  */
 export async function createRoutine(body: unknown, origin?: string, opts?: { id?: string; callerSid?: string }): Promise<{ job: unknown }> {
   refuseRoutineWriteOnReplica();
-  if (isCompanion()) return await (await companion()).companionRoutineWrite('create', { body: body ?? {} }) as { job: unknown };
+  if (isCompanion()) return owned(await (await companion()).companionRoutineWrite('create', { body: body ?? {} }) as { job: unknown });
   const service = await requireCronService();
   const { normalizeCronJobCreate } = await import('../cron/index.js');
   const input = normalizeCronJobCreate(body);
@@ -303,7 +311,7 @@ export async function createRoutine(body: unknown, origin?: string, opts?: { id?
     const job = await service.add(input, opts?.id ? { id: opts.id } : undefined);
     log.web.info('routine created via shared core', { jobId: job.id, name: job.name, ...(checkHost ? { checkHost } : {}), ...(opts?.id ? { hostId: true } : {}) });
     pushTriggersFor([checkHost]);
-    return { job };
+    return owned({ job });
   } catch (err) {
     mapCronError(err);
   }
@@ -314,7 +322,7 @@ export async function patchRoutine(id: string, body: unknown, origin?: string, o
   refuseRoutineWriteOnReplica();
   if (isCompanion()) {
     if (opts?.expectedRevision !== undefined) throw new SessionControlError('Conditional routine changes must run on the primary.', 501);
-    return await (await companion()).companionRoutineWrite('patch', { id, body: body ?? {} }) as { job: unknown };
+    return owned(await (await companion()).companionRoutineWrite('patch', { id, body: body ?? {} }) as { job: unknown });
   }
   const service = await requireCronService();
   const { normalizeCronJobPatch } = await import('../cron/index.js');
@@ -330,7 +338,7 @@ export async function patchRoutine(id: string, body: unknown, origin?: string, o
     const job = await service.update(id, patch, opts);
     log.web.info('routine updated via shared core', { jobId: id });
     pushTriggersFor([before?.check?.host, job.check?.host, clockHostOf(before), clockHostOf(job)]);
-    return { job };
+    return owned({ job });
   } catch (err) {
     mapCronError(err);
   }
@@ -357,7 +365,7 @@ export async function deleteRoutine(id: string): Promise<{ ok: boolean; removed:
 
 export async function toggleRoutine(id: string): Promise<{ job: unknown }> {
   refuseRoutineWriteOnReplica();
-  if (isCompanion()) return await (await companion()).companionRoutineWrite('toggle', { id }) as { job: unknown };
+  if (isCompanion()) return owned(await (await companion()).companionRoutineWrite('toggle', { id }) as { job: unknown });
   const service = await requireCronService();
   try {
     const job = await service.toggle(id);
@@ -365,7 +373,7 @@ export async function toggleRoutine(id: string): Promise<{ job: unknown }> {
     // absent from the compiled set, so this push is what stops the polling.
     // A paused clock keeps its host, which takes it off its clock now.
     pushTriggersFor([job.check?.host, clockHostOf(job)]);
-    return { job };
+    return owned({ job });
   } catch (err) {
     mapCronError(err);
   }
@@ -519,11 +527,12 @@ async function assertMissedSlot(service: Awaited<ReturnType<typeof requireCronSe
 /** Set a missed run aside: nobody will run it, and it no longer shows (cron/run-log.ts). */
 export async function dismissMissedRun(id: string, slotMs: number): Promise<{ job: unknown }> {
   refuseRoutineWriteOnReplica();
-  if (isCompanion()) return await (await companion()).companionRoutineWrite('dismiss-missed', { id, slotMs }) as { job: unknown };
+  if (isCompanion()) return owned(await (await companion()).companionRoutineWrite('dismiss-missed', { id, slotMs }) as { job: unknown });
   const service = await requireCronService();
   await assertMissedSlot(service, id, slotMs);
   const job = await service.markMissed(id, { dismiss: [slotMs] });
   if (!job) throw new SessionControlError(`Cron job not found: ${id}`, 404);
   log.web.info('routine missed run dismissed', { jobId: id, slotMs });
-  return { job: withMissed(job) };
+  // With its owner, as every answer that carries a routine: the row stays in its group.
+  return owned({ job: withMissed(job) });
 }

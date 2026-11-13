@@ -19,6 +19,25 @@ extension WalnutAPI {
         return response.jobs
     }
 
+    /// One routine, fresh (after Run Now, so its "Last run" moves).
+    func routine(id: String) async throws -> RoutineJob {
+        let envelope: RoutineEnvelope = try await get("/routines/\(escape(id))")
+        return envelope.job
+    }
+
+    /// Create a routine (201 → { job }). Body: RoutineEdit.createBody.
+    func createRoutine(_ body: [String: JSONValue]) async throws -> RoutineJob {
+        let envelope: RoutineEnvelope = try await send("POST", "/routines", body: body)
+        return envelope.job
+    }
+
+    /// Edit a routine (→ { job }). Body: RoutineEdit.patchBody, only what changed
+    /// (the server merges by key; an absent key leaves the stored field alone).
+    func updateRoutine(id: String, _ body: [String: JSONValue]) async throws -> RoutineJob {
+        let envelope: RoutineEnvelope = try await send("PATCH", "/routines/\(escape(id))", body: body)
+        return envelope.job
+    }
+
     /// Flip enabled. Returns the updated job (adopt it — server truth).
     func toggleRoutine(id: String) async throws -> RoutineJob {
         let envelope: RoutineEnvelope = try await send(
@@ -30,16 +49,55 @@ extension WalnutAPI {
     /// Run now (forced). Long timeout: a run can spawn a session / agent turn;
     /// the server replies when the trigger is accepted, but a cloud relay adds
     /// a bridge hop.
-    func runRoutineNow(id: String) async throws {
-        struct AnyResult: Codable {}
-        let _: AnyResult = try await send(
+    /// The engine's answer: a 200 can still be a refusal (RoutineRunResult.refusal).
+    @discardableResult
+    func runRoutineNow(id: String) async throws -> RoutineRunResult {
+        let envelope: RoutineRunEnvelope = try await send(
             "POST", "/routines/\(escape(id))/run", body: nil as [String: String]?, timeout: 60
         )
+        return envelope.result ?? RoutineRunResult()
     }
 
     /// Delete a routine — 204; 404 not_found for an unknown id.
     func deleteRoutine(id: String) async throws {
         try await sendNoContent("DELETE", "/routines/\(escape(id))")
+    }
+
+    /// Open tasks whose title holds `query` (the latest edited while it is empty), for
+    /// a session routine's Task: the console's routine form sends the same query
+    /// (web/src/components/routines/RoutineTaskField.tsx), on the same token.
+    func routineTaskChoices(query: String) async throws -> [RoutineTaskChoice] {
+        let found: RoutineTaskChoices = try await sendAbsolute("GET", Self.routineTaskSearchPath(query: query), body: nil as [String: String]?)
+        return found.tasks
+    }
+
+    /// One task by its id (complete or not), to name a routine's current task.
+    func routineTaskChoice(id: String) async throws -> RoutineTaskChoice? {
+        let found: RoutineTaskChoices = try await sendAbsolute("GET", Self.routineTaskLookupPath(id: id), body: nil as [String: String]?)
+        return found.tasks.first { $0.id == id }
+    }
+
+    /// `/api/tasks?q=…&completion=todo,in_progress&sort=updated_desc&fields=list&limit=8`.
+    static func routineTaskSearchPath(query: String) -> String {
+        var items = [URLQueryItem]()
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !q.isEmpty { items.append(.init(name: "q", value: q)) }
+        items += [.init(name: "completion", value: "todo,in_progress"), .init(name: "sort", value: "updated_desc"),
+                  .init(name: "fields", value: "list"), .init(name: "limit", value: "8")]
+        return "/api/tasks?" + queryString(items)
+    }
+
+    /// `/api/tasks?ids=<id>&fields=list&limit=8`.
+    static func routineTaskLookupPath(id: String) -> String {
+        "/api/tasks?" + queryString([.init(name: "ids", value: id), .init(name: "fields", value: "list"), .init(name: "limit", value: "8")])
+    }
+
+    /// Each value escaped whole: a "+", "&" or "#" typed in a search stays the text.
+    private static func queryString(_ items: [URLQueryItem]) -> String {
+        // ASCII only: `.alphanumerics` keeps accented and CJK letters raw, which no URL takes.
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~,")
+        return items.map { "\($0.name)=\(($0.value ?? "").addingPercentEncoding(withAllowedCharacters: allowed) ?? "")" }
+            .joined(separator: "&")
     }
 
     // MARK: - Session controls (provider-neutral) + queue

@@ -2,7 +2,7 @@
  * A routine whose clock a host's daemon holds (clock-routine-v1, docs/plan/walnut-trigger.md
  * "Clock routines") says where, the way a trigger names its check's host:
  *
- *   - its Routines card carries a "clock @ <host>" line; a routine on this server's
+ *   - its Routines row, opened, carries a "clock @ <host>" line; a routine on this server's
  *     timer carries none. A Claude Code routine's run that came due there says it
  *     waits for this Mac to start it;
  *   - it shows on its task's TRIGGER pill with the same label, "Run now" in place of
@@ -23,6 +23,7 @@ import path from 'node:path'
 import { test, expect } from './shortcut-test-fixture'
 import type { Locator, Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { openRoutineRow } from './routines-page-helpers'
 
 const PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${PORT}`
@@ -97,7 +98,7 @@ async function cleanup(ids: string[], taskId: string): Promise<void> {
   await fetch(`${API}/api/tasks/${taskId}`, { method: 'DELETE' }).catch(() => {})
 }
 
-test('a routine whose clock is on a host names it on its card and on its task', async ({ page }) => {
+test('a routine whose clock is on a host names it on its row and on its task', async ({ page }) => {
   const { isolateUiPrefs, presetPanelView, showEverything } = await import('./todo-panel-helpers')
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: '' })
@@ -131,26 +132,31 @@ test('a routine whose clock is on a host names it on its card and on its task', 
     const serverCard = page.locator('.routine-list .routine-card', { hasText: onServer }).first()
     await expect(hostCard).toBeVisible({ timeout: 20_000 })
     await expect(serverCard).toBeVisible()
+    // The clock line is in the opened row's detail (one row open at a time).
+    await openRoutineRow(hostCard)
     const line = hostCard.getByTestId('routine-clock-host')
     await expect(line).toHaveText(`clock @ ${HOST}`)
     await expect(line).toHaveAttribute('title', `Its clock runs on ${HOST}, where its work runs, so it fires while this Mac sleeps.`)
-    await expect(serverCard.getByTestId('routine-clock-host')).toHaveCount(0)
     await expect(hostCard.getByTestId('routine-clock-wait')).toHaveCount(0)
     await hostCard.scrollIntoViewIfNeeded()
     await shot(hostCard, 'routine-card-clock-host')
-    // A Claude Code run the host holds waits for this Mac, and the card says so.
+    await openRoutineRow(serverCard)
+    await expect(serverCard.getByTestId('routine-clock-host')).toHaveCount(0)
+    // A Claude Code run the host holds waits for this Mac, and the row says so.
     const cliCard = page.locator('.routine-list .routine-card', { hasText: onHostCli }).first()
+    // Its slot is past: the timing line names no next run, only that it waits.
+    await expect(cliCard.locator('.cron-job-desc')).toHaveText(/^Every day at 9:00\sAM( UTC)? · waiting for its host$/)
+    await openRoutineRow(cliCard)
     const cliLine = cliCard.getByTestId('routine-clock-host')
     await expect(cliLine.locator('code')).toHaveText(`clock @ ${HOST}`)
-    await expect(cliCard.getByTestId('routine-clock-wait')).toHaveText(new RegExp(`^Due 1\\dm ago: waiting on ${HOST} for this Mac to start it$`))
-    // Its slot is past: the timing line names no next run beside it.
-    await expect(cliCard.locator('.cron-job-desc')).toHaveText(/^Every day at 9:00\sAM( UTC)?$/)
+    await expect(cliCard.getByTestId('routine-clock-wait')).toHaveText(new RegExp(`^\\s*·\\s*Due 1\\dm ago: waiting on ${HOST} for this Mac to start it$`))
     await expect(cliLine).toHaveAttribute('title', `Its clock runs on ${HOST}, where its work runs. A run that comes due while this Mac sleeps waits there, and this Mac starts it when it is back.`)
     await cliCard.scrollIntoViewIfNeeded()
     await shot(cliCard, 'routine-card-clock-waiting')
     // A host that starts the run itself: the run starts there; this Mac only waits to hear.
     const startsCard = page.locator('.routine-list .routine-card', { hasText: startsCli }).first()
-    await expect(startsCard.getByTestId('routine-clock-wait')).toHaveText(new RegExp(`^Due 1\\dm ago: waiting on ${HOST}$`))
+    await openRoutineRow(startsCard)
+    await expect(startsCard.getByTestId('routine-clock-wait')).toHaveText(new RegExp(`^\\s*·\\s*Due 1\\dm ago: waiting on ${HOST}$`))
     await expect(startsCard.getByTestId('routine-clock-host')).toHaveAttribute('title', `Its clock runs on ${HOST}, where its work runs. A run that comes due while this Mac sleeps starts there on time.`)
     await startsCard.scrollIntoViewIfNeeded()
     await shot(startsCard, 'routine-card-clock-host-starts')
@@ -162,7 +168,7 @@ test('a routine whose clock is on a host names it on its card and on its task', 
     await showEverything(page)
     const row = taskRow(page, task.title)
     const pill = row.getByTestId('task-trigger-pill')
-    await expect(pill).toHaveText('TRIGGER', { timeout: 20_000 })
+    await expect(pill).toHaveText('Trigger', { timeout: 20_000 })
     await expect(pill).toHaveAttribute('data-trigger-count', '2')
     await expect(pill).toHaveAttribute('title', new RegExp(`clock @ ${HOST}`))
     await pill.click()

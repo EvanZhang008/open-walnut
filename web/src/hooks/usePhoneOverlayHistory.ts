@@ -34,8 +34,9 @@
  *   sheets close; a `keepOnBreakpoint` layer (session, viewer, board, file,
  *   draft, chat) keeps its owner's state, which desktop then shows.
  */
-import { useCallback, useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { PHONE_LAYOUT_QUERY, isPhoneLayout, usePhoneLayout } from './usePhoneLayout';
+import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { log } from '@/utils/log';
 
 export type PhoneOverlayKind =
@@ -499,6 +500,10 @@ function barEqual(a: PhoneOverlayBar | null | undefined, b: PhoneOverlayBar | nu
  */
 export function usePhoneOverlay(o: PhoneOverlayOptions): { close: () => void } {
   const phone = usePhoneLayout();
+  // The home page stays mounted, hidden, under every other route: its layers are
+  // not on screen there, so they hold no entry and never take the top bar
+  // (2026-11-04: the home chat's layer named Routines "Walnut" with a Back button).
+  const onScreen = useContext(RouteShownContext) !== false;
   const optsRef = useRef(o);
   optsRef.current = o;
   const entryRef = useRef<LiveEntry | null>(null);
@@ -508,7 +513,7 @@ export function usePhoneOverlay(o: PhoneOverlayOptions): { close: () => void } {
     () => !parentId || isPhoneOverlayOpen(parentId),
     () => !parentId,
   );
-  const active = o.open && phone && parentOpen;
+  const active = o.open && phone && parentOpen && onScreen;
 
   useEffect(() => {
     if (!active) return undefined;

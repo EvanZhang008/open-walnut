@@ -294,3 +294,63 @@ describe('save-time executor validation', () => {
     expect(json.job.executor.type).toBe('main-agent');
   });
 });
+
+describe('the task and project each routine belongs to (owner)', () => {
+  async function send(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
+    const res = await fetch(apiUrl(path), {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return { status: res.status, json: await res.json().catch(() => null) };
+  }
+
+  it('rides every answer that carries a routine, web and v1, and follows a moved task', async () => {
+    const { json: made } = await post('/api/tasks', { title: 'Owner e2e watcher', project: 'Owner e2e' });
+    const taskId = made.task.id;
+    const { status, json: created } = await post('/api/routines', {
+      name: 'E2E owned routine',
+      schedule: { kind: 'every', everyMs: 600_000 },
+      enabled: false,
+      executor: { type: 'session', config: { target: taskId, prompt: 'Look again.' } },
+    });
+    expect(status).toBe(201);
+    const owner = { taskId, title: 'Owner e2e watcher', project: 'Owner e2e' };
+    expect(created.job.owner).toEqual(owner);
+
+    const listed = (await get('/api/routines?includeDisabled=true')).json.jobs.find((j: any) => j.id === created.job.id);
+    expect(listed.owner).toEqual(owner);
+    expect((await get(`/api/routines/${created.job.id}`)).json.job.owner).toEqual(owner);
+    const v1 = (await get('/api/v1/routines?includeDisabled=true')).json.jobs.find((j: any) => j.id === created.job.id);
+    expect(v1.owner).toEqual(owner);
+    expect((await send('PATCH', `/api/routines/${created.job.id}`, { description: 'why' })).json.job.owner).toEqual(owner);
+    expect((await send('POST', `/api/v1/routines/${created.job.id}/toggle`)).json.job.owner).toEqual(owner);
+
+    // The owner is never stored: the job on disk names its target only.
+    const fs = await import('node:fs');
+    const { CRON_FILE } = await import('../../src/constants.js');
+    if (CRON_FILE && fs.existsSync(CRON_FILE)) expect(fs.readFileSync(CRON_FILE, 'utf8')).not.toContain('"owner"');
+
+    // Moving the task moves the routine with it.
+    await send('PATCH', `/api/tasks/${taskId}`, { project: 'Owner e2e moved' });
+    const moved = (await get('/api/routines?includeDisabled=true')).json.jobs.find((j: any) => j.id === created.job.id);
+    expect(moved.owner.project).toBe('Owner e2e moved');
+  });
+
+  it('leaves a routine with no task of its own without an owner', async () => {
+    const { json: created } = await post('/api/routines', {
+      name: 'E2E global routine',
+      schedule: { kind: 'every', everyMs: 600_000 },
+      enabled: false,
+      executor: { type: 'main-agent', config: { instructions: 'ping' } },
+    });
+    expect(created.job.owner).toBeUndefined();
+    const { json: missing } = await post('/api/routines', {
+      name: 'E2E missing target',
+      schedule: { kind: 'every', everyMs: 600_000 },
+      enabled: false,
+      executor: { type: 'session', config: { target: 'no-such-task', prompt: 'x' } },
+    });
+    expect(missing.job?.owner).toBeUndefined();
+  });
+});

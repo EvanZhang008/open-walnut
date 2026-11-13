@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   auditClock, auditHistory, auditTarget, clockHostTitle, describeAgo, describeAuditEntry, describeCheck, describeClockWait,
-  describeFireTally, describeLastCheck, describeRunTime, describeSchedule,
+  describeExecutorBadge, describeFireTally, describeLastCheck, describeRunTime, describeSchedule,
 } from '../../web/src/utils/routine-format';
 
 const NOW = Date.parse('2026-09-16T12:00:00Z');
@@ -63,7 +63,7 @@ describe('describeSchedule for an interval', () => {
     expect(describeSchedule({ kind: 'every', everyMs: 30_000 })).toBe('Every 30s');
     expect(describeSchedule({ kind: 'every', everyMs: 10_000 })).toBe('Every 10s');
     expect(describeSchedule({ kind: 'every', everyMs: 300_000 })).toBe('Every 5 min');
-    expect(describeSchedule({ kind: 'every', everyMs: 3_600_000 })).toBe('Every 1 hour');
+    expect(describeSchedule({ kind: 'every', everyMs: 3_600_000 })).toBe('Every hour');
   });
 });
 
@@ -75,7 +75,7 @@ describe('describeSchedule for a cron in another zone', () => {
   const short = away === 'UTC' ? 'UTC' : 'GMT+8' // a UTC viewer (CI) gets the GMT+8 case, so escape its + below
   it('names the zone when it is not the viewer\'s', () => {
     expect(describeSchedule({ kind: 'cron', expr: '0 9 * * *', tz: away })).toMatch(new RegExp(`^Every day at 9:00\\sAM ${short.replace('+', '\\+')}$`))
-    expect(describeSchedule({ kind: 'cron', expr: '5 4 1 * *', tz: away })).toBe(`Cron: 5 4 1 * * ${short}`)
+    expect(describeSchedule({ kind: 'cron', expr: '5 4 1 * *', tz: away })).toBe(`Monthly on the 1st at 4:05 AM ${short}`)
   })
   it('says nothing more in the viewer\'s own zone, or with no zone', () => {
     expect(describeSchedule({ kind: 'cron', expr: '0 9 * * *', tz: here })).toMatch(/^Every day at 9:00\sAM$/)
@@ -338,5 +338,36 @@ describe('the trigger card\'s time limit', () => {
       .toBe('quiet — the script said no · ran 20 s, over half its 30 s limit');
     expect(describeAuditEntry({ atMs: NOW, outcome: 'quiet', reason: 'fire-false', durationMs: 2_000 }, { timeoutSeconds: 30 }))
       .toBe('quiet — the script said no');
+  });
+});
+// Hand-written steps and ranges read as words, not as the expression (2026-11-04,
+// the iPhone gate: rows showed "*/15 9-17 * * 1-5" as it is).
+describe('describeSchedule: stepped and ranged cron', () => {
+  const said = (expr: string) => describeSchedule({ kind: 'cron', expr }).replace(/\s/g, ' ')
+  it('says a minute step, inside an hour range and on weekdays', () => {
+    expect(said('*/15 9-17 * * 1-5')).toBe('Every 15 min from 9:00 AM to 5:45 PM, weekdays')
+    expect(said('*/5 * * * *')).toBe('Every 5 min')
+  })
+  it('says an hour step and an hourly range', () => {
+    expect(said('0 */3 * * *')).toBe('Every 3 hours at :00')
+    expect(said('0 9-17 * * 1-5')).toBe('Hourly at :00 from 9:00 AM to 5:00 PM, weekdays')
+  })
+  it('says a day step', () => {
+    expect(said('30 20 */2 * *')).toBe('Every 2 days at 8:30 PM')
+  })
+  it('keeps the expression for what it cannot say', () => {
+    expect(said('*/7 * * * 2,4')).toBe('Cron: */7 * * * 2,4')
+    // A step that does not divide the hour or the day is not an even interval.
+    expect(said('*/45 * * * *')).toBe('Cron: */45 * * * *')
+    expect(said('0 */13 * * *')).toBe('Cron: 0 */13 * * *')
+    expect(said('0 9 * 1-6 *')).toBe('Cron: 0 9 * 1-6 *')
+  })
+})
+
+describe('describeExecutorBadge', () => {
+  it('names another machine, never this one', () => {
+    expect(describeExecutorBadge({ type: 'claude-code', config: {} }, { 'claude-code': 'Claude Code' })).toBe('Claude Code');
+    expect(describeExecutorBadge({ type: 'claude-code', config: { host: 'local' } }, { 'claude-code': 'Claude Code' })).toBe('Claude Code');
+    expect(describeExecutorBadge({ type: 'claude-code', config: { host: 'devbox' } }, { 'claude-code': 'Claude Code' })).toBe('Claude Code @ devbox');
   });
 });

@@ -614,20 +614,42 @@ extension DemoServer {
             let jobs = withState { $0.routines.filter { includeDisabled || $0.enabled } }
             return .encoded(RoutinesResponse(jobs: jobs))
         }
+        if match2(r, "POST", s, "routines") {
+            // A new routine runs in Walnut, like the phone's New Routine makes.
+            let body = Self.jsonBody(r)
+            guard let job = Self.routine(applying: body, to: nil, id: "r-new-\(Int(nowMs) % 1_000_000)", now: now) else {
+                return .error(400, "bad_request", "Invalid input. Provide at least schedule and payload.")
+            }
+            withState { state in state.routines.append(job) }
+            return .encoded(RoutineEnvelope(job: job), status: 201)
+        }
         guard s.count >= 2 else { return nil }
         let id = s[1]
         guard withState({ state in state.routines.contains { $0.id == id } }) else {
             return .error(404, "not_found", "Routine not found.")
         }
         switch (r.method, s.count > 2 ? s[2] : "") {
+        case ("GET", ""):
+            return .encoded(RoutineEnvelope(job: withState { state in state.routines.first { $0.id == id }! }))
+        case ("PATCH", ""):
+            let body = Self.jsonBody(r)
+            let job = withState { state -> RoutineJob? in
+                let i = state.routines.firstIndex { $0.id == id }!
+                guard var job = Self.routine(applying: body, to: state.routines[i], id: id, now: now) else { return nil }
+                // As the server does: the task it runs in, and so its project, named.
+                if let target = job.executor?.target, let task = state.tasks.first(where: { $0.id == target }) {
+                    job.owner = RoutineJob.Owner(taskId: task.id, title: task.title, project: task.project)
+                }
+                state.routines[i] = job
+                return job
+            }
+            guard let job else { return .error(400, "bad_request", "Invalid patch input.") }
+            return .encoded(RoutineEnvelope(job: job))
         case ("POST", "toggle"):
             let job = withState { state -> RoutineJob in
                 let i = state.routines.firstIndex { $0.id == id }!
                 let old = state.routines[i]
-                let job = RoutineJob(
-                    id: old.id, name: old.name, description: old.description, enabled: !old.enabled,
-                    schedule: old.schedule, executor: old.executor, state: old.state
-                )
+                let job = old.switched(!old.enabled, atMs: nowMs)
                 state.routines[i] = job
                 return job
             }
@@ -639,18 +661,103 @@ extension DemoServer {
                 state.routines[i] = RoutineJob(
                     id: old.id, name: old.name, description: old.description, enabled: old.enabled,
                     schedule: old.schedule, executor: old.executor,
+                    // The run is recorded; its history and pause stay as they were.
                     state: RoutineJob.State(
                         nextRunAtMs: old.state?.nextRunAtMs, lastRunAtMs: nowMs,
-                        lastStatus: "ok", lastError: nil, lastDurationMs: 38_000
-                    )
+                        lastStatus: "ok", lastError: nil, lastDurationMs: 38_000,
+                        pausedAtMs: old.state?.pausedAtMs, lastCheck: old.state?.lastCheck,
+                        checkLog: old.state?.checkLog, fireLog: old.state?.fireLog
+                    ),
+                    check: old.check, owner: old.owner
                 )
             }
-            return .object(["ok": true])
+            // The server answers before the run delivers (src/core/cron/ops.ts).
+            return .object(["result": ["ok": true, "ran": true]])
         case ("DELETE", ""):
             withState { state in state.routines.removeAll { $0.id == id } }
             return .noContent
         default:
             return nil
+        }
+    }
+
+    /// GET /api/tasks?q=&ids=&completion=&limit=: the routine editor's Task search, the
+    /// console's list route (outside /api/v1), with the filters it sends.
+    func routeTaskChoices(_ r: DemoRequest, _ s: [String]) -> DemoReply? {
+        guard r.method == "GET", s.isEmpty else { return nil }
+        let q = (r.query["q"] ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        let ids = Set((r.query["ids"] ?? "").split(separator: ",").map(String.init))
+        let completion = Set((r.query["completion"] ?? "").split(separator: ",").map(String.init))
+        let limit = Int(r.query["limit"] ?? "") ?? 50
+        let found = withState { state in
+            state.tasks
+                .filter { ids.isEmpty || ids.contains($0.id) }
+                .filter { completion.isEmpty || completion.contains($0.status) }
+                .filter { q.isEmpty || $0.title.lowercased().contains(q) }
+                .sorted { $0.updatedAt > $1.updatedAt }
+                .prefix(limit)
+                .map { RoutineTaskChoice(id: $0.id, title: $0.title, project: $0.project, phase: $0.phase) }
+        }
+        return .encoded(["tasks": Array(found)])
+    }
+
+    /// The request's JSON body as values (empty when there is none or it is not an object).
+    static func jsonBody(_ r: DemoRequest) -> [String: JSONValue] {
+        guard let data = r.body, !data.isEmpty,
+              let body = try? JSONDecoder().decode([String: JSONValue].self, from: data) else { return [:] }
+        return body
+    }
+
+    /// A routine as the server saves it: the stored one with the body's fields on top
+    /// (schedule, executor and check are replaced whole, as the server does), its next
+    /// run worked out again from its schedule. Nil when the result has no schedule.
+    static func routine(applying body: [String: JSONValue], to old: RoutineJob?, id: String, now: Date) -> RoutineJob? {
+        var object: [String: JSONValue] = [:]
+        if let old, let data = try? JSONEncoder().encode(old),
+           let stored = try? JSONDecoder().decode([String: JSONValue].self, from: data) {
+            object = stored
+        }
+        for key in ["name", "description", "schedule", "executor", "check", "enabled"] {
+            if let value = body[key] { object[key] = value }
+        }
+        object["id"] = .string(id)
+        if object["enabled"] == nil { object["enabled"] = .bool(true) }
+        if object["name"]?.nonEmptyString == nil { object["name"] = .string("New routine") }
+        guard let scheduleValue = object["schedule"], let scheduleData = try? JSONEncoder().encode(scheduleValue),
+              let schedule = try? JSONDecoder().decode(RoutineJob.Schedule.self, from: scheduleData) else { return nil }
+        var state = object["state"]?.objectValue ?? [:]
+        if let next = nextRun(schedule, after: now) {
+            state["nextRunAtMs"] = .number(next.timeIntervalSince1970 * 1000)
+        } else {
+            state["nextRunAtMs"] = nil
+        }
+        object["state"] = .object(state)
+        guard let data = try? JSONEncoder().encode(object) else { return nil }
+        return try? JSONDecoder().decode(RoutineJob.self, from: data)
+    }
+
+    /// When a schedule fires next: an interval from now, a one-time at its moment, a
+    /// "m h * * dow" cron at its next hour (anything else an hour from now).
+    static func nextRun(_ schedule: RoutineJob.Schedule, after now: Date, calendar: Calendar = .current) -> Date? {
+        switch schedule.kind {
+        case "every":
+            return schedule.everyMs.map { now.addingTimeInterval($0 / 1000) }
+        case "at":
+            return schedule.at.flatMap { WalnutTask.parseISO($0) }.flatMap { $0 > now ? $0 : nil }
+        default:
+            let f = (schedule.expr ?? "").split(separator: " ").map(String.init)
+            guard f.count == 5, let minute = Int(f[0]), let hour = Int(f[1]) else { return now.addingTimeInterval(3600) }
+            // Calendar weekdays (1 = Sunday); nil = any day.
+            var days: [Int?] = [nil]
+            if f[4] == "1-5" {
+                days = [2, 3, 4, 5, 6]
+            } else if f[4] != "*" {
+                days = f[4].split(separator: ",").compactMap { Int($0) }.map { Optional($0 + 1) }
+            }
+            return days.compactMap { weekday in
+                calendar.nextDate(after: now, matching: DateComponents(hour: hour, minute: minute, weekday: weekday),
+                                  matchingPolicy: .nextTime)
+            }.min()
         }
     }
 

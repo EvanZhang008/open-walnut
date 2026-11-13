@@ -162,6 +162,13 @@ export interface RoutineMissedRun {
   failedAtMs?: number;
 }
 
+/**
+ * The task a routine delivers into, and that task's project (server:
+ * src/core/routines/routine-owner.ts). Absent for one that files its own work;
+ * `project: ''` is the Inbox. Both read as global on the Routines page.
+ */
+export type RoutineOwner = { taskId: string; title: string; project: string };
+
 export interface Routine {
   id: string;
   name: string;
@@ -180,6 +187,7 @@ export interface Routine {
   state: RoutineState;
   /** Its missed runs, newest first; absent when none. */
   missed?: RoutineMissedRun[];
+  owner?: RoutineOwner;
 }
 
 export interface RoutineCheckTestResult {

@@ -11,6 +11,8 @@ interface ConfirmDialogProps {
   /** Omitted for alert-style dialogs (single OK button). */
   cancelLabel?: string;
   danger?: boolean;
+  /** Start on the cancel button, so Enter keeps what the person has (a discard). */
+  focusCancel?: boolean;
   /** When defined, renders a single-line text input (prompt mode). The submitted
    *  value is passed to onConfirm; an empty/whitespace value is rejected (no-op)
    *  unless promptAllowEmpty is set. */
@@ -36,6 +38,7 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel,
   danger,
+  focusCancel,
   promptDefaultValue,
   promptPlaceholder,
   promptAllowEmpty,
@@ -44,6 +47,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const modalOwner = useModalOverlay(onCancel);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const isPrompt = promptDefaultValue !== undefined;
   // A prompt's typed text is kept under its title and the value it started from
@@ -62,10 +66,11 @@ export function ConfirmDialog({
   useEffect(() => {
     const t = setTimeout(() => {
       if (isPrompt) inputRef.current?.select();
+      else if (focusCancel && cancelRef.current) cancelRef.current.focus();
       else confirmRef.current?.focus();
     }, 10);
     return () => clearTimeout(t);
-  }, [isPrompt]);
+  }, [isPrompt, focusCancel]);
 
   // Submit the prompt value (rejecting empty/whitespace unless allowed); plain confirm otherwise.
   const submit = () => {
@@ -108,7 +113,7 @@ export function ConfirmDialog({
           )}
           <div className="app-modal-actions">
             {cancelLabel && (
-              <button className="app-modal-btn" onClick={() => { draft.clear(); onCancel(); }}>
+              <button ref={cancelRef} className="app-modal-btn" onClick={() => { draft.clear(); onCancel(); }}>
                 {cancelLabel}
               </button>
             )}

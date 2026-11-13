@@ -56,6 +56,11 @@ final class ChatPlaceFixtureServer {
     /// a slow runner's queries can never outlast it (CI, 2026-11-10: a 5 s read landed before Back).
     private var holdMatch: ((_ method: String, _ path: String) -> Bool)?
     private var heldAnswers: [() -> Void] = []
+    /// More routes a test serves on top of these (asked first, on the server's queue),
+    /// with the request's target (its path and query) and body: `RoutinesUITests` serves
+    /// its routines and its task search here and records what the app sent. Nil answers
+    /// fall through.
+    var extraRoutes: ((_ method: String, _ target: String, _ body: Data) -> (Int, Any)?)?
 
     init(options: Options = Options()) throws {
         self.options = options
@@ -179,7 +184,8 @@ final class ChatPlaceFixtureServer {
                 let header = String(decoding: buffer[..<head.lowerBound], as: UTF8.self)
                 let length = Self.contentLength(header)
                 if buffer.count - head.upperBound >= length {
-                    self.answer(connection, requestLine: header.components(separatedBy: "\r\n").first ?? "")
+                    let body = Data(buffer[head.upperBound..<(head.upperBound + length)])
+                    self.answer(connection, requestLine: header.components(separatedBy: "\r\n").first ?? "", body: body)
                     return
                 }
             }
@@ -198,7 +204,7 @@ final class ChatPlaceFixtureServer {
         return 0
     }
 
-    private func answer(_ connection: NWConnection, requestLine: String) {
+    private func answer(_ connection: NWConnection, requestLine: String, body requestBody: Data) {
         let parts = requestLine.split(separator: " ")
         let method = parts.first.map(String.init) ?? "GET"
         let target = parts.count > 1 ? String(parts[1]) : "/"
@@ -222,9 +228,10 @@ final class ChatPlaceFixtureServer {
             connection.send(content: Data(head.utf8), completion: .contentProcessed { _ in })
             return
         }
-        let (status, body) = route(method: method, path: path, query: query)
+        let (status, body) = extraRoutes?(method, target, requestBody) ?? route(method: method, path: path, query: query)
         let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data("{}".utf8)
-        let head = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Not Found")\r\nContent-Type: application/json\r\n"
+        let reason = [200: "OK", 201: "Created", 400: "Bad Request", 409: "Conflict", 500: "Internal Server Error"][status] ?? "Not Found"
+        let head = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: application/json\r\n"
             + "Content-Length: \(data.count)\r\nConnection: close\r\n\r\n"
         if let holdMatch, holdMatch(method, path) {
             heldAnswers.append {

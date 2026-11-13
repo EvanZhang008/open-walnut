@@ -82,32 +82,55 @@ test('cron page shows empty state when no jobs exist', async ({ page }) => {
   await expect(emptyState).toContainText('No routines yet')
 })
 
-// ── Job card displays ──
+// ── Job row displays ──
 
-test('job card displays correctly with name, schedule, and toggle', async ({ page }) => {
+// A routine is one line until it is opened: the dot, the name, the timing line and
+// the switch. Everything else (Run now, Edit, Delete, the facts) is in the detail.
+function rowOf(page: import('@playwright/test').Page, name: string) {
+  return page.locator('.cron-job-card', { hasText: name })
+}
+
+async function openRow(row: import('@playwright/test').Locator) {
+  const line = row.locator('.routine-row-main')
+  await line.click()
+  await expect(line).toHaveAttribute('aria-expanded', 'true')
+  await expect(row.locator('.routine-detail')).toBeVisible()
+}
+
+test('job row displays correctly with name, schedule, and switch', async ({ page }) => {
   const job = await createCronJobViaApi('Display test job')
 
   try {
     await page.goto('/cron')
     await page.waitForLoadState('networkidle')
 
-    // Find the card with our job name
-    const card = page.locator('.cron-job-card', { hasText: job.name })
+    // Find the row with our job name
+    const card = rowOf(page, job.name)
     await expect(card).toBeVisible({ timeout: 5000 })
+    await expect(card).toHaveAttribute('data-routine-id', job.id)
 
     // Verify job name is shown
     await expect(card.locator('.cron-job-name')).toContainText(job.name)
 
-    // Verify schedule text (everyMs: 60000 = "Every 1 minute")
-    await expect(card).toContainText('Every 1 min')
+    // Verify the timing line (everyMs: 60000 = "Every 1 min")
+    await expect(card.locator('.cron-job-desc')).toContainText('Every 1 min')
 
-    // Verify toggle button exists and shows "On" (enabled by default)
-    const toggleBtn = card.locator('.cron-toggle-btn')
-    await expect(toggleBtn).toBeVisible()
-    await expect(toggleBtn).toContainText('On')
+    // The switch is on (enabled by default) and names what a click does
+    const toggle = page.getByTestId(`routine-switch-${job.id}`)
+    await expect(toggle).toBeVisible()
+    await expect(toggle).toHaveAttribute('role', 'switch')
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
+    await expect(toggle).toHaveAttribute('aria-label', `Pause ${job.name}`)
 
-    // Verify status dot exists
-    await expect(card.locator('.cron-status-dot')).toBeVisible()
+    // Verify status dot exists and says the routine is on
+    const dot = card.locator('.cron-status-dot')
+    await expect(dot).toBeVisible()
+    await expect(dot).toHaveAttribute('aria-label', 'On')
+    await expect(card).toHaveAttribute('data-health', 'ok')
+
+    // Closed by default: no detail, no actions
+    await expect(card.locator('.routine-row-main')).toHaveAttribute('aria-expanded', 'false')
+    await expect(card.locator('.routine-detail')).toHaveCount(0)
   } finally {
     await deleteCronJobViaApi(job.id)
   }
@@ -115,26 +138,32 @@ test('job card displays correctly with name, schedule, and toggle', async ({ pag
 
 // ── Toggle job ──
 
-test('toggle button disables and enables a job', async ({ page }) => {
+test('switch pauses and resumes a job', async ({ page }) => {
   const job = await createCronJobViaApi('Toggle test job')
 
   try {
     await page.goto('/cron')
     await page.waitForLoadState('networkidle')
 
-    const card = page.locator('.cron-job-card', { hasText: job.name })
+    const card = rowOf(page, job.name)
     await expect(card).toBeVisible({ timeout: 5000 })
 
-    // Initially enabled — toggle should show "On"
-    const toggleBtn = card.locator('.cron-toggle-btn')
-    await expect(toggleBtn).toContainText('On')
+    // Initially enabled: the switch is on
+    const toggle = page.getByTestId(`routine-switch-${job.id}`)
+    await expect(toggle).toHaveAttribute('aria-checked', 'true')
 
-    // Click toggle to disable
-    await toggleBtn.click()
+    // Click the switch to pause
+    await toggle.click()
 
-    // Wait for card to reflect disabled state
-    await expect(toggleBtn).toContainText('Paused', { timeout: 5000 })
+    // Wait for the row to reflect the paused state
+    await expect(toggle).toHaveAttribute('aria-checked', 'false', { timeout: 5000 })
     await expect(card).toHaveClass(/cron-job-disabled/, { timeout: 5000 })
+    await expect(card).toHaveAttribute('data-health', 'off')
+    await expect(card.locator('.cron-status-dot')).toHaveAttribute('aria-label', 'Paused', { timeout: 5000 })
+    await expect(card.locator('.cron-job-desc')).toContainText('Paused', { timeout: 5000 })
+    await expect(toggle).toHaveAttribute('aria-label', `Resume ${job.name}`)
+    // The switch never opens the row: it is a sibling of the line button
+    await expect(card.locator('.routine-row-main')).toHaveAttribute('aria-expanded', 'false')
 
     // Verify via API: the switch flips before the server answers, so wait for it.
     await expect.poll(async () => {
@@ -142,10 +171,12 @@ test('toggle button disables and enables a job', async ({ page }) => {
       return ((await res.json()) as { job: { enabled: boolean } }).job.enabled
     }, { timeout: 10_000 }).toBe(false)
 
-    // Click toggle again to re-enable
-    await toggleBtn.click()
-    await expect(toggleBtn).toContainText('On', { timeout: 5000 })
+    // Click the switch again to resume
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-checked', 'true', { timeout: 5000 })
     await expect(card).not.toHaveClass(/cron-job-disabled/, { timeout: 5000 })
+    await expect(card.locator('.cron-status-dot')).toHaveAttribute('aria-label', 'On', { timeout: 5000 })
+    await expect(card.locator('.cron-job-desc')).not.toContainText('Paused')
   } finally {
     await deleteCronJobViaApi(job.id)
   }
@@ -154,72 +185,70 @@ test('toggle button disables and enables a job', async ({ page }) => {
 // The All / Enabled / Disabled filter tabs went with the old page: Routines lists
 // every routine with its own switch (routines-store-same-browser-instant.spec.ts).
 
-// ── Three-dot menu ──
+// ── Opening a row ──
 
-test('three-dot menu opens with Run now, Edit, Delete items', async ({ page }) => {
+test('opening a row shows Run now, Edit, Delete', async ({ page }) => {
   const job = await createCronJobViaApi('Menu test job')
 
   try {
     await page.goto('/cron')
     await page.waitForLoadState('networkidle')
 
-    const card = page.locator('.cron-job-card', { hasText: job.name })
+    const card = rowOf(page, job.name)
     await expect(card).toBeVisible({ timeout: 5000 })
 
-    // Click the three-dot menu button
-    const menuBtn = card.locator('.cron-menu-btn')
-    await menuBtn.click()
+    // Click the row's line to open it in place
+    await openRow(card)
+    await expect(card).toHaveClass(/routine-row-open/)
 
-    // Verify dropdown menu appears
-    const menu = card.locator('.cron-menu')
-    await expect(menu).toBeVisible()
+    // The detail lists the facts and the actions
+    const detail = card.locator('.routine-detail')
+    await expect(detail.locator('dl.routine-facts')).toContainText('When')
+    await expect(detail.getByRole('button', { name: 'Run now', exact: true })).toBeVisible()
+    await expect(detail.getByRole('button', { name: 'Edit', exact: true })).toBeVisible()
+    await expect(detail.getByRole('button', { name: 'Delete', exact: true })).toBeVisible()
+    // No task behind a main-agent job, so no way into one
+    await expect(detail.getByRole('button', { name: 'Open task' })).toHaveCount(0)
 
-    // Verify all menu items
-    const menuItems = menu.locator('.cron-menu-item')
-    await expect(menuItems).toHaveCount(3)
-    await expect(menu.locator('.cron-menu-item', { hasText: 'Run now' })).toBeVisible()
-    await expect(menu.locator('.cron-menu-item', { hasText: 'Edit' })).toBeVisible()
-    await expect(menu.locator('.cron-menu-item.cron-menu-danger', { hasText: 'Delete' })).toBeVisible()
+    // Clicking the line again closes it
+    await card.locator('.routine-row-main').click()
+    await expect(card.locator('.routine-row-main')).toHaveAttribute('aria-expanded', 'false')
+    await expect(card.locator('.routine-detail')).toHaveCount(0)
   } finally {
     await deleteCronJobViaApi(job.id)
   }
 })
 
-// ── Delete with confirm popover ──
+// ── Delete with inline confirm ──
 
-test('delete via menu shows confirm popover and removes job', async ({ page }) => {
+test('delete from the open row asks to confirm and removes the job', async ({ page }) => {
   const job = await createCronJobViaApi('Delete confirm job')
 
   try {
     await page.goto('/cron')
     await page.waitForLoadState('networkidle')
 
-    const card = page.locator('.cron-job-card', { hasText: job.name })
+    const card = rowOf(page, job.name)
     await expect(card).toBeVisible({ timeout: 5000 })
 
-    // Open menu
-    await card.locator('.cron-menu-btn').click()
-    await expect(card.locator('.cron-menu')).toBeVisible()
+    // Open the row and click Delete
+    await openRow(card)
+    await card.getByRole('button', { name: 'Delete', exact: true }).click()
 
-    // Click Delete
-    await card.locator('.cron-menu-danger').click()
-
-    // Confirm popover should appear
-    const popover = card.locator('.cron-confirm-popover')
-    await expect(popover).toBeVisible()
-    await expect(popover.locator('.cron-confirm-text')).toContainText('Delete this job?')
+    // The inline confirm replaces the actions
+    await expect(card.locator('.cron-confirm-text')).toContainText('Delete this routine?')
+    await expect(card.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0)
 
     // Click the red Delete button to confirm
-    await popover.locator('.cron-confirm-delete').click()
+    await card.locator('.cron-confirm-delete').click()
 
-    // Card should disappear
+    // Row should disappear
     await expect(card).toBeHidden({ timeout: 5000 })
 
     // Verify via API that job is gone
-    const res = await fetch(`${API}/api/cron/${job.id}`)
-    expect(res.status).toBe(404)
-  } catch {
-    // Cleanup on failure
+    await expect.poll(async () => (await fetch(`${API}/api/cron/${job.id}`)).status, { timeout: 5000 }).toBe(404)
+  } finally {
+    // Cleanup on failure (a 404 when the test passed)
     await deleteCronJobViaApi(job.id)
   }
 })
@@ -233,24 +262,25 @@ test('cancel delete keeps the job visible', async ({ page }) => {
     await page.goto('/cron')
     await page.waitForLoadState('networkidle')
 
-    const card = page.locator('.cron-job-card', { hasText: job.name })
+    const card = rowOf(page, job.name)
     await expect(card).toBeVisible({ timeout: 5000 })
 
-    // Open menu and click Delete
-    await card.locator('.cron-menu-btn').click()
-    await card.locator('.cron-menu-danger').click()
+    // Open the row and click Delete
+    await openRow(card)
+    await card.getByRole('button', { name: 'Delete', exact: true }).click()
 
-    // Confirm popover should appear
-    const popover = card.locator('.cron-confirm-popover')
-    await expect(popover).toBeVisible()
+    // The confirm should appear
+    const confirmText = card.locator('.cron-confirm-text')
+    await expect(confirmText).toBeVisible()
 
     // Click Cancel
-    await popover.locator('.cron-confirm-cancel').click()
+    await card.locator('.cron-confirm-cancel').click()
 
-    // Popover should disappear
-    await expect(popover).toBeHidden()
+    // The confirm should disappear and the actions come back
+    await expect(confirmText).toBeHidden()
+    await expect(card.getByRole('button', { name: 'Edit', exact: true })).toBeVisible()
 
-    // Card should still be visible
+    // Row should still be visible
     await expect(card).toBeVisible()
 
     // Verify via API that job still exists
@@ -263,24 +293,27 @@ test('cancel delete keeps the job visible', async ({ page }) => {
 
 // ── Run now ──
 
-test('run now via menu does not crash and card remains', async ({ page }) => {
+test('run now from the open row does not crash and the row remains', async ({ page }) => {
   const job = await createCronJobViaApi('Run now test job')
 
   try {
     await page.goto('/cron')
     await page.waitForLoadState('networkidle')
 
-    const card = page.locator('.cron-job-card', { hasText: job.name })
+    const card = rowOf(page, job.name)
     await expect(card).toBeVisible({ timeout: 5000 })
 
-    // Open menu and click "Run now"
-    await card.locator('.cron-menu-btn').click()
-    await card.locator('.cron-menu-item', { hasText: 'Run now' }).click()
+    // Open the row and click "Run now"
+    await openRow(card)
+    await card.getByRole('button', { name: 'Run now', exact: true }).click()
 
-    // Menu should close
-    await expect(card.locator('.cron-menu')).toBeHidden()
+    // The button comes back once the run has started (no crash, no error)
+    await expect(card.getByRole('button', { name: 'Run now', exact: true })).toBeEnabled({ timeout: 10_000 })
+    await expect(page.getByTestId('routine-action-error')).toHaveCount(0)
+    // The row says what the run answered, in place.
+    await expect(card.getByTestId('routine-run-outcome')).toBeVisible()
 
-    // Card should still be visible (no crash)
+    // Row should still be visible
     await expect(card).toBeVisible()
     await expect(card.locator('.cron-job-name')).toContainText(job.name)
   } finally {
@@ -295,7 +328,7 @@ test('run now via menu does not crash and card remains', async ({ page }) => {
 
 // ── Edit job ──
 
-test('edit job via menu opens form with pre-filled values and saves changes', async ({ page }) => {
+test('edit job from the open row opens form with pre-filled values and saves changes', async ({ page }) => {
   const job = await createCronJobViaApi('Edit test job', {
     description: 'Original description',
   })
@@ -305,12 +338,12 @@ test('edit job via menu opens form with pre-filled values and saves changes', as
     await page.goto('/cron')
     await page.waitForLoadState('networkidle')
 
-    const card = page.locator('.cron-job-card', { hasText: job.name })
+    const card = rowOf(page, job.name)
     await expect(card).toBeVisible({ timeout: 5000 })
 
-    // Open menu and click Edit
-    await card.locator('.cron-menu-btn').click()
-    await card.locator('.cron-menu-item', { hasText: 'Edit' }).click()
+    // Open the row and click Edit
+    await openRow(card)
+    await card.getByRole('button', { name: 'Edit', exact: true }).click()
 
     // Form should appear in edit mode
     const form = page.locator('.routine-modal')
@@ -366,7 +399,16 @@ test('multiple jobs all appear in the list', async ({ page }) => {
     // Verify different schedule texts
     await expect(page.locator('.cron-job-card', { hasText: job1.name })).toContainText('Every 1 min')
     await expect(page.locator('.cron-job-card', { hasText: job2.name })).toContainText('Every 5 min')
-    await expect(page.locator('.cron-job-card', { hasText: job3.name })).toContainText('Every 1 hour')
+    await expect(page.locator('.cron-job-card', { hasText: job3.name })).toContainText('Every hour')
+
+    // Only one row is open at a time: opening the second closes the first
+    const row1 = rowOf(page, job1.name)
+    const row2 = rowOf(page, job2.name)
+    await openRow(row1)
+    await openRow(row2)
+    await expect(row1.locator('.routine-row-main')).toHaveAttribute('aria-expanded', 'false')
+    await expect(row1.locator('.routine-detail')).toHaveCount(0)
+    await expect(page.locator('.routine-row-open')).toHaveCount(1)
   } finally {
     await deleteCronJobViaApi(job1.id)
     await deleteCronJobViaApi(job2.id)

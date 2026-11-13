@@ -222,6 +222,8 @@ final class DemoServer: @unchecked Sendable {
             reply = routeV1(request, Array(parts.dropFirst(2)))
         } else if parts.count >= 2, parts[1] == "push" {
             reply = routePush(request, Array(parts.dropFirst(2)))
+        } else if parts.count >= 2, parts[1] == "tasks" {
+            reply = routeTaskChoices(request, Array(parts.dropFirst(2)))
         } else {
             reply = nil
         }

@@ -8,7 +8,7 @@
  *   - Resume re-arms it: a next run is scheduled and checks come back;
  *   - what appeared while paused arrives ONCE, as one fire, and nothing replays;
  *   - a trigger the server stopped after failing checks reads Stopped, on the
- *     task and on the Routines card.
+ *     task and on the Routines row.
  *
  * Needs a daemon advertising `triggers-v1` (bash scripts/build-daemon.sh).
  * Run in WebKit too (PW_WEBKIT=1 … --project webkit): the Mac app is a WKWebView.
@@ -18,6 +18,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test, expect } from './shortcut-test-fixture'
 import type { Locator, Page } from '@playwright/test'
+import { openRoutineRow } from './routines-page-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOTS = '/tmp/trigger-pause'
@@ -218,7 +219,7 @@ test('what appeared while paused arrives once, as ONE fire, on Resume; nothing r
   }
 })
 
-test('a trigger stopped after failing checks reads Stopped on its task and on the Routines card', async ({ page }) => {
+test('a trigger stopped after failing checks reads Stopped on its task and on the Routines row', async ({ page }) => {
   const { isolateUiPrefs, presetPanelView } = await import('./todo-panel-helpers')
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: '' })
@@ -251,27 +252,47 @@ test('a trigger stopped after failing checks reads Stopped on its task and on th
     await shot(flyout, 'stopped-flyout')
     await page.keyboard.press('Escape')
 
-    // The Routines card: the switch says why it is off, the timing says since
+    // The Routines row: the dot and the timing line say why it is off and since
     // when, and a paused trigger offers no Run now (its daemon has disarmed it).
     await page.getByTestId('sidebar-core-app-routines').click()
     await expect(page.locator('.page-title')).toContainText('Routines')
-    const stoppedCard = page.locator('.routine-list .routine-card', { hasText: name }).first()
-    const pausedCard = page.locator('.routine-list .routine-card', { hasText: pausedName }).first()
-    await expect(stoppedCard.locator('.cron-toggle-btn')).toHaveText('Stopped')
-    await expect(stoppedCard.locator('.cron-job-desc')).toContainText('Stopped after 5 failed checks')
-    await expect(pausedCard.locator('.cron-toggle-btn')).toHaveText('Paused')
-    await expect(pausedCard.locator('.cron-toggle-btn')).toHaveAttribute('title', 'Resume')
-    await expect(pausedCard.locator('.cron-job-desc')).toContainText(/Paused (just now|\dm ago)/)
-    await expect(pausedCard.locator('.cron-job-desc')).not.toContainText(/Next run/)
-    await pausedCard.locator('.cron-menu-btn').click()
-    await expect(pausedCard.getByRole('button', { name: 'Edit' })).toBeVisible()
-    await expect(pausedCard.getByRole('button', { name: 'Run now' })).toHaveCount(0)
+    // Both deliver into a task of the Work project, so both are in its group.
+    const workGroup = page.locator('.routine-group[data-group="project:Work"]')
+    const stoppedCard = workGroup.locator('.routine-card', { hasText: name }).first()
+    const pausedCard = workGroup.locator('.routine-card', { hasText: pausedName }).first()
+    await expect(stoppedCard).toHaveAttribute('data-health', 'error')
+    await expect(stoppedCard.locator('.cron-status-dot')).toHaveAttribute('aria-label', 'Stopped')
+    await expect(stoppedCard.locator('.routine-row-flag')).toHaveText('Stopped')
+    // The line keeps the cadence; why it stopped is in the opened row.
+    await expect(stoppedCard.locator('.cron-job-desc')).toContainText('Checks every')
+    await stoppedCard.locator('.routine-row-main').click()
+    await expect(stoppedCard.locator('.routine-quiet')).toHaveText('Stopped after 5 failed checks')
+    await stoppedCard.locator('.routine-row-main').click()
+    const stoppedSwitch = page.getByTestId(`routine-switch-${failing.id}`)
+    await expect(stoppedSwitch).toHaveAttribute('aria-checked', 'false')
+    await expect(stoppedSwitch).toHaveAttribute('aria-label', `Resume ${name}`)
+    await expect(workGroup.locator('.routine-group-failing')).toContainText(/\d+ failing/)
+    await expect(pausedCard).toHaveAttribute('data-health', 'off')
+    await expect(pausedCard.locator('.cron-status-dot')).toHaveAttribute('aria-label', 'Paused')
+    const pausedSwitch = page.getByTestId(`routine-switch-${quiet.id}`)
+    await expect(pausedSwitch).toHaveAttribute('aria-checked', 'false')
+    await expect(pausedSwitch).toHaveAttribute('aria-label', `Resume ${pausedName}`)
+    await expect(pausedCard.locator('.cron-job-desc')).toContainText(/^Paused · /)
+    await expect(pausedCard.locator('.cron-job-desc')).not.toContainText(/next/i)
+    const pausedDetail = await openRoutineRow(pausedCard)
+    // Since when is in the opened row: the line stays short enough for a phone.
+    await expect(pausedDetail.locator('.routine-quiet')).toHaveText(/^Paused (just now|\dm ago)$/)
+    await expect(pausedDetail.getByRole('button', { name: 'Edit', exact: true })).toBeVisible()
+    await expect(pausedDetail.getByRole('button', { name: 'Open task', exact: true })).toBeVisible()
+    await expect(pausedDetail.getByRole('button', { name: /^Run (check )?now$/ })).toHaveCount(0)
     await shot(pausedCard, 'paused-card')
-    await pausedCard.locator('.cron-menu-btn').click()
-    await expect(pausedCard.getByRole('button', { name: 'Edit' })).toHaveCount(0)
-    // Resume from the card: On again.
-    await pausedCard.locator('.cron-toggle-btn').click()
-    await expect(pausedCard.locator('.cron-toggle-btn')).toHaveText('On')
+    await pausedCard.locator('.routine-row-main').click()
+    await expect(pausedCard.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0)
+    // Resume from the row's switch: On again.
+    await pausedSwitch.click()
+    await expect(pausedSwitch).toHaveAttribute('aria-checked', 'true')
+    await expect(pausedCard.locator('.cron-status-dot')).toHaveAttribute('aria-label', 'On')
+    await expect(pausedSwitch).toHaveAttribute('aria-label', `Pause ${pausedName}`)
     await expect.poll(async () => (await getRoutine(quiet.id))?.enabled).toBe(true)
     await expect.poll(async () => (await getRoutine(quiet.id))?.state?.pausedAtMs ?? null).toBeNull()
   } finally {

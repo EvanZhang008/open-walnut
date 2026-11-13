@@ -185,9 +185,15 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     if (opts?.expectedRevision !== undefined && cronJobRevision(job) !== opts.expectedRevision) throw new CronJobChangedError();
     const now = state.deps.nowMs();
     const wasEnabled = job.enabled;
+    const prevSchedule = job.schedule;
 
     applyJobPatch(job, patch);
     if (job.enabled !== wasEnabled) markSwitched(job, now);
+    // A form saves the schedule it showed even when only the name or the task changed:
+    // the same schedule is no change, so its anchor and next run stay (2026-11-05, a
+    // review: renaming a 2-hourly routine put its next run 2 hours out).
+    const sameSchedule = patch.schedule !== undefined && sameScheduleAs(prevSchedule, patch.schedule);
+    if (sameSchedule) job.schedule = prevSchedule;
 
     // Fix up anchorMs for 'every' schedules if it's missing or invalid
     if (job.schedule.kind === 'every') {
@@ -206,7 +212,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
       }
     }
 
-    const scheduleChanged = patch.schedule !== undefined;
+    const scheduleChanged = patch.schedule !== undefined && !sameSchedule;
     // A trigger's next run is the daemon's report; an `enabled` it already had
     // (a stale Resume, a repeated Pause) must not replace it with a server guess.
     const enabledChanged = patch.enabled !== undefined && (job.enabled !== wasEnabled || !clockOnDaemon(job));
@@ -630,4 +636,15 @@ export async function markMissed(
     if (mark.dismiss?.length) emit(state, { jobId: id, action: 'updated', nextRunAtMs: job.state.nextRunAtMs });
     return job;
   });
+}
+
+/** The same schedule, but for an interval's anchor when the new one names none. */
+export function sameScheduleAs(prev: CronJob['schedule'], next: CronJob['schedule']): boolean {
+  if (prev.kind !== next.kind) return false;
+  if (prev.kind === 'every' && next.kind === 'every') {
+    return prev.everyMs === next.everyMs && (next.anchorMs === undefined || next.anchorMs === prev.anchorMs);
+  }
+  if (prev.kind === 'cron' && next.kind === 'cron') return prev.expr === next.expr && (prev.tz ?? '') === (next.tz ?? '');
+  if (prev.kind === 'at' && next.kind === 'at') return prev.at === next.at;
+  return false;
 }

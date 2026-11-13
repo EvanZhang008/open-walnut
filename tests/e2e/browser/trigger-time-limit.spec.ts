@@ -13,6 +13,7 @@
 import fs from 'node:fs/promises'
 import { test, expect } from './shortcut-test-fixture'
 import type { Locator, Page } from '@playwright/test'
+import { openRoutineRow } from './routines-page-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOTS = `${process.env.WALNUT_TASK_DIR || '/tmp'}/shots/trigger-time-limit`
@@ -131,9 +132,11 @@ test('the trigger card shows each check\'s time limit and last run, and History 
     await page.getByTestId('sidebar-core-app-routines').click()
     await expect(page.locator('.page-title')).toContainText('Routines')
     const card = page.locator('.routine-list .routine-card', { hasText: `PW hung ${stamp}` }).first()
+    await openRoutineRow(card)
     await expect(card.getByTestId('routine-check-time')).toHaveText('time limit 3 s · last run killed at the limit')
     await expect(card.getByTestId('routine-check-time')).toHaveAttribute('data-near', 'true')
     const slowCard = page.locator('.routine-list .routine-card', { hasText: `PW slow ${stamp}` }).first()
+    await openRoutineRow(slowCard)
     await expect(slowCard.getByTestId('routine-check-time')).toHaveText(/over half of it$/)
     await shot(card, 'routines-card')
   } finally {

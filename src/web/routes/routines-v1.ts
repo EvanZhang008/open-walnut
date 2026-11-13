@@ -59,8 +59,11 @@ async function answeredFromCopy(res: Response, includeDisabled: boolean, answer:
   const [{ companionRoutinesCopy }, { copyKindAsOf, COPY_AS_OF_HEADER }] = await Promise.all([
     import('../../core/replication/kinds/routines-follower.js'), import('../../core/replication/kinds/gate.js'),
   ])
-  const jobs = await companionRoutinesCopy({ includeDisabled })
-  if (!jobs) return false
+  const copied = await companionRoutinesCopy({ includeDisabled })
+  if (!copied) return false
+  // As every routine answer does: the task, and so the project, each belongs to.
+  const { withRoutineOwners } = await import('../../core/routines/routine-owner.js')
+  const jobs = await withRoutineOwners(copied)
   res.setHeader(COPY_AS_OF_HEADER, String(await copyKindAsOf('routines') ?? 0))
   const body = answer(jobs)
   if (body === null) sendError(res, 404, 'not_found', 'No such routine in the copy of your Mac\'s routines')

@@ -7,6 +7,7 @@
  * box with no provider configured could not create a routine at all.
  */
 import { test, expect } from './shortcut-test-fixture'
+import { openManualRoutineForm, openRoutineRow } from './routines-page-helpers'
 
 const API = 'http://localhost:3457'
 
@@ -38,9 +39,7 @@ test('builds a watcher routine by hand and stores exactly what the form showed',
     await openRoutines(page)
 
     // The manual path — no model call, so this works with no provider configured.
-    await page.getByRole('button', { name: 'Build it myself' }).click()
-    const form = page.locator('.routine-modal')
-    await expect(form).toBeVisible()
+    const form = await openManualRoutineForm(page)
 
     await form.locator('#routine-name').fill(name)
 
@@ -72,10 +71,14 @@ test('builds a watcher routine by hand and stores exactly what the form showed',
     await form.getByRole('button', { name: 'Create' }).click()
     await expect(form).toBeHidden()
 
-    // The card is in the list, badged as a Watcher.
-    const card = page.locator('.routine-list .routine-card', { hasText: name }).first()
+    // The row is in the list (Global: no task behind it), and opened it says it runs as a Watcher.
+    const card = page.locator('.routine-group[data-group="global"] .routine-card', { hasText: name }).first()
     await expect(card).toBeVisible()
-    await expect(card.locator('.routine-executor-badge')).toContainText('Watcher')
+    // A routine just made opens by itself, in view, so the person sees where it went.
+    await expect(card.locator('.routine-row-main')).toHaveAttribute('aria-expanded', 'true')
+    await expect(card).toBeInViewport()
+    const detail = await openRoutineRow(card)
+    await expect(detail.locator('dl.routine-facts')).toContainText('Watcher')
 
     // And what the server stored matches what the form showed.
     const stored = await findRoutineByName(name)
@@ -97,12 +100,13 @@ test('builds a watcher routine by hand and stores exactly what the form showed',
 
 test('a watcher with no instructions is refused in the form, not on the server', async ({ page }) => {
   await openRoutines(page)
-  await page.getByRole('button', { name: 'Build it myself' }).click()
-  const form = page.locator('.routine-modal')
+  const form = await openManualRoutineForm(page)
   await form.locator('#routine-name').fill(`PW watcher blank ${Date.now()}`)
   await form.locator('label.cron-form-radio', { hasText: 'Watcher' }).locator('input').check()
   await form.getByRole('button', { name: 'Create' }).click()
-  await expect(form.locator('.cron-form-error')).toContainText('What to watch is required')
+  // Said under the empty field, which takes the cursor.
+  await expect(form.locator('.routine-field-error')).toContainText('What to watch is required')
+  await expect(form.locator('#routine-f-instructions')).toBeFocused()
   await expect(form).toBeVisible()
   await form.getByRole('button', { name: 'Cancel' }).click()
 })
@@ -111,8 +115,7 @@ test('picking Watcher turns an untouched trigger into an interval, and leaves a 
   // A poll is an interval, not a wall clock. The form's default is weekdays
   // 9:00, which would make a hand-built mail watcher look once a day.
   await openRoutines(page)
-  await page.getByRole('button', { name: 'Build it myself' }).click()
-  const form = page.locator('.routine-modal')
+  const form = await openManualRoutineForm(page)
   await expect(form.locator('.routine-trigger-header')).toContainText('weekdays')
 
   await form.locator('label.cron-form-radio', { hasText: 'Watcher' }).locator('input').check()
@@ -122,7 +125,7 @@ test('picking Watcher turns an untouched trigger into an interval, and leaves a 
   // But a schedule the user picked must survive the executor switch.
   await form.getByRole('tab', { name: 'Daily' }).click()
   await expect(form.locator('.routine-trigger-header')).toContainText('every day at 9:00 AM')
-  await form.locator('label.cron-form-radio', { hasText: 'Main Agent' }).locator('input').check()
+  await form.locator('label.cron-form-radio', { hasText: 'Home Chat' }).locator('input').check()
   await form.locator('label.cron-form-radio', { hasText: 'Watcher' }).locator('input').check()
   await expect(form.locator('.routine-trigger-header')).toContainText('every day at 9:00 AM')
 
@@ -131,8 +134,7 @@ test('picking Watcher turns an untouched trigger into an interval, and leaves a 
 
 test('every watcher field the server advertises is one the form can draw', async ({ page }) => {
   await openRoutines(page)
-  await page.getByRole('button', { name: 'Build it myself' }).click()
-  const form = page.locator('.routine-modal')
+  const form = await openManualRoutineForm(page)
   await form.locator('label.cron-form-radio', { hasText: 'Watcher' }).locator('input').check()
 
   const res = await fetch(`${API}/api/routines/executors`)

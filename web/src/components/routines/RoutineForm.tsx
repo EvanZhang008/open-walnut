@@ -11,6 +11,9 @@ import { BoxMic, MicField, type BoxMicHandle } from '@/components/common/BoxMic'
 import { useSendAfterDictation, dictationWaitProps, useDictationGroup } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
+import { RoutineTaskField } from './RoutineTaskField';
+import { editKey } from './routine-groups';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 interface RoutineFormProps {
   /** Prefill from an AI draft or an existing routine (edit mode). */
@@ -216,6 +219,8 @@ interface KeptRoutine {
   config: Record<string, unknown>;
   check: CheckDraft;
   checkOpen: boolean;
+  /** The saved routine an edit's draft started from (editKey): a draft of an older one is stale. */
+  base?: string;
 }
 
 function keptFrom(source: CreateRoutineInput | undefined): KeptRoutine {
@@ -248,15 +253,32 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
       }
     : draft;
 
-  // The form is a draft of this routine (or of the new one) until Save or Cancel:
-  // Esc, the close button and a click outside keep it, and so does a reload.
-  const baseline = keptFrom(source);
+  // The form is a draft of this routine (or of the new one) until Save or a close:
+  // a reload keeps it; closing a changed form (Esc, the close button, a click
+  // outside, Cancel) asks first (2026-11-04, a review: Esc dropped the edits with
+  // no word).
+  const savedKey = routine ? editKey(routine) : undefined;
+  const baseline: KeptRoutine = { ...keptFrom(source), ...(savedKey ? { base: savedKey } : {}) };
   // An AI-drafted routine is its own draft, so it never takes over the words of
   // one typed by hand (or of another AI draft).
   const draftId = routine?.id ?? (draft ? `ai-${draftHash(JSON.stringify(draft))}` : 'new');
   const kept = useDraftValue<KeptRoutine>(draftKey('routine-form', draftId), baseline);
   // Over the baseline, so a draft kept by an older form never lacks a field.
-  const { name, description, trigger, executorType, config, check, checkOpen } = { ...baseline, ...kept.value };
+  // Unsaved edits of this routine kept from earlier (this tab, another, another device)
+  // are said, never filled in silently; edits made before the routine was saved again
+  // are not used unless asked for (2026-11-05, a review: another tab's unsaved name was
+  // saved with this tab's change).
+  const [restored, setRestored] = useState<{ stale: boolean; words: KeptRoutine } | null>(() => (
+    routine && kept.dirty ? { stale: kept.value.base !== savedKey, words: kept.value } : null
+  ));
+  useEffect(() => {
+    if (restored?.stale) kept.clear();
+    // Once, for what the form opened with.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // A stale draft is not shown, even for the one render before it is put aside.
+  const staleShown = restored?.stale === true && kept.dirty;
+  const { name, description, trigger, executorType, config, check, checkOpen } = staleShown ? baseline : { ...baseline, ...kept.value };
   const setKept = kept.setValue;
   const slice = <K extends keyof KeptRoutine>(field: K) => (next: SetStateAction<KeptRoutine[K]>) =>
     setKept((prev) => ({
@@ -275,6 +297,10 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   }>({ busy: false });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A required field left empty: said under that field, which gets the focus
+  // (2026-11-04, a review: the one line at the top of a long form was out of sight).
+  const [fieldError, setFieldError] = useState<{ id: string; text: string } | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
   const descRef = useRef<HTMLTextAreaElement | null>(null);
   const descMic = useRef<BoxMicHandle | null>(null);
   const instrRef = useRef<HTMLTextAreaElement | null>(null);
@@ -291,16 +317,41 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     setError(null);
   }, [draft]);
 
-  // Close on Escape, like every other modal
+  const dirty = JSON.stringify({ ...baseline, ...kept.value }) !== JSON.stringify(baseline);
+  const [askDiscard, setAskDiscard] = useState(false);
+  const discard = () => { setAskDiscard(false); kept.clear(); onCancel(); };
+  const requestClose = () => { if (dirty) setAskDiscard(true); else discard(); };
+  const closeRef = useRef(requestClose);
+  closeRef.current = askDiscard ? () => {} : requestClose;
+
+  // Close on Escape, like every other modal (the discard question answers its own Esc)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeRef.current(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
+  }, []);
 
   const executorInfo = executors.find((e) => e.type === executorType);
-  const setField = (fieldName: string, value: unknown) =>
+  const setField = (fieldName: string, value: unknown) => {
+    setFieldError((prev) => (prev?.id === `routine-f-${fieldName}` ? null : prev));
     setConfig((prev) => ({ ...prev, [fieldName]: value }));
+  };
+  /** Stop the save at one field: its words under it, the cursor in it. */
+  function failAt(id: string, text: string) {
+    setError(null);
+    setFieldError({ id, text });
+    requestAnimationFrame(() => {
+      const el = document.getElementById(id) ?? document.getElementById(`${id}-change`);
+      el?.scrollIntoView({ block: 'center' });
+      el?.focus({ preventScroll: true });
+    });
+  }
+  /** A save that failed: said beside the buttons, where the person pressed Save. */
+  function failSave(text: string) {
+    setFieldError(null);
+    setError(text);
+    requestAnimationFrame(() => formRef.current?.querySelector('.routine-save-error')?.scrollIntoView({ block: 'nearest' }));
+  }
 
   /**
    * A watcher POLLS, so its natural trigger is an interval, not a wall clock:
@@ -322,6 +373,17 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
 
   function pickExecutor(next: string) {
     setExecutorType(next);
+    // What it should do carries over: one kind calls it Instructions, a session Prompt.
+    const fields = executors.find((e) => e.type === next)?.configSchema.map((f) => f.name) ?? [];
+    const words = [config.instructions, config.prompt].find((v): v is string => typeof v === 'string' && v.trim() !== '');
+    if (words) {
+      setConfig((prev) => ({
+        ...prev,
+        ...(fields.includes('prompt') && !(typeof prev.prompt === 'string' && prev.prompt.trim()) ? { prompt: words } : {}),
+        ...(fields.includes('instructions') && !(typeof prev.instructions === 'string' && prev.instructions.trim()) ? { instructions: words } : {}),
+      }));
+    }
+    setFieldError(null);
     if (next !== 'watcher') return;
     defaultUntouchedTriggerToInterval(10);
   }
@@ -361,9 +423,14 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
 
   const schedule = useMemo(() => triggerToSchedule(trigger), [trigger]);
   const headerLine = useMemo(() => {
-    if (!schedule) return 'Select a trigger';
-    const abbr = schedule.kind === 'cron' ? tzAbbrev(schedule.tz ?? localTz()) : '';
-    return `Runs ${describeSchedule(schedule).replace(/^./, (c) => c.toLowerCase())}${abbr ? ` ${abbr}` : ''}`;
+    if (!schedule) return 'Pick when it runs';
+    // The zone only when it is not this computer's, as the list says times (a review:
+    // "UTC" here and no zone in the list read as two clocks).
+    const abbr = schedule.kind === 'cron' && schedule.tz && schedule.tz !== localTz() ? tzAbbrev(schedule.tz) : '';
+    // "Runs every day", "Runs weekdays", but "Runs Mondays": a day keeps its capital.
+    const said = describeSchedule(schedule);
+    const lead = /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)/.test(said) ? said : said.replace(/^./, (c) => c.toLowerCase());
+    return `Runs ${lead}${abbr ? ` ${abbr}` : ''}`;
   }, [schedule]);
 
   // Instructions + model are hoisted into the prominent top section; the
@@ -373,20 +440,21 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   const restFields = (executorInfo?.configSchema ?? []).filter((f) => f.name !== 'instructions' && f.name !== 'model');
 
   async function submitNow() {
-    if (!name.trim()) { setError('Name is required'); return; }
-    if (!schedule) { setError('A valid trigger is required'); return; }
+    if (!name.trim()) { failAt('routine-name', 'Give it a name'); return; }
+    if (!schedule) { failSave('Pick when it runs'); return; }
     for (const f of executorInfo?.configSchema ?? []) {
       const v = config[f.name];
       if (f.required && (typeof v !== 'string' || !v.trim())) {
-        setError(`${f.label} is required`);
+        const label = executorType === 'session' && f.name === 'target' ? 'Task' : f.label;
+        failAt(`routine-f-${f.name}`, f.name === 'target' ? 'Pick the task it runs in' : `${label} is required: say what it should do each run`);
         return;
       }
     }
     const executor: RoutineExecutorRef = { type: executorType, config: config as RoutineExecutorRef['config'] };
     const checkSpec = checkOpen ? draftToCheck(check) : null;
-    if (checkOpen && !checkSpec) { setError('Check command is required, or remove the check'); return; }
+    if (checkOpen && !checkSpec) { failAt('routine-check-run', 'Enter the check command, or remove the check'); return; }
     if (checkSpec && schedule.kind !== 'every') {
-      setError('A check trigger polls on an interval: pick Custom, then Interval');
+      failSave('A check trigger polls on an interval: pick Custom, then Interval');
       return;
     }
     // Only send `check` when it changes something: null clears an existing one.
@@ -395,6 +463,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
       : routine?.check ? { check: null } : {};
     setSaving(true);
     setError(null);
+    setFieldError(null);
     const sentKey = kept.key;
     try {
       // Sent even when empty: on an edit that is how a cleared description is removed.
@@ -404,7 +473,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
       await onSave({ name: name.trim(), description: description.trim(), schedule, executor, ...checkField });
       kept.clear(sentKey);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save');
+      failSave(err instanceof Error ? err.message : 'Failed to save');
     } finally {
       setSaving(false);
     }
@@ -418,6 +487,9 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
 
   function renderField(f: ExecutorFieldSpec) {
     const value = config[f.name];
+    if (executorType === 'session' && f.name === 'target') {
+      return <RoutineTaskField id={`routine-f-${f.name}`} value={typeof value === 'string' ? value : ''} onChange={(next) => setField(f.name, next)} />;
+    }
     if (f.kind === 'textarea') {
       return (
         <FieldMicTextarea
@@ -471,14 +543,28 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   }
 
   return (
-    <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+    <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !saving) requestClose(); }}>
       <div className="modal card routine-modal">
         <div className="routine-modal-header">
           <h3>{routine ? 'Edit routine' : 'New routine'}</h3>
-          <button type="button" className="routine-modal-close" onClick={onCancel} aria-label="Close">✕</button>
+          <button type="button" className="routine-modal-close" onClick={requestClose} disabled={saving} aria-label="Close">✕</button>
         </div>
-        <form onSubmit={handleSubmit}>
-          {error && <div className="cron-form-error">{error}</div>}
+        <form onSubmit={handleSubmit} ref={formRef}>
+          {restored && (
+            <div className="routine-restored" role="status" data-testid="routine-restored">
+              {restored.stale ? (
+                <>
+                  <span>You left unsaved edits here, but this routine was saved again since, so this shows what is saved now.</span>
+                  <button type="button" className="btn btn-sm" onClick={() => { setKept({ ...restored.words, base: savedKey }); setRestored(null); }}>Bring my edits back</button>
+                </>
+              ) : (
+                <>
+                  <span>These are your unsaved edits from earlier.</span>
+                  <button type="button" className="btn btn-sm" onClick={() => { kept.clear(); setRestored(null); }}>Start from saved</button>
+                </>
+              )}
+            </div>
+          )}
 
           <div className="form-group">
             <label htmlFor="routine-name">Name *</label>
@@ -487,9 +573,11 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
               id="routine-name"
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => { setName(e.target.value); setFieldError((p) => (p?.id === 'routine-name' ? null : p)); }}
               placeholder="e.g. Briefing"
+              aria-invalid={fieldError?.id === 'routine-name' || undefined}
             />
+            {fieldError?.id === 'routine-name' && <FieldError text={fieldError.text} />}
           </div>
 
           {/* 600: the limit trigger_create holds an agent to (TRIGGER_DESCRIPTION_MAX). */}
@@ -503,7 +591,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                 className="routine-description-input"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="What it does, in a sentence or two. Shown on the card."
+                placeholder="What it does, in a sentence or two. Shown when its row is opened."
                 rows={3}
                 maxLength={600}
               />
@@ -521,7 +609,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                   value={typeof config.instructions === 'string' ? config.instructions : ''}
                   onChange={(e) => setField('instructions', e.target.value)}
                   placeholder={instructionsField.placeholder ?? 'What should this routine do each run?'}
-                  rows={8}
+                  rows={5}
                 />
                 <div className="routine-instructions-footer">
                   {modelField && (
@@ -543,14 +631,14 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                   />
                 </div>
               </div>
+              {fieldError?.id === 'routine-f-instructions' && <FieldError text={fieldError.text} />}
             </div>
           )}
 
           <div className="form-group routine-trigger">
-            <label>Select a trigger</label>
+            <label>When it runs</label>
             <div className="routine-trigger-box">
               <div className="routine-trigger-header">
-                <span className="routine-trigger-clock">🕐</span>
                 <span>{headerLine}</span>
               </div>
               <div className="routine-trigger-presets" role="tablist">
@@ -667,7 +755,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
             <label>Check script</label>
             {!checkOpen ? (
               <button type="button" className="btn btn-sm routine-check-add" onClick={openCheck}>
-                Add a check script (fire only when it says so)
+                Add a check script (run only when it finds something)
               </button>
             ) : (
               <div className="routine-check-box">
@@ -684,9 +772,10 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                     type="text"
                     className="font-mono"
                     value={check.run}
-                    onChange={(e) => setCheck({ ...check, run: e.target.value })}
+                    onChange={(e) => { setCheck({ ...check, run: e.target.value }); setFieldError((p) => (p?.id === 'routine-check-run' ? null : p)); }}
                     placeholder="bash ~/.open-walnut/triggers/pr-comments/check.sh"
                   />
+                  {fieldError?.id === 'routine-check-run' && <FieldError text={fieldError.text} />}
                 </div>
                 <div className="form-row">
                   <div className="form-group">
@@ -787,19 +876,40 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
           </div>
           {restFields.map((f) => (
             <div className="form-group" key={f.name}>
-              <label htmlFor={`routine-f-${f.name}`}>{f.label}{f.required ? ' *' : ''}</label>
+              <label htmlFor={`routine-f-${f.name}`}>{executorType === 'session' && f.name === 'target' ? 'Task' : f.label}{f.required ? ' *' : ''}</label>
               {renderField(f)}
+              {fieldError?.id === `routine-f-${f.name}` && <FieldError text={fieldError.text} />}
             </div>
           ))}
 
-          <div className="form-actions">
-            <button type="button" className="btn" onClick={() => { kept.clear(); onCancel(); }} disabled={saving}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={saving} {...dictationWaitProps(gate)}>
-              {saving ? 'Saving…' : routine ? 'Save' : 'Create'}
-            </button>
+          {/* Always in sight at the dialog's bottom edge, with what the last Save answered. */}
+          <div className="routine-form-footer">
+            {error && <div className="cron-form-error routine-save-error" role="alert">{error}</div>}
+            <div className="form-actions">
+              <button type="button" className="btn" onClick={requestClose} disabled={saving}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={saving} {...dictationWaitProps(gate)}>
+                {saving ? 'Saving…' : routine ? 'Save' : 'Create'}
+              </button>
+            </div>
           </div>
         </form>
       </div>
+      {askDiscard && (
+        <ConfirmDialog
+          title="Discard changes?"
+          message="Your edits to this routine are not saved."
+          confirmLabel="Discard changes"
+          cancelLabel="Keep editing"
+          danger
+          focusCancel
+          onConfirm={discard}
+          onCancel={() => setAskDiscard(false)}
+        />
+      )}
     </div>
   );
+}
+
+function FieldError({ text }: { text: string }) {
+  return <div className="routine-field-error" role="alert">{text}</div>;
 }

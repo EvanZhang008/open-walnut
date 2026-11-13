@@ -215,7 +215,39 @@ final class DemoModeTests: XCTestCase {
         XCTAssertFalse(routines.isEmpty)
         _ = try await api.toggleRoutine(id: "r-plants")
         try await api.runRoutineNow(id: "r-briefing")
+        let ran = try await api.routine(id: "r-briefing")
+        XCTAssertNotNil(ran.state?.lastRunAtMs)
+        XCTAssertNotNil(ran.executor?.sends, "the briefing says what it sends")
+        var draft = RoutineDraft.new()
+        draft.name = "Stretch break"
+        draft.sends = "Remind me to stand up and stretch."
+        draft.repeatKind = .hours
+        draft.interval = 2
+        let made = try await api.createRoutine(draft.createBody())
+        XCTAssertEqual(made.executor?.type, "main-agent")
+        XCTAssertEqual(made.schedule.everyMs, 7_200_000)
+        XCTAssertNotNil(made.state?.nextRunAtMs)
+        let renamed = try await api.updateRoutine(id: made.id, ["name": .string("Stretch")])
+        XCTAssertEqual(renamed.name, "Stretch")
+        XCTAssertEqual(renamed.executor?.sends, "Remind me to stand up and stretch.", "a rename keeps what it sends")
         try await api.deleteRoutine(id: "r-weekly")
+        // A session routine's Task: found by title, looked up by id, and a pick saved
+        // moves the routine to that task (and keeps what it sends).
+        let crashTasks = try await api.routineTaskChoices(query: "crash")
+        XCTAssertTrue(crashTasks.contains { $0.id == "t-crash" })
+        XCTAssertFalse(crashTasks.contains { $0.isComplete }, "only open tasks are offered")
+        XCTAssertLessThanOrEqual(crashTasks.count, 8)
+        let looked = try await api.routineTaskChoice(id: "t-crash")
+        XCTAssertEqual(looked?.title, "Fix the shared album crash")
+        let crashes = try XCTUnwrap(routines.first { $0.id == "r-crashes" })
+        XCTAssertEqual(crashes.executor?.target, "t-crash")
+        let crashDraft = RoutineDraft(job: crashes)
+        var retarget = crashDraft
+        retarget.target = "t-l10n"
+        let moved = try await api.updateRoutine(id: crashes.id, retarget.patchBody(original: crashes, initial: crashDraft))
+        XCTAssertEqual(moved.executor?.target, "t-l10n")
+        XCTAssertEqual(moved.owner?.title, "Localize the settings screen")
+        XCTAssertEqual(moved.executor?.sends, crashes.executor?.sends)
 
         // Voice, push and the background reporters.
         let heard = try await api.transcribe(audio: Data(repeating: 0, count: 64), format: "m4a")

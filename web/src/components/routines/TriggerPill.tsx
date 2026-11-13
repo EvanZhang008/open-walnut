@@ -23,16 +23,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import type { Routine, RoutineAuditEntry } from '@/api/routines';
+import type { Routine } from '@/api/routines';
 import { useTaskTriggers } from '@/hooks/useTaskTriggers';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { removeRoutine, runRoutineNow, setRoutineEnabled } from '@/stores/routines-store';
 import {
-  auditClock, auditHistory, clockHostTitle, describeAuditEntry, describeCheck, describeClockHost, describeFireTally,
+  auditHistory, clockHostTitle, describeCheck, describeClockHost, describeFireTally,
   describeLastCheck, describeNextRun, describeRunTime, describeSchedule, describeTriggerOff, triggerRunState,
 } from '@/utils/routine-format';
 import { TRIGGER_STOP_AFTER_ERRORS } from '../../../../src/core/cron/trigger-run-state';
 import '@/styles/trigger-state.css';
+import { AuditRow } from './RoutineAuditRow';
 import { openSessionOnHome } from '@/utils/open-session';
 import '@/styles/routine-description.css';
 import { log } from '@/utils/log';
@@ -73,71 +74,6 @@ function promptOf(routine: Routine): string {
   const prompt = typeof config.prompt === 'string' ? config.prompt : '';
   const instructions = typeof config.instructions === 'string' ? config.instructions : '';
   return (prompt || instructions).trim();
-}
-
-/**
- * One audit row. A fire opens to show the message the session actually received
- * (the answer to "what is the injected context") plus a way into that session;
- * a quiet or failed check is the sentence alone, since there is nothing to open.
- */
-function AuditRow({ entry, check, onOpenSession }: {
-  entry: RoutineAuditEntry; check?: Routine['check']; onOpenSession: (sessionId: string) => void
-}) {
-  const [open, setOpen] = useState(false);
-  const rowRef = useRef<HTMLLIElement>(null);
-  const sessionId = entry.delivery?.sessionId;
-  const fired = entry.outcome === 'fired';
-  const warnings = entry.warnings ?? [];
-  const canOpen = (fired && (!!entry.injected || !!sessionId)) || warnings.length > 0;
-  // The list scrolls inside a bounded flyout, so a row opened near its bottom edge
-  // puts the injected text half below the fold with nothing saying to scroll. The
-  // whole ROW is scrolled, not just the detail: bringing only the detail into view
-  // pushed its own headline out, leaving text with nothing saying what it belongs to.
-  useEffect(() => {
-    if (open) rowRef.current?.scrollIntoView({ block: 'nearest' });
-  }, [open]);
-  return (
-    <li ref={rowRef} className="trigger-audit-row" data-outcome={entry.outcome} data-open={open ? 'true' : 'false'}>
-      <button
-        type="button"
-        className="trigger-audit-line"
-        disabled={!canOpen}
-        aria-expanded={canOpen ? open : undefined}
-        onClick={() => canOpen && setOpen((v) => !v)}
-      >
-        <span className="trigger-audit-clock">{auditClock(entry.atMs)}</span>
-        <span className="trigger-audit-what">{describeAuditEntry(entry, check)}</span>
-        {canOpen && <span className={`trigger-audit-chevron${open ? ' open' : ''}`}>›</span>}
-      </button>
-      {open && (
-        <div className="trigger-audit-detail">
-          {warnings.length > 0 && (
-            <>
-              <div className="trigger-audit-detail-label">
-                The daemon repaired what the check printed, so this run still counted. Fix the script:
-              </div>
-              <pre className="trigger-audit-injected">{warnings.map((w) => `- ${w}`).join('\n')}</pre>
-            </>
-          )}
-          {!fired ? null : entry.injected ? (
-            <>
-              <div className="trigger-audit-detail-label">
-                Injected into the session ({entry.injected.chars} chars)
-              </div>
-              <pre className="trigger-audit-injected">{entry.injected.preview}</pre>
-            </>
-          ) : (
-            <div className="trigger-audit-detail-label">No injected text was recorded for this fire.</div>
-          )}
-          {sessionId && (
-            <button type="button" className="trigger-jobs-link" onClick={() => onOpenSession(sessionId)}>
-              Open that session
-            </button>
-          )}
-        </div>
-      )}
-    </li>
-  );
 }
 
 function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSession: (sessionId: string) => void }) {

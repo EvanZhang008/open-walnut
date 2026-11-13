@@ -237,20 +237,41 @@ export async function toggleRoutine(id: string): Promise<Routine> {
  * that is a moment stale (an agent paused it meanwhile) cannot turn a Pause
  * into a Resume. Setting the state it already has is a no-op on the server.
  */
+/**
+ * The switch writes of one routine, one at a time in click order (2026-11-04, a review:
+ * pause then resume fast, the pause's request held up, and the server applied it last,
+ * so the routine ended paused against the last click). Only the newest write's answer
+ * is shown; an older one's would undo the switch the person already moved.
+ */
+const switchChains = new Map<string, { tail: Promise<unknown>; seq: number }>();
+
 export async function setRoutineEnabled(id: string, enabled: boolean): Promise<Routine> {
   const index = snapshot.routines.findIndex((r) => r.id === id);
   const before = index === -1 ? null : snapshot.routines[index];
   if (before && before.enabled !== enabled) patchRoutine(id, switchedPatch(before, enabled));
+  const chain = switchChains.get(id) ?? { tail: Promise.resolve(), seq: 0 };
+  const seq = ++chain.seq;
+  const write = chain.tail.catch(() => undefined).then(() => api.updateRoutine(id, { enabled }));
+  chain.tail = write;
+  switchChains.set(id, chain);
+  const newest = () => switchChains.get(id)?.seq === seq;
   writesInFlight += 1;
   try {
-    const job = await api.updateRoutine(id, { enabled });
-    replaceRoutine(job);
+    const job = await write;
+    if (newest()) replaceRoutine(job);
+    // A resumed trigger's next check is its daemon's to report, a moment later: read it
+    // again then, so the row says when without a reload (2026-11-05, a review).
+    if (enabled && job.enabled && job.state.nextRunAtMs === undefined) {
+      for (const ms of [3_000, 10_000]) setTimeout(() => onRoutinesChanged({ jobId: id, action: 'updated' }), ms);
+    }
     return job;
   } catch (err) {
     log.warn('routines', 'pause/resume failed, rolling back', { id, enabled, error: String(err).slice(0, 200) });
-    if (before) restoreRoutine(before, index);
+    // A newer click is queued behind this one: its answer decides the row.
+    if (before && newest()) restoreRoutine(before, index);
     throw err;
   } finally {
+    if (newest()) switchChains.delete(id);
     settleWrite();
   }
 }
@@ -358,5 +379,6 @@ export function __resetRoutinesStore(): void {
   changed = new Map();
   readSeq.clear();
   provisionalSeq = 0;
+  switchChains.clear();
   if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
 }

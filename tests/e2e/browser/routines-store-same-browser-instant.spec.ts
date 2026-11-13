@@ -54,13 +54,18 @@ test('toggling a routine on /routines flips both surfaces before the POST is ans
     // The compact view is the homepage panel; the plain one is the /routines page.
     const homeCard = page.locator('.routines-view-compact .cron-job-card', { hasText: routine.name })
     const pageCard = page.locator('.routines-view:not(.routines-view-compact) .cron-job-card', { hasText: routine.name })
+    // The row's switch (role=switch); the same testid is on both surfaces, so scope by card.
+    // A CSS locator, not getByRole: the homepage panel is display:none under /routines,
+    // and role locators skip hidden elements.
+    const homeSwitch = homeCard.locator('[role="switch"]')
+    const pageSwitch = pageCard.getByRole('switch')
     await expect(homeCard).toBeVisible()
-    await expect(homeCard.locator('.cron-toggle-btn')).toContainText('On')
+    await expect(homeSwitch).toHaveAttribute('aria-checked', 'true')
 
     await page.click('.sidebar a[href="/routines"]')
     await expect(page.locator('.page-title')).toContainText('Routines')
     await expect(pageCard).toBeVisible()
-    await expect(pageCard.locator('.cron-toggle-btn')).toContainText('On')
+    await expect(pageSwitch).toHaveAttribute('aria-checked', 'true')
 
     // Hold the switch (a PATCH of `enabled`: the card sets the state it shows,
     // never a flip): the server does not see it until the hold ends, so no echo
@@ -73,21 +78,24 @@ test('toggling a routine on /routines flips both surfaces before the POST is ans
       await route.continue()
     })
 
-    await pageCard.locator('.cron-toggle-btn').click()
-    await expect(pageCard.locator('.cron-toggle-btn')).toContainText('Paused', { timeout: INSTANT_MS })
+    await pageSwitch.click()
+    await expect(pageSwitch).toHaveAttribute('aria-checked', 'false', { timeout: INSTANT_MS })
     await expect(pageCard).toHaveClass(/cron-job-disabled/, { timeout: INSTANT_MS })
+    await expect(pageCard.locator('.cron-job-desc')).toContainText('Paused', { timeout: INSTANT_MS })
     // The homepage panel is mounted but display:none under /routines — read the DOM.
     await expect.poll(
-      () => homeCard.locator('.cron-toggle-btn').evaluate((el) => el.textContent ?? ''),
+      () => homeSwitch.evaluate((el) => el.getAttribute('aria-checked') ?? ''),
       { timeout: INSTANT_MS, intervals: [50, 50, 50, 50, 100, 100, 100] },
-    ).toContain('Paused')
+    ).toBe('false')
+    expect(await homeCard.locator('.cron-job-desc').evaluate((el) => el.textContent ?? '')).toContain('Paused')
     expect(togglesAnswered).toBe(0)
 
     // Let the held POST land: the server's answer must agree, not fight.
     await expect.poll(() => togglesAnswered, { timeout: HOLD_MS * 3 }).toBe(1)
     await page.waitForTimeout(1000)
-    await expect(pageCard.locator('.cron-toggle-btn')).toContainText('Paused')
-    expect(await homeCard.locator('.cron-toggle-btn').evaluate((el) => el.textContent ?? '')).toContain('Paused')
+    await expect(pageSwitch).toHaveAttribute('aria-checked', 'false')
+    await expect(pageCard.locator('.cron-status-dot')).toHaveAttribute('aria-label', 'Paused')
+    expect(await homeSwitch.evaluate((el) => el.getAttribute('aria-checked'))).toBe('false')
 
     const stored = await fetch(`${API}/api/routines/${routine.id}`)
     const body = (await stored.json()) as { job: { enabled: boolean } }
@@ -107,6 +115,8 @@ test('a refused toggle puts the switch back on both surfaces', async ({ page }) 
 
     const homeCard = page.locator('.routines-view-compact .cron-job-card', { hasText: routine.name })
     const pageCard = page.locator('.routines-view:not(.routines-view-compact) .cron-job-card', { hasText: routine.name })
+    const homeSwitch = homeCard.locator('[role="switch"]')
+    const pageSwitch = pageCard.getByRole('switch')
     await expect(homeCard).toBeVisible()
 
     await page.click('.sidebar a[href="/routines"]')
@@ -117,10 +127,13 @@ test('a refused toggle puts the switch back on both surfaces', async ({ page }) 
       await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'engine busy' }) })
     })
 
-    await pageCard.locator('.cron-toggle-btn').click()
+    await pageSwitch.click()
     // Optimistic flip, then the refusal rolls it back on BOTH surfaces.
-    await expect(pageCard.locator('.cron-toggle-btn')).toContainText('On', { timeout: 5000 })
-    expect(await homeCard.locator('.cron-toggle-btn').evaluate((el) => el.textContent ?? '')).toContain('On')
+    // The refusal is said on the row that was flipped, naming what failed.
+    await expect(pageCard.getByTestId('routine-action-error')).toContainText('Could not pause it: engine busy', { timeout: 5000 })
+    await expect(pageSwitch).toHaveAttribute('aria-checked', 'true', { timeout: 5000 })
+    await expect(pageCard.locator('.cron-status-dot')).toHaveAttribute('aria-label', 'On')
+    expect(await homeSwitch.evaluate((el) => el.getAttribute('aria-checked'))).toBe('true')
 
     const stored = await fetch(`${API}/api/routines/${routine.id}`)
     const body = (await stored.json()) as { job: { enabled: boolean } }

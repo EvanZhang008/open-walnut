@@ -64,9 +64,9 @@ test('the card shows the counter, the form shows it read-only, and an unchanged 
     await expect(card.locator('.cron-job-desc')).toContainText('Every 30 min')
     await expect(card.locator('.cron-job-desc')).toContainText('or after 20 new items')
 
-    // Edit → the counter is a line of text, not a control.
-    await card.locator('.cron-menu-btn').click()
-    await card.getByRole('button', { name: 'Edit' }).click()
+    // Open the row, Edit → the counter is a line of text, not a control.
+    await card.locator('.routine-row-main').click()
+    await card.getByRole('button', { name: 'Edit', exact: true }).click()
     const form = page.locator('.routine-modal')
     await expect(form).toBeVisible()
     const wakeLine = form.getByTestId('routine-wake-line')

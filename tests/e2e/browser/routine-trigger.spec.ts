@@ -1,13 +1,14 @@
 /**
  * walnut-trigger in the real UI: the Routines form's Check section, the Test
  * button's three verdicts, the save-time refusal of a wall-clock trigger, and
- * the card's Trigger badge + last-check line fed by the fixture's real local
+ * the row's check line + last-check status fed by the fixture's real local
  * daemon (which runs the check and reports quiet/fired/error).
  *
  * Needs a daemon advertising `triggers-v1`: the fixture spawns the built
  * binary from dist/daemon-binaries, so run `bash scripts/build-daemon.sh` first.
  */
 import { test, expect } from './shortcut-test-fixture'
+import { clickRoutineAction, openManualRoutineForm, openRoutineRow } from './routines-page-helpers'
 
 // The fixture server's port: a run on a private PW_TEST_PORT must not fetch a dead 3457.
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
@@ -42,10 +43,8 @@ async function openRoutines(page: import('@playwright/test').Page) {
 }
 
 async function openBlankForm(page: import('@playwright/test').Page) {
-  await page.getByRole('button', { name: 'Build it myself' }).click()
-  const form = page.locator('.routine-modal')
-  await expect(form).toBeVisible()
-  return form
+  // New routine opens the composer (unless the list is empty), then the manual path.
+  return openManualRoutineForm(page)
 }
 
 test('the Test button reports would-fire, quiet, and error without saving anything', async ({ page }) => {
@@ -104,7 +103,7 @@ test('a check with a wall-clock trigger is refused in the form with the reason',
   await form.getByRole('button', { name: 'Cancel' }).click()
 })
 
-test('a hand-built trigger stores its check, shows the badge, and the daemon reports the first quiet check', async ({ page }) => {
+test('a hand-built trigger stores its check, reads as a trigger, and the daemon reports the first quiet check', async ({ page }) => {
   const name = `PW trigger ${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   let createdId: string | undefined
   try {
@@ -121,7 +120,12 @@ test('a hand-built trigger stores its check, shows the badge, and the daemon rep
 
     const card = page.locator('.routine-list .routine-card', { hasText: name }).first()
     await expect(card).toBeVisible()
-    await expect(card.locator('.routine-trigger-badge')).toHaveText('Trigger')
+    // The one line says it is a trigger (it checks, on a cadence); the opened row
+    // shows the check itself.
+    await expect(card.locator('.cron-job-desc')).toContainText('Checks every 5 min')
+    const detail = await openRoutineRow(card)
+    await expect(detail.locator('dl.routine-facts')).toContainText('when its check finds something')
+    await expect(detail.getByRole('button', { name: 'Run check now', exact: true })).toBeVisible()
     await expect(card.locator('.routine-check-run')).toContainText('$ echo')
     await expect(card.locator('.routine-check-run')).toContainText('@ local')
 
@@ -138,14 +142,15 @@ test('a hand-built trigger stores its check, shows the badge, and the daemon rep
 
     // Edit round-trip: the section opens with the stored command; removing the
     // check turns the routine back into a plain scheduled one.
-    await card.locator('.cron-menu-btn').click()
-    await card.getByRole('button', { name: 'Edit' }).click()
+    await clickRoutineAction(card, 'Edit')
     const edit = page.locator('.routine-modal')
     await expect(edit.locator('#routine-check-run')).toHaveValue(/fire.*false/)
     await edit.getByRole('button', { name: 'Remove check' }).click()
     await edit.getByRole('button', { name: 'Save' }).click()
     await expect(edit).toBeHidden()
-    await expect(card.locator('.routine-trigger-badge')).toHaveCount(0)
+    await expect(card.locator('.cron-job-desc')).not.toContainText('Checks')
+    await expect(card.locator('.routine-check-run')).toHaveCount(0)
+    await expect(card.getByRole('button', { name: 'Run now', exact: true })).toBeVisible()
     await expect.poll(async () => (await findRoutineByName(name))?.check ?? null).toBeNull()
   } finally {
     if (createdId) await deleteRoutine(createdId)

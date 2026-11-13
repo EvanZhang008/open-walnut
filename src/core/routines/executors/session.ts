@@ -227,8 +227,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
     type: 'session',
     label: 'Session',
     description:
-      'Send the prompt into the live session on a task, restarting that session on the same task '
-      + 'when it has died. The task is the conversation\'s durable home.',
+      'Sends the prompt into the chat of a task, starting that chat again if it has stopped.',
     configSchema: [
       {
         name: 'target',
@@ -242,7 +241,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
         label: 'Prompt',
         kind: 'textarea',
         required: true,
-        placeholder: 'New review comments. Read each one; change code where it asks.',
+        placeholder: 'What the session should do each time it runs.',
       },
     ],
 

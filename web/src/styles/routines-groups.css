@@ -1,0 +1,862 @@
+/*
+ * The Routines page grouped by owner (components/routines/RoutinesView.tsx): global
+ * first, then one group per project, each routine one line that opens in place.
+ * The rows read as one list per group: hairlines between rows, one frame around
+ * the group, no card per routine.
+ */
+
+.routines-view {
+  container-type: inline-size;
+}
+
+.routines-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+}
+
+.routines-summary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.routines-summary-failing,
+.routine-group-failing {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.routines-new-btn {
+  flex: 0 0 auto;
+}
+
+.routine-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.routine-group-heading {
+  margin: 0;
+  font: inherit;
+}
+
+.routine-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 2px 2px 6px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.routine-group-header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.routine-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routine-group-count {
+  color: var(--fg-muted);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.routine-group-failing {
+  font-size: 12px;
+}
+
+
+/* One frame per group; the rows inside are a plain list. */
+.routine-group-list.cron-job-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card-bg);
+  overflow: hidden;
+}
+
+.routine-row.cron-job-card,
+.routine-row.cron-job-card:hover {
+  border: 0;
+  box-shadow: none;
+  transition: none;
+}
+
+/* As specific as the hover rule above, so a hovered (or, on a phone, tapped) row
+   keeps the line between it and the row above. */
+.routine-row.cron-job-card + .routine-row.cron-job-card {
+  border-top: 1px solid var(--border);
+}
+
+.routine-row.cron-job-card.cron-job-disabled {
+  opacity: 1;
+}
+
+/* A paused row reads quieter by colour, never by fading the whole row: its name
+   keeps a readable contrast, and its opened details and buttons are as usable as
+   any other row's (2026-11-04, a review: stacked opacities left 0.36). */
+.routine-row.cron-job-disabled .routine-row-name.cron-job-name {
+  color: var(--fg-secondary);
+}
+
+.routine-row-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-right: 12px;
+}
+
+/* Only a pointer that hovers: a tap would leave the colour behind on a phone. */
+@media (hover: hover) {
+  .routine-row-line:hover {
+    background: var(--bg-hover);
+  }
+}
+
+.routine-row-new .routine-row-line {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  transition: background 600ms ease-out;
+}
+
+.routine-row-main {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 9px 0 9px 14px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.routine-row-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+  border-radius: 6px;
+}
+
+.routine-dot {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.routine-dot.error { background: var(--error); }
+.routine-dot.running { background: var(--accent); animation: none; }
+.routine-dot.off {
+  background: transparent;
+  border: 1.5px solid var(--fg-muted);
+}
+
+.routine-row-text {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.routine-row-name.cron-job-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.routine-row-timing.cron-job-desc {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 55%;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.routine-row-flag {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.routine-row-flag-sep {
+  white-space: pre;
+}
+
+.routine-row-chevron {
+  flex: 0 0 auto;
+  display: inline-block;
+  color: var(--fg-muted);
+  font-size: 15px;
+  line-height: 1;
+  transition: transform 120ms ease-out;
+}
+
+.routine-row-chevron.open {
+  transform: rotate(90deg);
+}
+
+.routine-row-switch {
+  flex: 0 0 auto;
+  display: inline-flex;
+}
+
+/* A narrow column (the homepage panel, a phone): the timing goes under the name. */
+@container (max-width: 560px) {
+  .routine-row-text {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1px;
+  }
+  .routine-row-timing.cron-job-desc {
+    max-width: none;
+  }
+}
+
+/* Under the name the timing may take a second line: it is what the row is for. */
+@container (max-width: 560px) {
+  .routine-row-timing.cron-job-desc {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+}
+
+.routine-detail {
+  padding: 0 14px 14px 32px;
+  font-size: 13px;
+  color: var(--fg-secondary);
+}
+
+.routine-detail .routine-card-description {
+  margin: 0 0 10px;
+}
+
+.routine-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 0;
+}
+
+.routine-facts dt {
+  color: var(--fg-muted);
+}
+
+.routine-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.routine-facts code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.routine-row-error-next {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg-secondary);
+}
+
+.routine-row-error.cron-job-error {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  color: var(--error);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.routine-fold {
+  margin-top: 8px;
+}
+
+.routine-fold-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--fg-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.routine-fold-toggle:hover {
+  color: var(--fg);
+}
+
+/* The fold's chevron sits a little apart from its words, the same size open or shut. */
+.routine-fold-toggle .routine-row-chevron {
+  width: 12px;
+  margin-left: 2px;
+  text-align: center;
+}
+
+.routine-fold .trigger-audit-list {
+  margin-top: 6px;
+}
+
+/* On this page a history line is a line of text, not a link: a fire reads in the
+   text colour, a fire that was not delivered in the error colour. */
+.routine-fold .trigger-audit-line {
+  font-size: 12.5px;
+}
+
+.routine-fold .trigger-audit-row[data-outcome='fired'] .trigger-audit-what {
+  color: var(--fg);
+}
+
+/* A run that went nowhere: a red mark, the words in the quiet text colour
+   (2026-11-05, a review: whole red lines under a red error box were loud). */
+.routine-fold .trigger-audit-row[data-delivery='error'] .trigger-audit-what {
+  color: var(--fg-secondary);
+}
+.routine-fold .trigger-audit-row[data-delivery='error'] .trigger-audit-clock::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 0 1px 8px;
+  border-radius: 50%;
+  background: var(--error);
+  vertical-align: middle;
+}
+.routine-fold .trigger-audit-repeat {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The opened row's first line of text sits a little below the row's own line. */
+.routine-detail > .routine-description:first-child {
+  margin-top: 4px;
+}
+
+/* Dark mode's secondary background is the card's own: tint it from the text instead. */
+.routine-fold .trigger-audit-injected {
+  margin-top: 6px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+
+.routine-composer-actions {
+  gap: 8px;
+}
+
+.routine-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.routine-actions .routine-delete {
+  color: var(--error);
+}
+/* On a dark button the system red is too dim to read at a glance. */
+:root[data-theme='dark'] .routine-actions .routine-delete {
+  color: #ff7a72;
+  border-color: color-mix(in srgb, #ff7a72 45%, transparent);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .routine-actions .routine-delete {
+    color: #ff7a72;
+    border-color: color-mix(in srgb, #ff7a72 45%, transparent);
+  }
+}
+
+.routine-actions .routine-danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
+}
+
+.routine-confirm-text.cron-confirm-text {
+  margin: 0;
+  color: var(--fg);
+}
+
+.routine-run-outcome {
+  margin-top: 8px;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.routine-run-outcome.ok {
+  color: var(--success);
+}
+
+.routine-run-outcome.error {
+  color: var(--error);
+}
+
+/* On a phone every control takes a finger (phone-fixes-r2.css N2-19 sizes them);
+   the switch keeps its own shape and gets a larger hit area instead. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .routines-view .toggle-switch.settings-switch {
+    min-width: 0;
+    min-height: 0;
+    width: 51px;
+    height: 31px;
+    border-radius: 16px;
+  }
+  .app-shell-navigation .routines-view .toggle-switch.settings-switch .toggle-thumb {
+    width: 27px;
+    height: 27px;
+  }
+  .app-shell-navigation .routines-view .toggle-switch.settings-switch.toggle-on .toggle-thumb {
+    transform: translateX(20px);
+  }
+  .app-shell-navigation .routines-view .toggle-switch.settings-switch::before {
+    content: '';
+    position: absolute;
+    inset: -7px -2px;
+    z-index: 1;
+  }
+  .app-shell-navigation .routines-view :is(.routine-row-timing, .routine-group-failing, .routine-row-error) {
+    font-size: 13px;
+  }
+  .app-shell-navigation .routines-view .routine-row-name.cron-job-name {
+    font-size: 15px;
+  }
+  /* The details start under the name (the dot is 8px, the gap 10px). */
+  .app-shell-navigation .routines-view .routine-detail {
+    padding-left: 32px;
+    padding-right: 14px;
+  }
+  /* The four actions fit one line at a phone's width. */
+  .app-shell-navigation .routines-view .routine-actions {
+    gap: 6px;
+  }
+  .app-shell-navigation .routines-view .routine-actions .btn {
+    padding: 0 11px;
+  }
+  /* Each fold's line is already a 44px target: no margin on top of it. */
+  .app-shell-navigation .routines-view .routine-fold {
+    margin-top: 0;
+  }
+  /* The first screen on a phone is the list: the top bar names the page (its title
+     is hidden by phone-fixes-r2.css), so the header, sentence and gap go too. */
+  .app-shell-navigation .page-header:has(+ .routines-view) {
+    display: none;
+  }
+}
+
+/* A pause, resume or delete the server refused, on the row it was for. */
+.routine-action-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 12px 10px 30px;
+  color: var(--error);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.routine-action-error > span {
+  flex: 1 1 auto;
+}
+
+.routine-action-error-dismiss {
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+/* The composer and the form's schedule tabs drew their borders from a variable no
+   theme sets; they use the page's own. */
+.routines-view .routine-composer-input,
+.routines-view .routine-trigger-presets {
+  border: 1px solid var(--border);
+}
+
+.routines-view .routine-composer-input {
+  background: var(--bg-secondary);
+}
+
+.routines-view .routine-trigger-preset + .routine-trigger-preset {
+  border-left: 1px solid var(--border);
+}
+
+/* A choice reads as words, not as one more all-caps field label. */
+.routines-view .form-group label.cron-form-radio {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  color: var(--fg);
+}
+
+/* The task a session routine runs in, picked by its title (RoutineTaskField). */
+.routine-task-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.routine-task-current {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: 13px;
+}
+
+.routine-task-current-title {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.routine-task-current-meta {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.routine-task-complete {
+  color: var(--error);
+}
+
+.routine-task-hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.routine-task-hits > li + li {
+  border-top: 1px solid var(--border);
+}
+
+.routine-task-hit {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.routine-task-hit-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routine-task-hit-project {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.routine-task-none {
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+@media (hover: hover) {
+  .routine-task-hit:hover {
+    background: var(--bg-hover);
+  }
+}
+
+/* The form on a phone: the schedule tabs in two rows of three, and the "Run with"
+   choices as plain radios whose whole line is the target (N2-19 had grown each
+   radio into a 44px empty circle, under an all-caps label). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .routines-view .routine-trigger-presets {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    width: 100%;
+  }
+  .app-shell-navigation .routines-view .routine-trigger-preset {
+    padding: 0 6px;
+  }
+  .app-shell-navigation .routines-view .routine-trigger-preset.routine-trigger-preset:nth-child(3n + 1) {
+    border-left: 0;
+  }
+  .app-shell-navigation .routines-view .routine-trigger-preset:nth-child(n + 4) {
+    border-top: 1px solid var(--border);
+  }
+  .app-shell-navigation .routines-view .cron-form-radio {
+    min-height: 44px;
+    padding-right: 8px;
+    font-size: 15px;
+  }
+  .app-shell-navigation .routines-view .cron-form-radio input[type='radio'] {
+    min-width: 0;
+    min-height: 0;
+    width: 20px;
+    height: 20px;
+  }
+  .app-shell-navigation .routines-view .routine-task-hit {
+    min-height: 44px;
+    font-size: 15px;
+  }
+}
+
+/* A failure that is already dealt with (the routine was pointed at another task):
+   said in the page's own colours, not as an error. */
+.routine-row-note {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.routine-row-note .routine-row-error-next {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg);
+}
+
+/* Round 5 (2026-11-04 reviews). */
+
+/* The group's fold mark: one fixed box, the same folded or open, a step darker
+   than the row chevrons so it reads as the group's. */
+.routine-row-chevron.routine-group-chevron {
+  display: block;
+  width: 14px;
+  height: 14px;
+  color: var(--fg-secondary);
+}
+
+/* Folded groups in a row read as one list of names. */
+.routine-group[data-collapsed='true'] + .routine-group[data-collapsed='true'] {
+  margin-top: -10px;
+}
+
+/* A wide page: the list keeps a readable line length instead of the full width. */
+.routines-view:not(.routines-view-compact) {
+  max-width: 1040px;
+}
+.routines-view:not(.routines-view-compact) .routine-facts {
+  grid-template-columns: max-content minmax(0, 620px);
+}
+
+/* A narrow column: the dot and the chevron sit on the name's line, not between two lines. */
+@container (max-width: 560px) {
+  .routine-row-main {
+    align-items: flex-start;
+  }
+  .routine-row-main .routine-dot {
+    margin-top: 6px;
+  }
+  .routine-row-main > .routine-row-chevron {
+    margin-top: 2px;
+  }
+}
+
+/* A required field left empty, said under it. */
+.routine-field-error {
+  margin-top: 4px;
+  color: var(--error);
+  font-size: 12px;
+}
+.routine-save-error.cron-form-error {
+  margin: 0 0 10px;
+}
+
+/* Save and Cancel stay at the dialog's bottom edge however long the form is. */
+.routine-modal .routine-form-footer {
+  position: sticky;
+  bottom: -20px;
+  z-index: 2;
+  margin: 16px -20px -20px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--card-bg, var(--bg));
+}
+.routine-modal .routine-form-footer .form-actions {
+  margin-top: 0;
+}
+
+/* Unsaved edits kept from earlier, said at the top of the form. */
+.routine-restored {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--fg);
+  font-size: 13px;
+}
+.routine-restored > span {
+  flex: 1 1 auto;
+}
+.routine-restored > .btn {
+  flex: 0 0 auto;
+}
+
+/* The instructions and trigger boxes named a colour variable that does not exist, so
+   they drew no border and read as empty space (2026-11-05, a review). */
+.routine-instructions-box,
+.routine-instructions-footer {
+  border-color: var(--border-strong);
+}
+.routine-instructions-box {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-secondary);
+}
+.routine-instructions-footer {
+  border-top: 1px solid var(--border);
+}
+.routine-instructions-box:focus-within {
+  border-color: var(--accent);
+}
+.routine-trigger-box {
+  border: 1px solid var(--border);
+  background: transparent;
+}
+
+/* The failing count is a way to the first failing routine. */
+button.routines-summary-failing {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+button.routines-summary-failing:hover {
+  text-decoration: underline;
+}
+button.routines-summary-failing:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Small red words on white need a deeper red to read (4.5:1). */
+:root:not([data-theme='dark']) :is(.routines-summary-failing, .routine-group-failing, .routine-row-flag:not(.routine-row-flag-missed), .routine-field-error, .routine-actions .routine-delete) {
+  color: #d70015;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) :is(.routines-summary-failing, .routine-group-failing, .routine-row-flag:not(.routine-row-flag-missed), .routine-field-error) {
+    color: #ff6961;
+  }
+}
+:root[data-theme='dark'] :is(.routines-summary-failing, .routine-group-failing, .routine-row-flag:not(.routine-row-flag-missed), .routine-field-error) {
+  color: #ff6961;
+}
+
+/* A narrow column: the switch and the row's chevron centre on the row; only the dot
+   sits on the name's first line. */
+@container (max-width: 560px) {
+  .routine-row-main > .routine-row-chevron {
+    align-self: center;
+    margin-top: 0;
+  }
+}
+
+svg.routine-row-chevron {
+  width: 14px;
+  height: 14px;
+}
+
+/* On a phone the Run with choices sit close: each is a 44 px target already. */
+@media (max-width: 768px) {
+  .app-shell-navigation .routines-view .cron-form-radio-group {
+    row-gap: 0;
+    column-gap: 18px;
+  }
+}
+
+/* A missed run: amber, deep enough to read as small words (4.5:1) in light mode. */
+.routines-view .routine-row-flag.routine-row-flag-missed,
+.routines-view .routine-missed-text {
+  color: #9a5b00;
+}
+:root[data-theme='dark'] .routines-view :is(.routine-row-flag-missed, .routine-missed-text) {
+  color: #ffb340;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .routines-view :is(.routine-row-flag-missed, .routine-missed-text) {
+    color: #ffb340;
+  }
+}
+.routines-view .routine-missed {
+  margin-top: 10px;
+}
+
+/* A run that did not do its work: a red mark, its words in the quiet colour, as the trigger history. */
+.routines-view .routine-history-row[data-failed='true'] {
+  color: var(--fg-secondary);
+}
+.routines-view .routine-history-row[data-failed='true']::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 8px 1px 0;
+  border-radius: 50%;
+  background: var(--error);
+  vertical-align: middle;
+}
+.routines-view .routine-history-list {
+  font-size: 12.5px;
+}

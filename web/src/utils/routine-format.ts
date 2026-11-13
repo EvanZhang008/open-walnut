@@ -37,12 +37,75 @@ function foreignZone(tz: string | undefined): string | null {
   }
 }
 
+/** ", weekdays" / " on Mondays" / "" for a cron's day-of-week field; null when it says more. */
+function cronDays(dow: string): string | null {
+  if (dow === '*') return '';
+  if (dow === '1-5') return ', weekdays';
+  if (dow === '0,6' || dow === '6,0') return ', weekends';
+  if (/^\d$/.test(dow) && DAY_NAMES[Number(dow)]) return ` on ${DAY_NAMES[Number(dow)]}s`;
+  return null;
+}
+
+/**
+ * The stepped and ranged shapes people write by hand (2026-11-04, the iPhone gate:
+ * rows showed "*\/15 9-17 * * 1-5" as it is): "Every 15 min from 9:00 AM to 5:45 PM,
+ * weekdays", "Every 3 hours at :00", "Every 2 days at 8:30 PM".
+ */
+function describeSteppedCron(min: string, hour: string, dom: string, mon: string, dow: string): string | null {
+  if (mon !== '*') return null;
+  const days = cronDays(dow);
+  if (days === null) return null;
+  const minStep = /^\*\/(\d{1,2})$/.exec(min);
+  const hourRange = /^(\d{1,2})-(\d{1,2})$/.exec(hour);
+  const fixedMin = /^\d{1,2}$/.test(min) ? Number(min) : null;
+  if (dom === '*' && minStep) {
+    const n = Number(minStep[1]);
+    // Only a step that divides the hour runs evenly ("*/45" runs at :00 and :45).
+    if (n < 1 || 60 % n !== 0) return null;
+    if (hour === '*') return `Every ${n} min${days}`;
+    if (hourRange) {
+      const [a, b] = [Number(hourRange[1]), Number(hourRange[2])];
+      if (a > b || b > 23) return null;
+      const lastMin = Math.floor(59 / n) * n;
+      return `Every ${n} min from ${formatTime(a, 0)} to ${formatTime(b, lastMin)}${days}`;
+    }
+    return null;
+  }
+  if (fixedMin === null || fixedMin > 59) return null;
+  const hourStep = /^\*\/(\d{1,2})$/.exec(hour);
+  if (dom === '*' && hourStep) {
+    const n = Number(hourStep[1]);
+    if (n < 1 || 24 % n !== 0) return null;
+    return `Every ${n} hour${n === 1 ? '' : 's'} at :${String(fixedMin).padStart(2, '0')}${days}`;
+  }
+  if (dom === '*' && hourRange) {
+    const [a, b] = [Number(hourRange[1]), Number(hourRange[2])];
+    if (a > b || b > 23) return null;
+    return `Hourly at :${String(fixedMin).padStart(2, '0')} from ${formatTime(a, fixedMin)} to ${formatTime(b, fixedMin)}${days}`;
+  }
+  const domStep = /^\*\/(\d{1,2})$/.exec(dom);
+  if (domStep && dow === '*' && /^\d{1,2}$/.test(hour) && Number(hour) <= 23) {
+    const n = Number(domStep[1]);
+    if (n < 2 || n > 31) return null;
+    return `Every ${n} days at ${formatTime(Number(hour), fixedMin)}`;
+  }
+  return null;
+}
+
 /** Describe a 5-field cron expr in plain English; null if it's not a simple daily/weekly pattern. */
 function describeCronExpr(expr: string): string | null {
   const parts = expr.trim().split(/\s+/);
   if (parts.length !== 5) return null;
   const [min, hour, dom, mon, dow] = parts;
+  const stepped = describeSteppedCron(min, hour, dom, mon, dow);
+  if (stepped) return stepped;
   if (!/^\d{1,2}$/.test(min)) return null;
+  // One day of the month: "Monthly on the 1st at 9:00 AM".
+  if (/^\d{1,2}$/.test(dom) && mon === '*' && dow === '*' && /^\d{1,2}$/.test(hour)) {
+    const d = Number(dom);
+    const nth = d % 10 === 1 && d !== 11 ? 'st' : d % 10 === 2 && d !== 12 ? 'nd' : d % 10 === 3 && d !== 13 ? 'rd' : 'th';
+    return `Monthly on the ${d}${nth} at ${formatTime(Number(hour), Number(min))}`;
+  }
   if (dom !== '*' || mon !== '*') return null;
   // Hourly pattern: fixed minute, any hour
   if (hour === '*') {
@@ -74,7 +137,7 @@ export function describeSchedule(schedule: RoutineSchedule): string {
     const mins = Math.round(schedule.everyMs / 60_000);
     if (mins < 60) return `Every ${mins} min`;
     const hours = mins / 60;
-    return Number.isInteger(hours) ? `Every ${hours} hour${hours > 1 ? 's' : ''}` : `Every ${mins} min`;
+    return Number.isInteger(hours) ? (hours === 1 ? 'Every hour' : `Every ${hours} hours`) : `Every ${mins} min`;
   }
   const zone = foreignZone(schedule.tz);
   const said = describeCronExpr(schedule.expr) ?? `Cron: ${schedule.expr}`;
@@ -283,7 +346,8 @@ export function describeExecutorBadge(
   const label = executorLabels[executor.type] ?? executor.type;
   const host = executor.config?.host;
   if (executor.type === 'claude-code') {
-    return typeof host === 'string' && host ? `${label} @ ${host}` : `${label} @ local`;
+    // This computer needs no name; another machine is named (the iPhone says the same).
+    return typeof host === 'string' && host && host !== 'local' && host !== '__local__' ? `${label} @ ${host}` : label;
   }
   return label;
 }

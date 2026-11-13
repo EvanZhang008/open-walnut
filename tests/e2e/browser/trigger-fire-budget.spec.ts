@@ -18,6 +18,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test, expect } from './shortcut-test-fixture'
 import type { Locator, Page } from '@playwright/test'
+import { clickRoutineAction, openRoutineRow } from './routines-page-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOTS = '/tmp/trigger-ratelimit'
@@ -60,8 +61,7 @@ async function openRoutines(page: Page): Promise<void> {
 }
 
 async function openEdit(page: Page, card: Locator): Promise<Locator> {
-  await card.locator('.cron-menu-btn').click()
-  await card.getByRole('button', { name: 'Edit' }).click()
+  await clickRoutineAction(card, 'Edit')
   const form = page.locator('.routine-modal')
   await expect(form).toBeVisible()
   return form
@@ -123,6 +123,8 @@ test('a spent budget holds the fire with the cursor kept, and raising Fires per 
     // The card says it is held, and the audit row says it fires later.
     await openRoutines(page)
     const card = page.locator('.routine-list .routine-card', { hasText: name }).first()
+    // The check line is in the row's detail: open the row.
+    await openRoutineRow(card)
     await expect(card).toContainText(/last check: held by the fire budget, (just now|\ds ago|\d+s ago|\dm ago)/, { timeout: 15_000 })
     await shot(card, 'held-card')
 

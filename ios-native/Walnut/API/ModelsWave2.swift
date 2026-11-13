@@ -55,12 +55,48 @@ struct RoutineJob: Codable, Identifiable, Equatable {
     /// "claude-code" | future types).
     struct Executor: Codable, Equatable {
         let type: String
+        /// The executor's own settings, kept whole: an edit sends the executor back
+        /// entire (the server replaces it), so keys the phone does not show survive.
+        var config: [String: JSONValue]? = nil
 
+        /// What it sends when it runs: a session routine's `prompt`, another's
+        /// `instructions`, a legacy one's `message` (the console reads the same keys).
+        var sends: String? {
+            for key in ["prompt", "instructions", "message"] {
+                if let text = config?[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                    return text
+                }
+            }
+            return nil
+        }
+
+        /// The config key an edit of `sends` writes: the one it was read from, else
+        /// the executor's own (a session routine's `prompt`, everyone else's `instructions`).
+        var sendsKey: String {
+            for key in ["prompt", "instructions", "message"] where config?[key]?.nonEmptyString != nil {
+                return key
+            }
+            return type == "session" ? "prompt" : "instructions"
+        }
+
+        /// The task a session routine runs in (`config.target`); nil for any other kind.
+        var target: String? {
+            guard type == "session" else { return nil }
+            return config?["target"]?.nonEmptyString
+        }
+
+        /// The server's own name for the executor (GET /routines/executors, the console's
+        /// badge): the opened row's Runs and the New Routine sheet say the same words.
+        /// Claude Code on this computer is just "Claude Code" ("@ local" is the server's
+        /// word, not the person's, QA); on another machine it names the machine.
         var label: String {
             switch type {
-            case "main-agent": return "Personal AI"
-            case "walnut-agent": return "Isolated agent"
-            case "claude-code": return "Claude Code"
+            case "main-agent": return "Home Chat"
+            case "walnut-agent": return "Walnut Agent"
+            case "session": return "Session"
+            case "claude-code":
+                guard let host = config?["host"]?.nonEmptyString, host != "local" else { return "Claude Code" }
+                return "Claude Code @ \(host)"
             default: return type
             }
         }
@@ -68,14 +104,104 @@ struct RoutineJob: Codable, Identifiable, Equatable {
 
     /// Runtime state — timestamps are epoch milliseconds.
     struct State: Codable, Equatable {
+        /// A trigger's last check, as its daemon reported it ("fired" | "quiet" | "error").
+        struct LastCheck: Codable, Equatable {
+            let atMs: Double?
+            let outcome: String?
+            let error: String?
+            var reason: String? = nil
+            var items: Int? = nil
+            var retryPending: Bool? = nil
+        }
+
+        /// One line of a trigger's audit trail (server: src/core/cron/trigger-audit.ts):
+        /// a check's verdict, and for a fire where it went. Every field decodes on its
+        /// own, so one odd row never costs the whole routine list.
+        struct AuditEntry: Codable, Equatable {
+            struct Delivery: Codable, Equatable {
+                var status: String? = nil
+                var summary: String? = nil
+                var error: String? = nil
+            }
+
+            var atMs: Double? = nil
+            var outcome: String? = nil
+            var reason: String? = nil
+            var items: Int? = nil
+            var error: String? = nil
+            var seq: Double? = nil
+            var epoch: String? = nil
+            var attempts: Int? = nil
+            var coalesced: Int? = nil
+            var manual: Bool? = nil
+            var delivery: Delivery? = nil
+            var warnings: [String]? = nil
+
+            init(atMs: Double?, outcome: String?, reason: String? = nil, items: Int? = nil, error: String? = nil,
+                 seq: Double? = nil, epoch: String? = nil, attempts: Int? = nil, coalesced: Int? = nil,
+                 manual: Bool? = nil, delivery: Delivery? = nil, warnings: [String]? = nil) {
+                self.atMs = atMs; self.outcome = outcome; self.reason = reason; self.items = items
+                self.error = error; self.seq = seq; self.epoch = epoch; self.attempts = attempts
+                self.coalesced = coalesced; self.manual = manual; self.delivery = delivery; self.warnings = warnings
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                atMs = try? c.decodeIfPresent(Double.self, forKey: .atMs)
+                outcome = try? c.decodeIfPresent(String.self, forKey: .outcome)
+                reason = try? c.decodeIfPresent(String.self, forKey: .reason)
+                items = try? c.decodeIfPresent(Int.self, forKey: .items)
+                error = try? c.decodeIfPresent(String.self, forKey: .error)
+                seq = try? c.decodeIfPresent(Double.self, forKey: .seq)
+                epoch = try? c.decodeIfPresent(String.self, forKey: .epoch)
+                attempts = try? c.decodeIfPresent(Int.self, forKey: .attempts)
+                coalesced = try? c.decodeIfPresent(Int.self, forKey: .coalesced)
+                manual = try? c.decodeIfPresent(Bool.self, forKey: .manual)
+                delivery = try? c.decodeIfPresent(Delivery.self, forKey: .delivery)
+                warnings = try? c.decodeIfPresent([String].self, forKey: .warnings)
+            }
+        }
+
         let nextRunAtMs: Double?
         let lastRunAtMs: Double?
         let lastStatus: String? // "ok" | "error" | "skipped"
         let lastError: String?
         let lastDurationMs: Double?
+        var runningAtMs: Double? = nil
+        /// When someone paused it; absent while on, and on a trigger the server stopped.
+        var pausedAtMs: Double? = nil
+        var consecutiveErrors: Int? = nil
+        var lastCheck: LastCheck? = nil
+        /// A trigger's recent checks of any outcome, and its fires with their delivery
+        /// (both bounded on the server; History merges them, RoutineGroups.auditHistory).
+        var checkLog: [AuditEntry]? = nil
+        var fireLog: [AuditEntry]? = nil
+        /// A trigger's recorded fires, all time, and the daemon's fire counter (a floor
+        /// on the total for a trigger that fired before the count was kept).
+        var fireCount: Int? = nil
+        var lastFireSeq: Int? = nil
 
         var lastRunDate: Date? { lastRunAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } }
         var nextRunDate: Date? { nextRunAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } }
+    }
+
+    /// A walnut-trigger's check: a script on `host` decides when it fires.
+    struct Check: Codable, Equatable {
+        let run: String?
+        let host: String?
+        var maxFiresPerDay: Int? = nil
+        /// Sent back as they are when the command is edited: the server replaces `check` whole.
+        var cwd: String? = nil
+        var timeoutSeconds: Int? = nil
+    }
+
+    /// The task the routine delivers into and that task's project (the server's
+    /// `owner`, src/core/routines/routine-owner.ts). Absent for one that files its
+    /// own work; `project == ""` is the Inbox. Both are shown as global.
+    struct Owner: Codable, Equatable {
+        let taskId: String
+        let title: String?
+        let project: String?
     }
 
     let id: String
@@ -85,6 +211,40 @@ struct RoutineJob: Codable, Identifiable, Equatable {
     let schedule: Schedule
     let executor: Executor?
     let state: State?
+    var check: Check? = nil
+    var owner: Owner? = nil
+
+    /// The same routine switched on or off (the optimistic half of the switch).
+    func switched(_ on: Bool, atMs: Double) -> RoutineJob {
+        var s = state ?? State(nextRunAtMs: nil, lastRunAtMs: nil, lastStatus: nil, lastError: nil, lastDurationMs: nil)
+        s.pausedAtMs = on ? nil : atMs
+        return RoutineJob(
+            id: id, name: name, description: description, enabled: on,
+            schedule: schedule, executor: executor, state: s, check: check, owner: owner
+        )
+    }
+}
+
+/// Lenient where the server's audit trail could hold an odd row: one that does not
+/// decode costs that list (History shows nothing), never the routine or the whole
+/// list. The memberwise init stays (this is an extension).
+extension RoutineJob.State {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        nextRunAtMs = try c.decodeIfPresent(Double.self, forKey: .nextRunAtMs)
+        lastRunAtMs = try c.decodeIfPresent(Double.self, forKey: .lastRunAtMs)
+        lastStatus = try c.decodeIfPresent(String.self, forKey: .lastStatus)
+        lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
+        lastDurationMs = try c.decodeIfPresent(Double.self, forKey: .lastDurationMs)
+        runningAtMs = try c.decodeIfPresent(Double.self, forKey: .runningAtMs)
+        pausedAtMs = try c.decodeIfPresent(Double.self, forKey: .pausedAtMs)
+        consecutiveErrors = try c.decodeIfPresent(Int.self, forKey: .consecutiveErrors)
+        lastCheck = try? c.decodeIfPresent(LastCheck.self, forKey: .lastCheck)
+        checkLog = try? c.decodeIfPresent([AuditEntry].self, forKey: .checkLog)
+        fireLog = try? c.decodeIfPresent([AuditEntry].self, forKey: .fireLog)
+        fireCount = try? c.decodeIfPresent(Int.self, forKey: .fireCount)
+        lastFireSeq = try? c.decodeIfPresent(Int.self, forKey: .lastFireSeq)
+    }
 }
 
 /// GET /v1/routines → { jobs }.
@@ -92,14 +252,88 @@ struct RoutinesResponse: Codable {
     let jobs: [RoutineJob]
 }
 
-/// POST /v1/routines/:id/toggle (and PATCH) → { job }.
+/// GET /v1/routines/:id, POST /v1/routines, PATCH and POST /v1/routines/:id/toggle → { job }.
 struct RoutineEnvelope: Codable {
     let job: RoutineJob
 }
 
-/// POST /v1/routines/:id/run → { result } — shape is executor-specific; the
-/// phone only needs the 200 (then reloads the list for fresh state).
-struct RoutineRunAck: Codable {}
+/// POST /v1/routines/:id/run → { result }. A 200 is not a run: the engine answers
+/// a refusal in the body ({ status: "error", error }) and a run it skipped as
+/// { ran: false, reason } (src/core/cron/ops.ts), so the phone reads both.
+struct RoutineRunResult: Codable, Equatable {
+    var status: String? = nil
+    var error: String? = nil
+    var ran: Bool? = nil
+    var reason: String? = nil
+
+    /// What to say instead of "Started", or nil when the run started.
+    var refusal: String? {
+        if status == "error" {
+            let why = error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return why.isEmpty ? "The run did not start." : why
+        }
+        if ran == false {
+            switch reason {
+            case "already-running": return "It is already running."
+            case "not-due", "already-ran-this-slot": return "It already ran for this time."
+            default: return "The run did not start."
+            }
+        }
+        return nil
+    }
+
+    init(status: String? = nil, error: String? = nil, ran: Bool? = nil, reason: String? = nil) {
+        self.status = status; self.error = error; self.ran = ran; self.reason = reason
+    }
+
+    /// Lenient: a result of another shape (an executor's own) reads as started.
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        status = try? c?.decodeIfPresent(String.self, forKey: .status)
+        error = try? c?.decodeIfPresent(String.self, forKey: .error)
+        ran = try? c?.decodeIfPresent(Bool.self, forKey: .ran)
+        reason = try? c?.decodeIfPresent(String.self, forKey: .reason)
+    }
+}
+
+/// The run envelope; `result` may be absent or any shape.
+struct RoutineRunEnvelope: Codable {
+    var result: RoutineRunResult? = nil
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        result = (try? c?.decodeIfPresent(RoutineRunResult.self, forKey: .result)) ?? nil
+    }
+}
+
+/// A task a session routine can run in, from GET /api/tasks?fields=list (the
+/// console's routine form asks the same): the Edit sheet's Task section.
+struct RoutineTaskChoice: Codable, Equatable, Identifiable {
+    let id: String
+    let title: String
+    var project: String? = nil
+    var phase: String? = nil
+
+    var isComplete: Bool { phase == "COMPLETE" }
+    /// The project's name, or "Inbox" for a task in none.
+    var place: String { (project?.isEmpty == false ? project : nil) ?? "Inbox" }
+}
+
+/// GET /api/tasks → { tasks }. A row that does not decode costs that row.
+struct RoutineTaskChoices: Decodable {
+    let tasks: [RoutineTaskChoice]
+
+    private enum CodingKeys: String, CodingKey { case tasks }
+    private struct Lossy: Decodable {
+        let value: RoutineTaskChoice?
+        init(from decoder: Decoder) throws { value = try? RoutineTaskChoice(from: decoder) }
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        tasks = (try c.decodeIfPresent([Lossy].self, forKey: .tasks) ?? []).compactMap(\.value)
+    }
+}
 
 // MARK: - Session controls (provider-neutral)
 

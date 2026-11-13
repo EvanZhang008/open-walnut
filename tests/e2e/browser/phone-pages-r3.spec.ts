@@ -147,7 +147,7 @@ test('N2-16: a phone that lands on /tasks gets the home task list, never the two
   expect(errors).toEqual([])
 })
 
-test('N2-19: a routine card with an error keeps every line at 12 px and every control finger-sized', async ({ page }) => {
+test('N2-19: a routine row with an error keeps every line at 12 px and every control finger-sized', async ({ page }) => {
   // The fixture has no routines: add one whose last run failed, as the live list had.
   await page.route('**/api/routines?*', async (route) => {
     if (route.request().method() !== 'GET') return route.continue()
@@ -167,14 +167,28 @@ test('N2-19: a routine card with an error keeps every line at 12 px and every co
   await openPage(page, 'Routines')
   const view = page.locator('.routines-view').first()
   await expect(view).toBeVisible({ timeout: 15_000 })
-  const err = view.locator('.cron-job-error', { hasText: 'garden-helper' })
+  // The row is one line until opened; the error is in its detail.
+  const row = view.locator('.routine-row[data-routine-id="phone-routine-broken"]')
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  await row.locator('.routine-row-main').click()
+  const err = row.locator('.cron-job-error', { hasText: 'garden-helper' })
   await expect(err).toBeVisible({ timeout: 15_000 })
   await err.scrollIntoViewIfNeeded()
   expect(parseFloat(await err.evaluate((el) => getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12)
+  // The opened row: every line 12 px, every control finger-sized.
   const tiny = await findSmallText(page, 12, '.routines-view')
   expect(tiny, JSON.stringify(tiny)).toEqual([])
   const small = await findSmallTargets(page, '.routines-view')
   expect(small, JSON.stringify(small)).toEqual([])
+  // The composer shows after New routine (the list is not empty): measure it too.
+  await view.locator('button.routines-new-btn').click()
+  const composer = view.locator('.routine-composer')
+  await expect(composer).toBeVisible()
+  await composer.scrollIntoViewIfNeeded()
+  const tinyComposer = await findSmallText(page, 12, '.routines-view')
+  expect(tinyComposer, JSON.stringify(tinyComposer)).toEqual([])
+  const smallComposer = await findSmallTargets(page, '.routines-view')
+  expect(smallComposer, JSON.stringify(smallComposer)).toEqual([])
   // One title (the bar's) and a description without a dash.
   await expect(page.locator('.page-header .page-title', { hasText: 'Routines' })).toBeHidden()
   expect(await page.locator('.page-header').innerText()).not.toMatch(/[\u2013\u2014]/)

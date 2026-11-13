@@ -1,7 +1,7 @@
 /**
  * What a trigger DOES, in the words of whoever set it up, on every surface a
  * user meets it: the task's TRIGGER pill (hover text + flyout), the Routines
- * card, and the routine form, plus the composer "+" menu row that starts a
+ * row, and the routine form, plus the composer "+" menu row that starts a
  * message describing a trigger or cron job (a composer with no task; a task's
  * session sets one up from "Add a trigger…").
  *
@@ -18,6 +18,7 @@ import path from 'node:path'
 import { test, expect } from './shortcut-test-fixture'
 import type { Locator, Page } from '@playwright/test'
 import { openDraft, draftPanel } from './draft-helpers'
+import { clickRoutineAction, openRoutineRow } from './routines-page-helpers'
 import {
   startSessionAt, openPanels, openPlusMenu, openMoreMenu, composerTextarea, plusButton,
 } from './engine-settings-popover-helpers'
@@ -91,7 +92,7 @@ function taskRow(page: Page, title: string): Locator {
   return page.locator('.todo-panel-item, .todo-pinned-card, .todo-focus-card').filter({ hasText: title })
 }
 
-test('the pill, the flyout and the Routines card say what each trigger does; the form edits it', async ({ page }) => {
+test('the pill, the flyout and the Routines row say what each trigger does; the form edits it', async ({ page }) => {
   const { isolateUiPrefs, presetPanelView, showEverything } = await import('./todo-panel-helpers')
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: '' })
@@ -154,20 +155,24 @@ test('the pill, the flyout and the Routines card say what each trigger does; the
     await page.keyboard.press('Escape')
     await expect(flyout).toBeHidden()
 
-    // The Routines card shows the whole description; the legacy card nothing extra.
+    // The Routines row, opened, shows the whole description; the legacy one nothing extra.
+    // A closed row is one line: no description until it is opened.
     await page.getByTestId('sidebar-core-app-routines').click()
     await expect(page.locator('.page-title')).toContainText('Routines')
     const card = page.locator('.routine-list .routine-card', { hasText: `PW described ${stamp}` }).first()
     const legacyCard = page.locator('.routine-list .routine-card', { hasText: `PW legacy ${stamp}` }).first()
-    await expect(card.locator('.routine-card-description')).toHaveText(LONG)
+    await expect(card).toBeVisible()
+    await expect(card.locator('.routine-card-description')).toHaveCount(0)
     await expect(legacyCard).toBeVisible()
+    await openRoutineRow(legacyCard)
     await expect(legacyCard.locator('.routine-card-description')).toHaveCount(0)
+    await openRoutineRow(card)
+    await expect(card.locator('.routine-card-description')).toHaveText(LONG)
     await shot(card, 'card')
 
     // Edit: the field opens with the stored text; a new one replaces it.
     const before = await getRoutine(described.id)
-    await card.locator('.cron-menu-btn').click()
-    await card.getByRole('button', { name: 'Edit' }).click()
+    await clickRoutineAction(card, 'Edit')
     const form = page.locator('.routine-modal')
     const field = form.locator('#routine-description')
     await expect(field).toHaveValue(LONG)
@@ -188,9 +193,8 @@ test('the pill, the flyout and the Routines card say what each trigger does; the
       .toEqual({ kind: before.schedule.kind, everyMs: before.schedule.everyMs })
     expect(after.executor).toEqual(before.executor)
 
-    // Cleared in the form: gone from the card and from the stored routine.
-    await card.locator('.cron-menu-btn').click()
-    await card.getByRole('button', { name: 'Edit' }).click()
+    // Cleared in the form: gone from the row and from the stored routine.
+    await clickRoutineAction(card, 'Edit')
     await expect(field).toHaveValue(edited)
     await field.fill('')
     await form.getByRole('button', { name: 'Save' }).click()

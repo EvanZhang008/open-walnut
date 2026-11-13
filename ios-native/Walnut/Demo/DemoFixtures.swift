@@ -276,35 +276,123 @@ enum DemoFixtures {
         func job(
             _ id: String, _ name: String, _ description: String, enabled: Bool,
             schedule: RoutineJob.Schedule, executor: String,
-            lastRun: TimeInterval?, nextRun: TimeInterval?, status: String? = "ok"
+            lastRun: TimeInterval?, nextRun: TimeInterval?, status: String? = "ok",
+            task: (id: String, title: String, project: String)? = nil,
+            prompt: String? = nil, check: RoutineJob.Check? = nil,
+            checkLog: [RoutineJob.State.AuditEntry]? = nil
         ) -> RoutineJob {
-            RoutineJob(
+            // What it sends sits under the executor's own key: a session's prompt, else instructions.
+            // A session routine runs in its task (`target`), as the server stores it.
+            var config: [String: JSONValue]? = prompt.map { [(executor == "session" ? "prompt" : "instructions"): JSONValue.string($0)] }
+            if executor == "session", let task {
+                config = (config ?? [:]).merging(["target": .string(task.id)]) { a, _ in a }
+            }
+            return RoutineJob(
                 id: id, name: name, description: description, enabled: enabled,
-                schedule: schedule, executor: RoutineJob.Executor(type: executor),
+                schedule: schedule, executor: RoutineJob.Executor(type: executor, config: config),
                 state: RoutineJob.State(
                     nextRunAtMs: nextRun.map { c.msFromNow($0) },
                     lastRunAtMs: lastRun.map { c.msAgo($0) },
                     lastStatus: lastRun == nil ? nil : status,
-                    lastError: nil, lastDurationMs: lastRun == nil ? nil : 42_000
-                )
+                    lastError: nil, lastDurationMs: lastRun == nil ? nil : 42_000,
+                    lastCheck: checkLog?.first.map { .init(atMs: $0.atMs, outcome: $0.outcome, error: $0.error, items: $0.items) },
+                    checkLog: checkLog,
+                    fireLog: checkLog.map { $0.filter { $0.outcome == "fired" } }
+                ),
+                check: check,
+                owner: task.map { RoutineJob.Owner(taskId: $0.id, title: $0.title, project: $0.project) }
             )
         }
+        /// The next check of a watch that checks in waking hours only (every time the demo
+        /// shows is between 6:00 AM and 9:00 PM): `seconds` from now, or the morning's first.
+        func wakingCheck(in seconds: TimeInterval) -> TimeInterval {
+            let soon = c.now.addingTimeInterval(seconds)
+            let start = DemoClock.wakingStartHour, end = DemoClock.wakingEndHour
+            let hour = c.calendar.component(.hour, from: soon)
+            if hour >= start && hour < end { return seconds }
+            let day = hour >= end ? c.calendar.date(byAdding: .day, value: 1, to: soon) ?? soon : soon
+            let morning = c.calendar.date(bySettingHour: start, minute: 0, second: 0, of: day) ?? soon
+            return morning.timeIntervalSince(c.now)
+        }
+        /// A check every 10 minutes, newest first: mostly quiet, one fire, one failed check.
+        func feedbackChecks() -> [RoutineJob.State.AuditEntry] {
+            [
+                .init(atMs: c.msAgo(4 * 60), outcome: "quiet", reason: "fire-false"),
+                .init(atMs: c.msAgo(14 * 60), outcome: "quiet", reason: "all-seen"),
+                .init(atMs: c.msAgo(24 * 60), outcome: "fired", items: 2, seq: 7, epoch: "demo",
+                      delivery: .init(status: "ok", summary: "Ship the TestFlight build to beta testers")),
+                .init(atMs: c.msAgo(34 * 60), outcome: "error", error: "exit 1: the feedback page did not load"),
+                .init(atMs: c.msAgo(44 * 60), outcome: "quiet", reason: "fire-false"),
+            ]
+        }
+        /// A routine that delivers into one of the demo's tasks, so the Routines
+        /// screen shows its project groups: daily at `hour` on `weekdays` (1 = Sunday).
+        func taskJob(
+            _ id: String, _ name: String, _ description: String, hour: Int, weekdays: Set<Int>,
+            task: (id: String, title: String, project: String)
+        ) -> RoutineJob {
+            let runs = c.lastAndNextRun(hour: hour, weekdays: weekdays)
+            let dow = weekdays == Set(1...7) ? "*" : weekdays.sorted().map { String($0 - 1) }.joined(separator: ",")
+            return job(id, name, description, enabled: true,
+                       schedule: .init(kind: "cron", expr: "0 \(hour) * * \(dow == "1,2,3,4,5" ? "1-5" : dow)", tz: nil, everyMs: nil, at: nil),
+                       executor: "session", lastRun: runs.ago, nextRun: runs.ahead, task: task)
+        }
+        let everyDay: Set<Int> = Set(1...7)
+        let weekdays: Set<Int> = [2, 3, 4, 5, 6]
         return [
             job("r-briefing", "Morning briefing",
                 "Summarize today's calendar, due tasks and new letters.",
                 enabled: true,
                 schedule: .init(kind: "cron", expr: "0 8 * * 1-5", tz: nil, everyMs: nil, at: nil),
-                executor: "main-agent", lastRun: briefing.ago, nextRun: briefing.ahead),
+                executor: "main-agent", lastRun: briefing.ago, nextRun: briefing.ahead,
+                prompt: "Look at the calendar, the tasks that are due and the letters that came in overnight. "
+                    + "Write a short briefing: the three things to start with, and what can wait."),
             job("r-weekly", "Weekly review",
                 "Close out the week: what got done, what slipped, what is next.",
                 enabled: true,
                 schedule: .init(kind: "cron", expr: "0 16 * * 5", tz: nil, everyMs: nil, at: nil),
-                executor: "main-agent", lastRun: weekly.ago, nextRun: weekly.ahead),
+                executor: "main-agent", lastRun: weekly.ago, nextRun: weekly.ahead,
+                prompt: "Close out the week: list what got done, what slipped and why, and the three tasks "
+                    + "to pick up first next time. Send it as a letter."),
             job("r-crashes", "Check beta crash reports",
                 "Look for new crash groups in the beta and file a task for each one.",
                 enabled: true,
                 schedule: .init(kind: "cron", expr: "0 13 * * *", tz: nil, everyMs: nil, at: nil),
-                executor: "claude-code", lastRun: crashes.ago, nextRun: crashes.ahead),
+                executor: "session", lastRun: crashes.ago, nextRun: crashes.ahead,
+                task: ("t-crash", "Fix the shared album crash", "Pebble"),
+                prompt: "Open the beta crash dashboard. For each crash group that is new since the last run, "
+                    + "add a task with the top frame of its stack and how many testers hit it."),
+            job("r-feedback", "TestFlight feedback watch",
+                "Checks for new tester feedback and hands it to the release task.",
+                enabled: true,
+                schedule: .init(kind: "every", expr: nil, tz: nil, everyMs: 600_000, at: nil),
+                executor: "session", lastRun: 24 * 60, nextRun: wakingCheck(in: 6 * 60),
+                task: ("t-testflight", "Ship the TestFlight build to beta testers", "Pebble"),
+                prompt: "New TestFlight feedback came in. Read it, group it by screen, and add anything "
+                    + "that looks like a crash to the crash task.",
+                check: .init(run: "sh ~/.open-walnut/triggers/testflight-feedback/check.sh", host: "__local__", maxFiresPerDay: 6),
+                checkLog: feedbackChecks()),
+            taskJob("r-beta-review", "TestFlight review status",
+                    "Tell the task when the beta build clears review.", hour: 10, weekdays: everyDay,
+                    task: ("t-testflight", "Ship the TestFlight build to beta testers", "Pebble")),
+            taskJob("r-strings", "Missing translations check",
+                    "List settings strings that still have no translation.", hour: 11, weekdays: weekdays,
+                    task: ("t-l10n", "Localize the settings screen", "Pebble")),
+            taskJob("r-uptime", "Uptime summary",
+                    "Uptime over the last day, and any alert that fired.", hour: 9, weekdays: everyDay,
+                    task: ("t-uptime", "Set up uptime alerts", "Acme Website")),
+            taskJob("r-links", "Broken link scan",
+                    "Crawl the docs footer and list links that fail.", hour: 9, weekdays: [2],
+                    task: ("t-links", "Fix broken links in the docs footer", "Acme Website")),
+            taskJob("r-quotes", "Contractor replies",
+                    "Collect new replies about the counter quotes.", hour: 18, weekdays: everyDay,
+                    task: ("t-quotes", "Get three quotes for the kitchen counters", "Home")),
+            taskJob("r-train", "Train fare watch",
+                    "Say when the coast fares drop.", hour: 7, weekdays: everyDay,
+                    task: ("t-train", "Book train tickets to the coast", "Travel")),
+            taskJob("r-course", "Course chapter nudge",
+                    "A short evening nudge to keep the chapter moving.", hour: 19, weekdays: weekdays,
+                    task: ("t-course", "Finish chapter 4 of the design systems course", "Learning")),
             job("r-plants", "Water the plants",
                 "A Sunday morning nudge.", enabled: false,
                 schedule: .init(kind: "cron", expr: "0 9 * * 0", tz: nil, everyMs: nil, at: nil),

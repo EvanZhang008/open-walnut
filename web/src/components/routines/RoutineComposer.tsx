@@ -27,13 +27,15 @@ const TEMPLATES: Array<{ label: string; text: string }> = [
 
 interface RoutineComposerProps {
   onDraft: (draft: CreateRoutineInput) => void;
-  /** Fall back to a manual empty form when drafting fails. */
-  onDraftFailed: (error: string) => void;
-  /** Open the empty form directly, without asking the model first. */
-  onManual: () => void;
+  /** Fall back to the manual form, holding what was typed, when drafting fails. */
+  onDraftFailed: (error: string, text: string) => void;
+  /** Open the form directly, without asking the model first, holding what was typed. */
+  onManual: (text: string) => void;
+  /** Opened by the New routine button: the cursor goes into the box. */
+  autoFocus?: boolean;
 }
 
-export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineComposerProps) {
+export function RoutineComposer({ onDraft, onDraftFailed, onManual, autoFocus = false }: RoutineComposerProps) {
   const words = useDraft(draftKey('routine-ask', 'new'));
   const { text, setText } = words;
   const [drafting, setDrafting] = useState(false);
@@ -54,7 +56,7 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineCom
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Draft failed';
       setError(msg);
-      onDraftFailed(msg);
+      onDraftFailed(msg, text.trim());
     } finally {
       setDrafting(false);
     }
@@ -75,6 +77,7 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineCom
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) gate.send();
           }}
           placeholder="What do you want automated?"
+          autoFocus={autoFocus}
           rows={2}
           disabled={drafting}
         />
@@ -92,22 +95,27 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineCom
           </button>
         ))}
       </div>
-      {error && <div className="cron-form-error text-xs">{error} — fill the form manually below.</div>}
+      {error && (
+        <div className="cron-form-error text-xs" title={error}>
+          {/credential|provider|api key|not configured/i.test(error) ? 'No AI model is set up here to draft it.' : 'Could not draft it.'}{' '}
+          Your words are in the form as its instructions: give it a name and say when it runs.
+        </div>
+      )}
       <div className="routine-composer-actions">
         {/* The manual path is a FIRST-CLASS button, not a fallback the user
             reaches by making the model fail. Also the only path that works with
             no provider configured. */}
         <button
           type="button"
-          className="btn btn-secondary"
-          onClick={onManual}
+          className="btn btn-sm btn-secondary"
+          onClick={() => onManual(text.trim())}
           disabled={drafting}
         >
           Build it myself
         </button>
         <button
           type="button"
-          className="btn btn-primary"
+          className="btn btn-sm btn-primary"
           onClick={gate.send}
           disabled={(!text.trim() && !gate.micBusy && !gate.waiting) || drafting}
           {...dictationWaitProps(gate)}

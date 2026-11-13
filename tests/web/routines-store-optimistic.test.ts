@@ -45,6 +45,7 @@ import {
   loadRoutines,
   onRoutinesChanged,
   removeRoutine,
+  setRoutineEnabled,
   subscribeRoutines,
   toggleRoutine,
 } from '../../web/src/stores/routines-store.js'
@@ -116,6 +117,42 @@ describe('routines store', () => {
     await done
     expect(getRoutinesSnapshot().routines[0].updatedAtMs).toBe(2)
     unsub()
+  })
+
+  it('fast switch clicks reach the server in click order and the last click wins', async () => {
+    mocks.fetchRoutines.mockResolvedValue([routine()])
+    await loadRoutines()
+    const pause = deferred<Routine>()
+    const resume = deferred<Routine>()
+    mocks.updateRoutine.mockImplementationOnce(() => pause.promise).mockImplementationOnce(() => resume.promise)
+
+    const first = setRoutineEnabled('r-1', false)
+    const second = setRoutineEnabled('r-1', true)
+    expect(getRoutinesSnapshot().routines[0].enabled).toBe(true)
+    await new Promise((r) => setTimeout(r, 0))
+    // The resume is not sent while the pause is still out.
+    expect(mocks.updateRoutine).toHaveBeenCalledTimes(1)
+    pause.resolve(routine({ enabled: false, updatedAtMs: 2 }))
+    await first
+    await new Promise((r) => setTimeout(r, 0))
+    // The pause's answer does not undo the newer click.
+    expect(getRoutinesSnapshot().routines[0].enabled).toBe(true)
+    expect(mocks.updateRoutine).toHaveBeenCalledTimes(2)
+    expect(mocks.updateRoutine.mock.calls.map((c) => c[1])).toEqual([{ enabled: false }, { enabled: true }])
+    resume.resolve(routine({ enabled: true, updatedAtMs: 3 }))
+    await second
+    expect(getRoutinesSnapshot().routines[0]).toMatchObject({ enabled: true, updatedAtMs: 3 })
+  })
+
+  it('a refused switch with a newer click queued leaves the row to the newer one', async () => {
+    mocks.fetchRoutines.mockResolvedValue([routine()])
+    await loadRoutines()
+    mocks.updateRoutine.mockRejectedValueOnce(new Error('busy')).mockResolvedValueOnce(routine({ enabled: true, updatedAtMs: 5 }))
+    const first = setRoutineEnabled('r-1', false).catch((e) => e)
+    const second = setRoutineEnabled('r-1', true)
+    expect(await first).toBeInstanceOf(Error)
+    await second
+    expect(getRoutinesSnapshot().routines[0]).toMatchObject({ enabled: true, updatedAtMs: 5 })
   })
 
   it('a refused toggle rolls the switch back', async () => {

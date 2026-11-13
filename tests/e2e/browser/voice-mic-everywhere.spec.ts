@@ -29,6 +29,7 @@ import { stubSttStatus } from './voice-selection-helpers'
 import { calendarEmptySlotPoint } from './calendar-helpers'
 import { FAKE_MIC_ARGS } from './fake-mic'
 import { showTasks } from './org-view-helpers'
+import { openManualRoutineForm, openRoutineComposer } from './routines-page-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 /** Shots land here; VOICE_MIC_SHOTS moves them (a remote run keeps them under test-results). */
@@ -602,6 +603,8 @@ test.describe('Routines', () => {
   test('the routine composer has the mic inside it', async ({ page }) => {
     test.setTimeout(120_000)
     const view = await openRoutines(page)
+    // The composer shows after New routine (unless the list is empty).
+    await openRoutineComposer(view)
     await expect(view.getByPlaceholder('What do you want automated?')).toBeVisible()
     await expectMicField(page, 'routine-composer', view.locator('.routine-composer .mic-field'))
   })
@@ -609,9 +612,7 @@ test.describe('Routines', () => {
   test('"Build it myself": Description has the mic inside it, Instructions in its foot', async ({ page }) => {
     test.setTimeout(120_000)
     await openRoutines(page)
-    await page.getByRole('button', { name: 'Build it myself' }).click()
-    const form = page.locator('.routine-modal')
-    await expect(form).toBeVisible()
+    const form = await openManualRoutineForm(page)
     await expectMicField(page, 'routine-description', form.locator('.mic-field').filter({ has: page.locator('#routine-description') }))
     const instructions = form.locator('#routine-f-instructions')
     await expectBoxMic(page, 'routine-instructions', instructions, form.locator('.routine-instructions-box'))

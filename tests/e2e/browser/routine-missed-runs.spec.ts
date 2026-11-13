@@ -9,6 +9,7 @@
 import fs from 'node:fs/promises'
 import { test, expect } from './shortcut-test-fixture'
 import type { Locator, Page } from '@playwright/test'
+import { openRoutineRow } from './routines-page-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOTS = `${process.env.WALNUT_TASK_DIR || '/tmp'}/shots/routine-missed-runs`
@@ -73,6 +74,9 @@ test('the Routines card names a missed run, runs it now, sets one aside, and ope
     await page.getByTestId('sidebar-core-app-routines').click()
     await expect(page.locator('.page-title')).toContainText('Routines')
     const card = page.locator('.routine-list .routine-card', { hasText: `PW reflection ${stamp}` }).first()
+    // The row's one line says it missed runs; the opened row lists them.
+    await expect(card.getByTestId('routine-row-missed')).toHaveText('Missed 2 runs')
+    await openRoutineRow(card)
     const rows = card.getByTestId('routine-missed-row')
     await expect(rows).toHaveCount(2)
     await expect(rows.nth(0)).toHaveAttribute('data-slot', String(c))
@@ -84,7 +88,7 @@ test('the Routines card names a missed run, runs it now, sets one aside, and ope
 
     // History: closed by default, opens with every run.
     const toggle = card.getByTestId('routine-history-toggle')
-    await expect(toggle).toHaveText('▸ History (2 runs)')
+    await expect(toggle).toHaveText('History (2 runs)')
     await expect(card.getByTestId('routine-history-list')).toHaveCount(0)
     await toggle.click()
     const history = card.getByTestId('routine-history-list')
