@@ -15,6 +15,7 @@ import { isMacPlatform } from '@/hooks/usePanelKeyRouter';
 import { MAX_PANELS } from '@/hooks/session-panel-limits';
 import { chordKeys } from './chords';
 import { chordsFor, commandDef, type CommandId, type Overrides } from './commands';
+import { inMacApp } from '@/utils/mac-app';
 
 const ORDINAL = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th'];
 
@@ -22,9 +23,7 @@ export type KeyEnv = 'mac-app' | 'mac-browser' | 'other';
 
 export function detectKeyEnv(): KeyEnv {
   if (!isMacPlatform()) return 'other';
-  // The Mac app's web view carries its own message handlers (desktop/main.swift).
-  const handlers = (window as unknown as { webkit?: { messageHandlers?: Record<string, unknown> } }).webkit?.messageHandlers;
-  return handlers && ('walnutUpdate' in handlers || 'walnutChrome' in handlers) ? 'mac-app' : 'mac-browser';
+  return inMacApp() ? 'mac-app' : 'mac-browser';
 }
 
 type KeyLike = Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>;

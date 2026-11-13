@@ -15,7 +15,13 @@ function safePdfUrl(value?: string): string | undefined {
 }
 
 
-interface Props { path: string; host?: string; reloadToken?: number }
+/**
+ * A file in the workspace (`path`, read through the raw-file route), or any same-origin `url` that
+ * answers with the PDF's bytes: a mail attachment, say. `label` names the latter in a log line.
+ */
+type Props =
+  | { path: string; host?: string; reloadToken?: number; url?: undefined; label?: undefined }
+  | { url: string; label?: string; path?: undefined; host?: undefined; reloadToken?: undefined }
 interface PageSize { width: number; height: number; userUnit: number }
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 5;
@@ -161,7 +167,9 @@ function PdfPage({ pdf, lib, number, size, scale, root, onSize, onJump }: {
   );
 }
 
-export function PdfPreview({ path, host, reloadToken }: Props) {
+export function PdfPreview({ path, host, reloadToken, url, label }: Props) {
+  const source = url ?? rawFileContentUrl(path!, host, reloadToken);
+  const named = label ?? path ?? 'pdf';
   const [document, setDocument] = useState<{ pdf: PDFDocumentProxy; lib: PdfModule; sizes: PageSize[] }>();
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -206,10 +214,12 @@ export function PdfPreview({ path, host, reloadToken }: Props) {
       if (disposed) return;
       lib.GlobalWorkerOptions.workerSrc = workerSrc;
       task = lib.getDocument({
-        url: rawFileContentUrl(path, host, reloadToken),
+        url: source,
         cMapUrl: `/pdf-assets/${lib.version}/cmaps/`, cMapPacked: true,
         standardFontDataUrl: `/pdf-assets/${lib.version}/standard_fonts/`,
         wasmUrl: `/pdf-assets/${lib.version}/wasm/`,
+        // A PDF can come from a stranger (a mail attachment). pdf.js 6 compiles no code from one and
+        // has no `isEvalSupported` to turn off; tests/web/pdf-no-eval-guard.test.ts holds both facts.
       });
       task.onPassword = (submit: (password: string) => void, reason: number) => {
         if (disposed) return;
@@ -239,11 +249,11 @@ export function PdfPreview({ path, host, reloadToken }: Props) {
       clearTimeout(timeout);
       setPasswordRequest(undefined);
       destroy();
-      log.warn('pdf-preview', 'PDF could not load', { path, error: String(err) });
+      log.warn('pdf-preview', 'PDF could not load', { path: named, error: String(err) });
       setError('This PDF could not load. Retry or use Download to open it locally.');
     });
     return () => { disposed = true; clearTimeout(timeout); destroy(); };
-  }, [path, host, reloadToken, attempt]);
+  }, [source, named, attempt]);
 
   useEffect(() => {
     const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));

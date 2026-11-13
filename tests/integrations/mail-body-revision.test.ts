@@ -25,7 +25,10 @@ import { MailBodyStore } from '../../src/integrations/mail/bodies.js';
 import {
   bodyRevisionMetaKey,
   reconcileBodyRevision,
+  reconcileRefusalRevision,
+  refusalRevisionMetaKey,
   type BodyRevisionResult,
+  type RefusalRevisionResult,
 } from '../../src/integrations/mail/body-revision.js';
 import { MailDatabase } from '../../src/integrations/mail/db.js';
 import { MailEvents } from '../../src/integrations/mail/events.js';
@@ -51,6 +54,8 @@ interface Harness {
   scheduled: Array<() => void>;
   /** Every sweep that has finished, so a test can state the counts it walked. */
   sweeps: BodyRevisionResult[];
+  /** Every refusal sweep that has finished. */
+  refusalSweeps: RefusalRevisionResult[];
   /** Run what is scheduled and wait for the sweeps it starts. */
   runDeferred(): Promise<void>;
 }
@@ -83,6 +88,7 @@ async function openBase(existingRoot?: string): Promise<Harness> {
 
   const scheduled: Array<() => void> = [];
   const sweeps: BodyRevisionResult[] = [];
+  const refusalSweeps: RefusalRevisionResult[] = [];
   const inflight: Array<Promise<unknown>> = [];
   const api = createMailBaseApi({
     providers,
@@ -98,6 +104,11 @@ async function openBase(existingRoot?: string): Promise<Harness> {
     },
     // Graded on its own in mail-identity-revision.test.ts; none of the providers here declare one.
     identityRevision: async () => undefined,
+    refusalRevision: (providerId, revision) => {
+      const work = reconcileRefusalRevision({ store }, providerId, revision);
+      inflight.push(work.then((result) => { refusalSweeps.push(result); }));
+      return work.then(() => undefined);
+    },
     defer: (run) => { scheduled.push(run); },
   });
 
@@ -111,6 +122,7 @@ async function openBase(existingRoot?: string): Promise<Harness> {
     api,
     scheduled,
     sweeps,
+    refusalSweeps,
     runDeferred: async () => {
       for (const run of scheduled.splice(0)) run();
       await Promise.all(inflight.splice(0));
@@ -131,7 +143,7 @@ afterEach(async () => {
  * job and would blur every "what did registering arm" assertion below. The provider this feature
  * was built for declares a field too.
  */
-function fixtureProvider(id: string, text: () => string, bodyRevision?: string): {
+function fixtureProvider(id: string, text: () => string, bodyRevision?: string, refusalRevision?: string): {
   spec: MailProviderSpec;
   getBody: ReturnType<typeof vi.fn>;
 } {
@@ -145,6 +157,7 @@ function fixtureProvider(id: string, text: () => string, bodyRevision?: string):
       label: id,
       capabilities: { ...CAPABILITIES },
       ...(bodyRevision === undefined ? {} : { bodyRevision }),
+      ...(refusalRevision === undefined ? {} : { refusalRevision }),
       setup: {
         fields: [{ name: 'address', label: 'Address', kind: 'text' }],
         submit: async () => { throw new Error('this fixture adds accounts by hand'); },
@@ -396,5 +409,76 @@ describe('a changed body revision', () => {
     expect(stillThere).toEqual([]);
     // Every envelope is still a row, which is the whole difference between this and retention.
     expect(await one.store.countMessages('fake:one')).toBe(450);
+  }, 60_000);
+});
+
+/**
+ * A provider that learned to read mail it used to refuse (contract 1.14.0). 2026-11-13: IMAP read a
+ * message over its source cap by its text parts instead of refusing it, and every message it had
+ * already refused kept saying "too big" because the base remembers a `too-large` answer for good.
+ */
+describe('a changed refusal revision', () => {
+  async function refusedRow(one: Harness, messageId: string, code: string): Promise<number> {
+    const rowid = await seedMessage(one, 'fake:one', messageId);
+    await one.store.setMessageBodyError(rowid, code);
+    return rowid;
+  }
+
+  it('forgets the too-large answers once, keeps not-found and cached bodies, and the next open reads the body', async () => {
+    const one = await openBase();
+    await seedAccount(one, 'fake:one');
+    await refusedRow(one, 'big-1', 'too-large');
+    await refusedRow(one, 'gone-1', 'not-found');
+    const ref = await seedStoredBody(one, 'fake:one', 'kept-1', 'already cached');
+    const provider = fixtureProvider('fake', () => 'the text of a big message', undefined, 'parts-1');
+
+    // Before the sweep the remembered answer is what a read gets, with no provider call.
+    expect((await one.service.readMessage('fake:one', 'big-1')).bodyError).toBe('too-large');
+
+    const handle = one.api.registerProvider(provider.spec);
+    expect(one.scheduled).toHaveLength(1);
+    await one.runDeferred();
+
+    expect(one.refusalSweeps).toEqual([{ swept: true, accounts: 1, refusals: 1 }]);
+    expect((await one.store.getMessage('fake:one', 'big-1'))?.body_error).toBeNull();
+    // A message the server no longer has is not something a better reading can fix.
+    expect((await one.store.getMessage('fake:one', 'gone-1'))?.body_error).toBe('not-found');
+    // No cached body is dropped: that is the other revision's job.
+    expect(await bodyRefOf(one, 'fake:one', 'kept-1')).toBe(ref);
+    expect(await exists(one, ref)).toBe(true);
+    expect(await one.store.tasks.getMeta(refusalRevisionMetaKey('fake'))).toBe('parts-1');
+
+    const read = await one.service.readMessage('fake:one', 'big-1');
+    expect(read.bodyError).toBeUndefined();
+    expect(read.body?.text).toBe('the text of a big message');
+    expect(provider.getBody).toHaveBeenCalledTimes(1);
+
+    // The same revision again (a restart, a re-registration) sweeps nothing: a refusal given since stays.
+    handle.dispose();
+    await refusedRow(one, 'big-2', 'too-large');
+    one.api.registerProvider(fixtureProvider('fake', () => 'x', undefined, 'parts-1').spec);
+    await one.runDeferred();
+    expect(one.refusalSweeps).toEqual([
+      { swept: true, accounts: 1, refusals: 1 },
+      { swept: false, accounts: 0, refusals: 0 },
+    ]);
+    expect((await one.store.getMessage('fake:one', 'big-2'))?.body_error).toBe('too-large');
+  });
+
+  it('clears 450 refusals a page at a time, and only for the provider whose revision moved', async () => {
+    const one = await openBase();
+    await seedAccount(one, 'fake:one');
+    await seedAccount(one, 'other:one');
+    for (let index = 0; index < 450; index += 1) await refusedRow(one, `big-${index}`, 'too-large');
+    const otherRow = await seedMessage(one, 'other:one', 'theirs');
+    await one.store.setMessageBodyError(otherRow, 'too-large');
+    const paged = vi.spyOn(one.store, 'clearBodyErrors');
+
+    one.api.registerProvider(fixtureProvider('fake', () => 'x', undefined, 'parts-1').spec);
+    await one.runDeferred();
+
+    expect(one.refusalSweeps).toEqual([{ swept: true, accounts: 1, refusals: 450 }]);
+    expect(paged.mock.calls.map(([, , limit]) => limit)).toEqual([200, 200, 200]);
+    expect((await one.store.getMessage('other:one', 'theirs'))?.body_error).toBe('too-large');
   }, 60_000);
 });

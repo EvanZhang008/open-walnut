@@ -156,6 +156,12 @@ const withInvite = process.env.PW_MAIL_INVITE === '1'
 /** `PW_MAIL_NAMES_ONLY=1`: rows whose listing names people without addresses (names-only-set.mjs). */
 const withNamesOnly = process.env.PW_MAIL_NAMES_ONLY === '1'
 
+/** `PW_MAIL_ATTACHMENTS=1`: the big message and attachments that open (attachment-set.mjs). Implies the link. */
+const withAttachments = process.env.PW_MAIL_ATTACHMENTS === '1'
+// The Mac app's Download saves into `~/Downloads` of the server's user (attachments.ts), and HOME
+// here is the fixture's own: the folder a real Mac has, made inside the fixture.
+if (withAttachments) await fs.mkdir(path.join(tmpBase, 'Downloads'), { recursive: true })
+
 /**
  * `PW_MAIL_GROUPS=1`: the inbox-sorting message set (two adopted accounts, marina and ferry, see
  * `fixtures/mail-fixture-provider/groups-set.mjs`). `PW_MAIL_GROUPS_DENSE=1` is the same two accounts
@@ -171,7 +177,7 @@ const withGroups = process.env.PW_MAIL_GROUPS === '1' || withGroupsDense
 const ruleModelMode = (['canned', 'invalid', 'down', 'slow'] as const)
   .find((mode) => mode === process.env.PW_MAIL_RULE_MODEL) ?? 'down'
 
-const withProvider = process.env.PW_MAIL_PROVIDER === '1' || withCtx || withUnsub || withInvite || withNamesOnly || withGroups
+const withProvider = process.env.PW_MAIL_PROVIDER === '1' || withCtx || withUnsub || withInvite || withNamesOnly || withAttachments || withGroups
 if (withProvider) {
   const providerSource = path.join(repoRoot, 'tests/e2e/browser/fixtures/mail-fixture-provider')
   await fs.access(path.join(providerSource, 'server.mjs'))

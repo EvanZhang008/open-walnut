@@ -29,6 +29,10 @@ export interface MailCapabilities {
   send: boolean
   sendAsReply: boolean
   bodies: 'text' | 'html' | 'both'
+  /**
+   * `'metadata'`: names, types and sizes only. `'download'`: one attachment's bytes on request too
+   * (`getAttachment`, 1.14.0), and the console offers a click only then.
+   */
   attachments: 'none' | 'metadata' | 'download'
   /**
    * Can move inbox mail to the account's archive (`archiveMany`), which is what a "keep out of the
@@ -404,7 +408,8 @@ export interface MailBody {
    * Attachment metadata, when the parse produced better information than the envelope's
    * BODYSTRUCTURE did. The base reads attachments from the ENVELOPE, because that is free at
    * poll time; this field exists so a provider whose transport only reveals them here has
-   * somewhere to put them. Never the attachment CONTENT: v1 does not cache that at all.
+   * somewhere to put them. Never the attachment CONTENT: that is read on a click with
+   * `getAttachment` and is never cached.
    */
   attachments?: MailAttachmentMeta[]
   /**
@@ -436,6 +441,27 @@ export interface MailBody {
    * listing did cannot overwrite it, and a body that reports none cannot erase it.
    */
   listUnsubscribe?: MailListUnsubscribe
+}
+
+/**
+ * One attachment's bytes, as `getAttachment` hands them over (1.14.0).
+ *
+ * `filename` and `mimeType` are what the message SAYS (the sender wrote both), and the base treats
+ * them that way: a type decides only whether the browser may show the file inline, from a short list,
+ * and a name is sanitized before it reaches a header.
+ */
+export interface MailAttachmentContent {
+  filename?: string
+  mimeType?: string
+  /** The decoded size when the transport knows it in advance. Advisory: the stream is the truth. */
+  bytes?: number
+  /**
+   * The DECODED bytes, streamed. It ends when the file does, or throws: a `ProviderError` with code
+   * `too-large` once more than `maxBytes` arrived, or the transport's own failure. The base reads it
+   * at the browser's pace and may stop early; the provider releases its transport when `signal`
+   * aborts, whether or not anybody reads to the end.
+   */
+  content: AsyncIterable<Uint8Array>
 }
 
 export interface MailSendResult {
@@ -483,6 +509,17 @@ export interface MailProviderSpec {
    * changed cannot be kept. Undefined means never.
    */
   identityRevision?: string
+  /**
+   * What this provider REFUSES to read, as a string only it gives meaning to (1.14.0).
+   *
+   * Change it when a fix lets `getBody` read mail it used to refuse as `too-large`. The base remembers
+   * a `too-large` answer on the row so neither the reader nor the prefetch asks again, which is right
+   * while the answer cannot change and wrong after such a fix: the console keeps saying "too big" about
+   * mail the provider can now read. A revision the base has not seen makes it forget the `too-large`
+   * answers of this provider's accounts, ONCE, so each body is asked for again on its next open or by
+   * the prefetch. Cached bodies are untouched (that is `bodyRevision`). Undefined means never.
+   */
+  refusalRevision?: string
   /**
    * The unread envelopes of one mailbox, as the SERVER sees them right now. Optional.
    *
@@ -549,6 +586,22 @@ export interface MailProviderSpec {
    * cost the cap exists to avoid. Treat it as advisory, never as authoritative.
    */
   getBody(accountId: string, messageId: string, sizeHint?: number): Promise<MailBody>
+  /**
+   * One attachment's bytes, read only when `capabilities.attachments` is `'download'` (1.14.0).
+   *
+   * Called only because a person clicked that attachment: never ahead of time, never for an agent,
+   * and the base caches nothing of it. `attachmentId` is the `id` the envelope's attachment carried;
+   * an id the message does not list as an attachment is `not-found`, never some other part of the
+   * message. Refuse with `too-large` before anything moves when the size already says the file is
+   * over `maxBytes`, and end the stream with `too-large` when the bytes say so. Release the transport
+   * when `signal` aborts: that is the browser closing the download, or the route giving up.
+   */
+  getAttachment?(
+    accountId: string,
+    messageId: string,
+    attachmentId: string,
+    options: { maxBytes: number; signal: AbortSignal },
+  ): Promise<MailAttachmentContent>
   search?(accountId: string, query: string, limit: number): Promise<MailEnvelope[]>
   watch?(accountId: string, onHint: (hint: MailWatchHint) => void): Disposable
   markRead?(accountId: string, messageId: string, read: boolean): Promise<void>

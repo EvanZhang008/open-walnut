@@ -148,7 +148,9 @@ export function envelopeTable(
 /** What a body failure reads like. Plain words, never a throw: the envelope is still real data. */
 export function bodyErrorSentence(code: string): string {
   if (code === 'too-large') {
-    return 'The body is over the size cap Walnut will parse, so it was never stored. The envelope above is all there is; open it in the Mail app to read it.'
+    // Attachments do not count toward this: a big message is read through its own text parts, so
+    // only text itself over the cap ends here.
+    return 'The message text itself is over the size cap Walnut keeps of a body, so it was never stored. The envelope and attachment list above are all there is; the user can read it in their mail provider\'s own app.'
   }
   if (code === 'not-found') {
     return 'The mail server no longer has this message, so the body can never be fetched. It was probably moved or deleted elsewhere.'

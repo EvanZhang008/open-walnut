@@ -76,6 +76,7 @@ import type { UnsubscribeRow } from './store-write.js'
 import type {
   MailAccount,
   MailAddress,
+  MailAttachmentMeta,
   MailBody,
   MailCapabilities,
   MailEnvelope,
@@ -530,6 +531,26 @@ export class MailService {
       sentAt: row.sent_at,
       ...(marker ? { kind: marker.kind } : {}),
     }
+  }
+
+  /**
+   * One attachment as the CACHED envelope lists it, with the row's own message id.
+   *
+   * The envelope is the list a person clicked from, so an id it never listed is a 404 here, before any
+   * provider is asked: the attachment route cannot be pointed at a part the console never offered.
+   * A durable id from a search hit resolves to its row the way every other read does.
+   */
+  async cachedAttachment(accountId: string, messageId: string, attachmentId: string): Promise<{
+    messageId: string
+    attachment: MailAttachmentMeta
+  }> {
+    const row = await this.requireMessage(accountId, messageId)
+    const listed = parseJson<MailAttachmentMeta[]>(row.attachments_json, [])
+    const attachment = Array.isArray(listed) ? listed.find((one) => one?.id === attachmentId) : undefined
+    if (!attachment) {
+      throw new MailServiceError('unknown_attachment', `Message "${messageId}" lists no attachment "${attachmentId.slice(0, 40)}".`, 404)
+    }
+    return { messageId: row.message_id, attachment }
   }
 
   /**

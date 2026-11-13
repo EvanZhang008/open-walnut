@@ -8,7 +8,7 @@ import type { MailAgentDeps } from './agent-surface.js'
 import { createMailBaseApi } from './api.js'
 import { MailApprovals } from './approvals.js'
 import { MailBodyStore } from './bodies.js'
-import { reconcileBodyRevision } from './body-revision.js'
+import { reconcileBodyRevision, reconcileRefusalRevision } from './body-revision.js'
 import { reconcileIdentityRevision } from './identity-revision.js'
 import { providerIdOf, type MailAccountDto } from './contract.js'
 import { openMailDatabase } from './db.js'
@@ -362,6 +362,18 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
         await reconcileBodyRevision({ store, bodies, log: walnut.log }, providerId, revision)
       } catch (error: unknown) {
         walnut.log.warn('mail could not retire the bodies a provider replaced', {
+          providerId, revision: revision ?? '', error: String(error).slice(0, 200),
+        })
+      }
+    },
+    // A provider that can now read mail it used to refuse as too large. Replica rule and failure
+    // handling as for bodyRevision: the refusals live on the primary's rows.
+    refusalRevision: async (providerId, revision) => {
+      if (walnut.replica) return
+      try {
+        await reconcileRefusalRevision({ store, log: walnut.log }, providerId, revision)
+      } catch (error: unknown) {
+        walnut.log.warn('mail could not forget the refusals a provider replaced', {
           providerId, revision: revision ?? '', error: String(error).slice(0, 200),
         })
       }

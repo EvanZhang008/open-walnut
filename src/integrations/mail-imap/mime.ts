@@ -3,7 +3,8 @@
  *
  * The byte cap is not a nicety here. A MIME parse of a multi-megabyte message is CPU work in
  * the server process, and the server has ONE event loop that every route shares, so the caller
- * checks the size the server already reported and refuses before this file ever sees the bytes.
+ * checks the size the server already reported and never hands this file a source over the cap: a
+ * bigger message is read part by part from its structure instead (`bodyPartsOf`).
  * mailparser itself is stream based, which keeps the parse chunked rather than one long
  * synchronous burst, but "chunked" is not "free".
  *
@@ -34,6 +35,16 @@ import { encodeMessageId } from './coords.js'
  * moves, both numbers move; a provider that guessed high just gets its body refused.
  */
 export const MAX_SOURCE_BYTES = 2 * 1024 * 1024
+
+/**
+ * The most decoded text plus html a message over `MAX_SOURCE_BYTES` hands over: 2 MB, the base's
+ * documented body cap (`MAX_BODY_BYTES`), restated for the same reason as the number above.
+ *
+ * A message over the source cap is no longer refused for that alone: its own text and html parts are
+ * fetched from BODYSTRUCTURE and nothing else, so a 2.2 MB mail whose PDF is 2.19 MB of it opens with
+ * its text. Only text that is itself over this cap is still `too-large`.
+ */
+export const MAX_BODY_TEXT_BYTES = 2 * 1024 * 1024
 
 export interface ParsedBody {
   text?: string
@@ -161,43 +172,157 @@ function listHeadersOf(lines: Array<{ key?: string; line?: string }> | undefined
   return kept.length > 0 ? parseHeaders(kept.join('\r\n')) : {}
 }
 
-interface StructureNode {
+export interface StructureNode {
   part?: string
   type?: string
+  /** The transfer encoding (`base64`, `quoted-printable`, `7bit`...), lowercased by imapflow. */
+  encoding?: string
   disposition?: string
   dispositionParameters?: Record<string, string>
   parameters?: Record<string, string>
+  /** The ENCODED size on the server: a base64 part decodes to about three quarters of it. */
   size?: number
   childNodes?: StructureNode[]
+}
+
+/** The name a part carries, from its disposition or its content type. */
+function filenameOf(node: StructureNode): string | undefined {
+  return node.dispositionParameters?.filename ?? node.parameters?.name
+}
+
+/**
+ * Is this part an attachment, rather than a piece of the message or a container?
+ *
+ * ONE rule, read by both sides of the same question: `attachmentsFromStructure` lists what it says
+ * yes to, and `bodyPartsOf` never reads one of them as the message's text. A part is one or the
+ * other, never both, so a .txt file riding along is never shown as the mail and a body part is never
+ * offered as a download. A forwarded message (`message/rfc822`) is always one attachment, named or
+ * not: the file a mail client saves as `.eml`.
+ */
+function isAttachmentNode(node: StructureNode): boolean {
+  const type = node.type?.toLowerCase() ?? ''
+  // A multipart node never carries content of its own, so it can never be an attachment even
+  // when a client put a filename parameter on it.
+  if (type.startsWith('multipart/')) return false
+  if (type === 'message/rfc822') return true
+  return node.disposition?.toLowerCase() === 'attachment' || !!filenameOf(node)
+}
+
+/** The name of a forwarded message that carries none: what a mail client saves it as. */
+const FORWARDED_NAME = 'forwarded-message.eml'
+
+/**
+ * Every node with the part number IMAP fetches it by, breadth first and bounded: the ONE numbering
+ * the listing and the download both read, so a listed id always fetches the node it was listed for.
+ *
+ * Two places where imapflow's own `part` is not that number. A single-part message's root has none,
+ * and IMAP calls its only part `1` (a scanner's "scan to email" is one PDF and nothing else). And a
+ * forwarded message's own parts are not walked at all: imapflow numbers its body with the
+ * message's OWN number (RFC 3501 calls a single-part one `<n>.1`), so the two would share an id and
+ * the inner one could never be fetched. The forwarded message is listed whole instead.
+ */
+function numberedNodes(root: unknown, limit: number): Array<{ node: StructureNode; part: string | undefined }> {
+  const out: Array<{ node: StructureNode; part: string | undefined }> = []
+  if (!root) return out
+  const top = root as StructureNode
+  const queue = [{ node: top, part: top.part ?? (top.type?.toLowerCase().startsWith('multipart/') ? undefined : '1') }]
+  while (queue.length > 0 && out.length < limit) {
+    const entry = queue.shift()!
+    out.push(entry)
+    if (entry.node.type?.toLowerCase() === 'message/rfc822') continue
+    for (const child of entry.node.childNodes ?? []) queue.push({ node: child, part: child.part })
+  }
+  return out
 }
 
 /**
  * Attachment metadata straight from BODYSTRUCTURE, with no download.
  *
  * This is why a list can show a paperclip without fetching anything: the poll already asked
- * for the structure, so filenames and sizes are free. v1 never caches attachment CONTENT and
- * never puts one in agent context.
+ * for the structure, so filenames and sizes are free. Content is fetched only when a person asks
+ * for one attachment (`getAttachment`), never cached, and never put in agent context.
  */
 export function attachmentsFromStructure(root: unknown): MailAttachmentMeta[] {
   const out: MailAttachmentMeta[] = []
-  const queue: StructureNode[] = root ? [root as StructureNode] : []
-  while (queue.length > 0 && out.length < 100) {
-    const node = queue.shift()!
-    for (const child of node.childNodes ?? []) queue.push(child)
-    const filename = node.dispositionParameters?.filename ?? node.parameters?.name
-    const attached = node.disposition?.toLowerCase() === 'attachment'
-    if (!attached && !filename) continue
-    // A multipart node never carries content of its own, so it can never be an attachment even
-    // when a client put a filename parameter on it.
-    if (node.type?.toLowerCase().startsWith('multipart/')) continue
+  for (const { node, part } of numberedNodes(root, 1_000)) {
+    if (out.length >= 100) break
+    if (!isAttachmentNode(node)) continue
+    const filename = filenameOf(node) ?? (node.type?.toLowerCase() === 'message/rfc822' ? FORWARDED_NAME : undefined)
     out.push({
-      ...(node.part ? { id: node.part } : {}),
+      ...(part ? { id: part } : {}),
       ...(filename ? { filename } : {}),
       ...(node.type ? { mimeType: node.type } : {}),
       ...(typeof node.size === 'number' ? { bytes: node.size } : {}),
     })
   }
   return out
+}
+
+/** The node with this part number in the same numbering as the listing, or undefined. */
+export function structureNodeOf(root: unknown, part: string): StructureNode | undefined {
+  return numberedNodes(root, 1_000)
+    .find((entry) => entry.part === part && !entry.node.type?.toLowerCase().startsWith('multipart/'))?.node
+}
+
+/**
+ * The fewest bytes this part can decode to, from its encoded size: what lets a too-big attachment
+ * be refused before a byte of it moves. A LOWER bound on purpose, so nothing that fits is refused:
+ * base64 with its line breaks decodes to about 0.73 of its size, quoted-printable to at least a third.
+ */
+export function decodedFloorOf(node: StructureNode): number {
+  const size = typeof node.size === 'number' && node.size > 0 ? node.size : 0
+  const encoding = node.encoding?.toLowerCase() ?? ''
+  if (encoding === 'base64') return Math.floor(size * 0.7)
+  if (encoding === 'quoted-printable') return Math.floor(size / 3)
+  // 7bit, 8bit and binary are the bytes themselves; a charset conversion of a text part can still
+  // shrink them (UTF-16 to UTF-8 halves it), so even this is halved.
+  return Math.floor(size / 2)
+}
+
+/** At most this many text parts and html parts each: a body read is a bounded number of FETCHes. */
+const BODY_PARTS_MAX = 8
+
+/**
+ * The message's OWN text and html parts, by part number, from BODYSTRUCTURE alone.
+ *
+ * What a message too big to download whole is read through: only these parts are fetched, so a
+ * mail carrying a 20 MB PDF still opens with its few KB of text. The rules are the ones a mail
+ * client reads a structure by (RFC 2046 and RFC 2387):
+ *
+ * - `multipart/alternative` offers the SAME content several ways: its best text and its best html
+ *   are kept, and the last of each kind is the best (RFC 2046 orders them by fidelity).
+ * - `multipart/related` is one document and its resources: only its root (the first part) is read,
+ *   so the images an html part points at by `cid:` are not fetched. They do not render on this path.
+ * - Every other multipart (`mixed`, `signed`, `report`...) is a sequence: its body parts are read in
+ *   order, which is how a client that splits text around an inline image sends one message.
+ * - An attachment (`isAttachmentNode`) and a forwarded `message/rfc822` are never the message's text.
+ *
+ * A single-part message has no part number on its root; IMAP calls that part `1`.
+ */
+export function bodyPartsOf(root: unknown): { text: string[]; html: string[] } {
+  const walk = (node: StructureNode | undefined, depth: number): { text: string[]; html: string[] } => {
+    const none = { text: [], html: [] }
+    if (!node || depth > 16) return none
+    const type = node.type?.toLowerCase() ?? ''
+    if (type === 'message/rfc822') return none
+    if (type.startsWith('multipart/')) {
+      const children = (node.childNodes ?? []).map((child) => walk(child, depth + 1))
+      if (type === 'multipart/alternative') {
+        const best = (kind: 'text' | 'html') => [...children].reverse().find((one) => one[kind].length > 0)?.[kind] ?? []
+        return { text: best('text'), html: best('html') }
+      }
+      if (type === 'multipart/related') return children[0] ?? none
+      return { text: children.flatMap((one) => one.text), html: children.flatMap((one) => one.html) }
+    }
+    if (isAttachmentNode(node)) return none
+    const part = node.part ?? (depth === 0 ? '1' : undefined)
+    if (!part) return none
+    if (type === 'text/plain') return { text: [part], html: [] }
+    if (type === 'text/html') return { text: [], html: [part] }
+    return none
+  }
+  const found = walk(root as StructureNode | undefined, 0)
+  return { text: found.text.slice(0, BODY_PARTS_MAX), html: found.html.slice(0, BODY_PARTS_MAX) }
 }
 
 /**

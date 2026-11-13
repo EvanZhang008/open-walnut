@@ -130,8 +130,27 @@ export interface ImapClient {
    * no folder by that name yet (Gmail makes a label). Never deletes or renames anything.
    */
   mailboxCreate?(path: string | string[]): Promise<unknown>
+  /**
+   * One BODYSTRUCTURE part, DECODED, as a stream: imapflow undoes the transfer encoding (base64,
+   * quoted-printable), unwraps format=flowed and converts a text part's charset to UTF-8; an
+   * attachment's bytes are left as they are. `maxBytes` stops the FETCH loop once that many decoded
+   * bytes arrived, so a cap bounds the download and not only what is kept. `chunkSize` is how much one
+   * FETCH asks for (64 KB by default: a 2 MB part is 32 round trips at that size).
+   *
+   * Optional in this structural slice: only a big body and an attachment read use it. imapflow answers
+   * `{}` (no `content`) when no folder is open or the server returned nothing for the part.
+   */
+  download?(range: string, part?: string, options?: { uid?: boolean; maxBytes?: number; chunkSize?: number }): Promise<{
+    meta?: { contentType?: string; charset?: string; filename?: string; disposition?: string }
+    content?: ImapDownloadStream
+  }>
   on(event: string, listener: (payload: unknown) => void): unknown
   removeAllListeners?(event?: string): unknown
+}
+
+/** The decoded part as imapflow hands it over: a Node Readable, read here only by `for await`. */
+export interface ImapDownloadStream extends AsyncIterable<Buffer | Uint8Array> {
+  destroy(error?: Error): unknown
 }
 
 export interface ImapConnectOptions {
@@ -159,6 +178,9 @@ export function setImapClientFactory(fake: ImapClientFactory | null): void {
     return new ImapFlow(options) as unknown as ImapClient
   })
 }
+
+/** The codes `providerError` raises in this provider: `toProviderError` never re-reads one of them. */
+const PROVIDER_CODES = ['auth', 'unreachable', 'too-large', 'not-found', 'unsupported', 'invalid'] as const
 
 export interface ImapError extends Error {
   code: ProviderErrorCode
@@ -217,7 +239,8 @@ export function toProviderError(error: unknown, what: string): ImapError {
     serverResponseCode?: unknown
   } | null
   const existing = raw?.code
-  if (existing === 'auth' || existing === 'unreachable' || existing === 'too-large' || existing === 'not-found') {
+  // A code this provider raised itself, inside a command, is already an answer and passes through.
+  if (typeof existing === 'string' && (PROVIDER_CODES as readonly string[]).includes(existing)) {
     return error as ImapError
   }
   const message = error instanceof Error ? error.message : String(error)
@@ -243,6 +266,45 @@ export function toProviderError(error: unknown, what: string): ImapError {
   const said = refusal ? ` The server answered ${refusal.status}${refusal.text ? `: ${refusal.text}` : '.'}` : ''
   return providerError('unreachable', `The mail server could not be reached for ${what}. ${message}${said}`)
 }
+
+/**
+ * SELECT one mailbox, translating "the server will not open this one" into `not-found`.
+ *
+ * Every IMAP account has folders it lists but will not select. Gmail's `[Gmail]` namespace node is
+ * one, and so is any label whose only reason to exist is that a nested label lives under it: LIST
+ * reports them (RFC 5258 calls them `\Noselect`), SELECT answers `NO`. Without this the refusal was
+ * mapped as `unreachable`, which is a claim about the NETWORK, and two mechanisms built for network
+ * faults then fired on a healthy connection: the pool dropped the account's socket into a reconnect
+ * backoff, and the sweep treated it as this account being down.
+ *
+ * `not-found` is the code the contract already has for "that container is not there", and both
+ * layers above already do the right thing with it: the pool passes it through without touching the
+ * connection, and the sync loop marks the container done and moves to the next folder.
+ */
+export async function openMailbox(
+  client: Pick<ImapClient, 'mailboxOpen'>,
+  path: string,
+): Promise<ImapMailboxInfo> {
+  try {
+    return await client.mailboxOpen(path)
+  } catch (error) {
+    const refused = serverRefusal(error)
+    if (!refused) throw error
+    // A NO can also be the SIGN-IN being rejected, and that answer outranks this one: the two send
+    // the human to opposite places, and only the credential reading ever asks them for a password.
+    // Deciding that is `toProviderError`'s job, so it gets asked first rather than second-guessed.
+    const mapped = toProviderError(error, `the folder "${path}"`)
+    if (mapped.code === 'auth') throw mapped
+    throw providerError(
+      'not-found',
+      `The mail server will not open the folder "${path}". It answered ${refused.status}`
+      + `${refused.text ? `: ${refused.text}` : '.'}`,
+    )
+  }
+}
+
+/** The folder's UIDVALIDITY changed since the handle was made: its UIDs may name other mail now. */
+export const FOLDER_RESET = 'This folder was reset on the mail server; the mail is looked at again after the next check.'
 
 function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -476,7 +538,9 @@ export class ImapConnection {
   private async fail(error: unknown, what: string): Promise<ImapError> {
     const mapped = toProviderError(error, what)
     const detail = mapped.message.slice(0, 300)
-    if (mapped.code === 'too-large' || mapped.code === 'not-found') return mapped
+    // An answer about one message (too big, gone, not something this server can do) says nothing
+    // about the socket, which is kept.
+    if (mapped.code === 'too-large' || mapped.code === 'not-found' || mapped.code === 'unsupported' || mapped.code === 'invalid') return mapped
     if (mapped.code === 'auth') {
       // Nothing is retried: the credential is wrong until a human changes it, and the socket is
       // dropped so a later attempt starts from a clean LOGIN with whatever is stored then.
@@ -557,19 +621,36 @@ export class ImapPool {
     await Promise.all(all.map((connection) => connection.dispose().catch(() => undefined)))
   }
 
+  /**
+   * A connection of this account's own, OUTSIDE the pool, for one long read: an attachment.
+   *
+   * Not the shared one, for two reasons. A 30 MB download holds a connection for as long as it runs,
+   * and on the shared gate every poll, body read and flag change of the account would queue behind it.
+   * And a download the browser gave up on has to STOP, which on IMAP means closing the socket: a FETCH
+   * in flight cannot be cancelled, and closing the shared socket would cost the account its IDLE watch
+   * and a reconnect. This one is the caller's to dispose, which is what ends the download.
+   */
+  async detached(accountId: string): Promise<ImapConnection> {
+    return this.build(accountId)
+  }
+
   private async create(accountId: string): Promise<ImapConnection> {
+    const connection = await this.build(accountId)
+    this.connections.set(accountId, connection)
+    return connection
+  }
+
+  private async build(accountId: string): Promise<ImapConnection> {
     const settings = await this.deps.settings(accountId)
     if (!settings) {
       throw providerError('not-found', `No IMAP account "${accountId}" is configured on this box.`)
     }
-    const connection = new ImapConnection({
+    return new ImapConnection({
       accountId,
       settings,
       password: () => this.deps.password(accountId),
       log: this.deps.log,
       ...(this.deps.commandTimeoutMs !== undefined ? { commandTimeoutMs: this.deps.commandTimeoutMs } : {}),
     })
-    this.connections.set(accountId, connection)
-    return connection
   }
 }
