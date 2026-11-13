@@ -35,6 +35,7 @@ import path from 'node:path'
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { draftComposer, draftCwdPill, draftPanel, draftSend, loadHome, openDraft, REAL_PANEL, seedColumns } from './draft-helpers'
 import { backToDevices, openWay } from './devices-ways-helpers'
+import { goToSessionFolder } from './todo-panel-helpers'
 
 const SHOTS = process.env.CLOUD_HOST_SHOTS ?? path.join(os.tmpdir(), 'walnut-cloud-host-shots')
 const CLOUD = '__cloudbox__'
@@ -352,6 +353,9 @@ test('a file still arriving on a slow link: the viewer says it is loading from C
   await expect(column).toBeVisible({ timeout: 60_000 })
   await column.locator('.session-action-chip').filter({ hasText: 'Files' }).click()
   const explorer = column.locator('.session-file-explorer')
+  // Files opens on the host's HOME; the file sits in the session's folder.
+  await expect(explorer).toBeVisible({ timeout: 60_000 })
+  await goToSessionFolder(explorer)
   const row = explorer.locator('.sfe-name', { hasText: name })
   await expect(row).toBeVisible({ timeout: 60_000 })
   await setLink('slow', { ms: 50, bps: 8 * 1024 })
@@ -406,6 +410,9 @@ test('a ⌘S save and a new folder nobody answers: plain words when the browser 
   const column = page.locator(`${REAL_PANEL}[data-session-id="${cloudSessionId}"]`)
   await expect(column).toBeVisible({ timeout: 90_000 })
   await column.locator('.session-action-chip').filter({ hasText: 'Files' }).click({ timeout: 15_000 })
+  const explorer = column.locator('.session-file-explorer')
+  await expect(explorer).toBeVisible({ timeout: 60_000 })
+  await goToSessionFolder(explorer)
   const row = column.locator('.sfe-name').filter({ hasText: name }).first()
   await expect(row).toBeVisible({ timeout: 90_000 })
   await row.click()
