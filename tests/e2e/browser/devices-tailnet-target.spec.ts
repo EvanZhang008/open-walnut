@@ -228,13 +228,18 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await expect(ts.locator('.remote-access-step[data-step="mac"]')).toContainText('Get Tailscale from the App Store, then come back here.')
   })
 
-  test('cloud companion: the line stays hidden even if the field comes through', async ({ page }) => {
-    // A companion console: /api/config says cloud, the only target is the box itself.
+  // A companion console, as a current companion answers /api/config (a replica with the public
+  // door) and as an older one does (only `cloud: true`, no role or capability list).
+  const COMPANION_CONFIG: Array<[string, (body: Record<string, unknown>) => Record<string, unknown>]> = [
+    ['current', (body) => ({ ...body, cloud: true, role: 'replica', serverCapabilities: ['public-door', 'bridge-door', 'cloud-exec', 'backup-leader'] })],
+    ['older', ({ role: _role, serverCapabilities: _caps, ...body }) => ({ ...body, cloud: true })],
+  ]
+  for (const [age, configOf] of COMPANION_CONFIG) test(`cloud companion (${age}): the line stays hidden even if the field comes through`, async ({ page }) => {
+    // The only target is the box itself.
     await page.route((url) => url.pathname === '/api/config', async (route) => {
       if (route.request().method() !== 'GET') return route.continue()
       const res = await route.fetch()
-      const body = (await res.json()) as Record<string, unknown>
-      return json(route, { ...body, cloud: true })
+      return json(route, configOf((await res.json()) as Record<string, unknown>))
     })
     await mockDevices(page, {
       targets: [{ kind: 'cloud', origin: 'https://walnut.example.com', label: 'This server' }],
