@@ -32,7 +32,12 @@ const hostFixtureSpecs = fs.readdirSync(browserDir)
   .map((f) => `**/${f}`)
 // Specs with their own config and fixture (replica, cloud host, host alone, ...).
 // Every project names them again: a project's testIgnore replaces the top-level one.
-const sideSpecs = sideConfigSpecs(browserDir)
+// A `*.local.spec.ts` is a person's own walk-through (a demo video, a one-off check) and stays
+// out of git (.gitignore); a CI run never runs one, a file committed by mistake included
+// (2026-11-13: zz-approval-demo.local.spec.ts, swept into a commit, ran its 240 s demo to a
+// timeout on every CI run).
+const localSpecs = process.env.CI ? ['**/*.local.spec.ts'] : []
+const sideSpecs = [...sideConfigSpecs(browserDir), ...localSpecs]
 
 export default defineConfig({
   testDir: 'tests/e2e/browser',

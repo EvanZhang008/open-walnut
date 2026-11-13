@@ -135,5 +135,7 @@ node_trace.*.log
 /.*-tmp.*
 /verify-*-tmp.mjs
 /verify-*.local.mjs
+# A person's own Playwright walk-through (playwright.config.ts keeps CI from running one).
+tests/e2e/browser/*.local.spec.ts
 /err_*.txt
 /\?/
