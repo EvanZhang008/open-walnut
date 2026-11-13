@@ -56,7 +56,7 @@ struct RoutinesView: View {
     @State private var openFolds = Set<String>()
     @State private var editing: EditTarget?
     /// The task "Open task" shows, the way a task link opens one elsewhere in the app.
-    @State private var openedTask: InboxTaskDestination?
+    @State private var openedTask: TaskOpenTarget?
     /// A row to bring into view once the list has laid it out (opened, or just created).
     @State private var scrollRequest: ScrollRequest?
     /// The List's scroll view, and where each row was last laid out on screen: what keeps
@@ -76,7 +76,7 @@ struct RoutinesView: View {
     /// The facts' label column: "Last check", the longest label, at the text size.
     @ScaledMetric(relativeTo: .subheadline) private var factLabelWidth: CGFloat = 80
     /// Room above a group's first row for its header when a row is scrolled to.
-    @ScaledMetric(relativeTo: .subheadline) private var headerRoom: CGFloat = 40
+    @ScaledMetric(relativeTo: .title3) private var headerRoom: CGFloat = 50
     /// The gap between a group's name and its count: 6 at the default size, wider with
     /// the text ("Global6" at the largest size, QA).
     @ScaledMetric(relativeTo: .subheadline) private var headerGap: CGFloat = 6
@@ -276,7 +276,7 @@ struct RoutinesView: View {
             }
         }
         .sheet(item: $openedTask) { destination in
-            InboxTaskSheet(destination: destination)
+            TaskSessionSheet(target: destination)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
@@ -364,20 +364,28 @@ struct RoutinesView: View {
         .padding(.bottom, 6)
     }
 
-    /// The bordered buttons' words: the tint, a step darker (lighter in dark mode), so
-    /// they read at 4.5:1 on their own fill (the plain tint read 4.14:1 in dark).
+    /// The buttons' words: the tint, a step darker (lighter in dark mode), on their own
+    /// fill: 6:1 light, 8.8:1 dark (dark was 7:1 and still read dim, 2026-11-05 review).
     static let actionText = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0xE2 / 255, green: 0xB4 / 255, blue: 0x7E / 255, alpha: 1)
+            ? UIColor(red: 0xF0 / 255, green: 0xCC / 255, blue: 0x9C / 255, alpha: 1)
             : UIColor(red: 0x7A / 255, green: 0x4A / 255, blue: 0x1F / 255, alpha: 1)
     })
 
     /// Delete's word on its red wash: the danger text, lighter in dark mode, where the
-    /// danger text read 4.32:1 on the button's fill (QA); about 7:1 dark, 5.8:1 light.
+    /// danger text read 4.32:1 on the button's fill (QA); 8.8:1 dark, 5.8:1 light.
     static let deleteText = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0xFF / 255, green: 0x9A / 255, blue: 0x94 / 255, alpha: 1)
+            ? UIColor(red: 0xFF / 255, green: 0xB8 / 255, blue: 0xB3 / 255, alpha: 1)
             : UIColor(red: 0xB0 / 255, green: 0x12 / 255, blue: 0x18 / 255, alpha: 1)
+    })
+
+    /// A switch that is on: the tint, deeper in dark mode, where the white knob on the
+    /// light tint read 2.6:1; 4.7:1 there (3.6:1 against the card), 5.8:1 light.
+    static let switchTint = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0x9A / 255, green: 0x6A / 255, blue: 0x35 / 255, alpha: 1)
+            : UIColor(red: 0x8B / 255, green: 0x5A / 255, blue: 0x2B / 255, alpha: 1)
     })
 
     /// How far a group header's button reaches past the header's margins on each side.
@@ -393,8 +401,10 @@ struct RoutinesView: View {
         let isFolded = folded.contains(group.id)
         // Colors, not hierarchical styles: a section header draws its content in the
         // secondary style, so `.primary` there came out grey.
+        // A size above the rows' names, semibold: the groups are the page's structure, and
+        // at the rows' caption size they read as one more caption (2026-11-05 review).
         let name = Text(group.name)
-            .font(.subheadline.weight(.semibold))
+            .font(.title3.weight(.semibold))
             .foregroundStyle(Color.primary)
         let counts = HStack(spacing: 6) {
             Text("\(group.routines.count)")
@@ -418,11 +428,14 @@ struct RoutinesView: View {
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
+                    // Beside the name at every size, never the largest thing on the line.
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
                     .rotationEffect(.degrees(isFolded ? 0 : 90))
                     .foregroundStyle(Theme.secondaryOnCard)
                     .accessibilityHidden(true)
-                // One line while it fits; else the counts go under the name, whole.
+                // One line while it fits; else the counts go under the name, lined up with
+                // it, whole: the chevron and the name stay on the first line.
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .firstTextBaseline, spacing: headerGap) { name.lineLimit(1); counts }
                     VStack(alignment: .leading, spacing: 2) { name; counts }
@@ -430,6 +443,8 @@ struct RoutinesView: View {
                 Spacer(minLength: 0)
             }
             .textCase(nil)
+            // A little more room above a group than between its rows.
+            .padding(.top, 6)
             // The whole width folds, the empty right end too: the button reaches out over
             // the header's own margins (the list's trailing margin left the right end dead,
             // QA; a header ignores listRowInsets), and the words keep their place by as
@@ -536,13 +551,7 @@ struct RoutinesView: View {
                         // and a limit lifted on open pushed the line under it down 22pt (QA).
                         .lineLimit(ax ? 4 : 2)
                         .fixedSize(horizontal: false, vertical: true)
-                    // A wrap never starts a line with the dot: it stays with what is before it.
-                    (flag(job, health) + Text(shownTiming(job))
-                        .foregroundStyle(Theme.secondaryOnCard))
-                        .font(.footnote)
-                        // Wraps rather than cut: how often and when next are the line's point
-                        // ("Every 15 min, 9 AM to 5 PM, weekday…" lost both, QA).
-                        .fixedSize(horizontal: false, vertical: true)
+                    timingLine(job, health)
                 }
                 Spacer(minLength: 0)
                 // It opens: the console's "›", turned down while open.
@@ -563,13 +572,34 @@ struct RoutinesView: View {
         .accessibilityIdentifier("routines.row.\(job.id)")
     }
 
-    /// The row's timing as drawn: a wrap never starts a line with "·", and never splits
-    /// when it runs next ("next in" / "7 min").
-    private func shownTiming(_ job: RoutineJob) -> String {
-        let parts = RoutineGroups.rowTimingParts(job, now: AppClock.now())
+    /// The closed row's timing: one line, how often in its short form ("Weekdays, every
+    /// 15 min"), and when next kept whole; a long cadence is cut, never the next run.
+    /// The full words are in the opened row's When (2026-11-05 review: a long cron took
+    /// three lines and the rows went uneven). At accessibility sizes it wraps, since one
+    /// line there holds two words.
+    @ViewBuilder
+    private func timingLine(_ job: RoutineJob, _ health: RoutineHealth) -> some View {
+        let parts = RoutineGroups.rowTimingParts(job, now: AppClock.now(), brief: true)
         let how = parts.how.replacingOccurrences(of: " · ", with: "\u{00A0}· ")
-        guard let next = parts.next else { return how }
-        return "\(how)\u{00A0}· \(next.replacingOccurrences(of: " ", with: "\u{00A0}"))"
+        let next = parts.next.map { "\u{00A0}· \($0.replacingOccurrences(of: " ", with: "\u{00A0}"))" }
+        if typeSize.isAccessibilitySize {
+            (flag(job, health) + Text(how + (next ?? "")).foregroundStyle(Theme.secondaryOnCard))
+                .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                (flag(job, health) + Text(how).foregroundStyle(Theme.secondaryOnCard))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let next {
+                    Text(next).foregroundStyle(Theme.secondaryOnCard)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .layoutPriority(1)
+                }
+            }
+            .font(.footnote)
+        }
     }
 
     private func toggle(_ job: RoutineJob) -> some View {
@@ -578,6 +608,7 @@ struct RoutinesView: View {
             set: { _ in Task { await toggle(job) } }
         ))
         .labelsHidden()
+        .tint(Self.switchTint)
         .disabled(busyIds.contains(job.id))
         .accessibilityLabel(job.enabled ? "Pause \(job.name)" : "Resume \(job.name)")
         .accessibilityIdentifier("routines.toggle.\(job.id)")
@@ -620,7 +651,7 @@ struct RoutinesView: View {
             facts(job, now: now)
             if let error = RoutineGroups.errorText(job) { errorBox(job, error) }
             if let sends = job.executor?.sends {
-                fold("sends", job, title: job.check != nil ? "What it sends when it fires" : "What it sends when it runs") {
+                fold("sends", job, title: job.check != nil ? "What it sends when the check finds something" : "What it sends when it runs") {
                     Text(sends)
                         .font(.footnote.monospaced())
                         .fixedSize(horizontal: false, vertical: true)
@@ -711,7 +742,7 @@ struct RoutinesView: View {
         // "Show more" hid nothing but the next step (QA, accessibility sizes).
         let folds = head.more
         return VStack(alignment: .leading, spacing: 4) {
-            Text(full ? error.message : head.head)
+            Text(RoutineGroups.urlBreaks(full ? error.message : head.head))
                 // An old failure it has been fixed for reads quiet, as the console's note.
                 .foregroundStyle(error.past ? Theme.secondaryOnCard : Theme.dangerText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -727,9 +758,11 @@ struct RoutinesView: View {
                         if full { openFolds.remove(key) } else { openFolds.insert(key) }
                     }
                 } label: {
+                    // The accent, underlined: it reads as a link, not as more of the red text.
                     Text(full ? "Show less" : "Show full error")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Self.actionText)
+                        .underline()
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
                 }
@@ -810,7 +843,7 @@ struct RoutinesView: View {
     private func actions(_ job: RoutineJob) -> some View {
         // Small capsules close together: the four fit on one line at 390pt (Delete sat alone
         // on a second line and read as a heavier step, 2026-11-04 review).
-        RowOrColumn(spacing: 6, column: typeSize.isAccessibilitySize) {
+        RowOrColumn(spacing: 6) {
             // A paused trigger is disarmed on its daemon; Resume is the way to check it
             // again, and a stopped one offers it here (its State says why it stopped).
             if job.enabled || job.check == nil {
@@ -835,7 +868,7 @@ struct RoutinesView: View {
             // "Open task").
             if let task = RoutineGroups.currentTask(job) {
                 Button {
-                    openedTask = InboxTaskDestination(id: task, title: job.owner?.taskId == task ? job.owner?.title : nil)
+                    openedTask = TaskOpenTarget(id: task, title: job.owner?.taskId == task ? job.owner?.title : nil)
                 } label: {
                     Text("Open task").foregroundStyle(Self.actionText)
                 }
@@ -1141,36 +1174,53 @@ struct RowActionStyle: ButtonStyle {
     }
 }
 
-/// Its children at their whole width, side by side, wrapping onto the next line when
-/// the line is full (or one under another always, `column`). A button is never cut, and
-/// each is drawn once, unlike ViewThatFits; four buttons fit in two lines, not four.
+/// Its children at their whole width: all on one line when they fit; else two to a line
+/// (one, when two do not fit), so four buttons make two even lines and the last one
+/// never sits alone under three (2026-11-05 review: Delete fell to a line of its own at
+/// XXL). A button is never cut, and each is drawn once, unlike ViewThatFits.
 struct RowOrColumn: Layout {
     var spacing: CGFloat = 10
-    var column = false
 
     /// Each child's place, from the top leading corner, and the size they take.
     private func arrange(_ subviews: Subviews, width: CGFloat) -> (places: [CGPoint], sizes: [CGSize], size: CGSize) {
-        var places: [CGPoint] = []
-        var sizes: [CGSize] = []
-        var x: CGFloat = 0, y: CGFloat = 0, lineHeight: CGFloat = 0, widest: CGFloat = 0
-        for subview in subviews {
+        let sizes: [CGSize] = subviews.map { subview in
             var size = subview.sizeThatFits(.unspecified)
             if size.width > width {
                 size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
                 size.width = min(size.width, width)
             }
-            if x > 0, column || x + size.width > width {
-                x = 0
-                y += lineHeight + spacing
-                lineHeight = 0
-            }
-            places.append(CGPoint(x: x, y: y))
-            sizes.append(size)
-            x += size.width + spacing
-            lineHeight = max(lineHeight, size.height)
-            widest = max(widest, x - spacing)
+            return size
         }
-        return (places, sizes, CGSize(width: widest, height: y + lineHeight))
+        let total = sizes.reduce(0) { $0 + $1.width } + spacing * CGFloat(max(0, sizes.count - 1))
+        // The lines, as index ranges.
+        var lines: [[Int]] = []
+        if total <= width {
+            lines = [Array(sizes.indices)]
+        } else {
+            var i = 0
+            while i < sizes.count {
+                if i + 1 < sizes.count, sizes[i].width + spacing + sizes[i + 1].width <= width {
+                    lines.append([i, i + 1])
+                    i += 2
+                } else {
+                    lines.append([i])
+                    i += 1
+                }
+            }
+        }
+        var places = Array(repeating: CGPoint.zero, count: sizes.count)
+        var y: CGFloat = 0, widest: CGFloat = 0
+        for (n, line) in lines.enumerated() {
+            var x: CGFloat = 0
+            let height = line.map { sizes[$0].height }.max() ?? 0
+            for index in line {
+                places[index] = CGPoint(x: x, y: y)
+                x += sizes[index].width + spacing
+            }
+            widest = max(widest, x - spacing)
+            y += height + (n < lines.count - 1 ? spacing : 0)
+        }
+        return (places, sizes, CGSize(width: widest, height: y))
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {

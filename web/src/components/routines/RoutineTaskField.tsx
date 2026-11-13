@@ -90,6 +90,7 @@ export function RoutineTaskField({ id, value, onChange }: { id: string; value: s
       )}
       {listing && (<>
       <input
+        data-no-draft="search"
         id={id}
         autoFocus={choosing}
         type="search"

@@ -976,10 +976,12 @@ jobs:
   # tests, after 12 minutes of boot and build). ios-native/tests/ui/ci-shard.py deals every
   # UI class with tests that IOS_CI_SKIP_UI does not leave out to a shard, weighed by the
   # time CI measured (ios-native/tests/ui/ci-shard-times.tsv), so a new class needs no list.
-  # Four shards of about 18 minutes of tests each: the third of three ran out of its 45 minute
+  # Five shards of about 18 minutes of tests each: the third of three ran out of its 45 minute
   # step (run 42831643140: 12 to 15 minutes of build and boot before the first test, then
-  # 30 minutes of tests). macOS runners are scarce (five at a time, shared with the
-  # rehearsals), so on a push the job holds two, as it did with one UI leg.
+  # 30 minutes of tests), and the Routines UI tests put four at 23 minutes each, past what
+  # that step holds. macOS runners are scarce (five at a time, shared with the rehearsals),
+  # so on a push the job holds two, as it did with one UI leg; a pull request asks for every
+  # leg at once and the sixth waits for a runner.
   ios:
     name: iOS app (${{ matrix.layer }}${{ matrix.shard && format(' {0}/{1}', matrix.shard, matrix.shards) || '' }})
     runs-on: macos-26
@@ -987,14 +989,15 @@ jobs:
     continue-on-error: ${{ matrix.layer == 'ui' }}
     strategy:
       fail-fast: false
-      max-parallel: ${{ github.event_name == 'push' && 2 || 5 }}
+      max-parallel: ${{ github.event_name == 'push' && 2 || 6 }}
       matrix:
         include:
           - layer: unit
-          - { layer: ui, shard: 1, shards: 4 }
-          - { layer: ui, shard: 2, shards: 4 }
-          - { layer: ui, shard: 3, shards: 4 }
-          - { layer: ui, shard: 4, shards: 4 }
+          - { layer: ui, shard: 1, shards: 5 }
+          - { layer: ui, shard: 2, shards: 5 }
+          - { layer: ui, shard: 3, shards: 5 }
+          - { layer: ui, shard: 4, shards: 5 }
+          - { layer: ui, shard: 5, shards: 5 }
     # What this job leaves to the Mac (tests/scripts/ci-ios.test.ts keeps both lists whole):
     # the wall-clock budgets of the perf gates (a whole class, or the timed methods of
     # one whose other tests count work), which a shared runner misses by up to

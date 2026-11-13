@@ -178,8 +178,11 @@ final class RoutinesUITests: XCTestCase {
         XCTAssertEqual(element(app, "routines.errorNext.r-router").label, "Point it at an open task with Edit, or turn it off.")
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Every hour\nNext run")).firstMatch.exists,
                       "the opened row does not say when it runs next")
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "2[0-9]m ago · failed")).firstMatch.exists,
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "2[0-9]m ago")).firstMatch.exists,
                       "the last run is not shown")
+        // The box says it failed: the Last run fact only says when.
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "2[0-9]m ago · failed")).firstMatch.exists,
+                       "Last run says \"failed\" again under the red box")
         settle()
         shot("02-failing-row-open")
 
@@ -199,7 +202,7 @@ final class RoutinesUITests: XCTestCase {
         wait(for: [failed], timeout: 12)
         XCTAssertFalse(outcome.label.contains("Started"))
         XCTAssertEqual(store.ran, ["r-router"])
-        XCTAssertTrue(app.staticTexts["just now · failed"].waitForExistence(timeout: 5), "Last run did not update after Run now")
+        XCTAssertTrue(app.staticTexts["just now"].waitForExistence(timeout: 5), "Last run did not update after Run now")
         XCTAssertTrue(store.fetched.contains("r-router"), "Run now did not fetch the routine again")
         // The list brought what Run now said above the tab bar by itself.
         settle()
@@ -212,7 +215,7 @@ final class RoutinesUITests: XCTestCase {
         openTask.tap()
         // Its task is asked for and shown over the list.
         let asked = expectation(for: NSPredicate { _, _ in self.store.taskDetails.contains("t-home-ops") }, evaluatedWith: nil)
-        wait(for: [asked], timeout: 5)
+        wait(for: [asked], timeout: 15)
         settle()
         XCTAssertFalse(openTask.isHittable, "the task sheet did not open over the routine")
         shot("37-open-task")
@@ -259,6 +262,9 @@ final class RoutinesUITests: XCTestCase {
         app.buttons["routines.delete.r-backup"].tap()
         let confirm = app.buttons["Delete Routine"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        XCTAssertTrue(store.deleted.isEmpty, "Delete went through before it was confirmed")
+        settle()
+        shot("04a-delete-confirm")
         confirm.tap()
         let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: element(app, "routines.row.r-backup"))
         wait(for: [gone], timeout: 5)
@@ -313,6 +319,12 @@ final class RoutinesUITests: XCTestCase {
         settle()
         XCTAssertTrue(edit.isHittable)
         XCTAssertLessThanOrEqual(delete.frame.maxY, tabTop(app), "Delete is under the tab bar")
+        // Two even lines at this size: Run now and Edit, Open task and Delete.
+        let run = app.buttons["routines.run.r-router"]
+        let openTask = app.buttons["routines.openTask.r-router"]
+        XCTAssertEqual(edit.frame.midY, run.frame.midY, accuracy: 2, "Run now and Edit are not on one line")
+        XCTAssertEqual(delete.frame.midY, openTask.frame.midY, accuracy: 2, "Delete sits alone on its line")
+        XCTAssertGreaterThan(openTask.frame.minY, run.frame.maxY - 1, "the four are on one line at this size")
         shot("19-dark-xxl-actions")
         edit.tap()
         XCTAssertTrue(app.textFields["routines.editor.name"].waitForExistence(timeout: 5))
@@ -339,13 +351,13 @@ final class RoutinesUITests: XCTestCase {
         row.tap()
         let sendsFold = element(app, "routines.sendsFold.r-marina-1")
         XCTAssertTrue(sendsFold.waitForExistence(timeout: 5), "no fold for what it sends")
-        XCTAssertTrue(sendsFold.label.contains("What it sends when it fires"), sendsFold.label)
-        let checkFact = app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "\\$ sh check-pipeline.sh @ devbox\nLast check: [0-9]+m ago · failed")).firstMatch
-        XCTAssertTrue(checkFact.exists, "the Check fact does not say just \"failed\" (the box says why)")
-        XCTAssertTrue(element(app, "routines.error.r-marina-1").label.contains("exit 2: the pipeline page timed out"))
+        XCTAssertTrue(sendsFold.label.contains("What it sends when the check finds something"), sendsFold.label)
+        let checkFact = app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "Runs sh check-pipeline.sh on devbox\nLast check: [0-9]+m ago")).firstMatch
+        XCTAssertTrue(checkFact.exists, "the Check fact does not say what it runs and when it last checked (the box says it failed)")
+        XCTAssertTrue(element(app, "routines.error.r-marina-1").label.contains("exit code 2: the pipeline page timed out"))
         XCTAssertEqual(element(app, "routines.errorNext.r-marina-1").label, "Fix the check command with Edit.")
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "1×, last 9m ago · at most 6 a day")).firstMatch.exists,
-                      "no Fired fact with its daily budget")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "Woke its task once, 9 min ago · at most 6 a day")).firstMatch.exists,
+                      "no Activity fact in plain words with its daily budget")
         XCTAssertFalse(element(app, "routines.sends.r-marina-1").exists, "the fold starts open")
         reveal(app, sendsFold)
         sendsFold.tap()
@@ -361,8 +373,8 @@ final class RoutinesUITests: XCTestCase {
         historyFold.tap()
         let history = element(app, "routines.historyList.r-marina-1")
         XCTAssertTrue(history.waitForExistence(timeout: 5))
-        let first = history.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "check error: exit 2")).firstMatch
-        let last = history.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "quiet: the script said no")).firstMatch
+        let first = history.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "The check failed (exit code 2)")).firstMatch
+        let last = history.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Quiet: the check found nothing")).firstMatch
         XCTAssertTrue(first.exists && last.exists, "the history rows are missing")
         nudge(app, last)
         XCTAssertLessThan(first.frame.minY, last.frame.minY, "the history is not newest first")
@@ -457,8 +469,8 @@ final class RoutinesUITests: XCTestCase {
         stopped.tap()
         XCTAssertTrue(app.staticTexts["Stopped after 5 failed checks"].waitForExistence(timeout: 5))
         // Stopped after failed checks, so its last check failed (never "Not checked yet").
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", "Last check: 6m ago · failed")).firstMatch.exists,
-                      "the stopped trigger's last check does not say it failed")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", "Last check: 6m ago")).firstMatch.exists,
+                      "the stopped trigger's last check does not say when (the box says it failed)")
         XCTAssertTrue(element(app, "routines.error.r-marina-stopped").label.contains("exit 1: release.sh"))
         XCTAssertEqual(element(app, "routines.errorNext.r-marina-stopped").label, "Fix the check command with Edit, then Resume.")
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "ot checked yet")).firstMatch.exists)
@@ -834,7 +846,12 @@ final class RoutinesUITests: XCTestCase {
         reveal(app, edit)
         nudge(app, delete)
         settle()
-        XCTAssertGreaterThan(edit.frame.minY, run.frame.maxY - 1, "the buttons do not stack at this size")
+        // Two to a line where two fit, else one each: never three and Delete alone.
+        let openTask = app.buttons["routines.openTask.r-router"]
+        XCTAssertGreaterThan(openTask.frame.minY, run.frame.maxY - 1, "the buttons do not wrap at this size")
+        let paired = abs(delete.frame.midY - openTask.frame.midY) < 2
+        let stacked = edit.frame.minY > run.frame.maxY - 1 && delete.frame.minY > openTask.frame.maxY - 1
+        XCTAssertTrue(paired || stacked, "Delete sits alone under the others: run \(run.frame) edit \(edit.frame) open \(openTask.frame) delete \(delete.frame)")
         XCTAssertLessThanOrEqual(delete.frame.maxY, tabTop(app), "Delete is under the tab bar")
         shot("25-ax-actions")
 

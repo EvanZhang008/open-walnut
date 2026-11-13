@@ -272,6 +272,25 @@ struct RoutineEditorSheet: View {
                         .accessibilityIdentifier("routines.editor.name")
                 }
                 if draft.canEditTarget { taskSection }
+                // What it does before when: typed into with the keyboard up, it is in view
+                // without the form scrolling the Name label under the bar (2026-11-05 review).
+                if draft.canEditSends {
+                    Section {
+                        TextField("What should Walnut be told?", text: $draft.sends, axis: .vertical)
+                            .lineLimit(4...12)
+                            .accessibilityIdentifier("routines.editor.sends")
+                    } header: {
+                        Text(draft.isTrigger ? "What it sends when the check finds something" : "What it sends when it runs")
+                    } footer: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if job == nil { Text("Runs in Home Chat: these instructions go to Walnut's own chat.") }
+                            if !draft.problems.isEmpty {
+                                Text(draft.problems.joined(separator: " "))
+                                    .accessibilityIdentifier("routines.editor.problems")
+                            }
+                        }
+                    }
+                }
                 scheduleSection
                 if draft.isTrigger {
                     Section {
@@ -284,24 +303,7 @@ struct RoutineEditorSheet: View {
                     } header: {
                         Text("Check command")
                     } footer: {
-                        Text("Runs on \(hostName) each time; it fires when the command says so.")
-                    }
-                }
-                if draft.canEditSends {
-                    Section {
-                        TextField("What should Walnut be told?", text: $draft.sends, axis: .vertical)
-                            .lineLimit(4...12)
-                            .accessibilityIdentifier("routines.editor.sends")
-                    } header: {
-                        Text(draft.isTrigger ? "What it sends when it fires" : "What it sends when it runs")
-                    } footer: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if job == nil { Text("Runs in Home Chat: these instructions go to Walnut's own chat.") }
-                            if !draft.problems.isEmpty {
-                                Text(draft.problems.joined(separator: " "))
-                                    .accessibilityIdentifier("routines.editor.problems")
-                            }
-                        }
+                        Text("Runs on \(hostName) at each check; when the command says so, it wakes the task.")
                     }
                 }
             }
@@ -392,7 +394,7 @@ struct RoutineEditorSheet: View {
                         pick(hit)
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(hit.title)
+                            Text(AskProjectName.displayTitle(hit.title, project: hit.project))
                                 .foregroundStyle(Color.primary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Text(hit.place)
@@ -432,7 +434,7 @@ struct RoutineEditorSheet: View {
         let id = draft.target.trimmingCharacters(in: .whitespacesAndNewlines)
         VStack(alignment: .leading, spacing: 2) {
             if let task = currentTask, task.id == id {
-                Text(task.title)
+                Text(AskProjectName.displayTitle(task.title, project: task.project))
                     .font(.body.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 if task.isComplete {

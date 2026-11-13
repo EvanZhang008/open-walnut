@@ -143,7 +143,7 @@ describe('source guard: a child layer registers after its parent', () => {
   it('the store gates a layer on its parent, and the wrapper passes it through', () => {
     const store = read('hooks/usePhoneOverlayHistory.ts')
     expect(store).toMatch(/parentId\?:\s*string;/)
-    expect(store).toMatch(/const active = o\.open && phone && parentOpen;/)
+    expect(store).toMatch(/const active = o\.open && phone && parentOpen\b/)
     expect(store).toMatch(/isPhoneOverlayOpen\(parentId\)/)
     expect(read('components/sessions/phone-session-layer.tsx')).toMatch(/parentId\?:\s*string;/)
   })

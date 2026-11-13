@@ -819,7 +819,7 @@ svg.routine-row-chevron {
 }
 
 /* On a phone the Run with choices sit close: each is a 44 px target already. */
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation .routines-view .cron-form-radio-group {
     row-gap: 0;
     column-gap: 18px;

@@ -132,7 +132,8 @@ enum RoutineGroups {
 
     /// "Every 5 min", "Weekdays at 9:00 AM", "Once at Nov 8, 9:00 AM": how often. A cron
     /// with no words is "Custom schedule", or with `raw` "Custom: <its expression>".
-    static func cadence(_ schedule: RoutineJob.Schedule, raw: Bool = false, calendar: Calendar = .current) -> String {
+    static func cadence(_ schedule: RoutineJob.Schedule, raw: Bool = false, brief: Bool = false,
+                        calendar: Calendar = .current) -> String {
         switch schedule.kind {
         case "every":
             guard let everyMs = schedule.everyMs, everyMs > 0 else { return "Repeats" }
@@ -149,7 +150,10 @@ enum RoutineGroups {
             return "Once at \(date.formatted(date: .abbreviated, time: .shortened))"
         case "cron":
             guard let expr = schedule.expr else { return "On a schedule" }
-            let said = describeCron(expr, calendar: calendar) ?? (raw ? "Custom: \(expr)" : customSchedule)
+            let full = describeCron(expr, calendar: calendar)
+            // The closed row's line is one line: a long description gives way to its short form.
+            let short = brief && (full?.count ?? 0) > briefLimit ? briefCron(expr, calendar: calendar) : nil
+            let said = short ?? full ?? (raw ? "Custom: \(expr)" : customSchedule)
             // The hours are the schedule's own zone's: name it when it is not the phone's.
             guard let tz = schedule.tz, !tz.isEmpty, tz != calendar.timeZone.identifier else { return said }
             return "\(said) \(TimeZone(identifier: tz)?.abbreviation() ?? tz)"
@@ -263,6 +267,65 @@ enum RoutineGroups {
         return lead + " from \(from) to \(to)" + dayPart
     }
 
+    /// Longer than this, the closed row says a cron in its short form.
+    static let briefLimit = 30
+
+    /// A cron as the closed row says it, on one line: the days first, then the time or
+    /// how often ("Weekdays, every 15 min", "Mondays and days 1 to 7, 9:00 AM", "Hourly
+    /// at :15, 9 AM to 5 PM"). The opened row's When says it in full. Nil when there is no
+    /// short form (a month field, a stepped day of the month).
+    static func briefCron(_ expr: String, calendar: Calendar = .current) -> String? {
+        guard let parts = cronFields(expr), parts[3] == "*" else { return nil }
+        let minuteField = parts[0], hourField = parts[1], dom = parts[2], dow = parts[4]
+        func capital(_ s: String) -> String { s.prefix(1).uppercased() + s.dropFirst() }
+        var days: [String] = []
+        if dow != "*" {
+            guard let words = dayWords(dow) else { return nil }
+            days.append(capital(words))
+        }
+        if dom != "*" {
+            guard let words = monthDayWords(dom) else { return nil }
+            days.append(days.isEmpty ? capital(words) : words)
+        }
+        // Both day fields set: either one matches, as the server counts them.
+        let dayPart = days.joined(separator: " and ")
+        if let minute = Int(minuteField), (0...59).contains(minute), let hour = Int(hourField), (0...23).contains(hour) {
+            guard !dayPart.isEmpty, let at = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) else { return nil }
+            return "\(dayPart), \(timeText(at, calendar: calendar))"
+        }
+        let hours = range(hourField, 0...23)
+        let lead: String
+        if let minute = Int(minuteField), (0...59).contains(minute) {
+            if let n = step(hourField) {
+                guard (2...12).contains(n), 24 % n == 0 else { return nil }
+                lead = "every \(n) hours"
+            } else {
+                guard hourField == "*" || hours != nil else { return nil }
+                lead = String(format: "hourly at :%02d", minute)
+            }
+        } else {
+            guard hourField == "*" || hours != nil else { return nil }
+            if minuteField == "*" { lead = "every minute" } else if let n = step(minuteField), (2...30).contains(n), 60 % n == 0 {
+                lead = "every \(n) min"
+            } else { return nil }
+        }
+        if !dayPart.isEmpty { return "\(dayPart), \(lead)" }
+        guard let hours else { return nil }
+        return "\(capital(lead)), \(hourText(hours.lowerBound, calendar: calendar)) to \(hourText(hours.upperBound, calendar: calendar))"
+    }
+
+    /// The days of a cron's day-of-month field, short: "day 15", "days 1 to 7",
+    /// "days 1 and 15", "days 1, 10, 20"; nil for a step or another shape.
+    private static func monthDayWords(_ dom: String) -> String? {
+        if let day = Int(dom), (1...31).contains(day) { return "day \(day)" }
+        if let r = range(dom, 1...31) { return "days \(r.lowerBound) to \(r.upperBound)" }
+        let fields = dom.split(separator: ",")
+        let list = fields.compactMap { Int($0) }.filter { (1...31).contains($0) }
+        guard list.count >= 2, list.count == fields.count else { return nil }
+        if list.count == 2 { return "days \(list[0]) and \(list[1])" }
+        return "days " + list.map(String.init).joined(separator: ", ")
+    }
+
     /// "*/15" → 15.
     private static func step(_ field: String) -> Int? {
         guard field.hasPrefix("*/") else { return nil }
@@ -373,8 +436,8 @@ enum RoutineGroups {
     }
 
     /// How often, with "Checks" in front for a trigger: "Checks every 5 min".
-    static func often(_ job: RoutineJob, calendar: Calendar = .current) -> String {
-        let base = cadence(job.schedule, calendar: calendar)
+    static func often(_ job: RoutineJob, brief: Bool = false, calendar: Calendar = .current) -> String {
+        let base = cadence(job.schedule, brief: brief, calendar: calendar)
         return job.check != nil ? "Checks \(base.prefix(1).lowercased())\(base.dropFirst())" : base
     }
 
@@ -389,8 +452,11 @@ enum RoutineGroups {
     /// The row's line in its two halves: how often (with "Paused · " in front while
     /// quiet), and when next. The row keeps the second half on one line ("next in" and
     /// "7 min" split at XXL, QA).
-    static func rowTimingParts(_ job: RoutineJob, now: Date, calendar: Calendar = .current) -> (how: String, next: String?) {
-        let how = often(job, calendar: calendar)
+    /// `brief`: the cadence as the drawn row says it, on one line ("Weekdays, every 15
+    /// min"); without it the full words, for VoiceOver.
+    static func rowTimingParts(_ job: RoutineJob, now: Date, brief: Bool = false,
+                               calendar: Calendar = .current) -> (how: String, next: String?) {
+        let how = often(job, brief: brief, calendar: calendar)
         if !job.enabled {
             if isStopped(job) { return (how, nil) }
             return ("\(offLabel(job)) · \(how)", nil)
@@ -456,7 +522,7 @@ enum RoutineGroups {
             if failedInATaskItLeft(why, job) { return retargeted(job) }
             // The way out: the check is what failed (QA: the box said it again with none).
             let fix = isStopped(job) ? "Fix the check command with Edit, then Resume." : "Fix the check command with Edit."
-            return ErrorNote(why.isEmpty ? "The last check failed." : "The last check failed: \(nameTask(in: why, job))", fix)
+            return ErrorNote(why.isEmpty ? "The last check failed." : "The last check failed: \(plainExit(nameTask(in: why, job)))", fix)
         }
         let done = raw.firstMatch(of: /(?i)target task (\S+) is complete/)
         if failedInATaskItLeft(raw, job) { return retargeted(job) }
@@ -502,6 +568,26 @@ enum RoutineGroups {
         return (head, head != message.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// A text with each web address given places to break that add no hyphen: after a
+    /// "/" and before a "." or a "?", "&", "=" in it. A long address at the largest sizes
+    /// broke as "mail.example.-com" (2026-11-05 review), which reads and copies wrong.
+    static func urlBreaks(_ text: String) -> String {
+        let zwsp: Character = "\u{200B}"
+        return text.split(separator: " ", omittingEmptySubsequences: false).map { word -> String in
+            guard word.contains("://") || (word.contains("/") && word.contains(".")) else { return String(word) }
+            var out = ""
+            var previous: Character?
+            for ch in word {
+                if ".?&=".contains(ch), let p = previous, p != "/", p != zwsp { out.append(zwsp) }
+                out.append(ch)
+                previous = ch
+                if ch == "/" { out.append(zwsp); previous = zwsp }
+            }
+            // "https://" stays whole.
+            return out.replacingOccurrences(of: "/\u{200B}/\u{200B}", with: "//\u{200B}")
+        }.joined(separator: " ")
+    }
+
     /// The task a routine runs in now: its executor's target, else its owner's.
     static func currentTask(_ job: RoutineJob) -> String? {
         job.executor?.target ?? job.owner.flatMap { $0.taskId.isEmpty ? nil : $0.taskId }
@@ -522,7 +608,9 @@ enum RoutineGroups {
     }
 
     /// State (only while it is quiet), When, Runs, Task, then a trigger's Check and
-    /// Fired, or another routine's Last run (the console's RoutineRow).
+    /// Activity, or another routine's Last run (the console's RoutineRow). Under a red
+    /// box the last run or check only says when: the box says how it failed (the row's
+    /// flag, the table and the box said "failed" three times, 2026-11-05 review).
     static func facts(_ job: RoutineJob, now: Date, calendar: Calendar = .current) -> [Fact] {
         var rows: [Fact] = []
         if let quiet = quietFact(job, now: now) { rows.append(Fact(label: "State", value: quiet)) }
@@ -535,35 +623,57 @@ enum RoutineGroups {
         }
         if let check = job.check {
             var last = describeLastCheck(job.state?.lastCheck, now: now, short: boxSaysTheCheck(job))
+            if boxSaysTheCheck(job), errorText(job) != nil, let at = job.state?.lastCheck?.atMs {
+                last = ago(Date(timeIntervalSince1970: at / 1000), now: now)
+            }
             if last.hasPrefix("Not ") { last = "n" + last.dropFirst() }
             rows.append(Fact(label: "Check", value: "\(describeCheck(check))\nLast check: \(last)"))
             let budget = check.maxFiresPerDay.flatMap { $0 > 0 ? " · at most \($0) a day" : nil } ?? ""
-            rows.append(Fact(label: "Fired", value: describeFireTally(job.state, now: now) + budget))
-        } else if let line = lastRunLine(job.state, now: now) {
+            rows.append(Fact(label: "Activity", value: describeFireTally(job.state, now: now) + budget))
+        } else if let line = lastRunLine(job.state, now: now, whenOnly: errorText(job) != nil) {
             rows.append(Fact(label: "Last run", value: line))
         }
         return rows
     }
 
-    /// "2h ago · ok in 14s": a plain routine's last run; nil when it never ran.
-    static func lastRunLine(_ state: RoutineJob.State?, now: Date) -> String? {
+    /// "2h ago · ok in 14s": a plain routine's last run; nil when it never ran. With
+    /// `whenOnly` (a box under it says how it went) only "2h ago".
+    static func lastRunLine(_ state: RoutineJob.State?, now: Date, whenOnly: Bool = false) -> String? {
         guard let state, let last = state.lastRunDate else { return nil }
+        if whenOnly { return ago(last, now: now) }
         let outcome = state.lastStatus == "error" ? "failed" : state.lastStatus == "skipped" ? "skipped" : "ok"
         let took = (state.lastDurationMs ?? 0) >= 1000 ? " in \(Int(((state.lastDurationMs ?? 0) / 1000).rounded()))s" : ""
         return "\(ago(last, now: now)) · \(outcome)\(took)"
     }
 
-    /// A trigger's fires: "3×, last 2h ago", "Never yet" (the console's describeFireTally).
-    /// The server's count, else the daemon's counter, else the recorded rows; a fire
-    /// still being delivered is neither counted nor the latest.
+    /// How often a trigger woke its task, in plain words: "Woke its task once, 9 min ago",
+    /// "Woke its task 3 times, last 2 hours ago", "Has not woken its task yet" (the
+    /// console's describeFireTally said "3×, last 2h ago"). The server's count, else the
+    /// daemon's counter, else the recorded rows; a fire still being delivered is neither
+    /// counted nor the latest.
     static func describeFireTally(_ state: RoutineJob.State?, now: Date) -> String {
         let fires = state?.fireLog ?? []
         let landed = fires.filter { $0.delivery?.status != "retrying" }
         let count = state?.fireCount ?? state?.lastFireSeq ?? landed.count
         let retrying = fires.contains { $0.delivery?.status == "retrying" }
-        if count <= 0 { return retrying ? "Not yet, a delivery retrying" : "Never yet" }
-        let when = landed.compactMap(\.atMs).max().map { ", last \(ago(Date(timeIntervalSince1970: $0 / 1000), now: now))" } ?? ""
-        return "\(count)×\(when)\(retrying ? ", one delivery retrying" : "")"
+        if count <= 0 { return retrying ? "Not yet: a message to its task is still being sent" : "Has not woken its task yet" }
+        let last = landed.compactMap(\.atMs).max().map { agoWords(Date(timeIntervalSince1970: $0 / 1000), now: now) }
+        let times = count == 1 ? "once" : count == 2 ? "twice" : "\(count) times"
+        let when = last.map { count == 1 ? ", \($0)" : ", last \($0)" } ?? ""
+        return "Woke its task \(times)\(when)\(retrying ? "; one more message is still being sent" : "")"
+    }
+
+    /// "9 min ago", "2 hours ago", "3 days ago", "just now": `ago` in whole words.
+    static func agoWords(_ date: Date, now: Date) -> String {
+        let s = max(0, now.timeIntervalSince(date))
+        if s < 45 { return "just now" }
+        if s < 3600 { return "\(max(1, Int((s / 60).rounded()))) min ago" }
+        if s < 86_400 {
+            let h = Int((s / 3600).rounded())
+            return h == 1 ? "1 hour ago" : "\(h) hours ago"
+        }
+        let d = Int((s / 86_400).rounded())
+        return d == 1 ? "1 day ago" : "\(d) days ago"
     }
 
     /// How far to scroll so an opened row's details show (positive = down), given its
@@ -626,12 +736,13 @@ enum RoutineGroups {
         return note
     }
 
-    /// The check as one line: "$ sh check.sh @ devbox" (the console's describeCheck).
+    /// The check as one line, said: "Runs sh check.sh on devbox" (the console's
+    /// "$ sh check.sh @ devbox" was a bare prompt sign, 2026-11-05 review).
     static func describeCheck(_ check: RoutineJob.Check) -> String {
         let run = (check.run ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
         let short = run.count > 60 ? "\(run.prefix(60))…" : run
-        let host = check.host.flatMap { $0.isEmpty || $0 == "__local__" ? nil : $0 } ?? "local"
-        return "$ \(short) @ \(host)"
+        let host = check.host.flatMap { $0.isEmpty || $0 == "__local__" || $0 == "local" ? nil : $0 }
+        return "Runs \(short) \(host.map { "on \($0)" } ?? "on this computer")"
     }
 
     /// A trigger's "Last check" (most routines are triggers, and their last run says
@@ -642,17 +753,23 @@ enum RoutineGroups {
         switch last.outcome {
         case "fired":
             let n = last.items ?? 0
-            let what = n > 0 ? "fired, \(n) item\(n == 1 ? "" : "s")" : "fired"
+            let what = n > 0 ? "woke its task, \(n) item\(n == 1 ? "" : "s")" : "woke its task"
             if last.retryPending == true { return "\(when) · \(what), delivery retrying" }
             if last.error != nil { return "\(when) · \(what) but not delivered" }
             return "\(when) · \(what)"
         case "error":
             let msg = oneLine(last.error ?? "")
             guard !msg.isEmpty, !short else { return "\(when) · failed" }
-            return "\(when) · failed: \(msg.count > 80 ? "\(msg.prefix(80))…" : msg)"
+            return "\(when) · failed: \(plainExit(msg.count > 80 ? "\(msg.prefix(80))…" : msg))"
         default:
-            return "\(when) · \(last.reason == "rate-limited" ? "held by the fire budget" : "nothing new")"
+            return "\(when) · \(last.reason == "rate-limited" ? "held: it woke its task as often as allowed today" : "nothing new")"
         }
+    }
+
+    /// "exit 2: the page timed out" said plainly: "exit code 2: the page timed out".
+    static func plainExit(_ text: String) -> String {
+        guard let m = text.firstMatch(of: /^exit (\d+)(.*)$/) else { return text }
+        return "exit code \(m.1)\(m.2)"
     }
 
     private static func oneLine(_ text: String) -> String {
@@ -712,20 +829,28 @@ enum RoutineGroups {
     }
 
     private static func auditVerdict(_ entry: RoutineJob.State.AuditEntry) -> String {
+        // In plain words (2026-11-05 review: "check error: exit 2", "fired, 1 new item").
         if entry.outcome == "error" {
-            let msg = oneLine(entry.error ?? "check failed")
-            return "check error: \(msg.count > 90 ? "\(msg.prefix(90))…" : msg)"
+            let msg = oneLine(entry.error ?? "")
+            guard !msg.isEmpty else { return "The check failed" }
+            let shown = msg.count > 90 ? "\(msg.prefix(90))…" : msg
+            if let m = shown.firstMatch(of: /^exit (\d+):?\s*(.*)$/) {
+                let rest = String(m.2)
+                return "The check failed (exit code \(m.1))\(rest.isEmpty ? "" : ": \(rest)")"
+            }
+            return "The check failed: \(shown)"
         }
         if entry.outcome == "quiet" {
-            if entry.reason == "rate-limited" { return "held: fire budget used up, it fires on a later check" }
-            if entry.reason == "all-seen" { return "quiet: nothing new (all items already seen)" }
-            return "quiet: the script said no"
+            if entry.reason == "rate-limited" { return "Held: it woke its task as often as allowed today; a later check will" }
+            if entry.reason == "all-seen" { return "Quiet: nothing new (all items already seen)" }
+            return "Quiet: the check found nothing"
         }
         let n = entry.items ?? 0
         let newItems = "\(n) new item\(n == 1 ? "" : "s")"
-        let what = entry.manual == true ? "run now"
-            : (entry.coalesced ?? 1) > 1 ? "\(entry.coalesced ?? 1) fires, \(newItems)"
-            : n > 0 ? "fired, \(newItems)" : "fired"
+        let coalesced = entry.coalesced ?? 1
+        let what = entry.manual == true ? "Run now"
+            : coalesced > 1 ? "Woke its task \(coalesced == 2 ? "twice" : "\(coalesced) times"), \(newItems)"
+            : n > 0 ? "Woke its task, \(newItems)" : "Woke its task"
         guard let d = entry.delivery else { return what }
         let tries = (entry.attempts ?? 1) > 1 ? " after \(entry.attempts ?? 1) tries" : ""
         if d.status == "retrying" { return "\(what) → delivery retrying\(tries)" }

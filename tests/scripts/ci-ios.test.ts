@@ -419,8 +419,9 @@ describe('the UI shards of the iOS job', () => {
   })
 
   it('holds two macOS runners on a push, as one UI leg did, and every leg on a pull request', () => {
-    expect(job.strategy?.['max-parallel']).toBe("${{ github.event_name == 'push' && 2 || 5 }}")
-    expect(job.strategy!.matrix.include).toHaveLength(5)
+    // The pull request's number is every leg: the unit leg and each UI shard.
+    expect(job.strategy?.['max-parallel']).toBe(`\${{ github.event_name == 'push' && 2 || ${job.strategy!.matrix.include.length} }}`)
+    expect(job.strategy!.matrix.include).toHaveLength(1 + uiShards())
   })
 })
 

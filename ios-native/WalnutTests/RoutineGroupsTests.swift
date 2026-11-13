@@ -274,34 +274,34 @@ final class RoutineGroupsTests: XCTestCase {
         let rows = RoutineGroups.auditHistory(s)
         XCTAssertEqual(rows.map(\.outcome), ["error", "quiet", "fired"])
         XCTAssertEqual(rows[2].attempts, 3, "the fire is shown from fireLog")
-        XCTAssertEqual(RoutineGroups.describeAuditEntry(rows[2]), "fired, 1 new item → Release watch after 3 tries")
-        XCTAssertEqual(RoutineGroups.describeAuditEntry(rows[0]), "check error: exit 1")
-        XCTAssertEqual(RoutineGroups.describeAuditEntry(rows[1]), "quiet: the script said no")
+        XCTAssertEqual(RoutineGroups.describeAuditEntry(rows[2]), "Woke its task, 1 new item → Release watch after 3 tries")
+        XCTAssertEqual(RoutineGroups.describeAuditEntry(rows[0]), "The check failed (exit code 1)")
+        XCTAssertEqual(RoutineGroups.describeAuditEntry(rows[1]), "Quiet: the check found nothing")
         XCTAssertTrue(RoutineGroups.auditFailed(rows[0]))
         XCTAssertFalse(RoutineGroups.auditFailed(rows[2]))
 
         var firesOnly = state()
         firesOnly.fireLog = [Entry(atMs: ms - 10, outcome: "fired", manual: true)]
-        XCTAssertEqual(RoutineGroups.auditHistory(firesOnly).map { RoutineGroups.describeAuditEntry($0) }, ["run now"])
+        XCTAssertEqual(RoutineGroups.auditHistory(firesOnly).map { RoutineGroups.describeAuditEntry($0) }, ["Run now"])
         XCTAssertTrue(RoutineGroups.auditHistory(state()).isEmpty)
         XCTAssertTrue(RoutineGroups.auditHistory(nil).isEmpty)
     }
 
     func testAuditWording() {
         XCTAssertEqual(RoutineGroups.describeAuditEntry(Entry(atMs: 0, outcome: "quiet", reason: "rate-limited")),
-                       "held: fire budget used up, it fires on a later check")
+                       "Held: it woke its task as often as allowed today; a later check will")
         XCTAssertEqual(RoutineGroups.describeAuditEntry(Entry(atMs: 0, outcome: "quiet", reason: "all-seen")),
-                       "quiet: nothing new (all items already seen)")
-        XCTAssertEqual(RoutineGroups.describeAuditEntry(Entry(atMs: 0, outcome: "fired", items: 4, coalesced: 2)), "2 fires, 4 new items")
+                       "Quiet: nothing new (all items already seen)")
+        XCTAssertEqual(RoutineGroups.describeAuditEntry(Entry(atMs: 0, outcome: "fired", items: 4, coalesced: 2)), "Woke its task twice, 4 new items")
         XCTAssertEqual(RoutineGroups.describeAuditEntry(Entry(atMs: 0, outcome: "fired", delivery: .init(status: "retrying"))),
-                       "fired → delivery retrying")
+                       "Woke its task → delivery retrying")
         XCTAssertEqual(RoutineGroups.describeAuditEntry(Entry(atMs: 0, outcome: "fired", items: 2, delivery: .init(status: "error", error: "session gone"))),
-                       "fired, 2 new items → not delivered: session gone")
+                       "Woke its task, 2 new items → not delivered: session gone")
         XCTAssertEqual(RoutineGroups.describeAuditEntry(Entry(atMs: 0, outcome: "fired",
                                                              delivery: .init(status: "ok", summary: "Release — <walnut-message x>"))),
-                       "fired → Release", "an old envelope summary is cut before its markup")
+                       "Woke its task → Release", "an old envelope summary is cut before its markup")
         XCTAssertEqual(RoutineGroups.describeAuditEntry(Entry(atMs: 0, outcome: "quiet", warnings: ["id"])),
-                       "quiet: the script said no · output repaired")
+                       "Quiet: the check found nothing · output repaired")
         let check = job("c", check: .init(run: "x", host: "h"))
         XCTAssertEqual(RoutineGroups.historyTitle(check, count: 3), "History (3 recorded checks)")
         XCTAssertEqual(RoutineGroups.historyTitle(check, count: 1), "History (1 recorded check)")
@@ -312,15 +312,15 @@ final class RoutineGroupsTests: XCTestCase {
     }
 
     func testCheckAndLastCheckWording() {
-        XCTAssertEqual(RoutineGroups.describeCheck(.init(run: "sh  check.sh\n--all", host: "devbox")), "$ sh check.sh --all @ devbox")
-        XCTAssertEqual(RoutineGroups.describeCheck(.init(run: "sh c.sh", host: "__local__")), "$ sh c.sh @ local")
+        XCTAssertEqual(RoutineGroups.describeCheck(.init(run: "sh  check.sh\n--all", host: "devbox")), "Runs sh check.sh --all on devbox")
+        XCTAssertEqual(RoutineGroups.describeCheck(.init(run: "sh c.sh", host: "__local__")), "Runs sh c.sh on this computer")
         let ms = now.timeIntervalSince1970 * 1000
         XCTAssertEqual(RoutineGroups.describeLastCheck(.init(atMs: ms - 180_000, outcome: "fired", error: nil, items: 2), now: now),
-                       "3m ago · fired, 2 items")
+                       "3m ago · woke its task, 2 items")
         XCTAssertEqual(RoutineGroups.describeLastCheck(.init(atMs: ms - 120_000, outcome: "quiet", error: nil), now: now), "2m ago · nothing new")
         XCTAssertEqual(RoutineGroups.describeLastCheck(.init(atMs: ms - 120_000, outcome: "quiet", error: nil, reason: "rate-limited"), now: now),
-                       "2m ago · held by the fire budget")
-        XCTAssertEqual(RoutineGroups.describeLastCheck(.init(atMs: ms, outcome: "error", error: "exit 1"), now: now), "just now · failed: exit 1")
+                       "2m ago · held: it woke its task as often as allowed today")
+        XCTAssertEqual(RoutineGroups.describeLastCheck(.init(atMs: ms, outcome: "error", error: "exit 1"), now: now), "just now · failed: exit code 1")
         XCTAssertEqual(RoutineGroups.describeLastCheck(nil, now: now), "Not checked yet")
     }
 
@@ -614,13 +614,13 @@ final class RoutineGroupsTests: XCTestCase {
         var stoppedState = state(errors: 5)
         stoppedState.lastCheck = .init(atMs: ms - 360_000, outcome: "error", error: "exit 1")
         let stopped = job("s", project: "P", enabled: false, state: stoppedState, check: check)
-        XCTAssertEqual(labels(stopped), ["State", "When", "Runs", "Task", "Check", "Fired"])
+        XCTAssertEqual(labels(stopped), ["State", "When", "Runs", "Task", "Check", "Activity"])
         XCTAssertEqual(value(stopped, "State"), "Stopped after 5 failed checks")
-        XCTAssertEqual(value(stopped, "Check"), "$ sh c.sh @ devbox\nLast check: 6m ago · failed",
-                       "the red box says why: the fact does not say it again")
-        XCTAssertEqual(value(stopped, "Fired"), "Never yet · at most 6 a day")
+        XCTAssertEqual(value(stopped, "Check"), "Runs sh c.sh on devbox\nLast check: 6m ago",
+                       "the red box says it failed and why: the fact only says when")
+        XCTAssertEqual(value(stopped, "Activity"), "Has not woken its task yet · at most 6 a day")
         let never = job("n", project: "P", check: .init(run: "sh c.sh", host: "devbox"))
-        XCTAssertEqual(value(never, "Check"), "$ sh c.sh @ devbox\nLast check: not checked yet")
+        XCTAssertEqual(value(never, "Check"), "Runs sh c.sh on devbox\nLast check: not checked yet")
         XCTAssertEqual(labels(job("on", project: "P")), ["When", "Runs", "Task"], "never ran: no Last run")
         let paused = job("p", enabled: false, state: state(pausedAgo: 600))
         XCTAssertEqual(labels(paused), ["State", "When", "Runs"])
@@ -628,25 +628,33 @@ final class RoutineGroupsTests: XCTestCase {
         ranState = RoutineJob.State(nextRunAtMs: nil, lastRunAtMs: ms - 7_200_000, lastStatus: "error", lastError: nil, lastDurationMs: 14_200)
         let ran = job("r", project: "P", state: ranState)
         XCTAssertEqual(labels(ran), ["When", "Runs", "Task", "Last run"])
-        XCTAssertEqual(value(ran, "Last run"), "2h ago · failed in 14s")
+        XCTAssertEqual(value(ran, "Last run"), "2h ago · failed in 14s", "no box under it: the fact says it failed")
+        // Under the red box the last run only says when (it said "failed" three times).
+        let boxed = job("b", project: "P", state: RoutineJob.State(nextRunAtMs: nil, lastRunAtMs: ms - 1_200_000, lastStatus: "error",
+                                                                  lastError: "the page returned 502", lastDurationMs: 3_000))
+        XCTAssertNotNil(RoutineGroups.errorText(boxed))
+        XCTAssertEqual(value(boxed, "Last run"), "20m ago")
         XCTAssertEqual(value(ran, "Runs"), "In its task's session")
     }
 
     func testFireTally() {
         let ms = now.timeIntervalSince1970 * 1000
         var s = state()
-        XCTAssertEqual(RoutineGroups.describeFireTally(s, now: now), "Never yet")
+        XCTAssertEqual(RoutineGroups.describeFireTally(s, now: now), "Has not woken its task yet")
         s.fireLog = [Entry(atMs: ms - 120_000, outcome: "fired", delivery: .init(status: "ok")),
                      Entry(atMs: ms - 600_000, outcome: "fired", delivery: .init(status: "ok"))]
-        XCTAssertEqual(RoutineGroups.describeFireTally(s, now: now), "2×, last 2m ago")
+        XCTAssertEqual(RoutineGroups.describeFireTally(s, now: now), "Woke its task twice, last 2 min ago")
         s.fireCount = 40
-        XCTAssertEqual(RoutineGroups.describeFireTally(s, now: now), "40×, last 2m ago", "the server's count over the rows")
+        XCTAssertEqual(RoutineGroups.describeFireTally(s, now: now), "Woke its task 40 times, last 2 min ago", "the server's count over the rows")
         s.fireLog?.insert(Entry(atMs: ms - 10_000, outcome: "fired", delivery: .init(status: "retrying")), at: 0)
-        XCTAssertEqual(RoutineGroups.describeFireTally(s, now: now), "40×, last 2m ago, one delivery retrying",
+        XCTAssertEqual(RoutineGroups.describeFireTally(s, now: now), "Woke its task 40 times, last 2 min ago; one more message is still being sent",
                        "a fire still being delivered is not the latest")
+        s.fireCount = 1
+        s.fireLog = [Entry(atMs: ms - 540_000, outcome: "fired", delivery: .init(status: "ok"))]
+        XCTAssertEqual(RoutineGroups.describeFireTally(s, now: now), "Woke its task once, 9 min ago")
         var only = state()
         only.fireLog = [Entry(atMs: ms, outcome: "fired", delivery: .init(status: "retrying"))]
-        XCTAssertEqual(RoutineGroups.describeFireTally(only, now: now), "Not yet, a delivery retrying")
+        XCTAssertEqual(RoutineGroups.describeFireTally(only, now: now), "Not yet: a message to its task is still being sent")
         let json = #"{"nextRunAtMs":1,"fireCount":3,"lastFireSeq":"x"}"#
         let decoded = try? JSONDecoder().decode(RoutineJob.State.self, from: Data(json.utf8))
         XCTAssertEqual(decoded?.fireCount, 3)
@@ -708,7 +716,7 @@ final class RoutineGroupsTests: XCTestCase {
         let check = RoutineJob.Check(run: "x", host: "h")
         var s = state()
         s.lastCheck = .init(atMs: 1, outcome: "error", error: "exit 1: page 503")
-        XCTAssertEqual(RoutineGroups.errorText(job("t", state: s, check: check))?.message, "The last check failed: exit 1: page 503")
+        XCTAssertEqual(RoutineGroups.errorText(job("t", state: s, check: check))?.message, "The last check failed: exit code 1: page 503")
         XCTAssertEqual(RoutineGroups.errorText(job("t", state: s, check: check))?.nextStep, "Fix the check command with Edit.")
         var stoppedState = s
         stoppedState.consecutiveErrors = 5
@@ -722,6 +730,44 @@ final class RoutineGroupsTests: XCTestCase {
     // MARK: - QA round 4: any cron in words, health after a retarget, the server's labels
 
     /// Any five fields in words, field by field; names, "?" and macros read as numbers.
+    /// The closed row says a long cron on one line, days first; the opened row's When
+    /// keeps the full words (2026-11-05 review: three lines on the first screen).
+    func testClosedRowSaysALongCronShort() {
+        func brief(_ expr: String) -> String { RoutineGroups.cadence(cron(expr), brief: true, calendar: calendar) }
+        func full(_ expr: String) -> String { RoutineGroups.cadence(cron(expr), calendar: calendar) }
+        func h(_ hour: Int) -> String { RoutineGroups.hourText(hour, calendar: calendar) }
+        XCTAssertEqual(brief("*/15 9-17 * * 1-5"), "Weekdays, every 15 min")
+        XCTAssertEqual(full("*/15 9-17 * * 1-5"), "Every 15 min from \(t(at(4, 9))) to \(t(at(4, 17, 45))), weekdays")
+        XCTAssertEqual(brief("0 9 1-7 * 1"), "Mondays and days 1 to 7, \(t(at(4, 9)))")
+        XCTAssertEqual(brief("15 9-17 * * *"), "Hourly at :15, \(h(9)) to \(h(17))")
+        XCTAssertEqual(brief("0 9 1,15 * 1-5"), "Weekdays and days 1 and 15, \(t(at(4, 9)))")
+        XCTAssertEqual(brief("*/10 8-18 * * 0,6"), "Weekends, every 10 min")
+        // Short already: the same words as the opened row.
+        XCTAssertEqual(brief("0 9 * * 1-5"), "Weekdays at \(t(at(4, 9)))")
+        XCTAssertEqual(brief("30 20 */2 * *"), "Every 2 days at \(t(at(4, 20, 30)))")
+        XCTAssertEqual(brief("*/5 * * * *"), "Every 5 min")
+        // No short form (a month): the full words, which the row cuts to one line.
+        XCTAssertEqual(brief("*/10 9-17 * 1 *"), full("*/10 9-17 * 1 *"))
+        let office = job("o", schedule: cron("*/15 9-17 * * 1-5"))
+        XCTAssertEqual(RoutineGroups.rowTimingParts(office, now: now, brief: true, calendar: calendar).how, "Weekdays, every 15 min")
+        XCTAssertTrue(RoutineGroups.rowTimingParts(office, now: now, calendar: calendar).how.hasPrefix("Every 15 min from"),
+                      "VoiceOver hears the full words")
+        XCTAssertTrue(RoutineGroups.whenFact(office, now: now, calendar: calendar).hasPrefix("Every 15 min from"))
+    }
+
+    /// A web address in an error breaks where it adds no hyphen; plain words keep theirs.
+    func testErrorAddressesBreakWithoutHyphens() {
+        let zw = "\u{200B}"
+        XCTAssertEqual(RoutineGroups.urlBreaks("GET https://mail.example.com/inbox returned 502"),
+                       "GET https://\(zw)mail\(zw).example\(zw).com/\(zw)inbox returned 502")
+        XCTAssertEqual(RoutineGroups.urlBreaks("the page timed out."), "the page timed out.")
+        XCTAssertEqual(RoutineGroups.urlBreaks("see a/b.c?x=1"), "see a/\(zw)b\(zw).c\(zw)?x\(zw)=1")
+        XCTAssertEqual(RoutineGroups.urlBreaks("https://mail.example.com/inbox").replacingOccurrences(of: zw, with: ""),
+                       "https://mail.example.com/inbox", "the address itself is unchanged")
+        XCTAssertEqual(RoutineGroups.plainExit("exit 2: the pipeline page timed out"), "exit code 2: the pipeline page timed out")
+        XCTAssertEqual(RoutineGroups.plainExit("timed out"), "timed out")
+    }
+
     func testAnyFiveFieldCronInWords() {
         func c(_ expr: String) -> String { RoutineGroups.cadence(cron(expr), calendar: calendar) }
         func h(_ hour: Int) -> String { RoutineGroups.hourText(hour, calendar: calendar) }
@@ -786,7 +832,7 @@ final class RoutineGroupsTests: XCTestCase {
         let both = session("b", target: "t-open", owner: .init(taskId: "t-open", title: "Router firmware", project: "Home"),
                            state: checkFailed, check: .init(run: "x", host: "h"))
         XCTAssertEqual(RoutineGroups.health(both), .error)
-        XCTAssertEqual(RoutineGroups.errorText(both)?.message, "The last check failed: exit 1: page 503")
+        XCTAssertEqual(RoutineGroups.errorText(both)?.message, "The last check failed: exit code 1: page 503")
         XCTAssertEqual(RoutineGroups.errorText(both)?.nextStep, "Fix the check command with Edit.")
     }
 

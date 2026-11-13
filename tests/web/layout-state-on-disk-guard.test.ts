@@ -31,6 +31,7 @@ const WEB_SRC = join(ROOT, 'web/src');
 
 /** Files that touch sessionStorage, and why that is per tab by design. */
 const SESSION_FILES: Record<string, string> = {
+  'components/routines/RoutinesView.tsx': 'which Routines row this tab has open, kept across a reload like a scroll position, never across devices',
   'api/test-run.ts': 'the ?walnut-test-run= marker is for the tab that was opened with it',
   'api/browser-pair.ts': 'a sign-in code this tab is trading (kept across one reload mid sign-in), and the one-boot "Opening Walnut..." line after it',
   'api/vault.ts': 'the Passwords unlock of this tab: a secret that must end with the tab, never be kept on disk',

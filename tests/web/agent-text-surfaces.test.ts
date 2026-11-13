@@ -16,6 +16,7 @@ const plainAllowed: Record<string, string> = {
   'components/hosts/HostFailureText.tsx': "a host problem's summary is the SSH output Walnut captured, shown in a pre",
   'components/settings/SettingsSection.tsx': "a settings row's help is Walnut's own copy (Bitwarden's last sync result), not agent words",
   'components/sessions/SessionSpeedReadout.tsx': "the model a switch takes over with is a model name Walnut reads, not agent words",
+  'components/routines/RoutineRow.tsx': "error.next is Walnut's own next-step sentence (routine-groups.ts routineError), not agent words",
   'components/tasks/StartQueueLine.tsx': "why a start did not happen is Walnut's own sentence from the server's status (core/user-status.ts), not agent words",
   'components/sessions/MessageCard.tsx': "a message card's summary (sent or received) is a clipped two-line preview inside the card's own Details button (no link may sit in a button); the whole text opens below it through AgentText",
   'components/workspaces/StopFirstDialog.tsx': "the script asked for is a script name from the project's walnut.json, not agent words",

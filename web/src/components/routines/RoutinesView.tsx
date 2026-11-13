@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useRoutines, useExecutors } from '@/hooks/useRoutines';
 import { usePersistentState, isStringArray } from '@/hooks/usePersistentState';
 import { RoutineComposer } from './RoutineComposer';
@@ -7,7 +7,9 @@ import { RoutineRow } from './RoutineRow';
 import { changedSince, editKey, groupKeyOf, groupRoutines, keepShownOrder, routineHealth } from './routine-groups';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { discardDraft, draftKey, readDraft } from '@/utils/drafts';
-import { fetchRoutines, type Routine, type CreateRoutineInput } from '@/api/routines';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
+import { getRoutinesSnapshot, loadRoutines } from '@/stores/routines-store';
+import { type Routine, type CreateRoutineInput } from '@/api/routines';
 import '@/styles/routines-groups.css';
 
 /** The groups the person folded, by key (`global`, `project:<name>`), kept across visits. */
@@ -53,10 +55,10 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
   // Opening a row closes the one open above it, which would pull the clicked row up
   // out of sight: hold the clicked row where it was on screen.
   const anchor = useRef<{ id: string; top: number } | null>(null);
-  const rowElement = useCallback((id: string) => (
+  const rowElement = useLeanCallback((id: string) => (
     listRef.current?.querySelector<HTMLElement>(`[data-routine-id="${CSS.escape(id)}"]`) ?? null
   ), []);
-  const openRow = useCallback((id: string, open: boolean) => {
+  const openRow = useLeanCallback((id: string, open: boolean) => {
     const el = rowElement(id);
     anchor.current = el ? { id, top: el.getBoundingClientRect().top } : null;
     setOpenId(open ? id : null);
@@ -117,7 +119,7 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
   const collapsedSet = useMemo(() => new Set(collapsed), [collapsed]);
 
   // The failing count takes the person to the first failing routine, opened (as on the iPhone).
-  const showFirstFailing = useCallback(() => {
+  const showFirstFailing = useLeanCallback(() => {
     for (const g of groups) {
       const r = g.routines.find((x) => routineHealth(x) === 'error');
       if (!r) continue;
@@ -128,14 +130,14 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
     }
   }, [groups, setCollapsed]);
 
-  const toggleGroup = useCallback((key: string) => {
+  const toggleGroup = useLeanCallback((key: string) => {
     setCollapsed((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   }, [setCollapsed]);
 
   // A switch or a delete the server refused: the store has already put the row back
   // as it was; the reason shows on that row, naming what failed, until its next action
   // (2026-11-04, a review: a banner above the list pushed the flipped row off screen).
-  const act = useCallback(async (id: string, verb: string, fn: () => Promise<unknown>) => {
+  const act = useLeanCallback(async (id: string, verb: string, fn: () => Promise<unknown>) => {
     setRowErrors((prev) => (id in prev ? omit(prev, id) : prev));
     try {
       await fn();
@@ -144,15 +146,15 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
       setRowErrors((prev) => ({ ...prev, [id]: `Could not ${verb}: ${why}` }));
     }
   }, []);
-  const handleToggle = useCallback((id: string, enabled: boolean) => {
+  const handleToggle = useLeanCallback((id: string, enabled: boolean) => {
     void act(id, enabled ? 'turn it on' : 'pause it', () => setEnabled(id, enabled));
   }, [act, setEnabled]);
-  const dismissRowError = useCallback((id: string) => setRowErrors((prev) => omit(prev, id)), []);
+  const dismissRowError = useLeanCallback((id: string) => setRowErrors((prev) => omit(prev, id)), []);
   // The row shows what a run answered (RoutineRow): a refusal is not a page-level alert.
-  const handleRunNow = useCallback((id: string) => runNow(id), [runNow]);
-  const handleDelete = useCallback((id: string) => { void act(id, 'delete it', () => remove(id)); }, [act, remove]);
+  const handleRunNow = useLeanCallback((id: string) => runNow(id), [runNow]);
+  const handleDelete = useLeanCallback((id: string) => { void act(id, 'delete it', () => remove(id)); }, [act, remove]);
 
-  const handleDraft = useCallback((d: CreateRoutineInput) => {
+  const handleDraft = useLeanCallback((d: CreateRoutineInput) => {
     setDraft(d);
     setEditing(undefined);
     setShowForm(true);
@@ -160,18 +162,20 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
 
   // The words typed in the box go into the form, so nothing is typed twice: when the
   // model could not draft it, and when the person builds it by hand.
-  const handleManual = useCallback((text: string) => {
+  const handleManual = useLeanCallback((text: string) => {
     setDraft(text ? { name: '', schedule: undefined as unknown as CreateRoutineInput['schedule'], executor: { type: 'claude-code', config: { instructions: text } } } : undefined);
     setEditing(undefined);
     setShowForm(true);
   }, []);
-  const handleDraftFailed = useCallback((_error: string, text: string) => handleManual(text), [handleManual]);
+  const handleDraftFailed = useLeanCallback((_error: string, text: string) => handleManual(text), [handleManual]);
 
-  const handleSave = useCallback(async (input: CreateRoutineInput) => {
+  const handleSave = useLeanCallback(async (input: CreateRoutineInput) => {
     if (editing) {
       // Someone saved this routine after the form opened (another tab, the phone, an
       // agent): say what, keep the person's edits, and let a second Save replace it.
-      const latest = (await fetchRoutines().catch(() => routines)).find((r) => r.id === editing.id);
+      // The store reads the list again (the only place that fetches it whole).
+      await loadRoutines(true);
+      const latest = (getRoutinesSnapshot().routines ?? routines).find((r) => r.id === editing.id);
       const changed = latest ? changedSince(editing, latest) : [];
       if (latest && changed.length > 0 && seenConflict.current !== editKey(latest)) {
         seenConflict.current = editKey(latest);
@@ -199,14 +203,14 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
     setEditing(undefined);
   }, [editing, routines, create, update, setCollapsed]);
 
-  const handleEdit = useCallback((routine: Routine) => {
+  const handleEdit = useLeanCallback((routine: Routine) => {
     seenConflict.current = null;
     setEditing(routine);
     setDraft(undefined);
     setShowForm(true);
   }, []);
 
-  const handleCancel = useCallback(() => {
+  const handleCancel = useLeanCallback(() => {
     setShowForm(false);
     setDraft(undefined);
     setEditing(undefined);

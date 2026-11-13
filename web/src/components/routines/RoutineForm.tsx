@@ -446,7 +446,10 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
       const v = config[f.name];
       if (f.required && (typeof v !== 'string' || !v.trim())) {
         const label = executorType === 'session' && f.name === 'target' ? 'Task' : f.label;
-        failAt(`routine-f-${f.name}`, f.name === 'target' ? 'Pick the task it runs in' : `${label} is required: say what it should do each run`);
+        // Only the words a run is given get the "say what it should do" hint; a
+        // working directory or a watch target is just required.
+        const says = f.name === 'instructions' || f.name === 'prompt';
+        failAt(`routine-f-${f.name}`, f.name === 'target' ? 'Pick the task it runs in' : says ? `${label} is required: say what it should do each run` : `${label} is required`);
         return;
       }
     }

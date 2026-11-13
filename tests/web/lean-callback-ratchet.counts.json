@@ -133,7 +133,6 @@
   "web/src/components/passwords/PasswordsUnlockSheet.tsx": [1, 0],
   "web/src/components/passwords/VaultBrowser.tsx": [1, 0],
   "web/src/components/repositories/RepoForm.tsx": [8, 0],
-  "web/src/components/routines/RoutinesView.tsx": [5, 0],
   "web/src/components/routines/TriggerPill.tsx": [1, 0],
   "web/src/components/sessions/CompactContext.tsx": [2, 0],
   "web/src/components/sessions/ComposerModelPill.tsx": [7, 0],
