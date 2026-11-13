@@ -23,11 +23,19 @@ async function shot(target: Page | Locator, name: string): Promise<void> {
   await target.screenshot({ path: `${SHOTS}/${name}-${test.info().project.name}.png`, animations: 'disabled' })
 }
 
-/** The last three daily 08:00 UTC slots over an hour old, oldest first. */
+/**
+ * The daily slot's hour: twelve hours from now, so no slot is near the run. A fixed 08:00 put
+ * today's slot past the server's 15 minute grace (MISSED_GRACE_MS) and inside this spec's own
+ * "over an hour old" cut on every run between 08:15 and 09:00 UTC: a third missed row the test
+ * did not make (2026-11-13, CI at 08:20 UTC).
+ */
+const SLOT_HOUR = (new Date().getUTCHours() + 12) % 24
+
+/** The last three daily slots, oldest first. */
 function pastSlots(): number[] {
   const today = new Date()
-  let s = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 8, 0, 0)
-  while (s > Date.now() - HOUR) s -= DAY
+  let s = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), SLOT_HOUR, 0, 0)
+  while (s > Date.now()) s -= DAY
   return [s - 2 * DAY, s - DAY, s]
 }
 
@@ -47,7 +55,7 @@ test('the Routines card names a missed run, runs it now, sets one aside, and ope
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       name: `PW reflection ${stamp}`, enabled: true, wakeMode: 'now',
-      schedule: { kind: 'cron', expr: '0 8 * * *', tz: 'UTC' },
+      schedule: { kind: 'cron', expr: `0 ${SLOT_HOUR} * * *`, tz: 'UTC' },
       executor: { type: 'session', config: { target: task.id, prompt: 'Reflect.' } },
       // The first slot ran; the second failed for want of room; nothing ran for the third.
       state: {
