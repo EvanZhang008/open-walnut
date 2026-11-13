@@ -221,10 +221,18 @@ describe('POST /api/notifications/fix', () => {
     expect(message).toContain('[git] {"sizeGb":3.4}');
     expect(message).toContain('Condition key: git');
     expect(message).toContain(`source checkout at ${CHECKOUT}`);
-    // The briefing is the agent's: the person's bubble reads one line (review round 2, D08).
+    // Clicking the repair action does not make its generated request typed words.
+    // Keep the briefing as a hint and attribute the whole first message to Walnut.
     const { parseHinted } = await import('../../../src/core/hints/hint-format.js');
-    expect(parseHinted(message).text).toBe('Please find and fix the cause of this error: Data Repo Growing Too Large');
-    expect(parseHinted(message).hints.map((h) => h.kind)).toEqual(['repair-brief']);
+    const { parseWalnutMessage } = await import('../../../src/core/peers/walnut-message-tag.js');
+    const { transcriptSentBy } = await import('../../../src/core/sessions/transcript-sent-by.js');
+    const hinted = parseHinted(message);
+    const envelope = parseWalnutMessage(hinted.text);
+    expect(transcriptSentBy({ role: 'user', text: message })).toBe('agent');
+    expect(envelope?.kind).toBe('peer-note');
+    expect(envelope?.attrs.from).toBe('Walnut (notification fix)');
+    expect(envelope?.body.trim()).toBe('Please find and fix the cause of this error: Data Repo Growing Too Large');
+    expect(hinted.hints.map((h) => h.kind)).toEqual(['repair-brief']);
 
     // The card remembers its repair, and every client is told.
     const record = await findNotification(DEDUP_KEY);
