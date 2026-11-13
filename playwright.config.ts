@@ -10,6 +10,7 @@ import { VIDEO_USE, withVideoReporter } from './tests/e2e/browser/pw-video.js'
 // Linux WebKit paints on the CPU: its GL painting threads crash the page on software GL.
 import './tests/e2e/browser/pw-webkit-paint.js'
 import { sideConfigSpecs } from './tests/e2e/browser/side-config-specs.js'
+import { returningVisitorStorage } from './tests/e2e/browser/pw-storage.js'
 import { bunCommand } from './tests/helpers/bun-runtime.js'
 
 const testPort = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -75,22 +76,8 @@ export default defineConfig({
     // sections and no list. The specs written against the list remember By project, in
     // every page's storage, so a spec that serves its own ui-prefs keeps it too; a spec
     // about Flat presets it (status-section-helpers.ts presetPanelDesign).
-    // A first visit folds every region of a board that holds work (first-visit-folds.ts) and
-    // every status section (section-fold-rule.ts); the shared fixture board always holds work,
-    // so every page starts as a returning visitor with the folds a first visit kept before (only
-    // Parked folded, Watching and Needs you open). A spec about the first visit removes both
-    // keys (isolateUiPrefs `newInstall`).
-    storageState: {
-      cookies: [],
-      origins: [{
-        origin: `http://localhost:${testPort}`,
-        localStorage: [
-          { name: 'walnut-todo-panel-design', value: 'project' },
-          { name: 'walnut-todo-collapsed-sections', value: '["wait"]' },
-          { name: 'walnut-todo-status-sections', value: '{}' },
-        ],
-      }],
-    },
+    // A first visit folds the board; every page starts as a returning visitor (pw-storage.ts).
+    storageState: returningVisitorStorage(`http://localhost:${testPort}`, [{ name: 'walnut-todo-panel-design', value: 'project' }]),
   },
 
   projects: [

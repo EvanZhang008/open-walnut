@@ -20,6 +20,7 @@ import { defineConfig, devices } from '@playwright/test'
 import { engageGate } from './pw-gate.js'
 // Every test browser is silent: an init script in every frame, and Chromium's own mute.
 import { CHROMIUM_SILENT } from './pw-silence.js'
+import { returningVisitorStorage } from './pw-storage.js'
 // Linux WebKit paints on the CPU: its GL painting threads crash the page on software GL.
 import './pw-webkit-paint.js'
 // A context that records gets a video the size of its page (pw-video.ts).
@@ -46,6 +47,8 @@ export default defineConfig({
   reporter: 'list',
   use: {
     baseURL: `http://127.0.0.1:${port}`,
+    // A returning visitor's folds, as every config's pages (pw-storage.ts): the specs open Acme.
+    storageState: returningVisitorStorage(`http://127.0.0.1:${port}`),
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },
