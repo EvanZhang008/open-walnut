@@ -17,7 +17,7 @@ import fsp from 'node:fs/promises'
 import { log } from '../logging/index.js'
 import { isSessionProcessAlive, isLocalJsonlFresh } from '../utils/session-liveness.js'
 import { bus, EventNames } from './event-bus.js'
-import { runPeriodic, type PeriodicHandle, type TickContext } from './periodic-task.js'
+import { runPeriodic, slowTickWarnMs, type PeriodicHandle, type TickContext } from './periodic-task.js'
 import type { SessionRecord, Task, TaskPhase } from './types.js'
 import type { SessionWillReapEvent } from './event-types.js'
 import { emitSessionStatusChanged } from './session-tracker.js'
@@ -75,6 +75,15 @@ const ORPHAN_SWEEP_EVERY_TICKS = 120
 /** Idle stops in flight at once per tick (each waits on its daemon, up to ~15s). */
 const IDLE_REAP_CONCURRENCY = 4
 /**
+ * Liveness probes in flight at once before the liveness loop. Each one can be a daemon
+ * `status` RPC; one after another over ~125 sessions they cost 0.5 to 1.8 s a tick
+ * (2026-11-13), the loop's whole cost. Read-only, so running a few at once changes no
+ * outcome; the loop's writes stay one at a time and in order.
+ */
+export const LIVENESS_PROBE_CONCURRENCY = 8
+/** A tick slower than this logs at warn with its phase breakdown; faster ones at debug. */
+export const SLOW_TICK_WARN_MS = slowTickWarnMs(HEALTH_CHECK_BUDGET_MS)
+/**
  * After the owner refuses an idle stop, the same process is not asked again for
  * this long (an unreachable host or a lost answer is asked again next tick). A refusal is the daemon's answer, not
  * a blip: 2026-10-28 one session whose start time the daemon never recorded was
@@ -83,6 +92,28 @@ const IDLE_REAP_CONCURRENCY = 4
 export const IDLE_REAP_RETRY_BACKOFF_MS = 30 * 60_000
 /** How long the live limit's announcement (`session:will-reap`) comes before its stop: one tick. */
 export const LIVE_LIMIT_WARN_MS = 25_000
+
+/**
+ * Warm the cycle's liveness memo for `sessions`, LIVENESS_PROBE_CONCURRENCY at a time.
+ * Stops starting probes once the tick is over budget (the loop then breaks on its own
+ * budget check). A probe that throws is left in the memo for the loop to meet, as
+ * before; here it is only caught so it is never an unhandled rejection.
+ */
+export async function prefetchLiveness(
+  sessions: SessionRecord[],
+  isAlive: (s: SessionRecord) => Promise<boolean>,
+  ctx?: TickContext,
+): Promise<void> {
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < sessions.length) {
+      if (ctx?.overBudget()) return
+      const s = sessions[next++]
+      try { await isAlive(s) } catch { /* the loop sees it */ }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(LIVENESS_PROBE_CONCURRENCY, sessions.length) }, worker))
+}
 
 /** What an idle reap calls. Loaded once per tick, before the reap workers start. */
 interface IdleReapTools {
@@ -471,7 +502,8 @@ export class SessionHealthMonitor {
       // some OTHER session to be live before anyone looks at it.
       if (!ctx.overBudget()) await this.phase('snapshotPull', ctx, undefined, () => this.checkSnapshotPull(sessions, ctx, allSessions))
       const total = Date.now() - checkT0
-      if (total > 500) log.session.warn('health monitor: check() slow (no active sessions)', { totalMs: total, orphanMs: tOrphan - checkT0, recoverMs: tRecover - tOrphan })
+      const slowLog = total >= SLOW_TICK_WARN_MS ? log.session.warn : log.session.debug
+      if (total > 500) slowLog('health monitor: check() slow (no active sessions)', { totalMs: total, orphanMs: tOrphan - checkT0, recoverMs: tRecover - tOrphan })
       return
     }
 
@@ -591,6 +623,12 @@ export class SessionHealthMonitor {
     endPhase('liveLimit')
 
     if (halt()) return
+    // Probe first, a few at once; the loop below then reads the answers from the
+    // cycle's memo in order, so its writes stay one at a time.
+    await prefetchLiveness(
+      sessions.filter(s => !reconciledIds.has(s.claudeSessionId) && !idleTimedOutIds.has(s.claudeSessionId) && !hungKilledIds.has(s.claudeSessionId)),
+      cachedIsAlive, ctx,
+    )
     let livenessChecked = 0
     for (const session of sessions) {
       // In-loop budget: each iteration can await a liveness probe AND up to three
@@ -802,12 +840,14 @@ export class SessionHealthMonitor {
     await this.phase('taskPhases', ctx, undefined, () => this.reconcileTaskPhases(sessions, taskMap, cachedIsAlive))
     endPhase('taskPhases')
 
-    // Log total check duration (> 500ms = worth investigating)
+    // Log total check duration. Most of it is awaited daemon I/O (the loop is free
+    // meanwhile), so only a tick past SLOW_TICK_WARN_MS warns; others stay at debug.
     const checkTotal = Date.now() - checkT0
     if (checkTotal > 500) {
       // `phases` names the actual cost centre. `slowestPhase` is what to read first.
       const slowest = Object.entries(phaseMs).sort((a, b) => b[1] - a[1])[0]
-      log.session.warn('health monitor: check() slow', {
+      const slowLog = checkTotal >= SLOW_TICK_WARN_MS ? log.session.warn : log.session.debug
+      slowLog('health monitor: check() slow', {
         totalMs: checkTotal, orphanMs: tOrphan - checkT0, recoverMs: tRecover - tOrphan,
         sessionCount: sessions.length, taskCount: taskMap.size,
         phases: phaseMs,

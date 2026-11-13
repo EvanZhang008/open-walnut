@@ -7024,8 +7024,12 @@ function startPluginSyncPolling(): void {
             void publishRecovery([`plugin:${plugin.id}`, taskSyncPushRecoveryKey(plugin.id)])
           }
         }
+        // A sync tick waits on the provider's network; warn only once it has used a
+        // real share of its interval (slowTickWarnMs, at least 2 s for a short
+        // configured interval), never a fixed small wall time.
         const syncElapsed = Date.now() - syncT0
-        if (syncElapsed > 2000) {
+        const { slowTickWarnMs } = await import('../core/periodic-task.js')
+        if (syncElapsed >= Math.max(2000, slowTickWarnMs(intervalMs))) {
           log.web.warn(`${plugin.id} sync: slow tick`, { elapsed: syncElapsed })
         }
       } catch (err) {

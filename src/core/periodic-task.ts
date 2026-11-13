@@ -34,6 +34,20 @@ export interface TickContext {
   elapsedMs(): number
 }
 
+/**
+ * The wall time past which a tick of this budget is worth a warning: a quarter of
+ * the budget. A tick's wall time is mostly AWAITED I/O (daemon RPCs over a tunnel),
+ * which leaves the event loop free, so a fixed small number (the health monitor
+ * used 500 ms) warned on every tick of a normal day: about 2,000 warn lines a day
+ * with the tick's own CPU near a tenth of its wall time (2026-11-13). Real loop
+ * blocking is caught by the event-loop monitor (CPU per open section) and a tick
+ * that runs out of time by the budget warn below. Every slow-tick warning of
+ * periodic work uses this threshold (tests/core/periodic-slow-tick-ratchet.test.ts).
+ */
+export function slowTickWarnMs(budgetMs: number): number {
+  return Math.round(budgetMs / 4)
+}
+
 export function runPeriodic(
   name: string,
   intervalMs: number,
