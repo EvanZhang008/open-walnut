@@ -32,6 +32,7 @@ import { useImageAttachments, type ImageAttachments } from '@/components/common/
 import { AttachPictureButton, PictureStrip, usePictureInput } from '@/components/common/PictureStrip';
 import type { ImageAttachment } from '@/api/chat';
 import { useDraft } from '@/hooks/useDraft';
+import { useHidesHighlights } from '@/hooks/useHidesHighlights';
 import { claimFailedDraft, draftOriginOf, draftSaveMark, onDraftSettled, type DraftOrigin } from '@/utils/drafts';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { ThreadStatusWord } from './ThreadStatusWord';
@@ -198,6 +199,9 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const [full, setFull] = useState(false);
   useEffect(() => { if (!canFill) setFull(false); }, [canFill]);
   const fill = useFillBox(full && canFill, p.fillRef);
+  // A card whose passage scrolled away is hidden by visibility, and its words (the reply,
+  // the question) can carry find's marks: the highlight registry re-checks them when it turns.
+  useHidesHighlights(!!p.style.away && !fill);
 
   // A new question (or a draft) opens with the composer ready; the body starts
   // at its newest turn, where the answer is.

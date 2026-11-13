@@ -138,6 +138,8 @@ const REFRESHES: Record<string, string> = {
   // The sheet under a sheet: the Files view's full screen turns it here; the threads sheet in SideQuestionDrawer.
   'web/src/styles/fullscreen-tab.css :: html .open-walnut-fullscreen:has(.file-content-view.fv-fullscreen, .side-question-popover.open-walnut-fullscreen)': 'web/src/components/common/FileContentView.tsx',
   'web/src/styles/globals.css :: .session-panel-input:has(.side-question-popover.open-walnut-fullscreen)': 'web/src/components/sessions/SideQuestionDrawer.tsx',
+  // A question card whose passage scrolled out of the view: its reply and question can carry find's marks.
+  'web/src/components/sessions/ThreadCommentCard.tsx :: inline (1)': 'web/src/components/sessions/ThreadCommentCard.tsx',
 };
 
 const CONTROL = 'a control, pill or count, never words a painter marks';
