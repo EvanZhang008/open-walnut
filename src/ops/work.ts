@@ -12,6 +12,7 @@ import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '.
 import { WORK_PLACE_RULE } from '../core/work-place.js';
 import { leftOutLine, shapeHistory, type HistoryShape, type ShapeResult } from './task-history-shape.js';
 import { SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
+import { CLAUDE_PLUGIN_ID_MAX_CHARS, CLAUDE_PLUGINS_OFF_MAX_ITEMS } from '../core/sessions/claude-plugins-off.js';
 
 defineOp({
   name: 'task_start',
@@ -599,7 +600,7 @@ defineOp({
   name: 'project_metadata_get',
   title: 'Get project settings',
   description:
-    'Read one project\'s registry metadata, including default_cwd and default_host. ' +
+    'Read one project\'s registry metadata, including default_cwd, default_host and claude_plugins_off. ' +
     'This is not the project rename or merge operation.',
   input: {
     name: z.string().min(1).describe('Project name; Inbox has no metadata row'),
@@ -615,7 +616,10 @@ defineOp({
     'Merge execution defaults into one project registry row: default_cwd, default_host, and the ' +
     'launch defaults a new task of the project starts on when its start names none (default_engine, ' +
     'default_model of that engine, default_mode). A start that names its own engine, model or mode wins; ' +
-    'unset values fall back to the global defaults. Do not use project rename or merge for settings.',
+    'unset values fall back to the global defaults. claude_plugins_off lists Claude Code plugins ' +
+    '(name@marketplace) the project\'s Claude Code sessions start without, so their skills, agents and ' +
+    'MCP servers stay out of each request; the user\'s own plugin settings are not changed. ' +
+    'Do not use project rename or merge for settings.',
   input: {
     name: z.string().min(1).describe('Project name; Inbox has no metadata row'),
     default_cwd: z.string().nullable().optional().describe('Absolute default working directory; null clears it'),
@@ -623,11 +627,14 @@ defineOp({
     default_engine: z.enum(SESSION_ENGINE_IDS).nullable().optional().describe('Default coding engine for new tasks; null clears it (and its model)'),
     default_model: z.string().nullable().optional().describe('Default model id of default_engine; needs default_engine; null clears it'),
     default_mode: z.enum(SESSION_MODE_IDS).nullable().optional().describe('Default permission mode for new tasks; null clears it'),
+    claude_plugins_off: z.array(z.string().min(1).max(CLAUDE_PLUGIN_ID_MAX_CHARS).regex(/^\s*[^\s@]+@[^\s@]+\s*$/))
+      .max(CLAUDE_PLUGINS_OFF_MAX_ITEMS).nullable().optional()
+      .describe('Claude Code plugin ids (name@marketplace) this project\'s Claude Code sessions leave out; [] or null clears it'),
   },
   handler: async (args, call) => {
     const { name, ...body } = args;
     if (Object.values(body).every((v) => v === undefined)) {
-      throw new Error('project_metadata_update needs one of default_cwd, default_host, default_engine, default_model, default_mode');
+      throw new Error('project_metadata_update needs one of default_cwd, default_host, default_engine, default_model, default_mode, claude_plugins_off');
     }
     return call('PUT', `/projects/${encodeURIComponent(String(name))}/metadata`, body);
   },

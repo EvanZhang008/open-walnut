@@ -3358,6 +3358,10 @@ export class ClaudeCodeSession {
         if (own) { resolvedCwd = own.cwd; this._cwd = own.cwd; ownMoveUndo = own.undo ?? null }
         stepDone('ownFolderMs')
       }
+      if (!slim) {
+        await this.applySpawnClaudeScope(args)
+        stepDone('scopeMs')
+      }
       await this.applySpawnWalnutMount(args, profile, host)
       log.session.info('spawn: pre-spawn steps', {
         taskId: this.taskId, sessionId: tmpId, host: host ?? '__local__', resume: isResume && resumeNow,
@@ -10344,6 +10348,41 @@ export class ClaudeCodeSession {
       hostServesMcp: getConnectedDaemonConnection(hostKey)?.hasCapability(WALNUT_MCP_CAPABILITY) ?? false,
       local: hostKey === '__local__',
       hubMount: walnutMcpProfile,
+    }
+  }
+
+  /**
+   * The task's project's Claude plugins left out and the configured skill listing cap
+   * (claude-scope-settings.ts), merged into the spawn's one `--settings` arg. Fresh
+   * spawns and resumes both pass here. A lookup that fails spawns without them.
+   */
+  private async applySpawnClaudeScope(args: string[]): Promise<void> {
+    let project = this.project ?? ''
+    try {
+      const [{ getTask, getProjectMetadata }, { getConfig }, { readClaudePluginsOff }, { claudeScopeSettings, skillListingDescChars }] = await Promise.all([
+        import('../core/task-manager.js'),
+        import('../core/config-manager.js'),
+        import('../core/sessions/claude-plugins-off.js'),
+        import('./claude-scope-settings.js'),
+      ])
+      // The task's project now (it may have moved since this session was made), else the one it was made in.
+      const task = this.taskId ? await getTask(this.taskId).catch(() => undefined) : undefined
+      if (task) project = task.project ?? ''
+      const pluginsOff = project.trim() ? readClaudePluginsOff(await getProjectMetadata(project)) : []
+      const scope = claudeScopeSettings({ pluginsOff, listingDescChars: skillListingDescChars(await getConfig()) })
+      if (Object.keys(scope).length === 0) return
+      const at = args.indexOf('--settings')
+      const current = at >= 0 ? JSON.parse(args[at + 1]) as Record<string, unknown> : {}
+      const value = JSON.stringify({ ...current, ...scope })
+      if (at >= 0) args[at + 1] = value
+      else args.push('--settings', value)
+      log.session.info('spawn: claude scope settings', {
+        taskId: this.taskId, project, pluginsOff, listingDescChars: scope.skillListingMaxDescChars ?? null,
+      })
+    } catch (err) {
+      log.session.warn('claude scope settings: could not read them; this spawn goes without', {
+        taskId: this.taskId, project, error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 

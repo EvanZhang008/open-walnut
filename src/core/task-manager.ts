@@ -59,6 +59,7 @@ import { isPrivateTaskBlocked } from './private-tasks/sync-guard.js';
 import { privacyJudgeAvailable, startSyncGate } from './private-tasks/sync-gate.js';
 import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
 import { checkLaunchDefaultsPatch, checkLaunchDefaultsShape } from './sessions/project-launch-defaults.js';
+import { checkClaudePluginsOffPatch } from './sessions/claude-plugins-off.js';
 import type { TaskMergedInto } from './event-types.js';
 import {
   clearProjectTombstone,
@@ -2329,15 +2330,17 @@ export async function getProjectMetadata(project: string): Promise<{
 }
 
 /**
- * Merge `settings` into a project's registry metadata, creating the row when
+ * Merge `patch` into a project's registry metadata, creating the row when
  * absent. Returns the merged object. Inbox can't hold settings (no row).
  */
 export async function setProjectMetadata(
   project: string,
-  settings: Record<string, unknown>,
+  patch: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const raw = (project ?? '').trim();
   if (!raw) throw new Error('Inbox has no project settings — pass a project name.');
+  // The Claude plugins a project's sessions leave out: a list of plugin ids, [] clears it.
+  const settings = checkClaudePluginsOffPatch(patch);
   // The launch defaults are checked before the row is made, against the row as it is (a model
   // needs its engine): a refused write creates nothing. Checked again on the row under the lock.
   checkLaunchDefaultsShape(settings);

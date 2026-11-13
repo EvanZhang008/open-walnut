@@ -663,6 +663,17 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       }
     }
 
+    // The skill listing cap of Claude Code sessions (providers/claude-scope-settings.ts): an integer
+    // in the CLI's own range, or null to clear it.
+    const listingCap = (body.session as { skill_listing_desc_chars?: unknown } | undefined)?.skill_listing_desc_chars
+    if (listingCap !== undefined && listingCap !== null) {
+      const { validSkillListingDescChars, SKILL_LISTING_DESC_CHARS_MIN, SKILL_LISTING_DESC_CHARS_MAX } = await import('../../providers/claude-scope-settings.js')
+      if (!validSkillListingDescChars(listingCap)) {
+        res.status(400).json({ error: `session.skill_listing_desc_chars must be an integer from ${SKILL_LISTING_DESC_CHARS_MIN} to ${SKILL_LISTING_DESC_CHARS_MAX}` })
+        return
+      }
+    }
+
     // Whether agents' steps wait for the person (core/approvals/ask-me.ts): the person's own choice,
     // from any of their screens. A session cannot turn the asking off (or on) for itself, and a test
     // browser cannot move the person's switch. A write that carries it back unchanged is fine.

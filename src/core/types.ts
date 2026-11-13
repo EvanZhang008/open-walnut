@@ -1795,6 +1795,11 @@ export interface Config {
      *  the user's other ones. Default off (src/core/sessions/request-tag.ts). */
     tag_requests?: boolean;
 
+    /** Characters of each skill's description a Claude Code session's skill listing keeps
+     *  (an integer 40..1536, sent as the CLI's `skillListingMaxDescChars` setting). Unset:
+     *  nothing is sent and Claude Code keeps its own default (providers/claude-scope-settings.ts). */
+    skill_listing_desc_chars?: number;
+
     /** Days a Claude Code session's history stays as it is: a session nobody touched
      *  for longer is compressed in place on its host and comes back the moment it is
      *  opened (src/core/transcript-archive-sweep.ts). Default 60; 0 turns it off. */

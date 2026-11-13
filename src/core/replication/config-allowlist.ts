@@ -167,6 +167,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     history_compress_days: 'the history archive runs on the primary only (transcript-archive-sweep.ts)',
     history_remote: 'the remote history tier runs on the primary only, with its own credentials (core/history-remote/)',
     hints: 'the message hints the Mac composes into each message it delivers (core/hints/)',
+    skill_listing_desc_chars: 'the skill listing cap of the Claude Code sessions the Mac starts (providers/claude-scope-settings.ts)',
   },
   'hosts.*': {
     shell_setup: 'a shell command line that may carry tokens',
