@@ -13,6 +13,7 @@
  *   npx playwright test          (runs these tests)
  */
 import { test, expect } from '@playwright/test'
+import { routinesPageView } from './routines-page-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -77,7 +78,9 @@ test('cron page shows empty state when no jobs exist', async ({ page }) => {
   await page.goto('/cron')
   await page.waitForLoadState('networkidle')
 
-  const emptyState = page.locator('.empty-state')
+  // The Home page's Routines panel (a compact view of the same list) can stay mounted,
+  // hidden, under this page: its empty state is not this page's.
+  const emptyState = routinesPageView(page).locator('.empty-state')
   await expect(emptyState).toBeVisible({ timeout: 5000 })
   await expect(emptyState).toContainText('No routines yet')
 })
