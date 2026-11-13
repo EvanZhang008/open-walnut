@@ -214,6 +214,7 @@ import { createTimelineShare } from './timeline-share';
 import { SessionScriptsChip } from '@/components/workspaces/SessionScriptsChip';
 import { workspaceOf } from '@/components/workspaces/workspace-text';
 import { noteScriptDropped, noteScriptTyped } from '@/components/workspaces/script-results';
+import { ShortcutHint } from '@/keyboard/ShortcutHint';
 
 /**
  * Below this viewport width a split view opens with the chat column collapsed:
@@ -3448,6 +3449,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   aria-label={shownFullscreen ? 'Exit full screen' : inset ? 'Close this tab' : 'Close session panel'}
                 >
                   {ICON_CLOSE}
+                  {!shownFullscreen && <ShortcutHint command="session.close" />}
                 </button>
               )}
             </div>

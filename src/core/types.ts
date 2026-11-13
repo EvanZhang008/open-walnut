@@ -2071,6 +2071,10 @@ export interface Config {
     /** Where a session that leaves Home's strip without a Minimize goes: 'recent' (the Recent
      *  end of the taskbar, the default) or 'chips' (a chip like a minimized one). */
     taskbar_leaving?: 'recent' | 'chips';
+    /** The keys a person gave the keyboard commands (web/src/keyboard/commands.ts), per place
+     *  ('mac-app', 'mac-browser', 'other'): command id → chord ("Cmd+J"), '' for no key. A
+     *  command left out keeps its default. Settings > Keyboard shortcuts writes it. */
+    shortcuts?: Record<string, Record<string, string>>;
   };
   /** How a task's tags show (core/tag-display-rules.ts): a tag (`label:urgent`) or a key
    *  (`ticket-id:*`) to `shown` (whole), `value` (the text after the key) or `hidden`. Display

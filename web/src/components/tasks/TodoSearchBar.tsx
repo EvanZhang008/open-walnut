@@ -13,6 +13,7 @@ import { PhonePullToRefresh } from './PhonePullToRefresh';
 import { PhoneQueuedUpdatesPill } from './PhoneQueuedUpdatesPill';
 import { homeListScroller } from './phone-row-behavior';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
+import { isCommand } from '@/keyboard/shortcut-overrides';
 
 /** A blur this soon after a keystroke, with no user gesture, was not the user's. */
 const TYPING_GUARD_MS = 2000;
@@ -124,8 +125,8 @@ export function TodoSearchBar({
         if (inputRef.current?.closest('[inert]')) window.dispatchEvent(new CustomEvent('sidebar:toggle-todo'));
         reveal();
       };
-      // Cmd+K (Mac) or Ctrl+K (Windows)
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      // Cmd+K (Mac) or Ctrl+K (Windows), or the key the person gave it (keyboard/commands.ts)
+      if (isCommand(e, 'task.search')) {
         e.preventDefault();
         ensureVisible();
         return;

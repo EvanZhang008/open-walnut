@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { TaskUndoProvider } from '@/undo/TaskUndoContext';
 import { ShortcutsHelpHost } from '@/keyboard/ShortcutsHelp';
+import { KeyboardCommandsHost } from '@/keyboard/KeyboardCommandsHost';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { NotificationToaster } from '../common/NotificationToaster';
@@ -77,6 +78,7 @@ export function AppShell({ children }: AppShellProps) {
           <TaskUndoProvider>
             <AppShellInner>{children}</AppShellInner>
             <ShortcutsHelpHost />
+            <KeyboardCommandsHost />
           </TaskUndoProvider>
         </FocusBarProvider>
       </NotificationProvider>

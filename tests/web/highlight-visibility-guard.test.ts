@@ -149,6 +149,8 @@ const HEADER = 'a header or bar: no painter marks its words';
 /** Hides nothing a painter marks (thread marks, pins, comments, find), with why. */
 const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/utils/scrollbar-metrics.ts :: inline (1)': SLOT,
+  // A column's jump number (JumpBadge), hidden for the frame it measures where its header ends.
+  'web/src/pages/MainPage.tsx :: inline (1)': PLACING,
   'web/src/styles/plugin-updates.css :: .plugin-update-label::after': SLOT,
   'web/src/styles/plugin-updates.css :: .plugin-update-slot': SLOT,
   'web/src/styles/board-kanban-controls.css :: .kanban-lane-strip-measure': SLOT,

@@ -115,6 +115,8 @@ import { nextLine, useColumnCompleteClose, type AdvanceResult } from './useColum
 import { focusColumnComposer, focusTaskRow, noteKeyboardMove, personMovedSince, useHomeKeyboard } from './useHomeKeyboard';
 import { afterStrip } from './after-strip';
 import { COLUMN_FADE_MS, columnElement, holdStripAnimation, keepScrollWhileFading, prefersReducedMotion } from './hold-strip-animation';
+import { jumpBadgeLabel } from '@/keyboard/shortcuts';
+import { isCommand } from '@/keyboard/shortcut-overrides';
 import { phaseSnapshot, useTaskUndo } from '@/undo/TaskUndoContext';
 import { nextAfterCompleteNow, useNextAfterComplete } from '@/hooks/useNextAfterComplete';
 import { needsYouQueue, nextNeedsYou } from '@/components/tasks/next-needs-you';
@@ -1886,8 +1888,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     openSession: (sid) => openSessionOrToast(sid, { restore: true }),
   });
 
-  // ⌘⇧O opens the session finder from anywhere on the home page (no mouse
-  // needed). Plain ⌘K stays with the task search (TodoSearchBar) — don't
+  // ⌘⇧O (the session.find command, keyboard/commands.ts) opens the session finder from
+  // anywhere on the home page (no mouse needed). Plain ⌘K stays with the task search (TodoSearchBar) — don't
   // collide. Shortcut choice: ⌘⇧K is Firefox's Web Console, ⌘J is Chrome's
   // Downloads, ⌘⇧S is Firefox's screenshot — ⌘⇧O is free in this app (only
   // ⌘K / ⌘E / ⌘S are taken) and browsers let pages intercept it. Gated on
@@ -1896,7 +1898,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   useEffect(() => {
     if (!visible) return;
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'o' || e.key === 'O')) {
+      if (isCommand(e, 'session.find')) {
         // Match the file's other shortcut guards: never hijack the combo while
         // the user is typing in an input/textarea/contentEditable.
         const active = document.activeElement;
@@ -1909,7 +1911,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return () => window.removeEventListener('keydown', handler);
   }, [visible]);
 
-  // ⌘⇧Enter opens a new draft session column — the keyboard twin of "+".
+  // ⌘⇧Enter (the session.new command) opens a new draft session column — the keyboard twin of "+".
   // NOT ⌘N / ⌘⇧N: those are reserved by the browser (new window / new private
   // window) and cannot be preventDefault'd from a page, so binding them would
   // "work" in tests and silently lose to the browser for real users. Same
@@ -1917,7 +1919,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   useEffect(() => {
     if (!visible) return;
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') {
+      if (isCommand(e, 'session.new')) {
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) return;
         e.preventDefault();
@@ -2884,7 +2886,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setSuppressDetail(true);
     setFocusedTask(task); // the list follows a column already open: no new open for Recent
   };
-  const { current: currentColumn } = useHomeKeyboard({
+  const { jumpHints, env: keyEnv, current: currentColumn } = useHomeKeyboard({
     visible: visible && !phoneLayout,
     columnsRef: sessionColumnsRef,
     completeColumn: completeColumnTask,
@@ -3916,6 +3918,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               data-column-id={sid}
               style={colStyle}
             >
+              {jumpHints && idx < 9 && (
+                <JumpBadge
+                  label={jumpBadgeLabel(idx + 1, keyEnv)}
+                  // The last column is also mod+9's, as in a browser's tabs.
+                  alsoLast={idx > 0 && idx < 8 && idx === sessionColumns.length - 1 ? jumpBadgeLabel(9, keyEnv) : undefined}
+                />
+              )}
               {isDraft ? (
                 // A `draft:` id resolves to NOTHING server-side, so it must never
                 // reach SessionPanel (which would fetch it and render "session not
@@ -4043,5 +4052,23 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
     </div>
     </>
+  );
+}
+
+/** A column's number while the jump modifier is held: just under its header (whose rows are
+ *  all buttons), at the top of the transcript, for the moment the key is held. */
+function JumpBadge({ label, alsoLast }: { label: string; alsoLast?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [top, setTop] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const column = ref.current?.parentElement;
+    const header = column?.querySelector<HTMLElement>('.session-panel-header');
+    setTop(column && header ? header.getBoundingClientRect().bottom - column.getBoundingClientRect().top + 6 : 6);
+  }, []);
+  return (
+    <div ref={ref} className="session-jump-badge" aria-hidden="true" style={top === null ? { visibility: 'hidden' } : { top }}>
+      <kbd>{label}</kbd>
+      {alsoLast && <kbd className="session-jump-badge-last">{alsoLast}</kbd>}
+    </div>
   );
 }

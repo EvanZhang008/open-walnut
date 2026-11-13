@@ -11,6 +11,8 @@ import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { isTypingTarget } from '@/components/tasks/useHomeFilters';
 import { detectKeyEnv, envNote, isHelpChord, shortcutGroups } from './shortcuts';
 import { SHORTCUTS_HELP_EVENT } from './shortcuts-help-event';
+import { useShortcutOverrides } from './shortcut-overrides';
+import { ShortcutKeys } from './ShortcutKeys';
 import '@/styles/keyboard-shortcuts.css';
 
 
@@ -37,7 +39,9 @@ export function ShortcutsHelpHost() {
 
 function ShortcutsHelpDialog({ onClose }: { onClose: () => void }) {
   const env = useMemo(detectKeyEnv, []);
-  const groups = useMemo(() => shortcutGroups(env), [env]);
+  // A command shows the key the person gave it (Settings > Keyboard shortcuts).
+  const overrides = useShortcutOverrides(env);
+  const groups = useMemo(() => shortcutGroups(env, overrides), [env, overrides]);
   const note = envNote(env);
   const [dialogEl, setDialogEl] = useState<HTMLDivElement | null>(null);
   const labelId = useId();
@@ -66,14 +70,7 @@ function ShortcutsHelpDialog({ onClose }: { onClose: () => void }) {
                 {g.rows.map((r) => (
                   <div key={r.id} className="shortcuts-help-row" data-shortcut={r.id}>
                     <dt className="shortcuts-help-label">{r.label}</dt>
-                    <dd className="shortcuts-help-keys">
-                      {r.keys.map((chord, i) => (
-                        <span key={i} className="shortcuts-help-chord">
-                          {i > 0 && <span className="shortcuts-help-sep">{r.sep ?? 'or'}</span>}
-                          {chord.map((key, j) => <kbd key={j}>{key}</kbd>)}
-                        </span>
-                      ))}
-                    </dd>
+                    <ShortcutKeys row={r} as="dd" />
                   </div>
                 ))}
               </dl>
