@@ -445,7 +445,9 @@ humanInboxV1Router.post('/human-inbox/:id/settle', async (req: Request, res: Res
 humanInboxV1Router.post('/human-inbox/:id/redact-credentials', async (req: Request, res: Response, next: NextFunction) => {
   await guard(res, next, 'POST /human-inbox/:id/redact-credentials', async () => {
     const id = letterId(req)
-    if (isCompanion()) {
+    // Letters live on the leader: a replica relays. (A host replica's front forwards every
+    // write, or answers needs_leader, before this handler; only the companion gets here.)
+    if (isFollower()) {
       await relayControlAction(res, 'server.human-inbox.redact-credentials', SERVER_RELAY_SID, { id }, 200)
       return
     }
