@@ -683,6 +683,31 @@ describe('what is left of the team (2026-10-28: count what is open, wake an idle
       expect(sendMessageToSession).toHaveBeenCalledTimes(2);
     });
 
+    // 2026-11-13 (b5a8a84b): its close and its turn end, 4 s apart, each queued the completion; the
+    // second came while the first was still being sent and went out on its own 3 s later.
+    it('a second edge of the same completion that comes while the first is being sent sends nothing', async () => {
+      getChildTasks.mockResolvedValue([child('a', 'COMPLETE')]);
+      let release!: (v: { id: string }) => void;
+      sendMessageToSession.mockImplementationOnce(() => new Promise((r) => { release = r; }));
+      await queueSubtaskNotice({ ...completed('a'), completedAt: at });
+      await flushNow();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+      // The first send is still on its way.
+      await queueSubtaskNotice({ ...completed('a'), completedAt: at, lastWords: { text: 'Closed.' } });
+      release({ id: 'qm-1' });
+      await flushNow();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flushNow();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+      // A failed send holds the completion: a later edge of it is no news either.
+      sendMessageToSession.mockRejectedValueOnce(new Error('daemon unreachable'));
+      await queueSubtaskNotice({ ...completed('b'), completedAt: at });
+      await flushNow();
+      await queueSubtaskNotice({ ...completed('b'), completedAt: at });
+      await flushNow();
+      expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    });
+
     it('a team list that never arrived is not counted as seen', async () => {
       getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'COMPLETE'), child('d', 'IN_PROGRESS', { state: 'working' })]);
       sendMessageToSession.mockRejectedValueOnce(new Error('daemon unreachable'));

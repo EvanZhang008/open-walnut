@@ -157,6 +157,19 @@ function completionTold(n: SubtaskNotice, now: number): boolean {
   return !!n.completedAt && completionsTold.get(`${n.parentTaskId}/${n.child.id}`)?.completedAt === n.completedAt;
 }
 
+/**
+ * The completions a flush is sending now, child key → its completed_at: the told mark comes only
+ * after the send, so a second edge of the same completion queued meanwhile went out on its own
+ * 3 s later (2026-11-13, the org reflection: b5a8a84b's close and its turn end, 4 s apart, sent
+ * its lead the same completion at 10:46:13 and 10:46:16). Kept until that flush ends.
+ */
+const completionsSending = new Map<string, string>();
+
+function completionSending(n: SubtaskNotice): boolean {
+  const sending = completionsSending.get(`${n.parentTaskId}/${n.child.id}`);
+  return sending !== undefined && (!n.completedAt || !sending || sending === n.completedAt);
+}
+
 /** Once a completion is on its way (delivered, or held for the parent), the next turn end is no news. */
 function noteCompletionsTold(notices: readonly SubtaskNotice[], now = Date.now()): void {
   for (const n of notices) {
@@ -167,6 +180,7 @@ function noteCompletionsTold(notices: readonly SubtaskNotice[], now = Date.now()
 /** Test seam. */
 export function _resetSubtaskNoticeMemory(): void {
   completionsTold.clear();
+  completionsSending.clear();
   siblingsTold.clear();
 }
 
@@ -420,7 +434,7 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
       log.session.info('subtask notice skipped: its turn was only an agent-ack', { parentTaskId: n.parentTaskId, childTaskId: n.child.id });
       return;
     }
-    if (n.kind === 'completed' && completionTold(n, Date.now())) {
+    if (n.kind === 'completed' && (completionTold(n, Date.now()) || completionSending(n))) {
       log.session.info('subtask notice skipped: this completion was already told', {
         parentTaskId: n.parentTaskId, childTaskId: n.child.id, completedAt: n.completedAt,
       });
@@ -489,6 +503,8 @@ async function flush(parentSid: string): Promise<void> {
   pending.delete(parentSid);
   if (!slot) return;
   let notices = coalesce(slot.notices);
+  const sending = notices.filter((n) => n.kind === 'completed').map((n) => `${n.parentTaskId}/${n.child.id}`);
+  notices.forEach((n) => { if (n.kind === 'completed') completionsSending.set(`${n.parentTaskId}/${n.child.id}`, n.completedAt ?? ''); });
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const target = await getSessionByClaudeId(parentSid);
@@ -569,6 +585,8 @@ async function flush(parentSid: string): Promise<void> {
       parentSid, children: notices.map((n) => ({ id: n.child.id, kind: n.kind })),
       error: err instanceof Error ? err.message : String(err),
     });
+  } finally {
+    for (const key of sending) completionsSending.delete(key);
   }
 }
 
@@ -613,6 +631,8 @@ async function deliverOrHold(target: SessionRecord, notices: SubtaskNotice[]): P
     if (completions.length > 0) {
       const batch = await import('./subtask-batch.js');
       await batch.holdNotices(completions[0].parentTaskId, completions);
+      // Held is on its way: the next edge of the same completion is no news (noteCompletionsTold).
+      noteCompletionsTold(completions);
       armHeldWatch();
     }
     throw err;
