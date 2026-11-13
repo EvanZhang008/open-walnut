@@ -3,6 +3,15 @@ import path from 'node:path'
 import type { DemoPaths } from './demo-home.js'
 import { DEMO_SSH_TRANSLATE_AWK } from './demo-ssh-home-config.js'
 import { demoAgentSockFile, demoRealSshConfigFile, demoRealSshFlag, prepareDemoRealSsh } from './demo-real-ssh.js'
+import { accountInfo } from '../lib/account.js'
+
+/** The OS account's home for the account-settings branch, or undefined (none, or the Demo HOME itself). */
+function accountHome(paths: DemoPaths): string | undefined {
+  let home: string | undefined
+  try { home = accountInfo().homedir } catch { return undefined }
+  if (!home || !path.isAbsolute(home) || path.resolve(home) === path.resolve(paths.home)) return undefined
+  return path.resolve(home)
+}
 
 // OpenSSH finds ~/.ssh from the OS account, never from $HOME, so a Demo child with its own HOME
 // would still read the person's real SSH config, keys and known hosts. Every ssh and scp the Demo
@@ -73,6 +82,7 @@ export async function prepareDemoSsh(paths: DemoPaths, searchPath = process.env.
   await fs.writeFile(homeConfig, '', { flag: 'a', mode: 0o600 })
   await fs.writeFile(config, demoSshConfig(sshHome, homeConfig), { mode: 0o600 })
   await prepareDemoRealSsh(paths, undefined, agentSock)
+  const realHome = accountHome(paths)
   const awk = await findOnPath('awk', `/usr/bin${path.delimiter}/bin${path.delimiter}${searchPath}`, path.resolve(bin))
   for (const name of WRAPPED) {
     const wrapper = path.join(bin, name)
@@ -81,6 +91,7 @@ export async function prepareDemoSsh(paths: DemoPaths, searchPath = process.env.
     await fs.writeFile(wrapper, demoSshWrapper({
       real, awk, config, homeConfig, program, copies, home: paths.home, sshHome,
       realFlag: demoRealSshFlag(paths), realConfig: demoRealSshConfigFile(paths), agentSock: demoAgentSockFile(paths),
+      realHome,
     }), { mode: 0o700 })
     await fs.chmod(wrapper, 0o700)
   }
@@ -101,11 +112,14 @@ interface WrapperParts {
   real: string; awk: string; config: string; homeConfig: string; program: string; copies: string; home: string; sshHome: string
   /** "Use my SSH hosts" (demo-real-ssh.ts): the flag, the settings it names, the launcher's agent socket file. */
   realFlag: string; realConfig: string; agentSock: string
+  /** The OS account's home: what the person's own ssh runs under, so a ProxyCommand finds its login there. */
+  realHome?: string
 }
 
 /**
  * One ssh or scp run. Once the generation reads the account's ~/.ssh (demo-real-ssh.ts): the real tool with the account's
- * settings behind Walnut's overrides, and the launcher's agent (none when it had none). Otherwise,
+ * settings behind Walnut's overrides, the launcher's agent (none when it had none) and the account's
+ * HOME, as the person's own ssh runs. Otherwise,
  * as always: the Demo HOME config is written again (a refused write runs nothing), then the real
  * tool with the Demo's settings.
  */
@@ -116,6 +130,10 @@ export function demoSshWrapper(w: WrapperParts): string {
     '#!/bin/sh',
     `if [ -f ${q(w.realFlag)} ]; then`,
     `  SSH_AUTH_SOCK=$(cat ${q(w.agentSock)} 2>/dev/null) && [ -n "$SSH_AUTH_SOCK" ] && export SSH_AUTH_SOCK || unset SSH_AUTH_SOCK`,
+    // A ProxyCommand or Match exec helper reads its own login from $HOME (a proxy's cookie, a
+    // cloud CLI's profile): under the Demo HOME it found none and said the login expired
+    // (2026-11-12). ssh itself reads ~/.ssh from the account either way.
+    ...(w.realHome ? [`  HOME=${q(w.realHome)}; export HOME`] : []),
     `  exec ${q(w.real)} -F ${q(w.realConfig)} "$@"`,
     'fi',
     `${q(w.awk)} -v home=${q(w.home)} -v sshhome=${q(w.sshHome)} -v out=${q(w.copies)} -v run="$$" -f ${q(w.program)} > ${tmp} && mv -f ${tmp} ${q(w.homeConfig)} || {`,

@@ -95,6 +95,19 @@ describe.skipIf(process.platform === 'win32')('Demo "Use my SSH hosts"', () => {
     expect(fs.readdirSync(realSsh)).toEqual(['config'])
   })
 
+  it('on: ssh and its ProxyCommand run under the account HOME, as the person\'s own ssh does; off: the HOME it was given', async () => {
+    // 2026-11-12: a proxy that reads its login from $HOME found none under the Demo HOME and
+    // reported "login expired" for a host the person's own ssh reached.
+    fs.writeFileSync(path.join(fakeBin, 'ssh'), '#!/bin/sh\nprintf "home=%s" "$HOME"; echo\n', { mode: 0o755 })
+    fs.writeFileSync(path.join(realSsh, 'config'), 'Host lab-box\n  HostName 10.0.0.9\n')
+    await prepareDemoSsh(paths, fakeBin, undefined)
+    expect(run('ssh', { HOME: paths.home })).toBe(`home=${paths.home}`)
+    await enableDemoRealSsh(paths)
+    expect(run('ssh', { HOME: paths.home })).toBe(`home=${account.homedir}`)
+    // The Demo's own data stays in the Demo: the wrapper changes nothing but the child's HOME.
+    expect(fs.readdirSync(realSsh)).toEqual(['config'])
+  })
+
   it('on with no agent at launch: ssh gets none', async () => {
     fs.writeFileSync(path.join(realSsh, 'config'), '')
     await prepareDemoSsh(paths, fakeBin, undefined)

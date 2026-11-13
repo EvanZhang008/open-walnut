@@ -2,11 +2,11 @@
  * The home whose ~/.ssh Walnut reads (its config, keys and certificates) and the SSH agent it
  * asks. Everywhere: $HOME, else os.homedir(), and the process's own SSH_AUTH_SOCK.
  *
- * Walnut Demo runs under a HOME of its own, so by default it reads only the Demo HOME's ~/.ssh
- * and asks no agent. After the person's "Use my SSH hosts" (src/commands/demo-real-ssh.ts) it
- * reads the OS account's ~/.ssh and asks the agent the Demo launcher was started with, the same
- * settings its ssh wrapper then uses (src/commands/demo-ssh.ts), so the hosts it lists are the
- * ones it connects to.
+ * Walnut Demo runs under a HOME of its own. When the person has a ~/.ssh/config, the Demo reads
+ * the OS account's ~/.ssh by itself (src/commands/demo-real-ssh.ts) and asks the agent the Demo
+ * launcher was started with, the same settings its ssh wrapper then uses (src/commands/demo-ssh.ts),
+ * so the hosts it lists are the ones it connects to. Otherwise it reads only the Demo HOME's ~/.ssh
+ * and asks no agent.
  *
  * Every path to ~/.ssh in src/ goes through here (tests/core/ssh-home-guard.test.ts). Its one
  * Walnut import is lib/account.ts: the scanner, the credential checks and the file routes all ask it.
