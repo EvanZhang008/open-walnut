@@ -73,7 +73,18 @@ Object.assign(process.env, {
 await fs.mkdir(process.env.HOME!, { recursive: true })
 process.argv.push('--_ephemeral-child')
 
-await fs.writeFile(path.join(macHome, 'tasks', 'tasks.json'), JSON.stringify({ version: 1, tasks: [] }))
+// A Mac the person already works on: one task of their own. An empty board with no Claude Code
+// (the probe is off here) is a first use, whose welcome card takes Home's place for the
+// attention banner the Cloud specs read (web/src/pages/home-first-use-card.ts, utils/first-use.ts).
+const seededAt = new Date().toISOString()
+await fs.writeFile(path.join(macHome, 'tasks', 'tasks.json'), JSON.stringify({
+  version: 1,
+  tasks: [{
+    id: 'cloud-host-earlier-task', title: 'Earlier work on this Mac', status: 'todo', phase: 'TODO', priority: 'none',
+    project: '', source: 'local', session_ids: [], active_session_ids: [], created_at: seededAt, updated_at: seededAt,
+    description: '', summary: '', note: '', subtasks: [],
+  }],
+}))
 await fs.writeFile(path.join(macHome, 'config.yaml'), JSON.stringify({
   version: 1, user: { name: 'Tester' }, defaults: { priority: 'none' },
 }))
