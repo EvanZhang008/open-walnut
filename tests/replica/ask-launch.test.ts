@@ -65,7 +65,7 @@ async function send(h: Harness, launch: AskLaunch, path: string, body: Record<st
       return result ? result(cmd, params) : { kind: 'applied', reply: { sid: params.sid, taskId: params.taskId, mode: 'default', cwd: '/srv/marina/data', messageId: 'qm-ask-1' } }
     },
   }
-  const req = { method: 'POST', path, body, replicaWrite: w } as unknown as Request
+  const req = { method: 'POST', path, body, replicaWrite: w, headers: {}, get: () => undefined } as unknown as Request
   return new Promise((resolve) => {
     const res = {
       headersSent: false,
