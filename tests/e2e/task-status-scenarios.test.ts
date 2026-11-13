@@ -102,6 +102,15 @@ const report = (r: Partial<StatusReport>): StatusReport => ({ at: at(), turn_end
 
 let teamSeq = 0
 
+/**
+ * What a record that says its CLI runs (or idles) names as that CLI: a live process, this test's
+ * own. Walnut's stale-record sweep (session-tracker.ts fixStaleRecords, run by the capacity check
+ * on a send and the health monitor's pull) rightly stops a 'running' or 'idle' record whose
+ * process is gone, and on a loaded machine it landed between a step and its read ("stored
+ * working, the facts say waiting/stuck", 2026-11-13).
+ */
+const LIVE_CLI = { pid: process.pid }
+
 /** The answer an overloaded model endpoint gives, the way the CLI reports it. */
 const OVERLOADED = 'API Error: 529 Overloaded'
 
@@ -124,12 +133,12 @@ async function team(name: string): Promise<{ lead: Task; worker: Task; sid: stri
 /** A message reaches its session and a turn runs, as the delivery path moves the phase. */
 async function turnStarts(task: Task, sid: string, source: string, reopen = false): Promise<void> {
   await applySessionPhase(task.id, 'session:input', source, { sessionId: sid, ...(reopen ? { reopenTerminal: true } : {}) })
-  await updateSessionRecord(sid, { process_status: 'running' })
+  await updateSessionRecord(sid, { process_status: 'running', ...LIVE_CLI })
 }
 
 /** A turn ends with this report, as the session runtime and report-phase.ts do it. */
 async function turnEnds(task: Task, sid: string, r: Partial<StatusReport>): Promise<void> {
-  await updateSessionRecord(sid, { process_status: 'stopped' })
+  await updateSessionRecord(sid, { process_status: 'stopped', pid: undefined })
   const rep = report(r)
   await updateTaskRaw(task.id, { status_report: rep }, { emitEvent: true })
   await applyReportPhase(task.id, sid, rep, Date.now())
@@ -276,7 +285,7 @@ describe('every surface shows the same state after every step', () => {
       if (d.sessionId === sid && d.isError && typeof d.turnGen === 'number') cliFailed = true
     }, { global: true, interest: [EventNames.SESSION_RESULT] })
     try {
-      await updateSessionRecord(sid, { process_status: 'error', errorMessage: OVERLOADED })
+      await updateSessionRecord(sid, { process_status: 'error', errorMessage: OVERLOADED, pid: undefined })
       bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: OVERLOADED, isError: true }, ['*'], { source: 'session-runner' })
       await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
       expect(getSessionAutoContinue()?.retryAt(sid)).toBeGreaterThan(Date.now())
@@ -314,7 +323,7 @@ describe('every surface shows the same state after every step', () => {
   // progress right?", "it is working". Its own build is its work: Working everywhere, parked or not.
   it('parked on its own build with its session idle -> Working everywhere -> the build ends', async () => {
     const { lead, worker, sid } = await team('Ownbuildflow')
-    await updateSessionRecord(sid, { process_status: 'idle' })
+    await updateSessionRecord(sid, { process_status: 'idle', ...LIVE_CLI })
     // The trigger on the build parks it (trigger_create wait:true), then its turn ends saying so.
     await createRoutine({
       name: 'Ownbuildflow build watch', schedule: { kind: 'every', everyMs: 600_000 },
