@@ -275,30 +275,39 @@ describe('every surface shows the same state after every step', () => {
       const d = e.data as { sessionId?: string; isError?: boolean; turnGen?: number }
       if (d.sessionId === sid && d.isError && typeof d.turnGen === 'number') cliFailed = true
     }, { global: true, interest: [EventNames.SESSION_RESULT] })
-    await updateSessionRecord(sid, { process_status: 'error', errorMessage: OVERLOADED })
-    bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: OVERLOADED, isError: true }, ['*'], { source: 'session-runner' })
-    await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
-    expect(getSessionAutoContinue()?.retryAt(sid)).toBeGreaterThan(Date.now())
-    await expectEverywhere(worker.id, lead.id, 'waiting', 'Walnut retries it')
-    expect((await getTask(worker.id)).user_status).toMatchObject({ kind: 'machine', waitingOn: expect.stringContaining('Walnut, retrying its failed turn by itself') })
-    // The retry goes out and its turn really runs in the CLI, which fails it the same way
-    // (WALNUT_MOCK_CONTINUE_ERROR): no retry is left, so it is its lead's. The test waits for that
-    // turn's own result; a failure written beside the live retry raced the retry's real answer, and
-    // on a busy machine the answer landed last and cleared the error (CI, 2026-11-13).
-    await expect.poll(() => getSessionAutoContinue()?.firedCount(sid), { timeout: 15_000 }).toBe(1)
-    await expect.poll(() => cliFailed, { timeout: 30_000 }).toBe(true)
-    bus.unsubscribe('test-resetflow-cli-result')
-    await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
-    await expect.poll(async () => (await getSessionByClaudeId(sid))?.process_status, { timeout: 10_000 }).toBe('error')
-    expect(getSessionAutoContinue()?.retryAt(sid)).toBeNull()
-    await expectEverywhere(worker.id, lead.id, 'waiting', 'its lead retries it')
-    expect((await getTask(worker.id)).user_status).toMatchObject({
-      kind: 'lead', waitingOn: `Its lead, to retry it: its session failed again after Walnut's own retry (${OVERLOADED})`,
-    })
-    // An error only the user can fix still reaches him.
-    await updateSessionRecord(sid, { errorMessage: 'Invalid API key · Please run /login' })
-    // The record write moves the status through the server's own sync too; read once it settled.
-    await vi.waitFor(() => expectEverywhere(worker.id, lead.id, 'needs', 'a sign-in is his'), { timeout: 10_000, interval: 250 })
+    try {
+      await updateSessionRecord(sid, { process_status: 'error', errorMessage: OVERLOADED })
+      bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: OVERLOADED, isError: true }, ['*'], { source: 'session-runner' })
+      await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
+      expect(getSessionAutoContinue()?.retryAt(sid)).toBeGreaterThan(Date.now())
+      await expectEverywhere(worker.id, lead.id, 'waiting', 'Walnut retries it')
+      expect((await getTask(worker.id)).user_status).toMatchObject({ kind: 'machine', waitingOn: expect.stringContaining('Walnut, retrying its failed turn by itself') })
+      // The retry goes out and its turn really runs in the CLI, which fails it the same way
+      // (WALNUT_MOCK_CONTINUE_ERROR): no retry is left, so it is its lead's. The test waits for that
+      // turn's own result; a failure written beside the live retry raced the retry's real answer, and
+      // on a busy machine the answer landed last and cleared the error (CI, 2026-11-13).
+      await expect.poll(() => getSessionAutoContinue()?.firedCount(sid), { timeout: 15_000 }).toBe(1)
+      await expect.poll(() => cliFailed, { timeout: 30_000 }).toBe(true)
+    } finally {
+      bus.unsubscribe('test-resetflow-cli-result')
+    }
+    // The failed turn and its process ending settle in a few writes (phase, record, status sync);
+    // every surface reads its lead's once they have, whatever their order.
+    await vi.waitFor(async () => {
+      expect((await getTask(worker.id)).phase).toBe('NEED_ACTION')
+      expect((await getSessionByClaudeId(sid))?.process_status).toBe('error')
+      expect(getSessionAutoContinue()?.retryAt(sid)).toBeNull()
+      await expectEverywhere(worker.id, lead.id, 'waiting', 'its lead retries it')
+      expect((await getTask(worker.id)).user_status).toMatchObject({
+        kind: 'lead', waitingOn: `Its lead, to retry it: its session failed again after Walnut's own retry (${OVERLOADED})`,
+      })
+    }, { timeout: 15_000, interval: 250 })
+    // An error only the user can fix still reaches him. Written again on each read: a late write of
+    // the ended retry (its process end) may land after it, and only the record's error is under test.
+    await vi.waitFor(async () => {
+      await updateSessionRecord(sid, { errorMessage: 'Invalid API key \u00b7 Please run /login' })
+      await expectEverywhere(worker.id, lead.id, 'needs', 'a sign-in is his')
+    }, { timeout: 10_000, interval: 250 })
   }, 120_000)
 
   // 2026-11-02, the user, on a task parked on its own build: "if it is runnig it shoud be i
