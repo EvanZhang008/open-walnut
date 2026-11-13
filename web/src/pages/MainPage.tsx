@@ -114,7 +114,6 @@ import { nextLine, useColumnCompleteClose, type AdvanceResult } from './useColum
 import { focusColumnComposer, focusTaskRow, noteKeyboardMove, personMovedSince, useHomeKeyboard } from './useHomeKeyboard';
 import { afterStrip } from './after-strip';
 import { COLUMN_FADE_MS, columnElement, holdStripAnimation, keepScrollWhileFading, prefersReducedMotion } from './hold-strip-animation';
-import { jumpBadgeLabel } from '@/keyboard/shortcuts';
 import { phaseSnapshot, useTaskUndo } from '@/undo/TaskUndoContext';
 import { nextAfterCompleteNow, useNextAfterComplete } from '@/hooks/useNextAfterComplete';
 import { needsYouQueue, nextNeedsYou } from '@/components/tasks/next-needs-you';
@@ -2884,7 +2883,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setSuppressDetail(true);
     setFocusedTask(task); // the list follows a column already open: no new open for Recent
   };
-  const { jumpHints, env: keyEnv, current: currentColumn } = useHomeKeyboard({
+  const { current: currentColumn } = useHomeKeyboard({
     visible: visible && !phoneLayout,
     columnsRef: sessionColumnsRef,
     completeColumn: completeColumnTask,
@@ -3916,13 +3915,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               data-column-id={sid}
               style={colStyle}
             >
-              {jumpHints && idx < 9 && (
-                <JumpBadge
-                  label={jumpBadgeLabel(idx + 1, keyEnv)}
-                  // The last column is also mod+9's, as in a browser's tabs.
-                  alsoLast={idx > 0 && idx < 8 && idx === sessionColumns.length - 1 ? jumpBadgeLabel(9, keyEnv) : undefined}
-                />
-              )}
               {isDraft ? (
                 // A `draft:` id resolves to NOTHING server-side, so it must never
                 // reach SessionPanel (which would fetch it and render "session not
@@ -4050,23 +4042,5 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
     </div>
     </>
-  );
-}
-
-/** A column's number while the jump modifier is held: just under its header (whose rows are
- *  all buttons), at the top of the transcript, for the moment the key is held. */
-function JumpBadge({ label, alsoLast }: { label: string; alsoLast?: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [top, setTop] = useState<number | null>(null);
-  useLayoutEffect(() => {
-    const column = ref.current?.parentElement;
-    const header = column?.querySelector<HTMLElement>('.session-panel-header');
-    setTop(column && header ? header.getBoundingClientRect().bottom - column.getBoundingClientRect().top + 6 : 6);
-  }, []);
-  return (
-    <div ref={ref} className="session-jump-badge" aria-hidden="true" style={top === null ? { visibility: 'hidden' } : { top }}>
-      <kbd>{label}</kbd>
-      {alsoLast && <kbd className="session-jump-badge-last">{alsoLast}</kbd>}
-    </div>
   );
 }

@@ -70,16 +70,6 @@ export function isHelpChord(e: KeyLike, env: KeyEnv, typing: boolean): boolean {
   return !typing && e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey;
 }
 
-/** Is the modifier that shows the column numbers held alone? */
-export function isJumpHintModifier(e: KeyLike, env: KeyEnv): boolean {
-  if (e.shiftKey) return false;
-  switch (env) {
-    case 'mac-app': return e.key === 'Meta' && e.metaKey && !e.ctrlKey && !e.altKey;
-    case 'mac-browser': return e.key === 'Control' && e.ctrlKey && !e.metaKey && !e.altKey;
-    default: return e.key === 'Alt' && e.altKey && !e.ctrlKey && !e.metaKey;
-  }
-}
-
 // ── The sheet ──
 
 export interface ShortcutRow {
@@ -106,12 +96,6 @@ function names(env: KeyEnv) {
   };
 }
 
-/** The keys the column number badges show: "⌘1". */
-export function jumpBadgeLabel(n: number, env: KeyEnv): string {
-  const k = names(env).sw;
-  return env === 'other' ? `${k}+${n}` : `${k}${n}`;
-}
-
 export function shortcutGroups(env: KeyEnv): ShortcutGroup[] {
   const k = names(env);
   return [
@@ -121,7 +105,6 @@ export function shortcutGroups(env: KeyEnv): ShortcutGroup[] {
         // As many as the strip can hold (Settings > General > Session panels).
         { id: 'session.jump', keys: [[k.sw, '1'], [k.sw, String(MAX_PANELS)]], label: `Go to the 1st to ${ORDINAL[MAX_PANELS]} session column`, sep: 'to' },
         { id: 'session.last', keys: [[k.sw, '9']], label: 'Go to the last session column' },
-        { id: 'session.numbers', keys: [[k.sw]], label: 'Hold to show each column\'s number' },
         { id: 'session.cycle', keys: [[k.sw, k.shift, '['], [k.sw, k.shift, ']']], label: 'Previous / next session column', sep: '/' },
         { id: 'composer.focus', keys: [[k.sw, 'I']], label: 'Type in the current session' },
         { id: 'session.find', keys: [[k.mod, k.shift, 'O']], label: 'Find a session' },

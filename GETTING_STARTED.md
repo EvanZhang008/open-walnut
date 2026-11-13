@@ -394,7 +394,7 @@ For example: `Work → HomeLab → "Set up monitoring dashboard" → "Install Gr
 
 Just tell the agent what you need in the chat:
 
-> "I need to file my taxes before Friday. High priority."
+> "I need to renew the garden club's website domain before Friday. High priority."
 
 The agent creates the category, project, and task automatically — with priority, due date, and all metadata.
 
@@ -670,7 +670,7 @@ actionable line with the command and the reason. Nothing is shown when the host 
 fix runs once per host until you press Check again. To turn the fixes off, set
 `WALNUT_HOST_AUTOFIX=0` for every host, or `autofix: false` under `hosts.<alias>` for one.
 
-Home directories that are symlinks (`~/workplace -> /workplace`) list and resolve like any other
+Home directories that are symlinks (`~/code -> /data/code`) list and resolve like any other
 directory. If SSH drops, the session keeps running on the remote host and Walnut reattaches.
 
 ### Microsoft To-Do Sync
@@ -734,7 +734,6 @@ same list the app shows, checked by `tests/web/keyboard-shortcuts.test.ts`.
 |---|---|---|---|
 | Go to the 1st to 5th session column | `⌘1` to `⌘5` | `⌃1` to `⌃5` | `Alt+1` to `Alt+5` |
 | Go to the last session column | `⌘9` | `⌃9` | `Alt+9` |
-| Hold to show each column's number | `⌘` | `⌃` | `Alt` |
 | Previous / next session column | `⌘⇧[` / `⌘⇧]` | `⌃⇧[` / `⌃⇧]` | `Alt+Shift+[` / `Alt+Shift+]` |
 | Type in the current session | `⌘I` | `⌃I` | `Alt+I` |
 | Find a session | `⌘⇧O` | `⌘⇧O` | `Ctrl+Shift+O` |

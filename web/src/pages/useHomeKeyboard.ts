@@ -5,8 +5,9 @@
  *   - mod+shift+[ / ]: the previous / next column, wrapping;
  *   - mod+i: the caret into the current column's composer;
  *   - mod+shift+D: complete the current column's task, close it, go to the next task that
- *     needs the person (MainPage's `completeColumn`, through useColumnCompleteClose);
- *   - holding the jump modifier alone shows each column's number.
+ *     needs the person (MainPage's `completeColumn`, through useColumnCompleteClose).
+ * Holding the jump modifier alone shows nothing: the column number badges it once showed were
+ * removed (2026-11-13, the person never asked for them and they appeared on a bare Cmd press).
  * "Current" is the column holding the caret, else the one the person last pressed in; the
  * hook reports it (`current`) so Home can mark that column, the one the keys act on.
  * Off Home (MainPage stays mounted behind other routes) nothing here listens.
@@ -20,11 +21,10 @@ import { focusWhenShown } from '@/utils/focus-when-shown';
 import { installFindPointerTracking, lastPointerTarget } from '@/utils/find-scope';
 import { COMPOSER_FOCUS_EVENT, type ComposerFocusDetail } from '@/utils/composer-insert';
 import {
-  cycleDir, detectKeyEnv, isCompleteNextChord, isFocusComposerChord, isJumpHintModifier, jumpIndex,
+  cycleDir, detectKeyEnv, isCompleteNextChord, isFocusComposerChord, jumpIndex,
   type KeyEnv,
 } from '@/keyboard/shortcuts';
 
-const HINT_DELAY_MS = 350;
 const COLUMN = '.main-page-session-column[data-column-id]';
 
 function columnEl(id: string): HTMLElement | null {
@@ -313,29 +313,18 @@ function editorFocused(): boolean {
   return !!el && (el.isContentEditable || !!el.closest?.('.cm-editor, .xterm, .monaco-editor'));
 }
 
-export function useHomeKeyboard(deps: Deps): { jumpHints: boolean; env: KeyEnv; current: string | null } {
+export function useHomeKeyboard(deps: Deps): { current: string | null } {
   const latest = useRef(deps);
   latest.current = deps;
-  const [jumpHints, setJumpHints] = useState(false);
   const [current, setCurrent] = useState<string | null>(null);
   const env = useRef<KeyEnv>(detectKeyEnv()).current;
   const { visible } = deps;
 
   useEffect(() => {
-    if (!visible) { setJumpHints(false); return; }
+    if (!visible) return;
     installFindPointerTracking();
     trackPointer();
-    let hintTimer: ReturnType<typeof setTimeout> | undefined;
-    let hintsShown = false;
     let cancelFocus: (() => void) | null = null;
-    // Runs on every key, typing included: it touches React only when the numbers are up, so a
-    // typed letter never sets Home's state (2026-11-10, the user: "did we hook anything to the input").
-    const hideHints = () => {
-      if (hintTimer) { clearTimeout(hintTimer); hintTimer = undefined; }
-      if (!hintsShown) return;
-      hintsShown = false;
-      setJumpHints(false);
-    };
     /** The column the keys act on, and the one Home marks: one value for both. A jump sets it
      *  at once (so keys faster than the caret stack up), the caret or a press inside a column
      *  sets it to that column, and focus or a press outside every column clears it (the keys
@@ -389,16 +378,6 @@ export function useHomeKeyboard(deps: Deps): { jumpHints: boolean; env: KeyEnv; 
     document.addEventListener('focusin', onArrive, true);
     document.addEventListener('pointerdown', onPersonPress, true);
     const onKeyDown = (e: KeyboardEvent) => {
-      if (isJumpHintModifier(e, env)) {
-        if (!e.repeat && !hintTimer && latest.current.columnsRef.current.length > 0 && !hasActiveModalOverlay()) {
-          hintTimer = setTimeout(() => { hintTimer = undefined; hintsShown = true; setJumpHints(true); }, HINT_DELAY_MS);
-        }
-        return;
-      }
-      // Cmd still held after a jump: the numbers stay up for the next one.
-      const keepHints = hintsShown;
-      hideHints();
-      const showHintsAgain = () => { if (keepHints) { hintsShown = true; setJumpHints(true); } };
       if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
       if (hasActiveModalOverlay() || hasOpenOverlayLayer() || document.querySelector('.wn-context-menu')) return;
       const ids = latest.current.columnsRef.current.map((c) => c.id);
@@ -410,7 +389,6 @@ export function useHomeKeyboard(deps: Deps): { jumpHints: boolean; env: KeyEnv; 
         if (!id) return;
         e.preventDefault();
         goTo(id);
-        showHintsAgain();
         return;
       }
       const dir = cycleDir(e, env);
@@ -420,7 +398,6 @@ export function useHomeKeyboard(deps: Deps): { jumpHints: boolean; env: KeyEnv; 
         const at = ids.indexOf(intended(ids) ?? currentColumnId(ids) ?? '');
         const next = at < 0 ? (dir > 0 ? 0 : ids.length - 1) : (at + dir + ids.length) % ids.length;
         goTo(ids[next]);
-        showHintsAgain();
         return;
       }
       if (isFocusComposerChord(e, env)) {
@@ -442,13 +419,6 @@ export function useHomeKeyboard(deps: Deps): { jumpHints: boolean; env: KeyEnv; 
         latest.current.hint(id ? 'This column has no task to complete.' : 'Select a task, or click into a session, to complete it.');
       }
     };
-    const onKeyUp = (e: KeyboardEvent) => {
-      // Alt held to read the numbers, then let go: on Windows that release would open the
-      // browser's menu.
-      if (e.key === 'Alt' && hintsShown) e.preventDefault();
-      if (e.key === 'Meta' || e.key === 'Control' || e.key === 'Alt' || !(e.metaKey || e.ctrlKey || e.altKey)) hideHints();
-    };
-    const onBlur = () => hideHints();
     const mark = (e: Event) => {
       const el = e.target as Element | null;
       if (!el || el === document.body || el === document.documentElement) return;
@@ -459,18 +429,11 @@ export function useHomeKeyboard(deps: Deps): { jumpHints: boolean; env: KeyEnv; 
     document.addEventListener('focusin', mark, true);
     document.addEventListener('pointerdown', mark, true);
     window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', onBlur);
-    document.addEventListener('visibilitychange', onBlur);
     watchStrip();
     return () => {
-      hideHints();
       cancelFocus?.();
       stripObserver?.disconnect();
       window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
-      document.removeEventListener('visibilitychange', onBlur);
       document.removeEventListener('focusin', mark, true);
       document.removeEventListener('pointerdown', mark, true);
       document.removeEventListener('focusin', onArrive, true);
@@ -478,5 +441,5 @@ export function useHomeKeyboard(deps: Deps): { jumpHints: boolean; env: KeyEnv; 
     };
   }, [visible, env]);
 
-  return { jumpHints, env, current };
+  return { current };
 }

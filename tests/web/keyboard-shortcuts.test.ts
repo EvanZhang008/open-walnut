@@ -9,8 +9,8 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  cycleDir, envNote, isCompleteNextChord, isFocusComposerChord, isHelpChord, isJumpHintModifier,
-  jumpBadgeLabel, jumpIndex, shortcutGroups, type KeyEnv,
+  cycleDir, envNote, isCompleteNextChord, isFocusComposerChord, isHelpChord,
+  jumpIndex, shortcutGroups, type KeyEnv,
 } from '../../web/src/keyboard/shortcuts'
 
 type K = { key: string; code: string; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean }
@@ -41,14 +41,21 @@ describe('session switching takes the modifier the place leaves free', () => {
     expect(jumpIndex(ev({ key: '0', code: 'Digit0', altKey: true }), 'other')).toBe(0)
   })
 
-  it('the column badges and the hold that shows them follow the same modifier', () => {
-    expect(jumpBadgeLabel(1, 'mac-app')).toBe('\u23181')
-    expect(jumpBadgeLabel(4, 'mac-browser')).toBe('\u23034')
-    expect(jumpBadgeLabel(2, 'other')).toBe('Alt+2')
-    expect(isJumpHintModifier(ev({ key: 'Meta', code: 'MetaLeft', metaKey: true }), 'mac-app')).toBe(true)
-    expect(isJumpHintModifier(ev({ key: 'Meta', code: 'MetaLeft', metaKey: true, shiftKey: true }), 'mac-app')).toBe(false)
-    expect(isJumpHintModifier(ev({ key: 'Control', code: 'ControlLeft', ctrlKey: true }), 'mac-browser')).toBe(true)
-    expect(isJumpHintModifier(ev({ key: 'Meta', code: 'MetaLeft', metaKey: true }), 'mac-browser')).toBe(false)
+  // Holding the jump modifier alone shows nothing (2026-11-13: the column number badges came up on
+  // a bare Cmd press the person never asked for, "i press "command" and this show"). The sheet has
+  // no hold row, Home's keys never act on a lone modifier, and no page draws the badges.
+  it('a lone modifier held is no shortcut: no hold row, no handler, no badge', () => {
+    const MODIFIERS = new Set(['\u2318', '\u2303', '\u2325', '\u21e7', 'Ctrl', 'Alt', 'Shift'])
+    for (const env of ['mac-app', 'mac-browser', 'other'] as KeyEnv[]) {
+      for (const row of shortcutGroups(env).flatMap((g) => g.rows)) {
+        for (const chord of row.keys) expect(chord.every((k) => MODIFIERS.has(k)), `"${row.id}" is a modifier alone`).toBe(false)
+      }
+    }
+    const home = readFileSync(path.resolve(import.meta.dirname, '../../web/src/pages/useHomeKeyboard.ts'), 'utf8')
+    expect(home).not.toMatch(/e\.key === '(Meta|Control|Alt)'/)
+    expect(home).not.toMatch(/addEventListener\('keyup'/)
+    const main = readFileSync(path.resolve(import.meta.dirname, '../../web/src/pages/MainPage.tsx'), 'utf8')
+    expect(main).not.toMatch(/session-jump-badge|JumpBadge/)
   })
 })
 
@@ -95,7 +102,6 @@ describe('the sheet names only handled keys', () => {
   const HANDLERS: Record<string, { file: string; has: RegExp }> = {
     'session.jump': { file: 'pages/useHomeKeyboard.ts', has: /jumpIndex\(e, env\)/ },
     'session.last': { file: 'pages/useHomeKeyboard.ts', has: /n === 9 \? ids\[ids\.length - 1\]/ },
-    'session.numbers': { file: 'pages/useHomeKeyboard.ts', has: /isJumpHintModifier\(e, env\)/ },
     'session.cycle': { file: 'pages/useHomeKeyboard.ts', has: /cycleDir\(e, env\)/ },
     'composer.focus': { file: 'pages/useHomeKeyboard.ts', has: /isFocusComposerChord\(e, env\)/ },
     'task.completeNext': { file: 'pages/useHomeKeyboard.ts', has: /isCompleteNextChord\(e, env\)/ },
