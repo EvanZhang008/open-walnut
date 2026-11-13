@@ -329,6 +329,8 @@ describe('encrypted backups through the routes', () => {
     const before = await call('GET', '/gdrive/status');
     expect(before.body).toMatchObject({ builtinClient: true, connected: false });
     await updateConfig({ backup: { ...(await getConfig()).backup, destination: { type: 'gdrive' } } } as never);
+    // Only this sign-in's event counts: the test before cancelled one, which emitted its own.
+    const seen = events.length;
     const c = await call<{ authUrl: string }>('POST', '/gdrive/connect', {});
     expect(c.body.authUrl).toContain('code_challenge_method=S256');
     expect(c.body.authUrl).toContain(encodeURIComponent('https://www.googleapis.com/auth/drive.file'));
@@ -337,8 +339,9 @@ describe('encrypted backups through the routes', () => {
     // The fake consents at once and sends the browser to the loopback listener.
     const consent = await fetch(c.body.authUrl, { redirect: 'follow' });
     expect(consent.ok).toBe(true);
-    await until(() => events.some((e) => e.name === 'backup:gdrive'));
-    expect(events.find((e) => e.name === 'backup:gdrive')!.data).toMatchObject({ connected: true });
+    const driveEvent = () => events.slice(seen).find((e) => e.name === 'backup:gdrive');
+    await until(() => Boolean(driveEvent()));
+    expect(driveEvent()!.data).toMatchObject({ connected: true });
     const after = await call('GET', '/gdrive/status');
     // Signed in with Walnut's own client: the pane says nothing about a client of the user's.
     expect(after.body).toMatchObject({ connected: true, folderName: 'Walnut Backup', signedInWith: 'builtin' });
