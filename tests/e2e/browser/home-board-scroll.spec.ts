@@ -121,17 +121,22 @@ test('dense board scrolls horizontally from cards and keeps one clipping boundar
   const rows = Array.from({ length: 152 }, (_, i) => ({
     id: `board-scroll-${i}`, title: `Board scroll task ${i} ${'x'.repeat(80)}`, project: `Board scroll project ${i % 9}`,
     source: 'local', category: '', status: 'todo', phase: 'TODO', priority: 'none', created_at: now, updated_at: now,
-    pinned: i % 5 !== 4, focus_tier: ['focus', 'satellite', 'wait', 'ct_scroll', null][i % 5],
+    // Parked is retired (a legacy wait pin shows as Satellite), so a second custom tier keeps
+    // the board as wide as before: five lanes, wider than the 1000 px sheet.
+    pinned: i % 5 !== 4, focus_tier: ['focus', 'satellite', 'ct_ship', 'ct_scroll', null][i % 5],
     user_status: { state: ['needs', 'working', 'waiting'][i % 3], at: now },
   }));
   await answerTaskList(page, () => rows);
-  await page.route('**/api/focus/tiers', route => route.fulfill({ json: { tiers: [{ id: 'ct_scroll', label: 'Release' }] } }));
+  await page.route('**/api/focus/tiers', route => route.fulfill({ json: { tiers: [{ id: 'ct_scroll', label: 'Release' }, { id: 'ct_ship', label: 'Ship' }] } }));
   await page.route('**/api/focus/tasks', route => route.fulfill({ json: {
     pinned_tasks: rows.filter(t => t.pinned).map(t => t.id),
     focus_tasks: rows.filter(t => t.focus_tier === 'focus').map(t => t.id),
     satellite_tasks: rows.filter(t => t.focus_tier === 'satellite').map(t => t.id),
-    wait_tasks: rows.filter(t => t.focus_tier === 'wait').map(t => t.id),
-    custom_tier_tasks: { ct_scroll: rows.filter(t => t.focus_tier === 'ct_scroll').map(t => t.id) },
+    wait_tasks: [],
+    custom_tier_tasks: {
+      ct_scroll: rows.filter(t => t.focus_tier === 'ct_scroll').map(t => t.id),
+      ct_ship: rows.filter(t => t.focus_tier === 'ct_ship').map(t => t.id),
+    },
   } }));
   await isolateUiPrefs(page);
   await page.setViewportSize({ width: 1000, height: 718 });

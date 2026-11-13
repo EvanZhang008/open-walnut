@@ -322,10 +322,16 @@ test.describe('zoom stability', () => {
         for (let round = 0; round < 3; round++) {
           await row.getByRole('button', { name: 'More actions' }).click()
           await expect(menu).toBeVisible()
-          // The widest content: a long custom tier (in Pin to) and a plugin field (in More fields).
+          // The widest content: a plugin field (in More fields). The long custom tier sits behind
+          // More now (the first level holds only the pin shortcuts): its flyout lists it, and one
+          // Escape closes the flyout while the menu stays.
           await openKebabGroup(menu, 'kebab-group-pin')
           await openKebabGroup(menu, 'kebab-group-fields')
-          await expect(menu.getByRole('button', { name: /Virtual Teammate/ })).toBeVisible()
+          await menu.getByTestId('kebab-pin-more').click()
+          await expect(page.locator('[data-testid^="kebab-pin-option-"]', { hasText: 'Virtual Teammate' })).toBeVisible()
+          await page.keyboard.press('Escape')
+          await expect(page.locator('[data-testid^="kebab-pin-option-"]')).toHaveCount(0)
+          await expect(menu).toBeVisible()
           await expect(menu.getByText('Sprint', { exact: true })).toBeVisible()
           const samples = await menu.evaluate(async (el) => {
             const frames: Array<{ left: number; right: number; width: number; contentLeft: number }> = []

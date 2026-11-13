@@ -200,7 +200,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   await expect(record.locator('.suggest-accuracy-entry.verdict-kept', { hasText: aiCwd })).toBeVisible()
   await expect(record.locator('.suggest-accuracy-entry.verdict-changed', { hasText: `${AI_PROJECT} to ${USER_PROJECT}` }))
     .toBeVisible()
-  await expect(record.locator('.suggest-accuracy-entry.verdict-changed', { hasText: 'wait to satellite' })).toBeVisible()
+  await expect(record.locator('.suggest-accuracy-entry.verdict-changed', { hasText: 'focus to satellite' })).toBeVisible()
 
   // Scroll the card fully into frame for the artifact — the assertions above are
   // done, and a screenshot of the section header proves nothing to a human reviewer.
