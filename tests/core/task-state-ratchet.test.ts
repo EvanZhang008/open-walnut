@@ -116,7 +116,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/sessions/machine-wake.ts': 2,
   'src/core/sessions/outside-wait.ts': 4,
   'src/core/sessions/promise-alarm.ts': 1,
-  'src/core/sessions/report-phase.ts': 4,
+  // + one: a lead's waiting report parks it only on an armed trigger (no WAITING without one).
+  'src/core/sessions/report-phase.ts': 5,
   'src/core/sessions/restart-loss.ts': 2,
   'src/core/sessions/session-request-notify.ts': 1,
   // a repeated answer's one line wakes an asker parked on its replies (WAITING), as a real answer would
@@ -133,7 +134,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/task-outbox.ts': 1,
   'src/core/task-projection.ts': 1,
   'src/core/task-wait-resume.ts': 1,
-  'src/core/task-wait-until.ts': 4,
+  // + two: the clock that woke a task is forgotten once it leaves WAITING, and kept while it stays parked.
+  'src/core/task-wait-until.ts': 6,
   // + two: a parked task's own work reads Working while its wait clock brings it back (ownWork).
   'src/core/user-status.ts': 6,
   // the deriver's own fact: a subtask in progress or parked on its own wait is one its parent waits on (workersAtWork)

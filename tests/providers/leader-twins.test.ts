@@ -90,7 +90,9 @@ describe('leader protocol: both twins', () => {
       expect(fnBody(src, 'gatewayTargetFor')).toMatch(/if \(home && leaderBook\.backupLead\(home\)\) target = null/)
       const send = fnBody(src, 'sendGatewayRequest')
       expect(send).toMatch(/gatewayTargetFor\(home, \{ callerSid(: callerSid)?, op: payload\.name \}\)/)
-      expect(send).toMatch(/r\.error\.code === 'hub_unreachable' && !target\s*&& forwardToBackup\(home, capability, callerSid, payload, respond\)/)
+      // hub_unreachable here (unreachable) goes to the companion; its own hub_unreachable waits, then is held (holdWrite).
+      expect(send).toMatch(/r\.error\.code === 'hub_unreachable' && !target/)
+      expect(send).toMatch(/if \(unreachable\(r( as GatewayResponse)?\)\)?\s*&& forwardToBackup\(home, capability, callerSid, payload, /)
       const fwd = fnBody(src, 'forwardToBackup')
       expect(fwd).toMatch(/leaderBook\.backupLead\(home\)/)
       expect(fwd).toMatch(/via: 'bridge'/)
@@ -208,7 +210,9 @@ describe('leader protocol: both twins', () => {
       const send = fnBody(src, 'sendGatewayRequest')
       const guard = send.indexOf("payload.name === 'search'")
       const forward = send.indexOf('forwardToBackup(home, capability, callerSid, payload, ', guard)
-      const general = send.indexOf("r.error.code === 'hub_unreachable' && !target")
+      const general = send.indexOf('forwardToBackup(home, capability, callerSid, payload, (b)') > -1
+        ? send.indexOf('forwardToBackup(home, capability, callerSid, payload, (b)')
+        : send.indexOf('forwardToBackup(home, capability, callerSid, payload, function (b)')
       expect(guard).toBeGreaterThan(-1)
       expect(forward).toBeGreaterThan(guard)
       // Before the general path, and only with no server to ask.
