@@ -102,6 +102,9 @@ const report = (r: Partial<StatusReport>): StatusReport => ({ at: at(), turn_end
 
 let teamSeq = 0
 
+/** The answer an overloaded model endpoint gives, the way the CLI reports it. */
+const OVERLOADED = 'API Error: 529 Overloaded'
+
 /** A lead and one worker in a project of their own, the worker's session stopped after a turn. */
 async function team(name: string): Promise<{ lead: Task; worker: Task; sid: string }> {
   const lead = (await addTask({ title: `${name} lead`, project: name })).task
@@ -136,6 +139,10 @@ beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   // Walnut's own retry of a failed turn fires in a second here, not three minutes.
   process.env.WALNUT_AUTO_CONTINUE_DELAY_MS = '1000'
+  // That retry really runs: the mock CLI resumes the session, and its "continue" turn fails with
+  // this answer (tests/providers/mock-claude.mjs). Set before the server starts its local daemon,
+  // whose CLIs inherit it.
+  process.env.WALNUT_MOCK_CONTINUE_ERROR = OVERLOADED
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
   port = typeof addr === 'object' && addr ? addr.port : 0
@@ -143,6 +150,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   delete process.env.WALNUT_AUTO_CONTINUE_DELAY_MS
+  delete process.env.WALNUT_MOCK_CONTINUE_ERROR
   await stopServer()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
@@ -261,22 +269,27 @@ describe('every surface shows the same state after every step', () => {
   it('a turn fails on an overloaded answer -> Walnut retries it -> the retry fails too -> its lead retries, never the user', async () => {
     const { lead, worker, sid } = await team('Resetflow')
     await turnStarts(worker, sid, 'web-ui')
-    const OVERLOADED = 'API Error: 529 Overloaded'
+    // The CLI's own result of a turn names its turn (turnGen); the failure this test writes does not.
+    let cliFailed = false
+    bus.subscribe('test-resetflow-cli-result', (e) => {
+      const d = e.data as { sessionId?: string; isError?: boolean; turnGen?: number }
+      if (d.sessionId === sid && d.isError && typeof d.turnGen === 'number') cliFailed = true
+    }, { global: true, interest: [EventNames.SESSION_RESULT] })
     await updateSessionRecord(sid, { process_status: 'error', errorMessage: OVERLOADED })
     bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: OVERLOADED, isError: true }, ['*'], { source: 'session-runner' })
     await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
     expect(getSessionAutoContinue()?.retryAt(sid)).toBeGreaterThan(Date.now())
     await expectEverywhere(worker.id, lead.id, 'waiting', 'Walnut retries it')
     expect((await getTask(worker.id)).user_status).toMatchObject({ kind: 'machine', waitingOn: expect.stringContaining('Walnut, retrying its failed turn by itself') })
-    // The retry goes out, and its turn fails the same way: no retry is left, so it is its lead's.
+    // The retry goes out and its turn really runs in the CLI, which fails it the same way
+    // (WALNUT_MOCK_CONTINUE_ERROR): no retry is left, so it is its lead's. The test waits for that
+    // turn's own result; a failure written beside the live retry raced the retry's real answer, and
+    // on a busy machine the answer landed last and cleared the error (CI, 2026-11-13).
     await expect.poll(() => getSessionAutoContinue()?.firedCount(sid), { timeout: 15_000 }).toBe(1)
-    // The retry's message starts a turn; it fails only once that turn runs (else its delivery,
-    // landing late on a busy machine, would read as a new turn after the second failure).
-    await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 15_000 }).toBe('IN_PROGRESS')
-    await expect.poll(async () => (await getSessionByClaudeId(sid))?.process_status, { timeout: 15_000 }).not.toBe('error')
-    await updateSessionRecord(sid, { process_status: 'error', errorMessage: OVERLOADED })
-    bus.emit(EventNames.SESSION_RESULT, { sessionId: sid, taskId: worker.id, result: OVERLOADED, isError: true }, ['*'], { source: 'session-runner' })
+    await expect.poll(() => cliFailed, { timeout: 30_000 }).toBe(true)
+    bus.unsubscribe('test-resetflow-cli-result')
     await expect.poll(async () => (await getTask(worker.id)).phase, { timeout: 10_000 }).toBe('NEED_ACTION')
+    await expect.poll(async () => (await getSessionByClaudeId(sid))?.process_status, { timeout: 10_000 }).toBe('error')
     expect(getSessionAutoContinue()?.retryAt(sid)).toBeNull()
     await expectEverywhere(worker.id, lead.id, 'waiting', 'its lead retries it')
     expect((await getTask(worker.id)).user_status).toMatchObject({

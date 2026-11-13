@@ -1864,14 +1864,17 @@ if (outputFormat === 'stream-json') {
     // 2a.0c. "unreachable-error" — the model endpoint refused the connection (2026-11-03: a local
     //        model proxy that went down): the CLI's own words for ECONNREFUSED. Drives the endpoint
     //        wait (src/core/sessions/endpoint-wait.ts). WALNUT_MOCK_CONTINUE_UNREACHABLE=1 makes a
-    //        resumed `continue` turn fail the same way.
-    const continueUnreachable = process.env.WALNUT_MOCK_CONTINUE_UNREACHABLE === '1'
-      && resume && effectiveMessage === 'continue';
-    if (effectiveMessage === 'unreachable-error' || continueUnreachable) {
+    //        resumed `continue` turn fail the same way. WALNUT_MOCK_CONTINUE_ERROR=<text> makes a
+    //        resumed `continue` turn (Walnut's own retry) fail with that text instead, e.g.
+    //        "API Error: 529 Overloaded" (tests/e2e/task-status-scenarios.test.ts).
+    const resumedContinue = resume && effectiveMessage === 'continue';
+    const continueError = resumedContinue ? process.env.WALNUT_MOCK_CONTINUE_ERROR : undefined;
+    const continueUnreachable = process.env.WALNUT_MOCK_CONTINUE_UNREACHABLE === '1' && resumedContinue;
+    if (effectiveMessage === 'unreachable-error' || continueUnreachable || continueError) {
       const resultEvent = {
         type: 'result', subtype: 'success', is_error: true,
         duration_ms: 20, num_turns: 1,
-        result: 'API Error: Connection refused \u2014 a firewall or proxy may be blocking it (ECONNREFUSED)',
+        result: continueError || 'API Error: Connection refused \u2014 a firewall or proxy may be blocking it (ECONNREFUSED)',
         session_id: outputSessionId, total_cost_usd: 0.0,
         usage: { input_tokens: 0, output_tokens: 0 },
       };
