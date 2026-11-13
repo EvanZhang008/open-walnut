@@ -5491,13 +5491,29 @@ export class ClaudeCodeSession {
   /** The death error this process's offer kept quiet (startRecovery): reported plainly if the offer is withdrawn. */
   private _quietDeathError: string | null = null
   /**
-   * The words of this turn's failure (emitStatusChanged): every later status write of the same turn
-   * keeps them, until the next turn runs. 2026-11-13: a CLI that exited right after its failed turn
-   * (Walnut's retry of an overloaded turn, failing again) had its process end write the error away,
-   * so its lead read only "its session failed", and an error that is the user's, like a sign-in,
-   * stopped reaching him.
+   * The words of this turn's failure (emitStatusChanged): a later 'error' write of the same turn
+   * without words of its own carries them, and a new turn (another _turnGen) drops them. 2026-11-13:
+   * a CLI that exited right after its failed turn (Walnut's retry of an overloaded turn, failing
+   * again) had its process end write the error away, so its lead read only "its session failed",
+   * and an error that is the user's, like a sign-in, stopped reaching him.
    */
   private _failedTurn: { gen: number; text: string } | undefined
+
+  /** This turn's failure words, or undefined when this turn did not fail (see _failedTurn). */
+  private failedTurnText(): string | undefined {
+    return this._failedTurn?.gen === this._turnGen ? this._failedTurn.text : undefined
+  }
+
+  /**
+   * The one rule for the status a process ending after its turn leaves, in every exit handler
+   * (handleProcessDeath, handleQuietProcessExit, handleRemoteProcessExit, and the result path
+   * finding the CLI gone): a turn that failed stays 'error', the process ending is no new verdict;
+   * an end Walnut asked for (idle reap, eviction, completion, a stop) is 'stopped', and the
+   * reaper's own reason ("No output for N min") is the record's, not the turn's.
+   */
+  private statusAfterProcessEnd(failedLastTurn: boolean): 'error' | 'stopped' {
+    return failedLastTurn && !this._expectedTeardown ? 'error' : 'stopped'
+  }
 
   /**
    * Does this process still hold a first line it never read, its death not yet
@@ -6753,9 +6769,9 @@ export class ClaudeCodeSession {
       // Died between turns: the result saw the CLI still up and published 'idle',
       // and no result follows this death. Publish 'stopped' (and drop the dead
       // pid) the way the result handler does for a CLI already gone, or the
-      // record keeps describing a live idle process. A turn that failed stays failed (the process
-      // ending is no new verdict), as handleQuietProcessExit keeps it.
-      if (failedLastTurn) this._processStatus = 'error'
+      // record keeps describing a live idle process. A turn that failed stays failed
+      // (statusAfterProcessEnd).
+      this._processStatus = this.statusAfterProcessEnd(failedLastTurn)
       this._activity = undefined
       this.emitStatusChanged('NEED_ACTION')
       const sid = this.claudeSessionId
@@ -6785,7 +6801,7 @@ export class ClaudeCodeSession {
     if (this._expectedTeardown) {
       this._failedLocalCommandThisTurn = false
       this._deferredOutcome = undefined
-      this._processStatus = 'stopped'
+      this._processStatus = this.statusAfterProcessEnd(false)
     } else if (!this.resultEmitted && !this._turnResultEmitted) this._completeTurnOnIdle()
     this.resultEmitted = true
     this.pid = null
@@ -6883,8 +6899,8 @@ export class ClaudeCodeSession {
     if (!cleanStderr && stderr && suppressibleExit && !unreadFirstLine) {
       this.reclaimUntakenLines('exit', true)
       this._active = false
-      // A turn that failed before this exit stays failed.
-      if (this._processStatus !== 'error') this._processStatus = 'stopped'
+      // A turn that failed before this exit stays failed (statusAfterProcessEnd).
+      this._processStatus = this.statusAfterProcessEnd(this._processStatus === 'error')
       this._activity = undefined
       this.pid = null
       log.session.warn('remote session exited with only CLI startup advisories', {
@@ -6923,7 +6939,10 @@ export class ClaudeCodeSession {
     }
     if (this._host) parts.push(`[${this._host}]`)
     if (cleanStderr) parts.push(cleanStderr.slice(0, 500))
-    const errMsg = parts.join(' — ')
+    // A process that exits after its own turn failed: that turn's words come first, the exit
+    // follows them (an exit code over "Invalid API key" kept the sign-in from the user).
+    const turnFailure = this._initSeenThisProcess ? this.failedTurnText() : undefined
+    const errMsg = [...(turnFailure ? [turnFailure] : []), ...parts].join(' — ')
     const conversationLost = cleanStderr.includes('No conversation found')
     // Killed before it read its first line (no init): restart recovery sends that
     // line again, so this death is the machine's, not an error for the user. A CLI
@@ -9144,11 +9163,11 @@ export class ClaudeCodeSession {
           // the UI's "Streaming" badge stays stuck until the next writeMessage.
           this.emitStatusChanged('NEED_ACTION')
         } else {
-          // Process is exiting (SSH, interrupted, or natural exit). A failed turn stays failed:
-          // the CLI ending after its error result is no new verdict.
+          // Process is exiting (SSH, interrupted, or natural exit). A failed turn stays failed
+          // (statusAfterProcessEnd).
           this.resultEmitted = true
           this._active = false
-          this._processStatus = effectiveIsError ? 'error' : 'stopped'
+          this._processStatus = this.statusAfterProcessEnd(!!effectiveIsError)
           this._activity = undefined
           this._teamActive = false  // Safety: clear team flag on process exit
           if (this._teamIdleTimer) { clearTimeout(this._teamIdleTimer); this._teamIdleTimer = null }
@@ -9893,11 +9912,12 @@ export class ClaudeCodeSession {
       this._live.end()
       reportLiveActivity(sessionId, this.taskId, this._backgroundLive())
     }
-    // A failure's words stay with its turn: a later write of the same turn without words of its
-    // own (its process ending, a stop) keeps them; the next turn running drops them (_failedTurn).
-    if (this._processStatus === 'running') this._failedTurn = undefined
-    else if (errorMessage) this._failedTurn = { gen: this._turnGen, text: errorMessage }
-    else if (this._failedTurn?.gen === this._turnGen) errorMessage = this._failedTurn.text
+    // A failure's words stay with its turn: a later 'error' write of the same turn without words
+    // of its own (its process ending) carries them; another turn drops them (_failedTurn).
+    if (this._failedTurn && this._failedTurn.gen !== this._turnGen) this._failedTurn = undefined
+    if (errorMessage) {
+      if (this._processStatus === 'error') this._failedTurn = { gen: this._turnGen, text: errorMessage }
+    } else if (this._processStatus === 'error') errorMessage = this.failedTurnText()
     const updates = {
       process_status: this._processStatus,
       activity: this._activity,

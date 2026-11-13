@@ -4413,6 +4413,7 @@ describe('handleProcessDeath — init failure vs ordinary shutdown', () => {
     expect(session.processStatus).toBe('error');
     expect(await getSessionByClaudeId(id)).toMatchObject({ process_status: 'error', errorMessage: 'API Error: 529 Overloaded' });
     // The next turn runs and ends well: no word of the old failure is left.
+    s._turnGen++;
     s._processStatus = 'running';
     s.emitStatusChanged('IN_PROGRESS');
     s._processStatus = 'idle';
@@ -5057,4 +5058,90 @@ describe('a refused turn carries safeguardStop on its result', () => {
       }
     }
   });
+});
+
+// 2026-11-13: a CLI that ended after its failed turn had that end write the failure away (the
+// record said "failed" with no reason), or write an exit code over it, so an error that is the
+// user's (a sign-in) no longer reached him. Every exit handler follows one rule
+// (statusAfterProcessEnd): a failed turn stays 'error' in its own words, unless Walnut asked for
+// the end. A new exit handler must join the list below, or this suite fails.
+describe('every exit handler keeps a failed turn failed, in its words', () => {
+  const SOURCE = fs.readFileSync(path.resolve(import.meta.dirname, '../../src/providers/claude-code-session.ts'), 'utf8');
+  // A sign-in error, the kind only the user can fix (U+00B7 is the CLI's own separator).
+  const TURN = 'Invalid API key \u00b7 Please run /login';
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const ENDS: Record<string, (s: any) => void> = {
+    handleProcessDeath: (s) => s.handleProcessDeath(),
+    handleQuietProcessExit: (s) => s.handleQuietProcessExit(),
+    // An exit code with nothing on stderr (SIGTERM), after the turn already failed.
+    handleRemoteProcessExit: (s) => s.handleRemoteProcessExit(143, ''),
+  };
+
+  let seq = 0;
+  /** A session whose turn just ended on TURN's error result, the CLI still up, the record written. */
+  async function failedTurn(): Promise<{ session: ClaudeCodeSession; s: any; id: string }> {
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js');
+    const id = `exit-after-failed-turn-${++seq}`;
+    await createSessionRecord(id, `task-${id}`, 'proj');
+    const session = useDaemon(new ClaudeCodeSession(`task-${id}`, 'proj', MOCK_CLI));
+    const s = session as any;
+    s.claudeSessionId = id;
+    s.pid = 4242;
+    s._active = true;
+    s._exitCode = 0;
+    s._resolveSessionReady(id);
+    s._transport = { isRemote: false, isAlive: async () => false, deletePipe: () => {}, flushTail: () => {}, stopTail: () => {} };
+    s._turnResultEmitted = true;
+    s.resultEmitted = false;
+    s._processStatus = 'error';
+    s.emitStatusChanged('NEED_ACTION', TURN);
+    await s._statusCommit;
+    return { session, s, id };
+  }
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(() => {
+    vi.spyOn(log.session, 'error').mockImplementation((() => {}) as never);
+    vi.spyOn(log.session, 'warn').mockImplementation((() => {}) as never);
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('lists every exit handler of the session runner', () => {
+    const found = [...SOURCE.matchAll(/private (handle\w*Process(?:Exit|Death)\w*)\(/g)].map((m) => m[1]).sort();
+    expect(found).toEqual(Object.keys(ENDS).sort());
+  });
+
+  for (const [name, end] of Object.entries(ENDS)) {
+    it(`${name}: after a failed turn the record stays 'error', the turn's words first`, async () => {
+      const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+      const { session, s, id } = await failedTurn();
+
+      end(s);
+      await s._statusCommit;
+
+      expect(session.processStatus).toBe('error');
+      await vi.waitFor(async () => {
+        const rec = await getSessionByClaudeId(id);
+        expect(rec?.process_status).toBe('error');
+        expect(rec?.errorMessage?.startsWith(TURN), rec?.errorMessage).toBe(true);
+      }, { timeout: 5_000, interval: 50 });
+    });
+
+    it(`${name}: an end Walnut asked for (idle reap) is 'stopped' and carries no word of the turn`, async () => {
+      const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+      const { session, s, id } = await failedTurn();
+      session.markExpectedTeardown('idle_timeout');
+
+      end(s);
+      // The reaper's own reason is the record's (the snapshot adopts it): the runner's next
+      // write of this stop must not put the turn's words back.
+      s.emitStatusChanged('NEED_ACTION');
+      await s._statusCommit;
+
+      expect(session.processStatus).toBe('stopped');
+      await vi.waitFor(async () => {
+        expect((await getSessionByClaudeId(id))?.errorMessage).toBeUndefined();
+      }, { timeout: 5_000, interval: 50 });
+    });
+  }
 });
