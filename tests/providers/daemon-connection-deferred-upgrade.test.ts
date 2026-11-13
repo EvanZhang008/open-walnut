@@ -402,7 +402,7 @@ describe('the background update of a service-managed daemon', () => {
     const c = make()
     stub(c, { probe: MANAGED, version: OLD })
     const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
-    vi.spyOn(log.session, 'info').mockImplementation(() => {})
+    const info = vi.spyOn(log.session, 'info').mockImplementation(() => {})
     vi.spyOn(priv(c), 'serviceDaemonSource').mockResolvedValue({ binary: '/fixture/daemon' })
     managedUpdate.mockReset().mockImplementation(async (_s: unknown, _v: unknown, _io: unknown, _scope: unknown, opts?: { onStaged?: () => boolean | Promise<boolean> }) => {
       expect(await opts?.onStaged?.()).toBe(true)
@@ -410,14 +410,20 @@ describe('the background update of a service-managed daemon', () => {
     })
     live(c)
     const delays: number[] = []
+    const levels: string[] = []
     for (let i = 0; i < 6; i++) {
-      warn.mockClear()
+      warn.mockClear(); info.mockClear()
       await priv(c).recheckPostponedUpgrade()
-      const said = warn.mock.calls.find(([m]) => m === 'DaemonConnection: daemon update postponed; checking again')
+      const isPostpone = ([m]: unknown[]) => m === 'DaemonConnection: daemon update postponed; checking again'
+      const asWarn = warn.mock.calls.find(isPostpone)
+      const said = asWarn ?? info.mock.calls.find(isPostpone)
+      levels.push(asWarn ? 'warn' : 'info')
       delays.push((said?.[1] as { retryInMs: number }).retryInMs)
       expect(state(c)._lastUpgradeAttempt).toBeNull()
     }
     expect(delays).toEqual([60_000, 60_000, 60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000])
+    // The same hold asked again is not news: one warning, the rest at info (2026-11-12 log-spike alarm).
+    expect(levels).toEqual(['warn', 'info', 'info', 'info', 'info', 'info'])
   })
 
   it('a boot-start install waits for host_exec runs too', async () => {
@@ -574,5 +580,45 @@ describe('ratchet: no daemon update inside a connect while a live daemon answers
     expect(calls.some((c) => c.fn === 'checkDaemonRunning')).toBe(true)
     // And the deferred update is started once the link is up (else hosts stay on old daemons for good).
     expect(text).toMatch(/\n\s+this\.startDeferredUpgrade\(\)/)
+  })
+})
+
+// 2026-11-12: three host_exec runs held clouddev's update for over an hour, and the minute re-check
+// logged a warning each time (61 an hour), which raised the log-spike alarm for a wait that works as
+// designed. Every postpone goes through postponeUpgrade, so a new reason is covered by construction.
+describe('a held update says so once, not every minute', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+  it('warns on a new build, a new kind of reason, or a hold still going after 30 minutes; the rest at info', () => {
+    vi.useFakeTimers({ now: new Date('2026-11-12T23:00:00Z') })
+    const c = make()
+    const warn = vi.spyOn(log.session, 'warn').mockImplementation(() => {})
+    const info = vi.spyOn(log.session, 'info').mockImplementation(() => {})
+    const MSG = 'DaemonConnection: daemon update postponed; checking again'
+    const level = (reason: string, expected = EXPECTED) => {
+      warn.mockClear(); info.mockClear()
+      priv(c).postponeUpgrade(reason, expected, OLD, { steady: true })
+      const w = warn.mock.calls.some(([m]) => m === MSG)
+      const i = info.mock.calls.some(([m]) => m === MSG)
+      expect(w !== i).toBe(true)
+      return w ? 'warn' : 'info'
+    }
+    expect(level('3 host_exec runs on the host would end with the daemon')).toBe('warn')
+    vi.advanceTimersByTime(60_000)
+    expect(level('3 host_exec runs on the host would end with the daemon')).toBe('info')
+    // A different count is the same hold.
+    expect(level('2 host_exec runs on the host would end with the daemon')).toBe('info')
+    // A different kind of reason is news.
+    expect(level('a connect was in progress')).toBe('warn')
+    expect(level('a connect was in progress')).toBe('info')
+    // Holds that alternate are each said once.
+    expect(level('3 host_exec runs on the host would end with the daemon')).toBe('info')
+    expect(level('a connect was in progress')).toBe('info')
+    // A newer build is news.
+    expect(level('a connect was in progress', 'walnut-daemon-newer')).toBe('warn')
+    // The same hold still going after 30 minutes is said again.
+    vi.advanceTimersByTime(30 * 60_000)
+    expect(level('a connect was in progress', 'walnut-daemon-newer')).toBe('warn')
+    priv(c).clearUpgradeRecheck()
   })
 })

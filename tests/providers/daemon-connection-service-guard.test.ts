@@ -21,7 +21,7 @@
  * All SSH is stubbed at sshExec; no process, socket, or tunnel is created.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 
 const { managedUpdate } = vi.hoisted(() => ({ managedUpdate: vi.fn() }))
 vi.mock('../../src/providers/daemon-service-update.js', () => ({ updateRemoteDaemonService: managedUpdate }))
@@ -749,9 +749,16 @@ describe('DaemonConnection — a service probe with no answer is not a verdict',
     vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED_VERSION)
     return conn
   }
-  const postponed = (warn: { mock: { calls: unknown[][] } }) => warn.mock.calls
-    .filter((c) => c[0] === 'DaemonConnection: daemon update postponed; checking again')
-    .map((c) => c[1] as { reason: string; retryInMs: number; attempt: number })
+  // Every postpone, in order: the first of a hold is a warning, the same hold asked again is at info.
+  const postponed = (warn: { mock: { calls: unknown[][]; invocationCallOrder: number[] } }) => {
+    const info = vi.isMockFunction(log.session.info) ? vi.mocked(log.session.info).mock : { calls: [], invocationCallOrder: [] }
+    return [warn.mock, info]
+      .flatMap((m) => m.calls.map((c, i) => ({ c: c as unknown[], at: m.invocationCallOrder[i] })))
+      .filter(({ c }) => c[0] === 'DaemonConnection: daemon update postponed; checking again')
+      .sort((a, b) => a.at - b.at)
+      .map(({ c }) => c[1] as { reason: string; retryInMs: number; attempt: number })
+  }
+  beforeEach(() => { vi.spyOn(log.session, 'info').mockImplementation(() => {}) })
 
   it('asks once more with a longer deadline and uses that answer', async () => {
     conn = new DaemonConnection('devbox', TARGET)

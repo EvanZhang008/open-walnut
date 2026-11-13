@@ -4771,16 +4771,40 @@ export class DaemonConnection {
     const delays = UPGRADE_RECHECK_DELAYS_MS
     const delayMs = opts.delayMs ?? (opts.steady ? delays[0] : delays[Math.min(opts.attempt ?? this._upgradeRecheckAttempt, delays.length - 1)])
     if (!opts.steady && opts.attempt === undefined && opts.delayMs === undefined) this._upgradeRecheckAttempt += 1
-    log.session.warn('DaemonConnection: daemon update postponed; checking again', {
+    const fields = {
       host: this.hostKey, reason, expected, remoteVersion: remoteVersion || '(missing)',
       attempt: opts.attempt !== undefined ? opts.attempt + 1 : this._upgradeRecheckAttempt, retryInMs: delayMs,
-    })
+    }
+    if (this.postponeIsNews(expected, reason)) log.session.warn('DaemonConnection: daemon update postponed; checking again', fields)
+    else log.session.info('DaemonConnection: daemon update postponed; checking again', fields)
     if (this.upgradeRecheckTimer) clearTimeout(this.upgradeRecheckTimer)
     this.upgradeRecheckTimer = setTimeout(() => {
       this.upgradeRecheckTimer = null
       void this.recheckPostponedUpgrade()
     }, delayMs)
     this.upgradeRecheckTimer.unref?.()
+  }
+
+  /** When each hold of `expected` was last said at warn level: the same hold asked again every minute is not news. */
+  private _postponeNoted: { expected: string; at: Map<string, number> } | null = null
+  private static POSTPONE_REWARN_MS = 30 * 60_000
+
+  /**
+   * Whether this postpone is worth a warning: a new build, a new kind of reason (counts set aside,
+   * so "3 host_exec runs" and "2 host_exec runs" are one hold), or the same hold still going after
+   * POSTPONE_REWARN_MS. The rest go at info. 2026-11-12: three host_exec runs on clouddev held its
+   * update for over an hour and the minute re-check logged a warning each time, 61 an hour, which
+   * raised the log-spike alarm for a wait that works as designed (exec-runs-hold.ts bounds it).
+   */
+  private postponeIsNews(expected: string, reason: string): boolean {
+    // Holds that alternate (a connect in progress, then a version read that timed out) are each news once.
+    if (this._postponeNoted?.expected !== expected) this._postponeNoted = { expected, at: new Map() }
+    const kind = reason.replace(/\d+/g, '#')
+    const now = Date.now()
+    const last = this._postponeNoted.at.get(kind)
+    if (last !== undefined && now - last < DaemonConnection.POSTPONE_REWARN_MS) return false
+    this._postponeNoted.at.set(kind, now)
+    return true
   }
 
   private clearUpgradeRecheck(): void {
