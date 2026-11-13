@@ -47,6 +47,22 @@ async function asMacApp(page: Page) {
   })
 }
 
+/**
+ * The Undo window is 5 s of wall clock. A test that reads what the toast says, where it sits and
+ * where the columns went before it presses Undo spends longer than that on a loaded runner: the
+ * toast was gone when it was read, and Cmd+Z found nothing left to take back (2026-11-13, CI
+ * shard 6 and clouddev at 4 CPUs). openColumns stretches the window for its tests; a test about
+ * the window's end (the Undo gone, a delete refused when it ends) keeps the real one
+ * (`{ undoWindow: 'real' }`).
+ */
+async function stretchUndoWindow(page: Page) {
+  await page.addInitScript(() => {
+    const original = window.setTimeout.bind(window)
+    window.setTimeout = ((fn: TimerHandler, delay?: number, ...args: unknown[]) =>
+      original(fn, delay === 5000 ? 120_000 : delay, ...args)) as typeof window.setTimeout
+  })
+}
+
 async function phase(page: Page, k: Key): Promise<string | undefined> {
   const res = await page.request.get(`/api/tasks/${TID(k)}`)
   if (!res.ok()) return undefined
@@ -72,7 +88,8 @@ async function caretColumn(page: Page): Promise<string | null> {
     return el.closest('.main-page-session-column')?.getAttribute('data-column-id') ?? null
   })
 }
-async function openColumns(page: Page, keys: Key[]) {
+async function openColumns(page: Page, keys: Key[], opts: { undoWindow?: 'real' } = {}) {
+  if (opts.undoWindow !== 'real') await stretchUndoWindow(page)
   await setPanelMode(page, '3')
   await seedColumns(page, keys.map(SID))
   await loadHome(page)
@@ -86,7 +103,14 @@ test.beforeEach(async ({ page }) => {
     try { localStorage.setItem('open-walnut-home-chat-visible', 'false') } catch { /* off */ }
   })
 })
-test.afterEach(async ({ page }) => { await resetTasks(page) })
+// A fixture task a test deleted stays held while the page is open (its Undo) and on the server
+// for its window after: a test that failed inside that window would leave it to be deleted, and
+// every later test of the file found no such task (2026-11-13, clouddev at 4 CPUs: from the
+// delete test on, ten tests failed on a missing row). The hold is taken back before the page goes.
+test.afterEach(async ({ page }) => {
+  await page.request.post('/api/tasks/batch/delete/cancel', { data: { task_ids: KEYS.map(TID) } }).catch(() => {})
+  await resetTasks(page)
+})
 
 test('Cmd+1..3 and Cmd+Shift+[ ] move the caret between columns; Cmd+I puts it back in the current one', async ({ page }) => {
   await asMacApp(page)
@@ -298,7 +322,7 @@ test('completing from the column header goes on too, and the Undo is gone after 
   await asMacApp(page)
   await resetTasks(page)
   await setPhases(page, { b: 'NEED_ACTION', a: 'NEED_ACTION' }, ['b', 'a'])
-  await openColumns(page, ['a', 'b'])
+  await openColumns(page, ['a', 'b'], { undoWindow: 'real' })
 
   await col(page, 'a').locator('.task-quick-phase-btn').click()
   await expect(col(page, 'a')).toHaveCount(0, { timeout: 15_000 })
@@ -690,11 +714,7 @@ async function setGoingOn(page: Page, on: boolean) {
 test('with going on off, the caret moves to the neighbour column; two Undos, the older by its button; a refused complete takes its toast down', async ({ page }) => {
   await asMacApp(page)
   // B's Undo waits behind C's for several slow steps: its 5 second window is stretched here.
-  await page.addInitScript(() => {
-    const original = window.setTimeout.bind(window)
-    window.setTimeout = ((fn: TimerHandler, delay?: number, ...args: unknown[]) =>
-      original(fn, delay === 5000 ? 120_000 : delay, ...args)) as typeof window.setTimeout
-  })
+  await stretchUndoWindow(page)
   await resetTasks(page)
   await setPanelMode(page, '3')
   await setGoingOn(page, false)
@@ -744,10 +764,10 @@ test('with going on off, the caret moves to the neighbour column; two Undos, the
     await rowE.getByRole('button', { name: 'Mark complete', exact: true }).click()
     const refused = toast(page, 'Task completed').filter({ hasText: TITLE('e') })
     await expect(refused).toBeVisible()
-    const shownAt = Date.now()
-    // Gone once the write's retries fail, well before its 5 second window would end.
-    await expect(refused).toHaveCount(0, { timeout: 4_500 })
-    expect(Date.now() - shownAt).toBeLessThan(4_500)
+    // Gone once the write's retries fail. This test's windows are stretched (stretchUndoWindow), so
+    // the toast going at all is the refusal taking it down: the 4.5 s bound it had stood for the
+    // real 5 s window, and on a loaded runner the retries alone ran past it (2026-11-13, 4 CPUs).
+    await expect(refused).toHaveCount(0, { timeout: 30_000 })
     expect(await phase(page, 'e')).toBe('IN_PROGRESS')
   } finally {
     await page.unrouteAll({ behavior: 'ignoreErrors' })
@@ -953,7 +973,7 @@ test('deleting a task closes its open column, and the Undo puts the column back'
 test('a delete the server refuses gives the row and its column back', async ({ page }) => {
   await asMacApp(page)
   await resetTasks(page)
-  await openColumns(page, ['a', 'b', 'c'])
+  await openColumns(page, ['a', 'b', 'c'], { undoWindow: 'real' })
   await page.route(`**/api/tasks/${TID('b')}*`, (route) => route.request().method() === 'DELETE'
     ? route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'its session is live, for the test' }) })
     : route.fallback())
@@ -1420,7 +1440,7 @@ test('an Undo toast out of sight behind a newer one keeps its time, and comes ba
   for (const k of ['a', 'b'] as const) await page.request.delete(`/api/focus/tasks/${TID(k)}`).catch(() => {})
   // A short window: the corner shows one toast, so a newer one hides the older.
   await page.setViewportSize({ width: 1600, height: 700 })
-  await openColumns(page, ['a', 'b'])
+  await openColumns(page, ['a', 'b'], { undoWindow: 'real' })
   try {
     await columnKebab(page, 'a', 'Pin to')
     await page.getByTestId('kebab-pin-focus').click()
@@ -1473,7 +1493,7 @@ test('what is typed after Cmd+Shift+D goes to the next task box when its column 
 test('a delete the server refuses seconds later puts the column back but leaves the caret where the person is', async ({ page }) => {
   await asMacApp(page)
   await resetTasks(page)
-  await openColumns(page, ['c', 'b', 'a'])
+  await openColumns(page, ['c', 'b', 'a'], { undoWindow: 'real' })
   await page.route(`**/api/tasks/${TID('b')}*`, (route) => route.request().method() === 'DELETE'
     ? route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'its session is live, for the test' }) })
     : route.fallback())
