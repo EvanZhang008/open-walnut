@@ -14,6 +14,7 @@ import { claudeProjectsDir, localClaudeProjectsDir } from './claude-config-dir.j
 import { log } from '../logging/index.js';
 import { sortedNames } from '../lib/dir-order.js';
 import { isByteCeilingError } from './byte-ceiling.js';
+import { linkFailureKind } from '../providers/link-failure.js';
 
 // ── Path helpers ──
 
@@ -251,6 +252,19 @@ export async function mergeSyntheticUserEvents(sessionId: string, content: strin
 }
 
 /**
+ * The level a failed transcript read is logged at. A host with no link now
+ * (`no-link`: a refused SSH dial, DNS down, the pool's cached dial failure, this
+ * server shutting down) is not news on every read: the command never reached
+ * the host, the pool logged the dial once, and the host's status shows it. So it
+ * goes to debug (2026-11-13 health alarm on this line, 2,500 to 4,000 warns a
+ * day, more than half of them this). A link lost mid-read, no answer, a timeout
+ * or any other error is a real read failure and stays a warn.
+ */
+export function readFailureLogLevel(err: unknown): 'debug' | 'warn' {
+  return linkFailureKind(err) === 'no-link' ? 'debug' : 'warn';
+}
+
+/**
  * Read session JSONL content using the appropriate reader.
  * Tries local paths first, then falls back to remote if host is provided.
  *
@@ -379,7 +393,7 @@ export async function readSessionJsonlContent(
       // tail degradation sat unreachable. Not a failure, so not warned here: the
       // caller logs the degrade it chooses.
       if (isByteCeilingError(err)) throw err;
-      log.session.warn('JSONL read via daemon failed', {
+      log.session[readFailureLogLevel(err)]('JSONL read via daemon failed', {
         host: daemonHost, sessionId,
         error: errMsg,
       });
