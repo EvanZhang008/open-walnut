@@ -1414,6 +1414,49 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return { text: check.text(text) }
   }
 
+  /** A request this host answered: settled in its copy and journaled, with the reply's score (the server keeps it on the replier's task). */
+  function settleHere(home: string, id: string, own: OfflineRequestRow | undefined, replierTaskId: string | undefined, rawScore: unknown): void {
+    const given = offlineScoreOf(rawScore)
+    const score: OfflineReplyScore | undefined = given && replierTaskId ? { ...given, at: new Date(deps.now()).toISOString(), taskId: replierTaskId } : undefined
+    if (own) {
+      if (own.status === 'pending') {
+        own.status = 'replied'
+        own.settledAt = new Date(deps.now()).toISOString()
+        append(home, { kind: 'row', row: { ...own }, ...(score ? { score } : {}) })
+      }
+    } else if (!journalOf(home).settledCopies.includes(id)) {
+      journalOf(home).settledCopies.push(id)
+      append(home, { kind: 'settle', requestId: id, status: 'replied', ...(score ? { score } : {}) })
+    }
+  }
+
+  /**
+   * in_reply_to as a list (the server's performReplies): every id is checked before anything is
+   * sent; per asker, its first request carries the answer, naming the others, which settle here
+   * with it, so each asker reads it once.
+   */
+  async function opReplies(home: string, callerSid: string, args: Record<string, unknown>, text: string, ids: readonly string[]): Promise<GatewayResult> {
+    const me = callerIdentity(home, callerSid)
+    const byAsker = new Map<string, string[]>()
+    for (const id of ids) {
+      const { own, copy } = findRequest(home, id)
+      const row = own ?? copy
+      if (!row) return needsServer(`Request ${id} is not held by this host; answering it`)
+      if (!(row.toSessionId === callerSid || (!!row.toTaskId && row.toTaskId === me.taskId))) return fail('bad_request', `request ${id} was not addressed to this session`)
+      byAsker.set(row.fromSessionId, [...(byAsker.get(row.fromSessionId) ?? []), id])
+    }
+    let first: GatewayResult | undefined
+    for (const group of byAsker.values()) {
+      const [lead, ...rest] = group
+      const named = rest.length ? `${text}\n\n(This one answer also settles ${rest.join(', ')}: nothing more comes for ${rest.length === 1 ? 'it' : 'them'}.)` : text
+      const sent = await opReply(home, callerSid, { ...args, in_reply_to: lead }, named)
+      if (!sent.ok) return first ?? sent
+      first ??= sent
+      for (const id of rest) settleHere(home, id, findRequest(home, id).own, me.taskId, args.score)
+    }
+    return first!.ok ? ok({ ...first!.result, answered: [...ids], next: 'Nothing else is required. Do not answer them again one by one.' }) : first!
+  }
+
   async function opReply(home: string, callerSid: string, args: Record<string, unknown>, text: string): Promise<GatewayResult> {
     const id = String(args.in_reply_to)
     const { own, copy } = findRequest(home, id)
@@ -1445,19 +1488,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       if (remoteHost) return needsServer(`The asking session runs on ${remoteHost} and the answer could not be routed there (${delivered.reason}); answering it`)
       return fail('internal', `delivery to the asking session failed: ${delivered.reason}`)
     }
-    // A review's score is journalled with the reply, so the server keeps it on the replier's task.
-    const given = offlineScoreOf(args.score)
-    const score: OfflineReplyScore | undefined = given && me.taskId ? { ...given, at: new Date(deps.now()).toISOString(), taskId: me.taskId } : undefined
-    if (own) {
-      if (own.status === 'pending') {
-        own.status = 'replied'
-        own.settledAt = new Date(deps.now()).toISOString()
-        append(home, { kind: 'row', row: { ...own }, ...(score ? { score } : {}) })
-      }
-    } else if (!journalOf(home).settledCopies.includes(id)) {
-      journalOf(home).settledCopies.push(id)
-      append(home, { kind: 'settle', requestId: id, status: 'replied', ...(score ? { score } : {}) })
-    }
+    settleHere(home, id, own, me.taskId, args.score)
     // The host that wrote the text into the asker's session journals the delivery.
     if (!remoteHost) append(home, { kind: 'delivery', fromSessionId: callerSid, toSessionId: row.fromSessionId, messageId: mid, requestId: id, reply: true })
     deps.log('info', 'offline host: reply delivered', { home, requestId: id, from: callerSid, to: row.fromSessionId, viaLeader: !!remoteHost })
@@ -1520,8 +1551,11 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (args.withdraw_ask === true && args.answers_ask !== true) return fail('bad_request', 'withdraw_ask requires answers_ask: true')
     if (args.answers_ask === true) return needsServer('Answering a task\'s ask of the user in their place (answers_ask)')
     if (args.in_reply_to !== undefined) {
-      if (typeof args.in_reply_to !== 'string' || !/^rq-[a-f0-9]{6,}$/.test(args.in_reply_to)) return fail('bad_request', 'in_reply_to must be an rq-… id')
-      return opReply(home, callerSid, args, text)
+      const ids = Array.isArray(args.in_reply_to) ? [...new Set(args.in_reply_to)] : [args.in_reply_to]
+      if (!ids.length || ids.length > 20 || ids.some((id) => typeof id !== 'string' || !/^rq-[a-f0-9]{6,}$/.test(id))) {
+        return fail('bad_request', 'in_reply_to must be an rq-… id, or a list of up to 20 of them')
+      }
+      return ids.length === 1 ? opReply(home, callerSid, { ...args, in_reply_to: ids[0] }, text) : opReplies(home, callerSid, args, text, ids as string[])
     }
     if (typeof args.to !== 'string' || !args.to.trim()) return fail('bad_request', '`to` is required (or pass in_reply_to)')
     // Before the session lookup: a completed parent usually has nothing running.

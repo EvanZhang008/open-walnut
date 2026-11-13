@@ -72,7 +72,9 @@ defineOp({
     expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when a session sends down or across; false when it reports up (to its own leader, its VP, or Main). Pass true to ask a question up, false for fire-and-forget'),
     wake: z.boolean().optional().describe('false: a note that asks nothing (an FYI). It starts no turn: it rides the target\'s next message, folded with your other such notes. Not with expect_reply=true or hands_on. A script\'s note that ends "No reply needed" is held the same way'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 1h when you ask for a reply, 6h otherwise; 2h and 12h to a lead or Main)'),
-    in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),
+    in_reply_to: z.union([z.string().regex(/^rq-[a-f0-9]{6,}$/), z.array(z.string().regex(/^rq-[a-f0-9]{6,}$/)).min(1).max(20)]).optional().describe(
+      'Request id you are answering — routes to the asker. Several open requests that one answer covers (often from the same asker): '
+      + 'list them all, ["rq-…","rq-…"], in ONE call, and each asker reads the answer once; never send nearly the same reply once per request'),
     hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer, is told where the work went, and gets that answer straight from it'),
     answers_ask: z.boolean().optional().describe(
       'This message decides the question the target task is asking the user, in the user\'s place (you are a task it is under, its lead or VP, or Main). '
@@ -138,6 +140,9 @@ defineOp({
           ? (b.sameAnswerAs === b.repliedTo
             ? ` These are the same words you already answered ${b.repliedTo} with: they were not delivered again.`
             : ` These are the same words as your answer to ${b.sameAnswerAs}, which its asker already has: ${b.repliedTo} is settled by it too, and the asker read one line naming it, not the answer twice.`)
+          : '')
+        + (Array.isArray(b.answered) && b.answered.length > 1
+          ? ` This one answer settled ${b.answered.length} requests (${b.answered.join(', ')}); each asker reads it once. Do not answer them again one by one.`
           : '')
         + (Array.isArray(b.answeredFor) && b.answeredFor.length
           ? ` It answered ${b.answeredFor.join(', ')} too, so it went straight to the original asker (${b.targetTaskId || target}); the task that handed it to you got one line saying so.`

@@ -41,6 +41,12 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
     const b = (req.body ?? {}) as Record<string, unknown>
     const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v : undefined)
     const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+    // in_reply_to: one rq-… id, or a list of them that one answer settles (session-send-core.ts performReplies).
+    const replyIds = Array.isArray(b.in_reply_to) ? b.in_reply_to : b.in_reply_to === undefined ? [] : [b.in_reply_to]
+    if (replyIds.some((v) => typeof v !== 'string' || !v.trim())) {
+      sendError(res, 400, 'bad_request', 'in_reply_to must be an rq-… id or a list of them')
+      return
+    }
 
     const { performSessionSend, SendError } = await import('../../core/sessions/session-send-core.js')
     const { asksNothing } = await import('../../core/sessions/quiet-notes.js')
@@ -55,7 +61,8 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         // `undefined` so it can apply the session-caller default (on).
         expectReply: typeof b.expect_reply === 'boolean' ? b.expect_reply : undefined,
         replyTimeoutSecs: num(b.reply_timeout),
-        inReplyTo: str(b.in_reply_to),
+        inReplyTo: replyIds[0] as string | undefined,
+        ...(replyIds.length > 1 ? { alsoAnswers: replyIds.slice(1) as string[] } : {}),
         handsOn: str(b.hands_on),
         // This answers the target's question to the user in his place (sessions/ask-answer.ts).
         answersAsk: b.answers_ask === true,

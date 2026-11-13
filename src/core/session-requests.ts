@@ -987,8 +987,15 @@ const NOTE_NOTIFICATION = 'automated Walnut status notice';
  * OUTSIDE the envelope, because this part is Walnut speaking, and the exact
  * command is the whole point, so it is the whole line.
  */
-export function buildReplyTrailer(request: SessionRequest): string {
-  return kit.buildReplyTrailer(request);
+export function buildReplyTrailer(request: SessionRequest, alsoOpen?: readonly string[]): string {
+  return kit.buildReplyTrailer(request, alsoOpen?.length ? { alsoOpen } : undefined);
+}
+
+/** The asker's other open requests to the same target (its session or its task), oldest first. */
+export async function sameAskerOpen(request: Pick<SessionRequest, 'id' | 'fromSessionId' | 'toSessionId' | 'toTaskId'>): Promise<string[]> {
+  const open = await pendingRequestsForTarget({ sessionId: request.toSessionId, taskId: request.toTaskId }).catch(() => [] as SessionRequest[]);
+  return open.filter((r) => r.id !== request.id && r.fromSessionId === request.fromSessionId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((r) => r.id);
 }
 
 /**

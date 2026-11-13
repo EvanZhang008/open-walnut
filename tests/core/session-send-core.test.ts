@@ -997,6 +997,63 @@ describe('performSessionSend — in_reply_to', () => {
       expect(dispatched(1).sid).toBe('sess-asker-2');
     });
   });
+
+  // 2026-11-13, the org reflection: tasks holding two or three requests from their lead answered
+  // each one, nearly the same words seconds apart (08:59:24, :25, :27). One answer settles them all.
+  describe('in_reply_to as a list: one answer, each asker reads it once', () => {
+    const ANSWER = 'Done and live (prod 3c83c3190): the collapse rule and the Pinned fix.';
+
+    it('three requests from one asker: one delivery naming the other two, all three settled, no extra line', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      const b = await armRequest({ toTaskId: 'task-target' });
+      const c = await armRequest({ toTaskId: 'task-target' });
+      const res = await performSessionSend({ text: ANSWER, inReplyTo: a.id, alsoAnswers: [b.id, c.id], callerSid: TARGET });
+      expect(res).toMatchObject({ repliedTo: a.id, answered: [a.id, b.id, c.id], targetSessionId: ASKER });
+      expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+      expect(dispatched(0).sid).toBe(ASKER);
+      expect(deliveredText(0)).toContain(`also settles your requests ${b.id}, ${c.id}`);
+      for (const r of [a, b, c]) expect((await getSessionRequest(r.id))?.status).toBe('replied');
+      const { pendingStatusNote } = await import('../../src/core/sessions/status-push.js');
+      expect(pendingStatusNote(ASKER)?.text ?? '').not.toContain(b.id);
+    });
+
+    it('requests of two askers: each asker gets the answer once', async () => {
+      sessions.push(rec('sess-asker-2', { title: 'Asker two', taskId: 'task-asker-2' }));
+      addOrdinaryTasksForSessions();
+      const { createSessionRequest } = await import('../../src/core/session-requests.js');
+      const a = await armRequest({ toTaskId: 'task-target' });
+      const b = await armRequest({ toTaskId: 'task-target' });
+      const other = await createSessionRequest({ fromSessionId: 'sess-asker-2', toSessionId: TARGET, toTaskId: 'task-target', text: 'status?' });
+      await performSessionSend({ text: ANSWER, inReplyTo: a.id, alsoAnswers: [other.id, b.id], callerSid: TARGET });
+      expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+      expect([dispatched(0).sid, dispatched(1).sid].sort()).toEqual([ASKER, 'sess-asker-2'].sort());
+      for (const r of [a, b, other]) expect((await getSessionRequest(r.id))?.status).toBe('replied');
+    });
+
+    it('an id that is unknown or not this session\'s refuses the whole call before anything is sent', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      await expectSendError(
+        performSessionSend({ text: ANSWER, inReplyTo: a.id, alsoAnswers: ['rq-000000000000'], callerSid: TARGET }),
+        'unknown_request', 404,
+      );
+      const { createSessionRequest } = await import('../../src/core/session-requests.js');
+      const notMine = await createSessionRequest({ fromSessionId: ASKER, toSessionId: 'sess-bystander', text: 'other' });
+      await expectSendError(
+        performSessionSend({ text: ANSWER, inReplyTo: a.id, alsoAnswers: [notMine.id], callerSid: TARGET }),
+        'not_request_target', 403,
+      );
+      expect(sendMessageToSession).not.toHaveBeenCalled();
+      expect((await getSessionRequest(a.id))?.status).toBe('pending');
+    });
+
+    it('a new request from an asker that already has one open names both in its reply line', async () => {
+      const a = await armRequest({ toTaskId: 'task-target' });
+      await performSessionSend({ text: 'and also count the columns', to: 'task-target', callerSid: ASKER, expectReply: true });
+      const text = deliveredText(0);
+      expect(text).toMatch(new RegExp(`"in_reply_to":\\["rq-[a-f0-9]+","${a.id}"\\]`));
+      expect(text).toContain(`open request ${a.id} to you too: one answer settles all`);
+    });
+  });
 });
 
 /**

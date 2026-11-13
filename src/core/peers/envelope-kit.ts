@@ -123,7 +123,7 @@ export interface EnvelopeKit {
   buildPeerWrapper(originalText: string, sender: EnvelopeSender, opts?: EnvelopeMessageOptions): string;
   messageTitle(title: string | null | undefined): string;
   requestPreview(text: string): string;
-  buildReplyTrailer(request: { id: string }): string;
+  buildReplyTrailer(request: { id: string }, opts?: { alsoOpen?: readonly string[] }): string;
   buildReplyDeliveryText(
     request: EnvelopeRequest,
     sender: { title: string; shortId: string; host: string; sessionId?: string; taskId?: string },
@@ -300,11 +300,19 @@ export function createEnvelopeKit(): EnvelopeKit {
     return flat.length > 160 ? `${flat.slice(0, 160)}…` : flat;
   }
 
-  /** The ONE line Walnut appends to a message delivered with expect_reply. */
-  function buildReplyTrailer(request: { id: string }): string {
+  /**
+   * The ONE line Walnut appends to a message delivered with expect_reply. `alsoOpen`: the other
+   * open requests the same asker holds with this target. The line then answers them in one call
+   * (in_reply_to as a list), so the asker reads one answer, not one per request (2026-11-13: three
+   * nearly identical replies to one lead in three seconds).
+   */
+  function buildReplyTrailer(request: { id: string }, opts?: { alsoOpen?: readonly string[] }): string {
+    const others = (opts?.alsoOpen ?? []).filter((id) => id !== request.id)
+    const ids = others.length ? `[${[request.id, ...others].map((id) => `"${id}"`).join(',')}]` : `"${request.id}"`
     // The MCP tool first, the CLI its stand-in (2026-11-10, the user: MCP whenever it is there).
     return `Reply when done: mcp__walnut__task_send `
-      + `{"in_reply_to":"${request.id}","title":"<one-line TL;DR>","text":"<your result summary>"}`
+      + `{"in_reply_to":${ids},"title":"<one-line TL;DR>","text":"<your result summary>"}`
+      + (others.length ? ` (the same asker's open request${others.length === 1 ? '' : 's'} ${others.join(', ')} to you too: one answer settles all, and it reads it once)` : '')
       + ` (no such tool: walnut tools call task_send with that JSON;`
       + ` handing it to another task instead: add "hands_on":"${request.id}" to your ask to that task)`;
   }

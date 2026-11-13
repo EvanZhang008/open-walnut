@@ -147,7 +147,7 @@ describe('unansweredStopReason', () => {
   it('lists every request and gives the first one\'s reply command', () => {
     const now = Date.parse('2026-10-29T12:00:00Z')
     const r = (id: string, mins: number) => ({
-      request: { id, fromSessionId: 's', preview: `question ${id}`, createdAt: new Date(now - mins * 60_000).toISOString(), status: 'pending' } as never,
+      request: { id, fromSessionId: `s-${id}`, preview: `question ${id}`, createdAt: new Date(now - mins * 60_000).toISOString(), status: 'pending' } as never,
       from: `"Asker ${id}" (t-${id})`,
     })
     const text = unansweredStopReason([r('rq-a', 5), r('rq-b', 180)], now)

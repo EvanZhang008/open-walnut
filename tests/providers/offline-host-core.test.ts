@@ -400,6 +400,28 @@ describe('offline host: messages between sessions on this host', () => {
     expect(h.delivered).toHaveLength(2)
   })
 
+  // 2026-11-13: several requests from one asker were each answered with nearly the same words.
+  it('in_reply_to as a list: the asker reads one answer naming the others, and every row settles', async () => {
+    const h = harness()
+    h.host.configure(slice())
+    const ids: string[] = []
+    for (const text of ['What is the status?', 'And the footer?']) {
+      const sent = await call(h, A, 'task_send', { to: B, text })
+      ids.push(sent.ok ? String(sent.result.requestId) : '')
+    }
+    const before = h.delivered.length
+    const reply = await call(h, B, 'task_send', { in_reply_to: ids, text: 'Done: page and footer built.' })
+    expect(reply.ok && reply.result.answered).toEqual(ids)
+    expect(h.delivered).toHaveLength(before + 1)
+    expect(h.delivered[before].sid).toBe(A)
+    expect(h.delivered[before].text).toContain(`also settles ${ids[1]}`)
+    const rows = h.host.drain(HOME).records.filter((r): r is Extract<OfflineRecord, { kind: 'row' }> => r.kind === 'row').map((r) => r.row)
+    for (const id of ids) expect([...rows].reverse().find((r) => r.id === id)?.status).toBe('replied')
+    // A malformed list is refused whole.
+    const bad = await call(h, B, 'task_send', { in_reply_to: [ids[0], 'nope'], text: 'x' })
+    expect(!bad.ok && bad.error.code).toBe('bad_request')
+  })
+
   it('a reply\'s review score is journalled with the replied row, normalized, so the server keeps it on the replier\'s task', async () => {
     const h = harness()
     h.host.configure(slice())

@@ -39,11 +39,22 @@ export function unansweredStopReason(
     return mins < 90 ? `${mins} min ago` : `${Math.round(mins / 60)} h ago`;
   };
   const lines = open.map(({ request: r, from }) => `- ${r.id} from ${from}, asked ${ago(r.createdAt)}: "${r.preview}"`);
-  const first = open[0]?.request.id ?? '<request id>';
+  // Several from one asker: one answer settles them, and the asker reads it once (2026-11-13: a
+  // task answered its lead's three requests with three nearly identical replies in three seconds).
+  const byAsker = new Map<string, { from: string; ids: string[] }>();
+  for (const { request: r, from } of open) {
+    const g = byAsker.get(r.fromSessionId) ?? { from, ids: [] };
+    g.ids.push(r.id);
+    byAsker.set(r.fromSessionId, g);
+  }
+  const shared = [...byAsker.values()].filter((g) => g.ids.length > 1);
+  const firstIds = shared[0]?.ids ?? [open[0]?.request.id ?? '<request id>'];
+  const replyTo = firstIds.length > 1 ? `[${firstIds.map((id) => `"${id}"`).join(',')}]` : `"${firstIds[0]}"`;
   return [
     `Walnut: before this turn ends, you hold ${open.length === 1 ? 'a request' : `${open.length} requests`} that waits for your reply, still unanswered:`,
     ...lines,
-    `Answer it now: mcp__walnut__task_send {"in_reply_to":"${first}","title":"<one line>","text":"<your result>"} (no such tool: walnut tools call task_send with that JSON).`,
+    ...shared.map((g) => `${g.ids.length} of them are from ${g.from} (${g.ids.join(', ')}): answer them in ONE task_send with in_reply_to listing all of them, never one nearly identical reply each.`),
+    `Answer ${firstIds.length > 1 ? 'them' : 'it'} now: mcp__walnut__task_send {"in_reply_to":${replyTo},"title":"<one line>","text":"<your result>"} (no such tool: walnut tools call task_send with that JSON).`,
     'Still working on it in a later turn: end this turn as you planned, and reply when the work is done (a reply settles the request, so do not send a progress note). '
       + 'Handed it to another task: name that request with hands_on on your ask to it. '
       + 'Needs no answer: reply in one line saying why, so the asker stops waiting.',

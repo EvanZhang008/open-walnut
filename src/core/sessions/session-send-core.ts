@@ -33,6 +33,7 @@ import { isSideThreadLane } from './side-thread-fork.js';
 import {
   buildReplyDeliveryText,
   buildReplyTrailer,
+  sameAskerOpen,
   createSessionRequest,
   deletePendingRequest,
   getSessionRequest,
@@ -93,6 +94,9 @@ export interface SessionSendInput {
   replyKind?: import('../session-requests.js').ReplyKind;
   /** rq-… id — this send IS the reply; `to` may be omitted (routes to the asker). */
   inReplyTo?: string;
+  /** More rq-… ids this same answer settles (task_send `in_reply_to` as a list): each asker
+   *  reads it once, however many of its requests it answers (performReplies). */
+  alsoAnswers?: string[];
   /** rq-… id of a request the caller owes and hands to the target with this ask: its asker
    *  waits for the target's answer (session-requests.ts linkHandoffs). Needs the reply request. */
   handsOn?: string;
@@ -163,6 +167,8 @@ export interface SessionSendResult {
   answeredFor?: string[];
   /** The request whose answer, already delivered with the same words, settled this one: nothing was delivered again. */
   sameAnswerAs?: string;
+  /** in_reply_to as a list: every request this one answer settled (performReplies). */
+  answered?: string[];
   /** The target's open ask of the user, sent by a task above it without answers_ask (openAskBelow). */
   openAsk?: string;
   /** A line of a task's message (or reply) that asks someone to decide, sent to a task not below it (decisionAskedIn). */
@@ -866,7 +872,10 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
   if (!text) throw new SendError('bad_request', 'text must be a non-empty string (or, answering a request, give result)');
   const caller = await resolveCaller(input.callerSid);
 
-  if (input.inReplyTo) return performReply(input, caller, text, fields);
+  if (input.inReplyTo) {
+    const ids = [...new Set([input.inReplyTo, ...(input.alsoAnswers ?? [])])];
+    return ids.length > 1 ? performReplies(input, caller, text, fields, ids) : performReply(input, caller, text, fields);
+  }
 
   if (!input.to) throw new SendError('bad_request', '`to` is required (or pass in_reply_to)');
   if (input.handsOn !== undefined && !/^rq-[a-f0-9]{6,}$/.test(input.handsOn)) throw new SendError('bad_request', 'hands_on must be an rq-… id');
@@ -1034,7 +1043,8 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
       }, { title: input.title });
   }
   // One `\n`, one line, and only when a request exists to answer.
-  if (request) enqueueText = `${enqueueText}\n${buildReplyTrailer(request)}`;
+  // The asker's other open requests to this target ride the same line: one answer settles all.
+  if (request) enqueueText = `${enqueueText}\n${buildReplyTrailer(request, await sameAskerOpen(request))}`;
 
   const source = caller.kind === 'human' && !walnutSends ? 'cli' : 'peer';
   const taskId = target.taskId ?? target.session.taskId;
@@ -1087,6 +1097,54 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
   };
 }
 
+/** Most requests one answer may settle (task_send `in_reply_to` as a list). */
+export const MAX_ANSWERED_AT_ONCE = 20;
+
+/**
+ * in_reply_to as a list: one answer settles every request it names, and each asker reads it once
+ * (2026-11-13, the org reflection: a task holding three requests from its lead answered each, three
+ * nearly identical replies in three seconds; another sent its completion twice). Checked whole
+ * before anything is sent: an id that is unknown, or not this session's to answer, refuses the call.
+ * Per asker, its first request carries the answer and names the others; the rest settle with those
+ * same words (sameAnswerOf) and send that asker nothing more. A request of another asker in the list
+ * gets the answer delivered there too.
+ */
+async function performReplies(
+  input: SessionSendInput,
+  caller: CallerIdentity,
+  text: string,
+  fields: import('../peers/structured-reply.js').StructuredReply | null,
+  ids: readonly string[],
+): Promise<DeliveredSendResult> {
+  if (ids.length > MAX_ANSWERED_AT_ONCE) throw new SendError('bad_request', `in_reply_to names ${ids.length} requests; at most ${MAX_ANSWERED_AT_ONCE} at once`);
+  if (caller.kind !== 'session') throw new SendError('not_request_target', 'replies must come from the session the request was sent to', 403);
+  const requests: SessionRequest[] = [];
+  for (const id of ids) {
+    if (!/^rq-[a-f0-9]{6,}$/.test(id)) throw new SendError('bad_request', `in_reply_to must list rq-… ids (got "${id.slice(0, 40)}")`);
+    const request = await getSessionRequest(id);
+    if (!request) throw new SendError('unknown_request', `no such request: ${id}`, 404);
+    if (!answersRequest(caller, request)) throw new SendError('not_request_target', `request ${id} was not addressed to this session`, 403);
+    requests.push(request);
+  }
+  const byAsker = new Map<string, string[]>();
+  for (const r of requests) byAsker.set(r.fromSessionId, [...(byAsker.get(r.fromSessionId) ?? []), r.id]);
+  let first: DeliveredSendResult | undefined;
+  const repeats: string[] = [];
+  for (const group of byAsker.values()) {
+    const [lead, ...rest] = group;
+    const sent = await performReply({ ...input, inReplyTo: lead, alsoAnswers: undefined, ...(first ? { messageId: undefined } : {}) }, caller, text, fields, { covers: rest });
+    first ??= sent;
+    for (const id of rest) {
+      const settled = await performReply({ ...input, inReplyTo: id, alsoAnswers: undefined, messageId: undefined }, caller, text, fields, { quietRepeat: true });
+      if (settled.sameAnswerAs) repeats.push(id);
+    }
+  }
+  log.session.info('one reply settled several requests', {
+    requestIds: ids, askers: byAsker.size, settledQuietly: repeats, fromSessionId: caller.record.claudeSessionId,
+  });
+  return { ...first!, answered: [...ids] };
+}
+
 /**
  * in_reply_to: settle the request FIRST (atomic pending→replied; whoever wins
  * this transition is the one voice the asker hears), then route the answer to
@@ -1097,6 +1155,9 @@ async function performReply(
   caller: CallerIdentity,
   text: string,
   fields: import('../peers/structured-reply.js').StructuredReply | null = null,
+  /** `covers`: the asker's other requests this answer settles too (named in it, performReplies).
+   *  `quietRepeat`: one of those: when it settles with words the asker already has, it reads nothing more. */
+  many: { covers?: readonly string[]; quietRepeat?: boolean } = {},
 ): Promise<DeliveredSendResult> {
   const id = String(input.inReplyTo);
   const request = await getSessionRequest(id);
@@ -1201,7 +1262,12 @@ async function performReply(
     }
 
     replierTitle = await senderTitleOf(caller.record);
-    if (sameAs) {
+    if (sameAs && many.quietRepeat) {
+      // Named in the one answer the asker just got (performReplies): nothing more to read.
+      log.session.info('session reply settled with the answer it named — nothing more delivered', {
+        requestId: id, sameAnswerAs: sameAs, fromSessionId: caller.record.claudeSessionId, toSessionId: origin.claudeSessionId,
+      });
+    } else if (sameAs) {
       // Delivered once: the asker reads which requests the answer it already has settles.
       const who = replierTitle ? `"${replierTitle}"${caller.record.taskId ? ` (${caller.record.taskId})` : ''}` : (caller.record.taskId ?? 'The task');
       const line = sameAs === id
@@ -1230,9 +1296,13 @@ async function performReply(
         taskId: caller.record.taskId,
         host: displayHost(caller.record.host),
       }, replyBody, { title: input.title });
+      // The asker's other requests it answers, named once (performReplies): no separate line for each.
+      const covered = many.covers?.length
+        ? `${wrapped}\nThis one answer also settles your request${many.covers.length === 1 ? '' : 's'} ${many.covers.join(', ')} to the same task: nothing more comes for ${many.covers.length === 1 ? 'it' : 'them'}.`
+        : wrapped;
 
       ({ delivery, messageId } = await deliverToSession(origin, {
-        busText: replyBody, enqueueText: wrapped, source: 'peer', endsWait: true,
+        busText: replyBody, enqueueText: covered, source: 'peer', endsWait: true,
         taskId: origin.taskId, messageId: input.messageId,
         fromLeader: await callerLeads(caller, origin.taskId),
         ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),

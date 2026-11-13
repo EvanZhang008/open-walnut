@@ -44,6 +44,17 @@ export function createOpenItemsText() {
   const TITLE_MAX = 90;
   const PREVIEW_MAX = 120;
 
+  /**
+   * Several requests from one asker: one task_send answers them all (in_reply_to as a list), so the
+   * asker reads it once (2026-11-13: three nearly identical replies to one lead in three seconds).
+   */
+  function oneAnswerLines(asked: readonly { id: string; from: string }[]): string[] {
+    const byAsker = new Map<string, string[]>();
+    for (const r of asked) byAsker.set(r.from, [...(byAsker.get(r.from) ?? []), r.id]);
+    return [...byAsker.entries()].filter(([, ids]) => ids.length > 1).map(([from, ids]) =>
+      `  ${ids.length} are from ${from}: answer them in ONE task_send, in_reply_to [${ids.map((id) => `"${id}"`).join(',')}], so it reads the answer once.`);
+  }
+
   /** The cut at or before `index` that never splits a surrogate pair (src/core/text-cut.ts cutEnd). */
   function cutEnd(text: string, index: number): number {
     const i = Math.min(Math.max(0, Math.trunc(index)), text.length);
@@ -116,6 +127,7 @@ export function createOpenItemsText() {
         const handed = r.handedTo?.length ? ` (handed on to ${r.handedTo.join(', ')}: answer once that is back)` : '';
         lines.push(`- ${r.id} from ${r.from}${when ? `, ${when}` : ''}: "${oneLine(r.preview, PREVIEW_MAX)}"${handed}`);
       }
+      lines.push(...oneAnswerLines(items.askedOfYou.filter((r) => !r.handedTo?.length)));
     }
     if (partialDone.length > 0) {
       lines.push(`Finished subtasks whose result was Partial (${partialDone.length}); take up the rest or settle it with task_not_done_settle:`);
@@ -134,6 +146,7 @@ export function createOpenItemsText() {
         const when = ago(r.createdAt, now);
         lines.push(`- ${r.id} from ${r.from}${when ? `, ${when}` : ''}: "${oneLine(r.preview, PREVIEW_MAX)}"`);
       }
+      lines.push(...oneAnswerLines(overdueIn));
     }
     if (items.board) {
       const b = items.board;
