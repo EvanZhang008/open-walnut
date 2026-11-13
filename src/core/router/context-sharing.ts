@@ -3,7 +3,8 @@ import { readRouterAreas, taskArea, type RouterAreasFile } from './areas.js';
 import type { SessionRecord, Task } from '../types.js';
 // Static, never `await import()`: a test's module mock of these stores did not reach a dynamic
 // import here, so the check read the real store and refused every send (2026-11-07).
-import { getTask } from '../task-manager.js';
+import { getTask, listTasks } from '../task-manager.js';
+import { orgNodesAbove, orgPlaces } from '../org/thread-follow.js';
 import { getSessionsForTask } from '../session-tracker.js';
 
 /** The synchronous check on the persisted mark (same-area.ts, pure so the web build can share it). */
@@ -44,6 +45,23 @@ async function taskScopes(id: string, file: RouterAreasFile, deps: ContextSharin
   if (out.size === 0 && task.org_role === 'router') out.add(NO_AREA_ROUTER);
   for (const record of sessions ?? []) add(record?.profile?.areaId);
   return out;
+}
+
+/** Explicit supervisor instructions may enter their routed work, not raw router sessions.
+ * This does not grant reverse context sharing, transcript reads or a different profile. */
+export async function mayManageRoutedTask(fromTaskId: string, toTaskId: string | undefined): Promise<boolean> {
+  if (!toTaskId) return false;
+  try {
+    const [file, tasks] = await Promise.all([readRouterAreas(WALNUT_HOME), listTasks({})]);
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const from = byId.get(fromTaskId);
+    const to = byId.get(toTaskId);
+    if (!from || !to || from.phase === 'COMPLETE' || (from.org_role !== 'main' && from.org_role !== 'lead')
+      || to.org_role === 'router' || file.routers.some((r) => r.taskId === to.id)) return false;
+    const [scopes, sessions] = await Promise.all([taskScopes(fromTaskId, file, defaultDeps), getSessionsForTask(toTaskId)]);
+    return scopes.size === 0 && !sessions.some((s) => s.profile?.areaRole === 'router')
+      && orgNodesAbove(to, orgPlaces(tasks)).has(from.id);
+  } catch { return false; }
 }
 
 /**

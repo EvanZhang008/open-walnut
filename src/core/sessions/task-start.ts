@@ -409,8 +409,9 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
     const { resolveCaller } = await import('./session-send-core.js');
     const caller = await resolveCaller(params.callerSid);
     if (caller.kind === 'session' && caller.record.taskId) {
-      const { mayShareTaskContext } = await import('../router/context-sharing.js');
-      if (!await mayShareTaskContext(caller.record.taskId, task.id)) throw areaRefusal('cross_area', 'A start cannot carry context across an incoming-item area. Nothing was started.');
+      const { mayShareTaskContext, mayManageRoutedTask } = await import('../router/context-sharing.js');
+      if (!await mayShareTaskContext(caller.record.taskId, task.id)
+        && !await mayManageRoutedTask(caller.record.taskId, task.id)) throw areaRefusal('cross_area', 'Only the person, Main or the current owning VP may start routed work across its area boundary. Nothing was started.');
     }
   }
   if (params.source !== 'engine-switch') {

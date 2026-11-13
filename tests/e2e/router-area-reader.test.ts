@@ -9,6 +9,28 @@ import { patchLegacyTask, seedLegacySession } from '../helpers/router-history-fi
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-router-area-reader'));
 // The status check's own pass needs settled live sessions; its rows are fixed here so the route's filter is what is tested.
+const lifecycleLaunch = vi.hoisted(() => ({ enabled: false, calls: [] as Array<Record<string, unknown>>, fail: false }));
+const supervisorQueue = vi.hoisted(() => ({ enabled: false, calls: 0 }));
+vi.mock('../../src/core/session-message-queue.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/session-message-queue.js')>();
+  return { ...actual, sendMessageToSession: async (sid: string, text: string, opts?: Parameters<typeof actual.sendMessageToSession>[2]) => {
+    if (!supervisorQueue.enabled) return actual.sendMessageToSession(sid, text, opts);
+    const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
+    const { assertAreaDelivery } = await import('../../src/core/router/delivery-scope.js');
+    assertAreaDelivery(await getSessionByClaudeId(sid), sid, opts?.source, opts?.messageId);
+    supervisorQueue.calls++;
+    return { id: opts?.messageId ?? 'supervisor-queued' };
+  } };
+});
+vi.mock('../../src/core/sessions/task-start.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/sessions/task-start.js')>();
+  return { ...actual, startSessionForTask: async (params: Parameters<typeof actual.startSessionForTask>[0]) => {
+    if (!lifecycleLaunch.enabled) return actual.startSessionForTask(params);
+    lifecycleLaunch.calls.push(params as unknown as Record<string, unknown>);
+    if (lifecycleLaunch.fail) throw new Error('Injected launch failure');
+    return { taskId: params.taskIdPrefix, title: 'Routed work', started: true, sessionId: 'fixture-launch-session' };
+  } };
+});
 const statusRows = vi.hoisted(() => ({
   rows: [] as Array<{ kind: 'drift'; taskId: string; title: string; detail: string }>,
   during: undefined as undefined | (() => Promise<void>),
@@ -29,10 +51,12 @@ import { mailDeliveryVersion, mailRouterKey } from '../../src/integrations/mail/
 import { routerAreaProfile } from '../../src/core/router/session-policy.js';
 import { disposeRouterStores } from '../../src/core/router/runtime.js';
 import {
-  AreaBadInput, areaCallerOf, areaTargetOf, judgeAreaRead, rowDenied, recheckAreaPayload, isMentionSearchPath, isAreaAggregatePath, buildAreaDenials, filterAreaPayload, isAreaListPath, scopeAllows, taskScopes, type AreaDenials,
+  AreaBadInput, areaCallerOf, areaTargetOf, supervisorTaskAction, judgeAreaRead, rowDenied, recheckAreaPayload, isMentionSearchPath, isAreaAggregatePath, buildAreaDenials, filterAreaPayload, isAreaListPath, scopeAllows, taskScopes, type AreaDenials,
 } from '../../src/web/middleware/router-area-reader.js';
 import { snapshotTask } from '../../src/web/routes/org-v1.js';
 import { executeOp } from '../../src/ops/index.js';
+import { mayManageRoutedTask } from '../../src/core/router/context-sharing.js';
+import { assertAreaDelivery, withRouterDelivery } from '../../src/core/router/delivery-scope.js';
 import { routerRuleRevision } from '../../src/core/router/rules.js';
 import { routingRulesPath, setRoutingRule } from '../../src/core/triage/routing-rules.js';
 import type { Task } from '../../src/core/types.js';
@@ -719,6 +743,8 @@ describe('visible task pages and supervisor reads', () => {
     const isolatedWorkSid = randomUUID();
     const isolatedWork = (await addTask({ title: 'Classified isolated garden work', project: 'Garden' })).task;
     await mark(isolatedWork.id, { router_area_id: 'personal' });
+    await updateRouterAreas(WALNUT_HOME, (file) => ({ ...file, areas: file.areas.map((area) =>
+      area.id === 'personal' ? { ...area, taskIds: [...area.taskIds, isolatedWork.id] } : area) }));
     await createSessionRecord(isolatedWorkSid, isolatedWork.id, '', WALNUT_HOME, { profile: routerAreaProfile('personal', 'work'), mode: 'dontAsk' });
     await mark(isolatedWork.id, { session_id: isolatedWorkSid, exec_session_id: isolatedWorkSid, session_ids: [isolatedWorkSid] });
     await updateSessionRecord(isolatedWorkSid, { process_status: 'stopped' });
@@ -729,6 +755,10 @@ describe('visible task pages and supervisor reads', () => {
       await createSessionRecord(sid, node.id, '', WALNUT_HOME, { mode: 'dontAsk' });
       await updateSessionRecord(sid, { process_status: 'stopped' });
       const allowed = node.id === main.id || node.id === lead.id;
+      expect(await mayManageRoutedTask(node.id, isolatedWork.id)).toBe(allowed);
+      expect(await mayManageRoutedTask(node.id, personalId)).toBe(false);
+      expect(await mayManageRoutedTask(isolatedWork.id, node.id)).toBe(false);
+      expect(await judgeAreaRead({ sid }, { kind: 'session', id: isolatedWorkSid }, undefined, true, true)).toBe(allowed ? 'pass' : 'deny');
       const detail = await call('GET', `/api/tasks/${downstream.id}`, sid);
       expect(detail.status).toBe(allowed ? 200 : 403);
       const listed = await (await call('GET', '/api/tasks?q=Classified%20garden%20work&limit=1&fields=list', sid)).json();
@@ -754,6 +784,59 @@ describe('visible task pages and supervisor reads', () => {
       expect((await call('PATCH', `/api/tasks/${personalId}`, sid, { title: 'Changed by supervisor' })).status).toBe(403);
       expect((await call('GET', mailPath(account, personalMail.message), sid)).status).toBe(403);
     }
+    supervisorQueue.enabled = true;
+    supervisorQueue.calls = 0;
+    try {
+      for (const who of [sids.get(main.id)!, sids.get(lead.id)!]) {
+        const sent = await executeOp('task_send', { to: isolatedWork.id, text: 'Continue the answered work', expect_reply: false }, { apiBase: base, callerSid: who });
+        expect(sent.ok, JSON.stringify(sent)).toBe(true);
+      }
+      expect(supervisorQueue.calls).toBe(2);
+      const deniedSend = await executeOp('task_send', { to: isolatedWork.id, text: 'Foreign instructions', expect_reply: false }, { apiBase: base, callerSid: ordinarySid });
+      expect(deniedSend.ok).toBe(false);
+      expect(supervisorQueue.calls).toBe(2);
+    } finally { supervisorQueue.enabled = false; }
+    await withRouterDelivery(isolatedWorkSid, 'supervisor-message', async () => {
+      expect(assertAreaDelivery({ profile: routerAreaProfile('personal', 'work') }, isolatedWorkSid, 'peer', 'supervisor-message')).toBe(true);
+      expect(() => assertAreaDelivery({ profile: routerAreaProfile('personal', 'work') }, isolatedWorkSid, 'peer', 'different-message')).toThrow();
+    });
+    lifecycleLaunch.enabled = true;
+    lifecycleLaunch.calls = [];
+    try {
+      for (const who of [sids.get(main.id)!, sids.get(lead.id)!, sids.get(peer.id)!, sids.get(retired.id)!, ordinarySid, AUTOMATION] as const) {
+        const allowed = who === sids.get(main.id) || who === sids.get(lead.id);
+        const before = lifecycleLaunch.calls.length;
+        const response = await call('POST', `/api/v1/tasks/${isolatedWork.id}/start`, who, { message: 'Continue the answered work', expect_reply: false });
+        expect(response.status).toBe(allowed ? 202 : 403);
+        expect(lifecycleLaunch.calls).toHaveLength(before + (allowed ? 1 : 0));
+        const phase = await call('PATCH', `/api/tasks/${isolatedWork.id}`, who, { phase: 'TODO' });
+        expect(phase.status).toBe(allowed ? 200 : 403);
+        if (!allowed) expect(await phase.text()).toContain(lead.id);
+      }
+      // No policy, source or relationship changes sneak through the lifecycle grant.
+      for (const body of [{ router_area_id: 'work' }, { org_role: 'lead' }, { source: 'remote' }, { parent_task_id: peer.id }, { phase: 'TODO', router_area_id: 'work' }]) {
+        expect((await call('PATCH', `/api/tasks/${isolatedWork.id}`, sids.get(main.id)!, body)).status).toBe(403);
+      }
+      lifecycleLaunch.fail = true;
+      expect((await call('POST', `/api/v1/tasks/${isolatedWork.id}/start`, sids.get(main.id)!, { expect_reply: false })).status).toBe(500);
+      lifecycleLaunch.fail = false;
+      expect((await call('POST', `/api/v1/tasks/${isolatedWork.id}/start`, sids.get(main.id)!, { expect_reply: false })).status).toBe(202);
+      // Exercise the real isolated start preflight without ever spawning a CLI:
+      // an unsupported host fails before launch, after supervisor admission.
+      lifecycleLaunch.enabled = false;
+      const hostRefusal = await call('POST', `/api/v1/tasks/${isolatedWork.id}/start`, sids.get(main.id)!, { host: 'remote-box', expect_reply: false });
+      expect(hostRefusal.status).toBe(409);
+      expect(await hostRefusal.text()).toContain('runs only on this machine');
+      lifecycleLaunch.enabled = true;
+      const toClose = (await addTask({ title: 'Routed completed work', project: 'Garden' })).task;
+      await mark(toClose.id, { router_area_id: 'personal' });
+      const closed = await call('POST', `/api/v1/tasks/${toClose.id}/complete`, sids.get(lead.id)!, { result: 'Verified routed work' });
+      expect(closed.status).toBe(200);
+      expect((await getTask(toClose.id)).phase).toBe('COMPLETE');
+    } finally {
+      lifecycleLaunch.enabled = false;
+      lifecycleLaunch.fail = false;
+    }
     // Transferring this project also transfers the read grant, even if an old parent remains.
     await mark(downstream.id, { parent_task_id: lead.id });
     await mark(peer.id, { org_leads: ['Garden'] });
@@ -762,6 +845,8 @@ describe('visible task pages and supervisor reads', () => {
     expect(await judgeAreaRead({ sid: oldSid }, { kind: 'task', id: downstream.id }, undefined, true)).toBe('deny');
     expect(await judgeAreaRead({ sid: newSid }, { kind: 'task', id: downstream.id }, undefined, true)).toBe('pass');
     expect(await judgeAreaRead({ sid: newSid }, { kind: 'task', id: downstream.id })).toBe('deny');
+    expect((await call('PATCH', `/api/tasks/${downstream.id}`, oldSid, { phase: 'TODO' })).status).toBe(403);
+    expect((await call('PATCH', `/api/tasks/${downstream.id}`, newSid, { phase: 'TODO' })).status).toBe(200);
     await mark(peer.id, { org_leads: [] });
     // Lost org_role never turns a registered source router into downstream work.
     patchLegacyTask(personalId, { org_role: null as never });
@@ -779,6 +864,18 @@ describe('the pure helpers', () => {
     sessions: new Set(['s-area']),
     mail: (a, m) => a === account && m === personalMail.message,
   };
+
+  it('supervisor lifecycle permission is explicit and never a blanket task write', () => {
+    for (const action of ['start', 'complete', 'team-stop', 'team-resume', 'ask-answer/withdraw']) {
+      expect(supervisorTaskAction('POST', `/v1/tasks/t-work/${action}`)).toBe(true);
+    }
+    expect(supervisorTaskAction('PATCH', '/tasks/t-work', { phase: 'COMPLETE', reason: 'Finished' })).toBe(true);
+    for (const action of ['merge', 'notes', 'delete', 'switch-engine']) expect(supervisorTaskAction('POST', `/tasks/t-work/${action}`)).toBe(false);
+    expect(supervisorTaskAction('DELETE', '/tasks/t-work')).toBe(false);
+    expect(supervisorTaskAction('PATCH', '/tasks/t-work', { phase: 'TODO', router_area_id: 'other' })).toBe(false);
+    expect(supervisorTaskAction('POST', '/sessions/s1/resume')).toBe(false);
+    expect(supervisorTaskAction('POST', '/sessions/s1/terminate')).toBe(true);
+  });
 
   it('allows only the same single area, or a target outside every area', () => {
     const personal = new Set(['personal']);

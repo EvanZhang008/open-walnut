@@ -900,9 +900,12 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
     throw err;
   }
   const targetSid = target.session.claudeSessionId;
+  let supervisorDelivery = false;
   if (caller.kind === 'session' && caller.record.taskId) {
-    const { mayShareTaskContext } = await import('../router/context-sharing.js');
-    if (!await mayShareTaskContext(caller.record.taskId, target.taskId ?? target.session.taskId)) {
+    const { mayShareTaskContext, mayManageRoutedTask } = await import('../router/context-sharing.js');
+    const sharesArea = await mayShareTaskContext(caller.record.taskId, target.taskId ?? target.session.taskId);
+    if (!sharesArea) supervisorDelivery = await mayManageRoutedTask(caller.record.taskId, target.taskId ?? target.session.taskId);
+    if (!sharesArea && !supervisorDelivery) {
       throw new SendError('area_forbidden', 'Context cannot be sent across an area boundary.', 403);
     }
   }
@@ -1055,10 +1058,12 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
   let messageId: string | undefined;
   try {
     const fromLeader = await callerLeads(caller, taskId);
-    ({ delivery, messageId } = await deliverToSession(target.session, {
+    const deliver = () => deliverToSession(target.session, {
       busText: body, enqueueText, source, taskId, messageId: rowId, fromLeader,
       ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
-    }));
+    });
+    const { withRouterDelivery } = await import('../router/delivery-scope.js');
+    ({ delivery, messageId } = await (supervisorDelivery ? withRouterDelivery(targetSid, rowId, deliver) : deliver()));
   } catch (err) {
     // A rejected delivery never landed, so a request row we just created would
     // otherwise sit pending until its deadline and the sweeper would tell the

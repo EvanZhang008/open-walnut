@@ -448,7 +448,7 @@ const callerScopesOf = (caller: AreaCaller, file: RouterAreasFile | undefined): 
   'sid' in caller ? sessionIdScopes(caller.sid, file) : Promise.resolve(new Set());
 
 /** Whether `caller` may read `target` (`body`: a mail op's input; bad input throws AreaBadInput); reusable by WS or the op gateway. */
-export async function judgeAreaRead(caller: AreaCaller | undefined, target: AreaTarget, body?: unknown, allowSupervisor = false): Promise<AreaReadVerdict> {
+export async function judgeAreaRead(caller: AreaCaller | undefined, target: AreaTarget, body?: unknown, allowSupervisor = false, manageSession = false): Promise<AreaReadVerdict> {
   if (!caller || ('sid' in caller && !caller.sid.trim())) return 'pass';
   if ('sid' in caller && target.kind === 'session' && target.id === caller.sid.trim()) return 'pass';
   // Bad mail-op input throws AreaBadInput here, before the registry or any adapter is read.
@@ -469,8 +469,8 @@ export async function judgeAreaRead(caller: AreaCaller | undefined, target: Area
   const scopes = await targetScopes(target, file);
   if (scopes === undefined) return 'pass';
   const denied = scopes.size > 0 && !scopeAllows(await callerScopesOf(caller, file), scopes);
-  // Supervisors may READ their team's work, never write it through this exception
-  // or read the raw incoming mail. Only a denied object needs the org snapshot.
+  // Supervisors may read and manage routed work through explicit lifecycle
+  // routes, never its raw source, isolated transcripts or area policy.
   if (denied && allowSupervisor && file && (target.kind === 'task' || target.kind === 'session')) {
     const built = await buildAreaDenials(caller);
     if (!built) return 'unverifiable';
@@ -480,7 +480,12 @@ export async function judgeAreaRead(caller: AreaCaller | undefined, target: Area
     } else {
       const { resolveSessionByIdOrPrefix } = await import('../../core/session-tracker.js');
       const found = await resolveSessionByIdOrPrefix(target.id);
-      if (found.status === 'found' && built.denials.supervisedSessions?.has(found.session.claudeSessionId)) return 'pass';
+      if (found.status === 'found') {
+        if (built.denials.supervisedSessions?.has(found.session.claudeSessionId)) return 'pass';
+        const owners = [found.session.taskId, found.session.legacyTaskId].filter((id): id is string => !!id);
+        if (manageSession && found.session.profile?.areaRole !== 'router' && owners.length
+          && owners.every((id) => built.denials.supervisedTasks?.has(id))) return 'pass';
+      }
     }
   }
   if (denied) return 'deny';
@@ -644,6 +649,32 @@ export function areaCallerOf(req: Pick<Request, 'headers'>): AreaCaller | undefi
   return typeof kind === 'string' && kind.trim().toLowerCase() === 'automation' ? { automation: true } : undefined;
 }
 
+/** Supervisors manage routed work, never its area policy, storage or source content. */
+export function supervisorTaskAction(method: string, path: string, body?: unknown): boolean {
+  if (method === 'GET') return true;
+  if (method === 'POST' && /^\/(?:v1\/)?tasks\/[^/]+\/(?:start|complete|team-stop|team-resume|ask-answer\/withdraw)\/?$/.test(path)) return true;
+  if (method === 'POST' && /^\/sessions\/[^/]+\/terminate\/?$/.test(path)) return true;
+  if (method !== 'PATCH' || !/^\/(?:v1\/)?tasks\/[^/]+\/?$/.test(path)) return false;
+  const patch = obj(body);
+  const lifecycle = new Set(['phase', 'status', 'wait_until', 'waiting_on', 'user_words', 'force', 'reason']);
+  return !!patch && Object.keys(patch).length > 0 && Object.keys(patch).every((key) => lifecycle.has(key));
+}
+
+/** A refused read or action names the authorized owner without revealing the task's content. */
+async function areaRefusalFor(target: AreaTarget): Promise<typeof FORBIDDEN | { error: string; code: 'area_forbidden' }> {
+  if (target.kind !== 'task') return { ...FORBIDDEN, error: `${FORBIDDEN.error} The person or this area's own router can act on its source content.` };
+  const task = await findTask(target.id);
+  const file = await readAreas();
+  if (!task || !file) return FORBIDDEN;
+  if (task.org_role === 'router' || file.routers.some((r) => r.taskId === task.id)) {
+    return { ...FORBIDDEN, error: `${FORBIDDEN.error} The person or this area's own router can act on its source task.` };
+  }
+  const { listTasks } = await import('../../core/task-manager.js');
+  const places = orgPlaces(await listTasks({}));
+  const owners = [...orgNodesAbove(task, places)].filter((id) => id !== task.id);
+  return { code: 'area_forbidden', error: `This caller cannot perform that action on routed work. The person${owners.length ? ` or the supervising org tasks (${owners.join(', ')})` : ', Main or its current project VP'} can read, answer, start and close this task. Area policy and source access remain restricted.` };
+}
+
 /** Mounted on /api after the caller-id rewrite (acp-caller-sid), beside routerAreaAccess. */
 export async function routerAreaReader(req: Request, res: Response, next: NextFunction): Promise<void> {
   const caller = areaCallerOf(req);
@@ -671,22 +702,26 @@ export async function routerAreaReader(req: Request, res: Response, next: NextFu
   if (!target && !listKind) { next(); return; }
   try {
     if (target) {
+      // Express rewrites req.path inside nested routers; capture this /api path
+      // before next(), so the response-time check judges the same action.
+      const supervisorAction = supervisorTaskAction(req.method, req.path, req.body);
+      const manageSession = req.method === 'POST' && /^\/sessions\/[^/]+\/terminate\/?$/.test(req.path);
       let verdict: AreaReadVerdict;
       try {
-        verdict = await judgeAreaRead(caller, target, req.body, req.method === 'GET');
+        verdict = await judgeAreaRead(caller, target, req.body, supervisorAction, manageSession);
       } catch (error) {
         if (!(error instanceof AreaBadInput)) throw error;
         res.status(400).json({ error: error.message, code: error.code });
         return;
       }
-      if (verdict === 'deny') { res.status(403).json(FORBIDDEN); return; }
+      if (verdict === 'deny') { res.status(403).json(await areaRefusalFor(target)); return; }
       if (verdict === 'unverifiable') { res.status(503).json(UNVERIFIABLE); return; }
       // Judged again when the route answers: the object may have been classified meanwhile.
       deferJson(res, next, async (body) => {
-        const again = await judgeAreaRead(caller, target, req.body, req.method === 'GET');
-        if (again === 'deny') return { status: 403, body: FORBIDDEN };
+        const again = await judgeAreaRead(caller, target, req.body, supervisorAction, manageSession);
+        if (again === 'deny') return { status: 403, body: await areaRefusalFor(target) };
         if (again === 'unverifiable') return { status: 503, body: UNVERIFIABLE };
-        if (target.kind === 'mail' || (target.kind === 'task' && req.method === 'GET')) {
+        if (target.kind === 'mail' || target.kind === 'task') {
           const built = await buildAreaDenials(caller);
           if (!built) return { status: 503, body: UNVERIFIABLE };
           const judged = filterAreaPayload(body, built.denials, target.kind);
