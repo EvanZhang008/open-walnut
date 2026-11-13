@@ -10369,7 +10369,12 @@ export class ClaudeCodeSession {
       const task = this.taskId ? await getTask(this.taskId).catch(() => undefined) : undefined
       if (task) project = task.project ?? ''
       const pluginsOff = project.trim() ? readClaudePluginsOff(await getProjectMetadata(project)) : []
-      const scope = claudeScopeSettings({ pluginsOff, listingDescChars: skillListingDescChars(await getConfig()) })
+      // A broken config file costs only the cap, never the project's plugin choice.
+      const config = await getConfig().catch((err: unknown) => {
+        log.session.warn('claude scope settings: config unreadable; no skill listing cap this spawn', { taskId: this.taskId, error: err instanceof Error ? err.message : String(err) })
+        return null
+      })
+      const scope = claudeScopeSettings({ pluginsOff, listingDescChars: skillListingDescChars(config) })
       if (Object.keys(scope).length === 0) return
       const at = args.indexOf('--settings')
       const current = at >= 0 ? JSON.parse(args[at + 1]) as Record<string, unknown> : {}

@@ -98,6 +98,7 @@ describe('Claude Code spawn: plugins off and the skill listing cap', () => {
     expect(plain).not.toHaveProperty('skillListingMaxDescChars')
     // The rest of the settings arg is untouched: the hooks still ride it.
     expect(plain.hooks).toBeTruthy()
+    expect((plain.permissions as { allow?: unknown[] } | undefined)?.allow?.length).toBeGreaterThan(0)
 
     await updateConfig({ session: { skill_listing_desc_chars: 200 } })
     const capped = settingsOf(await spawnArgs(await taskIn('Scope Lab'), 'Scope Lab'))
@@ -106,6 +107,7 @@ describe('Claude Code spawn: plugins off and the skill listing cap', () => {
 
     // A resume carries the same keys as a fresh spawn.
     const resumed = await spawnArgs(await taskIn('Scope Lab'), 'Scope Lab', '11111111-2222-4333-8444-555555555555')
+    expect(resumed).toContain('--resume')
     expect(settingsOf(resumed).enabledPlugins).toEqual({ 'work-tools@acme': false, 'notes@example-market': false })
     expect(settingsOf(resumed).skillListingMaxDescChars).toBe(200)
   })
