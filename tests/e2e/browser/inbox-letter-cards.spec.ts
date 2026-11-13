@@ -10,6 +10,7 @@ let htmlId = '';
 const evidence = process.env.PW_EVIDENCE_DIR;
 
 test.describe.configure({ mode: 'serial' });
+// The viewport decides the recording's size (tests/e2e/browser/pw-video.ts).
 test.use({ video: process.env.PW_VIDEO ? 'on' : 'off' });
 test.beforeAll(async ({ request }) => {
   test.setTimeout(180_000);
