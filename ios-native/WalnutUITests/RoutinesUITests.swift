@@ -1024,7 +1024,7 @@ final class RoutineFixtures: @unchecked Sendable {
             state: ["lastStatus": "error", "lastRunAtMs": now - 20 * 60_000,
                     "lastError": "target task \(RoutineFixtures.taskId("Home Ops")) is complete; the trigger will not resurrect it"],
             sends: "Ping the router's status page. If it was down in the last hour, say for how long and since when.")
-        for name in ["Mail: new bank statement", "Package delivery watch", "Rent reminder"] {
+        for name in ["Mail: new newsletter issue", "Package delivery watch", "Rent reminder"] {
             add("r-home-\(name.count)", name, project: "Home Ops", schedule: evening, task: chores)
         }
         for (i, name) in ["Paper of the day", "Spanish practice reminder", "Weekend reading list"].enumerated() {
@@ -1052,8 +1052,8 @@ final class RoutineFixtures: @unchecked Sendable {
         add("r-marina-stopped", "Release train watch", project: "Marina", schedule: every5, enabled: false,
             state: ["consecutiveErrors": 5, "lastCheck": releaseChecks[0], "checkLog": releaseChecks],
             check: ["run": "sh release.sh", "host": "devbox"])
-        for (i, name) in ["Promotion daily report", "Evidence doc review watch"].enumerated() {
-            add("r-promo-\(i)", name, project: "Promotion", schedule: evening)
+        for (i, name) in ["Studio daily report", "Draft review watch"].enumerated() {
+            add("r-studio-\(i)", name, project: "Studio", schedule: evening)
         }
         for (i, name) in ["open-walnut release watch", "main CI run ended", "Community voice: hourly round",
                           "Instance watch: risky issues", "Mac queue results", "Daily digest (evening)",
@@ -1064,7 +1064,7 @@ final class RoutineFixtures: @unchecked Sendable {
         }
         jobs = all
         var known: [[String: Any]] = []
-        for project in ["Acme", "Home Ops", "Learning", "Marina", "Promotion", "Walnut"] {
+        for project in ["Acme", "Home Ops", "Learning", "Marina", "Studio", "Walnut"] {
             known.append(["id": RoutineFixtures.taskId(project), "title": "\(project) watcher", "project": project,
                           "phase": project == "Home Ops" ? "COMPLETE" : "IN_PROGRESS"])
         }
