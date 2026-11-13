@@ -33,6 +33,22 @@ export async function presetPanelDesign(target: Page | BrowserContext, design: P
 }
 
 /**
+ * A returning visitor's folds for a context the config's storageState does not reach (a
+ * persistent context, the extension's own profile): the folds a first visit kept before, only
+ * Parked folded, Watching and Needs you open (playwright.config.ts `storageState`). A first visit
+ * folds every region of a board that holds work (first-visit-folds.ts). Set only when absent, so
+ * a fold the spec makes survives its own reloads.
+ */
+export async function presetReturningFolds(target: Page | BrowserContext): Promise<void> {
+  await target.addInitScript(([sections, status]) => {
+    try {
+      if (localStorage.getItem(sections) === null) localStorage.setItem(sections, '["wait"]')
+      if (localStorage.getItem(status) === null) localStorage.setItem(status, '{}')
+    } catch { /* storage off */ }
+  }, ['walnut-todo-collapsed-sections', LS_STATUS_SECTIONS_KEY] as const)
+}
+
+/**
  * `isolateUiPrefs` for every page of a context: the boot GET answers the fixture's
  * one shared pref (the chat slot closed), and PUTs are dropped, so nothing this
  * context stores reaches another spec through the fixture server.

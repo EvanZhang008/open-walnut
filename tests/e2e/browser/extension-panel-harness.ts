@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { bunRuntime } from '../../helpers/bun-runtime'
-import { presetPanelDesign } from './status-section-helpers'
+import { presetPanelDesign, presetReturningFolds } from './status-section-helpers'
 
 export interface PanelLab {
   ctx: BrowserContext
@@ -73,6 +73,9 @@ export async function startPanelLab(base: string, label: string): Promise<PanelL
   // for a new person (2026-11-06); these specs check the Flat status rows, the layout the person
   // picked on his own Home, so the browser starts on Flat as his does (ui-prefs stay here, above).
   await presetPanelDesign(ctx, 'status')
+  // It is a returning person's board too: the config's storageState (the folds a returning
+  // visitor keeps) does not reach this persistent profile.
+  await presetReturningFolds(ctx)
   let worker = ctx.serviceWorkers()[0]
   if (!worker) worker = await ctx.waitForEvent('serviceworker')
   worker.on('console', (m) => { if (m.type() === 'error') console.log(`[background error] ${m.text()}`) })
